@@ -1,8 +1,10 @@
 import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout";
 import * as React from "react";
 import {
+  BookMarked,
   ChartNoAxesCombined,
   Hammer,
+  Plug,
   Puzzle,
   Route,
   ScanSearch,
@@ -42,11 +44,15 @@ export function WorkspaceSkillsSettings(props: {
   // Workbench snapshot containing Lua Skills and Agent Skills catalogs.
   // 包含 Lua Skills 与 Agent Skills 目录的工作台快照。
   workbench: WorkbenchSnapshot;
+  // Opens the application-wide runtime diagnostics page from the MCP server page.
+  // 从 MCP 服务器页面打开应用全局运行诊断页。
+  onOpenDiagnostics: () => void;
 }) {
   const {
     activeSubArea,
     luaInstallDialogOpen,
     onLuaInstallDialogOpenChange,
+    onOpenDiagnostics,
     skillActions,
     workbench,
   } = props;
@@ -54,7 +60,7 @@ export function WorkspaceSkillsSettings(props: {
   return (
     <>
       <React.Suspense fallback={null}>
-        <LazySkillsArea activeTab={activeSubArea} skillActions={skillActions} workbench={workbench} />
+        <LazySkillsArea activeTab={activeSubArea} onOpenDiagnostics={onOpenDiagnostics} skillActions={skillActions} workbench={workbench} />
       </React.Suspense>
       {luaInstallDialogOpen ? (
         <React.Suspense fallback={null}>
@@ -92,7 +98,9 @@ export function PluginWorkspaceMenu(props: {
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
+    { icon: <Plug size={15} />, id: "mcp-servers", label: t("settings.mcpServers") },
     { icon: <ScanSearch size={15} />, id: "context-engine", label: t("area.contextEngine") },
+    { icon: <BookMarked size={15} />, id: "knowledge", label: t("area.knowledge") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
   ];
 
@@ -132,8 +140,14 @@ export function skillSubAreaLabel(
   if (subArea === "plugins") {
     return t("skills.navigation.plugins");
   }
+  if (subArea === "mcp-servers") {
+    return t("settings.mcpServers");
+  }
   if (subArea === "context-engine") {
     return t("area.contextEngine");
+  }
+  if (subArea === "knowledge") {
+    return t("area.knowledge");
   }
   // pluginSelection resolves the selected manifest-owned navigation label.
   // pluginSelection 解析选中的清单自有导航名称。

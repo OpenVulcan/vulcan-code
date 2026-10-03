@@ -36,9 +36,14 @@ async function mount(invoke, strict = false, factory = null) {
   const plain = ({ children, label }) => React.createElement("div", null, label, children);
   const Button = ({ children, size, variant, ...props }) => React.createElement("button", props, children);
   const Metadata = ({ label, onActivate, ariaLabel }) => React.createElement("button", { onClick: onActivate, "aria-label": ariaLabel }, label);
+  // PageTabs keeps each tab a native button whose text is the exact label, plus the trailing actions.
+  // PageTabs 使每个标签保持为文本即精确标签的原生按钮，并保留尾部操作。
+  const PageTabs = ({ ariaLabel, options, onValueChange, actions }) => React.createElement("div", null, React.createElement("nav", { "aria-label": ariaLabel },
+    ...options.map((option) => React.createElement("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))),
+    actions);
   const createPanel = factory ?? (await import(`./index.mjs?test=${++moduleId}`)).createPluginPanel;
   const sdk = { React, invoke: client.invoke, locale: "en-US", formatNumber: String, t: (_key, fallback) => fallback,
-    components: { Button, Badge: plain, StatusPill: plain, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain } };
+    components: { Button, Badge: plain, StatusPill: plain, PageTabs, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain, StreamPlaceholder: plain } };
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
   await React.act(async () => root.render(React.createElement(strict ? React.StrictMode : React.Fragment, null, React.createElement(createPanel(sdk)))));
   return { container: document.getElementById("root"), factory: createPanel, close: async () => {

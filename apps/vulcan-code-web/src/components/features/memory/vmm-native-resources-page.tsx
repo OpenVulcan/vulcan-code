@@ -12,14 +12,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder"
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
   highlightedDiffLineSpans,
@@ -260,23 +260,28 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
     ? resourcePurposeText(selectedSummary.group, selectedSummary.fileName, t)
     : ""
   const changed = Boolean(file && editorText !== file.effectiveText)
+  // group is the resource family whose panel is currently shown.
+  // group 是当前显示面板的资源分组。
+  const group = activeGroup
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-lg font-semibold">{t("memory.resources.title")}</h2><p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.resources.description")}</p></div>
-        <Button disabled={busy} inert={filePending} onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>
-      </div>
+      {/* Keep short reads non-interactive without toggling every control's disabled opacity; the tabs share this guard
+          so a short read cannot switch groups mid-load. */}
+      {/* 短暂读取期间禁止交互，但不切换所有控件的禁用透明度；标签共用此保护，读取期间不能切换分组。 */}
+      <fieldset className="flex min-w-0 flex-col gap-4" disabled={busy} inert={filePending} aria-busy={filePending}>
+        <PageTabs
+          actions={<Button onClick={() => void loadCatalog().then(() => setFileReadRevision((revision) => revision + 1))} size="sm" type="button" variant="outline"><RefreshCw className="size-4" aria-hidden="true" />{t("memory.resources.refresh")}</Button>}
+          ariaLabel={t("memory.resources.title")}
+          onValueChange={setActiveGroup}
+          options={([["prompt", "memory.resources.promptTab"], ["pii", "memory.resources.piiTab"], ["noise", "memory.resources.noiseTab"]] as const).map(([value, label]) => ({ label: t(label), value }))}
+          value={activeGroup}
+        />
       <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"><span>{t("memory.resources.overrideDirectory")}: </span><span className="break-all font-mono">{catalog?.overrideRoot ?? <InlineStreamPlaceholder label={t("memory.resources.loading")} />}</span></div>
       {error ? <p className="settings-error-text text-sm">{error}</p> : null}
-
-      {/* Keep short reads non-interactive without toggling every control's disabled opacity. */}
-      {/* 短暂读取期间禁止交互，但不切换所有控件的禁用透明度。 */}
-      <fieldset className="min-w-0" disabled={busy} inert={filePending} aria-busy={filePending}>
-      <Tabs onValueChange={(value) => setActiveGroup(value as ResourceGroup)} value={activeGroup}>
-        <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="prompt">{t("memory.resources.promptTab")}</TabsTrigger><TabsTrigger value="pii">{t("memory.resources.piiTab")}</TabsTrigger><TabsTrigger value="noise">{t("memory.resources.noiseTab")}</TabsTrigger></TabsList>
-        {(["prompt", "pii", "noise"] as const).map((group) => (
-          <TabsContent className="space-y-4" key={group} value={group}>
+          {/* The key remounts the group's panel on switch, matching the previous tab panels' lifecycle.
+              key 在切换时重新挂载分组面板，与原标签面板的生命周期一致。 */}
+          <div className="space-y-4" key={group}>
             {catalog && settings ? <ResourceCompositionSettings busy={busy} catalog={catalog} group={group} onChange={setSettings} onSave={saveSettings} settings={settings} /> : null}
             <div className="vmm-resource-workspace">
             <ResourceFileSelect effectiveSelector={effectiveSelector} files={visibleFiles} onChange={setSelectedPath} value={selectedPath} />
@@ -284,15 +289,13 @@ export function VmmNativeResourcesPage({ busy, initialGroup = "prompt", onRunAct
               <CardHeader><CardTitle className="flex items-center gap-2"><FileCode2 className="size-4" aria-hidden="true" />{t("memory.resources.fileEditor")}</CardTitle><CardDescription>{t("memory.resources.fileEditorDescription")}</CardDescription></CardHeader>
               <CardContent className="space-y-4">
                 {selectedSummary ? <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{selectedSummary.selector}</Badge><Badge variant={selectedSummary.hasUserOverride ? "default" : "secondary"}>{selectedSummary.hasUserOverride ? t("memory.resources.userOverride") : t("memory.resources.builtIn")}</Badge><Badge variant="outline"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />{editUnlocked ? t("memory.resources.unlocked") : t("memory.resources.locked")}</Badge></div> : null}
-                {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p>{group === "prompt" ? <p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p> : null}</div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={busy || !editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <p className="text-sm text-muted-foreground">{t("memory.resources.loading")}</p>}
+                {file ? <><div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4" aria-hidden="true" />{file.highRisk ? t("memory.resources.highRisk") : t("memory.resources.guardedEdit")}</div><p className="mt-2 text-muted-foreground">{resourcePurpose}</p>{group === "prompt" ? <p className="mt-1 text-muted-foreground">{t("memory.resources.promptHowTo")}</p> : null}</div><div className="space-y-2"><Label>{t("memory.resources.currentEffective")}</Label><ResourceCodeEditor disabled={busy || !editUnlocked} language={resourceEditorLanguage(file.path)} onChange={setEditorText} value={editorText} /></div><div className="flex flex-wrap gap-2">{!editUnlocked ? <Button disabled={busy} onClick={() => setConfirmation("unlock")} type="button" variant="outline"><UnlockKeyhole className="size-4" aria-hidden="true" />{t("memory.resources.unlockEditor")}</Button> : null}<Button disabled={busy || !editUnlocked || !changed || !editorText} onClick={() => setConfirmation("save")} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.resources.saveFile")}</Button><Button disabled={busy || !file.hasUserOverride} onClick={() => setConfirmation("reset")} type="button" variant="outline"><RotateCcw className="size-4" aria-hidden="true" />{t("memory.resources.restoreBuiltIn")}</Button></div></> : <StreamPlaceholder label={t("memory.resources.loading")} shape="fields" count={3} />}
               </CardContent>
             </Card>
             </div>
             {group === "pii" ? <PiiTesters busy={busy} input={piiInput} formulaCondition={piiFormulaCondition} formulaInput={piiFormulaInput} formulaPattern={piiFormulaPattern} formulaReplacement={piiFormulaReplacement} formulaResult={piiFormulaResult} onFormulaConditionChange={setPiiFormulaCondition} onFormulaInputChange={setPiiFormulaInput} onFormulaPatternChange={setPiiFormulaPattern} onFormulaReplacementChange={setPiiFormulaReplacement} onInputChange={setPiiInput} onTest={testPii} onTestFormula={testPiiFormula} result={piiResult} /> : null}
             {group === "noise" ? <NoiseTester busy={busy} input={noiseInput} onInputChange={setNoiseInput} onTest={testNoise} result={noiseResult} /> : null}
-          </TabsContent>
-        ))}
-      </Tabs>
+          </div>
       </fieldset>
 
       <AlertDialog open={confirmation !== null} onOpenChange={(open) => !open && !busy && setConfirmation(null)}><AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{confirmationTitle(confirmation, t)}</AlertDialogTitle><AlertDialogDescription>{confirmationDescription(confirmation, resourcePurpose, t)}</AlertDialogDescription></AlertDialogHeader>{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}<AlertDialogFooter><AlertDialogCancel disabled={busy}>{t("memory.common.cancel")}</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => {

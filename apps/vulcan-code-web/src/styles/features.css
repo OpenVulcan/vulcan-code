@@ -28,10 +28,6 @@
   white-space: nowrap;
 }
 
-.settings-back-menu-row {
-  color: var(--muted-foreground);
-}
-
 .project-badge-icon {
   flex: 0 0 auto;
   display: block;

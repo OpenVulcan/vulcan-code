@@ -9,6 +9,7 @@ import {
   FLOATING_MOTION_CLASS_NAME,
   FLOATING_SURFACE_CLASS_NAME,
   MENU_CHECKABLE_ITEM_CLASS_NAME,
+  MENU_CONTENT_PADDING_CLASS_NAME,
   MENU_ITEM_CLASS_NAME,
   MENU_LABEL_CLASS_NAME,
   MENU_SEPARATOR_CLASS_NAME,
@@ -97,7 +98,8 @@ function DropdownMenuContent({
         onCloseAutoFocus={handleCloseAutoFocus}
         onInteractOutside={handleInteractOutside}
         className={cn(
-          "z-50 max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto p-1 data-[state=closed]:overflow-hidden",
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto data-[state=closed]:overflow-hidden",
+          MENU_CONTENT_PADDING_CLASS_NAME,
           FLOATING_SURFACE_CLASS_NAME,
           FLOATING_MOTION_CLASS_NAME,
           floatingContentWidthClassName(width),
@@ -318,7 +320,8 @@ function DropdownMenuSubContent({
       data-slot="dropdown-menu-sub-content"
       collisionPadding={collisionPadding}
       className={cn(
-        "z-50 max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain p-1 data-[state=closed]:overflow-hidden",
+        "z-50 max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain data-[state=closed]:overflow-hidden",
+        MENU_CONTENT_PADDING_CLASS_NAME,
         FLOATING_SURFACE_CLASS_NAME,
         FLOATING_MOTION_CLASS_NAME,
         "min-w-[min(8rem,var(--radix-dropdown-menu-content-available-width))] max-w-(--radix-dropdown-menu-content-available-width)",

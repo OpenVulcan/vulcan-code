@@ -944,7 +944,7 @@ export function KnowledgeBaseArea() {
       </div>
       <div className="knowledge-layout">
         <aside className="knowledge-library-list">
-          {librariesLoading ? <StreamPlaceholder label={t("knowledge.librariesLoading")} shape="rows" count={4} /> : null}
+          {librariesLoading ? <StreamPlaceholder fill label={t("knowledge.librariesLoading")} shape="rows" count={4} /> : null}
           {librariesError ? <KnowledgeReadFailure busy={pageBusy || librariesLoading} error={librariesError} onRetry={() => void refreshLibraryList()} /> : null}
           {filteredLibraries.map((library) => (
             <div className={library.id === selectedLibraryId ? "knowledge-library-row active" : "knowledge-library-row"} key={library.id}>
@@ -1087,7 +1087,7 @@ export function KnowledgeBaseArea() {
                 ) : null}
               </section>
             </>
-          ) : <div className="knowledge-empty">{t("knowledge.emptySelection")}</div>}
+          ) : librariesLoading ? <StreamPlaceholder className="p-4" decorative fill /> : <div className="knowledge-empty">{t("knowledge.emptySelection")}</div>}
         </main>
       </div>
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && busyRef.current === null) setDeleteTarget(null); }}>

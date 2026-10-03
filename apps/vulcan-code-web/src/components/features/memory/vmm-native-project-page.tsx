@@ -13,6 +13,7 @@ import {
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -317,26 +318,24 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
 
   return (
     <fieldset disabled={effectiveBusy} className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("vmm.nativeProjects.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("vmm.nativeProjects.description")}</p>
-        </div>
-        <Button disabled={effectiveBusy} onClick={() => void runAction("native_project_catalog")} type="button" variant="outline">
-          <RefreshCw className="size-4" aria-hidden="true" />
-          {t("vmm.nativeProjects.refresh")}
-        </Button>
-      </div>
+      <PageTabs
+        actions={<>
+          <Button disabled={effectiveBusy} onClick={() => void runAction("native_project_catalog")} size="sm" type="button" variant="outline">
+            <RefreshCw className="size-4" aria-hidden="true" />
+            {t("vmm.nativeProjects.refresh")}
+          </Button>
+          <Button disabled={effectiveBusy} onClick={() => setCreateOpen(true)} size="sm" type="button"><Plus className="size-4" aria-hidden="true" />{t("vmm.nativeProjects.createTitle")}</Button>
+        </>}
+        ariaLabel={t("memory.identity.nativeTitle")}
+        className="vmm-page-tabs"
+        onValueChange={setProjectView}
+        options={([["bindings", "vmm.nativeProjects.bindingsTitle"], ["catalog", "vmm.nativeProjects.catalogTitle"], ["rules", "memory.workspace.projectRules"], ["migration", "vmm.nativeProjects.migrateTitle"]] as const).map(([value, label]) => ({ label: t(label), value }))}
+        value={projectView}
+      />
 
       {notice ? <p className="rounded-lg border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">{notice}</p> : null}
       {effectiveBusy ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("vmm.nativeProjects.running")}</p> : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="vmm-section-tabs">
-          {([['bindings','vmm.nativeProjects.bindingsTitle'],['catalog','vmm.nativeProjects.catalogTitle'],['rules','memory.workspace.projectRules'],['migration','vmm.nativeProjects.migrateTitle']] as const).map(([id,label]) => <button type="button" key={id} aria-pressed={projectView === id} onClick={() => setProjectView(id)}>{t(label)}</button>)}
-        </div>
-        <Button disabled={effectiveBusy} onClick={() => setCreateOpen(true)}><Plus className="size-4" />{t("vmm.nativeProjects.createTitle")}</Button>
-      </div>
       <Dialog open={createOpen} onOpenChange={(open) => { if (!effectiveBusy) setCreateOpen(open) }}><DialogContent>
         <DialogHeader><DialogTitle>{t("vmm.nativeProjects.createTitle")}</DialogTitle><DialogDescription>{t("vmm.nativeProjects.createDescription")}</DialogDescription></DialogHeader>
         <div className="grid gap-3">
@@ -425,12 +424,18 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
 
       </div>
       <div hidden={projectView !== "rules"} className="space-y-4">
-      <Label>{t("memory.projectRetention.select")}</Label>
-      <NativeProjectSelect catalog={catalog} onChange={setMemoryProjectId} placeholder={t("memory.projectRetention.select")} value={memoryProjectId} />
-      <div className="vmm-section-tabs">
-        <button type="button" aria-pressed={projectRuleGroup === "retention"} onClick={() => setProjectRuleGroup("retention")}>{t("memory.projectRetention.title")}</button>
-        <button type="button" aria-pressed={projectRuleGroup === "profile"} onClick={() => setProjectRuleGroup("profile")}>{t("memory.projectProfile.title")}</button>
-      </div>
+      {/* The edited project sits in the rule-group tab row, so both rule groups visibly share one target.
+          被编辑项目位于规则分组标签行内，使两个规则分组明确共用同一目标。 */}
+      <PageTabs
+        actions={<div className="vmm-inline-field">
+          <Label>{t("memory.projectRetention.select")}</Label>
+          <NativeProjectSelect ariaLabel={t("memory.projectRetention.select")} catalog={catalog} onChange={setMemoryProjectId} placeholder={t("memory.projectRetention.select")} value={memoryProjectId} />
+        </div>}
+        ariaLabel={t("memory.workspace.projectRules")}
+        onValueChange={setProjectRuleGroup}
+        options={[{ label: t("memory.projectRetention.title"), value: "retention" }, { label: t("memory.projectProfile.title"), value: "profile" }]}
+        value={projectRuleGroup}
+      />
       {catalog && memoryProjectId ? <>
         <div hidden={projectRuleGroup !== "retention"}><VmmNativeProjectRetention selectedProjectId={Number(memoryProjectId)} projects={catalog.projects} busy={effectiveBusy || projectView !== "rules" || projectRuleGroup !== "retention"} onRunAction={runAction} /></div>
         <div hidden={projectRuleGroup !== "profile"}><VmmNativeProjectProfilePolicy selectedProjectId={Number(memoryProjectId)} projects={catalog.projects} busy={effectiveBusy || projectView !== "rules" || projectRuleGroup !== "profile"} onRunAction={runAction} /></div>
@@ -445,13 +450,14 @@ function VmmNativeProjectPage({ busy, notice, projects, onRunAction }: VmmNative
 
 // NativeProjectSelect renders one native project selector with an explicit placeholder.
 // NativeProjectSelect 渲染一个带明确占位文案的原生项目选择器。
-function NativeProjectSelect({ catalog, onChange, placeholder, value }: {
+function NativeProjectSelect({ ariaLabel, catalog, onChange, placeholder, value }: {
+  ariaLabel?: string
   catalog: VmmNativeProjectCatalogSummary | null
   onChange: (value: string) => void
   placeholder: string
   value: string
 }) {
-  return <Select onValueChange={onChange} value={value}><SelectTrigger><SelectValue placeholder={placeholder} /></SelectTrigger><SelectContent>{(catalog?.projects ?? []).map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name}</SelectItem>)}</SelectContent></Select>
+  return <Select onValueChange={onChange} value={value}><SelectTrigger aria-label={ariaLabel}><SelectValue placeholder={placeholder} /></SelectTrigger><SelectContent>{(catalog?.projects ?? []).map((project) => <SelectItem key={project.projectId} value={String(project.projectId)}>{project.name}</SelectItem>)}</SelectContent></Select>
 }
 
 // NativePreviewCard renders exact counts and the only commit action for a destructive preview.

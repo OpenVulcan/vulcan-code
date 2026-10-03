@@ -503,20 +503,10 @@ export function LuaSkillsSettingsPanel(props: {
     }
   }, [props.actions, props.catalog.managedRuntimeProgress, t])
 
+  // The page title, description and restart state live in the feature header, so the body starts with the settings.
+  // 页面标题、说明与重启状态位于功能页头部，主体直接从设置项开始。
   return (
     <section className="skill-page-body lua-settings-page-body">
-      <header className="agent-catalog-toolbar lua-settings-toolbar">
-        <div className="agent-catalog-toolbar-heading">
-          <div>
-            <h3>{t("skills.navigation.luaSettings")}</h3>
-            <p>{t("skills.luaSettings.description")}</p>
-          </div>
-          {props.catalog.restartRequired ? (
-            <span className="lua-settings-restart-badge">{t("skills.luaSettings.restartRequired")}</span>
-          ) : null}
-        </div>
-      </header>
-
       <fieldset disabled={saving || retryingTarget !== null} className="lua-settings-content min-w-0 border-0 p-0">
         {externalUpdate ? <div className="text-sm text-[var(--vcn-content-warning)]" role="status">
           <p>{t("skills.luaSettings.settingsChangedElsewhereYour")}</p>

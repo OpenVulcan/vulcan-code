@@ -14,6 +14,7 @@ import {
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import type {
   WorkspaceGitHistoryCommit,
   WorkspaceGitHistoryPage,
@@ -172,7 +173,7 @@ export function ConversationSessionBranchMenu(props: {
           <div className="session-git-branch-list" role="listbox" aria-label={t("gitBranchMenu.label")}>
             {loadError ? <p className="session-git-branch-message is-error" role="alert">{t("gitBranchMenu.loadFailed")}：{loadError}</p> : null}
             {!loadError && !branchList ? (
-              <p className="session-git-branch-message"><LoaderCircle className="spin" size={13} />{t("gitBranchMenu.loading")}</p>
+              <StreamPlaceholder className="p-1" label={t("gitBranchMenu.loading")} shape="rows" count={4} />
             ) : null}
             {branchList && visibleBranches.length === 0 ? <p className="session-git-branch-message">{t("gitBranchMenu.empty")}</p> : null}
             {visibleBranches.map((name) => {

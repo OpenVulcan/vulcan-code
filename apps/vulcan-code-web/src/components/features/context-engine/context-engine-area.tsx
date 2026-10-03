@@ -349,41 +349,31 @@ export function ContextEngineArea(props: ContextEngineAreaProps) {
   return (
     // Measure the settings pane itself: workbench sidebars can leave a narrow pane in a wide window.
     // 测量设置面板自身：工作台侧栏可能让宽窗口中的内容区域仍然很窄。
-    <section className="@container/vce mx-auto w-full max-w-6xl space-y-5">
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b pb-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <BrainCircuit className="size-5" />
-          </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold">{t("contextEngine.codeSemanticIndex")}</h2>
-              <span className={readiness?.ready
-                ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-success)] dark:text-emerald-300"
-                : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-warning)] dark:text-amber-300"}
-              >
-                {readiness?.ready ? t("contextEngine.ready") : t("contextEngine.closed")}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("contextEngine.providesProjectScopedSemantic")}
-            </p>
+    // The host header already names this page, so notes, readiness and recheck share one toolbar row.
+    // 宿主标题栏已显示本页名称，因此说明、就绪状态与重新检查共用一行工具栏。
+    <section className="@container/vce w-full space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
+          <div className="flex max-w-xl items-start gap-2">
+            <BrainCircuit className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
+            <span>{t("contextEngine.queryRewriting")}</span><VceHelpTooltip label={t("contextEngine.queryRewritingNotes")}>{t("contextEngine.queryRewritingKeepsModel")}</VceHelpTooltip>
+          </div>
+          <div className="flex max-w-xl items-start gap-2">
+            <Database className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
+            <span>{t("contextEngine.indexStorage")}</span><VceHelpTooltip label={t("contextEngine.indexStorageNotes")}>{t("contextEngine.indexStorageReusesVulcancode")}</VceHelpTooltip>
           </div>
         </div>
-        <Button disabled={busyKey !== null} onClick={() => void recheck()} size="sm" variant="outline">
-          <RefreshCw className="size-3.5" />
-          {t("contextEngine.recheck")}
-        </Button>
-      </header>
-
-      <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
-        <div className="flex max-w-xl items-start gap-2">
-          <BrainCircuit className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
-          <span>{t("contextEngine.queryRewriting")}</span><VceHelpTooltip label={t("contextEngine.queryRewritingNotes")}>{t("contextEngine.queryRewritingKeepsModel")}</VceHelpTooltip>
-        </div>
-        <div className="flex max-w-xl items-start gap-2">
-          <Database className="mt-0.5 size-3.5 shrink-0 text-foreground/60" />
-          <span>{t("contextEngine.indexStorage")}</span><VceHelpTooltip label={t("contextEngine.indexStorageNotes")}>{t("contextEngine.indexStorageReusesVulcancode")}</VceHelpTooltip>
+        <div className="flex items-center gap-2">
+          <span className={readiness?.ready
+            ? "rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-success)] dark:text-emerald-300"
+            : "rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-[var(--vcn-content-warning)] dark:text-amber-300"}
+          >
+            {readiness?.ready ? t("contextEngine.ready") : t("contextEngine.closed")}
+          </span>
+          <Button disabled={busyKey !== null} onClick={() => void recheck()} size="sm" variant="outline">
+            <RefreshCw className="size-3.5" />
+            {t("contextEngine.recheck")}
+          </Button>
         </div>
       </div>
 

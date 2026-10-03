@@ -4,10 +4,14 @@ import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-c
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { VceProjectSurfaceProvider } from "@/components/features/code-context/vce-project-surface";
 import { VceJobObserverProvider } from "@/components/features/code-context/vce-job-observer-context";
+import type { SkillActionProps } from "@/components/features/skills/skill-area-types";
 import {
   FeatureShell as ExtractedFeatureShell,
+  areaIconMap,
+  pluginDetailMountIcon,
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
+import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activity-rail";
 import { RepositoryLink } from "@/components/shell/app-chrome";
 import { StartupOverlay } from "@/components/shell/startup-screen";
 import {
@@ -29,6 +33,7 @@ import {
   type ProjectSettingsDialogTarget,
 } from "@/components/project/project-settings-types";
 import {
+  ProjectSessionTree,
   type ConversationMenuAction,
 } from "@/components/project/project-sidebar";
 import {
@@ -63,12 +68,15 @@ import {
   WorkspaceShell,
   type WorkspaceMainView,
 } from "@/components/workspace/workspace-shell";
+import { WORKSPACE_FEATURE_AREAS } from "@/components/workspace/workspace-shell/types";
 import type {
   SkillSubAreaId,
 } from "@/components/features/skills/skills-area";
 import {
+  enabledPluginDetailMounts,
   findEnabledPluginDetailMount,
   isPluginDetailSubArea,
+  localizedPluginMountLabel,
 } from "@/components/features/skills/skill-area-types";
 import type {
   MemorySubAreaId,
@@ -250,9 +258,9 @@ export function WorkbenchLayout(props: {
       resetNotificationPresentationContext();
     };
   }, [activeArea]);
-  // navigationSidebarOpen preserves sidebar collapse state across workspace and settings shells.
-  // navigationSidebarOpen 在工作台与设置外壳之间保留侧栏折叠状态。
-  const [navigationSidebarOpen, setNavigationSidebarOpen] = React.useState(true);
+  // sessionPanelOpen is the only collapsible panel state; feature menus and the settings tree always stay beside the rail.
+  // sessionPanelOpen 是唯一可折叠的面板状态；功能菜单与设置树始终位于轨道旁。
+  const [sessionPanelOpen, setSessionPanelOpen] = React.useState(true);
   // workspaceMainView stores the selected main surface inside the workbench.
   // workspaceMainView 保存工作台内部当前选中的主内容界面。
   const [workspaceMainView, setWorkspaceMainView] = React.useState<WorkspaceMainView>("chat");
@@ -575,11 +583,6 @@ export function WorkbenchLayout(props: {
       setWorkspaceMainView("memory");
       return;
     }
-    if (area === "knowledge") {
-      setActiveArea("chat");
-      setWorkspaceMainView("knowledge");
-      return;
-    }
     setActiveArea(area);
     setWorkspaceMainView("chat");
   }, []);
@@ -589,30 +592,25 @@ export function WorkbenchLayout(props: {
     setActiveArea("chat");
     setWorkspaceMainView("skills");
   }, []);
-  // handleOpenWorkspaceAgentSkills opens prompt skill management inside the workbench main panel.
-  // handleOpenWorkspaceAgentSkills 在工作台主面板内部打开提示词技能管理。
-  const handleOpenWorkspaceAgentSkills = React.useCallback(() => {
-    setActiveArea("chat");
-    setWorkspaceMainView("agent-skills");
-  }, []);
-  // handleOpenWorkspaceAgents opens agent management inside the workbench main panel.
-  // handleOpenWorkspaceAgents 在工作台主面板内部打开智能体管理。
-  const handleOpenWorkspaceAgents = React.useCallback(() => {
-    setActiveArea("chat");
-    setWorkspaceMainView("agents");
-  }, []);
   // handleOpenWorkspaceMemory opens memory settings inside the workbench main panel.
   // handleOpenWorkspaceMemory 在工作台主面板内部打开记忆设置。
   const handleOpenWorkspaceMemory = React.useCallback(() => {
     setActiveArea("chat");
     setWorkspaceMainView("memory");
   }, []);
-  // handleOpenWorkspaceKnowledge opens knowledge library management inside the workbench main panel.
-  // handleOpenWorkspaceKnowledge 在工作台主面板内打开知识库管理。
+  // handleOpenWorkspaceKnowledge opens knowledge library management under plugin management in the workbench main panel.
+  // handleOpenWorkspaceKnowledge 在工作台主面板的插件管理下打开知识库管理。
   const handleOpenWorkspaceKnowledge = React.useCallback(() => {
     setActiveArea("chat");
-    setWorkspaceMainView("knowledge");
+    setWorkspaceMainView("skills");
+    setActiveWorkbenchSkillSubArea("knowledge");
   }, []);
+  // handleOpenRuntimeDiagnostics leaves plugin management for the application-wide runtime diagnostics settings page.
+  // handleOpenRuntimeDiagnostics 从插件管理跳转到应用全局运行诊断设置页。
+  const handleOpenRuntimeDiagnostics = React.useCallback(() => {
+    setActiveSettingsSubArea("runtime-diagnostics");
+    handleSelectTopFeatureArea("settings");
+  }, [handleSelectTopFeatureArea]);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
   const handleOpenWorkspaceChat = React.useCallback(() => {
@@ -701,7 +699,7 @@ export function WorkbenchLayout(props: {
     handleProjectMenuAction,
     handleProjectSettingsVmmSave,
     handleProjectSettingsAgentSkillSave,
-    luaSkillActions,
+    luaSkillActions: luaSkillCatalogActions,
     agentSkillActions,
     agentActions,
     handleProjectIconConfirm,
@@ -732,6 +730,13 @@ export function WorkbenchLayout(props: {
     applySubagentCatalogUpdate,
     handleOpenWorkspaceChat,
   });
+  // luaSkillActions adds the MCP server page hosted by plugin management to the catalog lifecycle actions.
+  // luaSkillActions 在目录生命周期动作之外加入插件管理承载的 MCP 服务器页面动作。
+  const luaSkillActions = React.useMemo<SkillActionProps>(() => ({
+    ...luaSkillCatalogActions,
+    onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
+    onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
+  }), [applySkillWorkbenchAction, luaSkillCatalogActions]);
   // handleWorkbenchProjectMenuAction owns the UI-only terminal entry before delegating persisted actions.
   // handleWorkbenchProjectMenuAction 在委托持久化动作前处理仅属于界面的终端入口。
   const handleWorkbenchProjectMenuAction = React.useCallback((
@@ -1016,6 +1021,71 @@ export function WorkbenchLayout(props: {
     selectedConversationIdRef,
     setSelectedConversationId,
   ]);
+
+  // railEntries lists built-in areas first, then every enabled plugin detail page from the live catalog.
+  // railEntries 先列出内置区域，再列出实时目录中每个已启用的插件详情页。
+  const railEntries = React.useMemo<ActivityRailEntry[]>(() => {
+    const builtIns = WORKSPACE_FEATURE_AREAS.map((area): ActivityRailEntry => ({
+      id: area.id,
+      label: i18n.t(area.label),
+      icon: areaIconMap[area.id],
+      active: activeArea === "chat" && workspaceMainView === area.id,
+      onSelect: () => {
+        // Plugin detail pages own their rail entries, so the plugin entry itself opens plugin management.
+        // 插件详情页拥有各自的轨道入口，因此插件入口本身打开插件管理。
+        if (area.id === "skills" && isPluginDetailSubArea(activeWorkbenchSkillSubArea)) {
+          setActiveWorkbenchSkillSubArea("catalog");
+        }
+        handleSelectTopFeatureArea(area.id);
+      },
+    }));
+    const pluginPages = enabledPluginDetailMounts(workbenchState.plugins).map((selection): ActivityRailEntry => ({
+      id: selection.subAreaId,
+      label: localizedPluginMountLabel(selection, i18n.locale),
+      icon: pluginDetailMountIcon(selection.mount.icon),
+      active: activeArea === "chat" && workspaceMainView === "skills" && activeWorkbenchSkillSubArea === selection.subAreaId,
+      parentId: "skills",
+      onSelect: () => {
+        setActiveWorkbenchSkillSubArea(selection.subAreaId);
+        handleSelectTopFeatureArea("skills");
+      },
+    }));
+    return [...builtIns, ...pluginPages];
+  }, [activeArea, activeWorkbenchSkillSubArea, handleSelectTopFeatureArea, i18n, workbenchState.plugins, workspaceMainView]);
+  // activityRail is shared by the workspace and settings shells so navigation stays put across areas.
+  // activityRail 由工作台与设置外壳共用，使导航在区域切换时保持不动。
+  const activityRail = (
+    <ActivityRail
+      entries={railEntries}
+      sessionsActive={activeArea === "chat" && workspaceMainView === "chat"}
+      settingsActive={activeArea === "settings"}
+      onSelectSessions={handleOpenWorkspaceChat}
+      onSelectSettings={() => handleSelectTopFeatureArea("settings")}
+      // The flyout reuses the session panel's tree and persisted expansion so both surfaces stay identical.
+      // 浮层复用会话面板的会话树与持久化展开状态，使两处界面保持一致。
+      sessionTree={(
+        <ProjectSessionTree
+          activeProjectId={activeProjectId}
+          conversations={consoleWorkbenchState.conversations}
+          expandedProjectIds={consoleWorkbenchState.expandedProjectIds}
+          onConversationMenuAction={handleConversationMenuAction}
+          onCreateConversation={handleCreateConversationForProject}
+          onCreateProject={handleCreateProject}
+          onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
+          onProjectMenuAction={handleWorkbenchProjectMenuAction}
+          onReorderProjects={handleReorderProjects}
+          onSelectConversation={handleSelectConversation}
+          onSelectProject={setActiveProjectId}
+          pinnedConversationIds={pinnedConversationIds}
+          projects={consoleWorkbenchState.projects}
+          selectedConversationId={selectedConversationId}
+        />
+      )}
+      selectedConversationId={selectedConversationId}
+      titlebarDragRegion={windowDragRegionEnabled}
+      onTitlebarDoubleClick={handleTitlebarDoubleClick}
+    />
+  );
 
   React.useEffect(() => {
     notificationCoordinator.setRouteHandler((route) => {
@@ -1337,8 +1407,9 @@ export function WorkbenchLayout(props: {
             activeSkillSubArea={activeWorkbenchSkillSubArea}
             activeMemorySubArea={activeWorkbenchMemorySubArea}
             mainView={workspaceMainView}
-            sidebarOpen={navigationSidebarOpen}
-            onSidebarOpenChange={setNavigationSidebarOpen}
+            sidebarOpen={sessionPanelOpen}
+            onSidebarOpenChange={setSessionPanelOpen}
+            rail={activityRail}
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
@@ -1353,16 +1424,13 @@ export function WorkbenchLayout(props: {
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversationForProject}
             onCreateProject={handleCreateProject}
-            onOpenSkills={handleOpenWorkspaceSkills}
-            onOpenAgentSkills={handleOpenWorkspaceAgentSkills}
-            onOpenAgents={handleOpenWorkspaceAgents}
             onOpenCredentialManagement={() => {
               setActiveSettingsSubArea("credential-management")
               handleSelectTopFeatureArea("settings")
             }}
             onOpenMemory={handleOpenWorkspaceMemory}
             onOpenKnowledge={handleOpenWorkspaceKnowledge}
-            onSelectArea={handleSelectTopFeatureArea}
+            onOpenRuntimeDiagnostics={handleOpenRuntimeDiagnostics}
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
             onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
@@ -1438,8 +1506,7 @@ export function WorkbenchLayout(props: {
             } : undefined}
             activeArea={activeArea}
             activeFeature={activeFeature}
-            sidebarOpen={navigationSidebarOpen}
-            onSidebarOpenChange={setNavigationSidebarOpen}
+            rail={activityRail}
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
             onSelectArea={handleSelectTopFeatureArea}
@@ -1468,8 +1535,6 @@ export function WorkbenchLayout(props: {
               },
               onClearSelectedProviderApiTraceDirectory: clearSelectedProviderApiTraceDirectory,
               onSaveProviderRetrySettings: (request) => applySkillWorkbenchAction(async () => (await saveProviderRetrySettings(request)) ?? workbenchStateRef.current),
-              onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
-              onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
               onRestoreArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await restoreArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
               onDeleteArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await deleteArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
             }}

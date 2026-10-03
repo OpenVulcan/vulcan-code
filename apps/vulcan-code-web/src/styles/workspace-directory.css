@@ -14,6 +14,9 @@
   height: 100%;
   min-height: 0;
 }
+/* Pages whose menu lives in the panel beside the rail give the whole width to their content. */
+/* 菜单位于轨道旁面板的页面将全部宽度交给正文。 */
+.workspace-directory-layout[data-navigation-mode="none"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .workspace-directory-navigation {
   min-width: 0;
   min-height: 0;
@@ -32,7 +35,9 @@
   font-weight: 500;
 }
 .vmm-nav-group + .vmm-nav-group { margin-top: 22px; }
-.workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+/* Row rules below also style the same feature menus when they sit in the panel beside the rail. */
+/* 以下菜单行规则同样作用于位于轨道旁面板中的同一功能菜单。 */
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -50,44 +55,44 @@
   font-weight: 400;
   line-height: 20px;
 }
-.workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
   background: var(--muted);
   color: var(--foreground);
 }
-.workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   background: var(--accent);
   color: var(--accent-foreground);
   box-shadow: inset 2px 0 var(--ring);
   font-weight: 600;
 }
-.workspace-directory-navigation button:focus-visible {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) button:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
   border-radius: var(--vcn-radius-md);
 }
-.workspace-directory-navigation svg { width: 16px; height: 16px; flex-shrink: 0; }
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) svg { width: 16px; height: 16px; flex-shrink: 0; }
 /* Provider labels share the directory width; counts stay aligned without truncating icons. */
 /* 供应商标签共用目录宽度；数量保持对齐，不挤压图标。 */
-.workspace-directory-navigation .settings-directory-label {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) .settings-directory-label {
   min-width: 0;
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.workspace-directory-navigation .workspace-tool-panel-menu-row > small {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) .workspace-tool-panel-menu-row > small {
   margin-left: auto;
   flex-shrink: 0;
   font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
-.workspace-directory-navigation .agent-category-floating-row {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) .agent-category-floating-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
 }
-.workspace-directory-navigation .agent-skill-category-floating-row { padding: 0; }
-.workspace-directory-navigation .agent-skill-category-floating-main { min-height: 40px; padding: 8px 10px; gap: 10px; }
-.workspace-directory-navigation strong {
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) .agent-skill-category-floating-row { padding: 0; }
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) .agent-skill-category-floating-main { min-height: 40px; padding: 8px 10px; gap: 10px; }
+:is(.workspace-directory-navigation, .workspace-feature-panel-nav, .workspace-tab-strip) strong {
   min-width: 22px;
   height: 20px;
   border-radius: var(--vcn-radius-sm);
@@ -97,6 +102,48 @@
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
+/* Feature menus in the panel beside the rail use the session rows' geometry instead of the in-page directory size. */
+/* 轨道旁面板中的功能菜单使用会话行的尺寸，而非页内目录尺寸。 */
+.workspace-feature-panel-nav {
+  padding: 2px 10px 12px;
+}
+
+.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+  min-height: 36px;
+  height: auto;
+  margin: 1px 0;
+  padding: 8px;
+  border: 1px solid transparent;
+  color: var(--sidebar-foreground);
+}
+
+.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+
+.workspace-feature-panel-nav :is(.workspace-tool-panel-menu-row, .vmm-nav-row) > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-feature-panel-nav .agent-skill-category-floating-row {
+  padding: 0;
+}
+
+.workspace-feature-panel-nav .agent-skill-category-floating-main {
+  min-height: 34px;
+  padding: 7px 8px;
+  gap: 9px;
+}
+
+.workspace-feature-panel-nav :is(.workspace-directory-heading, .vmm-nav-heading) {
+  padding: 8px 8px 6px;
+  font-size: var(--vcn-font-size-xs);
+}
+
 .workspace-directory-content {
   width: 100%;
   max-width: none;
@@ -145,13 +192,17 @@
   .agent-management-surface .agent-definition-row-actions { grid-column: auto; justify-content: flex-end; }
 }
 
-/* Tabs mode turns short page menus into one underlined strip; the active tab carries the flame accent. */
-/* 标签模式将较短的页面菜单变为一条下划线标签条，当前标签使用火焰强调色。 */
+/* Tabs mode turns short page menus into one underlined strip; the active tab carries the flame accent.
+   The strip rules are shared by the directory layout's tabs mode and the standalone in-page PageTabs. */
+/* 标签模式将较短的页面菜单变为一条下划线标签条，当前标签使用火焰强调色。
+   标签条规则由目录布局的标签模式与独立的页内 PageTabs 共用。 */
 .workspace-directory-layout[data-navigation-mode="tabs"] {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-navigation {
+.workspace-tab-strip {
+  position: relative;
+  min-width: 0;
   max-height: none;
   padding: 0;
   overflow-x: auto;
@@ -161,13 +212,13 @@
   background: transparent;
   scrollbar-width: none;
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] :is(.workspace-directory-heading, .vmm-nav-heading) { display: none; }
-.workspace-directory-layout[data-navigation-mode="tabs"] :is(.workspace-directory-menu-list, .vmm-workspace-nav) {
+.workspace-tab-strip :is(.workspace-directory-heading, .vmm-nav-heading) { display: none; }
+.workspace-tab-strip :is(.workspace-directory-menu-list, .vmm-workspace-nav) {
   display: flex;
   flex-wrap: nowrap;
   gap: 2px;
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
+.workspace-tab-strip :is(.workspace-tool-panel-menu-row, .vmm-nav-row) {
   position: relative;
   flex: 0 0 auto;
   width: auto;
@@ -180,19 +231,21 @@
   white-space: nowrap;
   transition: color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out), background-color var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
+.workspace-tab-strip :is(.workspace-tool-panel-menu-row, .vmm-nav-row):hover {
   background: color-mix(in srgb, var(--muted) 60%, transparent);
   color: var(--foreground);
 }
-.workspace-directory-layout[data-navigation-mode="tabs"] .workspace-directory-navigation :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
+.workspace-tab-strip :is(.workspace-tool-panel-menu-row.active, .vmm-nav-row[aria-current="page"]) {
   background: transparent;
   box-shadow: none;
   color: var(--foreground);
   font-weight: 600;
 }
-/* One shared underline slides between tabs; the layout measures the active row and supplies its offset and width. */
-/* 一条共享下划线在标签间滑动；布局测量当前行并提供其偏移与宽度。 */
-.workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-navigation { position: relative; }
+.workspace-tab-strip :is(.workspace-tool-panel-menu-row, .vmm-nav-row):disabled { cursor: not-allowed; opacity: 0.5; }
+.workspace-tab-strip :is(.workspace-tool-panel-menu-row, .vmm-nav-row):disabled:hover { background: transparent; color: var(--muted-foreground); }
+.workspace-tab-strip .settings-directory-label { flex: none; overflow: visible; }
+/* One shared underline slides between tabs; the strip owner measures the active row and supplies its offset and width. */
+/* 一条共享下划线在标签间滑动；标签条持有者测量当前行并提供其偏移与宽度。 */
 .workspace-directory-tab-indicator {
   --tab-indicator-inset: 12px;
   position: absolute;
@@ -214,3 +267,30 @@
     opacity var(--vcn-duration-fast, 120ms) var(--vcn-ease-out, ease-out);
 }
 .workspace-directory-layout[data-navigation-mode="tabs"] > .workspace-directory-content { padding: 20px 0 0; }
+/* In-page tab strips own the section divider; trailing page actions sit on the same line, above the divider. */
+/* 页内标签条承担分区分隔线；尾部页面操作位于同一行、分隔线上方。 */
+.page-tabs {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.page-tabs > .workspace-tab-strip { flex: 1 1 auto; border-bottom: 0; }
+.page-tabs-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding-bottom: 4px; }
+/* A page that opens with a tab strip starts close to the header: the tab rows already pad their labels, so the
+   scroll body's full top padding would leave a visibly taller gap than card-led pages. The chain follows first
+   children through page wrappers (memory pages nest five deep); a directory body under a tab strip keeps its own
+   spacing because that strip already divides it from the header. */
+/* 以标签条开头的页面紧贴标题栏：标签行本身已为文字留出内距，若滚动正文再保留完整顶部内距，间距会明显高于以卡片
+   开头的页面。选择器沿页面包装层的首个子元素向下匹配（记忆页嵌套五层）；位于标签条下方的目录正文已由标签条与
+   标题栏隔开，保留其原有间距。 */
+:is(.settings-page-body, .workspace-directory-content:not([data-navigation-mode="tabs"] > *)):has(
+  > :is(.page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :is(.page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :first-child > :is(.page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :first-child > :first-child > :is(.page-tabs, [data-navigation-mode="tabs"]):first-child,
+  > :first-child > :first-child > :first-child > :first-child > :is(.page-tabs, [data-navigation-mode="tabs"]):first-child
+) {
+  padding-top: 8px;
+}

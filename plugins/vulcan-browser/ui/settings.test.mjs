@@ -26,7 +26,7 @@ async function mount(invoke, strict = false) {
     navigationTimeoutLabel: "Navigation timeout (ms)",
     settleTimeoutLabel: "Settle time (ms)",
   };
-  const sdk = { React, invoke, t: (key, fallback) => labels[key] ?? fallback, components: { Button } };
+  const sdk = { React, invoke, t: (key, fallback) => labels[key] ?? fallback, components: { Button, StreamPlaceholder: ({ label }) => React.createElement("p", { role: "status" }, label) } };
   const panel = createPluginPanel(sdk);
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
   await React.act(async () => root.render(React.createElement(

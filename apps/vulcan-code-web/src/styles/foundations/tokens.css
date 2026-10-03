@@ -1,6 +1,9 @@
 /* Defines the first semantic aliases for the unified visual foundation. */
 /* 定义统一视觉基础的第一批语义别名。 */
 :root {
+  /* Title bar height shared by page headers, the panel title strip and the rail brand, so their bottom edges form one line. */
+  /* 页面标题栏、面板标题条与轨道品牌区共用的标题栏高度，使三者底边连成一线。 */
+  --vcn-titlebar-height: 46px;
   --vcn-surface-page: var(--background);
   --vcn-surface-panel: var(--card);
   --vcn-surface-subtle: var(--muted);

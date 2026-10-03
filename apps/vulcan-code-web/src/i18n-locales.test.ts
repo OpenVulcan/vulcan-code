@@ -15,10 +15,14 @@ describe("device language detection", () => {
   // Device tags resolve by language; Chinese resolves by script, then region; anything else falls back to English.
   // 设备标签按语言解析；中文先按书写系统再按地区解析；其他语言回退到英文。
   it.each<[string[], LocaleCode]>([
-    [["zh-Hant-HK"], "zh-TW"],
+    [["zh-Hant-HK"], "zh-HK"],
+    [["zh-Hant"], "zh-TW"],
+    [["zh-Hant-TW"], "zh-TW"],
     [["zh-TW"], "zh-TW"],
-    [["zh-HK"], "zh-TW"],
+    [["zh-HK"], "zh-HK"],
+    [["zh_HK"], "zh-HK"],
     [["zh_MO"], "zh-TW"],
+    [["zh-Hans-HK"], "zh-CN"],
     [["zh-Hans-SG"], "zh-CN"],
     [["zh"], "zh-CN"],
     [["ja"], "ja-JP"],
@@ -40,15 +44,17 @@ describe("device language detection", () => {
   // 仅接受注册表中的精确代码作为已保存选择。
   it("accepts only exact supported codes as a saved selection", () => {
     expect(normalizeLocaleCode("zh-TW")).toBe("zh-TW")
+    expect(normalizeLocaleCode("zh-HK")).toBe("zh-HK")
     expect(normalizeLocaleCode("zh")).toBeNull()
     expect(normalizeLocaleCode("ar-SA")).toBeNull()
     expect(matchLocaleTag("")).toBeNull()
   })
 
-  // Host-provided bilingual text uses Chinese for both Chinese scripts and English elsewhere.
-  // 宿主提供的双语文本对两种中文使用中文，其他语言使用英文。
+  // Host-provided bilingual text uses Chinese for all Chinese locales and English elsewhere.
+  // 宿主提供的双语文本对所有中文语言使用中文，其他语言使用英文。
   it("reads the Chinese side of bilingual host data only for Chinese locales", () => {
     expect(pickBilingualText("zh-TW", "中", "en")).toBe("中")
+    expect(pickBilingualText("zh-HK", "中", "en")).toBe("中")
     expect(pickBilingualText("ja-JP", "中", "en")).toBe("en")
   })
 })

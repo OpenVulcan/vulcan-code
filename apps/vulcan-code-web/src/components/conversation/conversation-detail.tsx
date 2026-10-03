@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -294,9 +295,7 @@ function DiffDetailPanelLoading() {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   return (
-    <div className="detail-empty-state">
-      <span>{t("conversation.diff.loadingPanel")}</span>
-    </div>
+    <StreamPlaceholder className="w-full min-w-0 p-4" fill label={t("conversation.diff.loadingPanel")} shape="rows" />
   );
 }
 

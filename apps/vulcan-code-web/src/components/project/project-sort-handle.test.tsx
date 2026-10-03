@@ -33,11 +33,9 @@ it("sorts with the handle while expansion and new conversation remain independen
   try {
     await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><SidebarProvider defaultOpen><ProjectSidebar
       projects={[{ id: "a", name: "Project A", path: "D:/a" }, { id: "b", name: "Project B", path: "D:/b" }]}
-      conversations={[]} expandedProjectIds={[]} pinnedConversationIds={new Set()} selectedConversationId={null} activeProjectId={null}
+      conversations={[]} expandedProjectIds={[]} pinnedConversationIds={new Set()} selectedConversationId={null} activeProjectId={null} rail={null}
       onConversationMenuAction={noop} onCreateConversation={create} onCreateProject={noop} onExpandedProjectIdsChange={expand}
-      onOpenAgents={noop} onOpenAgentSkills={noop} onOpenKnowledge={noop} onOpenMemory={noop} onOpenSkills={noop}
-      onProjectMenuAction={noop} onReorderProjects={reorder} onSelectArea={noop} onSelectConversation={noop} onSelectProject={select}
-      skillsActive={false} agentSkillsActive={false} agentsActive={false} memoryActive={false} knowledgeActive={false}
+      onProjectMenuAction={noop} onReorderProjects={reorder} onSelectConversation={noop} onSelectProject={select}
     /></SidebarProvider></I18nProvider>));
     const row = container.querySelector<HTMLDivElement>(".project-folder-row")!;
     const folder = row.querySelector<HTMLButtonElement>(".project-folder-button")!;

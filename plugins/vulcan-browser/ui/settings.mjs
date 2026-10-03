@@ -29,6 +29,9 @@ export function createPluginPanel(sdk) {
   // React 由宿主提供，插件不打包第二份渲染器。
   const React = sdk.React;
   const Button = sdk.components.Button;
+  // StreamPlaceholder is the shared host loading silhouette shown while Core settings load.
+  // StreamPlaceholder 是共享宿主加载轮廓，在读取 Core 设置期间显示。
+  const StreamPlaceholder = sdk.components.StreamPlaceholder;
 
   // BrowserSettingsPanel owns only a local draft; Core remains the sole persistence authority.
   // BrowserSettingsPanel 仅持有本地草稿；Core 仍是唯一的持久化权威。
@@ -126,7 +129,7 @@ export function createPluginPanel(sdk) {
         }));
     }
 
-    if (loading && draft === null) return React.createElement("p", { role: "status" }, sdk.t("settingsLabel", "Playwright Settings"));
+    if (loading && draft === null) return React.createElement(StreamPlaceholder, { className: "p-3", label: sdk.t("settingsLabel", "Playwright Settings"), shape: "fields", count: 5 });
     if (draft === null) return React.createElement("div", { className: "flex flex-col gap-2 p-3" },
       React.createElement("p", { role: "alert" }, error),
       React.createElement(Button, { onClick: () => void load(), type: "button" }, sdk.t("settingsRetry", "Retry loading")));

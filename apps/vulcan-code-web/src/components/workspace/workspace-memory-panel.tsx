@@ -2,6 +2,7 @@ import React from "react";
 import "@/styles/context-injection.css";
 import { Brain, BrainCircuit, Database, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import {
   Dialog,
   DialogContent,
@@ -849,7 +850,7 @@ function ContextInjectionLookupDialog(props: {
           <DialogDescription>{t("workspaceMemory.turnId").replace("{turnId}", String(props.state.target.turnId))}</DialogDescription>
         </DialogHeader>
         <p className="context-injection-dialog-preview">{props.state.target.content}</p>
-        {props.state.loading ? <p className="context-injection-delete-notice">{t("workspaceMemory.loadingTurn")}</p> : null}
+        {props.state.loading ? <StreamPlaceholder label={t("workspaceMemory.loadingTurn")} count={3} /> : null}
         {props.state.error ? <p className="context-injection-delete-notice">{t("workspaceMemory.lookupFailed").replace("{error}", props.state.error)}</p> : null}
         {!props.state.loading && !props.state.error ? (
           turnEntries.length > 0 ? (

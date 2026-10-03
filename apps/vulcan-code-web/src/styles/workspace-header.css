@@ -1,6 +1,6 @@
 .console-header {
   min-width: 0;
-  min-height: 46px;
+  min-height: var(--vcn-titlebar-height);
   display: flex;
   align-items: center;
   justify-content: space-between;

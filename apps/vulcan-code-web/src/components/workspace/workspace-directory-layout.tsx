@@ -8,9 +8,10 @@ const ACTIVE_TAB_ROW_SELECTOR = '.workspace-tool-panel-menu-row.active, .vmm-nav
 // WorkspaceDirectoryLayoutProps separates persistent navigation from the flexible content pane.
 // WorkspaceDirectoryLayoutProps 将固定导航与弹性内容面板分离。
 interface WorkspaceDirectoryLayoutProps {
-  // navigation contains the existing capability-filtered menu and its exact selection callbacks.
-  // navigation 包含现有能力过滤菜单及其精确选择回调。
-  navigation: ReactNode;
+  // navigation contains the existing capability-filtered menu and its exact selection callbacks;
+  // omit it when the menu lives in the navigation panel beside the rail.
+  // navigation 包含现有能力过滤菜单及其精确选择回调；菜单位于轨道旁导航面板时省略。
+  navigation?: ReactNode;
   // children is the unrestricted page body.
   // children 是不限宽的页面正文。
   children: ReactNode;
@@ -27,16 +28,18 @@ interface WorkspaceDirectoryLayoutProps {
 // Parameters: navigation, children and optional content styling. Returns the two-pane page shell.
 // 参数：导航、正文及可选正文样式。返回双面板页面外壳。
 export function WorkspaceDirectoryLayout(props: WorkspaceDirectoryLayoutProps) {
-  const navigationMode = props.navigationMode ?? "column";
+  const navigationMode = props.navigation === undefined ? "none" : props.navigationMode ?? "column";
   const navigationRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLSpanElement>(null);
   useSlidingTabIndicator(navigationRef, indicatorRef, navigationMode === "tabs");
   return <div className="workspace-directory">
     <div className="workspace-directory-layout" data-navigation-mode={navigationMode}>
-      <div className="workspace-directory-navigation" ref={navigationRef}>
-        {props.navigation}
-        {navigationMode === "tabs" ? <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} /> : null}
-      </div>
+      {navigationMode === "none" ? null : (
+        <div className={cn("workspace-directory-navigation", navigationMode === "tabs" && "workspace-tab-strip")} ref={navigationRef}>
+          {props.navigation}
+          {navigationMode === "tabs" ? <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} /> : null}
+        </div>
+      )}
       <div className={cn("workspace-directory-content", props.contentClassName)}>{props.children}</div>
     </div>
   </div>;
@@ -93,6 +96,76 @@ function useSlidingTabIndicator(
       delete indicator.dataset.animate;
     };
   }, [enabled, indicatorRef, navigationRef]);
+}
+
+// PageTabOption describes one tab of a page tab strip.
+// PageTabOption 描述页面标签条中的一个标签。
+export interface PageTabOption<Value extends string> {
+  // value is the stable identity reported on selection.
+  // value 是选择时回传的稳定标识。
+  value: Value;
+  // label is the visible tab text.
+  // label 是可见的标签文字。
+  label: ReactNode;
+  // count is an optional trailing quantity shown after the label.
+  // count 是标签文字后可选的数量。
+  count?: ReactNode;
+  // disabled keeps the tab visible but not selectable.
+  // disabled 保留标签可见但不可选择。
+  disabled?: boolean;
+}
+
+// PageTabs renders the Vulcan page tab strip: underlined tabs, one sliding flame indicator and optional trailing actions.
+// It shares every rule with the directory layout's tabs mode, so in-page section switches look like provider management.
+// PageTabs 渲染 Vulcan 页面标签条：下划线标签、一条滑动的火焰指示条及可选的尾部操作。
+// 它与目录布局的标签模式共用全部规则，使页内分区切换与供应商管理页外观一致。
+// Parameters: accessible name, options, the selected value, the selection callback and optional actions. Returns the strip.
+// 参数：无障碍名称、选项、当前值、选择回调及可选操作。返回标签条。
+export function PageTabs<Value extends string>(props: {
+  // ariaLabel names the tab navigation.
+  // ariaLabel 命名标签导航。
+  ariaLabel: string;
+  // options lists the tabs in display order.
+  // options 按显示顺序列出标签。
+  options: readonly PageTabOption<Value>[];
+  // value is the selected tab.
+  // value 是当前选中的标签。
+  value: Value;
+  // onValueChange receives the newly selected tab.
+  // onValueChange 接收新选中的标签。
+  onValueChange: (value: Value) => void;
+  // actions renders page commands at the trailing end of the strip.
+  // actions 在标签条尾部渲染页面命令。
+  actions?: ReactNode;
+  // className styles the outer strip container.
+  // className 设置外层标签条容器样式。
+  className?: string;
+}) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  const indicatorRef = useRef<HTMLSpanElement>(null);
+  useSlidingTabIndicator(stripRef, indicatorRef, true);
+  return <div className={cn("page-tabs", props.className)}>
+    <div className="workspace-tab-strip" ref={stripRef}>
+      <nav aria-label={props.ariaLabel} className="workspace-directory-menu-list">
+        {props.options.map((option) => {
+          const active = option.value === props.value;
+          return <button
+            aria-current={active ? "page" : undefined}
+            className={cn("workspace-tool-panel-menu-row", active && "active")}
+            disabled={option.disabled}
+            key={option.value}
+            onClick={() => props.onValueChange(option.value)}
+            type="button"
+          >
+            <span className="settings-directory-label">{option.label}</span>
+            {option.count === undefined || option.count === null ? null : <small>{option.count}</small>}
+          </button>;
+        })}
+      </nav>
+      <span aria-hidden className="workspace-directory-tab-indicator" ref={indicatorRef} />
+    </div>
+    {props.actions ? <div className="page-tabs-actions">{props.actions}</div> : null}
+  </div>;
 }
 
 // WorkspaceDirectoryMenu renders a named, permanently available directory without floating controls.

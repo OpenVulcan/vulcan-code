@@ -59,8 +59,6 @@ describe("context settings draft navigation", () => {
         onSaveProviderRequestTraceSettings: vi.fn(async () => undefined),
         onOpenSelectedProviderApiTraceDirectory: vi.fn(async () => undefined),
         onClearSelectedProviderApiTraceDirectory: vi.fn(async () => false),
-        onSaveMcpServer: vi.fn(async () => undefined),
-        onRemoveMcpServer: vi.fn(async () => undefined),
         onRestoreArchivedConversations: vi.fn(async () => undefined),
         onDeleteArchivedConversations: vi.fn(async () => undefined),
       }} /></I18nProvider>))

@@ -256,7 +256,8 @@ export function ProviderManagementArea() {
                 onClick={() => setCategory(value)}
                 type="button"
               >
-                <span className="settings-directory-label">{label}</span>{count !== null ? <small>{count}</small> : null}
+                {/* Counts wait for the directory so a loading page never claims zero providers. / 数量等待目录读取完成，加载中不显示为零个供应商。 */}
+                <span className="settings-directory-label">{label}</span>{count !== null && snapshot ? <small>{count}</small> : null}
               </button>
             ))}
           </WorkspaceDirectoryMenu>}>

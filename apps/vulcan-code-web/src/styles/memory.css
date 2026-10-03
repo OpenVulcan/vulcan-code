@@ -37,13 +37,21 @@
 .vmm-workspace-body { container: memory-body / inline-size; }
 .vmm-workspace-body .vmm-memory-page { overflow: visible; scrollbar-gutter: auto; }
 .vmm-workspace-body .vmm-memory-shell { min-height: 0; }
-.vmm-section-tabs { display: flex; flex-wrap: wrap; gap: 18px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-.vmm-section-tabs button { padding: 8px 0 10px; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: var(--vcn-font-size-md); }
-.vmm-section-tabs button[aria-pressed="true"] { border-color: var(--foreground); color: var(--foreground); font-weight: 600; }
-/* Pending groups retain their place while exposing their unavailable state.
-   待加载分组保留位置，同时明确显示当前不可用状态。 */
-.vmm-section-tabs button:disabled { cursor: not-allowed; opacity: 0.5; }
-.vmm-section-tabs button:focus-visible, .vmm-nav-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+/* Memory pages open with the shared page tab strip; the feature header above already names the page. */
+/* 记忆页面以共享页面标签条开头；上方功能页头已显示页面名称。 */
+.vmm-page-tabs { margin-bottom: 4px; }
+.vmm-workspace-body > .vmm-page-tabs { margin-bottom: 20px; }
+/* Pages without tabs keep their commands in one trailing toolbar instead of a heading row. */
+/* 无标签的页面将命令放在一条尾部工具栏中，而非标题行。 */
+.vmm-page-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+/* A scope picker and its apply action share one row; the field keeps its hint directly below. */
+/* 范围选择与其应用操作共用一行；字段提示紧贴其下方。 */
+.vmm-scope-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px; }
+.vmm-scope-field { display: grid; min-width: 0; gap: 8px; }
+/* A compact label-and-control pair placed inside a tab row's trailing actions. */
+/* 放在标签行尾部操作区内的紧凑标签与控件组合。 */
+.vmm-inline-field { display: flex; min-width: 0; align-items: center; gap: 8px; white-space: nowrap; }
+.vmm-nav-row:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* Let the selected session own the workspace while its hidden list retains browsing state. */
 /* 让选中会话独占工作区，同时隐藏的列表保留浏览状态。 */
@@ -91,9 +99,49 @@
 .vmm-profile-counts [data-slot="card-content"] { display: flex; flex-wrap: wrap; gap: 16px; }
 .vmm-profile-counts [data-slot="card-content"] > div { border: 0; background: transparent; padding: 0; display: flex; gap: 8px; align-items: baseline; }
 .vmm-profile-counts [data-slot="card-content"] > div > p { margin: 0; font-size: var(--vcn-font-size-md); }
-.vmm-profile-list { display: flex; flex-direction: column; gap: 0; }
-.vmm-profile-list > [data-slot="card"] { border-radius: 0; border-width: 0 0 1px; }
-.vmm-profile-list [data-slot="card-content"] { padding: 18px 4px; }
+/* Recycle batches form one divided list: identity and contents on the left, actions on the right, manual sources full width. */
+/* 回收批次组成一个分隔列表：左侧为身份与内容，右侧为动作，手动来源占满整行。 */
+.vmm-recycle-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--vcn-radius-lg); background: var(--card); }
+.vmm-recycle-batch { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 12px 16px; }
+.vmm-recycle-batch + .vmm-recycle-batch { border-top: 1px solid var(--border); }
+.vmm-recycle-batch-main { display: grid; min-width: 0; gap: 4px; }
+.vmm-recycle-batch-title { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.vmm-recycle-batch-name { min-width: 0; overflow: hidden; color: var(--foreground); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vmm-recycle-batch-reason { flex: none; border-radius: var(--vcn-radius-pill); background: var(--vcn-fill-subtle); padding: 1px 8px; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); white-space: nowrap; }
+.vmm-recycle-batch-marker { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: var(--vcn-radius-sm); color: var(--muted-foreground); }
+.vmm-recycle-batch-marker:hover { background: var(--vcn-fill-hover); color: var(--foreground); }
+.vmm-recycle-batch-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px 14px; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+.vmm-recycle-batch-meta strong { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vmm-recycle-batch-expiry { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.vmm-recycle-batch-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.vmm-recycle-batch-sources { grid-column: 1 / -1; font-size: var(--vcn-font-size-sm); }
+.vmm-recycle-batch-sources > summary { width: fit-content; cursor: pointer; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+@media (max-width: 720px) {
+  .vmm-recycle-batch { grid-template-columns: minmax(0, 1fr); }
+  .vmm-recycle-batch-actions { justify-content: flex-start; }
+}
+
+/* Profile nodes are structured records: a state and weight row, the statement, then labelled provenance facts. */
+/* 画像节点是结构化记录：状态与权重行、陈述内容，以及带标签的来源信息。 */
+.vmm-profile-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.vmm-profile-node { --vmm-profile-node-tone: var(--vcn-content-success); display: grid; min-width: 0; gap: 10px; border: 1px solid var(--border); border-radius: var(--vcn-radius-lg); background: var(--card); padding: 14px 16px; }
+.vmm-profile-node[data-state="pending"] { --vmm-profile-node-tone: var(--vcn-content-warning); }
+.vmm-profile-node[data-state="scheduled"] { --vmm-profile-node-tone: var(--vcn-content-info); }
+.vmm-profile-node:is([data-state="inactive"], [data-state="expired"]) { --vmm-profile-node-tone: var(--muted-foreground); }
+.vmm-profile-node:is([data-state="inactive"], [data-state="expired"]) .vmm-profile-node-content { color: var(--muted-foreground); }
+.vmm-profile-node-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: var(--vcn-font-size-sm); }
+.vmm-profile-node-head:empty { display: none; }
+.vmm-profile-node-state { display: inline-flex; align-items: center; gap: 7px; color: var(--vmm-profile-node-tone); font-weight: 600; }
+.vmm-profile-node-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: var(--vcn-radius-pill); background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+.vmm-profile-node-weights { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.vmm-profile-node-tag { display: inline-flex; min-height: 22px; align-items: center; border-radius: var(--vcn-radius-pill); background: var(--vcn-fill-subtle); padding: 0 9px; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); white-space: nowrap; }
+.vmm-profile-node-tag strong { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vmm-profile-node-content { margin: 0; color: var(--foreground); font-size: var(--vcn-font-size-md); line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.vmm-profile-node-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 20px; margin: 0; border-top: 1px dashed var(--border); padding-top: 10px; }
+.vmm-profile-node-facts > div { min-width: 0; }
+.vmm-profile-node-facts dt { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
+.vmm-profile-node-facts dd { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 2px 0 0; color: var(--foreground); font-size: var(--vcn-font-size-sm); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vmm-profile-node-ref { color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--vcn-font-size-xs); }
 /* Target selection is a compact form section, with readable picker width independent of identity text. */
 /* 目标选择是紧凑表单分区，选择器的可读宽度独立于身份文本。 */
 .vmm-profile-target { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 12px; border-bottom: 1px solid var(--border); }
@@ -110,6 +158,10 @@
 .vmm-project-picker { display: none; }
 .vmm-project-directory .vmm-project-list { max-height: 520px; overflow-y: auto; }
 .vmm-project-directory .vmm-project-list button { display: flex; justify-content: space-between; gap: 8px; height: auto; white-space: normal; }
+/* The identity column absorbs long names and paths; the binding state keeps its own width so it never wraps per character. */
+/* 身份列吸收较长的名称与路径；绑定状态保持自身宽度，不会逐字换行。 */
+.vmm-project-list-identity { flex: 1 1 auto; min-width: 0; }
+.vmm-project-list-state { flex: none; color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); font-weight: 400; white-space: nowrap; }
 .vmm-directory-filters { display: flex; flex-wrap: wrap; gap: 2px; }
 .vmm-linked-project-list { max-height: 240px; overflow-y: auto; margin-top: 8px; }
 .vmm-project-list button { text-align: left; padding: 10px 12px; border-radius: var(--vcn-radius-sm); overflow-wrap: anywhere; }

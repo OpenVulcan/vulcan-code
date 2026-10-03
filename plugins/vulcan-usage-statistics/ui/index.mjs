@@ -122,6 +122,9 @@ export function createPluginPanel(sdk) {
   // StatusPill is the shared Vulcan lifecycle status component.
   // StatusPill 是 Vulcan 共享生命周期状态组件。
   const StatusPill = sdk.components.StatusPill;
+  // PageTabs is the shared Vulcan page tab strip; the host header already names this page.
+  // PageTabs 是 Vulcan 共享页面标签条；宿主标题栏已显示本页名称。
+  const PageTabs = sdk.components.PageTabs;
   // MetricCard is the shared host KPI card.
   // MetricCard 是共享宿主 KPI 卡片。
   const MetricCard = sdk.components.MetricCard;
@@ -146,6 +149,9 @@ export function createPluginPanel(sdk) {
   // ErrorState is the shared host error-state component.
   // ErrorState 是共享宿主错误状态组件。
   const ErrorState = sdk.components.ErrorState;
+  // StreamPlaceholder is the shared host loading silhouette shown in place of loading sentences.
+  // StreamPlaceholder 是共享宿主加载轮廓，用于代替加载文案。
+  const StreamPlaceholder = sdk.components.StreamPlaceholder;
   // HelpTooltip renders structured details in the host portal, outside table clipping.
   // HelpTooltip 在宿主门户中渲染结构化详情，避免表格裁切。
   const HelpTooltip = sdk.components.HelpTooltip;
@@ -1119,12 +1125,12 @@ export function createPluginPanel(sdk) {
     const pricingDirty = pricingSettings && PRICE_FIELDS.some((field) => pricingDraft[field.key] !== editablePrices(pricingSettings, selectedPricingModel)[field.key]);
 
     return h("section", { className: "settings-detail-panel plugin-statistics-layout" },
-      h("div", { className: "plugin-statistics-header" },
-        h("div", null,
-          h("strong", null, text("title", "System Usage Statistics")),
-          h("p", null, text("subtitle", "The core stores Token facts only. This plugin computes non-persisted reference estimates from its own catalog.")),
-        ),
-        h(StatusPill, {
+      h(PageTabs, {
+        ariaLabel: text("sections.label", "Statistics sections"),
+        value: section,
+        onValueChange: setSection,
+        options: ["overview", "details", "pricing"].map((value) => ({ value, label: text(`sections.${value}`, value) })),
+        actions: h(StatusPill, {
           status: loading ? "loading" : error || dashboard?.healthStatus !== "ready" ? "warning" : "ready",
           label: loading
             ? text("status.loading", "Loading system statistics")
@@ -1132,13 +1138,7 @@ export function createPluginPanel(sdk) {
               ? text("status.error", "System statistics failed to load")
               : dashboard?.healthStatus === "ready" ? text("status.ready", "System statistics available") : text("status.unknown", "Statistics health is unknown"),
         }),
-      ),
-      h("nav", { className: "plugin-control-navigation", "aria-label": text("sections.label", "Statistics sections") },
-        ...["overview", "details", "pricing"].map((value) => h(Button, {
-          key: value, type: "button", size: "sm", variant: section === value ? "secondary" : "ghost",
-          "aria-pressed": section === value, onClick: () => setSection(value),
-        }, text(`sections.${value}`, value))),
-      ),
+      }),
       h("div", { className: "plugin-statistics-range-header", hidden: section === "pricing" },
         h("div", { className: "plugin-statistics-toolbar" },
           h(Button, {
@@ -1220,10 +1220,10 @@ export function createPluginPanel(sdk) {
           onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
       ),
       notice ? h("p", { className: "plugin-statistics-privacy" }, notice) : null,
-      !dashboard && !error && section !== "pricing" ? h(EmptyState, {
-        title: text("status.loading", "Loading system statistics"),
-        description: text("loading.description", "Reading the authoritative host statistics database."),
-      }) : null,
+      !dashboard && !error && section !== "pricing" ? h(React.Fragment, null,
+        h(StreamPlaceholder, { label: text("status.loading", "Loading system statistics"), shape: "tiles", count: 4 }),
+        h(StreamPlaceholder, { decorative: true, fill: true, shape: "rows" }),
+      ) : null,
       dashboard || pricingSettings ? h(React.Fragment, null,
         h("div", { className: "plugin-statistics-summary-grid", hidden: section !== "overview" || !dashboard },
           h(MetricCard, {
@@ -1326,7 +1326,7 @@ export function createPluginPanel(sdk) {
             if (!open && !settingsBusyRef.current) setSelectedPricingModel("");
           } }, h(sdk.components.DialogContent, { scrollMode: "body-scroll", className: "plugin-statistics-price-dialog" },
           h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
-            pricingSettings === null ? h("p", { role: "status" }, text("pricing.loading", "Loading model prices"))
+            pricingSettings === null ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "fields", count: 4 })
               : !selectedPricingModel ? h("p", { className: "plugin-statistics-privacy", role: "status" }, text("pricing.chooseModel", "Select a model in the table below to edit its prices."))
                 : h(React.Fragment, null,
                   h("div", { className: "plugin-statistics-section-header" },
@@ -1359,7 +1359,8 @@ export function createPluginPanel(sdk) {
             settingsError ? h("p", { role: "alert" }, settingsError) : null,
           ))),
           h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${currencyAmount("", pricingDirectory.currency).trim()}` : ""),
-          pricingDirectoryLoading ? h("p", { role: "status", className: "plugin-statistics-table-feedback" }, text("pricing.loading", "Loading model prices")) : null,
+          pricingDirectoryLoading && !pricingDirectory ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "rows", count: 8 })
+            : pricingDirectoryLoading ? h("p", { role: "status", className: "plugin-statistics-table-feedback" }, text("pricing.loading", "Loading model prices")) : null,
           pricingDirectoryError ? h("div", { role: "alert", className: "plugin-statistics-table-feedback" }, text("pricing.loadError", "Unable to load model prices"),
             h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => setPricingRetry((revision) => revision + 1) }, text("error.retry", "Retry")),
             h("details", null, h("summary", null, text("error.details", "Error details")), h("pre", { className: "plugin-control-error-details" }, pricingDirectoryError))) : null,

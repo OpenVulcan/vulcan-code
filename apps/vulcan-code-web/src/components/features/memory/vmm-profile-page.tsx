@@ -7,9 +7,9 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { Badge } from "@/components/ui/badge"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Button } from "@/components/ui/button"
+import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import {
   Card,
   CardContent,
@@ -26,7 +26,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/i18n"
@@ -51,7 +50,13 @@ interface ProfileNodeView {
   content: string
   priority: string
   level: string
+  // Typed project profile date, shown as provided by the memory service.
+  // 强类型项目画像日期，按记忆服务提供的原样显示。
   date: string
+  // Native effective time, formatted at render time so it follows the current locale.
+  // 原生生效时间，在渲染时格式化以跟随当前语言。
+  effectiveAtUnixMs?: number | null
+  expiresAtUnixMs?: number | null
   state?: VmmNativeProfileRecordSummary["effectiveState"]
   storedState?: VmmNativeProfileRecordSummary["storedState"]
   activeForInjection?: boolean
@@ -336,9 +341,6 @@ function VmmProfilePage({
   ])
 
   const effectiveTarget = vmmProfileEffectiveTarget(snapshot.experienceState.deployment, target)
-  const profileDescription = t(isNative
-    ? "memory.profile.nativeDescription"
-    : "memory.profile.description")
   // usesFixedNativeUser distinguishes the host-owned user profile from selectable external users.
   // usesFixedNativeUser 区分宿主持有的固定用户画像与可选择的外置用户。
   const usesFixedNativeUser = vmmProfileUsesFixedNativeUser(
@@ -374,7 +376,7 @@ function VmmProfilePage({
         : { ...identityPayload, target: effectiveTarget })
       if (generation !== readGeneration.current) return
       if (isNative && nodesResult?.data.kind === "native_profile_records") {
-        setNodes(nativeProfileNodes(nodesResult.data.value.nodes, locale))
+        setNodes(nativeProfileNodes(nodesResult.data.value.nodes))
         setNativeStateCounts(nodesResult.data.value.counts)
       } else if (!isNative && nodesResult?.data.kind === "profile_nodes") {
         setNodes(projectProfileNodes(nodesResult.data.value.nodes))
@@ -394,7 +396,7 @@ function VmmProfilePage({
       setReadError(error instanceof Error ? error.message : String(error))
       setReadState("failed")
     }
-  }, [effectiveTarget, isNative, loadCatalog, locale, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment, t])
+  }, [effectiveTarget, isNative, loadCatalog, onRunAction, profileCatalogReady, selectedProjectRef, selectedTargetRef, selectedUserRef, snapshot.experienceState.deployment, t])
 
   React.useEffect(() => {
     if (busy || !profileCatalogReady || !selectedTargetRef) {
@@ -459,52 +461,44 @@ function VmmProfilePage({
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.profile.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {profileDescription}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || readState === "loading" || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)}>{t("memory.profile.instruction")}</Button>
-        <Button
-          disabled={busy || readState === "loading"}
-          onClick={() => void refreshProfile()}
-          type="button"
-          variant="outline"
-        >
-          <RefreshCw className="size-4" aria-hidden="true" />
-          {t("memory.profile.refresh")}
-        </Button></div>
-      </div>
+      {/* The profile target is the page's primary view switch, so it uses the shared page tab strip.
+          画像目标是本页的主视图切换，因此使用共享页面标签条。 */}
+      <PageTabs
+        actions={<>
+          <Button disabled={busy || readState === "loading" || !profileCatalogReady || !selectedTargetRef} onClick={() => setCorrectionOpen(true)} size="sm">{t("memory.profile.instruction")}</Button>
+          <Button
+            disabled={busy || readState === "loading"}
+            onClick={() => void refreshProfile()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <RefreshCw className="size-4" aria-hidden="true" />
+            {t("memory.profile.refresh")}
+          </Button>
+        </>}
+        ariaLabel={t("memory.profile.target")}
+        className="vmm-page-tabs"
+        onValueChange={(value) => {
+          setTarget(value)
+          setNodes([])
+          setNativeStateCounts(null)
+          setBundlePreview("")
+          setBundleModeError(false)
+        }}
+        options={(["user", "project"] as const).map((value) => ({
+          disabled: busy || readState === "loading" || !profileCatalogReady,
+          label: value === "user" ? t("memory.profile.user") : t("memory.profile.project"),
+          value,
+        }))}
+        value={target}
+      />
 
       {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
       {readError ? <p role="alert" className="text-sm text-destructive">{readError}</p> : null}
       {!profileCatalogReady && readState === "idle" ? <p role="status" className="text-sm text-muted-foreground">{t("memory.profile.createAnAvailableMemory")}</p> : null}
 
       <section className="vmm-profile-target" aria-label={t("memory.profile.target")}>
-          <RadioGroup
-            className="flex flex-wrap gap-3"
-            disabled={busy || readState === "loading" || !profileCatalogReady}
-            onValueChange={(value) => {
-              setTarget(value as "user" | "project")
-              setNodes([])
-              setNativeStateCounts(null)
-              setBundlePreview("")
-              setBundleModeError(false)
-            }}
-            value={target}
-          >
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2">
-              <RadioGroupItem value="user" />
-              <span className="text-sm font-medium">{t("memory.profile.user")}</span>
-            </label>
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2">
-              <RadioGroupItem value="project" />
-              <span className="text-sm font-medium">{t("memory.profile.project")}</span>
-            </label>
-          </RadioGroup>
           {usesFixedNativeUser ? (
             <div className="vmm-profile-identity space-y-1">
               <p className="text-sm font-medium">{t("memory.profile.nativeUserName")}</p>
@@ -568,7 +562,7 @@ function VmmProfilePage({
         </Card>
       ) : null}
 
-      {readState === "loading" ? <StreamPlaceholder label={t("memory.resources.loading")} shape="rows" count={4} /> : nodes.length === 0 && readState !== "ready" ? null : nodes.length === 0 ? (
+      {readState === "loading" ? <StreamPlaceholder fill label={t("memory.resources.loading")} shape="rows" count={4} /> : nodes.length === 0 && readState !== "ready" ? null : nodes.length === 0 ? (
         <Empty className="min-h-48" variant="outlined">
           <EmptyHeader>
             <EmptyMedia variant="icon"><BrainCircuit className="size-5" /></EmptyMedia>
@@ -577,69 +571,11 @@ function VmmProfilePage({
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="vmm-profile-list">
+        <ol className="vmm-profile-list" aria-label={t("memory.profile.title")}>
           {nodes.map((node, index) => (
-            <Card key={`${node.content}-${index}`}>
-              <CardContent className="space-y-3 pt-5">
-                <p className="whitespace-pre-wrap text-sm">{node.content}</p>
-                <div className="flex flex-wrap gap-2">
-                  {node.state ? (
-                    <Badge variant={node.state === "active" ? "secondary" : "outline"}>
-                      {t(nativeProfileStateKey(node.state))}
-                    </Badge>
-                  ) : null}
-                  {node.activeForInjection === false ? (
-                    <Badge variant="outline">{t("memory.profile.notInjected")}</Badge>
-                  ) : null}
-                  {node.priority ? (
-                    <Badge variant="secondary">
-                      {t("memory.profile.priority")}{t("global.labelSeparator")}{node.priority}
-                    </Badge>
-                  ) : null}
-                  {node.level ? (
-                    <Badge variant="outline">
-                      {t("memory.profile.level")}{t("global.labelSeparator")}{node.level}
-                    </Badge>
-                  ) : null}
-                  {node.date ? <span className="text-xs text-muted-foreground">{node.date}</span> : null}
-                </div>
-                {node.sourceKind ? (
-                  <div className="space-y-1 text-xs text-muted-foreground">
-                    <p>
-                      {t("memory.profile.source")}{t("global.labelSeparator")}
-                      {t(nativeProfileSourceKey(node.sourceKind))}
-                      {node.sourceId ? ` · ${node.sourceId}` : ""}
-                    </p>
-                    {node.sourceTurnIds?.length ? (
-                      <p>
-                        {t("memory.profile.sourceTurns")}{t("global.labelSeparator")}
-                        {node.sourceTurnIds.map((turnId) => `#${turnId}`).join(", ")}
-                      </p>
-                    ) : null}
-                    {node.statusReason ? (
-                      <p>
-                        {t("memory.profile.statusReason")}{t("global.labelSeparator")}
-                        {node.statusReason}
-                      </p>
-                    ) : null}
-                    {node.updatedAtUnixMs != null ? (
-                      <p>
-                        {t("memory.profile.updatedAt")}{t("global.labelSeparator")}
-                        {formatDateTime(node.updatedAtUnixMs, locale)}
-                      </p>
-                    ) : null}
-                    {node.storedState && node.state && node.storedState !== node.state ? (
-                      <p>
-                        {t("memory.profile.storedState")}{t("global.labelSeparator")}
-                        {t(nativeProfileStateKey(node.storedState))}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
+            <ProfileNodeItem key={`${node.content}-${index}`} locale={locale} node={node} />
           ))}
-        </div>
+        </ol>
       )}
 
       <Dialog open={correctionOpen} onOpenChange={(open) => { if (!busy) setCorrectionOpen(open) }}>
@@ -700,6 +636,96 @@ function VmmProfilePage({
   )
 }
 
+// ProfileNodeFact is one labelled provenance or timing value of a profile node.
+// ProfileNodeFact 是画像节点的一项带标签的来源或时间信息。
+interface ProfileNodeFact {
+  label: string
+  value: React.ReactNode
+}
+
+// ProfileNodeItem renders one profile node as a structured record: state and weight, the statement, then labelled facts.
+// ProfileNodeItem 将单个画像节点渲染为结构化记录：状态与权重、陈述内容，以及带标签的信息。
+function ProfileNodeItem({ locale, node }: { locale: string; node: ProfileNodeView }) {
+  const { t } = useI18n()
+  const separator = t("global.labelSeparator")
+  const levelKey = profileLevelKey(node.level)
+  const facts: ProfileNodeFact[] = []
+  if (node.sourceKind) {
+    facts.push({
+      label: t("memory.profile.source"),
+      value: (
+        <>
+          {t(nativeProfileSourceKey(node.sourceKind))}
+          {node.sourceId ? <code className="vmm-profile-node-ref">{node.sourceId}</code> : null}
+        </>
+      ),
+    })
+  }
+  if (node.sourceTurnIds?.length) {
+    facts.push({ label: t("memory.profile.sourceTurns"), value: node.sourceTurnIds.map((turnId) => `#${turnId}`).join(", ") })
+  }
+  const effectiveAt = node.effectiveAtUnixMs == null ? null : formatDateTime(node.effectiveAtUnixMs, locale)
+  if (effectiveAt) {
+    facts.push({ label: t("memory.profile.effectiveAt"), value: effectiveAt })
+  } else if (node.date) {
+    facts.push({ label: t("memory.profile.date"), value: node.date })
+  }
+  const expiresAt = node.expiresAtUnixMs == null ? null : formatDateTime(node.expiresAtUnixMs, locale)
+  if (expiresAt) {
+    facts.push({ label: t("memory.profile.expiresAt"), value: expiresAt })
+  }
+  const updatedAt = node.updatedAtUnixMs == null ? null : formatDateTime(node.updatedAtUnixMs, locale)
+  if (updatedAt) {
+    facts.push({ label: t("memory.profile.updatedAt"), value: updatedAt })
+  }
+  if (node.storedState && node.state && node.storedState !== node.state) {
+    facts.push({ label: t("memory.profile.storedState"), value: t(nativeProfileStateKey(node.storedState)) })
+  }
+  if (node.statusReason) {
+    facts.push({ label: t("memory.profile.statusReason"), value: node.statusReason })
+  }
+  return (
+    <li className="vmm-profile-node" data-state={node.state}>
+      <div className="vmm-profile-node-head">
+        {node.state ? (
+          <span className="vmm-profile-node-state">
+            <span className="vmm-profile-node-dot" aria-hidden="true" />
+            {t(nativeProfileStateKey(node.state))}
+          </span>
+        ) : null}
+        {node.activeForInjection === false ? (
+          <span className="vmm-profile-node-tag">{t("memory.profile.notInjected")}</span>
+        ) : null}
+        {node.priority || node.level ? (
+          <span className="vmm-profile-node-weights">
+            {node.priority ? (
+              <span className="vmm-profile-node-tag">
+                {t("memory.profile.priority")}{separator}<strong>{node.priority}</strong>
+              </span>
+            ) : null}
+            {node.level ? (
+              <span className="vmm-profile-node-tag">
+                {t("memory.profile.level")}{separator}<strong>{levelKey ? t(levelKey) : node.level}</strong>
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+      <p className="vmm-profile-node-content">{node.content}</p>
+      {facts.length > 0 ? (
+        <dl className="vmm-profile-node-facts">
+          {facts.map((fact) => (
+            <div key={fact.label}>
+              <dt>{fact.label}</dt>
+              <dd>{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </li>
+  )
+}
+
 // ProfileStateMetricProps defines one compact native profile-state counter.
 // ProfileStateMetricProps 定义一个紧凑的原生画像状态计数器。
 interface ProfileStateMetricProps {
@@ -733,6 +759,18 @@ function nativeProfileStateKey(
   }
 }
 
+// profileLevelKey maps a known profile level token to localized user text; unknown service tokens stay verbatim.
+// profileLevelKey 将已知画像层级标记映射为本地化用户文本；未知服务标记保持原样。
+function profileLevelKey(level: string) {
+  switch (level) {
+    case "transient": return "memory.profile.levelTransient" as const
+    case "situational": return "memory.profile.levelSituational" as const
+    case "stable": return "memory.profile.levelStable" as const
+    case "persistent": return "memory.profile.levelPersistent" as const
+    default: return null
+  }
+}
+
 // nativeProfileSourceKey maps one closed native provenance token to localized user text.
 // nativeProfileSourceKey 将一个封闭的原生来源标记映射为本地化用户文本。
 function nativeProfileSourceKey(sourceKind: VmmNativeProfileRecordSummary["sourceKind"]) {
@@ -746,16 +784,16 @@ function nativeProfileSourceKey(sourceKind: VmmNativeProfileRecordSummary["sourc
 
 // nativeProfileNodes converts native all-state records into detailed profile cards.
 // nativeProfileNodes 将原生全状态记录转换为详细画像卡片。
-function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[], locale: string): ProfileNodeView[] {
+function nativeProfileNodes(nodes: VmmNativeProfileRecordSummary[]): ProfileNodeView[] {
   return nodes
     .filter((node) => node.content.trim().length > 0)
     .map((node) => ({
       content: node.content,
       priority: String(node.priority),
       level: node.level,
-      date: node.effectiveDateAtUnixMs == null
-        ? ""
-        : formatDateTime(node.effectiveDateAtUnixMs, locale) ?? "",
+      date: "",
+      effectiveAtUnixMs: node.effectiveDateAtUnixMs,
+      expiresAtUnixMs: node.expiresAtUnixMs,
       state: node.effectiveState,
       storedState: node.storedState,
       activeForInjection: node.activeForInjection,

@@ -14,9 +14,9 @@ import { ProjectSidebar } from "@/components/project/project-sidebar";
 const noop = () => undefined;
 
 describe("ProjectSidebar", () => {
-  // Verifies the real chat workspace sidebar exposes knowledge library management beside memory.
-  // 验证真实会话工作台侧栏在记忆旁暴露知识库管理入口。
-  it("renders knowledge management and an actionable authoritative empty project directory", async () => {
+  // Feature areas moved to the activity rail; the session panel renders the rail it is given and only sessions.
+  // 功能区已移至活动轨道；会话面板渲染传入的轨道，自身只展示会话。
+  it("renders the supplied rail beside sessions and an actionable authoritative empty project directory", async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     // onCreateProject observes the empty-state action without opening real filesystem UI.
     // onCreateProject 观察空状态动作，不打开真实文件系统界面。
@@ -28,35 +28,26 @@ describe("ProjectSidebar", () => {
         <SidebarProvider defaultOpen>
           <ProjectSidebar
             activeProjectId={null}
-            agentSkillsActive={false}
-            agentsActive={false}
+            rail={<nav className="test-activity-rail" />}
             conversations={[]}
-            knowledgeActive={false}
-            memoryActive={false}
             onConversationMenuAction={noop}
             onCreateConversation={noop}
             onCreateProject={onCreateProject}
             onExpandedProjectIdsChange={noop}
-            onOpenAgents={noop}
-            onOpenAgentSkills={noop}
-            onOpenKnowledge={noop}
-            onOpenMemory={noop}
-            onOpenSkills={noop}
             onProjectMenuAction={noop}
             onReorderProjects={noop}
-            onSelectArea={noop}
             onSelectConversation={noop}
             onSelectProject={noop}
             pinnedConversationIds={new Set()}
             projects={[]}
             selectedConversationId={null}
-            skillsActive={false}
           />
         </SidebarProvider>
       </I18nProvider>
     );
     const markup = renderToStaticMarkup(element);
-    expect(markup).toContain("知识库");
+    expect(markup).toContain("test-activity-rail");
+    expect(markup).not.toContain("知识库");
     expect(markup).toContain("添加文件夹，开始一个项目");
     expect(markup).not.toContain("等待 Workspace 快照载入");
     // root exercises the visible empty-state button's real event path.
@@ -108,12 +99,9 @@ describe("ProjectSidebar", () => {
       return (
         <ProjectSidebar
           activeProjectId={null}
-          agentSkillsActive={false}
-          agentsActive={false}
+          rail={<nav className="test-activity-rail" />}
           conversations={[]}
           expandedProjectIds={expandedProjectIds}
-          knowledgeActive={false}
-          memoryActive={false}
           onConversationMenuAction={noop}
           onCreateConversation={noop}
           onCreateProject={noop}
@@ -121,20 +109,13 @@ describe("ProjectSidebar", () => {
             onExpandedProjectIdsChange(next);
             setExpandedProjectIds(next);
           }}
-          onOpenAgents={noop}
-          onOpenAgentSkills={noop}
-          onOpenKnowledge={noop}
-          onOpenMemory={noop}
-          onOpenSkills={noop}
           onProjectMenuAction={noop}
           onReorderProjects={noop}
-          onSelectArea={noop}
           onSelectConversation={noop}
           onSelectProject={noop}
           pinnedConversationIds={new Set()}
           projects={[project]}
           selectedConversationId={null}
-          skillsActive={false}
         />
       );
     }

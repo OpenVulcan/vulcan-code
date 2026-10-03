@@ -13,7 +13,6 @@ messages:
   actionFailed: 操作未完成
   errorDetails: 查看错误详情
   navigationLabel: RTK 设置
-  title: RTK 命令路由
   hookBadge: 声明式 Hook
   loadingSettings: 正在加载设置
   availability.ready: RTK 可用
@@ -27,7 +26,6 @@ messages:
   enabled: 已启用
   disabled: 已关闭
   densityTitle: 高密度命令上下文
-  densityDescription: RTK 会压缩测试、构建、搜索和 Git 输出中的重复日志，让 AI 保留更多有效分析内容；未匹配或改写失败时自动回退原命令。
   enableRouting: 启用 RTK 路由
   enableRoutingHelp: 将支持的 shell_command 调用改写为随包 RTK 命令。
   gitContext: 提交生成使用 RTK

@@ -18,10 +18,22 @@ export function activeSkillHeaderSummary(
   t: ReturnType<typeof useI18n>["t"],
 ): SkillHeaderSummary {
   if (activeTab === "settings") {
-    return { title: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice }
+    // The header carries the page description, led by the pending-restart state when saved settings await a restart.
+    // 头部承载页面说明；已保存设置等待重启时，以待重启状态开头。
+    const description = t("skills.luaSettings.description")
+    return {
+      title: t("skills.navigation.luaSettings"),
+      detail: workbench.luaSkills.restartRequired ? `${t("skills.luaSettings.restartRequired")} · ${description}` : description,
+    }
+  }
+  if (activeTab === "mcp-servers") {
+    return { title: t("settings.mcpServers"), detail: t("settings.mcpServers.description") }
   }
   if (activeTab === "context-engine") {
     return { title: t("area.contextEngine"), detail: t("area.contextEngine.description") }
+  }
+  if (activeTab === "knowledge") {
+    return { title: t("area.knowledge"), detail: t("area.knowledge.description") }
   }
   if (activeTab === "plugins") {
     // vulcanPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.

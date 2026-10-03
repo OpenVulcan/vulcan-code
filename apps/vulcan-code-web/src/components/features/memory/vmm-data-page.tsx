@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
 
@@ -499,12 +500,8 @@ export function VmmDataPage(props: VmmDataPageProps) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.data.title")}</h2>
-          <p className="text-sm text-muted-foreground">{t("memory.data.description")}</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <div className="vmm-page-toolbar">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant={capabilities ? "default" : "destructive"}>{capabilities ? t("memory.data.managementReady") : t("memory.data.managementUnavailable")}</Badge>
           {capabilities ? <Badge variant="outline">{capabilities.protocol_version} · {capabilities.storage_mode}</Badge> : null}
           {capabilities?.full_text_index_status ? <Badge variant="outline">{t("memory.data.fullTextIndex")}: {capabilities.full_text_index_status}</Badge> : null}
@@ -928,7 +925,7 @@ function TurnDetailDialog(props: {
             <Card key={section}>
               <CardHeader className="pb-2"><CardTitle className="text-sm">{section === "user" ? t("memory.data.userContent") : t("memory.data.assistantContent")}</CardTitle></CardHeader>
               <CardContent className="space-y-3">
-                <pre className="max-h-80 whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-sans text-sm">{value?.chunk ?? t("memory.data.loading")}</pre>
+                {value?.chunk !== undefined ? <pre className="max-h-80 whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-sans text-sm">{value.chunk}</pre> : <StreamPlaceholder className="rounded-md bg-muted p-3" label={t("memory.data.loading")} count={5} />}
                 {value?.has_more ? <Button disabled={props.busy} onClick={() => void props.onLoadMore(section)} size="sm" variant="outline">{t("memory.data.loadMore")}</Button> : null}
               </CardContent>
             </Card>

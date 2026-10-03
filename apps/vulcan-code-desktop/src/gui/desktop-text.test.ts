@@ -35,10 +35,17 @@ test('desktop languages match the WebUI language registry', () => {
 // Device tags resolve by language, Chinese by script and region, and unsupported languages fall back to English.
 // 设备标签按语言解析，中文按书写系统与地区解析，不受支持的语言回退到英文。
 test('detects the device language with Chinese script handling and an English fallback', () => {
+  // Cases cover separate Hong Kong and Taiwan catalogs, with explicit script taking precedence over region.
+  // 用例覆盖独立的香港与台湾目录，显式书写系统优先于地区。
   const cases: Array<[string[], DesktopLocale]> = [
-    [['zh-Hant-HK'], 'zh-TW'],
+    [['zh-Hant'], 'zh-TW'],
+    [['zh-Hant-TW'], 'zh-TW'],
+    [['zh-Hant-HK'], 'zh-HK'],
     [['zh-TW'], 'zh-TW'],
-    [['zh-HK'], 'zh-TW'],
+    [['zh-HK'], 'zh-HK'],
+    [['zh_HK'], 'zh-HK'],
+    [['zh-MO'], 'zh-TW'],
+    [['zh-Hans-HK'], 'zh-CN'],
     [['zh-Hans-SG'], 'zh-CN'],
     [['zh'], 'zh-CN'],
     [['pt-PT'], 'pt-BR'],

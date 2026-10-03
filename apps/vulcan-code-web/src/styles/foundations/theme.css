@@ -36,6 +36,8 @@
   --diff-deletion-base: #cf222e;
   --radius: 0.5rem;
   --sidebar: #f0efec;
+  --activity-rail: #e6e4e0;
+  --activity-rail-accent: #d9d6d1;
   --sidebar-foreground: #31302d;
   --sidebar-primary: #c84709;
   --sidebar-primary-foreground: #ffffff;
@@ -49,7 +51,10 @@
   /* 层级阶梯：静置表面轻微浮起，悬停加深，浮层与模态明显高于页面。 */
   --vcn-shadow-raised: 0 1px 2px rgb(24 22 19 / 4%), 0 1px 1px rgb(24 22 19 / 2%);
   --vcn-shadow-hover: 0 4px 14px rgb(24 22 19 / 7%), 0 1px 3px rgb(24 22 19 / 5%);
-  --vcn-shadow-floating: 0 8px 28px rgb(24 22 19 / 12%), 0 2px 6px rgb(24 22 19 / 6%);
+  --vcn-shadow-floating: 0 16px 40px -8px rgb(24 22 19 / 18%), 0 4px 12px -2px rgb(24 22 19 / 8%), 0 0 0 0.5px rgb(24 22 19 / 4%);
+  /* Hairline around floating surfaces; softer than --border so the shadow carries the depth. */
+  /* 浮层表面的细边线；比 --border 更柔和，由阴影承担层次。 */
+  --vcn-floating-ring: rgb(24 22 19 / 10%);
   --vcn-shadow-modal: 0 24px 60px rgb(24 22 19 / 16%), 0 6px 16px rgb(24 22 19 / 6%);
   /* A hairline top highlight makes filled controls read as material rather than flat paint. */
   /* 顶部细高光让实心控件呈现材质感，而不是平涂色块。 */
@@ -58,7 +63,11 @@
   --vcn-glow-primary: 0 4px 14px color-mix(in srgb, var(--primary) 26%, transparent), 0 1px 2px color-mix(in srgb, var(--primary) 30%, transparent);
   --vcn-shadow-primary-hover: var(--vcn-highlight-inset), var(--vcn-glow-primary);
   --vcn-focus-halo: 0 0 0 3px color-mix(in srgb, var(--ring) 14%, transparent);
-  --vcn-surface-glass: color-mix(in srgb, var(--popover) 90%, transparent);
+  --vcn-surface-glass: color-mix(in srgb, color-mix(in srgb, var(--popover) 78%, var(--sidebar)) 88%, transparent);
+  /* Floating copies of the navigation panel keep the panel tone, a touch lighter, instead of the white popover. */
+  /* 导航面板的浮动副本沿用面板色调并略微提亮，而不是使用白色弹出层。 */
+  --vcn-surface-panel: color-mix(in srgb, var(--sidebar) 82%, var(--popover));
+  --vcn-surface-panel-glass: color-mix(in srgb, var(--vcn-surface-panel) 88%, transparent);
   --vcn-overlay-blur: 3px;
   /* Interaction fills are translucent ink, so hover and pressed read the same on page, card, glass and dialog surfaces. */
   /* 交互填充使用半透明墨色，使悬停与按下在页面、卡片、玻璃浮层和对话框上观感一致。 */
@@ -88,7 +97,8 @@
   /* 深色层级依赖微弱顶部高光，因为在近黑页面上单靠阴影几乎看不见。 */
   --vcn-shadow-raised: 0 1px 2px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 3%);
   --vcn-shadow-hover: 0 6px 18px rgb(0 0 0 / 36%), 0 1px 3px rgb(0 0 0 / 24%), inset 0 1px 0 rgb(255 255 255 / 4%);
-  --vcn-shadow-floating: 0 12px 36px rgb(0 0 0 / 40%), 0 2px 8px rgb(0 0 0 / 20%), inset 0 1px 0 rgb(255 255 255 / 5%);
+  --vcn-shadow-floating: 0 18px 48px -8px rgb(0 0 0 / 55%), 0 4px 12px -2px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 6%);
+  --vcn-floating-ring: rgb(255 255 255 / 9%);
   --vcn-shadow-modal: 0 28px 72px rgb(0 0 0 / 55%), 0 6px 18px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 6%);
   --vcn-highlight-inset: inset 0 1px 0 rgb(255 255 255 / 16%);
   --vcn-primary-gradient: linear-gradient(180deg, color-mix(in srgb, var(--primary) 88%, #ffffff) 0%, var(--primary) 100%);
@@ -96,6 +106,8 @@
   --vcn-shadow-primary-hover: var(--vcn-highlight-inset), var(--vcn-glow-primary);
   --vcn-focus-halo: 0 0 0 3px color-mix(in srgb, var(--ring) 20%, transparent);
   --vcn-surface-glass: color-mix(in srgb, var(--popover) 92%, transparent);
+  --vcn-surface-panel: color-mix(in srgb, var(--sidebar) 70%, var(--popover));
+  --vcn-surface-panel-glass: color-mix(in srgb, var(--vcn-surface-panel) 90%, transparent);
   --vcn-fill-subtle: rgb(255 255 255 / 3%);
   --vcn-fill-hover: rgb(255 255 255 / 5.5%);
   --vcn-fill-active: rgb(255 255 255 / 8.5%);
@@ -133,6 +145,8 @@
   --diff-addition-base: #2ea043;
   --diff-deletion-base: #f85149;
   --sidebar: #111418;
+  --activity-rail: #0a0c0f;
+  --activity-rail-accent: #1c1f24;
   --sidebar-foreground: #ced1d6;
   --sidebar-primary: #f87331;
   --sidebar-primary-foreground: #111418;

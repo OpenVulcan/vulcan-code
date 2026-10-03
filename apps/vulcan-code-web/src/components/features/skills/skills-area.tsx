@@ -2,6 +2,8 @@ import { useI18n } from "@/i18n"
 import type { WorkbenchSnapshot } from "@/types"
 import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
 import { ContextEngineArea } from "@/components/features/context-engine/context-engine-area"
+import { KnowledgeBaseArea } from "@/components/features/knowledge/knowledge-base-area"
+import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area"
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
@@ -31,6 +33,9 @@ export function SkillsArea(props: {
   // Workbench snapshot containing the LuaSkills catalog and runtime settings.
   // 包含 LuaSkills 目录与运行时设置的工作台快照。
   workbench: WorkbenchSnapshot
+  // Navigates to the application-wide runtime diagnostics page when the host provides one.
+  // 宿主提供时导航至应用全局运行时诊断页面。
+  onOpenDiagnostics?: () => void
 }) {
   // t provides a visible unavailable state when the selected plugin loses its enabled mount.
   // t 在所选插件失去已启用挂载点时提供可见的不可用状态。
@@ -60,8 +65,12 @@ export function SkillsArea(props: {
           actions={props.skillActions}
           catalog={props.workbench.luaSkills}
         />
+      ) : props.activeTab === "mcp-servers" ? (
+        <McpSettingsArea actions={props.skillActions} servers={props.workbench.mcpServers ?? []} onOpenDiagnostics={props.onOpenDiagnostics} />
       ) : props.activeTab === "context-engine" ? (
         <ContextEngineArea workbenchRevision={props.workbench.revision} />
+      ) : props.activeTab === "knowledge" ? (
+        <KnowledgeBaseArea />
       ) : null}
       {pluginSelection ? (
         <div key={pluginSelection.subAreaId}>

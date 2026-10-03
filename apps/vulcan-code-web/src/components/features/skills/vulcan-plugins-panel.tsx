@@ -1,11 +1,13 @@
 import * as React from "react";
-import { ChartNoAxesCombined, KeyRound, Puzzle, Route, Search, ShieldCheck, Trash2 } from "lucide-react";
+import { Bot, ChartNoAxesCombined, Cpu, FileText, FolderOpen, Hammer, Info, KeyRound, MessageSquareText, MessagesSquare, Puzzle, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, IconButton } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
@@ -47,6 +49,58 @@ function pluginRuntimeStatusLabel(
     default:
       return t("skills.plugins.unavailable");
   }
+}
+
+// pluginMcpStatusLabel resolves one plugin-owned MCP server state key through the active UI locale.
+// pluginMcpStatusLabel 通过当前界面语言解析一个插件自有 MCP 服务器状态键。
+//
+// Parameters: status is the stable runtime state key and t is the active translation resolver.
+// 参数：status 是稳定运行时状态键，t 是当前翻译解析器。
+// Returns: the localized label, or the raw key for a state this client does not know yet.
+// 返回值：本地化标签；遇到当前客户端尚不认识的状态时返回原始键。
+function pluginMcpStatusLabel(status: string, t: ReturnType<typeof useI18n>["t"]): string {
+  switch (status) {
+    case "disabled": return t("skills.plugins.mcpStatus.disabled");
+    case "preparing": return t("skills.plugins.mcpStatus.preparing");
+    case "connecting": return t("skills.plugins.mcpStatus.connecting");
+    case "ready": return t("skills.plugins.mcpStatus.ready");
+    case "degraded": return t("skills.plugins.mcpStatus.degraded");
+    case "failed": return t("skills.plugins.mcpStatus.failed");
+    case "draining": return t("skills.plugins.mcpStatus.draining");
+    case "stopped": return t("skills.plugins.mcpStatus.stopped");
+    default: return status;
+  }
+}
+
+// PluginFact renders one secondary plugin fact as an icon, optionally with a count, and explains it in a tooltip.
+// PluginFact 把一项次要插件信息渲染为图标（可附带数量），并在 Tooltip 中说明。
+//
+// Parameters: icon and label name the fact, value is an optional count, items lists contributed identifiers,
+// and tooltip replaces the default "label value" explanation.
+// 参数：icon 与 label 命名该信息，value 是可选数量，items 列出贡献的标识，tooltip 替换默认的“标签 数量”说明。
+// Returns: one focusable fact chip with a portal-backed tooltip.
+// 返回值：一个可聚焦且带 Portal Tooltip 的信息标签。
+function PluginFact(props: { icon: LucideIcon; label: string; value?: number; items?: string[]; tooltip?: React.ReactNode }) {
+  const Icon = props.icon;
+  // summary is the accessible and default tooltip text of the fact.
+  // summary 是该信息的无障碍文本与默认 Tooltip 文本。
+  const summary = props.value === undefined ? props.label : `${props.label} ${props.value}`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span aria-label={summary} className="vulcan-plugin-fact" role="img" tabIndex={0}>
+          <Icon aria-hidden="true" size={13} />
+          {props.value === undefined ? null : <span aria-hidden="true">{props.value}</span>}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="vulcan-plugin-fact-tooltip" side="top" sideOffset={5}>
+        {props.tooltip ?? (props.items?.length ? <div className="vulcan-plugin-fact-items">
+          <strong>{summary}</strong>
+          {props.items.map((item) => <span key={item}>{item}</span>)}
+        </div> : summary)}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 // localizedPluginText resolves plugin manifest text for the active WebUI locale.
@@ -723,6 +777,7 @@ export function VulcanPluginsPanel(props: {
         <p>{t("skills.plugins.credentialActionFailedTry")}</p>
         <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{secretError}</pre></details>
       </div> : null}
+      <TooltipProvider delayDuration={300}>
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (
           <div className="skill-empty-state">
@@ -770,20 +825,26 @@ export function VulcanPluginsPanel(props: {
                       : plugin.id === "vulcan-browser" ? t("skills.plugins.builtInComponent")
                       : t("skills.plugins.systemKind")}</Badge>
                     {plugin.version ? <Badge variant="secondary">v{plugin.version}</Badge> : null}
-                    <Badge variant="outline">{plugin.extension?.hasLuaRuntime
-                      ? t("skills.plugins.runtimePlugin")
-                      : t("skills.plugins.contentPlugin")}</Badge>
-                    <Badge variant="outline">{t("skills.plugins.skills")} {plugin.skillCount}</Badge>
-                    <Badge variant="outline">{t("skills.plugins.agents")} {plugin.agentCount}</Badge>
-                    <Badge variant="outline">{t("skills.plugins.tools")} {plugin.toolCount}</Badge>
-                    <Badge variant="outline">{t("skills.plugins.hooks")} {plugin.hookCount}</Badge>
-                    <Badge variant="outline">{t("skills.plugins.sessions")} {plugin.activeSessionCount}</Badge>
                   </div>
                 </div>
                 <p>{localizedCapability}</p>
-                <span className="agent-definition-row-path">{plugin.id}</span>
-                {plugin.id === "vulcan-browser" ? <div className="space-y-2 text-xs">
-                  <div>
+                <div className="vulcan-plugin-facts">
+                  <span className="agent-definition-row-path">{plugin.id}</span>
+                  <PluginFact
+                    icon={plugin.extension?.hasLuaRuntime ? Cpu : FileText}
+                    label={plugin.extension?.hasLuaRuntime ? t("skills.plugins.runtimePlugin") : t("skills.plugins.contentPlugin")}
+                  />
+                  {plugin.toolCount > 0 ? <PluginFact icon={Wrench} label={t("skills.plugins.tools")} value={plugin.toolCount} /> : null}
+                  {plugin.skillCount > 0 ? <PluginFact icon={Hammer} label={t("skills.plugins.skills")} value={plugin.skillCount} items={plugin.extension?.skills} /> : null}
+                  {plugin.agentCount > 0 ? <PluginFact icon={Bot} label={t("skills.plugins.agents")} value={plugin.agentCount} items={plugin.extension?.agents} /> : null}
+                  {plugin.hookCount > 0 ? <PluginFact icon={Webhook} label={t("skills.plugins.hooks")} value={plugin.hookCount} /> : null}
+                  {plugin.activeSessionCount > 0 ? <PluginFact icon={MessagesSquare} label={t("skills.plugins.sessions")} value={plugin.activeSessionCount} /> : null}
+                </div>
+                {plugin.diagnostics.length > 0 ? <ul className="vulcan-plugin-diagnostics" role="alert">
+                  {plugin.diagnostics.map((diagnostic, index) => <li key={`${index}:${diagnostic}`}><TriangleAlert aria-hidden="true" size={13} />{diagnostic}</li>)}
+                </ul> : null}
+                {plugin.id === "vulcan-browser" ? <div className="vulcan-plugin-runtime-panel">
+                  <div role="status">
                   {formatMessage(t("skills.plugins.playwrightStatus"), {
                     status: t(environmentReadyByPlugin[plugin.id] === true
                       ? "skills.plugins.playwrightReady"
@@ -792,68 +853,49 @@ export function VulcanPluginsPanel(props: {
                   </div>
                   <CoreBrowserRuntimeControls />
                 </div> : null}
-                {plugin.diagnostics.length > 0 ? <details className="vulcan-plugin-component-details text-[var(--vcn-content-warning)]">
-                  <summary>{t("skills.plugins.viewPluginDiagnostics")}</summary>
-                  <pre className="plugin-control-error-details">{plugin.diagnostics.join("\n")}</pre>
-                </details> : null}
-                {plugin.skillCount > 0 || plugin.agentCount > 0 ? (
-                  <details className="vulcan-plugin-component-details">
-                    <summary>{t("skills.plugins.viewReadOnlyComponents")}</summary>
-                    {plugin.skillCount > 0 ? (
-                      <div className="vulcan-plugin-component-group">
-                        <strong>{t("skills.plugins.skills")}</strong>
-                        <div>{plugin.extension?.skills.map((skillId) => (
-                          <Badge key={skillId} variant="secondary">{skillId}</Badge>
-                        ))}</div>
-                      </div>
-                    ) : null}
-                    {plugin.agentCount > 0 ? (
-                      <div className="vulcan-plugin-component-group">
-                        <strong>{t("skills.plugins.agents")}</strong>
-                        <div>{plugin.extension?.agents.map((agentId) => (
-                          <Badge key={agentId} variant="secondary">{agentId}</Badge>
-                        ))}</div>
-                      </div>
-                    ) : null}
-                  </details>
-                ) : null}
                 {(plugin.extension?.mcpServers.length ?? 0) > 0 ? (
-                  <details className="vulcan-plugin-component-details">
-                    <summary>{t("skills.plugins.mcpServersAndCredentials")}</summary>
+                  <section className="vulcan-plugin-mcp" aria-label={t("skills.plugins.mcpServersAndCredentials")}>
+                    <h4>{t("skills.plugins.mcpServersAndCredentials")}</h4>
                     {plugin.extension?.mcpServers.map((server) => (
-                      <div className="vulcan-plugin-component-group" key={server.id}>
-                        <div className="agent-definition-row-title-line">
+                      <div className="vulcan-plugin-mcp-server" key={server.id}>
+                        <div className="vulcan-plugin-mcp-server-head">
+                          <Server aria-hidden="true" className="vulcan-plugin-mcp-server-icon" size={14} />
                           <strong>{server.name}</strong>
-                          <div className="agent-definition-row-badges">
-                            <StatusPill
-                              label={server.status}
-                              status={server.status === "ready" ? "ready" : server.status === "failed" || server.status === "degraded" ? "warning" : "pending"}
+                          <StatusPill
+                            label={pluginMcpStatusLabel(server.status, t)}
+                            status={server.status === "ready" ? "ready" : server.status === "failed" || server.status === "degraded" ? "warning" : "pending"}
+                          />
+                          <Badge variant="outline">{server.transport}</Badge>
+                          <div className="vulcan-plugin-facts">
+                            <PluginFact icon={Wrench} label={t("skills.plugins.tools")} value={server.toolCount} />
+                            <PluginFact icon={MessageSquareText} label={t("skills.plugins.mcpPrompts")} value={server.promptCount} />
+                            <PluginFact icon={FolderOpen} label={t("skills.plugins.mcpResources")} value={server.resourceCount} />
+                            <PluginFact
+                              icon={Info}
+                              label={t("skills.plugins.mcpConnectionDetails")}
+                              tooltip={<dl className="vulcan-plugin-fact-list">
+                                <div><dt>{t("skills.plugins.mcpEndpoint")}</dt><dd>{server.endpoint}</dd></div>
+                                <div><dt>{t("skills.plugins.mcpGeneration")}</dt><dd>{server.generation}</dd></div>
+                                <div><dt>{t("skills.plugins.mcpRetryCount")}</dt><dd>{server.retryCount}</dd></div>
+                              </dl>}
                             />
-                            <Badge variant="outline">{server.transport}</Badge>
-                            <Badge variant="outline">gen {server.generation}</Badge>
-                            <Badge variant="outline">retry {server.retryCount}</Badge>
-                            <Badge variant="outline">tools {server.toolCount}</Badge>
-                            <Badge variant="outline">prompts {server.promptCount}</Badge>
-                            <Badge variant="outline">resources {server.resourceCount}</Badge>
+                            {(server.recentLogs?.length ?? 0) > 0 ? <PluginFact
+                              icon={ScrollText}
+                              label={t("skills.plugins.recentSanitizedLogs")}
+                              tooltip={<pre className="vulcan-plugin-log-tooltip">{server.recentLogs?.join("\n")}</pre>}
+                            /> : null}
                           </div>
                         </div>
-                        <span className={`agent-definition-row-path ${server.lastError ? "warning" : ""}`}>
-                          {server.lastError ?? server.endpoint}
-                        </span>
-                        {(server.recentLogs?.length ?? 0) > 0 ? (
-                          <details className="vulcan-plugin-component-details">
-                            <summary>{t("skills.plugins.recentSanitizedLogs")}</summary>
-                            <pre className="agent-definition-row-path">{server.recentLogs?.join("\n")}</pre>
-                          </details>
-                        ) : null}
+                        {server.lastError ? <p className="vulcan-plugin-mcp-error" role="alert"><TriangleAlert aria-hidden="true" size={13} />{server.lastError}</p> : null}
                         {server.secretKeys.map((secretKey) => {
                           const draftKey = `${plugin.id}:${server.id}:${secretKey}`;
                           return (
-                            <div className="vulcan-plugin-install-input-row" key={secretKey}>
-                              <KeyRound aria-hidden="true" size={15} />
-                              <input
+                            <div className="vulcan-plugin-mcp-secret" key={secretKey}>
+                              <span className="vulcan-plugin-mcp-secret-key"><KeyRound aria-hidden="true" size={13} />{secretKey}</span>
+                              <Input
                                 aria-label={`${server.name} ${secretKey}`}
                                 autoComplete="new-password"
+                                density="compact"
                                 disabled={mutationBusy}
                                 onChange={(event) => setSecretDrafts((current) => ({
                                   ...current,
@@ -879,7 +921,7 @@ export function VulcanPluginsPanel(props: {
                                 size="sm"
                                 title={t("skills.plugins.deleteSecret")}
                                 type="button"
-                                variant="destructive"
+                                variant="ghost"
                               >
                                 <Trash2 size={14} />
                               </IconButton>
@@ -888,7 +930,7 @@ export function VulcanPluginsPanel(props: {
                         })}
                       </div>
                     ))}
-                  </details>
+                  </section>
                 ) : null}
               </div>
               <div className="agent-definition-row-actions">
@@ -943,6 +985,7 @@ export function VulcanPluginsPanel(props: {
           );
         })}
       </div>
+      </TooltipProvider>
       <AlertDialog open={pendingDestructive !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingDestructive(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

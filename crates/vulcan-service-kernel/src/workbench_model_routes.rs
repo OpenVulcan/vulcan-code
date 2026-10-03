@@ -426,7 +426,8 @@ pub(super) async fn service_select_webui_locale(
 /// a WebUI test fails when the two diverge.
 /// 与 `apps/vulcan-code-web/src/i18n-locales.ts` 中持有该列表的 `SUPPORTED_LOCALES` 保持一致；两者不一致时 WebUI 测试失败。
 const SUPPORTED_WEBUI_LOCALES: &[&str] = &[
-    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "es-ES", "fr-FR", "de-DE", "pt-BR", "ru-RU",
+    "en-US", "zh-CN", "zh-TW", "zh-HK", "ja-JP", "ko-KR", "es-ES", "fr-FR", "de-DE", "pt-BR",
+    "ru-RU",
 ];
 
 /// Parses one WebUI locale wire value.
@@ -550,7 +551,7 @@ mod tests {
         for locale in super::SUPPORTED_WEBUI_LOCALES {
             assert_eq!(super::parse_webui_locale(locale).as_deref(), Some(*locale));
         }
-        for rejected in ["", "zh", "en", "zh-HK", "ZH-CN", "ar-SA"] {
+        for rejected in ["", "zh", "en", "zh-MO", "ZH-CN", "ar-SA"] {
             assert_eq!(
                 super::parse_webui_locale(rejected),
                 None,

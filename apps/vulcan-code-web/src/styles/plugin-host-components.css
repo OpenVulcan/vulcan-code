@@ -409,7 +409,6 @@
 .plugin-statistics-table summary { cursor: pointer; }
 .plugin-statistics-table summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
-.plugin-statistics-header,
 .plugin-statistics-toolbar,
 .plugin-statistics-range-header,
 .plugin-statistics-section-header {
@@ -420,7 +419,6 @@
   flex-wrap: wrap;
 }
 
-.plugin-statistics-header p,
 .plugin-statistics-section-header p,
 .plugin-statistics-privacy {
   margin: 4px 0 0;

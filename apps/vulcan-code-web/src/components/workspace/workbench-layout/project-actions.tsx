@@ -4,7 +4,7 @@ import { readPluginInstallRequests, recoverPluginInstallRequest } from "@/servic
 import { readPluginSecretMutations, recoverPluginSecretMutation } from "@/service/plugin-secret-recovery-service";
 import { readPluginUninstallRequests, resumePluginUninstallRequest } from "@/service/plugin-uninstall-recovery-service";
 import type { AgentActionProps } from "@/components/features/agents/agents-area";
-import type { SkillActionProps } from "@/components/features/skills/skills-area";
+import type { SkillCatalogActionProps } from "@/components/features/skills/skill-area-types";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
@@ -319,7 +319,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
 
   // luaSkillActions groups the independent LuaSkills lifecycle boundary.
   // luaSkillActions 归组独立 LuaSkills 生命周期边界。
-  const luaSkillActions = React.useMemo<SkillActionProps>(() => ({
+  const luaSkillActions = React.useMemo<SkillCatalogActionProps>(() => ({
     onRefreshLuaSkills: () => runLuaSkillsCatalogAction(refreshLuaSkillsCatalog),
     onRetryLuaSkillsManagedRuntimes: (target) => runLuaSkillsCatalogAction(
       () => retryLuaSkillsManagedRuntimes(target),

@@ -14,6 +14,7 @@ const catalogLoaders: Record<LocaleCode, () => Promise<LocaleCatalog>> = {
   "en-US": () => import("@/i18n-messages.en-US").then((module) => module.enUSTranslations),
   "zh-CN": () => import("@/i18n-messages.zh-CN").then((module) => module.zhCNTranslations),
   "zh-TW": () => import("@/i18n-messages.zh-TW").then((module) => module.zhTWTranslations),
+  "zh-HK": () => import("@/i18n-messages.zh-HK").then((module) => module.zhHKTranslations),
   "ja-JP": () => import("@/i18n-messages.ja-JP").then((module) => module.jaJPTranslations),
   "ko-KR": () => import("@/i18n-messages.ko-KR").then((module) => module.koKRTranslations),
   "es-ES": () => import("@/i18n-messages.es-ES").then((module) => module.esESTranslations),

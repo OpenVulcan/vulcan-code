@@ -34,9 +34,6 @@ const LazyAgentSkillsArea = React.lazy(() => import("@/components/features/agent
 // LazyMemoryArea isolates VMM management from the console-first workbench chunk.
 // LazyMemoryArea 将 VMM 管理隔离在控制台优先的工作台分块之外。
 const LazyMemoryArea = React.lazy(() => import("@/components/features/memory/memory-area").then((module) => ({ default: module.MemoryArea })));
-// LazyKnowledgeBaseArea isolates knowledge management from the console-first workbench chunk.
-// LazyKnowledgeBaseArea 将知识库管理隔离在控制台优先的工作台分块之外。
-const LazyKnowledgeBaseArea = React.lazy(() => import("@/components/features/knowledge/knowledge-base-area").then((module) => ({ default: module.KnowledgeBaseArea })));
 // FeatureLoadBoundary provides one stable non-layout-shifting fallback for deferred feature chunks.
 // FeatureLoadBoundary 为延迟功能分块提供一个稳定且不改变布局的加载回退。
 export function FeatureLoadBoundary(props: {
@@ -104,8 +101,8 @@ export function FeatureContent(props: {
   // Opens the available statistics plugin through the owning workspace navigation.
   // 通过所属工作区导航打开可用统计插件。
   onOpenUsageStatistics?: () => void;
-  // Opens the global diagnostics route through the owning feature shell.
-  // 通过所属功能外壳打开全局诊断路由。
+  // Opens the global diagnostics route from the MCP server page under plugin management.
+  // 从插件管理下的 MCP 服务器页面打开全局诊断路由。
   onOpenDiagnostics?: () => void;
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
@@ -129,6 +126,7 @@ export function FeatureContent(props: {
       <div className="feature-content">
         <FeatureLoadBoundary regionKey={`${props.activeArea}:${props.activeSkillSubArea}`}><LazySkillsArea
           activeTab={props.activeSkillSubArea}
+          onOpenDiagnostics={props.onOpenDiagnostics}
           skillActions={props.luaSkillActions}
           workbench={props.workbench}
         /></FeatureLoadBoundary>
@@ -158,20 +156,12 @@ export function FeatureContent(props: {
       </div>
     );
   }
-  if (props.activeArea === "knowledge") {
-    return (
-      <div className="feature-content">
-        <FeatureLoadBoundary regionKey={props.activeArea}><LazyKnowledgeBaseArea /></FeatureLoadBoundary>
-      </div>
-    );
-  }
   if (props.activeArea === "settings") {
     return (
       <div className="feature-content settings-feature-content">
         <FeatureLoadBoundary regionKey={`${props.activeArea}:${props.activeSettingsSubArea}`}><LazySettingsFeatureContent
           activeSettingsSubArea={props.activeSettingsSubArea}
           onOpenUsageStatistics={props.onOpenUsageStatistics}
-          onOpenDiagnostics={props.onOpenDiagnostics}
           actions={props.settingsActions}
           startup={props.startup}
           workbench={props.workbench}

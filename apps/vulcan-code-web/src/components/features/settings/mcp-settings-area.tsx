@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { DisclosureSection, InlineDisclosure } from "@/components/ui/disclosure"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { InlineStreamPlaceholder, StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import type { LogEntrySummary, McpServerSummary, RuntimeModuleSnapshot, StartupSnapshot } from "@/types"
 import { loadMcpRuntimeSnapshot, loadMcpServerCapabilities, type McpServerInspection, type McpCapabilities, type McpConnectionStatus, type McpToolInspection } from "@/service/mcp-settings-service"
 import { McpServerDialog, type McpSettingsActionProps } from "./mcp-server-dialog"
@@ -26,7 +27,7 @@ export function McpSettingsArea(props: {
   actions: McpSettingsActionProps; servers: McpServerSummary[]
   // Legacy host props stay accepted while global diagnostics move to their own page.
   // 保留宿主旧属性接线，全局诊断移至独立页面。
-  logs: LogEntrySummary[]; modules: RuntimeModuleSnapshot[]; startup: StartupSnapshot
+  logs?: LogEntrySummary[]; modules?: RuntimeModuleSnapshot[]; startup?: StartupSnapshot
   // Navigates to the existing application-wide diagnostics surface.
   // 导航至现有应用全局诊断页面。
   onOpenDiagnostics?: () => void
@@ -44,6 +45,9 @@ export function McpSettingsArea(props: {
   // actionError 在后台状态刷新时保留，直到新的显式动作或选择发生。
   const [actionError, setActionError] = React.useState("")
   const [refreshing, setRefreshing] = React.useState(false)
+  // loaded turns true once the first runtime snapshot settles; until then runtime-derived fields stream as silhouettes.
+  // loaded 在首个运行时快照完成后变为 true；此前运行时派生字段以轮廓流式占位。
+  const [loaded, setLoaded] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [search, setSearch] = React.useState("")
   const [source, setSource] = React.useState("all")
@@ -67,7 +71,7 @@ export function McpSettingsArea(props: {
       inFlight = true; setRefreshing(true)
       try { const result = await loadMcpRuntimeSnapshot(); if (active) { setCatalog(result); setError("") } }
       catch (failure) { if (active) setError(String(failure)) }
-      finally { inFlight = false; if (active) setRefreshing(false) }
+      finally { inFlight = false; if (active) { setRefreshing(false); setLoaded(true) } }
     }
     void refresh()
     const timer = window.setInterval(() => void refresh(), 5000)
@@ -98,11 +102,12 @@ export function McpSettingsArea(props: {
       </div>
       <div className="mcp-server-list">{filtered.map(row => <button type="button" disabled={removing} className="mcp-server-row" data-active={selectedId === row.id} key={row.id} onClick={() => setSelectedId(row.id)}>
         <strong>{row.name}</strong><span>{row.transport} · {row.source === "plugin" ? t("settings.mcp.plugin") : t("settings.mcp.user2")}</span>
-        <span data-status={error ? "unknown" : row.runtime?.state.status}>{row.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[row.runtime.state.status]}` : row.config?.enabled === false ? t("settings.mcp.disabled") : t("settings.mcp.enabledStateUnavailable")}</span>
+        <span data-status={error ? "unknown" : row.runtime?.state.status}>{!loaded ? <InlineStreamPlaceholder decorative /> : row.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[row.runtime.state.status]}` : row.config?.enabled === false ? t("settings.mcp.disabled") : t("settings.mcp.enabledStateUnavailable")}</span>
         {row.runtime && <span>{formatMessage(t("settings.mcp.tools"), { length: row.runtime.tools.length })}</span>}
         {row.runtime?.state.lastError && <span className="mcp-error">{row.runtime.state.lastError}</span>}
       </button>)}</div>
-      {!filtered.length && <p>{rows.length ? t("settings.mcp.noMatches") : t("settings.mcp.addAServerTo")}</p>}
+      {!filtered.length && !loaded && <StreamPlaceholder label={t("settings.mcp.loading")} shape="rows" count={4} />}
+      {!filtered.length && loaded && <p>{rows.length ? t("settings.mcp.noMatches") : t("settings.mcp.addAServerTo")}</p>}
       <Button disabled={refreshing} size="sm" variant="outline" onClick={() => setRefreshKey(key => key + 1)}>{refreshing ? t("settings.mcp.refreshing") : t("settings.mcp.refreshStatus")}</Button>
       {error && <p role="alert" className="mcp-error">{error}<br />{t("settings.mcp.previousSnapshotRetainedCurrent")}</p>}
     </aside>
@@ -122,7 +127,8 @@ export function McpSettingsArea(props: {
         }}>{t("settings.mcp.confirmRemoval")}</Button><Button variant="ghost" disabled={removing} onClick={() => setConfirmDelete(false)}>{t("settings.mcp.cancel")}</Button></div>}
         <nav className="mcp-tabs" aria-label={t("settings.mcp.mcpDetails")}>{[["overview", t("settings.mcp.overview")], ["tools", t("settings.mcp.tools2")], ["capabilities", t("settings.mcp.promptsResources")], ["diagnostics", t("settings.mcp.diagnostics")]].map(([key, label]) => <Button key={key} size="sm" variant={tab === key ? "secondary" : "ghost"} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</Button>)}</nav>
         {actionError && <p role="alert" className="mcp-error">{actionError}</p>}
-        {tab === "overview" && <>
+        {tab === "overview" && !loaded && <StreamPlaceholder label={t("settings.mcp.loading")} count={5} />}
+        {tab === "overview" && loaded && <>
           <p>{selected.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[selected.runtime.state.status]}` : t("settings.mcp.noConnectionStatusYet")}</p>
           {selected.config && !selected.config.enabled && <p>{t("settings.mcp.thisServerIsDisabled")}</p>}
           {selected.runtime && <dl className="mcp-overview">
@@ -134,17 +140,19 @@ export function McpSettingsArea(props: {
           </dl>}
           <p className="settings-muted-line">{t("settings.mcp.thisListsEveryTool")}</p>
         </>}
-        {tab === "tools" && <McpToolCatalog runtime={selected.runtime} stale={Boolean(error)} />}
-        {tab === "capabilities" && <McpOptionalCapabilities key={`${selected.id}:${selected.runtime?.inspectionGeneration ?? "unavailable"}`} serverId={selected.id} connected={selected.runtime?.state.status === "connected" && !error} />}
+        {tab === "tools" && !loaded && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}
+        {tab === "tools" && loaded && <McpToolCatalog runtime={selected.runtime} stale={Boolean(error)} />}
+        {tab === "capabilities" && !loaded && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}
+        {tab === "capabilities" && loaded && <McpOptionalCapabilities key={`${selected.id}:${selected.runtime?.inspectionGeneration ?? "unavailable"}`} serverId={selected.id} connected={selected.runtime?.state.status === "connected" && !error} />}
         {tab === "diagnostics" && <>
           <p>{t("settings.mcp.recentConnectionActivityFor")}</p>
           {selected.runtime ? <><p>{t("settings.mcp.retries")}{selected.runtime.state.retryCount}</p>
             {selected.runtime.state.lastError && <p className="mcp-error">{selected.runtime.state.lastError}</p>}
             <section className="mcp-logs"><h4>{t("settings.mcp.recentLogs")} ({selected.runtime.state.recentLogs.length})</h4><pre>{selected.runtime.state.recentLogs.join("\n") || t("settings.mcp.noLogs")}</pre></section>
-          </> : <p>{t("settings.mcp.noDiagnosticsYet")}</p>}
+          </> : loaded ? <p>{t("settings.mcp.noDiagnosticsYet")}</p> : <StreamPlaceholder label={t("settings.mcp.loading")} count={4} />}
           {props.onOpenDiagnostics && <Button variant="outline" onClick={props.onOpenDiagnostics}>{t("settings.mcp.openRuntimeDiagnostics")}</Button>}
         </>}
-      </> : <p>{t("settings.mcp.selectAnMcpServer")}</p>}
+      </> : loaded ? <p>{t("settings.mcp.selectAnMcpServer")}</p> : <StreamPlaceholder fill label={t("settings.mcp.loading")} />}
     </section>
     <McpServerDialog actions={props.actions} open={creating || editing !== null} server={editing} onOpenChange={open => { if (!open) { setCreating(false); setEditing(null); setRefreshKey(key => key + 1) } }} />
   </div>
@@ -211,7 +219,7 @@ function McpOptionalCapabilities(props: { serverId: string; connected: boolean }
   if (!props.connected) return <p>{t("settings.mcp.serverNotConnectedContent")}</p>
   return <div><p>{t("settings.mcp.namesAndDescriptionsOnly")}</p>
     <Button size="sm" variant="outline" disabled={busy} onClick={() => setRefreshKey(key => key + 1)}>{busy ? t("settings.mcp.loading") : t("settings.mcp.refresh")}</Button>
-    {error && <p role="alert">{error}</p>}{result && <>
+    {error && <p role="alert">{error}</p>}{busy && !result && <StreamPlaceholder fill label={t("settings.mcp.loading")} shape="rows" />}{result && <>
       <h4>{t("settings.mcp.prompts")} ({result.prompts?.length ?? "—"})</h4>{result.promptError ? <p role="alert">{result.promptError}</p> : result.prompts?.map(prompt => <DisclosureSection className="mcp-tool" description={prompt.description ? <span className="line-clamp-1">{prompt.description}</span> : undefined} key={prompt.name} title={prompt.name}>
         {prompt.description && <p>{prompt.description}</p>}
         {prompt.arguments?.map(argument => <p key={argument.name}><strong>{argument.name}</strong> · {argument.required ? t("settings.mcp.required") : t("settings.mcp.optional")} {argument.description}</p>)}

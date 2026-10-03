@@ -7,7 +7,7 @@ import {
 
 import { FeatureContent as FeatureShellContent } from "@/components/features/feature-shell-content"
 import { Button } from "@/components/ui/button"
-import { FeatureSidebar, areaIconMap, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
+import { FeatureSidebar, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas } from "@/components/features/feature-shell-sidebar"
 import { activeAgentsHeaderSummary } from "@/components/features/agents/agent-area-header"
 import type { AgentActionProps } from "@/components/features/agents/agent-area-types"
 import { WorkspaceTitleMenu } from "@/components/workspace/workspace-title-menu"
@@ -29,6 +29,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { navigationShellStyle } from "@/components/shell/navigation-layout"
 import { useI18n } from "@/i18n"
 import type {
   FeatureAreaSummary,
@@ -56,21 +57,18 @@ function FeatureShell(props: {
   // Active top-level feature metadata.
   // 当前顶层功能元数据。
   activeFeature?: FeatureAreaSummary
-  // Shared navigation sidebar open state.
-  // 共享导航侧栏展开状态。
-  sidebarOpen: boolean
-  // Updates the shared navigation sidebar open state.
-  // 更新共享导航侧栏展开状态。
-  onSidebarOpenChange: (open: boolean) => void
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
-  // Selects one top-level application area from the sidebar brand menu.
-  // 从侧栏品牌菜单选择一个顶层应用区域。
+  // Selects one top-level application area, such as returning from credentials to settings.
+  // 选择一个顶层应用区域，例如从凭据入口跳转到设置。
   onSelectArea: (area: MainAreaId) => void
+  // Activity rail rendered beside the feature panel.
+  // 渲染在功能面板旁的活动轨道。
+  rail: React.ReactNode
   // Opens the exact enabled statistics mount in the embedded workspace plugin area.
   // 在内嵌工作区插件区域打开精确的已启用统计挂载点。
   onOpenUsageStatistics?: () => void
@@ -224,10 +222,10 @@ function FeatureShell(props: {
     : settingsHeaderSummary
       ? {
         ...(props.activeFeature ?? { id: "settings" as MainAreaId, label: t("area.settings"), description: "", status: "" }),
-        // The page frame owns the page title, so the header only names the area and group.
-        // 页面框架持有页面标题，标题栏只显示所属区域与分组。
-        label: t("area.settings"),
-        description: settingsHeaderSummary.group,
+        // The header carries the page title and description; settings pages have no in-page heading.
+        // 标题栏承载页面标题与说明；设置页面内不再有独立标题。
+        label: settingsHeaderSummary.title,
+        description: settingsHeaderSummary.detail,
       }
     : props.activeFeature
   // pageDescriptor registers feature-page chrome through the shared workspace contract.
@@ -240,7 +238,10 @@ function FeatureShell(props: {
         activeSkillSubArea={activeSkillSubArea}
         activeSettingsSubArea={props.activeSettingsSubArea}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
-        onOpenDiagnostics={() => props.onSelectSettingsSubArea("runtime-diagnostics")}
+        onOpenDiagnostics={() => {
+          props.onSelectSettingsSubArea("runtime-diagnostics")
+          props.onSelectArea("settings")
+        }}
         memoryActions={props.memoryActions}
         onOpenCredentialManagement={() => {
           props.onSelectSettingsSubArea("credential-management")
@@ -263,8 +264,8 @@ function FeatureShell(props: {
   return (
     <SidebarProvider
       className="console-shell feature-shell"
-      open={props.sidebarOpen}
-      onOpenChange={props.onSidebarOpenChange}
+      collapsible={false}
+      style={navigationShellStyle()}
     >
       <FeatureSidebar
         activeArea={props.activeArea}
@@ -274,7 +275,7 @@ function FeatureShell(props: {
         onSelectMemorySubArea={setActiveMemorySubArea}
         onSelectSkillSubArea={setActiveSkillSubArea}
         onSelectSettingsSubArea={props.onSelectSettingsSubArea}
-        onSelectArea={props.onSelectArea}
+        rail={props.rail}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         workbench={props.workbench}
@@ -357,4 +358,4 @@ function FeatureHeader(props: {
   )
 }
 
-export { FeatureShell, areaIconMap, primaryFeatureAreas, settingsSubAreas }
+export { FeatureShell, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas, settingsSubAreas }

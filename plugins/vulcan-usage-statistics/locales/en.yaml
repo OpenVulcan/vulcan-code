@@ -141,8 +141,6 @@ messages:
   usage.newest: Newest first
   usage.oldest: Oldest first
   navigationLabel: Usage Statistics
-  title: System Usage Statistics
-  subtitle: The core stores Token facts only; this plugin computes non-persisted reference estimates from its own catalog.
   status.ready: System statistics available
   status.loading: Loading system statistics
   status.error: System statistics failed to load
@@ -176,7 +174,6 @@ messages:
   consumer.label: Consumer
   consumer.all: All consumers
   error.title: Unable to read system statistics
-  loading.description: Querying the authoritative system statistics database.
   summary.requests: Physical attempts
   summary.requestsDetail: Includes retries and failures
   summary.successRate: Success rate

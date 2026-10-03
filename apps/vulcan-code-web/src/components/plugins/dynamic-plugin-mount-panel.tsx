@@ -2,9 +2,12 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/shared/status";
+import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 import {
   ActivityHeatmap,
   ActivityHeatmapLegend,
@@ -98,12 +101,24 @@ interface PluginUiSdk {
     // Shared Vulcan status component.
     // Vulcan 共享状态组件。
     StatusPill: typeof StatusPill;
+    // Shared Vulcan page tab strip with trailing page actions.
+    // Vulcan 共享页面标签条，含尾部页面操作。
+    PageTabs: typeof PageTabs;
     // Shared host contextual-help tooltip.
     // 共享宿主上下文帮助 Tooltip。
     HelpTooltip: typeof HelpTooltip;
     // Shared host KPI card component.
     // 共享宿主 KPI 卡片组件。
     MetricCard: typeof MetricCard;
+    // Shared host streaming loading silhouette; plugins show it instead of a "Loading…" sentence.
+    // 共享宿主流式加载轮廓；插件用它代替「正在加载…」文案。
+    StreamPlaceholder: typeof StreamPlaceholder;
+    // Shared host single-line text field, including password inputs.
+    // 共享宿主单行文本输入框，包括密码输入。
+    Input: typeof Input;
+    // Shared host boolean switch for on/off settings.
+    // 共享宿主布尔开关，用于开/关类设置。
+    Switch: typeof Switch;
     // Shared host compact actionable metadata tag.
     // 共享宿主紧凑可操作元数据标签。
     PluginMetadataLink: typeof PluginMetadataLink;
@@ -292,8 +307,12 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       DialogTitle,
       DialogDescription,
       StatusPill,
+      PageTabs,
       HelpTooltip,
       MetricCard,
+      StreamPlaceholder,
+      Input,
+      Switch,
       PluginMetadataLink,
       SelectControl,
       TextDocumentDialog,
@@ -397,7 +416,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     </div>;
   }
   if (Panel === null) {
-    return <StreamPlaceholder className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />;
+    return <StreamPlaceholder fill className="w-full min-w-0 p-4" shape="rows" label={t("skills.plugins.loadingPage")} />;
   }
   return <Panel />;
 }

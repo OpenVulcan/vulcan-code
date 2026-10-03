@@ -72,6 +72,17 @@ const BOOT_TEXT: Record<LocaleCode, BootText> = {
     completedSteps: "已完成 {completed}/{total} 個步驟",
     reloadApplication: "重新載入應用程式",
   },
+  "zh-HK": {
+    loadingWorkspace: "正在載入 Workspace",
+    connectingService: "正在連接 Vulcan Core Service",
+    loadingProjectIndex: "正在載入項目與對話索引",
+    loadingStepPrefix: "正在載入",
+    failedPrefix: "啟動失敗：",
+    errorDetails: "查看詳細資訊",
+    downloadProgress: "下載進度",
+    completedSteps: "已完成 {completed}/{total} 個步驟",
+    reloadApplication: "重新載入應用程式",
+  },
   "ja-JP": {
     loadingWorkspace: "Workspace を読み込んでいます",
     connectingService: "Vulcan Core Service に接続しています",

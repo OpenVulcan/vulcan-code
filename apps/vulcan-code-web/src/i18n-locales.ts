@@ -7,7 +7,8 @@
 export const SUPPORTED_LOCALES = [
   { code: "en-US", nativeName: "English", mark: "EN" },
   { code: "zh-CN", nativeName: "简体中文", mark: "简" },
-  { code: "zh-TW", nativeName: "繁體中文", mark: "繁" },
+  { code: "zh-TW", nativeName: "中国台湾（繁体）", mark: "繁" },
+  { code: "zh-HK", nativeName: "中国香港（繁体）", mark: "港" },
   { code: "ja-JP", nativeName: "日本語", mark: "日" },
   { code: "ko-KR", nativeName: "한국어", mark: "한" },
   { code: "es-ES", nativeName: "Español", mark: "ES" },
@@ -60,8 +61,8 @@ export function normalizeLocaleCode(value: string | null | undefined): LocaleCod
 // # Returns
 // 返回值
 // The supported locale for the tag's language, or `null` when that language is not supported.
-// Chinese resolves by script first (`Hant`/`Hans`), then by region (TW, HK and MO use Traditional).
-// 该标签语言对应的受支持语言；语言不受支持时返回 `null`。中文先按书写系统（`Hant`/`Hans`）再按地区解析（TW、HK、MO 使用繁体）。
+// Chinese resolves by script first (`Hant`/`Hans`); Traditional HK uses the Hong Kong catalog, while TW and MO use Taiwan.
+// 该标签语言对应的受支持语言；语言不受支持时返回 `null`。中文先按书写系统（`Hant`/`Hans`）解析；香港繁体使用香港目录，台湾与澳门繁体使用台湾目录。
 export function matchLocaleTag(tag: string): LocaleCode | null {
   const subtags = tag.trim().replace(/_/gu, "-").toLowerCase().split("-").filter(Boolean)
   const language = subtags[0]
@@ -69,9 +70,12 @@ export function matchLocaleTag(tag: string): LocaleCode | null {
     return null
   }
   if (language === "zh") {
-    if (subtags.includes("hant")) return "zh-TW"
+    // traditionalLocale preserves regional wording without overriding an explicit script choice.
+    // traditionalLocale 保留地区用语差异，同时不覆盖显式选择的书写系统。
+    const traditionalLocale = subtags.includes("hk") ? "zh-HK" : "zh-TW"
+    if (subtags.includes("hant")) return traditionalLocale
     if (subtags.includes("hans")) return "zh-CN"
-    return subtags.some((subtag) => TRADITIONAL_CHINESE_REGIONS.has(subtag)) ? "zh-TW" : "zh-CN"
+    return subtags.some((subtag) => TRADITIONAL_CHINESE_REGIONS.has(subtag)) ? traditionalLocale : "zh-CN"
   }
   const exact = SUPPORTED_LOCALES.find((entry) => entry.code.toLowerCase() === subtags.join("-"))
   if (exact) {
@@ -129,8 +133,18 @@ export function resolveAppLocale(savedLocale: string | null | undefined): Locale
 
 // isChineseLocale returns whether a locale reads Chinese, used to pick the Chinese side of host-provided bilingual data.
 // isChineseLocale 返回语言是否为中文，用于选择宿主提供的双语数据中的中文部分。
+//
+// # Parameters
+// 参数
+// `locale` is the active supported UI language.
+// `locale` 是当前受支持的界面语言。
+//
+// # Returns
+// 返回值
+// `true` for the Simplified, Taiwan Traditional or Hong Kong Traditional Chinese locale; otherwise `false`.
+// 简体中文、台湾繁体中文或香港繁体中文语言返回 `true`，其他语言返回 `false`。
 export function isChineseLocale(locale: LocaleCode): boolean {
-  return locale === "zh-CN" || locale === "zh-TW"
+  return locale === "zh-CN" || locale === "zh-TW" || locale === "zh-HK"
 }
 
 // pickBilingualText selects host-provided bilingual text: Chinese locales read the Chinese side, all others English.

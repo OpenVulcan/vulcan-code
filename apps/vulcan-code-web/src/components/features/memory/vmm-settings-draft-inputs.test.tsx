@@ -61,11 +61,14 @@ it("keeps fractional rule input intact and blocks saving until corrected or inhe
     await view.edit(view.snapshot.globalDraft.implicitMemoryTurns, "1.5")
     expect(view.onChange).toHaveBeenLastCalledWith({ implicitMemoryTurns: "1.5" })
     expect(view.container.querySelector('[aria-invalid="true"]')).not.toBeNull()
-    expect(view.container.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true)
+    // The apply action is located by its label because the scope selector also renders a button before it.
+    // 应用操作按文案定位，因为作用域选择器也会在其之前渲染按钮。
+    const applyButton = () => Array.from(view.container.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === "应用设置")!
+    expect(applyButton().disabled).toBe(true)
     expect(view.onApply).not.toHaveBeenCalled()
     await view.edit("1.5", "")
     expect(view.container.querySelector('[role="alert"]')).toBeNull()
-    await act(async () => view.container.querySelector<HTMLButtonElement>("button")!.click())
+    await act(async () => applyButton().click())
     expect(view.onApply.mock.calls[0]).toEqual(["global", null, expect.objectContaining({ implicitMemoryTurns: "" })])
   } finally { await view.dispose() }
 })

@@ -42,11 +42,7 @@ function VmmAdvancedPage({ busy, draft, snapshot, notice, onChange, onSave, onTe
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">{t("memory.advanced.title")}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("memory.advanced.description")}</p>
-        </div>
+      <div className="vmm-page-toolbar">
         <Button disabled={busy || !numbersValid} onClick={() => void onSave()} type="button"><Save className="size-4" aria-hidden="true" />{t("memory.advanced.save")}</Button>
       </div>
 

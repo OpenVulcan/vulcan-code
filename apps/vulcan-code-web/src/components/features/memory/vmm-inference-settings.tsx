@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import {
   Tooltip,
   TooltipContent,
@@ -323,7 +324,7 @@ export function VmmInferenceSettings({
       </div>
       {error ? <p role="alert" className="settings-muted-line settings-error-text mb-2">{error}</p> : null}
       {!snapshot ? (
-        loadPending ? <p role="status" className="settings-muted-line">{t("settings.models.loadingCatalog")}</p>
+        loadPending ? <StreamPlaceholder label={t("settings.models.loadingCatalog")} shape="fields" count={3} />
           : <Button type="button" variant="outline" onClick={() => setLoadRevision((current) => current + 1)}>{t("settings.modelExperience.retryLoad")}</Button>
       ) : (
         <>

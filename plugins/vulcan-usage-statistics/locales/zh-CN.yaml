@@ -90,8 +90,6 @@ messages:
   pricing.chooseModel: 在下方表格选择模型，即可在此编辑价格。
   pricing.editModel: "编辑模型 · {{model}}"
   navigationLabel: 使用统计
-  title: 系统用量统计
-  subtitle: 查看调用、用量与参考费用，管理模型价格。
   status.ready: 系统统计可用
   status.loading: 正在读取系统统计
   status.error: 系统统计加载失败
@@ -126,7 +124,6 @@ messages:
   consumer.label: 消费者
   consumer.all: 全部消费者
   error.title: 无法读取系统统计
-  loading.description: 正在查询权威系统统计数据库。
   summary.requests: 真实调用
   summary.requestsDetail: 包含重试与失败
   summary.successRate: 成功率

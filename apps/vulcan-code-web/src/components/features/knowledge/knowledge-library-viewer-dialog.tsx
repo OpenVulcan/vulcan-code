@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { listManagedKnowledgeDocumentFolders, listManagedKnowledgeDocuments, readManagedKnowledgeDocument, searchManagedKnowledgeLibrary } from "@/service/knowledge-base-service";
 import type { KnowledgeDisplayIndexState, KnowledgeDocumentContent, KnowledgeDocumentSummary, KnowledgeLibrarySummary, KnowledgeSearchResult } from "@/types";
@@ -425,7 +426,7 @@ export function KnowledgeLibraryViewerDialog(props: {
         <div className="knowledge-viewer-body">
           <aside className="knowledge-viewer-tree">
             {catalogError ? <div role="alert" className="space-y-2 p-3 text-sm text-destructive"><p>{catalogError}</p><Button variant="outline" onClick={() => setReloadCatalog((value) => value + 1)}>{t("skills.action.refresh")}</Button></div> : null}
-            {catalogLoading ? <div className="knowledge-viewer-state"><LoaderCircle className="animate-spin" size={18} />{t("knowledge.viewer.loadingDocuments")}</div> : null}
+            {catalogLoading ? <StreamPlaceholder className="p-1.5" fill label={t("knowledge.viewer.loadingDocuments")} shape="rows" /> : null}
             {!catalogLoading && searchResult && searchHits.length === 0 ? <div className="knowledge-viewer-state">{t("knowledge.search.empty")}</div> : null}
             {!catalogLoading && !catalogError && !searchResult && documentTree.children.length === 0 ? <div className="knowledge-viewer-state">{t("knowledge.emptyDocuments")}</div> : null}
             {searchResult ? searchHits.map((hit) => (
@@ -433,7 +434,7 @@ export function KnowledgeLibraryViewerDialog(props: {
                 <FileText size={14} /><span>{hit.relativePath}</span>
               </button>
             )) : documentTree.children.map((node) => <KnowledgeDocumentTreeRow activeDocumentId={selectedDocument?.document.id ?? null} directoryPages={directoryPages} key={node.path} node={node} onLoadDirectoryPage={loadDirectoryPage} onOpenDocument={openDocument} onToggleDirectory={toggleDirectory} openDirectoryPaths={openDirectoryPaths} t={t} />)}
-            {!searchResult && directoryPages[""]?.loading ? <div className="knowledge-viewer-tree-loading"><LoaderCircle className="animate-spin" size={14} />{t("knowledge.viewer.loadingFolder")}</div> : null}
+            {!searchResult && directoryPages[""]?.loading ? <StreamPlaceholder className="p-1.5" label={t("knowledge.viewer.loadingFolder")} shape="rows" count={2} /> : null}
             {!searchResult && directoryPages[""]?.hasMore && !directoryPages[""]?.loading ? <Button className="knowledge-viewer-load-more" onClick={() => void loadDirectoryPage("", directoryPages[""].documents.length)} size="sm" type="button" variant="ghost">{t("knowledge.viewer.loadMore")}</Button> : null}
           </aside>
           <main className="knowledge-viewer-reader">
@@ -448,10 +449,10 @@ export function KnowledgeLibraryViewerDialog(props: {
                   </span>
                 </header>
                 <div className="knowledge-viewer-markdown">
-                  {documentLoading ? <div className="knowledge-viewer-state"><LoaderCircle className="animate-spin" size={18} />{t("knowledge.viewer.loadingDocument")}</div> : (previewMode === "rendered" ? <MarkdownMessage content={selectedDocument.content} eager /> : <pre className="knowledge-markdown-source"><code>{selectedDocument.content}</code></pre>)}
+                  {documentLoading ? <StreamPlaceholder className="p-4" fill label={t("knowledge.viewer.loadingDocument")} /> : (previewMode === "rendered" ? <MarkdownMessage content={selectedDocument.content} eager /> : <pre className="knowledge-markdown-source"><code>{selectedDocument.content}</code></pre>)}
                 </div>
               </>
-            ) : <div className="knowledge-viewer-state"><FileText size={22} />{documentLoading ? t("knowledge.viewer.loadingDocument") : t("knowledge.viewer.selectDocument")}</div>}
+            ) : documentLoading ? <StreamPlaceholder className="p-4" fill label={t("knowledge.viewer.loadingDocument")} /> : <div className="knowledge-viewer-state"><FileText size={22} />{t("knowledge.viewer.selectDocument")}</div>}
           </main>
         </div>
       </DialogContent>
@@ -508,7 +509,7 @@ function KnowledgeDocumentTreeRow(props: {
         {isOpen ? (
           <div className="knowledge-viewer-tree-children">
             {props.node.children.map((child) => <KnowledgeDocumentTreeRow {...props} key={child.path} node={child} />)}
-            {directoryPage?.loading ? <div className="knowledge-viewer-tree-loading"><LoaderCircle className="animate-spin" size={14} />{props.t("knowledge.viewer.loadingFolder")}</div> : null}
+            {directoryPage?.loading ? <StreamPlaceholder label={props.t("knowledge.viewer.loadingFolder")} shape="rows" count={2} /> : null}
             {directoryPage?.error ? <p role="alert" className="p-2 text-xs text-destructive">{directoryPage.error}</p> : null}
             {directoryPage?.hasMore && !directoryPage.loading ? <Button className="knowledge-viewer-load-more" onClick={() => void props.onLoadDirectoryPage(props.node.path, directoryPage.documents.length)} size="sm" type="button" variant="ghost">{props.t("knowledge.viewer.loadMore")}</Button> : null}
           </div>

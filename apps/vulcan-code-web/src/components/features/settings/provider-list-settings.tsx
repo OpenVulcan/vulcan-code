@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
 import { Switch } from "@/components/ui/switch"
 import {
   Card,
@@ -204,6 +205,8 @@ export function CredentialManagementArea() {
             <small>{snapshot?.connections.filter((connection) => connection.provider_id === provider.id).length ?? 0}</small>
           </Button>
         ))}
+        {/* The provider directory streams in with the credential snapshot. / 供应商目录随凭据快照流式载入。 */}
+        {!snapshot && !error ? <StreamPlaceholder decorative shape="rows" count={6} /> : null}
       </WorkspaceDirectoryMenu>}>
         {activeProvider ? (
           <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -237,10 +240,12 @@ export function CredentialManagementArea() {
           </div>
         ) : null}
         {error ? <SettingsErrorNotice className="settings-error-text" detail={error} message={t("settings.providers.thatDidnTFinish")} /> : null}
-        {!snapshot ? (
+        {!snapshot && !error ? (
+          <StreamPlaceholder fill label={t("settings.credentials.connecting")} shape="cards" />
+        ) : !snapshot ? (
           <article className="settings-card">
-            <strong>{error ? t("settings.providers.credentialDirectoryCouldNot") : t("settings.credentials.connecting")}</strong>
-            {!error ? <p>{t("settings.credentials.connectingDescription")}</p> : <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{t("settings.providers.reload")}</Button>}
+            <strong>{t("settings.providers.credentialDirectoryCouldNot")}</strong>
+            <Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline">{t("settings.providers.reload")}</Button>
           </article>
         ) : visibleConnections.length > 0 ? (
           <div className="credential-management-list">

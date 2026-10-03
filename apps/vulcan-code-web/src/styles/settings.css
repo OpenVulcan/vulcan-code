@@ -463,21 +463,6 @@
   white-space: nowrap;
 }
 
-.rtk-page-heading {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: 0;
-}
-
-.rtk-page-title-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .rtk-routing-config {
   display: grid;
   gap: 8px;
