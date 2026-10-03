@@ -154,6 +154,31 @@ pub struct VulcanPluginPredecessorDrain {
     authority: Arc<UpdateDrainAuthority>,
 }
 
+/// Original-request drain diagnostics retain frozen identity and only currently selected physical owners.
+/// 原请求排空诊断保留冻结身份及当前选中的物理所有者。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VulcanPluginPredecessorDrainDiagnostics {
+    /// Actual original activation request identity.
+    /// 实际原启用请求身份。
+    pub request_id: Uuid,
+    /// Frozen predecessor plugin namespace.
+    /// 冻结前驱插件命名空间。
+    pub plugin_id: String,
+    /// Original manager incarnation, never the current same-name package's identity.
+    /// 原管理器实例，绝不使用当前同名包身份。
+    pub service_epoch: String,
+    /// Routing generation before original admission closed, encoded as an exact decimal string.
+    /// 原准入关闭前的路由代次，编码为精确十进制字符串。
+    pub predecessor_generation: String,
+    /// Original draining transition generation, encoded as an exact decimal string.
+    /// 原排空转换代次，编码为精确十进制字符串。
+    pub draining_generation: String,
+    /// All still-owned resources selected by the actual plugin-wide drain; null means no parent attachment.
+    /// 实际插件整体排空选中的全部仍有所属资源；空值表示没有父级附加。
+    pub resources: Option<super::formal::VulcanPluginResourceDiagnostics>,
+}
+
 impl std::fmt::Debug for VulcanPluginPredecessorDrain {
     /// Format only non-secret identity for formatter; return its formatting result.
     /// 为 formatter 仅格式化无秘密身份；返回格式化结果。
@@ -391,6 +416,58 @@ impl VulcanPluginRuntimeManager {
             .map(|owner| VulcanPluginPredecessorDrain {
                 authority: Arc::clone(owner),
             }))
+    }
+
+    /// Observe plugin_id/request_id's actual retained drain without acquiring its asynchronous cleanup gate.
+    /// 观测 plugin_id/request_id 实际保留排空，不获取其异步清理门。
+    /// Return None when no matching live handle remains; absence never certifies successful retirement.
+    /// 没有匹配实时句柄时返回空值；缺失绝不认证退役成功。
+    pub fn activation_predecessor_drain_diagnostics(
+        &self,
+        plugin_id: &str,
+        request_id: Uuid,
+    ) -> Result<Option<VulcanPluginPredecessorDrainDiagnostics>, VulcanPluginRuntimeError> {
+        // Reuse the existing readonly request lookup, never rebuild a durable attempt or choose current routing.
+        // 复用既有只读请求查询，绝不重建持久尝试或选择当前路由。
+        let Some(drain) = self.activation_predecessor_drain(request_id)? else {
+            return Ok(None);
+        };
+        if drain.authority.predecessor.id != plugin_id
+            || drain.identity().service_epoch != self.state.manager_id
+        {
+            return Err(error(
+                "Predecessor diagnostic request does not belong to this plugin and manager.",
+            ));
+        }
+        // Actual drain selects every retained generation in the namespace, including earlier incomplete cleanup.
+        // 实际排空选择命名空间内每个保留代次，包含更早尚未完成的清理。
+        let mut resources = self.formal_plugin_resource_diagnostics(plugin_id, None)?;
+        if let Some(resources) = &mut resources {
+            resources
+                .resources
+                .retain(|resource| resource.is_drain_blocking);
+        }
+        // Completion may race the multi-map sample; revalidate exact ownership so a later target cannot replace it.
+        // 完成可能与跨映射采样竞态；重新校验精确所有权，防止后续目标替代它。
+        let owners = self
+            .state
+            .update_drains
+            .lock()
+            .map_err(|_| error("Predecessor drain registry is poisoned."))?;
+        if !owners
+            .get(plugin_id)
+            .is_some_and(|owner| Arc::ptr_eq(owner, &drain.authority))
+        {
+            return Ok(None);
+        }
+        Ok(Some(VulcanPluginPredecessorDrainDiagnostics {
+            request_id,
+            plugin_id: plugin_id.to_owned(),
+            service_epoch: drain.identity().service_epoch.clone(),
+            predecessor_generation: drain.identity().predecessor_generation.to_string(),
+            draining_generation: drain.identity().draining_generation.to_string(),
+            resources,
+        }))
     }
 
     /// Retire drain's actual predecessor resources; caller cancellation does not cancel the owned supervisor.

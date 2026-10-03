@@ -22,9 +22,9 @@ pub(crate) use configuration::validate_plugin_config_value;
 mod drain;
 mod update_drain;
 pub use update_drain::{
-    VulcanPluginPredecessorDrain, VulcanPluginPredecessorRestoration,
-    VulcanPluginPredecessorRestorationFailure, VulcanPluginPredecessorRestorationSource,
-    VulcanPluginPredecessorRestoreEvidence,
+    VulcanPluginPredecessorDrain, VulcanPluginPredecessorDrainDiagnostics,
+    VulcanPluginPredecessorRestoration, VulcanPluginPredecessorRestorationFailure,
+    VulcanPluginPredecessorRestorationSource, VulcanPluginPredecessorRestoreEvidence,
 };
 mod environment;
 mod execution;
@@ -59,6 +59,7 @@ pub use bridge::{
 };
 use bridge::{canonical_bridge_workspace_root, required_json_string};
 pub use drain::VulcanPluginDrainReport;
+mod native_identity;
 pub use formal::{
     VulcanPluginActivationPredecessorCompletion,
     VulcanPluginActivationPredecessorHandoffParticipant,
@@ -73,7 +74,9 @@ pub use formal::{
     VulcanPluginLegacyLifecycleCall, VulcanPluginMcpPredecessorHandoffEvidence,
     VulcanPluginMcpTargetHandoffEvidence, VulcanPluginNativeMcpHandoffAdapter,
     VulcanPluginNativeMcpPredecessorHandoffAdapter, VulcanPluginPrewarmTargetRequest,
-    VulcanPluginPrewarmTargetStatus, VulcanPluginReusableDomainStatus,
+    VulcanPluginPrewarmTargetStatus, VulcanPluginResourceDiagnostic,
+    VulcanPluginResourceDiagnostics, VulcanPluginResourceErrorDiagnostic, VulcanPluginResourceKind,
+    VulcanPluginResourceOperationDiagnostic, VulcanPluginReusableDomainStatus,
 };
 pub use installation::{
     VulcanPluginDeactivationStateObservation, VulcanPluginDeactivationStateReservation,
@@ -87,6 +90,10 @@ pub use lifecycle::{
 use local_files::{
     canonical_plugin_file, copy_plugin_directory_tree, read_plugin_json_state,
     write_plugin_json_record,
+};
+pub use native_identity::{
+    VulcanPluginNativeIdentityCallback, VulcanPluginNativeIdentityEvent,
+    VulcanPluginNativeIdentitySubscription, install_native_identity_observer,
 };
 pub use process::VulcanPluginMcpStdioLaunchSpec;
 pub use sessions::VulcanPluginInvocationRequest;
@@ -205,7 +212,7 @@ struct VulcanPluginManagerState {
     engine: RwLock<Option<Arc<LuaEngine>>>,
     /// One formal parent runtime attached to this manager; the lock never spans Lua execution.
     /// 附加到此管理器的单个正式父运行时；此锁绝不包围 Lua 执行。
-    formal_runtime: Mutex<Option<Arc<formal::ManagedFormalRuntime>>>,
+    formal_runtime: Mutex<Option<formal::FormalRuntimeAttachment>>,
     /// Root containing deployed Vulcan Plugin packages.
     /// 包含已部署 Vulcan 插件包的根目录。
     vulcan_plugin_root: PathBuf,
@@ -286,7 +293,7 @@ impl Drop for VulcanPluginManagerState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .as_ref()
         {
-            let _ = owner.host.runtime().request_close();
+            let _ = owner.runtime().request_close();
         }
     }
 }

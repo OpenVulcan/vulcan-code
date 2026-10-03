@@ -170,10 +170,12 @@ mod host_tools_settings;
 mod internal_ai;
 mod knowledge_base_services;
 mod licenses;
+pub mod luaskills_diagnostics;
 mod luaskills_install_progress;
 mod luaskills_model;
 mod mcp_settings;
 mod media_upload;
+mod native_plugin_shutdown;
 mod native_vmm;
 mod output_style;
 mod pending_prompt_services;
@@ -509,9 +511,12 @@ pub fn service_prepare_for_app_shutdown(
     ) = {
         // guard provides the single authoritative shutdown snapshot of runtime handles.
         // guard 提供运行时句柄的单次权威关闭快照。
-        let guard = state
+        let mut guard = state
             .lock()
             .map_err(|_| String::from("The service bridge state is locked during shutdown."))?;
+        // Close bootstrap admission in the same observation that freezes runtime handles.
+        // 在冻结运行时句柄的同一次观测中关闭引导准入。
+        guard.service_lifecycle_state.begin_shutdown_drain();
         match guard.agent_runtime.as_ref() {
             Some(agent_runtime) => (
                 Some(Arc::clone(&agent_runtime.task_runtime)),
@@ -533,15 +538,6 @@ pub fn service_prepare_for_app_shutdown(
             ),
         }
     };
-    if state
-        .lock()
-        .map(|mut guard| guard.service_lifecycle_state.begin_shutdown_drain())
-        .is_err()
-    {
-        return Err(String::from(
-            "The service bridge state is locked during shutdown.",
-        ));
-    }
     let session_v1_handles = session_v1_handles
         .begin_shutdown()
         .map_err(|error| error.to_string())?;
@@ -642,12 +638,18 @@ pub fn service_prepare_for_app_shutdown(
                     // stopped_task_ids are captured before canonical writer drain prevents new runtime events.
                     // stopped_task_ids 在规范写入器排空阻止新运行事件之前捕获。
                     let stopped_task_ids = task_runtime.stop_active_tasks_for_app_shutdown()?;
+                    // Native finalizers must finish before writers and their MCP dependencies are released.
+                    // 原生关闭器必须在写入器及其 MCP 依赖释放之前完成。
+                    native_plugin_shutdown::close_original_plugin_runtime(state)?;
                     for handle in &session_v1_handles {
                         handle.flush_all().map_err(|error| error.to_string())?;
                     }
                     Ok(stopped_task_ids)
                 }
                 None => {
+                    // Bootstrap owns the same native parent even before agent runtime publication.
+                    // 即使智能体运行时尚未发布，引导也持有同一原生父级。
+                    native_plugin_shutdown::close_original_plugin_runtime(state)?;
                     for handle in &session_v1_handles {
                         handle.flush_all().map_err(|error| error.to_string())?;
                     }

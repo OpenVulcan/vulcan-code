@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // ruRUTranslations stores the Russian UI text.
 // ruRUTranslations 保存俄语界面文案。
 export const ruRUTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "Диагностика сохранённых ресурсов",
+    "pluginDiagnostics.unavailable": "Исходное освобождение или родительская среда недоступны. Это не подтверждает завершение освобождения.",
+    "pluginDiagnostics.nonAtomic": "Сохранённые ресурсы хоста опрашиваются отдельно, не атомарно. Пустой список не подтверждает полное физическое освобождение; проверьте запись исходного запроса.",
+    "pluginDiagnostics.pinned": "Закреплённые сеансы инструментов (ещё не освобождены физически)",
+    "pluginDiagnostics.locate": "Открыть диалог владельца",
+    "pluginDiagnostics.internal": "Внутренний ресурс (без владельца диалога)",
+    "pluginDiagnostics.missingOwner": "Исходный диалог владельца недоступен или архивирован.",
+    "pluginDiagnostics.blocking": "Блокирует физическое освобождение",
+    "pluginDiagnostics.nonBlocking": "Сохранённая запись; не блокирует освобождение",
+    "pluginDiagnostics.empty": "В этом наблюдении нет сохранённых ресурсов.",
+    "pluginDiagnostics.runtimeIdentity": "Текущий идентификатор службы / маршрута",
+    "pluginDiagnostics.activeOwners": "Активные вызовы и сеансы",
+    "pluginDiagnostics.locateRequest": "Открыть диагностику исходного запроса",
     "pluginRecovery.uninstallUnknown": "Результат исходного удаления не подтверждён. Отсутствие исходного запроса или пустой ответ не доказывают завершение.",
     "pluginRecovery.uninstallTitle": "Восстановление удаления",
     "pluginRecovery.uninstallDescription": "Прочитать все сохранённые операции удаления, включая плагины, уже исчезнувшие из списка. Завершение подтверждает только ответ службы.",

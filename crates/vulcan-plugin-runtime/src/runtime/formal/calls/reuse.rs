@@ -5,6 +5,7 @@ use super::*;
 use crate::VulcanPluginReusableToolManifest;
 use sha2::{Digest, Sha256};
 
+pub(in crate::runtime::formal) mod diagnostics;
 mod maintenance;
 #[cfg(test)]
 mod tests;

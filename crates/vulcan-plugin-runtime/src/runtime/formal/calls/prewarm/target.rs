@@ -246,6 +246,13 @@ impl VulcanPluginRuntimeManager {
                 initialized::remaining(deadline)?,
             )
             .map_err(core_error)?;
+        // Capture each actual attempt before the completed history can be popped or forgotten.
+        // 完成历史可以弹出或遗忘之前，捕获每次实际尝试。
+        crate::runtime::native_identity::observe_operation(
+            owner.host.runtime().id(),
+            &operation,
+            call.native_identity_owner(),
+        );
         state.operation = Some(operation);
         state.prewarm.as_mut().expect("validated target").attempts += 1;
         Ok(false)

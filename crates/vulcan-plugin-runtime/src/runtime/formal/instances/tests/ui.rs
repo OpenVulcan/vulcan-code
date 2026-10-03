@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::{VulcanPluginActionCaller, VulcanPluginActionIdentity, VulcanPluginActionRequest};
+mod native_identity;
 
 impl Fixture {
     /// Create an actual UI bundle with timeout and optional blocking initialization; return the fixture.

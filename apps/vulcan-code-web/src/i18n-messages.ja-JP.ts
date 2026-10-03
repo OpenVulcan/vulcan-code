@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // jaJPTranslations stores the Japanese UI text.
 // jaJPTranslations 保存日语界面文案。
 export const jaJPTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "保持リソースの診断",
+    "pluginDiagnostics.unavailable": "元のドレインまたは親を観測できません。排出完了を意味しません。",
+    "pluginDiagnostics.nonAtomic": "ホストの保持リソースを個別に取得します。アトミックではありません。空の一覧は物理ドレイン完了を証明しません。元のリクエストの記録を確認してください。",
+    "pluginDiagnostics.pinned": "固定ツールセッション（物理解放前）",
+    "pluginDiagnostics.locate": "所有者の会話を開く",
+    "pluginDiagnostics.internal": "内部リソース（会話の所有者なし）",
+    "pluginDiagnostics.missingOwner": "元の所有者の会話は利用不可またはアーカイブ済みです。",
+    "pluginDiagnostics.blocking": "物理ドレインを阻止",
+    "pluginDiagnostics.nonBlocking": "保持レコード：ドレインを阻止しない",
+    "pluginDiagnostics.empty": "この観測に保持リソースはありません。",
+    "pluginDiagnostics.runtimeIdentity": "現在のサービス／ルート識別子",
+    "pluginDiagnostics.activeOwners": "実行中の呼び出しとセッション",
+    "pluginDiagnostics.locateRequest": "元のリクエストの診断を表示",
     "pluginRecovery.uninstallUnknown": "元のアンインストールの結果は未確認です。元の要求がない場合や空の検索結果は完了の証明になりません。",
     "pluginRecovery.uninstallTitle": "アンインストールの復旧",
     "pluginRecovery.uninstallDescription": "一覧から削除されたプラグインも含め、保持中のアンインストールをすべて読み取ります。完了を確認できるのはサービス応答のみです。",

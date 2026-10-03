@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // deDETranslations stores the German UI text.
 // deDETranslations 保存德语界面文案。
 export const deDETranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "Diagnose zurückgehaltener Ressourcen",
+    "pluginDiagnostics.unavailable": "Ursprünglicher Drain oder übergeordnete Laufzeit nicht beobachtbar. Dies belegt keine vollständige Freigabe.",
+    "pluginDiagnostics.nonAtomic": "Zurückgehaltene Hostressourcen werden einzeln erfasst, nicht atomar. Eine leere Liste belegt keine vollständige physische Freigabe; prüfen Sie den ursprünglichen Anfragebeleg.",
+    "pluginDiagnostics.pinned": "Fixierte Werkzeugsitzungen (noch nicht physisch freigegeben)",
+    "pluginDiagnostics.locate": "Besitzerkonversation öffnen",
+    "pluginDiagnostics.internal": "Interne Ressource (ohne Konversationsbesitzer)",
+    "pluginDiagnostics.missingOwner": "Ursprüngliche Besitzerkonversation nicht verfügbar oder archiviert.",
+    "pluginDiagnostics.blocking": "Blockiert physische Freigabe",
+    "pluginDiagnostics.nonBlocking": "Zurückgehaltener Datensatz; blockiert Freigabe nicht",
+    "pluginDiagnostics.empty": "Keine zurückgehaltenen Ressourcen in dieser Beobachtung.",
+    "pluginDiagnostics.runtimeIdentity": "Aktuelle Dienst- / Routenidentität",
+    "pluginDiagnostics.activeOwners": "Aktive Aufrufe und Sitzungen",
+    "pluginDiagnostics.locateRequest": "Diagnose der ursprünglichen Anfrage öffnen",
     "pluginRecovery.uninstallUnknown": "Das Ergebnis der ursprünglichen Deinstallation ist unbestätigt. Ein fehlender Auftrag oder eine leere Abfrage beweist keinen Abschluss.",
     "pluginRecovery.uninstallTitle": "Deinstallation fortsetzen",
     "pluginRecovery.uninstallDescription": "Alle gespeicherten Deinstallationen lesen, einschließlich bereits aus dieser Liste entfernter Plugins. Nur die Service-Antwort bestätigt den Abschluss.",

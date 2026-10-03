@@ -56,7 +56,7 @@ const CAPABILITIES: &[&str] = &[
 pub struct VulcanPluginEmbeddedHost {
     /// Core owns all execution, queue, session, capability and shutdown lifetimes.
     /// 核心拥有全部执行、队列、会话、能力及关闭寿命。
-    runtime: EmbeddedRuntime,
+    runtime: Arc<EmbeddedRuntime>,
     /// Native callbacks share identity lookup but never strongly own this runtime.
     /// 原生回调共享身份查询，但绝不强持有此运行时。
     authority: Arc<HostAuthority>,
@@ -466,6 +466,23 @@ impl VulcanPluginEmbeddedHost {
         config: EmbeddedRuntimeConfig,
         max_capability_call_ms: u64,
     ) -> EmbeddedResult<Self> {
+        // Standalone callers retain their existing constructor; manager attachment retains this same Arc on failure.
+        // 独立调用方保持既有构造器；管理器附加在失败时保留此同一 Arc。
+        let runtime = Self::prepare_runtime(manager, config.clone(), max_capability_call_ms)?;
+        Self::attach_runtime(manager, runtime, &config, max_capability_call_ms)
+    }
+
+    /// Prepare the sole Core before native registration using manager's engine and exact validated config/budget.
+    /// 使用管理器引擎及精确已校验配置／预算，在原生注册前准备唯一 Core。
+    /// `manager` owns the engine; `config` and `max_capability_call_ms` are the original constructor inputs.
+    /// `manager` 拥有引擎；`config` 及 `max_capability_call_ms` 为原构造输入。
+    /// Return the exact shared Core so formal initialization can retain it on every later registration failure.
+    /// 返回精确共享 Core，使正式初始化可在随后每次注册失败时保留它。
+    pub(in crate::runtime) fn prepare_runtime(
+        manager: &VulcanPluginRuntimeManager,
+        config: EmbeddedRuntimeConfig,
+        max_capability_call_ms: u64,
+    ) -> EmbeddedResult<Arc<EmbeddedRuntime>> {
         // Validate before allocating any runtime-owned worker.
         // 在分配任何运行时工作线程前校验。
         config.validate()?;
@@ -482,7 +499,21 @@ impl VulcanPluginEmbeddedHost {
             .map_err(|failure| error(EmbeddedErrorCode::Closed, failure.message))?;
         // This core instance is the single owner of every plugin pool in this adapter.
         // 此核心实例是本适配器中全部插件池的唯一所有者。
-        let runtime = EmbeddedRuntime::new(engine, config.clone())?;
+        Ok(Arc::new(EmbeddedRuntime::new(engine, config)?))
+    }
+
+    /// Attach this manager's native authority to the already prepared original Core without constructing another runtime.
+    /// 将此管理器原生权威附加到已准备的原 Core，不构造另一个运行时。
+    /// `runtime` is prepare_runtime's same Arc; `config` and budget are its exact validated original inputs.
+    /// `runtime` 是 prepare_runtime 的同一 Arc；`config` 及预算是其精确已校验原输入。
+    /// Return the ready adapter or original native registration error; the formal initializer retains its original Arc across this call.
+    /// 返回就绪适配器或原生注册原错误；正式初始化器跨此调用保留原 Arc。
+    pub(in crate::runtime) fn attach_runtime(
+        manager: &VulcanPluginRuntimeManager,
+        runtime: Arc<EmbeddedRuntime>,
+        config: &EmbeddedRuntimeConfig,
+        max_capability_call_ms: u64,
+    ) -> EmbeddedResult<Self> {
         // Callback closures hold only this acyclic authority object.
         // 回调闭包仅持有此无环权威对象。
         let authority = Arc::new(HostAuthority {
@@ -534,7 +565,7 @@ impl VulcanPluginEmbeddedHost {
     /// Pool source remains trusted host input; use this adapter's registration for native services.
     /// 池源码仍属于可信宿主输入；使用本适配器的注册入口获得原生服务。
     pub fn runtime(&self) -> &EmbeddedRuntime {
-        &self.runtime
+        self.runtime.as_ref()
     }
 
     /// Register trusted definition and policy in scope with independent capacity; return the native pool identity.
@@ -783,6 +814,18 @@ impl VulcanPluginEmbeddedHost {
                 .pool_id
                 .set(id.clone())
                 .expect("new original domain has no pool identity");
+            // Copy only frozen original identity before callers may admit initialization.
+            // 调用方可以接纳初始化之前，仅复制冻结原身份。
+            crate::runtime::native_identity::observe_pool(|| {
+                crate::runtime::VulcanPluginNativeIdentityEvent::PoolRegistered {
+                    runtime_id: self.runtime.id().to_owned(),
+                    pool_id: id.clone(),
+                    plugin_id: domain.plugin.id.clone(),
+                    plugin_generation: domain.plugin.generation,
+                    package_generation: domain.generation.clone(),
+                    execution_revision: revision.clone(),
+                }
+            });
             RegisteredPool { id, domain }
         })
     }

@@ -9,6 +9,7 @@ use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolCon
 use std::sync::{Arc, Mutex};
 use vulcan_plugin_runtime::{VulcanPluginCapacityPurpose, VulcanPluginRuntimeSettings};
 
+mod diagnostics;
 mod prewarm;
 mod prewarm_policy;
 

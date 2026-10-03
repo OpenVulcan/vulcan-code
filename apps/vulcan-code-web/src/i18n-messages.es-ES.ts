@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // esESTranslations stores the Spanish UI text.
 // esESTranslations 保存西班牙语界面文案。
 export const esESTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "Diagnóstico de recursos retenidos",
+    "pluginDiagnostics.unavailable": "El drenaje original o el entorno padre no está disponible. Esto no demuestra que haya terminado.",
+    "pluginDiagnostics.nonAtomic": "Los recursos retenidos del host se muestrean por separado, sin atomicidad. Una lista vacía no demuestra el drenaje físico completo; revise el recibo de la solicitud original.",
+    "pluginDiagnostics.pinned": "Sesiones de herramientas fijadas (sin liberar físicamente)",
+    "pluginDiagnostics.locate": "Abrir conversación del propietario",
+    "pluginDiagnostics.internal": "Recurso interno (sin propietario de conversación)",
+    "pluginDiagnostics.missingOwner": "La conversación del propietario original no está disponible o está archivada.",
+    "pluginDiagnostics.blocking": "Bloquea el drenaje físico",
+    "pluginDiagnostics.nonBlocking": "Registro retenido; no bloquea el drenaje",
+    "pluginDiagnostics.empty": "No hay recursos retenidos en esta observación.",
+    "pluginDiagnostics.runtimeIdentity": "Identidad actual del servicio / ruta",
+    "pluginDiagnostics.activeOwners": "Llamadas y sesiones activas",
+    "pluginDiagnostics.locateRequest": "Localizar diagnóstico de la solicitud original",
     "pluginRecovery.uninstallUnknown": "El resultado de la desinstalación original no está confirmado. Una solicitud ausente o una consulta vacía no demuestra su finalización.",
     "pluginRecovery.uninstallTitle": "Recuperación de desinstalación",
     "pluginRecovery.uninstallDescription": "Leer todas las desinstalaciones retenidas, incluidos los complementos eliminados de esta lista. Solo la respuesta del servicio confirma la finalización.",

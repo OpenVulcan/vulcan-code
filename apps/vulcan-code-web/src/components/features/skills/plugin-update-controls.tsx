@@ -16,6 +16,9 @@ interface PluginUpdateControlProps {
   // actions preserve original request identity and apply the returned catalog through the ordinary publisher.
   // actions 保留原请求身份，并通过普通发布器应用返回目录。
   actions: Pick<SkillActionProps, "onReadLocalPluginUpdates" | "onResumeLocalPluginUpdate" | "onAbortLocalPluginUpdate">;
+  // onLocateDiagnostics opens the exact retained request without executing recovery.
+  // onLocateDiagnostics 打开精确保留请求，不执行恢复。
+  onLocateDiagnostics?: (pluginId: string, requestId: string) => void;
 }
 
 // phaseLabels presents durable stages without implying current readiness or successful external cleanup.
@@ -207,6 +210,8 @@ function PluginUpdateManagement(props: PluginUpdateControlProps) {
           : effect.phase === "succeeded" ? t("pluginUpdates.installSucceeded") : t("pluginUpdates.installUncertain")
       }</p>)}
       <div className="flex flex-wrap gap-2">
+        {props.onLocateDiagnostics !== undefined && <Button type="button" size="sm" variant="outline"
+          onClick={() => props.onLocateDiagnostics?.(record.pluginId, record.requestId)}>{t("pluginDiagnostics.locateRequest")}</Button>}
         {(((record.phase === null || record.phase === "preparing") && record.hasServiceOwner)
           || record.phase === "committing" || record.phase === "published"
           || (record.phase === "completed" && record.hasServiceOwner)) && <Button type="button" size="sm" disabled={!canWrite}

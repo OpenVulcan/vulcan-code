@@ -338,6 +338,13 @@ impl VulcanPluginRuntimeManager {
         // Keep the exact lifecycle evidence within this synchronous lock scope.
         // 在当前同步锁作用域内保留精确生命周期证据。
         let mut state = runtime.lock()?;
+        // Preserve the original internal initialization without inventing controller ownership.
+        // 保留原内部初始化，不虚构控制器所有权。
+        crate::runtime::native_identity::observe_operation(
+            owner.host.runtime().id(),
+            &opening.operation,
+            runtime.native_identity_owner(),
+        );
         state.session = Some(opening.session_id.clone());
         state.initialization = Some(opening.operation.clone());
         if let Some(attempt) = &mut state.target_attempt {
@@ -436,6 +443,13 @@ impl VulcanPluginRuntimeManager {
                 .host
                 .submit_session_in_workspace(session, call, &workspace, remaining(expires)?)
                 .map_err(core_error)?;
+            // Bind the trusted Core request while the original internal owner and handle are present.
+            // 原内部所有者及句柄存在时绑定可信 Core 请求。
+            crate::runtime::native_identity::observe_operation(
+                owner.host.runtime().id(),
+                &handle,
+                runtime.native_identity_owner(),
+            );
             // Separate observer completion from the operation's physical termination.
             // 区分观测者完成与操作物理终止。
             let acknowledged = Arc::new(AtomicBool::new(false));
@@ -581,6 +595,13 @@ impl VulcanPluginRuntimeManager {
                     work,
                 )
                 .map_err(core_error)?;
+            // Publish the actual UI business request before its original operation can be acknowledged and forgotten.
+            // 原操作可以确认及遗忘之前，发布实际 UI 业务请求。
+            crate::runtime::native_identity::observe_operation(
+                owner.host.runtime().id(),
+                &handle,
+                runtime.native_identity_owner(),
+            );
             // Record observer acknowledgement separately from real termination.
             // 将观察者确认与真实终止分开记录。
             let acknowledged = Arc::new(AtomicBool::new(false));

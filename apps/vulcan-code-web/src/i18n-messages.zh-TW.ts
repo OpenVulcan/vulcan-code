@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // zhTWTranslations stores the Traditional Chinese UI text.
 // zhTWTranslations 保存繁体中文界面文案。
 export const zhTWTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "保留資源診斷",
+    "pluginDiagnostics.unavailable": "原即時排空或附加父級無法觀測；此狀態不證明已排空。",
+    "pluginDiagnostics.nonAtomic": "此處僅獨立取樣宿主保留資源，不是原子快照。空清單不證明全部實體排空完成；請核對原要求回執。",
+    "pluginDiagnostics.pinned": "固定工具工作階段（尚未實體退役）",
+    "pluginDiagnostics.locate": "開啟擁有者對話",
+    "pluginDiagnostics.internal": "內部資源（無對話擁有者）",
+    "pluginDiagnostics.missingOwner": "原擁有者對話無法使用或已封存。",
+    "pluginDiagnostics.blocking": "阻塞實體排空",
+    "pluginDiagnostics.nonBlocking": "保留紀錄；不阻塞排空",
+    "pluginDiagnostics.empty": "本次觀測無保留資源。",
+    "pluginDiagnostics.runtimeIdentity": "目前服務／路由身分",
+    "pluginDiagnostics.activeOwners": "作用中呼叫與工作階段",
+    "pluginDiagnostics.locateRequest": "定位原要求診斷",
     "pluginRecovery.uninstallUnknown": "原解除安裝結果尚未確認。原請求缺失或空查詢不證明完成。",
     "pluginRecovery.uninstallTitle": "解除安裝恢復",
     "pluginRecovery.uninstallDescription": "讀取所有保留解除安裝，包括已從清單移除的外掛程式。僅服務回應可確認完成。",

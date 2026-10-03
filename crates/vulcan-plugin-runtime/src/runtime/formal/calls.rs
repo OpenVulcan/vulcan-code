@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 mod admission;
 mod candidates;
+pub(in crate::runtime::formal) mod diagnostics;
 mod initialized;
 mod legacy;
 pub use legacy::VulcanPluginLegacyLifecycleCall;
@@ -498,6 +499,19 @@ impl Drop for ObservationGuard {
 }
 
 impl FormalCall {
+    /// Borrow this original call's host identity; internal ownership keeps controller absent.
+    /// 借用此原调用的宿主身份；内部所有权保持控制器为空。
+    /// Return metadata references without cloning the descriptor or package owner.
+    /// 返回元数据引用，不克隆描述符或包所有者。
+    fn native_identity_owner(&self) -> crate::runtime::native_identity::NativeIdentityOwner<'_> {
+        crate::runtime::native_identity::NativeIdentityOwner {
+            plugin_generation: self.plugin.generation,
+            controller_session_id: self.ownership.controller_id(),
+            host_invocation_id: Some(&self.id),
+            host_session_id: None,
+        }
+    }
+
     /// Acquire the short evidence lock; report poison instead of inventing a completion state.
     /// 获取短证据锁；报告中毒而不伪造完成状态。
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, CallState>, VulcanPluginRuntimeError> {
@@ -1131,6 +1145,13 @@ impl VulcanPluginRuntimeManager {
                     remaining,
                 )
                 .map_err(core_error)?;
+            // Publish original identity while the admitted handle is still available.
+            // 已接纳句柄仍可取得时发布原身份。
+            crate::runtime::native_identity::observe_operation(
+                owner.host.runtime().id(),
+                &operation,
+                call.native_identity_owner(),
+            );
             call.lock()?.operation = Some(operation);
         } else if separate {
             // Initialization receives its own core identity without invoking the Action export.
@@ -1140,6 +1161,13 @@ impl VulcanPluginRuntimeManager {
                 .runtime()
                 .open_session(&pool, remaining)
                 .map_err(core_error)?;
+            // Separate initialization keeps its own Core operation/session identity.
+            // 独立初始化保持其自身 Core 操作／会话身份。
+            crate::runtime::native_identity::observe_operation(
+                owner.host.runtime().id(),
+                &opening.operation,
+                call.native_identity_owner(),
+            );
             call.lock()?.initialized = Some(initialized::InitializedCall::new(
                 opening.session_id,
                 opening.operation,
@@ -1165,6 +1193,13 @@ impl VulcanPluginRuntimeManager {
                     remaining,
                 )
                 .map_err(core_error)?;
+            // Publish original identity while the admitted handle is still available.
+            // 已接纳句柄仍可取得时发布原身份。
+            crate::runtime::native_identity::observe_operation(
+                owner.host.runtime().id(),
+                &operation,
+                call.native_identity_owner(),
+            );
             call.lock()?.operation = Some(operation);
         }
         Ok(())

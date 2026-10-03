@@ -9,8 +9,8 @@ use vulcan_agent_runtime::mcp::McpRuntimeAccess;
 use vulcan_plugin_runtime::{
     VulcanPluginDeactivationReservation, VulcanPluginDeactivationStateReservation,
     VulcanPluginGenerationStore, VulcanPluginLegacyLifecycleCall,
-    VulcanPluginLegacyUninstallationReservation, VulcanPluginRoutingReservation,
-    VulcanPluginRuntimeManager,
+    VulcanPluginLegacyUninstallationReservation, VulcanPluginResourceDiagnostics,
+    VulcanPluginRoutingReservation, VulcanPluginRuntimeManager,
 };
 
 mod collection;
@@ -20,6 +20,30 @@ mod publication;
 #[cfg(test)]
 mod tests;
 pub(crate) use owner::PendingLocalPluginUninstallRegistry;
+
+/// Original removal metadata remains readable while its sole mutable resource borrow is executing.
+/// 原移除元数据在其唯一可变资源借用执行时保持可读取。
+/// This is a live non-atomic diagnostic sample, never a durable completion or resource-release receipt.
+/// 此类型为实时非原子诊断采样，绝不是持久完成或资源释放回执。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LocalPluginUninstallDrainDiagnostics {
+    /// Original process-local removal identity.
+    /// 原进程内移除身份。
+    request_id: String,
+    /// Namespace frozen from the actual reserved descriptor.
+    /// 从实际预留描述符冻结的命名空间。
+    plugin_id: String,
+    /// Original manager incarnation is independent from current catalog selection.
+    /// 原管理器实例独立于当前目录选择。
+    service_epoch: String,
+    /// Original disabled routing generation is encoded without JavaScript rounding.
+    /// 原停用路由代次编码时避免 JavaScript 舍入。
+    plugin_generation: String,
+    /// The real plugin-wide drain selects all retained generations in that same original manager.
+    /// 真实插件级排空选择相同原管理器中全部保留代次。
+    resources: Option<VulcanPluginResourceDiagnostics>,
+}
 
 /// A temporary exclusive borrow projects one real retained completed removal without creating another owner or authority.
 /// 临时排他借用投影单个真实保留已完成移除，不创建另一所有者或权威。

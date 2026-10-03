@@ -6,6 +6,9 @@ use super::*;
 use crate::{VulcanPluginUiEventPublisher, VulcanPluginUiInvalidation};
 use serde_json::json;
 
+mod diagnostics;
+mod native_identity;
+
 /// A committed aggregate policy change preserves the exact pinned VM, its counter and original finalizer.
 /// 已提交聚合策略变化保留精确固定 VM、计数器及原关闭器。
 #[test]

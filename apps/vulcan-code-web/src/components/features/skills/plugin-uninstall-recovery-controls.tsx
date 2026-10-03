@@ -38,6 +38,9 @@ export interface PluginUninstallRecoveryProps {
   // releaseMutation releases only renderer admission, never service-owned originals.
   // releaseMutation 仅释放渲染器入场，绝不释放服务自有原实例。
   releaseMutation: () => void;
+  // onLocateDiagnostics selects the original plugin/request pair for readonly blockers.
+  // onLocateDiagnostics 为只读阻塞者选择原插件与请求组合。
+  onLocateDiagnostics?: (pluginId: string, requestId: string) => void;
 }
 
 // Observe all retained uninstalls on mount so hidden plugins remain discoverable after a full page refresh.
@@ -202,6 +205,8 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
       {records.map((record) => <article key={record.requestId} className="space-y-2 rounded-md border p-3">
         <p className="break-all">{record.pluginId} / {t("pluginUpdates.request")}: {record.requestId}</p>
         <p>{t(record.phase === "executing" ? "pluginRecovery.executing" : "pluginRecovery.pending")}</p>
+        {props.onLocateDiagnostics !== undefined && <Button type="button" size="sm" variant="outline"
+          onClick={() => props.onLocateDiagnostics?.(record.pluginId, record.requestId)}>{t("pluginDiagnostics.locateRequest")}</Button>}
         <Button type="button" size="sm" disabled={!canWrite || record.phase === "executing"}
           onClick={() => { setConfirmation(record); setAcknowledgement(false); }}>{t("pluginRecovery.uninstallContinue")}</Button>
       </article>)}

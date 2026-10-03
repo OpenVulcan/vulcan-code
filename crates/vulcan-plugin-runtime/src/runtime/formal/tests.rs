@@ -12,6 +12,7 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
+pub(in crate::runtime::formal) mod diagnostics;
 mod draining;
 mod pinned;
 mod stateless;

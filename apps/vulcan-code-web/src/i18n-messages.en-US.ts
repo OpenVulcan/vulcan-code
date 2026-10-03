@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // enUSTranslations stores the English shell-level localized labels.
 // enUSTranslations 保存外壳层英文本地化标签。
 export const enUSTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "Retained resource diagnostics",
+    "pluginDiagnostics.unavailable": "Original live drain or attached parent unavailable. This does not prove drainage.",
+    "pluginDiagnostics.nonAtomic": "Host retained resources are sampled independently, not atomically. An empty list does not prove complete physical drain; inspect the original request receipt.",
+    "pluginDiagnostics.pinned": "Pinned tool sessions (not physically retired)",
+    "pluginDiagnostics.locate": "Open owner conversation",
+    "pluginDiagnostics.internal": "Internal resource (no conversation owner)",
+    "pluginDiagnostics.missingOwner": "Original owner conversation unavailable or archived.",
+    "pluginDiagnostics.blocking": "Blocks physical drain",
+    "pluginDiagnostics.nonBlocking": "Retained record; does not block drain",
+    "pluginDiagnostics.empty": "No retained resources in this observation.",
+    "pluginDiagnostics.runtimeIdentity": "Current service / route identity",
+    "pluginDiagnostics.activeOwners": "Active calls and sessions",
+    "pluginDiagnostics.locateRequest": "Locate original request diagnostics",
     "pluginRecovery.uninstallUnknown": "Original uninstall outcome unconfirmed. A missing original or empty query does not prove completion.",
     "pluginRecovery.uninstallTitle": "Uninstallation recovery",
     "pluginRecovery.uninstallDescription": "Read all retained uninstalls, including plugins already removed from this list. Only the service can confirm completion.",

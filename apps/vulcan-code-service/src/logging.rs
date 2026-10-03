@@ -16,6 +16,9 @@ const ARCHIVE_COUNT: usize = 4;
 /// Installed data-root identity; a process never silently switches log ownership.
 /// 已安装的数据根身份，进程绝不静默切换日志归属。
 static INSTALLED: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+/// The native consumer shares the exact tracing writer, including its rotation ownership.
+/// 原生消费者共享 tracing 的精确写入器及其轮转所有权。
+static SHARED_WRITER: OnceLock<LogWriter> = OnceLock::new();
 
 /// Return the log directory for the already resolved authoritative data root.
 /// 根据已解析的权威数据根返回日志目录。
@@ -67,6 +70,9 @@ fn install(data_root: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sy
         )?,
         Err(error) => return Err(error.into()),
     };
+    // Keep one writer identity for tracing and the metadata-only native consumer.
+    // tracing 与仅元数据原生消费者保留同一写入器身份。
+    let native_writer = writer.clone();
     tracing_subscriber::registry()
         .with(filter)
         .with(
@@ -81,6 +87,9 @@ fn install(data_root: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sy
                 .with_writer(io::stderr),
         )
         .try_init()?;
+    SHARED_WRITER
+        .set(native_writer)
+        .map_err(|_| io::Error::other("service diagnostic writer is already installed"))?;
     // Panic records reach disk even when the GUI deliberately discards stderr.
     // 即使 GUI 主动丢弃 stderr，panic 记录也能落盘。
     let previous = std::panic::take_hook();
@@ -98,7 +107,113 @@ fn install(data_root: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sy
 /// Cloneable writer shared by every formatting call; the mutex serializes rotation and writes.
 /// 所有格式化调用共享的可克隆写入器，互斥锁串行化轮转和写入。
 #[derive(Clone)]
-struct LogWriter(Arc<Mutex<RollingLog>>);
+pub(crate) struct LogWriter(Arc<Mutex<RollingLog>>);
+
+/// Return the installed writer or an explicit initialization error; never open another log.
+/// 返回已安装写入器或明确的初始化错误；绝不打开第二份日志。
+pub(crate) fn shared_writer() -> Result<LogWriter, String> {
+    SHARED_WRITER
+        .get()
+        .cloned()
+        .ok_or_else(|| "Service diagnostic writer is not installed".into())
+}
+
+impl LogWriter {
+    /// Persist whitelisted JSON `record` and return its actual rotation segment, or the IO error.
+    /// 持久化白名单 JSON `record` 并返回其真实轮转分段，或返回 IO 错误。
+    pub(crate) fn write_native_record(&self, record: &serde_json::Value) -> io::Result<u64> {
+        // Serialization and disk access run only on the native consumer, never on a Core callback.
+        // 序列化及磁盘访问仅在原生消费者执行，绝不在 Core 回调执行。
+        let mut bytes = serde_json::to_vec(record)?;
+        bytes.push(b'\n');
+        let mut log = self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("service log lock poisoned"))?;
+        log.write_record(&bytes)?;
+        Ok(log.segment)
+    }
+
+    /// Place and persist dedicated `checkpoint` in one existing writer lock; return its actual segment.
+    /// 在一次既有写入器锁内确定并持久化专用 `checkpoint` 落点；返回其真实分段。
+    /// `first_segment` identifies the capture's original window; rotation resets copied segment counts.
+    /// `first_segment` 标识采集的原窗口；轮转会重置已复制的分段计数。
+    pub(crate) fn write_native_checkpoint(
+        &self,
+        checkpoint: &mut crate::native_diagnostics::NativeCheckpoint,
+        first_segment: u64,
+    ) -> io::Result<u64> {
+        // Both external tracing rotation and this checkpoint's own capacity decision are serialized here.
+        // 外部 tracing 轮转及本检查点自身容量判断均在此串行化。
+        let mut log = self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("service log lock poisoned"))?;
+        checkpoint.bind_segment(log.segment, first_segment)?;
+        // Exact serialized size decides rotation; no independent capacity or speculative size is introduced.
+        // 精确序列化大小决定轮转；不引入独立容量或推测大小。
+        let mut bytes = checkpoint.line()?;
+        if bytes.len() as u64 > log.limit {
+            return Err(io::Error::other(
+                "native checkpoint exceeds the service log segment",
+            ));
+        }
+        if log.file.is_none() || log.bytes.saturating_add(bytes.len() as u64) > log.limit {
+            log.rotate()?;
+            checkpoint.bind_segment(log.segment, first_segment)?;
+            bytes = checkpoint.line()?;
+            // A segment-number digit change can change the final JSON length; reject rather than omit it.
+            // 分段编号位数变化可能改变最终 JSON 长度；直接拒绝，而非省略检查点。
+            if bytes.len() as u64 > log.limit {
+                return Err(io::Error::other(
+                    "native checkpoint exceeds the service log segment",
+                ));
+            }
+        }
+        // The same lock keeps this exact bound and segment stable through the original write path.
+        // 同一锁使精确容量及分段通过原写入路径时保持稳定。
+        log.write_record(&bytes)?;
+        Ok(log.segment)
+    }
+
+    /// Return the current rotation segment for window-local accounting, or the lock error.
+    /// 返回当前轮转分段供窗口内计数，或返回锁错误。
+    pub(crate) fn native_segment(&self) -> io::Result<u64> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("service log lock poisoned"))?
+            .segment)
+    }
+
+    /// Flush the same actual file used by tracing; report a closed handle or IO error.
+    /// 刷新 tracing 使用的同一真实文件；报告句柄关闭或 IO 错误。
+    pub(crate) fn flush_native(&self) -> io::Result<()> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("service log lock poisoned"))?
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("service log file is closed"))?
+            .flush()
+    }
+
+    /// Create an isolated real writer with `limit` for native consumer tests.
+    /// 使用 `limit` 创建隔离的真实写入器供原生消费者测试。
+    #[cfg(test)]
+    pub(crate) fn native_test_writer(root: PathBuf, limit: u64) -> io::Result<Self> {
+        Ok(Self(Arc::new(Mutex::new(RollingLog::open(root, limit)?))))
+    }
+
+    /// Close an isolated test handle so the fixture can replace its directory with an actual IO fault.
+    /// 关闭隔离测试句柄，使夹具可将目录替换为真实 IO 故障。
+    #[cfg(test)]
+    pub(crate) fn native_test_close(&self) {
+        if let Ok(mut log) = self.0.lock() {
+            log.file.take();
+        }
+    }
+}
 
 impl Write for LogWriter {
     /// Persist one formatted record and report IO failure without recursively logging it.
@@ -132,6 +247,9 @@ struct RollingLog {
     /// Segment size passed by production or the deterministic test fixture.
     /// 由生产入口或确定性测试夹具传入的分段大小。
     limit: u64,
+    /// Monotonic process-local rotation segment, not a lifetime event counter.
+    /// 进程内单调轮转分段，不是生命周期事件计数。
+    segment: u64,
 }
 
 impl RollingLog {
@@ -155,6 +273,7 @@ impl RollingLog {
             file: Some(file),
             bytes,
             limit,
+            segment: 0,
         })
     }
 
@@ -205,7 +324,11 @@ impl RollingLog {
                 fs::rename(source, destination)?;
             }
         }
+        // Preserve the segment identity across reopen so native accounting cannot span deleted history.
+        // 重新打开后保留分段身份，使原生计数不能跨越已删除历史。
+        let next_segment = self.segment.saturating_add(1);
         *self = Self::open(self.root.clone(), self.limit)?;
+        self.segment = next_segment;
         Ok(())
     }
 }

@@ -151,6 +151,15 @@ async fn retained_service_uninstall_failed_callback_requires_ack_without_replay(
     PROVIDER_CONFIGURATION_PATH
         .scope(destination.path().join("policy.json"), async {
             seed_managed(&fixture).await;
+            // Freeze the actual disabled descriptor generation before the original removal is admitted.
+            // 在原移除入场之前冻结实际停用描述符代次。
+            let original_generation = fixture
+                .runtime
+                .snapshot()
+                .plugins
+                .get(PLUGIN)
+                .expect("installed disabled source")
+                .generation;
             let error = service_uninstall_user_plugin(
                 ServiceEventEmitter::new(Vec::new()),
                 Arc::clone(&fixture.state),
@@ -168,6 +177,69 @@ async fn retained_service_uninstall_failed_callback_requires_ack_without_replay(
                 .find(|row| row.plugin_id == PLUGIN)
                 .expect("actual original row");
             assert!(row.requires_external_effects_acknowledgement);
+            // A real failed callback remains readable while the original mutable execution borrow is held.
+            // 即使原可变执行借用被持有，真实失败回调仍保持可读取。
+            {
+                // The same strong registry supplies the actual retained owner, not reconstructed metadata.
+                // 相同强注册表提供实际保留所有者，而非重建元数据。
+                let registry = Arc::clone(
+                    &fixture
+                        .state
+                        .lock()
+                        .expect("state")
+                        .pending_local_plugin_uninstalls,
+                );
+                // UUID is parsed only from the original status delivered by production service code.
+                // UUID 仅从生产服务代码交付的原状态解析。
+                let request = uuid::Uuid::parse_str(&row.request_id).expect("original request UUID");
+                // This owner is the same concrete allocation that produced the failed callback evidence.
+                // 此所有者为产生失败回调证据的相同具体分配。
+                let original = registry.lookup(PLUGIN, request).expect("actual original");
+                // Holding this borrow reproduces the live executor's exclusion without restarting its callback.
+                // 持有此借用复现实时执行器的互斥，不重新启动其回调。
+                let _execution_borrow = original.resources.lock().await;
+                // The native parent ID is read from the exact fixture manager, never guessed from the request.
+                // 原生父级身份从精确夹具管理器读取，绝不从请求猜测。
+                let runtime_id = fixture
+                    .runtime
+                    .formal_runtime_status()
+                    .expect("real parent status")
+                    .expect("attached native parent")
+                    .runtime_id;
+                // This deadline detects accidental joining of the held execution borrow, not Lua performance.
+                // 此截止时间检测误联接已持有执行借用，而非 Lua 性能。
+                let sample = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    crate::plugin_runtime_services::diagnostics::uninstall_drain(
+                        Arc::clone(&fixture.state),
+                        runtime_id,
+                        PLUGIN.to_owned(),
+                        request,
+                    ),
+                )
+                .await
+                .expect("diagnostic read must not wait for the original execution borrow")
+                .expect("actual original diagnostic sample");
+                assert_eq!(sample.request_id, row.request_id);
+                assert_eq!(sample.plugin_id, PLUGIN);
+                assert_eq!(sample.plugin_generation, original_generation.to_string());
+                assert!(
+                    sample
+                        .resources
+                        .as_ref()
+                        .expect("actual native ownership sample")
+                        .resources
+                        .iter()
+                        .all(|resource| !resource.is_drain_blocking),
+                    "physically retired callback failure must not masquerade as a live drain blocker"
+                );
+                assert!(
+                    !serde_json::to_string(&sample)
+                        .expect("safe diagnostic JSON")
+                        .contains("actual failed uninstall after native effect"),
+                    "diagnostic metadata must not expose callback business error text"
+                );
+            }
             service_resume_local_plugin_uninstall(
                 ServiceEventEmitter::new(Vec::new()),
                 Arc::clone(&fixture.state),

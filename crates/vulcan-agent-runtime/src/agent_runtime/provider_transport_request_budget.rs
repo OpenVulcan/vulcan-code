@@ -1030,30 +1030,46 @@ mod tests {
         // A small context window would reject this fixture if media were counted as ordinary text.
         // 若把媒体计作普通正文，小型上下文窗口将拒绝本夹具。
         let guard = ProviderRequestBudgetGuard::new_v1(
-            "test-provider", "test-model", vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            "test-provider",
+            "test-model",
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
             "sha256:test-route",
-            ModelCapabilities { context_limit: Some(10_000), ..ModelCapabilities::default() },
+            ModelCapabilities {
+                context_limit: Some(10_000),
+                ..ModelCapabilities::default()
+            },
             ProviderRuntimeReasoningResolution::default(),
-            Some(ContextCompactionPolicy::default()), Some(8_000), None,
+            Some(ContextCompactionPolicy::default()),
+            Some(8_000),
+            None,
         );
         // Exact durable binary content is retained while its accounting uses existing attachment metadata.
         // 保留精确持久二进制内容，同时记账使用既有附件元数据。
         let envelope = serde_json::json!({"$vulcan_native_media_input":1,"text":"Read image","byte_len":60_000,"upload":null,
             "resource":{"id":"budget-media","kind":"image","media_type":"image/png","source_kind":"inline_data","file_name":"image.png","url":format!("data:image/png;base64,{}", "YWJj".repeat(20_000))}}).to_string();
-        for text in [envelope.clone(), serde_json::json!({"model_output":envelope,"host_result":null}).to_string()] {
+        for text in [
+            envelope.clone(),
+            serde_json::json!({"model_output":envelope,"host_result":null}).to_string(),
+        ] {
             // Exercise both real controller representations at the same preliminary guard.
             // 在同一初步守卫处覆盖两种真实控制器表示。
             let request = request_snapshot(vec![ConversationMessage {
                 id: "native-budget".into(),
                 payload: ConversationPayload::ToolResult {
-                    tool_call_id: Some("read".into()), is_error: false, text,
+                    tool_call_id: Some("read".into()),
+                    is_error: false,
+                    text,
                 },
             }]);
             // Production validates this budget before the authoritative V1 rebuild.
             // 生产流程在权威V1重建之前校验此预算。
             let budget = guard.build_budget_snapshot(&request).unwrap();
             guard.validate_budget(&budget).unwrap();
-            assert!(serde_json::to_string(&request).unwrap().contains("$vulcan_native_media_input"));
+            assert!(
+                serde_json::to_string(&request)
+                    .unwrap()
+                    .contains("$vulcan_native_media_input")
+            );
         }
     }
 

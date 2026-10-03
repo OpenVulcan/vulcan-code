@@ -54,6 +54,18 @@ fn collect_finalizations(
         {
             continue;
         }
+        // The original domain owns closing, independently of any last business invocation.
+        // 原域拥有关闭，独立于任何最后业务调用。
+        crate::runtime::native_identity::observe_snapshot(
+            owner.host.runtime().id(),
+            &snapshot,
+            crate::runtime::native_identity::NativeIdentityOwner {
+                plugin_generation: domain.key.generation,
+                controller_session_id: Some(&domain.key.controller),
+                host_invocation_id: None,
+                host_session_id: None,
+            },
+        );
         if !snapshot.phase.is_terminal() {
             pending = true;
             continue;

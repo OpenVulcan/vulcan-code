@@ -735,6 +735,9 @@ pub(crate) struct ServiceLifecycleState {
     /// Once a process-owned runtime is stopped, failed shutdown cannot safely reopen admission.
     /// 进程持有的运行时一旦停止，关闭失败后就不能安全地重新开放准入。
     pub(crate) shutdown_recovery_blocked: bool,
+    /// Sole original plugin manager retained before native initialization, including failed bootstrap.
+    /// 原生初始化之前保留的唯一原插件管理器，包含失败引导。
+    pub(crate) original_plugin_manager: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 }
 
 impl ServiceLifecycleState {
@@ -743,7 +746,8 @@ impl ServiceLifecycleState {
     pub(crate) fn begin_shutdown_drain(&mut self) {
         self.shutdown_drain_active = true;
         self.last_recovery_failure = None;
-        self.shutdown_recovery_blocked = false;
+        // A retry cannot undo the previous permanent native or process-runtime closure.
+        // 重试不能撤销先前永久的原生或进程运行时关闭。
     }
 
     /// Marks the irreversible shutdown boundary before stopping process-owned runtimes.
@@ -757,7 +761,8 @@ impl ServiceLifecycleState {
     pub(crate) fn end_shutdown_drain(&mut self) {
         self.shutdown_drain_active = false;
         self.last_recovery_failure = None;
-        self.shutdown_recovery_blocked = false;
+        // Successful recovery is admitted only before the irreversible boundary; never erase it here.
+        // 成功恢复仅允许发生在不可逆边界之前；此处绝不抹除该边界。
     }
 
     /// Retains one exact recovery failure and clears shutdown ownership.

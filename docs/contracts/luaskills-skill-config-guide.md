@@ -2,15 +2,15 @@
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立候选采用零点六点零，其版本和来源以根清单、实际锁与本轮元数据为准。
+本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式零点六点一注册表依赖，其版本和来源以根清单、实际锁与本轮元数据为准。
 
 技能配置声明以当前上游源码及已有生成技能配置契约为准，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。本文后续零点五点九版本引用保留历史契约与验证背景；不能用于证明零点六候选的构建来源。正式插件执行契约另见[插件执行引擎归属](plugin-execution-engine.md)。
 
-### 1.1 当前本地候选与正式依赖边界
+### 1.1 当前正式依赖与本地验证边界
 
-本独立候选的根 `Cargo.toml` 精确声明 `luaskills = "=0.6.0"`；本地验证通过显式 `--config patch.crates-io.luaskills.path=<已冻结的 Core 检出>` 指定来源。实际元数据必须指向该检出的根清单，且 `source` 为本地路径；当前锁中的该包没有注册表 `source` 或 `checksum`。不能用旧版本校验和构造零点六注册表身份。
+本独立集成检出的根 `Cargo.toml` 精确声明 `luaskills = "=0.6.1"`。实际 `cargo update -p luaskills --precise 0.6.1` 已从 crates.io 解析该版本，当前工作锁的来源为 `registry+https://github.com/rust-lang/crates.io-index`，校验和为 `e3a1a7bf25b63489568217f69d470fe6e248117ee7a0ac900f8c4b0d547e803b`。`cargo metadata --locked` 的包清单指向实际 registry 缓存中的 `luaskills-0.6.1/Cargo.toml`，没有 LuaSkills 本地 path patch。此处记录实际解析身份，不把根清单声明单独视为构建或现场验收通过。
 
-当前候选锁仍含受保护的既有依赖变化，作为本地验证输入保存，不整份纳入阶段提交。用户主工作树的正式依赖仍为零点五点九。按既定发布顺序完成 Core GitHub、Cargo 与 SDK 验收后，才取得真实零点六注册表身份，交付正式锁并同步本节；普通正式构建入口届时再验收。
+此前本地验证通过显式 `--config patch.crates-io.luaskills.path=<已冻结的 Core 检出>` 指定来源，其实际包清单指向该检出，不具有零点六注册表来源或校验和。旧验证检出的未提交混合锁原样保护，不复制到当前集成锁。当前正式解析在 Core 零点六点一 GitHub 与 Cargo 完整公共门禁通过后执行；普通正式构建入口、资源同步及宿主现场验收另行完成，不能由此次解析推断通过。
 
 本轮原生库及性能消费者使用明确的已提交 Core 来源；各自清单、元数据、锁和完整描述由证据保存。本地通过不表示五平台发布或正式注册表消费已完成。
 
@@ -32,6 +32,16 @@ checksum = "3f04f7301f2fd516b14f5a6a90849294b51dbd09156d0fccba5cd74ad31633b9"
 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER` 等所需接口由正式 0.5.9 公开。宿主的会话入场容量直接引用上游常量，不再维护兼容镜像。本指南后文保留的本地上游路径与测试取证仅解释历史行为和待改进边界，不是构建来源。
 
 本文中描述上游契约的章节（见 §3）同样以该 crate 的对应版本为准，本仓库不复制其字段校验。
+
+### 1.3 当前候选的上游契约回读
+
+此前回读候选提交 `df34cbd87bd223a0a01fba22cd7223767e466291`，并以正式零点五点九对照提交
+`71d94be113b309004c4d4aa2b18ce43b1e867aaf` 核对技能配置、监听、System 目录、安装来源、
+Managed IO 与受管环境缓存。下文对应旧技能入口的规则保持原行为；新增正式插件执行归属另见插件契约。
+源码存在的测试仅说明已有覆盖，不表示本轮候选多平台、正式注册表或真实宿主现场验收已经完成。
+上游版本、这些入口或宿主根依赖变化时，须重新回读源码并同步本文；历史验证不替代该步骤。
+
+当前正式零点六点一来源对应 Core 提交 `7320b8a21a4833afd0d94a260108d0bf755304cd`。本次从实际 registry 包回读 `src/skill/manifest.rs` 与 `src/skill/config.rs`，两份字节均与该冻结 Core 来源一致；第 3 节的技能配置声明仍以上游类型及校验为权威。本轮依赖身份确认不替代旧行为、正式构建、多平台或真实宿主现场的重新验收。
 
 ## 2. 宿主持久化位置
 
@@ -59,10 +69,10 @@ Vulcan Code 为宿主中的 LuaSkills 引擎传入同一个固定配置根：
 
 ## 3. 技能包作者声明配置
 
-> **契约归属。** 本节字段契约由上游 `luaskills` crate 拥有，版本与校验和由根 `Cargo.toml`
-> （`luaskills = "=0.5.9"`）与 `Cargo.lock` 锁定；本仓库不实现、不校验本节字段，上游源码也不随
-> 本仓库分发。因此本节无法在本仓库内验证：升级 `luaskills` 版本时必须回读上游对应版本的源码
-> 并同步本节，不能以本节作为行为依据。
+> **契约归属。** 本节字段契约由上游 `luaskills` crate 拥有，候选及正式来源边界见第 1 节。
+> 权威为上游 `src/skill/manifest.rs` 的 `SkillMeta` 以及 `src/skill/config.rs` 的声明类型和校验。
+> 当前正式注册表包的这两份源码已与冻结 Core 来源核对一致；本仓库不复制上游字段校验。
+> 升级版本时必须回读对应源码并同步本节，不能以本文代替实际 Schema 和类型检查。
 
 配置声明必须位于 `skill.yaml` 顶层 `config`，不能挂在单个 entry 下。以下示例展示常用字段：
 
@@ -70,7 +80,7 @@ Vulcan Code 为宿主中的 LuaSkills 引擎传入同一个固定配置根：
 id: example-configured-skill
 name: Example Configured Skill
 version: 1.0.0
-enabled: true
+enable: true
 
 config:
   - key: api_token
@@ -115,11 +125,11 @@ config:
     restart_required: true
 ```
 
-正式类型只有 `integer`、`string`、`float`、`enum` 和 `boolean`。技能包应直接遵守 0.5.9 的字段、类型、约束和安全整数规则，不应依赖宿主修正错误声明。
+正式类型只有 `integer`、`string`、`float`、`enum` 和 `boolean`。技能包应直接遵守第 1 节实际上游来源的字段、类型、约束和安全整数规则，不应依赖宿主修正错误声明。技能清单开关为 `enable`，不是插件清单的启用字段。
 
 ## 4. 技能包内读取配置
 
-Lua 代码只能访问当前技能包自己的配置命名空间。使用 LuaSkills 0.5.9 提供的正式接口：
+Lua 代码只能访问当前技能包自己的配置命名空间。当前上游在技能执行上下文中提供以下正式接口；该旧技能接口不自动授予所有正式插件公共配置访问权：
 
 ```lua
 local token = vulcan.config.get("api_token")
@@ -203,13 +213,19 @@ LuaSkills 宿主会在调用等待 5 秒、30 秒以及之后每 60 秒输出一
 表示已经进入 Lua 技能或其宿主调用；诊断中的 `blocking_runtime_operation` 表示 RunLua 生命周期
 等通用阻塞操作已经开始。诊断只包含规范工具名、进程内调用关联 ID、阶段与耗时，不包含完整参数。
 
-宿主引擎使用读写锁：普通技能调用、一次性 runLua、持久 runLua 会话与插件 System lease 只取读锁，
-因此宿主锁不再阻断独立调用并发进入 LuaSkills。普通技能与一次性 runLua 分别使用主池和 runLua 池；
-插件 System lease 使用每租约专用 VM，不占用这两个池。池的 `maxSize` 限制 VM 租约数，但不单独决定实际执行并发：
-LuaSkills 0.5.9 的文件型 runLua 仍在执行期间持有进程工作目录锁；System lease 使用租约逻辑目录，
-不修改进程工作目录、不取得该锁。不同插件可并行，同一插件的同用途运行时仍由宿主执行门串行。
-宿主引擎写锁仍会排空全部读取；插件依赖安装等管理动作不在本次并发改造范围内。
-技能安装、更新、
+普通技能管理引擎使用读写锁：普通技能调用、一次性 runLua 和公开持久 runLua 会话取得读锁。
+普通技能与一次性 runLua 分别使用主池和 runLua 池；池的 `maxSize` 限制 VM 租约数，
+不单独决定实际执行并发。文件型 runLua 及带目录的公开会话仍有进程工作目录锁约束；
+上游独立 System 接口使用租约逻辑目录，不修改进程目录、不取得该锁。
+
+当前正式插件执行使用独立的不可变插件引擎及管理器唯一 `ManagedFormalRuntime`，
+不进入上述普通技能管理锁。工具、Hook、Action、生命周期及启用探测由该父级统一管理，
+公共或专用用途容量与 `SingleCall`、复用实例、固定会话策略分别声明；不能将旧 System 租约的
+每租约专用 VM 描述套用于当前全部插件调用。权威入口为 `luaskills_bridge.rs::bootstrap_luaskills`、
+`service_bootstrap.rs::prepare_vulcan_plugin_runtime` 及 `runtime/bridge/embedded.rs::new`，
+资源与权限边界见[插件执行引擎归属](plugin-execution-engine.md)。独立引擎不表示整个宿主进程只有一份资源预算。
+
+普通技能管理引擎写锁仍会排空该引擎的全部读取。技能安装、更新、
 卸载、启停、重载与技能包配置写入取写锁，并在排空在途读锁之后才变更引擎状态。单次锁等待超过
 1 秒时另输出 `engine-read-lock-slow` 或 `engine-write-lock-slow`；写锁慢诊断只包含管理动作标签
 （如 `refresh`、`install`），不包含技能标识与来源定位值。`runtime-config` 虽只暴露只读的
@@ -217,7 +233,7 @@ LuaSkills 0.5.9 的文件型 runLua 仍在执行期间持有进程工作目录�
 
 ## 9. 外部修改、显式刷新与事件
 
-LuaSkills 0.5.9 文件监听器会观察两个固定存储。WebUI 打开配置弹窗时轮询有序配置事件：
+当前上游 `config_service.rs` 的文件监听器观察 `skills` 与 `system-skills` 两个固定存储，监听及显式刷新语义与第 1.3 节的旧对照保持一致。WebUI 打开配置弹窗时轮询有序配置事件：
 
 - 发现当前技能包发生本地写入或外部重载后，重新加载描述与校验状态；
 - 保留用户尚未提交的草稿；
@@ -248,7 +264,7 @@ LuaSkills 0.5.9 文件监听器会观察两个固定存储。WebUI 打开配置�
 
 遇到配置问题时按以下顺序检查：
 
-1. 根 `Cargo.toml` 与 `Cargo.lock` 是否均锁定 `luaskills 0.5.9`，且来源为注册表；
+1. 根 `Cargo.toml`、实际 `Cargo.lock` 与元数据的版本及来源是否一致；正式构建要求真实注册表来源和校验和，本地候选边界见第 1.1 节；
 2. `skill.yaml` 的 `config` 是否位于顶层且符合正式 schema；
 3. 生效技能来自 ROOT 还是 USER，以确认对应存储作用域；
 4. `runtime-config validate` 或 WebUI 校验结果中的稳定错误码；
@@ -261,7 +277,7 @@ LuaSkills 0.5.9 文件监听器会观察两个固定存储。WebUI 打开配置�
 
 ### 12.1 权威归属与同步触发
 
-本节对应正式 `luaskills 0.5.9`，上游权威为 `src/runtime/engine/logical_cwd.rs`、`lease.rs`、`runlua.rs`、`managed_io.rs`、`process_session.rs` 及 `contracts/system-lease-execution.md`。升级时必须重新核对这些入口；本文不定义另一套执行协议。
+本节描述上游独立 System 接口与普通 runLua 的目录语义，权威为 `src/runtime/engine/logical_cwd.rs`、`lease.rs`、`runlua.rs`、`managed_io.rs`、`process_session.rs` 及 `contracts/system-lease-execution.md`。第 1.3 节候选回读确认旧目录规则保持；当前正式插件父级的执行归属另见插件契约。升级时必须重新核对这些入口，本文不定义另一套执行协议。
 
 ### 12.2 System 逻辑工作目录
 
@@ -282,7 +298,7 @@ Context7 的 `lcurl.safe` 只接收 URL、请求头、超时、TLS 校验选项�
 
 上游明确阻塞的宿主回调尚未放行时，另一 System 租约已完成；同时持有普通 runLua 目录锁并真实改变进程目录时，System 文件、模块与命令仍使用自己的目录。恢复旧全局锁后这两项回归均失败。
 
-正式 0.5.9 对应上游提交 `70bb42d`，Windows、Ubuntu、macOS 原生 CI：<https://github.com/LuaSkills/luaskills/actions/runs/35960551210>。同租约串行和宿主取消归属由 VulcanCode 另行测试，不能以这份上游证据替代真实页面验收。
+历史零点五点九记录中的上游提交为 `70bb42d`，Windows、Ubuntu、macOS 原生 CI：<https://github.com/LuaSkills/luaskills/actions/runs/35960551210>。该记录保留原验证归属，不是当前零点六候选结果。同租约串行和宿主取消归属由 VulcanCode 另行测试，不能以这份上游证据替代真实页面验收。
 
 ## 13. 安装来源策略与可达路径
 
@@ -338,7 +354,7 @@ Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` �
 
 ### 13.5 可达验收结论
 
-本地回环 HTTP 的安装、更新、缓存、离线与失败回滚验收针对当时的本地源码 HEAD 完成。该历史结论不表示生产 WebUI/RPC 已支持任意 URL；当前构建来源与版本以第 1 节的正式 0.5.9 注册表依赖为准。
+本地回环 HTTP 的安装、更新、缓存、离线与失败回滚验收针对当时的本地源码 HEAD 完成。该历史结论不表示生产 WebUI/RPC 已支持任意 URL；当前候选与提交锁的实际来源边界见第 1 节。
 
 ## 14. 可延后项的结论与后续入口
 
@@ -347,10 +363,10 @@ Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` �
 ### 14.1 安装分阶段接口（方案四.1）
 
 - **取证：** `install_luaskill` 在入口取 `engine.write()`；`LuaEngine::install_skill_in_root` 是同步方法，内部 `apply_skill_request_in_root` 依次完成下载、校验、解压与提交，期间无 `await`、无线程派生。写锁因此**跨越整个网络 I/O**。
-- **分阶段接口不可行：** `PreparedSkill*` 事务字段为 `pub(crate)`，宿主无法驱动「先暂存、后取锁应用」的事务。
+- **当前分阶段限制：** `SkillManager` 已公开 prepare、commit 和 rollback，可外部持有不透明事务；但安装 prepare 已将包重命名至最终目录，更新 prepare 已备份旧目录并发布新目录。因此它不是“不改变公开目录、随后才取得引擎锁应用”的纯暂存接口。当前 `LuaEngine` 同步入口还需一起协调目录重载、提交和回滚，不能仅据部分字段私有推断公开事务完全不可驱动。
 - **结论：** 按方案四.1 的保留分支处理——**保留写锁**，并把安装期排队**作为明确限制显示**（安装进度横幅与更新进度弹窗在 `inFlight` 期间披露其他技能操作需要等待）。**该能力未修复，只是被如实呈现。**
-- **更新进度交互：** 点击更新后立即打开弹窗，首个服务事件到达前显示准备状态；随后按 `correlationId` 排除点击前保留的旧操作，展示当前阶段、`percent` 与下载字节数。当前 LuaSkills 0.5.9 仅在下载字节总量已知时提供下载百分比，解析、解压等无数值阶段显示不确定进度；下载达到 100% 不代表整次更新完成。服务操作与本地请求结束后保留完成或失败结果，供用户关闭，关闭后的同一终态不会再次弹出。
-- **后续入口：** 需上游先公开不可变暂存区与代次检查接口，宿主才可能分阶段。
+- **更新进度交互：** 点击更新后立即打开弹窗，首个服务事件到达前显示准备状态；随后按 `correlationId` 排除点击前保留的旧操作，展示当前阶段、`percent` 与下载字节数。上游 `host/callbacks.rs` 仅在已下载字节和正数总量均已知时计算下载百分比，解析、解压等无数值阶段显示不确定进度；下载达到 100% 不代表整次更新完成。服务操作与本地请求结束后保留完成或失败结果，供用户关闭，关闭后的同一终态不会再次弹出。
+- **后续入口：** 若改造普通技能安装，需先设计不提前改写公开目录、且与 `LuaEngine` 目录和代次一致的暂存提交边界；本轮不实施该独立改造。
 
 ### 14.2 插件租约逻辑目录
 
@@ -358,30 +374,31 @@ Vulcan 生产入口仍只接受 `github` 来源，并继续拒绝用户 `url` �
 
 ### 14.3 文件型 runLua 工作目录虚拟化（方案四.3）
 
-- **取证：** `runlua.rs` 依赖进程级 cwd（`set_current_dir(entry_dir)`），且 `engine.rs:966` 的 `fs.copy` 与 `:1657` 的 `process.exec` 按进程 cwd 解析相对路径。
+- **取证：** `runlua.rs` 的文件执行路径仍取得 `lock_runlua_cwd_guard` 并切换进程目录；普通 Public 会话由 `lease.rs::eval_lua_value_with_optional_cwd` 保留同类行为。第 1.3 节回读没有将这些入口迁移成 System 逻辑目录。
 - **结论：** 未实施。逐 VM 工作目录解析只能在其与原行为在文件读取、模块加载、子进程 cwd、失败、取消和跨工作区隔离上**全部等价**后才可考虑；当前**保留有界串行**。
 - **后续入口：** 需先提供改前行为样本集作为等价性判据。
 
 ### 14.4 插件 lease 源码与编译缓存（方案四.6）
 
-- **结论：** 未测量、未实施。磁盘读取与 `load` 编译耗时**尚未分开测量**，因此没有依据判断重复读取是否占主要成本。
-- **后续入口：** 先测量再取舍。实施时须以可信包身份与内容代次缓存不可变源码，在安装/更新/停用及代次变化时失效，且**不得跨 VM 复用绑定了沙箱环境的 Lua 闭包**；编译缓存还须上游证明同版本 VM、权限与沙箱隔离等价。
+- **历史范围：** 原“未分开测量磁盘读取与 `load` 编译、未实施缓存”的结论仅描述旧 System JSON lease 路径，不能用于否定当前正式插件运行时。
+- **当前正式路径：** 上游 `embedded/module.rs` 保留不可变模块声明并一次编译 JSON 契约；`engine/lease/embedded.rs` 在每个 VM 初始化时从该声明加载源码并捕获绑定函数。它没有跨 VM 共享 Lua 闭包，也不是 Lua 字节码缓存。宿主按可信包身份与内容代次构造定义，细节见插件执行契约。
+- **后续入口：** 若新增字节码缓存或改变旧路径，仍须先测量，并证明版本、权限与沙箱隔离等价；不得跨 VM 复用绑定了环境的闭包。
 
 ### 14.5 Managed IO 外部覆盖策略（方案五.2）
 
 - **归属：** Managed IO 的发布规则由**上游**实现。Vulcan 只通过 `capabilities.enable_managed_io_compat`（默认 `true`）传递开关，见 `luaskills_bridge.rs` 与 `luaskills_runtime.rs`。
-- **结论：** Vulcan 侧**不存在**声称自动合并外部修改的产品路径，因此无需修正的冲突声明。**该行为未被验证，也未做任何改动。**
-- **后续入口：** 若上游确认采用完整权威缓冲覆盖，凡需要保留外部修改的产品路径必须**显式声明冲突或约束**。
+- **当前规则：** 上游 `managed_io.rs` 的写入／更新模式在文件代次改变后按完整权威缓冲截断并覆盖外部改写；仅追加模式使用待写后缀追加。上游已有外部替换和无新写恢复测试，不能继续将覆盖策略标为尚待确认。
+- **宿主边界：** Vulcan 没有声称自动合并外部修改的产品路径，本轮没有改变该策略，也没有新增宿主现场 IO 验收。需要保留外部修改的业务必须显式声明冲突或约束，不能把源码中的已有测试作为本轮真实 UI 验收。
 
 ### 14.6 受管运行时缓存失效扩展测试（方案五.3）
 
 - **归属：** 计划缓存位于上游 `runtime/managed_package.rs:285-669`（`managed_runtime_plan_cache`、`managed_runtime_plan_cache_hits`、`cached_/cache_/evict_managed_runtime_plan`），**全部 `pub(crate)`**，宿主不可触及。
 - **结论：** 「相同 owner 命中、锁文件或清单改变后失效、不同 owner 隔离」是**上游内部行为**，只能在上游内验收。Vulcan 侧已验收的部分是受管运行时**安装目标与清单校验**（既有测试覆盖严格目标、清单不匹配、版本意外与平台矩阵）。
-- **后续入口：** 上游为该缓存补充命中/失效/隔离测试；Vulcan 侧不重复实现。
+- **已有覆盖：** 上游 `python_env_plan_resolves_manifests_and_lockfile` 已验证命中、锁文件失效、不同 owner 和释放；`node_env_plan_includes_package_manifest_hash` 已验证命中与清单失效。旧对照与候选的该测试文件相同。Vulcan 不重复实现私有缓存；这些源码断言不代表本轮宿主现场或最终候选多平台已经重新验收。
 
 ### 14.7 共同边界
 
-除 §14.2 已完成外，其余项目仍按各自条目所列边界处理；不能用插件并发修复推导普通 runLua、离线缓存或 Managed IO 已全部改善。
+本节分别保留旧方案延后项、已确认上游规则和当前正式插件路径，不能把历史“未实施”扩大为当前全部插件能力缺失，也不能根据源码或已有测试存在推断本轮普通 runLua、离线缓存、Managed IO 或真实界面验收全部通过。
 
 ## 15. Agent 请求期线程入场审计（方案四.4）
 
@@ -397,9 +414,9 @@ LuaSkills 相关工作线程按上游实际资源拆成三类：
 | --- | --- | --- |
 | 普通技能调用 | `runtime_settings.vm_pool.max_size` | 主 VM 池 |
 | 一次性文件型/内联 runLua | `runtime_settings.run_lua_pool.max_size` | 隔离 runLua VM 池 |
-| 公开持久 runLua 会话操作 | `LUASKILLS_RUNTIME_SESSION_LEASE_CAPACITY`，当前为 8 | 公共 Runtime Session manager 的租约上限 |
+| 公开持久 runLua 会话操作 | 直接引用上游 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER` | 公共 Runtime Session manager 的租约上限 |
 
-公开持久会话没有复用一次性 runLua 默认上限 4。LuaSkills 0.5.9 对 manager 的持久会话租约上限公开 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER`；Vulcan 的会话入场器直接引用该常量，保持与上游容量一致。宿主只对公开会话入口使用该容量；System lease 与插件运行时仍由独立 manager 管理，不与公开会话的入场器混用。
+公开持久会话没有复用一次性 runLua 默认上限 4。Vulcan 的会话入场器在 `luaskills_runtime/types.rs::from_shared_engine` 中直接引用上游 `MAX_RUNTIME_SESSION_LEASES_PER_MANAGER`，保持与上游容量一致；不维护另一份宿主兼容常量。该入场器仅用于公开会话入口，独立 System 接口及正式插件父级不与它混用。
 
 ### 15.2 入场与取消语义
 
@@ -416,4 +433,4 @@ LuaSkills 相关工作线程按上游实际资源拆成三类：
 
 ### 15.4 当前限制
 
-带 `cwd` 的 System lease 和文件型 runLua 仍通过进程级 `lock_runlua_cwd_guard` 串行修改进程工作目录；本次入场只约束线程数量，不宣称消除了这条 cwd 串行。插件 bundle 的受限环境仍未暴露 `vulcan.models`，内部模型接线也没有扩大插件沙箱权限。
+文件型 runLua 和带 `cwd` 的公开 Public 会话仍通过进程级 `lock_runlua_cwd_guard` 串行修改进程工作目录；上述入场只约束线程数量，不宣称消除了这条 cwd 串行。上游 `lease.rs::eval_runtime_session_with_profile_json` 对 System profile 直接在逻辑目录 VM 中执行，只有 Public 分支调用 `eval_lua_value_with_optional_cwd`。正式插件父级的用途容量和执行策略独立于这三个普通技能入场器，见第 8 节及插件执行契约。

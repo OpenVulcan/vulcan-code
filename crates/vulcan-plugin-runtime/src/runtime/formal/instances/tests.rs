@@ -3,6 +3,7 @@
 
 use super::*;
 
+mod diagnostics;
 mod ui;
 
 use crate::runtime::tests::{test_manager, write_hook_package};

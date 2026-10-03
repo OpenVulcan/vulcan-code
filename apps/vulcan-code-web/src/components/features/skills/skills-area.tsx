@@ -36,6 +36,9 @@ export function SkillsArea(props: {
   // Navigates to the application-wide runtime diagnostics page when the host provides one.
   // 宿主提供时导航至应用全局运行时诊断页面。
   onOpenDiagnostics?: () => void
+  // onSelectPluginResourceOwner navigates the original resource owner through workspace service selection.
+  // onSelectPluginResourceOwner 通过工作台服务选择导航至原资源所有者。
+  onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean>
 }) {
   // t provides a visible unavailable state when the selected plugin loses its enabled mount.
   // t 在所选插件失去已启用挂载点时提供可见的不可用状态。
@@ -56,6 +59,8 @@ export function SkillsArea(props: {
           <VulcanPluginsPanel
             actions={props.skillActions}
             plugins={props.workbench.plugins}
+            conversations={props.workbench.conversations}
+            onSelectPluginResourceOwner={props.onSelectPluginResourceOwner}
           />
           <PluginPrewarmControls conversations={props.workbench.conversations} selectedConversationId={props.workbench.selectedConversationId} />
           <PluginPrewarmPolicyControls />

@@ -129,6 +129,15 @@ impl VulcanPluginRuntimeManager {
                         .map_err(core_error)?,
                 );
             }
+            if let Some(finalization) = &state.finalization {
+                // Borrow existing closing evidence before any successful forget can remove it.
+                // 任何成功遗忘可以移除证据之前，借用既有关闭证据。
+                crate::runtime::native_identity::observe_snapshot(
+                    owner.host.runtime().id(),
+                    finalization,
+                    session.native_identity_owner(),
+                );
+            }
             owner
                 .host
                 .runtime()

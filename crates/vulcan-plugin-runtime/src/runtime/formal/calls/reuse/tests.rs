@@ -9,6 +9,8 @@ use std::sync::Condvar;
 
 mod automatic;
 mod budget;
+mod diagnostics;
+mod native_identity;
 mod prewarm;
 mod recovery;
 mod targets;

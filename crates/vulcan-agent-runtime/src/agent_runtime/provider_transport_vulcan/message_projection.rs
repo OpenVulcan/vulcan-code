@@ -130,7 +130,10 @@ pub(crate) async fn build_responses_compaction_messages(
             session_scope_id: session_scope_id.into(),
         }
     });
-    crate::native_media_input::project_native_media_messages(&mut messages, media_context.as_ref())?;
+    crate::native_media_input::project_native_media_messages(
+        &mut messages,
+        media_context.as_ref(),
+    )?;
     Ok(messages)
 }
 

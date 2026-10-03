@@ -697,6 +697,7 @@ fn run_service_bootstrap(
     // plugin_runtime_started_at 测量不包含异步预热等待的插件目录准备。
     let plugin_runtime_started_at = start_bootstrap_stage("plugin_catalog_prepare");
     let (vulcan_plugin_runtime, vulcan_plugin_catalog) = prepare_vulcan_plugin_runtime(
+        state,
         luaskills_runtime.as_ref(),
         &provider_configuration,
         &controller_runtime,
@@ -1766,6 +1767,10 @@ fn run_service_bootstrap(
                 format!("failed to lock service state during workspace bootstrap: {error}"),
             )
         })?;
+        // Reject bootstrap's first runtime publication after closing or the actual HTTP failure.
+        // 关闭或真实 HTTP 失败之后，拒绝引导首次运行时发布。
+        crate::native_plugin_shutdown::require_bootstrap_admission(&guard)
+            .map_err(|error| ServiceBootstrapError::new("workspace", "Workspace", error))?;
         guard.agent_runtime = Some(agent_runtime.clone());
         let subagent_navigation =
             subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)
@@ -1887,6 +1892,11 @@ fn run_service_bootstrap(
                 "HTTP bridge failed before readiness publication",
             ));
         }
+        // Ready publication must obey the same closing admission as the initial runtime commit.
+        // 就绪发布必须遵循首次运行时提交使用的同一关闭准入。
+        crate::native_plugin_shutdown::require_bootstrap_admission(&guard).map_err(|error| {
+            ServiceBootstrapError::new("service-process", "Core Service", error)
+        })?;
         guard.host_database_providers = Some(pending_host_database_providers.commit());
         guard.startup = startup.clone();
         // Only this actual final readiness commit disarms cleanup of all original native startup work.
@@ -2002,12 +2012,15 @@ fn refresh_public_ai_catalogs_at_startup(
 /// 参数
 /// `luaskills_runtime` optionally supplies the execution engine, while the remaining arguments own catalog policy, storage, async bridging, and events.
 /// `luaskills_runtime` 可选提供执行引擎，其余参数分别持有目录策略、存储、异步桥接与事件。
+/// `state` retains the exact original manager before native attachment and serializes initialization with closing.
+/// `state` 在原生附加前保留精确原管理器，并将初始化与关闭串行化。
 ///
 /// # Returns
 /// 返回值
 /// Returns the long-lived manager and immutable catalog used by background Hook prewarming and later runtime projection.
 /// 返回供后台 Hook 预热及后续运行时投影使用的长生命周期管理器与不可变目录。
 fn prepare_vulcan_plugin_runtime(
+    state: &SharedServiceBridgeState,
     luaskills_runtime: Option<&vulcan_service_runtime::luaskills_bridge::TauriLuaSkillsHandle>,
     provider_configuration: &ProviderConfigurationFile,
     controller_runtime: &HostRuntimeHandle,
@@ -2098,40 +2111,44 @@ fn prepare_vulcan_plugin_runtime(
                 format!("初始化插件恢复门控失败：{error}"),
             )
         })?;
-    if let Some(luaskills_runtime) = luaskills_runtime {
-        // Read host-owned formal budgets once; missing settings remain memory-only defaults.
-        // 一次性读取宿主自有正式预算；缺失设置保持内存默认值。
-        let plugin_runtime_settings = vulcan_plugin_runtime::load_plugin_runtime_settings(
-            &plugin_state_root,
-        )
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "plugins",
-                "Vulcan Plugins",
-                format!("读取插件运行时预算失败：{error}"),
-            )
-        })?;
-        vulcan_plugin_runtime
-            .attach_runtime_engine(Arc::clone(&luaskills_runtime.plugin_engine))
-            .map_err(|error| {
-                ServiceBootstrapError::new(
-                    "plugins",
-                    "Vulcan Plugins",
-                    format!("附加 Vulcan 插件执行运行时失败：{error}"),
-                )
-            })?;
-        // Every production plugin route will share this one parent instead of allocating another engine.
-        // 每条生产插件路由将共享此唯一父级，不另行分配引擎。
-        vulcan_plugin_runtime
-            .initialize_formal_runtime(plugin_runtime_settings)
-            .map_err(|error| {
-                ServiceBootstrapError::new(
-                    "plugins",
-                    "Vulcan Plugins",
-                    format!("初始化插件正式运行时失败：{error}"),
-                )
-            })?;
-    }
+    // Read settings outside the short service gate; absence means a documented metadata-only manager.
+    // 在服务短门外读取设置；缺失表示已记录的纯元数据管理器。
+    let plugin_runtime_settings = match luaskills_runtime {
+        Some(_) => Some(
+            vulcan_plugin_runtime::load_plugin_runtime_settings(&plugin_state_root).map_err(
+                |error| {
+                    ServiceBootstrapError::new(
+                        "plugins",
+                        "Vulcan Plugins",
+                        format!("读取插件运行时预算失败：{error}"),
+                    )
+                },
+            )?,
+        ),
+        None => None,
+    };
+    // Retain the original owner before any native worker starts; attachment failure also keeps this same owner.
+    // 任何原生线程启动之前保留原所有者；附加失败也保持同一所有者。
+    crate::native_plugin_shutdown::retain_and_initialize_original_manager(
+        state,
+        &vulcan_plugin_runtime,
+        || {
+            if let Some(luaskills_runtime) = luaskills_runtime {
+                vulcan_plugin_runtime
+                    .attach_runtime_engine(Arc::clone(&luaskills_runtime.plugin_engine))
+                    .map_err(|error| format!("附加 Vulcan 插件执行运行时失败：{error}"))?;
+                // The optional budget exists exactly when the declared engine exists, established above.
+                // 可选预算恰好在声明引擎存在时存在，该关系已在上方建立。
+                let settings = plugin_runtime_settings
+                    .expect("formal settings exist for the declared plugin engine");
+                vulcan_plugin_runtime
+                    .initialize_formal_runtime(settings)
+                    .map_err(|error| format!("初始化插件正式运行时失败：{error}"))?;
+            }
+            Ok(())
+        },
+    )
+    .map_err(|error| ServiceBootstrapError::new("plugins", "Vulcan Plugins", error))?;
     // storageService routes plugin database calls through the already-open shared host runtime.
     // storageService 通过已连接的共享 Controller 客户端路由插件数据库调用。
     let storage_service = Arc::new(crate::plugin_storage::PluginStorageService::new(

@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // frFRTranslations stores the French UI text.
 // frFRTranslations 保存法语界面文案。
 export const frFRTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "Diagnostic des ressources conservées",
+    "pluginDiagnostics.unavailable": "Le drainage original ou le parent est indisponible. Cela ne prouve pas la fin du drainage.",
+    "pluginDiagnostics.nonAtomic": "Les ressources conservées de l’hôte sont échantillonnées séparément, sans atomicité. Une liste vide ne prouve pas la fin du drainage physique ; consultez le reçu de la requête originale.",
+    "pluginDiagnostics.pinned": "Sessions d’outils épinglées (non libérées physiquement)",
+    "pluginDiagnostics.locate": "Ouvrir la conversation du propriétaire",
+    "pluginDiagnostics.internal": "Ressource interne (sans propriétaire de conversation)",
+    "pluginDiagnostics.missingOwner": "La conversation du propriétaire original est indisponible ou archivée.",
+    "pluginDiagnostics.blocking": "Bloque le drainage physique",
+    "pluginDiagnostics.nonBlocking": "Enregistrement conservé ; ne bloque pas le drainage",
+    "pluginDiagnostics.empty": "Aucune ressource conservée dans cette observation.",
+    "pluginDiagnostics.runtimeIdentity": "Identité actuelle du service / routage",
+    "pluginDiagnostics.activeOwners": "Appels et sessions actifs",
+    "pluginDiagnostics.locateRequest": "Afficher le diagnostic de la requête originale",
     "pluginRecovery.uninstallUnknown": "Le résultat de la désinstallation initiale n’est pas confirmé. Une demande absente ou une lecture vide ne prouve pas la fin.",
     "pluginRecovery.uninstallTitle": "Reprise de désinstallation",
     "pluginRecovery.uninstallDescription": "Lire toutes les désinstallations conservées, y compris les extensions absentes de cette liste. Seule la réponse du service confirme la fin.",

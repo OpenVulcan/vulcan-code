@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // koKRTranslations stores the Korean UI text.
 // koKRTranslations 保存韩语界面文案。
 export const koKRTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "보유 리소스 진단",
+    "pluginDiagnostics.unavailable": "원래 드레인 또는 연결된 상위를 관측할 수 없습니다. 배출 완료를 의미하지 않습니다.",
+    "pluginDiagnostics.nonAtomic": "호스트 보유 리소스를 개별 관측하며 원자적 스냅샷이 아닙니다. 빈 목록은 전체 물리 배출 완료를 증명하지 않습니다. 원래 요청 기록을 확인하세요.",
+    "pluginDiagnostics.pinned": "고정 도구 세션 (물리 해제 전)",
+    "pluginDiagnostics.locate": "소유자 대화 열기",
+    "pluginDiagnostics.internal": "내부 리소스 (대화 소유자 없음)",
+    "pluginDiagnostics.missingOwner": "원래 소유자 대화가 없거나 보관되었습니다.",
+    "pluginDiagnostics.blocking": "물리 배출 차단",
+    "pluginDiagnostics.nonBlocking": "보유 기록: 배출 차단 없음",
+    "pluginDiagnostics.empty": "이번 관측에 보유 리소스가 없습니다.",
+    "pluginDiagnostics.runtimeIdentity": "현재 서비스 / 경로 ID",
+    "pluginDiagnostics.activeOwners": "활성 호출 및 세션",
+    "pluginDiagnostics.locateRequest": "원래 요청 진단 찾기",
     "pluginRecovery.uninstallUnknown": "원래 제거 결과가 확인되지 않았습니다. 원래 요청이 없거나 조회가 비어 있어도 완료를 증명하지 않습니다.",
     "pluginRecovery.uninstallTitle": "제거 복구",
     "pluginRecovery.uninstallDescription": "목록에서 사라진 플러그인을 포함하여 보관된 모든 제거 요청을 읽습니다. 서비스 응답만 완료를 확인할 수 있습니다.",

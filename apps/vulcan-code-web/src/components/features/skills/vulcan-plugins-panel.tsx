@@ -13,9 +13,11 @@ import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import { PluginRuntimeControls } from "./plugin-runtime-controls";
 import { PluginUpdateControls } from "./plugin-update-controls";
+import { PluginResourceDiagnostics } from "./plugin-resource-diagnostics";
+import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";
 import { PluginRequestRecoveryControls } from "./plugin-request-recovery-controls";
 import { PluginUninstallRecoveryControls, type PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
-import type { PluginSummary, VulcanPluginPermissionPreview } from "@/types";
+import type { PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
 // VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
@@ -194,7 +196,16 @@ export function VulcanPluginsPanel(props: {
   // Plugin rows from the committed host plugin projection.
   // 来自已提交宿主插件领域投影的插件行。
   plugins: PluginSummary[];
+  // conversations carries authoritative owner IDs for resource navigation.
+  // conversations 携带资源导航的权威所有者 ID。
+  conversations?: WorkbenchSnapshot["conversations"];
+  // onSelectPluginResourceOwner follows the existing service-backed workspace selection chain.
+  // onSelectPluginResourceOwner 遵循既有服务支持的工作台选择链。
+  onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean>;
 }) {
+  // diagnosticsSelection retains the exact card or original management request identity.
+  // diagnosticsSelection 保留精确卡片或原管理请求身份。
+  const [diagnosticsSelection, setDiagnosticsSelection] = React.useState<PluginDiagnosticsSelection | null>(null);
   // locale and t resolve plugin manifest text and stable plugin-page labels.
   // locale 与 t 分别解析插件清单文案和稳定的插件页面文案。
   const { locale, t } = useI18n();
@@ -744,11 +755,15 @@ export function VulcanPluginsPanel(props: {
         ) : null}
       </section>
       <PluginRuntimeControls plugins={props.plugins} onRefreshCatalog={props.actions.onRefreshLuaSkills} />
-      <PluginUpdateControls plugins={props.plugins} actions={props.actions} />
+      <PluginResourceDiagnostics selection={diagnosticsSelection} onSelect={setDiagnosticsSelection}
+        conversations={props.conversations ?? []} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} />
+      <PluginUpdateControls plugins={props.plugins} actions={props.actions}
+        onLocateDiagnostics={(pluginId, requestId) => setDiagnosticsSelection({ kind: "update", pluginId, requestId })} />
       {(["installation", "credential"] as const).map((kind) => <PluginRequestRecoveryControls key={kind} kind={kind}
         plugins={vulcanPlugins} actions={props.actions} suggestedPluginId={permissionPreview === null ? "" : permissionPreview.pluginId}
         mutationBusy={mutationBusy} acquireMutation={acquireRecoveryMutation} releaseMutation={releaseRecoveryMutation} />)}
       <PluginUninstallRecoveryControls actions={props.actions} initialUncertainty={uninstallUncertainty}
+        onLocateDiagnostics={(pluginId, requestId) => setDiagnosticsSelection({ kind: "uninstall", pluginId, requestId })}
         onConfirmed={(pluginId) => { if (uninstallUncertainty?.pluginId === pluginId) { setUninstallUncertainty(null); setInstallError(""); } }}
         mutationBusy={mutationBusy} acquireMutation={acquireRecoveryMutation} releaseMutation={releaseRecoveryMutation} />
       <div className="agent-catalog-filter-row skill-list-filter-row plugin-skill-filter-row">
@@ -828,6 +843,12 @@ export function VulcanPluginsPanel(props: {
                   </div>
                 </div>
                 <p>{localizedCapability}</p>
+                {plugin.extension !== undefined && plugin.extension !== null && <p className="break-all text-xs text-muted-foreground">
+                  {t("pluginDiagnostics.runtimeIdentity")}: <code>{plugin.extension.runtimeIdentity}</code>
+                </p>}
+                <Button type="button" size="sm" variant="outline" onClick={() => setDiagnosticsSelection({ kind: "plugin", pluginId: plugin.id })}>
+                  {t("pluginDiagnostics.title")}
+                </Button>
                 <div className="vulcan-plugin-facts">
                   <span className="agent-definition-row-path">{plugin.id}</span>
                   <PluginFact
@@ -838,7 +859,7 @@ export function VulcanPluginsPanel(props: {
                   {plugin.skillCount > 0 ? <PluginFact icon={Hammer} label={t("skills.plugins.skills")} value={plugin.skillCount} items={plugin.extension?.skills} /> : null}
                   {plugin.agentCount > 0 ? <PluginFact icon={Bot} label={t("skills.plugins.agents")} value={plugin.agentCount} items={plugin.extension?.agents} /> : null}
                   {plugin.hookCount > 0 ? <PluginFact icon={Webhook} label={t("skills.plugins.hooks")} value={plugin.hookCount} /> : null}
-                  {plugin.activeSessionCount > 0 ? <PluginFact icon={MessagesSquare} label={t("skills.plugins.sessions")} value={plugin.activeSessionCount} /> : null}
+                  {plugin.activeSessionCount > 0 ? <PluginFact icon={MessagesSquare} label={t("pluginDiagnostics.activeOwners")} value={plugin.activeSessionCount} /> : null}
                 </div>
                 {plugin.diagnostics.length > 0 ? <ul className="vulcan-plugin-diagnostics" role="alert">
                   {plugin.diagnostics.map((diagnostic, index) => <li key={`${index}:${diagnostic}`}><TriangleAlert aria-hidden="true" size={13} />{diagnostic}</li>)}

@@ -21,6 +21,18 @@ pub(super) struct InitializedCall {
     session_forgotten: bool,
 }
 impl InitializedCall {
+    /// Borrow the original session identity for readonly diagnostics; return no inferred identity.
+    /// 为只读诊断借用原会话身份；不返回推断身份。
+    pub(super) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Return the actual forgetting checkpoint for readonly diagnostics without changing ownership.
+    /// 为只读诊断返回实际遗忘检查点，不改变所有权。
+    pub(super) fn session_forgotten(&self) -> bool {
+        self.session_forgotten
+    }
+
     /// Borrow the original initialization observer while retained; absence means its exact cleanup checkpoint completed.
     /// 保留期间借用原初始化观察者；缺失表示其精确清理检查点已完成。
     pub(super) fn initialization_operation(&self) -> Option<&OperationHandle> {
@@ -201,6 +213,13 @@ impl VulcanPluginRuntimeManager {
                         work,
                     )
                     .map_err(core_error)?;
+                // The actual Action request is captured from Core authority, never its business envelope.
+                // 实际 Action 请求从 Core 权威捕获，绝不读取其业务信封。
+                crate::runtime::native_identity::observe_operation(
+                    owner.host.runtime().id(),
+                    &operation,
+                    call.native_identity_owner(),
+                );
                 state.operation = Some(operation);
                 Ok(())
             }

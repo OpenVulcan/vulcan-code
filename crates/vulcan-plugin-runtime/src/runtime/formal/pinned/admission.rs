@@ -268,6 +268,13 @@ impl VulcanPluginRuntimeManager {
             .open_session(&pool, remaining(deadline)?)
             .map_err(core_error)?;
         let mut state = session.lock()?;
+        // Preserve independent initialization before its successful forget checkpoint.
+        // 成功遗忘检查点之前保留独立初始化。
+        crate::runtime::native_identity::observe_operation(
+            owner.host.runtime().id(),
+            &opening.operation,
+            session.native_identity_owner(),
+        );
         state.core_session = Some(opening.session_id);
         state.initialization = Some(opening.operation);
         Ok(())
@@ -379,6 +386,13 @@ impl VulcanPluginRuntimeManager {
                 remaining(deadline)?,
             )
             .map_err(core_error)?;
+        // Retain business identity in the capture window before successful acknowledgement.
+        // 成功确认之前在采集窗口保留业务身份。
+        crate::runtime::native_identity::observe_operation(
+            owner.host.runtime().id(),
+            &operation,
+            session.native_identity_owner(),
+        );
         state.activity = Instant::now();
         Ok(operation)
     }

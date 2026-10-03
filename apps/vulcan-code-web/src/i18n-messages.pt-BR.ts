@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // ptBRTranslations stores the Brazilian Portuguese UI text.
 // ptBRTranslations 保存巴西葡萄牙语界面文案。
 export const ptBRTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "Diagnóstico de recursos retidos",
+    "pluginDiagnostics.unavailable": "O esvaziamento original ou o ambiente pai está indisponível. Isso não comprova a conclusão.",
+    "pluginDiagnostics.nonAtomic": "Os recursos retidos do host são amostrados separadamente, sem atomicidade. Uma lista vazia não comprova o esvaziamento físico completo; consulte o recibo da solicitação original.",
+    "pluginDiagnostics.pinned": "Sessões de ferramentas fixadas (ainda não liberadas fisicamente)",
+    "pluginDiagnostics.locate": "Abrir conversa do proprietário",
+    "pluginDiagnostics.internal": "Recurso interno (sem proprietário de conversa)",
+    "pluginDiagnostics.missingOwner": "A conversa do proprietário original está indisponível ou arquivada.",
+    "pluginDiagnostics.blocking": "Bloqueia o esvaziamento físico",
+    "pluginDiagnostics.nonBlocking": "Registro retido; não bloqueia o esvaziamento",
+    "pluginDiagnostics.empty": "Nenhum recurso retido nesta observação.",
+    "pluginDiagnostics.runtimeIdentity": "Identidade atual do serviço / rota",
+    "pluginDiagnostics.activeOwners": "Chamadas e sessões ativas",
+    "pluginDiagnostics.locateRequest": "Localizar diagnóstico da solicitação original",
     "pluginRecovery.uninstallUnknown": "O resultado da desinstalação original não foi confirmado. Uma solicitação ausente ou consulta vazia não prova a conclusão.",
     "pluginRecovery.uninstallTitle": "Recuperação de desinstalação",
     "pluginRecovery.uninstallDescription": "Ler todas as desinstalações retidas, incluindo plugins removidos desta lista. Somente a resposta do serviço confirma a conclusão.",

@@ -1410,9 +1410,10 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     serde_json::to_value(output).map_err(provider_projection_runtime_error)?;
                 // Native tool media is owned by the persisted model_output field, not the host metadata object.
                 // 原生工具媒体归持久model_output字段持有，而非宿主元数据对象。
-                let output = vulcan_agent_runtime::native_media_input::v1_native_media_content(&output)
-                    .map_err(provider_projection_runtime_error)?
-                    .unwrap_or(output);
+                let output =
+                    vulcan_agent_runtime::native_media_input::v1_native_media_content(&output)
+                        .map_err(provider_projection_runtime_error)?
+                        .unwrap_or(output);
                 request_messages.push(AiMessage {
                     role: MessageRole::Tool,
                     content: vec![ContentItem::ToolResult {

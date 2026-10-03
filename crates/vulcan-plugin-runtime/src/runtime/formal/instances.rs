@@ -17,6 +17,7 @@ use std::time::Instant;
 
 mod admission;
 mod control;
+pub(in crate::runtime::formal) mod diagnostics;
 mod handoff;
 mod predecessor_handoff;
 mod predecessor_hooks;
@@ -207,6 +208,17 @@ impl Drop for PersistentMonitor {
 }
 
 impl PersistentRuntime {
+    /// Borrow original persistent ownership; internal Hook/UI operations have no controller or host call/session.
+    /// 借用原持久所有权；内部 Hook/UI 操作没有控制器及宿主调用／会话。
+    fn native_identity_owner(&self) -> crate::runtime::native_identity::NativeIdentityOwner<'_> {
+        crate::runtime::native_identity::NativeIdentityOwner {
+            plugin_generation: self.plugin.generation,
+            controller_session_id: None,
+            host_invocation_id: None,
+            host_session_id: None,
+        }
+    }
+
     /// Reuse or compile the validator for the freshly read UI output declaration.
     /// 复用或编译刚读取的 UI 输出声明校验器。
     /// path is already checked, schema is parsed from that file; return its exact validator or the original error.

@@ -303,6 +303,13 @@ export function WorkbenchLayout(props: {
   // conversationSelectionRequestVersionRef prevents an older selection response from committing after a newer click.
   // conversationSelectionRequestVersionRef 防止较早的选择响应在较新的点击之后提交。
   const conversationSelectionRequestVersionRef = React.useRef(0);
+  // pluginOwnerNavigationVersionRef cancels diagnostic-owner navigation when its source page leaves or disposes.
+  // pluginOwnerNavigationVersionRef 在来源页面离开或销毁时取消诊断所有者导航。
+  const pluginOwnerNavigationVersionRef = React.useRef(0);
+  React.useLayoutEffect(() => {
+    pluginOwnerNavigationVersionRef.current += 1;
+    return () => { pluginOwnerNavigationVersionRef.current += 1; };
+  }, [activeArea, workspaceMainView, activeWorkbenchSkillSubArea]);
   // conversationNavigation owns visual feedback while the authoritative route remains on its previous session.
   // conversationNavigation 在权威路由仍属于原会话期间管理视觉反馈。
   const [conversationNavigation, setConversationNavigation] = React.useState<{
@@ -1022,6 +1029,49 @@ export function WorkbenchLayout(props: {
     setSelectedConversationId,
   ]);
 
+  // handleSelectPluginResourceOwner confirms the original conversation before leaving diagnostics.
+  // handleSelectPluginResourceOwner 离开诊断前确认原会话。
+  // conversationId is the retained host owner; observation cancels only local navigation, returning true after exact confirmation.
+  // conversationId 是保留宿主所有者；observation 仅取消本地导航，精确确认后返回真值。
+  const handleSelectPluginResourceOwner = React.useCallback(async (conversationId: string, observation: AbortSignal): Promise<boolean> => {
+    if (observation.aborted) return false;
+    // requestVersion prevents a late owner lookup from overtaking a newer sidebar or diagnostics selection.
+    // requestVersion 阻止迟到所有者查询越过较新侧栏或诊断选择。
+    const requestVersion = ++conversationSelectionRequestVersionRef.current;
+    // Retiring the previous selection also retires its visual transition, whose old response can no longer clear it.
+    // 使先前选择失效时也结束其视觉过渡，因为旧响应已无法清除该过渡。
+    setConversationNavigation(null);
+    // ownerVersion fences the original diagnostics page independently from generic sidebar selection.
+    // ownerVersion 独立于通用侧栏选择约束原诊断页面。
+    const ownerVersion = ++pluginOwnerNavigationVersionRef.current;
+    // sourceId preserves the currently displayed owner until the service confirms the requested identity.
+    // sourceId 保留当前显示所有者，直至服务确认请求身份。
+    const sourceId = selectedConversationIdRef.current;
+    // snapshot can legitimately select another remaining conversation after missing storage cleanup.
+    // snapshot 在缺失存储清理后可合法选中另一个剩余会话。
+    const snapshot = await selectConversation(conversationId);
+    if (observation.aborted || conversationSelectionRequestVersionRef.current !== requestVersion || pluginOwnerNavigationVersionRef.current !== ownerVersion || snapshot === null
+      || snapshot.selectedConversationId !== conversationId) return false;
+    // Both projections must still contain this owner; the shared gate rejects replies older than already accepted lifecycle updates.
+    // 两份投影必须仍包含此所有者；共享闸门拒绝早于已接受生命周期更新的响应。
+    if (!workbenchStateRef.current.conversations.some((conversation) => conversation.id === conversationId)
+      || !snapshot.conversations.some((conversation) => conversation.id === conversationId)
+      || !acceptServiceWorkbenchSnapshot(snapshot)) return false;
+    // Only this confirmed owner may publish a route change; sidebar fallback semantics remain separate.
+    // 仅此已确认所有者可以发布路由变更；侧栏回退语义保持独立。
+    handleOpenWorkspaceChat();
+    selectedConversationIdRef.current = conversationId;
+    setSelectedConversationId(conversationId);
+    liveStreamStore.resetForWorkbenchSnapshot();
+    liveStreamStore.flushNotifications();
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot, { selectedConversationSource: "incoming" }));
+    setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading: !props.isConversationInitialized(conversationId) });
+    // Read persistence is ancillary; a later marker snapshot must not change the exact navigation decision.
+    // 已读持久化属于附属操作；迟到标记快照不得改变精确导航决定。
+    void markConversationRead(conversationId).catch((error) => console.warn("[workbench] conversation read marker update failed", error));
+    return true;
+  }, [acceptServiceWorkbenchSnapshot, handleOpenWorkspaceChat, liveStreamStore, mergeWorkbenchWithLocalCaches, props.isConversationInitialized]);
+
   // railEntries lists built-in areas first, then every enabled plugin detail page from the live catalog.
   // railEntries 先列出内置区域，再列出实时目录中每个已启用的插件详情页。
   const railEntries = React.useMemo<ActivityRailEntry[]>(() => {
@@ -1438,6 +1488,7 @@ export function WorkbenchLayout(props: {
             onReorderProjects={handleReorderProjects}
             onSelectProject={setActiveProjectId}
             onSelectConversation={handleSelectConversation}
+            onSelectPluginResourceOwner={handleSelectPluginResourceOwner}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
             onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}

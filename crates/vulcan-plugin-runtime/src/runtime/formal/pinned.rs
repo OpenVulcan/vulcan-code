@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 mod admission;
 mod control;
+pub(in crate::runtime::formal) mod diagnostics;
 mod monitor;
 
 /// A stable owner-bound host identity pins the original descriptor and resource reservation.
@@ -180,6 +181,17 @@ impl Drop for PinnedMonitorGuard {
 }
 
 impl PinnedSession {
+    /// Borrow the original host session and controller separately; return no Core session substitute.
+    /// 分别借用原宿主会话及控制器；不返回 Core 会话替代值。
+    fn native_identity_owner(&self) -> crate::runtime::native_identity::NativeIdentityOwner<'_> {
+        crate::runtime::native_identity::NativeIdentityOwner {
+            plugin_generation: self.plugin.generation,
+            controller_session_id: Some(&self.owner),
+            host_invocation_id: None,
+            host_session_id: Some(&self.id),
+        }
+    }
+
     /// Acquire exact evidence or return explicit poison; never fabricate empty state.
     /// 获取精确证据或明确返回中毒；绝不伪造空状态。
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, PinnedState>, VulcanPluginRuntimeError> {

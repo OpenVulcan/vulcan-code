@@ -3,6 +3,19 @@ import type { TranslationKey } from "@/i18n-messages"
 // zhCNTranslations stores the simplified Chinese shell-level localized labels.
 // zhCNTranslations 保存外壳层简体中文本地化标签。
 export const zhCNTranslations: Record<TranslationKey, string> = {
+    "pluginDiagnostics.title": "保留资源诊断",
+    "pluginDiagnostics.unavailable": "原实时排空或附加父级不可观测；此状态不证明已排空。",
+    "pluginDiagnostics.nonAtomic": "此处仅独立采样宿主保留资源，不是原子快照。空列表不证明全部物理排空完成；请核对原请求回执。",
+    "pluginDiagnostics.pinned": "固定工具会话（尚未物理退役）",
+    "pluginDiagnostics.locate": "打开所有者会话",
+    "pluginDiagnostics.internal": "内部资源（无会话所有者）",
+    "pluginDiagnostics.missingOwner": "原所有者会话不可用或已归档。",
+    "pluginDiagnostics.blocking": "阻塞物理排空",
+    "pluginDiagnostics.nonBlocking": "保留记录；不阻塞排空",
+    "pluginDiagnostics.empty": "本次观测无保留资源。",
+    "pluginDiagnostics.runtimeIdentity": "当前服务／路由身份",
+    "pluginDiagnostics.activeOwners": "活动调用与会话",
+    "pluginDiagnostics.locateRequest": "定位原请求诊断",
     "pluginRecovery.uninstallUnknown": "原卸载结果尚未确认。原请求缺失或空查询不证明完成。",
     "pluginRecovery.uninstallTitle": "卸载恢复",
     "pluginRecovery.uninstallDescription": "读取所有保留卸载，包括已从列表移除的插件。仅服务响应可确认完成。",

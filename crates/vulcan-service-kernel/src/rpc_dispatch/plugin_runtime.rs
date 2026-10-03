@@ -2,6 +2,7 @@
 //! 正式插件管理属于已认证宿主 RPC 边界。
 
 use super::*;
+use crate::plugin_runtime_services::diagnostics;
 use crate::plugin_runtime_services::run_plugin_runtime_control;
 use serde::{Deserialize, de::DeserializeOwned};
 use vulcan_plugin_runtime::{
@@ -17,6 +18,9 @@ mod prewarm_policy;
 #[cfg(test)]
 pub(super) const RPC_METHODS: &[&str] = &[
     "service_plugin_runtime_status",
+    "service_plugin_resource_diagnostics",
+    "service_plugin_update_drain_diagnostics",
+    "service_plugin_uninstall_drain_diagnostics",
     "service_plugin_capacity_catalog",
     "service_plugin_capacity_registration_status",
     "service_register_plugin_capacity",
@@ -69,6 +73,46 @@ struct RegistrationParams {
     registration_id: String,
 }
 
+/// An authenticated read selects one exact existing parent and plugin namespace.
+/// 已认证读取选择单个精确既有父级及插件命名空间。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResourceDiagnosticParams {
+    /// Original parent identity rejects queries accidentally retained across a runtime restart.
+    /// 原父级身份拒绝运行时重启后误保留的查询。
+    runtime_id: String,
+    /// Exact plugin spelling is retained without changing catalog selection.
+    /// 保留精确插件拼写，不改变目录选择。
+    plugin_id: String,
+}
+
+/// Original mutation identity selects live diagnostic ownership without granting recovery or execution.
+/// 原变更身份选择实时诊断所有权，不授予恢复或执行权限。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DrainDiagnosticParams {
+    /// Existing native parent must match the page's retained identity.
+    /// 既有原生父级必须匹配页面保留身份。
+    runtime_id: String,
+    /// Namespace must match the same original request, never the latest selected plugin.
+    /// 命名空间必须匹配相同原请求，绝不使用最新已选插件。
+    plugin_id: String,
+    /// UUID syntax is validated before any service or registry access.
+    /// 在任何服务或注册表访问前校验 UUID 语法。
+    request_id: uuid::Uuid,
+}
+
+/// Require nonempty runtime_id and plugin_id; return a parameter error without normalizing original identities.
+/// 要求 runtime_id 及 plugin_id 非空；返回参数错误，不规范化原身份。
+fn require_diagnostic_names(runtime_id: &str, plugin_id: &str) -> Result<(), WebuiServiceRpcError> {
+    if runtime_id.is_empty() || plugin_id.is_empty() {
+        return Err(WebuiServiceRpcError::InvalidParams(
+            "Plugin diagnostics require nonempty original runtimeId and pluginId.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Durable UUID selects the same transaction even after an explicit process restart recovery.
 /// 持久 UUID 即使在明确进程重启恢复后也选择同一事务。
 #[derive(Deserialize)]
@@ -103,6 +147,45 @@ pub(super) async fn dispatch(
     // Preserve service errors as handled results so later routers cannot reinterpret a failed control operation.
     // 将服务错误保留为已处理结果，避免后续路由重新解释失败的控制操作。
     let result = match method {
+        "service_plugin_resource_diagnostics" => {
+            // Parse the exact read contract before resolving the retained runtime.
+            // 在解析保留运行时之前，解码精确读取契约。
+            let request: ResourceDiagnosticParams = parse_params(params)?;
+            require_diagnostic_names(&request.runtime_id, &request.plugin_id)?;
+            rpc_json_result(
+                diagnostics::resources(state, request.runtime_id, request.plugin_id).await,
+            )
+        }
+        "service_plugin_update_drain_diagnostics" => {
+            // The original request is a read identity, never permission to start another drain.
+            // 原请求为读取身份，绝不是启动另一次排空的权限。
+            let request: DrainDiagnosticParams = parse_params(params)?;
+            require_diagnostic_names(&request.runtime_id, &request.plugin_id)?;
+            rpc_json_result(
+                diagnostics::update_drain(
+                    state,
+                    request.runtime_id,
+                    request.plugin_id,
+                    request.request_id,
+                )
+                .await,
+            )
+        }
+        "service_plugin_uninstall_drain_diagnostics" => {
+            // Uninstall diagnostics read the same actual owner even while its resource borrow is busy.
+            // 即使资源借用忙碌，卸载诊断仍读取相同实际所有者。
+            let request: DrainDiagnosticParams = parse_params(params)?;
+            require_diagnostic_names(&request.runtime_id, &request.plugin_id)?;
+            rpc_json_result(
+                diagnostics::uninstall_drain(
+                    state,
+                    request.runtime_id,
+                    request.plugin_id,
+                    request.request_id,
+                )
+                .await,
+            )
+        }
         "service_plugin_runtime_status" => {
             parse_params::<EmptyParams>(params)?;
             rpc_json_result(

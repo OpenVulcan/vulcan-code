@@ -29,15 +29,27 @@ fn formal_predecessor_restore_absent_declaration_needs_no_formal_parent() {
         .expect("actual parent retired");
         // Detach only after the real public closure API proves complete native retirement.
         // 仅在真实公开关闭 API 证明原生完全退役后移除注册。
-        drop(
-            fixture
-                .manager
-                .state
-                .formal_runtime
-                .lock()
-                .expect("parent slot")
-                .take(),
+        // The precise slot now distinguishes ready ownership from retained failed initialization.
+        // 精确槽位现区分就绪所有权与保留失败初始化。
+        let detached = fixture
+            .manager
+            .state
+            .formal_runtime
+            .lock()
+            .expect("parent slot")
+            .take()
+            .expect("actual closed attachment");
+        assert!(matches!(
+            &detached,
+            crate::runtime::formal::FormalRuntimeAttachment::Ready(_)
+        ));
+        assert!(
+            detached
+                .runtime()
+                .poll_closed()
+                .expect("detached original joins")
         );
+        drop(detached);
         assert!(
             fixture
                 .manager

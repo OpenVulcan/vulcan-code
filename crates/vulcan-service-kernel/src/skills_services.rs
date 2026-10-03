@@ -13,6 +13,7 @@ pub(crate) use legacy_secret_owner::LegacySecretMutationRegistry;
 use legacy_secret_owner::{LegacySecretMutationPhase, LegacySecretMutationStatus};
 use local_plugin_install::LocalPluginInstallStatus;
 pub(crate) use local_plugin_install::PendingLocalPluginInstallRegistry;
+pub(crate) use local_plugin_uninstall::LocalPluginUninstallDrainDiagnostics;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
 pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
 pub(crate) use local_plugin_update::LocalPluginUpdateStatus;

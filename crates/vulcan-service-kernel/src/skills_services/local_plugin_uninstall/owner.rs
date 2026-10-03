@@ -84,6 +84,17 @@ pub(super) struct PendingLocalPluginUninstall {
     /// Exact namespace from the captured source.
     /// 来自捕获来源的精确命名空间。
     pub(super) plugin_id: String,
+    /// The same existing manager handle supports read-only queries without the mutable execution borrow.
+    /// 相同既有管理器句柄无需可变执行借用即可支持只读查询。
+    /// Cloning its handle creates no second runtime, namespace reservation or execution authority.
+    /// 克隆其句柄不创建第二运行时、命名空间预留或执行权威。
+    diagnostic_runtime: VulcanPluginRuntimeManager,
+    /// Original incarnation is captured from the actual catalog before callbacks or publication.
+    /// 原实例在回调或发布之前从实际目录捕获。
+    service_epoch: String,
+    /// Original disabled descriptor fixes the only permitted callback routing generation.
+    /// 原停用描述符固定唯一获准回调路由代次。
+    plugin_generation: u64,
     /// Guard binds weak namespace identity and never adds a second physical namespace owner.
     /// 守卫绑定弱命名空间身份，绝不添加第二物理命名空间所有者。
     routing: Mutex<Option<VulcanPluginRoutingReservation>>,
@@ -102,6 +113,62 @@ pub(crate) struct PendingLocalPluginUninstallRegistry {
 }
 
 impl PendingLocalPluginUninstallRegistry {
+    /// Read runtime_id/plugin/request's exact live original without borrowing or advancing mutable removal resources.
+    /// 读取 runtime_id/plugin/request 的精确实时原实例，不借用或推进可变移除资源。
+    /// Return metadata only while the same owner remains registered; missing or changed ownership is explicit failure.
+    /// 仅相同所有者仍注册时返回元数据；所有权缺失或改变时明确失败。
+    pub(crate) fn drain_diagnostics(
+        &self,
+        runtime_id: &str,
+        plugin: &str,
+        request: uuid::Uuid,
+    ) -> Result<LocalPluginUninstallDrainDiagnostics, String> {
+        // The short lookup retains the actual owner; no async resource lock joins its running callback.
+        // 短查找保留实际所有者；没有异步资源锁联接其正在运行的回调。
+        let owner = self.lookup(plugin, request)?;
+        crate::plugin_runtime_services::diagnostics::require_runtime_identity(
+            &owner.diagnostic_runtime,
+            runtime_id,
+        )
+        .map_err(|error| error.to_string())?;
+        // Actual uninstall execution drains the whole namespace, including older retained cleanup owners.
+        // 实际卸载执行排空整个命名空间，包含更早保留的清理所有者。
+        // The frozen source generation is context, not a filter that could hide those real participants.
+        // 冻结来源代次是上下文，不能作为隐藏真实参与者的过滤器。
+        let mut resources = owner
+            .diagnostic_runtime
+            .formal_plugin_resource_diagnostics(plugin, None)
+            .map_err(|error| error.to_string())?;
+        // Request diagnostics show only live physical participants; general plugin diagnostics retain history separately.
+        // 请求诊断仅显示实时物理参与者；通用插件诊断独立保留历史。
+        if let Some(sample) = &mut resources {
+            sample
+                .resources
+                .retain(|resource| resource.is_drain_blocking);
+        }
+        if resources
+            .as_ref()
+            .is_some_and(|sample| sample.service_epoch != owner.service_epoch)
+        {
+            return Err(String::from(
+                "Plugin uninstall diagnostic manager incarnation changed.",
+            ));
+        }
+        // A completed removal must not donate its original request identity to later selected resources.
+        // 已完成移除不能将其原请求身份赠予后续已选资源。
+        let current = self.lookup(plugin, request)?;
+        if !Arc::ptr_eq(&current, &owner) {
+            return Err(String::from("Plugin uninstall diagnostic owner changed."));
+        }
+        Ok(LocalPluginUninstallDrainDiagnostics {
+            request_id: owner.request_id.to_string(),
+            plugin_id: owner.plugin_id.clone(),
+            service_epoch: owner.service_epoch.clone(),
+            plugin_generation: owner.plugin_generation.to_string(),
+            resources,
+        })
+    }
+
     /// Exempt only actual original membership from coordination; request grants no physical authority.
     /// 仅豁免实际原成员的协调；request 不授予物理权威。
     /// Returns rejection before ordinary writers can persist or replace Full.
@@ -434,6 +501,9 @@ pub(super) fn reserve(
     let owner = Arc::new(PendingLocalPluginUninstall {
         request_id,
         plugin_id: plugin.to_owned(),
+        diagnostic_runtime: bridge.vulcan_plugin_runtime.clone(),
+        service_epoch: catalog.service_epoch.clone(),
+        plugin_generation: descriptor.generation,
         routing: Mutex::new(Some(routing)),
         resources: tokio::sync::Mutex::new(UninstallResources {
             runtime: bridge.vulcan_plugin_runtime.clone(),
