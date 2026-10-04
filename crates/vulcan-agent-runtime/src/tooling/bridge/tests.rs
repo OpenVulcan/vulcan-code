@@ -17,11 +17,15 @@ use crate::tooling::collaboration::{
     REPLY_QUESTION_TOOL_ID, SEND_NOTIFICATION_TOOL_ID, SEND_SESSION_MESSAGE_TOOL_ID,
     WAIT_AGENTS_RESULT_TOOL_ID,
 };
-use luaskills::RuntimeEntryDescriptor;
+use luaskills::{
+    LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig, RuntimeEntryDescriptor,
+};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
+use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
     ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
@@ -774,5 +778,365 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
     assert!(
         matches!(hidden_plan_tool.plan_policy, VulcanPlanToolPolicy::Hidden),
         "task message delivery must keep its Hidden Plan policy through the bridge"
+    );
+}
+
+/// Writes the real idle fixture package; root selects its exact deployed parent; returns no value.
+/// 写入真实 idle 夹具包；root 选择精确部署父目录；无返回值。
+fn frozen_bridge_write_package(root: &Path) {
+    // package owns the real source under the exact built-in fixture root.
+    // package 拥有精确内置夹具根目录下的真实来源。
+    let package = root.join("idle-plugin");
+    fs::create_dir_all(package.join("runtime")).expect("create idle runtime directory");
+    fs::create_dir_all(package.join("schemas")).expect("create idle schema directory");
+    fs::write(package.join("dependencies.yaml"), "{}\n").expect("write dependencies");
+    fs::write(
+        package.join("runtime/plugin.bundle.lua"),
+        r#"-- M owns the real fixture module.
+-- M 拥有真实夹具模块。
+local M = {}
+-- Dispatch returns the real accepted result; _args is the declared invocation payload.
+-- Dispatch 返回真实接纳结果；_args 是声明的调用载荷。
+function M.dispatch(_args) return '{"ok":true,"result":{"accepted":true}}' end
+-- Shutdown returns the real close result; _args is the declared cleanup payload.
+-- Shutdown 返回真实关闭结果；_args 是声明的清理载荷。
+function M.shutdown(_args) return '{"ok":true,"result":{"closed":true}}' end
+return M
+"#,
+    )
+    .expect("write idle runtime module");
+    fs::write(
+        package.join("schemas/open.json"),
+        r#"{"type":"object","properties":{}}"#,
+    )
+    .expect("write open schema");
+    fs::write(
+            package.join("schemas/close.json"),
+            r#"{"type":"object","properties":{"session_id":{"type":"string"}},"required":["session_id"],"additionalProperties":false}"#,
+        )
+        .expect("write close schema");
+    fs::write(
+        package.join("plugin.yaml"),
+        r#"schema_version: 1
+id: idle-plugin
+version: 1.0.0
+default_enabled: true
+display:
+  name: Idle Plugin
+  capability: Idle cleanup fixture
+execution:
+  dependencies:
+    manifest: dependencies.yaml
+    install_mode: bundled
+lua_runtime:
+  bundle: runtime/plugin.bundle.lua
+  invoke_function: dispatch
+  shutdown_function: shutdown
+  max_active_sessions: 1
+  session_idle_timeout_sec: 1
+  tools:
+    - id: idle_ping
+      group: idle_tools
+      description: Run one stateless idle test operation.
+      parameters_file: schemas/open.json
+      execution:
+        kind: stateless
+        operation: ping
+        timeout_ms: 1000
+    - id: idle_open
+      group: idle_tools
+      description: Open one idle test session.
+      parameters_file: schemas/open.json
+      execution:
+        kind: session_open
+        operation: open
+        timeout_ms: 1000
+    - id: idle_close
+      group: idle_tools
+      description: Close one idle test session.
+      parameters_file: schemas/close.json
+      execution:
+        kind: session_close
+        operation: close
+        timeout_ms: 1000
+"#,
+    )
+    .expect("write idle manifest");
+}
+/// Creates the real Lua engine; runtime_root selects its canonical layout; returns the actual engine.
+/// 创建真实 Lua 引擎；runtime_root 选择规范布局；返回真实引擎。
+fn frozen_bridge_engine(runtime_root: &Path) -> LuaEngine {
+    // native_runtime_root keeps the integration-test Lua package paths free of Windows verbatim prefixes.
+    // native_runtime_root 使集成测试的 Lua package 路径不包含 Windows verbatim 前缀。
+    let native_runtime_root = vulcan_runtime_assets::native_host_path(
+        &runtime_root
+            .canonicalize()
+            .expect("canonicalize LuaSkills runtime root"),
+    );
+    // host_options uses the real canonical runtime root.
+    // host_options 使用真实规范运行时根目录。
+    let host_options = LuaRuntimeHostOptions::with_runtime_root(native_runtime_root);
+    LuaEngine::new(LuaEngineOptions::new(
+        LuaVmPoolConfig {
+            min_size: 1,
+            max_size: 1,
+            idle_ttl_secs: 60,
+        },
+        host_options,
+    ))
+    .expect("create LuaSkills test engine")
+}
+/// Constructs the real runtime owner around explicit isolated roots.
+/// 围绕明确隔离根目录构建真实运行时所有者。
+/// runtime_root hosts engine and state; vulcan_plugin_root owns the real built-in package.
+/// runtime_root 持有引擎与状态；vulcan_plugin_root 拥有真实内置插件包。
+/// managed_runtime_distribution_root selects the exact bundled dependency root.
+/// managed_runtime_distribution_root 选择精确内置依赖根目录。
+/// Returns a manager ready for explicit formal initialization and catalog refresh.
+/// 返回可显式初始化正式父级并刷新目录的管理器。
+fn frozen_bridge_runtime(
+    runtime_root: &Path,
+    vulcan_plugin_root: PathBuf,
+    managed_runtime_distribution_root: PathBuf,
+) -> VulcanPluginRuntimeManager {
+    // bridge_root deploys the original production bridge package.
+    // bridge_root 部署原生产桥接包。
+    let bridge_root = runtime_root
+        .join("system_lua_lib")
+        .join("vulcan-plugin-bridge");
+    fs::create_dir_all(bridge_root.join("runtime")).expect("create bridge runtime directory");
+    fs::write(bridge_root.join("dependencies.yaml"), "{}\n").expect("write bridge dependencies");
+    fs::write(
+        bridge_root.join("runtime/bridge.lua"),
+        include_str!("../../../../../plugin-bridge/vulcan-plugin-bridge/runtime/bridge.lua"),
+    )
+    .expect("write bridge module");
+    // user_plugin_root isolates user packages from this built-in source.
+    // user_plugin_root 将用户包与此内置来源隔离。
+    let user_plugin_root = runtime_root.join("user_plugins");
+    fs::create_dir_all(&user_plugin_root).expect("create user plugin root");
+    fs::create_dir_all(&managed_runtime_distribution_root)
+        .expect("create managed runtime distribution root");
+    VulcanPluginRuntimeManager::new(
+        Arc::new(frozen_bridge_engine(runtime_root)),
+        vulcan_plugin_root,
+        user_plugin_root,
+        bridge_root,
+        managed_runtime_distribution_root,
+        runtime_root.join("plugin_state"),
+        runtime_root.join("plugin_runtime"),
+    )
+}
+
+/// Projects the real enabled descriptors through the production tools-manager bridge.
+/// 将真实已启用描述符通过生产工具管理器桥投影。
+/// runtime selects the real owner, workspace_root selects its workspace; returns frozen tools.
+/// runtime 选择真实所有者，workspace_root 选择工作区；返回冻结工具。
+fn frozen_bridge_tools(
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    workspace_root: &Path,
+) -> VulcanToolsManager {
+    // runtime_config disables unrelated source selections in this exact fixture.
+    // runtime_config 在此精确夹具中关闭无关来源选择。
+    let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("frozen-agent"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    // native_catalog uses the constructor already exercised by the public-id tests.
+    // native_catalog 使用公开标识测试已使用的构造器。
+    let native_catalog = build_native_tool_catalog(
+        &runtime_config,
+        None,
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    build_vulcan_tools_manager(
+        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+        native_catalog,
+        Some(runtime.clone()),
+        runtime.snapshot().enabled_tools.values().cloned().collect(),
+        Vec::new(),
+        None,
+        Some(workspace_root.to_path_buf()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        Vec::new(),
+        VmmConfigLayer::default(),
+        VmmConfigLayer::default(),
+        false,
+        None,
+        None,
+    )
+}
+
+/// Constructs typed invocation identities without substituting the execution result.
+/// 构建类型化调用身份，不替换执行结果。
+/// No parameters; returns a valid owner context for the actual tools-manager invocation.
+/// 无参数；返回真实工具管理器调用的合法所有者上下文。
+fn frozen_bridge_context() -> VulcanToolInvocationContext {
+    use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
+    VulcanToolInvocationContext {
+        session_id: String::from("frozen-owner"),
+        request_stream_id: RequestStreamId::try_new("frozen-stream").expect("valid stream id"),
+        api_call_id: ApiCallId::try_new(1).expect("valid API id"),
+        tool_call_id: ToolCallId::try_new(2).expect("valid tool id"),
+        tool_seq: Seq::try_new(3).expect("valid sequence"),
+        controller_tool_call_id: String::from("frozen-call"),
+        provider_tool_call_id: None,
+    }
+}
+
+/// Rejects the old frozen closure after a real refresh while preserving fresh and ordinary calls.
+/// 真实刷新后拒绝旧冻结闭包，并保留新冻结及普通调用。
+/// No parameters; the real parent closes before the critical stale-call assertion.
+/// 无参数；真实父级在关键陈旧调用断言之前关闭。
+#[test]
+fn frozen_plugin_bridge_rejects_changed_generation() {
+    // temp retains all real fixture roots until the parent has closed.
+    // temp 保留全部真实夹具根目录直到父级关闭。
+    let temp = tempfile::tempdir().expect("create isolated root");
+    // runtime_root owns engine layout and persistent state.
+    // runtime_root 拥有引擎布局与持久状态。
+    let runtime_root = temp.path().join("runtime");
+    // plugin_root owns the real built-in package.
+    // plugin_root 拥有真实内置插件包。
+    let plugin_root = runtime_root.join("plugins");
+    std::fs::create_dir_all(&plugin_root).expect("create plugin root");
+    frozen_bridge_write_package(&plugin_root);
+    // manager is the actual production owner, not a descriptor-only fake.
+    // manager 是真实生产所有者，而非仅有描述符的模拟对象。
+    let manager = frozen_bridge_runtime(
+        &runtime_root,
+        plugin_root.clone(),
+        runtime_root.join("managed_runtime"),
+    );
+    manager
+        .initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
+        .expect("initialize formal parent");
+    manager
+        .refresh_catalog(&Default::default(), &Default::default())
+        .expect("load first real catalog");
+    // old_catalog retains the actual first-generation snapshot during refresh.
+    // old_catalog 在刷新期间保留真实第一代次快照。
+    let old_catalog = manager.snapshot();
+    // old_generation is the descriptor generation before the content changes.
+    // old_generation 是内容变更之前的描述符代次。
+    let old_generation = old_catalog.enabled_tools["idle_ping"].plugin_generation;
+    // old_tools captures the first descriptor through the production bridge.
+    // old_tools 通过生产桥捕获第一个描述符。
+    let old_tools = frozen_bridge_tools(&manager, temp.path());
+    // old_resolved retains the old Provider definition, including its original schema.
+    // old_resolved 保留旧 Provider 定义及其原始 Schema。
+    let old_resolved = old_tools.resolve_for_execution_mode("Build");
+    // old_definition is selected by exact ID rather than an evolving list position.
+    // old_definition 按精确标识选择，不依赖会演进的列表位置。
+    let old_definition = old_resolved
+        .definitions
+        .iter()
+        .find(|tool| tool.descriptor.id == "idle_ping")
+        .expect("find frozen plugin tool");
+    // executor drives the real asynchronous native operation.
+    // executor 驱动真实异步原生操作。
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("create executor");
+    // unchanged proves that the captured closure works before its generation changes.
+    // unchanged 证明捕获闭包在代次变化之前可用。
+    let unchanged = executor.block_on(old_tools.invoke_tool(
+        old_definition,
+        json!({}),
+        frozen_bridge_context(),
+        "Build",
+    ));
+    std::fs::write(
+        plugin_root.join("idle-plugin/dependencies.yaml"),
+        "# generation change\n",
+    )
+    .expect("change the real package fingerprint");
+    manager
+        .refresh_catalog(&Default::default(), &Default::default())
+        .expect("refresh changed package");
+    // new_generation is read from the real refreshed descriptor.
+    // new_generation 从真实刷新后的描述符读取。
+    let new_generation = manager.snapshot().enabled_tools["idle_ping"].plugin_generation;
+    // stale observes the old closure against the changed actual generation.
+    // stale 观察旧闭包面对真实已变化代次的结果。
+    let stale = executor.block_on(old_tools.invoke_tool(
+        old_definition,
+        json!({}),
+        frozen_bridge_context(),
+        "Build",
+    ));
+    // fresh_tools captures the changed descriptor through the same bridge.
+    // fresh_tools 通过相同桥捕获变化后的描述符。
+    let fresh_tools = frozen_bridge_tools(&manager, temp.path());
+    // fresh_resolved contains the refreshed actual Provider definition.
+    // fresh_resolved 包含刷新后的真实 Provider 定义。
+    let fresh_resolved = fresh_tools.resolve_for_execution_mode("Build");
+    // fresh_definition selects the same stable ID from the new captured catalog.
+    // fresh_definition 从新捕获目录选择相同稳定标识。
+    let fresh_definition = fresh_resolved
+        .definitions
+        .iter()
+        .find(|tool| tool.descriptor.id == "idle_ping")
+        .expect("find refreshed plugin tool");
+    // fresh executes the actual current generation through the frozen bridge.
+    // fresh 通过冻结桥执行真实当前代次。
+    let fresh = executor.block_on(fresh_tools.invoke_tool(
+        fresh_definition,
+        json!({}),
+        frozen_bridge_context(),
+        "Build",
+    ));
+    // ordinary preserves the existing current-ID late-binding API.
+    // ordinary 保留既有按当前标识晚绑定的 API。
+    let ordinary = executor.block_on(manager.invoke(
+        vulcan_plugin_runtime::VulcanPluginInvocationRequest {
+            tool_id: String::from("idle_ping"),
+            arguments: json!({}),
+            owner_session_id: String::from("frozen-owner"),
+            workspace_root: temp.path().to_path_buf(),
+        },
+    ));
+    manager
+        .close_formal_runtime_blocking()
+        .expect("close original native parent");
+    assert_ne!(old_generation, new_generation);
+    assert_eq!(
+        unchanged.expect("same generation works").model_output["accepted"],
+        true
+    );
+    assert_eq!(
+        stale.expect_err("a frozen old descriptor must not execute the new generation"),
+        format!(
+            "Vulcan Plugin tool `idle_ping` was frozen for plugin `idle-plugin` generation {old_generation}, but current plugin is `idle-plugin` generation {new_generation}."
+        ),
+    );
+    assert_eq!(
+        fresh.expect("fresh generation works").model_output["accepted"],
+        true
+    );
+    assert_eq!(
+        ordinary.expect("ordinary invocation stays late-bound")["accepted"],
+        true
     );
 }

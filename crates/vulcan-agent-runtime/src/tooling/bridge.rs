@@ -261,6 +261,12 @@ pub fn build_vulcan_tools_manager(
             occupied_public_tool_ids.insert(tool.id.clone());
             let runtime = vulcan_plugin_runtime.clone();
             let tool_id = tool.id.clone();
+            // expected_plugin_id is the original package identity, since generations are scoped per plugin.
+            // expected_plugin_id 是原插件包身份，因为代次按插件分域。
+            let expected_plugin_id = tool.plugin_id.clone();
+            // expected_plugin_generation binds execution to this descriptor and its argument schema.
+            // expected_plugin_generation 将执行绑定到此描述符及其参数 Schema。
+            let expected_plugin_generation = tool.plugin_generation;
             let workspace_root = workspace_root.clone();
             candidates.push(VulcanToolCandidate {
                 descriptor,
@@ -273,6 +279,9 @@ pub fn build_vulcan_tools_manager(
                 },
                 request_streaming: None,
                 invoke: Arc::new(move |arguments, context| {
+                    // expected_plugin_id preserves the same captured source across each asynchronous call.
+                    // expected_plugin_id 在每次异步调用中保持相同捕获来源。
+                    let expected_plugin_id = expected_plugin_id.clone();
                     let runtime = runtime.clone();
                     let tool_id = tool_id.clone();
                     let workspace_root = workspace_root.clone();
@@ -285,12 +294,16 @@ pub fn build_vulcan_tools_manager(
                             format!("Vulcan Plugin tool `{tool_id}` requires a workspace root.")
                         })?;
                         let output = runtime
-                            .invoke(VulcanPluginInvocationRequest {
-                                tool_id,
-                                arguments,
-                                owner_session_id,
-                                workspace_root,
-                            })
+                            .invoke_in_generation(
+                                VulcanPluginInvocationRequest {
+                                    tool_id,
+                                    arguments,
+                                    owner_session_id,
+                                    workspace_root,
+                                },
+                                &expected_plugin_id,
+                                expected_plugin_generation,
+                            )
                             .await
                             .map_err(|error| error.to_string())?;
                         Ok(VulcanToolInvocationResult::from_model_output(output))

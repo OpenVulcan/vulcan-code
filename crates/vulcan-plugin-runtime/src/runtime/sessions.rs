@@ -44,6 +44,42 @@ impl VulcanPluginRuntimeManager {
         &self,
         request: VulcanPluginInvocationRequest,
     ) -> Result<Value, VulcanPluginRuntimeError> {
+        self.invoke_with_expected_generation(request, None).await
+    }
+
+    /// Invokes one tool only in the exact plugin identity captured with its frozen declaration.
+    /// 仅在与冻结声明一起捕获的精确插件身份下调用工具。
+    /// request supplies the tool, arguments, owner and workspace; expected_plugin_id and expected_plugin_generation identify the captured package.
+    /// request 提供工具、参数、所有者与工作区；expected_plugin_id 和 expected_plugin_generation 标识捕获的插件包。
+    /// Returns the existing result envelope or an explicit identity rejection before any business dispatch.
+    /// 返回既有结果信封，或任何业务分派之前的明确身份拒绝。
+    pub async fn invoke_in_generation(
+        &self,
+        request: VulcanPluginInvocationRequest,
+        expected_plugin_id: &str,
+        expected_plugin_generation: u64,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        self.invoke_with_expected_generation(
+            request,
+            Some((expected_plugin_id, expected_plugin_generation)),
+        )
+        .await
+    }
+
+    /// Shares current-tool lookup and the existing four dispatch routes for both declared invocation semantics.
+    /// 为两种声明调用语义共用当前工具查找及既有四条分派路径。
+    /// request is the original invocation; expected_generation is the frozen plugin identity or None for ordinary current-ID invocation.
+    /// request 是原调用；expected_generation 是冻结插件身份，普通当前标识调用则为 None。
+    /// Returns the original result or preserves the existing admission, permission, and lifecycle failures.
+    /// 返回原结果，或保留既有准入、权限与生命周期失败。
+    async fn invoke_with_expected_generation(
+        &self,
+        request: VulcanPluginInvocationRequest,
+        expected_generation: Option<(&str, u64)>,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        // tool is selected once from the sole actual current catalog.
+        // tool 从唯一真实当前目录选择一次。
+
         let tool = self
             .snapshot()
             .enabled_tools
@@ -55,6 +91,23 @@ impl VulcanPluginRuntimeManager {
                     request.tool_id
                 ))
             })?;
+        // The numeric generation is scoped by plugin id; comparing only its number would admit another plugin reusing this tool id.
+        // 数值代次按插件标识分域；只比较数字会接纳复用此工具标识的另一个插件。
+        // expected_plugin_id and expected_plugin_generation are the original frozen source identity.
+        // expected_plugin_id 与 expected_plugin_generation 是原冻结来源身份。
+        if let Some((expected_plugin_id, expected_plugin_generation)) = expected_generation
+            && (tool.plugin_id != expected_plugin_id
+                || tool.plugin_generation != expected_plugin_generation)
+        {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin tool `{}` was frozen for plugin `{}` generation {}, but current plugin is `{}` generation {}.",
+                request.tool_id,
+                expected_plugin_id,
+                expected_plugin_generation,
+                tool.plugin_id,
+                tool.plugin_generation,
+            )));
+        }
         self.ensure_current_tool_generation(&tool)?;
         match tool.manifest.execution.kind {
             VulcanPluginToolExecutionKind::Stateless => self.invoke_stateless(&tool, request).await,
