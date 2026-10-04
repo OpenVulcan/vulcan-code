@@ -21,6 +21,186 @@ use luaskills::{
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Exact permission authority borrowed only for the duration of one process specification resolution.
+/// 仅在单次进程规格解析期间借用的精确权限权威。
+pub(super) enum ProcessPermissionSource<'a> {
+    /// Live published grants intersect the retained declaration.
+    /// 实时已发布授权与保留声明取交集。
+    Published,
+    /// The existing original activation fixes its own operation scope and manifest permissions.
+    /// 既有原激活固定其操作作用域及清单权限。
+    Activation(&'a super::candidates::ActivationExecution),
+    /// The selected private target Hook retains its exact unpublished manifest permissions.
+    /// 已选私有目标 Hook 保留其精确未发布清单权限。
+    PrivateHook(&'a super::private_hooks::PrivateHookOrigin),
+    /// The original disabled-user guard fixes this lifecycle declaration and scope.
+    /// 原已停用用户守卫固定此生命周期声明及作用域。
+    LegacyLifecycle {
+        /// Actual retained authority validates the same manager and complete descriptor.
+        /// 实际保留权威校验同一管理器及完整描述符。
+        authority: &'a super::legacy_lifecycle::LegacyLifecycleExecution,
+        /// The admitted lifecycle event is never inferred from business input.
+        /// 已接纳生命周期事件绝不从业务输入推断。
+        scope: VulcanPluginBridgeLeaseScope,
+    },
+}
+
+/// Resolve validated process arguments against the caller's exact retained plugin and workspace.
+/// 针对调用方保留的精确插件及工作区解析已校验进程参数。
+/// Return the original launch specification using the explicitly selected permission source.
+/// 使用显式选择的权限来源返回原启动规格。
+/// Published calls continue to intersect their original permissions with current grants.
+/// 已发布调用继续将原权限与当前授权取交集。
+/// Current catalog data cannot replace original executable declarations, package paths or environment identity.
+/// 当前目录数据不能替换原可执行声明、包路径或环境身份。
+pub(super) fn resolve_plugin_process_for_snapshot(
+    state: &Arc<VulcanPluginManagerState>,
+    plugin: &crate::VulcanPluginDescriptor,
+    workspace_root: &Path,
+    payload: &Map<String, Value>,
+    source: ProcessPermissionSource<'_>,
+) -> Result<Value, String> {
+    // The package ID, process declarations and dependency environment share one frozen owner.
+    // 包 ID、进程声明及依赖环境共用一个冻结所有者。
+    let plugin_id = &plugin.id;
+    // Required process entry is business input; it never supplies a program or cwd.
+    // 必需进程入口属于业务输入；它绝不提供程序或 cwd。
+    let entry_id = required_json_string(payload, "entry_id")?;
+    // Only the two explicitly supported process protocols are accepted.
+    // 仅接受两个显式支持的进程协议。
+    let mode = required_json_string(payload, "mode")?;
+    if mode != "exec" && mode != "session" {
+        return Err("Vulcan plugin process mode must be `exec` or `session`.".to_string());
+    }
+    // The manifest belongs to the original authorized generation.
+    // 清单属于原已授权代次。
+    let manifest = plugin
+        .manifest
+        .as_ref()
+        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
+    // Permission withdrawal applies to the exact process subtype and session mode as well as its broad capability.
+    // 权限撤回除宽泛能力外，也适用于精确进程子类型及会话模式。
+    let current_permissions = match source {
+        ProcessPermissionSource::Activation(authority) => {
+            // The original request fixes the operation package; old and target callbacks use their own manifest grants.
+            // 原请求固定操作插件包；旧包及目标回调使用各自清单授权。
+            authority
+                .validate(state, plugin, authority.operation.scope())
+                .map_err(|failure| failure.message)?;
+            manifest.permissions.clone()
+        }
+        ProcessPermissionSource::LegacyLifecycle { authority, scope } => {
+            // Validate the actual original guard before consulting the frozen process permissions.
+            // 查询冻结进程权限之前校验实际原守卫。
+            authority
+                .validate(state, plugin, scope)
+                .map_err(|failure| failure.message)?;
+            manifest.permissions.clone()
+        }
+        ProcessPermissionSource::PrivateHook(authority) => {
+            // Target initialization cannot borrow the predecessor's published permission list.
+            // 目标初始化不能借用前驱的已发布权限列表。
+            authority
+                .validate(state, plugin)
+                .map_err(|failure| failure.message)?;
+            manifest.permissions.clone()
+        }
+        ProcessPermissionSource::Published => {
+            // Ordinary calls continue to intersect their original declaration with live permission withdrawal.
+            // 普通调用继续将原声明与实时权限撤回取交集。
+            let snapshot = state
+                .snapshot
+                .read()
+                .map_err(|_| "Plugin catalog lock is poisoned.".to_string())?;
+            let current = snapshot
+                .plugins
+                .get(plugin_id)
+                .ok_or_else(|| "Plugin is no longer installed.".to_string())?;
+            current
+                .manifest
+                .as_ref()
+                .ok_or_else(|| "Plugin current manifest is unavailable.".to_string())?
+                .permissions
+                .clone()
+        }
+    };
+    // Require both the original declaration and current grant for one exact permission.
+    // 对单个精确权限同时要求原声明及当前授权。
+    let permitted = |permission: VulcanPluginPermission| {
+        manifest.permissions.contains(&permission) && current_permissions.contains(&permission)
+    };
+    let options = payload
+        .get("options")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            "Vulcan plugin process request requires object field `options`.".to_string()
+        })?;
+    if mode == "session" && !permitted(VulcanPluginPermission::ProcessSession) {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` did not declare process_session capability."
+        ));
+    }
+
+    let binary = manifest
+        .execution
+        .native_binaries
+        .iter()
+        .find(|entry| entry.id == entry_id);
+    let node_entry = manifest
+        .execution
+        .node_entries
+        .iter()
+        .find(|entry| entry.id == entry_id);
+    let python_entry = manifest
+        .execution
+        .python_entries
+        .iter()
+        .find(|entry| entry.id == entry_id);
+    // executionRoot binds all logical process paths to the trusted package generation.
+    // executionRoot 把所有逻辑进程路径绑定到可信插件包代次。
+    let execution_root = plugin_execution_package_root(state, plugin)?;
+    match (binary, node_entry, python_entry) {
+        (Some(binary), None, None) => {
+            if !permitted(VulcanPluginPermission::ProcessBinary) {
+                return Err(format!(
+                    "Vulcan plugin `{plugin_id}` did not declare process_binary capability."
+                ));
+            }
+            resolve_plugin_binary_spec(
+                plugin,
+                &execution_root,
+                binary,
+                mode,
+                options,
+                workspace_root,
+            )
+        }
+        (None, Some(node_entry), None) => {
+            if !permitted(VulcanPluginPermission::ProcessNode) {
+                return Err(format!(
+                    "Vulcan plugin `{plugin_id}` did not declare process_node capability."
+                ));
+            }
+            resolve_plugin_node_spec(state, plugin, manifest, node_entry, mode, options)
+        }
+        (None, None, Some(python_entry)) => {
+            if !permitted(VulcanPluginPermission::ProcessPython) {
+                return Err(format!(
+                    "Vulcan plugin `{plugin_id}` did not declare process_python capability."
+                ));
+            }
+            resolve_plugin_python_spec(state, plugin, manifest, python_entry, mode, options)
+        }
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => Err(format!(
+            "Vulcan plugin `{plugin_id}` declares duplicate process entry `{entry_id}`."
+        )),
+        (None, None, None) => Err(format!(
+            "Vulcan plugin `{plugin_id}` does not declare process entry `{entry_id}`."
+        )),
+    }
+}
 
 /// Host-resolved process launch data for one plugin-owned stdio MCP server.
 /// 单个插件自有 stdio MCP 服务器的宿主解析进程启动数据。
@@ -53,129 +233,54 @@ pub struct VulcanPluginMcpStdioLaunchSpec {
 /// Returns a contained executable specification or an explicit policy error.
 /// 返回受目录边界约束的可执行规范或显式策略错误。
 pub(super) fn resolve_plugin_process_spec(
-    state: &VulcanPluginManagerState,
+    state: &Arc<VulcanPluginManagerState>,
     request_args: &Value,
 ) -> Result<Value, String> {
+    // The compatibility envelope is accepted only from the legacy trusted bridge.
+    // 兼容信封仅从旧可信桥接接收。
     let request = request_args
         .as_object()
         .ok_or_else(|| "Vulcan plugin process request must be an object.".to_string())?;
+    // Read the exact bridge-injected plugin identity.
+    // 读取桥接注入的精确插件身份。
     let plugin_id = required_json_string(request, "plugin_id")?;
-    let lease_scope =
-        VulcanPluginBridgeLeaseScope::parse(required_json_string(request, "lease_scope")?)?;
-    let workspace_root = canonical_bridge_workspace_root(request)?;
+    // Lifecycle scope is validated before resolving executable resources.
+    // 在解析可执行资源前校验生命周期作用域。
+    let scope = VulcanPluginBridgeLeaseScope::parse(required_json_string(request, "lease_scope")?)?;
+    // Workspace authorization belongs to the host envelope.
+    // 工作区授权属于宿主信封。
+    let workspace = canonical_bridge_workspace_root(request)?;
+    // Process-specific options retain their existing strict interpretation.
+    // 进程特定选项保留既有严格解释。
     let payload = request
         .get("payload")
         .and_then(Value::as_object)
         .ok_or_else(|| {
             "Vulcan plugin process request requires object field `payload`.".to_string()
         })?;
-    let entry_id = required_json_string(payload, "entry_id")?;
-    let mode = required_json_string(payload, "mode")?;
-    if mode != "exec" && mode != "session" {
-        return Err("Vulcan plugin process mode must be `exec` or `session`.".to_string());
-    }
-
-    let snapshot = state
+    // Retain the descriptor before releasing the short catalog lock.
+    // 在释放短目录锁前保留描述符。
+    let plugin = state
         .snapshot
         .read()
-        .map_err(|_| "Vulcan plugin catalog lock was poisoned.".to_string())?;
-    let plugin = snapshot
+        .map_err(|_| "Vulcan plugin catalog lock was poisoned.".to_string())?
         .plugins
         .get(plugin_id)
+        .cloned()
         .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` is not installed."))?;
-    let required_runtime_state = lease_scope.required_runtime_state();
-    if plugin.runtime_state != required_runtime_state {
+    if plugin.runtime_state != scope.required_runtime_state() {
         return Err(format!(
             "Vulcan plugin `{plugin_id}` runtime state does not authorize process bridge scope `{}`.",
-            lease_scope.as_str()
+            scope.as_str()
         ));
     }
-    let manifest = plugin
-        .manifest
-        .as_ref()
-        .ok_or_else(|| format!("Vulcan plugin `{plugin_id}` has no valid manifest."))?;
-    let options = payload
-        .get("options")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            "Vulcan plugin process request requires object field `options`.".to_string()
-        })?;
-    if mode == "session"
-        && !manifest
-            .permissions
-            .contains(&VulcanPluginPermission::ProcessSession)
-    {
-        return Err(format!(
-            "Vulcan plugin `{plugin_id}` did not declare process_session capability."
-        ));
-    }
-
-    let binary = manifest
-        .execution
-        .native_binaries
-        .iter()
-        .find(|entry| entry.id == entry_id);
-    let node_entry = manifest
-        .execution
-        .node_entries
-        .iter()
-        .find(|entry| entry.id == entry_id);
-    let python_entry = manifest
-        .execution
-        .python_entries
-        .iter()
-        .find(|entry| entry.id == entry_id);
-    // executionRoot binds all logical process paths to the trusted package generation.
-    // executionRoot 把所有逻辑进程路径绑定到可信插件包代次。
-    let execution_root = plugin_execution_package_root(state, plugin)?;
-    match (binary, node_entry, python_entry) {
-        (Some(binary), None, None) => {
-            if !manifest
-                .permissions
-                .contains(&VulcanPluginPermission::ProcessBinary)
-            {
-                return Err(format!(
-                    "Vulcan plugin `{plugin_id}` did not declare process_binary capability."
-                ));
-            }
-            resolve_plugin_binary_spec(
-                plugin,
-                &execution_root,
-                binary,
-                mode,
-                options,
-                &workspace_root,
-            )
-        }
-        (None, Some(node_entry), None) => {
-            if !manifest
-                .permissions
-                .contains(&VulcanPluginPermission::ProcessNode)
-            {
-                return Err(format!(
-                    "Vulcan plugin `{plugin_id}` did not declare process_node capability."
-                ));
-            }
-            resolve_plugin_node_spec(state, plugin, manifest, node_entry, mode, options)
-        }
-        (None, None, Some(python_entry)) => {
-            if !manifest
-                .permissions
-                .contains(&VulcanPluginPermission::ProcessPython)
-            {
-                return Err(format!(
-                    "Vulcan plugin `{plugin_id}` did not declare process_python capability."
-                ));
-            }
-            resolve_plugin_python_spec(state, plugin, manifest, python_entry, mode, options)
-        }
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => Err(format!(
-            "Vulcan plugin `{plugin_id}` declares duplicate process entry `{entry_id}`."
-        )),
-        (None, None, None) => Err(format!(
-            "Vulcan plugin `{plugin_id}` does not declare process entry `{entry_id}`."
-        )),
-    }
+    resolve_plugin_process_for_snapshot(
+        state,
+        &plugin,
+        &workspace,
+        payload,
+        ProcessPermissionSource::Published,
+    )
 }
 
 /// Resolves one plugin MCP stdio launcher into an exact managed process specification.
@@ -190,7 +295,7 @@ pub(super) fn resolve_plugin_process_spec(
 /// 返回值
 /// Returns a Shell-free executable, fixed arguments, contained working directory, and host environment.
 /// 返回不使用 Shell 的可执行文件、固定参数、受约束工作目录与宿主环境。
-fn resolve_plugin_mcp_stdio_launcher(
+pub(super) fn resolve_plugin_mcp_stdio_launcher(
     state: &VulcanPluginManagerState,
     plugin: &crate::VulcanPluginDescriptor,
     manifest: &VulcanPluginManifest,
@@ -1022,17 +1127,17 @@ impl VulcanPluginRuntimeManager {
         self.resolve_mcp_stdio_launcher_descriptor(server)
     }
 
-    /// Resolves the exact process launcher for one validated candidate stdio MCP descriptor before publication.
+    /// Resolves the exact process launcher for one validated activation stdio MCP descriptor before publication.
     /// 在发布前为一个已校验的候选 stdio MCP 描述符解析精确进程启动器。
     ///
     /// # Parameters
     /// 参数
-    /// `server` is the immutable descriptor from the candidate catalog and must match the installed package generation.
+    /// `server` is the immutable descriptor from the activation catalog and must match the installed package generation.
     /// `server` 是候选目录中的不可变描述符，且必须匹配已安装包代次。
     ///
     /// # Returns
     /// 返回值
-    /// Returns a contained Shell-free launch specification without requiring the candidate server to be enabled already.
+    /// Returns a contained Shell-free launch specification without requiring the activation server to be enabled already.
     /// 返回一份受目录约束且不使用 Shell 的启动规格，不要求候选服务器已经启用。
     pub fn resolve_mcp_stdio_launcher_descriptor(
         &self,

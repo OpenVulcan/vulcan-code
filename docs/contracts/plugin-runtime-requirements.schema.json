@@ -1,0 +1,212 @@
+{
+  "$defs": {
+    "CapabilityExecution": {
+      "description": "Host execution transport, explicitly selected before a capability is published.\n宿主执行传输，在能力发布前显式选择。",
+      "oneOf": [
+        {
+          "const": "native",
+          "description": "Short cooperative Rust callback executed on the owning VM thread.\n在所属 VM 线程执行的短时协作 Rust 回调。",
+          "type": "string"
+        },
+        {
+          "const": "queued",
+          "description": "Reliable request consumed and completed by an SDK event pump.\n由 SDK 事件泵消费并完成的可靠请求。",
+          "type": "string"
+        }
+      ]
+    },
+    "CapabilityScope": {
+      "description": "Scope required from the trusted caller, independent from Lua business arguments.\n可信调用方必须具备的作用域，独立于 Lua 业务参数。",
+      "oneOf": [
+        {
+          "const": "invocation",
+          "description": "Available during an ordinary operation or session invocation.\n在普通操作或会话调用期间可用。",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "description": "Requires an explicitly bound session identity.\n要求显式绑定的会话身份。",
+          "type": "string"
+        }
+      ]
+    },
+    "ExecutionBackend": {
+      "description": "Declared backend; unavailable variants are rejected instead of downgraded.\n声明的执行后端；不可用的取值直接拒绝，不降级。",
+      "oneOf": [
+        {
+          "const": "in_process",
+          "description": "Execute in owned Lua VMs inside the current host process.\n在当前宿主进程内的受管 Lua VM 中执行。",
+          "type": "string"
+        },
+        {
+          "const": "worker_process",
+          "description": "Reserved protocol identity; no worker backend is advertised yet.\n预留的协议身份；目前尚未声明工作进程后端可用。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginCapacityPurpose": {
+      "description": "Host-selected execution purpose; plugin business arguments cannot select capacity ownership.\n宿主选择的执行用途；插件业务参数不能选择容量归属。",
+      "oneOf": [
+        {
+          "const": "tool_call",
+          "description": "Ordinary tool invocations keep their declared single-call semantics.\n普通工具调用保留声明的单次调用语义。",
+          "type": "string"
+        },
+        {
+          "const": "tool_session",
+          "description": "Controller-owned tool sessions retain one exact VM for their lifetime.\n控制器拥有的工具会话在整个寿命内保留一个精确 VM。",
+          "type": "string"
+        },
+        {
+          "const": "hook",
+          "description": "Persistent Hook instances preserve their ordering and original shutdown declaration.\n持久 Hook 实例保留顺序及原关闭声明。",
+          "type": "string"
+        },
+        {
+          "const": "ui_action",
+          "description": "Transient and persistent UI Actions share limits without sharing Lua state.\n瞬时及持久 UI Action 共享上限，不共享 Lua 状态。",
+          "type": "string"
+        },
+        {
+          "const": "lifecycle",
+          "description": "Host lifecycle callbacks retain their own capacity across catalog generations.\n宿主生命周期回调跨目录代次保留自身容量。",
+          "type": "string"
+        },
+        {
+          "const": "activation_probe",
+          "description": "Activation probes consume real initialization resources without a business export.\n启用探测消费真实初始化资源，不具有业务导出。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginCapacityRequirement": {
+      "additionalProperties": false,
+      "description": "Minimum host policy needed by one execution purpose, separate from current free capacity.\n单个执行用途所需的最小宿主策略，独立于当前空闲容量。",
+      "properties": {
+        "purpose": {
+          "$ref": "#/$defs/VulcanPluginCapacityPurpose",
+          "description": "Exact production purpose whose frozen configuration must satisfy these floors.\n冻结配置必须满足这些下限的精确生产用途。"
+        },
+        "queued_bytes": {
+          "description": "Minimum acceptable pending-input byte limit, positive and never interpreted as unlimited.\n可接受的最小等待输入字节上限，必须为正，绝不解释为无限。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "queued_calls": {
+          "description": "Minimum acceptable pending-call limit, positive and never interpreted as unlimited.\n可接受的最小等待调用上限，必须为正，绝不解释为无限。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reserved_resident_vms": {
+          "description": "Required non-lendable guarantee; zero requires no reservation or prewarming.\n必需的不可出借保证；零表示不要求预留或预热。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resident_vms": {
+          "description": "Minimum acceptable resident limit, positive and not a request to allocate instances.\n可接受的最小常驻上限，必须为正，且不表示申请分配实例。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "running_calls": {
+          "description": "Minimum acceptable running-call limit, positive and bounded by resident_vms.\n可接受的最小执行调用上限，必须为正且不超过 resident_vms。",
+          "format": "uint",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "purpose",
+        "reserved_resident_vms",
+        "resident_vms",
+        "running_calls",
+        "queued_calls",
+        "queued_bytes"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginHostCapabilityRequirement": {
+      "additionalProperties": false,
+      "description": "One required registered host contract, independent from permission grants or external service readiness.\n单个必需的已注册宿主契约，独立于权限授予或外部服务就绪状态。",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/CapabilityExecution",
+          "description": "Declared core dispatch transport, checked against the actual captured descriptor.\n声明的核心分发传输，针对实际捕获描述符校验。"
+        },
+        "name": {
+          "description": "Exact namespaced callback name; aliases and alternate names are never probed.\n精确命名空间回调名称；绝不探测别名或备用名称。",
+          "minLength": 1,
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/CapabilityScope",
+          "description": "Required trusted caller scope, independently enforced by core invocation admission.\n必需的可信调用方作用域，由核心调用入场独立执行。"
+        },
+        "version": {
+          "description": "Exact semantic interface version; a range or a newer version does not implicitly match.\n精确语义接口版本；版本范围或更新版本不隐式匹配。",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "execution",
+        "scope"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Required compatibility and capacity floors; host policy must satisfy these without being rewritten.\n必需的兼容性及容量下限；宿主策略必须满足这些条件，且不能被自动改写。",
+  "properties": {
+    "backend": {
+      "$ref": "#/$defs/ExecutionBackend",
+      "description": "Required execution backend; unsupported backends are rejected without substitution.\n必需执行后端；不支持的后端直接拒绝，不替代。"
+    },
+    "capacities": {
+      "description": "Distinct purpose requirements; an empty list explicitly requests no additional resource floors.\n不重复的用途要求；空列表明确表示不要求额外资源下限。",
+      "items": {
+        "$ref": "#/$defs/VulcanPluginCapacityRequirement"
+      },
+      "type": "array"
+    },
+    "core_capabilities": {
+      "description": "Exact versioned semantic feature names advertised by the linked core, never permission grants.\n链接核心声明的精确版本化语义功能名，绝不表示权限授予。",
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "host_capabilities": {
+      "description": "Exact registered host contracts required for business admission; omission declares no callback requirement.\n业务入场所需的精确已注册宿主契约；省略表示不声明回调要求。",
+      "items": {
+        "$ref": "#/$defs/VulcanPluginHostCapabilityRequirement"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "protocol_version": {
+      "description": "Exact embedded core protocol identity, independent from the package manifest version.\n精确嵌入式核心协议身份，独立于插件包清单版本。",
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "backend",
+    "core_capabilities",
+    "capacities"
+  ],
+  "title": "VulcanPluginRuntimeRequirements",
+  "type": "object"
+}

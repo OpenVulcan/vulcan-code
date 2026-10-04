@@ -1114,8 +1114,7 @@ pub(super) async fn prepare_webui_pending_prompt(
         // The submission reservation spans Hook preparation, durable capture and kernel registration.
         // 提交预留覆盖 Hook 准备、可靠捕获以及 kernel 注册。
         let mut hook_runtime = entry_agent_runtime
-            .conversation_hook_runtime
-            .lock()
+            .lock_conversation_hooks()
             .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
         let precheck_start = begin_shared_prompt_turn(
             &mut workspace_snapshot,
@@ -1293,8 +1292,7 @@ pub(super) async fn prepare_webui_pending_prompt(
         // The retained submission reservation serializes this admission without holding outer locks over I/O.
         // 保留的提交预留串行化本次准入，无须跨 I/O 持有外层锁。
         let mut hook_runtime = entry_agent_runtime
-            .conversation_hook_runtime
-            .lock()
+            .lock_conversation_hooks()
             .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
         // Exact process inputs retain their individual canonical identities even when Provider preparation uses a batch prompt.
         // 即使 Provider 准备使用批次提示，精确过程输入仍保留各自规范身份。

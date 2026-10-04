@@ -3,8 +3,11 @@
 
 mod atomic_file;
 mod catalog;
+mod generation_store;
 mod host_services;
 mod manifest;
+#[cfg(feature = "manifest-schema")]
+pub mod manifest_authoring;
 mod runtime;
 
 /// Returns whether metadata identifies a symbolic link or any Windows reparse point.
@@ -34,6 +37,7 @@ pub(crate) fn metadata_is_link_or_reparse_point(metadata: &std::fs::Metadata) ->
 }
 
 pub use catalog::*;
+pub use generation_store::*;
 pub use host_services::*;
 pub use manifest::*;
 pub use runtime::*;

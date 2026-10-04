@@ -1,22 +1,18 @@
-//! Deterministic plugin drain ownership, retained-lease retries, and cleanup diagnostics.
-//! 确定性插件排空所有权、保留租约重试与清理诊断。
+//! Deterministic formal plugin drain ownership and cleanup diagnostics.
+//! 确定性正式插件排空所有权与清理诊断。
 
-use super::lease::required_lua_runtime;
 use super::{
-    ManagedVulcanPluginSession, RetainedVulcanPluginLease, VulcanPluginPersistentRuntimeKind,
-    VulcanPluginRuntimeError, VulcanPluginRuntimeManager, lock_hook_runtimes, lock_retained_leases,
-    lock_sessions, plugin_payload,
+    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
 };
-use crate::{VulcanPluginRuntimeState, VulcanPluginToolExecutionKind};
-use serde_json::Map;
 use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 /// Reports completed plugin cleanup and retained failures after drain attempts.
 /// 报告排空尝试中完成的插件清理与保留的失败。
 #[derive(Debug, Clone, Default)]
 pub struct VulcanPluginDrainReport {
+    /// Number of tracked formal calls whose request ownership, including any reusable borrow, has retired.
+    /// 请求归属已退役的受跟踪正式调用数量，包含其可复用借用。
+    pub closed_formal_calls: usize,
     /// Number of sessions closed and removed successfully.
     /// 成功关闭并移除的会话数量。
     pub closed_sessions: usize,
@@ -26,9 +22,6 @@ pub struct VulcanPluginDrainReport {
     /// Number of persistent plugin UI action runtimes closed successfully.
     /// 成功关闭的持久插件界面 Action 运行时数量。
     pub closed_ui_action_runtimes: usize,
-    /// Number of previously retained raw leases closed successfully.
-    /// 成功关闭的此前保留原始租约数量。
-    pub closed_retained_leases: usize,
     /// Deterministic cleanup failures retained for diagnostics and retry.
     /// 为诊断与重试保留的确定性清理失败集合。
     pub failures: Vec<String>,
@@ -40,6 +33,9 @@ impl VulcanPluginDrainReport {
     /// other contributes ordered counts and diagnostics to self; returns no value.
     /// other向self贡献有序计数与诊断；不返回值。
     fn merge(&mut self, other: Self) {
+        self.closed_formal_calls = self
+            .closed_formal_calls
+            .saturating_add(other.closed_formal_calls);
         self.closed_sessions = self.closed_sessions.saturating_add(other.closed_sessions);
         self.closed_hook_runtimes = self
             .closed_hook_runtimes
@@ -47,14 +43,44 @@ impl VulcanPluginDrainReport {
         self.closed_ui_action_runtimes = self
             .closed_ui_action_runtimes
             .saturating_add(other.closed_ui_action_runtimes);
-        self.closed_retained_leases = self
-            .closed_retained_leases
-            .saturating_add(other.closed_retained_leases);
         self.failures.extend(other.failures);
     }
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Test all tracked physical retirement owners while registration is excluded.
+    /// 排除注册时检查全部受跟踪物理退役所有者。
+    /// plugin_id selects one namespace; registration proves publication exclusion; true means work remains.
+    /// plugin_id 选择命名空间；registration 证明发布互斥；true 表示仍有工作。
+    pub(super) fn has_unretired_plugin_resources_locked(
+        &self,
+        plugin_id: &str,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        if let Some(owner) = self.formal_runtime_owner()?
+            && owner.has_retiring_capacities(plugin_id)?
+        {
+            return Ok(true);
+        }
+        // Probe preparation has no legacy session quota, but still retains real cleanup ownership.
+        // 探测准备不占旧会话配额，但仍保留真实清理所有权。
+        let has_formal_calls = self.has_unretired_formal_calls(plugin_id)?;
+        let has_hook_runtime =
+            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::Hook)?;
+        let has_ui_action_runtime =
+            self.has_formal_instance(plugin_id, VulcanPluginPersistentRuntimeKind::UiAction)?;
+        let has_active_count = self.active_session_count(plugin_id)? > 0;
+        if self.has_reusable_domains(plugin_id)?
+            || has_formal_calls
+            || has_hook_runtime
+            || has_ui_action_runtime
+            || has_active_count
+        {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// Closes every retained session owned by one draining plugin.
     /// 关闭一个正在排空的插件所拥有的全部保留会话。
     ///
@@ -84,84 +110,21 @@ impl VulcanPluginRuntimeManager {
     /// 即使等待报告的调用方取消，也继续完成插件排空。
     /// The plugin identity selects retained resources; returns the exact cleanup report.
     /// 插件身份选择保留资源；返回精确清理报告。
-    async fn drain_plugin_sessions_owned(
+    pub(super) async fn drain_plugin_sessions_owned(
         &self,
         plugin_id: &str,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        let sessions = lock_sessions(&self.state.sessions)?
-            .values()
-            .filter(|session| session.plugin_id == plugin_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut report = self.drain_sessions(sessions).await?;
-        self.drain_persistent_runtime(
-            plugin_id,
+        let mut report = VulcanPluginDrainReport::default();
+        report.merge(self.drain_formal_calls(Some(plugin_id), None).await?);
+        report.merge(self.drain_reusable_domains(Some(plugin_id), None).await?);
+        report.merge(self.drain_pinned(Some(plugin_id), None).await?);
+        for kind in [
             VulcanPluginPersistentRuntimeKind::Hook,
-            &mut report,
-        )
-        .await?;
-        self.drain_persistent_runtime(
-            plugin_id,
             VulcanPluginPersistentRuntimeKind::UiAction,
-            &mut report,
-        )
-        .await?;
-        let retained = self.take_retained_leases(|lease| lease.plugin_id == plugin_id)?;
-        report.merge(self.drain_retained_leases(retained).await?);
-        Ok(report)
-    }
-
-    /// Drains one category-isolated persistent runtime into the shared lifecycle report.
-    /// 把一个按类别隔离的持久运行时排空到共享生命周期报告中。
-    /// plugin_id and runtime_kind select one registry; appends cleanup results to report and returns unit or a lock error.
-    /// plugin_id与runtime_kind选择一个注册表；向report追加清理结果，返回空值或锁错误。
-    async fn drain_persistent_runtime(
-        &self,
-        plugin_id: &str,
-        runtime_kind: VulcanPluginPersistentRuntimeKind,
-        report: &mut VulcanPluginDrainReport,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let gate = self.persistent_runtime_gate(plugin_id, runtime_kind)?;
-        let _lifecycle = gate.lock().await;
-        let runtimes = match runtime_kind {
-            VulcanPluginPersistentRuntimeKind::Hook => &self.state.hook_runtimes,
-            VulcanPluginPersistentRuntimeKind::UiAction => &self.state.ui_action_runtimes,
-        };
-        let runtime = lock_hook_runtimes(runtimes)?.get(plugin_id).cloned();
-        let Some(runtime) = runtime else {
-            return Ok(());
-        };
-        match self
-            .close_persistent_runtime(Arc::clone(&runtime), runtime_kind)
-            .await
-        {
-            Ok(shutdown_diagnostic) => {
-                lock_hook_runtimes(runtimes)?
-                    .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
-                match runtime_kind {
-                    VulcanPluginPersistentRuntimeKind::Hook => {
-                        report.closed_hook_runtimes += 1;
-                    }
-                    VulcanPluginPersistentRuntimeKind::UiAction => {
-                        report.closed_ui_action_runtimes += 1;
-                    }
-                }
-                if let Some(diagnostic) = shutdown_diagnostic {
-                    report.failures.push(diagnostic);
-                }
-            }
-            Err(error) => {
-                // A failed close remains quarantined; subsequent drains may retry cleanup.
-                // 关闭失败的实例保持隔离；后续排空可以重试清理。
-                let diagnostic = format!(
-                    "Plugin `{plugin_id}` persistent {} runtime cleanup failed and remains retained: {error}",
-                    runtime_kind.label()
-                );
-                self.record_cleanup_failure(plugin_id, diagnostic.clone())?;
-                report.failures.push(diagnostic);
-            }
+        ] {
+            report.merge(self.drain_formal_instance(plugin_id, kind).await?);
         }
-        Ok(())
+        Ok(report)
     }
 
     /// Closes every retained plugin session owned by one archived conversation.
@@ -180,224 +143,64 @@ impl VulcanPluginRuntimeManager {
         &self,
         owner_session_id: &str,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        let sessions = lock_sessions(&self.state.sessions)?
-            .values()
-            .filter(|session| session.owner_session_id == owner_session_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut affected_plugin_ids = sessions
-            .iter()
-            .map(|session| session.plugin_id.clone())
-            .collect::<BTreeSet<_>>();
-        let mut report = self.drain_sessions(sessions).await?;
-        let retained = self.take_retained_leases(|lease| {
-            lease.owner_session_id.as_deref() == Some(owner_session_id)
-        })?;
-        affected_plugin_ids.extend(retained.iter().map(|lease| lease.plugin_id.clone()));
-        report.merge(self.drain_retained_leases(retained).await?);
+        let mut affected_plugin_ids = BTreeSet::new();
+        // Include formal-only owners so a completed retry clears the original drain warning.
+        // 包含仅持有正式调用的所有者，使重试完成后清除原排空警告。
+        affected_plugin_ids.extend(
+            self.formal_calls(owner_session_id)?
+                .into_iter()
+                .map(|call| call.plugin_id),
+        );
+        affected_plugin_ids.extend(
+            self.formal_sessions(owner_session_id)?
+                .into_iter()
+                .map(|session| session.plugin_id),
+        );
+        affected_plugin_ids.extend(
+            self.reusable_tool_domains(owner_session_id)?
+                .into_iter()
+                .map(|domain| domain.plugin_id),
+        );
+        let mut report = VulcanPluginDrainReport::default();
+        report.merge(
+            self.drain_formal_calls(None, Some(owner_session_id))
+                .await?,
+        );
+        report.merge(
+            self.drain_reusable_domains(None, Some(owner_session_id))
+                .await?,
+        );
+        report.merge(self.drain_pinned(None, Some(owner_session_id)).await?);
         for plugin_id in affected_plugin_ids {
             self.clear_cleanup_diagnostics_if_fully_drained(&plugin_id)?;
         }
         Ok(report)
     }
 
-    /// Performs deterministic shutdown and lease cleanup for an exact session set.
-    /// 对精确会话集合执行确定性关闭与租约清理。
-    /// sessions is the exact claimed set; returns successful close counts and retained failures, or an invariant error.
-    /// sessions是精确领取的集合；返回成功关闭计数与保留失败，或不变量错误。
-    pub(super) async fn drain_sessions(
-        &self,
-        sessions: Vec<Arc<ManagedVulcanPluginSession>>,
-    ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        let mut report = VulcanPluginDrainReport::default();
-        for session in sessions {
-            let plugin_id = session.plugin_id.clone();
-            let _close = session.close_gate.lock().await;
-            let is_registered = lock_sessions(&self.state.sessions)?
-                .get(&session.session_id)
-                .is_some_and(|current| Arc::ptr_eq(current, &session));
-            if !is_registered {
-                continue;
-            }
-            if session
-                .closing
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                continue;
-            }
-            let close_execution = required_lua_runtime(&session.manifest)?
-                .tools
-                .iter()
-                .find(|tool| tool.execution.kind == VulcanPluginToolExecutionKind::SessionClose)
-                .map(|tool| tool.execution.clone())
-                .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new(format!(
-                        "Vulcan Plugin `{plugin_id}` declares no session-close operation."
-                    ))
-                })?;
-            let payload = plugin_payload(&close_execution.operation, Map::new())?;
-            let host_timeout_ms = close_execution
-                .timeout_ms
-                .checked_add(close_execution.timeout_grace_ms)
-                .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new("Vulcan Plugin close timeout overflowed.")
-                })?;
-            let shutdown_result = self
-                .dispatch(Arc::clone(&session), payload, host_timeout_ms, true)
-                .await;
-            let close_result = self.close_lease(Arc::clone(&session)).await;
-            match close_result {
-                Ok(_) => {
-                    lock_sessions(&self.state.sessions)?.remove(&session.session_id);
-                    self.release_session_slot(&plugin_id);
-                    report.closed_sessions += 1;
-                    if let Err(error) = shutdown_result {
-                        report.failures.push(format!(
-                            "Session `{}` lease closed after graceful shutdown failed: {}",
-                            session.session_id, error
-                        ));
-                    }
-                }
-                Err(error) => {
-                    session.closing.store(false, Ordering::Release);
-                    let diagnostic = format!(
-                        "Session `{}` lease cleanup failed and remains retained: {}",
-                        session.session_id, error
-                    );
-                    self.record_cleanup_failure(&plugin_id, diagnostic.clone())?;
-                    report.failures.push(diagnostic);
-                }
-            }
-        }
-        Ok(report)
-    }
-
-    /// Retries exact closure for raw leases retained by earlier failed cleanup paths.
-    /// 对此前清理失败路径保留的原始租约重试精确关闭。
-    /// leases contains atomically claimed retry identities; returns cleanup counts while restoring failed entries.
-    /// leases包含原子领取的重试身份；返回清理计数并恢复失败条目。
-    async fn drain_retained_leases(
-        &self,
-        leases: Vec<RetainedVulcanPluginLease>,
-    ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        let mut report = VulcanPluginDrainReport::default();
-        for lease in leases {
-            match self
-                .close_raw_lease(&lease.lease_id, &lease.sid, lease.generation)
-                .await
-            {
-                Ok(()) => {
-                    if lease.reserved_session_slot {
-                        self.release_session_slot(&lease.plugin_id);
-                    }
-                    report.closed_retained_leases += 1;
-                }
-                Err(error) => {
-                    self.restore_retained_lease(lease.clone())?;
-                    let diagnostic = format!(
-                        "Retained lease `{}` cleanup retry failed: {error}",
-                        lease.lease_id
-                    );
-                    self.record_cleanup_failure(&lease.plugin_id, diagnostic.clone())?;
-                    report.failures.push(diagnostic);
-                }
-            }
-        }
-        Ok(report)
-    }
-
-    /// Atomically claims retained raw leases that match one exact lifecycle predicate.
-    /// 原子领取匹配一个精确生命周期谓词的保留原始租约。
-    /// predicate selects identities under one lock; returns and removes only the matching leases.
-    /// predicate在同一个锁内选择身份；返回并移除匹配租约。
-    fn take_retained_leases(
-        &self,
-        predicate: impl Fn(&RetainedVulcanPluginLease) -> bool,
-    ) -> Result<Vec<RetainedVulcanPluginLease>, VulcanPluginRuntimeError> {
-        let mut retained = lock_retained_leases(&self.state.retained_leases)?;
-        let lease_ids = retained
-            .values()
-            .filter(|lease| predicate(lease))
-            .map(|lease| lease.lease_id.clone())
-            .collect::<Vec<_>>();
-        Ok(lease_ids
-            .into_iter()
-            .filter_map(|lease_id| retained.remove(&lease_id))
-            .collect())
-    }
-
-    /// Retains one raw lease after immediate cleanup fails and records a visible diagnostic.
-    /// 在立即清理失败后保留一个原始租约，并记录可见诊断。
-    /// lease preserves the retry identity and diagnostic is published; returns unit or a duplicate/lock error.
-    /// lease保留重试身份并发布diagnostic；返回空值或重复/锁错误。
-    pub(super) fn retain_failed_lease(
-        &self,
-        lease: RetainedVulcanPluginLease,
-        diagnostic: String,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let plugin_id = lease.plugin_id.clone();
-        let lease_id = lease.lease_id.clone();
-        let mut retained = lock_retained_leases(&self.state.retained_leases)?;
-        if retained.contains_key(&lease_id) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Retained Vulcan Plugin lease id `{lease_id}` already exists."
-            )));
-        }
-        retained.insert(lease_id, lease);
-        drop(retained);
-        self.record_cleanup_failure(&plugin_id, diagnostic)
-    }
-
-    /// Restores one atomically claimed lease after its cleanup retry fails.
-    /// 在清理重试失败后恢复一个已被原子领取的租约。
-    /// lease is one failed claimed retry; returns unit after reinsertion or an explicit concurrent-restore error.
-    /// lease是一次失败的已领取重试；重新插入后返回空值，否则显式报告并发恢复错误。
-    fn restore_retained_lease(
-        &self,
-        lease: RetainedVulcanPluginLease,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let lease_id = lease.lease_id.clone();
-        let mut retained = lock_retained_leases(&self.state.retained_leases)?;
-        if retained.contains_key(&lease_id) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Retained Vulcan Plugin lease id `{lease_id}` was restored concurrently."
-            )));
-        }
-        retained.insert(lease_id, lease);
-        Ok(())
-    }
-
-    /// Retains one failed-cleanup session lease while preserving its reserved capacity for retry.
-    /// 保留一个清理失败的会话租约，并为重试继续占用其已预留容量。
-    /// session supplies the exact retained identity and reserved slot; diagnostic is published and success returns unit.
-    /// session提供精确保留身份与预留名额；发布diagnostic，成功返回空值。
-    pub(super) fn retain_failed_session_lease(
-        &self,
-        session: &ManagedVulcanPluginSession,
-        diagnostic: String,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        self.retain_failed_lease(
-            RetainedVulcanPluginLease {
-                plugin_id: session.plugin_id.clone(),
-                owner_session_id: Some(session.owner_session_id.clone()),
-                lease_id: session.lease_id.clone(),
-                sid: session.sid.clone(),
-                generation: session.generation,
-                reserved_session_slot: true,
-            },
-            diagnostic,
-        )
-    }
-
     /// Retains one cleanup diagnostic so UI and later refreshes cannot hide leaked resources.
     /// 保留一条清理诊断，确保界面与后续刷新不会隐藏泄漏资源。
-    /// plugin_id selects the owner and diagnostic is retained without duplication; returns publication status.
-    /// plugin_id选择所有者，不重复保留diagnostic；返回发布状态。
+    /// plugin_id selects the owner and diagnostic is retained without duplication; returns accounting status.
+    /// plugin_id选择所有者，不重复保留diagnostic；返回记账状态。
     pub(super) fn record_cleanup_failure(
         &self,
         plugin_id: &str,
         diagnostic: String,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Serialize diagnostics with lifecycle capacity retirement and its final catalog publication.
+        // 将诊断与生命周期容量回收及最终目录发布排序。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.record_cleanup_failure_locked(plugin_id, diagnostic, &registration)
+    }
+
+    /// Retain diagnostic for plugin_id under an existing publication guard; return after its unique live map is updated.
+    /// 在既有发布守卫下为 plugin_id 保留 diagnostic；更新唯一实时映射后返回。
+    pub(super) fn record_cleanup_failure_locked(
+        &self,
+        plugin_id: &str,
+        diagnostic: String,
+        _registration: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
         let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
@@ -406,42 +209,18 @@ impl VulcanPluginRuntimeManager {
         if !plugin_diagnostics.contains(&diagnostic) {
             plugin_diagnostics.push(diagnostic);
         }
-        drop(diagnostics);
-        self.publish_cleanup_diagnostics(plugin_id)
+        Ok(())
     }
 
-    /// Publishes newly recorded cleanup failures without waiting for a later catalog refresh.
-    /// 无需等待后续目录刷新即可发布新记录的清理失败。
-    /// plugin_id selects the immutable catalog projection to update; returns unit or a lock diagnostic.
-    /// plugin_id选择要更新的不可变目录投影；返回空值或锁诊断。
-    fn publish_cleanup_diagnostics(&self, plugin_id: &str) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
-        let cleanup_diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
-        })?;
-        let Some(plugin_diagnostics) = cleanup_diagnostics.get(plugin_id) else {
-            return Ok(());
-        };
-        let mut snapshot = (*self.snapshot()).clone();
-        let Some(plugin) = snapshot.plugins.get_mut(plugin_id) else {
-            return Ok(());
-        };
-        if plugin.runtime_state == VulcanPluginRuntimeState::Disabled {
-            plugin.runtime_state = VulcanPluginRuntimeState::DisabledWithCleanupWarning;
-        }
-        for diagnostic in plugin_diagnostics {
-            if !plugin.diagnostics.contains(diagnostic) {
-                plugin.diagnostics.push(diagnostic.clone());
-            }
-        }
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
-        Ok(())
+    /// Observe unresolved cleanup without acquiring the registration gate again.
+    /// 观测未解决清理，不再次获取登记门。
+    /// `plugin_id` selects the live namespace; returns whether diagnostics remain or an explicit lock error.
+    /// `plugin_id` 选择实时命名空间；返回是否残留诊断或明确锁错误。
+    pub fn has_cleanup_diagnostics(
+        &self,
+        plugin_id: &str,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        self.state.has_cleanup_diagnostics(plugin_id)
     }
 
     /// Clears stale cleanup diagnostics only after every resource owned by one plugin is gone.
@@ -455,63 +234,51 @@ impl VulcanPluginRuntimeManager {
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
-        let has_sessions = lock_sessions(&self.state.sessions)?
-            .values()
-            .any(|session| session.plugin_id == plugin_id);
-        let has_retained_leases = lock_retained_leases(&self.state.retained_leases)?
-            .values()
-            .any(|lease| lease.plugin_id == plugin_id);
-        let has_hook_runtime =
-            lock_hook_runtimes(&self.state.hook_runtimes)?.contains_key(plugin_id);
-        let has_ui_action_runtime =
-            lock_hook_runtimes(&self.state.ui_action_runtimes)?.contains_key(plugin_id);
-        let has_active_count = self
-            .state
-            .active_session_counts
-            .lock()
-            .map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
-            })?
-            .get(plugin_id)
-            .copied()
-            .unwrap_or_default()
-            > 0;
-        if has_sessions
-            || has_retained_leases
-            || has_hook_runtime
-            || has_ui_action_runtime
-            || has_active_count
-        {
+        self.clear_cleanup_diagnostics_locked(plugin_id, &_registration)
+    }
+
+    /// Clear resolved diagnostics for plugin_id while the caller holds publication; retain explicit unfinished capacity retirement.
+    /// 调用方持有发布门时清除 plugin_id 已解决诊断；保留明确未完成容量回收。
+    /// Return success after the live map update, or a precise ownership error without claiming cleanup completion.
+    /// 实时映射更新后返回成功；或返回精确归属错误而不宣称清理完成。
+    pub(super) fn clear_cleanup_diagnostics_locked(
+        &self,
+        plugin_id: &str,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        if self.has_unretired_plugin_resources_locked(plugin_id, _registration)? {
             return Ok(());
         }
-        let removed_diagnostics = self
-            .state
+        self.state
             .cleanup_diagnostics
             .lock()
             .map_err(|_| {
                 VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
             })?
-            .remove(plugin_id)
-            .unwrap_or_default();
-        if removed_diagnostics.is_empty() {
-            return Ok(());
-        }
-        let mut snapshot = (*self.snapshot()).clone();
-        let Some(plugin) = snapshot.plugins.get_mut(plugin_id) else {
-            return Ok(());
-        };
-        plugin
-            .diagnostics
-            .retain(|diagnostic| !removed_diagnostics.contains(diagnostic));
-        if plugin.runtime_state == VulcanPluginRuntimeState::DisabledWithCleanupWarning {
-            plugin.runtime_state = VulcanPluginRuntimeState::Disabled;
-        }
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
+            .remove(plugin_id);
         Ok(())
+    }
+}
+
+impl super::VulcanPluginManagerState {
+    /// Inspect the unique cleanup map without acquiring publication or changing routing identity.
+    /// 检查唯一清理映射，不获取发布门或改变路由身份。
+    /// `plugin_id` selects the namespace; returns true for retained diagnostics or a poisoned-lock error.
+    /// `plugin_id` 选择命名空间；保留诊断返回真，锁污染返回错误。
+    pub(super) fn has_cleanup_diagnostics(
+        &self,
+        plugin_id: &str,
+    ) -> Result<bool, VulcanPluginRuntimeError> {
+        self.cleanup_diagnostics
+            .lock()
+            .map(|diagnostics| {
+                diagnostics
+                    .get(plugin_id)
+                    .is_some_and(|entries| !entries.is_empty())
+            })
+            .map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
+            })
     }
 }
 

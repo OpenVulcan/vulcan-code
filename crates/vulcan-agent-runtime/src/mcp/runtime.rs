@@ -14,7 +14,7 @@ use crate::mcp::registry::{McpServerRegistry, configured_mcp_registry_overview};
 use crate::tooling::{allocate_unique_public_tool_name, build_prefixed_public_tool_name};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::{RwLock as AsyncRwLock, watch};
 use vulcan_mcp_runtime::{
@@ -32,7 +32,12 @@ pub use diagnostics::{
     McpRuntimeServerStatus, McpRuntimeToolAllowlist, McpRuntimeToolInspection,
 };
 pub use handle::{
-    bootstrap_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
+    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, LegacyPluginMcpReplacement,
+    PredecessorPluginMcpHandoffGuard, PredecessorPluginMcpRuntime,
+    PreparedPublishedPluginMcpPublication, PublishedPluginMcpObservation,
+    PublishedPluginMcpPublicationGuard, PublishedPluginMcpRuntime, TargetPluginMcpHandoffGuard,
+    TargetPluginMcpRuntime, bootstrap_mcp_runtime_access,
+    bootstrap_mcp_runtime_access_with_published, remove_plugin_mcp_runtime_partition,
     replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
     validate_plugin_mcp_runtime_partition,
 };

@@ -11,13 +11,16 @@ use std::time::Duration;
 /// Verifies the host reaps an idle owner-bound session without another tool invocation.
 /// 验证宿主无需额外工具调用即可回收空闲的所有者绑定会话。
 #[test]
-fn idle_session_timeout_reaps_managed_lease() {
+fn idle_session_timeout_retires_formal_session() {
     let temp = tempfile::tempdir().expect("create temp directory");
     let runtime_root = temp.path().join("runtime");
     let vulcan_plugin_root = runtime_root.join("plugins");
     fs::create_dir_all(&vulcan_plugin_root).expect("create Vulcan Plugin root");
     write_idle_session_package(&vulcan_plugin_root);
     let manager = test_manager(&runtime_root, vulcan_plugin_root);
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal stateless runtime");
     manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load idle plugin catalog");
@@ -35,7 +38,9 @@ fn idle_session_timeout_reaps_managed_lease() {
         .expect("invoke stateless tool");
     assert_eq!(stateless["accepted"], true);
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
     runtime
@@ -47,7 +52,9 @@ fn idle_session_timeout_reaps_managed_lease() {
         }))
         .expect("open idle session");
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         1
     );
     runtime.block_on(async {
@@ -55,7 +62,15 @@ fn idle_session_timeout_reaps_managed_lease() {
         // 回收器在一秒截止点启动，而异步关闭在全仓负载下可能稍后才完成。
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if manager.snapshot().plugins["idle-plugin"].active_session_count == 0 {
+                if manager
+                    .active_session_count("idle-plugin")
+                    .expect("actual live reservation count")
+                    == 0
+                    && manager
+                        .formal_sessions("owner-1")
+                        .expect("retained session registry")
+                        .is_empty()
+                {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -65,7 +80,9 @@ fn idle_session_timeout_reaps_managed_lease() {
         .expect("idle session should be reaped within the bounded shutdown window");
     });
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
 }
@@ -81,9 +98,13 @@ fn close_tool_retires_stale_generation_session() {
     write_idle_session_package(&vulcan_plugin_root);
     let manager = test_manager(&runtime_root, vulcan_plugin_root.clone());
     manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal session parent");
+    manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load idle plugin catalog");
     let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .expect("create Tokio test runtime");
     let opened = runtime
@@ -118,7 +139,9 @@ fn close_tool_retires_stale_generation_session() {
     assert_eq!(closed["closed"], true);
     assert_eq!(closed["result"]["closed_stale_generation"], true);
     assert_eq!(
-        manager.snapshot().plugins["idle-plugin"].active_session_count,
+        manager
+            .active_session_count("idle-plugin")
+            .expect("actual live reservation count"),
         0
     );
 }

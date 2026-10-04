@@ -73,8 +73,7 @@ impl MainBusinessHookPreparation {
         // No storage locks or asynchronous effects are held while updating the process-local Hook owner.
         // 更新进程内 Hook 所有者时不持有存储锁或异步效果。
         let mut hooks = runtime
-            .conversation_hook_runtime
-            .lock()
+            .lock_conversation_hooks()
             .map_err(|error| format!("Failed to lock business Hook runtime: {error}"))?;
         match self {
             Self::Initial(source) => hooks.discard_unpublished_business_preparation(source),

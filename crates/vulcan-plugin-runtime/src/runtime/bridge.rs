@@ -17,6 +17,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+mod embedded;
+pub(in crate::runtime) use embedded::PrivateHookHandoff;
+pub use embedded::{VulcanPluginBundlePoolRequest, VulcanPluginEmbeddedHost};
+
+/// Maximum encoded bytes in a plugin-local UI invalidation topic.
+/// 插件内界面失效主题的编码字节上限。
+const UI_INVALIDATION_TOPIC_MAX_BYTES: usize = 128;
+
 /// Fixed LuaSkills host-tool name used to resolve one manifest-declared plugin process.
 /// 用于解析单个清单声明插件进程的固定 LuaSkills 宿主工具名称。
 const VULCAN_PLUGIN_PROCESS_RESOLVE_TOOL: &str = "vulcan.plugin.process.resolve";
@@ -105,7 +113,7 @@ static VULCAN_PLUGIN_MANAGER_REGISTRY: OnceLock<
 /// Host-injected lease scope that binds bridge calls to one exact runtime lifecycle state.
 /// 宿主注入的租约作用域，把桥接调用绑定到一个精确运行时生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum VulcanPluginBridgeLeaseScope {
+pub enum VulcanPluginBridgeLeaseScope {
     /// Ordinary action, tool, or hook work accepted only while enabled.
     /// 仅在已启用状态接收的普通 Action、工具或 Hook 工作。
     Enabled,
@@ -130,6 +138,15 @@ pub(super) enum VulcanPluginBridgeLeaseScope {
 }
 
 impl VulcanPluginBridgeLeaseScope {
+    /// Return whether this trusted scope performs teardown that must remain possible after business requirements change.
+    /// 返回此可信作用域是否执行在业务必需条件变化后仍须可进行的清理。
+    pub(super) fn is_cleanup(self) -> bool {
+        matches!(
+            self,
+            Self::LifecycleDisable | Self::LifecycleEnableRollback | Self::LifecycleUninstall
+        )
+    }
+
     /// Returns the immutable wire value injected into the fixed Lua bridge.
     /// 返回注入固定 Lua 桥接层的不可变线协议值。
     ///
@@ -275,7 +292,6 @@ impl VulcanPluginRuntimeManager {
 fn dispatch_registered_plugin_host_tool_request(
     request: &RuntimeHostToolRequest,
 ) -> Result<Value, String> {
-    let _timing = super::action_status::HostCallTimer::start();
     if request.action != RuntimeHostToolAction::Call {
         return dispatch_plugin_host_tool_request(&Weak::new(), request);
     }
@@ -530,7 +546,9 @@ fn dispatch_plugin_storage_request(
         .clone()
         .ok_or_else(|| "Vulcan plugin storage service is unavailable.".to_string())?;
     storage_service.execute(VulcanPluginStorageRequest {
-        deadline: super::action_status::callback_deadline(),
+        // The generic legacy bridge has no Action authority; formal native calls carry their own deadline.
+        // 通用旧桥不具有 Action 权威；正式原生调用携带自身截止时间。
+        deadline: None,
         plugin_id: plugin_identity.to_string(),
         operation: storage_operation,
         payload: Value::Object(payload.clone()),
@@ -580,7 +598,9 @@ fn dispatch_plugin_vldb_request(
         .clone()
         .ok_or_else(|| "Vulcan plugin VLDB service is unavailable.".to_string())?;
     vldb_service.execute(VulcanPluginVldbRequest {
-        deadline: super::action_status::callback_deadline(),
+        // The generic legacy bridge has no Action authority; formal native calls carry their own deadline.
+        // 通用旧桥不具有 Action 权威；正式原生调用携带自身截止时间。
+        deadline: None,
         plugin_id: plugin_identity.to_string(),
         operation,
         payload: Value::Object(payload.clone()),
@@ -620,9 +640,9 @@ fn dispatch_plugin_ui_invalidation(
     let topic = payload
         .get("topic")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .filter(|value| !value.is_empty() && value.len() <= UI_INVALIDATION_TOPIC_MAX_BYTES)
         .ok_or_else(|| {
-            "Vulcan plugin UI invalidation requires a topic of 1 to 128 bytes.".to_string()
+            format!("Vulcan plugin UI invalidation requires a topic of 1 to {UI_INVALIDATION_TOPIC_MAX_BYTES} bytes.")
         })?;
     // revision is a monotonic plugin-owned data version.
     // revision 是插件持有的单调数据版本。

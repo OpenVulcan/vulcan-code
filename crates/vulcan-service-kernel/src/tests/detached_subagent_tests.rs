@@ -174,8 +174,15 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         child_maintenance_stops: BTreeMap::new(),
         terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        automatic_plugin_prewarm: BTreeMap::new(),
         session_runtime_registry: Default::default(),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
+        pending_local_plugin_updates: Arc::new(Default::default()),
+        pending_legacy_secret_mutations: Arc::new(Default::default()),
+        pending_local_plugin_installs: Arc::new(Default::default()),
+        // Actual original removal resources survive executor failures.
+        // 实际原移除资源跨执行器失败存续。
+        pending_local_plugin_uninstalls: Arc::new(Default::default()),
         project_resource_catalog_registry: Default::default(),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),

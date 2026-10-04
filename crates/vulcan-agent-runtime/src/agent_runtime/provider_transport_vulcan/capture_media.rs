@@ -34,7 +34,9 @@ pub(super) async fn prepare_capture_user_media(
         .collect::<Vec<_>>();
     // The host enforces upload-free capture using the same frozen execution as final encoding.
     // 宿主使用与最终编码相同的冻结执行强制无上传捕获。
-    let replacements = projection.project_capture(&source_ids, context.clone()).await?;
+    let replacements = projection
+        .project_capture(&source_ids, context.clone())
+        .await?;
     apply_capture_media(
         &request.controller_snapshot.messages,
         &request.source_message_positions,

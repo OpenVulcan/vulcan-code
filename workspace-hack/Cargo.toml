@@ -43,7 +43,7 @@ futures-task = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["std"] }
-half = { version = "2", default-features = false, features = ["bytemuck", "num-traits", "std"] }
+half = { version = "2", features = ["bytemuck", "num-traits"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16" }
 hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
@@ -56,6 +56,7 @@ jieba-rs = { version = "0.10" }
 libc = { version = "0.2", features = ["extra_traits"] }
 litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 lock_api = { version = "0.4", features = ["arc_lock"] }
+luaskills = { version = "0.6", default-features = false, features = ["contract-generation"] }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
@@ -73,11 +74,12 @@ regex-automata = { version = "0.4", default-features = false, features = ["dfa",
 regex-syntax = { version = "0.8" }
 reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13", default-features = false, features = ["blocking", "brotli", "charset", "default-tls", "deflate", "form", "gzip", "http2", "json", "multipart", "stream", "system-proxy", "zstd"] }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12", default-features = false, features = ["blocking", "charset", "gzip", "http2", "json", "macos-system-configuration", "multipart", "rustls-tls", "rustls-tls-native-roots", "stream"] }
+rusqlite = { version = "0.40", features = ["bundled", "column_decltype", "limits", "pointer"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "aws_lc_rs", "logging", "ring", "std", "tls12"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "ring", "std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", features = ["alloc", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+serde_json = { version = "1", features = ["alloc", "float_roundtrip", "raw_value"] }
 simd-adler32 = { version = "0.3" }
 slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
@@ -110,6 +112,7 @@ aho-corasick = { version = "1" }
 bytes = { version = "1" }
 cc = { version = "1", default-features = false, features = ["parallel"] }
 crc32fast = { version = "1" }
+digest = { version = "0.10", features = ["mac", "std"] }
 either = { version = "1", features = ["use_std"] }
 fastrand = { version = "2" }
 foldhash = { version = "0.2" }
@@ -130,11 +133,13 @@ regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 serde_core = { version = "1", features = ["alloc", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+serde_json = { version = "1", features = ["alloc", "float_roundtrip", "raw_value"] }
+subtle = { version = "2", default-features = false, features = ["const-generics"] }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "full", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 tempfile = { version = "3" }
 time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
+typenum = { version = "1", default-features = false, features = ["const-generics"] }
 
 [target.x86_64-pc-windows-msvc.dependencies]
 async-compression = { version = "0.4", default-features = false, features = ["brotli", "gzip", "tokio", "zlib", "zstd"] }

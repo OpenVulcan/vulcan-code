@@ -1527,6 +1527,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           luaInstallDialogOpen={luaInstallDialogOpen}
           onLuaInstallDialogOpenChange={setLuaInstallDialogOpen}
           onOpenDiagnostics={props.onOpenRuntimeDiagnostics}
+          onSelectPluginResourceOwner={props.onSelectPluginResourceOwner}
           skillActions={props.luaSkillActions}
           workbench={props.workbench}
         />

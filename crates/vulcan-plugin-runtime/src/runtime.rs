@@ -1,21 +1,49 @@
-//! Long-lived generic Vulcan Plugin session runtime backed by LuaSkills leases.
-//! 由 LuaSkills 租约承载的长生命周期通用 Vulcan 插件会话运行时。
+//! Generic Vulcan Plugin execution owned by the formal LuaSkills parent runtime.
+//! 由正式 LuaSkills 父运行时持有的通用 Vulcan 插件执行。
 
 mod action_status;
 mod actions;
 mod authorization;
+pub(crate) use authorization::plugin_required_permissions;
 mod bridge;
+mod candidates;
+pub use candidates::{
+    VulcanPluginMcpPredecessorControl, VulcanPluginMcpPredecessorHandoffGuard,
+    VulcanPluginMcpPredecessorStartGuard, VulcanPluginMcpTargetControl,
+    VulcanPluginMcpTargetHandoffGuard, VulcanPluginMcpTargetStartGuard,
+    VulcanPluginPredecessorMcpProfile, VulcanPluginPreparedMcpCandidate,
+    VulcanPluginPreparedMcpPredecessor, VulcanPluginPreparedMcpTarget,
+    VulcanPluginPreparedPublishedMcp, VulcanPluginPublishedMcpProfile,
+    VulcanPluginPublishedMcpStartGuard, VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginTargetMcpProfile,
+};
 mod configuration;
+pub(crate) use configuration::validate_plugin_config_value;
 mod drain;
+mod update_drain;
+pub use update_drain::{
+    VulcanPluginPredecessorDrain, VulcanPluginPredecessorDrainDiagnostics,
+    VulcanPluginPredecessorRestoration, VulcanPluginPredecessorRestorationFailure,
+    VulcanPluginPredecessorRestorationSource, VulcanPluginPredecessorRestoreEvidence,
+};
 mod environment;
 mod execution;
+mod formal;
 mod installation;
 mod lease;
+mod legacy_lifecycle;
+pub use legacy_lifecycle::VulcanPluginLegacyLifecycleEvent;
 mod lifecycle;
 mod local_files;
 mod persistent;
+mod private_hooks;
 mod process;
+mod recovery;
+mod routing;
+pub use routing::VulcanPluginRoutingReservation;
+mod requirements;
 mod sessions;
+mod settings;
 
 // Preserve the existing public plugin API at its original module path.
 // 在原模块路径保留既有公开插件API。
@@ -26,43 +54,85 @@ pub use authorization::{
     VulcanPluginPermissionPreview, plugin_permission_key,
 };
 
-use bridge::{VulcanPluginBridgeLeaseScope, canonical_bridge_workspace_root, required_json_string};
-pub use drain::VulcanPluginDrainReport;
-pub use installation::{VulcanPluginInstallationResult, VulcanPluginUpdateTransaction};
-use lease::{
-    call_engine_blocking, close_raw_system_lease_sync, close_system_lease_sync,
-    parse_engine_response,
+pub use bridge::{
+    VulcanPluginBridgeLeaseScope, VulcanPluginBundlePoolRequest, VulcanPluginEmbeddedHost,
 };
-pub use lifecycle::VulcanPluginLifecycleEvent;
+use bridge::{canonical_bridge_workspace_root, required_json_string};
+pub use drain::VulcanPluginDrainReport;
+mod native_identity;
+pub use formal::{
+    VulcanPluginActivationPredecessorCompletion,
+    VulcanPluginActivationPredecessorHandoffParticipant,
+    VulcanPluginActivationPredecessorRegistration, VulcanPluginActivationTargetCompletion,
+    VulcanPluginActivationTargetHandoffParticipant, VulcanPluginActivationTargetRegistration,
+    VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
+    VulcanPluginAutomaticPrewarmTrigger, VulcanPluginCapacityControlAction,
+    VulcanPluginCapacityControlRequest, VulcanPluginCapacityRegistrationRequest,
+    VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityCatalog,
+    VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
+    VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
+    VulcanPluginLegacyLifecycleCall, VulcanPluginMcpPredecessorHandoffEvidence,
+    VulcanPluginMcpTargetHandoffEvidence, VulcanPluginNativeMcpHandoffAdapter,
+    VulcanPluginNativeMcpPredecessorHandoffAdapter, VulcanPluginPrewarmTargetRequest,
+    VulcanPluginPrewarmTargetStatus, VulcanPluginResourceDiagnostic,
+    VulcanPluginResourceDiagnostics, VulcanPluginResourceErrorDiagnostic, VulcanPluginResourceKind,
+    VulcanPluginResourceOperationDiagnostic, VulcanPluginReusableDomainStatus,
+};
+pub use installation::{
+    VulcanPluginDeactivationStateObservation, VulcanPluginDeactivationStateReservation,
+    VulcanPluginInstallationResult, VulcanPluginInstallationTransaction,
+    VulcanPluginLegacyUninstallationObservation, VulcanPluginLegacyUninstallationReservation,
+};
+pub use lifecycle::{
+    VulcanPluginActivationPredecessorPublication, VulcanPluginActivationTargetPublication,
+    VulcanPluginLifecycleEvent,
+};
 use local_files::{
     canonical_plugin_file, copy_plugin_directory_tree, read_plugin_json_state,
     write_plugin_json_record,
 };
+pub use native_identity::{
+    VulcanPluginNativeIdentityCallback, VulcanPluginNativeIdentityEvent,
+    VulcanPluginNativeIdentitySubscription, install_native_identity_observer,
+};
 pub use process::VulcanPluginMcpStdioLaunchSpec;
 pub use sessions::VulcanPluginInvocationRequest;
 use sessions::plugin_payload;
-
-use crate::{
-    VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginManifest,
-    VulcanPluginRuntimeState,
+pub use settings::{
+    VulcanPluginAutomaticPrewarmRule, VulcanPluginBudgetSource, VulcanPluginCapacityBudgetSource,
+    VulcanPluginCapacityPolicyPhase, VulcanPluginCapacityPolicyRecord,
+    VulcanPluginCapacityPolicyUpdate, VulcanPluginCapacityPurpose, VulcanPluginPrewarmPolicyPhase,
+    VulcanPluginPrewarmPolicyRecord, VulcanPluginPrewarmPolicyStatus,
+    VulcanPluginPrewarmPolicyUpdate, VulcanPluginRuntimeSettings, load_plugin_runtime_settings,
 };
+
+use crate::{VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginRuntimeState};
 use luaskills::LuaEngine;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-/// Maximum Lua execution time shared by bundle loading and lifecycle probing.
-/// bundle加载与生命周期探测共用的Lua最大执行时长。
+/// Sole enabling-probe budget covers registered preparation and actual module initialization.
+/// 唯一启用探测预算覆盖已登记准备及实际模块初始化。
 const VULCAN_PLUGIN_PROBE_TIMEOUT_MS: u64 = 5_000;
 
 /// Default Lua execution time used when one hook declaration omits a timeout.
 /// hook 声明省略超时时使用的 Lua 默认执行时长。
 const VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS: u64 = 60_000;
+
+/// Sole default shutdown budget for formal host finalizers and explicit host drains.
+/// 正式宿主关闭器及显式宿主排空的唯一默认关闭预算。
+const VULCAN_PLUGIN_DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
+
+/// Exact backend implemented by every production plugin route and checked against manifest requirements.
+/// 全部生产插件路由实现并用于清单要求检查的精确后端。
+pub(crate) const VULCAN_PLUGIN_EXECUTION_BACKEND: luaskills::runtime::embedded::ExecutionBackend =
+    luaskills::runtime::embedded::ExecutionBackend::InProcess;
 
 /// Structured generic plugin runtime failure.
 /// 结构化的通用插件运行时失败。
@@ -103,76 +173,6 @@ impl fmt::Display for VulcanPluginRuntimeError {
 
 impl Error for VulcanPluginRuntimeError {}
 
-/// One owner-bound managed plugin session.
-/// 单个绑定所有者的受管插件会话。
-struct ManagedVulcanPluginSession {
-    /// Public host-owned session identifier.
-    /// 宿主自有的公开会话标识。
-    session_id: String,
-    /// Stable owning plugin identifier.
-    /// 稳定的所属插件标识。
-    plugin_id: String,
-    /// Host plugin generation captured when the session opened.
-    /// 会话打开时捕获的宿主插件代次。
-    plugin_generation: u64,
-    /// Stable controller session owner.
-    /// 稳定的控制器会话所有者。
-    owner_session_id: String,
-    /// LuaSkills managed lease identifier.
-    /// LuaSkills 受管租约标识。
-    lease_id: String,
-    /// Stable LuaSkills session identifier returned with the managed lease.
-    /// 与受管租约一同返回的稳定 LuaSkills 会话标识。
-    sid: String,
-    /// LuaSkills managed lease generation.
-    /// LuaSkills 受管租约代次。
-    generation: u64,
-    /// Manifest revision captured when the session opened.
-    /// 会话打开时捕获的插件清单。
-    manifest: Arc<VulcanPluginManifest>,
-    /// Serial operation gate required by ordered stateful protocols.
-    /// 有序有状态协议要求的串行操作门。
-    operation_gate: AsyncMutex<()>,
-    /// Whole-session close gate that makes concurrent lifecycle drains wait for one owner.
-    /// 使并发生命周期排空等待唯一关闭所有者的完整会话关闭门。
-    close_gate: AsyncMutex<()>,
-    /// Closing state used to reject late operations.
-    /// 用于拒绝迟到操作的关闭状态。
-    closing: AtomicBool,
-    /// Last successful or attempted activity timestamp in Unix milliseconds.
-    /// 最近一次成功或尝试活动的 Unix 毫秒时间戳。
-    last_activity_unix_ms: AtomicU64,
-}
-
-/// One persistent plugin-level Lua lease dedicated to one handler category and plugin generation.
-/// 专用于一个处理器类别和插件代次的持久插件级 Lua 租约。
-struct ManagedVulcanPluginHookRuntime {
-    /// Stable owning plugin identifier.
-    /// 稳定的所属插件标识。
-    plugin_id: String,
-    /// Host plugin generation captured when the hook runtime opened.
-    /// hook 运行时打开时捕获的宿主插件代次。
-    plugin_generation: u64,
-    /// LuaSkills managed lease identifier.
-    /// LuaSkills 受管租约标识。
-    lease_id: String,
-    /// Stable LuaSkills session identifier returned with the managed lease.
-    /// 与受管租约一同返回的稳定 LuaSkills 会话标识。
-    sid: String,
-    /// LuaSkills managed lease generation.
-    /// LuaSkills 受管租约代次。
-    generation: u64,
-    /// Manifest revision captured when the hook runtime opened.
-    /// hook 运行时打开时捕获的插件清单。
-    manifest: Arc<VulcanPluginManifest>,
-    /// Serial gate that preserves deterministic plugin-local hook state.
-    /// 保持插件本地 hook 状态确定性的串行门。
-    operation_gate: AsyncMutex<()>,
-    /// Closing state used to reject late invocations.
-    /// 用于拒绝迟到调用的关闭状态。
-    closing: AtomicBool,
-}
-
 /// Persistent runtime category used to isolate latency-sensitive hooks from plugin UI actions.
 /// 用于隔离延迟敏感 Hook 与插件界面 Action 的持久运行时类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -186,15 +186,6 @@ enum VulcanPluginPersistentRuntimeKind {
 }
 
 impl VulcanPluginPersistentRuntimeKind {
-    /// Returns the stable managed-lease identifier for this runtime category.
-    /// 返回当前运行时类别的稳定受管租约标识。
-    fn lease_id(self) -> &'static str {
-        match self {
-            Self::Hook => "enabled-plugin-hook-runtime",
-            Self::UiAction => "enabled-plugin-ui-action-runtime",
-        }
-    }
-
     /// Returns the diagnostic category label used in lifecycle errors.
     /// 返回生命周期错误使用的诊断类别标签。
     fn label(self) -> &'static str {
@@ -205,29 +196,10 @@ impl VulcanPluginPersistentRuntimeKind {
     }
 }
 
-/// One raw lease retained after a failed immediate cleanup so later lifecycle drains can retry it.
-/// 在立即清理失败后保留的原始租约，使后续生命周期排空可以重试。
-#[derive(Debug, Clone)]
-struct RetainedVulcanPluginLease {
-    /// Stable owning plugin identifier.
-    /// 稳定的所属插件标识。
-    plugin_id: String,
-    /// Optional controller session that caused this lease to be created.
-    /// 触发创建该租约的可选控制器会话。
-    owner_session_id: Option<String>,
-    /// LuaSkills managed lease identifier.
-    /// LuaSkills 受管租约标识。
-    lease_id: String,
-    /// Stable LuaSkills session identifier.
-    /// 稳定的 LuaSkills 会话标识。
-    sid: String,
-    /// LuaSkills managed lease generation.
-    /// LuaSkills 受管租约代次。
-    generation: u64,
-    /// Whether successful cleanup must release one plugin session slot.
-    /// 成功清理后是否必须释放一个插件会话名额。
-    reserved_session_slot: bool,
-}
+/// Weak admission gates are keyed by the exact plugin and persistent purpose.
+/// 弱入场门以精确插件及持久用途为键。
+type PersistentRuntimeGates =
+    BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>;
 
 /// Shared mutable state retained across runtime-foundation refreshes.
 /// 跨运行时基础刷新保留的共享可变状态。
@@ -235,9 +207,12 @@ struct VulcanPluginManagerState {
     /// Unique runtime identity injected into every fixed bridge host call.
     /// 注入每次固定桥接宿主调用的唯一运行时身份。
     manager_id: String,
-    /// Shared LuaSkills engine used for host-managed bridge leases.
-    /// 用于宿主受管桥接租约的共享 LuaSkills 引擎。
-    engine: RwLock<Option<Arc<RwLock<LuaEngine>>>>,
+    /// Immutable plugin engine; this lock guards only one-time attachment, never Lua execution.
+    /// 不可变插件引擎；此锁仅保护一次性附加，绝不包围 Lua 执行。
+    engine: RwLock<Option<Arc<LuaEngine>>>,
+    /// One formal parent runtime attached to this manager; the lock never spans Lua execution.
+    /// 附加到此管理器的单个正式父运行时；此锁绝不包围 Lua 执行。
+    formal_runtime: Mutex<Option<formal::FormalRuntimeAttachment>>,
     /// Root containing deployed Vulcan Plugin packages.
     /// 包含已部署 Vulcan 插件包的根目录。
     vulcan_plugin_root: PathBuf,
@@ -253,6 +228,9 @@ struct VulcanPluginManagerState {
     /// User-owned root containing plugin configuration, authorization, and install records.
     /// 包含插件配置、授权与安装记录的用户状态根目录。
     plugin_state_root: PathBuf,
+    /// One manager-local slot reuses compilation only for freshly read nonmanaged configuration schemas.
+    /// 单个管理器本地槽仅为刚读取的非受管配置 Schema 复用编译结果。
+    configuration_schema_cache: Mutex<Option<configuration::CompiledConfigurationSchema>>,
     /// User-owned root containing isolated plugin dependency environments.
     /// 包含隔离插件依赖环境的用户自有根目录。
     plugin_runtime_root: PathBuf,
@@ -268,29 +246,18 @@ struct VulcanPluginManagerState {
     /// Monotonic sidecar request identifier counter.
     /// 单调 sidecar 请求标识计数器。
     next_request_id: AtomicU64,
-    /// Active sessions keyed by public host identifier.
-    /// 以宿主公开标识为键的活动会话集合。
-    sessions: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginSession>>>,
     /// Short gate that orders catalog generation publication against final session registration.
     /// 对目录代次发布与最终会话注册进行排序的短同步门。
     session_registration_gate: Mutex<()>,
+    /// One weak actual-original reservation coordinates routing without owning execution or a File.
+    /// 单个实际原请求弱预留协调路由，不拥有执行权或文件。
+    routing_reservation: Mutex<std::sync::Weak<routing::RoutingReservationInner>>,
     /// Active session counts keyed by plugin identifier.
     /// 以插件标识为键的活动会话计数。
     active_session_counts: Mutex<BTreeMap<String, usize>>,
-    /// Persistent hook runtimes keyed by plugin identifier.
-    /// 以插件标识为键的持久 hook 运行时集合。
-    hook_runtimes: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
-    /// Persistent global UI action runtimes keyed by plugin identifier.
-    /// 以插件标识为键的持久全局界面 Action 运行时集合。
-    ui_action_runtimes: Mutex<BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
-    /// Raw leases retained after cleanup failures and keyed by lease identifier.
-    /// 清理失败后保留并以租约标识为键的原始租约集合。
-    retained_leases: Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
     /// Weak plugin/category gates shared by initialization and drain; inactive entries are reclaimed.
     /// 初始化与排空共享的插件及类别弱引用同步门；回收无人持有的条目。
-    persistent_runtime_gates: Mutex<
-        BTreeMap<(String, VulcanPluginPersistentRuntimeKind), std::sync::Weak<AsyncMutex<()>>>,
-    >,
+    persistent_runtime_gates: Mutex<PersistentRuntimeGates>,
     /// Bounded outstanding actions shared across lifecycle generations until actual cleanup.
     /// 跨生命周期代次共享的有界在途 Action，直至实际清理完成。
     action_admissions: Mutex<BTreeMap<String, std::sync::Weak<tokio::sync::Semaphore>>>,
@@ -303,62 +270,30 @@ struct VulcanPluginManagerState {
     /// Transient lifecycle overrides keyed by plugin identifier.
     /// 以插件标识为键的临时生命周期覆盖。
     lifecycle_overrides: Mutex<BTreeMap<String, VulcanPluginRuntimeState>>,
+    /// Original update owners remain retained through failed or interrupted predecessor retirement.
+    /// 原更新所有者跨失败或中断的前驱退役保持保留。
+    update_drains: Mutex<BTreeMap<String, Arc<update_drain::UpdateDrainAuthority>>>,
     /// Cleanup warnings retained after a plugin becomes disabled.
     /// 插件停用后保留的清理警告。
     cleanup_diagnostics: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Original startup recovery obligations survive refreshes and missing journal files.
+    /// 原始启动恢复义务在刷新及日志文件缺失后仍保留。
+    activation_recovery: Mutex<Option<recovery::ActivationRecovery>>,
 }
 
 impl Drop for VulcanPluginManagerState {
-    /// Closes every remaining managed lease during deterministic host shutdown.
-    /// 在宿主确定性关闭期间释放所有剩余受管租约。
+    /// Request formal shutdown; unfinished physical work remains owned by the core.
+    /// 请求正式关闭；未完成物理工作继续由核心持有。
+    /// No input or return value; only subsequent core polling proves termination.
+    /// 无参数或返回值；仅后续核心轮询证明终止。
     fn drop(&mut self) {
-        let sessions = self
-            .sessions
+        if let Some(owner) = self
+            .formal_runtime
             .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Ok(engine_slot) = self.engine.get_mut() else {
-            return;
-        };
-        let Some(engine) = engine_slot.as_ref() else {
-            return;
-        };
-        let Ok(engine) = engine.read() else {
-            return;
-        };
-        for session in sessions.values() {
-            let _ = close_system_lease_sync(&engine, session);
-        }
-        let hook_runtimes = self
-            .hook_runtimes
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for runtime in hook_runtimes.values() {
-            let _ = close_raw_system_lease_sync(
-                &engine,
-                &runtime.lease_id,
-                &runtime.sid,
-                runtime.generation,
-            );
-        }
-        let ui_action_runtimes = self
-            .ui_action_runtimes
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for runtime in ui_action_runtimes.values() {
-            let _ = close_raw_system_lease_sync(
-                &engine,
-                &runtime.lease_id,
-                &runtime.sid,
-                runtime.generation,
-            );
-        }
-        let retained_leases = self
-            .retained_leases
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for lease in retained_leases.values() {
-            let _ =
-                close_raw_system_lease_sync(&engine, &lease.lease_id, &lease.sid, lease.generation);
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            let _ = owner.runtime().request_close();
         }
     }
 }
@@ -397,20 +332,20 @@ impl fmt::Debug for VulcanPluginRuntimeManager {
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Creates one manager around the shared LuaSkills engine and deployed plugin root.
-    /// 围绕共享 LuaSkills 引擎与已部署插件根目录创建管理器。
+    /// Creates one manager around an immutable plugin engine and deployed plugin root.
+    /// 围绕不可变插件引擎与已部署插件根目录创建管理器。
     ///
     /// # Parameters
     /// 参数
-    /// `engine` is the shared LuaSkills engine and `vulcan_plugin_root` is the trusted package root.
-    /// `engine` 是共享 LuaSkills 引擎，`vulcan_plugin_root` 是受信任包根。
+    /// `engine` is separate from mutable ordinary-skill management; `vulcan_plugin_root` is the trusted package root.
+    /// `engine` 独立于可变普通技能管理；`vulcan_plugin_root` 是受信任包根。
     ///
     /// # Returns
     /// 返回值
     /// Returns a manager initialized with an empty catalog snapshot.
     /// 返回以空目录快照初始化的管理器。
     pub fn new(
-        engine: Arc<RwLock<LuaEngine>>,
+        engine: Arc<LuaEngine>,
         vulcan_plugin_root: PathBuf,
         user_plugin_root: PathBuf,
         bridge_package_root: PathBuf,
@@ -473,7 +408,7 @@ impl VulcanPluginRuntimeManager {
     /// A fully initialized shared manager.
     /// 返回完整初始化的共享管理器。
     fn new_with_optional_engine(
-        engine: Option<Arc<RwLock<LuaEngine>>>,
+        engine: Option<Arc<LuaEngine>>,
         vulcan_plugin_root: PathBuf,
         user_plugin_root: PathBuf,
         bridge_package_root: PathBuf,
@@ -489,28 +424,29 @@ impl VulcanPluginRuntimeManager {
             state: Arc::new(VulcanPluginManagerState {
                 manager_id: Uuid::new_v4().to_string(),
                 engine: RwLock::new(engine),
+                formal_runtime: Mutex::new(None),
                 vulcan_plugin_root,
                 user_plugin_root,
                 bridge_package_root,
                 managed_runtime_distribution_root,
                 plugin_state_root,
+                configuration_schema_cache: Mutex::default(),
                 plugin_runtime_root,
                 host_services: RwLock::new(VulcanPluginHostServices::default()),
                 snapshot: RwLock::new(snapshot),
                 next_revision: AtomicU64::new(1),
                 next_request_id: AtomicU64::new(1),
-                sessions: Mutex::new(BTreeMap::new()),
                 session_registration_gate: Mutex::new(()),
+                routing_reservation: Mutex::new(std::sync::Weak::new()),
                 active_session_counts: Mutex::new(BTreeMap::new()),
-                hook_runtimes: Mutex::new(BTreeMap::new()),
-                ui_action_runtimes: Mutex::new(BTreeMap::new()),
-                retained_leases: Mutex::new(BTreeMap::new()),
                 persistent_runtime_gates: Mutex::new(BTreeMap::new()),
                 action_admissions: Mutex::new(BTreeMap::new()),
                 action_records: Mutex::new(BTreeMap::new()),
                 plugin_generations: Mutex::new(BTreeMap::new()),
                 lifecycle_overrides: Mutex::new(BTreeMap::new()),
+                update_drains: Mutex::new(BTreeMap::new()),
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),
+                activation_recovery: Mutex::new(None),
             }),
         };
         if has_engine {
@@ -519,8 +455,8 @@ impl VulcanPluginRuntimeManager {
         manager
     }
 
-    /// Attaches the shared Lua engine used by executable plugins.
-    /// 附加执行型插件使用的共享 Lua 引擎。
+    /// Attaches the immutable execution engine used by plugins exactly once.
+    /// 恰好附加一次插件使用的不可变执行引擎。
     ///
     /// # Parameters
     /// 参数
@@ -531,7 +467,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回值
     /// Returns unit after the engine and fixed bridge are published.
     /// 发布引擎与固定桥接后返回空值。
-    pub fn attach_runtime_engine(&self, engine: Arc<RwLock<LuaEngine>>) -> Result<(), String> {
+    pub fn attach_runtime_engine(&self, engine: Arc<LuaEngine>) -> Result<(), String> {
         let mut slot = self
             .state
             .engine
@@ -555,7 +491,7 @@ impl VulcanPluginRuntimeManager {
     /// 返回值
     /// The shared engine required by one executable plugin operation.
     /// 单次执行型插件操作所需的共享引擎。
-    fn runtime_engine(&self) -> Result<Arc<RwLock<LuaEngine>>, VulcanPluginRuntimeError> {
+    fn runtime_engine(&self) -> Result<Arc<LuaEngine>, VulcanPluginRuntimeError> {
         self.state
             .engine
             .read()
@@ -598,42 +534,6 @@ impl VulcanPluginRuntimeManager {
     pub fn plugin_state_root(&self) -> &Path {
         &self.state.plugin_state_root
     }
-}
-
-/// Acquires the shared active-session registry.
-/// 获取共享活动会话注册表。
-fn lock_sessions(
-    sessions: &Mutex<BTreeMap<String, Arc<ManagedVulcanPluginSession>>>,
-) -> Result<
-    MutexGuard<'_, BTreeMap<String, Arc<ManagedVulcanPluginSession>>>,
-    VulcanPluginRuntimeError,
-> {
-    sessions.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin session registry lock is poisoned.")
-    })
-}
-
-/// Acquires the shared persistent hook-runtime registry.
-/// 获取共享持久 hook 运行时注册表。
-fn lock_hook_runtimes(
-    runtimes: &Mutex<BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
-) -> Result<
-    MutexGuard<'_, BTreeMap<String, Arc<ManagedVulcanPluginHookRuntime>>>,
-    VulcanPluginRuntimeError,
-> {
-    runtimes.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin hook runtime registry lock is poisoned.")
-    })
-}
-
-/// Locks the retained raw-lease registry without silently recovering poisoned state.
-/// 锁定保留原始租约注册表，不静默恢复已中毒状态。
-fn lock_retained_leases(
-    leases: &Mutex<BTreeMap<String, RetainedVulcanPluginLease>>,
-) -> Result<MutexGuard<'_, BTreeMap<String, RetainedVulcanPluginLease>>, VulcanPluginRuntimeError> {
-    leases.lock().map_err(|_| {
-        VulcanPluginRuntimeError::new("Vulcan Plugin retained lease registry lock is poisoned.")
-    })
 }
 
 #[cfg(test)]

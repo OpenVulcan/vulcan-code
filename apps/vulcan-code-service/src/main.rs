@@ -13,6 +13,7 @@ mod desktop_integration;
 mod desktop_notifications;
 mod launch;
 mod logging;
+mod native_diagnostics;
 mod runtime_layout;
 mod service_runtime;
 #[cfg(feature = "desktop-tray")]

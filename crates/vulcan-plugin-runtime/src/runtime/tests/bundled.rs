@@ -1,6 +1,8 @@
 //! Integration tests for the real bundled plugin surfaces and authenticated VLDB requests.
 //! 真实内建插件暴露面与已认证VLDB请求的集成测试。
 
+mod prepared;
+
 use super::super::VulcanPluginActionRequest;
 use super::test_manager;
 use crate::{
@@ -265,6 +267,9 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     // manager loads the real repository package through the production catalog path.
     // manager 通过生产目录路径加载真实仓库插件包。
     let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach the production formal parent for persistent UI");
     // vldb records every authoritative logical-binding query emitted by the real Lua bundle.
     // vldb 记录真实 Lua Bundle 发出的每个权威逻辑绑定查询。
     let vldb = Arc::new(RecordingVldbService::default());
@@ -531,7 +536,19 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
             reuse_enabled_runtime: true,
         }))
         .expect_err("reject statistics VLDB access without capability");
-    assert!(capability_error.message.contains("system_vldb_access"));
+    assert!(capability_error.message.contains("no longer authorizes"));
+    assert!(
+        capability_error
+            .message
+            .contains("vulcan.vldb.sqlite.query.v1")
+    );
+    assert_eq!(
+        vldb.calls
+            .lock()
+            .expect("no call after permission withdrawal")
+            .len(),
+        24
+    );
 }
 
 /// Verifies the repository Context7 bundle loads through the LuaSkills typed JSON surface.
@@ -554,6 +571,11 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
     // manager loads the production catalog and fixed bridge sources.
     // manager 加载生产插件目录与固定桥源码。
     let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+    // Match production bootstrap: attach the parent before checking version-two admission.
+    // 对齐生产启动顺序：检查第二版入场前先附加父级。
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal Context7 probe parent");
     // disabled selects the real package for a host-owned enabling probe, not a Hook-only no-op.
     // disabled为真实插件选择宿主持有的启用探测，而不是仅Hook预热的空操作。
     let disabled = BTreeSet::from([String::from("context7")]);
@@ -578,8 +600,8 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
     manager
         .begin_enabling("context7")
         .expect("begin Context7 enabling probe");
-    // runtime executes the real Context7 module initialization under LuaSkills 0.5.5.
-    // runtime 在 LuaSkills 0.5.5 下执行真实 Context7 模块初始化。
+    // runtime executes real Context7 initialization through the attached formal parent.
+    // runtime 通过已附加正式父级执行真实 Context7 初始化。
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -594,6 +616,51 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
 #[cfg(target_os = "windows")]
 #[test]
 fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
+    // Run this integration in its own process so RTK history stays private without mutating shared process environment.
+    // 在独立进程运行此集成，使 RTK 历史保持私有，而不修改共享进程环境。
+    const CHILD_MARKER: &str = "VULCAN_RTK_INTEGRATION_CHILD";
+    if std::env::var_os(CHILD_MARKER).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        // An empty real database bounds fixture work independently from the user's history size or concurrent commands.
+        // 空的真实数据库使夹具工作独立于用户历史大小及并发命令而保持有界。
+        let history = tempfile::tempdir().expect("isolated RTK history");
+        // The child CLI owns this one test database until the subprocess has finished.
+        // 子 CLI 在子进程结束前拥有此单个测试数据库。
+        let database = history.path().join("history.db");
+        // The current test executable preserves the exact compiled runtime and production plugin path.
+        // 当前测试程序保留精确已编译运行时及生产插件路径。
+        let executable = std::env::current_exe().expect("integration test executable");
+        // Derive the current harness entry from its real module identity rather than a source line or test index.
+        // 从真实模块身份派生当前测试入口，不使用源码行或测试下标。
+        let test_path = concat!(
+            module_path!(),
+            "::bundled_rtk_plugin_uses_generic_action_and_hook_boundaries"
+        );
+        // Rust's test harness omits only the crate prefix from the declared module path.
+        // Rust 测试器仅从声明模块路径省略 crate 前缀。
+        let (_, test_name) = test_path
+            .split_once("::")
+            .expect("crate-qualified test name");
+        // Child-local environment keeps other tests and the user's running RTK commands untouched.
+        // 子进程局部环境保持其他测试及用户正在运行的 RTK 命令不变。
+        let output = std::process::Command::new(executable)
+            .args([test_name, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD_MARKER, "1")
+            .env("RTK_DB_PATH", &database)
+            .env("RTK_TELEMETRY_DISABLED", "1")
+            .output()
+            .expect("isolated RTK integration process");
+        assert!(
+            output.status.success(),
+            "RTK integration failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            database.is_file(),
+            "RTK integration must use the private history database"
+        );
+        return;
+    }
     let temp = tempfile::tempdir().expect("create RTK plugin test directory");
     let runtime_root = temp.path().join("runtime");
     fs::create_dir_all(&runtime_root).expect("create RTK test runtime root");
@@ -604,6 +671,9 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
         .expect("resolve repository root");
     let workspace_root = repository_root.to_path_buf();
     let manager = test_manager(&runtime_root, repository_root.join("plugins"));
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal RTK Hook parent");
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load repository plugin catalog");
@@ -652,7 +722,10 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
             reuse_enabled_runtime: true,
         }))
         .expect("invoke RTK statistics action");
-    assert_eq!(statistics["available"], true);
+    assert_eq!(
+        statistics["available"], true,
+        "RTK statistics result: {statistics}"
+    );
     assert!(statistics["byCommand"].is_array());
 
     let invocation = HookInvocation {

@@ -30,6 +30,7 @@ pub type HookListenerId = String;
 /// 描述 hook 点位期望的行为类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum HookMode {
     /// Observes a runtime event without changing the payload or control flow.
     /// 观察运行时事件，不修改 payload 或控制流。
@@ -110,6 +111,7 @@ impl HookPointDescriptor {
 /// 描述拥有某个 hook 注册项的配置层级。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum HookScope {
     /// Registration applies to the whole application.
     /// 注册项应用于整个应用。
@@ -137,6 +139,7 @@ impl Default for HookScope {
 /// 描述单个 hook 失败时调度器应如何响应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum HookFailurePolicy {
     /// Record the failure and continue running later hooks.
     /// 记录失败并继续运行后续 hook。
@@ -305,6 +308,7 @@ impl SystemPromptHookBlock {
 /// 声明 hook 可向宿主请求的一项能力。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum HookCapability {
     /// Read visible conversation history.
     /// 读取可见会话历史。

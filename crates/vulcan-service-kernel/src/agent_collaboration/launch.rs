@@ -357,8 +357,7 @@ pub(super) async fn wake_accepted_question(
     let start = {
         let _state_guard = invocation.state.lock().map_err(|error| error.to_string())?;
         let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
+            .lock_conversation_hooks()
             .map_err(|error| error.to_string())?;
         begin_shared_prompt_turn(
             &mut workspace,

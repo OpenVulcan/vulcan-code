@@ -33,19 +33,26 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::McpTransportResources;
 use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
 use crate::error::McpRuntimeError;
 use crate::http_support::parse_http_headers_to_header_map;
+use crate::resources::RetainedResource;
 use crate::rmcp_support::{
     build_rmcp_call_tool_request_params, project_rmcp_tool_result,
     rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources, rmcp_tool_to_schema,
 };
+use crate::shutdown::TransportShutdown;
 use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 
 /// Background response channel sender keyed by JSON-RPC request id.
 /// 按 JSON-RPC 请求标识索引的后台响应通道发送端。
 type PendingResponseMap =
     Arc<Mutex<HashMap<String, oneshot::Sender<Result<ServerJsonRpcMessage, McpRuntimeError>>>>>;
+
+/// Sole reconnect delay for the legacy listener; shutdown interrupts this wait.
+/// 旧式监听器重连延迟的唯一定义；关闭中断此等待。
+const SSE_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 /// Legacy SSE MCP client transport.
 /// 旧式 SSE MCP 客户端传输。
@@ -55,7 +62,7 @@ pub struct SseTransport {
     endpoint: String,
     /// Shared HTTP client used by the stream and message posts.
     /// 被事件流和消息 POST 复用的共享 HTTP 客户端。
-    http_client: Client,
+    http_client: RetainedResource<Client>,
     /// Optional bearer token attached to outgoing requests.
     /// 附加到外发请求中的可选 Bearer Token。
     bearer_token: Option<String>,
@@ -77,9 +84,9 @@ pub struct SseTransport {
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
-    /// Join handle proving the background listener has observed shutdown and exited.
-    /// 用于证明后台监听器已观察到关闭并退出的 Join Handle。
-    listener_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Shared close operation retaining the listener until its actual completion.
+    /// 保留监听器直至实际结束的共享关闭操作。
+    shutdown: TransportShutdown,
     /// Optional shared host-owned OAuth session reused across reconnects.
     /// 在重连之间复用的可选共享宿主自有 OAuth 会话。
     auth_session: Option<Arc<McpOAuthSession>>,
@@ -89,21 +96,27 @@ pub struct SseTransport {
 }
 
 impl SseTransport {
-    /// Connect to one legacy SSE MCP endpoint and perform the initialize handshake.
-    /// 连接到一个旧式 SSE MCP 端点并完成 initialize 握手。
-    pub async fn connect(
+    /// Connects while retaining exact host resources in the client, listener and response stream.
+    /// 连接并在客户端、监听器及响应流中保留精确宿主资源。
+    /// Endpoint labels the server; sse_url, token, headers and auth_session define the request policy.
+    /// endpoint 标识服务器；sse_url、令牌、请求头及 auth_session 定义请求策略。
+    /// Resources owns the frozen host authority; returns the initialized transport or an explicit error.
+    /// resources 拥有冻结宿主权威；返回已初始化传输或明确错误。
+    pub async fn connect_with_resources(
         endpoint: impl Into<String>,
         sse_url: impl Into<String>,
         bearer_token: Option<String>,
         custom_headers: HashMap<String, String>,
         auth_session: Option<Arc<McpOAuthSession>>,
+        resources: McpTransportResources,
     ) -> Result<Self, McpRuntimeError> {
         let sse_url = Url::parse(&sse_url.into()).map_err(|error| {
             McpRuntimeError::invalid_argument(format!("invalid legacy SSE MCP url: {error}"))
         })?;
-        let http_client = Client::builder()
-            .build()
-            .map_err(|error| McpRuntimeError::transport(format!("build SSE client: {error}")))?;
+        let http_client =
+            resources.retain(Client::builder().build().map_err(|error| {
+                McpRuntimeError::transport(format!("build SSE client: {error}"))
+            })?);
         let custom_headers = parse_http_headers_to_header_map(custom_headers)?;
         let pending_responses = Arc::new(Mutex::new(HashMap::new()));
         let (message_endpoint_tx, message_endpoint_rx) = watch::channel(None);
@@ -122,6 +135,15 @@ impl SseTransport {
             auth_session: auth_session.clone(),
         });
 
+        // The close worker retains the original listener even if its observer goes away.
+        // 即使观察者退出，关闭工作任务仍保留原监听器。
+        let close_token = shutdown_token.clone();
+        let shutdown = TransportShutdown::new("mcp.shutdown(sse)", async move {
+            close_token.cancel();
+            listener_task.await.map_err(|error| {
+                McpRuntimeError::transport(format!("mcp.shutdown(sse).join: {error}"))
+            })
+        });
         let mut transport = Self {
             endpoint: endpoint.into(),
             http_client,
@@ -132,13 +154,36 @@ impl SseTransport {
             next_request_id: AtomicU64::new(1),
             shutdown_token,
             event_sender,
-            listener_task: Mutex::new(Some(listener_task)),
+            shutdown,
             auth_session,
             capabilities: ServerCapabilities::default(),
         };
 
         transport.capabilities = transport.initialize().await?;
         Ok(transport)
+    }
+
+    /// Connect to one legacy SSE MCP endpoint and perform the initialize handshake.
+    /// 连接到一个旧式 SSE MCP 端点并完成 initialize 握手。
+    pub async fn connect(
+        endpoint: impl Into<String>,
+        sse_url: impl Into<String>,
+        bearer_token: Option<String>,
+        custom_headers: HashMap<String, String>,
+        auth_session: Option<Arc<McpOAuthSession>>,
+    ) -> Result<Self, McpRuntimeError> {
+        // Empty host ownership preserves the original public connection API.
+        // 空宿主所有权保留原公开连接接口。
+        let (resources, _) = McpTransportResources::new(());
+        Self::connect_with_resources(
+            endpoint,
+            sse_url,
+            bearer_token,
+            custom_headers,
+            auth_session,
+            resources,
+        )
+        .await
     }
 
     /// Perform the MCP initialize handshake on the legacy message endpoint.
@@ -184,7 +229,7 @@ impl SseTransport {
     ) -> Result<(), McpRuntimeError> {
         let message_endpoint = self.resolve_message_endpoint().await?;
         let response = post_client_message(
-            &self.http_client,
+            self.http_client.as_ref(),
             &message_endpoint,
             &self.bearer_token,
             &self.custom_headers,
@@ -211,7 +256,7 @@ impl SseTransport {
 
         let message_endpoint = self.resolve_message_endpoint().await?;
         let post_result = post_client_message(
-            &self.http_client,
+            self.http_client.as_ref(),
             &message_endpoint,
             &self.bearer_token,
             &self.custom_headers,
@@ -322,21 +367,20 @@ impl McpTransport for SseTransport {
 
     /// Cancels the legacy SSE listener and waits for its exact background task to exit.
     /// 取消 legacy SSE 监听器并等待其精确后台任务退出。
+    /// Returns the shared listener result; timeout and cancellation do not discard its join.
+    /// 返回共享监听器结果；超时和取消不丢弃其等待句柄。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
         self.shutdown_token.cancel();
-        let listener_task = self.listener_task.lock().await.take();
-        let Some(listener_task) = listener_task else {
-            return Ok(());
-        };
-        match timeout(Duration::from_secs(5), listener_task).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(McpRuntimeError::transport(format!(
-                "mcp.shutdown(sse).join: {error}"
-            ))),
-            Err(_) => Err(McpRuntimeError::transport(
-                "mcp.shutdown(sse) timed out after 5 seconds",
-            )),
-        }
+        self.shutdown.wait().await
+    }
+
+    /// Waits for the exact cancelled SSE listener to finish without discarding its join handle.
+    /// 等待已取消的精确 SSE 监听器结束，不丢弃其等待句柄。
+    /// No inputs; returns the listener's terminal result or explicit interruption.
+    /// 无输入；返回监听器终态结果或明确中断。
+    async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
+        self.shutdown_token.cancel();
+        self.shutdown.wait_until_complete().await
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
@@ -564,7 +608,7 @@ impl McpTransport for SseTransport {
 struct SseListenerInput {
     /// HTTP client reused for reconnecting the SSE stream.
     /// 用于重连 SSE 流的复用 HTTP 客户端。
-    http_client: Client,
+    http_client: RetainedResource<Client>,
     /// Legacy SSE endpoint URL.
     /// 旧式 SSE 端点地址。
     sse_url: Url,
@@ -612,15 +656,20 @@ fn spawn_sse_listener(input: SseListenerInput) -> tokio::task::JoinHandle<()> {
                 break;
             }
 
-            let response = match open_sse_stream(
-                &http_client,
+            // Opening a response can wait indefinitely for headers; cancellation must cover that wait.
+            // 打开响应可能无限等待响应头；取消必须覆盖此等待。
+            let open_result = tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => return,
+                result = open_sse_stream(
+                http_client.as_ref(),
                 &sse_url,
                 &bearer_token,
                 &custom_headers,
                 auth_session.as_ref(),
-            )
-            .await
-            {
+                ) => result,
+            };
+            let response = match open_result {
                 Ok(response) => response,
                 Err(_) => {
                     if observed_connection {
@@ -629,13 +678,20 @@ fn spawn_sse_listener(input: SseListenerInput) -> tokio::task::JoinHandle<()> {
                         });
                         observed_connection = false;
                     }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::select! {
+                        biased;
+                        _ = shutdown_token.cancelled() => return,
+                        _ = tokio::time::sleep(SSE_RECONNECT_DELAY) => {}
+                    }
                     continue;
                 }
             };
 
             observed_connection = true;
-            let mut stream = SseStream::from_bytes_stream(response.bytes_stream());
+            // The response has independent ownership even when its creating client is dropped.
+            // 创建客户端释放后，响应仍有独立所有权。
+            let mut stream =
+                http_client.retain(SseStream::from_bytes_stream(response.bytes_stream()));
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
@@ -666,7 +722,11 @@ fn spawn_sse_listener(input: SseListenerInput) -> tokio::task::JoinHandle<()> {
                 });
                 observed_connection = false;
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => return,
+                _ = tokio::time::sleep(SSE_RECONNECT_DELAY) => {}
+            }
         }
     })
 }

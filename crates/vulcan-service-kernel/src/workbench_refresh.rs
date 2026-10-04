@@ -285,6 +285,14 @@ async fn refresh_workbench_snapshot_with_selected_session(
     let vulcan_plugin_catalog = agent_runtime_for_status
         .as_ref()
         .and_then(|agent_runtime| agent_runtime.extension_generation.plugin_catalog());
+    // UI observation overlays only the retained Full catalog; it never replaces that routing Arc.
+    // 界面观测仅覆盖保留 Full 目录，不替换该路由 Arc。
+    let observed_plugin_catalog = agent_runtime_for_status
+        .as_ref()
+        .zip(vulcan_plugin_catalog.as_ref())
+        .map(|(runtime, catalog)| runtime.vulcan_plugin_runtime.observe_catalog(catalog))
+        .transpose()
+        .map_err(|error| error.to_string())?;
     let mcp_server_states = agent_runtime_for_status
         .as_ref()
         .map(|agent_runtime| {
@@ -336,7 +344,7 @@ async fn refresh_workbench_snapshot_with_selected_session(
             .as_ref()
             .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         luaskills_catalog: &luaskills_catalog,
-        vulcan_plugin_catalog: vulcan_plugin_catalog.as_deref(),
+        vulcan_plugin_catalog: observed_plugin_catalog.as_ref(),
         subagent_catalog: subagent_catalog.as_ref(),
         mcp_server_states: &mcp_server_states,
         mcp_catalog: &mcp_catalog,

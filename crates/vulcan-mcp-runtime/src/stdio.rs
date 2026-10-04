@@ -2,19 +2,16 @@
 //! 基于官方 `rmcp` SDK 的 stdio MCP 客户端传输。
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{self, Read};
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
-use rmcp::service::{Peer, RoleClient, RunningService, ServiceExt};
-use rmcp::transport::TokioChildProcess;
+use rmcp::service::{Peer, RoleClient, ServiceExt};
 use serde_json::Value;
-use tokio::io::AsyncReadExt;
-use tokio::process::ChildStderr;
 use tokio::process::Command;
-use tokio::sync::{Mutex as AsyncMutex, broadcast};
+use tokio::sync::broadcast;
 use vulcan_host_tools::{
     output_decode::decode_shell_output_bytes, process_creation::apply_windows_no_window,
 };
@@ -24,7 +21,20 @@ use crate::rmcp_support::{
     EventingClientHandler, call_rmcp_tool, get_rmcp_prompt, list_rmcp_prompts, list_rmcp_resources,
     list_rmcp_tools, read_rmcp_resource, spawn_rmcp_disconnect_watch,
 };
+use crate::shutdown::{TransportShutdown, observe_backend_close};
 use crate::transport::{McpServerIdentity, McpToolSchema, McpTransport, McpTransportEvent};
+
+mod child;
+mod child_backend;
+mod native_pipe;
+mod pipe_completion;
+use child_backend::ManagedChildBackend;
+use pipe_completion::PipeCompletion;
+
+#[cfg(test)]
+mod resource_tests;
+#[cfg(test)]
+mod stderr_tests;
 
 /// Maximum number of sanitized stderr chunks retained per stdio transport.
 /// 每个 stdio 传输保留的最大脱敏 stderr 分片数量。
@@ -45,9 +55,9 @@ pub struct StdioTransport {
     /// Cloneable rmcp client peer used for schema discovery and calls.
     /// 用于 schema 发现与调用的可克隆 rmcp 客户端 peer。
     peer: Peer<RoleClient>,
-    /// Keeps the rmcp service alive for the lifetime of the transport.
-    /// 在传输生命周期内保持 rmcp 服务存活。
-    service: AsyncMutex<Option<RunningService<RoleClient, Arc<EventingClientHandler>>>>,
+    /// Owns the rmcp service and its single shared close operation.
+    /// 拥有 rmcp 服务及其唯一共享关闭操作。
+    shutdown: TransportShutdown,
     /// Broadcast channel used to surface tool refresh and disconnect events.
     /// 用于对外广播工具刷新与断连事件的广播通道。
     event_sender: broadcast::Sender<McpTransportEvent>,
@@ -57,6 +67,92 @@ pub struct StdioTransport {
 }
 
 impl StdioTransport {
+    /// Spawns with host authority retained by the actual process and each native pipe.
+    /// 启动时由实际进程及每条原生管道保留宿主权威。
+    /// Endpoint identifies diagnostics; program, args, cwd, env and inherit_environment define the exact launch.
+    /// endpoint 标识诊断；program、args、cwd、env 及 inherit_environment 定义精确启动。
+    /// Resources is consumed before native work starts; its original receipt survives cancellation of initialization.
+    /// 原生工作开始前消费 resources；初始化取消后，其原回执继续存续。
+    /// Returns a connected transport or the original launch or handshake error; errors alone do not prove release.
+    /// 返回已连接传输或原启动及握手错误；错误本身不能证明释放。
+    pub async fn spawn_with_resources(
+        endpoint: impl Into<String>,
+        program: impl AsRef<std::ffi::OsStr>,
+        args: &[&str],
+        cwd: Option<&Path>,
+        env: &BTreeMap<String, String>,
+        inherit_environment: bool,
+        resources: crate::McpTransportResources,
+    ) -> Result<Self, McpRuntimeError> {
+        // Own the diagnostic label independently of borrowed launch arguments.
+        // 独立于借用启动参数，持有诊断标签。
+        let endpoint = endpoint.into();
+        // Preserve the exact native executable identity across initialization awaits.
+        // 跨初始化等待保留精确原生可执行文件身份。
+        let program = program.as_ref().to_owned();
+        // Owned arguments preserve the caller's declared ordering and values.
+        // 自有参数保留调用方声明的顺序及值。
+        let argv: Vec<String> = args.iter().map(|value| (*value).to_string()).collect();
+        // The existing builder remains the sole command normalization authority.
+        // 既有构造器保持命令规范化的唯一权威。
+        let cmd = build_child_command(&program, &argv, cwd, env, inherit_environment);
+        // sensitiveValues contains only exact injected values and is consumed solely by the stderr redactor.
+        // sensitiveValues 仅包含精确注入值，并且只由 stderr 脱敏器消费。
+        let mut sensitive_values = argv
+            .iter()
+            .chain(env.values())
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        sensitive_values.dedup();
+        // The native diagnostic owner shares only sanitized bounded output with observers.
+        // 原生诊断所有者仅向观察者共享有界脱敏输出。
+        let recent_logs = Arc::new(Mutex::new(VecDeque::new()));
+        // This clone moves into the native reader, which outlives the caller's executor when needed.
+        // 此克隆移入原生读取者，必要时比调用方执行器存续更久。
+        let capture_logs = Arc::clone(&recent_logs);
+        // Process and all three native pipe owners exist before protocol initialization begins.
+        // 协议初始化开始前，进程及三条原生管道的所有者均已建立。
+        let transport = ManagedChildBackend::spawn_with_resources(cmd, resources, move |stderr| {
+            spawn_sanitized_stderr_capture(stderr, sensitive_values, capture_logs)
+        })
+        .await
+        .map_err(|error| McpRuntimeError::transport(format!("mcp.spawn: {error}")))?;
+        // Preserve the actual backend close result independently of the official service join.
+        // 独立于官方服务任务等待，保留实际后端关闭结果。
+        let (transport, backend_close) = observe_backend_close(transport, "mcp.shutdown");
+        // Bounded events belong to this transport's existing public notification channel.
+        // 有界事件属于此传输既有公开通知通道。
+        let (event_sender, _) = broadcast::channel(32);
+        // The official service receives the existing host event handler.
+        // 官方服务接收既有宿主事件处理器。
+        let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
+        // Initialization may be cancelled while actual native owners retain host leases.
+        // 初始化可以取消，同时实际原生所有者保留宿主租约。
+        let service = handler
+            .serve(transport)
+            .await
+            .map_err(|error| McpRuntimeError::transport(format!("mcp.connect: {error}")))?;
+        // The connected peer exposes protocol operations without taking native ownership.
+        // 已连接对端暴露协议操作，不接管原生所有权。
+        let peer = service.peer().clone();
+        spawn_rmcp_disconnect_watch(
+            endpoint.clone(),
+            "stdio",
+            peer.clone(),
+            event_sender.clone(),
+        );
+
+        Ok(Self {
+            endpoint,
+            peer,
+            shutdown: TransportShutdown::for_service("mcp.shutdown", service, backend_close),
+            event_sender,
+            recent_logs,
+        })
+    }
+
     /// Spawn one child program and connect over stdio.
     /// 启动一个子进程程序并通过 stdio 建立连接。
     ///
@@ -79,101 +175,89 @@ impl StdioTransport {
         env: &BTreeMap<String, String>,
         inherit_environment: bool,
     ) -> Result<Self, McpRuntimeError> {
-        let endpoint = endpoint.into();
-        let program = program.as_ref().to_owned();
-        let argv: Vec<String> = args.iter().map(|value| (*value).to_string()).collect();
-        let cmd = build_child_command(&program, &argv, cwd, env, inherit_environment);
-        // sensitiveValues contains only exact injected values and is consumed solely by the stderr redactor.
-        // sensitiveValues 仅包含精确注入值，并且只由 stderr 脱敏器消费。
-        let mut sensitive_values = argv
-            .iter()
-            .chain(env.values())
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .collect::<Vec<_>>();
-        sensitive_values.sort_by_key(|value| std::cmp::Reverse(value.len()));
-        sensitive_values.dedup();
-        let (transport, stderr) = TokioChildProcess::builder(cmd)
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| McpRuntimeError::transport(format!("mcp.spawn: {error}")))?;
-        // recentLogs is shared with the non-blocking stderr capture task and diagnostic readers.
-        // recentLogs 与非阻塞 stderr 捕获任务及诊断读取方共享。
-        let recent_logs = Arc::new(Mutex::new(VecDeque::new()));
-        if let Some(stderr) = stderr {
-            spawn_sanitized_stderr_capture(stderr, sensitive_values, Arc::clone(&recent_logs));
-        }
-        let (event_sender, _) = broadcast::channel(32);
-        let handler = Arc::new(EventingClientHandler::new(event_sender.clone()));
-        let service = handler
-            .serve(transport)
-            .await
-            .map_err(|error| McpRuntimeError::transport(format!("mcp.connect: {error}")))?;
-        let peer = service.peer().clone();
-        spawn_rmcp_disconnect_watch(
-            endpoint.clone(),
-            "stdio",
-            peer.clone(),
-            event_sender.clone(),
-        );
-
-        Ok(Self {
+        // Ordinary launches follow the same actual resource ownership without plugin-specific leases.
+        // 普通启动遵循相同实际资源所有权，不携带插件专用租约。
+        let (resources, _) = crate::McpTransportResources::new(());
+        Self::spawn_with_resources(
             endpoint,
-            peer,
-            service: AsyncMutex::new(Some(service)),
-            event_sender,
-            recent_logs,
-        })
+            program,
+            args,
+            cwd,
+            env,
+            inherit_environment,
+            resources,
+        )
+        .await
     }
 }
 
-/// Spawns a non-blocking bounded stderr capture task for one managed MCP child process.
-/// 为单个受管 MCP 子进程启动非阻塞且有界的 stderr 捕获任务。
+/// Spawns a native bounded stderr reader that owns its actual resource independently of Tokio.
+/// 启动原生有界 stderr 读取者，独立于 Tokio 持有其实际资源。
 ///
 /// # Parameters
 /// 参数
-/// `stderr` is the child pipe, `sensitive_values` contains exact injected values, and `recent_logs` owns the bounded result.
-/// `stderr` 是子进程管道，`sensitive_values` 包含精确注入值，`recent_logs` 持有有界结果。
+/// `stderr` is the owned reader, `sensitive_values` contains exact injected values, and `recent_logs` owns the bounded result.
+/// `stderr` 是自有读取者，`sensitive_values` 包含精确注入值，`recent_logs` 持有有界结果。
+/// Production passes the original ChildStderr; tests can also exercise actual file I/O errors.
+/// 生产传入原 ChildStderr；测试也可验证实际文件输入输出错误。
+/// Returns the original release receipt, or the native thread-creation error with no pipe handoff.
+/// 返回原释放回执，或尚未移交管道时的原生线程创建错误。
 fn spawn_sanitized_stderr_capture(
-    mut stderr: ChildStderr,
+    mut stderr: impl Read + Send + 'static,
     sensitive_values: Vec<String>,
     recent_logs: Arc<Mutex<VecDeque<String>>>,
-) {
-    tokio::spawn(async move {
-        // buffer bounds every individual read so an unterminated child message cannot cause unbounded allocation.
-        // buffer 限制每次独立读取，避免未终止的子进程消息导致无界分配。
-        let mut buffer = [0_u8; 4096];
-        // pending_line retains complete byte continuity so secrets split across reads cannot bypass redaction.
-        // pending_line 保留完整字节连续性，防止跨读取分割的 Secret 绕过脱敏。
-        let mut pending_line = Vec::new();
-        // discarding_line suppresses every byte of one oversized line instead of exposing a partial suffix.
-        // discarding_line 抑制单条超长行的全部字节，避免暴露部分后缀。
-        let mut discarding_line = false;
-        loop {
-            let read = match stderr.read(&mut buffer).await {
-                Ok(0) | Err(_) => {
-                    consume_stderr_bytes(
-                        &mut pending_line,
-                        &mut discarding_line,
-                        &[],
-                        true,
-                        &sensitive_values,
-                        &recent_logs,
-                    );
-                    break;
-                }
-                Ok(read) => read,
+) -> io::Result<PipeCompletion> {
+    // The sole native publisher retains terminal evidence even if every current observer leaves.
+    // 即使当前全部观察者离开，唯一原生发布者仍保留终态证据。
+    let (result, completion) = PipeCompletion::channel();
+    std::thread::Builder::new()
+        .name(String::from("mcp-stderr-owner"))
+        .spawn(move || {
+            // Buffer bounds each independent read without relying on an executor's blocking I/O task.
+            // 缓冲限制每次独立读取，不依赖执行器的阻塞输入输出任务。
+            let mut buffer = [0_u8; 4096];
+            // Byte continuity prevents secrets split across reads from bypassing the existing redactor.
+            // 字节连续性防止跨读取分割的秘密绕过既有脱敏器。
+            let mut pending_line = Vec::new();
+            // Oversized lines are discarded in full, preserving the same established framing contract.
+            // 超长行被整体丢弃，保持同一既有分帧契约。
+            let mut discarding_line = false;
+            // Distinguish real EOF from read failure; failed partial lines must not be published as complete.
+            // 区分真实结束与读取失败；失败的部分行不能作为完整行发布。
+            let outcome = loop {
+                // The worker retains the exact standard-library pipe through every blocking read.
+                // 工作线程在每次阻塞读取期间保留精确标准库管道。
+                let read = match stderr.read(&mut buffer) {
+                    Ok(0) => {
+                        consume_stderr_bytes(
+                            &mut pending_line,
+                            &mut discarding_line,
+                            &[],
+                            true,
+                            &sensitive_values,
+                            &recent_logs,
+                        );
+                        break Ok(());
+                    }
+                    Ok(read) => read,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => break Err(format!("MCP stderr read failed: {error}")),
+                };
+                consume_stderr_bytes(
+                    &mut pending_line,
+                    &mut discarding_line,
+                    &buffer[..read],
+                    false,
+                    &sensitive_values,
+                    &recent_logs,
+                );
             };
-            consume_stderr_bytes(
-                &mut pending_line,
-                &mut discarding_line,
-                &buffer[..read],
-                false,
-                &sensitive_values,
-                &recent_logs,
-            );
-        }
-    });
+            // Closing the actual OS pipe precedes success publication, not just the observer's completion.
+            // 在发布成功前关闭实际操作系统管道，而非仅结束观察者。
+            drop(stderr);
+            result.send_replace(Some(outcome));
+        })?;
+    Ok(completion)
 }
 
 /// Consumes arbitrary stderr byte chunks while preserving line boundaries across reads.
@@ -321,10 +405,8 @@ fn build_child_command(
     }
     command.envs(env);
     apply_windows_no_window(&mut command);
-    // The command-level drop guard stops a child if initialize is cancelled before rmcp
-    // returns a transport to the runtime owner.
-    // 命令级析构保护在 initialize 返回传输给运行时所有者之前被取消时终止子进程。
-    command.kill_on_drop(true);
+    // ManagedChild transfers this standard command to a native process owner before initialization.
+    // ManagedChild 在初始化前将此标准命令移交给原生进程所有者。
     command
 }
 
@@ -361,24 +443,20 @@ impl McpTransport for StdioTransport {
         })
     }
 
-    /// Gracefully closes rmcp, waits for child exit, and lets rmcp force-kill after its bounded grace period.
-    /// 优雅关闭 rmcp、等待子进程退出，并允许 rmcp 在有限宽限期后强制终止。
+    /// Observes the original rmcp close operation without cancelling it on timeout.
+    /// 观测原 rmcp 关闭操作，不因观测超时而取消清理。
+    /// Returns protocol, process-scope and all three actual pipe receipts; Unix descendants remain incomplete.
+    /// 返回协议、进程范围及三条实际管道回执；Unix 后代仍待完整接入。
     async fn shutdown(&self) -> Result<(), McpRuntimeError> {
-        // service is taken exactly once so concurrent shutdown requests cannot race child cleanup.
-        // service 仅被取出一次，避免并发关闭请求竞争子进程清理。
-        let service = self.service.lock().await.take();
-        let Some(mut service) = service else {
-            return Ok(());
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(5), service.close()).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => Err(McpRuntimeError::transport(format!(
-                "mcp.shutdown.join: {error}"
-            ))),
-            Err(_) => Err(McpRuntimeError::transport(
-                "mcp.shutdown timed out after 5 seconds",
-            )),
-        }
+        self.shutdown.wait().await
+    }
+
+    /// Waits for the original rmcp close result while the lifecycle owner retains this transport.
+    /// 生命周期所有者保留当前传输期间，等待原 rmcp 关闭结果。
+    /// No inputs; returns terminal close success or failure without an observer timeout.
+    /// 无输入；返回终态关闭成功或失败，不返回观察者超时。
+    async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
+        self.shutdown.wait_until_complete().await
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {

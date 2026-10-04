@@ -47,6 +47,9 @@ export function WorkspaceSkillsSettings(props: {
   // Opens the application-wide runtime diagnostics page from the MCP server page.
   // 从 MCP 服务器页面打开应用全局运行诊断页。
   onOpenDiagnostics: () => void;
+  // onSelectPluginResourceOwner preserves the real workspace-to-service navigation chain.
+  // onSelectPluginResourceOwner 保留真实工作台至服务导航链。
+  onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean>;
 }) {
   const {
     activeSubArea,
@@ -60,7 +63,7 @@ export function WorkspaceSkillsSettings(props: {
   return (
     <>
       <React.Suspense fallback={null}>
-        <LazySkillsArea activeTab={activeSubArea} onOpenDiagnostics={onOpenDiagnostics} skillActions={skillActions} workbench={workbench} />
+        <LazySkillsArea activeTab={activeSubArea} onOpenDiagnostics={onOpenDiagnostics} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} skillActions={skillActions} workbench={workbench} />
       </React.Suspense>
       {luaInstallDialogOpen ? (
         <React.Suspense fallback={null}>

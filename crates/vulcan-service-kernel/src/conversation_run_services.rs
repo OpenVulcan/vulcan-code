@@ -154,8 +154,7 @@ pub(crate) fn terminate_active_conversation_hook_turn_after_stop(
     // hookRuntime is the unique in-memory owner of logical conversation Hook turns.
     // hookRuntime 是逻辑会话 Hook 回合的唯一内存所有者。
     let mut hook_runtime = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
     // expectedTurnId must exist before stop may mutate the retained Hook owner.
     // expectedTurnId 必须存在，停止操作才可以变更保留的 Hook 所有者。
@@ -433,8 +432,7 @@ async fn service_stop_conversation_run_owned(
     // stoppedHookTurnId freezes the exact logical Hook owner before any stop teardown can race a replacement turn.
     // stoppedHookTurnId 在停止清理可能与替代回合竞争前冻结精确逻辑 Hook 所有者。
     let stopped_hook_turn_id = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?
         .active_turn_id(target_session_id)
         .map(str::to_string);

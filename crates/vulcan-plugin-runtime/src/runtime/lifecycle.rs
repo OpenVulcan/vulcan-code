@@ -2,23 +2,25 @@
 //! 插件目录投影、精确代次守卫与宿主生命周期转换。
 
 use super::authorization::plugin_is_authorized;
-use super::bridge::VulcanPluginBridgeLeaseScope;
-use super::environment::{ensure_plugin_execution_environment, plugin_execution_package_root};
 use super::{
-    RetainedVulcanPluginLease, VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-    VULCAN_PLUGIN_PROBE_TIMEOUT_MS, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
-    call_engine_blocking, parse_engine_response,
+    VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS, VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
+    VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
 };
 use crate::{
     VulcanPluginAvailability, VulcanPluginCatalogSnapshot, VulcanPluginHookDescriptor,
     VulcanPluginPackageOrigin, VulcanPluginRuntimeState, VulcanPluginToolDescriptor,
     load_vulcan_plugin_catalog,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use uuid::Uuid;
+
+mod predecessor_publication;
+mod predecessor_restore;
+pub use predecessor_publication::VulcanPluginActivationPredecessorPublication;
+mod update_publication;
+pub use update_publication::VulcanPluginActivationTargetPublication;
 
 /// Host-owned plugin lifecycle event that may invoke one manifest callback.
 /// 可调用清单回调的宿主自有插件生命周期事件。
@@ -42,6 +44,178 @@ pub enum VulcanPluginLifecycleEvent {
 }
 
 impl VulcanPluginRuntimeManager {
+    /// Share the existing publication gate and transition rules with a concrete original update owner.
+    /// 与具体原更新所有者共用既有发布门及转换规则。
+    /// Optional update carries the frozen catalog and real candidate ownership; returns retained authority only for that path.
+    /// 可选 update 携带固定目录及真实候选所有权；仅该路径返回保留权威。
+    pub(super) fn begin_lifecycle_transition_with_update(
+        &self,
+        plugin_id: &str,
+        runtime_state: VulcanPluginRuntimeState,
+        allowed_source_states: &[VulcanPluginRuntimeState],
+        update: Option<(
+            &crate::VulcanPluginActivationCandidate<'_>,
+            &VulcanPluginCatalogSnapshot,
+        )>,
+    ) -> Result<Option<Arc<super::update_drain::UpdateDrainAuthority>>, VulcanPluginRuntimeError>
+    {
+        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.require_routing_publication_locked(
+            &_registration,
+            update.map(|(candidate, _)| {
+                super::routing::ActivationRoutingOriginal::Candidate(candidate)
+            }),
+        )?;
+        // A disabled recovery publication is not permission to start ordinary lifecycle effects.
+        // 停用恢复发布不表示允许开始普通生命周期副作用。
+        let (recovery_error, recovery_diagnostics) = self.activation_recovery_diagnostics(None)?;
+        if let Some(diagnostic) = recovery_error
+            .as_ref()
+            .or_else(|| recovery_diagnostics.get(plugin_id))
+        {
+            return Err(VulcanPluginRuntimeError::new(diagnostic.clone()));
+        }
+        // New unfinished requests created after startup also exclude ordinary enablement and lifecycle side effects.
+        // 启动后新建的未完成请求同样排除普通启用及生命周期副作用。
+        if let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+        {
+            // A concrete owned original is the only exception; every other pending request still excludes transition.
+            // 具体自有原请求是唯一例外；其他任何待完成请求仍排除转换。
+            let pending = store
+                .activation_recovery_records(plugin_id)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+            let allowed = match (update, pending.as_slice()) {
+                (None, []) => true,
+                (
+                    Some((candidate, _)),
+                    [crate::VulcanPluginActivationRequestRecord::Activation(original)],
+                ) => original == candidate.transaction_record(),
+                _ => false,
+            };
+            if !allowed {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Plugin has an unfinished original activation request.",
+                ));
+            }
+        }
+        let mut snapshot = (*self.snapshot()).clone();
+        let plugin = snapshot.plugins.get_mut(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin `{plugin_id}` was not discovered."
+            ))
+        })?;
+        if let Some((candidate, expected)) = update {
+            super::update_drain::validate_predecessor(&self.state, candidate, expected, plugin)?;
+            if runtime_state != VulcanPluginRuntimeState::Draining {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Update authority only permits predecessor draining.",
+                ));
+            }
+        }
+        // Actual retained cleanup permits the existing explicit retry without changing the frozen routing source.
+        // 实际保留清理允许既有明确重试，不改变冻结路由来源。
+        let observed_source_state = observed_runtime_state(
+            plugin.runtime_state,
+            self.has_cleanup_diagnostics(plugin_id)?,
+        );
+        if !allowed_source_states.contains(&observed_source_state) {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin `{plugin_id}` cannot enter state `{runtime_state:?}` from state `{:?}`.",
+                observed_source_state
+            )));
+        }
+        if !matches!(
+            plugin.availability,
+            VulcanPluginAvailability::Enabled | VulcanPluginAvailability::Disabled
+        ) {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan Plugin `{plugin_id}` cannot enter a lifecycle transition while unavailable."
+            )));
+        }
+        // Check requirements before changing generations, allocating guarantees, or publishing Enabling.
+        // 在变更代次、分配保证或发布启用中状态前检查必需条件。
+        if runtime_state == VulcanPluginRuntimeState::Enabling {
+            self.validate_plugin_requirements(plugin)?;
+        }
+        // Re-establish all configured guarantees before callbacks or the Enabling catalog can observe activation.
+        // 在回调或启用中目录可观测启用之前，重新建立全部配置保证。
+        if runtime_state == VulcanPluginRuntimeState::Enabling
+            && let Some(owner) = self.formal_runtime_owner()?
+            && let Err(error) = owner.prepare_plugin_capacities(plugin_id, &_registration)
+        {
+            if owner.has_retiring_capacities(plugin_id)? {
+                self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+            }
+            return Err(error);
+        }
+        let (generation, update_authority) = {
+            let mut generations = self.state.plugin_generations.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
+            })?;
+            let generation = generations.entry(plugin_id.to_owned()).or_insert(1);
+            let successor = generation.checked_add(1).ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin generation is exhausted.")
+            })?;
+            // Persist update intent before issuing the new generation or granting any old finalizer.
+            // 签发新代次或授权任何旧关闭函数之前，持久保存更新意图。
+            let update_authority = match update {
+                Some((candidate, _)) => Some(super::update_drain::UpdateDrainAuthority::begin(
+                    &self.state,
+                    candidate,
+                    plugin,
+                    successor,
+                )?),
+                None => None,
+            };
+            *generation = successor;
+            (successor, update_authority)
+        };
+        // Grant only existing formal domains while publication is excluded; the grant needs the new snapshot to work.
+        // 在排除发布竞争时仅授权既有正式域；授权必须匹配新快照才生效。
+        if runtime_state == VulcanPluginRuntimeState::Draining
+            && let Some(owner) = self.formal_runtime_owner()?
+        {
+            match update_authority.as_ref() {
+                Some(authority) => {
+                    owner
+                        .host
+                        .authorize_draining_with_update(plugin, generation, Some(authority))
+                }
+                None => owner.host.authorize_draining(plugin, generation),
+            }
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        }
+        self.state
+            .lifecycle_overrides
+            .lock()
+            .map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
+            })?
+            .insert(plugin_id.to_owned(), runtime_state);
+        plugin.runtime_state = runtime_state;
+        plugin.generation = generation;
+        for tool in &mut plugin.tools {
+            tool.plugin_generation = generation;
+        }
+        for hook in &mut plugin.hooks {
+            hook.plugin_generation = generation;
+        }
+        for server in &mut plugin.mcp_servers {
+            server.plugin_generation = generation;
+        }
+        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
+        rebuild_enabled_surface(&mut snapshot);
+        let mut guard = self.state.snapshot.write().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
+        })?;
+        *guard = Arc::new(snapshot);
+        Ok(update_authority)
+    }
+
     /// Atomically replaces the catalog snapshot after a full package scan.
     /// 在完整扫描插件包后原子替换目录快照。
     ///
@@ -59,19 +233,164 @@ impl VulcanPluginRuntimeManager {
         disabled_plugin_ids: &BTreeSet<String>,
         enabled_plugin_ids: &BTreeSet<String>,
     ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+        // Scan and publish under the same gate used by lifecycle capacity ownership.
+        // 在生命周期容量归属使用的同一门下扫描并发布。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
-        let revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        let mut snapshot = load_vulcan_plugin_catalog(
+        self.require_routing_publication_locked(&registration, None)?;
+        // The declared policy selects this one scan; no alternate catalog is consulted.
+        // 声明策略选择此次唯一扫描；不查询备用目录。
+        let snapshot =
+            self.scan_runtime_catalog(disabled_plugin_ids, enabled_plugin_ids, &registration);
+        self.publish_runtime_catalog(snapshot, &registration, None)
+    }
+
+    /// Refresh the declared catalog through one retained original Legacy namespace owner.
+    /// 通过单个保留原旧格式命名空间所有者刷新声明目录。
+    /// Policy sets select the projection; plugin_id and mutation must identify this manager's same original guard.
+    /// 策略集合选择投影；plugin_id 及 mutation 必须标识此管理器同一原屏障。
+    /// Returns the actual published manager snapshot without reacquiring the guarded plugin namespace.
+    /// 返回实际已发布管理器快照，不重新获取已屏障插件命名空间。
+    pub fn refresh_catalog_with_legacy_mutation(
+        &self,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        plugin_id: &str,
+        mutation: &crate::VulcanPluginLegacyMutationGuard,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Reuse the existing publication gate and projection, with only the exact guarded scan changed.
+        // 复用既有发布门及投影，仅改变精确已屏障扫描。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog gate is poisoned.")
+        })?;
+        self.require_routing_namespace_retired_locked(&registration, mutation)?;
+        // Validate literal root ownership before asking the catalog reader to borrow its original pin.
+        // 要求目录读取器借用原固定之前，校验字面根所有权。
+        mutation
+            .validate_user_root(&self.state.user_plugin_root, plugin_id)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // The revision is issued by the same sole publisher after runtime projection.
+        // 修订在运行时投影之后由相同唯一发布器签发。
+        let revision = self.state.next_revision.load(Ordering::Relaxed);
+        // Guarded catalog loading remains the existing authoritative package-selection implementation.
+        // 已屏障目录加载保持使用既有权威插件包选择实现。
+        let snapshot = crate::catalog::load_vulcan_plugin_catalog_with_legacy_mutation(
+            &self.state.vulcan_plugin_root,
+            &self.state.user_plugin_root,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            revision,
+            plugin_id,
+            mutation,
+        )
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        self.publish_runtime_catalog(
+            snapshot,
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::LegacyMutation(
+                mutation,
+            )),
+        )
+    }
+
+    /// Refresh this manager's catalog through the same original removal File after exact tombstone publication.
+    /// 在精确停用记录发布之后，通过同一原移除文件刷新此管理器目录。
+    /// Policy sets select the projection; original must belong to the actual user root and remain retained.
+    /// 策略集合选择投影；original 必须属于实际用户根并保持保留。
+    /// Returns the manager snapshot; service Full publication, credentials, package GC and terminal receipts remain separate obligations.
+    /// 返回管理器快照；服务完整发布、凭据、包回收及终态回执仍为独立义务。
+    pub fn refresh_catalog_with_deactivation(
+        &self,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        original: &crate::VulcanPluginDeactivationReservation,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Reuse the same sole manager publisher while the original namespace remains held throughout actual readback.
+        // 复用同一唯一管理器发布器，同时原命名空间跨实际回读全程保持持有。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog gate is poisoned.")
+        })?;
+        self.require_routing_publication_locked(
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Deactivation(
+                original,
+            )),
+        )?;
+        original
+            .require_no_lifecycle_borrowers()
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // Candidate revision is issued only by the common publisher after successful runtime projection.
+        // 候选修订仅在运行时投影成功后由公共发布器签发。
+        let revision = self.state.next_revision.load(Ordering::Relaxed);
+        // The explicit original source accepts only its exact admitted tombstone; there is no ordinary scan fallback.
+        // 明确原来源仅接受精确已准入停用记录；不存在普通扫描备用路径。
+        let snapshot = crate::catalog::load_vulcan_plugin_catalog_with_deactivation(
+            &self.state.vulcan_plugin_root,
+            &self.state.user_plugin_root,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            revision,
+            original,
+        )
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        self.publish_runtime_catalog(
+            snapshot,
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Deactivation(
+                original,
+            )),
+        )
+    }
+
+    /// Scan the declared policy sets while publication is excluded; return the unprojected catalog.
+    /// 排除发布竞争时扫描声明策略集合；返回尚未投影的目录。
+    fn scan_runtime_catalog(
+        &self,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> VulcanPluginCatalogSnapshot {
+        // This candidate routing revision is not issued until successful publication.
+        // 此候选路由修订仅在成功发布时签发。
+        let revision = self.state.next_revision.load(Ordering::Relaxed);
+        load_vulcan_plugin_catalog(
             &self.state.vulcan_plugin_root,
             Some(&self.state.user_plugin_root),
             disabled_plugin_ids,
             enabled_plugin_ids,
             revision,
-        );
-        self.project_runtime_state(&mut snapshot)?;
+        )
+    }
+
+    /// Apply live ownership to snapshot and publish it under the caller-held gate; return the immutable projection.
+    /// 在调用方持有的门下向 snapshot 应用实时归属并发布；返回不可变投影。
+    /// `original` is absent for ordinary publication or borrows the actual validated original owner.
+    /// 普通发布的 `original` 缺省，否则借用实际已校验原所有者。
+    fn publish_runtime_catalog(
+        &self,
+        mut snapshot: VulcanPluginCatalogSnapshot,
+        _registration: &std::sync::MutexGuard<'_, ()>,
+        original: Option<super::routing::ActivationRoutingOriginal<'_>>,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Only an actual transaction can supply the recovery projection's full original record.
+        // 仅实际事务能够提供恢复投影的完整原记录。
+        let recovery_permit = match &original {
+            Some(super::routing::ActivationRoutingOriginal::Transaction(transaction)) => {
+                Some((*transaction).record())
+            }
+            _ => None,
+        };
+        self.require_routing_publication_locked(_registration, original)?;
+        self.project_runtime_state(&mut snapshot, recovery_permit)?;
+        // Issue the routing revision only after the authoritative routing projection succeeds.
+        // 仅在权威路由投影成功后签发路由修订。
+        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
+        // Readers retain this exact published value independently of future changes.
+        // 读取方独立于未来变化保留此精确发布值。
         let snapshot = Arc::new(snapshot);
+        // Publication remains a single replacement of the authoritative catalog pointer.
+        // 发布继续作为权威目录指针的单次替换。
         let mut guard = self.state.snapshot.write().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
         })?;
@@ -165,8 +484,28 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         disabled_plugin_ids: &BTreeSet<String>,
         enabled_plugin_ids: &BTreeSet<String>,
-        cleanup_failures: Vec<String>,
+        mut cleanup_failures: Vec<String>,
     ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // Capacity retirement and final catalog publication must exclude new member preparation together.
+        // 容量回收及最终目录发布必须共同排除新成员准备。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.require_routing_publication_locked(&registration, None)?;
+        // Ordinary completion cannot remove an update-owned admission barrier.
+        // 普通完成不得移除更新所有的入场屏障。
+        if let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            && !store
+                .activation_recovery_records(plugin_id)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+                .is_empty()
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Plugin has an unfinished original activation request.",
+            ));
+        }
         self.state
             .lifecycle_overrides
             .lock()
@@ -174,15 +513,30 @@ impl VulcanPluginRuntimeManager {
                 VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
             })?
             .remove(plugin_id);
+        // Resolve actual persisted policy before deciding whether this transition ends the capacity lifetime.
+        // 决定此次转换是否结束容量寿命前，解析实际持久策略。
+        let snapshot =
+            self.scan_runtime_catalog(disabled_plugin_ids, enabled_plugin_ids, &registration);
+        if snapshot
+            .plugins
+            .get(plugin_id)
+            .is_some_and(|plugin| !plugin.desired_enabled)
+            && let Some(owner) = self.formal_runtime_owner()?
+            && let Err(error) = owner.retire_plugin_capacities(plugin_id, &registration)
+        {
+            cleanup_failures.push(format!("Plugin capacity retirement failed: {error}"));
+        }
         if cleanup_failures.is_empty() {
-            self.clear_cleanup_diagnostics_if_fully_drained(plugin_id)?;
+            self.clear_cleanup_diagnostics_locked(plugin_id, &registration)?;
         } else {
+            // Keep retirement failures in the existing diagnostic authority and disabled warning projection.
+            // 在既有诊断权威及停用告警投影中保留回收失败。
             let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
                 VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
             })?;
             diagnostics.insert(plugin_id.to_owned(), cleanup_failures);
         }
-        self.refresh_catalog(disabled_plugin_ids, enabled_plugin_ids)
+        self.publish_runtime_catalog(snapshot, &registration, None)
     }
 
     /// Probes dependency resolution and Lua module loading without opening a business session.
@@ -195,9 +549,18 @@ impl VulcanPluginRuntimeManager {
     ///
     /// # Returns
     /// 返回值
-    /// Returns success only after the probe lease is also closed successfully.
-    /// 仅在探测租约也成功关闭后返回成功。
+    /// Returns success only after the original probe initialization and actual core retirement complete.
+    /// 仅在原探测初始化及实际核心退役完成后返回成功。
     pub async fn probe_plugin(&self, plugin_id: &str) -> Result<(), VulcanPluginRuntimeError> {
+        // Probe preparation and initialization share the existing finite probe budget from API entry.
+        // 探测准备及初始化从接口入场起共用既有有限探测预算。
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
+            ))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin probe deadline is out of range.")
+            })?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
@@ -221,90 +584,7 @@ impl VulcanPluginRuntimeManager {
         if !manifest.has_lua_runtime() {
             return Ok(());
         }
-        // executionRoot prevents a post-catalog package mutation from changing probe code.
-        // executionRoot 防止目录扫描后的插件包变更替换探测代码。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        let probe_id = Uuid::new_v4().to_string();
-        let (lease_id, sid, generation) = self
-            .create_managed_lease(
-                &probe_id,
-                &execution_root,
-                &execution_root,
-                &manifest,
-                VulcanPluginBridgeLeaseScope::EnablingProbe,
-            )
-            .await?;
-        // code probes the already loaded plugin through the fixed bridge ABI.
-        // code 通过固定桥接 ABI 探测已加载插件。
-        let code = String::from("local bridge = require('runtime.bridge')\nreturn bridge.probe()");
-        let engine = self.runtime_engine()?;
-        let stable_plugin_id = plugin_id.to_owned();
-        let probe_result = call_engine_blocking(Arc::clone(&engine), {
-            let lease_id = lease_id.clone();
-            let sid = sid.clone();
-            let plugin_id = stable_plugin_id.clone();
-            move |engine| {
-                let raw = engine
-                    .eval_system_runtime_lease_json(
-                        &json!({
-                            "lease_id": lease_id,
-                            "sid": sid,
-                            "generation": generation,
-                            "code": code,
-                            "args": {},
-                            "timeout_ms": VULCAN_PLUGIN_PROBE_TIMEOUT_MS,
-                        })
-                        .to_string(),
-                    )
-                    .map_err(VulcanPluginRuntimeError::new)?;
-                let response = parse_engine_response(&raw, "probe Vulcan Plugin runtime lease")?;
-                if response.get("result").and_then(Value::as_bool) != Some(true) {
-                    return Err(VulcanPluginRuntimeError::new(format!(
-                        "Vulcan Plugin `{plugin_id}` probe did not return true."
-                    )));
-                }
-                Ok(())
-            }
-        })
-        .await;
-        let retained_lease = RetainedVulcanPluginLease {
-            plugin_id: stable_plugin_id.clone(),
-            owner_session_id: None,
-            lease_id: lease_id.clone(),
-            sid: sid.clone(),
-            generation,
-            reserved_session_slot: false,
-        };
-        let close_result = call_engine_blocking(engine, move |engine| {
-            let raw = engine
-                .close_system_runtime_lease_json(
-                    &json!({
-                        "lease_id": lease_id,
-                        "sid": sid,
-                        "generation": generation,
-                    })
-                    .to_string(),
-                )
-                .map_err(VulcanPluginRuntimeError::new)?;
-            parse_engine_response(&raw, "close Vulcan Plugin probe lease").map(|_| ())
-        })
-        .await;
-        match (probe_result, close_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(probe_error), Ok(())) => Err(probe_error),
-            (probe_result, Err(close_error)) => {
-                let diagnostic = format!(
-                    "Vulcan Plugin `{stable_plugin_id}` probe lease cleanup failed and remains retained: {close_error}"
-                );
-                self.retain_failed_lease(retained_lease, diagnostic.clone())?;
-                let message = match probe_result {
-                    Ok(()) => diagnostic,
-                    Err(probe_error) => format!("{probe_error}; {diagnostic}"),
-                };
-                Err(VulcanPluginRuntimeError::new(message))
-            }
-        }
+        self.invoke_formal_probe(plugin.clone(), deadline).await
     }
 
     /// Returns one immutable current catalog snapshot.
@@ -322,8 +602,51 @@ impl VulcanPluginRuntimeManager {
             .unwrap_or_else(|poisoned| Arc::clone(&poisoned.into_inner()))
     }
 
-    /// Invokes one optional manifest-declared lifecycle callback through a temporary bridge lease.
-    /// 通过临时桥接租约调用一个可选的清单声明生命周期回调。
+    /// Project live counts and cleanup onto the explicitly supplied routing catalog without publishing it.
+    /// 将实时计数及清理投影到明确传入的路由目录，不发布该目录。
+    /// `catalog` is the actual current or service-published routing value; returns a display-only owned value or a lock error.
+    /// `catalog` 为实际当前或服务已发布路由值；返回仅用于展示的自有值或锁错误。
+    /// The routing revision is preserved; this value must never replace a Full, Source, or prepared routing Arc.
+    /// 保留路由修订；此值绝不能替换 Full、Source 或已准备路由 Arc。
+    pub fn observe_catalog(
+        &self,
+        catalog: &VulcanPluginCatalogSnapshot,
+    ) -> Result<VulcanPluginCatalogSnapshot, VulcanPluginRuntimeError> {
+        // One gate makes both actual maps coherent while leaving immutable routing ownership untouched.
+        // 同一登记门使两个实际映射保持一致，同时不触碰不可变路由归属。
+        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        // Read the sole counters; no projection cache becomes another accounting authority.
+        // 读取唯一计数器；不让投影缓存成为另一记账权威。
+        let counts = self.state.active_session_counts.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
+        })?;
+        // Retain cleanup evidence from its unique live map, including failures after catalog publication.
+        // 从唯一实时映射保留清理证据，包含目录发布后的失败。
+        let diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
+        })?;
+        // This plain value has no publication identity and retains the supplied routing revision.
+        // 此普通值没有发布身份，并保留传入路由修订。
+        let mut observed = catalog.clone();
+        for plugin in observed.plugins.values_mut() {
+            plugin.active_session_count = counts.get(&plugin.id).copied().unwrap_or_default();
+            if let Some(entries) = diagnostics.get(&plugin.id) {
+                plugin.runtime_state =
+                    observed_runtime_state(plugin.runtime_state, !entries.is_empty());
+                for diagnostic in entries {
+                    if !plugin.diagnostics.contains(diagnostic) {
+                        plugin.diagnostics.push(diagnostic.clone());
+                    }
+                }
+            }
+        }
+        Ok(observed)
+    }
+
+    /// Invokes one optional manifest-declared lifecycle callback through the owned formal runtime.
+    /// 通过拥有明确归属的正式运行时调用一个可选的清单声明生命周期回调。
     ///
     /// # Parameters
     /// 参数
@@ -332,13 +655,22 @@ impl VulcanPluginRuntimeManager {
     ///
     /// # Returns
     /// 返回值
-    /// Returns success when no callback is declared or after the callback and lease cleanup succeed.
-    /// 未声明回调时直接成功；否则在回调与租约清理均成功后返回成功。
+    /// Returns success when no callback is declared or after the callback and actual core retirement succeed.
+    /// 未声明回调时直接成功；否则在回调及实际核心退役均成功后返回成功。
     pub async fn invoke_lifecycle(
         &self,
         plugin_id: &str,
         event: VulcanPluginLifecycleEvent,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // The original deadline includes environment preparation, core initialization and business work.
+        // 原截止时间涵盖环境准备、核心初始化及业务工作。
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(
+                VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
+            ))
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Plugin lifecycle deadline is out of range.")
+            })?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
@@ -369,56 +701,20 @@ impl VulcanPluginRuntimeManager {
         let Some(function) = function else {
             return Ok(());
         };
-        // environmentRoot provides lifecycle-owned writable dependency and process state.
-        // environmentRoot 提供生命周期持有的可写依赖与进程状态。
-        let environment_root = ensure_plugin_execution_environment(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        // executionRoot pins lifecycle Lua code to the trusted package generation.
-        // executionRoot 把生命周期 Lua 代码固定到可信插件包代次。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        self.reserve_session_slot(plugin_id, lua_runtime.max_active_sessions)?;
-        let lifecycle_id = format!("lifecycle-{event_key}-{}", Uuid::new_v4());
-        let lease_result = self
-            .create_managed_lease(
-                &lifecycle_id,
-                &execution_root,
-                &environment_root,
-                &manifest,
-                VulcanPluginBridgeLeaseScope::from(event),
-            )
-            .await;
-        let (lease_id, sid, generation) = match lease_result {
-            Ok(lease) => lease,
-            Err(error) => {
-                self.release_session_slot(plugin_id);
-                return Err(error);
-            }
-        };
-        let callback_result = self
-            .evaluate_bridge_function(
-                &lease_id,
-                &sid,
-                generation,
-                &function,
-                json!({
-                    "event": event_key,
-                    "plugin_id": plugin_id,
-                    "environment_root": environment_root,
-                }),
-                VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS,
-            )
-            .await
-            .map(|_| ());
-        let close_result = self.close_raw_lease(&lease_id, &sid, generation).await;
-        self.release_session_slot(plugin_id);
-        match (callback_result, close_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(callback_error), Err(close_error)) => Err(VulcanPluginRuntimeError::new(format!(
-                "{callback_error}; lifecycle lease cleanup failed: {close_error}"
-            ))),
-        }
+        // The registered blocking worker prepares the original writable environment before Lua admission.
+        // 已登记阻塞工作者在 Lua 入场前准备原可写环境。
+        self.invoke_formal_lifecycle(
+            plugin.clone(),
+            event,
+            function,
+            json!({
+                "event": event_key,
+                "plugin_id": plugin_id,
+            }),
+            deadline,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Requires one tool definition to match the current enabled plugin generation.
@@ -429,6 +725,13 @@ impl VulcanPluginRuntimeManager {
         &self,
         tool: &VulcanPluginToolDescriptor,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Published identity alone cannot admit business before the original target handoff completes.
+        // 仅发布身份不能在原目标交接完成前接纳业务。
+        crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+            &self.state,
+            &tool.plugin_id,
+            crate::VulcanPluginBridgeLeaseScope::Enabled,
+        )?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(&tool.plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
@@ -455,6 +758,13 @@ impl VulcanPluginRuntimeManager {
         &self,
         hook: &VulcanPluginHookDescriptor,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Published identity alone cannot admit business before the original target handoff completes.
+        // 仅发布身份不能在原目标交接完成前接纳业务。
+        crate::runtime::update_drain::validate_ordinary_lifecycle_admission(
+            &self.state,
+            &hook.plugin_id,
+            crate::VulcanPluginBridgeLeaseScope::Enabled,
+        )?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(&hook.plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!(
@@ -483,24 +793,94 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
-    /// Applies generations, transient lifecycle overrides, active counts, and cleanup diagnostics.
-    /// 应用代次、临时生命周期覆盖、活动计数与清理诊断。
+    /// Publish the exact disabled target owned by `transaction` using the supplied explicit policy sets.
+    /// 按提供的明确策略集合发布 `transaction` 持有的精确停用目标。
+    /// Return its catalog only after validating original ownership; retain recovery obligations until route completion.
+    /// 仅在校验原所有权后返回目录；路由完成前保留恢复义务。
+    pub fn refresh_catalog_for_activation_recovery(
+        &self,
+        transaction: &crate::VulcanPluginActivationTransaction,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
+        // One publication gate excludes ordinary lifecycle admission throughout validation and projection.
+        // 单个发布门在校验及投影全程排除普通生命周期入场。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.require_routing_publication_locked(
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Transaction(
+                transaction,
+            )),
+        )?;
+        // Borrow the original target; neither a plugin ID nor a UUID alone grants publication.
+        // 借用原始目标；仅插件标识或 UUID 均不授予发布权。
+        let target = transaction.record().target();
+        if !disabled_plugin_ids.contains(&target.plugin_id)
+            || enabled_plugin_ids.contains(&target.plugin_id)
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Recovery publication requires explicit disabled policy.",
+            ));
+        }
+        // Read the existing store, preserving absence as a failure after an observed original request.
+        // 读取既有存储，已观察原请求后将缺失保留为失败。
+        let store = crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            .ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Original activation store is missing.")
+            })?;
+        store
+            .validate_published_activation_owner(transaction)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // A disabled descriptor pins the complete target authority without executing plugin callbacks.
+        // 停用描述符固定完整目标权威，不执行插件回调。
+        let snapshot =
+            self.scan_runtime_catalog(disabled_plugin_ids, enabled_plugin_ids, &registration);
+        if !snapshot
+            .plugins
+            .get(&target.plugin_id)
+            .is_some_and(|plugin| {
+                !plugin.desired_enabled
+                    && plugin.availability == crate::VulcanPluginAvailability::Disabled
+                    && plugin
+                        .managed_package()
+                        .is_some_and(|package| package.matches_activation(target))
+            })
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Original activation target is not a valid disabled catalog entry.",
+            ));
+        }
+        self.publish_runtime_catalog(
+            snapshot,
+            &registration,
+            Some(super::routing::ActivationRoutingOriginal::Transaction(
+                transaction,
+            )),
+        )
+    }
+
+    /// Apply generations and transient lifecycle overrides without live observation overlays.
+    /// 应用代次及临时生命周期覆盖，不混入实时观测。
     /// Mutates the scanned `snapshot` using this manager's state; returns unit or a lock diagnostic.
     /// 使用本管理器状态修改扫描所得的 `snapshot`；返回空值或锁诊断。
+    /// `recovery_permit` exempts only its exact original from startup gating for this disabled publication.
+    /// `recovery_permit` 仅使精确原请求在此次停用发布中豁免启动门控。
     fn project_runtime_state(
         &self,
         snapshot: &mut VulcanPluginCatalogSnapshot,
+        recovery_permit: Option<&crate::VulcanPluginActivationTransactionRecord>,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Resolve durable startup obligations before taking unrelated runtime state locks.
+        // 获取无关运行时状态锁之前解析持久启动义务。
+        let (recovery_error, recovery_diagnostics) =
+            self.activation_recovery_diagnostics(recovery_permit)?;
         let previous = self.snapshot();
         snapshot.service_epoch = self.state.manager_id.clone();
-        let active_counts = self.state.active_session_counts.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session counter lock is poisoned.")
-        })?;
         let overrides = self.state.lifecycle_overrides.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
-        })?;
-        let cleanup_diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
         })?;
         let mut generations = self.state.plugin_generations.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
@@ -524,18 +904,43 @@ impl VulcanPluginRuntimeManager {
                     "The plugin package is valid, but its Lua execution runtime is unavailable; read-only skills and agents remain active.",
                 ));
             }
+            // Remember prior incarnations even when a tombstone removed the preceding catalog row.
+            // 即使停用记录移除了前一目录条目，也必须记住先前实例。
+            let previously_seen = generations.contains_key(&plugin.id);
+            // Routing identity remains process-local and must never be reused after disappearance.
+            // 路由身份保持进程内归属，插件消失后也绝不能复用。
             let generation = generations.entry(plugin.id.clone()).or_insert(1);
-            let changed = previous.plugins.get(&plugin.id).is_some_and(|prior| {
-                prior.version != plugin.version
-                    || prior.content_fingerprint != plugin.content_fingerprint
-                    || prior.desired_enabled != plugin.desired_enabled
-                    || prior.availability != plugin.availability
-            });
+            // Managed activation identity is independent from semantic version and content authorization.
+            // 受管激活身份独立于语义版本及内容授权。
+            let changed = previous
+                .plugins
+                .get(&plugin.id)
+                .map_or(previously_seen, |prior| {
+                    prior.version != plugin.version
+                        || prior.content_fingerprint != plugin.content_fingerprint
+                        || prior.desired_enabled != plugin.desired_enabled
+                        || prior.availability != plugin.availability
+                        || prior.managed_package().map(|managed| {
+                            (
+                                managed.activation_revision(),
+                                managed.generation().identity(),
+                            )
+                        }) != plugin.managed_package().map(|managed| {
+                            (
+                                managed.activation_revision(),
+                                managed.generation().identity(),
+                            )
+                        })
+                });
             if changed {
-                *generation = generation.saturating_add(1);
+                *generation = generation.checked_add(1).ok_or_else(|| {
+                    VulcanPluginRuntimeError::new(format!(
+                        "Vulcan Plugin `{}` routing generation is exhausted.",
+                        plugin.id
+                    ))
+                })?;
             }
             plugin.generation = *generation;
-            plugin.active_session_count = active_counts.get(&plugin.id).copied().unwrap_or(0);
             for tool in &mut plugin.tools {
                 tool.plugin_generation = *generation;
             }
@@ -547,10 +952,6 @@ impl VulcanPluginRuntimeManager {
             }
             if let Some(runtime_state) = overrides.get(&plugin.id).copied() {
                 plugin.runtime_state = runtime_state;
-            } else if plugin.runtime_state == VulcanPluginRuntimeState::Disabled
-                && cleanup_diagnostics.contains_key(&plugin.id)
-            {
-                plugin.runtime_state = VulcanPluginRuntimeState::DisabledWithCleanupWarning;
             }
             if plugin.origin == VulcanPluginPackageOrigin::UserInstalled {
                 match plugin_is_authorized(&self.state.plugin_state_root, plugin) {
@@ -567,8 +968,21 @@ impl VulcanPluginRuntimeManager {
                     }
                 }
             }
-            if let Some(diagnostics) = cleanup_diagnostics.get(&plugin.id) {
-                plugin.diagnostics.extend(diagnostics.iter().cloned());
+            // Resource requirements gate the complete plugin surface before any activation is published.
+            // 在任何激活发布前，资源必需条件门控插件的完整暴露面。
+            if let Err(error) = self.validate_plugin_requirements(plugin) {
+                plugin.runtime_execution_available = false;
+                plugin.diagnostics.push(error.to_string());
+            }
+            // Recovery gates every surface while preserving the user's declared enabled policy.
+            // 恢复门控全部暴露面，同时保留用户声明的启用策略。
+            if let Some(diagnostic) = recovery_error
+                .as_ref()
+                .or_else(|| recovery_diagnostics.get(&plugin.id))
+            {
+                plugin.runtime_state = VulcanPluginRuntimeState::Unavailable;
+                plugin.runtime_execution_available = false;
+                plugin.diagnostics.push(diagnostic.clone());
             }
         }
         rebuild_enabled_surface(snapshot);
@@ -593,62 +1007,30 @@ impl VulcanPluginRuntimeManager {
         runtime_state: VulcanPluginRuntimeState,
         allowed_source_states: &[VulcanPluginRuntimeState],
     ) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
-        let mut snapshot = (*self.snapshot()).clone();
-        let plugin = snapshot.plugins.get_mut(plugin_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{plugin_id}` was not discovered."
-            ))
-        })?;
-        if !allowed_source_states.contains(&plugin.runtime_state) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{plugin_id}` cannot enter state `{runtime_state:?}` from state `{:?}`.",
-                plugin.runtime_state
-            )));
-        }
-        if !matches!(
-            plugin.availability,
-            VulcanPluginAvailability::Enabled | VulcanPluginAvailability::Disabled
-        ) {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan Plugin `{plugin_id}` cannot enter a lifecycle transition while unavailable."
-            )));
-        }
-        let generation = {
-            let mut generations = self.state.plugin_generations.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin generation lock is poisoned.")
-            })?;
-            let generation = generations.entry(plugin_id.to_owned()).or_insert(1);
-            *generation = generation.saturating_add(1);
-            *generation
-        };
-        self.state
-            .lifecycle_overrides
-            .lock()
-            .map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin lifecycle lock is poisoned.")
-            })?
-            .insert(plugin_id.to_owned(), runtime_state);
-        plugin.runtime_state = runtime_state;
-        plugin.generation = generation;
-        for tool in &mut plugin.tools {
-            tool.plugin_generation = generation;
-        }
-        for hook in &mut plugin.hooks {
-            hook.plugin_generation = generation;
-        }
-        for server in &mut plugin.mcp_servers {
-            server.plugin_generation = generation;
-        }
-        snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        rebuild_enabled_surface(&mut snapshot);
-        let mut guard = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        *guard = Arc::new(snapshot);
-        Ok(())
+        self.begin_lifecycle_transition_with_update(
+            plugin_id,
+            runtime_state,
+            allowed_source_states,
+            None,
+        )
+        .map(|_| ())
+    }
+}
+
+/// Observe cleanup warning state independently from the immutable routing descriptor.
+/// 独立于不可变路由描述符观测清理告警状态。
+/// `routing_state` is the actual lifecycle state and `has_cleanup` comes from its sole live map.
+/// `routing_state` 为实际生命周期状态，`has_cleanup` 来自其唯一实时映射。
+/// Returns a warning only for Disabled with real retained cleanup; all other lifecycle states remain exact.
+/// 仅对存在真实保留清理的停用状态返回告警；其他全部生命周期状态保持精确。
+fn observed_runtime_state(
+    routing_state: VulcanPluginRuntimeState,
+    has_cleanup: bool,
+) -> VulcanPluginRuntimeState {
+    if routing_state == VulcanPluginRuntimeState::Disabled && has_cleanup {
+        VulcanPluginRuntimeState::DisabledWithCleanupWarning
+    } else {
+        routing_state
     }
 }
 
@@ -666,6 +1048,11 @@ fn rebuild_enabled_surface(snapshot: &mut VulcanPluginCatalogSnapshot) {
     for plugin in snapshot.plugins.values() {
         if plugin.availability != VulcanPluginAvailability::Enabled
             || plugin.runtime_state != VulcanPluginRuntimeState::Enabled
+            || (!plugin.runtime_execution_available
+                && plugin
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.runtime_requirements.is_some()))
         {
             continue;
         }

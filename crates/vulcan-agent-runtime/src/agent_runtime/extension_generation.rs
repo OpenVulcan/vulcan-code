@@ -1,6 +1,7 @@
 //! Immutable plugin and MCP extension generation captured by one execution.
 //! 单次执行捕获的不可变插件与 MCP 扩展代次。
 
+use super::conversation_hooks::VulcanPluginConversationHooks;
 use crate::mcp::McpRuntimeAccess;
 use std::sync::Arc;
 use vulcan_plugin_runtime::VulcanPluginCatalogSnapshot;
@@ -22,9 +23,49 @@ pub struct ExtensionGeneration {
     /// Immutable system-and-user prompt-skill catalog loaded only at startup or explicit refresh.
     /// 仅在启动或显式刷新时加载的不可变系统与用户提示词技能目录。
     prompt_skill_catalog: Option<Arc<PromptSkillCatalog>>,
+    /// Frozen conversation plugin handlers prepared from this exact plugin catalog.
+    /// 从本精确插件目录准备的冻结会话插件处理器。
+    plugin_conversation_hooks: Option<Arc<VulcanPluginConversationHooks>>,
 }
 
 impl ExtensionGeneration {
+    /// Replace one original full extension pointer and record its same-instance commit in the adjacent tail.
+    /// 替换单个原完整扩展指针，并在相邻尾段记录其同实例提交。
+    /// slot is the host's actual publication slot, expected is its captured original, and next is its complete successor.
+    /// slot 为宿主实际发布槽，expected 为捕获的原值，next 为其完整后继。
+    /// on_commit must be an infallible synchronous ownership transfer without I/O, waits or plugin callbacks.
+    /// on_commit 须为不可失败的同步所有权转交，不执行输入输出、等待或插件回调。
+    /// Returns the actual committed Arc; pointer or revision conflicts fail before either mutation or confirmation.
+    /// 返回实际已提交 Arc；指针或修订冲突在修改及确认之前失败。
+    pub fn publish_prepared(
+        slot: &mut Arc<Self>,
+        expected: &Arc<Self>,
+        next: Arc<Self>,
+        on_commit: impl FnOnce(&Arc<Self>),
+    ) -> Result<Arc<Self>, String> {
+        if !Arc::ptr_eq(slot, expected) {
+            return Err(String::from(
+                "The original extension publication pointer changed.",
+            ));
+        }
+        // The actual original pointer supplies the sole successor revision used by this replacement.
+        // 此替换使用的唯一后继修订由实际原指针提供。
+        let revision = expected
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| String::from("Extension generation revision exhausted."))?;
+        if next.revision != revision {
+            return Err(String::from(
+                "The prepared extension revision is not the original successor.",
+            ));
+        }
+        // All fallible checks precede this single write; expected keeps the displaced resources alive through confirmation.
+        // 全部可失败校验先于此单次写入；expected 使被替换资源跨确认存续。
+        *slot = Arc::clone(&next);
+        on_commit(&next);
+        Ok(next)
+    }
+
     /// Builds one immutable extension generation from an already prepared catalog and MCP access surface.
     /// 根据已经准备好的目录与 MCP 访问面构建一个不可变扩展代次。
     ///
@@ -48,7 +89,56 @@ impl ExtensionGeneration {
             plugin_catalog,
             mcp_runtime,
             prompt_skill_catalog,
+            plugin_conversation_hooks: None,
         }
+    }
+
+    /// Builds a service generation with the exact catalog owned by `hooks`.
+    /// 使用 `hooks` 持有的精确目录构建服务代次。
+    /// `revision`, `mcp_runtime`, and `prompt_skill_catalog` are the prepared publication resources.
+    /// `revision`、`mcp_runtime` 与 `prompt_skill_catalog` 是准备发布的资源。
+    /// Returns an immutable generation; catalog and conversation handlers cannot be paired independently.
+    /// 返回不可变代次；目录与会话处理器不能被独立配对。
+    pub fn new_with_plugin_conversation_hooks(
+        revision: u64,
+        hooks: Arc<VulcanPluginConversationHooks>,
+        mcp_runtime: McpRuntimeAccess,
+        prompt_skill_catalog: Option<Arc<PromptSkillCatalog>>,
+    ) -> Self {
+        Self {
+            revision,
+            plugin_catalog: Some(hooks.catalog()),
+            mcp_runtime,
+            prompt_skill_catalog,
+            plugin_conversation_hooks: Some(hooks),
+        }
+    }
+
+    /// Prepares a successor with replacement MCP and prompt catalogs while retaining plugin routing.
+    /// 准备替换 MCP 与提示词目录的后继代次，同时保留插件路由。
+    /// Returns the unpublished successor, or an error if the service revision is exhausted.
+    /// 返回尚未发布的后继代次；服务修订号耗尽则返回错误。
+    pub fn republish(
+        &self,
+        mcp_runtime: McpRuntimeAccess,
+        prompt_skill_catalog: Option<Arc<PromptSkillCatalog>>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            revision: self
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| String::from("Extension generation revision exhausted."))?,
+            plugin_catalog: self.plugin_catalog.clone(),
+            mcp_runtime,
+            prompt_skill_catalog,
+            plugin_conversation_hooks: self.plugin_conversation_hooks.clone(),
+        })
+    }
+
+    /// Returns captured plugin handlers, or `None` for explicitly standalone generations.
+    /// 返回捕获的插件处理器；显式独立代次返回 `None`。
+    pub fn plugin_conversation_hooks(&self) -> Option<&VulcanPluginConversationHooks> {
+        self.plugin_conversation_hooks.as_deref()
     }
 
     /// Returns the monotonic extension revision.

@@ -18,9 +18,9 @@ pub mod agent_profile;
 pub mod agent_runtime;
 pub mod attachment_asset_index;
 pub mod attachment_assets;
-pub mod image_conversion;
 pub mod context_budget;
 pub mod conversation_protocol;
+pub mod image_conversion;
 pub mod data_plane {
     //! Shared data-plane helpers re-exported for extracted runtime modules.
     //! 为抽取后的运行时模块重新导出的共享数据平面辅助函数。

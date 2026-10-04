@@ -4,7 +4,6 @@
 use super::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager};
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::BTreeMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -64,11 +63,23 @@ pub struct VulcanPluginActionStatus {
 /// One supervised invocation owns this record until real completion.
 /// 单个受监督调用持有此记录直至实际完成。
 pub(super) struct ActionRecord {
+    /// Exact initiating client and invocation UUIDs.
+    /// 精确发起客户端及调用 UUID。
     pub(super) identity: VulcanPluginActionIdentity,
+    /// Original service epoch and catalog generation.
+    /// 原服务纪元及目录代次。
     pub(super) runtime_identity: String,
+    /// Immutable manifest owner for diagnostic authorization.
+    /// 诊断授权使用的不可变清单所有者。
     pub(super) plugin_id: String,
+    /// Exact declared action selected at admission.
+    /// 入场选择的精确声明 Action。
     pub(super) action_id: String,
+    /// Original monotonic start of the complete invocation.
+    /// 完整调用的原单调开始时刻。
     pub(super) entered: Instant,
+    /// Frozen absolute budget for all stages.
+    /// 全部阶段的冻结绝对预算。
     pub(super) deadline: Instant,
     /// Only declared reads allow withdrawal after submission.
     /// 仅声明为读取的操作允许提交后撤回。
@@ -84,6 +95,15 @@ pub(super) struct ActionRecord {
 /// Mutable timing state excludes all business payloads.
 /// 可变计时状态排除全部业务载荷。
 struct RecordState {
+    /// The diagnostic owner retains capacity through physical work, not just its supervisor.
+    /// 诊断所有者跨物理工作保留容量，而非仅跨监督任务。
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// Outstanding real operations include queued blocking closures and admitted core work.
+    /// 未结束真实操作包含排队阻塞闭包和已入场核心工作。
+    active_work: usize,
+    /// The first logical completion remains pending until all physical work leaves.
+    /// 首次逻辑完成保持待定，直至全部物理工作离开。
+    completion: Option<&'static str>,
     phase: String,
     changed: Instant,
     terminal: bool,
@@ -93,70 +113,178 @@ struct RecordState {
 }
 
 tokio::task_local! {
-    /// Async supervisor context propagated explicitly onto engine blocking threads.
-    /// 异步监督上下文，显式传播到引擎阻塞线程。
+    /// Async supervisor context used to attach preparation to the originating Action.
+    /// 用于将准备关联至原始 Action 的异步监督上下文。
     pub(super) static ACTION_RECORD: Arc<ActionRecord>;
 }
-thread_local! {
-    /// Only the current synchronous engine call may populate this callback context.
-    /// 仅当前同步引擎调用可以设置此回调上下文。
-    static BLOCKING_RECORD: RefCell<Option<Arc<ActionRecord>>> = const { RefCell::new(None) };
+
+/// Validated admission inputs include the exact owned capacity permit.
+/// 已校验入场输入包含精确持有的容量许可。
+pub(super) struct ActionAdmission {
+    /// Client and invocation UUIDs select one diagnostic record.
+    /// 客户端及调用 UUID 选择一条诊断记录。
+    pub identity: VulcanPluginActionIdentity,
+    /// Catalog plugin identity is immutable for this invocation.
+    /// 本次调用的目录插件身份不可变。
+    pub plugin_id: String,
+    /// Manifest action identity is immutable for this invocation.
+    /// 本次调用的清单 Action 身份不可变。
+    pub action_id: String,
+    /// Service epoch and generation bind the original UI projection.
+    /// 服务纪元与代次绑定原界面投影。
+    pub runtime_identity: String,
+    /// Original monotonic admission instant starts all timing.
+    /// 原单调入场时刻开启全部计时。
+    pub entered: Instant,
+    /// Original absolute deadline cannot be extended by scheduling.
+    /// 原绝对截止时间不能因调度而延长。
+    pub deadline: Instant,
+    /// Only read actions permit withdrawal before execution admission.
+    /// 只有读取型 Action 允许执行入场前撤回。
+    pub cancellable: bool,
+    /// Physical completion releases the outstanding action admission.
+    /// 物理完成释放未结束 Action 的入场容量。
+    pub permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-/// Restores the preceding callback context on normal return and panic alike.
-/// 正常返回与异常展开时都恢复先前回调上下文。
-pub(super) struct BlockingActionScope(Option<Arc<ActionRecord>>);
-impl BlockingActionScope {
-    /// Installs an optional supervisor record for one blocking closure.
-    /// 为单个阻塞闭包安装可选监督记录。
-    pub(super) fn enter(record: Option<Arc<ActionRecord>>) -> Self {
-        Self(BLOCKING_RECORD.with(|slot| slot.replace(record)))
+/// One real operation retains its action record and optional persistent admission gate.
+/// 一个真实操作保留其 Action 记录及可选持久入场门。
+pub(super) struct ActionWorkGuard {
+    /// The record owns the capacity permit without retaining a runtime or manager.
+    /// 记录拥有容量许可，但不保留运行时或管理器。
+    record: Arc<ActionRecord>,
+    /// A persistent UI gate follows real work even when its observer is dropped.
+    /// 即使观察者被丢弃，持久 UI 门仍跟随真实工作。
+    gate: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+impl ActionWorkGuard {
+    /// Retain record and optional gate before dispatch; reject completion or counter overflow.
+    /// 在派发前保留 record 与可选 gate；拒绝已完成记录或计数溢出。
+    pub(super) fn new(
+        record: Arc<ActionRecord>,
+        gate: Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) -> Result<Self, VulcanPluginRuntimeError> {
+        {
+            // Registration and logical completion share one atomic state transition.
+            // 注册及逻辑完成共享一个原子状态转换。
+            let mut state = record
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.completion.is_some() {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Action ownership already completed.",
+                ));
+            }
+            state.active_work = state.active_work.checked_add(1).ok_or_else(|| {
+                VulcanPluginRuntimeError::new("Action physical ownership count overflow.")
+            })?;
+        }
+        Ok(Self { record, gate })
+    }
+
+    /// Return the exact trusted diagnostic owner for a native callback.
+    /// 返回原生回调的精确可信诊断所有者。
+    pub(super) fn record(&self) -> Arc<ActionRecord> {
+        Arc::clone(&self.record)
     }
 }
-impl Drop for BlockingActionScope {
+impl Drop for ActionWorkGuard {
+    /// Release the actual gate before publishing terminal status and returning action capacity.
+    /// 发布终态及归还 Action 容量之前释放真实入场门。
     fn drop(&mut self) {
-        BLOCKING_RECORD.with(|slot| slot.replace(self.0.take()));
+        drop(self.gate.take());
+        // Every guard increments once and is moved, never cloned.
+        // 每个守卫恰好递增一次，且只移动、不克隆。
+        let mut state = self
+            .record
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.active_work -= 1;
+        state.publish_completion();
     }
 }
-
-/// Returns the actual host deadline for the currently executing plugin callback.
-/// 返回当前执行插件回调的实际宿主截止时间。
-pub(super) fn callback_deadline() -> Option<Instant> {
-    BLOCKING_RECORD.with(|slot| slot.borrow().as_ref().map(|record| record.deadline))
+impl RecordState {
+    /// Publish the recorded outcome only after the last physical guard leaves; return no value.
+    /// 仅在最后一个物理守卫离开后发布已记录结果；不返回值。
+    fn publish_completion(&mut self) {
+        if self.terminal || self.active_work != 0 {
+            return;
+        }
+        let Some(outcome) = self.completion else {
+            return;
+        };
+        // Freeze final timing before releasing capacity for a successor.
+        // 为后继释放容量之前冻结最终计时。
+        let previous = self.phase.clone();
+        *self.stages.entry(previous).or_default() += self.changed.elapsed().as_millis() as u64;
+        self.phase = outcome.into();
+        self.changed = Instant::now();
+        self.terminal = true;
+        self.permit.take();
+    }
 }
 
 impl ActionRecord {
-    /// Records waiter cancellation without interrupting an already running VM.
-    /// 记录等待方取消，不中断已经运行的 VM。
-    pub(super) fn withdraw(&self) {
+    /// Record the first logical outcome; physical work must finish before terminal publication.
+    /// 记录首次逻辑结果；物理工作必须先结束，才能发布终态。
+    fn complete(&self, outcome: &'static str) {
+        // Idempotence also prevents a completion guard from overwriting a successful result.
+        // 幂等性同时防止完成守卫覆盖成功结果。
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.cancellable && !state.started {
+        if state.completion.is_some() {
+            return;
+        }
+        state.completion = Some(outcome);
+        if state.active_work != 0 {
+            // Accumulate elapsed time under the previous phase before transitioning.
+            // 转换之前，在上一阶段下累计经过时间。
+            let previous = state.phase.clone();
+            // Measure the phase with the same monotonic clock as admission.
+            // 使用与入场相同的单调时钟测量阶段。
+            let elapsed = state.changed.elapsed().as_millis() as u64;
+            *state.stages.entry(previous).or_default() += elapsed;
+            state.phase = "cleanup_wait".into();
+            state.changed = Instant::now();
+        }
+        state.publish_completion();
+    }
+    /// Records waiter cancellation without interrupting an already running VM.
+    /// 记录等待方取消，不中断已经运行的 VM。
+    pub(super) fn withdraw(&self) {
+        // Serialize cancellation with business admission; late observer loss preserves timeout classification.
+        // 将取消与业务入场排序；观测者迟到丢失保留超时分类。
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.cancellable && !state.started && !state.terminal && Instant::now() < self.deadline {
             state.cancel_requested = true;
         }
     }
-    /// Records a distinct final outcome after actual execution and cleanup returned.
-    /// 实际执行与清理返回后记录明确区分的最终结果。
+    /// Record the supervisor result; publish it only after registered physical work finishes.
+    /// 记录监督结果；仅在已登记物理工作结束后发布。
     pub(super) fn finish(&self, succeeded: bool) {
+        // Read cancellation admission before choosing the logical outcome.
+        // 选择逻辑结果之前读取取消入场状态。
         let cancelled = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .cancel_requested;
-        self.phase(
-            if succeeded {
-                "succeeded"
-            } else if cancelled {
-                "cancelled"
-            } else if Instant::now() >= self.deadline {
-                "timed_out"
-            } else {
-                "failed"
-            },
-            true,
-        );
+        self.complete(if succeeded {
+            "succeeded"
+        } else if cancelled {
+            "cancelled"
+        } else if Instant::now() >= self.deadline {
+            "timed_out"
+        } else {
+            "failed"
+        });
     }
     /// Accumulates a measured boundary without changing the execution state.
     /// 累计实测边界耗时，不改变执行状态。
@@ -171,21 +299,31 @@ impl ActionRecord {
     }
     /// Records one stage transition and accumulates repeated stage durations.
     /// 记录阶段转换，并累加重复阶段的耗时。
-    pub(super) fn phase(&self, phase: &str, terminal: bool) {
+    pub(super) fn phase(&self, phase: &str) {
+        // Read or update one exact ownership record under its short evidence lock.
+        // 在短证据锁下读取或更新一条精确所有权记录。
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.completion.is_some() {
+            return;
+        }
+        // Accumulate elapsed time under the previous phase before transitioning.
+        // 转换之前，在上一阶段下累计经过时间。
         let previous = state.phase.clone();
+        // Measure the phase with the same monotonic clock as admission.
+        // 使用与入场相同的单调时钟测量阶段。
         let elapsed = state.changed.elapsed().as_millis() as u64;
         *state.stages.entry(previous).or_default() += elapsed;
         state.phase = phase.to_owned();
         state.changed = Instant::now();
-        state.terminal = terminal;
     }
     /// Rejects client cancellation or an expired deadline before entering Lua.
     /// 进入 Lua 前拒绝客户端取消或已过期截止时间。
     pub(super) fn check(&self) -> Result<(), VulcanPluginRuntimeError> {
+        // Read or update one exact ownership record under its short evidence lock.
+        // 在短证据锁下读取或更新一条精确所有权记录。
         let state = self
             .state
             .lock()
@@ -205,6 +343,8 @@ impl ActionRecord {
     /// Atomically closes cancellation admission before any action-side effects start.
     /// 在任何 Action 副作用开始前原子关闭取消准入。
     pub(super) fn start(&self) -> Result<(), VulcanPluginRuntimeError> {
+        // Read or update one exact ownership record under its short evidence lock.
+        // 在短证据锁下读取或更新一条精确所有权记录。
         let mut state = self
             .state
             .lock()
@@ -214,7 +354,11 @@ impl ActionRecord {
                 "Plugin action cancelled or expired before execution.",
             ));
         }
+        // Accumulate elapsed time under the previous phase before transitioning.
+        // 转换之前，在上一阶段下累计经过时间。
         let previous = state.phase.clone();
+        // Measure the phase with the same monotonic clock as admission.
+        // 使用与入场相同的单调时钟测量阶段。
         let elapsed = state.changed.elapsed().as_millis() as u64;
         *state.stages.entry(previous).or_default() += elapsed;
         state.phase = "executing".into();
@@ -225,6 +369,8 @@ impl ActionRecord {
     /// Returns a current safe projection, including time spent in the active stage.
     /// 返回当前安全投影，包含当前阶段已经消耗的时间。
     pub(super) fn snapshot(&self) -> VulcanPluginActionStatus {
+        // Read or update one exact ownership record under its short evidence lock.
+        // 在短证据锁下读取或更新一条精确所有权记录。
         let state = self
             .state
             .lock()
@@ -275,14 +421,20 @@ impl VulcanPluginRuntimeManager {
     /// 创建有界诊断记录，拒绝复用调用标识。
     pub(super) fn register_action(
         &self,
-        identity: VulcanPluginActionIdentity,
-        plugin_id: &str,
-        action_id: &str,
-        runtime_identity: String,
-        entered: Instant,
-        deadline: Instant,
-        cancellable: bool,
+        admission: ActionAdmission,
     ) -> Result<Arc<ActionRecord>, VulcanPluginRuntimeError> {
+        // All identity, budget and capacity fields belong to the same admission.
+        // 全部身份、预算与容量字段属于同一次入场。
+        let ActionAdmission {
+            identity,
+            plugin_id,
+            action_id,
+            runtime_identity,
+            entered,
+            deadline,
+            cancellable,
+            permit,
+        } = admission;
         if uuid::Uuid::parse_str(&identity.client_id).is_err()
             || uuid::Uuid::parse_str(&identity.invocation_id).is_err()
         {
@@ -316,12 +468,15 @@ impl VulcanPluginRuntimeManager {
         let record = Arc::new(ActionRecord {
             identity,
             runtime_identity,
-            plugin_id: plugin_id.into(),
-            action_id: action_id.into(),
+            plugin_id,
+            action_id,
             entered,
             deadline,
             cancellable,
             state: Mutex::new(RecordState {
+                permit: Some(permit),
+                active_work: 0,
+                completion: None,
                 phase: "admitted".into(),
                 changed: entered,
                 terminal: false,
@@ -365,11 +520,13 @@ impl VulcanPluginRuntimeManager {
             ));
         }
         if cancel && record.cancellable {
+            // Read or update one exact ownership record under its short evidence lock.
+            // 在短证据锁下读取或更新一条精确所有权记录。
             let mut state = record
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !state.terminal && !state.started {
+            if !state.terminal && !state.started && Instant::now() < record.deadline {
                 state.cancel_requested = true;
                 record.cancelled.notify_one();
             }
@@ -382,13 +539,10 @@ impl VulcanPluginRuntimeManager {
 /// 测量同步宿主回调，不保留其参数。
 pub(super) struct HostCallTimer(Option<Arc<ActionRecord>>, Instant);
 impl HostCallTimer {
-    /// Captures only the current trusted blocking context and start instant.
-    /// 仅捕获当前可信阻塞上下文与开始时刻。
-    pub(super) fn start() -> Self {
-        Self(
-            BLOCKING_RECORD.with(|slot| slot.borrow().clone()),
-            Instant::now(),
-        )
+    /// Measure a callback attributed to an explicitly authenticated record, or no action.
+    /// 测量归属于明确已认证记录的回调，或无 Action 的回调。
+    pub(super) fn for_record(record: Option<Arc<ActionRecord>>) -> Self {
+        Self(record, Instant::now())
     }
 }
 impl Drop for HostCallTimer {
@@ -399,13 +553,13 @@ impl Drop for HostCallTimer {
     }
 }
 
-/// Marks abnormal supervisor exits terminal without releasing ownership before stack cleanup.
-/// 将异常监督退出标为终态，不在栈清理前释放所有权。
+/// Records abnormal supervision while physical guards retain status and capacity.
+/// 记录异常监督退出，物理守卫继续保留状态及容量。
 pub(super) struct ActionCompletionGuard(pub(super) Arc<ActionRecord>);
 impl Drop for ActionCompletionGuard {
+    /// Preserve the first result, or record supervisor failure pending actual physical completion.
+    /// 保留首次结果，或记录等待真实物理完成的监督失败。
     fn drop(&mut self) {
-        if !self.0.snapshot().terminal {
-            self.0.phase("supervisor_failed", true);
-        }
+        self.0.complete("supervisor_failed");
     }
 }

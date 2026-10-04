@@ -104,11 +104,11 @@ end
 -- Build the restricted global environment used by one real plugin bundle.
 -- 构建单个真实插件 bundle 使用的受限全局环境。
 --
--- plugin_id, runtime_id, lease_scope, and lua_module_names are immutable values bound by the Vulcan host.
--- plugin_id、runtime_id、lease_scope 与 lua_module_names 是 Vulcan 宿主绑定的不可变值。
--- Returns an environment exposing standard pure Lua helpers and an identity-injecting host call.
--- 返回一个环境，其中暴露标准纯 Lua 辅助能力及注入身份的宿主调用。
-local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_module_names)
+-- lua_module_names is the exact allowlist; call_host is the explicitly selected trusted transport.
+-- lua_module_names 是精确白名单；call_host 是显式选择的可信传输。
+-- Returns standard pure Lua helpers and a host call that never selects a transport from plugin data.
+-- 返回标准纯 Lua 辅助能力及绝不从插件数据选择传输的宿主调用。
+local function build_plugin_environment(lua_module_names, call_host)
     local environment = {
         assert = assert,
         error = error,
@@ -150,13 +150,7 @@ local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_
         payload = host_vulcan.json.object(payload)
         -- response is the fixed LuaSkills host-call envelope, never the tool value itself.
         -- response 是固定 LuaSkills 宿主调用信封，绝不是工具值本身。
-        local response = host_vulcan.host.call(tool_name, {
-            plugin_id = plugin_id,
-            runtime_id = runtime_id,
-            lease_scope = lease_scope,
-            workspace_root = active_workspace_root,
-            payload = payload,
-        })
+        local response = call_host(tool_name, payload)
         if type(response) ~= "table" or response.ok ~= true then
             -- message preserves the explicit host diagnostic without exposing envelope internals.
             -- message 保留明确的宿主诊断，同时不暴露信封内部结构。
@@ -171,8 +165,8 @@ local function build_plugin_environment(plugin_id, runtime_id, lease_scope, lua_
         end
         return response.value
     end
-    -- resolve_process closes over plugin identity and never accepts a program or cwd from the bundle.
-    -- resolve_process 闭包捕获插件身份，且绝不接受 bundle 提供的 program 或 cwd。
+    -- resolve_process uses the selected host authority and never accepts a program or cwd from the bundle.
+    -- resolve_process 使用已选择宿主权威，且绝不接受 bundle 提供的 program 或 cwd。
     local function resolve_process(mode, entry_id, options)
         if type(entry_id) ~= "string" or entry_id == "" then
             error("Vulcan plugin process entry_id must be a non-empty string")
@@ -328,6 +322,32 @@ local function require_plugin_function(plugin, function_name)
     end
 end
 
+-- Compile bundle_source once for plugin_id under lua_module_names and the fixed call_host transport.
+-- 使用 lua_module_names 及固定 call_host 传输，为 plugin_id 编译一次 bundle_source。
+-- Returns the validated module table without publishing it into any global package registry.
+-- 返回已校验模块表，不将其发布到任何全局包注册表。
+local function load_plugin_bundle(plugin_id, bundle_source, lua_module_names, call_host)
+    -- Diagnostic names do not expose executable host paths to the plugin environment.
+    -- 诊断名称不向插件环境暴露可执行宿主路径。
+    local chunk_name = "@vulcan-plugin/" .. plugin_id .. "/runtime/plugin.bundle.lua"
+    -- The selected transport is a host closure, never a plugin-provided function.
+    -- 所选传输为宿主闭包，绝不使用插件提供的函数。
+    local plugin_environment = build_plugin_environment(lua_module_names, call_host)
+    -- Text-only loading rejects bytecode before any bundle instruction executes.
+    -- 仅文本加载在任何 bundle 指令执行前拒绝字节码。
+    local loader, compile_error = load(bundle_source, chunk_name, "t", plugin_environment)
+    if loader == nil then
+        error("Failed to compile Vulcan plugin bundle: " .. tostring(compile_error))
+    end
+    -- Execute initialization in the restricted environment and require one module table.
+    -- 在受限环境中执行初始化，并要求一个模块表。
+    local plugin = loader()
+    if type(plugin) ~= "table" then
+        error("Vulcan plugin bundle must return a table")
+    end
+    return plugin
+end
+
 -- Load one host-validated plugin bundle into the current isolated lease.
 -- 把一个经过宿主校验的插件 bundle 加载到当前隔离租约。
 --
@@ -348,27 +368,24 @@ function M.load(args)
     local lease_scope = require_string(args, "lease_scope")
     local workspace_root = require_string(args, "workspace_root")
     local bundle_source = require_string(args, "bundle_source")
-    -- chunk_name provides stable diagnostics without exposing an executable host path.
-    -- chunk_name 提供稳定诊断，同时不暴露可执行宿主路径。
-    local chunk_name = "@vulcan-plugin/" .. plugin_id .. "/runtime/plugin.bundle.lua"
     active_workspace_root = workspace_root
     if type(args.lua_modules) ~= "table" then
         error("Vulcan plugin bridge requires lua_modules to be a table")
     end
-    local plugin_environment = build_plugin_environment(
-        plugin_id,
-        runtime_id,
-        lease_scope,
-        args.lua_modules
-    )
-    local loader, compile_error = load(bundle_source, chunk_name, "t", plugin_environment)
-    if loader == nil then
-        error("Failed to compile Vulcan plugin bundle: " .. tostring(compile_error))
+    -- Legacy dispatch supplies identity only at this explicit compatibility boundary.
+    -- 旧分发仅在此显式兼容边界提供身份。
+    local function call_legacy_host(tool_name, payload)
+        return host_vulcan.host.call(tool_name, {
+            plugin_id = plugin_id,
+            runtime_id = runtime_id,
+            lease_scope = lease_scope,
+            workspace_root = active_workspace_root,
+            payload = payload,
+        })
     end
-    local plugin = loader()
-    if type(plugin) ~= "table" then
-        error("Vulcan plugin bundle must return a table")
-    end
+    -- Compile once in the same restricted environment used by formal modules.
+    -- 在与正式模块相同的受限环境中编译一次。
+    local plugin = load_plugin_bundle(plugin_id, bundle_source, args.lua_modules, call_legacy_host)
     require_plugin_function(plugin, require_string(args, "invoke_function"))
     require_plugin_function(plugin, require_string(args, "shutdown_function"))
     if args.hook_shutdown_function ~= nil and not is_json_null(args.hook_shutdown_function) then
@@ -389,6 +406,72 @@ function M.load(args)
     loaded_plugin = plugin
     loaded_plugin_id = plugin_id
     return true
+end
+
+-- Build a formal module from exact host args using only the runtime-bound native transport.
+-- 仅使用运行时绑定的原生传输，从精确宿主 args 构造正式模块。
+-- args supplies plugin_id, bundle_source, lua_modules and exact exported function_names.
+-- args 提供 plugin_id、bundle_source、lua_modules 及精确导出 function_names。
+-- Returns captured functions for direct typed invocation; no per-call bridge lookup is retained.
+-- 返回供直接类型化调用的已捕获函数；不保留逐次调用的桥接查找。
+function M.load_module(args)
+    -- Plugin identity is diagnostic data here; the Rust registry owns actual authorization.
+    -- 此处插件身份为诊断数据；Rust 注册表拥有实际授权。
+    local plugin_id = require_string(args, "plugin_id")
+    -- Bundle bytes are frozen by the host before the core pool is registered.
+    -- Bundle 字节在核心池注册前由宿主冻结。
+    local bundle_source = require_string(args, "bundle_source")
+    if type(args.lua_modules) ~= "table" or type(args.function_names) ~= "table" then
+        error("Vulcan plugin module requires lua_modules and function_names tables")
+    end
+    -- Formal capability dispatch already carries authenticated caller metadata outside these arguments.
+    -- 正式能力分发已经在这些参数之外携带已认证调用方元数据。
+    local plugin = load_plugin_bundle(plugin_id, bundle_source, args.lua_modules, host_vulcan.host.call)
+    -- Only explicit manifest exports reach the core; helper functions remain plugin-private.
+    -- 仅显式清单导出到达核心；辅助函数保持插件私有。
+    local exports = {}
+    for _, function_name in ipairs(args.function_names) do
+        require_plugin_function(plugin, function_name)
+        if exports[function_name] ~= nil then
+            error("Vulcan plugin module received duplicate function " .. function_name)
+        end
+        exports[function_name] = plugin[function_name]
+    end
+    if args.finalizer_name ~= nil and not is_json_null(args.finalizer_name) then
+        -- The host selects one declared shutdown entry; the captured reference keeps its original VM state.
+        -- 宿主选择一个已声明关闭入口；捕获引用保留其原始 VM 状态。
+        local finalizer_name = require_function_name(args.finalizer_name)
+        local finalizer = exports[finalizer_name]
+        if type(finalizer) ~= "function" then
+            error("Vulcan plugin finalizer is not a declared export")
+        end
+        -- Convert the version-one error frame into a failed closing outcome while preserving successful bytes.
+        -- 将版本一错误帧转换为失败关闭结果，同时保留成功返回的原始字节。
+        -- close_args is the frozen host envelope; returns its successful JSON frame or raises its protocol error.
+        -- close_args 为冻结宿主信封；返回成功 JSON 帧，或抛出其协议错误。
+        exports[finalizer_name] = function(close_args)
+            local frame = finalizer(close_args)
+            if type(frame) ~= "string" then
+                error("Vulcan Plugin shutdown returned no JSON frame")
+            end
+            local decoded = host_vulcan.json.decode(frame)
+            if type(decoded) ~= "table" or decoded.ok ~= true then
+                -- Error details follow the existing string-or-JSON plugin frame contract.
+                -- 错误详情遵循既有字符串或 JSON 插件帧契约。
+                local message = "Unknown Vulcan Plugin runtime error."
+                if type(decoded) == "table" and decoded.error ~= nil then
+                    if type(decoded.error) == "string" then
+                        message = decoded.error
+                    else
+                        message = host_vulcan.json.encode(decoded.error)
+                    end
+                end
+                error("Vulcan Plugin shutdown failed: " .. message)
+            end
+            return frame
+        end
+    end
+    return exports
 end
 
 -- Report whether the current bridge lease contains one valid loaded plugin.

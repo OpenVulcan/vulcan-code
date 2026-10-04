@@ -146,7 +146,8 @@ pub(super) async fn refresh_optional(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        McpRuntimeServerStatus, McpRuntimeSnapshot, McpServerRegistry, initial_server_snapshot,
+        McpBusinessGate, McpRuntimePurpose, McpRuntimeServerStatus, McpRuntimeSnapshot,
+        McpServerRegistry, initial_server_snapshot,
     };
     use super::*;
     use std::collections::BTreeMap;
@@ -260,8 +261,26 @@ mod tests {
         snapshot.status = McpRuntimeServerStatus::Connected;
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         let inner = Arc::new(McpRuntimeInner {
+            instance_id: uuid::Uuid::new_v4(),
             registry: McpServerRegistry::new(vec![server.clone()]),
+            // Synthetic connection state cannot certify an actual full plugin source.
+            // 合成连接状态不能认证实际完整插件来源。
+            launch_source: crate::mcp::registry::McpPluginLaunchSource::Unproven,
+            purpose: McpRuntimePurpose::Managed,
+            business_gate: RwLock::new(McpBusinessGate::Open),
             transports: RwLock::new(BTreeMap::new()),
+            // This synthetic fixture launches no native transport and has no authentic launch-input lease.
+            // 此合成夹具未启动原生传输，不具有真实启动输入租约。
+            launch_inputs: RwLock::new(BTreeMap::new()),
+            cleanup_observations: RwLock::new(BTreeMap::new()),
+            resource_releases: RwLock::new(BTreeMap::new()),
+            // This synthetic registry starts no native lifecycle and therefore has an empty released scope.
+            // 此合成注册表不启动原生生命周期，因此拥有已释放的空范围。
+            partition_release: {
+                let (resources, released) = vulcan_mcp_runtime::McpTransportResources::new(());
+                drop(resources);
+                released
+            },
             auth_sessions: tokio::sync::RwLock::new(BTreeMap::new()),
             snapshot: RwLock::new(McpRuntimeSnapshot {
                 servers: BTreeMap::from([(server.id.clone(), snapshot)]),

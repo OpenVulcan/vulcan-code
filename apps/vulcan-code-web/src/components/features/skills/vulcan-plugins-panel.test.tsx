@@ -2,6 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { formatMessage, readLocaleMessage } from "@/i18n";
 import type { PluginSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel";
@@ -36,30 +37,88 @@ it("shows Playwright MCP and optional Core browser readiness independently", asy
   await act(async () => root.render(<VulcanPluginsPanel plugins={[browserPlugin]} actions={{
     onPluginEnvironmentReady: async () => true,
     onPluginEnvironmentInstallStatusForPlugin: async () => null,
+    onReadPluginUninstallRequests: async () => [],
   } as unknown as SkillActionProps} />));
-  expect(host.textContent).toContain("Playwright MCP dependencies: installed; Core browser component: missing or unavailable");
+  expect(host.textContent).toContain(formatMessage(readLocaleMessage("en-US", "skills.plugins.playwrightStatus"), {
+    status: readLocaleMessage("en-US", "skills.plugins.playwrightReady"),
+  }));
+  expect(host.textContent).toContain(readLocaleMessage("en-US", "browser.builtInCoreBrowser"));
 });
 
-it("requires shared confirmation before uninstall and keeps failed confirmation retryable", async () => {
+it("requires shared confirmation and discovers the original after uninstall failure without replay", async () => {
+  // original is the sole actual service request returned after the initial response fails.
+  // original 是初始响应失败后返回的唯一实际服务请求。
+  const original = { pluginId: plugin.id, requestId: "12345678-1234-4234-8234-123456789abc", phase: "collection" as const,
+    requiresExternalEffectsAcknowledgement: false };
+  // read observes the registry on mount and then the actual retained original after failure.
+  // read 在挂载时观测注册表，然后在失败后观测实际保留原实例。
+  const read = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([original]);
+  // resume completes only the captured original UUID, never the ordinary uninstall entry.
+  // resume 仅完成捕获原 UUID，绝不调用普通卸载入口。
+  const resume = vi.fn().mockResolvedValue(undefined);
+  // uninstall reports its foreground failure independently from the retained request observation.
+  // uninstall 独立于保留请求观测报告前台失败。
   const uninstall = vi.fn().mockRejectedValueOnce(new Error("busy runtime")).mockResolvedValue(undefined);
-  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onUninstallUserPlugin: uninstall, onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onUninstallUserPlugin: uninstall,
+    onReadPluginUninstallRequests: read, onResumePluginUninstallRequest: resume,
+    onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')!.click());
   expect(uninstall).not.toHaveBeenCalled();
   const dialog = document.querySelector('[role="alertdialog"]')!;
   expect(dialog.textContent).toContain("configuration and isolated environment");
   const confirm = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
   await act(async () => confirm.click());
-  expect(dialog.textContent).toContain("busy runtime");
-  expect(confirm.disabled).toBe(false);
-  await act(async () => confirm.click());
-  expect(uninstall).toHaveBeenCalledTimes(2);
+  expect(host.textContent).toContain("busy runtime"); expect(host.textContent).toContain(original.requestId);
+  expect(host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')?.disabled).toBe(true);
+  expect(read).toHaveBeenCalledTimes(2); expect(read).toHaveBeenLastCalledWith();
+  expect(uninstall).toHaveBeenCalledTimes(1);
   expect(uninstall).toHaveBeenLastCalledWith("fixture");
   expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  // refresh is the only visible read in the automatically expanded uninstall recovery surface.
+  // refresh 是自动展开卸载恢复界面中唯一可见读取。
+  const refresh = [...host.querySelectorAll("button")].find((button) => button.textContent === "Read original requests")!;
+  await act(async () => refresh.click());
+  // continueButton reviews the same retained original rather than dispatching a replacement.
+  // continueButton 审阅相同保留原实例，而非派发替代请求。
+  const continueButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue original uninstall")!;
+  await act(async () => continueButton.click()); read.mockResolvedValue([]);
+  // finalConfirm belongs to the original request confirmation portal.
+  // finalConfirm 属于原请求确认门户。
+  const finalConfirm = [...document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
+  await act(async () => finalConfirm.click());
+  expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
+  expect(uninstall).toHaveBeenCalledTimes(1);
+});
+
+// An empty read after a failed initial response never proves deletion or authorizes blind replay.
+// 初始响应失败后的空读取绝不证明删除，也不授权盲重放。
+it.each(["empty", "failed"] as const)("shows an initial no-ID uninstall result as unknown after a %s query and blocks ordinary replay", async (outcome) => {
+  // uninstall loses its foreground response before an original can be discovered.
+  // uninstall 在可发现原实例之前丢失前台响应。
+  const uninstall = vi.fn().mockRejectedValue(new Error("response lost"));
+  // read remains empty and cannot supply an authoritative completion receipt.
+  // read 持续为空，不能提供权威完成回执。
+  const read = vi.fn().mockResolvedValueOnce([]);
+  if (outcome === "empty") read.mockResolvedValue([]);
+  else read.mockRejectedValue(new Error("query unavailable"));
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onUninstallUserPlugin: uninstall,
+    onReadPluginUninstallRequests: read, onPluginEnvironmentReady: async () => true,
+    onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
+  await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')!.click());
+  // confirm is the ordinary uninstall confirmation, selected by its current semantic text.
+  // confirm 是普通卸载确认，按当前语义文本选择。
+  const confirm = [...document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
+  await act(async () => confirm.click());
+  expect(host.textContent).toContain("Original uninstall outcome unconfirmed"); expect(host.textContent).toContain("response lost");
+  expect(host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')?.disabled).toBe(true);
+  expect(uninstall).toHaveBeenCalledTimes(1); expect(read).toHaveBeenCalledTimes(2);
+  if (outcome === "failed") expect(host.textContent).toContain("query unavailable");
 });
 
 it("shows a lifecycle failure and clears it when the same action succeeds", async () => {
   const toggle = vi.fn().mockRejectedValueOnce(new Error("activation failed")).mockResolvedValue(undefined);
-  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onSetVulcanPluginEnabled: toggle, onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onSetVulcanPluginEnabled: toggle,
+    onReadPluginUninstallRequests: async () => [], onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
   const control = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
   await act(async () => control.click());
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("activation failed");
@@ -82,6 +141,7 @@ it("keeps enable unavailable until the explicit environment install succeeds", a
   const toggle = vi.fn().mockResolvedValue(undefined);
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
     onPluginEnvironmentReady: async () => ready,
+    onReadPluginUninstallRequests: async () => [],
     onPluginEnvironmentInstallStatusForPlugin: async () => null,
     onStartPluginEnvironmentInstall: start,
     onPluginEnvironmentInstallStatus: status,
@@ -115,9 +175,121 @@ it("resumes a Core-owned install task after the panel mounts", async () => {
   const latest = vi.fn().mockResolvedValue({ taskId: "foreign-1", pluginId: "fixture", generation: "generation-1", state: "failed", stage: "failed", error: "registry unavailable" });
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
     onPluginEnvironmentReady: async () => false,
+    onReadPluginUninstallRequests: async () => [],
     onPluginEnvironmentInstallStatusForPlugin: latest,
   } as unknown as SkillActionProps} />));
   expect(latest).toHaveBeenCalledWith("fixture");
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("registry unavailable");
   expect(host.textContent).toContain("Install runtime");
+});
+
+// Actual page recovery shares synchronous lifecycle admission without requiring a replay of ordinary actions.
+// 实际页面恢复共享同步生命周期入场，无需重放普通动作。
+it("holds the ordinary plugin controls closed during original installation recovery", async () => {
+  // request is a retained original for this exact namespace, without credential values.
+  // request 是此精确命名空间的保留原实例，不含凭据值。
+  const request: import("@/service/plugin-install-recovery-service").PluginInstallStatus = {
+    requestId: "12345678-1234-4234-8234-123456789abc", pluginId: plugin.id, phase: "lifecycle",
+  };
+  // finish resolves the same dispatched service-owned recovery after the page gate is inspected.
+  // finish 在检查页面门之后结束相同已派发服务自有恢复。
+  let finish!: () => void;
+  // recover retains the exact explicit recovery call; it never dispatches install or enable.
+  // recover 保留精确明确恢复调用；绝不派发安装或启用。
+  const recover = vi.fn<(pluginId: string, requestId: string, acknowledgement: boolean) => Promise<void>>()
+    .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  // read observes the original until the service reports successful retirement.
+  // read 观测原实例，直至服务报告成功退役。
+  const read = vi.fn().mockResolvedValue([request]);
+  // toggle proves the actual lifecycle control never dispatches while recovery owns admission.
+  // toggle 证明恢复拥有入场期间实际生命周期控件绝不派发。
+  const toggle = vi.fn().mockResolvedValue(undefined);
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
+    onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null,
+    onReadPluginUninstallRequests: async () => [],
+    onReadPluginInstallRequests: read, onRecoverPluginInstallRequest: recover, onSetVulcanPluginEnabled: toggle,
+  } as unknown as SkillActionProps} />));
+  // find locates one actual visible English button or reports current fixture drift.
+  // find 定位单个实际可见英文按钮，或报告当前夹具漂移。
+  const find = (text: string): HTMLButtonElement => {
+    // matched is selected semantically across the actual confirmation portal.
+    // matched 跨实际确认门户按语义选择。
+    const matched = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === text);
+    if (!matched) throw new Error(`Expected ${text}; the control label or availability may have changed`);
+    return matched;
+  };
+  await act(async () => find("Installation recovery").click());
+  // field is the explicit original namespace field, independent from installed-row position.
+  // field 是明确原命名空间字段，独立于已安装行位置。
+  const field = host.querySelector<HTMLInputElement>("input[list]");
+  if (!field) throw new Error("Expected recovery namespace field; its contract may have changed");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, plugin.id);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => find("Read original requests").click());
+  await act(async () => find("Recover original request").click());
+  await act(async () => find("Confirm").click());
+  // control is the actual ordinary plugin toggle, not a test-only admission observer.
+  // control 是实际普通插件开关，而非测试专用入场观察者。
+  const control = host.querySelector<HTMLButtonElement>('[role="switch"]');
+  if (!control) throw new Error("Expected ordinary plugin toggle; its contract may have changed");
+  expect(control.disabled).toBe(true); expect(field.disabled).toBe(true);
+  await act(async () => control.click()); expect(toggle).not.toHaveBeenCalled();
+  read.mockResolvedValue([]); await act(async () => finish());
+  expect(control.disabled).toBe(false); expect(field.disabled).toBe(false);
+  expect(recover).toHaveBeenCalledExactlyOnceWith(plugin.id, request.requestId, false);
+});
+
+// The real page gate also excludes lifecycle and ordinary uninstall while an original deletion continues.
+// 真实页面门在原删除继续期间也排除生命周期及普通卸载。
+it("holds ordinary controls closed during exact uninstall continuation without repeat dispatch", async () => {
+  // original is the retained deletion read from the service on page mount.
+  // original 是页面挂载时从服务读取的保留删除。
+  const original = { pluginId: plugin.id, requestId: "12345678-1234-4234-8234-123456789abc", phase: "collection" as const,
+    requiresExternalEffectsAcknowledgement: false };
+  // finish resolves the one actual-shaped continuation already dispatched by this page.
+  // finish 结束此页面已派发的唯一符合实际结构继续。
+  let finish!: () => void;
+  // resume records the original continuation while keeping the page admission occupied.
+  // resume 记录原继续，并保持页面入场占用。
+  const resume = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  // read removes the original only after the foreground response is acknowledged.
+  // read 仅在前台响应已确认之后移除原实例。
+  const read = vi.fn().mockResolvedValue([original]);
+  // toggle and uninstall observe ordinary actions, which must never dispatch during continuation.
+  // toggle 及 uninstall 观测普通动作，继续期间绝不应派发。
+  const toggle = vi.fn();
+  // uninstall records replacement entry calls independently from original continuation.
+  // uninstall 独立于原继续记录替代入口调用。
+  const uninstall = vi.fn();
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
+    onReadPluginUninstallRequests: read, onResumePluginUninstallRequest: resume,
+    onUninstallUserPlugin: uninstall, onSetVulcanPluginEnabled: toggle,
+    onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null,
+  } as unknown as SkillActionProps} />));
+  // find selects the current semantic label rather than a shifting control index.
+  // find 选择当前语义标签，而非移动控件下标。
+  const find = (text: string): HTMLButtonElement => {
+    // found is the actual ordinary or recovery control.
+    // found 是实际普通或恢复控件。
+    const found = [...document.querySelectorAll("button")].find((button) => button.textContent === text);
+    if (!found) throw new Error(`Expected ${text}; the current label or availability may have changed`);
+    return found;
+  };
+  await act(async () => find("Uninstallation recovery").click());
+  await act(async () => find("Continue original uninstall").click());
+  await act(async () => find("Confirm").click());
+  // control and remove are real ordinary plugin controls guarded by the parent's synchronous admission.
+  // control 及 remove 是受父级同步入场保护的真实普通插件控件。
+  const control = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+  // remove is the original ordinary uninstall entry, never the continuation control.
+  // remove 是原普通卸载入口，绝不是继续控件。
+  const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')!;
+  expect(control.disabled).toBe(true); expect(remove.disabled).toBe(true); expect(find("Confirm").disabled).toBe(true);
+  await act(async () => { control.click(); remove.click(); find("Confirm").click(); });
+  expect(toggle).not.toHaveBeenCalled(); expect(uninstall).not.toHaveBeenCalled(); expect(resume).toHaveBeenCalledTimes(1);
+  read.mockResolvedValue([]); await act(async () => finish());
+  expect(control.disabled).toBe(false); expect(remove.disabled).toBe(false);
+  expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
 });

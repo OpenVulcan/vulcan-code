@@ -11,14 +11,22 @@ pub use config::{
     McpTransportKind, runtime_mcp_server_configs,
 };
 pub use plugin::{
-    PluginMcpSecretStore, plugin_conversation_mcp_server_config, plugin_mcp_server_configs,
-    plugin_mcp_server_configs_for_descriptors,
+    PluginMcpSecretStore, PreparedPluginMcpConfigs, PreparedPredecessorPluginMcpConfigs,
+    PreparedPublishedPluginMcpConfigs, PreparedTargetPluginMcpConfigs,
+    candidate_global_mcp_server_configs, candidate_local_mcp_server_configs,
+    plugin_conversation_mcp_server_config, plugin_mcp_server_configs,
+    plugin_mcp_server_configs_for_descriptors, predecessor_global_mcp_server_configs,
+    published_global_mcp_server_configs, target_global_mcp_server_configs,
 };
 pub use runtime::{
+    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, LegacyPluginMcpReplacement,
     McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
     McpRuntimeOwnedStdioPartition, McpRuntimeServerState, McpRuntimeServerStatus,
-    McpRuntimeToolAllowlist, McpRuntimeToolBinding, bootstrap_mcp_runtime_access,
-    configured_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
-    replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
-    validate_plugin_mcp_runtime_partition,
+    McpRuntimeToolAllowlist, McpRuntimeToolBinding, PredecessorPluginMcpHandoffGuard,
+    PredecessorPluginMcpRuntime, PreparedPublishedPluginMcpPublication,
+    PublishedPluginMcpObservation, PublishedPluginMcpPublicationGuard, PublishedPluginMcpRuntime,
+    TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime, bootstrap_mcp_runtime_access,
+    bootstrap_mcp_runtime_access_with_published, configured_mcp_runtime_access,
+    remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
+    replace_user_mcp_runtime_partition, validate_plugin_mcp_runtime_partition,
 };

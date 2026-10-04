@@ -2,6 +2,9 @@
 //! 核心服务状态与共享任务辅助能力。
 
 use super::*;
+use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
+    ConversationHookGenerationGuard, VulcanPluginConversationHooks,
+};
 
 /// Shared runtime handles used to execute real conversation turns.
 /// 用于执行真实会话轮次的共享运行时句柄集合。
@@ -41,6 +44,10 @@ pub(crate) struct AgentRuntimeBridge {
     /// Host-owned Vulcan Plugin catalog and optional execution runtime.
     /// 宿主持有的 Vulcan 插件目录与可选执行运行时。
     pub(crate) vulcan_plugin_runtime: vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    /// First registered native host remains paired with this exact manager through bridge clones and updates.
+    /// 首次注册原生宿主跨桥克隆及更新保持配对至此精确管理器。
+    pub(crate) vulcan_plugin_native_mcp_host:
+        vulcan_plugin_runtime::VulcanPluginRegisteredNativeMcpHostAuthority,
     /// Atomically published plugin catalog and MCP runtime generation reused by one execution.
     /// 单次执行复用的原子发布插件目录与 MCP 运行时代次。
     pub(crate) extension_generation: Arc<ExtensionGeneration>,
@@ -59,6 +66,417 @@ pub(crate) struct AgentRuntimeBridge {
     /// Shared VMM hook runtime snapshot used by built-in memory hooks.
     /// 内置记忆 hook 使用的共享 VMM hook 运行时快照。
     pub(crate) vmm_hook_runtime: VmmHookRuntimeHandle,
+}
+
+/// Prepared Full mechanics retain one actual slot and inert host policies without granting source-specific authority.
+/// 已准备 Full 机械逻辑保留单个实际槽及惰性宿主策略，不授予特定来源权威。
+struct PreparedActivationPluginExtensionPublication {
+    /// Exact current Full allocation stays pinned through the final adjacent pointer write.
+    /// 精确当前 Full 分配跨最终相邻指针写入保持固定。
+    expected: Arc<ExtensionGeneration>,
+    /// The sole successor revision derives from the actual expected allocation.
+    /// 唯一后继修订从实际预期分配派生。
+    revision: u64,
+    /// Same actual prepared partition access has no independent business admission.
+    /// 相同实际已准备分区访问不具有独立业务入场。
+    access: McpRuntimeAccess,
+    /// Isolated host point policies contain no live turn state or base dispatcher lock.
+    /// 孤立宿主点位策略不含实时回合状态或基础调度器锁。
+    host: vulcan_hooks::HookDispatcher,
+}
+
+impl PreparedActivationPluginExtensionPublication {
+    /// Prepare inert hooks for manager/catalog and replace slot once using the captured actual Full boundary.
+    /// 为 manager／catalog 准备惰性 Hook，并使用捕获实际 Full 边界替换 slot 一次。
+    /// Caller is inside its source-specific core publisher; return the committed Arc without callbacks or fallible work after writing.
+    /// 调用方位于其特定来源核心发布器内；返回已提交 Arc，写入后不执行回调或可失败工作。
+    fn publish_into(
+        self,
+        slot: &mut Arc<ExtensionGeneration>,
+        manager: vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+        catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    ) -> Result<Arc<ExtensionGeneration>, String> {
+        // Only the isolated dispatcher is consulted while core registration remains held.
+        // 核心注册门保持持有时，仅访问孤立调度器。
+        let hooks = VulcanPluginConversationHooks::prepare(&self.host, manager, catalog)
+            .map_err(|error| format!("准备插件 Hook 代次失败：{error}"))?;
+        // All projected surfaces retain the exact same final catalog and prepared native lease.
+        // 全部投影暴露面保留精确相同最终目录及已准备原生租约。
+        let next = Arc::new(ExtensionGeneration::new_with_plugin_conversation_hooks(
+            self.revision,
+            Arc::new(hooks),
+            self.access,
+            self.expected.prompt_skill_catalog(),
+        ));
+        ExtensionGeneration::publish_prepared(slot, &self.expected, next, |_| {})
+    }
+}
+
+impl AgentRuntimeBridge {
+    /// Freeze expected/access mechanics and copy host point policy before acquiring core publication registration.
+    /// 取得核心发布注册门前固定 expected／access 机械逻辑并复制宿主点位策略。
+    /// expected is this bridge's actual current slot; return inert preparation with the base hook mutex already released.
+    /// expected 为此桥实际当前槽；返回基础 Hook 互斥锁已释放的惰性准备。
+    fn prepare_activation_plugin_extension_publication(
+        &self,
+        expected: Arc<ExtensionGeneration>,
+        access: McpRuntimeAccess,
+    ) -> Result<PreparedActivationPluginExtensionPublication, String> {
+        // The real Full allocation supplies the only successor revision.
+        // 真实 Full 分配提供唯一后继修订。
+        let revision = expected
+            .revision()
+            .checked_add(1)
+            .ok_or("Extension generation revision exhausted.")?;
+        // Active turns may enter plugins while holding the base mutex, so no core gate can be held during this copy.
+        // 活动回合可能持有基础互斥锁进入插件，因此此复制期间不能持有核心门。
+        let points = {
+            // Release this actual base guard before any source-specific publisher enters registration.
+            // 任一特定来源发布器进入注册门前释放此实际基础守卫。
+            let mut runtime = self
+                .conversation_hook_runtime
+                .lock()
+                .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+            runtime.dispatcher_mut().registry().point_descriptors()
+        };
+        // This dispatcher carries host policies only, never live listeners or previous plugin handlers.
+        // 此调度器仅携带宿主策略，绝不携带实时监听器或先前插件处理器。
+        let mut host = vulcan_hooks::HookDispatcher::new(vulcan_hooks::HookRegistry::new());
+        host.register_points(points)
+            .map_err(|error| format!("准备宿主 Hook 点位策略失败：{error}"))?;
+        Ok(PreparedActivationPluginExtensionPublication {
+            expected,
+            revision,
+            access,
+            host,
+        })
+    }
+
+    /// Shared drain deadline for retired user and plugin MCP partitions after generation publication.
+    /// 代次发布后退役用户与插件 MCP 分区共用的排空期限。
+    pub(crate) const RETIRED_MCP_PARTITION_DRAIN_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_secs(30);
+
+    /// Prepares a plugin catalog and its handlers under the base hook policy without publishing them.
+    /// 依据基础 Hook 策略准备插件目录及处理器，不发布它们。
+    /// `catalog` and `mcp_runtime` are the candidate resources; returns one complete successor or an error.
+    /// `catalog` 与 `mcp_runtime` 是候选资源；返回完整后继代次或错误。
+    pub(crate) fn prepare_plugin_extension_generation(
+        &self,
+        catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+        mcp_runtime: McpRuntimeAccess,
+    ) -> Result<Arc<ExtensionGeneration>, String> {
+        // Reserve the successor before acquiring or changing any route state.
+        // 在取得或修改任何路由状态前预留后继修订号。
+        let revision = self
+            .extension_generation
+            .revision()
+            .checked_add(1)
+            .ok_or_else(|| String::from("Extension generation revision exhausted."))?;
+        // The base lock supplies host policy; active logical turns are never cloned.
+        // 基础锁提供宿主策略；活动逻辑回合从不克隆。
+        let mut runtime = self
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        // Preparation retains only candidate plugin handlers and the exact catalog.
+        // 准备过程仅保留候选插件处理器及精确目录。
+        let hooks = VulcanPluginConversationHooks::prepare(
+            runtime.dispatcher_mut(),
+            self.vulcan_plugin_runtime.clone(),
+            catalog,
+        )
+        .map_err(|error| format!("准备会话插件 Hook 代次失败：{error}"))?;
+        Ok(Arc::new(
+            ExtensionGeneration::new_with_plugin_conversation_hooks(
+                revision,
+                Arc::new(hooks),
+                mcp_runtime,
+                self.extension_generation.prompt_skill_catalog(),
+            ),
+        ))
+    }
+
+    /// Publish one ready original native partition into this bridge's actual full extension slot.
+    /// 将单个就绪原原生分区发布至本桥实际完整扩展槽。
+    /// native is the single original control and catalog is its original exact snapshot.
+    /// native 为单个原控制，catalog 为其原精确快照。
+    /// The caller must exclusively own this bridge, through the service lock or unpublished bootstrap ownership.
+    /// 调用方须通过服务锁或未发布启动所有权排他拥有本桥。
+    /// Returns the actual committed Arc and displaced access; retire displaced partitions only after releasing host ownership.
+    /// 返回实际已提交 Arc 及被替换访问；仅释放宿主所有权之后退休被替换分区。
+    pub(crate) fn publish_native_plugin_extension_generation(
+        &mut self,
+        native: &vulcan_agent_runtime::mcp::PublishedPluginMcpRuntime,
+        catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    ) -> Result<(Arc<ExtensionGeneration>, McpRuntimeAccess), String> {
+        if !self
+            .vulcan_plugin_native_mcp_host
+            .matches_manager(&self.vulcan_plugin_runtime)
+        {
+            return Err(String::from("插件原生宿主签发者与当前服务管理器不一致。"));
+        }
+        // Capture the real slot while the caller already holds its publication ownership.
+        // 调用方已持有发布所有权时，捕获真实槽。
+        let expected = Arc::clone(&self.extension_generation);
+        // Exact displaced partitions survive through the adjacent commit without becoming historical control resources.
+        // 精确被替换分区跨相邻提交存续，不成为历史控制资源。
+        let current_mcp = expected.mcp_runtime();
+        // Derive access before native guards acquire its observation registry, avoiding same-lock reentry.
+        // 原生守卫取得观察注册表之前派生访问，避免同锁重入。
+        let publication_access = native.publication_access(&current_mcp)?;
+        // Prepare frozen hooks and release their base mutex before source registration or native exclusion is acquired.
+        // 取得来源登记或原生互斥之前，准备冻结 Hook 并释放其基础互斥锁。
+        let next =
+            self.prepare_plugin_extension_generation(Arc::clone(&catalog), publication_access)?;
+        // Clone the original private identities so the native borrow does not include the mutable full slot.
+        // 克隆原私有身份，使原生借用不包含可变完整槽。
+        let manager = self.vulcan_plugin_runtime.clone();
+        // The first service issuer is reused; no per-publication host registration occurs.
+        // 复用首次服务签发者；不进行每次发布的宿主登记。
+        let authority = self.vulcan_plugin_native_mcp_host.clone();
+        // The service publication owner precedes source, admission and business locks in this production path.
+        // 此生产路径中，服务发布所有者先于来源、入场及业务锁。
+        let publication = native
+            .prepare_publication(&manager, &authority, &catalog)?
+            .prepare_extension(&expected, next)?;
+        // The sole actual slot write and original same-lease business opening remain one adjacent synchronous tail.
+        // 唯一实际槽写入及原同租约业务开放保持为单个相邻同步尾段。
+        let committed = publication.publish_into(&mut self.extension_generation)?;
+        Ok((committed, current_mcp))
+    }
+
+    /// Publish the original selected update into the actual full slot while target business remains fenced.
+    /// 将原已选更新发布至实际完整槽，同时目标业务继续被隔离。
+    /// transaction and staged identify the original request and closed catalog; native is its original global MCP owner, if declared.
+    /// transaction 及 staged 标识原请求及关闭目录；声明全局 MCP 时，native 为其原所有者。
+    /// The caller exclusively owns this bridge; returns sealed publication and the actual committed Arc without completing or restarting resources.
+    /// 调用方排他拥有此桥；返回封闭发布凭据及实际已提交 Arc，不完成或重启资源。
+    pub(crate) fn publish_activation_target_plugin_extension_generation(
+        &mut self,
+        transaction: &vulcan_plugin_runtime::VulcanPluginActivationTransaction,
+        staged: &Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+        native: Option<&vulcan_agent_runtime::mcp::TargetPluginMcpRuntime>,
+    ) -> Result<
+        (
+            vulcan_plugin_runtime::VulcanPluginActivationTargetPublication,
+            Arc<ExtensionGeneration>,
+        ),
+        String,
+    > {
+        if !self
+            .vulcan_plugin_native_mcp_host
+            .matches_manager(&self.vulcan_plugin_runtime)
+        {
+            return Err(String::from("插件原生宿主签发者与当前服务管理器不一致。"));
+        }
+        // The original target declaration decides whether native ownership is required.
+        // 原目标声明决定是否要求原生所有权。
+        let plugin = staged
+            .plugins
+            .get(&transaction.record().target().plugin_id)
+            .ok_or("原更新目标不在暂存目录中。")?;
+        // A missing or extra native participant cannot silently change the declared resource boundary.
+        // 缺失或多余的原生参与者不能静默改变声明的资源边界。
+        let has_global_mcp = plugin.mcp_servers.iter().any(|server| {
+            server.manifest.scope == vulcan_plugin_runtime::VulcanPluginMcpScopeManifest::Global
+        });
+        if has_global_mcp != native.is_some() {
+            return Err(String::from(
+                "原更新目标的全局 MCP 声明与实际所有者不一致。",
+            ));
+        }
+        if let Some(native) = native {
+            // The same service registration must issue the real target, not another registration on an equal manager.
+            // 真实目标必须由同次服务登记签发，不能来自相等管理器上的另一登记。
+            let authority =
+                vulcan_plugin_runtime::VulcanPluginNativeMcpHandoffAdapter::authority(native)
+                    .ok_or("原更新目标缺少原生宿主签发者。")?;
+            if !authority.same_issuer(&self.vulcan_plugin_native_mcp_host) {
+                return Err(String::from("原更新目标与服务首次原生签发者不一致。"));
+            }
+        }
+        // Capture the sole slot and its successor before acquiring the manager publication gate.
+        // 在取得管理器发布门之前，捕获唯一槽及其后继。
+        let expected = Arc::clone(&self.extension_generation);
+        // Derive only this plugin partition while the actual native registries remain unlocked.
+        // 实际原生注册表尚未加锁时，仅派生此插件分区。
+        let access = match native {
+            Some(native) => native.publication_access(&expected.mcp_runtime())?,
+            None => vulcan_agent_runtime::mcp::remove_plugin_mcp_runtime_partition(
+                &expected.mcp_runtime(),
+                &plugin.id,
+            ),
+        };
+        // Shared mechanics copy inert host policies only, retaining this actual boundary without merging target authority.
+        // 共用机械逻辑仅复制惰性宿主策略，保留此实际边界而不合并目标权威。
+        let prepared = self.prepare_activation_plugin_extension_publication(expected, access)?;
+        // Clone only the same manager authority so the publisher can borrow the actual full slot mutably.
+        // 仅克隆同一管理器权威，使发布器可以可变借用实际完整槽。
+        let manager = self.vulcan_plugin_runtime.clone();
+        // Retain the real commit before returning the sealed core witness; no callback or await follows the pointer write.
+        // 返回封闭核心凭据之前保留真实提交；指针写入之后没有回调或等待。
+        let mut committed = None;
+        // The core installs its exact provisional Enabled catalog under registration before validating inert handlers.
+        // 核心在注册门内安装精确临时 Enabled 目录，然后校验惰性处理器。
+        let publication = manager
+            .publish_activation_target_handoff(transaction, staged, |catalog| {
+                // Source-specific core publication supplies the exact final catalog to the shared final pointer writer.
+                // 特定来源核心发布将精确最终目录提供给共用最终指针写入器。
+                committed = Some(prepared.publish_into(
+                    &mut self.extension_generation,
+                    manager.clone(),
+                    catalog,
+                )?);
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        Ok((
+            publication,
+            committed.expect("successful original full publisher committed its actual slot"),
+        ))
+    }
+
+    /// Publish one actual restored predecessor into the Full slot while its private Hook/native owners still deny business.
+    /// 将单个实际恢复前驱发布至 Full 槽，同时其私有 Hook／原生所有者仍拒绝业务。
+    /// transaction/source/staged bind the original Aborted request and actual closed old route; native is required only for global MCP.
+    /// transaction／source／staged 绑定原 Aborted 请求及实际关闭旧路由；仅全局 MCP 要求 native。
+    /// Return the genuine core seal and actual committed Full Arc without transfer, initialization or another recovery File.
+    /// 返回真实核心封闭凭据及实际已提交 Full Arc，不转交、初始化或打开另一恢复文件。
+    pub(crate) fn publish_activation_predecessor_plugin_extension_generation(
+        &mut self,
+        transaction: &vulcan_plugin_runtime::VulcanPluginActivationTransaction,
+        source: &Arc<vulcan_plugin_runtime::VulcanPluginPredecessorRestorationSource>,
+        staged: &Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+        native: Option<&vulcan_agent_runtime::mcp::PredecessorPluginMcpRuntime>,
+    ) -> Result<
+        (
+            vulcan_plugin_runtime::VulcanPluginActivationPredecessorPublication,
+            Arc<ExtensionGeneration>,
+        ),
+        String,
+    > {
+        if !self
+            .vulcan_plugin_native_mcp_host
+            .matches_manager(&self.vulcan_plugin_runtime)
+        {
+            return Err(String::from("插件原生宿主签发者与当前服务管理器不一致。"));
+        }
+        // Old identity comes only from the original predecessor selection, never the aborted target's payload.
+        // 旧身份仅来自原前驱选择，绝不来自中止目标的载荷。
+        let old = transaction
+            .record()
+            .predecessor()
+            .ok_or("原更新前驱缺少完整托管选择。")?;
+        // This route is merely an observation; the actual core publisher independently checks Source's exact closed Arc and Pending File.
+        // 此路由仅为观测；实际核心发布器独立检查 Source 的精确关闭 Arc 及 Pending 文件。
+        let plugin = staged
+            .plugins
+            .get(&old.plugin_id)
+            .ok_or("原更新前驱不在关闭目录中。")?;
+        if transaction.record().phase()
+            != vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase::Aborted
+            || source.request_id() != transaction.record().request_id()
+            || plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabling
+            || old.configuration().is_none()
+            || old.credential_revision().is_none()
+            || !plugin
+                .managed_package()
+                .is_some_and(|managed| managed.matches_activation(old))
+        {
+            return Err(String::from(
+                "原更新前驱与完整已中止旧选择或关闭路由不一致。",
+            ));
+        }
+        // Declaration and native participation must match exactly, even when every declared server is disabled.
+        // 即使每个已声明服务器均停用，声明及原生参与也必须精确匹配。
+        let has_global_mcp = plugin.mcp_servers.iter().any(|server| {
+            server.manifest.scope == vulcan_plugin_runtime::VulcanPluginMcpScopeManifest::Global
+        });
+        if has_global_mcp != native.is_some() {
+            return Err(String::from(
+                "原更新前驱的全局 MCP 声明与实际所有者不一致。",
+            ));
+        }
+        if let Some(native) = native {
+            // Compare the first issuer and actual weak Source allocation before selecting any native Full access.
+            // 选择任何原生 Full 访问前比较首次签发者及实际弱 Source 分配。
+            let authority =
+                vulcan_plugin_runtime::VulcanPluginNativeMcpPredecessorHandoffAdapter::authority(
+                    native,
+                )
+                .ok_or("原更新前驱缺少原生宿主签发者。")?;
+            // Control values are diagnostics alongside actual Source allocation, never standalone restoration authority.
+            // 控制值为实际 Source 分配旁的诊断，绝不独立授予恢复权威。
+            let control = native.control();
+            if !authority.same_issuer(&self.vulcan_plugin_native_mcp_host)
+                || !control.matches_source(source)
+                || control.request_id() != source.request_id()
+                || control.plugin_id() != old.plugin_id
+                || control.generation() != plugin.generation
+            {
+                return Err(String::from("原更新前驱与服务首次签发者或实际来源不一致。"));
+            }
+        }
+        // Capture the sole current Full allocation before entering core registration.
+        // 进入核心注册门前捕获唯一当前 Full 分配。
+        let expected = Arc::clone(&self.extension_generation);
+        // Access changes only this old plugin partition and keeps the same actual original native lease.
+        // 访问仅改变此旧插件分区，并保留相同实际原原生租约。
+        let access = match native {
+            Some(native) => native.publication_access(&expected.mcp_runtime())?,
+            None => vulcan_agent_runtime::mcp::remove_plugin_mcp_runtime_partition(
+                &expected.mcp_runtime(),
+                &old.plugin_id,
+            ),
+        };
+        // Preparation shares only inert Full mechanics; predecessor authority remains exclusively with its core publisher.
+        // 准备仅共享惰性 Full 机械逻辑；前驱权威仍完全属于其核心发布器。
+        let prepared = self.prepare_activation_plugin_extension_publication(expected, access)?;
+        // Clone the original manager only, so the callback can borrow the actual Full slot mutably.
+        // 仅克隆原管理器，使回调可以可变借用实际 Full 槽。
+        let manager = self.vulcan_plugin_runtime.clone();
+        // Record the actual Full result before returning its successful core seal; pointer writing is the callback's final effect.
+        // 返回其成功核心封闭凭据前记录实际 Full 结果；指针写入为回调最终副作用。
+        let mut committed = None;
+        // Strict original closed Source and Pending remain mandatory for first publication, independently of service observations.
+        // 首次发布仍强制要求严格原关闭 Source 及 Pending，独立于服务观测。
+        let publication = manager
+            .publish_activation_predecessor_handoff(transaction, source, |catalog| {
+                committed = Some(prepared.publish_into(
+                    &mut self.extension_generation,
+                    manager.clone(),
+                    catalog,
+                )?);
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        Ok((
+            publication,
+            committed
+                .expect("successful original predecessor full publisher committed its actual slot"),
+        ))
+    }
+
+    /// Locks shared turn state and projects this bridge's captured plugin hook generation.
+    /// 锁定共享回合状态，并投影本桥捕获的插件 Hook 代次。
+    /// Returns a scoped guard; lock or projection failure leaves the base dispatcher unchanged.
+    /// 返回作用域守卫；加锁或投影失败时保持基础调度器不变。
+    pub(crate) fn lock_conversation_hooks(
+        &self,
+    ) -> Result<ConversationHookGenerationGuard<'_>, String> {
+        // Acquire the existing mutex; no independent conversation state is introduced.
+        // 取得现有互斥锁，不引入独立会话状态。
+        let runtime = self
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
+        ConversationHookGenerationGuard::new(
+            runtime,
+            self.extension_generation.plugin_conversation_hooks(),
+        )
+        .map_err(|error| format!("投影会话插件 Hook 代次失败：{error}"))
+    }
 }
 
 /// Session-scoped AI capability configuration save request sent by the WebUI composer dialog.
@@ -317,6 +735,9 @@ pub(crate) struct ServiceLifecycleState {
     /// Once a process-owned runtime is stopped, failed shutdown cannot safely reopen admission.
     /// 进程持有的运行时一旦停止，关闭失败后就不能安全地重新开放准入。
     pub(crate) shutdown_recovery_blocked: bool,
+    /// Sole original plugin manager retained before native initialization, including failed bootstrap.
+    /// 原生初始化之前保留的唯一原插件管理器，包含失败引导。
+    pub(crate) original_plugin_manager: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 }
 
 impl ServiceLifecycleState {
@@ -325,7 +746,8 @@ impl ServiceLifecycleState {
     pub(crate) fn begin_shutdown_drain(&mut self) {
         self.shutdown_drain_active = true;
         self.last_recovery_failure = None;
-        self.shutdown_recovery_blocked = false;
+        // A retry cannot undo the previous permanent native or process-runtime closure.
+        // 重试不能撤销先前永久的原生或进程运行时关闭。
     }
 
     /// Marks the irreversible shutdown boundary before stopping process-owned runtimes.
@@ -339,7 +761,8 @@ impl ServiceLifecycleState {
     pub(crate) fn end_shutdown_drain(&mut self) {
         self.shutdown_drain_active = false;
         self.last_recovery_failure = None;
-        self.shutdown_recovery_blocked = false;
+        // Successful recovery is admitted only before the irreversible boundary; never erase it here.
+        // 成功恢复仅允许发生在不可逆边界之前；此处绝不抹除该边界。
     }
 
     /// Retains one exact recovery failure and clears shutdown ownership.
@@ -500,6 +923,9 @@ pub struct ServiceBridgeState {
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     pub(crate) session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
+    /// One latest prewarm lifecycle owner per known session, retained after receipt acknowledgement.
+    /// 每个已知会话保留一个最近预热生命周期所有者，在回执确认后仍保留。
+    pub(crate) automatic_plugin_prewarm: BTreeMap<SessionId, crate::plugin_runtime_services::automatic_prewarm::AutomaticPrewarmTurn>,
     /// Unique V1 mutable session owners keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的唯一 V1 可变会话所有者。
     pub(crate) session_runtime_registry:
@@ -507,6 +933,22 @@ pub struct ServiceBridgeState {
     /// Retained service lifecycle diagnostics used by the protected status endpoint.
     /// 受保护状态端点使用的保留服务生命周期诊断。
     pub(crate) service_lifecycle_state: ServiceLifecycleState,
+    /// Actual original plugin updates outlive executor failures and foreground RPC waiters.
+    /// 实际原插件更新比执行器故障及前台 RPC 等待者存活更久。
+    pub(crate) pending_local_plugin_updates:
+        Arc<crate::skills_services::PendingLocalPluginUpdateRegistry>,
+    /// Original Legacy credential guards and preimages survive executor failure until confirmed recovery.
+    /// 原旧凭据屏障及前像跨执行器故障存续，直至确认恢复。
+    pub(crate) pending_legacy_secret_mutations:
+        Arc<crate::skills_services::LegacySecretMutationRegistry>,
+    /// Original first-install package, preimages and actual calls outlive executor failures.
+    /// 原首次安装插件包、前像及实际调用跨执行器故障存续。
+    pub(crate) pending_local_plugin_installs:
+        Arc<crate::skills_services::PendingLocalPluginInstallRegistry>,
+    /// Same physical removal originals outlive callbacks, failed publication and executor cancellation.
+    /// 相同物理移除原实例跨回调、发布失败及执行器取消存续。
+    pub(crate) pending_local_plugin_uninstalls:
+        Arc<crate::skills_services::PendingLocalPluginUninstallRegistry>,
     /// Unique project-level resource catalog owners keyed by exact storage partition path.
     /// 按精确存储分区路径索引的唯一项目级资源目录 owner。
     pub(crate) project_resource_catalog_registry:

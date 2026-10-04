@@ -5,9 +5,20 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 
+mod requirements;
+mod reuse;
+pub use requirements::{
+    VulcanPluginCapacityRequirement, VulcanPluginHostCapabilityRequirement,
+    VulcanPluginRuntimeRequirements,
+};
+pub use reuse::{VulcanPluginReusableToolManifest, VulcanPluginToolOrdering};
+
 /// Current manifest schema version accepted by the host.
 /// 当前宿主接受的清单结构版本。
-pub const VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 2;
+/// Original manifest format retains its exact single-call and fixed-session semantics.
+/// 初版清单格式保留其精确的单次调用及固定会话语义。
+pub const VULCAN_PLUGIN_LEGACY_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Host point for a cached transformation of one AI-visible tool definition.
 /// 对单个 AI 可见工具定义执行缓存变换的宿主点位。
@@ -32,6 +43,7 @@ pub const VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS: [&str; 3] =
 /// 一份完整的 Vulcan 插件包清单。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginManifest {
     /// Manifest schema version.
     /// 清单结构版本。
@@ -68,6 +80,14 @@ pub struct VulcanPluginManifest {
     /// 可选的受管 Lua 协议声明。
     #[serde(default)]
     pub lua_runtime: Option<VulcanPluginLuaRuntimeManifest>,
+    /// Version-two Lua requirements; omission is allowed only for non-Lua or legacy manifests.
+    /// 第二版 Lua 必需条件；仅非 Lua 或旧版清单允许省略。
+    #[serde(
+        default,
+        deserialize_with = "requirements::deserialize_present_requirements"
+    )]
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "VulcanPluginRuntimeRequirements", transform = crate::manifest_authoring::remove_schema_default))]
+    pub runtime_requirements: Option<VulcanPluginRuntimeRequirements>,
     /// Optional Model Context Protocol server declarations.
     /// 可选的模型上下文协议服务器声明。
     #[serde(default)]
@@ -127,6 +147,7 @@ impl VulcanPluginManifest {
 /// 由 Lua 与 MCP 协议共享的宿主管理执行资源。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginExecutionManifest {
     /// Dependency graph and acquisition policy for the private plugin environment.
     /// 插件私有环境的依赖图与获取策略。
@@ -150,6 +171,7 @@ pub struct VulcanPluginExecutionManifest {
 /// 单个插件私有执行环境的依赖声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginDependenciesManifest {
     /// Package-relative dependency manifest consumed by the managed runtime installer.
     /// 由受管运行时安装器消费的插件包相对依赖清单。
@@ -165,6 +187,7 @@ pub struct VulcanPluginDependenciesManifest {
 /// 支持的依赖获取模式。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginDependencyInstallMode {
     /// Install exclusively from artifacts shipped inside the plugin package.
     /// 仅从插件包内随附的制品安装。
@@ -179,6 +202,7 @@ pub enum VulcanPluginDependencyInstallMode {
 /// 可选 Lua 生命周期函数声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginLifecycleManifest {
     /// Function invoked after a user plugin package is installed.
     /// 用户插件包安装完成后调用的函数。
@@ -202,6 +226,7 @@ pub struct VulcanPluginLifecycleManifest {
 /// 使用前必须声明并授权的宿主权限。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginPermission {
     /// Access host-allowlisted Lua runtime modules declared by this bundled plugin.
     /// 访问当前内建插件声明且经宿主白名单允许的 Lua 运行时模块。
@@ -254,6 +279,7 @@ pub enum VulcanPluginPermission {
 /// 一个可通过通用服务边界调用的插件业务 action。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginActionManifest {
     /// Stable plugin-local action identifier.
     /// 稳定的插件内 action 标识。
@@ -292,6 +318,7 @@ pub struct VulcanPluginActionManifest {
 /// 清单对查询共享及显式提交操作的权威分类。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginActionEffect {
     /// A local read that may share an identical in-flight request.
     /// 可共享相同在途请求的本地只读操作。
@@ -306,6 +333,7 @@ pub enum VulcanPluginActionEffect {
 /// 单个插件 action 的授权调用方类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginActionCaller {
     /// The plugin's own Lua bundle may invoke the action.
     /// 插件自身 Lua bundle 可以调用 action。
@@ -322,6 +350,7 @@ pub enum VulcanPluginActionCaller {
 /// 单个插件的动态 UI 声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginUiManifest {
     /// Ordered UI mounts contributed by the plugin.
     /// 插件贡献的有序 UI 挂载集合。
@@ -333,6 +362,7 @@ pub struct VulcanPluginUiManifest {
 /// 一个挂载到宿主持有界面位置的未压缩 ESM 模块。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginUiMountManifest {
     /// Stable plugin-local mount identifier.
     /// 稳定的插件内挂载标识。
@@ -364,6 +394,7 @@ pub struct VulcanPluginUiMountManifest {
 /// 动态插件导航条目可使用的稳定宿主图标。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginUiMountIcon {
     /// Generic plugin puzzle icon.
     /// 通用插件拼图图标。
@@ -381,6 +412,7 @@ pub enum VulcanPluginUiMountIcon {
 /// 稳定的宿主持有动态 UI 挂载点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginUiMountPoint {
     /// Plugin detail page below the LuaSkills/Plugins area.
     /// LuaSkills/插件区域下的插件详情页。
@@ -397,6 +429,7 @@ pub enum VulcanPluginUiMountPoint {
 /// 插件持有的配置 Schema 与默认值。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginConfigManifest {
     /// Package-relative JSON Schema for the complete configuration object.
     /// 完整配置对象使用的插件包相对 JSON Schema。
@@ -410,6 +443,7 @@ pub struct VulcanPluginConfigManifest {
 /// 一个带有插件包相对目标映射的逻辑原生可执行文件。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginBinaryManifest {
     /// Stable plugin-local executable identifier.
     /// 稳定的插件内可执行文件标识。
@@ -431,6 +465,7 @@ pub struct VulcanPluginBinaryManifest {
 /// 单个由插件包持有的逻辑 Node.js 脚本入口。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginNodeEntryManifest {
     /// Stable plugin-local Node entry identifier.
     /// 稳定的插件内 Node 入口标识。
@@ -447,6 +482,7 @@ pub struct VulcanPluginNodeEntryManifest {
 /// 单个由插件包持有的逻辑 Python 脚本入口。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginPythonEntryManifest {
     /// Stable plugin-local Python entry identifier.
     /// 稳定的插件内 Python 入口标识。
@@ -463,6 +499,7 @@ pub struct VulcanPluginPythonEntryManifest {
 /// 默认的用户可见插件元数据。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginDisplayManifest {
     /// Default plugin name.
     /// 默认插件名称。
@@ -476,6 +513,7 @@ pub struct VulcanPluginDisplayManifest {
 /// 目标平台可用性声明。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginPlatformManifest {
     /// Exact Rust target triples excluded by the package.
     /// 插件包明确排除的 Rust 目标三元组。
@@ -487,6 +525,7 @@ pub struct VulcanPluginPlatformManifest {
 /// 由单个插件 bundle 实现的可选受管 Lua 协议。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginLuaRuntimeManifest {
     /// Package-relative bundled Lua source loaded through the fixed Vulcan bridge package.
     /// 通过固定 Vulcan 桥接包加载的插件包相对 Lua bundle 源文件。
@@ -534,6 +573,7 @@ pub struct VulcanPluginLuaRuntimeManifest {
 /// 单个插件贡献的模型上下文协议服务器集合。
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginMcpManifest {
     /// Independently managed servers keyed by their plugin-local identifiers.
     /// 以插件内标识独立管理的服务器集合。
@@ -545,6 +585,7 @@ pub struct VulcanPluginMcpManifest {
 /// 单个插件自有的模型上下文协议服务器。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginMcpServerManifest {
     /// Stable server identifier within the owning plugin.
     /// 所属插件内部稳定的服务器标识。
@@ -565,6 +606,7 @@ pub struct VulcanPluginMcpServerManifest {
 /// 单个插件自有 MCP 服务器声明的生命周期。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginMcpScopeManifest {
     /// Start with the enabled plugin's global MCP runtime partition.
     /// 随已启用插件的全局 MCP 运行时分区启动。
@@ -642,6 +684,7 @@ fn collect_mcp_value_source_secret_key(
 /// 单个插件 MCP 服务器的传输专属设置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginMcpTransportManifest {
     /// Local stdio transport launched through a manifest-owned managed entry.
     /// 通过清单自有受管入口启动的本地 stdio 传输。
@@ -694,6 +737,7 @@ pub enum VulcanPluginMcpTransportManifest {
 /// 单个插件自有远端 MCP 服务器的宿主驱动 OAuth 设置。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginMcpOAuthManifest {
     /// Optional pre-registered client identifier.
     /// 可选的预注册客户端标识。
@@ -717,6 +761,7 @@ pub struct VulcanPluginMcpOAuthManifest {
 /// 插件 MCP stdio 服务器允许使用的受管本地启动器变体。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginMcpStdioLauncherManifest {
     /// Execute a declared Node.js module through the managed Node runtime.
     /// 通过受管 Node 运行时执行已声明的 Node.js 模块。
@@ -748,6 +793,7 @@ pub enum VulcanPluginMcpStdioLauncherManifest {
 /// 单个插件配置值的无歧义来源。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginValueSourceManifest {
     /// Inline non-secret value stored in the plugin manifest.
     /// 存储在插件清单中的内联非敏感值。
@@ -786,6 +832,7 @@ pub enum VulcanPluginValueSourceManifest {
 /// 绑定到现有宿主自有 hook 点位的单个 Lua 处理器。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginHookManifest {
     /// Stable hook identifier within the owning plugin.
     /// 所属插件内部稳定的 hook 标识。
@@ -837,6 +884,7 @@ pub struct VulcanPluginHookManifest {
 /// 宿主改写工具公开名称前用于匹配的原始来源身份。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginToolHookTargetManifest {
     /// Exact kind of the original tool source.
     /// 原始工具来源的精确类别。
@@ -853,6 +901,7 @@ pub struct VulcanPluginToolHookTargetManifest {
 /// 显式定向的通用工具 Hook 所支持的来源类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub enum VulcanPluginToolHookSourceKind {
     /// Host-owned native Rust tool.
     /// 宿主自有的 Rust 原生工具。
@@ -878,6 +927,8 @@ pub enum VulcanPluginToolHookSourceKind {
 /// 支持的通用工具执行生命周期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "manifest-schema", derive(serde::Serialize))]
 pub enum VulcanPluginToolExecutionKind {
     /// Create, invoke, and close one temporary managed lease for a single call.
     /// 为单次调用创建、执行并关闭一个临时受管租约。
@@ -897,7 +948,13 @@ pub enum VulcanPluginToolExecutionKind {
 /// 附着在单个插件工具上的运行时调度声明。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginToolExecutionManifest {
+    /// Explicit version-two reusable instance contract; omission preserves single-call execution.
+    /// 明确的第二版可复用实例契约；省略保留单次调用执行。
+    #[serde(default, deserialize_with = "reuse::deserialize_present_reuse")]
+    #[cfg_attr(feature = "manifest-schema", schemars(with = "VulcanPluginReusableToolManifest", transform = crate::manifest_authoring::remove_schema_default))]
+    pub reusable: Option<VulcanPluginReusableToolManifest>,
     /// Generic session lifecycle kind.
     /// 通用会话生命周期类型。
     pub kind: VulcanPluginToolExecutionKind,
@@ -925,6 +982,7 @@ pub struct VulcanPluginToolExecutionManifest {
 /// 插件包声明的单个 Provider 可见工具。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginToolManifest {
     /// Stable globally unique tool identifier.
     /// 全局唯一的稳定工具标识。
@@ -951,6 +1009,7 @@ pub struct VulcanPluginToolManifest {
 /// 单个插件级模型说明贡献。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginPromptManifest {
     /// Stable contribution identifier within the plugin.
     /// 插件内部稳定的贡献标识。
@@ -967,6 +1026,7 @@ pub struct VulcanPluginPromptManifest {
 /// 从单个语言文件加载的可选用户可见元数据。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
 pub struct VulcanPluginLocaleManifest {
     /// Localized plugin name.
     /// 本地化插件名称。

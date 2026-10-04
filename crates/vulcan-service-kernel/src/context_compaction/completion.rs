@@ -392,8 +392,7 @@ fn dispatch_context_compaction_committed_hook(
     // hook_runtime only dispatches an asynchronous notification and does not own compaction state.
     // hook_runtime 仅分发异步通知，不持有上下文压缩状态。
     let mut hook_runtime = agent_runtime
-        .conversation_hook_runtime
-        .lock()
+        .lock_conversation_hooks()
         .map_err(|error| format!("failed to lock conversation hook runtime: {error}"))?;
     hook_runtime.record_compacted(
         session_id,

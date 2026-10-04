@@ -1,15 +1,18 @@
 //! Secure package discovery and immutable Vulcan Plugin catalog snapshots.
 //! 安全的插件包发现与不可变 Vulcan 插件目录快照。
 
+mod generations;
+pub use generations::VulcanPluginManagedPackage;
+pub(crate) use generations::load_pinned_package;
+
 use crate::{
     VULCAN_PLUGIN_HOOK_TOOL_AFTER, VULCAN_PLUGIN_HOOK_TOOL_BEFORE,
-    VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION, VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
-    VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS, VULCAN_PLUGIN_SESSION_ID_ARGUMENT,
-    VulcanPluginDependencyInstallMode, VulcanPluginHookManifest, VulcanPluginLocaleManifest,
-    VulcanPluginManifest, VulcanPluginMcpScopeManifest, VulcanPluginMcpServerManifest,
-    VulcanPluginMcpStdioLauncherManifest, VulcanPluginMcpTransportManifest, VulcanPluginPermission,
-    VulcanPluginPromptManifest, VulcanPluginToolExecutionKind, VulcanPluginToolManifest,
-    VulcanPluginValueSourceManifest,
+    VULCAN_PLUGIN_HOOK_TOOL_REGISTRATION, VULCAN_PLUGIN_RESERVED_PAYLOAD_ARGUMENTS,
+    VULCAN_PLUGIN_SESSION_ID_ARGUMENT, VulcanPluginDependencyInstallMode, VulcanPluginHookManifest,
+    VulcanPluginLocaleManifest, VulcanPluginManifest, VulcanPluginMcpScopeManifest,
+    VulcanPluginMcpServerManifest, VulcanPluginMcpStdioLauncherManifest,
+    VulcanPluginMcpTransportManifest, VulcanPluginPermission, VulcanPluginPromptManifest,
+    VulcanPluginToolExecutionKind, VulcanPluginToolManifest, VulcanPluginValueSourceManifest,
 };
 use luaskills::PackageDependencyManifest;
 use serde_json::Value;
@@ -78,8 +81,8 @@ pub enum VulcanPluginRuntimeState {
     /// Plugin is not supported on the current target.
     /// 插件不支持当前目标平台。
     UnsupportedPlatform,
-    /// Plugin package or dependency validation failed.
-    /// 插件包或依赖校验失败。
+    /// Plugin validation failed or an original durable activation requires recovery before admission.
+    /// 插件校验失败，或原始持久激活要求恢复后才能入场。
     Unavailable,
 }
 
@@ -141,6 +144,15 @@ pub struct VulcanPluginMcpServerDescriptor {
     /// Owning plugin generation captured with this server declaration.
     /// 随当前服务器声明捕获的所属插件代次。
     pub plugin_generation: u64,
+    /// Exact credential namespace captured with this declaration; old selections explicitly use legacy storage.
+    /// 随此声明捕获的精确凭据命名空间；旧选择明确使用旧存储。
+    pub credential_binding: crate::VulcanPluginCredentialBinding,
+    /// Real retention follows standalone descriptor clones, preventing collection during later secret reads.
+    /// 实际保留随独立描述符克隆传递，防止后续秘密读取期间被回收。
+    pub(crate) credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
+    /// Version-four configuration follows this exact descriptor; absence denotes the legacy live-file authority.
+    /// 第四版配置随此精确描述符保留；缺失表示旧实时文件权威。
+    pub(crate) configuration: Option<std::sync::Arc<crate::VulcanPluginConfigurationSelection>>,
     /// Stable server identifier within the owning plugin.
     /// 所属插件内部稳定的服务器标识。
     pub id: String,
@@ -183,6 +195,9 @@ pub struct VulcanPluginDescriptor {
     /// Canonical package root.
     /// 规范化插件包根目录。
     pub package_root: PathBuf,
+    /// Exact managed activation and its live package lease; absent for bundled and legacy packages.
+    /// 精确受管激活及其活动包租约；内置包及旧平铺包没有此字段。
+    pub(crate) managed_package: Option<VulcanPluginManagedPackage>,
     /// Effective package origin selected by deterministic root precedence.
     /// 通过确定性根目录优先级选定的生效插件包来源。
     pub origin: VulcanPluginPackageOrigin,
@@ -243,6 +258,14 @@ pub struct VulcanPluginDescriptor {
 }
 
 impl VulcanPluginDescriptor {
+    /// Returns the managed selection retained by this descriptor, or `None` for legacy/bundled packages.
+    /// 返回此描述符保留的受管选择；旧平铺包及内置包返回 `None`。
+    /// Borrow or clone its generation handle while consuming files beyond this descriptor's lifetime.
+    /// 在此描述符寿命之外使用包文件时，必须借用或克隆其中的代次句柄。
+    pub fn managed_package(&self) -> Option<&VulcanPluginManagedPackage> {
+        self.managed_package.as_ref()
+    }
+
     /// Returns localized metadata or the manifest defaults when no exact locale exists.
     /// 返回本地化元数据；不存在精确语言时回退到清单默认值。
     ///
@@ -346,9 +369,9 @@ impl VulcanPluginCatalogSnapshot {
 ///
 /// # Returns
 /// 返回值
-/// Returns a deterministic snapshot with valid packages and rejection diagnostics.
-/// 返回包含有效插件及拒绝诊断的确定性快照。
-fn load_plugin_root_catalog(
+/// Returns discovered packages and diagnostics; global contribution surfaces are built after final selection.
+/// 返回已发现插件及诊断；全局贡献表面在最终选择完成后构建。
+fn discover_plugin_root_catalog(
     root: &Path,
     disabled_plugin_ids: &BTreeSet<String>,
     enabled_plugin_ids: &BTreeSet<String>,
@@ -379,6 +402,11 @@ fn load_plugin_root_catalog(
             }
         };
         let path = entry.path();
+        // Private generation storage is discovered through its activation records, never as a package.
+        // 私有代次存储通过激活记录发现，绝不作为插件包发现。
+        if crate::VulcanPluginGenerationStore::is_store_entry(&path) {
+            continue;
+        }
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -426,7 +454,8 @@ fn load_plugin_root_catalog(
         }
         snapshot.plugins.insert(plugin_id, descriptor);
     }
-    rebuild_catalog_surface(&mut snapshot);
+    // Global names are reserved only after managed selection and bundled precedence are resolved.
+    // 仅在受管选择及内置优先级确定后才保留全局名称。
     snapshot
 }
 
@@ -448,25 +477,118 @@ pub fn load_vulcan_plugin_catalog(
     enabled_plugin_ids: &BTreeSet<String>,
     revision: u64,
 ) -> VulcanPluginCatalogSnapshot {
-    let mut bundled = load_plugin_root_catalog(
+    // Root discovery remains independent from the shared precedence and surface rebuilding primitive.
+    // 根发现保持独立于共享优先级及表面重建原语。
+    let bundled = discover_plugin_root_catalog(
         bundled_root,
         disabled_plugin_ids,
         enabled_plugin_ids,
         revision,
     );
-    for plugin in bundled.plugins.values_mut() {
-        plugin.origin = VulcanPluginPackageOrigin::Bundled;
-    }
-    let mut user = user_root.map_or_else(
+    // Explicit absence of a user root preserves the ordinary empty user projection.
+    // 用户根显式缺失保留普通空用户投影。
+    let user = user_root.map_or_else(
         || {
             let mut snapshot = VulcanPluginCatalogSnapshot::empty(bundled.root.clone());
             snapshot.revision = revision;
             snapshot
         },
         |user_root| {
-            load_plugin_root_catalog(user_root, disabled_plugin_ids, enabled_plugin_ids, revision)
+            generations::load_user_catalog(
+                user_root,
+                disabled_plugin_ids,
+                enabled_plugin_ids,
+                revision,
+            )
         },
     );
+    merge_catalog_roots(bundled, user, user_root)
+}
+
+/// Load both real roots while one explicit user plugin retains its actual legacy namespace owner.
+/// 一个显式用户插件保留实际旧格式命名空间所有者期间，加载两个真实根。
+/// Root/policy/revision parameters preserve ordinary ordering; plugin_id and guard identify the sole held namespace.
+/// 根／策略／修订参数保留普通顺序；plugin_id 和 guard 标识唯一被持有命名空间。
+/// Return the shared merged snapshot or the original classified guard/target failure, without ordinary-read fallback.
+/// 返回共享合并快照或原带类别守卫／目标失败，不使用普通读取备用路径。
+pub(crate) fn load_vulcan_plugin_catalog_with_legacy_mutation(
+    bundled_root: &Path,
+    user_root: &Path,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+    revision: u64,
+    plugin_id: &str,
+    guard: &crate::VulcanPluginLegacyMutationGuard,
+) -> crate::VulcanPluginStoreResult<VulcanPluginCatalogSnapshot> {
+    // Target validation completes before any successful snapshot can conceal the guarded selection error.
+    // 任何成功快照可能隐藏守卫选择错误之前，目标校验完成。
+    let user = generations::load_user_catalog_with_legacy_mutation(
+        user_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+        plugin_id,
+        guard,
+    )?;
+    // Bundled discovery retains its existing precedence, diagnostics and ordinary physical source.
+    // 内置发现保留既有优先级、诊断及普通物理来源。
+    let bundled = discover_plugin_root_catalog(
+        bundled_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+    );
+    Ok(merge_catalog_roots(bundled, user, Some(user_root)))
+}
+
+/// Load both actual roots through the original managed-removal owner without reopening its namespace.
+/// 通过原受管移除所有者加载两个实际根，不重开其命名空间。
+/// Roots/policies/revision retain ordinary semantics; original authorizes only its exact already-published tombstone.
+/// 根／策略／修订保留普通语义；original 仅授权其精确已发布停用记录。
+/// Returns the shared complete projection or a classified original failure, never an ordinary target read fallback.
+/// 返回共享完整投影或带类别原失败，绝不使用普通目标读取备用路径。
+pub(crate) fn load_vulcan_plugin_catalog_with_deactivation(
+    bundled_root: &Path,
+    user_root: &Path,
+    disabled_plugin_ids: &BTreeSet<String>,
+    enabled_plugin_ids: &BTreeSet<String>,
+    revision: u64,
+    original: &crate::VulcanPluginDeactivationReservation,
+) -> crate::VulcanPluginStoreResult<VulcanPluginCatalogSnapshot> {
+    // The target is validated before bundled discovery can conceal an original selection conflict.
+    // 目标在内置发现可能隐藏原选择冲突之前被校验。
+    let user = generations::load_user_catalog_with_deactivation(
+        user_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+        original,
+    )?;
+    // Keep the existing bundled precedence and sole merged contribution builder.
+    // 保持既有内置优先顺序及唯一合并贡献构建器。
+    let bundled = discover_plugin_root_catalog(
+        bundled_root,
+        disabled_plugin_ids,
+        enabled_plugin_ids,
+        revision,
+    );
+    Ok(merge_catalog_roots(bundled, user, Some(user_root)))
+}
+
+/// Merge already discovered roots with the sole bundled-first precedence and rebuild every contribution surface.
+/// 使用唯一内置优先顺序合并已发现根，并重建每份贡献表面。
+/// Inputs retain real selected leases; user_root supplies only the ordinary projected root, not selection authority.
+/// 输入保留真实选定租约；user_root 仅提供普通投影根，而非选择权威。
+/// Return the complete catalog with unchanged shadowing diagnostics and origin assignments.
+/// 返回完整目录，保留未变遮蔽诊断及来源赋值。
+fn merge_catalog_roots(
+    mut bundled: VulcanPluginCatalogSnapshot,
+    mut user: VulcanPluginCatalogSnapshot,
+    user_root: Option<&Path>,
+) -> VulcanPluginCatalogSnapshot {
+    for plugin in bundled.plugins.values_mut() {
+        plugin.origin = VulcanPluginPackageOrigin::Bundled;
+    }
     for plugin in user.plugins.values_mut() {
         plugin.origin = VulcanPluginPackageOrigin::UserInstalled;
     }
@@ -608,6 +730,7 @@ fn load_vulcan_plugin_package(
         id: fallback_id.clone(),
         version: None,
         package_root: canonical_package_root.clone(),
+        managed_package: None,
         origin: VulcanPluginPackageOrigin::Bundled,
         content_fingerprint: String::new(),
         availability: VulcanPluginAvailability::Unavailable,
@@ -666,6 +789,7 @@ fn load_vulcan_plugin_package(
         id: manifest.id.clone(),
         version: Some(manifest.version.clone()),
         package_root: canonical_package_root.clone(),
+        managed_package: None,
         origin: VulcanPluginPackageOrigin::Bundled,
         content_fingerprint: String::new(),
         availability: VulcanPluginAvailability::Enabled,
@@ -878,6 +1002,9 @@ fn load_vulcan_plugin_package(
         .map(|server| VulcanPluginMcpServerDescriptor {
             plugin_id: manifest.id.clone(),
             plugin_generation: 0,
+            credential_binding: crate::VulcanPluginCredentialBinding::Legacy,
+            credential_lease: None,
+            configuration: None,
             id: server.id.clone(),
             name: server.name.clone(),
             manifest: server.clone(),
@@ -976,16 +1103,11 @@ fn load_vulcan_plugin_package(
 
 /// Validates version, identity, host-owned package origin, and identifier grammar.
 /// 校验版本、身份、宿主持有的插件包来源与标识符语法。
-fn validate_manifest_identity(
+pub(crate) fn validate_manifest_identity(
     manifest: &VulcanPluginManifest,
     package_directory_id: &str,
 ) -> Result<(), String> {
-    if manifest.schema_version != VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION {
-        return Err(format!(
-            "Unsupported Vulcan Plugin manifest schema version `{}`.",
-            manifest.schema_version
-        ));
-    }
+    manifest.validate_runtime_requirements()?;
     validate_identifier(&manifest.id, "plugin id")?;
     if manifest.id != package_directory_id {
         return Err(format!(
@@ -1264,6 +1386,71 @@ fn validate_manifest_identity(
         }
     }
     for tool in &runtime.tools {
+        if let Some(reuse) = &tool.execution.reusable {
+            if manifest.schema_version != crate::VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION
+                || tool.execution.kind != VulcanPluginToolExecutionKind::Stateless
+            {
+                return Err(format!(
+                    "Tool `{}` reuse requires a version-two stateless declaration.",
+                    tool.id
+                ));
+            }
+            for function in [&reuse.before_call, &reuse.after_call, &reuse.reuse_check] {
+                validate_lua_identifier(function, "tool reuse callback")?;
+            }
+            // Names remain exact identities; duplicate or empty entries cannot disguise a broader policy.
+            // 名称保持精确身份；重复或空条目不能掩盖更宽策略。
+            let mut initialization = BTreeSet::new();
+            for name in &reuse.initialization_capabilities {
+                if name.trim().is_empty() || name.contains('\0') || !initialization.insert(name) {
+                    return Err(format!(
+                        "Tool `{}` initialization capabilities must be nonempty distinct names without NUL.",
+                        tool.id
+                    ));
+                }
+            }
+            // Hygiene cannot alias a business export or another cleanup phase.
+            // 清理不能与业务导出或其他清理阶段共用名称。
+            let hygiene = [&reuse.before_call, &reuse.after_call, &reuse.reuse_check];
+            // Include every captured public export, not just the shared tool dispatcher.
+            // 包含每个捕获的公开导出，不仅包含共用工具分发器。
+            let public = [&runtime.invoke_function, &runtime.shutdown_function]
+                .into_iter()
+                .chain(runtime.hook_shutdown_function.iter())
+                .chain(runtime.hooks.iter().map(|hook| &hook.function))
+                .chain(runtime.actions.iter().map(|action| &action.function))
+                .chain(
+                    [
+                        &runtime.lifecycle.install,
+                        &runtime.lifecycle.enable,
+                        &runtime.lifecycle.disable,
+                        &runtime.lifecycle.uninstall,
+                    ]
+                    .into_iter()
+                    .flatten(),
+                );
+            if hygiene.into_iter().collect::<BTreeSet<_>>().len() != hygiene.len()
+                || public.into_iter().any(|export| hygiene.contains(&export))
+            {
+                return Err(format!(
+                    "Tool `{}` hygiene callbacks must be distinct private functions.",
+                    tool.id
+                ));
+            }
+            if reuse.max_resident_vms == 0
+                || reuse.max_running_calls == 0
+                || reuse.max_running_calls > reuse.max_resident_vms
+                || reuse.idle_ttl_ms == 0
+                || reuse.max_uses == 0
+                || (reuse.ordering == crate::VulcanPluginToolOrdering::KeySerial
+                    && reuse.max_running_calls != 1)
+            {
+                return Err(format!(
+                    "Tool `{}` has invalid reuse capacity, ordering or retirement limits.",
+                    tool.id
+                ));
+            }
+        }
         validate_identifier(&tool.id, "tool id")?;
         validate_identifier(&tool.group, "tool group")?;
         validate_identifier(&tool.execution.operation, "tool operation")?;
@@ -2290,12 +2477,22 @@ pub(crate) fn validate_json_schema_instance(
     instance: &Value,
     label: &str,
 ) -> Result<(), String> {
-    reject_external_schema_references(schema)?;
-    let validator = jsonschema::validator_for(schema)
-        .map_err(|error| format!("Invalid {label} JSON Schema: {error}"))?;
-    validator
+    compile_json_schema(schema, label)?
         .validate(instance)
         .map_err(|error| format!("Invalid {label}: {error}"))
+}
+
+/// Compile the exact self-contained schema with the existing validator settings.
+/// 使用既有校验器设置编译精确的自包含 Schema。
+/// schema owns the declaration and label identifies compilation errors; return its validator or the original error.
+/// schema 持有声明，label 标识编译错误；返回其校验器或原错误。
+pub(crate) fn compile_json_schema(
+    schema: &Value,
+    label: &str,
+) -> Result<jsonschema::Validator, String> {
+    reject_external_schema_references(schema)?;
+    jsonschema::validator_for(schema)
+        .map_err(|error| format!("Invalid {label} JSON Schema: {error}"))
 }
 
 /// Rejects external JSON Schema references while preserving reference-shaped annotation data.
@@ -2616,7 +2813,7 @@ fn update_package_digest_path(digest: &mut Sha256, path: &Path) {
 
 /// Validates one lowercase kebab/snake identifier used in host dispatch.
 /// 校验一个用于宿主调度的小写短横线或下划线标识符。
-fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
     let valid = !value.is_empty()
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
@@ -2675,6 +2872,25 @@ fn current_platform_is_excluded(excluded_targets: &[String]) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Loads `root` through the public single-root path with the supplied policies and revision.
+    /// 使用传入策略及修订，通过公开单根路径加载 `root`。
+    /// Returns the final validated surface rather than the private discovery-only intermediate result.
+    /// 返回最终已校验表面，而非私有的仅发现中间结果。
+    fn load_plugin_root_catalog(
+        root: &Path,
+        disabled_plugin_ids: &BTreeSet<String>,
+        enabled_plugin_ids: &BTreeSet<String>,
+        revision: u64,
+    ) -> VulcanPluginCatalogSnapshot {
+        load_vulcan_plugin_catalog(
+            root,
+            None,
+            disabled_plugin_ids,
+            enabled_plugin_ids,
+            revision,
+        )
+    }
 
     /// Verifies generic tool hooks require an exact original identity and a phase-compatible mode.
     /// 验证通用工具 Hook 必须声明精确原始身份及与阶段兼容的模式。
@@ -2919,7 +3135,7 @@ display:
     /// 参数
     /// `root` is the catalog root, `plugin_id` is the package identity, and `tool_ids` preserves manifest order.
     /// `root` 是目录根，`plugin_id` 是插件身份，`tool_ids` 保持清单顺序。
-    fn write_named_stateless_package(root: &Path, plugin_id: &str, tool_ids: &[&str]) {
+    pub(super) fn write_named_stateless_package(root: &Path, plugin_id: &str, tool_ids: &[&str]) {
         let package = root.join(plugin_id);
         fs::create_dir_all(package.join("runtime")).expect("create named runtime directory");
         fs::create_dir_all(package.join("schemas")).expect("create named schema directory");

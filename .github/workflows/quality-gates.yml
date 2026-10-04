@@ -83,6 +83,24 @@ jobs:
         run: cargo test --locked -p vulcan-workspace-store --lib local_sql -- --test-threads=1
       - name: Isolated offline LuaSkills callback regressions
         run: node scripts/test-isolated-callbacks.mjs
+      # Check the full Rust-derived manifest contract and explicit authoring boundaries.
+      # 检查由 Rust 派生的完整清单契约及显式编写边界。
+      - name: Plugin manifest artifacts and migration
+        shell: pwsh
+        run: |
+          cargo run --locked -p vulcan-plugin-runtime --features manifest-schema --bin vulcan-plugin-manifest -- schema-check docs/contracts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p vulcan-plugin-runtime --features manifest-schema -- manifest_authoring --test-threads=1
+      # Exercise the real synced browser package and managed debug sidecar through formal Lua ownership.
+      # 通过正式 Lua 所有权执行真实已同步浏览器插件及受管调试进程。
+      - name: Bundled plugin version-two runtime migration
+        shell: pwsh
+        run: |
+          ./make.ps1 sync
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p vulcan-plugin-runtime --features manifest-schema runtime::tests::bundled -- --test-threads=1 --include-ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test plugins/vulcan-debug-runtime/node/sidecar.test.mjs
       - name: Service log retention and hidden-process diagnostics
         run: cargo test --locked -p vulcan-code-service logging::tests -- --test-threads=1
       - name: Protocol core regressions

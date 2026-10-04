@@ -8,9 +8,20 @@ use reqwest::Url;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use vulcan_plugin_runtime::{
-    VulcanPluginMcpOAuthManifest, VulcanPluginMcpScopeManifest, VulcanPluginMcpServerDescriptor,
-    VulcanPluginMcpTransportManifest, VulcanPluginRuntimeManager, VulcanPluginValueSourceManifest,
+    VulcanPluginCredentialBinding, VulcanPluginMcpOAuthManifest, VulcanPluginMcpScopeManifest,
+    VulcanPluginMcpServerDescriptor, VulcanPluginMcpTransportManifest, VulcanPluginRuntimeManager,
+    VulcanPluginValueSourceManifest,
 };
+
+mod candidates;
+mod published;
+use candidates::PluginMcpMaterializationSource;
+pub use candidates::{
+    PreparedPluginMcpConfigs, PreparedPredecessorPluginMcpConfigs, PreparedTargetPluginMcpConfigs,
+    candidate_global_mcp_server_configs, candidate_local_mcp_server_configs,
+    predecessor_global_mcp_server_configs, target_global_mcp_server_configs,
+};
+pub use published::{PreparedPublishedPluginMcpConfigs, published_global_mcp_server_configs};
 
 /// Host boundary for reading one plugin-scoped secret without exposing storage details to plugins.
 /// 用于读取单个插件作用域 Secret 且不向插件暴露存储细节的宿主边界。
@@ -20,8 +31,8 @@ pub trait PluginMcpSecretStore: Send + Sync {
     ///
     /// # Parameters
     /// 参数
-    /// Plugin, server, and secret identifiers form the complete host-owned namespace.
-    /// 插件、服务器与 Secret 标识共同组成完整的宿主持有命名空间。
+    /// Plugin, server, secret identifiers and the frozen `binding` form the complete host-owned namespace.
+    /// 插件、服务器、Secret 标识及固定 `binding` 共同组成完整的宿主持有命名空间。
     ///
     /// # Returns
     /// 返回值
@@ -32,7 +43,35 @@ pub trait PluginMcpSecretStore: Send + Sync {
         plugin_id: &str,
         server_id: &str,
         secret_key: &str,
+        binding: &VulcanPluginCredentialBinding,
     ) -> Result<String, String>;
+}
+
+/// Bind all values of one server materialization to the credential authority captured in its descriptor.
+/// 将单个服务器物化的全部值绑定至描述符捕获的凭据权威。
+struct BoundPluginMcpSecrets<'a> {
+    /// The caller supplies the exact credential backend without an alternate lookup source.
+    /// 调用方提供精确凭据后端，不提供替代查找来源。
+    store: &'a dyn PluginMcpSecretStore,
+    /// This immutable binding survives changes to the manager's latest catalog.
+    /// 此不可变绑定在管理器最新目录变化后仍保持不变。
+    binding: &'a VulcanPluginCredentialBinding,
+}
+
+impl BoundPluginMcpSecrets<'_> {
+    /// Read `secret_key` for the exact `plugin_id` and `server_id` using only this captured binding.
+    /// 仅使用此捕获绑定，读取精确 `plugin_id` 及 `server_id` 的 `secret_key`。
+    /// Returns the backend value or its original non-sensitive error, with no revision fallback.
+    /// 返回后端值或其原始非敏感错误，不回退修订。
+    fn read_secret(
+        &self,
+        plugin_id: &str,
+        server_id: &str,
+        secret_key: &str,
+    ) -> Result<String, String> {
+        self.store
+            .read_secret(plugin_id, server_id, secret_key, self.binding)
+    }
 }
 
 /// Materializes every enabled global plugin MCP declaration into source-neutral runtime configuration.
@@ -80,7 +119,14 @@ pub fn plugin_mcp_server_configs_for_descriptors(
     servers
         .iter()
         .filter(|server| server.manifest.scope == VulcanPluginMcpScopeManifest::Global)
-        .map(|server| plugin_mcp_server_config(plugins, server, secrets, None))
+        .map(|server| {
+            plugin_mcp_server_config(
+                &PluginMcpMaterializationSource::Published(plugins),
+                server,
+                secrets,
+                None,
+            )
+        })
         .collect()
 }
 
@@ -124,7 +170,12 @@ pub fn plugin_conversation_mcp_server_config(
         ));
     }
     validate_core_browser_endpoint(core_browser_endpoint)?;
-    plugin_mcp_server_config(plugins, server, secrets, Some(core_browser_endpoint))
+    plugin_mcp_server_config(
+        &PluginMcpMaterializationSource::Published(plugins),
+        server,
+        secrets,
+        Some(core_browser_endpoint),
+    )
 }
 
 /// Accepts only the exact loopback browser-level WebSocket capability returned by Core.
@@ -169,24 +220,35 @@ fn validate_core_browser_endpoint(endpoint: &str) -> Result<(), String> {
 
 /// Materializes one validated plugin MCP descriptor without admitting alternate field sources.
 /// 物化单个已校验插件 MCP 描述符，且不接纳替代字段来源。
+/// The source fixes launcher and legacy-read authority, while the descriptor owns configuration and credentials.
+/// 来源固定启动器及旧配置读取权威，描述符持有配置与凭据。
+/// Returns one exact runtime definition; the optional endpoint is only an explicit conversation owner grant.
+/// 返回单个精确运行时定义；可选端点仅用于显式会话所有者授权。
 fn plugin_mcp_server_config(
-    plugins: &VulcanPluginRuntimeManager,
+    source: &PluginMcpMaterializationSource<'_>,
     server: &VulcanPluginMcpServerDescriptor,
     secrets: &dyn PluginMcpSecretStore,
     core_browser_endpoint: Option<&str>,
 ) -> Result<McpServerConfig, String> {
+    // Every transport and OAuth field uses one descriptor-owned revision, never a fresh global selection.
+    // 每种传输及 OAuth 字段使用单个描述符自有修订，绝不重新全局选择。
+    let secrets = &BoundPluginMcpSecrets {
+        store: secrets,
+        binding: &server.credential_binding,
+    };
     // config is loaded only when this exact server declaration names a Config source.
     // config 仅在当前精确服务器声明使用 Config 来源时加载。
     let config = if transport_uses_plugin_config(&server.manifest.transport) {
-        plugin_server_configuration(plugins, &server.plugin_id)?
+        match server.configuration() {
+            Some(selection) => selection.value().cloned(),
+            None => source.legacy_configuration(&server.plugin_id)?,
+        }
     } else {
         None
     };
     let transport = match &server.manifest.transport {
         VulcanPluginMcpTransportManifest::Stdio { args, env, .. } => {
-            let launcher = plugins
-                .resolve_mcp_stdio_launcher_descriptor(server)
-                .map_err(|error| error.to_string())?;
+            let launcher = source.stdio_launcher(server)?;
             let mut resolved_args = launcher.base_args;
             resolved_args.extend(
                 args.iter()
@@ -396,7 +458,7 @@ fn resolve_plugin_stdio_value(
     plugin_id: &str,
     server_id: &str,
     config: Option<&Value>,
-    secrets: &dyn PluginMcpSecretStore,
+    secrets: &BoundPluginMcpSecrets<'_>,
     core_browser_endpoint: Option<&str>,
 ) -> Result<String, String> {
     match source {
@@ -414,7 +476,7 @@ fn resolve_plugin_value(
     plugin_id: &str,
     server_id: &str,
     config: Option<&Value>,
-    secrets: &dyn PluginMcpSecretStore,
+    secrets: &BoundPluginMcpSecrets<'_>,
 ) -> Result<String, String> {
     match source {
         VulcanPluginValueSourceManifest::Literal { value } => Ok(value.clone()),
@@ -449,7 +511,7 @@ fn resolve_remote_url(
     plugin_id: &str,
     server_id: &str,
     config: Option<&Value>,
-    secrets: &dyn PluginMcpSecretStore,
+    secrets: &BoundPluginMcpSecrets<'_>,
 ) -> Result<String, String> {
     let value = resolve_plugin_value(source, plugin_id, server_id, config, secrets)?;
     let url = Url::parse(&value).map_err(|error| {
@@ -475,7 +537,7 @@ fn resolve_headers(
     plugin_id: &str,
     server_id: &str,
     config: Option<&Value>,
-    secrets: &dyn PluginMcpSecretStore,
+    secrets: &BoundPluginMcpSecrets<'_>,
 ) -> Result<BTreeMap<String, String>, String> {
     headers
         .iter()
@@ -493,7 +555,7 @@ fn resolve_oauth(
     plugin_id: &str,
     server_id: &str,
     config: Option<&Value>,
-    secrets: &dyn PluginMcpSecretStore,
+    secrets: &BoundPluginMcpSecrets<'_>,
 ) -> Result<Option<McpServerOAuthConfig>, String> {
     oauth
         .map(|oauth| {
@@ -526,10 +588,12 @@ fn resolve_oauth(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::mcp) mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
+
+    pub(in crate::mcp) mod credential_binding;
 
     /// In-memory Secret Store fixture that exposes only exact namespaced values.
     /// 仅暴露精确命名空间值的内存 Secret Store 夹具。
@@ -557,7 +621,13 @@ mod tests {
             plugin_id: &str,
             server_id: &str,
             key: &str,
+            binding: &VulcanPluginCredentialBinding,
         ) -> Result<String, String> {
+            if *binding != VulcanPluginCredentialBinding::Legacy {
+                return Err(String::from(
+                    "This fixture declares only legacy credentials.",
+                ));
+            }
             self.values
                 .get(&(
                     plugin_id.to_string(),
@@ -584,6 +654,12 @@ mod tests {
             )]),
         };
         let config = json!({"endpoint": "https://example.test/mcp", "number": 7});
+        // These existing source tests explicitly select the legacy fixture namespace.
+        // 这些既有来源测试明确选择旧夹具命名空间。
+        let secrets = BoundPluginMcpSecrets {
+            store: &secrets,
+            binding: &VulcanPluginCredentialBinding::Legacy,
+        };
         assert_eq!(
             resolve_plugin_value(
                 &VulcanPluginValueSourceManifest::Literal {
@@ -642,6 +718,12 @@ mod tests {
     fn remote_url_validation_is_https_only_and_credential_safe() {
         let secrets = TestSecretStore {
             values: BTreeMap::new(),
+        };
+        // Literal endpoint validation has no credential revision to infer.
+        // 字面端点校验没有可推断的凭据修订。
+        let secrets = BoundPluginMcpSecrets {
+            store: &secrets,
+            binding: &VulcanPluginCredentialBinding::Legacy,
         };
         let valid = VulcanPluginValueSourceManifest::Literal {
             value: String::from("https://example.test/mcp"),

@@ -10,6 +10,7 @@ mod conversation_events_v1;
 mod conversation_runtime;
 mod extensibility;
 mod knowledge_base;
+mod plugin_runtime;
 mod project_conversation;
 mod session_resources_v1;
 mod vce;
@@ -72,6 +73,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = extensibility::dispatch(app.clone(), state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = plugin_runtime::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -210,6 +215,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
     [
         workspace_io::RPC_METHODS,
         extensibility::RPC_METHODS,
+        plugin_runtime::RPC_METHODS,
         conversation_events_v1::RPC_METHODS,
         session_resources_v1::RPC_METHODS,
         conversation_runtime::RPC_METHODS,
@@ -239,6 +245,7 @@ mod tests {
         // unique_methods 证明前置路由不会遮蔽后续领域分支。
         let declared_method_count = workspace_io::RPC_METHODS.len()
             + extensibility::RPC_METHODS.len()
+            + plugin_runtime::RPC_METHODS.len()
             + conversation_events_v1::RPC_METHODS.len()
             + session_resources_v1::RPC_METHODS.len()
             + conversation_runtime::RPC_METHODS.len()
@@ -258,6 +265,10 @@ mod tests {
         assert!(methods.contains("service_update_local_plugin"));
         assert!(methods.contains("service_set_plugin_mcp_secret"));
         assert!(methods.contains("service_delete_plugin_mcp_secret"));
+        assert!(methods.contains("service_plugin_mcp_secret_mutation_requests"));
+        assert!(methods.contains("service_recover_plugin_mcp_secret_mutation"));
+        assert!(methods.contains("service_local_plugin_install_requests"));
+        assert!(methods.contains("service_recover_local_plugin_install"));
         assert!(methods.contains("workspace.diff.snapshot"));
         assert!(methods.contains("workspace.git.catalog"));
         assert!(methods.contains("workspace.git.setMonitoring"));

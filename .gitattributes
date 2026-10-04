@@ -1,0 +1,5 @@
+# Keep generated contract bytes identical after checkout on every platform.
+# 保证生成契约在各平台检出后保持相同字节。
+/docs/contracts/plugin-manifest.schema.json text eol=lf
+/docs/contracts/plugin-runtime-requirements.schema.json text eol=lf
+/docs/contracts/plugin-tool-reuse.schema.json text eol=lf

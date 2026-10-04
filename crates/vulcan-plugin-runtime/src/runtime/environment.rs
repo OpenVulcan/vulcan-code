@@ -20,6 +20,10 @@ use std::process::Command;
 use uuid::Uuid;
 use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 
+mod leases;
+pub(super) use leases::lock_plugin_execution_environment_cleanup;
+pub(super) use leases::retain_plugin_execution_environment;
+
 /// Windows creation flag that prevents a console window for a child process.
 /// 防止子进程创建控制台窗口的 Windows 创建标志。
 #[cfg(windows)]
@@ -125,6 +129,9 @@ pub(super) fn ensure_plugin_execution_environment(
         .version
         .as_deref()
         .ok_or_else(|| format!("Vulcan plugin `{}` has no validated version.", plugin.id))?;
+    // Keep builders and their staging directories outside every cleanup's exclusive interval.
+    // 让构建者及其暂存目录避开所有清理的排他区间。
+    let _environment = retain_plugin_execution_environment(state, &plugin.id)?;
     fs::create_dir_all(&state.plugin_runtime_root).map_err(|error| {
         format!(
             "Failed to create Vulcan plugin runtime root `{}`: {error}",
@@ -400,6 +407,12 @@ pub(super) fn remove_plugin_execution_environment_generation(
     version: &str,
     fingerprint: &str,
 ) -> Result<(), String> {
+    // Absence is a no-op; an existing root must be exclusively owned before inspecting descendants.
+    // 根缺失时无需处理；根存在时须先排他持有再检查下级目录。
+    if !state.plugin_runtime_root.exists() {
+        return Ok(());
+    }
+    let _cleanup = lock_plugin_execution_environment_cleanup(state, plugin_id)?;
     let environment = state
         .plugin_runtime_root
         .join(plugin_id)
@@ -463,91 +476,6 @@ pub(super) fn remove_plugin_execution_environment_generation(
         .ok_or_else(|| String::from("Candidate environment has no plugin directory."))?;
     let _ = fs::remove_dir(version_root);
     let _ = fs::remove_dir(plugin_root);
-    Ok(())
-}
-
-/// Removes every obsolete execution environment after one plugin update commits.
-/// 在单个插件更新提交后移除全部过期执行环境。
-///
-/// # Parameters
-/// 参数
-/// `state` owns the runtime root and the remaining arguments identify the sole committed generation.
-/// `state` 持有运行时根，其余参数标识唯一已提交代次。
-///
-/// # Returns
-/// 返回值
-/// Returns success after only the committed generation remains, or a boundary-safe cleanup diagnostic.
-/// 仅保留已提交代次后返回成功，失败时返回边界安全的清理诊断。
-pub(super) fn remove_obsolete_plugin_execution_environments(
-    state: &VulcanPluginManagerState,
-    plugin_id: &str,
-    current_version: &str,
-    current_fingerprint: &str,
-) -> Result<(), String> {
-    let plugin_root = state.plugin_runtime_root.join(plugin_id);
-    if !plugin_root.exists() {
-        return Ok(());
-    }
-    let canonical_runtime_root = state
-        .plugin_runtime_root
-        .canonicalize()
-        .map_err(|error| format!("Failed to resolve Vulcan plugin runtime root: {error}"))?;
-    let canonical_plugin_root = plugin_root
-        .canonicalize()
-        .map_err(|error| format!("Failed to resolve plugin runtime directory: {error}"))?;
-    if canonical_plugin_root.parent() != Some(canonical_runtime_root.as_path()) {
-        return Err(String::from(
-            "Plugin runtime directory is outside the exact runtime root.",
-        ));
-    }
-    for version_entry in fs::read_dir(&canonical_plugin_root)
-        .map_err(|error| format!("Failed to list plugin runtime versions: {error}"))?
-    {
-        let version_entry = version_entry
-            .map_err(|error| format!("Failed to inspect plugin runtime version: {error}"))?;
-        let metadata = fs::symlink_metadata(version_entry.path()).map_err(|error| {
-            format!("Failed to inspect plugin runtime version metadata: {error}")
-        })?;
-        if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
-            return Err(format!(
-                "Unexpected entry exists in plugin runtime directory `{}`.",
-                version_entry.path().display()
-            ));
-        }
-        let version_name = version_entry.file_name();
-        if version_name.to_string_lossy() != current_version {
-            fs::remove_dir_all(version_entry.path()).map_err(|error| {
-                format!(
-                    "Failed to remove obsolete plugin runtime version `{}`: {error}",
-                    version_entry.path().display()
-                )
-            })?;
-            continue;
-        }
-        for fingerprint_entry in fs::read_dir(version_entry.path())
-            .map_err(|error| format!("Failed to list plugin runtime generations: {error}"))?
-        {
-            let fingerprint_entry = fingerprint_entry
-                .map_err(|error| format!("Failed to inspect plugin runtime generation: {error}"))?;
-            let metadata = fs::symlink_metadata(fingerprint_entry.path()).map_err(|error| {
-                format!("Failed to inspect plugin runtime generation metadata: {error}")
-            })?;
-            if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
-                return Err(format!(
-                    "Unexpected entry exists in plugin runtime version directory `{}`.",
-                    fingerprint_entry.path().display()
-                ));
-            }
-            if fingerprint_entry.file_name().to_string_lossy() != current_fingerprint {
-                fs::remove_dir_all(fingerprint_entry.path()).map_err(|error| {
-                    format!(
-                        "Failed to remove obsolete plugin runtime generation `{}`: {error}",
-                        fingerprint_entry.path().display()
-                    )
-                })?;
-            }
-        }
-    }
     Ok(())
 }
 
@@ -969,7 +897,8 @@ impl VulcanPluginRuntimeManager {
                 .join(&plugin.content_fingerprint);
             if destination.exists() {
                 if plugin.runtime_state != crate::VulcanPluginRuntimeState::Disabled
-                    || plugin.active_session_count != 0
+                    || self.active_session_count(plugin_id)? != 0
+                    || self.has_cleanup_diagnostics(plugin_id)?
                 {
                     return Err(VulcanPluginRuntimeError::new(format!(
                         "Vulcan plugin `{plugin_id}` has an incomplete environment but is not fully disabled."

@@ -4,7 +4,11 @@
 use crate::mcp::config::McpServerConfig;
 use crate::mcp::runtime::{McpRuntimeDiscoveryReport, McpRuntimeOverview};
 use std::sync::Arc;
-use vulcan_mcp_runtime::{McpOAuthSession, McpTransport};
+use vulcan_mcp_runtime::McpOAuthSession;
+
+mod launch_inputs;
+pub(crate) use launch_inputs::{McpActualLaunchInputLease, McpPluginLaunchSource};
+pub(crate) use launch_inputs::{McpLaunchInputCaptureError, McpLaunchedTransport};
 
 /// Runtime registry of configured MCP servers.
 /// 已配置 MCP 服务器的运行时注册表。
@@ -90,11 +94,17 @@ impl McpServerRegistry {
 
     /// Spawns one MCP transport from the stored server entry.
     /// 根据存储的服务器条目启动一个 MCP 传输实例。
+    /// Server_id selects the exact declaration; auth_session supplies OAuth, resources owns its frozen host authority.
+    /// server_id 选择精确声明；auth_session 提供 OAuth，resources 拥有其冻结宿主权威。
+    /// Returns an initialized transport or the sanitized launch error; the caller keeps the independent release receipt.
+    /// 返回已初始化传输或脱敏启动错误；调用方保留独立释放回执。
     pub(crate) async fn spawn_transport(
         &self,
         server_id: &str,
         auth_session: Option<Arc<McpOAuthSession>>,
-    ) -> Result<Arc<dyn McpTransport>, String> {
+        resources: vulcan_mcp_runtime::McpTransportResources,
+        source: launch_inputs::McpPluginLaunchSource,
+    ) -> Result<McpLaunchedTransport, String> {
         let server = self
             .server_by_id(server_id)
             .ok_or_else(|| format!("未找到 MCP 服务器 `{server_id}`。"))?;
@@ -104,8 +114,7 @@ impl McpServerRegistry {
         }
 
         let launch_spec = server.launch_spec()?;
-        launch_spec
-            .launch(auth_session)
+        McpLaunchedTransport::launch(launch_spec, auth_session, resources, source)
             .await
             .map_err(|error| server.launch_error_text(error))
     }

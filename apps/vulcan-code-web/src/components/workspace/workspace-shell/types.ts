@@ -160,6 +160,9 @@ export interface WorkspaceShellProps {
   // Selects one persisted conversation.
   // 选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;
+  // Confirms this exact resource owner through the service before opening chat; false preserves diagnostics.
+  // 打开聊天前通过服务确认此精确资源所有者；返回假值时保留诊断。
+  onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean>;
   // Selects one project without changing the current conversation.
   // 选择一个项目且不改变当前会话。
   onSelectProject: (projectId: string) => void;

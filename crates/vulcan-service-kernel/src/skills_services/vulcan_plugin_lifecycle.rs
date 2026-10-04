@@ -3,6 +3,68 @@
 
 use super::*;
 
+mod target_publication;
+pub(super) use target_publication::{
+    TargetPluginExtensionPublication, publish_activation_target_plugin_extension_generation,
+};
+mod predecessor_publication;
+pub(super) use predecessor_publication::{
+    PredecessorPluginExtensionPublication,
+    publish_activation_predecessor_plugin_extension_generation,
+};
+
+#[cfg(test)]
+mod owner_drain_tests;
+
+/// Publish one original native control under the real service slot lock, preserving its first host issuer.
+/// 在真实服务槽锁内发布单个原原生控制，保留其首次宿主签发者。
+/// state owns the actual bridge, native is its ready original, and catalog is that original source snapshot.
+/// state 持有实际桥，native 为其就绪原实例，catalog 为该原来源快照。
+/// Returns the actual full commit witness; shutdown or source errors precede the pointer write and do not replay initialization.
+/// 返回实际完整提交见证；关闭或来源错误先于指针写入，且不重播初始化。
+#[cfg(test)]
+pub(super) fn publish_native_published_plugin_extension_generation(
+    state: &SharedServiceBridgeState,
+    native: &vulcan_agent_runtime::mcp::PublishedPluginMcpRuntime,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+) -> Result<
+    Arc<vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration>,
+    String,
+> {
+    // Acquire service ownership before source and native guards to avoid native-to-service lock inversion.
+    // 在来源及原生守卫之前取得服务所有权，避免原生到服务的锁反序。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    // Ordinary native publication cannot admit another installation's private manager descriptor.
+    // 普通原生发布不能准入另一安装的私有管理器描述符。
+    let current_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    guard
+        .pending_local_plugin_installs
+        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
+    // This actual bridge contains the sole full slot consumed by new executions.
+    // 此实际桥包含新执行消费的唯一完整槽。
+    let bridge = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    // The same original prepared lease transfers without allocation of a replacement runtime or issuer.
+    // 同一原已准备租约转交，不分配替代运行时或签发者。
+    let (committed, displaced) =
+        bridge.publish_native_plugin_extension_generation(native, catalog)?;
+    drop(guard);
+    displaced.retire_plugin_partitions_after(
+        native.observer().identity().0,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
+    Ok(committed)
+}
+
 /// One exact desired lifecycle state selected by the service request.
 /// 服务请求选择的唯一目标生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +144,9 @@ struct VulcanPluginTransition {
     /// Complete MCP descriptor set validated for the requested target catalog.
     /// 针对请求目标目录完成校验的完整 MCP 描述符集合。
     target_mcp_servers: Vec<vulcan_plugin_runtime::VulcanPluginMcpServerDescriptor>,
+    /// Original descriptors required to restart global MCP after a failed committed disable.
+    /// 已提交停用失败后重启全局 MCP 所需的原始描述符。
+    previous_mcp_servers: Vec<vulcan_plugin_runtime::VulcanPluginMcpServerDescriptor>,
     /// Policy projection captured before any mutation.
     /// 任意变更前捕获的策略投影。
     previous_policy: VulcanPluginPolicySnapshot,
@@ -112,6 +177,16 @@ pub(super) async fn set_vulcan_plugin_enabled(
     let stable_plugin_id = plugin_id.trim().to_owned();
     if stable_plugin_id.is_empty() {
         return Err(String::from("Vulcan 插件标识不能为空。"));
+    }
+    {
+        // Core refresh also replaces the exact catalog Arc, so reject before any lifecycle or policy mutation begins.
+        // 核心刷新也替换精确目录 Arc，因此在任何生命周期或策略变更开始前拒绝。
+        let guard = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        crate::service_state_access::require_plugin_update_full_publication_admission(
+            &guard, None,
+        )?;
     }
     // management_guard serializes catalog, lifecycle, persistence, and hook ownership transfer.
     // management_guard 串行化目录、生命周期、持久化与 Hook 所有权交接。
@@ -151,6 +226,11 @@ pub(super) async fn set_vulcan_plugin_enabled(
     // target converts the transport boolean once so later branches carry domain meaning.
     // target 仅转换一次传输布尔值，使后续分支携带领域语义。
     let target = VulcanPluginTargetState::from_enabled(enabled);
+    // requires_cleanup_retry observes retained cleanup independently from immutable routing.
+    // requires_cleanup_retry 独立于不可变路由观测保留清理。
+    let requires_cleanup_retry = runtime
+        .has_cleanup_diagnostics(&stable_plugin_id)
+        .map_err(|error| error.to_string())?;
     // already_settled excludes cleanup-warning states that require an explicit retry.
     // already_settled 排除需要显式重试的清理告警状态。
     let already_settled = matches!(
@@ -162,11 +242,7 @@ pub(super) async fn set_vulcan_plugin_enabled(
             VulcanPluginTargetState::Disabled,
             vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
         )
-    );
-    // requires_cleanup_retry identifies retained resources from an earlier disable attempt.
-    // requires_cleanup_retry 标识早期停用尝试遗留的资源。
-    let requires_cleanup_retry = current_plugin.runtime_state
-        == vulcan_plugin_runtime::VulcanPluginRuntimeState::DisabledWithCleanupWarning;
+    ) && !requires_cleanup_retry;
     if !matches!(
         current_plugin.availability,
         vulcan_plugin_runtime::VulcanPluginAvailability::Enabled
@@ -240,6 +316,7 @@ pub(super) async fn set_vulcan_plugin_enabled(
         previous_enabled,
         plugin_generation,
         target_mcp_servers,
+        previous_mcp_servers: current_plugin.mcp_servers.clone(),
         previous_policy: VulcanPluginPolicySnapshot {
             disabled_plugin_ids: provider_configuration
                 .luaskills
@@ -270,14 +347,20 @@ pub(super) async fn set_vulcan_plugin_enabled(
             .await?
         }
         VulcanPluginTargetState::Disabled => {
-            prepare_disable_transition(&state, &runtime, &transition)?;
+            prepare_disable_transition(&state, &runtime, &transition).await?;
             None
         }
     };
     if let Err(error) = persist_transition_target(&state, &transition).await {
         // rollback_result preserves runtime, lifecycle, and Hook compensation diagnostics.
         // rollback_result 保留运行时、生命周期与 Hook 补偿诊断。
-        let rollback_result = rollback_prepared_transition(&state, &runtime, &transition).await;
+        let rollback_result = rollback_prepared_transition(
+            &state,
+            &runtime,
+            &transition,
+            prepared_mcp_runtime.as_ref(),
+        )
+        .await;
         return Err(append_rollback_error(error, rollback_result));
     }
     match transition.target {
@@ -370,12 +453,18 @@ async fn prepare_enable_transition(
         .map_err(|error| error.to_string())?;
     // Keep owner MCP admission closed for the whole preparation window, including a previously plain Disabled state.
     // 在整个启用准备窗口内保持所有者 MCP 准入关闭，包括此前只是普通 Disabled 的状态。
-    begin_plugin_owner_mcp_drain(state, &transition.plugin_id).map_err(|error| {
+    begin_plugin_mcp_drain(state, &transition.plugin_id).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
             restore_previous_projection(state, runtime, transition, Vec::new()),
         )
     })?;
+    if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
+        return Err(append_rollback_error(
+            format!("重新启用前 MCP 排空失败：{error}"),
+            restore_previous_projection(state, runtime, transition, vec![error]),
+        ));
+    }
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin hook 同步失败：{error}"),
@@ -391,7 +480,8 @@ async fn prepare_enable_transition(
     {
         // cleanup_failures captures partial callback side effects through the declared disable callback.
         // cleanup_failures 通过声明的停用回调捕获部分回调副作用。
-        let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+        let cleanup_failures =
+            compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
             format!(
                 "Vulcan 插件 `{}` 启用回调失败：{error}",
@@ -403,7 +493,8 @@ async fn prepare_enable_transition(
     if let Err(error) = runtime.probe_plugin(&transition.plugin_id).await {
         // cleanup_failures compensates a successful callback whose runtime probe failed.
         // cleanup_failures 补偿回调成功但运行时探测失败的情况。
-        let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+        let cleanup_failures =
+            compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
             format!(
                 "Vulcan 插件 `{}` 启用探测失败：{error}",
@@ -412,42 +503,21 @@ async fn prepare_enable_transition(
             restore_previous_projection(state, runtime, transition, cleanup_failures),
         ));
     }
-    let candidate_result = async {
-        // currentMcpRuntime is captured once before asynchronous candidate startup so the replacement cannot mix service generations.
-        // currentMcpRuntime 在异步候选启动前仅捕获一次，避免替换过程混用服务代次。
-        let current_mcp_runtime = state
-            .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?
-            .agent_runtime
-            .as_ref()
-            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-        let server_configs = plugin_mcp_server_configs_for_descriptors(
-            runtime,
-            &transition.target_mcp_servers,
-            &secret_store,
-        )?;
-        if server_configs.is_empty() {
-            Ok(remove_plugin_mcp_runtime_partition(
-                &current_mcp_runtime,
-                &transition.plugin_id,
-            ))
-        } else {
-            replace_plugin_mcp_runtime_partition(
-                &current_mcp_runtime,
-                &transition.plugin_id,
-                transition.plugin_generation,
-                server_configs,
-            )
-            .await
-        }
-    }
+    // Build from this operation's validated target rather than a later catalog scan.
+    // 根据此次操作已校验的目标构建，不读取后续目录扫描。
+    let candidate_result = prepare_transition_mcp(
+        state,
+        runtime,
+        &transition.plugin_id,
+        transition.plugin_generation,
+        &transition.target_mcp_servers,
+    )
     .await;
     let candidate_mcp_runtime = match candidate_result {
         Ok(candidate) => candidate,
         Err(error) => {
-            let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+            let cleanup_failures =
+                compensate_failed_enable(state, runtime, &transition.plugin_id).await;
             return Err(append_rollback_error(
                 format!(
                     "Vulcan 插件 `{}` MCP 就绪检查失败：{error}",
@@ -472,7 +542,7 @@ async fn prepare_enable_transition(
 /// 返回值
 /// Returns success only while the plugin remains safely in `Draining`.
 /// 仅当插件安全保持在 `Draining` 状态时返回成功。
-fn prepare_disable_transition(
+async fn prepare_disable_transition(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
@@ -493,7 +563,7 @@ fn prepare_disable_transition(
         // Restore the gate to the immutable pre-transition policy instead of reopening it blindly.
         // 按不可变的转换前策略恢复闸门，不能无条件重新开放。
         let gate = if transition.previous_enabled {
-            finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+            finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
         } else {
             begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
         };
@@ -596,8 +666,11 @@ async fn commit_enable_transition(
             Err(error) => {
                 // cleanup_failures compensates while the snapshot still authorizes EnableRollback.
                 // cleanup_failures 在快照仍允许 EnableRollback 时完成补偿。
-                let cleanup_failures =
-                    compensate_failed_enable(runtime, &transition.plugin_id).await;
+                let mut cleanup_failures =
+                    drain_prepared_transition_mcp(&candidate_mcp_runtime, &transition.plugin_id)
+                        .await;
+                cleanup_failures
+                    .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
                 // persistence_rollback restores the durable baseline before catalog restoration.
                 // persistence_rollback 在目录恢复前还原持久化基线。
                 let persistence_rollback = persist_transition_enabled_state(
@@ -641,13 +714,24 @@ async fn commit_enable_transition(
             state,
             &transition.plugin_id,
             Arc::clone(&final_catalog),
-            candidate_mcp_runtime,
+            candidate_mcp_runtime.clone(),
         )
         .err()
     } else {
         activation_error
     };
     if let Some(error) = activation_error {
+        // An unpublished candidate is not in the current service view; retire it explicitly first.
+        // 未发布候选不在当前服务视图中；先显式退役它。
+        let cleanup =
+            drain_prepared_transition_mcp(&candidate_mcp_runtime, &transition.plugin_id).await;
+        // Preserve cleanup evidence without losing the original activation failure.
+        // 保留清理证据，不丢失原激活失败。
+        let error = if cleanup.is_empty() {
+            error
+        } else {
+            format!("{error}；{}", cleanup.join("；"))
+        };
         // rollback_result performs a real disable lifecycle because the plugin is already Enabled.
         // rollback_result 执行真实停用生命周期，因为插件已经进入 Enabled。
         let rollback_result = rollback_finalized_enable_to_policy(
@@ -665,7 +749,7 @@ async fn commit_enable_transition(
     }
     // Reopen owner MCP admission only after the enabled catalog and matching runtime generation are published.
     // 仅在启用目录及其匹配运行时代次发布后重新开放所有者 MCP 准入。
-    if let Err(error) = finish_plugin_owner_mcp_drain(state, &transition.plugin_id) {
+    if let Err(error) = finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
         let rollback_result = rollback_finalized_enable_to_policy(
             state,
             runtime,
@@ -699,12 +783,18 @@ async fn commit_disable_transition(
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
 ) -> Result<(), String> {
+    // Close all original global partitions only after the disabled policy is durable.
+    // 仅在停用策略持久化之后关闭全部原全局分区。
+    begin_plugin_mcp_drain(state, &transition.plugin_id)?;
     // cleanup_failures retains non-fatal drain and lifecycle diagnostics in the final runtime state.
     // cleanup_failures 在最终运行时状态中保留非致命排空与生命周期诊断。
     let mut cleanup_failures = match runtime.drain_plugin_sessions(&transition.plugin_id).await {
         Ok(report) => report.failures,
         Err(error) => vec![error.to_string()],
     };
+    if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
+        cleanup_failures.push(format!("插件 MCP 清理失败：{error}"));
+    }
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
@@ -783,6 +873,8 @@ async fn commit_disable_transition(
 /// 参数
 /// Service state, runtime, and transition determine the exact compensation direction.
 /// 服务状态、运行时与转换决定精确补偿方向。
+/// The enabling branch receives its exact unpublished MCP candidate; disabling has no candidate.
+/// 启用分支接收其精确未发布 MCP 候选；停用分支没有候选。
 ///
 /// # Returns
 /// 返回值
@@ -792,15 +884,25 @@ async fn rollback_prepared_transition(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
+    candidate_mcp: Option<&McpRuntimeAccess>,
 ) -> Result<(), String> {
     match transition.target {
         VulcanPluginTargetState::Enabled => {
             // cleanup_failures compensates the completed enable callback before projection rollback.
             // cleanup_failures 在投影回滚前补偿已完成的启用回调。
-            let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+            // Enabling preparation always owns a ready candidate; disabled preparation owns none.
+            // 启用准备始终持有就绪候选；停用准备不持有候选。
+            let candidate =
+                candidate_mcp.ok_or_else(|| String::from("启用补偿缺少原 MCP 候选。"))?;
+            // Keep original candidate cleanup diagnostics alongside lifecycle compensation.
+            // 将原候选清理诊断与生命周期补偿一起保留。
+            let mut cleanup_failures =
+                drain_prepared_transition_mcp(candidate, &transition.plugin_id).await;
+            cleanup_failures
+                .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
             let result = restore_previous_projection(state, runtime, transition, cleanup_failures);
             let gate_result = if transition.previous_enabled {
-                finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+                finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
             } else {
                 begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
             };
@@ -817,7 +919,7 @@ async fn rollback_prepared_transition(
             // 持久化前尚未执行停用回调，因此只需恢复目录与 Hook。
             let result = restore_previous_projection(state, runtime, transition, Vec::new());
             let gate_result = if transition.previous_enabled {
-                finish_plugin_owner_mcp_drain(state, &transition.plugin_id)
+                finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
             } else {
                 begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
             };
@@ -863,7 +965,7 @@ async fn rollback_finalized_enable_to_policy(
         .map_err(|error| error.to_string())?;
     // Keep the owner MCP gate closed while compensating a failed finalized enable.
     // 在补偿已完成但失败的启用事务时保持所有者 MCP 闸门关闭。
-    begin_plugin_owner_mcp_drain(state, &transition.plugin_id)?;
+    begin_plugin_mcp_drain(state, &transition.plugin_id)?;
     synchronize_transient_hooks(state, runtime)?;
     // cleanup_failures records whether the real disable compensation was complete.
     // cleanup_failures 记录真实停用补偿是否完整。
@@ -871,6 +973,9 @@ async fn rollback_finalized_enable_to_policy(
         Ok(report) => report.failures,
         Err(error) => vec![error.to_string()],
     };
+    if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
+        cleanup_failures.push(format!("插件 MCP 清理失败：{error}"));
+    }
     if let Err(error) = runtime
         .invoke_lifecycle(
             &transition.plugin_id,
@@ -883,12 +988,24 @@ async fn rollback_finalized_enable_to_policy(
     // incomplete_cleanup is reported even though the disabled warning projection is published.
     // incomplete_cleanup 即使已经发布停用告警投影也必须上报。
     let incomplete_cleanup = cleanup_failures.clone();
-    finish_transition_and_sync(
+    // Remove the revoked global partition from the same recovered extension publication.
+    // 从同一恢复扩展发布中移除已撤销的全局分区。
+    let catalog = finish_transition(runtime, transition, restored_policy, cleanup_failures)?;
+    synchronize_service_vulcan_plugin_hooks(state, runtime.clone(), &catalog)?;
+    // Capture current access synchronously; no service lock crosses an await.
+    // 同步捕获当前访问；服务锁不跨越异步等待。
+    let current_mcp = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|bridge| bridge.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    publish_extension_generation(
         state,
-        runtime,
-        transition,
-        restored_policy,
-        cleanup_failures,
+        &transition.plugin_id,
+        catalog,
+        remove_plugin_mcp_runtime_partition(&current_mcp, &transition.plugin_id),
     )?;
     if incomplete_cleanup.is_empty() {
         Ok(())
@@ -924,6 +1041,26 @@ async fn rollback_disable(
         // 清理重试开始时就是停用状态，因此回滚绝不能执行启用生命周期。
         return restore_previous_projection(state, runtime, transition, cleanup_failures);
     }
+    // Never start reverse enable effects while old MCP processes remain alive.
+    // 旧 MCP 进程仍存活时绝不开始反向启用副作用。
+    if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
+        // Preserve both earlier cleanup evidence and this original resource failure.
+        // 保留先前清理证据及此次原资源失败。
+        let mut failures = cleanup_failures;
+        failures.push(error.clone());
+        return Err(append_rollback_error(
+            format!("停用回滚前 MCP 排空失败：{error}"),
+            // The disabled target is already durable; incomplete cleanup cannot restore enabled hooks.
+            // 停用目标已经持久化；清理不完整不能恢复启用 Hook。
+            finish_transition_and_sync(
+                state,
+                runtime,
+                transition,
+                &transition.target_policy,
+                failures,
+            ),
+        ));
+    }
     if finalized {
         // A finalized disable no longer owns a Draining override, so recovery must use the regular Disabled -> Enabling transition.
         // 已完成停用不再持有 Draining 覆盖，因此恢复必须使用常规的 Disabled -> Enabling 转换。
@@ -945,7 +1082,8 @@ async fn rollback_disable(
         )
         .await
     {
-        let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+        let cleanup_failures =
+            compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
             format!("停用回滚的启用回调失败：{error}"),
             finish_transition_and_sync(
@@ -958,7 +1096,8 @@ async fn rollback_disable(
         ));
     }
     if let Err(error) = runtime.probe_plugin(&transition.plugin_id).await {
-        let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+        let cleanup_failures =
+            compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
             format!("停用回滚的启用探测失败：{error}"),
             finish_transition_and_sync(
@@ -970,6 +1109,35 @@ async fn rollback_disable(
             ),
         ));
     }
+    // Recreate the stopped original partition from its frozen descriptors before restoring enabled policy.
+    // 恢复启用策略前，依据固定描述符重建已经停止的原分区。
+    let candidate_mcp = match prepare_transition_mcp(
+        state,
+        runtime,
+        &transition.plugin_id,
+        transition.plugin_generation,
+        &transition.previous_mcp_servers,
+    )
+    .await
+    {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            // Preserve failed reverse-enable cleanup in the durable disabled projection.
+            // 在持久停用投影中保留反向启用的清理失败。
+            let cleanup_failures =
+                compensate_failed_enable(state, runtime, &transition.plugin_id).await;
+            return Err(append_rollback_error(
+                format!("停用回滚的 MCP 就绪检查失败：{error}"),
+                finish_transition_and_sync(
+                    state,
+                    runtime,
+                    transition,
+                    &transition.target_policy,
+                    cleanup_failures,
+                ),
+            ));
+        }
+    };
     if let Err(error) = persist_transition_enabled_state(
         state,
         transition,
@@ -978,7 +1146,12 @@ async fn rollback_disable(
     )
     .await
     {
-        let cleanup_failures = compensate_failed_enable(runtime, &transition.plugin_id).await;
+        // Stop the ready candidate before compensating the reverse enable.
+        // 补偿反向启用之前停止就绪候选。
+        let mut cleanup_failures =
+            drain_prepared_transition_mcp(&candidate_mcp, &transition.plugin_id).await;
+        cleanup_failures
+            .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
         return Err(append_rollback_error(
             error,
             finish_transition_and_sync(
@@ -998,8 +1171,10 @@ async fn rollback_disable(
             Err(error) => {
                 // cleanup_failures compensates the reverse enable while it remains in Enabling.
                 // cleanup_failures 在反向启用仍处于 Enabling 时进行补偿。
-                let cleanup_failures =
-                    compensate_failed_enable(runtime, &transition.plugin_id).await;
+                let mut cleanup_failures =
+                    drain_prepared_transition_mcp(&candidate_mcp, &transition.plugin_id).await;
+                cleanup_failures
+                    .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
                 persist_transition_enabled_state(
                     state,
                     transition,
@@ -1035,7 +1210,28 @@ async fn rollback_disable(
     } else {
         activation_error
     };
+    // Publish the recreated global MCP and recovered catalog as one extension generation.
+    // 将重建的全局 MCP 与恢复目录作为同一扩展代次发布。
+    let activation_error = if activation_error.is_none() {
+        publish_extension_generation(
+            state,
+            &transition.plugin_id,
+            recovered_catalog,
+            candidate_mcp.clone(),
+        )
+        .err()
+    } else {
+        activation_error
+    };
     if let Some(error) = activation_error {
+        // Retain candidate cleanup errors alongside the activation failure.
+        // 将候选清理错误与激活失败一起保留。
+        let cleanup = drain_prepared_transition_mcp(&candidate_mcp, &transition.plugin_id).await;
+        let error = if cleanup.is_empty() {
+            error
+        } else {
+            format!("{error}；{}", cleanup.join("；"))
+        };
         return Err(append_rollback_error(
             error,
             rollback_finalized_enable_to_policy(
@@ -1050,7 +1246,19 @@ async fn rollback_disable(
     }
     // Reopen owner MCP admission only after the reverse enable transaction is fully recovered.
     // 仅在反向启用事务完整恢复后重新开放所有者 MCP 准入。
-    finish_plugin_owner_mcp_drain(state, &transition.plugin_id)?;
+    if let Err(error) = finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await {
+        return Err(append_rollback_error(
+            error,
+            rollback_finalized_enable_to_policy(
+                state,
+                runtime,
+                transition,
+                transition.target.is_enabled(),
+                &transition.target_policy,
+            )
+            .await,
+        ));
+    }
     Ok(())
 }
 
@@ -1059,23 +1267,34 @@ async fn rollback_disable(
 ///
 /// # Parameters
 /// 参数
-/// `runtime` owns the enabling transition and `plugin_id` selects the exact plugin.
-/// `runtime` 持有启用转换，`plugin_id` 选择精确插件。
+/// `state` owns original MCP observations, `runtime` owns the enabling transition, and `plugin_id` selects the exact plugin.
+/// `state` 持有原 MCP 观察，`runtime` 持有启用转换，`plugin_id` 选择精确插件。
 ///
 /// # Returns
 /// 返回值
 /// Returns every cleanup failure that prevents complete compensation.
 /// 返回所有阻止完整补偿的清理失败。
 async fn compensate_failed_enable(
+    state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     plugin_id: &str,
 ) -> Vec<String> {
     // failures combines lease drain and lifecycle compensation diagnostics.
     // failures 合并租约排空与生命周期补偿诊断。
-    let mut failures = match runtime.drain_plugin_sessions(plugin_id).await {
+    let mut failures = match begin_plugin_mcp_drain(state, plugin_id) {
+        Ok(()) => wait_plugin_mcp_drain(state, plugin_id)
+            .await
+            .err()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        Err(error) => vec![error],
+    };
+    // Lua cleanup contributes to the same evidence instead of replacing MCP failures.
+    // Lua 清理补充同一证据，不覆盖 MCP 失败。
+    failures.extend(match runtime.drain_plugin_sessions(plugin_id).await {
         Ok(report) => report.failures,
         Err(error) => vec![error.to_string()],
-    };
+    });
     if let Err(error) = runtime
         .invoke_lifecycle(
             plugin_id,
@@ -1133,22 +1352,150 @@ fn begin_plugin_owner_mcp_drain(
     Ok(())
 }
 
-/// Reopens owner-scoped MCP admission after an enabled projection is fully published.
-/// 在启用投影完整发布后重新开放所有者范围 MCP 准入。
-fn finish_plugin_owner_mcp_drain(
+/// Builds a ready global partition from an operation's frozen descriptors without publishing it.
+/// 根据操作固定的描述符构建就绪全局分区，不发布它。
+/// State supplies current access, runtime supplies package materialization, and identity/generation/descriptors fix the candidate.
+/// state 提供当前访问，runtime 提供插件包物化，身份、代次及描述符固定候选。
+/// Returns an unpublished matching access surface or the original readiness error.
+/// 返回未发布的匹配访问面，或原始就绪错误。
+async fn prepare_transition_mcp(
+    state: &SharedServiceBridgeState,
+    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
+    plugin_id: &str,
+    generation: u64,
+    descriptors: &[vulcan_plugin_runtime::VulcanPluginMcpServerDescriptor],
+) -> Result<McpRuntimeAccess, String> {
+    // Capture once before awaiting so a candidate cannot combine extension generations.
+    // 等待前仅捕获一次，避免候选混用扩展代次。
+    let current_mcp_runtime = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|bridge| bridge.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    // Resolve credentials only through the exact descriptor binding.
+    // 仅通过精确描述符绑定解析凭据。
+    let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+    // Materialization retains the descriptor's immutable package identity.
+    // 物化保留描述符的不可变插件包身份。
+    let server_configs =
+        plugin_mcp_server_configs_for_descriptors(runtime, descriptors, &secret_store)?;
+    if server_configs.is_empty() {
+        Ok(remove_plugin_mcp_runtime_partition(
+            &current_mcp_runtime,
+            plugin_id,
+        ))
+    } else {
+        replace_plugin_mcp_runtime_partition(
+            &current_mcp_runtime,
+            plugin_id,
+            generation,
+            server_configs,
+        )
+        .await
+    }
+}
+
+/// Stops an unpublished candidate before reverse lifecycle effects can run.
+/// 在反向生命周期副作用运行之前停止未发布候选。
+/// The exact candidate and plugin select resources; failures retain their original receipts.
+/// 精确候选及插件选择资源；失败时保留原回执。
+/// Returns cleanup diagnostics without shutting down any other plugin.
+/// 返回清理诊断，不关闭其他任何插件。
+async fn drain_prepared_transition_mcp(
+    candidate: &McpRuntimeAccess,
+    plugin_id: &str,
+) -> Vec<String> {
+    if let Err(error) = candidate.begin_plugin_mcp_drain(plugin_id) {
+        return vec![error];
+    }
+    match candidate
+        .wait_plugin_mcp_drain(
+            plugin_id,
+            AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+        )
+        .await
+    {
+        Ok(()) => Vec::new(),
+        Err(error) => vec![format!("候选 MCP 清理失败：{error}")],
+    }
+}
+
+/// Closes owner, browser and global admission for the exact plugin without affecting other plugins.
+/// 关闭精确插件的所有者、浏览器及全局入场，不影响其他插件。
+/// Receives service state and plugin identity; returns a failure while preserving existing closures.
+/// 接收服务状态及插件身份；失败时保留已经关闭的入场。
+fn begin_plugin_mcp_drain(state: &SharedServiceBridgeState, plugin_id: &str) -> Result<(), String> {
+    begin_plugin_owner_mcp_drain(state, plugin_id)?;
+    // The serialized management operation keeps this published access authoritative.
+    // 串行化管理操作保持此发布访问的权威性。
+    let mcp_runtime = state
+        .lock()
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .agent_runtime
+        .as_ref()
+        .map(|bridge| bridge.extension_generation.mcp_runtime())
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    mcp_runtime.begin_plugin_mcp_drain(plugin_id)
+}
+
+/// Waits for original owner and global resources with one service drain budget, keeping admission closed.
+/// 使用同一服务排空预算等待原所有者与全局资源，保持入场关闭。
+/// Receives the service state and plugin identity; reports release failure without removing evidence.
+/// 接收服务状态及插件身份；报告释放失败，不移除证据。
+async fn wait_plugin_mcp_drain(
     state: &SharedServiceBridgeState,
     plugin_id: &str,
 ) -> Result<(), String> {
-    let guard = state
+    // Capture shared access without holding service state across asynchronous cleanup.
+    // 捕获共享访问，不跨异步清理持有服务状态。
+    let mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
-    let browser_manager = guard.browser_manager.clone();
-    let mcp_runtime = guard
+        .map_err(|error| format!("锁定服务状态失败：{error}"))?
         .agent_runtime
         .as_ref()
-        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
+        .map(|bridge| bridge.extension_generation.mcp_runtime())
         .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    drop(guard);
+    mcp_runtime
+        .wait_plugin_mcp_drain(
+            plugin_id,
+            AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+        )
+        .await
+}
+
+/// Reopens owner and browser admission only after the original resource scopes have released.
+/// 仅在原资源范围释放之后重新开放所有者及浏览器入场。
+/// Receives the service state and plugin identity; errors retain closed admission.
+/// 接收服务状态及插件身份；发生错误时保持入场关闭。
+async fn finish_plugin_owner_mcp_drain(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+) -> Result<(), String> {
+    // End the synchronous lock scope before awaiting any original resource.
+    // 等待任何原资源之前结束同步锁作用域。
+    let (browser_manager, mcp_runtime) = {
+        // This guard exists only within the synchronous capture scope.
+        // 此锁守卫仅存在于同步捕获作用域内。
+        let guard = state
+            .lock()
+            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        // Preserve the exact access whose original resource receipts will be observed.
+        // 保留将要观察其原资源回执的精确访问。
+        let mcp_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|bridge| bridge.extension_generation.mcp_runtime())
+            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        (guard.browser_manager.clone(), mcp_runtime)
+    };
+    mcp_runtime
+        .wait_plugin_owner_drain(
+            plugin_id,
+            AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+        )
+        .await?;
     mcp_runtime.finish_plugin_owner_drain(plugin_id)?;
     if plugin_id == "vulcan-browser" {
         // Publish Core admission only after the exact owner MCP runtime has reopened.
@@ -1228,30 +1575,182 @@ pub(super) fn publish_extension_generation(
     catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     mcp_runtime: McpRuntimeAccess,
 ) -> Result<(), String> {
+    publish_extension_generation_with_current_mcp(state, plugin_id, catalog, |_| Ok(mcp_runtime))
+}
+
+/// Publish the retained Legacy replacement and confirm its secret owner adjacent to the actual full write.
+/// 发布保留旧格式替换，并在实际完整写入相邻处确认其秘密所有者。
+/// State owns the real slot; catalog and resources belong to the same original credential request.
+/// state 持有真实槽；catalog 及 resources 属于相同原凭据请求。
+/// Returns after confirmation; preparation errors preserve the current pointer and its original native owners.
+/// 确认后返回；准备错误保留当前指针及其原原生所有者。
+pub(super) fn publish_legacy_secret_extension_generation(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    resources: &mut legacy_secret_owner::LegacySecretMutationResources,
+) -> Result<(), String> {
+    // Actual service ownership precedes all native guards in the established publication lock order.
+    // 实际服务所有权按既定发布锁序先于全部原生守卫。
+    let mut guard = state.lock().map_err(|error| error.to_string())?;
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    // This actual bridge owns the only full slot used by subsequent executions.
+    // 此实际桥持有后续执行使用的唯一完整槽。
+    let bridge = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    // Preserve the current original through adjacent confirmation, including concurrent unrelated updates.
+    // 跨相邻确认保留当前原值，包括并发无关更新。
+    let expected = Arc::clone(&bridge.extension_generation);
+    // The actual current full pointer supplies the complete catalog; a pre-readiness snapshot cannot overwrite later routes.
+    // 实际当前完整指针提供完整目录；就绪前快照不能覆盖后续路由。
+    let current_catalog = expected.plugin_catalog().ok_or_else(|| {
+        String::from("Legacy publication requires the actual current plugin catalog.")
+    })?;
+    // The captured route must still be enabled in the same manager incarnation and monotonic plugin generation.
+    // 捕获路由须在相同管理器实例及单调插件代次中仍保持启用。
+    let original = catalog.plugins.get(plugin_id).ok_or_else(|| {
+        String::from("Legacy publication original plugin is absent from its captured catalog.")
+    })?;
+    if current_catalog.service_epoch != catalog.service_epoch
+        || original.generation == 0
+        || original.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled
+        || !current_catalog
+            .plugins
+            .get(plugin_id)
+            .is_some_and(|current| {
+                current.generation == original.generation
+                    && current.runtime_state
+                        == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled
+            })
+    {
+        return Err(String::from(
+            "Legacy publication original plugin routing changed during readiness.",
+        ));
+    }
+    // Merge actual current partitions instead of using a pre-readiness frozen access.
+    // 合并实际当前分区，而非使用就绪前冻结访问。
+    let current = expected.mcp_runtime();
+    // Disjoint borrows keep physical ownership in the original service slot through confirmation.
+    // 不相交借用跨确认使物理所有权保持在原服务槽中。
+    let legacy_secret_owner::LegacySecretMutationResources { native, phase, .. } = resources;
+    // Empty global declarations require removal and have no candidate native work.
+    // 空全局声明要求移除，且没有候选原生工作。
+    let access = match native.as_ref() {
+        Some(native) => native.publication_access(&current)?,
+        None => remove_plugin_mcp_runtime_partition(&current, plugin_id),
+    };
+    // Hook and catalog preparation complete before native guard acquisition or full-pointer mutation.
+    // Hook 及目录准备在原生守卫获取或完整指针修改之前完成。
+    let next = bridge.prepare_plugin_extension_generation(current_catalog, access)?;
+    match native.as_ref() {
+        Some(native) => {
+            native.publish_prepared(&mut bridge.extension_generation, &expected, next, || {
+                *phase = LegacySecretMutationPhase::Committed;
+            })?
+        }
+        None => {
+            vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration::publish_prepared(
+                &mut bridge.extension_generation, &expected, next, |_| { *phase = LegacySecretMutationPhase::Committed; },
+            )?;
+        }
+    }
+    // Retire displaced native owners only after actual confirmation and native guard release.
+    // 仅实际确认及原生守卫释放后退役被替换原生所有者。
+    drop(guard);
+    current.retire_plugin_partitions_after(
+        plugin_id,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
+    Ok(())
+}
+
+/// Publish a disabled plugin while preserving every other partition from the actual current service generation.
+/// 发布停用插件，同时保留实际当前服务代次中的全部其他分区。
+/// state owns the sole pointer; plugin_id selects only the removed partition; catalog is the exact disabled snapshot.
+/// state 持有唯一指针；plugin_id 仅选择要移除的分区；catalog 是精确停用快照。
+/// Returns confirmed replacement or an explicit error before replacement, including shutdown admission rejection.
+/// 返回已确认替换，或替换前的明确错误，包括关闭准入拒绝。
+pub(super) fn publish_disabled_plugin_extension_generation(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+) -> Result<(), String> {
+    publish_extension_generation_with_current_mcp(state, plugin_id, catalog, |current| {
+        Ok(remove_plugin_mcp_runtime_partition(current, plugin_id))
+    })
+}
+
+/// Prepare and replace the complete extension using its current MCP surface under the sole service publication lock.
+/// 在唯一服务发布锁内，使用当前 MCP 暴露面准备并替换完整扩展。
+/// state owns the pointer; plugin_id identifies retired leases; catalog supplies exact routes; prepare_mcp merges current partitions.
+/// state 持有指针；plugin_id 标识退休租约；catalog 提供精确路由；prepare_mcp 合并当前分区。
+/// The synchronous closure must not await, reenter service state, or execute plugin business.
+/// 同步闭包不得等待、重入服务状态或执行插件业务。
+/// Returns success after one pointer replacement; any preparation or shutdown error preserves the original pointer.
+/// 单次指针替换后返回成功；任何准备或关闭错误均保留原指针。
+pub(super) fn publish_extension_generation_with_current_mcp(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    prepare_mcp: impl FnOnce(&McpRuntimeAccess) -> Result<McpRuntimeAccess, String>,
+) -> Result<(), String> {
+    // The service lock publishes catalog, MCP access, and plugin conversation handlers together.
+    // 服务锁共同发布目录、MCP 访问面及插件会话处理器。
     let mut guard = state
         .lock()
         .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+    // Check shutdown admission under the same lock that replaces the extension pointer.
+    // 在替换扩展指针的同一锁内检查关闭准入。
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    // Generic lifecycle publication preserves every retained original's actual full visibility and generation.
+    // 通用生命周期发布保留每个保留原实例的实际完整可见性及代次。
+    let current_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    guard
+        .pending_local_plugin_installs
+        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
+    // This bridge owns the single extension pointer consumed by new executions.
+    // 本桥持有新执行消费的唯一扩展指针。
     let agent_runtime = guard
         .agent_runtime
         .as_mut()
         .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    // retiredMcpRuntime remains owned by old in-flight ExtensionGeneration arcs until natural release or forced drain expiry.
-    // retiredMcpRuntime 由旧执行中的 ExtensionGeneration Arc 保留，直到自然释放或强制排空到期。
-    let retired_mcp_runtime = agent_runtime.extension_generation.mcp_runtime();
-    let revision = agent_runtime
-        .extension_generation
-        .revision()
-        .saturating_add(1);
-    agent_runtime.extension_generation = Arc::new(ExtensionGeneration::new(
-        revision,
-        Some(catalog),
-        mcp_runtime,
-        agent_runtime.extension_generation.prompt_skill_catalog(),
-    ));
-    retired_mcp_runtime
-        .retire_plugin_partitions_after(plugin_id, std::time::Duration::from_secs(30));
+    // Capture the actual original extension only after acquiring its publication lock.
+    // 仅在取得其发布锁后捕获实际原扩展。
+    let expected = Arc::clone(&agent_runtime.extension_generation);
+    // The actual original extension also keeps displaced resources alive until adjacent confirmation completes.
+    // 实际原扩展也使被替换资源存续，直至相邻确认完成。
+    let current_mcp = expected.mcp_runtime();
+    // The caller replaces only its own partition while preserving unrelated current owners.
+    // 调用方仅替换自己的分区，同时保留当前无关所有者。
+    let mcp_runtime = prepare_mcp(&current_mcp)?;
+    // Validate all handlers before replacing the complete published pointer.
+    // 替换完整已发布指针前校验全部处理器。
+    let next = agent_runtime.prepare_plugin_extension_generation(catalog, mcp_runtime)?;
+    vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGeneration::publish_prepared(
+        &mut agent_runtime.extension_generation,
+        &expected,
+        next,
+        |_| {},
+    )?;
+    // Retirement can acquire native observation locks only after leaving the sole service publication lock.
+    // 仅离开唯一服务发布锁之后，退休才可取得原生观察锁。
+    drop(guard);
+    current_mcp.retire_plugin_partitions_after(
+        plugin_id,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
     Ok(())
 }
+
+#[cfg(test)]
+pub(in crate::skills_services) mod generation_tests;
 
 /// Finishes one runtime transition from an immutable policy snapshot.
 /// 根据不可变策略快照完成单个运行时转换。

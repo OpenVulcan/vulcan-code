@@ -56,7 +56,6 @@ use vulcan_agent_runtime::{
         McpRuntimeAccess, plugin_mcp_server_configs_for_descriptors,
         remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
         replace_user_mcp_runtime_partition, runtime_mcp_server_configs,
-        validate_plugin_mcp_runtime_partition,
     },
     provider_config::{
         self, ProviderConfigurationFile, ReasoningEffortLevel, WorkbenchThinkingDisplayMode,
@@ -171,16 +170,19 @@ mod host_tools_settings;
 mod internal_ai;
 mod knowledge_base_services;
 mod licenses;
+pub mod luaskills_diagnostics;
 mod luaskills_install_progress;
 mod luaskills_model;
 mod mcp_settings;
 mod media_upload;
+mod native_plugin_shutdown;
 mod native_vmm;
 mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
 mod plugin_environment_install_tasks;
 mod plugin_mcp_secret_store;
+mod plugin_runtime_services;
 mod plugin_services;
 mod plugin_storage;
 mod plugin_ui_events;
@@ -464,8 +466,15 @@ pub fn create_service_bridge_state(
         child_maintenance_stops: BTreeMap::new(),
         terminal_pre_intent_repairs: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
+        automatic_plugin_prewarm: BTreeMap::new(),
         session_runtime_registry: Arc::new(Default::default()),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
+        pending_local_plugin_updates: Arc::new(Default::default()),
+        pending_legacy_secret_mutations: Arc::new(Default::default()),
+        pending_local_plugin_installs: Arc::new(Default::default()),
+        // Actual original removal resources survive executor failures.
+        // 实际原移除资源跨执行器失败存续。
+        pending_local_plugin_uninstalls: Arc::new(Default::default()),
         project_resource_catalog_registry: Arc::new(Default::default()),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
@@ -502,9 +511,12 @@ pub fn service_prepare_for_app_shutdown(
     ) = {
         // guard provides the single authoritative shutdown snapshot of runtime handles.
         // guard 提供运行时句柄的单次权威关闭快照。
-        let guard = state
+        let mut guard = state
             .lock()
             .map_err(|_| String::from("The service bridge state is locked during shutdown."))?;
+        // Close bootstrap admission in the same observation that freezes runtime handles.
+        // 在冻结运行时句柄的同一次观测中关闭引导准入。
+        guard.service_lifecycle_state.begin_shutdown_drain();
         match guard.agent_runtime.as_ref() {
             Some(agent_runtime) => (
                 Some(Arc::clone(&agent_runtime.task_runtime)),
@@ -526,18 +538,61 @@ pub fn service_prepare_for_app_shutdown(
             ),
         }
     };
-    if state
-        .lock()
-        .map(|mut guard| guard.service_lifecycle_state.begin_shutdown_drain())
-        .is_err()
-    {
-        return Err(String::from(
-            "The service bridge state is locked during shutdown.",
-        ));
-    }
     let session_v1_handles = session_v1_handles
         .begin_shutdown()
         .map_err(|error| error.to_string())?;
+    // Closed admission prevents late publication while actual original update executors and resources drain.
+    // 关闭准入防止晚发布，同时排空实际原更新执行器及资源。
+    let pending_local_plugin_updates = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_local_plugin_updates,
+    );
+    if let Some(service_runtime) = service_runtime.as_ref() {
+        service_runtime.block_on(pending_local_plugin_updates.drain_for_shutdown())?;
+    } else {
+        pending_local_plugin_updates.require_empty_without_runtime()?;
+    }
+    // Original installation ownership drains before irreversible task or native teardown.
+    // 原安装所有权在不可逆任务或原生拆卸之前排空。
+    let pending_local_plugin_installs = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_local_plugin_installs,
+    );
+    if let Some(service_runtime) = service_runtime.as_ref() {
+        service_runtime.block_on(pending_local_plugin_installs.drain_for_shutdown(&state))?;
+    } else {
+        pending_local_plugin_installs.require_empty_without_runtime()?;
+    }
+    // Original removal ownership drains without publishing or acknowledging failed external effects during shutdown.
+    // 关闭期间排空原移除所有权，不发布或确认失败外部副作用。
+    let pending_local_plugin_uninstalls = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_local_plugin_uninstalls,
+    );
+    if let Some(service_runtime) = service_runtime.as_ref() {
+        service_runtime.block_on(pending_local_plugin_uninstalls.drain_for_shutdown())?;
+    } else {
+        pending_local_plugin_uninstalls.require_empty_without_runtime()?;
+    }
+    // Original secret ownership must drain before any irreversible task or native runtime teardown.
+    // 在任何不可逆任务或原生运行时拆卸之前，必须排空原秘密所有权。
+    let pending_legacy_secret_mutations = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_legacy_secret_mutations,
+    );
+    if let Some(service_runtime) = service_runtime.as_ref() {
+        service_runtime.block_on(pending_legacy_secret_mutations.drain_for_shutdown())?;
+    } else {
+        pending_legacy_secret_mutations.require_empty_without_runtime()?;
+    }
     if let Some(vce_runtime) = vce_runtime.as_ref() {
         // VCE rejects new semantic operations now, while active tool Futures remain cancellable by
         // the task-runtime shutdown immediately below.
@@ -583,12 +638,18 @@ pub fn service_prepare_for_app_shutdown(
                     // stopped_task_ids are captured before canonical writer drain prevents new runtime events.
                     // stopped_task_ids 在规范写入器排空阻止新运行事件之前捕获。
                     let stopped_task_ids = task_runtime.stop_active_tasks_for_app_shutdown()?;
+                    // Native finalizers must finish before writers and their MCP dependencies are released.
+                    // 原生关闭器必须在写入器及其 MCP 依赖释放之前完成。
+                    native_plugin_shutdown::close_original_plugin_runtime(state)?;
                     for handle in &session_v1_handles {
                         handle.flush_all().map_err(|error| error.to_string())?;
                     }
                     Ok(stopped_task_ids)
                 }
                 None => {
+                    // Bootstrap owns the same native parent even before agent runtime publication.
+                    // 即使智能体运行时尚未发布，引导也持有同一原生父级。
+                    native_plugin_shutdown::close_original_plugin_runtime(state)?;
                     for handle in &session_v1_handles {
                         handle.flush_all().map_err(|error| error.to_string())?;
                     }

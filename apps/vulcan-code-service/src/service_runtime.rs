@@ -462,6 +462,9 @@ pub struct HeadlessService {
     /// Shutdown request flag shared with the signal waiter.
     /// 与信号等待器共享的关闭请求标志。
     shutdown_requested: Arc<AtomicBool>,
+    /// One immutable native diagnostic subscription survives every plugin and parent generation.
+    /// 唯一不可变原生诊断订阅跨越全部插件和父级代次。
+    native_diagnostics: crate::native_diagnostics::NativeDiagnosticCapture,
     /// Test-only one-shot failure before the durable coordinator starts.
     /// 仅测试使用、在可靠协调器启动前触发的一次性故障。
     #[cfg(feature = "test-support")]
@@ -512,6 +515,9 @@ impl HeadlessService {
         // Only the data-root owner may rotate its logs; install before any service workers start.
         // 仅数据根所有者可以轮转日志，在任何服务线程启动前安装日志接收器。
         crate::logging::initialize(&data_root)?;
+        // Install once before state construction or any native worker can admit an operation.
+        // state 构造或任何原生工作线程准入操作前一次性安装。
+        let native_diagnostics = crate::native_diagnostics::NativeDiagnosticCapture::install()?;
         let (service_event_bus, _) =
             broadcast::channel(vulcan_service_host::WEBUI_SERVICE_EVENT_BUS_CAPACITY);
         let state = create_service_bridge_state(Arc::new(ServiceShellHostImpl));
@@ -579,6 +585,7 @@ impl HeadlessService {
             state,
             _http_bridge: http_bridge,
             shutdown_requested: Arc::new(AtomicBool::new(false)),
+            native_diagnostics,
             #[cfg(feature = "test-support")]
             test_fail_shutdown_once: AtomicBool::new(
                 std::env::var("VULCAN_TEST_FAIL_FIRST_HEADLESS_SHUTDOWN")
@@ -603,7 +610,27 @@ impl HeadlessService {
             return Err(String::from("injected first headless shutdown failure"));
         }
         match service_prepare_for_app_shutdown(&self.state) {
-            Ok(stopped) => Ok(stopped),
+            Ok(stopped) => {
+                // Kernel success includes the original manager's real execution and retirement joins.
+                // 内核成功结果包含原管理器真实执行与退役 join。
+                // Telemetry failures cannot reopen native resources already closed.
+                // 遥测失败不能重新打开已经关闭的原生资源。
+                if self
+                    .native_diagnostics
+                    .finish_after_native_shutdown()
+                    .is_err()
+                {
+                    // Persist only a fixed safe classification; the collector's checkpoint owns details.
+                    // 仅持久化固定安全分类；细节由采集器检查点拥有。
+                    tracing::error!(
+                        target: "vulcan_code_service::native_diagnostics",
+                        event = "native_capture_incomplete",
+                        reason = "capture_tail_or_persistence_unconfirmed",
+                        "Native diagnostic capture is incomplete after successful native shutdown"
+                    );
+                }
+                Ok(stopped)
+            }
             Err(error) => {
                 let recovery = service_resume_after_failed_app_shutdown(&self.state).err();
                 match recovery {

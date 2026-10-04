@@ -29,6 +29,10 @@ sse-stream.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "io-std", "time"] }
 tokio-util.workspace = true
 vulcan-host-tools.workspace = true
+vulcan-process-lifecycle.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-tools-manager.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tempfile.workspace = true

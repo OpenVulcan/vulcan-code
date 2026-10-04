@@ -1,27 +1,37 @@
-//! Staged user-plugin installation, update, rollback, and uninstallation.
-//! 用户插件的暂存安装、更新、回滚与卸载。
+//! Retained user-plugin installation and legacy uninstallation.
+//! 保留原所有权的用户插件安装及旧卸载。
 
 use super::authorization::{
     VulcanPluginPermissionPreview, authorization_record_for_descriptor, build_permission_preview,
     plugin_authorization_state_path,
 };
 use super::configuration::plugin_config_state_path;
-use super::environment::{
-    remove_obsolete_plugin_execution_environments, remove_plugin_execution_environment_generation,
-};
-use super::{
-    VulcanPluginRuntimeError, VulcanPluginRuntimeManager, copy_plugin_directory_tree,
-    write_plugin_json_record,
-};
+use super::environment::remove_plugin_execution_environment_generation;
+use super::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager, copy_plugin_directory_tree};
 use crate::{
     VulcanPluginDependencyInstallMode, VulcanPluginPackageOrigin, VulcanPluginRuntimeState,
     inspect_user_plugin_package,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+mod retained;
+pub use retained::VulcanPluginInstallationTransaction;
+mod uninstallation;
+pub use uninstallation::{
+    VulcanPluginDeactivationStateObservation, VulcanPluginDeactivationStateReservation,
+    VulcanPluginLegacyUninstallationObservation, VulcanPluginLegacyUninstallationReservation,
+};
+
+/// Per-file opaque state snapshot budget bounds original/cleanup preimages without borrowing another protocol's JSON metadata limit.
+/// 每文件不透明状态快照额度约束原／清理前像，不借用其他协议的 JSON 元数据上限。
+/// Oversized or concurrently growing files fail before mutation; all snapshot callers derive their read bound from this sole value.
+/// 超限或并发增长文件在变更之前失败；全部快照调用方从此唯一值派生读取边界。
+const MAX_PLUGIN_STATE_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Durable installation record for one atomically published user plugin package.
 /// 一个原子发布用户插件包的持久安装记录。
@@ -58,37 +68,6 @@ pub struct VulcanPluginInstallationResult {
     pub permission_preview: VulcanPluginPermissionPreview,
 }
 
-/// Pending filesystem transaction for one disabled user-plugin package update.
-/// 单个已停用用户插件包更新的待提交文件系统事务。
-#[derive(Debug)]
-#[must_use = "a plugin update transaction must be committed or rolled back"]
-pub struct VulcanPluginUpdateTransaction {
-    /// Exact updated plugin identity.
-    /// 精确的已更新插件身份。
-    plugin_id: String,
-    /// Unique private transaction root retaining the previous package until commit.
-    /// 提交前保留旧插件包的唯一私有事务根目录。
-    transaction_root: PathBuf,
-    /// Canonical user-plugin package destination containing the candidate package.
-    /// 包含候选插件包的规范化用户插件目标目录。
-    destination: PathBuf,
-    /// Previous authorization record bytes restored verbatim on rollback.
-    /// 回滚时逐字节恢复的旧授权记录内容。
-    previous_authorization: Vec<u8>,
-    /// Previous installation record bytes restored verbatim on rollback.
-    /// 回滚时逐字节恢复的旧安装记录内容。
-    previous_installation: Vec<u8>,
-    /// Candidate version used to remove only its unpublished private environment on rollback.
-    /// 回滚时仅移除其未发布私有环境的候选版本。
-    candidate_version: String,
-    /// Candidate fingerprint used to identify the exact unpublished private environment.
-    /// 用于识别精确未发布私有环境的候选指纹。
-    candidate_fingerprint: String,
-    /// Host-derived authorization preview for the candidate package.
-    /// 候选插件包的宿主派生授权预览。
-    permission_preview: VulcanPluginPermissionPreview,
-}
-
 /// Returns the deterministic installation record path for one validated plugin identity.
 /// 返回一个已校验插件身份的确定性安装记录路径。
 ///
@@ -119,6 +98,8 @@ fn plugin_installation_state_path(state_root: &Path, plugin_id: &str) -> PathBuf
 /// 返回值
 /// Returns absent state or the exact file bytes after rejecting links and special files.
 /// 在拒绝链接与特殊文件后返回缺失状态或精确文件字节。
+/// The sole per-file snapshot budget bounds allocation; oversized or concurrently growing files return an error without truncation.
+/// 唯一每文件快照额度约束分配；超限或并发增长文件返回错误，不截断。
 fn read_optional_plugin_state_file(
     path: &Path,
 ) -> Result<Option<Vec<u8>>, VulcanPluginRuntimeError> {
@@ -137,12 +118,49 @@ fn read_optional_plugin_state_file(
             path.display()
         )));
     }
-    fs::read(path).map(Some).map_err(|error| {
+    if metadata.len() > MAX_PLUGIN_STATE_SNAPSHOT_BYTES {
+        return Err(VulcanPluginRuntimeError::new(
+            "Plugin state file exceeds the original snapshot budget.",
+        ));
+    }
+    // The actual opened file is also checked; its bounded read rejects growth rather than allocating an unbounded snapshot.
+    // 实际已打开文件也被检查；有界读取拒绝增长，而非分配无上限快照。
+    let file = fs::File::open(path).map_err(|error| {
         VulcanPluginRuntimeError::new(format!(
-            "Failed to read plugin state file `{}`: {error}",
+            "Failed to open plugin state file `{}`: {error}",
             path.display()
         ))
-    })
+    })?;
+    // File-handle metadata is authoritative for type and current size, independently of the earlier path observation.
+    // 文件句柄元数据为类型及当前大小的权威，独立于此前路径观测。
+    let actual = file
+        .metadata()
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+    if !actual.is_file()
+        || crate::metadata_is_link_or_reparse_point(&actual)
+        || actual.len() > MAX_PLUGIN_STATE_SNAPSHOT_BYTES
+    {
+        return Err(VulcanPluginRuntimeError::new(
+            "Opened plugin state file is not a plain file within the original snapshot budget.",
+        ));
+    }
+    // Retain at most the sole allowed snapshot plus one overflow byte, even if the actual file grows during readback.
+    // 即使实际文件在回读期间增长，最多保留唯一允许快照及单个溢出字节。
+    let mut bytes = Vec::new();
+    file.take(MAX_PLUGIN_STATE_SNAPSHOT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            VulcanPluginRuntimeError::new(format!(
+                "Failed to read plugin state file `{}`: {error}",
+                path.display()
+            ))
+        })?;
+    if bytes.len() as u64 > MAX_PLUGIN_STATE_SNAPSHOT_BYTES {
+        return Err(VulcanPluginRuntimeError::new(
+            "Plugin state file grew beyond the original snapshot budget.",
+        ));
+    }
+    Ok(Some(bytes))
 }
 
 /// Removes one optional plugin state file without following links.
@@ -200,36 +218,6 @@ fn current_unix_time_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-impl VulcanPluginUpdateTransaction {
-    /// Returns the exact updated plugin identifier.
-    /// 返回精确的已更新插件标识。
-    ///
-    /// # Parameters
-    /// 参数
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the exact plugin identity borrowed from this pending transaction.
-    /// 返回从当前待处理事务借用的精确插件身份。
-    pub fn plugin_id(&self) -> &str {
-        &self.plugin_id
-    }
-
-    /// Returns the candidate package authorization preview.
-    /// 返回候选插件包的授权预览。
-    ///
-    /// # Parameters
-    /// 参数
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the candidate permission preview borrowed from this transaction.
-    /// 返回从当前事务借用的候选权限预览。
-    pub fn permission_preview(&self) -> &VulcanPluginPermissionPreview {
-        &self.permission_preview
-    }
-}
-
 impl VulcanPluginRuntimeManager {
     /// Inspects one local user-plugin package before any filesystem mutation.
     /// 在执行任何文件系统变更前检查一个本地用户插件包。
@@ -270,559 +258,26 @@ impl VulcanPluginRuntimeManager {
         &self,
         source_root: &Path,
         expected_content_fingerprint: &str,
-        mut approved_permissions: Vec<String>,
+        approved_permissions: Vec<String>,
         allow_registry_dependencies: bool,
     ) -> Result<VulcanPluginInstallationResult, VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan plugin installation gate is poisoned.")
-        })?;
-        let source_descriptor =
-            inspect_user_plugin_package(source_root).map_err(VulcanPluginRuntimeError::new)?;
-        if source_descriptor.content_fingerprint != expected_content_fingerprint {
-            return Err(VulcanPluginRuntimeError::new(
-                "Local plugin package changed after authorization inspection.",
-            ));
+        // The synchronous compatibility entry uses the same original borrowed transaction.
+        // 同步兼容入口使用相同原借用事务。
+        let mut transaction = self.reserve_local_user_plugin_installation(
+            source_root,
+            expected_content_fingerprint,
+            approved_permissions,
+            allow_registry_dependencies,
+        )?;
+        match self.publish_local_user_plugin_installation(&mut transaction) {
+            Ok(result) => Ok(result),
+            Err(error) => match self.abort_local_user_plugin_installation(&mut transaction) {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(VulcanPluginRuntimeError::new(format!(
+                    "{error}; original installation compensation failed: {cleanup}"
+                ))),
+            },
         }
-        let manifest = source_descriptor.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Local user plugin has no valid manifest.")
-        })?;
-        if manifest.execution.dependencies.install_mode
-            == VulcanPluginDependencyInstallMode::Registry
-            && !allow_registry_dependencies
-        {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` requires explicit registry dependency network authorization.",
-                source_descriptor.id
-            )));
-        }
-        let preview = build_permission_preview(&source_descriptor)?;
-        approved_permissions.sort();
-        if approved_permissions
-            .windows(2)
-            .any(|pair| pair[0] == pair[1])
-            || approved_permissions != preview.permissions
-        {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` installation must approve the complete current capability set exactly once.",
-                source_descriptor.id
-            )));
-        }
-        if self
-            .snapshot()
-            .plugins
-            .get(&source_descriptor.id)
-            .is_some_and(|plugin| plugin.origin == VulcanPluginPackageOrigin::Bundled)
-        {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` is already supplied by the system distribution.",
-                source_descriptor.id
-            )));
-        }
-        fs::create_dir_all(&self.state.user_plugin_root).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!("Failed to create user plugin root: {error}"))
-        })?;
-        let canonical_user_root = self
-            .state
-            .user_plugin_root
-            .canonicalize()
-            .map_err(|error| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Failed to resolve user plugin root: {error}"
-                ))
-            })?;
-        let destination = canonical_user_root.join(&source_descriptor.id);
-        if destination.exists() {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` is already installed for this user.",
-                source_descriptor.id
-            )));
-        }
-        // authorization_path, installation_path, and config_path must be absent so rollback never deletes pre-existing user state.
-        // authorization_path、installation_path 与 config_path 必须不存在，确保回滚绝不删除既有用户状态。
-        let authorization_path =
-            plugin_authorization_state_path(&self.state.plugin_state_root, &source_descriptor.id);
-        let installation_path =
-            plugin_installation_state_path(&self.state.plugin_state_root, &source_descriptor.id);
-        let config_path =
-            plugin_config_state_path(&self.state.plugin_state_root, &source_descriptor.id);
-        for (label, path) in [
-            ("authorization", &authorization_path),
-            ("installation", &installation_path),
-            ("configuration", &config_path),
-        ] {
-            if path.exists() {
-                return Err(VulcanPluginRuntimeError::new(format!(
-                    "Vulcan plugin `{}` has stale {label} state at `{}`; remove or recover it before installation.",
-                    source_descriptor.id,
-                    path.display()
-                )));
-            }
-        }
-        let staging_root = canonical_user_root.join(format!(".install-{}", Uuid::new_v4()));
-        let staged_package = staging_root.join(&source_descriptor.id);
-        let transaction =
-            (|| -> Result<VulcanPluginInstallationResult, VulcanPluginRuntimeError> {
-                copy_plugin_directory_tree(&source_descriptor.package_root, &staged_package)
-                    .map_err(VulcanPluginRuntimeError::new)?;
-                let staged_descriptor = inspect_user_plugin_package(&staged_package)
-                    .map_err(VulcanPluginRuntimeError::new)?;
-                if staged_descriptor.content_fingerprint != source_descriptor.content_fingerprint {
-                    return Err(VulcanPluginRuntimeError::new(
-                        "Local plugin package changed while it was being installed.",
-                    ));
-                }
-                fs::rename(&staged_package, &destination).map_err(|error| {
-                    VulcanPluginRuntimeError::new(format!(
-                        "Failed to atomically publish Vulcan plugin `{}`: {error}",
-                        source_descriptor.id
-                    ))
-                })?;
-                let authorization = authorization_record_for_descriptor(
-                    &staged_descriptor,
-                    approved_permissions.clone(),
-                )?;
-                write_plugin_json_record(&authorization_path, &authorization, "authorization")?;
-                let installation = VulcanPluginInstallationRecord {
-                    schema_version: 1,
-                    plugin_id: staged_descriptor.id.clone(),
-                    version: staged_descriptor.version.clone().ok_or_else(|| {
-                        VulcanPluginRuntimeError::new("Installed plugin has no validated version.")
-                    })?,
-                    content_fingerprint: staged_descriptor.content_fingerprint.clone(),
-                    installed_at_ms: current_unix_time_ms(),
-                };
-                write_plugin_json_record(&installation_path, &installation, "installation")?;
-                Ok(VulcanPluginInstallationResult {
-                    plugin_id: source_descriptor.id.clone(),
-                    permission_preview: preview.clone(),
-                })
-            })();
-        match transaction {
-            Ok(result) => {
-                if staging_root.exists() {
-                    // The published package no longer depends on its now-empty unique staging parent.
-                    // 已发布插件包不再依赖其当前为空的唯一暂存父目录。
-                    let _ = fs::remove_dir(&staging_root);
-                }
-                Ok(result)
-            }
-            Err(error) => {
-                // rollbackFailures preserves every residual package or state cleanup failure.
-                // rollbackFailures 保留每个残余插件包或状态清理失败。
-                let mut rollback_failures = Vec::new();
-                if destination.exists()
-                    && let Err(rollback_error) = fs::remove_dir_all(&destination)
-                {
-                    rollback_failures.push(format!(
-                        "Failed to remove published plugin package during rollback: {rollback_error}"
-                    ));
-                }
-                for (label, path) in [
-                    ("authorization", &authorization_path),
-                    ("installation", &installation_path),
-                ] {
-                    if path.exists()
-                        && let Err(rollback_error) = fs::remove_file(path)
-                    {
-                        rollback_failures.push(format!(
-                            "Failed to remove plugin {label} state during rollback: {rollback_error}"
-                        ));
-                    }
-                }
-                if staging_root.exists()
-                    && let Err(rollback_error) = fs::remove_dir_all(&staging_root)
-                {
-                    rollback_failures.push(format!(
-                        "Failed to remove plugin staging directory during rollback: {rollback_error}"
-                    ));
-                }
-                if rollback_failures.is_empty() {
-                    Err(error)
-                } else {
-                    Err(VulcanPluginRuntimeError::new(format!(
-                        "{error}; installation rollback failed: {}",
-                        rollback_failures.join("; ")
-                    )))
-                }
-            }
-        }
-    }
-
-    /// Begins a gated candidate swap while retaining the disabled and drained plugin's previous package.
-    /// 在同步门内开始候选替换，并保留已停用且排空插件的旧包。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `source_root` selects the replacement package, `expected_content_fingerprint` binds the prior authorization preview,
-    /// `source_root` 选择替换插件包，`expected_content_fingerprint` 绑定此前的授权预览，
-    /// `approved_permissions` must match its exact declaration, and `allow_registry_dependencies` records explicit network installation consent.
-    /// `approved_permissions` 必须与其精确声明匹配，`allow_registry_dependencies` 记录显式网络依赖安装许可。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns a pending transaction retaining the previous package until service-level validation commits it.
-    /// 返回一份待提交事务，在 Service 层校验提交前保留旧插件包。
-    pub fn begin_local_user_plugin_update(
-        &self,
-        source_root: &Path,
-        expected_content_fingerprint: &str,
-        mut approved_permissions: Vec<String>,
-        allow_registry_dependencies: bool,
-    ) -> Result<VulcanPluginUpdateTransaction, VulcanPluginRuntimeError> {
-        let _registration =
-            self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan plugin update gate is poisoned.")
-            })?;
-        // source_descriptor is independently inspected before any installed package mutation.
-        // source_descriptor 在任何已安装插件包变更前独立完成检查。
-        let source_descriptor =
-            inspect_user_plugin_package(source_root).map_err(VulcanPluginRuntimeError::new)?;
-        if source_descriptor.content_fingerprint != expected_content_fingerprint {
-            return Err(VulcanPluginRuntimeError::new(
-                "Local plugin package changed after update authorization inspection.",
-            ));
-        }
-        let manifest = source_descriptor.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Local user plugin update has no valid manifest.")
-        })?;
-        if manifest.execution.dependencies.install_mode
-            == VulcanPluginDependencyInstallMode::Registry
-            && !allow_registry_dependencies
-        {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` update requires explicit registry dependency network authorization.",
-                source_descriptor.id
-            )));
-        }
-        let preview = build_permission_preview(&source_descriptor)?;
-        approved_permissions.sort();
-        if approved_permissions
-            .windows(2)
-            .any(|pair| pair[0] == pair[1])
-            || approved_permissions != preview.permissions
-        {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` update must approve the complete current capability set exactly once.",
-                source_descriptor.id
-            )));
-        }
-        // installed_snapshot pins the exact old generation while its package is moved into the transaction root.
-        // installed_snapshot 在旧插件包移入事务根期间固定精确旧代次。
-        let installed_snapshot = self.snapshot();
-        let installed = installed_snapshot
-            .plugins
-            .get(&source_descriptor.id)
-            .ok_or_else(|| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Vulcan plugin `{}` is not installed for this user.",
-                    source_descriptor.id
-                ))
-            })?;
-        if installed.origin != VulcanPluginPackageOrigin::UserInstalled {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Bundled Vulcan plugin `{}` cannot be updated from a local user package.",
-                source_descriptor.id
-            )));
-        }
-        if installed.runtime_state != VulcanPluginRuntimeState::Disabled
-            || installed.active_session_count != 0
-        {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` must be disabled and fully drained before update.",
-                source_descriptor.id
-            )));
-        }
-        if installed.content_fingerprint == source_descriptor.content_fingerprint {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` update package is identical to the installed package.",
-                source_descriptor.id
-            )));
-        }
-        let canonical_user_root = self
-            .state
-            .user_plugin_root
-            .canonicalize()
-            .map_err(|error| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Failed to resolve user plugin root: {error}"
-                ))
-            })?;
-        let destination = installed.package_root.canonicalize().map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to resolve installed user plugin package: {error}"
-            ))
-        })?;
-        if destination.parent() != Some(canonical_user_root.as_path()) {
-            return Err(VulcanPluginRuntimeError::new(
-                "Installed user plugin package is outside the exact user plugin root.",
-            ));
-        }
-        // authorization_path and installation_path are snapshotted verbatim for exact rollback.
-        // authorization_path 与 installation_path 被逐字节快照以供精确回滚。
-        let authorization_path =
-            plugin_authorization_state_path(&self.state.plugin_state_root, &source_descriptor.id);
-        let installation_path =
-            plugin_installation_state_path(&self.state.plugin_state_root, &source_descriptor.id);
-        let previous_authorization = fs::read(&authorization_path).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to snapshot existing plugin authorization before update: {error}"
-            ))
-        })?;
-        let previous_installation = fs::read(&installation_path).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to snapshot existing plugin installation record before update: {error}"
-            ))
-        })?;
-        let transaction_root = canonical_user_root.join(format!(".update-{}", Uuid::new_v4()));
-        let staged_package = transaction_root.join(&source_descriptor.id);
-        let previous_package = transaction_root.join("previous");
-        fs::create_dir(&transaction_root).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to create Vulcan plugin update transaction root: {error}"
-            ))
-        })?;
-        let candidate_version = source_descriptor.version.clone().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Updated plugin has no validated version.")
-        })?;
-        let candidate_fingerprint = source_descriptor.content_fingerprint.clone();
-        let update_result = (|| -> Result<(), VulcanPluginRuntimeError> {
-            copy_plugin_directory_tree(&source_descriptor.package_root, &staged_package)
-                .map_err(VulcanPluginRuntimeError::new)?;
-            let staged_descriptor = inspect_user_plugin_package(&staged_package)
-                .map_err(VulcanPluginRuntimeError::new)?;
-            if staged_descriptor.content_fingerprint != source_descriptor.content_fingerprint {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Local plugin package changed while its update was being staged.",
-                ));
-            }
-            fs::rename(&destination, &previous_package).map_err(|error| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Failed to retain previous Vulcan plugin package for update rollback: {error}"
-                ))
-            })?;
-            fs::rename(&staged_package, &destination).map_err(|error| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Failed to publish candidate Vulcan plugin package for validation: {error}"
-                ))
-            })?;
-            let authorization = authorization_record_for_descriptor(
-                &staged_descriptor,
-                approved_permissions.clone(),
-            )?;
-            write_plugin_json_record(&authorization_path, &authorization, "authorization")?;
-            let installation = VulcanPluginInstallationRecord {
-                schema_version: 1,
-                plugin_id: staged_descriptor.id.clone(),
-                version: candidate_version.clone(),
-                content_fingerprint: candidate_fingerprint.clone(),
-                installed_at_ms: current_unix_time_ms(),
-            };
-            write_plugin_json_record(&installation_path, &installation, "installation")?;
-            Ok(())
-        })();
-        if let Err(error) = update_result {
-            // rollback_failures preserves every failure while restoring the old package and records.
-            // rollback_failures 保留恢复旧插件包与记录期间的全部失败。
-            let mut rollback_failures = Vec::new();
-            if destination.exists()
-                && previous_package.exists()
-                && let Err(rollback_error) = fs::remove_dir_all(&destination)
-            {
-                rollback_failures.push(format!(
-                    "Failed to remove candidate package during update rollback: {rollback_error}"
-                ));
-            }
-            if previous_package.exists()
-                && !destination.exists()
-                && let Err(rollback_error) = fs::rename(&previous_package, &destination)
-            {
-                rollback_failures.push(format!(
-                    "Failed to restore previous package during update rollback: {rollback_error}"
-                ));
-            }
-            for (path, bytes, label) in [
-                (
-                    &authorization_path,
-                    &previous_authorization,
-                    "authorization",
-                ),
-                (&installation_path, &previous_installation, "installation"),
-            ] {
-                if let Err(rollback_error) = crate::atomic_file::write_file_atomically(path, bytes)
-                {
-                    rollback_failures.push(format!(
-                        "Failed to restore previous plugin {label} record: {rollback_error}"
-                    ));
-                }
-            }
-            if transaction_root.exists()
-                && let Err(rollback_error) = fs::remove_dir_all(&transaction_root)
-            {
-                rollback_failures.push(format!(
-                    "Failed to remove update transaction root: {rollback_error}"
-                ));
-            }
-            return if rollback_failures.is_empty() {
-                Err(error)
-            } else {
-                Err(VulcanPluginRuntimeError::new(format!(
-                    "{error}; update rollback failed: {}",
-                    rollback_failures.join("; ")
-                )))
-            };
-        }
-        Ok(VulcanPluginUpdateTransaction {
-            plugin_id: source_descriptor.id.clone(),
-            transaction_root,
-            destination,
-            previous_authorization,
-            previous_installation,
-            candidate_version,
-            candidate_fingerprint,
-            permission_preview: preview,
-        })
-    }
-
-    /// Verifies that a staged update candidate still matches the exact package inspected at transaction start.
-    /// 验证暂存更新候选仍与事务开始时检查的精确插件包一致。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `transaction` identifies the candidate that is about to enter an extension generation.
-    /// `transaction` 标识即将进入扩展代次的候选插件包。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success only when the complete package fingerprint remains unchanged.
-    /// 仅当完整插件包指纹保持不变时返回成功。
-    pub fn verify_local_user_plugin_update_candidate(
-        &self,
-        transaction: &VulcanPluginUpdateTransaction,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan plugin update verification gate is poisoned.")
-        })?;
-        let fingerprint = crate::catalog::compute_package_fingerprint(&transaction.destination)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        if fingerprint != transaction.candidate_fingerprint {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` candidate changed before update publication.",
-                transaction.plugin_id
-            )));
-        }
-        Ok(())
-    }
-
-    /// Commits one validated update by deleting its retained previous package and obsolete environments.
-    /// 通过删除保留的旧插件包与过期环境提交一次已验证更新。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `transaction` is the exact pending update previously returned by this manager.
-    /// `transaction` 是此前由当前管理器返回的精确待提交更新。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after fingerprint verification and retained-data cleanup, or the exact failure diagnostic.
-    /// 返回指纹复查和保留数据清理后的成功结果，或精确失败诊断。
-    pub fn commit_local_user_plugin_update(
-        &self,
-        transaction: VulcanPluginUpdateTransaction,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan plugin update commit gate is poisoned.")
-        })?;
-        // The second fingerprint check closes the gap between pre-publication verification and post-publication cleanup.
-        // 第二次指纹检查封闭发布前复核与发布后清理之间的间隙。
-        let fingerprint = crate::catalog::compute_package_fingerprint(&transaction.destination)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        if fingerprint != transaction.candidate_fingerprint {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` candidate changed before update cleanup.",
-                transaction.plugin_id
-            )));
-        }
-        fs::remove_dir_all(&transaction.transaction_root).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to remove retained previous package for Vulcan plugin `{}`: {error}",
-                transaction.plugin_id
-            ))
-        })?;
-        remove_obsolete_plugin_execution_environments(
-            &self.state,
-            &transaction.plugin_id,
-            &transaction.candidate_version,
-            &transaction.candidate_fingerprint,
-        )
-        .map_err(VulcanPluginRuntimeError::new)
-    }
-
-    /// Rolls back one uncommitted update to the exact previous package and durable records.
-    /// 将一次未提交更新回滚到精确的旧插件包与持久记录。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `transaction` is the pending update whose candidate has not entered a published generation.
-    /// `transaction` 是候选尚未进入已发布代次的待处理更新。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after restoring the old package/records and removing the candidate environment, or a restoration/cleanup error.
-    /// 返回恢复旧包/记录并移除候选环境后的成功结果，或恢复/清理错误。
-    pub fn rollback_local_user_plugin_update(
-        &self,
-        transaction: VulcanPluginUpdateTransaction,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan plugin update rollback gate is poisoned.")
-        })?;
-        let previous_package = transaction.transaction_root.join("previous");
-        let failed_candidate = transaction.transaction_root.join("failed-candidate");
-        let authorization_path =
-            plugin_authorization_state_path(&self.state.plugin_state_root, &transaction.plugin_id);
-        let installation_path =
-            plugin_installation_state_path(&self.state.plugin_state_root, &transaction.plugin_id);
-        fs::rename(&transaction.destination, &failed_candidate).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to hide candidate package during update rollback: {error}"
-            ))
-        })?;
-        if let Err(error) = fs::rename(&previous_package, &transaction.destination) {
-            let restore_candidate_result = fs::rename(&failed_candidate, &transaction.destination);
-            return Err(VulcanPluginRuntimeError::new(
-                match restore_candidate_result {
-                    Ok(()) => format!("Failed to restore previous plugin package: {error}"),
-                    Err(candidate_error) => format!(
-                        "Failed to restore previous plugin package: {error}; candidate restoration also failed: {candidate_error}"
-                    ),
-                },
-            ));
-        }
-        let rollback_result = (|| -> Result<(), String> {
-            crate::atomic_file::write_file_atomically(
-                &authorization_path,
-                &transaction.previous_authorization,
-            )?;
-            crate::atomic_file::write_file_atomically(
-                &installation_path,
-                &transaction.previous_installation,
-            )?;
-            if failed_candidate.exists() {
-                fs::remove_dir_all(&failed_candidate).map_err(|error| {
-                    format!("Failed to remove rolled-back candidate package: {error}")
-                })?;
-            }
-            fs::remove_dir(&transaction.transaction_root).map_err(|error| {
-                format!("Failed to remove completed update rollback root: {error}")
-            })?;
-            remove_plugin_execution_environment_generation(
-                &self.state,
-                &transaction.plugin_id,
-                &transaction.candidate_version,
-                &transaction.candidate_fingerprint,
-            )
-        })();
-        rollback_result.map_err(VulcanPluginRuntimeError::new)
     }
 
     /// Removes one fully drained user-installed plugin package and its private state.
@@ -841,6 +296,7 @@ impl VulcanPluginRuntimeManager {
         let _registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan plugin uninstallation gate is poisoned.")
         })?;
+        self.require_routing_publication_locked(&_registration, None)?;
         let snapshot = self.snapshot();
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
@@ -850,7 +306,8 @@ impl VulcanPluginRuntimeManager {
                 "Bundled Vulcan plugin `{plugin_id}` cannot be uninstalled."
             )));
         }
-        if plugin.active_session_count != 0
+        if self.active_session_count(plugin_id)? != 0
+            || self.has_cleanup_diagnostics(plugin_id)?
             || plugin.runtime_state != VulcanPluginRuntimeState::Disabled
         {
             return Err(VulcanPluginRuntimeError::new(format!(
@@ -874,6 +331,18 @@ impl VulcanPluginRuntimeManager {
                 "User plugin package is outside the exact user plugin root.",
             ));
         }
+        // Every flat removal cooperates with retained install, configuration and credential owners.
+        // 每次平铺移除均与保留安装、配置及凭据所有者协作。
+        let store = crate::VulcanPluginGenerationStore::open(&self.state.user_plugin_root)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        // This actual File stays held through capacity retirement, package removal and compensation.
+        // 此实际文件跨容量退役、插件包移除及补偿持续持有。
+        let _mutation = store
+            .acquire_legacy_mutation_guard(plugin_id, None)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        _mutation
+            .validate_user_root(&self.state.user_plugin_root, plugin_id)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
         // state_paths are validated and snapshotted before the package leaves its discoverable name.
         // state_paths 在插件包离开可发现名称前完成校验与快照。
         let state_paths = [
@@ -885,6 +354,19 @@ impl VulcanPluginRuntimeManager {
             .iter()
             .map(|path| read_optional_plugin_state_file(path).map(|bytes| (path.clone(), bytes)))
             .collect::<Result<Vec<_>, _>>()?;
+        // Keep uninstall outside all live environment use before any package or configuration mutation.
+        // 在任何插件包或配置变更前，使卸载避开全部存续环境使用。
+        let _environment_cleanup = if self.state.plugin_runtime_root.exists() {
+            Some(
+                super::environment::lock_plugin_execution_environment_cleanup(
+                    &self.state,
+                    plugin_id,
+                )
+                .map_err(VulcanPluginRuntimeError::new)?,
+            )
+        } else {
+            None
+        };
         // runtime_directory is canonicalized before any recursive removal authority is granted.
         // runtime_directory 在授予递归移除权限前完成规范化。
         let runtime_directory = self.state.plugin_runtime_root.join(plugin_id);
@@ -912,6 +394,14 @@ impl VulcanPluginRuntimeManager {
         } else {
             None
         };
+        // The caller completes uninstall callbacks first; refuse removal while any formal capacity member still owns the package.
+        // 调用方先完成卸载回调；任何正式容量成员仍持有包时拒绝移除。
+        if let Some(owner) = self.formal_runtime_owner()?
+            && let Err(error) = owner.retire_plugin_capacities(plugin_id, &_registration)
+        {
+            self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+            return Err(error);
+        }
         let tombstone =
             canonical_user_root.join(format!(".uninstall-{}-{}", plugin_id, Uuid::new_v4()));
         fs::rename(&canonical_package, &tombstone).map_err(|error| {

@@ -1,0 +1,171 @@
+{
+  "catalog": {
+    "capacities": [
+      {
+        "budgetSource": "host_override",
+        "managementRequest": {
+          "expectedRegistryRevision": "registry-before",
+          "pluginId": "control-plugin",
+          "purpose": "tool_call",
+          "registrationId": "00000000-0000-4000-8000-000000000001",
+          "runtimeId": "runtime-fixture"
+        },
+        "pendingConvergence": false,
+        "policyRevision": "policy-after",
+        "preparingMembers": 0,
+        "purpose": "tool_call",
+        "retirementRequested": false,
+        "runtimeId": "runtime-fixture",
+        "snapshot": {
+          "active_operations": 0,
+          "capacity_id": "capacity-fixture",
+          "closing": false,
+          "committed_resident_vms": 0,
+          "config": {
+            "max_queued_bytes": 33554432,
+            "max_queued_calls": 127,
+            "resources": {
+              "kind": "shared",
+              "max_resident_vms": 32,
+              "max_running_calls": 4,
+              "min_resident_vms": 0
+            }
+          },
+          "plugin_id": "control-plugin",
+          "queued_bytes": 0,
+          "queued_calls": 0,
+          "resources": {
+            "creating": 0,
+            "idle": 0,
+            "resident": 0,
+            "retiring": 0,
+            "running": 0
+          },
+          "retained_pools": 0
+        }
+      }
+    ],
+    "registryRevision": "registry-current",
+    "runtimeId": "runtime-fixture"
+  },
+  "initialCapacity": {
+    "budgetSource": "plugin_budget",
+    "managementRequest": {
+      "expectedRegistryRevision": "registry-before",
+      "pluginId": "control-plugin",
+      "purpose": "tool_call",
+      "registrationId": "00000000-0000-4000-8000-000000000001",
+      "runtimeId": "runtime-fixture"
+    },
+    "pendingConvergence": false,
+    "policyRevision": "policy-before",
+    "preparingMembers": 0,
+    "purpose": "tool_call",
+    "retirementRequested": false,
+    "runtimeId": "runtime-fixture",
+    "snapshot": {
+      "active_operations": 0,
+      "capacity_id": "capacity-fixture",
+      "closing": false,
+      "committed_resident_vms": 0,
+      "config": {
+        "max_queued_bytes": 33554432,
+        "max_queued_calls": 128,
+        "resources": {
+          "kind": "shared",
+          "max_resident_vms": 32,
+          "max_running_calls": 4,
+          "min_resident_vms": 0
+        }
+      },
+      "plugin_id": "control-plugin",
+      "queued_bytes": 0,
+      "queued_calls": 0,
+      "resources": {
+        "creating": 0,
+        "idle": 0,
+        "resident": 0,
+        "retiring": 0,
+        "running": 0
+      },
+      "retained_pools": 0
+    }
+  },
+  "runtime": {
+    "operations": {
+      "active_operations": 0,
+      "cleaning_operations": 0,
+      "closing": false,
+      "queued_bytes": 0,
+      "queued_calls": 0
+    },
+    "policyUpdate": {
+      "appliedRevision": "policy-after",
+      "error": null,
+      "phase": "committed",
+      "request": {
+        "capacityId": "capacity-fixture",
+        "config": {
+          "max_queued_bytes": 33554432,
+          "max_queued_calls": 127,
+          "resources": {
+            "kind": "shared",
+            "max_resident_vms": 32,
+            "max_running_calls": 4,
+            "min_resident_vms": 0
+          }
+        },
+        "expectedRevision": "policy-before",
+        "pluginId": "control-plugin",
+        "purpose": "tool_call",
+        "runtimeId": "runtime-fixture",
+        "updateId": "00000000-0000-4000-8000-000000000002"
+      }
+    },
+    "resources": {
+      "creating": 0,
+      "idle": 0,
+      "resident": 0,
+      "retiring": 0,
+      "running": 0
+    },
+    "runtimeId": "runtime-fixture",
+    "settings": {
+      "automaticPrewarm": [],
+      "capacityBudgets": {
+        "control-plugin": {
+          "tool_call": {
+            "max_queued_bytes": 33554432,
+            "max_queued_calls": 127,
+            "resources": {
+              "kind": "shared",
+              "max_resident_vms": 32,
+              "max_running_calls": 4,
+              "min_resident_vms": 0
+            }
+          }
+        }
+      },
+      "maxCapabilityCallMs": 60000,
+      "parent": {
+        "max_effect_bytes_per_operation": 1048576,
+        "max_effect_records_per_operation": 256,
+        "max_host_request_bytes": 33554432,
+        "max_host_requests": 32,
+        "max_operations": 512,
+        "max_queued_bytes": 33554432,
+        "max_queued_calls": 128,
+        "max_registered_capabilities": 64,
+        "max_registered_plugins": 64,
+        "max_registered_pools": 256,
+        "max_resident_vms": 32,
+        "max_running_calls": 4,
+        "max_sessions": 128,
+        "max_value_bytes": 8388608
+      },
+      "pluginBudgets": {},
+      "schemaVersion": 5,
+      "shutdownTimeoutMs": 5000
+    }
+  }
+}

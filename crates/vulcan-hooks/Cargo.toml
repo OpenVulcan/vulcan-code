@@ -11,9 +11,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+schemars = { workspace = true, optional = true }
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 vulcan-context-injection.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[features]
+manifest-schema = ["dep:schemars"]

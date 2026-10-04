@@ -2,7 +2,7 @@ import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtim
 
 // McpConnectionStatus mirrors the serialized Agent runtime state exactly.
 // McpConnectionStatus 精确对应 Agent 运行时序列化状态。
-export type McpConnectionStatus = "disabled" | "connecting" | "connected" | "disconnected" | "failed" | "stopped"
+export type McpConnectionStatus = "disabled" | "connecting" | "connected" | "disconnected" | "failed" | "stopping" | "stopped"
 
 // McpToolInspection retains both original schemas without narrowing JSON Schema keywords.
 // McpToolInspection 保留两份原始 Schema，不收窄 JSON Schema 关键字。

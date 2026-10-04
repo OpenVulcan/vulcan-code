@@ -5,6 +5,23 @@ use super::*;
 use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
 use vulcan_service_api::{LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsDomain};
 
+mod legacy_secret_owner;
+mod local_plugin_install;
+mod local_plugin_uninstall;
+mod local_plugin_update;
+pub(crate) use legacy_secret_owner::LegacySecretMutationRegistry;
+use legacy_secret_owner::{LegacySecretMutationPhase, LegacySecretMutationStatus};
+use local_plugin_install::LocalPluginInstallStatus;
+pub(crate) use local_plugin_install::PendingLocalPluginInstallRegistry;
+pub(crate) use local_plugin_uninstall::LocalPluginUninstallDrainDiagnostics;
+pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
+pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
+pub(crate) use local_plugin_update::LocalPluginUpdateStatus;
+pub(crate) use local_plugin_update::pending_owner::PendingLocalPluginUpdateRegistry;
+#[cfg(test)]
+mod legacy_native_observation;
+#[cfg(test)]
+mod legacy_secret_mutation_tests;
 mod vulcan_plugin_lifecycle;
 
 /// Serializes user-agent catalog file mutations across concurrent service requests.
@@ -77,10 +94,11 @@ async fn lock_luaskills_management_mutation() -> tokio::sync::MutexGuard<'static
 ///
 /// Dropping an RPC waiter detaches a Tokio join handle but must not release the management
 /// lock while a nested `spawn_blocking` mutation is still running. The inner task therefore
-/// owns both the lock guard and the whole post-mutation projection. Runtime shutdown remains
-/// the sole boundary allowed to cancel that ownership.
+/// owns both the lock guard and the whole post-mutation projection. Physical mutation owners
+/// must separately survive task panic or cancellation in their service registries.
 /// 丢弃 RPC 等待者会分离 Tokio 联接句柄，但不得在嵌套的 `spawn_blocking` 变更仍运行时释放
-/// 管理锁。因此内部任务同时拥有锁守卫与完整后置投影。仅运行时关闭边界允许取消该所有权。
+/// 管理锁。因此内部任务同时拥有锁守卫与完整后置投影。物理变更所有者必须通过独立服务注册表
+/// 跨任务 panic 或取消存续。
 async fn run_luaskills_management_owned<T, F, Fut>(
     label: &'static str,
     operation: F,
@@ -90,12 +108,35 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<T, String>> + Send + 'static,
 {
-    spawn_service_task(async move {
+    // Capture the explicitly scoped test destination before Tokio creates a task that does not inherit task locals.
+    // 在 Tokio 创建不继承任务局部值的任务之前，捕获明确设置作用域的测试目标。
+    #[cfg(test)]
+    let test_configuration_destination =
+        crate::tests::provider_configuration_persistence_scope::current_path();
+    // The same service task owns serialization and the complete operation after the caller drops its join observer.
+    // 调用方丢弃联接观测者之后，相同服务任务拥有串行化及完整操作。
+    let owned_operation = async move {
+        // Keep the existing management guard alive throughout persistence and final projection.
+        // 在持久化及最终投影期间持续保留既有管理守卫。
         let _management_guard = lock_luaskills_management_mutation().await;
         operation().await
-    })
-    .await
-    .map_err(|error| format!("LuaSkills 管理事务 `{label}` 任务异常结束：{error}"))?
+    };
+    // Optional test context is explicitly defined by current_path; only an actual installed scope is propagated.
+    // 可选测试上下文由 current_path 明确定义；仅传递实际已安装作用域。
+    #[cfg(test)]
+    let owned_operation = async move {
+        match test_configuration_destination {
+            Some(path) => {
+                crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH
+                    .scope(path, owned_operation)
+                    .await
+            }
+            None => owned_operation.await,
+        }
+    };
+    spawn_service_task(owned_operation)
+        .await
+        .map_err(|error| format!("LuaSkills 管理事务 `{label}` 任务异常结束：{error}"))?
 }
 
 /// Acquires the complete Agent Skills catalog transaction guard.
@@ -270,6 +311,19 @@ pub(crate) async fn service_refresh_luaskills_catalog(
     state: SharedServiceBridgeState,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     run_luaskills_management_owned("refresh catalog", move || async move {
+        // Whole discovery must not invalidate an original installation's callback generation.
+        // 整个发现不能使原安装的回调代次失效。
+        {
+            // Discovery must preserve both installation routes and an update's retained actual Full/catalog identity.
+            // 发现必须同时保留安装路由及更新保留的实际 Full／目录身份。
+            let guard = state.lock().map_err(|error| error.to_string())?;
+            crate::service_state_access::require_plugin_update_full_publication_admission(
+                &guard, None,
+            )?;
+            guard
+                .pending_local_plugin_installs
+                .require_catalog_refresh()?;
+        }
         let handle = service_luaskills_handle(&state)?;
         let provider_configuration = provider_configuration_from_state(&state)?;
         let vulcan_plugin_runtime = service_vulcan_plugin_runtime(&state)?;
@@ -902,6 +956,10 @@ pub(crate) async fn service_delete_plugin_mcp_secret(
 
 /// Applies one exact Secret Store mutation with allowlist validation, candidate readiness, atomic publication, and value rollback.
 /// 通过白名单校验、候选就绪、原子发布与值回滚应用单个精确 Secret Store 变更。
+/// Identifiers select one declared Legacy account; the optional value chooses set or delete.
+/// 标识选择单个已声明旧格式账户；可选值选择设置或删除。
+/// Returns the refreshed catalog only after publication, while the original namespace fence covers rollback.
+/// 仅在发布后返回已刷新目录，原命名空间屏障覆盖回滚阶段。
 async fn mutate_plugin_mcp_secret(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -933,53 +991,147 @@ async fn mutate_plugin_mcp_secret(
                 "插件 MCP Server `{plugin_id}:{server_id}` 未声明 Secret 键 `{secret_key}`。"
             ));
         }
+        // A versioned selection must not report success after writing an unrelated legacy credential.
+        // 版本化选择不得在写入无关旧凭据后报告成功。
+        if matches!(
+            server.credential_binding,
+            vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(_)
+        ) {
+            return Err(String::from(
+                "Versioned plugin credentials require a credential revision transaction.",
+            ));
+        }
+        // Explicit mutation follows host initialization so a bundled-only installation can create its user store.
+        // 显式变更遵循宿主初始化方式，使仅有内建插件的安装可创建其用户存储。
+        std::fs::create_dir_all(runtime.user_plugin_root())
+            .map_err(|error| format!("Failed to create user plugin root: {error}"))?;
+        // This actual Store retains the sole canonical root authority across the entire Legacy mutation.
+        // 此实际存储在整个旧格式变更期间保留唯一规范根权威。
+        let store =
+            vulcan_plugin_runtime::VulcanPluginGenerationStore::open(runtime.user_plugin_root())
+                .map_err(|error| error.to_string())?;
+        // Freeze the complete selection before acquiring the cross-process fence; acquisition compares it again.
+        // 获取跨进程屏障前固定完整选择；获取屏障时再次比较它。
+        let selected = store
+            .activation(&plugin_id)
+            .map_err(|error| error.to_string())?;
+        match (plugin.managed_package(), selected.as_ref()) {
+            (Some(managed), Some(activation)) if managed.matches_activation(activation) => {}
+            (None, None) => {}
+            _ => {
+                return Err(String::from(
+                    "Legacy plugin credential activation changed before mutation.",
+                ));
+            }
+        }
+        // Acquire before the first OS credential read and keep this same File through Ready, publication and rollback.
+        // 在首次操作系统凭据读取前获取屏障，并将相同文件保留至就绪、发布及回滚。
+        let mutation = store
+            .acquire_legacy_mutation_guard(&plugin_id, selected.as_ref())
+            .map_err(|error| error.to_string())?;
+        mutation
+            .validate_plugin(&plugin_id)
+            .map_err(|error| error.to_string())?;
+        // The OS adapter remains stateless; only the retained typed guard grants this service mutation authority.
+        // 操作系统适配器保持无状态；仅保留的类型化屏障授予本次服务变更权威。
         let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+        // The exact original value is read once under the same namespace fence used for its restoration.
+        // 在用于恢复的相同命名空间屏障下，精确原值仅被读取一次。
         let previous_value =
             secret_store.read_optional_secret(&plugin_id, &server_id, &secret_key)?;
-        match next_value.as_deref() {
-            Some(value) => secret_store.write_secret(&plugin_id, &server_id, &secret_key, value)?,
-            None => secret_store.delete_secret(&plugin_id, &server_id, &secret_key)?,
-        }
-        let refresh_result =
-            if plugin.runtime_state == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled {
+        // Insert the actual guard and preimage under the same service admission used by shutdown.
+        // 在关闭使用的相同服务准入下，插入实际屏障及前像。
+        let (registry, owner) = {
+            // Publication shutdown cannot interleave between admission validation and original ownership registration.
+            // 发布关闭不能在准入校验与原所有权登记之间交错。
+            let guard = state.lock().map_err(|error| error.to_string())?;
+            crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+            // The registry remains service-owned even when the management task unwinds.
+            // 即使管理任务展开栈，注册表仍由服务拥有。
+            let registry = Arc::clone(&guard.pending_legacy_secret_mutations);
+            // This exact slot owns all rollback authority before the first uncertain OS effect.
+            // 此精确槽在首次不确定操作系统副作用前拥有全部回滚权威。
+            let owner = registry.retain(plugin_id.clone(), server_id.clone(), secret_key.clone(), mutation, previous_value)?;
+            (registry, owner)
+        };
+        // Executors borrow the service owner rather than moving its physical resources into their futures.
+        // 执行器借用服务所有者，而非将其物理资源移入自身 Future。
+        let mut resources = owner.resources.lock().await;
+        resources.mutation
+            .validate_plugin(&plugin_id)
+            .map_err(|error| error.to_string())?;
+        // A failed OS write may be uncertain, so its original preimage follows the same guarded rollback path.
+        // 失败的操作系统写入可能结果不确定，因此其原前像走相同受保护回滚路径。
+        let write_result = match next_value.as_deref() {
+            Some(value) => secret_store.write_secret(&plugin_id, &server_id, &secret_key, value),
+            None => secret_store.delete_secret(&plugin_id, &server_id, &secret_key),
+        };
+        // The live fence spans every awaited candidate effect instead of being reacquired against a newer selection.
+        // 活动屏障跨越全部等待中的候选副作用，而非相对更新选择重新获取。
+        let refresh_result = match write_result {
+            Err(error) => Err(error),
+            Ok(())
+                if plugin.runtime_state
+                    == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled =>
+            {
                 refresh_enabled_plugin_mcp_after_secret_change(
                     &state,
                     &runtime,
                     Arc::clone(&catalog),
                     plugin,
+                    &mut resources,
                 )
                 .await
-            } else {
-                Ok(())
-            };
+            }
+            Ok(()) => resources.mutation
+                .validate_plugin(&plugin_id)
+                .map_err(|error| error.to_string()),
+        };
         if let Err(error) = refresh_result {
-            let rollback_result = restore_plugin_mcp_secret(
-                &secret_store,
-                &plugin_id,
-                &server_id,
-                &secret_key,
-                previous_value.as_deref(),
-            );
+            // Restoration validates the retained original owner without releasing or taking a latest-selection guard.
+            // 恢复校验保留的原所有者，不释放或获取最新选择屏障。
+            let rollback_result = owner.rollback(&mut resources).await;
+            // Retirement requires both actual native cleanup, when admitted, and exact credential readback.
+            // 退役要求实际原生清理（若已准入）及精确凭据回读均完成。
+            if rollback_result.is_ok() && resources.phase == LegacySecretMutationPhase::Restored {
+                registry.retire(&owner, &resources)?;
+            }
             return Err(match rollback_result {
-                Ok(()) => format!("插件 MCP Secret 变更未通过就绪检查：{error}"),
-                Err(rollback_error) => format!(
-                    "插件 MCP Secret 变更未通过就绪检查：{error}；Secret 回滚失败：{rollback_error}"
-                ),
+                Ok(()) => format!("插件 MCP Secret 变更失败：{error}；原请求：{}", owner.request_id),
+                Err(rollback_error) => {
+                    format!("插件 MCP Secret 变更失败：{error}；恢复未完成：{rollback_error}；原请求：{}", owner.request_id)
+                }
             });
         }
-        refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+        resources.phase = LegacySecretMutationPhase::Committed;
+        // A committed original remains queryable if projection or event delivery loses its return.
+        // 投影或事件投递返回丢失时，已提交原请求仍保持可查询。
+        let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
+        registry.retire(&owner, &resources)?;
+        Ok(update)
     })
     .await
 }
 
 /// Rebuilds only the enabled target plugin MCP partition and publishes it with the unchanged exact catalog.
 /// 仅重建已启用目标插件 MCP 分区，并与未变化的精确目录一起发布。
+/// The catalog and descriptor identify one captured plugin; resources retain original cross-process ownership.
+/// 目录及描述符标识单个已捕获插件；resources 保留原跨进程所有权。
+/// Returns success after actual Ready and full publication; errors leave the guard available to its caller's rollback.
+/// 实际就绪及完整发布后返回成功；错误将屏障保留给调用者回滚。
 async fn refresh_enabled_plugin_mcp_after_secret_change(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
     plugin: &vulcan_plugin_runtime::VulcanPluginDescriptor,
+    resources: &mut legacy_secret_owner::LegacySecretMutationResources,
 ) -> Result<(), String> {
+    // Validate the retained original owner before materialization can read Legacy OS credentials.
+    // 在物化可读取旧格式操作系统凭据之前，校验保留的原所有者。
+    resources
+        .mutation
+        .validate_plugin(&plugin.id)
+        .map_err(|error| error.to_string())?;
     let current_mcp_runtime = state
         .lock()
         .map_err(|error| format!("锁定服务状态失败：{error}"))?
@@ -990,22 +1142,121 @@ async fn refresh_enabled_plugin_mcp_after_secret_change(
     let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
     let server_configs =
         plugin_mcp_server_configs_for_descriptors(runtime, &plugin.mcp_servers, &secret_store)?;
-    let next_mcp_runtime = if server_configs.is_empty() {
-        remove_plugin_mcp_runtime_partition(&current_mcp_runtime, &plugin.id)
-    } else {
-        replace_plugin_mcp_runtime_partition(
-            &current_mcp_runtime,
-            &plugin.id,
-            plugin.generation,
-            server_configs,
-        )
-        .await?
-    };
-    vulcan_plugin_lifecycle::publish_extension_generation(
-        state,
-        &plugin.id,
-        catalog,
-        next_mcp_runtime,
+    if !server_configs.is_empty() {
+        // Retain exact work and the unique native lease in the service owner before dispatch.
+        // 派发前，在服务所有者中保留精确工作及唯一原生租约。
+        resources.native = Some(
+            vulcan_agent_runtime::mcp::LegacyPluginMcpReplacement::prepare(
+                &current_mcp_runtime,
+                &plugin.id,
+                plugin.generation,
+                server_configs,
+            )?,
+        );
+        resources.phase = LegacySecretMutationPhase::NativeRefresh;
+        // Readiness borrows its actual owner instead of moving ownership into the future.
+        // 就绪借用其实际所有者，而非将所有权移入 Future。
+        let native = resources
+            .native
+            .as_ref()
+            .expect("retained original Legacy preparation");
+        native.dispatch()?;
+        native.wait_until_ready().await?;
+        #[cfg(test)]
+        legacy_native_observation::observe(&plugin.id, legacy_native_observation::Milestone::Ready);
+    }
+    // Readiness cannot replace the original authority; publication still validates the same guarded selection.
+    // 就绪不能替换原权威；发布仍校验相同受保护选择。
+    resources
+        .mutation
+        .validate_plugin(&plugin.id)
+        .map_err(|error| error.to_string())?;
+    vulcan_plugin_lifecycle::publish_legacy_secret_extension_generation(
+        state, &plugin.id, catalog, resources,
+    )?;
+    #[cfg(test)]
+    legacy_native_observation::observe(&plugin.id, legacy_native_observation::Milestone::Published);
+    Ok(())
+}
+
+/// List service-owned original secret mutations for the exact plugin without exposing secret values.
+/// 列出精确插件的服务自有原秘密变更，不暴露秘密值。
+/// Returns non-secret original UUIDs and current phases, including executor failures.
+/// 返回无秘密原 UUID 及当前阶段，包括执行器故障。
+pub(crate) fn service_plugin_mcp_secret_mutation_requests(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<Vec<LegacySecretMutationStatus>, String> {
+    // Obtain the existing owner registry; public catalog absence cannot erase an unfinished request.
+    // 获取现有所有者注册表；公共目录缺失不能抹除未完成请求。
+    let registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_legacy_secret_mutations,
+    );
+    registry.list(&plugin_id)
+}
+
+/// Recover one exact retained request, retiring its unpublished native original or acknowledging its actual full commit.
+/// 恢复单个精确保留请求，退役其未发布原生原实例或确认其实际完整提交。
+/// Plugin and UUID must match the original strong owner; errors preserve its actual resources.
+/// 插件及 UUID 必须匹配原强所有者；错误保留其实际资源。
+/// app delivers the committed projection; returns after exact rollback or committed projection and retirement.
+/// app 投递已提交投影；精确回滚或已提交投影及退役后返回。
+pub(crate) async fn service_recover_plugin_mcp_secret_mutation(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    request_id: uuid::Uuid,
+) -> Result<(), String> {
+    run_luaskills_management_owned("recover plugin MCP secret", move || async move {
+        // Recovery borrows the original registry, never latest activation or credential values.
+        // 恢复借用原注册表，绝不借用最新激活或凭据值。
+        let registry = Arc::clone(&state.lock().map_err(|error| error.to_string())?.pending_legacy_secret_mutations);
+        // Exact lookup occurs before any OS adapter access.
+        // 精确查询发生在任何操作系统适配器访问之前。
+        let owner = registry.get(&plugin_id, request_id)?;
+        // Exclude every active executor using the same actual asynchronous resource lock.
+        // 使用相同实际异步资源锁，排除每个活动执行器。
+        let mut resources = owner.resources.lock().await;
+        match resources.phase {
+            LegacySecretMutationPhase::CredentialMutation | LegacySecretMutationPhase::NativeRefresh => owner.rollback(&mut resources).await?,
+            LegacySecretMutationPhase::Restored => {},
+            LegacySecretMutationPhase::Committed => {
+                // Reproject the actual current successor without credential writes or native initialization replay.
+                // 重新投影实际当前后继，不写入凭据或重放原生初始化。
+                refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
+            },
+            _ => return Err(format!("Original credential request `{request_id}` requires actual native partition recovery before retirement.")),
+        }
+        registry.retire(&owner, &resources)
+    }).await
+}
+
+/// Restore one exact OS preimage while the original Legacy mutation guard remains alive.
+/// 在原旧格式变更屏障保持活动时，恢复单个精确操作系统前像。
+/// The retained guard, plugin/server/key tuple and optional previous value select this mutation's only rollback account.
+/// 保留屏障、插件／服务器／密钥元组及可选先前值选择本次变更唯一回滚账户。
+/// Returns validation or OS restoration failure without reacquiring a different selected generation.
+/// 返回校验或操作系统恢复失败，不重新获取不同已选代次。
+fn restore_guarded_plugin_mcp_secret(
+    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
+    mutation: &vulcan_plugin_runtime::VulcanPluginLegacyMutationGuard,
+    plugin_id: &str,
+    server_id: &str,
+    secret_key: &str,
+    previous_value: Option<&str>,
+) -> Result<(), String> {
+    mutation
+        .validate_plugin(plugin_id)
+        .map_err(|error| error.to_string())?;
+    restore_plugin_mcp_secret(
+        secret_store,
+        plugin_id,
+        server_id,
+        secret_key,
+        previous_value,
     )
 }
 
@@ -1091,237 +1342,6 @@ fn validate_initial_plugin_mcp_secrets(
     Ok(values)
 }
 
-/// Restores every credential changed by one failed plugin installation in reverse order.
-/// 按逆序恢复一次失败插件安装变更的全部凭据。
-///
-/// # Parameters
-/// 参数
-/// `secret_store` owns the operating-system credential boundary, `plugin_id` selects the namespace,
-/// and `previous_values` records exact pre-transaction values.
-/// `secret_store` 持有操作系统凭据边界，`plugin_id` 选择命名空间，
-/// `previous_values` 记录事务前的精确值。
-///
-/// # Returns
-/// 返回值
-/// Returns every rollback failure so no credential residue is silently ignored.
-/// 返回全部回滚失败，确保不会静默忽略凭据残留。
-fn rollback_initial_plugin_mcp_secrets(
-    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-    plugin_id: &str,
-    previous_values: &[((String, String), Option<String>)],
-) -> Vec<String> {
-    let mut failures = Vec::new();
-    for ((server_id, secret_key), previous_value) in previous_values.iter().rev() {
-        if let Err(error) = restore_plugin_mcp_secret(
-            secret_store,
-            plugin_id,
-            server_id,
-            secret_key,
-            previous_value.as_deref(),
-        ) {
-            failures.push(format!(
-                "恢复 Secret `{server_id}:{secret_key}` 失败：{error}"
-            ));
-        }
-    }
-    failures
-}
-
-/// Compensates one failed local-plugin installation after its initial disabled policy was persisted.
-/// 补偿一次在初始停用策略持久化后失败的本地插件安装。
-///
-/// # Parameters
-/// 参数
-/// `state` owns provider policy, `runtime` owns package state, and `plugin_id` selects the candidate.
-/// `state` 持有 Provider 策略，`runtime` 持有插件包状态，`plugin_id` 选择候选插件。
-/// `secret_store` and `previous_secret_values` restore credentials; prior override flags restore exact policy membership.
-/// `secret_store` 与 `previous_secret_values` 恢复凭据；先前覆盖标志恢复精确策略成员关系。
-/// `compensate_lifecycle` indicates whether the install callback completed and therefore requires its uninstall counterpart.
-/// `compensate_lifecycle` 表示安装回调是否已完成并因此需要对应的卸载补偿。
-///
-/// # Returns
-/// 返回值
-/// Returns every rollback failure; an unsafe lifecycle or package cleanup failure leaves dependent state intact for retry.
-/// 返回全部回滚失败；不安全的生命周期或插件包清理失败会保留依赖状态以供重试。
-// Rollback needs previous credential and enablement evidence plus explicit lifecycle compensation.
-// 回滚需要此前凭据、启用证据及明确的生命周期补偿。
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Rollback needs previous credential and enablement evidence plus explicit lifecycle compensation."
-)]
-async fn rollback_local_plugin_install(
-    state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
-    plugin_id: &str,
-    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-    previous_secret_values: &[((String, String), Option<String>)],
-    had_disabled_override: bool,
-    had_enabled_override: bool,
-    compensate_lifecycle: bool,
-) -> Vec<String> {
-    if compensate_lifecycle
-        && let Err(error) = runtime
-            .invoke_lifecycle(
-                plugin_id,
-                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Uninstall,
-            )
-            .await
-    {
-        return vec![format!("安装生命周期补偿失败：{error}")];
-    }
-    if let Err(error) = runtime.uninstall_user_plugin(plugin_id) {
-        return vec![format!("插件包回滚失败：{error}")];
-    }
-    // rollback_plugin_id moves into the configuration transaction without borrowing the caller.
-    // rollback_plugin_id 移入配置事务，避免借用调用方数据。
-    let rollback_plugin_id = plugin_id.to_string();
-    // configuration_result restores exact pre-transaction override membership.
-    // configuration_result 恢复事务前的精确覆盖成员关系。
-    let configuration_result = mutate_provider_configuration(
-        state,
-        "回滚用户插件初始状态失败",
-        move |provider_configuration| {
-            if had_disabled_override {
-                provider_configuration
-                    .luaskills
-                    .disabled_vulcan_plugins
-                    .insert(rollback_plugin_id.clone());
-            } else {
-                provider_configuration
-                    .luaskills
-                    .disabled_vulcan_plugins
-                    .remove(&rollback_plugin_id);
-            }
-            if had_enabled_override {
-                provider_configuration
-                    .luaskills
-                    .enabled_vulcan_plugins
-                    .insert(rollback_plugin_id.clone());
-            } else {
-                provider_configuration
-                    .luaskills
-                    .enabled_vulcan_plugins
-                    .remove(&rollback_plugin_id);
-            }
-            Ok(())
-        },
-        |_, _| (),
-    )
-    .await;
-    let mut failures =
-        rollback_initial_plugin_mcp_secrets(secret_store, plugin_id, previous_secret_values);
-    if let Err(error) = configuration_result {
-        failures.push(format!("配置回滚失败：{error}"));
-    }
-    failures
-}
-
-/// Rolls back one uncommitted user-plugin update candidate and restores its credential values.
-/// 回滚一个未提交的用户插件更新候选，并恢复其凭据值。
-///
-/// # Parameters
-/// 参数
-/// `state` supplies current policy for catalog restoration, `runtime` owns the pending package transaction,
-/// and the remaining arguments describe lifecycle and credential compensation.
-/// `state` 提供目录恢复所需的当前策略，`runtime` 持有待处理插件包事务，
-/// 其余参数描述生命周期与凭据补偿。
-///
-/// # Returns
-/// 返回值
-/// Returns every compensation failure while still attempting all independent safe restoration steps.
-/// 返回全部补偿失败，同时仍会尝试所有相互独立且安全的恢复步骤。
-async fn rollback_local_plugin_update_candidate(
-    state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
-    transaction: vulcan_plugin_runtime::VulcanPluginUpdateTransaction,
-    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-    previous_secret_values: &[((String, String), Option<String>)],
-    compensate_lifecycle: bool,
-) -> Vec<String> {
-    // plugin_id remains available after the transaction is consumed by rollback.
-    // plugin_id 在事务被回滚消费后仍可使用。
-    let plugin_id = transaction.plugin_id().to_string();
-    let mut failures = Vec::new();
-    if compensate_lifecycle
-        && let Err(error) = runtime
-            .invoke_lifecycle(
-                &plugin_id,
-                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Uninstall,
-            )
-            .await
-    {
-        failures.push(format!("更新生命周期补偿失败：{error}"));
-    }
-    let package_rollback_succeeded = match runtime.rollback_local_user_plugin_update(transaction) {
-        Ok(()) => true,
-        Err(error) => {
-            failures.push(format!("更新插件包回滚失败：{error}"));
-            false
-        }
-    };
-    if package_rollback_succeeded {
-        failures.extend(rollback_initial_plugin_mcp_secrets(
-            secret_store,
-            &plugin_id,
-            previous_secret_values,
-        ));
-        match provider_configuration_from_state(state).and_then(|configuration| {
-            runtime
-                .refresh_catalog(
-                    &configuration.luaskills.disabled_vulcan_plugins,
-                    &configuration.luaskills.enabled_vulcan_plugins,
-                )
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        }) {
-            Ok(()) => {}
-            Err(error) => failures.push(format!("恢复旧插件目录失败：{error}")),
-        }
-    }
-    failures
-}
-
-/// Rolls back an uncommitted update candidate and combines every compensation failure with the primary error.
-/// 回滚未提交的更新候选，并将全部补偿失败与主错误合并。
-///
-/// # Parameters
-/// 参数
-/// `state`, `runtime`, `transaction`, `secret_store`, and `previous_secret_values` identify the exact transaction state.
-/// `state`、`runtime`、`transaction`、`secret_store` 与 `previous_secret_values` 标识精确事务状态。
-/// `compensate_lifecycle` requests the matching lifecycle compensation after a completed candidate callback.
-/// `compensate_lifecycle` 在候选回调完成后请求对应的生命周期补偿。
-/// `primary_error` is the failure that aborted publication.
-/// `primary_error` 是中止发布的主失败。
-///
-/// # Returns
-/// 返回值
-/// Returns one complete diagnostic without hiding rollback failures.
-/// 返回一条完整诊断，且不会隐藏回滚失败。
-async fn rollback_local_plugin_update_after_error(
-    state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
-    transaction: vulcan_plugin_runtime::VulcanPluginUpdateTransaction,
-    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-    previous_secret_values: &[((String, String), Option<String>)],
-    compensate_lifecycle: bool,
-    primary_error: String,
-) -> String {
-    let rollback_failures = rollback_local_plugin_update_candidate(
-        state,
-        runtime,
-        transaction,
-        secret_store,
-        previous_secret_values,
-        compensate_lifecycle,
-    )
-    .await;
-    if rollback_failures.is_empty() {
-        primary_error
-    } else {
-        format!("{primary_error}；{}", rollback_failures.join("；"))
-    }
-}
-
 /// Installs one explicitly authorized local user plugin and leaves it disabled for review.
 /// 安装一个经过明确授权的本地用户插件，并使其保持停用以供复核。
 ///
@@ -1347,348 +1367,62 @@ pub(crate) async fn service_install_local_plugin(
     allow_registry_dependencies: bool,
     initial_secrets: Vec<VulcanPluginInitialSecretInput>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    // management_guard makes package publication, state persistence, lifecycle, and projection one transaction.
-    // management_guard 使插件包发布、状态持久化、生命周期与投影成为同一事务。
     run_luaskills_management_owned("install local plugin", move || async move {
-        let runtime = service_vulcan_plugin_runtime(&state)?;
-        let install_runtime = runtime.clone();
-        let source_path = PathBuf::from(source_path);
-        let installation = run_extension_management_blocking("install local plugin", move || {
-            install_runtime
-                .install_local_user_plugin(
-                    &source_path,
-                    &expected_content_fingerprint,
-                    approved_permissions,
-                    allow_registry_dependencies,
-                )
-                .map_err(|error| error.to_string())
-        })
-        .await?;
-        let plugin_id = installation.plugin_id.clone();
-        // configuration is read before credential mutation so a state-lock failure needs only package rollback.
-        // configuration 在凭据变更前读取，使状态锁失败时只需回滚插件包。
-        let configuration = match provider_configuration_from_state(&state) {
-            Ok(configuration) => configuration,
-            Err(error) => {
-                return match runtime.uninstall_user_plugin(&plugin_id) {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(format!(
-                        "{error}；回滚用户插件 `{plugin_id}` 失败：{rollback_error}"
-                    )),
-                };
-            }
-        };
-        // had_disabled_override preserves exact pre-install policy membership for rollback.
-        // had_disabled_override 为回滚保留安装前精确的停用策略成员关系。
-        let had_disabled_override = configuration
-            .luaskills
-            .disabled_vulcan_plugins
-            .contains(&plugin_id);
-        // had_enabled_override preserves exact pre-install policy membership for rollback.
-        // had_enabled_override 为回滚保留安装前精确的启用策略成员关系。
-        let had_enabled_override = configuration
-            .luaskills
-            .enabled_vulcan_plugins
-            .contains(&plugin_id);
-        // initial_secret_values must match the host-derived local MCP requirement set exactly.
-        // initial_secret_values 必须与宿主派生的本地 MCP 要求集合完全一致。
-        let initial_secret_values = match validate_initial_plugin_mcp_secrets(
-            &installation.permission_preview,
+        local_plugin_install::install(
+            &app,
+            &state,
+            source_path,
+            expected_content_fingerprint,
+            approved_permissions,
+            allow_registry_dependencies,
             initial_secrets,
-        ) {
-            Ok(values) => values,
-            Err(error) => {
-                return match runtime.uninstall_user_plugin(&plugin_id) {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(format!(
-                        "{error}；回滚用户插件 `{plugin_id}` 失败：{rollback_error}"
-                    )),
-                };
-            }
-        };
-        // secret_store is the sole persistence boundary for installation credentials.
-        // secret_store 是安装凭据的唯一持久化边界。
-        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-        // previous_secret_values records only mutations that completed and therefore require rollback.
-        // previous_secret_values 仅记录已完成且因此需要回滚的变更。
-        let mut previous_secret_values = Vec::new();
-        for ((server_id, secret_key), value) in &initial_secret_values {
-            let previous_value =
-                match secret_store.read_optional_secret(&plugin_id, server_id, secret_key) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                            &secret_store,
-                            &plugin_id,
-                            &previous_secret_values,
-                        );
-                        if let Err(rollback_error) = runtime.uninstall_user_plugin(&plugin_id) {
-                            rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
-                        }
-                        return if rollback_failures.is_empty() {
-                            Err(error)
-                        } else {
-                            Err(format!("{error}；{}", rollback_failures.join("；")))
-                        };
-                    }
-                };
-            if let Err(error) = secret_store.write_secret(&plugin_id, server_id, secret_key, value)
-            {
-                let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                    &secret_store,
-                    &plugin_id,
-                    &previous_secret_values,
-                );
-                if let Err(rollback_error) = runtime.uninstall_user_plugin(&plugin_id) {
-                    rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
-                }
-                return if rollback_failures.is_empty() {
-                    Err(error)
-                } else {
-                    Err(format!("{error}；{}", rollback_failures.join("；")))
-                };
-            }
-            previous_secret_values.push(((server_id.clone(), secret_key.clone()), previous_value));
-        }
-        let mut disabled_plugins = configuration.luaskills.disabled_vulcan_plugins.clone();
-        disabled_plugins.insert(plugin_id.clone());
-        let preview_catalog = match runtime.refresh_catalog(
-            &disabled_plugins,
-            &configuration.luaskills.enabled_vulcan_plugins,
-        ) {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                let error = error.to_string();
-                let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                    &secret_store,
-                    &installation.plugin_id,
-                    &previous_secret_values,
-                );
-                if let Err(rollback_error) = runtime.uninstall_user_plugin(&installation.plugin_id)
-                {
-                    rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
-                }
-                return if rollback_failures.is_empty() {
-                    Err(error)
-                } else {
-                    Err(format!("{error}；{}", rollback_failures.join("；")))
-                };
-            }
-        };
-        let plugin_default_enabled = preview_catalog
-            .plugins
-            .get(&plugin_id)
-            .and_then(|plugin| plugin.manifest.as_ref())
-            .map(|manifest| manifest.default_enabled);
-        let Some(plugin_default_enabled) = plugin_default_enabled else {
-            let error = format!("新安装插件 `{plugin_id}` 未进入有效目录。");
-            let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                &secret_store,
-                &installation.plugin_id,
-                &previous_secret_values,
-            );
-            if let Err(rollback_error) = runtime.uninstall_user_plugin(&installation.plugin_id) {
-                rollback_failures.push(format!("回滚用户插件失败：{rollback_error}"));
-            }
-            return if rollback_failures.is_empty() {
-                Err(error)
-            } else {
-                Err(format!("{error}；{}", rollback_failures.join("；")))
-            };
-        };
-        let persistence_result = mutate_provider_configuration(
-            &state,
-            "保存用户插件初始停用状态失败",
-            |provider_configuration| {
-                provider_configuration
-                    .luaskills
-                    .set_vulcan_plugin_enabled_with_default(
-                        &plugin_id,
-                        false,
-                        plugin_default_enabled,
-                    );
-                Ok(())
-            },
-            |_, _| (),
         )
-        .await;
-        if let Err(error) = persistence_result {
-            // rollbackResult must be surfaced because a failed removal leaves an installed package.
-            // rollbackResult 必须显式上报，因为删除失败会留下已安装插件包。
-            let rollback_result = runtime.uninstall_user_plugin(&installation.plugin_id);
-            let mut rollback_failures = rollback_initial_plugin_mcp_secrets(
-                &secret_store,
-                &installation.plugin_id,
-                &previous_secret_values,
-            );
-            if let Err(rollback_error) = rollback_result {
-                rollback_failures.push(format!(
-                    "回滚用户插件 `{}` 失败：{rollback_error}",
-                    installation.plugin_id
-                ));
-            }
-            return if rollback_failures.is_empty() {
-                Err(error)
-            } else {
-                Err(format!("{error}；{}", rollback_failures.join("；")))
-            };
-        }
-        let prepare_runtime = runtime.clone();
-        let prepare_plugin_id = installation.plugin_id.clone();
-        let preparation_result =
-            run_extension_management_blocking("prepare local plugin", move || {
-                prepare_runtime
-                    .prepare_plugin_environment(&prepare_plugin_id)
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-        // local_mcp_identity captures the exact disabled catalog candidate without including remote servers.
-        // local_mcp_identity 捕获精确的停用目录候选，且不包含远程服务器。
-        let local_mcp_identity = preview_catalog
-            .plugins
-            .get(&installation.plugin_id)
-            .map(|plugin| {
-                (
-                plugin.generation,
-                plugin
-                    .mcp_servers
-                    .iter()
-                    .filter(|server| {
-                        matches!(
-                            &server.manifest.transport,
-                            vulcan_plugin_runtime::VulcanPluginMcpTransportManifest::Stdio { .. }
-                        )
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )
-            })
-            .ok_or_else(|| format!("新安装插件 `{}` 未进入候选目录。", installation.plugin_id));
-        // candidate_preparation_result includes isolated local MCP startup and confirmed teardown.
-        // candidate_preparation_result 包含隔离的本地 MCP 启动与经确认的拆除。
-        let candidate_preparation_result = match (preparation_result, local_mcp_identity) {
-            (Ok(()), Ok((generation, local_mcp_descriptors))) => {
-                match plugin_mcp_server_configs_for_descriptors(
-                    &runtime,
-                    &local_mcp_descriptors,
-                    &secret_store,
-                ) {
-                    Ok(servers) => {
-                        validate_plugin_mcp_runtime_partition(
-                            &installation.plugin_id,
-                            generation,
-                            servers,
-                        )
-                        .await
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            (Err(error), _) | (_, Err(error)) => Err(error),
-        };
-        // installCallbackStarted distinguishes dependency preparation failure from partial lifecycle work.
-        // installCallbackStarted 区分依赖准备失败与已经开始的部分生命周期工作。
-        let install_callback_started = candidate_preparation_result.is_ok();
-        // lifecycleResult retains the exact preparation or install callback failure.
-        // lifecycleResult 保留精确的准备或安装回调失败。
-        let lifecycle_result = match candidate_preparation_result {
-            Ok(()) => runtime
-                .invoke_lifecycle(
-                    &installation.plugin_id,
-                    vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Install,
-                )
-                .await
-                .map_err(|error| error.to_string()),
-            Err(error) => Err(error),
-        };
-        if let Err(error) = lifecycle_result {
-            let rollback_failures = rollback_local_plugin_install(
-                &state,
-                &runtime,
-                &installation.plugin_id,
-                &secret_store,
-                &previous_secret_values,
-                had_disabled_override,
-                had_enabled_override,
-                install_callback_started,
-            )
-            .await;
-            let base_error = format!(
-                "用户插件 `{}` 安装生命周期失败：{error}",
-                installation.plugin_id
-            );
-            return if rollback_failures.is_empty() {
-                Err(base_error)
-            } else {
-                Err(format!("{base_error}；{}", rollback_failures.join("；")))
-            };
-        }
-        // publication_candidate completes every fallible preparation before the atomic pointer swap.
-        // publication_candidate 在原子指针切换前完成全部可能失败的准备。
-        let publication_candidate = (|| -> Result<_, String> {
-            let effective_configuration = provider_configuration_from_state(&state)?;
-            let catalog = runtime
-                .refresh_catalog(
-                    &effective_configuration.luaskills.disabled_vulcan_plugins,
-                    &effective_configuration.luaskills.enabled_vulcan_plugins,
-                )
-                .map_err(|error| error.to_string())?;
-            synchronize_service_vulcan_plugin_hooks(&state, runtime.clone(), &catalog)?;
-            let current_mcp_runtime = state
-                .lock()
-                .map_err(|error| format!("锁定服务状态失败：{error}"))?
-                .agent_runtime
-                .as_ref()
-                .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-                .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-            Ok((catalog, current_mcp_runtime))
-        })();
-        let (catalog, current_mcp_runtime) = match publication_candidate {
-            Ok(candidate) => candidate,
-            Err(error) => {
-                let rollback_failures = rollback_local_plugin_install(
-                    &state,
-                    &runtime,
-                    &installation.plugin_id,
-                    &secret_store,
-                    &previous_secret_values,
-                    had_disabled_override,
-                    had_enabled_override,
-                    true,
-                )
-                .await;
-                return if rollback_failures.is_empty() {
-                    Err(error)
-                } else {
-                    Err(format!("{error}；{}", rollback_failures.join("；")))
-                };
-            }
-        };
-        if let Err(error) = vulcan_plugin_lifecycle::publish_extension_generation(
+        .await
+    })
+    .await
+}
+
+/// Read sanitized original first-install requests even when package discovery is absent.
+/// 即使插件包发现结果缺失，亦读取脱敏原首次安装请求。
+/// state supplies the actual strong registry and plugin_id selects exact immutable originals; returns identities and phases.
+/// state 提供实际强注册表，plugin_id 选择精确不可变原实例；返回身份及阶段。
+pub(crate) fn service_local_plugin_install_requests(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<Vec<LocalPluginInstallStatus>, String> {
+    // Clone the actual registry without awaiting or borrowing secret resources under service ownership.
+    // 克隆实际注册表，不在服务所有权下等待或借用秘密资源。
+    let registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_local_plugin_installs,
+    );
+    registry.list(&plugin_id)
+}
+
+/// Recover one retained initial installation by UUID, without replaying package, native or Install work.
+/// 按 UUID 恢复单个保留初始安装，不重放插件包、原生或安装工作。
+/// app/state supply publication projection; acknowledgement applies only to retired failed external compensation.
+/// app 及 state 提供发布投影；确认仅适用于已退役失败外部补偿。
+/// Returns after exact original rollback or committed reprojection and original registry retirement.
+/// 精确原回滚或已提交重新投影及原注册表退役后返回。
+pub(crate) async fn service_recover_local_plugin_install(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    request_id: uuid::Uuid,
+    acknowledge_external_effects: bool,
+) -> Result<(), String> {
+    run_luaskills_management_owned("recover original local installation", move || async move {
+        local_plugin_install::recover(
+            &app,
             &state,
-            &installation.plugin_id,
-            Arc::clone(&catalog),
-            current_mcp_runtime,
-        ) {
-            let rollback_failures = rollback_local_plugin_install(
-                &state,
-                &runtime,
-                &installation.plugin_id,
-                &secret_store,
-                &previous_secret_values,
-                had_disabled_override,
-                had_enabled_override,
-                true,
-            )
-            .await;
-            return if rollback_failures.is_empty() {
-                Err(error)
-            } else {
-                Err(format!("{error}；{}", rollback_failures.join("；")))
-            };
-        }
-        refresh_plugin_catalog_local_state_and_emit(&app, &state).await
+            &plugin_id,
+            request_id,
+            acknowledge_external_effects,
+        )
+        .await
     })
     .await
 }
@@ -1719,486 +1453,145 @@ pub(crate) async fn service_update_local_plugin(
     initial_secrets: Vec<VulcanPluginInitialSecretInput>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     run_luaskills_management_owned("update local plugin", move || async move {
-        let runtime = service_vulcan_plugin_runtime(&state)?;
-    let source_path = PathBuf::from(source_path);
-    // inspected_preview validates credential inputs before any package swap occurs.
-    // inspected_preview 在任何插件包替换前校验凭据输入。
-    let inspect_runtime = runtime.clone();
-    let inspect_path = source_path.clone();
-    let inspected_preview = run_extension_management_blocking("inspect plugin update", move || {
-        inspect_runtime
-            .inspect_local_user_plugin(&inspect_path)
-            .map_err(|error| error.to_string())
-    })
-    .await?;
-    if inspected_preview.content_fingerprint != expected_content_fingerprint {
-        return Err(String::from("本地插件包在更新授权检查后发生了变化。"));
-    }
-    let initial_secret_values =
-        validate_initial_plugin_mcp_secrets(&inspected_preview, initial_secrets)?;
-    // old_declared_secret_keys identifies credentials removed by the candidate manifest after commit.
-    // old_declared_secret_keys 标识候选清单提交后被移除的凭据。
-    let old_declared_secret_keys = runtime
-        .snapshot()
-        .plugins
-        .get(&inspected_preview.plugin_id)
-        .map(|plugin| {
-            plugin
-                .mcp_servers
-                .iter()
-                .flat_map(|server| {
-                    server
-                        .manifest
-                        .declared_secret_keys()
-                        .into_iter()
-                        .map(|secret_key| (server.id.clone(), secret_key))
-                })
-                .collect::<BTreeSet<_>>()
-        })
-        .ok_or_else(|| {
-            format!(
-                "用户插件 `{}` 尚未安装，不能执行更新。",
-                inspected_preview.plugin_id
-            )
-        })?;
-    let update_runtime = runtime.clone();
-    let transaction = run_extension_management_blocking("begin local plugin update", move || {
-        update_runtime
-            .begin_local_user_plugin_update(
-                &source_path,
-                &expected_content_fingerprint,
-                approved_permissions,
-                allow_registry_dependencies,
-            )
-            .map_err(|error| error.to_string())
-    })
-    .await?;
-    let plugin_id = transaction.plugin_id().to_string();
-    let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-    // previous_secret_values records only credential mutations that completed.
-    // previous_secret_values 仅记录已完成的凭据变更。
-    let mut previous_secret_values = Vec::new();
-    for ((server_id, secret_key), value) in &initial_secret_values {
-        let mutation_result = secret_store
-            .read_optional_secret(&plugin_id, server_id, secret_key)
-            .and_then(|previous_value| {
-                secret_store
-                    .write_secret(&plugin_id, server_id, secret_key, value)
-                    .map(|_| previous_value)
-            });
-        match mutation_result {
-            Ok(previous_value) => {
-                previous_secret_values
-                    .push(((server_id.clone(), secret_key.clone()), previous_value));
-            }
-            Err(error) => {
-                return Err(rollback_local_plugin_update_after_error(
-                    &state,
-                    &runtime,
-                    transaction,
-                    &secret_store,
-                    &previous_secret_values,
-                    false,
-                    error,
-                )
-                .await);
-            }
-        }
-    }
-    let configuration = match provider_configuration_from_state(&state) {
-        Ok(configuration) => configuration,
-        Err(error) => {
-            return Err(rollback_local_plugin_update_after_error(
-                &state,
-                &runtime,
-                transaction,
-                &secret_store,
-                &previous_secret_values,
-                false,
-                error,
-            )
-            .await);
-        }
-    };
-    let candidate_catalog = match runtime.refresh_catalog(
-        &configuration.luaskills.disabled_vulcan_plugins,
-        &configuration.luaskills.enabled_vulcan_plugins,
-    ) {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            let error = error.to_string();
-            return Err(rollback_local_plugin_update_after_error(
-                &state,
-                &runtime,
-                transaction,
-                &secret_store,
-                &previous_secret_values,
-                false,
-                error,
-            )
-            .await);
-        }
-    };
-    let candidate = candidate_catalog
-        .plugins
-        .get(&plugin_id)
-        .cloned()
-        .ok_or_else(|| format!("更新候选插件 `{plugin_id}` 未进入有效目录。"));
-    let preparation_result = match candidate {
-        Ok(candidate) => {
-            let prepare_runtime = runtime.clone();
-            let prepare_plugin_id = plugin_id.clone();
-            match run_extension_management_blocking("prepare plugin update", move || {
-                prepare_runtime
-                    .prepare_plugin_environment(&prepare_plugin_id)
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-            })
-            .await
-            {
-                Ok(()) => {
-                    let local_servers = candidate
-                        .mcp_servers
-                        .iter()
-                        .filter(|server| {
-                            matches!(
-                                &server.manifest.transport,
-                                vulcan_plugin_runtime::VulcanPluginMcpTransportManifest::Stdio { .. }
-                            )
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    match plugin_mcp_server_configs_for_descriptors(
-                        &runtime,
-                        &local_servers,
-                        &secret_store,
-                    ) {
-                        Ok(servers) => {
-                            validate_plugin_mcp_runtime_partition(
-                                &plugin_id,
-                                candidate.generation,
-                                servers,
-                            )
-                            .await
-                        }
-                        Err(error) => Err(error),
-                    }
-                }
-                Err(error) => Err(error),
-            }
-        }
-        Err(error) => Err(error),
-    };
-    if let Err(error) = preparation_result {
-        return Err(rollback_local_plugin_update_after_error(
+        local_plugin_update::update(
+            &app,
             &state,
-            &runtime,
-            transaction,
-            &secret_store,
-            &previous_secret_values,
-            false,
-            error,
-        )
-        .await);
-    }
-    let lifecycle_result = runtime
-        .invoke_lifecycle(
-            &plugin_id,
-            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Install,
+            source_path,
+            expected_content_fingerprint,
+            approved_permissions,
+            allow_registry_dependencies,
+            initial_secrets,
         )
         .await
-        .map_err(|error| error.to_string());
-    if let Err(error) = lifecycle_result {
-        return Err(rollback_local_plugin_update_after_error(
-            &state,
-            &runtime,
-            transaction,
-            &secret_store,
-            &previous_secret_values,
-            true,
-            error,
-        )
-        .await);
-    }
-    if let Err(error) = runtime.verify_local_user_plugin_update_candidate(&transaction) {
-        return Err(rollback_local_plugin_update_after_error(
-            &state,
-            &runtime,
-            transaction,
-            &secret_store,
-            &previous_secret_values,
-            true,
-            error.to_string(),
-        )
-        .await);
-    }
-    if let Err(error) =
-        synchronize_service_vulcan_plugin_hooks(&state, runtime.clone(), &candidate_catalog)
-    {
-        return Err(rollback_local_plugin_update_after_error(
-            &state,
-            &runtime,
-            transaction,
-            &secret_store,
-            &previous_secret_values,
-            true,
-            error,
-        )
-        .await);
-    }
-    let current_mcp_runtime = match state
-        .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))
-        .and_then(|guard| {
-            guard
-                .agent_runtime
-                .as_ref()
-                .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-                .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))
-        }) {
-        Ok(runtime_access) => runtime_access,
-        Err(error) => {
-            return Err(rollback_local_plugin_update_after_error(
-                &state,
-                &runtime,
-                transaction,
-                &secret_store,
-                &previous_secret_values,
-                true,
-                error,
-            )
-            .await);
-        }
-    };
-    if let Err(error) = vulcan_plugin_lifecycle::publish_extension_generation(
-        &state,
-        &plugin_id,
-        Arc::clone(&candidate_catalog),
-        current_mcp_runtime,
-    ) {
-        return Err(rollback_local_plugin_update_after_error(
-            &state,
-            &runtime,
-            transaction,
-            &secret_store,
-            &previous_secret_values,
-            true,
-            error,
-        )
-        .await);
-    }
-    // new_declared_secret_keys determines which old credentials no longer belong to the committed manifest.
-    // new_declared_secret_keys 决定哪些旧凭据不再属于已提交清单。
-    let new_declared_secret_keys = candidate_catalog
-        .plugins
-        .get(&plugin_id)
-        .into_iter()
-        .flat_map(|plugin| plugin.mcp_servers.iter())
-        .flat_map(|server| {
-            server
-                .manifest
-                .declared_secret_keys()
-                .into_iter()
-                .map(|secret_key| (server.id.clone(), secret_key))
-        })
-        .collect::<BTreeSet<_>>();
-    let mut cleanup_failures = Vec::new();
-    for (server_id, secret_key) in old_declared_secret_keys.difference(&new_declared_secret_keys) {
-        if let Err(error) = secret_store.delete_secret(&plugin_id, server_id, secret_key) {
-            cleanup_failures.push(format!(
-                "Secret `{server_id}:{secret_key}` 清理失败：{error}"
-            ));
-        }
-    }
-    if let Err(error) = runtime.commit_local_user_plugin_update(transaction) {
-        cleanup_failures.push(format!("旧插件包或环境清理失败：{error}"));
-    }
-    let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
-        if cleanup_failures.is_empty() {
-        Ok(update)
-    } else {
-        Err(format!(
-            "用户插件 `{plugin_id}` 已更新，但提交后清理存在问题：{}",
-            cleanup_failures.join("；")
-        ))
-        }
     })
     .await
 }
 
-/// Uninstalls one disabled user plugin after its declared lifecycle callback completes.
-/// 在声明的生命周期回调完成后卸载一个已停用的用户插件。
+/// Read sanitized original update records without starting work or creating a store.
+/// 读取脱敏原更新记录，不启动工作或创建存储。
+/// State selects the configured runtime and plugin_id selects one exact namespace; returns durable status rows.
+/// state 选择配置运行时，plugin_id 选择单个精确命名空间；返回持久状态行。
+pub(crate) async fn service_local_plugin_update_requests(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<Vec<LocalPluginUpdateStatus>, String> {
+    // Read-only status must remain available while the mutation owner is busy.
+    // 变更所有者忙碌时，只读状态必须仍可用。
+    let runtime = service_vulcan_plugin_runtime(&state)?;
+    // Read-only query snapshots the actual registry without applying mutation shutdown admission.
+    // 只读查询快照实际注册表，不应用变更关闭准入。
+    let registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .pending_local_plugin_updates,
+    );
+    let mut rows =
+        run_extension_management_blocking("inspect original plugin updates", move || {
+            local_plugin_update::list_owned(&runtime, &plugin_id, &registry)
+        })
+        .await?;
+    // Read the actual strong owner map without joining or waiting for its mutation executor.
+    // 不联接或等待变更执行器，读取实际强所有者映射。
+    local_plugin_update::project_service_owners(&state, &mut rows)?;
+    Ok(rows)
+}
+
+/// Resume only an explicitly named already-published update through the service-owned management task.
+/// 仅通过服务自有管理任务恢复明确命名的已发布更新。
+/// App/state own publication and plugin_id/request_id identify the original request; returns its catalog projection.
+/// app/state 拥有发布，plugin_id/request_id 标识原请求；返回其目录投影。
+pub(crate) async fn service_resume_local_plugin_update(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    request_id: String,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    run_luaskills_management_owned("resume published plugin update", move || async move {
+        local_plugin_update::resume_published(&app, &state, &plugin_id, &request_id).await
+    })
+    .await
+}
+
+/// Abandon an explicit unpublished request while preserving user data and external-effect history.
+/// 放弃明确的尚未发布请求，同时保留用户数据及外部副作用历史。
+/// State and identities select the original owner; acknowledgement is required when installation effects were attempted.
+/// state 及身份选择原所有者；已尝试安装副作用时要求明确确认。
+/// Returns retained status rather than a claim that external effects were rolled back.
+/// 返回保留状态，而非声称外部副作用已回滚。
+pub(crate) async fn service_abort_local_plugin_update(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    request_id: String,
+    acknowledge_external_effects: bool,
+) -> Result<LocalPluginUpdateStatus, String> {
+    run_luaskills_management_owned("abandon original plugin update", move || async move {
+        // Original live ownership takes precedence over disk recovery; the global management fence is held once.
+        // 原存活所有权优先于磁盘恢复；全局管理屏障仅持有一次。
+        local_plugin_update::abort_owned(
+            &state,
+            &plugin_id,
+            &request_id,
+            acknowledge_external_effects,
+        )
+        .await
+    })
+    .await
+}
+
+/// Uninstall through one retained actual original; app/state publish and plugin_id selects its namespace.
+/// 通过单个保留实际原实例卸载；app／state 负责发布，plugin_id 选择其命名空间。
+/// Returns the catalog only after real callback retirement, Full removal and physical collection.
+/// 仅在真实回调退役、完整移除及物理回收之后返回目录。
 pub(crate) async fn service_uninstall_user_plugin(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     plugin_id: String,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     run_luaskills_management_owned("uninstall local plugin", move || async move {
-        let runtime = service_vulcan_plugin_runtime(&state)?;
-        let snapshot = runtime.snapshot();
-        let plugin = snapshot
-            .plugins
-            .get(&plugin_id)
-            .ok_or_else(|| format!("用户插件 `{plugin_id}` 未安装。"))?;
-        if plugin.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled {
-            return Err(format!("内建插件 `{plugin_id}` 不允许卸载。"));
-        }
-        if plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
-            || plugin.active_session_count != 0
-        {
-            return Err(format!("用户插件 `{plugin_id}` 必须先停用并完全排空。"));
-        }
-        // declared_secret_keys captures the complete credential namespace before package removal.
-        // declared_secret_keys 在插件包删除前捕获完整凭据命名空间。
-        let declared_secret_keys = plugin
-            .mcp_servers
-            .iter()
-            .flat_map(|server| {
-                server
-                    .manifest
-                    .declared_secret_keys()
-                    .into_iter()
-                    .map(|secret_key| (server.id.clone(), secret_key))
-            })
-            .collect::<Vec<_>>();
-        let mcp_runtime = state
+        local_plugin_uninstall::uninstall(&app, &state, plugin_id).await
+    })
+    .await
+}
+
+/// Read every actual retained removal without mutation admission; state selects the live registry.
+/// 读取每个实际保留移除，不取得变更准入；state 选择存活注册表。
+/// Returns sanitized live ownership, including executing owners, while shutdown is closed.
+/// 关闭期间返回脱敏实时所有权，包含执行中所有者。
+pub(crate) fn service_local_plugin_uninstall_requests(
+    state: SharedServiceBridgeState,
+) -> Result<Vec<local_plugin_uninstall::LocalPluginUninstallStatus>, String> {
+    // Release service exclusion before trying resource borrows for read-only projection.
+    // 尝试只读投影资源借用之前释放服务互斥。
+    let registry = Arc::clone(
+        &state
             .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?
-            .agent_runtime
-            .as_ref()
-            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-        if mcp_runtime.has_usable_retired_plugin_partitions(&plugin_id) {
-            return Err(format!(
-                "用户插件 `{plugin_id}` 的旧 MCP generation 仍在排空，暂时不能卸载。"
-            ));
-        }
-        runtime
-            .invoke_lifecycle(
-                &plugin_id,
-                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Uninstall,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        // previousConfiguration preserves exact override membership for uninstall rollback.
-        // previousConfiguration 保留精确覆盖成员关系，用于卸载回滚。
-        let previous_configuration = provider_configuration_from_state(&state)?;
-        // hadDisabledOverride records whether the plugin id was explicitly disabled before cleanup.
-        // hadDisabledOverride 记录清理前插件标识是否被显式停用。
-        let had_disabled_override = previous_configuration
-            .luaskills
-            .disabled_vulcan_plugins
-            .contains(&plugin_id);
-        // hadEnabledOverride records whether the plugin id was explicitly enabled before cleanup.
-        // hadEnabledOverride 记录清理前插件标识是否被显式启用。
-        let had_enabled_override = previous_configuration
-            .luaskills
-            .enabled_vulcan_plugins
-            .contains(&plugin_id);
-        mutate_provider_configuration(
-            &state,
-            "清理用户插件状态覆盖失败",
-            |provider_configuration| {
-                provider_configuration
-                    .luaskills
-                    .disabled_vulcan_plugins
-                    .remove(&plugin_id);
-                provider_configuration
-                    .luaskills
-                    .enabled_vulcan_plugins
-                    .remove(&plugin_id);
-                Ok(())
-            },
-            |_, _| (),
-        )
-        .await?;
-        // rollbackPluginId remains available to the persistence rollback closure if removal fails.
-        // rollbackPluginId 在删除失败时供持久化回滚闭包使用。
-        let rollback_plugin_id = plugin_id.clone();
-        let uninstall_runtime = runtime.clone();
-        let uninstall_plugin_id = plugin_id.clone();
-        // uninstallResult is handled explicitly so provider overrides can be restored transactionally.
-        // uninstallResult 被显式处理，以便事务化恢复 Provider 覆盖。
-        let uninstall_result =
-            run_extension_management_blocking("uninstall user plugin", move || {
-                uninstall_runtime
-                    .uninstall_user_plugin(&uninstall_plugin_id)
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-        if let Err(uninstall_error) = uninstall_result {
-            // restoreResult republishes the exact prior override membership after package rollback.
-            // restoreResult 在插件包回滚后重新发布精确的先前覆盖成员关系。
-            let restore_result = mutate_provider_configuration(
-                &state,
-                "恢复用户插件状态覆盖失败",
-                move |provider_configuration| {
-                    if had_disabled_override {
-                        provider_configuration
-                            .luaskills
-                            .disabled_vulcan_plugins
-                            .insert(rollback_plugin_id.clone());
-                    }
-                    if had_enabled_override {
-                        provider_configuration
-                            .luaskills
-                            .enabled_vulcan_plugins
-                            .insert(rollback_plugin_id.clone());
-                    }
-                    Ok(())
-                },
-                |_, _| (),
-            )
-            .await;
-            return match restore_result {
-                Ok(()) => Err(uninstall_error),
-                Err(restore_error) => Err(format!(
-                    "{uninstall_error}；恢复用户插件状态覆盖失败：{restore_error}"
-                )),
-            };
-        }
-        // secret_cleanup_failures remain independently reportable after the package transaction commits.
-        // secret_cleanup_failures 在插件包事务提交后仍可独立上报。
-        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-        let secret_cleanup_failures = declared_secret_keys
-            .iter()
-            .filter_map(|(server_id, secret_key)| {
-                secret_store
-                    .delete_secret(&plugin_id, server_id, secret_key)
-                    .err()
-                    .map(|error| format!("{server_id}:{secret_key}：{error}"))
-            })
-            .collect::<Vec<_>>();
-        let configuration = provider_configuration_from_state(&state)?;
-        let catalog = runtime
-            .refresh_catalog(
-                &configuration.luaskills.disabled_vulcan_plugins,
-                &configuration.luaskills.enabled_vulcan_plugins,
-            )
-            .map_err(|error| error.to_string())?;
-        let current_mcp_runtime = state
-            .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?
-            .agent_runtime
-            .as_ref()
-            .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-        vulcan_plugin_lifecycle::publish_extension_generation(
+            .map_err(|error| error.to_string())?
+            .pending_local_plugin_uninstalls,
+    );
+    registry.statuses()
+}
+
+/// Continue the exact live original; app/state publish, identities locate ownership and acknowledgement accepts retired failure.
+/// 继续精确存活原实例；app／state 负责发布，身份定位所有权，确认接受已退役失败。
+/// Returns the usual catalog response without reconstructing files or replaying callbacks.
+/// 返回普通目录响应，不重建文件或重放回调。
+pub(crate) async fn service_resume_local_plugin_uninstall(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+    request_id: String,
+    acknowledge_external_effects: bool,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    run_luaskills_management_owned("continue original plugin removal", move || async move {
+        local_plugin_uninstall::resume(
+            &app,
             &state,
             &plugin_id,
-            Arc::clone(&catalog),
-            current_mcp_runtime,
-        )?;
-        synchronize_service_vulcan_plugin_hooks(&state, runtime, &catalog)?;
-        let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
-        if secret_cleanup_failures.is_empty() {
-            Ok(update)
-        } else {
-            Err(format!(
-                "用户插件 `{plugin_id}` 已卸载，但 Secret 清理失败：{}",
-                secret_cleanup_failures.join("；")
-            ))
-        }
+            &request_id,
+            acknowledge_external_effects,
+        )
+        .await
     })
     .await
 }
@@ -2607,6 +2000,19 @@ pub(crate) async fn service_set_vulcan_plugin_enabled(
     enabled: bool,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     run_luaskills_management_owned("set plugin enabled", move || async move {
+        // Refuse before discovery, callbacks or policy changes can invalidate a retained first installation.
+        // 在发现、回调或策略变更能够使保留首安装失效之前拒绝。
+        {
+            // Refuse catalog-changing enable/disable before entering any original management work.
+            // 在进入任何原管理工作之前拒绝改变目录的启用／停用。
+            let guard = state.lock().map_err(|error| error.to_string())?;
+            crate::service_state_access::require_plugin_update_full_publication_admission(
+                &guard, None,
+            )?;
+            guard
+                .pending_local_plugin_installs
+                .require_no_original(plugin_id.trim())?;
+        }
         // update is emitted here so the lifecycle module remains a pure transaction without a second publisher.
         // update 在此发送，使生命周期模块保持为不包含第二发布出口的纯事务。
         let update =
@@ -3112,9 +2518,14 @@ pub(crate) async fn service_save_agent_skill(
     };
     let configuration_original_name = original_name.clone();
     let configuration_target_name = name.clone();
-    mutate_provider_configuration(
+    crate::service_state_access::mutate_provider_configuration_with_state_validation(
         &state,
         "保存 Agent Skill 状态失败",
+        |guard| {
+            crate::service_state_access::require_plugin_update_full_publication_admission(
+                guard, None,
+            )
+        },
         move |configuration| {
             if let Some(original_name) = configuration_original_name
                 .as_deref()
@@ -3193,9 +2604,14 @@ pub(crate) async fn service_delete_agent_skill(
         .get(&name)
         .copied();
     let state_name = name.clone();
-    mutate_provider_configuration(
+    crate::service_state_access::mutate_provider_configuration_with_state_validation(
         &state,
         "删除 Agent Skill 状态失败",
+        |guard| {
+            crate::service_state_access::require_plugin_update_full_publication_admission(
+                guard, None,
+            )
+        },
         move |configuration| {
             configuration
                 .prompt_skills
@@ -3825,9 +3241,14 @@ pub(crate) async fn service_set_agent_skill_enabled(
     } else {
         PersistedPromptSkillState::Disabled
     };
-    mutate_provider_configuration(
+    crate::service_state_access::mutate_provider_configuration_with_state_validation(
         &state,
         "保存 Agent Skill 状态失败",
+        |guard| {
+            crate::service_state_access::require_plugin_update_full_publication_admission(
+                guard, None,
+            )
+        },
         |configuration| {
             configuration
                 .prompt_skills
@@ -5289,6 +4710,97 @@ mod tests {
         );
         assert!(!projected.values.contains_key("api_token"));
         assert_eq!(projected.restart_required_keys, vec!["api_token"]);
+    }
+
+    /// Preserve the exact test-only destination inside a detached service task and persist through the real bounded writer.
+    /// 在已分离服务任务内保留精确测试专用目标，并经真实受限写入器持久化。
+    /// No parameters or return value; verifies a cancelled outer scoped waiter cannot redirect its still-owned save.
+    /// 无参数或返回值；验证取消外层作用域等待者不能重定向仍被拥有的保存。
+    #[tokio::test]
+    async fn scoped_management_persistence_survives_waiter_cancellation() {
+        // One bounded observation deadline is shared by both synchronization points in this test.
+        // 此测试的两个同步点共用单个有界观测期限。
+        const CONFIRMATION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+        // Private storage outlives the actual detached operation and all file assertions.
+        // 私有存储比实际分离操作及全部文件断言存活更久。
+        let storage = tempfile::tempdir().expect("private detached persistence root");
+        // Only this explicitly installed destination may receive the real configuration save.
+        // 仅此明确安装目标可以接收真实配置保存。
+        let destination = storage.path().join("owned-policy.json");
+        // A separate owned copy survives destruction of the outer task-local scope.
+        // 独立拥有副本跨外层任务局部作用域销毁存续。
+        let write_destination = destination.clone();
+        // Entry notification proves the service task acquired its actual management guard before cancellation.
+        // 入场通知证明取消之前服务任务取得了实际管理守卫。
+        let (entered_sender, entered_receiver) = tokio::sync::oneshot::channel();
+        // The real write is delayed until the caller and its outer task-local scope are gone.
+        // 真实写入延迟至调用方及其外层任务局部作用域消失之后。
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel();
+        // Completion carries the actual retained destination after successful real persistence.
+        // 完成通知在真实持久化成功之后携带实际保留目标。
+        let (finished_sender, finished_receiver) = tokio::sync::oneshot::channel();
+        // Scope the future inside its own spawned caller; Tokio peer tasks do not inherit a parent's task-local value.
+        // 在其自身派生调用方内设置协程作用域；Tokio 其他任务不继承父任务局部值。
+        let waiter = tokio::spawn(
+            crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH
+                .scope(destination.clone(), async move {
+                    run_luaskills_management_owned("private detached persistence", move || async move {
+                        entered_sender.send(()).map_err(|_| String::from("entry receiver closed"))?;
+                        release_receiver.await.map_err(|_| String::from("release sender closed"))?;
+                        // Prove the destination before invoking the writer so an old defective implementation cannot touch user files.
+                        // 调用写入器之前证明目标，避免旧缺陷实现触及用户文件。
+                        let actual = crate::tests::provider_configuration_persistence_scope::current_path();
+                        if actual.as_ref() != Some(&write_destination) {
+                            return Err(String::from("Owned management task lost its exact private save destination."));
+                        }
+                        // This unique harmless membership makes the actual saved document independently identifiable.
+                        // 此唯一无害成员关系使实际保存文档可以独立识别。
+                        let mut configuration = vulcan_provider_config::config::ProviderConfigurationFile::default();
+                        configuration.luaskills.disabled_vulcan_plugins.insert(String::from("owned-scope-proof"));
+                        // Use the same transaction and bounded atomic writer as the production persistence path.
+                        // 使用与生产持久化路径相同的事务及受限原子写入器。
+                        let transaction = crate::service_state_access::begin_provider_configuration_transaction().await;
+                        transaction.persist(&configuration, "private detached persistence")?;
+                        finished_sender.send(actual).map_err(|_| String::from("completion receiver closed"))?;
+                        Ok(())
+                    }).await
+                }),
+        );
+        tokio::time::timeout(CONFIRMATION_WAIT, entered_receiver)
+            .await
+            .expect("owned task must enter")
+            .expect("actual entry notification");
+        waiter.abort();
+        assert!(
+            waiter
+                .await
+                .expect_err("outer observer is cancelled")
+                .is_cancelled()
+        );
+        release_sender
+            .send(())
+            .expect("actual owner remains alive after observer cancellation");
+        assert_eq!(
+            tokio::time::timeout(CONFIRMATION_WAIT, finished_receiver)
+                .await
+                .expect("actual private persistence must finish")
+                .expect("actual completion notification"),
+            Some(destination.clone())
+        );
+        // Parse the actual file produced by the real writer rather than counting a callback or trusting a path projection.
+        // 解析真实写入器产出的实际文件，不计数回调或信任路径投影。
+        let saved: vulcan_provider_config::config::ProviderConfigurationFile =
+            serde_json::from_slice(
+                &std::fs::read(&destination).expect("actual private persisted file"),
+            )
+            .expect("actual private configuration document");
+        assert!(
+            saved
+                .luaskills
+                .disabled_vulcan_plugins
+                .contains("owned-scope-proof")
+        );
+        assert!(crate::tests::provider_configuration_persistence_scope::current_path().is_none());
     }
 
     /// Verifies an aborted RPC waiter cannot release a live management transaction.

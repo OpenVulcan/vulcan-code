@@ -58,6 +58,9 @@ pub enum McpRuntimeServerStatus {
     /// Server exhausted its bounded automatic retries and requires an explicit lifecycle action.
     /// 服务器已耗尽有限自动重试，需要显式生命周期操作才能恢复。
     Failed,
+    /// Tool admission is withdrawn while the original transport cleanup is still pending.
+    /// 原传输清理尚未完成，工具入场已经撤销。
+    Stopping,
     /// Server task completed host-requested transport teardown and will not reconnect.
     /// 服务器任务已完成宿主请求的传输拆除，且不会重新连接。
     Stopped,
@@ -73,6 +76,7 @@ impl McpRuntimeServerStatus {
             Self::Connected => "在线",
             Self::Disconnected => "离线",
             Self::Failed => "失败",
+            Self::Stopping => "停止中",
             Self::Stopped => "已停止",
         }
     }
@@ -228,6 +232,7 @@ impl McpRuntimeServerSnapshot {
             }
             McpRuntimeServerStatus::Disabled
             | McpRuntimeServerStatus::Failed
+            | McpRuntimeServerStatus::Stopping
             | McpRuntimeServerStatus::Stopped => &self.tools,
         }
     }
@@ -320,6 +325,9 @@ impl McpRuntimeServerDiagnostic {
             }
             McpRuntimeServerStatus::Failed => {
                 format!("MCP 服务器失败 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::Stopping => {
+                format!("MCP 服务器停止中 · {}", self.server_name())
             }
             McpRuntimeServerStatus::Stopped => {
                 format!("MCP 服务器已停止 · {}", self.server_name())

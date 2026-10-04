@@ -62,6 +62,9 @@ const MENU_QUIT_SERVICE: &str = "quit-service";
 /// Shared tray-owned service handles retained for menu actions.
 /// 托盘持有的共享服务句柄，供菜单动作使用。
 struct TrayServiceHandles {
+    /// The exact service owner retained across every shutdown worker and native event.
+    /// 跨全部关闭工作器及原生事件保留的精确服务所有者。
+    service: Arc<HeadlessService>,
     /// Shared service state used by the shutdown coordinator.
     /// 关闭协调器使用的共享服务状态。
     state: vulcan_service_kernel::SharedServiceBridgeState,
@@ -76,8 +79,10 @@ struct TrayServiceHandles {
 /// Runs the service with a desktop tray and no workbench window.
 /// 运行带桌面托盘、无工作台窗口的服务。
 pub fn run_with_tray() {
+    // The original service owner shared by the event loop and its nonblocking shutdown worker.
+    // 事件循环及其非阻塞关闭工作器共享的原服务所有者。
     let service = match HeadlessService::start() {
-        Ok(Some(service)) => service,
+        Ok(Some(service)) => Arc::new(service),
         Ok(None) => {
             eprintln!("[vulcan-code-service] another service already owns this data directory");
             return;
@@ -89,7 +94,10 @@ pub fn run_with_tray() {
             std::process::exit(1);
         }
     };
+    // Menu state and worker ownership both derive from this exact service instance.
+    // 菜单状态及工作器所有权均来自此精确服务实例。
     let handles = TrayServiceHandles {
+        service: Arc::clone(&service),
         state: service.headless_state(),
         bridge_failure: service.http_bridge_failure_slot(),
         shutdown_in_progress: Arc::new(AtomicBool::new(false)),
@@ -504,42 +512,61 @@ fn quit_service(state: &TrayServiceHandles, proxy: &EventLoopProxy<TrayEvent>) {
         return;
     }
     tracing::info!("[vulcan-code-service] tray quit requested");
-    let worker_state = Arc::clone(&state.state);
+    // Clone the original owner, ensuring its capture outlives the worker and its completion event.
+    // 克隆原所有者，保证其采集生命周期覆盖工作器及完成事件。
+    let worker_service = Arc::clone(&state.service);
+    // The original flag continues to suppress duplicate quit requests during the bounded drain.
+    // 原标志继续在有界排空期间抑制重复退出请求。
     let worker_flag = Arc::clone(&state.shutdown_in_progress);
+    // Return the concrete result to the same native event loop without blocking its thread.
+    // 将具体结果返回同原生事件循环，不阻塞其线程。
     let proxy = proxy.clone();
+    // The sole OS worker owns the complete native shutdown and diagnostic acknowledgement boundary.
+    // 唯一系统工作器拥有完整原生关闭及诊断回执边界。
     let spawned = std::thread::Builder::new()
         .name(String::from("vulcan-tray-shutdown"))
         .spawn(move || {
-            tracing::info!("[vulcan-code-service] tray drain started");
-            match vulcan_service_kernel::service_prepare_for_app_shutdown(&worker_state) {
-                Ok(_) => {
-                    if let Err(error) =
-                        vulcan_service_kernel::remove_owned_webui_service_discovery(&worker_state)
-                    {
-                        tracing::error!("[vulcan-code-service] discovery cleanup failed: {error}");
-                    }
-                    let _ = proxy.send_event(TrayEvent::ShutdownComplete);
-                }
-                Err(error) => {
-                    let recovery =
-                        vulcan_service_kernel::service_resume_after_failed_app_shutdown(&worker_state)
-                            .err();
-                    worker_flag.store(false, Ordering::Release);
-                    let message = match recovery {
-                        Some(recovery_error) => format!(
-                            "Shutdown failed: {error} Admission recovery also failed: {recovery_error}"
-                        ),
-                        None => format!("Shutdown failed: {error}"),
-                    };
-                    let _ = proxy.send_event(TrayEvent::ShutdownFailed(message));
-                }
-            }
+            let _ = proxy.send_event(run_shutdown_worker(&worker_service, &worker_flag));
         });
     if let Err(error) = spawned {
         state.shutdown_in_progress.store(false, Ordering::Release);
         report_tray_failure(&format!("Cannot start shutdown coordinator: {error}"));
     }
 }
+
+/// Close the same service owner on the worker and return the event after capture settlement.
+/// 在工作线程关闭同服务所有者，并在采集收口后返回事件。
+/// `service` is the original owner; `shutdown_in_progress` resets only on business shutdown failure.
+/// `service` 是原所有者；`shutdown_in_progress` 仅在业务关闭失败时重置。
+/// Return ShutdownComplete after the owner boundary, or the actual business failure.
+/// 所有者边界结束后返回 ShutdownComplete，否则返回实际业务失败。
+fn run_shutdown_worker(service: &HeadlessService, shutdown_in_progress: &AtomicBool) -> TrayEvent {
+    tracing::info!("[vulcan-code-service] tray drain started");
+    match service.shutdown() {
+        Ok(_) => {
+            // Discovery cleanup uses this exact service state after its shutdown and capture boundary.
+            // 发现清理在关闭及采集边界结束后使用此精确服务状态。
+            let state = service.headless_state();
+            if let Err(error) = vulcan_service_kernel::remove_owned_webui_service_discovery(&state)
+            {
+                tracing::error!("[vulcan-code-service] discovery cleanup failed: {error}");
+            }
+            TrayEvent::ShutdownComplete
+        }
+        Err(error) => {
+            // HeadlessService owns the admission-recovery decision; never perform a second attempt.
+            // HeadlessService 拥有准入恢复决定；绝不执行第二次尝试。
+            shutdown_in_progress.store(false, Ordering::Release);
+            TrayEvent::ShutdownFailed(format!("Shutdown failed: {error}"))
+        }
+    }
+}
+
+/// Real owner/capture closure cases isolated from process-global subscriber state.
+/// 与进程级订阅状态隔离的真实所有者及采集关闭场景。
+#[cfg(all(test, feature = "test-support"))]
+#[path = "tray/shutdown_tests.rs"]
+mod shutdown_tests;
 
 #[cfg(test)]
 mod tests {

@@ -16,6 +16,7 @@ import { useI18n, formatMessage, type Translate } from "@/i18n"
 function connectionLabels(t: Translate): Record<McpConnectionStatus, string> { return {
   disabled: t("settings.mcp.disabled"), connecting: t("settings.mcp.connecting"), connected: t("settings.mcp.connected"),
   disconnected: t("settings.mcp.disconnected"), failed: t("settings.mcp.failed"), stopped: t("settings.mcp.stopped"),
+  stopping: t("settings.mcp.stopping"),
 } }
 
 // McpSettingsArea reads the live Agent catalog and scopes diagnostics to the selected server.

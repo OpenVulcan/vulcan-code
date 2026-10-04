@@ -21,8 +21,10 @@ static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Returns
 /// 返回值
-/// Returns success after publication or a diagnostic that leaves the old target untouched.
-/// 发布成功后返回成功；失败诊断保证旧目标不受影响。
+/// Returns success after publication; directory synchronization failure can occur after replacement.
+/// 发布后返回成功；目录同步失败可能发生在替换之后。
+/// Recovery-sensitive callers must retain their intended bytes instead of assuming every error precedes publication.
+/// 需要恢复的调用方必须保留期望字节，不能假定全部错误都发生在发布前。
 pub(crate) fn write_file_atomically(target: &Path, contents: &[u8]) -> Result<(), String> {
     let parent = target
         .parent()

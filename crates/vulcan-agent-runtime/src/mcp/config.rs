@@ -876,6 +876,49 @@ mod tests {
         );
     }
 
+    /// Later lookup values cannot alter a previously resolved launch projection.
+    /// 后续查找值不能改变先前已经解析的启动投影。
+    /// Both lookups are injected fixtures; this test does not mutate the Rust host environment.
+    /// 两次查找均为注入夹具；此测试不修改 Rust 宿主环境。
+    #[test]
+    fn launch_capture_resolves_passthrough_once_per_original_projection() {
+        // The original resolved map is the exact explicit input subsequently passed to native launch.
+        // 原解析映射是随后传入原生启动的精确显式输入。
+        let original = McpServerConfig::resolved_env_with_lookup(
+            &BTreeMap::new(),
+            &[String::from("PASSTHROUGH_SECRET")],
+            |_| Some(String::from("original-host-lookup")),
+        );
+        let later = McpServerConfig::resolved_env_with_lookup(
+            &BTreeMap::new(),
+            &[String::from("PASSTHROUGH_SECRET")],
+            |_| Some(String::from("later-host-lookup")),
+        );
+        assert_eq!(original["PASSTHROUGH_SECRET"], "original-host-lookup");
+        assert_eq!(later["PASSTHROUGH_SECRET"], "later-host-lookup");
+        let mut server = sample_server(McpTransportKind::Stdio);
+        if let McpServerTransportConfig::Stdio {
+            env,
+            env_passthrough,
+            ..
+        } = &mut server.transport
+        {
+            *env = original;
+            env_passthrough.clear();
+        }
+        let passed = server.launch_spec().expect("original explicit projection");
+        if let McpServerTransportConfig::Stdio { env, .. } = &mut server.transport {
+            *env = later;
+        }
+        assert!(matches!(passed, McpTransportLaunchSpec::Stdio { env, .. }
+            if env["PASSTHROUGH_SECRET"] == "original-host-lookup"));
+        assert!(
+            matches!(server.launch_spec().expect("separate later projection"),
+            McpTransportLaunchSpec::Stdio { env, .. }
+            if env["PASSTHROUGH_SECRET"] == "later-host-lookup")
+        );
+    }
+
     /// Verifies every debug and endpoint-summary surface excludes resolved credential values and sensitive URL components.
     /// 验证每个调试与端点摘要能力面均排除已解析凭据值及敏感 URL 组成部分。
     #[test]
