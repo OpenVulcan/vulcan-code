@@ -1288,12 +1288,14 @@ async fn validate_and_install_retained(
         .map_err(|error| error.to_string())
 }
 
-/// Execute the existing disabled-plugin update through immutable preparation and the original durable selection.
-/// 经不可变准备及原持久选择，执行既有已停用插件更新。
+/// Execute one approved local plugin update through immutable preparation and the original durable selection.
+/// 经不可变准备及原持久选择，执行单个已批准本地插件更新。
 /// App/state own the sole service publisher; inputs are the explicitly approved local package request.
 /// app/state 拥有唯一服务发布器；输入为已明确批准的本地插件包请求。
-/// Returns the committed catalog projection; any failure retains its request and never renames old package directories.
-/// 返回已提交目录投影；任何失败均保留请求，绝不重命名旧插件包目录。
+/// Return the committed catalog projection; after reservation, failures retain the original owner and request.
+/// 返回已提交目录投影；预留成功后的失败保留原所有者及请求。
+/// Earlier admission failures create no reservation; old package directories are never renamed.
+/// 更早的入场失败不创建预留；绝不重命名旧插件包目录。
 pub(super) async fn update(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,

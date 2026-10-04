@@ -137,8 +137,8 @@ export interface PluginUpdateDrainDiagnostics {
   // predecessorGeneration is the original predecessor route.
   // predecessorGeneration 是原前驱路由。
   predecessorGeneration: string;
-  // drainingGeneration is the exact selected physical generation.
-  // drainingGeneration 是精确选中物理代次。
+  // drainingGeneration is the original catalog drain transition, encoded as an exact decimal string.
+  // drainingGeneration 是原目录排空转换代次，编码为精确十进制字符串。
   drainingGeneration: string;
   // resources is unavailable when the original drain owner cannot be observed.
   // resources 在原排空所有者无法观测时不可用。
