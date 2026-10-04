@@ -93,23 +93,26 @@ public static class IsolatedConsoleSignal {
         return code;
     }
 
-    // Interrupt attaches to only the child console and broadcasts Ctrl-C there.
-    // Interrupt 只附加该子进程的控制台，并在其中广播 Ctrl-C。
+    // Interrupt broadcasts one Ctrl-C to processId's console from the disposable SignalPid sender.
+    // Interrupt 从一次性的 SignalPid 发送器向 processId 的控制台广播一次 Ctrl-C。
+    // processId identifies the caller-owned child; return after sending, without claiming child exit.
+    // processId 标识调用方拥有的子进程；发送后返回，不宣称子进程已经退出。
+    // Native failures throw; the sender retains its attachment and Ctrl-C protection until process exit.
+    // 原生失败抛出异常；发送器保留控制台附加及自身 Ctrl-C 保护直至进程退出。
     public static void Interrupt(int processId) {
         // The invoking PowerShell may already be attached to its own hidden console.
         // 调用方 PowerShell 可能已附加自己的隐藏控制台。
         FreeConsole();
         if (!AttachConsole((uint)processId))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-        try {
-            if (!SetConsoleCtrlHandler(IntPtr.Zero, true))
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-            if (!GenerateConsoleCtrlEvent(0, 0))
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-        } finally {
-            FreeConsole();
-            SetConsoleCtrlHandler(IntPtr.Zero, false);
-        }
+        if (!SetConsoleCtrlHandler(IntPtr.Zero, true))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        // FreeConsole resets control handlers; restoring them here can terminate the sender with its own event.
+        // FreeConsole 会重置控制处理器；此处恢复处理可能使发送器被自身事件终止。
+        // The only caller immediately exits this isolated sender; Windows releases its console then.
+        // 唯一调用方随即退出此隔离发送器，届时由 Windows 释放其控制台。
+        if (!GenerateConsoleCtrlEvent(0, 0))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
     }
 }
 '@
@@ -154,11 +157,26 @@ try {
     $headers = @{ 'x-vulcan-service-token' = $discovery.serviceToken }
     $liveStatus = Invoke-RestMethod -Uri ($discovery.baseUrl + '/v1/service/status') -Headers $headers -TimeoutSec 3
     if ($liveStatus.pid -ne $childPid -or $liveStatus.lifecycle -ne 'ready') { throw 'Core readiness did not match the child' }
+    # The system TCP enum supplies the documented listening state for the Windows connection table.
+    # 系统 TCP 枚举为 Windows 连接表提供文档声明的监听状态。
+    $listeningState = [byte][System.Net.NetworkInformation.TcpState]::Listen
+    # Filter only the declared service port; query failures remain errors, never evidence of closure.
+    # 仅过滤已声明服务端口；查询失败仍是错误，绝不作为关闭证据。
+    $listenerFilter = 'LocalPort = {0} AND State = {1}' -f $discovery.port, $listeningState
+    # Require the actual listener before signalling so an incorrect query cannot pass vacuously after exit.
+    # 发信前要求实际监听者，防止错误查询在退出后以空结果侥幸通过。
+    $ownedListeners = @(Get-CimInstance -Namespace 'root/StandardCimv2' -ClassName 'MSFT_NetTCPConnection' -Filter $listenerFilter -ErrorAction Stop)
+    if ($ownedListeners.Count -eq 0 -or @($ownedListeners | Where-Object OwningProcess -NE $childPid).Count -ne 0) {
+        throw 'Declared Core TCP listener did not belong to the owned child'
+    }
     # Signal generation runs in a hidden helper because Windows broadcasts control events to the sender too.
     # 信号在隐藏辅助进程中生成，因为 Windows 也会把控制事件广播给发送者。
     $sender = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @(
         '-NoProfile', '-File', $PSCommandPath, '-SignalPid', [string]$childPid
     ) -WindowStyle Hidden -Wait -PassThru
+    # Verify the actual sender separately; child shutdown alone does not prove successful sender retirement.
+    # 单独核验实际发送器；仅子进程关闭不能证明发送器成功退役。
+    if ($sender.ExitCode -ne 0) { throw "Ctrl-C sender exited with code $($sender.ExitCode)" }
     if ($ExpectFirstShutdownFailure) {
         Start-Sleep -Milliseconds 1000
         if ($child.HasExited) { throw 'Core exited after an injected shutdown failure' }
@@ -169,18 +187,18 @@ try {
         $sender = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @(
             '-NoProfile', '-File', $PSCommandPath, '-SignalPid', [string]$childPid
         ) -WindowStyle Hidden -Wait -PassThru
+        # The explicitly permitted second signal has its own observable sender exit.
+        # 明确允许的第二次信号拥有独立可观察的发送器退出结果。
+        if ($sender.ExitCode -ne 0) { throw "Ctrl-C sender exited with code $($sender.ExitCode)" }
     }
     if (-not $child.WaitForExit(30000)) { throw 'Core ignored real Ctrl-C for 30 seconds' }
     $child.Refresh()
     $exitCode = [IsolatedConsoleSignal]::ExitCode()
     Write-Output "SIGNAL_DIAGNOSTIC sender=$($sender.ExitCode) hasExited=$($child.HasExited) exitCode=$exitCode"
     if ($exitCode -ne 0) { throw "Core shutdown exit code $exitCode" }
-    $portClosed = $false
-    try {
-        Invoke-WebRequest -Uri ($discovery.baseUrl + '/health') -TimeoutSec 2 | Out-Null
-    } catch {
-        $portClosed = $true
-    }
+    # Inspect the same exact system listener; HTTP errors and timeouts do not establish port closure.
+    # 检查同一精确系统监听者；HTTP 错误及超时不能证明端口关闭。
+    $portClosed = @(Get-CimInstance -Namespace 'root/StandardCimv2' -ClassName 'MSFT_NetTCPConnection' -Filter $listenerFilter -ErrorAction Stop).Count -eq 0
     if (-not $portClosed) { throw 'Core HTTP port remained open after process exit' }
     # A successful drain must revoke the exact discovery generation before process exit.
     # 成功排空必须在进程退出前撤销精确的发现记录代次。
