@@ -673,8 +673,9 @@ fn formal_probe_interruption_preserves_ownership_and_warning() {
         assert_eq!(report.closed_formal_calls, 0);
         fixture
             .manager
-            .clear_cleanup_diagnostics_if_fully_drained("hook-plugin")
-            .expect("inspect real ownership");
+            .drain_plugin_sessions("hook-plugin")
+            .await
+            .expect("normal retry cannot clear live ownership");
         assert!(
             fixture
                 .manager
@@ -688,10 +689,13 @@ fn formal_probe_interruption_preserves_ownership_and_warning() {
         fixture.events.release();
         fixture.empty().await;
         assert!(original.lock().expect("original checkpoint").retired);
+        // Normal drain reconciles the original finite warning after actual retirement.
+        // 正常排空在实际退役后对账原有限警告。
         fixture
             .manager
-            .clear_cleanup_diagnostics_if_fully_drained("hook-plugin")
-            .expect("clear completed warning");
+            .drain_plugin_sessions("hook-plugin")
+            .await
+            .expect("normal drain reconciles completed warning");
         assert!(
             !fixture
                 .manager

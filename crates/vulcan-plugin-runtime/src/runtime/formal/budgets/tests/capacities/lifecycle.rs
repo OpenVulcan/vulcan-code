@@ -128,8 +128,8 @@ async fn formal_capacity_lifecycle_disable_and_reenable_preserve_callback_order(
         .probe_plugin("hook-plugin")
         .await
         .expect("activation probe");
-    // Successful recovery acknowledges the old callback diagnostic through the real lifecycle projection.
-    // 成功恢复通过真实生命周期投影确认旧回调诊断。
+    // Ordinary activation restores guarantees without acknowledging the real prior callback failure.
+    // 普通启用恢复保证，不确认真实的先前回调失败。
     let enabled = fixture
         .manager
         .finish_lifecycle_transition(
@@ -150,7 +150,7 @@ async fn formal_capacity_lifecycle_disable_and_reenable_preserve_callback_order(
             .expect("actual recovered cleanup observation")
             .plugins["hook-plugin"]
             .diagnostics
-            .is_empty(),
+            .contains(&callback_error.to_string()),
         "{:?}",
         fixture
             .manager

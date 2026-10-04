@@ -755,7 +755,7 @@ impl VulcanPluginRuntimeManager {
                         "Formal invocation {} has not physically retired; its identity and capacity remain retained.",
                         call.id
                     );
-                    self.record_cleanup_failure(&call.plugin.id, diagnostic.clone())?;
+                    self.record_cleanup_pending(&call.plugin.id, diagnostic.clone())?;
                     observation.pending(diagnostic);
                     break;
                 }

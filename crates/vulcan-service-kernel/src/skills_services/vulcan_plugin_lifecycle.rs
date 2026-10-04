@@ -16,6 +16,121 @@ pub(super) use predecessor_publication::{
 #[cfg(test)]
 mod owner_drain_tests;
 
+/// Temporary orchestration evidence preserves diagnostic origin without another persistent ledger.
+/// 临时编排证据保留诊断来源，不建立另一个持久账本。
+#[derive(Clone)]
+enum CleanupEvidenceItem {
+    /// Runtime has already classified and recorded this unchanged public message.
+    /// 运行时已分类并登记此未变公开消息。
+    RuntimeRecorded(String),
+    /// External cleanup failed and must enter the runtime's unknown Failure authority.
+    /// 外部清理失败，必须进入运行时未知 Failure 权威。
+    AdditionalFailure(String),
+}
+
+/// One request-local ordered collection projects all messages but publishes only new external failures.
+/// 单个请求局部有序集合投影全部消息，仅发布新的外部失败。
+#[derive(Clone, Default)]
+struct CleanupEvidence {
+    /// Original messages retain their actual producing boundary across compensation.
+    /// 原消息跨补偿保留实际生产边界。
+    entries: Vec<CleanupEvidenceItem>,
+}
+
+impl CleanupEvidence {
+    /// Preserve result's already-recorded lifecycle message; context prefixes only an accounting error.
+    /// 保留 result 已登记生命周期消息；context 仅为记账错误加前缀。
+    /// Return request-local evidence without reclassifying the runtime producer or dropping real failures.
+    /// 返回请求局部证据，不重新分类运行时生产者或丢弃真实失败。
+    fn from_recorded_lifecycle(
+        result: Result<Option<String>, vulcan_plugin_runtime::VulcanPluginRuntimeError>,
+        context: &str,
+    ) -> Self {
+        match result {
+            Ok(None) => Self::default(),
+            Ok(Some(message)) => Self {
+                entries: vec![CleanupEvidenceItem::RuntimeRecorded(message)],
+            },
+            Err(error) => Self::additional(vec![format!("{context}：{error}")]),
+        }
+    }
+
+    /// Preserve result's recorded report or its unrecorded error; return origin-bearing evidence.
+    /// 保留 result 已登记报告或未登记错误；返回携带来源的证据。
+    fn from_runtime(
+        result: Result<
+            vulcan_plugin_runtime::VulcanPluginDrainReport,
+            vulcan_plugin_runtime::VulcanPluginRuntimeError,
+        >,
+    ) -> Self {
+        match result {
+            Ok(report) => Self {
+                entries: report
+                    .failures
+                    .into_iter()
+                    .map(CleanupEvidenceItem::RuntimeRecorded)
+                    .collect(),
+            },
+            Err(error) => Self::additional(vec![error.to_string()]),
+        }
+    }
+
+    /// Bind messages from a non-runtime producer as additional failures; return request-local evidence.
+    /// 将非运行时生产者的 messages 绑定为额外失败；返回请求局部证据。
+    fn additional(messages: Vec<String>) -> Self {
+        Self {
+            entries: messages
+                .into_iter()
+                .map(CleanupEvidenceItem::AdditionalFailure)
+                .collect(),
+        }
+    }
+
+    /// Append message from an external failure; return no value and retain its origin.
+    /// 追加外部失败的 message；不返回值并保留来源。
+    fn push(&mut self, message: String) {
+        self.entries
+            .push(CleanupEvidenceItem::AdditionalFailure(message));
+    }
+
+    /// Append other in original order without changing classifications; return no value.
+    /// 按原顺序追加 other，不改变分类；不返回值。
+    fn extend(&mut self, other: Self) {
+        self.entries.extend(other.entries);
+    }
+
+    /// Return whether every cleanup producer completed without retained evidence.
+    /// 返回是否全部清理生产者已完成且无保留证据。
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Project all original messages with separator for unchanged compensation errors; return text.
+    /// 使用 separator 投影全部原消息以保持补偿错误；返回文本。
+    fn join(&self, separator: &str) -> String {
+        self.entries
+            .iter()
+            .map(|entry| match entry {
+                CleanupEvidenceItem::RuntimeRecorded(message)
+                | CleanupEvidenceItem::AdditionalFailure(message) => message.as_str(),
+            })
+            .collect::<Vec<_>>()
+            .join(separator)
+    }
+
+    /// Consume this collection and return only unrecorded failures for the unchanged runtime finish API.
+    /// 消费此集合，仅返回尚未登记的失败给未变运行时 finish 接口。
+    fn additional_failures(self) -> Vec<String> {
+        self.entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                CleanupEvidenceItem::RuntimeRecorded(_) => None,
+                CleanupEvidenceItem::AdditionalFailure(message) => Some(message),
+            })
+            .collect()
+    }
+}
+
 /// Publish one original native control under the real service slot lock, preserving its first host issuer.
 /// 在真实服务槽锁内发布单个原原生控制，保留其首次宿主签发者。
 /// state owns the actual bridge, native is its ready original, and catalog is that original source snapshot.
@@ -422,7 +537,7 @@ async fn prepare_enable_transition(
                 runtime,
                 transition,
                 &transition.previous_policy,
-                cleanup_report.failures.clone(),
+                CleanupEvidence::from_runtime(Ok(cleanup_report.clone())),
             )?;
             return Err(format!(
                 "Vulcan 插件 `{}` 仍有未清理资源：{}",
@@ -456,19 +571,24 @@ async fn prepare_enable_transition(
     begin_plugin_mcp_drain(state, &transition.plugin_id).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
-            restore_previous_projection(state, runtime, transition, Vec::new()),
+            restore_previous_projection(state, runtime, transition, CleanupEvidence::default()),
         )
     })?;
     if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
         return Err(append_rollback_error(
             format!("重新启用前 MCP 排空失败：{error}"),
-            restore_previous_projection(state, runtime, transition, vec![error]),
+            restore_previous_projection(
+                state,
+                runtime,
+                transition,
+                CleanupEvidence::additional(vec![error]),
+            ),
         ));
     }
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin hook 同步失败：{error}"),
-            restore_previous_projection(state, runtime, transition, Vec::new()),
+            restore_previous_projection(state, runtime, transition, CleanupEvidence::default()),
         )
     })?;
     if let Err(error) = runtime
@@ -555,11 +675,12 @@ async fn prepare_disable_transition(
     begin_plugin_owner_mcp_drain(state, &transition.plugin_id).map_err(|error| {
         append_rollback_error(
             format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
-            restore_previous_projection(state, runtime, transition, Vec::new()),
+            restore_previous_projection(state, runtime, transition, CleanupEvidence::default()),
         )
     })?;
     if let Err(error) = synchronize_transient_hooks(state, runtime) {
-        let rollback = restore_previous_projection(state, runtime, transition, Vec::new());
+        let rollback =
+            restore_previous_projection(state, runtime, transition, CleanupEvidence::default());
         // Restore the gate to the immutable pre-transition policy instead of reopening it blindly.
         // 按不可变的转换前策略恢复闸门，不能无条件重新开放。
         let gate = if transition.previous_enabled {
@@ -660,37 +781,40 @@ async fn commit_enable_transition(
 ) -> Result<(), String> {
     // final_catalog publishes the prevalidated target policy without rereading mutable configuration.
     // final_catalog 使用预校验目标策略发布，而不重新读取可变配置。
-    let final_catalog =
-        match finish_transition(runtime, transition, &transition.target_policy, Vec::new()) {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                // cleanup_failures compensates while the snapshot still authorizes EnableRollback.
-                // cleanup_failures 在快照仍允许 EnableRollback 时完成补偿。
-                let mut cleanup_failures =
-                    drain_prepared_transition_mcp(&candidate_mcp_runtime, &transition.plugin_id)
-                        .await;
-                cleanup_failures
-                    .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
-                // persistence_rollback restores the durable baseline before catalog restoration.
-                // persistence_rollback 在目录恢复前还原持久化基线。
-                let persistence_rollback = persist_transition_enabled_state(
-                    state,
-                    transition,
-                    transition.previous_enabled,
-                    "回滚 Vulcan 插件状态失败",
-                )
-                .await;
-                if let Err(rollback_error) = persistence_rollback {
-                    return Err(format!(
-                        "Vulcan Plugin 启用最终发布失败：{error}；配置回滚失败：{rollback_error}"
-                    ));
-                }
-                return Err(append_rollback_error(
-                    format!("Vulcan Plugin 启用最终发布失败：{error}"),
-                    restore_previous_projection(state, runtime, transition, cleanup_failures),
+    let final_catalog = match finish_transition(
+        runtime,
+        transition,
+        &transition.target_policy,
+        CleanupEvidence::default(),
+    ) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            // cleanup_failures compensates while the snapshot still authorizes EnableRollback.
+            // cleanup_failures 在快照仍允许 EnableRollback 时完成补偿。
+            let mut cleanup_failures =
+                drain_prepared_transition_mcp(&candidate_mcp_runtime, &transition.plugin_id).await;
+            cleanup_failures
+                .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
+            // persistence_rollback restores the durable baseline before catalog restoration.
+            // persistence_rollback 在目录恢复前还原持久化基线。
+            let persistence_rollback = persist_transition_enabled_state(
+                state,
+                transition,
+                transition.previous_enabled,
+                "回滚 Vulcan 插件状态失败",
+            )
+            .await;
+            if let Err(rollback_error) = persistence_rollback {
+                return Err(format!(
+                    "Vulcan Plugin 启用最终发布失败：{error}；配置回滚失败：{rollback_error}"
                 ));
             }
-        };
+            return Err(append_rollback_error(
+                format!("Vulcan Plugin 启用最终发布失败：{error}"),
+                restore_previous_projection(state, runtime, transition, cleanup_failures),
+            ));
+        }
+    };
     // activation_error joins atomic hook replacement and persistent runtime cold initialization.
     // activation_error 合并原子 Hook 替换与持久运行时冷初始化错误。
     let activation_error =
@@ -788,22 +912,24 @@ async fn commit_disable_transition(
     begin_plugin_mcp_drain(state, &transition.plugin_id)?;
     // cleanup_failures retains non-fatal drain and lifecycle diagnostics in the final runtime state.
     // cleanup_failures 在最终运行时状态中保留非致命排空与生命周期诊断。
-    let mut cleanup_failures = match runtime.drain_plugin_sessions(&transition.plugin_id).await {
-        Ok(report) => report.failures,
-        Err(error) => vec![error.to_string()],
-    };
+    let mut cleanup_failures =
+        CleanupEvidence::from_runtime(runtime.drain_plugin_sessions(&transition.plugin_id).await);
     if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
         cleanup_failures.push(format!("插件 MCP 清理失败：{error}"));
     }
-    if let Err(error) = runtime
-        .invoke_lifecycle(
-            &transition.plugin_id,
-            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Disable,
-        )
-        .await
-    {
-        cleanup_failures.push(format!("插件停用生命周期回调失败：{error}"));
-    }
+    // This exact existing prefix is shared by recording and accounting-error projection.
+    // 此精确既有前缀由记账及记账错误投影共享。
+    let diagnostic_context = "插件停用生命周期回调失败";
+    cleanup_failures.extend(CleanupEvidence::from_recorded_lifecycle(
+        runtime
+            .invoke_lifecycle_for_cleanup(
+                &transition.plugin_id,
+                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Disable,
+                diagnostic_context,
+            )
+            .await,
+        diagnostic_context,
+    ));
     if transition.plugin_id == "vulcan-browser" {
         // Browser cleanup is part of the disable transaction and must be observed before the
         // final catalog publication, otherwise a failed retirement is reported as plain Disabled.
@@ -917,7 +1043,8 @@ async fn rollback_prepared_transition(
         VulcanPluginTargetState::Disabled => {
             // No disable callback ran before persistence, so only catalog and hooks need restoration.
             // 持久化前尚未执行停用回调，因此只需恢复目录与 Hook。
-            let result = restore_previous_projection(state, runtime, transition, Vec::new());
+            let result =
+                restore_previous_projection(state, runtime, transition, CleanupEvidence::default());
             let gate_result = if transition.previous_enabled {
                 finish_plugin_owner_mcp_drain(state, &transition.plugin_id).await
             } else {
@@ -969,22 +1096,24 @@ async fn rollback_finalized_enable_to_policy(
     synchronize_transient_hooks(state, runtime)?;
     // cleanup_failures records whether the real disable compensation was complete.
     // cleanup_failures 记录真实停用补偿是否完整。
-    let mut cleanup_failures = match runtime.drain_plugin_sessions(&transition.plugin_id).await {
-        Ok(report) => report.failures,
-        Err(error) => vec![error.to_string()],
-    };
+    let mut cleanup_failures =
+        CleanupEvidence::from_runtime(runtime.drain_plugin_sessions(&transition.plugin_id).await);
     if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
         cleanup_failures.push(format!("插件 MCP 清理失败：{error}"));
     }
-    if let Err(error) = runtime
-        .invoke_lifecycle(
-            &transition.plugin_id,
-            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Disable,
-        )
-        .await
-    {
-        cleanup_failures.push(format!("插件启用回滚的停用回调失败：{error}"));
-    }
+    // The compensation keeps its original prefix and the runtime's actual recorded origin.
+    // 补偿保留原前缀及运行时实际登记来源。
+    let diagnostic_context = "插件启用回滚的停用回调失败";
+    cleanup_failures.extend(CleanupEvidence::from_recorded_lifecycle(
+        runtime
+            .invoke_lifecycle_for_cleanup(
+                &transition.plugin_id,
+                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::Disable,
+                diagnostic_context,
+            )
+            .await,
+        diagnostic_context,
+    ));
     // incomplete_cleanup is reported even though the disabled warning projection is published.
     // incomplete_cleanup 即使已经发布停用告警投影也必须上报。
     let incomplete_cleanup = cleanup_failures.clone();
@@ -1033,7 +1162,7 @@ async fn rollback_disable(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
-    cleanup_failures: Vec<String>,
+    cleanup_failures: CleanupEvidence,
     finalized: bool,
 ) -> Result<(), String> {
     if !transition.previous_enabled {
@@ -1165,35 +1294,39 @@ async fn rollback_disable(
     }
     // recovered_catalog returns the plugin to its exact previous enabled projection.
     // recovered_catalog 把插件恢复到精确的原始启用投影。
-    let recovered_catalog =
-        match finish_transition(runtime, transition, &transition.previous_policy, Vec::new()) {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                // cleanup_failures compensates the reverse enable while it remains in Enabling.
-                // cleanup_failures 在反向启用仍处于 Enabling 时进行补偿。
-                let mut cleanup_failures =
-                    drain_prepared_transition_mcp(&candidate_mcp, &transition.plugin_id).await;
-                cleanup_failures
-                    .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
-                persist_transition_enabled_state(
+    let recovered_catalog = match finish_transition(
+        runtime,
+        transition,
+        &transition.previous_policy,
+        CleanupEvidence::default(),
+    ) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            // cleanup_failures compensates the reverse enable while it remains in Enabling.
+            // cleanup_failures 在反向启用仍处于 Enabling 时进行补偿。
+            let mut cleanup_failures =
+                drain_prepared_transition_mcp(&candidate_mcp, &transition.plugin_id).await;
+            cleanup_failures
+                .extend(compensate_failed_enable(state, runtime, &transition.plugin_id).await);
+            persist_transition_enabled_state(
+                state,
+                transition,
+                transition.target.is_enabled(),
+                "恢复 Vulcan 插件停用状态失败",
+            )
+            .await?;
+            return Err(append_rollback_error(
+                format!("停用回滚的启用发布失败：{error}"),
+                finish_transition_and_sync(
                     state,
+                    runtime,
                     transition,
-                    transition.target.is_enabled(),
-                    "恢复 Vulcan 插件停用状态失败",
-                )
-                .await?;
-                return Err(append_rollback_error(
-                    format!("停用回滚的启用发布失败：{error}"),
-                    finish_transition_and_sync(
-                        state,
-                        runtime,
-                        transition,
-                        &transition.target_policy,
-                        cleanup_failures,
-                    ),
-                ));
-            }
-        };
+                    &transition.target_policy,
+                    cleanup_failures,
+                ),
+            ));
+        }
+    };
     // activation_error joins recovered Hook replacement and persistent runtime initialization.
     // activation_error 合并恢复后的 Hook 替换与持久运行时初始化错误。
     let activation_error =
@@ -1278,32 +1411,36 @@ async fn compensate_failed_enable(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     plugin_id: &str,
-) -> Vec<String> {
+) -> CleanupEvidence {
     // failures combines lease drain and lifecycle compensation diagnostics.
     // failures 合并租约排空与生命周期补偿诊断。
-    let mut failures = match begin_plugin_mcp_drain(state, plugin_id) {
-        Ok(()) => wait_plugin_mcp_drain(state, plugin_id)
-            .await
-            .err()
-            .into_iter()
-            .collect::<Vec<_>>(),
-        Err(error) => vec![error],
-    };
+    let mut failures =
+        CleanupEvidence::additional(match begin_plugin_mcp_drain(state, plugin_id) {
+            Ok(()) => wait_plugin_mcp_drain(state, plugin_id)
+                .await
+                .err()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            Err(error) => vec![error],
+        });
     // Lua cleanup contributes to the same evidence instead of replacing MCP failures.
     // Lua 清理补充同一证据，不覆盖 MCP 失败。
-    failures.extend(match runtime.drain_plugin_sessions(plugin_id).await {
-        Ok(report) => report.failures,
-        Err(error) => vec![error.to_string()],
-    });
-    if let Err(error) = runtime
-        .invoke_lifecycle(
-            plugin_id,
-            vulcan_plugin_runtime::VulcanPluginLifecycleEvent::EnableRollback,
-        )
-        .await
-    {
-        failures.push(format!("插件启用补偿回调失败：{error}"));
-    }
+    failures.extend(CleanupEvidence::from_runtime(
+        runtime.drain_plugin_sessions(plugin_id).await,
+    ));
+    // Preserve this existing host prefix for both recorded evidence and accounting failures.
+    // 为已登记证据及记账失败保留此既有宿主前缀。
+    let diagnostic_context = "插件启用补偿回调失败";
+    failures.extend(CleanupEvidence::from_recorded_lifecycle(
+        runtime
+            .invoke_lifecycle_for_cleanup(
+                plugin_id,
+                vulcan_plugin_runtime::VulcanPluginLifecycleEvent::EnableRollback,
+                diagnostic_context,
+            )
+            .await,
+        diagnostic_context,
+    ));
     failures
 }
 
@@ -1406,9 +1543,9 @@ async fn prepare_transition_mcp(
 async fn drain_prepared_transition_mcp(
     candidate: &McpRuntimeAccess,
     plugin_id: &str,
-) -> Vec<String> {
+) -> CleanupEvidence {
     if let Err(error) = candidate.begin_plugin_mcp_drain(plugin_id) {
-        return vec![error];
+        return CleanupEvidence::additional(vec![error]);
     }
     match candidate
         .wait_plugin_mcp_drain(
@@ -1417,8 +1554,8 @@ async fn drain_prepared_transition_mcp(
         )
         .await
     {
-        Ok(()) => Vec::new(),
-        Err(error) => vec![format!("候选 MCP 清理失败：{error}")],
+        Ok(()) => CleanupEvidence::default(),
+        Err(error) => CleanupEvidence::additional(vec![format!("候选 MCP 清理失败：{error}")]),
     }
 }
 
@@ -1521,7 +1658,7 @@ fn restore_previous_projection(
     state: &SharedServiceBridgeState,
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
-    cleanup_failures: Vec<String>,
+    cleanup_failures: CleanupEvidence,
 ) -> Result<(), String> {
     finish_transition_and_sync(
         state,
@@ -1549,7 +1686,7 @@ fn finish_transition_and_sync(
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
     policy: &VulcanPluginPolicySnapshot,
-    cleanup_failures: Vec<String>,
+    cleanup_failures: CleanupEvidence,
 ) -> Result<(), String> {
     // catalog is the immutable post-transition surface supplied to Hook replacement.
     // catalog 是提供给 Hook 替换的不可变转换后能力面。
@@ -1768,14 +1905,14 @@ fn finish_transition(
     runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
     transition: &VulcanPluginTransition,
     policy: &VulcanPluginPolicySnapshot,
-    cleanup_failures: Vec<String>,
+    cleanup_failures: CleanupEvidence,
 ) -> Result<Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>, String> {
     runtime
         .finish_lifecycle_transition(
             &transition.plugin_id,
             &policy.disabled_plugin_ids,
             &policy.enabled_plugin_ids,
-            cleanup_failures,
+            cleanup_failures.additional_failures(),
         )
         .map_err(|error| error.to_string())
 }

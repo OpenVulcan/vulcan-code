@@ -2,6 +2,7 @@
 //! 生命周期回收及重新启用保留物理归属和完整配置保证。
 
 use super::*;
+use crate::runtime::drain::CleanupOriginError;
 
 impl ManagedFormalRuntime {
     /// Retire plugin_id's capacities under the caller-held publication gate; return only after all identities are removed.
@@ -13,6 +14,19 @@ impl ManagedFormalRuntime {
         plugin_id: &str,
         _publication: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        self.retire_plugin_capacities_classified(plugin_id, _publication)
+            .map_err(CleanupOriginError::into_runtime_error)
+    }
+
+    /// Retire plugin_id under publication and preserve finite-owner evidence for diagnostic producers.
+    /// 在 publication 下回收 plugin_id，并为诊断生产者保留有限所有者证据。
+    /// Return Pending only for retained members or preparation; every other error remains Failure.
+    /// 仅为保留成员或准备返回 Pending；其他错误均为 Failure。
+    pub(in crate::runtime) fn retire_plugin_capacities_classified(
+        &self,
+        plugin_id: &str,
+        _publication: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), CleanupOriginError> {
         // One lock orders lifecycle intent, unfinished host preparation and native member metadata.
         // 同一锁排序生命周期意图、未完成宿主准备及原生成员元数据。
         let mut registry = self.capacities.lock().map_err(|_| capacity_lock_error())?;
@@ -43,12 +57,39 @@ impl ManagedFormalRuntime {
         plugin_id: &str,
         publication: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        self.prepare_plugin_capacities_classified(plugin_id, publication)
+            .map_err(CleanupOriginError::into_runtime_error)
+    }
+
+    /// Restore plugin_id under publication, retaining the exact prior retirement classification.
+    /// 在 publication 下恢复 plugin_id，保留精确的先前回收分类。
+    /// Activation failures remain Failure; only the prior retirement preflight may return Pending.
+    /// 启用失败仍为 Failure；只有先前回收前置检查可返回 Pending。
+    pub(in crate::runtime) fn prepare_plugin_capacities_classified(
+        &self,
+        plugin_id: &str,
+        publication: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), CleanupOriginError> {
         // A failed prior lifecycle release is retried explicitly by reactivation, never by ordinary admission.
         // 重新启用显式重试此前失败的生命周期释放；普通入场绝不重试。
         let mut registry = self.capacities.lock().map_err(|_| capacity_lock_error())?;
         if registry.retiring_plugins.contains(plugin_id) {
             self.retire_registered_capacities(plugin_id, &mut registry)?;
         }
+        self.prepare_registered_capacities(plugin_id, publication, &mut registry)
+            .map_err(CleanupOriginError::Failure)
+    }
+
+    /// Activate plugin_id using registry under publication; all activation errors remain failures.
+    /// 在 publication 下使用 registry 启用 plugin_id；全部启用错误仍为失败。
+    /// Return after guarantees are restored or original compensation preserves every unfinished identity.
+    /// 在恢复保证或原补偿保留全部未完成身份后返回。
+    fn prepare_registered_capacities(
+        &self,
+        plugin_id: &str,
+        publication: &std::sync::MutexGuard<'_, ()>,
+        registry: &mut CapacityRegistry,
+    ) -> Result<(), VulcanPluginRuntimeError> {
         // Unconfigured purposes remain explicitly lazy and do not allocate metadata during activation.
         // 未配置用途保持明确延迟创建，不在启用期间分配元数据。
         let Some(configured) = registry
@@ -151,7 +192,7 @@ impl ManagedFormalRuntime {
         &self,
         plugin_id: &str,
         registry: &mut CapacityRegistry,
-    ) -> Result<(), VulcanPluginRuntimeError> {
+    ) -> Result<(), CleanupOriginError> {
         // Collect only this exact plugin's semantic owners; other plugin guarantees remain untouched.
         // 仅收集此精确插件的语义所有者；其他插件保证保持不变。
         let keys: Vec<_> = registry
@@ -166,9 +207,9 @@ impl ManagedFormalRuntime {
             // 原生状态继续作为保留成员及物理归属的唯一来源。
             let registration = registry.registrations.get(key).expect("retained capacity");
             if registration.preparing_members != 0 {
-                return Err(VulcanPluginRuntimeError::new(
+                return Err(CleanupOriginError::Pending(VulcanPluginRuntimeError::new(
                     "Plugin capacity retirement still owns unfinished member preparation.",
-                ));
+                )));
             }
             if self
                 .verify_capacity(plugin_id, key.1, registration, &registry.policy.settings)?
@@ -176,9 +217,9 @@ impl ManagedFormalRuntime {
                 .retained_pools
                 != 0
             {
-                return Err(VulcanPluginRuntimeError::new(
+                return Err(CleanupOriginError::Pending(VulcanPluginRuntimeError::new(
                     "Plugin capacity retirement still owns retained member pools.",
-                ));
+                )));
             }
         }
         for key in keys {

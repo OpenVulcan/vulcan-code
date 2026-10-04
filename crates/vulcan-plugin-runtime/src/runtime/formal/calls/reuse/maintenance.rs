@@ -198,7 +198,7 @@ impl VulcanPluginRuntimeManager {
         // Keep the original publication guard until diagnostics are visible, while releasing registry ownership first.
         // 保留原发布守卫直至诊断可见，同时先释放注册表归属。
         for (operation, (domain_id, plugin, message)) in diagnostics {
-            self.record_cleanup_failure_locked(&plugin, message, publication)?;
+            self.record_domain_cleanup_locked(&plugin, message, &domain_id, true, publication)?;
             // Acknowledgement shares this publication gate, so the original failure cannot disappear here.
             // 确认共用此发布门，因此原失败不能在此消失。
             let mut registry = owner.reusable.lock().map_err(|_| calls_error())?;
@@ -429,7 +429,7 @@ impl VulcanPluginRuntimeManager {
             registry.domains.remove(domain_id);
             plugin
         };
-        self.clear_cleanup_diagnostics_locked(&plugin, &publication)
+        self.acknowledge_domain_cleanup_locked(&plugin, domain_id, &publication)
     }
 
     /// Drain exact plugin/controller domains within the frozen shutdown budget; return retained failures and counts.
@@ -466,44 +466,71 @@ impl VulcanPluginRuntimeManager {
         let mut observation = crate::runtime::drain::DrainObservation::default();
         loop {
             self.maintain_reusable_domains(&owner)?;
-            let pending = {
-                let registry = owner.reusable.lock().map_err(|_| calls_error())?;
-                registry
-                    .domains
-                    .iter()
-                    .filter(|(_, domain)| {
-                        plugin.is_none_or(|id| domain.plugin_id == id)
-                            && controller.is_none_or(|id| domain.key.controller == id)
-                    })
-                    .map(|(id, domain)| {
-                        (
-                            id.clone(),
-                            domain.plugin_id.clone(),
-                            domain.preparing
-                                || domain.borrowers > 0
-                                || (domain.pool.is_some() && !domain.pool_retired)
-                                || domain.pending_finalizations,
-                            !domain.failures.is_empty(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            };
-            if pending.iter().all(|(_, _, physical, _)| !physical) || Instant::now() >= deadline {
-                for (id, plugin, physical, failed) in pending {
-                    if physical || failed {
-                        let message = format!(
-                            "Reusable domain {id} retains unfinished cleanup or unacknowledged shutdown failure."
-                        );
-                        self.record_cleanup_failure(&plugin, message.clone())?;
-                        if failed {
-                            observation.failed(message);
-                        } else {
-                            // This branch is reached at the finite deadline with physical work still retained.
-                            // 此分支在有限截止时间到达且物理工作仍保留时进入。
-                            observation.pending(message);
+            // Completed is decided synchronously; the publication guard never crosses an await.
+            // completed 同步决定；发布守卫绝不跨越 await。
+            let completed = {
+                // Publication orders the actual snapshot and its diagnostic write against explicit domain ACK.
+                // publication 将实际快照及其诊断写入与显式域确认排序。
+                let publication = self
+                    .state
+                    .session_registration_gate
+                    .lock()
+                    .map_err(|_| calls_error())?;
+                // Pending freezes the actual domain records while ACK is excluded, releasing the registry before accounting.
+                // pending 在排除确认时固定实际域记录，记账之前释放注册表。
+                let pending = {
+                    let registry = owner.reusable.lock().map_err(|_| calls_error())?;
+                    registry
+                        .domains
+                        .iter()
+                        .filter(|(_, domain)| {
+                            plugin.is_none_or(|id| domain.plugin_id == id)
+                                && controller.is_none_or(|id| domain.key.controller == id)
+                        })
+                        .map(|(id, domain)| {
+                            (
+                                id.clone(),
+                                domain.plugin_id.clone(),
+                                domain.preparing
+                                    || domain.borrowers > 0
+                                    || (domain.pool.is_some() && !domain.pool_retired)
+                                    || domain.pending_finalizations,
+                                !domain.failures.is_empty(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                if pending.iter().all(|(_, _, physical, _)| !physical) || Instant::now() >= deadline
+                {
+                    for (id, plugin, physical, failed) in pending {
+                        if physical || failed {
+                            // Message preserves the original public bytes while typed source selects accounting.
+                            // message 保留原公开字节，由类型化来源选择记账。
+                            let message = format!(
+                                "Reusable domain {id} retains unfinished cleanup or unacknowledged shutdown failure."
+                            );
+                            self.record_domain_cleanup_locked(
+                                &plugin,
+                                message.clone(),
+                                &id,
+                                failed,
+                                &publication,
+                            )?;
+                            if failed {
+                                observation.failed(message);
+                            } else {
+                                // This branch is reached at the finite deadline with physical work still retained.
+                                // 此分支在有限截止时间到达且物理工作仍保留时进入。
+                                observation.pending(message);
+                            }
                         }
                     }
+                    true
+                } else {
+                    false
                 }
+            };
+            if completed {
                 return Ok(observation);
             }
             tokio::time::sleep(OBSERVATION_INTERVAL).await;

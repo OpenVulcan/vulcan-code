@@ -2,6 +2,7 @@
 //! 工具与宿主生命周期回调的共享入场及确认。
 
 use super::*;
+use crate::runtime::drain::CleanupOriginError;
 
 impl VulcanPluginRuntimeManager {
     /// Exclude existing ordinary lifecycle originals before routing is reserved under `registration`.
@@ -324,7 +325,7 @@ impl VulcanPluginRuntimeManager {
         export: String,
         arguments: Value,
         deadline: Instant,
-    ) -> Result<Value, VulcanPluginRuntimeError> {
+    ) -> Result<Value, CleanupOriginError> {
         // Parent identity is required; lifecycle execution cannot silently choose a legacy engine.
         // 父级身份为必需；生命周期执行不能静默选择旧引擎。
         let owner = self.required_formal_owner()?;
@@ -340,7 +341,7 @@ impl VulcanPluginRuntimeManager {
             self.require_routing_publication_locked(&publication, None)?;
             self.validate_formal_plugin(&plugin, scope)?;
             if owner.has_retiring_capacities(&plugin.id)? {
-                owner.prepare_plugin_capacities(&plugin.id, &publication)?;
+                owner.prepare_plugin_capacities_classified(&plugin.id, &publication)?;
             }
         }
         // A lifecycle callback has fresh state and no tool or Hook business finalizer.
@@ -354,7 +355,9 @@ impl VulcanPluginRuntimeManager {
             security_partition: format!("lifecycle:{}:{}", scope.as_str(), plugin.generation),
             deadline,
         };
-        self.invoke_owned_formal_call(owner, plugin, input).await
+        self.invoke_owned_formal_call(owner, plugin, input)
+            .await
+            .map_err(CleanupOriginError::Failure)
     }
 
     /// Admit bounded frozen input using the sole runtime and preserve actual work independently of waiting.

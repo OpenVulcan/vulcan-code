@@ -6,6 +6,64 @@ use super::{
 };
 use std::collections::BTreeSet;
 
+/// Preserve the exact cleanup error with its proven retirement origin; unknown errors remain failures.
+/// 保留精确清理错误及其已证回收来源；未知错误仍为失败。
+pub(in crate::runtime) enum CleanupOriginError {
+    /// Only unfinished preparation or retained native members may produce this finite observation.
+    /// 只有未完成准备或保留的原生成员可产生此有限观测。
+    Pending(VulcanPluginRuntimeError),
+    /// Native, policy, lock and activation errors require explicit failure acknowledgement.
+    /// 原生、策略、锁及启用错误需要显式失败确认。
+    Failure(VulcanPluginRuntimeError),
+}
+
+impl CleanupOriginError {
+    /// Return whether this error originates from a proven finite physical owner.
+    /// 返回此错误是否来自已证有限物理所有者。
+    pub(in crate::runtime) fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending(_))
+    }
+
+    /// Consume the classification and return the unchanged original public error.
+    /// 消耗分类并返回未变的原公开错误。
+    pub(in crate::runtime) fn into_runtime_error(self) -> VulcanPluginRuntimeError {
+        match self {
+            Self::Pending(error) | Self::Failure(error) => error,
+        }
+    }
+}
+
+impl From<VulcanPluginRuntimeError> for CleanupOriginError {
+    /// Classify an otherwise unknown error as Failure without changing its original value.
+    /// 将其他未知错误归类为 Failure，不改变原值。
+    fn from(error: VulcanPluginRuntimeError) -> Self {
+        Self::Failure(error)
+    }
+}
+
+/// Proven failure ownership controls explicit acknowledgement; unknown owners remain retained.
+/// 已证失败归属控制显式确认；未知所有者继续保留。
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum CleanupFailureSource {
+    /// No specific resource has acknowledged this terminal or unknown failure.
+    /// 没有特定资源确认此终态或未知失败。
+    Unknown,
+    /// The exact reusable domain owns the failure and its explicit acknowledgement.
+    /// 精确可复用域拥有此失败及其显式确认。
+    ReusableDomain(String),
+}
+
+/// One unique diagnostic retains its public message and all actual failure owners.
+/// 一条唯一诊断保留公开消息及全部实际失败所有者。
+pub(super) struct CleanupDiagnostic {
+    /// Original ordered public diagnostic bytes remain unchanged.
+    /// 原有序公开诊断字节保持不变。
+    pub(super) message: String,
+    /// Empty means proven finite Pending; any source means Failure and dominates Pending.
+    /// 空集合表示已证有限 Pending；任一来源表示 Failure，优先于 Pending。
+    failure_sources: BTreeSet<CleanupFailureSource>,
+}
+
 /// Reports completed plugin cleanup and retained failures after drain attempts.
 /// 报告排空尝试中完成的插件清理与保留的失败。
 #[derive(Debug, Clone, Default)]
@@ -170,7 +228,11 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin_id: &str,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        Ok(self.observe_plugin_sessions_owned(plugin_id).await?.report)
+        // Keep the exact report even if retirement races its final pending reconciliation.
+        // 即使退役与最终待完成对账竞态，也保留精确报告。
+        let observation = self.observe_plugin_sessions_owned(plugin_id).await?;
+        self.clear_cleanup_diagnostics_if_fully_drained(plugin_id)?;
+        Ok(observation.report)
     }
 
     /// Observe plugin_id's original cleanup with internal failure classification; return exact evidence without replay.
@@ -265,14 +327,90 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin_id: &str,
         diagnostic: String,
+        registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.record_cleanup_diagnostic_locked(
+            plugin_id,
+            diagnostic,
+            Some(CleanupFailureSource::Unknown),
+            registration,
+        )
+    }
+
+    /// Record a proven finite diagnostic for plugin_id; diagnostic preserves its message; return accounting status.
+    /// 为 plugin_id 登记已证有限诊断；diagnostic 保留消息；返回记账状态。
+    pub(super) fn record_cleanup_pending(
+        &self,
+        plugin_id: &str,
+        diagnostic: String,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Publication excludes reconciliation until this observation is recorded.
+        // 发布门在此观测记账前排除对账。
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
+        })?;
+        self.record_cleanup_pending_locked(plugin_id, diagnostic, &registration)
+    }
+
+    /// Record proven finite diagnostic for plugin_id using the caller-held registration gate; return accounting status.
+    /// 使用调用方持有的 registration 门为 plugin_id 登记已证有限 diagnostic；返回记账状态。
+    pub(super) fn record_cleanup_pending_locked(
+        &self,
+        plugin_id: &str,
+        diagnostic: String,
+        registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.record_cleanup_diagnostic_locked(plugin_id, diagnostic, None, registration)
+    }
+
+    /// Record diagnostic for its exact domain under registration; failure selects actual Failure versus finite Pending.
+    /// 在 registration 下为精确 domain 登记 diagnostic；failure 选择实际 Failure 或有限 Pending。
+    /// Returns accounting status without changing public strings or other failure ownership.
+    /// 返回记账状态，不改变公开字符串或其他失败归属。
+    pub(super) fn record_domain_cleanup_locked(
+        &self,
+        plugin_id: &str,
+        diagnostic: String,
+        domain_id: &str,
+        failure: bool,
+        registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.record_cleanup_diagnostic_locked(
+            plugin_id,
+            diagnostic,
+            failure.then(|| CleanupFailureSource::ReusableDomain(domain_id.to_owned())),
+            registration,
+        )
+    }
+
+    /// Merge message and source into plugin_id's sole map under registration; return explicit accounting status.
+    /// 在 registration 下将 message 与 source 合并到 plugin_id 唯一映射；返回明确记账状态。
+    /// None is accepted only from a proven finite branch; unknown failures always pass Unknown.
+    /// None 仅接受已证有限分支；未知失败始终传入 Unknown。
+    fn record_cleanup_diagnostic_locked(
+        &self,
+        plugin_id: &str,
+        message: String,
+        source: Option<CleanupFailureSource>,
         _registration: &std::sync::MutexGuard<'_, ()>,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Diagnostics remain the only ledger, ordered by first occurrence.
+        // diagnostics 仍是唯一账本，按首次出现排序。
         let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
         })?;
-        let plugin_diagnostics = diagnostics.entry(plugin_id.to_owned()).or_default();
-        if !plugin_diagnostics.contains(&diagnostic) {
-            plugin_diagnostics.push(diagnostic);
+        // Entries merge exact message duplicates without losing independent failure owners.
+        // entries 合并精确消息重复项，不丢失独立失败所有者。
+        let entries = diagnostics.entry(plugin_id.to_owned()).or_default();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.message == message) {
+            if let Some(source) = source {
+                entry.failure_sources.insert(source);
+            }
+        } else {
+            entries.push(CleanupDiagnostic {
+                message,
+                failure_sources: source.into_iter().collect(),
+            });
         }
         Ok(())
     }
@@ -288,10 +426,10 @@ impl VulcanPluginRuntimeManager {
         self.state.has_cleanup_diagnostics(plugin_id)
     }
 
-    /// Clears stale cleanup diagnostics only after every resource owned by one plugin is gone.
-    /// 仅在单个插件拥有的全部资源均已消失后清除陈旧清理诊断。
-    /// plugin_id selects all registries and capacity counters; removes diagnostics only if none remain and returns status.
-    /// plugin_id选择全部注册表与容量计数；仅在没有残留时移除诊断并返回状态。
+    /// Reconcile only finite Pending after every resource owned by plugin_id retires; return accounting status.
+    /// 仅在 plugin_id 全部资源退役后对账有限 Pending；返回记账状态。
+    /// Ordinary drain is not acknowledgement of terminal or unknown failures.
+    /// 普通排空不是对终态或未知失败的确认。
     pub(super) fn clear_cleanup_diagnostics_if_fully_drained(
         &self,
         plugin_id: &str,
@@ -314,14 +452,49 @@ impl VulcanPluginRuntimeManager {
         if self.has_unretired_plugin_resources_locked(plugin_id, _registration)? {
             return Ok(());
         }
-        self.state
-            .cleanup_diagnostics
-            .lock()
-            .map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
-            })?
-            .remove(plugin_id);
+        // Preserve every Failure while removing only observations whose physical owners are gone.
+        // 保留全部 Failure，仅移除物理所有者已消失的观测。
+        let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
+        })?;
+        if let Some(entries) = diagnostics.get_mut(plugin_id) {
+            entries.retain(|entry| !entry.failure_sources.is_empty());
+            if entries.is_empty() {
+                diagnostics.remove(plugin_id);
+            }
+        }
         Ok(())
+    }
+
+    /// Acknowledge only domain_id's proven failures in plugin_id under registration; retain all other sources.
+    /// 在 registration 下仅确认 plugin_id 中 domain_id 的已证失败；保留全部其他来源。
+    /// Returns status after exact domain removal has proved acknowledgement, without inferring from messages.
+    /// 精确域移除已证明确认后返回状态，不从消息推断。
+    pub(super) fn acknowledge_domain_cleanup_locked(
+        &self,
+        plugin_id: &str,
+        domain_id: &str,
+        registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        // Source selects one confirmed owner, including duplicates shared with unknown failures.
+        // source 选择一个已确认所有者，包含与未知失败共用的重复项。
+        let source = CleanupFailureSource::ReusableDomain(domain_id.to_owned());
+        {
+            // The sole map must not turn an acknowledged Failure into a surviving unowned Pending.
+            // 唯一映射不得把已确认 Failure 变成残留无归属 Pending。
+            let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
+                VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
+            })?;
+            if let Some(entries) = diagnostics.get_mut(plugin_id) {
+                entries.retain_mut(|entry| {
+                    !entry.failure_sources.remove(&source) || !entry.failure_sources.is_empty()
+                });
+                if entries.is_empty() {
+                    diagnostics.remove(plugin_id);
+                }
+            }
+        }
+        self.clear_cleanup_diagnostics_locked(plugin_id, registration)
     }
 }
 

@@ -145,10 +145,29 @@ impl VulcanPluginRuntimeManager {
         // 在回调或启用中目录可观测启用之前，重新建立全部配置保证。
         if runtime_state == VulcanPluginRuntimeState::Enabling
             && let Some(owner) = self.formal_runtime_owner()?
-            && let Err(error) = owner.prepare_plugin_capacities(plugin_id, &_registration)
+            && let Err(error) =
+                owner.prepare_plugin_capacities_classified(plugin_id, &_registration)
         {
+            // Preserve the originating preflight classification before returning the unchanged public error.
+            // 返回未变公开错误前保留前置检查的来源分类。
+            let pending = error.is_pending();
+            // The original error retains its public message and rejection semantics.
+            // 原错误保留公开消息及拒绝语义。
+            let error = error.into_runtime_error();
             if owner.has_retiring_capacities(plugin_id)? {
-                self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+                if pending {
+                    self.record_cleanup_pending_locked(
+                        plugin_id,
+                        error.to_string(),
+                        &_registration,
+                    )?;
+                } else {
+                    self.record_cleanup_failure_locked(
+                        plugin_id,
+                        error.to_string(),
+                        &_registration,
+                    )?;
+                }
             }
             return Err(error);
         }
@@ -522,20 +541,29 @@ impl VulcanPluginRuntimeManager {
             .get(plugin_id)
             .is_some_and(|plugin| !plugin.desired_enabled)
             && let Some(owner) = self.formal_runtime_owner()?
-            && let Err(error) = owner.retire_plugin_capacities(plugin_id, &registration)
+            && let Err(error) = owner.retire_plugin_capacities_classified(plugin_id, &registration)
         {
-            cleanup_failures.push(format!("Plugin capacity retirement failed: {error}"));
+            // Finite physical owners remain Pending; no text or current-map lookup determines their source.
+            // 有限物理所有者保持 Pending；来源不由文本或当前映射查询决定。
+            let pending = error.is_pending();
+            // Keep the original projected capacity error wording for both classifications.
+            // 为两种分类保留原容量错误投影文案。
+            let diagnostic = format!(
+                "Plugin capacity retirement failed: {}",
+                error.into_runtime_error()
+            );
+            if pending {
+                self.record_cleanup_pending_locked(plugin_id, diagnostic, &registration)?;
+            } else {
+                cleanup_failures.push(diagnostic);
+            }
         }
-        if cleanup_failures.is_empty() {
-            self.clear_cleanup_diagnostics_locked(plugin_id, &registration)?;
-        } else {
-            // Keep retirement failures in the existing diagnostic authority and disabled warning projection.
-            // 在既有诊断权威及停用告警投影中保留回收失败。
-            let mut diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
-            })?;
-            diagnostics.insert(plugin_id.to_owned(), cleanup_failures);
+        // Only additional failures enter this unchanged public argument; recorded drain evidence stays typed.
+        // 此未变公开参数仅接收额外失败；已登记排空证据保持类型。
+        for diagnostic in cleanup_failures {
+            self.record_cleanup_failure_locked(plugin_id, diagnostic, &registration)?;
         }
+        self.clear_cleanup_diagnostics_locked(plugin_id, &registration)?;
         self.publish_runtime_catalog(snapshot, &registration, None)
     }
 
@@ -636,8 +664,8 @@ impl VulcanPluginRuntimeManager {
                 plugin.runtime_state =
                     observed_runtime_state(plugin.runtime_state, !entries.is_empty());
                 for diagnostic in entries {
-                    if !plugin.diagnostics.contains(diagnostic) {
-                        plugin.diagnostics.push(diagnostic.clone());
+                    if !plugin.diagnostics.contains(&diagnostic.message) {
+                        plugin.diagnostics.push(diagnostic.message.clone());
                     }
                 }
             }
@@ -662,6 +690,20 @@ impl VulcanPluginRuntimeManager {
         plugin_id: &str,
         event: VulcanPluginLifecycleEvent,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        self.invoke_lifecycle_classified(plugin_id, event)
+            .await
+            .map_err(crate::runtime::drain::CleanupOriginError::into_runtime_error)
+    }
+
+    /// Execute plugin_id's event with its exact internal cleanup origin; return unchanged runtime evidence.
+    /// 使用精确内部清理来源执行 plugin_id 的 event；返回未变运行时证据。
+    /// Unknown preparation and actual callback errors remain Failure; only the proven capacity owners may be Pending.
+    /// 未知准备及实际回调错误仍为 Failure；只有已证容量所有者可为 Pending。
+    async fn invoke_lifecycle_classified(
+        &self,
+        plugin_id: &str,
+        event: VulcanPluginLifecycleEvent,
+    ) -> Result<(), crate::runtime::drain::CleanupOriginError> {
         // The original deadline includes environment preparation, core initialization and business work.
         // 原截止时间涵盖环境准备、核心初始化及业务工作。
         let deadline = std::time::Instant::now()
@@ -715,6 +757,37 @@ impl VulcanPluginRuntimeManager {
         )
         .await
         .map(|_| ())
+    }
+
+    /// Execute and record one cleanup callback without losing its actual diagnostic origin.
+    /// 执行并登记单个清理回调，不丢失实际诊断来源。
+    /// plugin_id and event select the original callback; diagnostic_context supplies its existing host message prefix.
+    /// plugin_id 与 event 选择原回调；diagnostic_context 提供既有宿主消息前缀。
+    /// None means success or no declaration; Some is already recorded; Err reports accounting failure only.
+    /// None 表示成功或无声明；Some 已登记；Err 仅报告记账失败。
+    pub async fn invoke_lifecycle_for_cleanup(
+        &self,
+        plugin_id: &str,
+        event: VulcanPluginLifecycleEvent,
+        diagnostic_context: &str,
+    ) -> Result<Option<String>, VulcanPluginRuntimeError> {
+        match self.invoke_lifecycle_classified(plugin_id, event).await {
+            Ok(()) => Ok(None),
+            Err(error) => {
+                // Preserve the actual producer classification before projecting its public message.
+                // 投影公开消息前保留实际生产者分类。
+                let pending = error.is_pending();
+                // Use the unchanged host prefix and original error, never a current-map or text classification.
+                // 使用未变宿主前缀及原错误，绝不通过当前映射或文本分类。
+                let diagnostic = format!("{diagnostic_context}：{}", error.into_runtime_error());
+                if pending {
+                    self.record_cleanup_pending(plugin_id, diagnostic.clone())?;
+                } else {
+                    self.record_cleanup_failure(plugin_id, diagnostic.clone())?;
+                }
+                Ok(Some(diagnostic))
+            }
+        }
     }
 
     /// Requires one tool definition to match the current enabled plugin generation.

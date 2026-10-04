@@ -286,6 +286,24 @@ impl VulcanPluginRuntimeManager {
                 Err(error) => return Err(core_error(error)),
             }
         }
+        // Record real failure while publication and this original state still prove retirement ownership.
+        // 发布门和此原状态仍证明退役归属时登记真实失败。
+        if let Some(snapshot) = &state.finalization
+            && let Err(error) = project_closing(snapshot)
+        {
+            self.record_cleanup_failure_locked(
+                &runtime.plugin.id,
+                format!("Plugin persistent shutdown failed: {error}"),
+                &_publication,
+            )?;
+        }
+        if let Some(Err(error)) = &state.prepared {
+            self.record_cleanup_failure_locked(
+                &runtime.plugin.id,
+                format!("Plugin persistent preparation failed: {error}"),
+                &_publication,
+            )?;
+        }
         state.preparation_action.take();
         state.retired = true;
         // Release private original-request preparation ownership only after the actual core pool is forgotten.
@@ -389,6 +407,7 @@ impl VulcanPluginRuntimeManager {
         let budget = match remaining(expires) {
             Ok(budget) => budget,
             Err(error) => {
+                self.record_cleanup_pending(plugin_id, error.to_string())?;
                 observation.pending(error.to_string());
                 return Ok(observation);
             }
@@ -398,8 +417,12 @@ impl VulcanPluginRuntimeManager {
         let _initialization = match tokio::time::timeout(budget, gate.lock_owned()).await {
             Ok(initialization) => initialization,
             Err(_) => {
-                observation
-                    .pending(instance_error("persistent drain admission timed out.").to_string());
+                // Diagnostic comes from this exact finite admission timeout, not a terminal finalizer.
+                // diagnostic 来自此精确有限入场超时，不是终态关闭函数。
+                let diagnostic =
+                    instance_error("persistent drain admission timed out.").to_string();
+                self.record_cleanup_pending(plugin_id, diagnostic.clone())?;
+                observation.pending(diagnostic);
                 return Ok(observation);
             }
         };
@@ -459,7 +482,7 @@ impl VulcanPluginRuntimeManager {
                 }
             }
             Ok(crate::runtime::drain::RetirementObservation::Pending(error)) => {
-                self.record_cleanup_failure(plugin_id, error.to_string())?;
+                self.record_cleanup_pending(plugin_id, error.to_string())?;
                 observation.pending(error.to_string());
             }
             Err(error) => {

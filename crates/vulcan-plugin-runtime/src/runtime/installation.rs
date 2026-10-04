@@ -397,9 +397,19 @@ impl VulcanPluginRuntimeManager {
         // The caller completes uninstall callbacks first; refuse removal while any formal capacity member still owns the package.
         // 调用方先完成卸载回调；任何正式容量成员仍持有包时拒绝移除。
         if let Some(owner) = self.formal_runtime_owner()?
-            && let Err(error) = owner.retire_plugin_capacities(plugin_id, &_registration)
+            && let Err(error) = owner.retire_plugin_capacities_classified(plugin_id, &_registration)
         {
-            self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+            // Only proven unfinished preparation or native members may be reconciled after physical retirement.
+            // 只有已证未完成准备或原生成员可在物理退役后对账。
+            let pending = error.is_pending();
+            // Return the original rejection without proceeding to package removal.
+            // 返回原拒绝，不继续移除包。
+            let error = error.into_runtime_error();
+            if pending {
+                self.record_cleanup_pending_locked(plugin_id, error.to_string(), &_registration)?;
+            } else {
+                self.record_cleanup_failure_locked(plugin_id, error.to_string(), &_registration)?;
+            }
             return Err(error);
         }
         let tombstone =

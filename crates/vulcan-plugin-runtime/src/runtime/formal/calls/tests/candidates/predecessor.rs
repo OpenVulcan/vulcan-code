@@ -1038,6 +1038,32 @@ fn formal_predecessor_drain_terminal_failure_survives_later_empty_cleanup() {
                 .await
                 .is_err()
         );
+        // Empty physical registries and ordinary reconciliation cannot acknowledge the actual Hook failure.
+        // 空物理注册表及普通对账不能确认实际 Hook 失败。
+        for _ in 0..2 {
+            fixture
+                .manager
+                .drain_plugin_sessions("hook-plugin")
+                .await
+                .expect("normal drain of retired original resources");
+            assert!(
+                fixture
+                    .manager
+                    .has_cleanup_diagnostics("hook-plugin")
+                    .expect("retained actual failure")
+            );
+            assert!(
+                fixture
+                    .manager
+                    .observe_catalog(&fixture.manager.snapshot())
+                    .expect("public failure projection")
+                    .plugins["hook-plugin"]
+                    .diagnostics
+                    .iter()
+                    .any(|message| message
+                        .contains("transient call must not invoke tool or Hook shutdown"))
+            );
+        }
         // Both original effects executed once, independently from how often cleanup was observed.
         // 两个原副作用各执行一次，独立于清理观测次数。
         let events = fixture.events.values.lock().expect("actual effects");

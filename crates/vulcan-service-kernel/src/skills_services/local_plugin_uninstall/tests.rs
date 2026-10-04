@@ -45,6 +45,21 @@ impl vulcan_plugin_runtime::VulcanPluginUiEventPublisher for CallbackEvents {
 /// fixture supplies authoritative paths; returns actual native callback evidence.
 /// fixture 提供权威路径；返回实际原生回调证据。
 fn declare_failed_callback(fixture: &Fixture) -> Arc<CallbackEvents> {
+    // Actual event counter belongs to this fixture's native publisher.
+    // 实际事件计数器属于此夹具的原生发布器。
+    let events = Arc::new(CallbackEvents::default());
+    declare_callback_with_publisher(fixture, events.clone());
+    events
+}
+
+/// Attach real Lua and declare its actual failed callback; fixture owns bytes and events receives native effects.
+/// 附加真实 Lua 并声明实际失败回调；fixture 拥有字节，events 接收原生效果。
+/// Returns no value; the production inspector later freezes the same declarations.
+/// 不返回值；生产检查器随后固定同一声明。
+fn declare_callback_with_publisher(
+    fixture: &Fixture,
+    events: Arc<dyn vulcan_plugin_runtime::VulcanPluginUiEventPublisher>,
+) {
     use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
     // Derive the existing isolated root from the actual configured user root.
     // 从实际配置用户根派生既有隔离根。
@@ -117,20 +132,216 @@ return M
     .expect("actual Lua callback bytes");
     // Native evidence belongs to the actual manager and not to a copied call receipt.
     // 原生证据属于实际管理器，而非复制调用回执。
-    let events = Arc::new(CallbackEvents::default());
     fixture
         .runtime
         .install_host_services(vulcan_plugin_runtime::VulcanPluginHostServices {
             storage: None,
             vldb: None,
-            ui_events: Some(events.clone()),
+            ui_events: Some(events),
         })
         .expect("actual native callback publisher");
     fixture
         .runtime
         .initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
         .expect("actual formal parent");
-    events
+}
+
+/// One real native callback can remain pending until its test owner releases the original publisher.
+/// 单个真实原生回调可保持待完成，直到测试所有者释放原发布器。
+#[derive(Default)]
+struct BlockedCallbackEvents {
+    /// Count actual Uninstall effects before blocking, independently from observers.
+    /// 在阻塞前统计实际卸载效果，独立于观察者。
+    count: AtomicUsize,
+    /// Actual publisher entry proves a physically executing native callback.
+    /// 实际发布器入场证明物理执行中的原生回调。
+    entered: std::sync::atomic::AtomicBool,
+    /// Original release flag is shared only with this native publisher.
+    /// 原释放标志仅与此原生发布器共享。
+    released: std::sync::Mutex<bool>,
+    /// Notify the existing host worker without replaying a callback.
+    /// 通知既有宿主工作者，不重放回调。
+    changed: std::sync::Condvar,
+}
+
+impl BlockedCallbackEvents {
+    /// Release the actual blocked host worker; no parameters or return value.
+    /// 释放实际阻塞宿主工作者；无参数或返回值。
+    fn release(&self) {
+        *self.released.lock().expect("release original callback") = true;
+        self.changed.notify_all();
+    }
+}
+
+/// Test-scope ownership releases the actual host worker even when an assertion fails.
+/// 测试作用域所有权即使断言失败也释放实际宿主工作者。
+struct CallbackReleaseGuard(Arc<BlockedCallbackEvents>);
+
+impl Drop for CallbackReleaseGuard {
+    /// Release this guard's original publisher on scope exit; return no value.
+    /// 作用域退出时释放此守卫原发布器；不返回值。
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+impl vulcan_plugin_runtime::VulcanPluginUiEventPublisher for BlockedCallbackEvents {
+    /// Require event's actual Uninstall identity and retain one effect; return success only after original release.
+    /// 要求 event 实际卸载身份并保留单个效果；仅在原释放后返回成功。
+    fn publish(
+        &self,
+        event: vulcan_plugin_runtime::VulcanPluginUiInvalidation,
+    ) -> Result<(), String> {
+        if event.topic != "uninstall" {
+            return Err(String::from("Unexpected blocked removal callback event."));
+        }
+        self.count.fetch_add(1, Ordering::AcqRel);
+        self.entered.store(true, Ordering::Release);
+        // Released remains protected by the original mutex throughout the real wait.
+        // released 在实际等待期间始终由原互斥锁保护。
+        let mut released = self.released.lock().map_err(|error| error.to_string())?;
+        while !*released {
+            released = self
+                .changed
+                .wait(released)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+/// A real Pending callback keeps the original UUID through cancellation and explicit known-failure acknowledgement.
+/// 真实待完成回调跨取消及显式已知失败确认保留原 UUID。
+/// No inputs or return value; actual native effects run once and ordinary drain reconciles only their finite warning.
+/// 无输入及返回值；实际原生效果仅执行一次，普通排空仅对账其有限警告。
+#[tokio::test]
+async fn retained_service_uninstall_pending_callback_resumes_same_uuid_once() {
+    // Fixture owns original managed source and the actual service bridge.
+    // fixture 拥有原受管来源及实际服务桥。
+    let fixture = Fixture::new(false);
+    // Events retain the original real callback and its exact effect count.
+    // events 保留原真实回调及其精确效果计数。
+    let events = Arc::new(BlockedCallbackEvents::default());
+    // Release guard precedes every possible assertion after installing the blocking native publisher.
+    // release_guard 先于安装阻塞原生发布器后的任何可能断言。
+    let _release_guard = CallbackReleaseGuard(events.clone());
+    declare_callback_with_publisher(&fixture, events.clone());
+    // Policy writes are restricted to this test's actual isolated destination.
+    // 策略写入限于此测试实际隔离目标。
+    let destination = tempfile::tempdir().expect("private removal policy");
+    PROVIDER_CONFIGURATION_PATH
+        .scope(destination.path().join("policy.json"), async {
+            seed_managed(&fixture).await;
+            // State clones the same real service slot; the foreground waiter has no independent supervisor.
+            // state 克隆相同真实服务槽；前台等待者没有独立监督者。
+            let state = Arc::clone(&fixture.state);
+            // Pending retains the ordinary public removal future until only that waiter is cancelled.
+            // pending 保留普通公开移除 future，直到仅此等待者被取消。
+            let pending = tokio::spawn(async move {
+                service_uninstall_user_plugin(
+                    ServiceEventEmitter::new(Vec::new()),
+                    state,
+                    PLUGIN.to_owned(),
+                )
+                .await
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while !events.entered.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("actual Uninstall publisher entered");
+            // Original UUID is read from the actual retained service registry while the callback is still live.
+            // 回调仍活动时，从实际保留服务注册表读取原 UUID。
+            let row = service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+                .expect("actual original query")
+                .into_iter()
+                .find(|row| row.plugin_id == PLUGIN)
+                .expect("actual original Uninstall");
+            // Actual finite drain observes the same native call and records Pending without a synthetic map write.
+            // 实际有限排空观测同一原生调用并登记 Pending，不合成映射写入。
+            let report = fixture
+                .runtime
+                .drain_plugin_sessions(PLUGIN)
+                .await
+                .expect("bounded live callback drain");
+            assert!(!report.failures.is_empty());
+            assert!(
+                fixture
+                    .runtime
+                    .has_cleanup_diagnostics(PLUGIN)
+                    .expect("actual finite warning")
+            );
+            pending.abort();
+            assert!(
+                pending
+                    .await
+                    .expect_err("only foreground observer cancelled")
+                    .is_cancelled()
+            );
+            events.release();
+            // False acknowledgement must first observe the original physically retired business failure.
+            // false 确认必须先观测原实际退役业务失败。
+            assert!(
+                service_resume_local_plugin_uninstall(
+                    ServiceEventEmitter::new(Vec::new()),
+                    Arc::clone(&fixture.state),
+                    PLUGIN.to_owned(),
+                    row.request_id.clone(),
+                    false
+                )
+                .await
+                .is_err()
+            );
+            // Retained metadata authorizes only the existing failed callback, never unknown replay.
+            // 保留元数据仅授权既有失败回调，绝不授权未知重放。
+            let observed = service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+                .expect("known retired original")
+                .into_iter()
+                .find(|current| current.request_id == row.request_id)
+                .expect("same UUID retained");
+            assert!(observed.requires_external_effects_acknowledgement);
+            assert_eq!(events.count.load(Ordering::Acquire), 1);
+            service_resume_local_plugin_uninstall(
+                ServiceEventEmitter::new(Vec::new()),
+                Arc::clone(&fixture.state),
+                PLUGIN.to_owned(),
+                row.request_id,
+                true,
+            )
+            .await
+            .expect("same original acknowledged and collected");
+            assert_eq!(events.count.load(Ordering::Acquire), 1);
+            assert!(
+                !fixture
+                    .runtime
+                    .has_cleanup_diagnostics(PLUGIN)
+                    .expect("only finite warning reconciled")
+            );
+            assert!(!fixture.runtime.user_plugin_root().join(PLUGIN).exists());
+            assert!(
+                service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+                    .expect("original slot released")
+                    .is_empty()
+            );
+        })
+        .await;
+    fixture
+        .runtime
+        .request_formal_runtime_close()
+        .expect("close actual native parent");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !fixture
+            .runtime
+            .poll_formal_runtime_closed()
+            .expect("actual parent retirement")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("original native parent closed");
 }
 
 /// Actual Lua failure requires acknowledgement only after physical retirement and never replays its native effect.

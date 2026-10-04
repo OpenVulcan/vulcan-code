@@ -157,6 +157,17 @@ impl VulcanPluginRuntimeManager {
                 Err(error) => return Err(core_error(error)),
             }
         }
+        // Publish the actual finalizer failure before releasing the last live capacity proof.
+        // 在释放最后活动容量证明前发布实际关闭失败。
+        if let Some(snapshot) = &state.finalization
+            && let Err(error) = project_closing(snapshot)
+        {
+            self.record_cleanup_failure_locked(
+                &session.plugin.id,
+                with_session(error, &session.id).to_string(),
+                &publication,
+            )?;
+        }
         self.release_session_slot_with_publication(&session.plugin.id, &publication)?;
         state.retired = true;
         Ok(true)
@@ -256,7 +267,7 @@ impl VulcanPluginRuntimeManager {
                     }
                 }
                 Ok(crate::runtime::drain::RetirementObservation::Pending(error)) => {
-                    self.record_cleanup_failure(&session.plugin.id, error.to_string())?;
+                    self.record_cleanup_pending(&session.plugin.id, error.to_string())?;
                     observation.pending(error.to_string());
                 }
                 Err(error) => {

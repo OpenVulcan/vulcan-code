@@ -275,7 +275,7 @@ struct VulcanPluginManagerState {
     update_drains: Mutex<BTreeMap<String, Arc<update_drain::UpdateDrainAuthority>>>,
     /// Cleanup warnings retained after a plugin becomes disabled.
     /// 插件停用后保留的清理警告。
-    cleanup_diagnostics: Mutex<BTreeMap<String, Vec<String>>>,
+    cleanup_diagnostics: Mutex<BTreeMap<String, Vec<drain::CleanupDiagnostic>>>,
     /// Original startup recovery obligations survive refreshes and missing journal files.
     /// 原始启动恢复义务在刷新及日志文件缺失后仍保留。
     activation_recovery: Mutex<Option<recovery::ActivationRecovery>>,
