@@ -304,13 +304,25 @@ impl VulcanPluginRuntimeManager {
         runtime: &PersistentRuntime,
         expires: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        self.observe_instance_retirement(runtime, expires)
+            .await?
+            .into_result()
+    }
+
+    /// Observe runtime until expires; return pending only at the deadline and preserve actual cleanup errors.
+    /// 观测 runtime 至 expires；仅在截止时间返回待完成，保留实际清理错误。
+    async fn observe_instance_retirement(
+        &self,
+        runtime: &PersistentRuntime,
+        expires: Instant,
+    ) -> Result<crate::runtime::drain::RetirementObservation, VulcanPluginRuntimeError> {
         loop {
             {
                 // Keep the exact lifecycle evidence within this synchronous lock scope.
                 // 在当前同步锁作用域内保留精确生命周期证据。
                 let state = runtime.lock()?;
                 if state.retired {
-                    return Ok(());
+                    return Ok(crate::runtime::drain::RetirementObservation::Retired);
                 }
                 if let Some(error) = &state.cleanup_error {
                     return Err(VulcanPluginRuntimeError::new(error.clone()));
@@ -321,25 +333,29 @@ impl VulcanPluginRuntimeManager {
                     ));
                 }
             }
-            remaining(expires).map_err(|_| {
-                instance_error("persistent cleanup timed out; original ownership remains retained.")
-            })?;
+            if remaining(expires).is_err() {
+                return Ok(crate::runtime::drain::RetirementObservation::Pending(
+                    instance_error(
+                        "persistent cleanup timed out; original ownership remains retained.",
+                    ),
+                ));
+            }
             tokio::time::sleep(OBSERVATION_INTERVAL).await;
         }
     }
 
-    /// Drain plugin_id's original instance of kind; return counts and independent shutdown diagnostics.
-    /// 排空 plugin_id 的原 持久；返回计数及独立关闭诊断。
-    pub(in crate::runtime) async fn drain_formal_instance(
+    /// Observe plugin_id's original instance of kind; return typed cleanup evidence without replaying initialization.
+    /// 观测 plugin_id 的原 kind 实例；返回类型化清理证据，不重放初始化。
+    pub(in crate::runtime) async fn observe_formal_instance(
         &self,
         plugin_id: &str,
         kind: VulcanPluginPersistentRuntimeKind,
-    ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
+    ) -> Result<crate::runtime::drain::DrainObservation, VulcanPluginRuntimeError> {
         // Accumulate physical-close counts independently from shutdown failures.
         // 独立于关闭失败累计物理关闭计数。
-        let mut report = VulcanPluginDrainReport::default();
+        let mut observation = crate::runtime::drain::DrainObservation::default();
         let Some(owner) = self.formal_runtime_owner()? else {
-            return Ok(report);
+            return Ok(observation);
         };
         // Freeze one absolute deadline for this complete cleanup attempt.
         // 为本次完整清理尝试冻结一个绝对截止时间。
@@ -368,9 +384,25 @@ impl VulcanPluginRuntimeManager {
         }
         // Keep initialization ordering within the original finite admission budget.
         // 在原有限入场预算内保持初始化顺序。
-        let _initialization = tokio::time::timeout(remaining(expires)?, gate.lock_owned())
-            .await
-            .map_err(|_| instance_error("persistent drain admission timed out."))?;
+        // Expired admission is still pending on the same owner, not a failed finalizer.
+        // 入场到期仍为同所有者待完成，不是关闭函数失败。
+        let budget = match remaining(expires) {
+            Ok(budget) => budget,
+            Err(error) => {
+                observation.pending(error.to_string());
+                return Ok(observation);
+            }
+        };
+        // Preserve the original gate ordering and diagnostic while classifying only the proven deadline branch.
+        // 保留原门排序及诊断，仅分类已证截止时间分支。
+        let _initialization = match tokio::time::timeout(budget, gate.lock_owned()).await {
+            Ok(initialization) => initialization,
+            Err(_) => {
+                observation
+                    .pending(instance_error("persistent drain admission timed out.").to_string());
+                return Ok(observation);
+            }
+        };
         // Retain the original persistent instance across preparation and observation.
         // 跨准备及观测保留原持久实例。
         let runtime = {
@@ -395,25 +427,21 @@ impl VulcanPluginRuntimeManager {
             runtime
         };
         let Some(runtime) = runtime else {
-            return Ok(report);
+            return Ok(observation);
         };
         self.start_instance_monitor(&owner, &runtime)?;
-        match self.wait_instance_retired(&runtime, expires).await {
-            Ok(()) => {
+        match self.observe_instance_retirement(&runtime, expires).await {
+            Ok(crate::runtime::drain::RetirementObservation::Retired) => {
                 // Keep the exact lifecycle evidence within this synchronous lock scope.
                 // 在当前同步锁作用域内保留精确生命周期证据。
                 let state = runtime.lock()?;
                 if let Some(snapshot) = &state.finalization
                     && let Err(error) = project_closing(snapshot)
                 {
-                    report
-                        .failures
-                        .push(format!("Plugin persistent shutdown failed: {error}"));
+                    observation.failed(format!("Plugin persistent shutdown failed: {error}"));
                 }
                 if let Some(Err(error)) = &state.prepared {
-                    report
-                        .failures
-                        .push(format!("Plugin persistent preparation failed: {error}"));
+                    observation.failed(format!("Plugin persistent preparation failed: {error}"));
                 }
                 drop(state);
                 owner
@@ -422,18 +450,24 @@ impl VulcanPluginRuntimeManager {
                     .map_err(|_| instance_error("persistent registry lock is poisoned."))?
                     .retain(|id, current| id != plugin_id || !Arc::ptr_eq(current, &runtime));
                 match kind {
-                    VulcanPluginPersistentRuntimeKind::Hook => report.closed_hook_runtimes = 1,
+                    VulcanPluginPersistentRuntimeKind::Hook => {
+                        observation.report.closed_hook_runtimes = 1
+                    }
                     VulcanPluginPersistentRuntimeKind::UiAction => {
-                        report.closed_ui_action_runtimes = 1
+                        observation.report.closed_ui_action_runtimes = 1
                     }
                 }
             }
+            Ok(crate::runtime::drain::RetirementObservation::Pending(error)) => {
+                self.record_cleanup_failure(plugin_id, error.to_string())?;
+                observation.pending(error.to_string());
+            }
             Err(error) => {
                 self.record_cleanup_failure(plugin_id, error.to_string())?;
-                report.failures.push(error.to_string());
+                observation.failed(error.to_string());
             }
         }
-        Ok(report)
+        Ok(observation)
     }
 
     /// Report retained ownership for plugin_id and kind before clearing cleanup diagnostics.

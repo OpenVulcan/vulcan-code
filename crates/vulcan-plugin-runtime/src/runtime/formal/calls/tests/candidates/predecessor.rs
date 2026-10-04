@@ -635,6 +635,23 @@ fn formal_predecessor_drain_rejects_exhaustion_before_effects() {
 /// 取消及有限排空观测绝不在原生工作存活时释放原所有权。
 #[test]
 fn formal_predecessor_drain_cancelled_observer_retains_native_request() {
+    pending_predecessor_drain_retires_original(false);
+}
+
+/// A reused real UI instance keeps Started after finite cleanup expiry and completes only on its original retirement.
+/// 真实复用 UI 实例在有限清理到期后保持 Started，仅在原退役时完成。
+/// No inputs or return value; original native pool/session identities and one business event prove no replay.
+/// 无输入与返回值；原生原池/会话身份及单次业务事件证明没有重放。
+#[test]
+fn formal_predecessor_drain_pending_reused_ui_retires_original() {
+    pending_predecessor_drain_retires_original(true);
+}
+
+/// Exercise one real predecessor drain; reuse_enabled_runtime selects the declared persistent or transient UI route.
+/// 验证单个真实前驱排空；reuse_enabled_runtime 选择已声明持久或瞬时 UI 路由。
+/// Return no value; only same-owner physical retirement may turn its Started receipt into Succeeded.
+/// 无返回值；仅同所有者物理退役可将原 Started 回执变为 Succeeded。
+fn pending_predecessor_drain_retires_original(reuse_enabled_runtime: bool) {
     // Begin with an enabled actual predecessor and no pending request.
     // 从实际启用前驱及无待处理请求开始。
     let (fixture, store) = fixture();
@@ -672,7 +689,7 @@ fn formal_predecessor_drain_cancelled_observer_retains_native_request() {
                         arguments: json!({"block":true}),
                         caller: crate::VulcanPluginActionCaller::PluginUi,
                         workspace_root: workspace,
-                        reuse_enabled_runtime: false,
+                        reuse_enabled_runtime,
                     },
                     &generation,
                     caller,
@@ -680,6 +697,32 @@ fn formal_predecessor_drain_cancelled_observer_retains_native_request() {
                 .await
         });
         fixture.entered().await;
+        // Freeze the persistent route's actual native identities before update closes admission.
+        // 更新关闭准入之前，固定持久路由的实际原生身份。
+        let persistent_identity = if reuse_enabled_runtime {
+            let rows = fixture
+                .manager
+                .formal_plugin_resource_diagnostics("hook-plugin", None)
+                .expect("actual persistent identity")
+                .expect("original parent");
+            let row = rows
+                .resources
+                .into_iter()
+                .find(|row| {
+                    matches!(
+                        row.resource_kind,
+                        crate::runtime::formal::VulcanPluginResourceKind::UiActionRuntime
+                    )
+                })
+                .expect("actual reused UI resource");
+            assert!(!row.retired);
+            Some((
+                row.original_pool_id.expect("original pool"),
+                row.core_session_id.expect("original session"),
+            ))
+        } else {
+            None
+        };
         // Prepare and close admission while the real worker still owns its native callback.
         // 真实工作者仍拥有原生回调时准备并关闭入场。
         let transaction = prepare(&fixture, &store);
@@ -748,9 +791,42 @@ fn formal_predecessor_drain_cancelled_observer_retains_native_request() {
         );
         fixture.events.release();
         let _ = call.await.expect("original Action observer");
+        if let Some((pool, session)) = &persistent_identity {
+            // Await the original monitor's retirement checkpoint; release or business cancellation alone is insufficient.
+            // 等待原监控器退役检查点；释放或业务取消本身不足以证明完成。
+            tokio::time::timeout(WAIT, async {
+                loop {
+                    let rows = fixture
+                        .manager
+                        .formal_plugin_resource_diagnostics("hook-plugin", None)
+                        .expect("same persistent owner observation")
+                        .expect("original parent");
+                    let row = rows
+                        .resources
+                        .iter()
+                        .find(|row| {
+                            matches!(
+                                row.resource_kind,
+                                crate::runtime::formal::VulcanPluginResourceKind::UiActionRuntime
+                            )
+                        })
+                        .expect("same original UI record stays until drain acknowledgement");
+                    assert_eq!(row.original_pool_id.as_ref(), Some(pool));
+                    assert_eq!(row.core_session_id.as_ref(), Some(session));
+                    if row.retired {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("original persistent instance physically retired");
+        }
         fixture.empty().await;
+        // The exact same observer now certifies physical cleanup, not the cancelled business outcome.
+        // 精确相同观察者现在认证物理清理，而非被取消业务的结果。
         assert!(
-            !fixture
+            fixture
                 .manager
                 .drain_activation_predecessor(&retained)
                 .await
@@ -771,7 +847,18 @@ fn formal_predecessor_drain_cancelled_observer_retains_native_request() {
                 .expect("effects")
                 .expect("receipt")
                 .observations(),
-            vec![(Effect::DrainPredecessorLua, Observation::ObservationFailed)]
+            vec![(Effect::DrainPredecessorLua, Observation::Succeeded)]
+        );
+        assert_eq!(
+            fixture
+                .events
+                .values
+                .lock()
+                .expect("actual business effects")
+                .iter()
+                .filter(|event| event.topic == "business")
+                .count(),
+            1
         );
         // Physical retirement releases the file lock even while the caller keeps its completed handle.
         // 即使调用方保留已完成句柄，物理退役仍释放文件锁。
@@ -783,5 +870,190 @@ fn formal_predecessor_drain_cancelled_observer_retains_native_request() {
         store
             .abort_activation_request("hook-plugin", request_id)
             .expect("explicit abandonment after retirement");
+    });
+}
+
+/// A real failed Hook finalizer stays sticky while a second original UI resource is still pending.
+/// 真实 Hook 关闭函数失败在第二个原 UI 资源仍待完成时持续保留。
+/// No inputs or return value; retirement of the remaining UI must never wash away the already-removed Hook error.
+/// 无输入与返回值；剩余 UI 退役绝不能洗掉已移除 Hook 的错误。
+#[test]
+fn formal_predecessor_drain_terminal_failure_survives_later_empty_cleanup() {
+    // Publish the unchanged managed fixture whose Hook shutdown emits one real failure.
+    // 发布未变托管夹具，其 Hook 关闭发出单次真实失败。
+    let (fixture, store) = fixture();
+    executor().block_on(async {
+        fixture
+            .manager
+            .prewarm_plugin_runtime("hook-plugin")
+            .await
+            .expect("actual Hook initialized");
+        // Freeze the real old generation before either resource enters the update's closed domain.
+        // 两个资源进入更新关闭域之前，固定真实旧代次。
+        let original = fixture.manager.snapshot();
+        // Only the actual UI worker is blocked; the independent Hook finalizer can fail and retire first.
+        // 仅实际 UI 工作者阻塞；独立 Hook 关闭函数可先失败并退役。
+        let manager = fixture.manager.clone();
+        // Routing identity comes from the same original catalog, never a manufactured replacement.
+        // 路由身份来自同原目录，绝不来自人为替代。
+        let generation = format!(
+            "{}:{}",
+            original.service_epoch, original.plugins["hook-plugin"].generation
+        );
+        // The fixture's private existing root supplies the original UI workspace.
+        // 夹具自有既有根提供原 UI 工作区。
+        let workspace = fixture._root.path().to_path_buf();
+        // Observe exactly one admitted native business invocation without retries.
+        // 观测恰好一个已准入原生业务调用，不重试。
+        let call = tokio::spawn(async move {
+            manager
+                .invoke_ui_action(
+                    crate::VulcanPluginActionRequest {
+                        plugin_id: "hook-plugin".into(),
+                        action_id: "ui-action".into(),
+                        arguments: json!({"block":true}),
+                        caller: crate::VulcanPluginActionCaller::PluginUi,
+                        workspace_root: workspace,
+                        reuse_enabled_runtime: true,
+                    },
+                    &generation,
+                    crate::VulcanPluginActionIdentity {
+                        client_id: Uuid::new_v4().to_string(),
+                        invocation_id: Uuid::new_v4().to_string(),
+                    },
+                )
+                .await
+        });
+        fixture.entered().await;
+        // The actual immutable transaction owns the only original request and Started observation.
+        // 实际不可变事务拥有唯一原请求及 Started 观测。
+        let transaction = prepare(&fixture, &store);
+        // Inspect the exact candidate before obtaining its manager-issued drain authority.
+        // 取得管理器签发排空权威之前，检查精确候选。
+        let candidate = store
+            .inspect_activation_candidate(&transaction)
+            .expect("original candidate");
+        // Retain the same drain while physical resource records disappear independently.
+        // 物理资源记录独立消失时，保留同一排空。
+        let drain = fixture
+            .manager
+            .begin_activation_predecessor_drain(&candidate, &original)
+            .expect("original drain");
+        // Preserve only real runtime ownership after dropping the foreground transaction borrow.
+        // 销毁前台事务借用后，仅保留真实运行时所有权。
+        let request = drain.request_id();
+        drop(candidate);
+        drop(transaction);
+        // Poll the same observer until the genuine failed Hook is physically removed; never replay shutdown.
+        // 轮询同观察者直到真实失败 Hook 物理移除；绝不重放关闭。
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let report = fixture
+                    .manager
+                    .drain_activation_predecessor(&drain)
+                    .await
+                    .expect("actual mixed drain observation");
+                if report.closed_hook_runtimes == 1 {
+                    assert!(
+                        report.failures.iter().any(|error| error
+                            .contains("transient call must not invoke tool or Hook shutdown")),
+                        "{report:?}"
+                    );
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("real failed Hook retired while original UI stayed live");
+        assert!(
+            fixture
+                .owner()
+                .hooks
+                .lock()
+                .expect("actual Hook registry")
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .manager
+                .activation_predecessor_drain(request)
+                .expect("original lookup")
+                .is_some()
+        );
+        assert_eq!(
+            store
+                .activation_effects("hook-plugin", request)
+                .expect("original effects")
+                .expect("actual receipt")
+                .observations(),
+            vec![(Effect::DrainPredecessorLua, Observation::Started)]
+        );
+        fixture.events.release();
+        let _ = call.await.expect("original UI observer");
+        // Await the remaining original UI checkpoint rather than assuming cancellation freed native resources.
+        // 等待剩余原 UI 检查点，不假定取消释放了原生资源。
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let rows = fixture
+                    .manager
+                    .formal_plugin_resource_diagnostics("hook-plugin", None)
+                    .expect("actual UI observation")
+                    .expect("original parent");
+                if rows.resources.iter().all(|row| row.retired) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("actual remaining resource retirement");
+        // The first terminal error remains in the original authority even though the Hook's second report is empty.
+        // 即使 Hook 第二次报告为空，首个终态错误仍保留在原权威中。
+        let report = fixture
+            .manager
+            .drain_activation_predecessor(&drain)
+            .await
+            .expect("final same-owner observation");
+        assert!(!report.failures.is_empty());
+        assert_eq!(
+            store
+                .activation_effects("hook-plugin", request)
+                .expect("original effects")
+                .expect("actual receipt")
+                .observations(),
+            vec![(Effect::DrainPredecessorLua, Observation::ObservationFailed)]
+        );
+        assert!(
+            fixture
+                .manager
+                .activation_predecessor_drain(request)
+                .expect("completed original lookup")
+                .is_none()
+        );
+        assert!(
+            fixture
+                .manager
+                .drain_activation_predecessor(&drain)
+                .await
+                .is_err()
+        );
+        // Both original effects executed once, independently from how often cleanup was observed.
+        // 两个原副作用各执行一次，独立于清理观测次数。
+        let events = fixture.events.values.lock().expect("actual effects");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.topic == "wrong-finalizer")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.topic == "business")
+                .count(),
+            1
+        );
     });
 }

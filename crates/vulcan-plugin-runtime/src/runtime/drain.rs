@@ -47,6 +47,62 @@ impl VulcanPluginDrainReport {
     }
 }
 
+/// Internal cleanup evidence separates a finite pending observation from an actual terminal failure.
+/// 内部清理证据区分有限未完成观测与实际终态失败。
+#[derive(Default)]
+pub(in crate::runtime) struct DrainObservation {
+    /// The unchanged public report preserves every count and diagnostic for existing callers.
+    /// 未变公开报告为既有调用方保留全部计数与诊断。
+    pub(in crate::runtime) report: VulcanPluginDrainReport,
+    /// A real failure must stay sticky even after its physical record leaves the live registry.
+    /// 即使物理记录离开活动注册表，真实失败也必须持续保留。
+    pub(in crate::runtime) terminal_failure: bool,
+}
+
+impl DrainObservation {
+    /// Append diagnostic from a proven budget-expiration branch; preserve pending authority and return no value.
+    /// 追加已证预算到期分支的 diagnostic；保留待完成权威，不返回值。
+    pub(in crate::runtime) fn pending(&mut self, diagnostic: String) {
+        self.report.failures.push(diagnostic);
+    }
+
+    /// Append an actual terminal or unknown cleanup diagnostic and retain its failure classification; return no value.
+    /// 追加实际终态或未知清理 diagnostic 并保留失败分类；不返回值。
+    pub(in crate::runtime) fn failed(&mut self, diagnostic: String) {
+        self.terminal_failure = true;
+        self.report.failures.push(diagnostic);
+    }
+
+    /// Merge other's exact report and sticky classification into this observation; return no value.
+    /// 将 other 的精确报告及持续失败分类合并至当前观测；不返回值。
+    fn merge(&mut self, other: Self) {
+        self.terminal_failure |= other.terminal_failure;
+        self.report.merge(other.report);
+    }
+}
+
+/// Only a known finite deadline may yield Pending; synchronization and real cleanup errors remain Err.
+/// 仅已知有限截止时间可产生 Pending；同步及真实清理错误保持 Err。
+pub(in crate::runtime) enum RetirementObservation {
+    /// Original native owners have physically retired.
+    /// 原生原所有者已经物理退役。
+    Retired,
+    /// The budget expired while the same original owner remains retained.
+    /// 预算到期时相同原所有者仍被保留。
+    Pending(VulcanPluginRuntimeError),
+}
+
+impl RetirementObservation {
+    /// Project this typed observation to the original waiting API; return its unchanged error or successful retirement.
+    /// 将此类型化观测投影至原等待接口；返回未变错误或成功退役。
+    pub(in crate::runtime) fn into_result(self) -> Result<(), VulcanPluginRuntimeError> {
+        match self {
+            Self::Retired => Ok(()),
+            Self::Pending(error) => Err(error),
+        }
+    }
+}
+
 impl VulcanPluginRuntimeManager {
     /// Test all tracked physical retirement owners while registration is excluded.
     /// 排除注册时检查全部受跟踪物理退役所有者。
@@ -114,17 +170,26 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin_id: &str,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        let mut report = VulcanPluginDrainReport::default();
-        report.merge(self.drain_formal_calls(Some(plugin_id), None).await?);
-        report.merge(self.drain_reusable_domains(Some(plugin_id), None).await?);
-        report.merge(self.drain_pinned(Some(plugin_id), None).await?);
+        Ok(self.observe_plugin_sessions_owned(plugin_id).await?.report)
+    }
+
+    /// Observe plugin_id's original cleanup with internal failure classification; return exact evidence without replay.
+    /// 以内部失败分类观测 plugin_id 的原清理；返回精确证据，不重放。
+    pub(super) async fn observe_plugin_sessions_owned(
+        &self,
+        plugin_id: &str,
+    ) -> Result<DrainObservation, VulcanPluginRuntimeError> {
+        let mut observation = DrainObservation::default();
+        observation.merge(self.observe_formal_calls(Some(plugin_id), None).await?);
+        observation.merge(self.observe_reusable_domains(Some(plugin_id), None).await?);
+        observation.merge(self.observe_pinned(Some(plugin_id), None).await?);
         for kind in [
             VulcanPluginPersistentRuntimeKind::Hook,
             VulcanPluginPersistentRuntimeKind::UiAction,
         ] {
-            report.merge(self.drain_formal_instance(plugin_id, kind).await?);
+            observation.merge(self.observe_formal_instance(plugin_id, kind).await?);
         }
-        Ok(report)
+        Ok(observation)
     }
 
     /// Closes every retained plugin session owned by one archived conversation.

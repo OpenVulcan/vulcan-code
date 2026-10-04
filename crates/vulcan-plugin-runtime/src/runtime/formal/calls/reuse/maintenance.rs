@@ -439,8 +439,21 @@ impl VulcanPluginRuntimeManager {
         plugin: Option<&str>,
         controller: Option<&str>,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
+        Ok(self
+            .observe_reusable_domains(plugin, controller)
+            .await?
+            .report)
+    }
+
+    /// Observe plugin/controller's exact domains; return physical pending separately from retained shutdown failures.
+    /// 观测 plugin/controller 的精确域；分别返回物理待完成与保留关闭失败。
+    pub(in crate::runtime) async fn observe_reusable_domains(
+        &self,
+        plugin: Option<&str>,
+        controller: Option<&str>,
+    ) -> Result<crate::runtime::drain::DrainObservation, VulcanPluginRuntimeError> {
         let Some(owner) = self.formal_runtime_owner()? else {
-            return Ok(VulcanPluginDrainReport::default());
+            return Ok(crate::runtime::drain::DrainObservation::default());
         };
         self.close_reusable_domains(plugin, controller, false)?;
         let deadline = Instant::now()
@@ -448,7 +461,9 @@ impl VulcanPluginRuntimeManager {
             .ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Reuse drain deadline is out of range.")
             })?;
-        let mut report = VulcanPluginDrainReport::default();
+        // Preserve real shutdown failures independently from still-live borrowers and pools.
+        // 独立于仍存活借用者及池保留真实关闭失败。
+        let mut observation = crate::runtime::drain::DrainObservation::default();
         loop {
             self.maintain_reusable_domains(&owner)?;
             let pending = {
@@ -480,10 +495,16 @@ impl VulcanPluginRuntimeManager {
                             "Reusable domain {id} retains unfinished cleanup or unacknowledged shutdown failure."
                         );
                         self.record_cleanup_failure(&plugin, message.clone())?;
-                        report.failures.push(message);
+                        if failed {
+                            observation.failed(message);
+                        } else {
+                            // This branch is reached at the finite deadline with physical work still retained.
+                            // 此分支在有限截止时间到达且物理工作仍保留时进入。
+                            observation.pending(message);
+                        }
                     }
                 }
-                return Ok(report);
+                return Ok(observation);
             }
             tokio::time::sleep(OBSERVATION_INTERVAL).await;
         }

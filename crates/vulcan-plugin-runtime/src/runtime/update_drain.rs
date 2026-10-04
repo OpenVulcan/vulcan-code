@@ -268,8 +268,8 @@ pub(super) struct UpdateDrainAuthority {
     /// Serializes cleanup observations without retaining a synchronous lock across await.
     /// 串行清理观测，不跨 await 保留同步锁。
     gate: AsyncMutex<()>,
-    /// A failed earlier observation cannot become successful merely because a later poll is quiet.
-    /// 先前失败的观测不能仅因后续轮询安静而变成成功。
+    /// An actual terminal or unknown cleanup failure stays sticky; finite pending observations do not set this flag.
+    /// 实际终态或未知清理失败持续保留；有限待完成观测不设置此标志。
     failed: AtomicBool,
 }
 
@@ -521,16 +521,19 @@ impl VulcanPluginRuntimeManager {
         }
         // Existing cleanup owns operation handles and does not repeat completed finalizers on polling.
         // 既有清理拥有操作句柄，轮询时不会重复已完成的关闭函数。
-        let mut report = match self.drain_plugin_sessions_owned(plugin_id).await {
-            Ok(report) => report,
+        let observation = match self.observe_plugin_sessions_owned(plugin_id).await {
+            Ok(observation) => observation,
             Err(failure) => {
                 authority.failed.store(true, Ordering::Release);
                 return Err(failure);
             }
         };
-        if !report.failures.is_empty() {
+        if observation.terminal_failure {
             authority.failed.store(true, Ordering::Release);
         }
+        // Preserve pending diagnostics for the caller while retaining only proven failures in the original authority.
+        // 为调用方保留待完成诊断，仅在原权威中持续保存已证失败。
+        let mut report = observation.report;
         // Final proof shares registration exclusion with the initial admission closure.
         // 最终证明与初始入场关闭共享注册互斥。
         let registration = self
@@ -548,6 +551,9 @@ impl VulcanPluginRuntimeManager {
             None => false,
         };
         if self.has_unretired_plugin_resources_locked(plugin_id, &registration)? || native_retained
+            // A deadline may race physical retirement; require another exact observation before consuming Started.
+            // 截止时间可能与物理退役竞态；消费 Started 之前要求另一次精确观测。
+            || !report.failures.is_empty() && !authority.failed.load(Ordering::Acquire)
         {
             report
                 .failures

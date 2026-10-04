@@ -169,11 +169,23 @@ impl VulcanPluginRuntimeManager {
         session: &PinnedSession,
         deadline: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        self.observe_pinned_retirement(session, deadline)
+            .await?
+            .into_result()
+    }
+
+    /// Observe session until deadline; return typed pending only for expiration and Err for actual cleanup faults.
+    /// 观测 session 至 deadline；仅到期返回类型化待完成，实际清理故障返回 Err。
+    async fn observe_pinned_retirement(
+        &self,
+        session: &PinnedSession,
+        deadline: Instant,
+    ) -> Result<crate::runtime::drain::RetirementObservation, VulcanPluginRuntimeError> {
         loop {
             {
                 let state = session.lock()?;
                 if state.retired {
-                    return Ok(());
+                    return Ok(crate::runtime::drain::RetirementObservation::Retired);
                 }
                 if let Some(error) = &state.cleanup_error {
                     return Err(with_session(
@@ -183,10 +195,12 @@ impl VulcanPluginRuntimeManager {
                 }
             }
             if Instant::now() >= deadline {
-                return Err(VulcanPluginRuntimeError::new(format!(
-                    "Formal session {} has not physically retired; ownership remains retained.",
-                    session.id
-                )));
+                return Ok(crate::runtime::drain::RetirementObservation::Pending(
+                    VulcanPluginRuntimeError::new(format!(
+                        "Formal session {} has not physically retired; ownership remains retained.",
+                        session.id
+                    )),
+                ));
             }
             tokio::time::sleep(OBSERVATION_INTERVAL).await;
         }
@@ -199,8 +213,18 @@ impl VulcanPluginRuntimeManager {
         plugin_id: Option<&str>,
         owner_id: Option<&str>,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
+        Ok(self.observe_pinned(plugin_id, owner_id).await?.report)
+    }
+
+    /// Observe plugin_id/owner_id's original sessions; return pending retirement independently from closing failures.
+    /// 观测 plugin_id/owner_id 的原会话；分别返回待完成退役与关闭失败。
+    pub(in crate::runtime) async fn observe_pinned(
+        &self,
+        plugin_id: Option<&str>,
+        owner_id: Option<&str>,
+    ) -> Result<crate::runtime::drain::DrainObservation, VulcanPluginRuntimeError> {
         let Some(owner) = self.formal_runtime_owner()? else {
-            return Ok(VulcanPluginDrainReport::default());
+            return Ok(crate::runtime::drain::DrainObservation::default());
         };
         let sessions: Vec<_> = owner
             .pinned
@@ -218,25 +242,29 @@ impl VulcanPluginRuntimeManager {
             session.closing.store(true, Ordering::Release);
             self.start_pinned_monitor(&owner, session)?;
         }
-        let mut report = VulcanPluginDrainReport::default();
+        // The typed aggregate retains a real finalizer failure after later registry cleanup.
+        // 类型化聚合在后续注册表清理之后保留真实关闭函数失败。
+        let mut observation = crate::runtime::drain::DrainObservation::default();
         for session in sessions {
-            match self.wait_pinned_retired(&session, deadline).await {
-                Ok(()) => {
-                    report.closed_sessions += 1;
+            match self.observe_pinned_retirement(&session, deadline).await {
+                Ok(crate::runtime::drain::RetirementObservation::Retired) => {
+                    observation.report.closed_sessions += 1;
                     if let Some(finalization) = &session.lock()?.finalization
                         && let Err(error) = project_closing(finalization)
                     {
-                        report
-                            .failures
-                            .push(with_session(error, &session.id).to_string());
+                        observation.failed(with_session(error, &session.id).to_string());
                     }
+                }
+                Ok(crate::runtime::drain::RetirementObservation::Pending(error)) => {
+                    self.record_cleanup_failure(&session.plugin.id, error.to_string())?;
+                    observation.pending(error.to_string());
                 }
                 Err(error) => {
                     self.record_cleanup_failure(&session.plugin.id, error.to_string())?;
-                    report.failures.push(error.to_string());
+                    observation.failed(error.to_string());
                 }
             }
         }
-        Ok(report)
+        Ok(observation)
     }
 }

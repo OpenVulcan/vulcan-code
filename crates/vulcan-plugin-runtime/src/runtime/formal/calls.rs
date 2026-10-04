@@ -669,8 +669,21 @@ impl VulcanPluginRuntimeManager {
         plugin_id: Option<&str>,
         owner_session_id: Option<&str>,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
+        Ok(self
+            .observe_formal_calls(plugin_id, owner_session_id)
+            .await?
+            .report)
+    }
+
+    /// Observe calls selected by plugin_id and owner_session_id; return classified original cleanup without changing public reports.
+    /// 观测由 plugin_id 及 owner_session_id 选中的调用；返回分类原清理，不改变公开报告。
+    pub(in crate::runtime) async fn observe_formal_calls(
+        &self,
+        plugin_id: Option<&str>,
+        owner_session_id: Option<&str>,
+    ) -> Result<crate::runtime::drain::DrainObservation, VulcanPluginRuntimeError> {
         let Some(owner) = self.formal_runtime_owner()? else {
-            return Ok(VulcanPluginDrainReport::default());
+            return Ok(crate::runtime::drain::DrainObservation::default());
         };
         let calls: Vec<_> = owner
             .calls
@@ -683,7 +696,7 @@ impl VulcanPluginRuntimeManager {
             })
             .cloned()
             .collect();
-        self.drain_selected_formal_calls(&owner, calls).await
+        self.observe_selected_formal_calls(&owner, calls).await
     }
 
     /// Drain the exact retained calls using owner's existing finite shutdown budget; returns original cleanup evidence.
@@ -695,6 +708,19 @@ impl VulcanPluginRuntimeManager {
         owner: &Arc<ManagedFormalRuntime>,
         calls: Vec<Arc<FormalCall>>,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
+        Ok(self
+            .observe_selected_formal_calls(owner, calls)
+            .await?
+            .report)
+    }
+
+    /// Observe owner's exact calls once; return pending deadlines separately from terminal cleanup failures.
+    /// 单次观测 owner 的精确 calls；将待完成截止时间与终态清理失败分别返回。
+    async fn observe_selected_formal_calls(
+        &self,
+        owner: &Arc<ManagedFormalRuntime>,
+        calls: Vec<Arc<FormalCall>>,
+    ) -> Result<crate::runtime::drain::DrainObservation, VulcanPluginRuntimeError> {
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(owner.settings.shutdown_timeout_ms))
             .ok_or_else(|| {
@@ -704,7 +730,9 @@ impl VulcanPluginRuntimeManager {
             call.cancelled.store(true, Ordering::Release);
             self.retire_unstarted_formal_call(call)?;
         }
-        let mut report = VulcanPluginDrainReport::default();
+        // Keep actual failure classification beside the unchanged public diagnostics.
+        // 在未变公开诊断旁保留实际失败分类。
+        let mut observation = crate::runtime::drain::DrainObservation::default();
         for call in calls {
             loop {
                 self.resume_formal_cleanup(owner, &call)?;
@@ -713,9 +741,9 @@ impl VulcanPluginRuntimeManager {
                     (state.retired, state.supervised, state.cleanup_error.clone())
                 };
                 if retired && !supervised {
-                    report.closed_formal_calls += 1;
+                    observation.report.closed_formal_calls += 1;
                     if let Some(error) = cleanup_error {
-                        report.failures.push(format!(
+                        observation.failed(format!(
                             "Formal invocation {} shutdown failed: {error}",
                             call.id
                         ));
@@ -728,14 +756,14 @@ impl VulcanPluginRuntimeManager {
                         call.id
                     );
                     self.record_cleanup_failure(&call.plugin.id, diagnostic.clone())?;
-                    report.failures.push(diagnostic);
+                    observation.pending(diagnostic);
                     break;
                 }
                 tokio::time::sleep(OBSERVATION_INTERVAL).await;
             }
         }
         self.reap_internal_calls(owner)?;
-        Ok(report)
+        Ok(observation)
     }
 
     /// Submit one legacy stateless tool to the formal parent using its exact owned payload and timeout.
