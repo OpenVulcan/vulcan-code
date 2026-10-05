@@ -1,0 +1,22 @@
+name: Vulcan 브라우저
+capability: Core가 관리하고 세션별로 격리하는 AI 브라우저 화면
+messages:
+  navigationLabel: AI 브라우저
+  localBrowserLabel: 로컬 브라우저
+  conversationRequired: AI 브라우저를 보려면 대화를 선택하세요.
+  settingsLabel: Playwright 설정
+  actionTimeoutLabel: 작업 시간 제한(밀리초)
+  navigationTimeoutLabel: 탐색 시간 제한(밀리초)
+  settleTimeoutLabel: 작업 후 대기 시간(밀리초)
+  consoleLevelLabel: 콘솔 로그 수준
+  settingsSave: 설정 저장
+  settingsRetry: 다시 불러오기
+  settingsSaved: 설정을 저장했습니다. 새 브라우저 연결에 변경된 값이 적용됩니다.
+  settingsHint: 새 AI 브라우저 연결을 시작할 때 적용됩니다.
+  settingsInvalid: 저장하기 전에 유효한 시간 제한을 입력하세요.
+  settingsResponseInvalid: Playwright 설정 응답이 잘못되었습니다.
+  settingsPersistedInvalid: 저장된 Playwright 설정이 잘못되었습니다.
+  consoleLevel_error: 오류
+  consoleLevel_warning: 경고
+  consoleLevel_info: 정보
+  consoleLevel_debug: 디버그

@@ -1,0 +1,22 @@
+name: Vulcan 瀏覽器
+capability: 由 Core 持有並依工作階段隔離的 AI 瀏覽器投影
+messages:
+  navigationLabel: AI 瀏覽器
+  localBrowserLabel: 本機瀏覽器
+  conversationRequired: 請先選取對話以查看其 AI 瀏覽器。
+  settingsLabel: Playwright 設定
+  actionTimeoutLabel: 操作逾時（毫秒）
+  navigationTimeoutLabel: 導覽逾時（毫秒）
+  settleTimeoutLabel: 操作後等待（毫秒）
+  consoleLevelLabel: 主控台層級
+  settingsSave: 儲存設定
+  settingsRetry: 重新載入
+  settingsSaved: 設定已儲存，新建瀏覽器連線將使用更新後的值。
+  settingsHint: 設定在新建 AI 瀏覽器連線時生效。
+  settingsInvalid: 請填入有效的逾時時間後再儲存。
+  settingsResponseInvalid: Playwright 設定回應無效。
+  settingsPersistedInvalid: 已儲存的 Playwright 設定無效。
+  consoleLevel_error: 錯誤
+  consoleLevel_warning: 警告
+  consoleLevel_info: 資訊
+  consoleLevel_debug: 偵錯

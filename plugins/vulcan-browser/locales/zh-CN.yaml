@@ -14,3 +14,9 @@ messages:
   settingsSaved: 设置已保存，新建浏览器连接将使用更新后的值。
   settingsHint: 设置在新建 AI 浏览器连接时生效。
   settingsInvalid: 请填写有效的超时时间后再保存。
+  settingsResponseInvalid: Playwright 设置响应无效。
+  settingsPersistedInvalid: 已保存的 Playwright 设置无效。
+  consoleLevel_error: 错误
+  consoleLevel_warning: 警告
+  consoleLevel_info: 信息
+  consoleLevel_debug: 调试

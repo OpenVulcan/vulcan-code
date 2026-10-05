@@ -1,0 +1,239 @@
+name: Vulcan-Nutzungsstatistik
+capability: Token-Daten des Anbieters über die System-VLDB abfragen und Referenzkosten mit dem eigenen Plugin-Katalog berechnen
+messages:
+  tokens.details: Token-Details
+  timing.request: Anfragedauer
+  timing.column: Latenz
+  timing.firstShort: Erstes Token
+  timing.averageFirstShort: Erstes Token
+  timing.totalShort: Gesamt
+  timing.averageTotalShort: Dauer
+  timing.unrecorded: Nicht aufgezeichnet
+  timing.averageRequest: Durchschnittliche Anfragedauer
+  timing.firstToken: Latenz bis zum ersten Token
+  timing.averageFirstToken: Durchschnittliche Latenz bis zum ersten Token
+  timing.output: Ausgabedauer
+  timing.totalOutput: Gemessene Ausgabedauer
+  timing.speed: Durchschnittliche Ausgabegeschwindigkeit
+  timing.samples: Gemessene Anfragen
+  timing.formula: Die Ausgabedauer reicht vom ersten Token bis zum Abschluss der Anfrage. Die Geschwindigkeit verwendet Ausgabe-Tokens und Dauer derselben gemessenen Anfragen; fehlende Zeiten werden nicht geschätzt.
+  tokens.uncachedInputTokens: Eingabe ohne Cache
+  tokens.reasoningTokens: Denk-Tokens
+  tokens.totalTokens: Tokens gesamt
+  cost.details: Details der Referenzkosten
+  cost.component: Geschätzte Kosten
+  cost.unitPrice: Stückpreis
+  cost.total: Gesamte Referenzschätzung
+  cost.referenceOnly: Aus aufgezeichneter Nutzung und aktuellen Referenzpreisen berechnet; keine Rechnung des Anbieters.
+  pricing.actions: Aktionen
+  pricing.edit: Bearbeiten
+  consumer.name.default-worker: Gesprächsassistent
+  consumer.name.vulcan-code-native-vmm: Gedächtnisdienst
+  consumer.name.vulcan-code-settings-inference-test: Modellverbindungstest
+  consumer.name.vulcan-code-provider-validation: Modellprüfung
+  consumer.name.vulcan-code-knowledge-curation: Wissensaufbereitung
+  consumer.name.vulcan-code-knowledge-embedding: Wissensvektoren
+  consumer.codeContext: Codekontext
+  consumer.custom: 'Benutzerdefinierter Aufrufer · {{id}}'
+  operation.custom: 'Benutzerdefinierter Vorgang · {{id}}'
+  operation.conversation: Gespräch
+  operation.conversation_respond: Gespräch
+  operation.compact: Kontextkomprimierung
+  operation.warmup: Modellvorwärmung
+  operation.image_understand: Bildverständnis
+  operation.image_generate: Bilderzeugung
+  operation.image_edit: Bildbearbeitung
+  operation.video_understand: Videoverständnis
+  operation.video_generate: Videoerzeugung
+  operation.video_edit: Videobearbeitung
+  operation.video_extend: Videoverlängerung
+  operation.audio_understand: Audioverständnis
+  operation.speech_synthesize: Sprachsynthese
+  operation.speech_transcribe: Sprachtranskription
+  operation.voice_clone: Stimmenklonung
+  operation.voice_design: Stimmengestaltung
+  operation.music_generate: Musikerzeugung
+  operation.music_cover: Musik-Cover
+  operation.lyrics_generate: Liedtexterzeugung
+  operation.embedding_create: Vektorerzeugung
+  operation.rerank_documents: Dokumentenneusortierung
+  operation.web_search: Websuche
+  operation.web_extract: Webextraktion
+  error.category: Fehlerkategorie
+  error.code: Fehlercode
+  error.requestId: Anfrage-ID
+  error.noOriginal: Der Statistikdatensatz enthält die ursprüngliche Fehlermeldung nicht.
+  failure.unknown: Die Anfrage wurde nicht erfolgreich abgeschlossen.
+  failure.authentication: Die Authentifizierung der Anfrage ist fehlgeschlagen.
+  failure.permission_denied: Der Anfrage fehlen die erforderlichen Berechtigungen.
+  failure.payment_required: Guthaben oder Kontingent des Kontos reichen nicht aus.
+  failure.rate_limited: Die Anfragerate des Anbieters wurde überschritten.
+  failure.provider_overloaded: Der Anbieter ist überlastet.
+  failure.provider_unavailable: Der Dienst des Anbieters ist nicht verfügbar.
+  failure.timeout: Die Anfrage hat das Zeitlimit überschritten.
+  failure.invalid_request: Die Prüfung der Anfrage ist fehlgeschlagen.
+  failure.context_length_exceeded: Die Anfrage überschreitet das Kontextfenster des Modells.
+  failure.content_policy: Eine Inhaltsrichtlinie hat Anfrage oder Ausgabe abgelehnt.
+  failure.cancelled: Die Anfrage wurde abgebrochen.
+  failure.unclassified: Der Fehler ist nicht klassifiziert. Siehe den aufgezeichneten Status unten.
+  failure.contract: Die Anfrage verletzt den Schnittstellenvertrag.
+  failure.authorization: Dem Aufrufer fehlt die erforderliche Autorisierung.
+  failure.configuration: Die Inferenzkonfiguration ist nicht verfügbar.
+  failure.limit: Die Anfrage hat eine konfigurierte Ausführungsgrenze überschritten.
+  failure.execution: Die Modellinferenz ist fehlgeschlagen.
+  snapshot.retained: Das vorherige Ergebnis wird bis zur erfolgreichen Aktualisierung angezeigt.
+  tokens.noComposition: Eingabe-/Ausgabeanteil nicht verfügbar
+  tokens.composition: 'Eingabe {{input}} · Ausgabe {{output}}'
+  tokens.cacheSeparate: Der Cache-Leseanteil bezieht sich auf die gemeldete Eingabe; Cache-Zahlen werden nicht zu Eingabe und Ausgabe addiert.
+  cost.empty: Keine Kostenaufzeichnungen in diesem Zeitraum
+  pricing.editor: Modellpreis-Editor
+  pricing.chooseModel: Wählen Sie unten ein Modell aus, um seine Preise zu bearbeiten.
+  pricing.editModel: 'Modell bearbeiten · {{model}}'
+  status.unknown: Statistikzustand unbekannt
+  sections.label: Statistikbereiche
+  sections.overview: Übersicht
+  sections.details: Nutzungsdetails
+  sections.pricing: Modellpreise
+  sections.maintenance: Wartung
+  range.label: Zeitraum
+  range.now: Jetzt
+  range.description: Lokale Datums- und Zeitangaben auswählen.
+  range.today: Heute
+  range.start: Startzeit
+  range.end: Endzeit
+  range.followNow: Endzeit folgt der aktuellen Zeit
+  range.invalid: Die Endzeit muss nach der Startzeit liegen.
+  range.confirm: Bestätigen
+  cost.item: Position
+  cost.unitPerMillion: Preis / 1 Mio. Tokens
+  cost.noNonzero: Keine Kostenpositionen ungleich null
+  range.days: 'Letzte {{days}} Tage'
+  page.previous: Zurück
+  page.loading: Diese Tabelle wird aktualisiert…
+  range.last24Hours: 1 Tag
+  range.lastDays: '{{days}} Tage'
+  page.next: Weiter
+  pricing.search: Modelle suchen
+  pricing.filter: Preisfilter
+  pricing.filter.all: Alle Modelle
+  pricing.filter.unpriced: Ohne Preis
+  pricing.filter.override: Eigene Preise
+  pricing.filter.used: Alle Modelle mit gespeicherter Nutzung
+  pricing.tableScope: Preise pro Million Tokens. Genutzte Modelle umfassen alle gespeicherten Datensätze unabhängig von der Detailseitenaufteilung.
+  pricing.loading: Modellpreise werden geladen
+  cost.title: Referenzkosten für den gewählten Zeitraum
+  cost.coverage: '{{priced}} Zeilen mit Preis · {{unpriced}} ohne Preis · {{incomplete}} unvollständig'
+  cost.partial: Teilweise Abdeckung
+  pricing.source: Preisquelle
+  pricing.unpriced: Kein Preis festgelegt
+  pricing.incompleteUsage: Erforderliche Nutzungsdaten unvollständig
+  pricing.loadError: Modellpreise konnten nicht geladen werden
+  error.details: Fehlerdetails
+  tokens.inputTokens: Eingabe
+  tokens.outputTokens: Ausgabe
+  tokens.cacheReadTokens: Cache-Lesen
+  tokens.cacheWriteTokens: Cache-Schreiben
+  tokens.cacheShare: Cache-Lesen / gemeldete Eingabe
+  tokens.breakdown: Eingabe, Ausgabe und Cache
+  usage.search: Nutzung nach Modell suchen
+  usage.applySearch: Suchen
+  usage.order: Zeitliche Reihenfolge
+  usage.newest: Neueste zuerst
+  usage.oldest: Älteste zuerst
+  navigationLabel: Nutzungsstatistik
+  status.ready: Systemstatistik verfügbar
+  status.loading: Systemstatistik wird geladen
+  status.error: Systemstatistik konnte nicht geladen werden
+  status.succeeded: Erfolgreich
+  status.failed: Fehlgeschlagen
+  status.cancelled: Abgebrochen
+  refresh: Aktualisieren
+  refreshing: Wird aktualisiert
+  source.host: System-VLDB
+  pricing.catalog: Referenzkatalog
+  pricing.unmatched: Modell nicht im Referenzkatalog
+  pricing.incomplete: Token-Daten unvollständig
+  pricing.title: Modellreferenzpreise
+  pricing.description: Eigene Preise gehören nur zu dieser Plugin-Konfiguration. Schätzungen werden neu berechnet und nie in die Systemstatistikdatenbank geschrieben.
+  pricing.model: Modell
+  pricing.override: Eigener Preis
+  pricing.default: Katalogstandard
+  pricing.empty: Keine Modellkennungen verfügbar
+  pricing.input: Eingabe ohne Cache
+  pricing.output: Ausgabe
+  pricing.cacheRead: Cache-Lesen
+  pricing.cacheWrite: Cache-Schreiben
+  pricing.perMillion: pro Million Tokens
+  pricing.save: Eigenen Preis speichern
+  pricing.saving: Wird gespeichert
+  pricing.saved: Eigener Modellpreis gespeichert
+  pricing.reset: Katalogstandard wiederherstellen
+  pricing.resetDone: Katalogpreis wiederhergestellt
+  pricing.validation: Vier nichtnegative Dezimalpreise eingeben.
+  revision: Revision
+  consumer.label: Verbraucher
+  consumer.all: Alle Verbraucher
+  error.title: Systemstatistik kann nicht gelesen werden
+  summary.requests: Tatsächliche Versuche
+  summary.requestsDetail: Einschließlich Wiederholungen und Fehlern
+  summary.successRate: Erfolgsquote
+  summary.successes: erfolgreiche Versuche
+  summary.tokens: Bekannte Tokens
+  summary.tokensDetail: Unbekannte Nutzung bleibt fehlend
+  summary.usageCoverage: Nutzungsabdeckung
+  summary.usageCoverageDetail: Direkt vom Anbieter gemeldet
+  heatmap.title: Aktivitätsübersicht
+  heatmap.aria: Token-Aktivitätsübersicht für den gewählten Zeitraum
+  heatmap.empty: Noch keine Token-Aktivität
+  heatmap.tooltip: '{{date}}: {{value}} Tokens · {{requests}} Anfragen · {{successRate}} Erfolg · {{model}}'
+  heatmap.noModel: Kein Modell
+  heatmap.less: Weniger
+  heatmap.more: Mehr
+  trend.title: Tägliche Token-Nutzung
+  trend.range: Letzte 30 Tage
+  trend.aria: Tägliches Token-Liniendiagramm nach Modell
+  trend.empty: Keine Trenddaten in diesem Zeitraum
+  daily.title: Modellnutzung
+  daily.empty: Keine Nutzung in diesem Zeitraum
+  daily.date: Datum
+  daily.provider: Anbieter / Modell
+  daily.consumer: Verbraucher
+  daily.consumerOperation: Verbraucher / Vorgang
+  daily.averageDuration: Durchschnittliche Dauer
+  daily.operation: Vorgang
+  daily.attempts: Versuche
+  daily.tokens: Tokens
+  daily.cost: Referenzschätzung
+  recent.title: Letzte tatsächliche Versuche
+  recent.modelTypes: Modelltypen
+  recent.group.llm: Gesprächsmodelle
+  recent.group.embedding: Vektormodelle
+  recent.group.rerank: Neusortierungsmodelle
+  recent.empty: Keine Aufzeichnungen tatsächlicher Versuche
+  recent.time: Zeit
+  recent.model: Anbieter / Modell
+  recent.consumer: Verbraucher
+  recent.status: Status
+  recent.tokens: Tokens
+  recent.cost: Referenzschätzung
+  recent.error: Fehler
+  accounts.title: Kontonutzungsaufnahmen
+  accounts.empty: Keine Kontonutzungsaufnahmen
+  accounts.time: Beobachtet
+  accounts.provider: Anbieter
+  accounts.connection: Verbindung
+  accounts.kind: Art der Aufnahme
+  clear.title: Historische Statistiken löschen
+  clear.preview: Löschung voranzeigen
+  clear.previewing: Vorschau wird vorbereitet
+  clear.previewSummary: Dieser Vorgang löscht dauerhaft
+  clear.attempts: tatsächliche Versuche
+  clear.tokens: bekannte Tokens
+  clear.cancel: Abbrechen
+  clear.apply: Löschung bestätigen
+  clear.applying: Wird gelöscht
+  clear.success: Historische Statistiken gelöscht
+  privacy: Vulcan speichert ausschließlich Token-Daten in der eigenen Systemdatenbank. Dieses vertrauenswürdige integrierte Plugin fragt sie ab und bereinigt sie; Referenzkosten werden bei jeder Anfrage mit seinem eigenen Katalog neu berechnet.
+  error.retry: Erneut versuchen
+  usage.clearSearch: Modellsuche löschen
+  timing.tokensPerSecond: "{{value}} Tokens/s"

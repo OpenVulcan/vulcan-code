@@ -1,0 +1,22 @@
+name: Браузер Vulcan
+capability: Управляемое Core представление ИИ-браузера с изоляцией по сеансам
+messages:
+  navigationLabel: ИИ-браузер
+  localBrowserLabel: Локальный браузер
+  conversationRequired: Выберите беседу, чтобы открыть её ИИ-браузер.
+  settingsLabel: Настройки Playwright
+  actionTimeoutLabel: Время ожидания действия (мс)
+  navigationTimeoutLabel: Время ожидания навигации (мс)
+  settleTimeoutLabel: Ожидание после действия (мс)
+  consoleLevelLabel: Уровень консоли
+  settingsSave: Сохранить настройки
+  settingsRetry: Загрузить повторно
+  settingsSaved: Настройки сохранены. Новые подключения браузера будут использовать обновлённые значения.
+  settingsHint: Эти настройки применяются при запуске нового подключения ИИ-браузера.
+  settingsInvalid: Перед сохранением введите допустимые значения времени ожидания.
+  settingsResponseInvalid: Ответ с настройками Playwright некорректен.
+  settingsPersistedInvalid: Сохранённые настройки Playwright некорректны.
+  consoleLevel_error: Ошибка
+  consoleLevel_warning: Предупреждение
+  consoleLevel_info: Информация
+  consoleLevel_debug: Отладка

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { createPluginPanel, formatMoney, presetTimeRange } from "./index.mjs";
 import { createPluginQueryClient, invalidatePluginQueries } from "../../../apps/vulcan-code-web/src/service/plugin-ui-query-runtime.ts";
+import { SUPPORTED_LOCALES } from "../../../apps/vulcan-code-web/src/i18n-locales.ts";
 
 // require resolves the existing host test dependencies without adding a plugin bundle dependency.
 // require 解析现有宿主测试依赖，不向插件包添加依赖。
@@ -11,6 +13,9 @@ const require = createRequire(new URL("../../../apps/vulcan-code-web/package.jso
 // React 与 JSDOM 提供真实宿主渲染器与隔离浏览器文档。
 const React = require("react");
 const { JSDOM } = require("jsdom");
+// load parses actual plugin manifests and catalogs through the existing host test dependency.
+// load 通过现有宿主测试依赖解析真实插件清单与词表。
+const { load } = require("js-yaml");
 
 // Select one real calendar shortcut and confirm the dialog's exact interval.
 // 选择真实自然日快捷项，并确认对话框中的精确区间。
@@ -32,11 +37,24 @@ test("money preserves unknown, zero, tiny values, carry and large exact digits",
   ]) assert.equal(formatMoney(input, "en-US"), expected, String(input));
 });
 
+// Check special branches as well as exact large values against comma-decimal locales.
+// 对逗号小数语言验证特殊分支和精确大金额，避免常规分支通过而零值回退英文格式。
+test("money localizes zero, tiny values and exact rounding without losing stored digits", () => {
+  for (const locale of ["fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU"]) {
+    assert.equal(formatMoney("0", locale), "0,00", locale);
+    assert.equal(formatMoney("0.00000001", locale), "<0,0001", locale);
+    assert.equal(formatMoney("0.99999", locale), "≈1,00", locale);
+    assert.equal(formatMoney("123456789012345678901.125", locale).replace(/[.\s\u00a0\u202f]/g, ""), "≈123456789012345678901,13", locale);
+  }
+});
+
 // Mount the actual plugin against an isolated DOM and controlled action responses.
 // 将真实插件挂载到隔离 DOM 与受控 Action 响应。
-// invoke handles declared actions; returns the container and asynchronous cleanup.
-// invoke 处理声明的 Action；返回容器与异步清理函数。
-async function mount(invoke, strict = false) {
+// invoke handles declared actions; strict controls StrictMode; locale and messages project host localization.
+// invoke 处理声明的 Action；strict 控制 StrictMode；locale 与 messages 投影宿主本地化。
+// Returns the container and asynchronous cleanup.
+// 返回容器与异步清理函数。
+async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
   // Use the real host coordinator so StrictMode tests exercise the shared subscription contract.
   // 使用真实宿主协调器，让 StrictMode 测试覆盖共享订阅契约。
   invalidatePluginQueries("usage-test");
@@ -68,7 +86,7 @@ async function mount(invoke, strict = false) {
   // sdk supplies only the formally used host surface.
   // sdk 仅提供正式使用的宿主接口。
   const sdk = {
-    React, locale: "en-US", invoke: client.invoke, t: (key, fallback) => fallback,
+    React, locale, invoke: client.invoke, t: (key, fallback) => messages[key] ?? fallback,
     components: { Badge: plain, Button, StatusPill: plain, PageTabs, MetricCard: plain, StreamPlaceholder: plain,
       SelectControl, ActivityHeatmap, ActivityHeatmapLegend: plain,
       TimeSeriesLineChart: plain, ChartLegend: plain, EmptyState: plain, ErrorState: plain,
@@ -139,6 +157,70 @@ const dashboard = {
     costs: [{ currency: "USD", amount: null, pricedRows: 0, incompleteRows: 0, unpricedRows: 0 }] },
   pricingCatalog: { currency: "USD", entryCount: 1, overrideCount: 0 },
 };
+
+// Locale affects projected text only; arithmetic, stored facts and CSS proportions stay exact.
+// 语言只影响投影文本；计算、存储事实和 CSS 占比保持精确。
+test("French host locale formats percentage spacing, cache share and translated panel labels", async () => {
+  // messages is the declared host translation projection, independent from plugin calculations.
+  // messages 为声明的宿主译文投影，与插件计算相互独立。
+  const messages = {
+    "sections.overview": "Vue d’ensemble", "sections.details": "Détails d’utilisation",
+    "tokens.composition": "Entrée {{input}} · Sortie {{output}}",
+    "heatmap.tooltip": "{{date}} : {{value}} tokens · {{requests}} requêtes · {{successRate}} de réussite · {{model}}",
+  };
+  const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : {
+    ...dashboard, summary: { ...dashboard.summary, inputTokens: 1200, outputTokens: 300, cacheReadTokens: 400 },
+    heatmap: [{ date: new Date().toLocaleDateString("en-CA"), value: 1500, requests: 3, successes: 2, topModelName: "fixture-model", topProviderName: "fixture-provider" }],
+  }), false, "fr-FR", messages);
+  try {
+    assert.match(panel.container.textContent, /Vue d’ensemble/);
+    assert.match(panel.container.textContent, /Détails d’utilisation/);
+    const bar = panel.container.querySelector('.plugin-statistics-token-bar[role="img"]');
+    assert.equal(bar.getAttribute("aria-label"), "Entrée 80,0\u00a0% · Sortie 20,0\u00a0%");
+    assert.equal(bar.children[0].style.width, "80%");
+    assert.equal(bar.children[1].style.width, "20%");
+    assert.match(panel.container.querySelector(".plugin-statistics-cache-facts").textContent, /33,3\u00a0%/);
+    const labels = [...panel.container.querySelectorAll('[data-test-heatmap] [aria-label]')].map((cell) => cell.getAttribute("aria-label"));
+    assert.ok(labels.some((label) => label.includes("66,7\u00a0% de réussite")));
+    assert.doesNotMatch(panel.container.textContent, /80\.0%|33\.3%/);
+  } finally { await panel.close(); }
+});
+
+// Validate each current host language with its real manifest-selected catalog and mounted UI.
+// 使用清单实际选择的词表及已挂载界面验证宿主当前每种语言。
+test("every host locale renders real translations, percentage measurements and special money values", async () => {
+  // manifest owns locale paths; the shared host registry owns the supported language set.
+  // manifest 拥有语言路径；共享宿主注册表拥有支持语言集合。
+  const manifest = load(readFileSync(new URL("../plugin.yaml", import.meta.url), "utf8"));
+  for (const { code: locale } of SUPPORTED_LOCALES) {
+    // catalog is the actual plugin resource selected for this language, including the shared English file.
+    // catalog 为此语言实际选择的插件资源，包含共用的英文文件。
+    const catalog = load(readFileSync(new URL(`../${manifest.locales[locale]}`, import.meta.url), "utf8"));
+    // separator keeps the assertion independent from any English-only punctuation assumption.
+    // separator 使断言不依赖仅适用英文的标点假设。
+    const separator = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
+    assert.equal(formatMoney("0", locale), `0${separator}00`, locale);
+    assert.equal(formatMoney("0.00000001", locale), `<0${separator}0001`, locale);
+    const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : {
+      ...dashboard, summary: { ...dashboard.summary, inputTokens: 1200, outputTokens: 300, cacheReadTokens: 400 },
+      heatmap: [{ date: new Date().toLocaleDateString("en-CA"), value: 1500, requests: 3, successes: 2, topModelName: "fixture-model", topProviderName: "fixture-provider" }],
+    }), false, locale, catalog.messages);
+    try {
+      assert.match(panel.container.textContent, new RegExp(catalog.messages["sections.overview"].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), locale);
+      assert.ok([...panel.container.querySelectorAll("nav button")].some((button) => button.textContent === catalog.messages["sections.details"]), locale);
+      // percent keeps the locale's exact whitespace and suffix in accessibility labels.
+      // percent 在无障碍标签中保留语言精确的空白与后缀。
+      const percent = new Intl.NumberFormat(locale, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      const expected = catalog.messages["tokens.composition"].replace("{{input}}", percent.format(0.8)).replace("{{output}}", percent.format(0.2));
+      const bar = panel.container.querySelector('.plugin-statistics-token-bar[role="img"]');
+      assert.equal(bar.getAttribute("aria-label"), expected, locale);
+      assert.equal(bar.children[0].style.width, "80%", locale);
+      assert.ok(panel.container.querySelector(".plugin-statistics-cache-facts").textContent.includes(percent.format(1 / 3)), locale);
+      const labels = [...panel.container.querySelectorAll('[data-test-heatmap] [aria-label]')].map((cell) => cell.getAttribute("aria-label"));
+      assert.ok(labels.some((label) => label.includes(percent.format(2 / 3))), locale);
+    } finally { await panel.close(); }
+  }
+});
 
 // Zero requests must remain distinct from measured requests that all failed.
 // 零请求必须与已观测请求全部失败明确区分。

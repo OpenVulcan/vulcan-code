@@ -194,19 +194,13 @@ export function createPluginPanel(sdk) {
   //
   // unixSeconds is the exact Context7 quota reset Unix timestamp in seconds.
   // unixSeconds 是 Context7 配额重置时间的精确 Unix 秒时间戳。
-  // Returns YYYY-MM-DD for Chinese or a standard abbreviated English date.
-  // 中文返回 YYYY-MM-DD，英文返回标准缩写日期。
+  // Returns a calendar date formatted in the active host locale.
+  // 返回按当前宿主语言格式化的日历日期。
   function formatQuotaResetDate(unixSeconds) {
     // date is interpreted in the user's local timezone, matching the previous UI behavior.
     // date 使用用户本地时区解释，与之前界面行为保持一致。
     const date = new Date(unixSeconds * 1000);
-    if (sdk.locale.toLowerCase().startsWith("zh")) {
-      // pad ensures every Chinese numeric month and day occupies exactly two digits.
-      // pad 确保中文数字月份与日期始终占用两位。
-      const pad = (value) => String(value).padStart(2, "0");
-      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-    }
-    return new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short", year: "numeric" }).format(date);
+    return new Intl.DateTimeFormat(sdk.locale, { day: "numeric", month: "short", year: "numeric" }).format(date);
   }
 
   // Context7PluginPanel owns only non-secret rendered state; saved keys are never returned by actions.
@@ -495,7 +489,7 @@ export function createPluginPanel(sdk) {
     const stats = usage?.localStats ?? null;
     // dayOptions renders one bounded day list as localized select options.
     // dayOptions 把一组有界天数渲染为本地化下拉选项。
-    const dayOptions = (values) => values.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: value }) }));
+    const dayOptions = (values) => values.map((value) => ({ value: String(value), label: interpolate(text("days", "{{days}} days"), { days: sdk.formatNumber(value) }) }));
 
     // settingRow renders one setting as name and explanation on the left and its controls on the right.
     // settingRow 把一项设置渲染为左侧名称与说明、右侧控件。
@@ -590,7 +584,7 @@ export function createPluginPanel(sdk) {
             className: "w-28",
             disabled: saving,
             onValueChange: (value) => updateSettings({ ...config, requestTimeoutMs: Number(value) }),
-            options: TIMEOUT_OPTIONS.map((value) => ({ value: String(value), label: `${value / 1000} s` })),
+            options: TIMEOUT_OPTIONS.map((value) => ({ value: String(value), label: new Intl.NumberFormat(sdk.locale, { style: "unit", unit: "second", unitDisplay: "short" }).format(value / 1000) })),
             value: String(config.requestTimeoutMs),
           }),
         ),
@@ -633,7 +627,7 @@ export function createPluginPanel(sdk) {
               h(MetricCard, { label: text("requests", "Requests"), value: stats ? sdk.formatNumber(stats.requests) : "—" }),
               h(MetricCard, { label: text("successes", "Successful"), value: stats ? sdk.formatNumber(stats.successes) : "—" }),
               h(MetricCard, { label: text("failures", "Failed"), value: stats ? sdk.formatNumber(stats.failures) : "—" }),
-              h(MetricCard, { label: text("averageDuration", "Average duration"), value: stats && stats.requests > 0 ? `${Math.round(stats.averageDurationMs)} ms` : "—" }),
+              h(MetricCard, { label: text("averageDuration", "Average duration"), value: stats && stats.requests > 0 ? new Intl.NumberFormat(sdk.locale, { style: "unit", unit: "millisecond", unitDisplay: "short" }).format(Math.round(stats.averageDurationMs)) : "—" }),
             ),
           ),
           metricGroup(

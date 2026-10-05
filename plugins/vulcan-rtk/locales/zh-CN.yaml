@@ -63,6 +63,7 @@ messages:
   stats.byCommand: 按命令统计
   stats.time: 耗时
   stats.impact: 影响
+  stats.topCommands: "前 {{count}} 个命令"
   routes.title: RTK 路由
   routes.description: 精确选择允许改写的受支持命令。
   routes.curated: 精选

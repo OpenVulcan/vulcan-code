@@ -1,5 +1,8 @@
 # 插件清单校验、生成契约与显式迁移
 
+开发入口见[插件开发指南](plugin-development-guide.md)，涵盖入口选择、能力注册、多语言、同步与验证。
+五个内置插件的当前状态、复用候选和测量方法见[插件性能适配指南](plugin-performance-adaptation.md)。
+
 ## 契约归属
 
 完整清单结构的权威是 `manifest.rs`、`manifest/requirements.rs`、`manifest/reuse.rs`，

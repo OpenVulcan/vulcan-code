@@ -1,0 +1,62 @@
+name: Context7
+capability: コーディングエージェント向けの最新・バージョン対応ライブラリドキュメント
+messages:
+  errorDetails: エラーの詳細
+  navigationLabel: Context7
+  allowanceDescription: API キーなしの匿名モードでは 200 回リクエストできます。登録して無料の API キーを設定すると、1,000 回リクエストでき、公式ダッシュボードでアカウントの使用状況を確認できます。
+  refresh: 更新
+  loading: Context7 の設定を読み込み中…
+  loadError: Context7 のデータを読み込めませんでした。
+  retry: 再試行
+  operationFailed: 操作に失敗しました。再試行してください。
+  credentialTitle: 認証
+  anonymousMode: 匿名モード
+  apiKeyMode: API キーモード
+  configured: API キー設定済み
+  notConfigured: API キーが未設定のため、匿名モードの利用枠を使用します。
+  apiKeyLabel: API キー
+  apiKeyPlaceholder: ctx7sk-…
+  saveApiKey: API キーを保存
+  replaceApiKey: API キーを変更
+  deleteApiKey: API キーを削除
+  confirmDeleteApiKey: 削除を確認
+  apiKeySaved: Context7 の API キーを保存しました。
+  apiKeyDeleted: Context7 の API キーを削除し、匿名モードを有効にしました。
+  credentialInvalid: 設定済みの API キーが Context7 に拒否されました。
+  credentialValid: 設定済みの API キーの検証に成功しました。
+  credentialUntested: 設定済みの API キーはまだテストされていません。
+  credentialUnknown: API キーの検証結果はありません。
+  connectionTitle: 接続テスト
+  connectionTest: 接続をテスト
+  connectionTestHint: テストには現在の利用枠から Context7 リクエストを 1 回消費します。
+  connectionSuccess: Context7 に接続できました。
+  behaviorTitle: リクエストの動作
+  defaultFastMode: 高速モードを既定で使用
+  defaultFastModeHint: Context7 の LLM による再ランキングを省略して遅延を減らします。関連性が低下する場合があります。
+  timeout: リクエストのタイムアウト
+  timeoutHint: 1 回の Context7 リクエストで応答を待つ最大時間です。
+  retention: ローカル統計の保持期間
+  retentionHint: 保持期間を過ぎたローカルのリクエスト記録は削除されます。
+  saveSettings: 設定を保存
+  settingsSaved: Context7 の設定を保存しました。
+  usageTitle: 使用状況と割り当て
+  localStatsTitle: ローカルのリクエスト統計
+  usageRange: ローカル統計の範囲
+  requests: リクエスト数
+  successes: 成功
+  failures: 失敗
+  averageDuration: 平均所要時間
+  quotaTitle: 最新の Context7 割り当て情報
+  quotaTier: プラン
+  quotaRemaining: 残り
+  quotaLimit: 上限
+  quotaReset: リセット日
+  noQuota: 現在の認証世代では割り当て情報を含む応答をまだ受信していません。
+  localUsageNotice: ローカル統計には、この Vulcan Code プラグインから行ったリクエストのみが含まれます。
+  officialUsageNotice: アカウント全体の使用状況、請求期間、シート数、料金は Context7 の公式ダッシュボードで確認できます。
+  dashboardLink: Context7 ダッシュボード
+  apiKeyDocsLink: 無料の API キーを取得
+  usageDocsLink: API と使用状況のドキュメント
+  saving: 保存中…
+  testing: テスト中…
+  days: "{{days}} 日"

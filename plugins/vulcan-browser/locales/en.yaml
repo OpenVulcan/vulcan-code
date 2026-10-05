@@ -14,3 +14,9 @@ messages:
   settingsSaved: Settings saved. New browser connections use the updated values.
   settingsHint: These settings apply when a new AI browser connection starts.
   settingsInvalid: Enter valid timeouts before saving.
+  settingsResponseInvalid: Playwright settings response is invalid.
+  settingsPersistedInvalid: Persisted Playwright settings are invalid.
+  consoleLevel_error: Error
+  consoleLevel_warning: Warning
+  consoleLevel_info: Information
+  consoleLevel_debug: Debug

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { createPluginPanel } from "./index.mjs";
+import { SUPPORTED_LOCALES } from "../../../apps/vulcan-code-web/src/i18n-locales.ts";
 
 // require uses existing host dependencies without adding a plugin runtime library.
 // require 使用既有宿主依赖，不向插件运行时增加库。
@@ -17,9 +19,9 @@ const bootstrap = { settings, credential: { configured: false, validationStatus:
 
 // mount exposes the real panel and its declared background event without running network or storage effects.
 // mount 暴露真实面板及其声明后台事件，不执行网络或存储副作用。
-// invoke handles explicit synthetic actions; returns the DOM, refresh callback, notifications and cleanup.
-// invoke 处理明确的合成动作；返回 DOM、刷新回调、通知及清理函数。
-async function mount(invoke) {
+// invoke handles synthetic actions, locale and messages select the catalog; returns the DOM and cleanup.
+// invoke 处理合成动作，locale 和 messages 选择语言目录；返回 DOM 与清理函数。
+async function mount(invoke, locale = "en-US", messages = {}) {
   // dom and originals preserve the test runner's global browser state.
   // dom 和 originals 保留测试运行器的全局浏览器状态。
   const dom = new JSDOM("<!doctype html><div id='root'></div>");
@@ -44,7 +46,7 @@ async function mount(invoke) {
   }, options.map((option) => React.createElement("option", { key: option.value, value: option.value }, option.label)));
   // sdk supplies no network, credentials or real event bus.
   // sdk 不提供网络、凭据或真实事件总线。
-  const sdk = { React, locale: "en-US", invoke, t: (_key, fallback) => fallback, formatNumber: String,
+  const sdk = { React, locale, invoke, t: (key, fallback) => messages[key] ?? fallback, formatNumber: (value) => new Intl.NumberFormat(locale).format(value),
     components: { Badge: plain, Button, Input, Switch, MetricCard: plain, SelectControl, ErrorState: plain, EmptyState: plain, StreamPlaceholder: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }) },
     events: { subscribe: (_name, callback) => { eventHandler = callback; return () => { eventHandler = () => {}; }; } },
@@ -73,6 +75,40 @@ test("partial usage failure keeps authentication visible and secondary explanati
     assert.ok(panel.container.querySelector('[aria-label="Local request statistics"]'));
     assert.ok(panel.container.querySelector('[aria-label="Fast mode by default"]'));
   } finally { await panel.close(); }
+});
+
+test("all host locales render translated controls and regional dates, numbers and units", async () => {
+  // yaml loads the existing host dependency and rejects malformed authored catalogs.
+  // yaml 加载既有宿主依赖，并拒绝格式错误的语言目录。
+  const yaml = require("js-yaml");
+  // localeCodes derives mounted coverage directly from the authoritative host registry.
+  // localeCodes 直接从权威宿主注册表派生挂载覆盖范围。
+  const localeCodes = SUPPORTED_LOCALES.map((entry) => entry.code);
+  // reset and result are explicit non-secret quota and local statistics projections.
+  // reset 和 result 是明确的非密钥配额及本机统计投影。
+  const reset = 1791187200;
+  const result = { ...bootstrap, usageError: null, usage: {
+    localStats: { requests: 1234, successes: 1230, failures: 4, averageDurationMs: 1234 },
+    quotaSnapshot: { quotaTier: "free", quotaRemaining: 750, quotaLimit: 1000, quotaResetUnixSec: reset },
+  } };
+  for (const locale of localeCodes) {
+    // catalog is the exact authored catalog rather than an English fallback fixture.
+    // catalog 是准确的已创作语言目录，而非英语回退测试数据。
+    const catalog = yaml.load(readFileSync(new URL(`../locales/${locale === "en-US" ? "en" : locale}.yaml`, import.meta.url), "utf8"));
+    // panel mounts the real UI with this exact locale and no native or network effects.
+    // panel 使用当前准确语言挂载真实界面，不执行原生或网络副作用。
+    const panel = await mount(async () => result, locale, catalog.messages);
+    try {
+      assert.ok(panel.container.querySelector('input[type="password"]'));
+      assert.ok([...panel.container.querySelectorAll("button")].some((button) => button.textContent === catalog.messages.saveApiKey), locale);
+      assert.ok(panel.container.textContent.includes(new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", year: "numeric" }).format(new Date(reset * 1000))), locale);
+      assert.ok(panel.container.textContent.includes(new Intl.NumberFormat(locale).format(1234)), locale);
+      assert.ok(panel.container.textContent.includes(new Intl.NumberFormat(locale, { style: "unit", unit: "millisecond", unitDisplay: "short" }).format(1234)), locale);
+      assert.ok([...panel.container.querySelectorAll("option")].some((option) => option.textContent === new Intl.NumberFormat(locale, { style: "unit", unit: "second", unitDisplay: "short" }).format(30)), locale);
+      assert.ok([...panel.container.querySelectorAll("option")].some((option) => option.textContent === catalog.messages.days.replace("{{days}}", new Intl.NumberFormat(locale).format(90))), locale);
+      assert.doesNotMatch(panel.container.textContent, /\{\{days\}\}/);
+    } finally { await panel.close(); }
+  }
 });
 
 test("retains settings drafts across background refresh and accepts only one concurrent save", async () => {

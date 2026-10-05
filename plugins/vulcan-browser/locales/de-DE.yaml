@@ -1,0 +1,22 @@
+name: Vulcan-Browser
+capability: Von Core verwaltete und pro Sitzung isolierte KI-Browseransicht
+messages:
+  navigationLabel: KI-Browser
+  localBrowserLabel: Lokaler Browser
+  conversationRequired: Wählen Sie eine Unterhaltung aus, um deren KI-Browser anzuzeigen.
+  settingsLabel: Playwright-Einstellungen
+  actionTimeoutLabel: Zeitlimit für Aktionen (ms)
+  navigationTimeoutLabel: Zeitlimit für Navigation (ms)
+  settleTimeoutLabel: Wartezeit nach Aktionen (ms)
+  consoleLevelLabel: Konsolenstufe
+  settingsSave: Einstellungen speichern
+  settingsRetry: Erneut laden
+  settingsSaved: Einstellungen gespeichert. Neue Browserverbindungen verwenden die aktualisierten Werte.
+  settingsHint: Diese Einstellungen gelten beim Start einer neuen KI-Browserverbindung.
+  settingsInvalid: Geben Sie vor dem Speichern gültige Zeitlimits ein.
+  settingsResponseInvalid: Die Antwort mit den Playwright-Einstellungen ist ungültig.
+  settingsPersistedInvalid: Die gespeicherten Playwright-Einstellungen sind ungültig.
+  consoleLevel_error: Fehler
+  consoleLevel_warning: Warnung
+  consoleLevel_info: Information
+  consoleLevel_debug: Debugging

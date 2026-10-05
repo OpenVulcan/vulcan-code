@@ -1,0 +1,239 @@
+name: Statistiques d’utilisation Vulcan
+capability: Consulter les données Token du fournisseur via la VLDB système et estimer les coûts à partir du catalogue de l’extension
+messages:
+  tokens.details: Détails des tokens
+  timing.request: Durée de la requête
+  timing.column: Latence
+  timing.firstShort: Premier token
+  timing.averageFirstShort: Premier token
+  timing.totalShort: Total
+  timing.averageTotalShort: Durée
+  timing.unrecorded: Non enregistré
+  timing.averageRequest: Durée moyenne des requêtes
+  timing.firstToken: Latence du premier token
+  timing.averageFirstToken: Latence moyenne du premier token
+  timing.output: Durée de sortie
+  timing.totalOutput: Durée de sortie mesurée
+  timing.speed: Vitesse moyenne de sortie
+  timing.samples: Requêtes mesurées
+  timing.formula: La durée de sortie va du premier token à la fin de la requête. La vitesse utilise les tokens et la durée des mêmes requêtes mesurées ; aucun temps manquant n’est estimé.
+  tokens.uncachedInputTokens: Entrée hors cache
+  tokens.reasoningTokens: Tokens de raisonnement
+  tokens.totalTokens: Total des tokens
+  cost.details: Détails du coût indicatif
+  cost.component: Coût estimé
+  cost.unitPrice: Prix unitaire
+  cost.total: Estimation indicative totale
+  cost.referenceOnly: Calculé à partir de l’utilisation enregistrée et des prix indicatifs actuels ; ce n’est pas une facture du fournisseur.
+  pricing.actions: Actions
+  pricing.edit: Modifier
+  consumer.name.default-worker: Assistant de conversation
+  consumer.name.vulcan-code-native-vmm: Service de mémoire
+  consumer.name.vulcan-code-settings-inference-test: Test de connexion du modèle
+  consumer.name.vulcan-code-provider-validation: Validation du modèle
+  consumer.name.vulcan-code-knowledge-curation: Organisation des connaissances
+  consumer.name.vulcan-code-knowledge-embedding: Vectorisation des connaissances
+  consumer.codeContext: Contexte du code
+  consumer.custom: 'Appelant personnalisé · {{id}}'
+  operation.custom: 'Opération personnalisée · {{id}}'
+  operation.conversation: Conversation
+  operation.conversation_respond: Conversation
+  operation.compact: Compression du contexte
+  operation.warmup: Préchauffage du modèle
+  operation.image_understand: Compréhension d’image
+  operation.image_generate: Génération d’image
+  operation.image_edit: Modification d’image
+  operation.video_understand: Compréhension de vidéo
+  operation.video_generate: Génération de vidéo
+  operation.video_edit: Modification de vidéo
+  operation.video_extend: Prolongement de vidéo
+  operation.audio_understand: Compréhension audio
+  operation.speech_synthesize: Synthèse vocale
+  operation.speech_transcribe: Transcription vocale
+  operation.voice_clone: Clonage de voix
+  operation.voice_design: Conception de voix
+  operation.music_generate: Génération musicale
+  operation.music_cover: Reprise musicale
+  operation.lyrics_generate: Génération de paroles
+  operation.embedding_create: Génération de vecteurs
+  operation.rerank_documents: Reclassement des documents
+  operation.web_search: Recherche web
+  operation.web_extract: Extraction web
+  error.category: Catégorie d’erreur
+  error.code: Code d’erreur
+  error.requestId: ID de requête
+  error.noOriginal: L’enregistrement statistique ne contient pas le message d’erreur original.
+  failure.unknown: La requête ne s’est pas terminée correctement.
+  failure.authentication: L’authentification de la requête a échoué.
+  failure.permission_denied: La requête ne dispose pas des permissions nécessaires.
+  failure.payment_required: Le solde ou le quota du compte est insuffisant.
+  failure.rate_limited: La limite de débit du fournisseur a été dépassée.
+  failure.provider_overloaded: Le fournisseur est surchargé.
+  failure.provider_unavailable: Le service du fournisseur est indisponible.
+  failure.timeout: Le délai de la requête a expiré.
+  failure.invalid_request: La validation de la requête a échoué.
+  failure.context_length_exceeded: La requête dépasse la fenêtre de contexte du modèle.
+  failure.content_policy: Une politique de contenu a rejeté la requête ou la sortie.
+  failure.cancelled: La requête a été annulée.
+  failure.unclassified: Erreur non classée. Consultez l’état enregistré ci-dessous.
+  failure.contract: La requête viole le contrat de l’interface.
+  failure.authorization: L’appelant ne dispose pas de l’autorisation requise.
+  failure.configuration: La configuration d’inférence est indisponible.
+  failure.limit: La requête a dépassé une limite d’exécution configurée.
+  failure.execution: L’exécution de l’inférence du modèle a échoué.
+  snapshot.retained: Le résultat précédent reste affiché jusqu’à la réussite de l’actualisation.
+  tokens.noComposition: Proportion entrée/sortie indisponible
+  tokens.composition: 'Entrée {{input}} · Sortie {{output}}'
+  tokens.cacheSeparate: La part de lecture du cache utilise l’entrée déclarée ; les compteurs de cache ne sont pas ajoutés à l’entrée ou à la sortie.
+  cost.empty: Aucun coût enregistré dans cette période
+  pricing.editor: Éditeur de prix des modèles
+  pricing.chooseModel: Sélectionnez un modèle dans le tableau ci-dessous pour modifier ses prix.
+  pricing.editModel: 'Modifier le modèle · {{model}}'
+  status.unknown: État des statistiques inconnu
+  sections.label: Sections des statistiques
+  sections.overview: Vue d’ensemble
+  sections.details: Détails d’utilisation
+  sections.pricing: Prix des modèles
+  sections.maintenance: Maintenance
+  range.label: Période
+  range.now: Maintenant
+  range.description: Choisissez des dates et heures locales.
+  range.today: Aujourd’hui
+  range.start: Heure de début
+  range.end: Heure de fin
+  range.followNow: La fin suit l’heure actuelle
+  range.invalid: La fin doit être postérieure au début.
+  range.confirm: Confirmer
+  cost.item: Élément
+  cost.unitPerMillion: Prix / million de tokens
+  cost.noNonzero: Aucun coût non nul
+  range.days: '{{days}} derniers jours'
+  page.previous: Précédent
+  page.loading: Mise à jour du tableau…
+  range.last24Hours: 1 jour
+  range.lastDays: '{{days}} jours'
+  page.next: Suivant
+  pricing.search: Rechercher des modèles
+  pricing.filter: Filtre de prix
+  pricing.filter.all: Tous les modèles
+  pricing.filter.unpriced: Sans prix
+  pricing.filter.override: Prix personnalisés
+  pricing.filter.used: Tous les modèles ayant une utilisation conservée
+  pricing.tableScope: Prix par million de tokens. Les modèles utilisés incluent tous les enregistrements conservés, indépendamment de la pagination des détails.
+  pricing.loading: Chargement des prix des modèles
+  cost.title: Coût indicatif pour la période sélectionnée
+  cost.coverage: '{{priced}} lignes tarifées · {{unpriced}} sans prix · {{incomplete}} incomplètes'
+  cost.partial: Couverture partielle
+  pricing.source: Source du prix
+  pricing.unpriced: Aucun prix configuré
+  pricing.incompleteUsage: Utilisation requise incomplète
+  pricing.loadError: Impossible de charger les prix des modèles
+  error.details: Détails de l’erreur
+  tokens.inputTokens: Entrée
+  tokens.outputTokens: Sortie
+  tokens.cacheReadTokens: Lecture du cache
+  tokens.cacheWriteTokens: Écriture du cache
+  tokens.cacheShare: Lecture du cache / entrée déclarée
+  tokens.breakdown: Entrée, sortie et cache
+  usage.search: Rechercher l’utilisation par modèle
+  usage.applySearch: Rechercher
+  usage.order: Ordre chronologique
+  usage.newest: Plus récents d’abord
+  usage.oldest: Plus anciens d’abord
+  navigationLabel: Statistiques d’utilisation
+  status.ready: Statistiques système disponibles
+  status.loading: Chargement des statistiques système
+  status.error: Échec du chargement des statistiques système
+  status.succeeded: Réussite
+  status.failed: Échec
+  status.cancelled: Annulé
+  refresh: Actualiser
+  refreshing: Actualisation
+  source.host: VLDB système
+  pricing.catalog: Catalogue indicatif
+  pricing.unmatched: Modèle absent du catalogue indicatif
+  pricing.incomplete: Données Token incomplètes
+  pricing.title: Prix indicatifs des modèles
+  pricing.description: Les prix personnalisés appartiennent uniquement à cette extension. Les estimations sont recalculées et ne sont jamais écrites dans la base de statistiques système.
+  pricing.model: Modèle
+  pricing.override: Prix personnalisé
+  pricing.default: Valeur du catalogue
+  pricing.empty: Aucun identifiant de modèle disponible
+  pricing.input: Entrée hors cache
+  pricing.output: Sortie
+  pricing.cacheRead: Lecture du cache
+  pricing.cacheWrite: Écriture du cache
+  pricing.perMillion: par million de tokens
+  pricing.save: Enregistrer le prix personnalisé
+  pricing.saving: Enregistrement
+  pricing.saved: Prix personnalisé du modèle enregistré
+  pricing.reset: Rétablir le prix du catalogue
+  pricing.resetDone: Prix du catalogue rétabli
+  pricing.validation: Saisissez quatre prix décimaux positifs ou nuls.
+  revision: Révision
+  consumer.label: Consommateur
+  consumer.all: Tous les consommateurs
+  error.title: Impossible de lire les statistiques système
+  summary.requests: Tentatives réelles
+  summary.requestsDetail: Inclut les nouvelles tentatives et les échecs
+  summary.successRate: Taux de réussite
+  summary.successes: tentatives réussies
+  summary.tokens: Tokens connus
+  summary.tokensDetail: L’utilisation inconnue reste absente
+  summary.usageCoverage: Couverture de l’utilisation
+  summary.usageCoverageDetail: Déclarée directement par le fournisseur
+  heatmap.title: Carte d’activité
+  heatmap.aria: Carte d’activité des tokens pour la période sélectionnée
+  heatmap.empty: Aucune activité de tokens pour le moment
+  heatmap.tooltip: '{{date}} : {{value}} tokens · {{requests}} requêtes · {{successRate}} de réussite · {{model}}'
+  heatmap.noModel: Aucun modèle
+  heatmap.less: Moins
+  heatmap.more: Plus
+  trend.title: Utilisation quotidienne des tokens
+  trend.range: 30 derniers jours
+  trend.aria: Courbe quotidienne des tokens regroupée par modèle
+  trend.empty: Aucune tendance dans cette période
+  daily.title: Utilisation des modèles
+  daily.empty: Aucune utilisation dans cette période
+  daily.date: Date
+  daily.provider: Fournisseur / modèle
+  daily.consumer: Consommateur
+  daily.consumerOperation: Consommateur / opération
+  daily.averageDuration: Durée moyenne
+  daily.operation: Opération
+  daily.attempts: Tentatives
+  daily.tokens: Tokens
+  daily.cost: Estimation indicative
+  recent.title: Tentatives réelles récentes
+  recent.modelTypes: Types de modèles
+  recent.group.llm: Modèles de conversation
+  recent.group.embedding: Modèles de vectorisation
+  recent.group.rerank: Modèles de reclassement
+  recent.empty: Aucun enregistrement de tentative réelle
+  recent.time: Heure
+  recent.model: Fournisseur / modèle
+  recent.consumer: Consommateur
+  recent.status: État
+  recent.tokens: Tokens
+  recent.cost: Estimation indicative
+  recent.error: Erreur
+  accounts.title: Instantanés d’utilisation des comptes
+  accounts.empty: Aucun instantané d’utilisation des comptes
+  accounts.time: Observation
+  accounts.provider: Fournisseur
+  accounts.connection: Connexion
+  accounts.kind: Type d’instantané
+  clear.title: Effacer l’historique des statistiques
+  clear.preview: Prévisualiser l’effacement
+  clear.previewing: Préparation de l’aperçu
+  clear.previewSummary: Cette opération supprimera définitivement
+  clear.attempts: tentatives réelles
+  clear.tokens: tokens connus
+  clear.cancel: Annuler
+  clear.apply: Confirmer l’effacement
+  clear.applying: Effacement
+  clear.success: Historique des statistiques effacé
+  privacy: Vulcan ne stocke que les données Token dans la base système dédiée. Cette extension intégrée de confiance consulte et nettoie cette base, puis recalcule les coûts indicatifs à partir de son catalogue pour chaque requête.
+  error.retry: Réessayer
+  usage.clearSearch: Effacer la recherche de modèles
+  timing.tokensPerSecond: "{{value}} tokens/s"

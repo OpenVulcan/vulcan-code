@@ -1,0 +1,239 @@
+name: Vulcan 使用量統計
+capability: システム VLDB から Provider の Token 使用量を取得し、プラグイン独自の料金表で参考費用を計算
+messages:
+  tokens.details: Token の内訳
+  timing.request: リクエスト所要時間
+  timing.column: 遅延
+  timing.firstShort: 最初の Token
+  timing.averageFirstShort: 最初の Token
+  timing.totalShort: 合計
+  timing.averageTotalShort: 所要時間
+  timing.unrecorded: 未記録
+  timing.averageRequest: 平均リクエスト所要時間
+  timing.firstToken: 最初の Token までの時間
+  timing.averageFirstToken: 最初の Token までの平均時間
+  timing.output: 出力時間
+  timing.totalOutput: 計測済み出力時間の合計
+  timing.speed: 平均出力速度
+  timing.samples: 計測済みリクエスト数
+  timing.formula: 出力時間は最初の Token からリクエスト完了までの時間です。速度は同じ計測対象の出力 Token 数と出力時間から計算し、欠落した時間は推定しません。
+  tokens.uncachedInputTokens: キャッシュ外の入力
+  tokens.reasoningTokens: 推論 Token
+  tokens.totalTokens: 合計 Token
+  cost.details: 参考費用の内訳
+  cost.component: 推定費用
+  cost.unitPrice: 単価
+  cost.total: 参考費用の合計
+  cost.referenceOnly: 記録された使用量と現在の参考単価による計算値であり、プロバイダーの請求額ではありません。
+  pricing.actions: 操作
+  pricing.edit: 編集
+  consumer.name.default-worker: 会話アシスタント
+  consumer.name.vulcan-code-native-vmm: メモリサービス
+  consumer.name.vulcan-code-settings-inference-test: モデル接続テスト
+  consumer.name.vulcan-code-provider-validation: モデル検証
+  consumer.name.vulcan-code-knowledge-curation: ナレッジ整理
+  consumer.name.vulcan-code-knowledge-embedding: ナレッジのベクトル化
+  consumer.codeContext: コードコンテキスト
+  consumer.custom: 'カスタム呼び出し元 · {{id}}'
+  operation.custom: 'カスタム操作 · {{id}}'
+  operation.conversation: 会話
+  operation.conversation_respond: 会話
+  operation.compact: コンテキスト圧縮
+  operation.warmup: モデルのウォームアップ
+  operation.image_understand: 画像理解
+  operation.image_generate: 画像生成
+  operation.image_edit: 画像編集
+  operation.video_understand: 動画理解
+  operation.video_generate: 動画生成
+  operation.video_edit: 動画編集
+  operation.video_extend: 動画延長
+  operation.audio_understand: 音声理解
+  operation.speech_synthesize: 音声合成
+  operation.speech_transcribe: 音声文字起こし
+  operation.voice_clone: 声の複製
+  operation.voice_design: 声の設計
+  operation.music_generate: 音楽生成
+  operation.music_cover: 音楽カバー
+  operation.lyrics_generate: 歌詞生成
+  operation.embedding_create: ベクトル生成
+  operation.rerank_documents: 文書の再順位付け
+  operation.web_search: ウェブ検索
+  operation.web_extract: ウェブ情報抽出
+  error.category: エラー分類
+  error.code: エラーコード
+  error.requestId: リクエスト ID
+  error.noOriginal: 統計レコードには元のエラーメッセージが含まれていません。
+  failure.unknown: リクエストは正常に完了しませんでした。
+  failure.authentication: リクエストの認証に失敗しました。
+  failure.permission_denied: リクエストに必要な権限がありません。
+  failure.payment_required: アカウントの残高または割り当てが不足しています。
+  failure.rate_limited: プロバイダーのレート制限を超えました。
+  failure.provider_overloaded: プロバイダーが過負荷です。
+  failure.provider_unavailable: プロバイダーのサービスを利用できません。
+  failure.timeout: リクエストがタイムアウトしました。
+  failure.invalid_request: リクエストの検証に失敗しました。
+  failure.context_length_exceeded: リクエストがモデルのコンテキスト上限を超えています。
+  failure.content_policy: コンテンツポリシーによりリクエストまたは出力が拒否されました。
+  failure.cancelled: リクエストはキャンセルされました。
+  failure.unclassified: 未分類のエラーです。以下の記録された状態を確認してください。
+  failure.contract: リクエストがインターフェース契約に違反しています。
+  failure.authorization: 呼び出し元に必要な許可がありません。
+  failure.configuration: 推論設定を利用できません。
+  failure.limit: 設定された実行上限を超えました。
+  failure.execution: モデルの推論実行に失敗しました。
+  snapshot.retained: 更新が成功するまで前回の結果を表示します。
+  tokens.noComposition: 入力と出力の割合を算出できません
+  tokens.composition: '入力 {{input}} · 出力 {{output}}'
+  tokens.cacheSeparate: キャッシュ読み取りの割合は報告済み入力を分母とし、キャッシュ数は入力と出力に加算しません。
+  cost.empty: この範囲には費用の記録がありません
+  pricing.editor: モデル料金エディター
+  pricing.chooseModel: 下の表からモデルを選択して料金を編集します。
+  pricing.editModel: 'モデルを編集 · {{model}}'
+  status.unknown: 統計の稼働状態は不明です
+  sections.label: 統計のセクション
+  sections.overview: 概要
+  sections.details: 使用量の詳細
+  sections.pricing: モデル料金
+  sections.maintenance: メンテナンス
+  range.label: 期間
+  range.now: 現在
+  range.description: ローカルの日付と時刻を選択してください。
+  range.today: 今日
+  range.start: 開始日時
+  range.end: 終了日時
+  range.followNow: 終了日時を現在時刻に追従
+  range.invalid: 終了日時は開始日時より後にしてください。
+  range.confirm: 確定
+  cost.item: 項目
+  cost.unitPerMillion: 100万 Token あたりの単価
+  cost.noNonzero: ゼロ以外の費用項目はありません
+  range.days: '過去 {{days}} 日間'
+  page.previous: 前へ
+  page.loading: この表を更新中…
+  range.last24Hours: 1 日
+  range.lastDays: '{{days}} 日'
+  page.next: 次へ
+  pricing.search: モデルを検索
+  pricing.filter: 料金フィルター
+  pricing.filter.all: すべてのモデル
+  pricing.filter.unpriced: 料金未設定
+  pricing.filter.override: カスタム上書き
+  pricing.filter.used: 使用記録のあるすべてのモデル
+  pricing.tableScope: 単価は100万 Token あたりです。使用済みモデルは詳細のページ分割とは無関係に、保持された全記録を含みます。
+  pricing.loading: モデル料金を読み込み中
+  cost.title: 選択期間の参考費用
+  cost.coverage: '料金設定済み {{priced}} 行 · 未設定 {{unpriced}} 行 · 不完全 {{incomplete}} 行'
+  cost.partial: 一部のみ算出
+  pricing.source: 料金の出典
+  pricing.unpriced: 料金未設定
+  pricing.incompleteUsage: 必要な使用量が不完全です
+  pricing.loadError: モデル料金を読み込めません
+  error.details: エラーの詳細
+  tokens.inputTokens: 入力
+  tokens.outputTokens: 出力
+  tokens.cacheReadTokens: キャッシュ読み取り
+  tokens.cacheWriteTokens: キャッシュ書き込み
+  tokens.cacheShare: キャッシュ読み取り / 報告済み入力
+  tokens.breakdown: 入力、出力、キャッシュ
+  usage.search: モデル別に使用量を検索
+  usage.applySearch: 検索
+  usage.order: 時間順
+  usage.newest: 新しい順
+  usage.oldest: 古い順
+  navigationLabel: 使用量統計
+  status.ready: システム統計を利用可能
+  status.loading: システム統計を読み込み中
+  status.error: システム統計の読み込みに失敗
+  status.succeeded: 成功
+  status.failed: 失敗
+  status.cancelled: キャンセル済み
+  refresh: 更新
+  refreshing: 更新中
+  source.host: システム VLDB
+  pricing.catalog: 参考料金表
+  pricing.unmatched: 参考料金表にないモデル
+  pricing.incomplete: Token 情報が不完全
+  pricing.title: モデル参考料金
+  pricing.description: 上書きはこのプラグインの設定にのみ属します。推定値は毎回再計算され、システム統計データベースには書き込まれません。
+  pricing.model: モデル
+  pricing.override: カスタム上書き
+  pricing.default: 料金表の既定値
+  pricing.empty: 利用可能なモデル識別子はありません
+  pricing.input: キャッシュ外の入力
+  pricing.output: 出力
+  pricing.cacheRead: キャッシュ読み取り
+  pricing.cacheWrite: キャッシュ書き込み
+  pricing.perMillion: 100万 Token あたり
+  pricing.save: 上書きを保存
+  pricing.saving: 保存中
+  pricing.saved: モデル料金の上書きを保存しました
+  pricing.reset: 料金表の既定値に戻す
+  pricing.resetDone: 料金表の料金に戻しました
+  pricing.validation: 4つの非負の十進数料金を入力してください。
+  revision: リビジョン
+  consumer.label: 利用元
+  consumer.all: すべての利用元
+  error.title: システム統計を読み取れません
+  summary.requests: 実際の試行数
+  summary.requestsDetail: 再試行と失敗を含む
+  summary.successRate: 成功率
+  summary.successes: 成功した試行
+  summary.tokens: 既知の Token
+  summary.tokensDetail: 不明な使用量は欠落のまま保持
+  summary.usageCoverage: 使用量の記録率
+  summary.usageCoverageDetail: Provider からの直接報告
+  heatmap.title: アクティビティヒートマップ
+  heatmap.aria: 選択期間の Token アクティビティヒートマップ
+  heatmap.empty: Token アクティビティはまだありません
+  heatmap.tooltip: '{{date}}：{{value}} Token · {{requests}} 件 · 成功率 {{successRate}} · {{model}}'
+  heatmap.noModel: モデルなし
+  heatmap.less: 少ない
+  heatmap.more: 多い
+  trend.title: 日別 Token 使用量
+  trend.range: 過去30日間
+  trend.aria: モデル別の日別 Token 使用量折れ線グラフ
+  trend.empty: この範囲には傾向データがありません
+  daily.title: モデル使用量
+  daily.empty: この期間には使用量がありません
+  daily.date: 日付
+  daily.provider: プロバイダー / モデル
+  daily.consumer: 利用元
+  daily.consumerOperation: 利用元 / 操作
+  daily.averageDuration: 平均所要時間
+  daily.operation: 操作
+  daily.attempts: 試行数
+  daily.tokens: Token
+  daily.cost: 参考推定値
+  recent.title: 最近の実際の試行
+  recent.modelTypes: モデルの種類
+  recent.group.llm: 会話モデル
+  recent.group.embedding: ベクトルモデル
+  recent.group.rerank: 再順位付けモデル
+  recent.empty: 実際の試行記録はありません
+  recent.time: 時刻
+  recent.model: プロバイダー / モデル
+  recent.consumer: 利用元
+  recent.status: 状態
+  recent.tokens: Token
+  recent.cost: 参考推定値
+  recent.error: エラー
+  accounts.title: アカウント使用量スナップショット
+  accounts.empty: 使用量スナップショットはありません
+  accounts.time: 観測日時
+  accounts.provider: プロバイダー
+  accounts.connection: 接続
+  accounts.kind: スナップショットの種類
+  clear.title: 過去の統計を消去
+  clear.preview: 消去をプレビュー
+  clear.previewing: プレビューを準備中
+  clear.previewSummary: この操作で次を完全に削除します
+  clear.attempts: 件の試行
+  clear.tokens: 既知の Token
+  clear.cancel: キャンセル
+  clear.apply: 消去を確定
+  clear.applying: 消去中
+  clear.success: 過去の統計を消去しました
+  privacy: Vulcan は Token の事実のみを専用システムデータベースに保存します。この信頼済み内蔵プラグインはデータベースの照会と消去を行い、各リクエストで独自の料金表から参考費用を再計算します。
+  error.retry: 再試行
+  usage.clearSearch: モデル検索をクリア
+  timing.tokensPerSecond: "{{value}} Token/秒"

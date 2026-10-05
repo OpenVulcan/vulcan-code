@@ -71,8 +71,11 @@ export function formatMoney(value, locale = "en") {
   // fraction is explicitly optional in the accepted decimal grammar.
   // fraction 在接受的十进制语法中明确可选。
   const fraction = parts[1] ?? "";
-  if (BigInt(parts[0]) === 0n && !/[1-9]/.test(fraction)) return "0.00";
-  if (BigInt(parts[0]) === 0n && fraction.slice(0, 4).padEnd(4, "0") === "0000") return "<0.0001";
+  // The decimal separator also applies to zero and values below display precision.
+  // 小数分隔符同样适用于零值和低于展示精度的数值。
+  const decimalSeparator = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
+  if (BigInt(parts[0]) === 0n && !/[1-9]/.test(fraction)) return `0${decimalSeparator}00`;
+  if (BigInt(parts[0]) === 0n && fraction.slice(0, 4).padEnd(4, "0") === "0000") return `<0${decimalSeparator}0001`;
   // places keeps small amounts useful while limiting ordinary amounts to cents.
   // places 保留小金额的有效信息，并将普通金额限制为分。
   let places = BigInt(parts[0]) === 0n ? 4 : 2;
@@ -87,9 +90,6 @@ export function formatMoney(value, locale = "en") {
   // integer is formatted as BigInt to preserve arbitrarily large exact values.
   // integer 使用 BigInt 格式化，以保留任意大精确值。
   const integer = new Intl.NumberFormat(locale).format(BigInt(digits.slice(0, -places)));
-  // decimalSeparator follows the host locale.
-  // decimalSeparator 遵循宿主语言环境。
-  const decimalSeparator = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
   // tail removes insignificant zeros only for sub-unit amounts.
   // tail 仅在小于一的金额中移除无意义尾零。
   const tail = places === 4 ? digits.slice(-places).replace(/0+$/, "") : digits.slice(-places);
@@ -182,6 +182,39 @@ export function createPluginPanel(sdk) {
   // 返回一个遵循当前语言环境的整数文本。
   function formatInteger(value) {
     return new Intl.NumberFormat(sdk.locale, { maximumFractionDigits: 0 }).format(numeric(value));
+  }
+
+  // Format measured display numbers without changing their stored values.
+  // 格式化实测展示数值，不改变存储值。
+  // value is a finite measurement; places is its displayed precision; returns localized text.
+  // value 为有限测量值；places 为展示精度；返回本地化文本。
+  function formatDecimal(value, places) {
+    return new Intl.NumberFormat(sdk.locale, {
+      useGrouping: false, minimumFractionDigits: places, maximumFractionDigits: places,
+    }).format(value);
+  }
+
+  // Render percentage measurements with the host locale's decimal and percent spacing.
+  // 使用宿主语言的小数及百分号间距渲染百分比测量值。
+  // value is a measured percentage on the 0–100 scale; returns one-decimal localized text.
+  // value 为 0–100 尺度的测量百分比；返回一位小数的本地化文本。
+  function formatPercent(value) {
+    return new Intl.NumberFormat(sdk.locale, {
+      style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1,
+    }).format(value / 100);
+  }
+
+  // Localize interval units using the host locale rather than English abbreviations.
+  // 按宿主语言本地化时间单位，不使用固定英文缩写。
+  // value is a measured interval; unit is second or minute; places controls precision.
+  // value 为实测区间；unit 为秒或分钟；places 控制精度。
+  // Returns a compact localized duration component.
+  // 返回紧凑的本地化时长片段。
+  function formatInterval(value, unit, places) {
+    return new Intl.NumberFormat(sdk.locale, {
+      style: "unit", unit, unitDisplay: "narrow", useGrouping: false,
+      minimumFractionDigits: places, maximumFractionDigits: places,
+    }).format(value);
   }
 
   // formatTimestamp renders one Unix millisecond timestamp through the inherited host locale.
@@ -421,7 +454,7 @@ export function createPluginPanel(sdk) {
             date: new Intl.DateTimeFormat(sdk.locale, { month: "long", day: "numeric" }).format(new Date(`${date}T00:00:00`)),
             model: topModel,
             requests: formatInteger(requests),
-            successRate: successRate === null ? "—" : `${successRate.toFixed(1)}%`,
+            successRate: successRate === null ? "—" : formatPercent(successRate),
             value: formatInteger(value),
           },
         ),
@@ -547,10 +580,10 @@ export function createPluginPanel(sdk) {
         h("strong", null, text("tokens.details", "Token details")),
         facts(dimensions.map((key) => [text(`tokens.${key}`, key), formatInteger(record[key])])),
         h("div", { className: "plugin-statistics-cost-total" }, facts([
-          [text(aggregate ? "timing.averageRequest" : "timing.request", "Request duration"), record.requestDurationMs === null ? null : `${(record.requestDurationMs / 1000).toFixed(3)} s`],
-          [text(aggregate ? "timing.averageFirstToken" : "timing.firstToken", "First-token latency"), !tokenTiming || record.firstTokenLatencyMs === null ? null : `${(record.firstTokenLatencyMs / 1000).toFixed(3)} s`],
-          [text(aggregate ? "timing.totalOutput" : "timing.output", "Output duration"), !tokenTiming || record.outputDurationMs === null ? null : `${(record.outputDurationMs / 1000).toFixed(3)} s`],
-          [text("timing.speed", "Output speed"), !tokenTiming || record.outputTokensPerSecond === null ? null : `${record.outputTokensPerSecond.toFixed(2)} tokens/s`],
+          [text(aggregate ? "timing.averageRequest" : "timing.request", "Request duration"), record.requestDurationMs === null ? null : formatInterval(record.requestDurationMs / 1000, "second", 3)],
+          [text(aggregate ? "timing.averageFirstToken" : "timing.firstToken", "First-token latency"), !tokenTiming || record.firstTokenLatencyMs === null ? null : formatInterval(record.firstTokenLatencyMs / 1000, "second", 3)],
+          [text(aggregate ? "timing.totalOutput" : "timing.output", "Output duration"), !tokenTiming || record.outputDurationMs === null ? null : formatInterval(record.outputDurationMs / 1000, "second", 3)],
+          [text("timing.speed", "Output speed"), !tokenTiming || record.outputTokensPerSecond === null ? null : interpolate(text("timing.tokensPerSecond", "{{value}} tokens/s"), { value: formatDecimal(record.outputTokensPerSecond, 2) })],
           [text("timing.samples", "Measured requests"), record.timedAttemptCount > 0 ? formatInteger(record.timedAttemptCount) : null],
         ])),
         tokenTiming ? h("p", null, text("timing.formula", "Output speed uses paired output tokens and completion minus first-token duration; missing timing is not estimated.")) : null,
@@ -567,7 +600,8 @@ export function createPluginPanel(sdk) {
     // Preserve subsecond precision for short model output intervals.
     // 为较短的模型输出区间保留毫秒精度。
     const seconds = milliseconds / 1000;
-    return seconds < 60 ? `${seconds.toFixed(seconds < 1 ? 3 : 2)}s` : `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(2)}s`;
+    return seconds < 60 ? formatInterval(seconds, "second", seconds < 1 ? 3 : 2)
+      : `${formatInterval(Math.floor(seconds / 60), "minute", 0)} ${formatInterval(seconds % 60, "second", 2)}`;
   }
 
   // Render first-token latency and full request duration, with generation speed beside duration.
@@ -591,7 +625,7 @@ export function createPluginPanel(sdk) {
         h("span", null, text(aggregate ? "timing.averageTotalShort" : "timing.totalShort", "Total")),
         h("span", null,
           record.requestDurationMs === null ? text("timing.unrecorded", "Not recorded") : latencyDuration(record.requestDurationMs),
-          !tokenTiming || record.outputTokensPerSecond === null ? null : ` (${record.outputTokensPerSecond.toFixed(1)} t/s)`)),
+          !tokenTiming || record.outputTokensPerSecond === null ? null : ` (${interpolate(text("timing.tokensPerSecond", "{{value}} tokens/s"), { value: formatDecimal(record.outputTokensPerSecond, 1) })})`)),
     );
   }
 
@@ -671,18 +705,18 @@ export function createPluginPanel(sdk) {
     const inputShare = total !== null && total > 0 ? record.inputTokens / total * 100 : null;
     const outputShare = inputShare === null ? null : 100 - inputShare;
     const cacheShare = record.inputTokens !== null && record.inputTokens > 0 && record.cacheReadTokens !== null
-      ? `${(record.cacheReadTokens / record.inputTokens * 100).toFixed(1)}%` : "-";
+      ? formatPercent(record.cacheReadTokens / record.inputTokens * 100) : "-";
     return h(React.Fragment, null,
       h("div", { className: "plugin-statistics-token-values" },
         ...[["inputTokens", inputShare], ["outputTokens", outputShare]].map(([key, share]) => h("div", { key, "data-token-dimension": key },
           h("span", null, text(`tokens.${key}`, key)),
           h("strong", null, record[key] === null ? "-" : formatInteger(record[key])),
-          h("span", { className: "plugin-statistics-token-share" }, share === null ? "-" : `${share.toFixed(1)}%`),
+          h("span", { className: "plugin-statistics-token-share" }, share === null ? "-" : formatPercent(share)),
         )),
       ),
       inputShare === null ? h("p", { className: "plugin-statistics-privacy" }, text("tokens.noComposition", "Input/output share is unavailable"))
-        : h("div", { className: "plugin-statistics-token-bar", role: "img", "aria-label": interpolate(text("tokens.composition", "Input {{input}}% · Output {{output}}%"), {
-          input: inputShare.toFixed(1), output: outputShare.toFixed(1),
+        : h("div", { className: "plugin-statistics-token-bar", role: "img", "aria-label": interpolate(text("tokens.composition", "Input {{input}} · Output {{output}}"), {
+          input: formatPercent(inputShare), output: formatPercent(outputShare),
         }) }, h("span", { style: { width: `${inputShare}%` } }), h("span", { style: { width: `${outputShare}%` } })),
       h("dl", { className: "plugin-control-facts plugin-statistics-cache-facts" },
         h("dt", null, text("tokens.cacheReadTokens", "Cache read")),
@@ -1235,7 +1269,7 @@ export function createPluginPanel(sdk) {
           h(MetricCard, {
             icon: "success",
             label: text("summary.successRate", "Success rate"),
-            value: summary.successRate === null ? "—" : `${summary.successRate.toFixed(1)}%`,
+            value: summary.successRate === null ? "—" : formatPercent(summary.successRate),
             detail: `${formatInteger(summary.successes)} ${text("summary.successes", "successful attempts")}`,
           }),
           h(MetricCard, {
@@ -1247,7 +1281,7 @@ export function createPluginPanel(sdk) {
           h(MetricCard, {
             icon: "activity",
             label: text("summary.usageCoverage", "Usage coverage"),
-            value: summary.usageCoverage === null ? "—" : `${summary.usageCoverage.toFixed(1)}%`,
+            value: summary.usageCoverage === null ? "—" : formatPercent(summary.usageCoverage),
             detail: text("summary.usageCoverageDetail", "Directly Provider-reported"),
           }),
         ),

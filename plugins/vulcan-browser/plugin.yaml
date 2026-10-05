@@ -176,4 +176,14 @@ ui:
       export: createPluginPanel
 locales:
   en: locales/en.yaml
+  en-US: locales/en.yaml
   zh-CN: locales/zh-CN.yaml
+  zh-TW: locales/zh-TW.yaml
+  zh-HK: locales/zh-HK.yaml
+  ja-JP: locales/ja-JP.yaml
+  ko-KR: locales/ko-KR.yaml
+  es-ES: locales/es-ES.yaml
+  fr-FR: locales/fr-FR.yaml
+  de-DE: locales/de-DE.yaml
+  pt-BR: locales/pt-BR.yaml
+  ru-RU: locales/ru-RU.yaml

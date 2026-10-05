@@ -1,0 +1,239 @@
+name: Статистика использования Vulcan
+capability: Запрос данных Token провайдера через системную VLDB и расчёт ориентировочной стоимости по каталогу плагина
+messages:
+  tokens.details: Подробности токенов
+  timing.request: Длительность запроса
+  timing.column: Задержка
+  timing.firstShort: Первый токен
+  timing.averageFirstShort: Первый токен
+  timing.totalShort: Всего
+  timing.averageTotalShort: Длительность
+  timing.unrecorded: Не записано
+  timing.averageRequest: Средняя длительность запроса
+  timing.firstToken: Задержка первого токена
+  timing.averageFirstToken: Средняя задержка первого токена
+  timing.output: Длительность вывода
+  timing.totalOutput: Измеренная длительность вывода
+  timing.speed: Средняя скорость вывода
+  timing.samples: Измеренные запросы
+  timing.formula: Длительность вывода измеряется от первого токена до завершения запроса. Скорость рассчитывается по токенам и длительности тех же измеренных запросов; отсутствующее время не оценивается.
+  tokens.uncachedInputTokens: Ввод без кэша
+  tokens.reasoningTokens: Токены рассуждения
+  tokens.totalTokens: Всего токенов
+  cost.details: Подробности ориентировочной стоимости
+  cost.component: Расчётная стоимость
+  cost.unitPrice: Цена за единицу
+  cost.total: Итоговая ориентировочная оценка
+  cost.referenceOnly: Расчёт по записанному использованию и текущим справочным ценам, а не счёт провайдера.
+  pricing.actions: Действия
+  pricing.edit: Изменить
+  consumer.name.default-worker: Помощник диалога
+  consumer.name.vulcan-code-native-vmm: Служба памяти
+  consumer.name.vulcan-code-settings-inference-test: Проверка подключения модели
+  consumer.name.vulcan-code-provider-validation: Проверка модели
+  consumer.name.vulcan-code-knowledge-curation: Упорядочивание знаний
+  consumer.name.vulcan-code-knowledge-embedding: Векторизация знаний
+  consumer.codeContext: Контекст кода
+  consumer.custom: 'Пользовательский вызывающий · {{id}}'
+  operation.custom: 'Пользовательская операция · {{id}}'
+  operation.conversation: Диалог
+  operation.conversation_respond: Диалог
+  operation.compact: Сжатие контекста
+  operation.warmup: Прогрев модели
+  operation.image_understand: Анализ изображений
+  operation.image_generate: Генерация изображений
+  operation.image_edit: Редактирование изображений
+  operation.video_understand: Анализ видео
+  operation.video_generate: Генерация видео
+  operation.video_edit: Редактирование видео
+  operation.video_extend: Продление видео
+  operation.audio_understand: Анализ аудио
+  operation.speech_synthesize: Синтез речи
+  operation.speech_transcribe: Расшифровка речи
+  operation.voice_clone: Клонирование голоса
+  operation.voice_design: Создание голоса
+  operation.music_generate: Генерация музыки
+  operation.music_cover: Музыкальный кавер
+  operation.lyrics_generate: Генерация текста песни
+  operation.embedding_create: Генерация векторов
+  operation.rerank_documents: Переранжирование документов
+  operation.web_search: Поиск в интернете
+  operation.web_extract: Извлечение веб-данных
+  error.category: Категория ошибки
+  error.code: Код ошибки
+  error.requestId: ID запроса
+  error.noOriginal: Запись статистики не содержит исходного сообщения об ошибке.
+  failure.unknown: Запрос не завершился успешно.
+  failure.authentication: Ошибка аутентификации запроса.
+  failure.permission_denied: У запроса нет необходимых прав.
+  failure.payment_required: На счёте недостаточно средств или квоты.
+  failure.rate_limited: Превышен лимит частоты запросов провайдера.
+  failure.provider_overloaded: Провайдер перегружен.
+  failure.provider_unavailable: Служба провайдера недоступна.
+  failure.timeout: Время ожидания запроса истекло.
+  failure.invalid_request: Запрос не прошёл проверку.
+  failure.context_length_exceeded: Запрос превышает контекстное окно модели.
+  failure.content_policy: Политика содержимого отклонила запрос или вывод.
+  failure.cancelled: Запрос отменён.
+  failure.unclassified: Ошибка не классифицирована. См. записанное состояние ниже.
+  failure.contract: Запрос нарушает контракт интерфейса.
+  failure.authorization: У вызывающего нет необходимого разрешения.
+  failure.configuration: Конфигурация вывода модели недоступна.
+  failure.limit: Запрос превысил настроенный предел выполнения.
+  failure.execution: Ошибка выполнения вывода модели.
+  snapshot.retained: До успешного обновления показывается предыдущий результат.
+  tokens.noComposition: Доля ввода и вывода недоступна
+  tokens.composition: 'Ввод {{input}} · Вывод {{output}}'
+  tokens.cacheSeparate: Доля чтения кэша считается от сообщённого ввода; счётчики кэша не добавляются ко вводу и выводу.
+  cost.empty: За этот период нет записей о стоимости
+  pricing.editor: Редактор цен моделей
+  pricing.chooseModel: Выберите модель в таблице ниже, чтобы изменить её цены.
+  pricing.editModel: 'Изменить модель · {{model}}'
+  status.unknown: Состояние статистики неизвестно
+  sections.label: Разделы статистики
+  sections.overview: Обзор
+  sections.details: Подробности использования
+  sections.pricing: Цены моделей
+  sections.maintenance: Обслуживание
+  range.label: Период
+  range.now: Сейчас
+  range.description: Выберите местные дату и время.
+  range.today: Сегодня
+  range.start: Время начала
+  range.end: Время окончания
+  range.followNow: Окончание следует за текущим временем
+  range.invalid: Время окончания должно быть позже начала.
+  range.confirm: Подтвердить
+  cost.item: Статья
+  cost.unitPerMillion: Цена за 1 млн токенов
+  cost.noNonzero: Нет ненулевых статей расходов
+  range.days: 'Последние {{days}} дней'
+  page.previous: Назад
+  page.loading: Обновление таблицы…
+  range.last24Hours: 1 день
+  range.lastDays: '{{days}} дней'
+  page.next: Далее
+  pricing.search: Поиск моделей
+  pricing.filter: Фильтр цен
+  pricing.filter.all: Все модели
+  pricing.filter.unpriced: Без цены
+  pricing.filter.override: Свои цены
+  pricing.filter.used: Все модели с сохранённым использованием
+  pricing.tableScope: Цены за миллион токенов. Использованные модели включают все сохранённые записи независимо от страниц подробностей.
+  pricing.loading: Загрузка цен моделей
+  cost.title: Ориентировочная стоимость за выбранный период
+  cost.coverage: '{{priced}} строк с ценой · {{unpriced}} без цены · {{incomplete}} неполных'
+  cost.partial: Частичное покрытие
+  pricing.source: Источник цены
+  pricing.unpriced: Цена не задана
+  pricing.incompleteUsage: Необходимые данные использования неполны
+  pricing.loadError: Не удалось загрузить цены моделей
+  error.details: Подробности ошибки
+  tokens.inputTokens: Ввод
+  tokens.outputTokens: Вывод
+  tokens.cacheReadTokens: Чтение кэша
+  tokens.cacheWriteTokens: Запись кэша
+  tokens.cacheShare: Чтение кэша / сообщённый ввод
+  tokens.breakdown: Ввод, вывод и кэш
+  usage.search: Поиск использования по модели
+  usage.applySearch: Найти
+  usage.order: Порядок по времени
+  usage.newest: Сначала новые
+  usage.oldest: Сначала старые
+  navigationLabel: Статистика использования
+  status.ready: Системная статистика доступна
+  status.loading: Загрузка системной статистики
+  status.error: Не удалось загрузить системную статистику
+  status.succeeded: Успешно
+  status.failed: Ошибка
+  status.cancelled: Отменено
+  refresh: Обновить
+  refreshing: Обновление
+  source.host: Системная VLDB
+  pricing.catalog: Справочный каталог
+  pricing.unmatched: Модель отсутствует в справочном каталоге
+  pricing.incomplete: Неполные данные Token
+  pricing.title: Справочные цены моделей
+  pricing.description: Свои цены относятся только к настройкам плагина. Оценки пересчитываются и никогда не записываются в системную базу статистики.
+  pricing.model: Модель
+  pricing.override: Своя цена
+  pricing.default: Цена каталога
+  pricing.empty: Нет доступных идентификаторов моделей
+  pricing.input: Ввод без кэша
+  pricing.output: Вывод
+  pricing.cacheRead: Чтение кэша
+  pricing.cacheWrite: Запись кэша
+  pricing.perMillion: за миллион токенов
+  pricing.save: Сохранить свою цену
+  pricing.saving: Сохранение
+  pricing.saved: Своя цена модели сохранена
+  pricing.reset: Восстановить цену каталога
+  pricing.resetDone: Цена каталога восстановлена
+  pricing.validation: Введите четыре неотрицательные десятичные цены.
+  revision: Редакция
+  consumer.label: Потребитель
+  consumer.all: Все потребители
+  error.title: Не удалось прочитать системную статистику
+  summary.requests: Фактические попытки
+  summary.requestsDetail: Включая повторы и ошибки
+  summary.successRate: Доля успеха
+  summary.successes: успешных попыток
+  summary.tokens: Известные токены
+  summary.tokensDetail: Неизвестное использование остаётся отсутствующим
+  summary.usageCoverage: Покрытие использования
+  summary.usageCoverageDetail: Сообщено напрямую провайдером
+  heatmap.title: Карта активности
+  heatmap.aria: Карта активности токенов за выбранный период
+  heatmap.empty: Пока нет активности токенов
+  heatmap.tooltip: '{{date}}: {{value}} токенов · {{requests}} запросов · {{successRate}} успеха · {{model}}'
+  heatmap.noModel: Нет модели
+  heatmap.less: Меньше
+  heatmap.more: Больше
+  trend.title: Суточное использование токенов
+  trend.range: Последние 30 дней
+  trend.aria: Суточный график токенов по моделям
+  trend.empty: За этот период нет данных тенденций
+  daily.title: Использование моделей
+  daily.empty: За этот период нет использования
+  daily.date: Дата
+  daily.provider: Провайдер / модель
+  daily.consumer: Потребитель
+  daily.consumerOperation: Потребитель / операция
+  daily.averageDuration: Средняя длительность
+  daily.operation: Операция
+  daily.attempts: Попытки
+  daily.tokens: Токены
+  daily.cost: Ориентировочная оценка
+  recent.title: Последние фактические попытки
+  recent.modelTypes: Типы моделей
+  recent.group.llm: Диалоговые модели
+  recent.group.embedding: Векторные модели
+  recent.group.rerank: Модели переранжирования
+  recent.empty: Нет записей фактических попыток
+  recent.time: Время
+  recent.model: Провайдер / модель
+  recent.consumer: Потребитель
+  recent.status: Состояние
+  recent.tokens: Токены
+  recent.cost: Ориентировочная оценка
+  recent.error: Ошибка
+  accounts.title: Снимки использования аккаунтов
+  accounts.empty: Нет снимков использования аккаунтов
+  accounts.time: Время наблюдения
+  accounts.provider: Провайдер
+  accounts.connection: Подключение
+  accounts.kind: Тип снимка
+  clear.title: Очистить историю статистики
+  clear.preview: Предпросмотр очистки
+  clear.previewing: Подготовка предпросмотра
+  clear.previewSummary: Эта операция окончательно удалит
+  clear.attempts: фактические попытки
+  clear.tokens: известные токены
+  clear.cancel: Отмена
+  clear.apply: Подтвердить очистку
+  clear.applying: Очистка
+  clear.success: История статистики очищена
+  privacy: Vulcan сохраняет только факты использования Token в отдельной системной базе. Этот доверенный встроенный плагин запрашивает и очищает базу, пересчитывая ориентировочные затраты по своему каталогу для каждого запроса.
+  error.retry: Повторить
+  usage.clearSearch: Очистить поиск моделей
+  timing.tokensPerSecond: "{{value}} токенов/с"

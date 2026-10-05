@@ -1,0 +1,62 @@
+name: Context7
+capability: Documentación actualizada de bibliotecas por versión para agentes de programación
+messages:
+  errorDetails: Detalles del error
+  navigationLabel: Context7
+  allowanceDescription: El modo anónimo permite 200 solicitudes sin clave de API. Al registrarte y configurar una clave gratuita, obtienes 1.000 solicitudes y puedes consultar el uso de la cuenta en el panel oficial.
+  refresh: Actualizar
+  loading: Cargando la configuración de Context7…
+  loadError: No se pudieron cargar los datos de Context7.
+  retry: Reintentar
+  operationFailed: La operación ha fallado. Inténtalo de nuevo.
+  credentialTitle: Autenticación
+  anonymousMode: Modo anónimo
+  apiKeyMode: Modo con clave de API
+  configured: Clave de API configurada
+  notConfigured: No hay una clave de API configurada; las solicitudes utilizan la cuota anónima.
+  apiKeyLabel: Clave de API
+  apiKeyPlaceholder: ctx7sk-…
+  saveApiKey: Guardar clave de API
+  replaceApiKey: Sustituir clave de API
+  deleteApiKey: Eliminar clave de API
+  confirmDeleteApiKey: Confirmar eliminación
+  apiKeySaved: Se ha guardado la clave de API de Context7.
+  apiKeyDeleted: Se ha eliminado la clave de API de Context7; el modo anónimo está activo.
+  credentialInvalid: Context7 ha rechazado la clave de API configurada.
+  credentialValid: La clave de API configurada se ha validado correctamente.
+  credentialUntested: Aún no se ha probado la clave de API configurada.
+  credentialUnknown: No hay ningún resultado de validación de la clave de API.
+  connectionTitle: Prueba de conexión
+  connectionTest: Probar conexión
+  connectionTestHint: La prueba consume una solicitud de Context7 de la cuota actual.
+  connectionSuccess: La conexión con Context7 se ha establecido correctamente.
+  behaviorTitle: Comportamiento de las solicitudes
+  defaultFastMode: Usar el modo rápido por defecto
+  defaultFastModeHint: Omite la reordenación mediante LLM de Context7 para reducir la latencia, aunque puede reducir la relevancia.
+  timeout: Tiempo de espera de la solicitud
+  timeoutHint: Tiempo máximo que una solicitud de Context7 espera una respuesta.
+  retention: Conservación de estadísticas locales
+  retentionHint: Se eliminan los registros locales de solicitudes anteriores a este periodo.
+  saveSettings: Guardar configuración
+  settingsSaved: Se ha guardado la configuración de Context7.
+  usageTitle: Uso y cuota
+  localStatsTitle: Estadísticas locales de solicitudes
+  usageRange: Intervalo local
+  requests: Solicitudes
+  successes: Correctas
+  failures: Fallidas
+  averageDuration: Duración media
+  quotaTitle: Última instantánea de la cuota de Context7
+  quotaTier: Nivel
+  quotaRemaining: Restante
+  quotaLimit: Límite
+  quotaReset: Restablecimiento
+  noQuota: No se ha recibido ninguna respuesta de cuota para la generación de autenticación actual.
+  localUsageNotice: Las estadísticas locales solo incluyen las solicitudes realizadas por este complemento de Vulcan Code.
+  officialUsageNotice: El uso completo de la cuenta, los periodos de facturación, las plazas y los costes están disponibles en el panel oficial de Context7.
+  dashboardLink: Panel de Context7
+  apiKeyDocsLink: Obtener una clave de API gratuita
+  usageDocsLink: Documentación de API y uso
+  saving: Guardando…
+  testing: Probando…
+  days: "{{days}} días"

@@ -137,7 +137,7 @@ export function createPluginPanel(sdk) {
   // Returns percent text.
   // 返回百分比文本。
   function formatPercent(value) {
-    return `${value.toFixed(1)}%`;
+    return new Intl.NumberFormat(sdk.locale, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value / 100);
   }
 
   // formatDurationMs renders RTK command duration values in compact milliseconds or seconds.
@@ -148,9 +148,9 @@ export function createPluginPanel(sdk) {
   // Returns compact duration text.
   // 返回紧凑耗时文本。
   function formatDurationMs(value) {
-    if (value < 1000) return `${Math.round(value)}ms`;
-    if (value < 60000) return `${(value / 1000).toFixed(1)}s`;
-    return `${Math.floor(value / 60000)}m${Math.floor((value % 60000) / 1000)}s`;
+    if (value < 1000) return new Intl.NumberFormat(sdk.locale, { style: "unit", unit: "millisecond", unitDisplay: "short", maximumFractionDigits: 0 }).format(value);
+    if (value < 60000) return new Intl.NumberFormat(sdk.locale, { style: "unit", unit: "second", unitDisplay: "short", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value / 1000);
+    return `${new Intl.NumberFormat(sdk.locale, { style: "unit", unit: "minute", unitDisplay: "short" }).format(Math.floor(value / 60000))} ${new Intl.NumberFormat(sdk.locale, { style: "unit", unit: "second", unitDisplay: "short" }).format(Math.floor((value % 60000) / 1000))}`;
   }
 
   // formatStatisticsTimestamp renders one RTK statistics timestamp in the inherited locale.
@@ -172,6 +172,25 @@ export function createPluginPanel(sdk) {
     }).format(new Date(value));
   }
 
+  // formatPeriodDate formats RTK's observed ISO calendar dates without shifting their day across time zones.
+  // formatPeriodDate 格式化 RTK 实际输出的 ISO 日历日期，避免跨时区改变日期。
+  // value is YYYY-MM-DD for daily/weekly data or YYYY-MM for monthly data; monthOnly selects the latter.
+  // value 为日或周数据的 YYYY-MM-DD、月数据的 YYYY-MM；monthOnly 选择月数据。
+  // Returns localized calendar text, preserving an invalid source value visibly for diagnosis.
+  // 返回本地化日历文本；无效源值原样显示，便于诊断。
+  function formatPeriodDate(value, monthOnly = false) {
+    // Reject undocumented shapes rather than asking Date to infer a calendar representation.
+    // 拒绝未声明的格式，避免让 Date 猜测日历表示。
+    if (!(monthOnly ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/).test(value)) return value;
+    // date anchors the calendar field to UTC, independently of the local timestamp display.
+    // date 将日历字段固定在 UTC，与本地时间戳展示分开。
+    const date = new Date(`${value}${monthOnly ? "-01" : ""}T00:00:00Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, monthOnly ? 7 : 10) !== value) return value;
+    return new Intl.DateTimeFormat(sdk.locale, monthOnly
+      ? { year: "numeric", month: "short", timeZone: "UTC" }
+      : { month: "numeric", day: "numeric", timeZone: "UTC" }).format(date);
+  }
+
   // periodPoints selects and normalizes the requested RTK statistics series.
   // periodPoints 选择并规范化请求的 RTK 统计序列。
   //
@@ -183,10 +202,10 @@ export function createPluginPanel(sdk) {
     const source = Array.isArray(statistics?.[view]) ? statistics[view] : [];
     return source.map((point) => {
       const label = view === "daily"
-        ? String(point.date ?? "").slice(5)
+        ? formatPeriodDate(String(point.date ?? ""))
         : view === "weekly"
-          ? `${String(point.week_start ?? point.weekStart ?? "").slice(5)}-${String(point.week_end ?? point.weekEnd ?? "").slice(5)}`
-          : String(point.month ?? "");
+          ? `${formatPeriodDate(String(point.week_start ?? point.weekStart ?? ""))} – ${formatPeriodDate(String(point.week_end ?? point.weekEnd ?? ""))}`
+          : formatPeriodDate(String(point.month ?? ""), true);
       return {
         label,
         commands: numberField(point, "commands"),
@@ -235,7 +254,7 @@ export function createPluginPanel(sdk) {
     // maximumSavedTokens 归一化原有相对影响指标。
     const maximumSavedTokens = Math.max(1, ...props.rows.map((row) => numberField(row, "saved_tokens", "savedTokens")));
     return React.createElement("section", { className: "rtk-command-stats" },
-      React.createElement("div", { className: "rtk-command-stats-header" }, React.createElement("strong", null, text("stats.byCommand", "By command")), React.createElement("span", null, `Top ${props.rows.length}`)),
+      React.createElement("div", { className: "rtk-command-stats-header" }, React.createElement("strong", null, text("stats.byCommand", "By command")), React.createElement("span", null, text("stats.topCommands", "Top {{count}} commands").replace("{{count}}", sdk.formatNumber(props.rows.length)))),
       React.createElement("div", { className: "rtk-command-table-wrap" },
       React.createElement("table", { className: "rtk-command-table" },
         React.createElement("thead", null, React.createElement("tr", null,
@@ -248,7 +267,7 @@ export function createPluginPanel(sdk) {
           React.createElement("th", null, text("stats.impact", "Impact")),
         )),
         React.createElement("tbody", null, ...props.rows.map((row, index) => React.createElement("tr", { key: `${row.command ?? "command"}:${index}` },
-          React.createElement("td", null, index + 1),
+          React.createElement("td", null, sdk.formatNumber(index + 1)),
           React.createElement("td", null, React.createElement("strong", { title: row.command ?? "" }, row.command ?? "-")),
           React.createElement("td", null, sdk.formatNumber(numberField(row, "count", "commands"))),
           React.createElement("td", null, sdk.formatNumber(numberField(row, "saved_tokens", "savedTokens"))),
@@ -561,7 +580,7 @@ export function createPluginPanel(sdk) {
       [text("stats.savedTokens", "Tokens saved"), numberField(summary, "total_saved", "totalSaved")],
       [text("stats.averageSavings", "Average savings"), formatPercent(numberField(summary, "avg_savings_pct", "avgSavingsPct"))],
       [text("stats.commands", "Commands"), numberField(summary, "total_commands", "totalCommands")],
-      [text("stats.capacityRatio", "Context capacity"), `${(numberField(summary, "total_input", "totalInput") / Math.max(1, numberField(summary, "total_output", "totalOutput"))).toFixed(1)}×`],
+      [text("stats.capacityRatio", "Context capacity"), `${new Intl.NumberFormat(sdk.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(numberField(summary, "total_input", "totalInput") / Math.max(1, numberField(summary, "total_output", "totalOutput")))}×`],
     ];
     // chartPoints contains the normalized series selected by the current tab.
     // chartPoints 包含当前页签选择的规范化序列。
@@ -647,7 +666,7 @@ export function createPluginPanel(sdk) {
         React.createElement("article", { className: "settings-card", hidden: section !== "routes" },
           React.createElement("div", { className: "settings-route-header" },
             React.createElement("div", null, React.createElement("strong", null, text("routes.title", "RTK routes")), React.createElement("p", null, text("routes.description", "Choose exactly which supported commands may be rewritten."))),
-            React.createElement(Badge, { variant: "outline" }, `${checkedRoutes.size}/${RTK_AVAILABLE_ROUTES.length}`),
+            React.createElement(Badge, { variant: "outline" }, `${sdk.formatNumber(checkedRoutes.size)}/${sdk.formatNumber(RTK_AVAILABLE_ROUTES.length)}`),
           ),
           React.createElement("input", { className: "plugin-statistics-price-input", type: "search", "aria-label": text("routes.search", "Search routes"), placeholder: text("routes.search", "Search routes"), value: routeSearch, onChange: (event) => setRouteSearch(event.currentTarget.value) }),
           React.createElement("div", { className: "settings-route-groups" },
@@ -656,7 +675,7 @@ export function createPluginPanel(sdk) {
           ),
           !RTK_AVAILABLE_ROUTES.some((route) => route.includes(routeSearch.trim().toLowerCase()))
             ? React.createElement("p", { role: "status", className: "settings-muted-line" }, text("routes.noMatches", "No matching routes")) : null,
-          React.createElement("small", { className: "settings-muted-line" }, `${checkedRoutes.size} ${text("routes.selected", "RTK routes selected")}`),
+          React.createElement("small", { className: "settings-muted-line" }, `${sdk.formatNumber(checkedRoutes.size)} ${text("routes.selected", "RTK routes selected")}`),
         ),
         settingsError ? React.createElement("div", { role: "alert" }, text("settingsLoadFailed", "Unable to load RTK settings"),
           React.createElement(Button, { type: "button", size: "sm", variant: "outline", disabled: settingsLoading || saving, onClick: () => void loadSettings() }, text("retry", "Retry")),

@@ -83,7 +83,7 @@ messages:
   failure.execution: 模型推理执行失败。
   snapshot.retained: 当前显示上次读取结果，刷新成功后更新。
   tokens.noComposition: 暂无可计算的输入与输出占比
-  tokens.composition: "输入 {{input}}% · 输出 {{output}}%"
+  tokens.composition: "输入 {{input}} · 输出 {{output}}"
   tokens.cacheSeparate: 缓存读取比例以已报告输入为分母，缓存不重复计入输入与输出。
   cost.empty: 此范围暂无费用记录
   pricing.editor: 模型价格编辑器
@@ -236,3 +236,4 @@ messages:
   usage.oldest: 最早在前
   error.retry: 重试
   usage.clearSearch: 清除模型搜索
+  timing.tokensPerSecond: "{{value}} Token/秒"

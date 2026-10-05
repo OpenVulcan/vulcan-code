@@ -63,7 +63,7 @@ export function createPluginPanel(sdk) {
           if (readRequest.current === request) readRequest.current = null;
         });
         if (!mounted.current || sequence !== readSequence.current) return;
-        if (!validSettings(current)) throw new Error("Playwright settings response is invalid");
+        if (!validSettings(current)) throw new Error(sdk.t("settingsResponseInvalid", "Playwright settings response is invalid."));
         setDraft(current);
         setSaved(false);
       } catch (reason) {
@@ -97,7 +97,7 @@ export function createPluginPanel(sdk) {
       try {
         const persisted = await sdk.invoke("settings-update", draft);
         if (!mounted.current) return;
-        if (!validSettings(persisted)) throw new Error("Persisted Playwright settings are invalid");
+        if (!validSettings(persisted)) throw new Error(sdk.t("settingsPersistedInvalid", "Persisted Playwright settings are invalid."));
         setDraft(persisted);
         setSaved(true);
       } catch (reason) {
@@ -150,7 +150,7 @@ export function createPluginPanel(sdk) {
           },
           value: draft.consoleLevel,
         }, ...["error", "warning", "info", "debug"].map((level) =>
-          React.createElement("option", { key: level, value: level }, level)))),
+          React.createElement("option", { key: level, value: level }, sdk.t(`consoleLevel_${level}`, level))))),
       !validSettings(draft) ? React.createElement("p", { role: "alert" },
         sdk.t("settingsInvalid", "Enter valid timeouts before saving.")) : null,
       error ? React.createElement("p", { role: "alert" }, error) : null,

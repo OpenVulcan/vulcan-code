@@ -1,0 +1,239 @@
+name: Vulcan 사용량 통계
+capability: 시스템 VLDB에서 Provider Token 사용 사실을 조회하고 플러그인 자체 가격표로 참고 비용 계산
+messages:
+  tokens.details: Token 상세
+  timing.request: 요청 소요 시간
+  timing.column: 지연 시간
+  timing.firstShort: 첫 Token
+  timing.averageFirstShort: 첫 Token
+  timing.totalShort: 전체
+  timing.averageTotalShort: 소요 시간
+  timing.unrecorded: 기록되지 않음
+  timing.averageRequest: 평균 요청 소요 시간
+  timing.firstToken: 첫 Token 지연 시간
+  timing.averageFirstToken: 평균 첫 Token 지연 시간
+  timing.output: 출력 소요 시간
+  timing.totalOutput: 측정된 총 출력 시간
+  timing.speed: 평균 출력 속도
+  timing.samples: 측정된 요청 수
+  timing.formula: 출력 시간은 첫 Token부터 요청 완료까지입니다. 속도는 동일한 측정 요청의 출력 Token과 출력 시간으로 계산하며, 누락된 시간은 추정하지 않습니다.
+  tokens.uncachedInputTokens: 캐시되지 않은 입력
+  tokens.reasoningTokens: 추론 Token
+  tokens.totalTokens: 전체 Token
+  cost.details: 참고 비용 상세
+  cost.component: 예상 비용
+  cost.unitPrice: 단가
+  cost.total: 총 참고 예상 비용
+  cost.referenceOnly: 기록된 사용량과 현재 참고 단가로 계산한 값이며 공급자의 청구서가 아닙니다.
+  pricing.actions: 작업
+  pricing.edit: 편집
+  consumer.name.default-worker: 대화 도우미
+  consumer.name.vulcan-code-native-vmm: 메모리 서비스
+  consumer.name.vulcan-code-settings-inference-test: 모델 연결 테스트
+  consumer.name.vulcan-code-provider-validation: 모델 검증
+  consumer.name.vulcan-code-knowledge-curation: 지식 정리
+  consumer.name.vulcan-code-knowledge-embedding: 지식 임베딩
+  consumer.codeContext: 코드 컨텍스트
+  consumer.custom: '사용자 지정 호출자 · {{id}}'
+  operation.custom: '사용자 지정 작업 · {{id}}'
+  operation.conversation: 대화
+  operation.conversation_respond: 대화
+  operation.compact: 컨텍스트 압축
+  operation.warmup: 모델 준비
+  operation.image_understand: 이미지 이해
+  operation.image_generate: 이미지 생성
+  operation.image_edit: 이미지 편집
+  operation.video_understand: 동영상 이해
+  operation.video_generate: 동영상 생성
+  operation.video_edit: 동영상 편집
+  operation.video_extend: 동영상 연장
+  operation.audio_understand: 오디오 이해
+  operation.speech_synthesize: 음성 합성
+  operation.speech_transcribe: 음성 전사
+  operation.voice_clone: 음성 복제
+  operation.voice_design: 음성 설계
+  operation.music_generate: 음악 생성
+  operation.music_cover: 음악 커버
+  operation.lyrics_generate: 가사 생성
+  operation.embedding_create: 임베딩 생성
+  operation.rerank_documents: 문서 재순위화
+  operation.web_search: 웹 검색
+  operation.web_extract: 웹 내용 추출
+  error.category: 오류 분류
+  error.code: 오류 코드
+  error.requestId: 요청 ID
+  error.noOriginal: 통계 기록에 원본 오류 메시지가 없습니다.
+  failure.unknown: 요청이 정상적으로 완료되지 않았습니다.
+  failure.authentication: 요청 인증에 실패했습니다.
+  failure.permission_denied: 요청에 필요한 권한이 없습니다.
+  failure.payment_required: 계정 잔액 또는 할당량이 부족합니다.
+  failure.rate_limited: 공급자 요청 속도 제한을 초과했습니다.
+  failure.provider_overloaded: 공급자가 과부하 상태입니다.
+  failure.provider_unavailable: 공급자 서비스를 사용할 수 없습니다.
+  failure.timeout: 요청 시간이 초과되었습니다.
+  failure.invalid_request: 요청 검증에 실패했습니다.
+  failure.context_length_exceeded: 요청이 모델 컨텍스트 창을 초과합니다.
+  failure.content_policy: 콘텐츠 정책이 요청 또는 출력을 거부했습니다.
+  failure.cancelled: 요청이 취소되었습니다.
+  failure.unclassified: 분류되지 않은 오류입니다. 아래 기록된 상태를 확인하세요.
+  failure.contract: 요청이 인터페이스 계약을 위반합니다.
+  failure.authorization: 호출자에게 필요한 승인이 없습니다.
+  failure.configuration: 추론 설정을 사용할 수 없습니다.
+  failure.limit: 설정된 실행 제한을 초과했습니다.
+  failure.execution: 모델 추론 실행에 실패했습니다.
+  snapshot.retained: 새로 고침이 성공할 때까지 이전 결과를 표시합니다.
+  tokens.noComposition: 입력과 출력 비율을 계산할 수 없음
+  tokens.composition: '입력 {{input}} · 출력 {{output}}'
+  tokens.cacheSeparate: 캐시 읽기 비율은 보고된 입력을 기준으로 하며 캐시 수를 입력과 출력에 더하지 않습니다.
+  cost.empty: 이 범위에 비용 기록이 없음
+  pricing.editor: 모델 가격 편집기
+  pricing.chooseModel: 아래 표에서 모델을 선택하여 가격을 편집하세요.
+  pricing.editModel: '모델 편집 · {{model}}'
+  status.unknown: 통계 상태를 알 수 없음
+  sections.label: 통계 영역
+  sections.overview: 개요
+  sections.details: 사용량 상세
+  sections.pricing: 모델 가격
+  sections.maintenance: 유지 관리
+  range.label: 시간 범위
+  range.now: 현재
+  range.description: 현지 날짜와 시간을 선택하세요.
+  range.today: 오늘
+  range.start: 시작 시간
+  range.end: 종료 시간
+  range.followNow: 종료 시간이 현재 시간을 따름
+  range.invalid: 종료 시간은 시작 시간 이후여야 합니다.
+  range.confirm: 확인
+  cost.item: 항목
+  cost.unitPerMillion: 백만 Token당 가격
+  cost.noNonzero: 0이 아닌 비용 항목이 없음
+  range.days: '최근 {{days}}일'
+  page.previous: 이전
+  page.loading: 이 표 업데이트 중…
+  range.last24Hours: 1일
+  range.lastDays: '{{days}}일'
+  page.next: 다음
+  pricing.search: 모델 검색
+  pricing.filter: 가격 필터
+  pricing.filter.all: 모든 모델
+  pricing.filter.unpriced: 가격 미설정
+  pricing.filter.override: 사용자 지정 재정의
+  pricing.filter.used: 보존된 사용 기록이 있는 모든 모델
+  pricing.tableScope: 가격은 백만 Token 기준입니다. 사용된 모델에는 상세 페이지와 무관하게 보존된 모든 기록이 포함됩니다.
+  pricing.loading: 모델 가격 로딩 중
+  cost.title: 선택한 범위의 참고 비용
+  cost.coverage: '가격 설정 {{priced}}행 · 미설정 {{unpriced}}행 · 불완전 {{incomplete}}행'
+  cost.partial: 일부만 계산됨
+  pricing.source: 가격 출처
+  pricing.unpriced: 가격이 설정되지 않음
+  pricing.incompleteUsage: 필수 사용량이 불완전함
+  pricing.loadError: 모델 가격을 불러올 수 없음
+  error.details: 오류 상세
+  tokens.inputTokens: 입력
+  tokens.outputTokens: 출력
+  tokens.cacheReadTokens: 캐시 읽기
+  tokens.cacheWriteTokens: 캐시 쓰기
+  tokens.cacheShare: 캐시 읽기 / 보고된 입력
+  tokens.breakdown: 입력, 출력 및 캐시
+  usage.search: 모델별 사용량 검색
+  usage.applySearch: 검색
+  usage.order: 시간 정렬
+  usage.newest: 최신순
+  usage.oldest: 오래된순
+  navigationLabel: 사용량 통계
+  status.ready: 시스템 통계 사용 가능
+  status.loading: 시스템 통계 로딩 중
+  status.error: 시스템 통계 로딩 실패
+  status.succeeded: 성공
+  status.failed: 실패
+  status.cancelled: 취소됨
+  refresh: 새로 고침
+  refreshing: 새로 고치는 중
+  source.host: 시스템 VLDB
+  pricing.catalog: 참고 가격표
+  pricing.unmatched: 참고 가격표에 없는 모델
+  pricing.incomplete: 불완전한 Token 정보
+  pricing.title: 모델 참고 가격
+  pricing.description: 재정의는 이 플러그인 설정에만 속합니다. 예상 비용은 다시 계산되며 시스템 통계 데이터베이스에 기록되지 않습니다.
+  pricing.model: 모델
+  pricing.override: 사용자 지정 재정의
+  pricing.default: 가격표 기본값
+  pricing.empty: 사용 가능한 모델 식별자가 없음
+  pricing.input: 캐시되지 않은 입력
+  pricing.output: 출력
+  pricing.cacheRead: 캐시 읽기
+  pricing.cacheWrite: 캐시 쓰기
+  pricing.perMillion: 백만 Token당
+  pricing.save: 재정의 저장
+  pricing.saving: 저장 중
+  pricing.saved: 모델 가격 재정의를 저장함
+  pricing.reset: 가격표 기본값 복원
+  pricing.resetDone: 가격표 가격을 복원함
+  pricing.validation: 음수가 아닌 십진수 가격 네 개를 입력하세요.
+  revision: 리비전
+  consumer.label: 사용 주체
+  consumer.all: 모든 사용 주체
+  error.title: 시스템 통계를 읽을 수 없음
+  summary.requests: 실제 시도
+  summary.requestsDetail: 재시도와 실패 포함
+  summary.successRate: 성공률
+  summary.successes: 성공한 시도
+  summary.tokens: 알려진 Token
+  summary.tokensDetail: 알 수 없는 사용량은 누락 상태 유지
+  summary.usageCoverage: 사용량 기록률
+  summary.usageCoverageDetail: Provider가 직접 보고함
+  heatmap.title: 활동 히트맵
+  heatmap.aria: 선택한 범위의 Token 활동 히트맵
+  heatmap.empty: 아직 Token 활동이 없음
+  heatmap.tooltip: '{{date}}: {{value}} Token · 요청 {{requests}}건 · 성공률 {{successRate}} · {{model}}'
+  heatmap.noModel: 모델 없음
+  heatmap.less: 적음
+  heatmap.more: 많음
+  trend.title: 일별 Token 사용량
+  trend.range: 최근 30일
+  trend.aria: 모델별 일별 Token 사용량 꺾은선 그래프
+  trend.empty: 이 범위에 추세 데이터가 없음
+  daily.title: 모델 사용량
+  daily.empty: 이 시간 범위에 사용량이 없음
+  daily.date: 날짜
+  daily.provider: 공급자 / 모델
+  daily.consumer: 사용 주체
+  daily.consumerOperation: 사용 주체 / 작업
+  daily.averageDuration: 평균 소요 시간
+  daily.operation: 작업
+  daily.attempts: 시도
+  daily.tokens: Token
+  daily.cost: 참고 예상 비용
+  recent.title: 최근 실제 시도
+  recent.modelTypes: 모델 유형
+  recent.group.llm: 대화 모델
+  recent.group.embedding: 임베딩 모델
+  recent.group.rerank: 재순위화 모델
+  recent.empty: 실제 시도 기록이 없음
+  recent.time: 시간
+  recent.model: 공급자 / 모델
+  recent.consumer: 사용 주체
+  recent.status: 상태
+  recent.tokens: Token
+  recent.cost: 참고 예상 비용
+  recent.error: 오류
+  accounts.title: 계정 사용량 스냅샷
+  accounts.empty: 계정 사용량 스냅샷이 없음
+  accounts.time: 관측 시간
+  accounts.provider: 공급자
+  accounts.connection: 연결
+  accounts.kind: 스냅샷 유형
+  clear.title: 과거 통계 삭제
+  clear.preview: 삭제 미리 보기
+  clear.previewing: 미리 보기 준비 중
+  clear.previewSummary: 이 작업은 다음을 영구 삭제합니다
+  clear.attempts: 실제 시도
+  clear.tokens: 알려진 Token
+  clear.cancel: 취소
+  clear.apply: 삭제 확인
+  clear.applying: 삭제 중
+  clear.success: 과거 통계를 삭제함
+  privacy: Vulcan은 Token 사실만 전용 시스템 데이터베이스에 저장합니다. 이 신뢰된 내장 플러그인은 데이터베이스를 조회하고 삭제하며, 요청마다 자체 가격표에서 참고 비용을 다시 계산합니다.
+  error.retry: 재시도
+  usage.clearSearch: 모델 검색 지우기
+  timing.tokensPerSecond: "{{value}} Token/초"

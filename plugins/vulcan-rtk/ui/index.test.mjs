@@ -3,12 +3,23 @@ import test, { beforeEach } from "node:test";
 import { createPluginQueryClient, invalidatePluginQueries } from "../../../apps/vulcan-code-web/src/service/plugin-ui-query-runtime.ts";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
+import { SUPPORTED_LOCALES } from "../../../apps/vulcan-code-web/src/i18n-locales.ts";
 
 // Dependencies come from the existing host; no runtime plugin bundle dependency is added.
 // 依赖来自现有宿主，不添加运行时插件打包依赖。
 const require = createRequire(new URL("../../../apps/vulcan-code-web/package.json", import.meta.url));
 const React = require("react");
 const { JSDOM } = require("jsdom");
+// loadYaml parses the shipped locale and manifest files with the existing host dependency.
+// loadYaml 使用宿主现有依赖解析实际发布的语言与清单文件。
+const { load: loadYaml } = require("js-yaml");
+// manifest is the exact plugin declaration whose locale assets must cover the host registry.
+// manifest 是语言资源必须覆盖宿主语言注册表的实际插件清单。
+const manifest = loadYaml(await readFile(new URL("../plugin.yaml", import.meta.url), "utf8"));
+// catalogs contains every host language's actual package translations, indexed by locale code.
+// catalogs 按语言代码保存每种宿主语言的实际包内翻译。
+const catalogs = new Map(await Promise.all(SUPPORTED_LOCALES.map(async ({ code }) => [code,
+  loadYaml(await readFile(new URL(`../${manifest.locales[code]}`, import.meta.url), "utf8"))])));
 // settings uses the real declared default shape in an isolated in-memory copy.
 // settings 使用真实声明的默认结构，但只保留隔离内存副本。
 const settings = JSON.parse(await readFile(new URL("../config/defaults.json", import.meta.url), "utf8"));
@@ -19,9 +30,9 @@ beforeEach(() => invalidatePluginQueries("rtk-test"));
 
 // mount renders the authoritative plugin against controlled actions and native interaction adapters.
 // mount 使用受控 Action 与原生交互适配器渲染权威插件。
-// invoke supplies action responses; strict replays effects; factory optionally retains the module cache. Returns the DOM and cleanup.
-// invoke 提供 Action 响应；strict 重放 Effect；factory 可保留模块缓存。返回 DOM 与清理函数。
-async function mount(invoke, strict = false, factory = null) {
+// invoke supplies action responses; strict replays effects; factory retains the module cache; locale selects a real catalog. Returns DOM and cleanup.
+// invoke 提供 Action 响应；strict 重放 Effect；factory 保留模块缓存；locale 选择实际翻译。返回 DOM 与清理函数。
+async function mount(invoke, strict = false, factory = null, locale = null) {
   // Exercise the production coordinator; only the backend action boundary is controlled.
   // 使用生产协调器；仅控制后端 Action 边界。
   const client = createPluginQueryClient({ pluginId: "rtk-test", runtimeIdentity: "fixture:1", workspacePath: null, conversationId: null }, [
@@ -42,7 +53,11 @@ async function mount(invoke, strict = false, factory = null) {
     ...options.map((option) => React.createElement("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))),
     actions);
   const createPanel = factory ?? (await import(`./index.mjs?test=${++moduleId}`)).createPluginPanel;
-  const sdk = { React, invoke: client.invoke, locale: "en-US", formatNumber: String, t: (_key, fallback) => fallback,
+  // sdk preserves existing English fixtures and optionally renders an actual package locale with host-equivalent formatting.
+  // sdk 保留原英文夹具，也可用宿主等效格式化方法渲染实际包内语言。
+  const sdk = { React, invoke: client.invoke, locale: locale ?? "en-US",
+    formatNumber: (value) => locale ? new Intl.NumberFormat(locale).format(value) : String(value),
+    t: (key, fallback) => locale ? catalogs.get(locale).messages[key] ?? fallback : fallback,
     components: { Button, Badge: plain, StatusPill: plain, PageTabs, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain, StreamPlaceholder: plain } };
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
   await React.act(async () => root.render(React.createElement(strict ? React.StrictMode : React.Fragment, null, React.createElement(createPanel(sdk)))));
@@ -86,6 +101,71 @@ test("settings retry is independent, effect replay shares reads, and search pres
     await React.act(async () => { setter.call(search, ""); search.dispatchEvent(new window.Event("input", { bubbles: true })); });
     assert.equal(panel.container.querySelectorAll('input[type="checkbox"]:checked').length, selected);
   } finally { await panel.close(); }
+});
+
+// Shipped translations cover host languages and retain exact interpolation contracts.
+// 发布翻译覆盖宿主语言，并保留精确的插值契约。
+test("all host locales have complete translated catalogs and required assets", () => {
+  // baseline is the English source catalog, not a second manually maintained key registry.
+  // baseline 为英文源翻译，不另行维护第二份键注册表。
+  const baseline = catalogs.get("en-US");
+  assert.equal(manifest.locales.en, manifest.locales["en-US"]);
+  for (const { code } of SUPPORTED_LOCALES) {
+    // catalog is the actual declared asset for this host language.
+    // catalog 为此宿主语言实际声明的资源。
+    const catalog = catalogs.get(code);
+    assert.ok(manifest.required_files.includes(manifest.locales[code]), `${code} locale must be packaged`);
+    assert.equal(catalog.name, "Vulcan RTK");
+    assert.equal(typeof catalog.capability, "string");
+    assert.deepEqual(Object.keys(catalog.messages).sort(), Object.keys(baseline.messages).sort(), code);
+    // key and value identify one real translation whose placeholders must match its source contract.
+    // key 与 value 标识一条实际翻译，其占位符必须符合源契约。
+    for (const [key, value] of Object.entries(catalog.messages)) {
+      assert.equal(typeof value, "string", `${code}:${key}`);
+      assert.ok(value.trim(), `${code}:${key} must be translated`);
+      assert.deepEqual(value.match(/\{\{[^}]+\}\}/g) ?? [], baseline.messages[key].match(/\{\{[^}]+\}\}/g) ?? [], `${code}:${key} placeholders`);
+    }
+    if (code !== "en-US") {
+      assert.notEqual(catalog.capability, baseline.capability, `${code} capability must be translated`);
+      assert.notEqual(catalog.messages.save, baseline.messages.save, `${code} actions must be translated`);
+    }
+  }
+});
+
+// Real localized panels preserve numeric units, calendar dates, and translations across all host languages.
+// 实际本地化面板在所有宿主语言中保留数字单位、日历日期与翻译。
+test("statistics render every host locale without English-only labels or numeric formatting", async () => {
+  for (const { code } of SUPPORTED_LOCALES) {
+    // catalog supplies the exact language used by this mounted panel.
+    // catalog 提供此挂载面板实际使用的语言。
+    const catalog = catalogs.get(code);
+    // statistics includes all period shapes observed from the packaged RTK binary.
+    // statistics 包含从随包 RTK 二进制实际观察到的全部周期格式。
+    const statistics = { available: true, generated_at_ms: 1_791_158_400_000,
+      summary: { total_saved: 12345, avg_savings_pct: 12.5, total_input: 2500, total_output: 1000 },
+      daily: [{ date: "2026-10-05", saved_tokens: 100, savings_pct: 12.5 }],
+      weekly: [{ week_start: "2026-10-05", week_end: "2026-10-11", saved_tokens: 100, savings_pct: 12.5 }],
+      monthly: [{ month: "2026-10", saved_tokens: 100, savings_pct: 12.5 }],
+      byCommand: [{ command: "git", count: 1234, saved_tokens: 100, avg_savings_pct: 12.5, avg_time_ms: 1250 },
+        { command: "cargo", count: 2, saved_tokens: 50, avg_savings_pct: 25, avg_time_ms: 25 },
+        { command: "rg", count: 3, saved_tokens: 30, avg_savings_pct: 50, avg_time_ms: 61000 }] };
+    // panel mounts the production module with localized controls and deterministic action responses.
+    // panel 使用本地化控件与确定的 Action 响应挂载生产模块。
+    const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : statistics), false, null, code);
+    try {
+      assert.ok(button(panel, catalog.messages.save), `${code} save button`);
+      await React.act(async () => button(panel, catalog.messages["sections.statistics"]).click());
+      assert.ok(panel.container.querySelector(".rtk-command-stats-header").textContent.includes(catalog.messages["stats.topCommands"].replace("{{count}}", new Intl.NumberFormat(code).format(3))), code);
+      assert.ok(panel.container.querySelector(".rtk-command-table").textContent.includes(new Intl.NumberFormat(code, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(0.125)), `${code} percent`);
+      assert.ok(panel.container.querySelector(".rtk-command-table").textContent.includes(new Intl.NumberFormat(code, { style: "unit", unit: "second", unitDisplay: "short", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(1.25)), `${code} duration`);
+      assert.ok(panel.container.querySelector(".rtk-gain-summary-grid").textContent.includes(new Intl.NumberFormat(code, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(2.5)), `${code} ratio`);
+      assert.equal(panel.container.querySelector(".plugin-stat-chart-column small").textContent, new Intl.DateTimeFormat(code, { month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date("2026-10-05T00:00:00Z")), `${code} daily`);
+      await React.act(async () => button(panel, catalog.messages["stats.weekly"]).click());
+      assert.ok(panel.container.querySelector(".plugin-stat-chart-column small").textContent.includes(new Intl.DateTimeFormat(code, { month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date("2026-10-11T00:00:00Z"))), `${code} weekly`);
+      await React.act(async () => button(panel, catalog.messages["stats.monthly"]).click());
+      assert.equal(panel.container.querySelector(".plugin-stat-chart-column small").textContent, new Intl.DateTimeFormat(code, { year: "numeric", month: "short", timeZone: "UTC" }).format(new Date("2026-10-01T00:00:00Z")), `${code} monthly`);
+    } finally { await panel.close(); }
+  }
 });
 
 // Same-event writes are serialized and a rejected write retains the exact visible draft for manual retry.

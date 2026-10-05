@@ -1,0 +1,22 @@
+name: Navigateur Vulcan
+capability: Vue du navigateur IA gérée par Core et isolée par session
+messages:
+  navigationLabel: Navigateur IA
+  localBrowserLabel: Navigateur local
+  conversationRequired: Sélectionnez une conversation pour afficher son navigateur IA.
+  settingsLabel: Paramètres de Playwright
+  actionTimeoutLabel: Délai d’attente des actions (ms)
+  navigationTimeoutLabel: Délai d’attente de navigation (ms)
+  settleTimeoutLabel: Attente après l’action (ms)
+  consoleLevelLabel: Niveau de la console
+  settingsSave: Enregistrer les paramètres
+  settingsRetry: Recharger
+  settingsSaved: Paramètres enregistrés. Les nouvelles connexions du navigateur utiliseront les valeurs mises à jour.
+  settingsHint: Ces paramètres s’appliquent au démarrage d’une nouvelle connexion du navigateur IA.
+  settingsInvalid: Saisissez des délais d’attente valides avant d’enregistrer.
+  settingsResponseInvalid: La réponse des paramètres de Playwright est invalide.
+  settingsPersistedInvalid: Les paramètres enregistrés de Playwright sont invalides.
+  consoleLevel_error: Erreur
+  consoleLevel_warning: Avertissement
+  consoleLevel_info: Information
+  consoleLevel_debug: Débogage

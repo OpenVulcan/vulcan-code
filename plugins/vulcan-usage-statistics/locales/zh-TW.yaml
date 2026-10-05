@@ -1,0 +1,239 @@
+name: Vulcan 用量統計
+capability: 透過系統 VLDB 查詢 Provider Token 事實，並使用外掛自有價目表即時計算參考費用
+messages:
+  tokens.details: Token 明細
+  timing.request: 請求總時間
+  timing.column: 延遲
+  timing.firstShort: 首 Token
+  timing.averageFirstShort: 首 Token
+  timing.totalShort: 總耗時
+  timing.averageTotalShort: 耗時
+  timing.unrecorded: 未記錄
+  timing.averageRequest: 平均請求時間
+  timing.firstToken: 首 Token 延遲
+  timing.averageFirstToken: 平均首 Token 延遲
+  timing.output: 輸出時間
+  timing.totalOutput: 已測累計輸出時間
+  timing.speed: 平均輸出速度
+  timing.samples: 已測請求數
+  timing.formula: 輸出時間為請求結束減去首 Token 時間。速度依同一組已測請求的輸出 Token 與輸出時間計算；缺少計時不會補估。
+  tokens.uncachedInputTokens: 非快取輸入
+  tokens.reasoningTokens: 推理 Token
+  tokens.totalTokens: 總 Token
+  cost.details: 參考費用明細
+  cost.component: 預估費用
+  cost.unitPrice: 單價
+  cost.total: 參考費用合計
+  cost.referenceOnly: 根據已記錄用量與目前參考單價計算，不代表供應商實際帳單。
+  pricing.actions: 操作
+  pricing.edit: 編輯
+  consumer.name.default-worker: 對話助理
+  consumer.name.vulcan-code-native-vmm: 記憶服務
+  consumer.name.vulcan-code-settings-inference-test: 模型連線測試
+  consumer.name.vulcan-code-provider-validation: 模型驗證
+  consumer.name.vulcan-code-knowledge-curation: 知識庫整理
+  consumer.name.vulcan-code-knowledge-embedding: 知識庫向量化
+  consumer.codeContext: 程式碼上下文
+  consumer.custom: '自訂呼叫端 · {{id}}'
+  operation.custom: '自訂操作 · {{id}}'
+  operation.conversation: 對話生成
+  operation.conversation_respond: 對話生成
+  operation.compact: 上下文壓縮
+  operation.warmup: 模型預熱
+  operation.image_understand: 圖片理解
+  operation.image_generate: 圖片生成
+  operation.image_edit: 圖片編輯
+  operation.video_understand: 影片理解
+  operation.video_generate: 影片生成
+  operation.video_edit: 影片編輯
+  operation.video_extend: 影片延長
+  operation.audio_understand: 音訊理解
+  operation.speech_synthesize: 語音合成
+  operation.speech_transcribe: 語音轉錄
+  operation.voice_clone: 聲音複製
+  operation.voice_design: 聲音設計
+  operation.music_generate: 音樂生成
+  operation.music_cover: 音樂翻唱
+  operation.lyrics_generate: 歌詞生成
+  operation.embedding_create: 向量生成
+  operation.rerank_documents: 文件重新排序
+  operation.web_search: 網頁搜尋
+  operation.web_extract: 網頁內容擷取
+  error.category: 錯誤類別
+  error.code: 錯誤代碼
+  error.requestId: 請求識別碼
+  error.noOriginal: 此統計記錄未保存完整錯誤原文。
+  failure.unknown: 請求未正常完成。
+  failure.authentication: 請求身分驗證失敗。
+  failure.permission_denied: 目前請求沒有所需權限。
+  failure.payment_required: 帳號餘額或可用額度不足。
+  failure.rate_limited: 請求頻率超過供應商限制。
+  failure.provider_overloaded: 供應商目前負載過高。
+  failure.provider_unavailable: 供應商服務目前無法使用。
+  failure.timeout: 請求逾時。
+  failure.invalid_request: 請求參數未通過驗證。
+  failure.context_length_exceeded: 請求內容超過模型上下文視窗。
+  failure.content_policy: 請求或輸出遭內容政策拒絕。
+  failure.cancelled: 請求已取消。
+  failure.unclassified: 此錯誤尚未分類，詳細狀態請見下方記錄。
+  failure.contract: 請求不符合介面契約。
+  failure.authorization: 呼叫端未取得所需授權。
+  failure.configuration: 目前推理設定無法使用。
+  failure.limit: 請求超過設定的執行限制。
+  failure.execution: 模型推理執行失敗。
+  snapshot.retained: 目前顯示上次讀取結果，重新整理成功後更新。
+  tokens.noComposition: 尚無可計算的輸入與輸出占比
+  tokens.composition: '輸入 {{input}} · 輸出 {{output}}'
+  tokens.cacheSeparate: 快取讀取比例以已回報輸入為分母，快取不重複計入輸入與輸出。
+  cost.empty: 此範圍尚無費用記錄
+  pricing.editor: 模型價格編輯器
+  pricing.chooseModel: 在下方表格選取模型，即可在此編輯價格。
+  pricing.editModel: '編輯模型 · {{model}}'
+  status.unknown: 統計健康狀態未知
+  sections.label: 統計區域
+  sections.overview: 總覽
+  sections.details: 用量明細
+  sections.pricing: 模型定價
+  sections.maintenance: 維護
+  range.label: 時間範圍
+  range.now: 目前時間
+  range.description: 選擇本地日期與時間。
+  range.today: 今天
+  range.start: 開始時間
+  range.end: 結束時間
+  range.followNow: 結束時間跟隨目前時間
+  range.invalid: 結束時間必須晚於開始時間。
+  range.confirm: 確認
+  cost.item: 項目
+  cost.unitPerMillion: 單價 / 百萬 Token
+  cost.noNonzero: 尚無非零費用項目
+  range.days: '最近 {{days}} 天'
+  page.previous: 上一頁
+  page.loading: 正在更新此表格…
+  range.last24Hours: 1 天
+  range.lastDays: '{{days}} 天'
+  page.next: 下一頁
+  pricing.search: 搜尋模型
+  pricing.filter: 定價篩選
+  pricing.filter.all: 全部模型
+  pricing.filter.unpriced: 未定價
+  pricing.filter.override: 自訂覆寫
+  pricing.filter.used: 全部已有用量的模型
+  pricing.tableScope: 每百萬 Token 單價；已有用量包含全部保留記錄，不受明細分頁影響。
+  pricing.loading: 正在載入模型價格
+  cost.title: 所選範圍的參考費用
+  cost.coverage: '{{priced}} 列可計算 · {{unpriced}} 列未定價 · {{incomplete}} 列用量不完整'
+  cost.partial: 部分涵蓋
+  pricing.source: 價格來源
+  pricing.unpriced: 未設定價格
+  pricing.incompleteUsage: 必要用量不完整
+  pricing.loadError: 無法讀取模型價格
+  error.details: 錯誤詳情
+  tokens.inputTokens: 輸入
+  tokens.outputTokens: 輸出
+  tokens.cacheReadTokens: 快取讀取
+  tokens.cacheWriteTokens: 快取寫入
+  tokens.cacheShare: 快取讀取占已回報輸入比例
+  tokens.breakdown: 輸入、輸出與快取
+  usage.search: 依模型搜尋用量
+  usage.applySearch: 搜尋
+  usage.order: 時間排序
+  usage.newest: 最新在前
+  usage.oldest: 最早在前
+  navigationLabel: 用量統計
+  status.ready: 系統統計可用
+  status.loading: 正在讀取系統統計
+  status.error: 系統統計載入失敗
+  status.succeeded: 成功
+  status.failed: 失敗
+  status.cancelled: 已取消
+  refresh: 重新整理
+  refreshing: 正在重新整理
+  source.host: 系統 VLDB
+  pricing.catalog: 參考價目表
+  pricing.unmatched: 模型未符合參考價目表
+  pricing.incomplete: Token 事實不完整
+  pricing.title: 模型參考價格
+  pricing.description: 覆寫僅屬於此外掛設定。每次重新計算估算值，不會寫入系統統計資料庫。
+  pricing.model: 模型
+  pricing.override: 自訂覆寫
+  pricing.default: 目錄預設值
+  pricing.empty: 尚無可選模型識別碼
+  pricing.input: 非快取輸入
+  pricing.output: 輸出
+  pricing.cacheRead: 快取讀取
+  pricing.cacheWrite: 快取寫入
+  pricing.perMillion: 每百萬 Token
+  pricing.save: 儲存覆寫
+  pricing.saving: 正在儲存
+  pricing.saved: 已儲存模型價格覆寫
+  pricing.reset: 還原目錄預設值
+  pricing.resetDone: 已還原目錄預設價格
+  pricing.validation: 請填寫四個非負十進位價格。
+  revision: 修訂
+  consumer.label: 使用端
+  consumer.all: 全部使用端
+  error.title: 無法讀取系統統計
+  summary.requests: 實際呼叫
+  summary.requestsDetail: 包含重試與失敗
+  summary.successRate: 成功率
+  summary.successes: 次成功請求
+  summary.tokens: 已知 Token
+  summary.tokensDetail: 未知用量保持缺漏
+  summary.usageCoverage: 用量涵蓋率
+  summary.usageCoverageDetail: Provider 直接回報
+  heatmap.title: 活動熱度圖
+  heatmap.aria: 所選範圍的 Token 活動熱度圖
+  heatmap.empty: 尚無 Token 活動
+  heatmap.tooltip: '{{date}}：{{value}} Token · {{requests}} 次請求 · 成功率 {{successRate}} · {{model}}'
+  heatmap.noModel: 無模型
+  heatmap.less: 較少
+  heatmap.more: 較多
+  trend.title: 每日 Token 用量
+  trend.range: 最近 30 天
+  trend.aria: 依模型分組的每日 Token 用量折線圖
+  trend.empty: 此範圍尚無趨勢資料
+  daily.title: 模型用量
+  daily.empty: 此時間範圍內尚無用量
+  daily.date: 日期
+  daily.provider: 供應商 / 模型
+  daily.consumer: 使用端
+  daily.consumerOperation: 使用端 / 操作
+  daily.averageDuration: 平均耗時
+  daily.operation: 操作
+  daily.attempts: 呼叫
+  daily.tokens: Token
+  daily.cost: 參考估算
+  recent.title: 最近實際呼叫
+  recent.modelTypes: 模型類別
+  recent.group.llm: 對話模型
+  recent.group.embedding: 向量模型
+  recent.group.rerank: 重新排序模型
+  recent.empty: 尚無實際呼叫記錄
+  recent.time: 時間
+  recent.model: 供應商 / 模型
+  recent.consumer: 使用端
+  recent.status: 狀態
+  recent.tokens: Token
+  recent.cost: 參考估算
+  recent.error: 錯誤
+  accounts.title: 帳戶用量快照
+  accounts.empty: 尚無帳戶用量快照
+  accounts.time: 觀測時間
+  accounts.provider: 供應商
+  accounts.connection: 連線
+  accounts.kind: 快照類型
+  clear.title: 清理歷史統計
+  clear.preview: 預覽清理
+  clear.previewing: 正在產生預覽
+  clear.previewSummary: 此操作將永久刪除
+  clear.attempts: 筆呼叫記錄
+  clear.tokens: 個已知 Token
+  clear.cancel: 取消
+  clear.apply: 確認清理
+  clear.applying: 正在清理
+  clear.success: 已清理歷史統計
+  privacy: Vulcan 只將 Token 事實寫入獨立系統資料庫。此受信任的內建外掛查詢及清理該資料庫，並於每次請求時依自有價目表重新計算參考費用。
+  error.retry: 重試
+  usage.clearSearch: 清除模型搜尋
+  timing.tokensPerSecond: "{{value}} Token/秒"

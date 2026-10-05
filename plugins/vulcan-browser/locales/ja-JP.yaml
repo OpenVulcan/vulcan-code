@@ -1,0 +1,22 @@
+name: Vulcan ブラウザー
+capability: Core が管理するセッション別 AI ブラウザー表示
+messages:
+  navigationLabel: AI ブラウザー
+  localBrowserLabel: ローカルブラウザー
+  conversationRequired: AI ブラウザーを表示する会話を選択してください。
+  settingsLabel: Playwright の設定
+  actionTimeoutLabel: 操作のタイムアウト（ミリ秒）
+  navigationTimeoutLabel: ナビゲーションのタイムアウト（ミリ秒）
+  settleTimeoutLabel: 操作後の待機時間（ミリ秒）
+  consoleLevelLabel: コンソールのログレベル
+  settingsSave: 設定を保存
+  settingsRetry: 再読み込み
+  settingsSaved: 設定を保存しました。新しいブラウザー接続から更新後の値が使用されます。
+  settingsHint: 新しい AI ブラウザー接続の開始時に適用されます。
+  settingsInvalid: 保存する前に有効なタイムアウトを入力してください。
+  settingsResponseInvalid: Playwright の設定応答が無効です。
+  settingsPersistedInvalid: 保存された Playwright の設定が無効です。
+  consoleLevel_error: エラー
+  consoleLevel_warning: 警告
+  consoleLevel_info: 情報
+  consoleLevel_debug: デバッグ

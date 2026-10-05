@@ -1,0 +1,62 @@
+name: Context7
+capability: Documentation à jour des bibliothèques selon leur version pour les agents de programmation
+messages:
+  errorDetails: Détails de l’erreur
+  navigationLabel: Context7
+  allowanceDescription: Le mode anonyme permet 200 requêtes sans clé API. L’inscription et la configuration d’une clé gratuite donnent accès à 1 000 requêtes et au suivi de l’utilisation du compte dans le tableau de bord officiel.
+  refresh: Actualiser
+  loading: Chargement des paramètres de Context7…
+  loadError: Impossible de charger les données de Context7.
+  retry: Réessayer
+  operationFailed: L’opération a échoué. Veuillez réessayer.
+  credentialTitle: Authentification
+  anonymousMode: Mode anonyme
+  apiKeyMode: Mode avec clé API
+  configured: Clé API configurée
+  notConfigured: Aucune clé API configurée ; les requêtes utilisent le quota anonyme.
+  apiKeyLabel: Clé API
+  apiKeyPlaceholder: ctx7sk-…
+  saveApiKey: Enregistrer la clé API
+  replaceApiKey: Remplacer la clé API
+  deleteApiKey: Supprimer la clé API
+  confirmDeleteApiKey: Confirmer la suppression
+  apiKeySaved: La clé API de Context7 a été enregistrée.
+  apiKeyDeleted: La clé API de Context7 a été supprimée ; le mode anonyme est actif.
+  credentialInvalid: Context7 a rejeté la clé API configurée.
+  credentialValid: La clé API configurée a été validée.
+  credentialUntested: La clé API configurée n’a pas encore été testée.
+  credentialUnknown: Aucun résultat de validation de la clé API n’est disponible.
+  connectionTitle: Test de connexion
+  connectionTest: Tester la connexion
+  connectionTestHint: Le test consomme une requête Context7 sur le quota actuel.
+  connectionSuccess: La connexion à Context7 a réussi.
+  behaviorTitle: Comportement des requêtes
+  defaultFastMode: Mode rapide par défaut
+  defaultFastModeHint: Ignore le reclassement par LLM de Context7 pour réduire la latence, avec une possible baisse de pertinence.
+  timeout: Délai d’attente des requêtes
+  timeoutHint: Durée maximale d’attente d’une réponse à une requête Context7.
+  retention: Conservation des statistiques locales
+  retentionHint: Les enregistrements locaux de requêtes antérieurs à cette période sont supprimés.
+  saveSettings: Enregistrer les paramètres
+  settingsSaved: Les paramètres de Context7 ont été enregistrés.
+  usageTitle: Utilisation et quota
+  localStatsTitle: Statistiques locales des requêtes
+  usageRange: Période locale
+  requests: Requêtes
+  successes: Réussites
+  failures: Échecs
+  averageDuration: Durée moyenne
+  quotaTitle: Dernier état du quota Context7
+  quotaTier: Niveau
+  quotaRemaining: Restant
+  quotaLimit: Limite
+  quotaReset: Réinitialisation
+  noQuota: Aucune réponse de quota n’a été reçue pour la génération d’authentification actuelle.
+  localUsageNotice: Les statistiques locales incluent uniquement les requêtes effectuées par cette extension Vulcan Code.
+  officialUsageNotice: L’utilisation complète du compte, les périodes de facturation, les sièges et les coûts restent disponibles dans le tableau de bord officiel de Context7.
+  dashboardLink: Tableau de bord Context7
+  apiKeyDocsLink: Obtenir une clé API gratuite
+  usageDocsLink: Documentation de l’API et de l’utilisation
+  saving: Enregistrement…
+  testing: Test en cours…
+  days: "{{days}} jours"

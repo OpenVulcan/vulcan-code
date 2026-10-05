@@ -63,6 +63,7 @@ messages:
   stats.byCommand: By command
   stats.time: Time
   stats.impact: Impact
+  stats.topCommands: "Top {{count}} commands"
   routes.title: RTK routes
   routes.description: Choose exactly which supported commands may be rewritten.
   routes.curated: Curated

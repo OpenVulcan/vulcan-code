@@ -83,7 +83,7 @@ messages:
   failure.execution: Model inference execution failed.
   snapshot.retained: Showing the previous result until a refresh succeeds.
   tokens.noComposition: Input/output share is unavailable
-  tokens.composition: "Input {{input}}% · Output {{output}}%"
+  tokens.composition: "Input {{input}} · Output {{output}}"
   tokens.cacheSeparate: Cache read share uses reported input; cache counts are not added to input/output.
   cost.empty: No cost records in this range
   pricing.editor: Model price editor
@@ -236,3 +236,4 @@ messages:
   privacy: Vulcan stores Token facts only in the dedicated system database. This trusted bundled plugin queries and clears that database, then recomputes reference estimates from its own catalog for each request.
   error.retry: Retry
   usage.clearSearch: Clear model search
+  timing.tokensPerSecond: "{{value}} tokens/s"
