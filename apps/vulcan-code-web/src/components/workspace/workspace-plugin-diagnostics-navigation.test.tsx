@@ -2,7 +2,7 @@
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { formatMessage, I18nProvider, readLocaleMessage, type TranslationKey } from "@/i18n";
 import type { PluginSummary, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skill-area-types";
@@ -48,6 +48,9 @@ async function mount(subArea: SkillSubAreaId): Promise<void> {
     onSelectPluginResourceOwner={async (conversationId) => (await selectConversation(conversationId))?.selectedConversationId === conversationId} /></I18nProvider>));
   await act(async () => { await import("@/components/features/skills/skills-area"); });
 }
+// The lazy skills area is a large module graph; loading it once here keeps its cold transform out of every test's time budget.
+// 懒加载技能区域是较大的模块图；在此统一加载一次，使其冷转换不计入每个测试的时间预算。
+beforeAll(async () => { await import("@/components/features/skills/skills-area"); }, 60_000);
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.clearAllMocks();
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });

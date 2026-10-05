@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { createAuditPublicAi } from "./fixtures"
+import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings"
 import { ModelListSettingsArea } from "@/components/features/settings/provider-model-settings"
 
 // service replaces only catalog I/O; dialogs, route grouping and focus behavior stay real.
@@ -25,7 +25,7 @@ describe("model list access and usage interactions", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
     // snapshot reuses existing multi-account fixtures without adding a per-file visual harness.
     // snapshot 复用现有多账号数据，不增加逐文件视觉夹具。
-    const snapshot = createAuditPublicAi("invalid-default")
+    const snapshot = publicAiSettingsWithInvalidDefaultFixture()
     service.load.mockResolvedValue(snapshot)
     // container and root belong only to this isolated render.
     // container 与 root 仅属于本次隔离渲染。
@@ -71,7 +71,7 @@ describe("model list access and usage interactions", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
     // snapshot and next preserve all independent usage dimensions while changing one exact preference.
     // snapshot 与 next 保留所有独立用途维度，仅修改一个准确偏好。
-    const snapshot = createAuditPublicAi("invalid-default")
+    const snapshot = publicAiSettingsWithInvalidDefaultFixture()
     const next = structuredClone(snapshot)
     snapshot.internalInferenceCandidates = [{
       providerDisplayName: "验收供应商", serviceEntryDisplayName: "隔离兼容入口", connectionDisplayName: "验收账号", modelDisplayName: "验收模型",

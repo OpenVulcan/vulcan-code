@@ -18,8 +18,8 @@ export default defineConfig(({ mode }) => {
   const userVulcanRootName = isRelease ? ".vulcan" : ".vulcan-debug";
 
   return {
-    // Parallel audit servers share this package's default cache; keep their optimizer writes out of the live workbench.
-    // 并行验收服务共用本包默认缓存；隔离其依赖预构建写入，防止污染运行中的工作台。
+    // The live-backend acceptance server uses this package's default cache; keep its optimizer writes out of the live workbench.
+    // 真实后端验收服务使用本包默认缓存；隔离其依赖预构建写入，防止污染运行中的工作台。
     // Unit tests also own a separate cache so their module graph cannot replace the browser's React singleton.
     // 单元测试也拥有独立缓存，避免其模块图替换浏览器中的 React 单例。
     cacheDir: path.resolve(__dirname, "node_modules", mode === "test" ? ".vite-workbench-test" : ".vite-workbench"),
@@ -51,9 +51,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     test: {
-      // The full-workbench audit requires its isolated transport aliases and dedicated Vitest configuration.
-      // 完整工作台验收依赖隔离传输别名及其专属 Vitest 配置。
-      exclude: [...configDefaults.exclude, "scripts/*.test.mjs", "tests/ui-audit/**"],
+      // Node-native script tests run through node:test, not Vitest.
+      // Node 原生脚本测试通过 node:test 运行，不经 Vitest。
+      exclude: [...configDefaults.exclude, "scripts/*.test.mjs"],
       // Common bilingual fixtures are preloaded; locale-specific suites await their own additional catalogs.
       // 预加载通用中英夹具；特定语言测试等待加载自身所需的其他目录。
       setupFiles: ["src/test-setup/preload-locale-catalogs.ts"],

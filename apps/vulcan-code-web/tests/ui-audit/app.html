@@ -1,8 +1,0 @@
-<!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<!-- The isolated application can access only local audit assets, never a discovered service. -->
-<!-- 隔离应用仅能访问本地验收资源，绝不访问发现的服务。 -->
-<!-- Permit the production loader's Blob module for the two source-allowlisted audit plugins.
-允许生产加载器以 Blob 模块加载两个源码白名单验收插件。 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; media-src 'self' blob: data:; worker-src 'self' blob:" />
-<title>Vulcan WebUI 隔离应用</title></head><body><div id="root"></div><script type="module" src="/app.tsx"></script></body></html>

@@ -11,6 +11,12 @@ const sourceRoot = resolve(scriptDirectory, "../src")
 // sourceExtensions contains the source formats relevant to UI architecture.
 // sourceExtensions 包含与 UI 架构相关的源码格式。
 const sourceExtensions = new Set([".ts", ".tsx", ".css"])
+// transcriptScrollOwners render the conversation transcript whose scroll position only the shared scroll controller may write.
+// transcriptScrollOwners 渲染会话转录，其滚动位置只能由共享滚动控制器写入。
+const transcriptScrollOwners = new Set([
+  "components/conversation/chat-area.tsx",
+  "components/conversation/conversation-workspace.tsx",
+])
 
 // collectSourceFiles recursively returns relevant source files in stable order.
 // collectSourceFiles 递归返回稳定排序的相关源码文件。
@@ -64,6 +70,9 @@ export async function checkUiArchitecture(root = sourceRoot) {
     }
     if (!name.includes(".test.") && /focus-visible:ring-3|aria-invalid:ring-3/.test(source)) {
       failures.push(`${name}: three-pixel control focus rings are forbidden`)
+    }
+    if (transcriptScrollOwners.has(name) && /\.scrollTop\s*=(?!=)|\.scroll(?:To|By)\(/.test(source)) {
+      failures.push(`${name}: transcript scroll writes belong to chat-area/conversation-scroll-controller`)
     }
   }
   return failures

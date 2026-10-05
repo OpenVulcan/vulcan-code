@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -8,7 +9,7 @@ import { PublicAiModelCapabilityDialog } from "@/components/features/settings/pu
 import { CredentialManagementArea, PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings";
 import { ProviderManagementArea } from "@/components/features/settings/provider-management-settings";
 import { ProviderManifestStatusPanel } from "@/components/features/settings/provider-manifest-status";
-import { createAuditPublicAi } from "./fixtures";
+import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
 
 // Every mutation and read below is a detached mock, never a provider or local configuration write.
 // 下方所有变更和读取均为独立模拟，不写供应商或本地配置。
@@ -56,7 +57,7 @@ function button(label: string): HTMLButtonElement {
 }
 
 it("locks the model draft and close action until a rejected save restores editing", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   const model = snapshot.catalogs["audit-account-1"].models[0];
   let reject!: (error: Error) => void;
   service.modelSave.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
@@ -78,7 +79,7 @@ it("locks the model draft and close action until a rejected save restores editin
 });
 
 it("retains a credential draft across equivalent snapshots and blocks closing while saving", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   const close = vi.fn();
   let reject!: (error: Error) => void;
   service.connectionSave.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
@@ -118,7 +119,7 @@ it("preserves a rejected manifest reason after the status refresh and serializes
 });
 
 it("allows typing unfinished custom header rows without silently persisting the old map", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   snapshot.connections = [];
   snapshot.providers[0].service_entries[0].protocol_routes = [
     { protocol_profile_id: "openai-responses.v1", endpoint_path: "/responses", verified: true },
@@ -150,7 +151,7 @@ it("allows typing unfinished custom header rows without silently persisting the 
 });
 
 it("does not restart OAuth commit when the parent callback changes and locks close during commit", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   const profile = snapshot.providers[0].service_entries[0].credential_profiles[0];
   profile.credential_mode = "auth";
   profile.authorization = { kind: "registered_oauth", provider: "open_ai_codex" };
@@ -179,7 +180,7 @@ it("does not restart OAuth commit when the parent callback changes and locks clo
 });
 
 it("keeps a deleting account dialog open and editable after a rejected deletion", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   service.load.mockResolvedValue(snapshot);
   let reject!: (error: Error) => void;
   service.connectionDelete.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
@@ -198,7 +199,7 @@ it("keeps a deleting account dialog open and editable after a rejected deletion"
 });
 
 it("does not close an OAuth dialog until cancellation is acknowledged", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   const profile = snapshot.providers[0].service_entries[0].credential_profiles[0];
   profile.credential_mode = "auth";
   profile.authorization = { kind: "registered_oauth", provider: "open_ai_codex" };
@@ -220,7 +221,7 @@ it("does not close an OAuth dialog until cancellation is acknowledged", async ()
 });
 
 it("locks all provider rows and account creation during a priority write", async () => {
-  const snapshot = createAuditPublicAi("invalid-default");
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   service.load.mockResolvedValue(snapshot);
   let reject!: (error: Error) => void;
   service.prioritySave.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));

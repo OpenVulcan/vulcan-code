@@ -1,4 +1,0 @@
-/* Scan the production sources despite the isolated Vite root; retain production styles unchanged. */
-/* 尽管使用隔离 Vite 根目录，仍扫描生产源码；生产样式保持不变。 */
-@import "../../src/styles.css";
-@source "../../src";

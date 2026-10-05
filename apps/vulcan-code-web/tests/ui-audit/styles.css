@@ -1,8 +1,0 @@
-/* Fixture controls stay outside the real workbench and never override production component classes. */
-/* 夹具控件保持在真实工作台之外，绝不覆盖生产组件类。 */
-html, body, #root { height: 100%; margin: 0; }
-#root { display: flex; flex-direction: column; }
-.ui-audit-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; flex: 0 0 auto; padding: 7px 12px; background: var(--background, white); color: var(--foreground, black); border-bottom: 1px solid var(--border, #aaa); font: 12px system-ui; }
-.ui-audit-toolbar button, .ui-audit-toolbar select { border: 1px solid var(--border, #aaa); border-radius: 5px; padding: 4px 6px; cursor: pointer; }
-.ui-audit-workbench { flex: 1; min-height: 0; width: 100%; border: 0; }
-.ui-audit-log { position: fixed; right: 12px; bottom: 12px; max-width: min(700px, 90vw); max-height: 50vh; overflow: auto; padding: 12px; background: var(--background, white); color: var(--foreground, black); border: 1px solid var(--border, #aaa); z-index: 9999; font: 12px monospace; }

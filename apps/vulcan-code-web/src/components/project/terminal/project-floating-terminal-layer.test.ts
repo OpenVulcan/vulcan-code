@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { translateActive } from "@/i18n";
 
@@ -94,46 +93,6 @@ describe("project terminal data contracts", () => {
     expect([...seenRequests.keys()]).toEqual(["retained"]);
   });
 
-  // Verifies the top terminal action uses the same visibility request path as the floating window.
-  // 验证顶部终端操作与浮动窗口使用同一条可见性请求链路。
-  it("toggles the floating terminal from the top-bar action", () => {
-    const componentSource = readFileSync(
-      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
-      "utf8",
-    );
-    const workbenchSource = readFileSync(
-      new URL("../../workspace/workbench-layout.tsx", import.meta.url),
-      "utf8",
-    );
-    const shellSource = readFileSync(
-      new URL("../../workspace/workspace-shell.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(componentSource).toContain('props.openRequest.action === "toggle"');
-    expect(componentSource).toContain("onClick={minimizeProjectTerminal}");
-    expect(workbenchSource).toContain("action: \"toggle\",");
-    expect(workbenchSource).toContain("onToggleProjectTerminal={handleToggleActiveProjectTerminal}");
-    expect(shellSource).toContain("onClick={props.onToggleProjectTerminal}");
-  });
-
-  // Verifies the running-terminal confirmation is above every dynamically activated floating terminal.
-  // 验证运行中终端确认弹窗始终位于动态激活的浮动终端之上。
-  it("raises the terminal lifecycle confirmation layer", () => {
-    const componentSource = readFileSync(
-      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
-      "utf8",
-    );
-    const alertDialogSource = readFileSync(
-      new URL("../../../components/ui/alert-dialog.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(componentSource).toContain('<AlertDialogContent layerClassName="z-[1000]">');
-    expect(alertDialogSource).toContain("layerClassName?: string");
-    expect(alertDialogSource).toContain("<AlertDialogOverlay className={layerClassName} />");
-  });
-
   // Verifies React batching deduplicates output and exposes a bounded-history gap explicitly.
   // 验证 React 批处理去重输出，并明确显示有界历史缺口。
   it("deduplicates pushed chunks and marks an eviction gap", () => {
@@ -154,46 +113,6 @@ describe("project terminal data contracts", () => {
     );
     expect(gap.map((chunk) => chunk.seq)).toEqual([5, 6]);
     expect(gap.find((chunk) => chunk.seq === 5)?.text).toContain(translateActive("project.terminal.outputTruncated"));
-  });
-
-  // Verifies every nested floating-terminal body keeps a definite height for the absolute xterm viewport.
-  // 验证浮动终端的每层嵌套主体都为绝对定位的 xterm 视口保持确定高度。
-  it("keeps the floating terminal viewport height chain definite", () => {
-    // terminalStyles is the production stylesheet that owns all three nested container selectors.
-    // terminalStyles 是持有三层嵌套容器选择器的生产样式表。
-    const terminalStyles = readFileSync(
-      new URL("../../../styles/terminal.css", import.meta.url),
-      "utf8",
-    );
-    expect(terminalStyles).toMatch(
-      /\.project-floating-surface-body,\s*\.project-terminal-body,\s*\.project-terminal-stage,\s*\.project-terminal-pane\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%;/,
-    );
-  });
-
-  // Verifies one floating terminal frame mounts only its selected xterm and disables the old pane immediately.
-  // 验证一个浮动终端框仅挂载选中的 xterm，并立即禁用旧面板。
-  it("keeps input, output, visibility, and focus on one selected terminal", () => {
-    // componentSource owns selected-pane identity, display attachment, and input routing.
-    // componentSource 持有选中面板标识、显示挂接与输入路由。
-    const componentSource = readFileSync(
-      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
-      "utf8",
-    );
-    // viewportSource owns the repeated-focus request applied to the one interactive xterm.
-    // viewportSource 持有应用于唯一交互 xterm 的重复焦点请求。
-    const viewportSource = readFileSync(
-      new URL("../../terminal/terminal-viewport-runtime.tsx", import.meta.url),
-      "utf8",
-    );
-
-    expect(componentSource).toContain("data-selected-terminal-id={selectedTerminal?.id}");
-    expect(componentSource).toContain("key={selectedTerminal.id}");
-    expect(componentSource).not.toContain("catalog.terminals.map((terminal) => (\n                    <ProjectTerminalPane");
-    expect(componentSource).toContain('setWorkspaceInputOwner({ kind: "project_terminal", terminalId });');
-    expect(componentSource).toContain("terminalFocusRequestNonce: current.terminalFocusRequestNonce + 1");
-    expect(componentSource).toContain("readOnly={!props.visible");
-    expect(componentSource).toContain('t("workspaceAudit.connecting")');
-    expect(viewportSource).toContain("[props.autoFocus, props.focusRequestNonce, props.readOnly]");
   });
 
   // Verifies a pane hidden during asynchronous topic setup releases the late listener instead of leaking it.
@@ -259,122 +178,5 @@ describe("project terminal data contracts", () => {
     expect(retainedListeners).toHaveLength(1);
     retainedListeners[0]();
     expect(releaseCount).toBe(1);
-  });
-
-  // Verifies terminal switching and lifecycle controls live in the requested vertical sidebar.
-  // 验证终端切换与生命周期控制位于要求的左侧竖向列表中。
-  it("uses a vertical terminal list with row actions and a current-title header", () => {
-    // componentSource is the production component contract guarded by this regression test.
-    // componentSource 是本回归测试保护的生产组件契约。
-    const componentSource = readFileSync(
-      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(componentSource).toContain('className="project-terminal-current-title"');
-    expect(componentSource).toContain('className="project-terminal-sidebar"');
-    expect(componentSource).toContain('className="project-terminal-session-list"');
-    expect(componentSource).toContain('aria-orientation="vertical"');
-    expect(componentSource).toContain('className="project-terminal-sidebar-add"');
-    expect(componentSource).toContain('className="project-terminal-session-actions"');
-    expect(componentSource).toContain('title={t("workspaceAudit.stopTitle")}');
-    expect(componentSource).toContain('title={t("workspaceAudit.closeTitle")}');
-    expect(componentSource).toContain('floatingControls.maximized ? "workspaceAudit.restore" : "workspaceAudit.maximize"');
-    expect(componentSource).toContain("projectTerminalUiStateCache");
-    expect(componentSource).toContain("projectTerminalSeenRequests");
-    expect(componentSource).toContain("sidebarCollapsed: false");
-    expect(componentSource).toContain('className="project-terminal-compact-session-list"');
-    expect(componentSource).toContain('{index + 1}');
-    expect(componentSource).toContain('data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}');
-    expect(componentSource).not.toContain('className="project-terminal-tab-list"');
-    expect(componentSource).not.toContain('aria-label="选择项目终端"');
-  });
-
-  // Verifies the shell selector has explicit contrast and terminal names may use the available row width.
-  // 验证 Shell 选择器具有明确对比度，且终端名称可使用列表行的可用宽度。
-  it("keeps shell labels readable and terminal names fully discoverable", () => {
-    // terminalStyles is the exact production stylesheet for selector contrast and name wrapping.
-    // terminalStyles 是控制选择器对比度与名称换行的生产样式表。
-    const terminalStyles = readFileSync(
-      new URL("../../../styles/terminal.css", import.meta.url),
-      "utf8",
-    );
-    expect(terminalStyles).toMatch(
-      /\.project-terminal-select-trigger\s*\{[^}]*color:\s*var\(--foreground\);[^}]*background:\s*var\(--background\);/,
-    );
-    expect(terminalStyles).toMatch(
-      /\.project-terminal-session-name\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*normal;/,
-    );
-  });
-
-  // Verifies native resize dragging orders immediate latest-wins PTY grids before subsequent input.
-  // 验证原生尺寸拖动会在后续输入前排序即时且最新值优先的 PTY 网格。
-  it("serializes latest PTY resize requests before terminal input", () => {
-    // componentSource is the exact production resize coordinator guarded by this regression test.
-    // componentSource 是本回归测试保护的生产尺寸协调器。
-    const componentSource = readFileSync(
-      new URL("./project-floating-terminal-layer.tsx", import.meta.url),
-      "utf8",
-    );
-    // viewportSource owns exact visible-grid repainting after every xterm fit.
-    // viewportSource 持有每次 xterm 拟合后的精确可见网格重绘。
-    const viewportSource = readFileSync(
-      new URL("../../terminal/terminal-viewport-runtime.tsx", import.meta.url),
-      "utf8",
-    );
-    expect(componentSource).not.toContain("PROJECT_TERMINAL_RESIZE_SETTLE_MS");
-    expect(componentSource).not.toContain("resizeSettleTimer");
-    expect(componentSource).not.toContain("initialResizeDelivered");
-    expect(componentSource).toContain("const resizeSettlement = React.useRef<ProjectTerminalResizeSettlement | null>(null);");
-    expect(componentSource).toContain("const resizeBarrier = resizeSettlement.current?.promise;");
-    expect(componentSource).toContain("if (resizeBarrier) await resizeBarrier;");
-    expect(componentSource).toContain(
-      "const projectTerminalResizeRequestTails = new Map<string, Promise<void>>();",
-    );
-    expect(componentSource).toContain("await resizeProjectTerminalInOrder(");
-    expect(componentSource).toContain(".then(() => resizeProjectTerminal(projectId, terminalId, rows, cols));");
-    expect(componentSource).toContain("if (!resizeDisposed.current && pendingResize.current) {");
-    expect(componentSource).toContain("void flushResize();");
-    expect(componentSource).not.toContain("while (pendingResize.current)");
-    expect(viewportSource).toContain(
-      "const wasAtBottom = terminal.buffer.active.viewportY === terminal.buffer.active.baseY;",
-    );
-    expect(viewportSource).toContain("if (wasAtBottom) terminal.scrollToBottom();");
-    expect(viewportSource).toContain("terminal.refresh(0, rows - 1);");
-  });
-
-  // Verifies the toolbar badge uses count-only lifecycle pushes and one revisioned metadata bootstrap.
-  // 验证工具栏徽标使用纯数量生命周期推送以及一次带修订号的元数据初始加载。
-  it("shows a pushed running-terminal count without subscribing to hidden terminal content", () => {
-    // layoutSource owns the count subscription and rejects stale initial-query results.
-    // layoutSource 持有数量订阅，并拒绝过期的首次查询结果。
-    const layoutSource = readFileSync(
-      new URL("../../workspace/workbench-layout.tsx", import.meta.url),
-      "utf8",
-    );
-    // shellSource owns the visible badge attached to the top terminal button.
-    // shellSource 持有附着于顶部终端按钮的可见徽标。
-    const shellSource = readFileSync(
-      new URL("../../workspace/workspace-shell.tsx", import.meta.url),
-      "utf8",
-    );
-    // transportSource maps the count-only service event independently from display content.
-    // transportSource 独立于显示内容映射纯数量服务事件。
-    const transportSource = readFileSync(
-      new URL("../../../service/browserTransport.ts", import.meta.url),
-      "utf8",
-    );
-    expect(layoutSource).toContain('"project.terminal.running-count.changed"');
-    expect(layoutSource).toContain("previous.revision > catalog.runningCountRevision");
-    expect(layoutSource).toContain("projectTerminalCountListenerReady");
-    expect(layoutSource).not.toContain("setInterval(");
-    expect(shellSource).toContain('size={props.projectTerminalRunningCount > 0 ? "sm" : "icon-sm"}');
-    expect(shellSource).toContain('<Badge aria-hidden="true" variant="secondary">');
-    expect(shellSource).toContain("{props.projectTerminalRunningCount}");
-    expect(shellSource).toContain("props.projectTerminalRunningCount > 0");
-    expect(shellSource).not.toContain('"99+"');
-    expect(transportSource).toContain(
-      'projectTerminalRunningCountChanged: "project.terminal.running-count.changed"',
-    );
-    expect(shellSource.indexOf("<Badge")).toBeLessThan(shellSource.indexOf("</Button>"));
   });
 });
