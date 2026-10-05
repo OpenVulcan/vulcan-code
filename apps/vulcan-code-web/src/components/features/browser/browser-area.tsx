@@ -1,8 +1,7 @@
 import * as React from "react";
-import { ArrowRight, Download, Globe2, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
+import { ArrowRight, Download, Hand, Keyboard, MonitorSmartphone, MoreHorizontal, MousePointer2, RefreshCw, Settings2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import { CoreBrowserRuntimeControls } from "./core-browser-runtime-controls";
 import { BrowserFrameImage, BrowserFrameRateCounter, createBrowserFrameSource } from "./browser-frame-surface";
 import { maintainCoreBrowserStream } from "@/service/browser-stream-reconnect";
@@ -21,41 +20,21 @@ import {
   type CoreBrowserPage,
   type CoreBrowserSession,
 } from "@/service/core-browser-service";
+import {
+  BrowserCloseConfirmDialog,
+  BrowserInstanceTabs,
+  BrowserPagePrompts,
+  BrowserPageTabs,
+  browserTabTitle,
+  type BrowserCloseRequest,
+} from "./browser-area-sections";
+import { useBrowserInputQueue, type HeldBrowserPointer, type QueuedBrowserInput } from "./use-browser-input-queue";
 
 import {
   observeCoreBrowserSessions, observeCoreBrowserPages, observeCoreBrowserDownloads,
   observeCoreBrowserDialogs, observeCoreBrowserFileChoosers,
   refreshCoreBrowserSessions, refreshCoreBrowserPages,
 } from "@/service/core-browser-metadata";
-
-// BrowserInputResult describes the Core-confirmed outcome of one input action.
-// BrowserInputResult 描述一条输入操作经 Core 确认的结果。
-interface BrowserInputResult {
-  outcome: "accepted" | "applied" | "rejected" | "unknown";
-  reason?: string;
-}
-
-// QueuedBrowserInput binds an input to the exact Core owner, browser, page, and control generation.
-// QueuedBrowserInput 将输入绑定到精确的 Core 归属、浏览器、页面与控制代次。
-interface QueuedBrowserInput {
-  ownerSessionId: string;
-  sessionId: string;
-  pageId: string;
-  leaseSecret: string;
-  pageGeneration: string;
-  viewportGeneration: string;
-  kind: string;
-  payload: Record<string, unknown>;
-}
-
-// HeldBrowserPointer remembers the pressed button and last page coordinates until release.
-// HeldBrowserPointer 记录已按下按钮及最后页面坐标，直至指针释放。
-interface HeldBrowserPointer {
-  pointerId: number;
-  button: "left" | "middle" | "right";
-  x: number;
-  y: number;
-}
 
 // BrowserPollSource identifies independently refreshed Core browser metadata.
 // BrowserPollSource 标识独立刷新的 Core 浏览器元数据来源。
@@ -77,20 +56,6 @@ export function coreBrowserAddress(input: string): string {
     throw new Error("Only HTTP and HTTPS website addresses can be opened.");
   }
   return url.href;
-}
-
-// browserTabTitle presents a compact origin label while the full URL remains in the tooltip.
-// browserTabTitle 显示紧凑站点名称，完整地址仍保留在提示中。
-// url is one Core-reported page URL; returns a safe plain-text tab label.
-// url 是 Core 报告的页面地址；返回安全的纯文本页签文案。
-function browserTabTitle(url: string | null): string {
-  if (!url || url === "about:blank") return "about:blank";
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname || url;
-  } catch {
-    return url;
-  }
 }
 
 // BrowserArea lets any WebUI client observe and control a Core-owned browser page.
@@ -134,7 +99,7 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   const [showRuntime, setShowRuntime] = React.useState(false);
   // closeRequest freezes the confirmed browser/page identity even when polls update the selection.
   // closeRequest 冻结待确认的浏览器、页面身份，避免轮询变更选择后关错目标。
-  const [closeRequest, setCloseRequest] = React.useState<{ session: CoreBrowserSession; page: CoreBrowserPage | null; label: string } | null>(null);
+  const [closeRequest, setCloseRequest] = React.useState<BrowserCloseRequest | null>(null);
   // closing and closePending prevent duplicate destructive requests while keeping errors in the dialog.
   // closing 和 closePending 阻止重复关闭请求，并让错误保留在确认框内。
   const [closing, setClosing] = React.useState(false);
@@ -179,18 +144,9 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   // projectionSuspended also covers the interval before Core returns the new generation.
   // projectionSuspended 还覆盖 Core 返回新代次之前的时段。
   const projectionSuspended = React.useRef(false);
-  // inputSequence tracks the sender sequence required by Core's input protocol.
-  // inputSequence 跟踪 Core 输入协议要求的发送方序号。
-  const inputSequence = React.useRef(0);
-  // inputQueue preserves down/up order across asynchronous HTTP requests.
-  // inputQueue 在异步 HTTP 请求之间保持按下和释放的顺序。
-  const inputQueue = React.useRef<Promise<void>>(Promise.resolve());
   // pendingPointerMove retains only the latest not-yet-dispatched drag position.
   // pendingPointerMove 仅保留尚未派发的最新拖拽位置。
   const pendingPointerMove = React.useRef<QueuedBrowserInput | null>(null);
-  // pointerMoveQueued ensures at most one coalescing worker waits in the input queue.
-  // pointerMoveQueued 确保输入队列中最多只有一个移动事件合并任务。
-  const pointerMoveQueued = React.useRef(false);
   // heldKeys lets focus loss release only keys this view actually pressed.
   // heldKeys 使失焦时只释放此视图确实按下过的按键。
   const heldKeys = React.useRef(new Set<string>());
@@ -567,6 +523,18 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     setError(null);
   }
 
+  // selectPage finishes held key and pointer input on the previous page before observing another page tab.
+  // selectPage 在观察另一页面页签前，先在上一页面完成已按下的按键与指针输入。
+  function selectPage(page: CoreBrowserPage): void {
+    if (page.pageId === selectedPageId) return;
+    for (const key of heldKeys.current) queueInput("key", { type: "up", key });
+    heldKeys.current.clear();
+    const held = heldPointer.current;
+    if (held) queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
+    heldPointer.current = null;
+    setSelectedPageId(page.pageId);
+  }
+
   // acquireControl takes a free lease or explicitly takes over another holder.
   // acquireControl 获取空闲租约，或明确接管另一持有者。
   async function acquireControl(): Promise<void> {
@@ -626,174 +594,21 @@ export function BrowserArea(props: { ownerSessionId: string }) {
     }
   }
 
-  // captureInput freezes the current owner, page, lease, and frame for one input event.
-  // captureInput 为一条输入固定当前归属、页面、租约和画面；无可用授权时返回空值。
-  function captureInput(kind: string, payload: Record<string, unknown>): QueuedBrowserInput | null {
-    const currentLease = leaseRef.current;
-    const currentFrame = frameRef.current;
-    const sessionId = selectedSessionRef.current;
-    const pageId = selectedPageRef.current;
-    if (!currentLease || !currentFrame || projectionSuspended.current || !sessionId || !pageId
-      || currentLease.session.sessionId !== sessionId || currentFrame.pageId !== pageId) return null;
-    return {
-      ownerSessionId: ownerSessionRef.current, sessionId, pageId,
-      leaseSecret: currentLease.leaseSecret,
-      pageGeneration: currentFrame.pageGeneration,
-      viewportGeneration: currentFrame.viewportGeneration,
-      kind, payload,
-    };
-  }
-
-  // inputStillAuthorized permits only key or pointer release to finish on a previously selected page.
-  // inputStillAuthorized 只允许按键或指针释放在先前选中的页面完成；返回当前授权是否仍有效。
-  function inputStillAuthorized(input: QueuedBrowserInput): boolean {
-    // releasingInput never authorizes an old conversation or an old browser lease.
-    // releasingInput 不会授权旧会话或旧浏览器租约。
-    const releasingInput = (input.kind === "key" || input.kind === "pointer") && input.payload.type === "up";
-    return ownerSessionRef.current === input.ownerSessionId
-      && selectedSessionRef.current === input.sessionId
-      && leaseRef.current?.leaseSecret === input.leaseSecret
-      && (releasingInput || selectedPageRef.current === input.pageId);
-  }
-
-  // deliverInput sends one captured event in queue order and publishes only its still-current outcome.
-  // deliverInput 按队列顺序发送一条固定的输入，并仅发布仍属当前选择的结果。
-  async function deliverInput(input: QueuedBrowserInput): Promise<void> {
-    if (!inputStillAuthorized(input)) return;
-    // sequence is assigned at dispatch time so coalesced moves leave no sender gaps.
-    // sequence 在实际派发时分配，使合并的移动事件不留下发送方序号空洞。
-    const sequence = String(++inputSequence.current);
-    try {
-      const result = await requestCoreBrowser<BrowserInputResult>(input.ownerSessionId, "browser.input.dispatch", {
-        sessionId: input.sessionId,
-        pageId: input.pageId,
-        leaseSecret: input.leaseSecret,
-        pageGeneration: input.pageGeneration,
-        viewportGeneration: input.viewportGeneration,
-        sequence,
-        kind: input.kind,
-        payload: input.payload,
-      });
-      if (result.outcome !== "applied" && inputStillAuthorized(input)) {
-        setError(result.reason ?? `Input ${result.outcome}`);
-        if (result.outcome === "unknown" || result.reason === "lease_required" || result.reason === "lease_blocked") {
-          leaseRef.current = null;
-          setLease(null);
-        }
-      }
-    } catch (failure) {
-      if (inputStillAuthorized(input)) setError(String(failure));
-      // Transport failure does not prove lease loss; Core will reject stale credentials.
-      // 传输失败不能证明租约已丢失；过期凭据会由 Core 明确拒绝。
-    }
-  }
-
-  // queueCapturedInput appends one exact event behind all earlier browser inputs.
-  // queueCapturedInput 将一条精确输入追加在此前所有浏览器输入之后。
-  function queueCapturedInput(input: QueuedBrowserInput): void {
-    inputQueue.current = inputQueue.current.then(() => deliverInput(input));
-  }
-
-  // flushPendingPointerMove schedules one latest drag position and repeats only when a newer one exists.
-  // flushPendingPointerMove 调度一个最新拖拽位置，只有出现更新位置时才继续调度。
-  function flushPendingPointerMove(): void {
-    if (pointerMoveQueued.current || !pendingPointerMove.current) return;
-    pointerMoveQueued.current = true;
-    inputQueue.current = inputQueue.current.then(async () => {
-      // latest replaces any earlier move that has not entered Core's dispatch.
-      // latest 替换尚未进入 Core 派发的所有更早移动事件。
-      const latest = pendingPointerMove.current;
-      pendingPointerMove.current = null;
-      if (latest) await deliverInput(latest);
-    }).finally(() => {
-      pointerMoveQueued.current = false;
-      if (pendingPointerMove.current) flushPendingPointerMove();
-    });
-  }
-
-  // queuePointerMove keeps one pending drag point instead of accumulating one HTTP request per event.
-  // queuePointerMove 仅保留一个待派发拖拽位置，避免为每次指针移动累积 HTTP 请求。
-  function queuePointerMove(payload: Record<string, unknown>): void {
-    const input = captureInput("pointer", payload);
-    if (!input) return;
-    pendingPointerMove.current = input;
-    flushPendingPointerMove();
-  }
-
-  // queueInput preserves down/up, key, text, and wheel order around coalesced pointer moves.
-  // queueInput 在合并指针移动的同时保持按下、抬起、按键、文字和滚轮的顺序。
-  function queueInput(kind: string, payload: Record<string, unknown>): void {
-    // An intervening non-move event makes the last pending move observable before that event.
-    // 插入的非移动事件必须排在最后一个待派发移动事件之后。
-    const pending = pendingPointerMove.current;
-    if (pending) {
-      pendingPointerMove.current = null;
-      queueCapturedInput(pending);
-    }
-    const input = captureInput(kind, payload);
-    if (input) queueCapturedInput(input);
-  }
-
-  // pointerCoordinates maps a pointer or wheel event through the scaled frame to CSS page pixels.
-  // pointerCoordinates 将指针或滚轮事件经缩放画面换算为页面 CSS 像素；无有效画面时返回空值。
-  function pointerCoordinates(event: { currentTarget: HTMLDivElement; clientX: number; clientY: number }): { x: number; y: number } | null {
-    const currentFrame = frameRef.current;
-    if (!currentFrame) {
-      return null;
-    }
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const scale = Math.min(bounds.width / currentFrame.width, bounds.height / currentFrame.height);
-    if (!Number.isFinite(scale) || scale <= 0) return null;
-    const left = (bounds.width - currentFrame.width * scale) / 2;
-    const top = (bounds.height - currentFrame.height * scale) / 2;
-    return {
-      x: (event.clientX - bounds.left - left) / scale,
-      y: (event.clientY - bounds.top - top) / scale,
-    };
-  }
-
-  // pressPointer captures the primary pointer and sends its first page-coordinate down event.
-  // pressPointer 捕获主指针，并向当前页面发送首条页面坐标的按下事件。
-  function pressPointer(event: React.PointerEvent<HTMLDivElement>): void {
-    if (!ownsControl || !event.isPrimary || heldPointer.current) return;
-    event.preventDefault();
-    event.currentTarget.focus();
-    const coordinates = pointerCoordinates(event);
-    if (coordinates) {
-      // button retains the initiating button even when pointerup reports a different value.
-      // button 保留起始按钮，即使 pointerup 报告不同按钮值也不会改变。
-      const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
-      heldPointer.current = { pointerId: event.pointerId, button, ...coordinates };
-      event.currentTarget.setPointerCapture(event.pointerId);
-      queueInput("pointer", { type: "down", button, ...coordinates });
-    }
-  }
-
-  // movePointer coalesces drag positions while retaining the pressed-button bit field for CDP.
-  // movePointer 合并拖拽位置，并为 CDP 保留已按下按钮的位字段。
-  function movePointer(event: React.PointerEvent<HTMLDivElement>): void {
-    const held = heldPointer.current;
-    if (!ownsControl || !held || held.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    const coordinates = pointerCoordinates(event);
-    if (!coordinates) return;
-    heldPointer.current = { ...held, ...coordinates };
-    const buttons = held.button === "right" ? 2 : held.button === "middle" ? 4 : 1;
-    queuePointerMove({ type: "move", buttons, ...coordinates });
-  }
-
-  // releasePointer sends the matching up event after the latest pending drag position.
-  // releasePointer 在最后一个待派发拖拽位置之后发送对应的抬起事件。
-  function releasePointer(event: React.PointerEvent<HTMLDivElement>): void {
-    const held = heldPointer.current;
-    if (!held || held.pointerId !== event.pointerId) return;
-    heldPointer.current = null;
-    const coordinates = pointerCoordinates(event) ?? { x: held.x, y: held.y };
-    queueInput("pointer", { type: "up", button: held.button, ...coordinates });
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  }
+  // inputQueue serializes pointer, key, wheel and text input behind the current control grant.
+  // inputQueue 在当前控制授权下串行化指针、按键、滚轮与文字输入。
+  const { queueInput, pointerCoordinates, pressPointer, movePointer, releasePointer } = useBrowserInputQueue({
+    ownsControl,
+    leaseRef,
+    frameRef,
+    projectionSuspended,
+    ownerSessionRef,
+    selectedSessionRef,
+    selectedPageRef,
+    pendingPointerMove,
+    heldPointer,
+    setError,
+    setLease,
+  });
 
   React.useLayoutEffect(() => {
     // React's delegated wheel listener is passive in Chromium; bind this page input non-passively.
@@ -1029,54 +844,29 @@ export function BrowserArea(props: { ownerSessionId: string }) {
   return (
     <div className="flex h-full min-h-0 min-w-0 w-full flex-col gap-2 overflow-hidden bg-background p-2" aria-label={t("browser.aiBrowser")}>
       <CoreBrowserRuntimeControls compact={!showRuntime} />
-      <div hidden={visibleSessions.length <= 1} data-browser-instance-row className="shrink-0">
-        <div className="min-w-0 flex-1" hidden={visibleSessions.length <= 1} role="tablist" aria-label={t("browser.activeAiBrowsers")}>
-          <div className="flex items-center gap-1 overflow-x-auto">
-          {visibleSessions.map((session, index) => {
-            // The browser label is its displayed page, never the last AI navigation URL.
-            // 浏览器标签取其显示页面，绝不使用最后一次 AI 导航地址。
-            const displayedPage = session.sessionId === selectedSessionId && selectedPage ? selectedPage : viewedPages.current.get(session.sessionId);
-            const label = displayedPage ? displayedPage.title || browserTabTitle(displayedPage.url) : `${t("browser.browser")} ${index + 1}`;
-            return <div key={session.sessionId} className={`context-dynamic-tab max-w-44 shrink-0 ${selectedSessionId === session.sessionId ? "active" : ""}`}>
-              <span className="context-dynamic-tab-icon"><Globe2 size={12} /></span>
-              <button type="button" role="tab" data-browser-session-id={session.sessionId} aria-selected={selectedSessionId === session.sessionId}
-                className="context-dynamic-tab-label" title={label} onClick={() => void selectSession(session.sessionId)}>
-                <span>{label}{session.status === "crashed" ? t("browser.crashed") : null}</span>
-              </button>
-              <button type="button" className="context-dynamic-tab-close" aria-label={`${t("browser.closeBrowser")}: ${label}`}
-                onClick={() => { setCloseError(null); setCloseRequest({ session, page: null, label }); }}><X size={10} /></button>
-            </div>;
-          })}
-          </div>
-        </div>
-      </div>
+      <BrowserInstanceTabs
+        visibleSessions={visibleSessions}
+        selectedSessionId={selectedSessionId}
+        selectedPage={selectedPage}
+        viewedPages={viewedPages.current}
+        selectSession={selectSession}
+        setCloseError={setCloseError}
+        setCloseRequest={setCloseRequest}
+      />
       {selectedSession ? (
         <>
           {selectedSession.status === "crashed" ? <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">
             {t("browser.thePlaywrightBrowserHost")}
           </p> : null}
           {selectedSession.blockedReason ? <p className="shrink-0 text-xs text-destructive">{selectedSession.blockedReason}</p> : null}
-          <div hidden={pages.length <= 1} className="shrink-0" role="tablist" aria-label={t("browser.browserPages")}>
-            <div className="flex items-center gap-1 overflow-x-auto">
-            {pages.map((page) => (
-              <div key={page.pageId} className={`context-dynamic-tab max-w-44 shrink-0 ${page.pageId === selectedPageId ? "active" : ""}`}>
-                <span className="context-dynamic-tab-icon"><Globe2 size={12} /></span>
-                <button type="button" role="tab" data-browser-page-id={page.pageId} aria-selected={page.pageId === selectedPageId}
-                  className="context-dynamic-tab-label" title={page.title || page.url} onClick={() => {
-                    if (page.pageId === selectedPageId) return;
-                    for (const key of heldKeys.current) queueInput("key", { type: "up", key });
-                    heldKeys.current.clear();
-                    const held = heldPointer.current;
-                    if (held) queueInput("pointer", { type: "up", button: held.button, x: held.x, y: held.y });
-                    heldPointer.current = null;
-                    setSelectedPageId(page.pageId);
-                  }}><span>{page.title || browserTabTitle(page.url)}</span></button>
-                <button type="button" className="context-dynamic-tab-close" aria-label={`${t("browser.closePage")}: ${page.title || browserTabTitle(page.url)}`}
-                  onClick={() => { setCloseError(null); setCloseRequest({ session: selectedSession, page, label: page.title || browserTabTitle(page.url) }); }}><X size={10} /></button>
-              </div>
-            ))}
-            </div>
-          </div>
+          <BrowserPageTabs
+            pages={pages}
+            selectedPageId={selectedPageId}
+            selectedSession={selectedSession}
+            selectPage={selectPage}
+            setCloseError={setCloseError}
+            setCloseRequest={setCloseRequest}
+          />
         </>
       ) : null}
       <div className="flex min-w-0 shrink-0 items-center gap-1">
@@ -1157,24 +947,16 @@ export function BrowserArea(props: { ownerSessionId: string }) {
               </div>
             ) : <span className="text-xs text-muted-foreground">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : t("browser.waitingForBrowserFrame")}</span>}
           </div>
-          {dialogs.filter((dialog) => dialog.pageId === selectedPageId).map((dialog) => (
-            <div key={dialog.dialogId} role="alertdialog" className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
-              <strong>{dialog.dialogType}</strong><span>{dialog.message}</span>
-              {dialog.dialogType === "prompt" ? <input className="rounded border bg-background px-2 py-1"
-                value={dialogText} onChange={(event) => setDialogText(event.target.value)} disabled={!ownsControl} /> : null}
-              <Button type="button" size="sm" disabled={!ownsControl} onClick={() => void answerDialog(dialog, true)}>
-                {t("browser.accept")}
-              </Button>
-              <Button type="button" size="sm" variant="outline" disabled={!ownsControl}
-                onClick={() => void answerDialog(dialog, false)}>{t("browser.dismiss")}</Button>
-            </div>
-          ))}
-          {fileChoosers.filter((chooser) => chooser.pageId === selectedPageId).map((chooser) => (
-            <label key={chooser.chooserId} className="flex flex-wrap items-center gap-2 rounded border p-3 text-sm">
-              <span>{t("browser.pageRequestsAFile")}</span>
-              <input type="file" disabled={!ownsControl} onChange={(event) => void submitFileChooser(chooser, event.target.files?.[0])} />
-            </label>
-          ))}
+          <BrowserPagePrompts
+            dialogs={dialogs}
+            fileChoosers={fileChoosers}
+            selectedPageId={selectedPageId}
+            dialogText={dialogText}
+            setDialogText={setDialogText}
+            ownsControl={ownsControl}
+            answerDialog={answerDialog}
+            submitFileChooser={submitFileChooser}
+          />
           <div className="flex h-6 shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
             <span className="min-w-0 flex-1 truncate">{selectedSession.status === "crashed" ? t("browser.viewInterrupted") : streamStatus === "connected" ? (ownsControl ? t("browser.manualControl") : t("browser.liveView")) : t("browser.connectingView")}</span>
             <BrowserFrameRateCounter source={frameSource} owner={props.ownerSessionId} browser={selectedSessionId} page={selectedPageId} title={t("browser.receivedFramesOverThe")} />
@@ -1209,25 +991,15 @@ export function BrowserArea(props: { ownerSessionId: string }) {
         : t("browser.noActiveAiBrowser")}</p>}
       {!selectedSession && error ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{error}</div> : null}
       {Object.values(pollErrors).some(Boolean) ? <div role="alert" className="rounded border border-destructive p-2 text-xs text-destructive">{Object.values(pollErrors).find(Boolean)}</div> : null}
-      <AlertDialog open={closeRequest !== null} onOpenChange={(open) => { if (!open && !closePending.current) setCloseRequest(null); }}>
-        {closeRequest ? <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{closeRequest?.page ? t("browser.closePage2") : t("browser.closeBrowser2")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {closeRequest?.page
-                ? (formatMessage(t("browser.closeUnsavedPageChanges"), { label: closeRequest.label }))
-                : (formatMessage(t("browser.closeAndAllIts"), { label: closeRequest?.label }))}
-              {closeRequest?.session.leaseState === "held" && lease?.session.sessionId !== closeRequest.session.sessionId
-                ? t("browser.activeAutomationWillBe") : null}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {closeError ? <p role="alert" className="text-xs text-destructive">{closeError}</p> : null}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={closing}>{t("browser.cancel")}</AlertDialogCancel>
-            <Button type="button" variant="destructive" disabled={closing} onClick={() => void closeSession()}>{closing ? t("browser.closing") : t("browser.confirmClose")}</Button>
-          </AlertDialogFooter>
-        </AlertDialogContent> : null}
-      </AlertDialog>
+      <BrowserCloseConfirmDialog
+        closeRequest={closeRequest}
+        setCloseRequest={setCloseRequest}
+        closePending={closePending}
+        closeError={closeError}
+        closing={closing}
+        lease={lease}
+        closeSession={closeSession}
+      />
     </div>
   );
 }
