@@ -82,7 +82,8 @@ async function publishInstallation(prepared, destination) {
 // installLockedTools installs group into repositoryRoot using verified cache bytes; offline prohibits downloads.
 // installLockedTools 使用已验证缓存字节将 group 安装到 repositoryRoot；offline 禁止下载。
 export async function installLockedTools(group, repositoryRoot, offline = false) {
-  if (!['bundled', 'protoc'].includes(group)) throw new Error('Expected bundled or protoc.');
+  if (!['bundled', 'protoc', 'nextest'].includes(group)) throw new Error('Expected bundled, protoc or nextest.');
+  if (group === 'nextest' && (process.platform !== 'win32' || process.arch !== 'x64')) throw new Error('The CI nextest input supports Windows x64 only.');
   // lock is the sole version/digest authority shared by every host installer.
   // lock 是所有宿主安装器共享的唯一版本与摘要权威。
   const lock = JSON.parse(await readFile(new URL('./build-inputs.lock.json', import.meta.url), 'utf8'));
@@ -98,7 +99,8 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
   const cache = path.join(root, 'target', 'build-input-cache');
   // destination is the established installation path consumed by Cargo or resource sync.
   // destination 是 Cargo 或资源同步使用的既有安装路径。
-  const destination = group === 'protoc' ? path.join(root, '.cargo', 'protoc') : path.join(root, 'third_party', 'tools', platform.target);
+  const destination = group === 'protoc' ? path.join(root, '.cargo', 'protoc')
+    : group === 'nextest' ? path.join(root, 'target', 'ci-tools') : path.join(root, 'third_party', 'tools', platform.target);
   // parent keeps staging and destination on the same filesystem for rename.
   // parent 使暂存与目标位于同一文件系统，支持重命名。
   const parent = path.dirname(destination);
@@ -122,20 +124,21 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
     if (group === 'bundled' && await pathExists(destination)) await cp(destination, prepared, { recursive: true });
     // entries identifies exactly the requested tool set; tools are validated before any installation switch.
     // entries 明确请求的工具集合；所有工具均在安装切换之前验证。
-    const entries = group === 'protoc' ? ['protoc'] : ['sg', 'rg'];
+    const entries = group === 'bundled' ? ['sg', 'rg'] : [group];
     // id selects the exact declared tool contract.
     // id 选择明确声明的工具契约。
     for (const id of entries) {
       // version comes exclusively from the reviewed manifest.
       // version 仅来自已评审清单。
-      const version = id === 'protoc' ? lock.protoc.version : lock.tools[id].tag_name;
+      const version = id === 'protoc' || id === 'nextest' ? lock[id].version : lock.tools[id].tag_name;
       // archiveName follows the upstream tool-specific platform naming contract.
       // archiveName 遵循各上游工具的平台命名契约。
       const archiveName = id === 'protoc' ? `protoc-${version}-${platform.protoc}.zip`
+        : id === 'nextest' ? `cargo-nextest-${version}-${platform.target}.zip`
         : id === 'sg' ? `app-${platform.target}.zip` : `ripgrep-${version}-${platform.rgTarget}.${platform.archiveKind}`;
       // assets is the declared archive list for this tool.
       // assets 是此工具声明的归档列表。
-      const assets = id === 'protoc' ? lock.protoc.assets : lock.tools[id].assets;
+      const assets = id === 'protoc' || id === 'nextest' ? lock[id].assets : lock.tools[id].assets;
       // matches rejects missing and duplicated identities instead of selecting a fallback.
       // matches 拒绝缺失和重复身份，不选择替代项。
       const matches = assets.filter(asset => asset.name === archiveName);
@@ -145,7 +148,7 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       const asset = matches[0];
       // identity normalizes the two explicit lock shapes for the shared downloader.
       // identity 将两种明确的锁结构规范化后交给共用下载器。
-      const identity = id === 'protoc' ? asset : { url: asset.browser_download_url, sha256: asset.digest.replace(/^sha256:/, '') };
+      const identity = id === 'protoc' || id === 'nextest' ? asset : { url: asset.browser_download_url, sha256: asset.digest.replace(/^sha256:/, '') };
       // archive holds only digest-verified bytes.
       // archive 仅保存摘要已验证的字节。
       const archive = path.join(temporary, archiveName);
@@ -157,7 +160,7 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       extractArchive(archive, extracted);
       // sourceName preserves the upstream ast-grep executable name before installing the sg alias.
       // sourceName 在安装 sg 别名之前保留上游 ast-grep 可执行文件名。
-      const sourceName = `${id === 'sg' ? 'ast-grep' : id}${platform.suffix}`;
+      const sourceName = `${id === 'sg' ? 'ast-grep' : id === 'nextest' ? 'cargo-nextest' : id}${platform.suffix}`;
       // binary is the unique regular executable member.
       // binary 是唯一的普通可执行文件成员。
       const binary = await locateBinary(extracted, sourceName);
@@ -167,20 +170,22 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       const reported = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
       // expected includes the tool name so unrelated executables cannot pass a version substring check.
       // expected 包含工具名，避免无关程序通过版本子串检查。
-      const expected = id === 'protoc' ? `libprotoc ${version}` : id === 'sg' ? `ast-grep ${version}` : `ripgrep ${version}`;
+      const expected = id === 'protoc' ? `libprotoc ${version}` : id === 'nextest' ? `cargo-nextest ${version}`
+        : id === 'sg' ? `ast-grep ${version}` : `ripgrep ${version}`;
       // ripgrep includes a revision suffix in its first line; compare the full version token, not a substring.
       // ripgrep 首行包含修订后缀；比较完整版本标记，而非子串。
       const firstLine = reported.split(/\r?\n/)[0];
-      // versionLine strips only the observed ripgrep revision suffix.
-      // versionLine 仅去除已观察到的 ripgrep 修订后缀。
-      const versionLine = id === 'rg' ? firstLine.replace(/ \(rev [a-f0-9]+\)$/, '') : firstLine;
+      // versionLine removes documented build metadata while preserving the complete version token.
+      // versionLine 去除规定的构建元数据，同时保留完整版本标记。
+      const versionLine = id === 'rg' ? firstLine.replace(/ \(rev [a-f0-9]+\)$/, '')
+        : id === 'nextest' ? firstLine.split(' ').slice(0, 2).join(' ') : firstLine;
       if (versionLine !== expected) throw new Error(`Unexpected ${id} version: ${reported}`);
       await mkdir(path.join(prepared, 'bin'), { recursive: true });
-      await cp(binary, path.join(prepared, 'bin', `${id}${platform.suffix}`));
+      await cp(binary, path.join(prepared, 'bin', id === 'nextest' ? sourceName : `${id}${platform.suffix}`));
       if (id === 'protoc') {
         await access(path.join(extracted, 'include', 'google', 'protobuf', 'descriptor.proto'));
         await cp(path.join(extracted, 'include'), path.join(prepared, 'include'), { recursive: true });
-      } else {
+      } else if (id !== 'nextest') {
         // licenseRoot is the established sync-compatible license directory.
         // licenseRoot 是兼容既有同步流程的许可证目录。
         const licenseRoot = path.join(prepared, 'licenses', id);

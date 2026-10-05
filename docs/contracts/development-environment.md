@@ -81,6 +81,14 @@ make deps-rust-tools
 
 ## Rust 依赖治理检查
 
+### 持续集成中的精简准备
+
+开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业运行在已有编译器的 Windows 镜像中，只准备当前检查实际使用的依赖：由 `install-locked-tools.mjs` 安装 protoc、nextest 与内置 sg/rg，执行 `make.ps1 deps lua` 和 `managed-node.mjs output`，在运行时回归前显式 `make.ps1 sync`。不为这些测试编译安装未使用的 hakari、deny、about 或 RTK。
+
+nextest 的 CI 二进制仅支持该作业使用的 Windows x64，安装到忽略目录 `target/ci-tools/bin/`，不覆盖开发机全局 Cargo 工具。唯一版本与归档 SHA-256 来源为 `scripts/build-inputs.lock.json`；下载器检查缓存摘要，安装器检查实际版本，不使用 latest 或未校验的归档。开发机其他平台仍使用原初始化入口。分类与缓存规则见 [仓库检查](repository-quality-gates.md)。
+
+### 依赖治理入口
+
 依赖版本、Feature 或成员清单变化后，执行仓库只读治理入口：
 
 ```bash

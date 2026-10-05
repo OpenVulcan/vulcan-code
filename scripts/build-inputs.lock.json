@@ -1,5 +1,15 @@
 {
   "schema_version": 1,
+  "nextest": {
+    "version": "0.9.146",
+    "assets": [
+      {
+        "name": "cargo-nextest-0.9.146-x86_64-pc-windows-msvc.zip",
+        "url": "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.146/cargo-nextest-0.9.146-x86_64-pc-windows-msvc.zip",
+        "sha256": "0fa689815c8157e4633225b6b173184b3d546eb6ffb754c3d0e6ea5973284a20"
+      }
+    ]
+  },
   "tools": {
     "sg": {
       "repository": "ast-grep/ast-grep",

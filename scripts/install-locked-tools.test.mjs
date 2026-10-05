@@ -19,4 +19,7 @@ test('all supported hosts have exactly one locked tool archive', async () => {
   }
   assert.throws(() => resolveToolPlatform('linux', 'ia32'), /Unsupported/);
   assert.throws(() => resolveToolPlatform('freebsd', 'x64'), /Unsupported/);
+  assert.equal(lock.nextest.assets.length, 1);
+  assert.equal(lock.nextest.assets[0].name, `cargo-nextest-${lock.nextest.version}-x86_64-pc-windows-msvc.zip`);
+  assert.match(lock.nextest.assets[0].sha256, /^[a-f0-9]{64}$/);
 });

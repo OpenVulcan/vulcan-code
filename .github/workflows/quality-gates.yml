@@ -6,14 +6,45 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Weekly full coverage catches classification drift without repeating it on every UI edit.
+  # 每周完整检查捕获分类规则漂移，避免每次界面编辑都重复执行。
+  schedule:
+    - cron: '23 19 * * 0'
 permissions:
   contents: read
 concurrency:
-  group: quality-${{ github.workflow }}-${{ github.ref }}
+  group: quality-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scripts: ${{ steps.scope.outputs.scripts }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      rustfmt: ${{ steps.scope.outputs.rustfmt }}
+      rust: ${{ steps.scope.outputs.rust }}
+      fixtures: ${{ steps.scope.outputs.fixtures }}
+      full: ${{ steps.scope.outputs.full }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Verify classification and required-result failure paths
+        run: node --test scripts/ci-scope.test.mjs
+      - id: scope
+        run: node scripts/ci-scope.mjs --from-event
   scripts:
     name: Build contracts (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -28,6 +59,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ steps.versions.outputs.node }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/build-input-cache
+          key: build-inputs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
       - name: Download and verify locked CLI tools
         run: node scripts/install-locked-tools.mjs bundled
       - name: Download and verify locked protoc
@@ -36,10 +71,19 @@ jobs:
         run: node scripts/install-locked-tools.mjs bundled --offline
       - name: Reinstall protoc from verified cache without network
         run: node scripts/install-locked-tools.mjs protoc --offline
+      - name: Verify the Windows CI runner online and offline
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          node scripts/install-locked-tools.mjs nextest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/install-locked-tools.mjs nextest --offline
       - name: Validate download, publication and layout failure paths
-        run: node --test scripts/locked-download.test.mjs scripts/install-locked-tools.test.mjs scripts/directory-publication.test.mjs scripts/desktop-runtime.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/locked-download.test.mjs scripts/install-locked-tools.test.mjs scripts/directory-publication.test.mjs scripts/desktop-runtime.test.mjs scripts/managed-node.test.mjs scripts/browser-runtime.test.mjs
   frontend:
     name: Frontend gates
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -51,16 +95,65 @@ jobs:
           node-version: ${{ steps.versions.outputs.node }}
       - name: Install declared pnpm
         run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          cache: pnpm
+          cache-dependency-path: apps/vulcan-code-web/pnpm-lock.yaml
       - name: Install frozen frontend dependencies
         run: pnpm --dir apps/vulcan-code-web install --frozen-lockfile
       - name: Prove invalid lint and architecture fixtures are rejected
+        if: needs.changes.outputs.fixtures == 'true'
         run: |
           pnpm --dir apps/vulcan-code-web run test:lint
           pnpm --dir apps/vulcan-code-web run test:architecture
+      - name: Frontend behavior regressions
+        run: pnpm --dir apps/vulcan-code-web exec vitest run --maxWorkers=4
+      - name: Bundled plugin UI and locale regressions
+        run: node --test plugins/context7/ui/index.test.mjs plugins/vulcan-browser/ui/settings.test.mjs plugins/vulcan-rtk/ui/index.test.mjs plugins/vulcan-usage-statistics/ui/index.test.mjs
       - name: Lint, typecheck, architecture, production build and size budgets
         run: pnpm --dir apps/vulcan-code-web run build
+  desktop:
+    name: Desktop gates
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          cache: pnpm
+          cache-dependency-path: apps/vulcan-code-desktop/pnpm-lock.yaml
+      - name: Install frozen desktop dependencies
+        run: pnpm --dir apps/vulcan-code-desktop install --frozen-lockfile
+      - name: Compile desktop and its test targets
+        run: pnpm --dir apps/vulcan-code-desktop run build
+      - name: Desktop unit regressions
+        run: pnpm --dir apps/vulcan-code-desktop run test:unit
+  rustfmt:
+    name: Rust formatting
+    needs: changes
+    if: needs.changes.outputs.rustfmt == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: cargo fmt --all -- --check
   rust:
     name: Rust gates
+    needs: [changes, rustfmt]
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
     timeout-minutes: 180
     steps:
@@ -72,13 +165,39 @@ jobs:
           node-version: ${{ steps.versions.outputs.node }}
       - name: Install declared pnpm
         run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
-      - name: Initialize through the repository entry point
+      # Cache dependency artifacts only; mutable output and user configuration are never cached.
+      # 仅缓存依赖产物；不缓存可变 output 与用户配置。
+      - name: Select the pinned toolchain before restoring Rust cache
+        run: rustc --version
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          cache-bin: 'false'
+          cache-on-failure: 'true'
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/build-input-cache
+          key: rust-build-inputs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
+      - name: Prepare only the dependencies consumed by Rust CI
         shell: pwsh
-        run: ./make.ps1 init-system
-      - name: Rust formatting
-        run: cargo fmt --all -- --check
-      - name: Kernel all-target complexity gates
-        run: cargo clippy --locked --no-deps -p vulcan-service-kernel --all-targets -- -D clippy::too_many_arguments -D clippy::type_complexity
+        run: |
+          node scripts/install-locked-tools.mjs protoc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/install-locked-tools.mjs nextest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$PWD/target/ci-tools/bin" >> $env:GITHUB_PATH
+          node scripts/install-locked-tools.mjs bundled
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./make.ps1 deps lua
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/managed-node.mjs output
+      - name: Compile workspace including test targets
+        run: cargo check --locked --workspace --all-targets
+      # Complexity counts guide refactoring; compiler errors remain mandatory in the preceding step.
+      # 复杂度计数用于指导重构；上一环节的编译错误仍然强制阻断。
+      - name: Full-run kernel complexity diagnostics
+        if: needs.changes.outputs.full == 'true'
+        run: cargo clippy --locked --no-deps -p vulcan-service-kernel --all-targets -- -W clippy::too_many_arguments -W clippy::type_complexity
       - name: Database boundary regression tests
         run: cargo test --locked -p vulcan-workspace-store --lib local_sql -- --test-threads=1
       - name: Isolated offline LuaSkills callback regressions
@@ -110,11 +229,12 @@ jobs:
   required:
     name: Required quality gates
     if: always()
-    needs: [scripts, frontend, rust]
+    needs: [changes, scripts, frontend, desktop, rustfmt, rust]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Reject any failed or cancelled dependency
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Require success for selected jobs and intentional skips for all others
         env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          node -e 'const jobs = JSON.parse(process.env.RESULTS); if (Object.values(jobs).some(job => job.result !== "success")) { console.error(jobs); process.exit(1); }'
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-scope.mjs --verify-required
