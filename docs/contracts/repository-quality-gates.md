@@ -34,7 +34,23 @@
 
 CI 使用现有安装器准备必需的 protoc、nextest、sg/rg、Lua 载荷与受管 Node，再显式 `make sync`。不执行整个开发机 `init-system`，不安装当前检查未使用的 hakari、deny、about 或宿主 RTK。nextest 改为官方精确版本二进制，版本和 SHA-256 统一锁定于 `scripts/build-inputs.lock.json`，每次安装都重新验证缓存字节及实际版本。完整开发初始化语义见 [开发环境](development-environment.md)。
 
-pnpm 按各应用锁文件缓存下载内容；下载归档按系统、架构和构建输入锁缓存。Rust 使用固定提交的 `Swatinem/rust-cache`，自动区分工具链、清单、锁文件和编译环境，只保留依赖产物并清理增量缓存；仅 main 写入共享缓存，失败时保留已编译的依赖以减少重复成本。用户配置、完整 `output` 和凭证不进入缓存。首次冷编译仍可能较长，不承诺未经测量的总耗时。
+pnpm 按各应用锁文件缓存下载内容；下载归档按系统、架构和构建输入锁缓存。Rust 使用固定提交的 `actions/cache/restore` 与 `actions/cache/save`，对 Cargo 下载内容及独立的 `target/ci-rust` 编译产物执行分阶段恢复、保存；仅 main 写入共享缓存。用户配置、完整 `output`、凭证与开发机的普通 `target/debug` 不进入该缓存。首次冷编译仍可能较长，不承诺未经测量的总耗时。
+
+### Rust 重依赖编译缓存
+
+缓存实现权威为工作流和 `scripts/ci-rust-cache.mjs`。此前把缓存保存留到整个 Rust 作业的收尾阶段；二〇二六年十月五日复核时，远程缓存列表只有工具下载与 pnpm，没有已保存的 Rust 编译缓存。配置了缓存步骤不等于已经建立可复用的缓存。
+
+1. 使用当前实际选中的 `rustc -vV`、编译环境、系统和架构划分缓存空间。不以提交 SHA 或运行编号创建新空间，也不因未使用的预装 Rust 工具链更新而失效。
+2. 同一空间内以 Cargo 清单、锁文件、工具链配置、Cargo 配置、受管构建输入及 CI 执行规则求摘要。优先恢复同一输入的完整快照，其次恢复同一输入的数据库检查点，最后允许同编译环境的旧输入快照；所有恢复产物仍由 Cargo 指纹检查，依赖或源码变化必须重新编译相应单元。
+3. 未命中完整快照时，先对真正要运行的 `vulcan-workspace-store` 库测试执行 `cargo test --no-run`。其依赖包含 LanceDB，成功后立即保存数据库检查点，再执行全工作区检查和其他回归。没有引入一套与真实测试不同特性的人工 LanceDB 构建。后续正常数据库测试继续执行。
+4. 按后续真实回归使用的包、目标与特性编译其余测试程序，成功后用另一个不可变键保存完整编译快照，再运行测试。缓存保存不依赖业务测试结果，业务失败不会使已经成功的编译失效。数据库检查点和完整快照不能使用同一个键，否则早期快照会阻止完整产物写入。后续失败或取消不会删除已经上传成功的快照；发生在首次检查点上传前的取消仍会损失尚未保存的编译。
+5. CI 统一使用 `CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_INCREMENTAL=0` 和隔离的目标目录，减少重依赖调试符号及不适合临时 runner 的增量数据。默认 test 继承 dev；未关闭调试断言、整数溢出检查或减少已有测试。根清单对内核包显式声明的 limited 调试信息覆盖仍保留。开发机和 release 构建参数不变。
+6. 每次运行在作业摘要显示精确命中状态、实际恢复键和请求键。精确命中只跳过预编译准备与重复上传，不能跳过类型检查、行为测试、资源同步或汇总门禁。只读 PR 可以使用 main 缓存，不负责写入共享快照。
+7. 并发控制按检查域分组。新 WebUI 推送不能取消或排队等待旧 Rust 作业；主分支正在执行的 Rust 作业保留至完成，其后等待的同域推送合并为最新待执行项。PR 的过时 Rust 作业仍可取消，前端等快速检查也继续取消同域过时作业。这样连续推送不再反复中断主分支的首次缓存建立。
+
+完整快照保留工作区编译产物以供 Cargo 校验复用，并非只缓存 registry 下载。键不随普通源码提交增长；锁定输入变化才产生新的一组快照。GitHub 仍可能按容量与访问策略淘汰归档，因此需要观察真实压缩体积和恢复耗时；不能宣称永久命中，也不能把本地热构建当成远程缓存验收。
+
+上游依据：[独立保存动作](https://github.com/actions/cache/blob/0057852bfaa89a56745cba8c7296529d2fc39830/save/README.md)、[恢复与前缀匹配](https://github.com/actions/cache/blob/0057852bfaa89a56745cba8c7296529d2fc39830/restore/README.md)、[Cargo 配置继承与覆盖](https://doc.rust-lang.org/cargo/reference/profiles.html)、[按作业控制并发](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)。升级这些动作或调整编译参数时，必须复核上述约束和缓存身份回归。
 
 ## 本地验证与故障归属
 
