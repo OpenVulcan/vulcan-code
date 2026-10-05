@@ -187,6 +187,8 @@ it("routes Paste through Electron's page command when available", async () => {
   const field = await openMenu(0, 5);
   await choose("composer.contextMenu.paste");
   expect(nativePaste).toHaveBeenCalledOnce();
-  expect(document.activeElement).toBe(field);
+  // Radix restores focus when its closing focus scope unmounts, after the native command resolves.
+  // Radix 在关闭中的焦点作用域卸载时恢复焦点，该动作晚于原生命令完成。
+  await act(async () => { await vi.waitFor(() => expect(document.activeElement).toBe(field)); });
   expect([field.selectionStart, field.selectionEnd]).toEqual([0, 5]);
 });

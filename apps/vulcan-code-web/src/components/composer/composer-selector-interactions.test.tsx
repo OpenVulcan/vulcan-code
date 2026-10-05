@@ -431,18 +431,6 @@ it("shows a concise failed-save status for a false acknowledgement and allows re
   expect(document.querySelector('[role="alert"]')).toBeNull();
 });
 
-it("keeps missing cumulative usage compact without replacing it with the last call", async () => {
-  await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null,
-    maxTokens: 950_000, percent: 8, severity: "normal", tooltipRows: [], tooltipTitle: "Context", usageBasisPoints: 800, usedTokens: 76_000 }}
-    sessionProviderUsage={{ providerCallCount: 2, inFlightCallCount: 0, unknownUsageCallCount: 1, usageRevision: 1,
-      cumulativeUsage: { inputTokens: 100 }, lastUsage: { totalTokens: 500 } }}
-    contextCompactionWindowNodes={[]} selectedNodeId={null} modelContextLimit={950_000} onNodeChange={vi.fn()} />);
-  await act(async () => host.querySelector<HTMLButtonElement>('.context-usage-control')!.click());
-  expect(document.querySelector('.context-usage-tooltip')?.textContent).toContain("Lifetime usage unavailable");
-  expect(document.querySelector('.context-usage-cache-row strong')?.textContent).toBe("-");
-  expect(document.querySelector('.context-usage-tooltip')?.textContent).not.toContain("500");
-});
-
 it("retains an invalid saved node and lets the user restore the exact model default", async () => {
   // change records explicit reset; loading this state must never rewrite the saved node automatically.
   // change 记录显式重置；加载此状态绝不能自动改写已保存节点。

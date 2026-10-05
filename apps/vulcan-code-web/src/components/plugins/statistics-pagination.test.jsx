@@ -154,9 +154,9 @@ it("hides token generation timing for embeddings and reranking in both tables", 
     for (const cell of [cells[0], cells[1]]) {
       expect(cell.textContent).toContain("0.250s");
       expect(cell.textContent).not.toContain("First token");
-      expect(cell.textContent).not.toContain("t/s");
+      expect(cell.textContent).not.toContain("tokens/s");
     }
     expect(cells[2].textContent).toContain("First token");
-    expect(cells[2].textContent).toContain("20.0 t/s");
+    expect(cells[2].textContent).toContain("20.0 tokens/s");
   }
 });

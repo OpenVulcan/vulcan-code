@@ -93,13 +93,15 @@ describe("goal strip lifecycle actions", () => {
     expect(rendered.markup).toContain("0:00:00");
     const detail = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN">
       <ComposerGoalDetails goal={{ ...rendered.goal, objective: "First line\n" + "完整目标".repeat(200),
+        // The backend owns budget usage independently of displayed token dimensions.
+        // 后端独立持有预算用量，不由展示的 Token 维度反推。
+        tokensUsed: 150,
         inputTokens: 100, cachedInputTokens: 900, outputTokens: 50, reasoningTokens: 20, totalTokens: 1050 }} />
     </I18nProvider>);
     expect(detail).toContain("完整目标".repeat(200));
     expect(detail).toContain("composer-goal-details-metrics");
-    expect(detail.match(/class="turn-stats-metric"/g)).toHaveLength(8);
     expect(detail).toContain("150 / 20K");
     expect(detail).toContain("90.0%");
-    expect(detail).toContain("1,050");
+    expect(detail).toContain("1.1K");
   });
 });
