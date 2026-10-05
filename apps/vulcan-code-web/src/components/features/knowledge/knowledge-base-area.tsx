@@ -2,7 +2,6 @@ import * as React from "react";
 import "@/styles/knowledge.css";
 import { KnowledgeSkippedDocuments } from "./knowledge-skipped-documents";
 import { KnowledgeFileConfirmationDialog, type KnowledgeFileReviewTarget } from "./knowledge-file-confirmation-dialog";
-import type { KnowledgeFileConfirmation } from "@/types";
 import { BookOpen, Database, Download, FolderInput, FolderPen, Plus, RefreshCw, Search, Settings2, Trash2, Upload, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,38 +9,29 @@ import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-di
 import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { KnowledgeLibraryViewerDialog } from "@/components/features/knowledge/knowledge-library-viewer-dialog";
-import { KnowledgeLibraryCreateDialog, type KnowledgeLibraryCreateDialogModel } from "@/components/features/knowledge/knowledge-library-create-dialog";
-import { KnowledgeOperationProgress } from "@/components/features/knowledge/knowledge-operation-progress";
-import { KnowledgeMessageDialog, KnowledgeOperationFeedback } from "@/components/features/knowledge/knowledge-feedback";
+import { KnowledgeLibraryCreateDialog } from "@/components/features/knowledge/knowledge-library-create-dialog";
+import { KnowledgeOperationDialog } from "@/components/features/knowledge/knowledge-operation-dialog";
+import { KnowledgeMessageDialog } from "@/components/features/knowledge/knowledge-feedback";
 import { KnowledgePackageImportDialog, KnowledgePackagePickerDialog } from "@/components/features/knowledge/knowledge-package-dialogs";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { formatKnowledgeIndexStatus } from "@/lib/knowledge-index-status";
-import { loadPublicAiSettings } from "@/service/settings-actions-service";
 import {
   browseKnowledgeSourceDirectories,
-  buildKnowledgeDisplayIndex,
-  buildKnowledgeVectorIndex,
-  cancelKnowledgeImport,
-  createKnowledgeLibrary,
   deleteKnowledgeLibrary,
   exportKnowledgePackage,
   getKnowledgeIndexIntegrity,
-  getKnowledgeImportJob,
-  importKnowledgeDirectory,
   importKnowledgePackage,
   inspectKnowledgePackage,
   listKnowledgeLibraries,
   listKnowledgeSources,
   renameKnowledgeLibrary,
-  updateKnowledgeLibrarySettings,
-  repairKnowledgeIndex,
-  rebuildKnowledgeIndex,
 } from "@/service/knowledge-base-service";
-import type { KnowledgeDisplayIndexState, KnowledgeImportJobSummary, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeRetrievalMode, KnowledgeSourceSummary } from "@/types";
-import type { PublicAiInternalInferenceCandidate } from "@/types/public-ai";
+import type { KnowledgeDisplayIndexState, KnowledgeIndexIntegritySummary, KnowledgeLibrarySummary, KnowledgePackageInspection, KnowledgeSourceSummary } from "@/types";
+import type { KnowledgeBusyOperation, KnowledgeSourcePickerTarget } from "./knowledge-area-types";
+import { useKnowledgeLibraryPolicyDialogs } from "./use-knowledge-library-policy-dialogs";
+import { useKnowledgeOperationJob } from "./use-knowledge-operation-job";
 import { formatDateTime } from "@/lib/display-format";
 
 // KnowledgeReadFailure keeps a failed read distinct from empty content and exposes only read recovery.
@@ -69,47 +59,6 @@ function KnowledgeReadFailure({ error, busy, onRetry }: {
     <details><summary className="cursor-pointer text-muted-foreground">{t("toolPresentation.output.errorDetails")}</summary><pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs">{error}</pre></details>
     <Button disabled={busy} onClick={onRetry} size="sm" type="button" variant="outline"><RefreshCw size={14} />{t("knowledge.refresh")}</Button>
   </div>;
-}
-
-// KnowledgeBusyOperation is the locale-independent identity of one serialized page mutation.
-// KnowledgeBusyOperation 是一次串行页面变更的语言无关身份。
-type KnowledgeBusyOperation =
-  | "create"
-  | "settings"
-  | "rename"
-  | "delete"
-  | "repair"
-  | "rebuild"
-  | "display-build"
-  | "vector-build"
-  | "refresh"
-  | "directory-import"
-  | "package-export"
-  | "package-import"
-  | "package-replace";
-
-// KnowledgeSourcePickerTarget identifies whether directory browsing adds a source or remaps one.
-// KnowledgeSourcePickerTarget 标识目录浏览是在新增来源还是重新映射现有来源。
-type KnowledgeSourcePickerTarget = {
-  // Existing source identity to remap, or null when adding or synchronizing by path.
-  // 要重新映射的现有来源身份；按路径新增或同步时为空。
-  sourceId: string | null;
-};
-
-// knowledgeCandidateRouteKey derives the same immutable route key as the creation dialog.
-// knowledgeCandidateRouteKey 根据不可变路由生成与创建对话框一致的键。
-function knowledgeCandidateRouteKey(candidate: PublicAiInternalInferenceCandidate): string {
-  const route = candidate.route;
-  return [route.provider_id, route.service_entry_id, route.connection_id, route.model_id, route.operation, route.binding.kind, route.binding.kind === "protocol" ? route.binding.protocol_profile_id : route.binding.action_binding_id].join("/");
-}
-
-// knowledgeImportHasCommittedContent identifies import phases reached after authoritative commit.
-// knowledgeImportHasCommittedContent 标识在权威内容提交后才会到达的导入阶段。
-// Parameters: job is one durable operation snapshot. Returns: whether document and chunk projections can refresh.
-// 参数：job 是一份持久化操作快照。返回值：是否可以刷新文档与切片投影。
-export function knowledgeImportHasCommittedContent(job: KnowledgeImportJobSummary): boolean {
-  return job.operationKind === "import"
-    && ["indexing", "rebuilding", "verifying", "finalizing"].includes(job.phase);
 }
 
 // KnowledgeDisplayBuildAction describes the only action exposed by the display-generation button.
@@ -199,42 +148,6 @@ export function KnowledgeBaseArea() {
   // selectedLibraryId identifies the detail panel target.
   // selectedLibraryId 标识详情面板目标。
   const [selectedLibraryId, setSelectedLibraryId] = React.useState<string | null>(null);
-  // createName stores the new-library name field.
-  // createName 保存新知识库名称字段。
-  const [createName, setCreateName] = React.useState("");
-  // createDialogOpen controls the creation-time policy wizard.
-  // createDialogOpen 控制创建阶段的策略向导。
-  const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
-  // createRetrievalMode stores the selected corpus policy before submission.
-  // createRetrievalMode 保存提交前选择的内容层策略。
-  const [createRetrievalMode, setCreateRetrievalMode] = React.useState<KnowledgeRetrievalMode>("raw_bm25");
-  // createInferenceCandidates mirrors the official capability snapshot used by the wizard.
-  // createInferenceCandidates 镜像向导使用的官方能力快照候选。
-  const [createInferenceCandidates, setCreateInferenceCandidates] = React.useState<PublicAiInternalInferenceCandidate[]>([]);
-  // createCurationCandidateKey identifies the selected LLM route.
-  // createCurationCandidateKey 标识所选整理 LLM 路由。
-  const [createCurationCandidateKey, setCreateCurationCandidateKey] = React.useState("");
-  // createCurationReasoningEffort stores the selected official reasoning level.
-  // createCurationReasoningEffort 保存官方声明的整理推理级别。
-  const [createCurationReasoningEffort, setCreateCurationReasoningEffort] = React.useState("");
-  // createEmbeddingCandidateKey identifies the selected embedding route.
-  // createEmbeddingCandidateKey 标识所选向量路由。
-  const [createEmbeddingCandidateKey, setCreateEmbeddingCandidateKey] = React.useState("");
-  // createConfiguredDimension stores the selected capability dimension.
-  // createConfiguredDimension 保存所选能力维度。
-  const [createConfiguredDimension, setCreateConfiguredDimension] = React.useState("");
-  // createRequestedBatchSize stores an optional user override.
-  // createRequestedBatchSize 保存可选的用户批量覆盖值。
-  const [createRequestedBatchSize, setCreateRequestedBatchSize] = React.useState("");
-  // createCompatibilityOverride stores a deliberate same-dimension index reuse note.
-  // createCompatibilityOverride 保存明确复用同维度索引的风险说明。
-  const [createCompatibilityOverride, setCreateCompatibilityOverride] = React.useState("");
-  // settingsDialogOpen controls editing of the selected library policy.
-  // settingsDialogOpen 控制当前资料库策略编辑对话框。
-  const [settingsDialogOpen, setSettingsDialogOpen] = React.useState(false);
-  // editingLibraryId freezes the exact library whose policy the user opened, across background registry updates.
-  // editingLibraryId 在后台注册表更新期间冻结用户打开策略的精确知识库。
-  const [editingLibraryId, setEditingLibraryId] = React.useState<string | null>(null);
   // deleteTarget freezes the exact library named by the shared destructive confirmation.
   // deleteTarget 冻结共享删除确认明确指定的精确知识库。
   const [deleteTarget, setDeleteTarget] = React.useState<KnowledgeLibrarySummary | null>(null);
@@ -256,45 +169,9 @@ export function KnowledgeBaseArea() {
   // busyRef synchronously closes the duplicate-click window before React publishes busy state.
   // busyRef 在 React 发布忙碌状态前同步关闭重复点击窗口。
   const busyRef = React.useRef<KnowledgeBusyOperation | null>(null);
-  // importJob stores dedicated progress while a long-running import remains active.
-  // importJob 保存长时间运行导入期间的专用进度。
-  const [importJob, setImportJob] = React.useState<KnowledgeImportJobSummary | null>(null);
-  // importLibraryId keeps progress and cancellation bound to the library that started the job.
-  // importLibraryId 将进度和取消操作绑定到启动任务的知识库。
-  const [importLibraryId, setImportLibraryId] = React.useState<string | null>(null);
-  // importProgressOpen controls the dedicated non-blocking import progress dialog.
-  // importProgressOpen 控制独立的非阻塞导入进度对话框。
-  const [importProgressOpen, setImportProgressOpen] = React.useState(false);
-  // importError stores the terminal failure inside the progress dialog.
-  // importError 在进度对话框内保存终态失败信息。
-  const [importError, setImportError] = React.useState("");
   // actionError owns non-job failures displayed by the shared in-window dialog.
   // actionError 持有由窗口内共享弹窗展示的非任务失败。
   const [actionError, setActionError] = React.useState<string | null>(null);
-  // importOutcome preserves the authoritative command result even if final progress refresh fails.
-  // importOutcome 即使最终进度刷新失败也会保留权威命令结果。
-  const [importOutcome, setImportOutcome] = React.useState<"completed" | "cancelled" | "failed" | null>(null);
-  // importCancelRequested gives immediate feedback before the backend reaches a cancellation checkpoint.
-  // importCancelRequested 在后端到达取消检查点之前提供即时反馈。
-  const [importCancelRequested, setImportCancelRequested] = React.useState(false);
-  // importWarnings stores bounded, copyable warnings from the latest completed import.
-  // importWarnings 保存最近一次完成导入产生的有界、可复制告警。
-  const [importWarnings, setImportWarnings] = React.useState<string[]>([]);
-  // operationPollRevision restarts durable polling after a new detached operation is accepted.
-  // operationPollRevision 在新的分离式操作被接受后重启持久化轮询。
-  const [operationPollRevision, setOperationPollRevision] = React.useState(0);
-  // trackedOperationJobId binds terminal handling to the exact operation observed as active.
-  // trackedOperationJobId 将终态处理绑定到被观察为活动状态的精确操作。
-  const trackedOperationJobId = React.useRef<string | null>(null);
-  // handledTerminalJobId prevents duplicate registry refreshes for one persisted terminal row.
-  // handledTerminalJobId 防止针对同一持久化终态记录重复刷新注册表。
-  const handledTerminalJobId = React.useRef<string | null>(null);
-  // projectedAuthoritativeJobId prevents duplicate count refreshes after one import commits content.
-  // projectedAuthoritativeJobId 防止一次导入提交内容后重复刷新权威计数。
-  const projectedAuthoritativeJobId = React.useRef<string | null>(null);
-  // dismissedOperationDialogJobId prevents polling from reopening a job the user deliberately sent to background.
-  // dismissedOperationDialogJobId 防止轮询重新打开用户明确转入后台的任务。
-  const dismissedOperationDialogJobId = React.useRef<string | null>(null);
   // sourcePickerTarget controls the directory browser and preserves its add-or-remap intent.
   // sourcePickerTarget 控制目录浏览器并保留其新增或重新映射意图。
   const [sourcePickerTarget, setSourcePickerTarget] = React.useState<KnowledgeSourcePickerTarget | null>(null);
@@ -324,18 +201,6 @@ export function KnowledgeBaseArea() {
   const sourcePickerSource = sourcePickerTarget?.sourceId
     ? sources.find((source) => source.id === sourcePickerTarget.sourceId) ?? null
     : null;
-  // operationRunning is derived from durable backend state rather than the initiating HTTP request.
-  // operationRunning 从持久化后端状态派生，而不是依赖发起操作的 HTTP 请求。
-  const operationRunning = importJob?.state === "queued" || importJob?.state === "running";
-  // pageBusy prevents authoritative mutations from overlapping a local request or durable operation.
-  // pageBusy 防止权威变更与本地请求或持久化操作相互重叠。
-  const pageBusy = busy !== null || operationRunning;
-  // operationDialogRunning includes the short service-start window before the durable job is returned.
-  // operationDialogRunning 包含持久化任务返回前的短暂服务启动窗口。
-  const operationDialogRunning = operationRunning || busy === "directory-import" || busy === "repair" || busy === "rebuild" || busy === "display-build" || busy === "vector-build";
-  // displayedOperationKind preserves a truthful dialog title while a start request is in flight.
-  // displayedOperationKind 在启动请求进行期间保持真实的对话框标题。
-  const displayedOperationKind = importJob?.operationKind ?? (busy === "repair" ? "repair" : (busy === "rebuild" ? "rebuild" : (busy === "display-build" ? "display_build" : (busy === "vector-build" ? "vector_build" : "import"))));
 
   // acquireBusy atomically claims the single page mutation slot for one exact operation.
   // acquireBusy 为一个精确操作原子占用唯一页面变更槽位。
@@ -467,253 +332,32 @@ export function KnowledgeBaseArea() {
     };
   }, [refreshIndexIntegrity, refreshSources, selectedLibraryId]);
 
-  React.useEffect(() => {
-    if (!selectedLibraryId) return;
-    // disposed prevents an obsolete selection from projecting job state into the current library.
-    // disposed 防止过期选择将任务状态投影到当前知识库。
-    let disposed = false;
-    // timer owns recursive polling only while the exact persisted operation remains active.
-    // timer 仅在精确持久化操作保持活动时持有递归轮询。
-    let timer: number | null = null;
-    // poll reads durable state so a WebUI refresh can reconnect without owning the executor future.
-    // poll 读取持久化状态，使 WebUI 刷新后无需持有执行器 future 即可重新连接。
-    const poll = async (): Promise<void> => {
-      try {
-        // job is the latest durable operation row for the exact selected library.
-        // job 是精确选中知识库最近的持久化操作记录。
-        const job = await getKnowledgeImportJob(selectedLibraryId);
-        if (disposed) return;
-        // active identifies both the persisted queue window and actual execution.
-        // active 同时标识持久化排队窗口与实际执行阶段。
-        const active = job?.state === "queued" || job?.state === "running";
-        if (job && active) {
-          trackedOperationJobId.current = job.id;
-          handledTerminalJobId.current = null;
-          setImportLibraryId(selectedLibraryId);
-          setImportJob(job);
-          setImportOutcome(null);
-          setImportError("");
-          setImportWarnings(job.warnings);
-          if (dismissedOperationDialogJobId.current !== job.id) setImportProgressOpen(true);
-          // ContentVisible identifies import phases reached only after authoritative rows and counts commit.
-          // ContentVisible 标识仅在权威记录与计数提交后才会到达的导入阶段。
-          const contentVisible = knowledgeImportHasCommittedContent(job);
-          if (contentVisible && projectedAuthoritativeJobId.current !== job.id) {
-            projectedAuthoritativeJobId.current = job.id;
-            // ProjectionRefresh exposes document and chunk counts while derived indexing is still active.
-            // ProjectionRefresh 在派生索引仍运行时公开文档与切片计数。
-            void Promise.allSettled([
-              refreshLibraries(),
-              refreshSources(selectedLibraryId),
-            ]).then((results) => {
-              if (results.some((result) => result.status === "rejected")
-                && projectedAuthoritativeJobId.current === job.id) {
-                projectedAuthoritativeJobId.current = null;
-              }
-            });
-          }
-          timer = window.setTimeout(() => void poll(), 500);
-          return;
-        }
-        if (job && trackedOperationJobId.current === job.id) {
-          setImportJob(job);
-          setImportWarnings(job.warnings);
-          setImportCancelRequested(false);
-          setImportError(job.state === "failed" ? (job.errorMessage ?? t("knowledge.importDialog.failed")) : "");
-          setImportOutcome(job.state === "completed" ? "completed" : (job.state === "cancelled" ? "cancelled" : "failed"));
-          if (handledTerminalJobId.current !== job.id) {
-            handledTerminalJobId.current = job.id;
-            // TerminalRefresh reconciles every projection exactly once after detached work finishes.
-            // TerminalRefresh 在分离式工作结束后仅一次协调全部投影。
-            void Promise.allSettled([
-              refreshLibraries(),
-              refreshSources(selectedLibraryId),
-              refreshIndexIntegrity(selectedLibraryId),
-            ]);
-          }
-        }
-      } catch (error) {
-        if (disposed) return;
-        // ActiveError remains visible once a concrete operation has been observed; initial recovery still retries quietly.
-        // ActiveError 在观察到具体操作后保持可见；初始恢复失败则继续静默重试。
-        if (trackedOperationJobId.current !== null) {
-          setImportError(error instanceof Error ? error.message : String(error));
-        }
-        timer = window.setTimeout(() => void poll(), 1000);
-      }
-    };
-    void poll();
-    return () => {
-      disposed = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [operationPollRevision, refreshIndexIntegrity, refreshLibraries, refreshSources, selectedLibraryId, t]);
-
-  // startDirectoryImport closes the picker and hands execution to the retained backend runtime.
-  // startDirectoryImport 关闭目录选择器并将执行交给保留的后端运行时。
-  const startDirectoryImport = React.useCallback(async (libraryId: string, path: string, sourceId: string | null = null, confirmation?: KnowledgeFileConfirmation) => {
-    if (!confirmation) {
-      setSourcePickerTarget(null);
-      setImportProgressOpen(false);
-      setFileReview({ kind: "import", libraryId, sourceRoot: path, sourceId });
-      return;
-    }
-    if (!acquireBusy("directory-import")) return;
-    setSourcePickerTarget(null);
-    setImportLibraryId(libraryId);
-    // TrackedOperation is cleared before an ambiguous start response can expose an older terminal row.
-    // TrackedOperation 在可能出现不确定启动响应前清空，避免暴露旧终态记录。
-    trackedOperationJobId.current = null;
-    dismissedOperationDialogJobId.current = null;
-    handledTerminalJobId.current = null;
-    projectedAuthoritativeJobId.current = null;
-    setImportJob(null);
-    setImportError("");
-    setImportOutcome(null);
-    setImportCancelRequested(false);
-    setImportWarnings([]);
-    setImportProgressOpen(true);
-    try {
-      // job is persisted before the service returns, so polling never races a missing operation row.
-      // job 在服务返回前已经持久化，因此轮询不会与缺失的操作记录发生竞态。
-      const job = await importKnowledgeDirectory(libraryId, path, sourceId, confirmation);
-      trackedOperationJobId.current = job.id;
-      handledTerminalJobId.current = null;
-      setImportJob(job);
-      setImportWarnings(job.warnings);
-      setOperationPollRevision((revision) => revision + 1);
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : String(error));
-      setImportOutcome("failed");
-      // RecoveryPoll resolves whether the service accepted the durable job before the response failed.
-      // RecoveryPoll 用于确认服务是否在响应失败前已经接受持久化任务。
-      setOperationPollRevision((revision) => revision + 1);
-    } finally {
-      releaseBusy("directory-import");
-    }
-  }, [acquireBusy, releaseBusy]);
-
-  // requestImportCancellation acknowledges the click immediately and requests cooperative cancellation once.
-  // requestImportCancellation 立即确认点击，并仅请求一次协作取消。
-  const requestImportCancellation = React.useCallback(async () => {
-    if (!importLibraryId || !importJob?.id || importCancelRequested) return;
-    setImportCancelRequested(true);
-    setImportError("");
-    try {
-      const accepted = await cancelKnowledgeImport(importLibraryId, importJob.id);
-      if (!accepted) {
-        setImportCancelRequested(false);
-      }
-    } catch (error) {
-      setImportCancelRequested(false);
-      setImportError(error instanceof Error ? error.message : String(error));
-    }
-  }, [importCancelRequested, importJob?.id, importLibraryId]);
-
-  // startIndexOperation starts one detached repair or rebuild and reuses the durable progress dialog.
-  // startIndexOperation 启动一个分离式补全或重建，并复用持久化进度对话框。
-  // Parameters: operation selects repair or rebuild and libraryId identifies the exact target.
-  // 参数：operation 选择补全或重建，libraryId 标识精确目标。返回值：操作启动完成后的 Promise。
-  const startIndexOperation = React.useCallback(async (operation: "repair" | "rebuild", libraryId: string): Promise<void> => {
-    if (!acquireBusy(operation)) return;
-    setImportLibraryId(libraryId);
-    // TrackedOperation is cleared before an ambiguous start response can expose an older terminal row.
-    // TrackedOperation 在可能出现不确定启动响应前清空，避免暴露旧终态记录。
-    trackedOperationJobId.current = null;
-    dismissedOperationDialogJobId.current = null;
-    handledTerminalJobId.current = null;
-    projectedAuthoritativeJobId.current = null;
-    setImportJob(null);
-    setImportError("");
-    setImportOutcome(null);
-    setImportCancelRequested(false);
-    setImportWarnings([]);
-    setImportProgressOpen(true);
-    try {
-      // job is the durable queue row returned before detached indexing proceeds.
-      // job 是分离式索引继续执行前返回的持久化排队记录。
-      const job = operation === "repair"
-        ? await repairKnowledgeIndex(libraryId)
-        : await rebuildKnowledgeIndex(libraryId);
-      trackedOperationJobId.current = job.id;
-      handledTerminalJobId.current = null;
-      setImportJob(job);
-      setOperationPollRevision((revision) => revision + 1);
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : String(error));
-      setImportOutcome("failed");
-      // RecoveryPoll resolves whether the service accepted the durable job before the response failed.
-      // RecoveryPoll 用于确认服务是否在响应失败前已经接受持久化任务。
-      setOperationPollRevision((revision) => revision + 1);
-    } finally {
-      releaseBusy(operation);
-    }
-  }, [acquireBusy, releaseBusy]);
-
-  // startDerivedOperation starts one detached display or vector build and reuses durable polling.
-  // startDerivedOperation 启动一个分离式显示库或向量构建，并复用持久化轮询。
-  // Parameters: operation selects the derived stage and libraryId identifies the exact target.
-  // 参数：operation 选择派生阶段，libraryId 标识精确目标。
-  const startDerivedOperation = React.useCallback(async (operation: "display-build" | "vector-build", libraryId: string, confirmation?: KnowledgeFileConfirmation): Promise<void> => {
-    if (operation === "display-build" && !confirmation) {
-      setImportProgressOpen(false);
-      setFileReview({ kind: "display", libraryId });
-      return;
-    }
-    if (!acquireBusy(operation)) return;
-    setImportLibraryId(libraryId);
-    trackedOperationJobId.current = null;
-    dismissedOperationDialogJobId.current = null;
-    handledTerminalJobId.current = null;
-    projectedAuthoritativeJobId.current = null;
-    setImportJob(null);
-    setImportError("");
-    setImportOutcome(null);
-    setImportCancelRequested(false);
-    setImportWarnings([]);
-    setImportProgressOpen(true);
-    try {
-      const job = operation === "display-build"
-        ? await buildKnowledgeDisplayIndex(libraryId, confirmation!)
-        : await buildKnowledgeVectorIndex(libraryId);
-      trackedOperationJobId.current = job.id;
-      setImportJob(job);
-      setOperationPollRevision((revision) => revision + 1);
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : String(error));
-      setImportOutcome("failed");
-      setOperationPollRevision((revision) => revision + 1);
-    } finally {
-      releaseBusy(operation);
-    }
-  }, [acquireBusy, releaseBusy]);
-
-  // reopenDerivedOperationProgress reconnects the dialog to a detached operation without starting another build.
-  // reopenDerivedOperationProgress 将弹窗重新连接到分离式任务，且不会启动另一轮构建。
-  // Parameters: libraryId identifies the exact library whose durable job should be polled. Returns: nothing.
-  // 参数：libraryId 标识需要轮询持久化任务的精确资料库。返回值：无。
-  const reopenDerivedOperationProgress = React.useCallback((libraryId: string): void => {
-    dismissedOperationDialogJobId.current = null;
-    setImportLibraryId(libraryId);
-    setImportJob(null);
-    setImportError("");
-    setImportOutcome(null);
-    setImportCancelRequested(false);
-    setImportWarnings([]);
-    setImportProgressOpen(true);
-    setOperationPollRevision((revision) => revision + 1);
-  }, []);
-
-  // hideOperationProgress keeps detached execution running while hiding only the progress projection.
-  // hideOperationProgress 保持分离式执行继续运行，同时仅隐藏进度投影。
-  // Returns: nothing after the current durable job is marked as intentionally hidden.
-  // 返回值：将当前持久化任务标记为主动隐藏后不返回内容。
-  const hideOperationProgress = React.useCallback((): void => {
-    if (operationDialogRunning && importJob?.id) {
-      dismissedOperationDialogJobId.current = importJob.id;
-    }
-    setImportProgressOpen(false);
-  }, [importJob?.id, operationDialogRunning]);
+  // operationJob owns the durable import, index and derived-build operation and its progress dialog.
+  // operationJob 持有持久化导入、索引与派生构建操作及其进度弹窗。
+  const operationJob = useKnowledgeOperationJob({
+    selectedLibraryId,
+    busy,
+    acquireBusy,
+    releaseBusy,
+    refreshLibraries,
+    refreshSources,
+    refreshIndexIntegrity,
+    setFileReview,
+    setSourcePickerTarget,
+    t,
+  });
+  const {
+    importJob,
+    importLibraryId,
+    operationRunning,
+    startDirectoryImport,
+    startIndexOperation,
+    startDerivedOperation,
+    reopenDerivedOperationProgress,
+  } = operationJob;
+  // pageBusy prevents authoritative mutations from overlapping a local request or durable operation.
+  // pageBusy 防止权威变更与本地请求或持久化操作相互重叠。
+  const pageBusy = busy !== null || operationRunning;
 
   // runMutation serializes page mutations and refreshes authoritative registry state.
   // runMutation 串行化页面变更并刷新权威注册状态。
@@ -743,126 +387,30 @@ export function KnowledgeBaseArea() {
     }
   }, [acquireBusy, refreshLibraries, releaseBusy]);
 
-  // openCreateDialog loads the current official model capability snapshot before showing choices.
-  // openCreateDialog 在显示选项前加载当前官方模型能力快照。
-  const openCreateDialog = React.useCallback(async () => {
-    if (!acquireBusy("create")) return;
-    try {
-      const snapshot = await loadPublicAiSettings();
-      setCreateInferenceCandidates(snapshot.internalInferenceCandidates);
-      setCreateRetrievalMode("raw_bm25");
-      setCreateCurationCandidateKey("");
-      setCreateCurationReasoningEffort("");
-      setCreateEmbeddingCandidateKey("");
-      setCreateConfiguredDimension("");
-      setCreateRequestedBatchSize("");
-      setCreateCompatibilityOverride("");
-      setCreateDialogOpen(true);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
-    } finally {
-      releaseBusy("create");
-    }
-  }, [acquireBusy, releaseBusy]);
-
-  // openSettingsDialog loads fresh official candidates and mirrors the persisted library choices.
-  // openSettingsDialog 加载最新官方候选并镜像持久化的资料库选择。
-  const openSettingsDialog = React.useCallback(async () => {
-    if (!selectedLibrary || !acquireBusy("settings")) return;
-    try {
-      const snapshot = await loadPublicAiSettings();
-      const settings = selectedLibrary.settings;
-      setCreateInferenceCandidates(snapshot.internalInferenceCandidates);
-      setCreateName(selectedLibrary.name);
-      setCreateRetrievalMode(settings.retrievalMode);
-      const routeKeyForSettings = (route: { providerId: string; serviceEntryId: string; connectionId?: string | null; modelId: string; protocol: string; bindingKind?: "protocol" | "action" } | null | undefined, operation: string) => route ? snapshot.internalInferenceCandidates.find((candidate) => candidate.route.operation === operation && candidate.route.provider_id === route.providerId && candidate.route.service_entry_id === route.serviceEntryId && candidate.route.connection_id === route.connectionId && candidate.route.model_id === route.modelId && candidate.route.binding.kind === (route.bindingKind ?? "protocol") && (candidate.route.binding.kind === "protocol" ? candidate.route.binding.protocol_profile_id : candidate.route.binding.action_binding_id) === route.protocol) : null;
-      const curationCandidate = routeKeyForSettings(settings.curation.route, "conversation_respond");
-      const embeddingCandidate = routeKeyForSettings(settings.embedding.route, "embedding_create");
-      setCreateCurationCandidateKey(curationCandidate ? knowledgeCandidateRouteKey(curationCandidate) : "");
-      setCreateCurationReasoningEffort(settings.curation.reasoningEffort ?? "");
-      setCreateEmbeddingCandidateKey(embeddingCandidate ? knowledgeCandidateRouteKey(embeddingCandidate) : "");
-      setCreateConfiguredDimension(settings.embedding.configuredDimension ? String(settings.embedding.configuredDimension) : "");
-      setCreateRequestedBatchSize(settings.embedding.embeddingBatchSize ? String(settings.embedding.embeddingBatchSize) : "");
-      setCreateCompatibilityOverride(settings.vectorIndex.compatibilityOverride ?? "");
-      setEditingLibraryId(selectedLibrary.id);
-      setSettingsDialogOpen(true);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
-    } finally {
-      releaseBusy("settings");
-    }
-  }, [acquireBusy, releaseBusy, selectedLibrary]);
-
-  // createLibrary validates and submits one named library with the selected model policy.
-  // createLibrary 校验并提交一个带模型策略的命名知识库。
-  const createLibrary = React.useCallback(async (model: KnowledgeLibraryCreateDialogModel) => {
-    const name = createName.trim();
-    if (!name) {
-      setActionError(t("knowledge.nameRequired"));
-      return;
-    }
-    const routeFromCandidate = (candidate: PublicAiInternalInferenceCandidate | null) => candidate ? ({
-      consumerProfileId: "knowledge_base",
-      providerId: candidate.route.provider_id,
-      protocol: candidate.route.binding.kind === "protocol" ? candidate.route.binding.protocol_profile_id : candidate.route.binding.action_binding_id,
-      bindingKind: candidate.route.binding.kind,
-      serviceEntryId: candidate.route.service_entry_id,
-      modelId: candidate.route.model_id,
-      usageScope: "internal_background" as const,
-      connectionId: candidate.route.connection_id,
-    }) : null;
-    const embeddingCapability = model.embeddingCandidate?.capabilities.embedding;
-    await runMutation("create", t("knowledge.create"), async () => {
-      const created = await createKnowledgeLibrary(name, "", [], {
-        retrievalMode: model.retrievalMode,
-        fallbackPolicy: "explicit_only",
-        curation: {
-          enabled: model.retrievalMode !== "raw_bm25",
-          route: routeFromCandidate(model.curationCandidate),
-          promptVersion: "knowledge-display-v1",
-          reasoningEffort: model.reasoningEffort || null,
-        },
-        embedding: {
-          enabled: model.retrievalMode === "display_hybrid",
-          route: routeFromCandidate(model.embeddingCandidate),
-          configuredDimension: model.configuredDimension,
-          modelMaxBatchSize: embeddingCapability?.maximum_inputs ?? null,
-          requestedBatchSize: model.requestedBatchSize,
-          compatibilityOverride: model.compatibilityOverride.trim() || null,
-        },
-      });
-      setCreateName("");
-      setSelectedLibraryId(created.id);
-      setCreateDialogOpen(false);
-    });
-  }, [createName, runMutation, t]);
-
-  // updateLibrarySettings persists an edited policy without re-importing source files.
-  // updateLibrarySettings 持久化编辑后的策略且不重新导入原始文件。
-  const updateLibrarySettings = React.useCallback(async (model: KnowledgeLibraryCreateDialogModel) => {
-    if (!editingLibraryId) return;
-    const routeFromCandidate = (candidate: PublicAiInternalInferenceCandidate | null) => candidate ? ({
-      consumerProfileId: "knowledge_base",
-      providerId: candidate.route.provider_id,
-      protocol: candidate.route.binding.kind === "protocol" ? candidate.route.binding.protocol_profile_id : candidate.route.binding.action_binding_id,
-      bindingKind: candidate.route.binding.kind,
-      serviceEntryId: candidate.route.service_entry_id,
-      modelId: candidate.route.model_id,
-      usageScope: "internal_background" as const,
-      connectionId: candidate.route.connection_id,
-    }) : null;
-    const embeddingCapability = model.embeddingCandidate?.capabilities.embedding;
-    await runMutation("settings", t("knowledge.experience.saveSettings"), async () => {
-      await updateKnowledgeLibrarySettings(editingLibraryId, {
-        retrievalMode: model.retrievalMode,
-        fallbackPolicy: "explicit_only",
-        curation: { enabled: model.retrievalMode !== "raw_bm25", route: routeFromCandidate(model.curationCandidate), promptVersion: "knowledge-display-v1", reasoningEffort: model.reasoningEffort || null },
-        embedding: { enabled: model.retrievalMode === "display_hybrid", route: routeFromCandidate(model.embeddingCandidate), configuredDimension: model.configuredDimension, modelMaxBatchSize: embeddingCapability?.maximum_inputs ?? null, requestedBatchSize: model.requestedBatchSize, compatibilityOverride: model.compatibilityOverride.trim() || null },
-      });
-      setSettingsDialogOpen(false);
-      await refreshLibraries();
-    });
-  }, [editingLibraryId, refreshLibraries, runMutation]);
+  // policyDialogs owns the create and settings policy drafts shared by both library dialogs.
+  // policyDialogs 持有两个知识库弹窗共用的创建与设置策略草稿。
+  const {
+    createName,
+    setCreateName,
+    createDialogOpen,
+    setCreateDialogOpen,
+    settingsDialogOpen,
+    setSettingsDialogOpen,
+    policyDialogFields,
+    openCreateDialog,
+    openSettingsDialog,
+    createLibrary,
+    updateLibrarySettings,
+  } = useKnowledgeLibraryPolicyDialogs({
+    selectedLibrary,
+    acquireBusy,
+    releaseBusy,
+    runMutation,
+    refreshLibraries,
+    setActionError,
+    setSelectedLibraryId,
+    t,
+  });
 
   // exportPackage writes one consistent package to the selected host directory.
   // exportPackage 将一个一致性知识库包写入选中的宿主目录。
@@ -1102,50 +650,18 @@ export function KnowledgeBaseArea() {
         </AlertDialogContent>
       </AlertDialog>
       <KnowledgeLibraryCreateDialog
+        {...policyDialogFields}
         busy={busy === "create"}
-        candidates={createInferenceCandidates}
-        configuredDimension={createConfiguredDimension}
-        compatibilityOverride={createCompatibilityOverride}
-        curationCandidateKey={createCurationCandidateKey}
-        embeddingCandidateKey={createEmbeddingCandidateKey}
-        reasoningEffort={createCurationReasoningEffort}
-        name={createName}
-        onConfiguredDimensionChange={setCreateConfiguredDimension}
-        onCompatibilityOverrideChange={setCreateCompatibilityOverride}
-        onCurationCandidateChange={setCreateCurationCandidateKey}
-        onReasoningEffortChange={setCreateCurationReasoningEffort}
-        onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
-        onNameChange={setCreateName}
         onOpenChange={(open) => { if (busyRef.current === null) setCreateDialogOpen(open) }}
-        onRequestedBatchSizeChange={setCreateRequestedBatchSize}
-        onRetrievalModeChange={setCreateRetrievalMode}
         onSubmit={(model) => void createLibrary(model)}
         open={createDialogOpen}
-        requestedBatchSize={createRequestedBatchSize}
-        retrievalMode={createRetrievalMode}
       />
       <KnowledgeLibraryCreateDialog
+        {...policyDialogFields}
         busy={busy === "settings"}
-        candidates={createInferenceCandidates}
-        configuredDimension={createConfiguredDimension}
-        compatibilityOverride={createCompatibilityOverride}
-        curationCandidateKey={createCurationCandidateKey}
-        embeddingCandidateKey={createEmbeddingCandidateKey}
-        reasoningEffort={createCurationReasoningEffort}
-        name={createName}
-        onConfiguredDimensionChange={setCreateConfiguredDimension}
-        onCompatibilityOverrideChange={setCreateCompatibilityOverride}
-        onCurationCandidateChange={setCreateCurationCandidateKey}
-        onReasoningEffortChange={setCreateCurationReasoningEffort}
-        onEmbeddingCandidateChange={setCreateEmbeddingCandidateKey}
-        onNameChange={setCreateName}
         onOpenChange={(open) => { if (busyRef.current === null) setSettingsDialogOpen(open) }}
-        onRequestedBatchSizeChange={setCreateRequestedBatchSize}
-        onRetrievalModeChange={setCreateRetrievalMode}
         onSubmit={(model) => void updateLibrarySettings(model)}
         open={settingsDialogOpen}
-        requestedBatchSize={createRequestedBatchSize}
-        retrievalMode={createRetrievalMode}
         submitLabel={t("memory.common.save")}
         title={t("knowledge.experience.settingsTitle")}
       />
@@ -1199,47 +715,7 @@ export function KnowledgeBaseArea() {
           ? t("knowledge.sources.modifyPickerTitle").replace("{name}", sourcePickerSource.displayName)
           : t("knowledge.pickerTitle")}
       />
-      <Dialog onOpenChange={(open) => {
-        if (open) {
-          setImportProgressOpen(true);
-        } else if (!operationDialogRunning || importJob?.id) {
-          hideOperationProgress();
-        }
-      }} open={importProgressOpen}>
-        <DialogContent
-          className="knowledge-import-dialog"
-          size="xl"
-          layout="document"
-          scrollMode="fixed-footer"
-          showCloseButton={!operationDialogRunning || Boolean(importJob?.id)}
-        >
-          <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
-            <DialogTitle>{displayedOperationKind === "repair"
-              ? t("knowledge.operationDialog.title.repair")
-              : (displayedOperationKind === "rebuild"
-                ? t("knowledge.operationDialog.title.rebuild")
-                : (displayedOperationKind === "display_build" ? t("knowledge.experience.displayOperation") : (displayedOperationKind === "vector_build" ? t("knowledge.experience.vectorOperation") : t("knowledge.operationDialog.title.import"))))}</DialogTitle>
-          </DialogHeader>
-          <div className="knowledge-operation-dialog-body">
-            {importError ? <KnowledgeOperationFeedback message={importError} /> : null}
-            <KnowledgeOperationProgress cancelRequested={importCancelRequested} job={importJob} outcome={importOutcome} running={operationDialogRunning} />
-            {importWarnings.length > 0 ? <details className="knowledge-operation-warnings"><summary>{t("knowledge.feedback.warnings").replace("{count}", String(importWarnings.length))}</summary><pre>{importWarnings.join("\n")}</pre></details> : null}
-          </div>
-          <DialogFooter className="m-0 shrink-0">
-            {operationDialogRunning && importLibraryId ? (
-              <>
-                <Button disabled={!importJob?.id} onClick={hideOperationProgress} type="button" variant="ghost">{t("knowledge.experience.background")}</Button>
-                <Button disabled={!importJob?.id || importCancelRequested} onClick={() => void requestImportCancellation()} type="button" variant="outline">{importCancelRequested ? t("knowledge.importDialog.cancelling") : t(displayedOperationKind === "import" ? "knowledge.cancelImport" : "knowledge.cancelOperation")}</Button>
-              </>
-            ) : (
-              <>
-                {importOutcome === "failed" && displayedOperationKind === "display_build" && importLibraryId ? <Button disabled={pageBusy} onClick={() => void startDerivedOperation("display-build", importLibraryId)} type="button" variant="outline"><RefreshCw size={14} />{t("knowledge.experience.resume")}</Button> : null}
-                <Button onClick={() => setImportProgressOpen(false)} type="button" variant="outline">{t("knowledge.importDialog.close")}</Button>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <KnowledgeOperationDialog operation={operationJob} pageBusy={pageBusy} />
       <KnowledgeMessageDialog message={actionError} onClose={() => setActionError(null)} />
     </section>
   );
