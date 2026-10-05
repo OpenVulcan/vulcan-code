@@ -4,6 +4,54 @@
     "read_action": "settings-get",
     "write_action": "settings-update"
   },
+  "header": {
+    "status": {
+      "ready_message_key": "availability.ready",
+      "unavailable_message_key": "availability.unavailable"
+    },
+    "links": [
+      {
+        "url": "https://github.com/rtk-ai/rtk",
+        "label_message_key": "compliance.repositoryTag",
+        "aria_label_message_key": "compliance.githubAria",
+        "icon": "github"
+      }
+    ],
+    "documents": [
+      {
+        "id": "license",
+        "asset": "LICENSE",
+        "label_message_key": "compliance.licenseTag",
+        "aria_label_message_key": "compliance.licenseAria",
+        "title_message_key": "compliance.licenseTitle",
+        "description_message_key": "compliance.licenseDescription",
+        "icon": "license"
+      }
+    ]
+  },
+  "tabs": [
+    {
+      "id": "settings",
+      "title_message_key": "sections.settings",
+      "sections": [
+        "general"
+      ]
+    },
+    {
+      "id": "routes",
+      "title_message_key": "sections.routes",
+      "sections": [
+        "routes"
+      ]
+    },
+    {
+      "id": "statistics",
+      "title_message_key": "sections.statistics",
+      "sections": [
+        "gain"
+      ]
+    }
+  ],
   "sections": [
     {
       "id": "general",
@@ -31,12 +79,7 @@
           "description_message_key": "disableTelemetryHelp"
         }
       ],
-      "links": [
-        {
-          "url": "https://github.com/rtk-ai/rtk",
-          "label_message_key": "compliance.repositoryLink"
-        }
-      ]
+      "layout": "inline"
     },
     {
       "id": "routes",
@@ -269,6 +312,141 @@
                 "wget",
                 "yamllint"
               ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gain",
+      "title_message_key": "stats.title",
+      "description_message_key": "stats.description",
+      "data": {
+        "action": "statistics-get",
+        "refreshable": true,
+        "show_loaded_at": true,
+        "available_path": "available",
+        "error_path": "error",
+        "unavailable_message_key": "stats.unavailableHelp"
+      },
+      "blocks": [
+        {
+          "type": "metrics",
+          "web": {
+            "variant": "tiles",
+            "columns": 4
+          },
+          "items": [
+            {
+              "label_message_key": "stats.savedTokens",
+              "path": "summary.total_saved",
+              "format": "compact"
+            },
+            {
+              "label_message_key": "stats.averageSavings",
+              "path": "summary.avg_savings_pct",
+              "format": "percent"
+            },
+            {
+              "label_message_key": "stats.commands",
+              "path": "summary.total_commands",
+              "format": "compact"
+            },
+            {
+              "label_message_key": "stats.capacityRatio",
+              "ratio": {
+                "numerator": "summary.total_input",
+                "denominator": "summary.total_output"
+              },
+              "format": "ratio"
+            }
+          ]
+        },
+        {
+          "type": "chart",
+          "value_label_message_key": "stats.savedTokens",
+          "value_path": "saved_tokens",
+          "value_format": "number",
+          "detail": {
+            "path": "savings_pct",
+            "format": "percent"
+          },
+          "limit": 14,
+          "empty_message_key": "stats.empty",
+          "web": {
+            "variant": "bars"
+          },
+          "tui": {
+            "variant": "sparkline"
+          },
+          "periods": [
+            {
+              "id": "daily",
+              "label_message_key": "stats.daily",
+              "path": "daily",
+              "label_paths": [
+                "date"
+              ],
+              "label_format": "date"
+            },
+            {
+              "id": "weekly",
+              "label_message_key": "stats.weekly",
+              "path": "weekly",
+              "label_paths": [
+                "week_start",
+                "week_end"
+              ],
+              "label_format": "date"
+            },
+            {
+              "id": "monthly",
+              "label_message_key": "stats.monthly",
+              "path": "monthly",
+              "label_paths": [
+                "month"
+              ],
+              "label_format": "month"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "path": "byCommand",
+          "title_message_key": "stats.byCommand",
+          "count_message_key": "stats.topCommands",
+          "rank": true,
+          "empty_message_key": "stats.noCommandBreakdown",
+          "columns": [
+            {
+              "path": "command",
+              "label_message_key": "stats.command",
+              "format": "code"
+            },
+            {
+              "path": "count",
+              "label_message_key": "stats.count",
+              "format": "number"
+            },
+            {
+              "path": "savedTokens",
+              "label_message_key": "stats.saved",
+              "format": "number"
+            },
+            {
+              "path": "avgSavingsPct",
+              "label_message_key": "stats.savingsRate",
+              "format": "percent"
+            },
+            {
+              "path": "avgTimeMs",
+              "label_message_key": "stats.time",
+              "format": "duration_ms"
+            },
+            {
+              "path": "savedTokens",
+              "label_message_key": "stats.impact",
+              "format": "bar"
             }
           ]
         }

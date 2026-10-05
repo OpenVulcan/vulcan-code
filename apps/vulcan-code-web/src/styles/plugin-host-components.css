@@ -377,36 +377,141 @@
 .plugin-settings-input { width: min(260px, 100%); }
 .plugin-settings-select { min-width: 140px; }
 .plugin-settings-issue { display: block; color: var(--vcn-content-danger); }
-.plugin-settings-checklist { display: grid; gap: var(--vcn-space-3); min-width: 0; }
+.plugin-settings-checklist { display: grid; flex: 1 1 auto; gap: 14px; width: 100%; min-width: 0; }
 .plugin-settings-checklist-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--vcn-space-2); }
+.plugin-settings-checklist-none { margin: 0; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
+
+/* Checklist groups keep the route-grid look: a titled header with bulk actions above a four-column bordered option grid. */
+/* 清单分组保持路由网格外观：带批量操作的标题行，下方为四列带边框的选项网格。 */
 .plugin-settings-checklist-group {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--vcn-space-2);
+  align-items: center;
+  gap: 8px 10px;
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
-.plugin-settings-checklist-group > legend {
-  float: left;
-  padding: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-weight: 600;
-}
-.plugin-settings-checklist-actions { display: flex; justify-content: flex-end; gap: var(--vcn-space-1); }
+.plugin-settings-checklist-group + .plugin-settings-checklist-group { padding-top: 14px; border-top: 1px solid var(--border); }
+.plugin-settings-checklist-header { min-width: 0; font-size: var(--vcn-font-size-sm); }
+.plugin-settings-checklist-header > strong { font-weight: 600; }
+.plugin-settings-checklist-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.plugin-settings-checklist-actions > button { color: var(--muted-foreground); }
 .plugin-settings-checklist-options {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-  gap: var(--vcn-space-1) var(--vcn-space-3);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px 10px;
+  min-width: 0;
 }
 .plugin-settings-checklist-option {
   display: flex;
   align-items: center;
-  gap: var(--vcn-space-2);
+  gap: 7px;
   min-width: 0;
-  font-size: var(--vcn-font-size-sm);
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-sm);
+  cursor: pointer;
 }
-.plugin-settings-checklist-option > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-settings-checklist-option:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.plugin-settings-checklist-option > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inline sections: unconditional switches side by side, each with its description in a help tooltip. */
+/* 行内区块：无条件开关并排显示，说明放在帮助提示中。 */
+.plugin-settings-inline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; min-width: 0; }
+.plugin-settings-inline-option { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.plugin-settings-inline-option > label { display: flex; align-items: center; gap: 6px; min-width: 0; cursor: pointer; }
+.plugin-settings-inline-option > label > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--vcn-font-size-md);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Page header actions: status pill, repository and license tags on the tab row. */
+/* 页面标题区操作：状态标记、仓库与许可证标签位于标签行。 */
+.plugin-settings-header { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+
+/* Data sections: key-figure tiles, period bar chart and ranked tables of one read action. */
+/* 数据区块：同一读取 Action 的关键数字方块、周期柱状图与排名表格。 */
+.plugin-data-meta { margin: 0; }
+.plugin-data-block { display: grid; gap: 8px; min-width: 0; }
+.plugin-data-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.plugin-data-heading > h4 { display: inline-flex; align-items: center; gap: 4px; margin: 0; color: var(--foreground); font-size: var(--vcn-font-size-md); font-weight: 600; }
+.plugin-data-heading > span { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
+.plugin-data-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.plugin-data-tiles[data-columns],
+.plugin-data-cards[data-columns] { grid-template-columns: repeat(var(--plugin-data-columns), minmax(0, 1fr)); }
+.plugin-data-tile {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
+}
+.plugin-data-tile > span { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
+.plugin-data-tile > strong { font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plugin-data-periods { display: flex; flex-wrap: wrap; gap: 4px; padding-block: 6px; border-bottom: 1px solid var(--border); }
+.plugin-data-bar {
+  display: inline-flex;
+  width: 72px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--vcn-radius-pill);
+  background: color-mix(in srgb, var(--muted-foreground) 16%, transparent);
+}
+.plugin-data-bar > span { min-width: 4px; border-radius: inherit; background: var(--chart-2); }
+
+/* Bar chart: one column per period, value bars grow from the baseline with the period label below. */
+/* 柱状图：每个周期一列，数值柱从基线向上生长，周期标签在下方。 */
+.plugin-bar-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  height: 150px;
+  padding: 12px 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+}
+.plugin-bar-chart-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+.plugin-bar-chart-column > span {
+  width: min(100%, 20px);
+  min-height: 3px;
+  border-radius: var(--vcn-radius-xs) var(--vcn-radius-xs) 1px 1px;
+  background: var(--primary);
+}
+.plugin-bar-chart-column > small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .plugin-settings-checklist-options, .plugin-data-tiles, .plugin-data-tiles[data-columns], .plugin-data-cards[data-columns] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plugin-settings-inline { grid-template-columns: minmax(0, 1fr); }
+}

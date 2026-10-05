@@ -30,8 +30,14 @@
         }
       ],
       "links": [
-        { "url": "https://context7.com/docs/howto/api-keys", "label_message_key": "apiKeyDocsLink" },
-        { "url": "https://context7.com/dashboard", "label_message_key": "dashboardLink" }
+        {
+          "url": "https://context7.com/docs/howto/api-keys",
+          "label_message_key": "apiKeyDocsLink"
+        },
+        {
+          "url": "https://context7.com/dashboard",
+          "label_message_key": "dashboardLink"
+        }
       ]
     },
     {
@@ -52,7 +58,17 @@
           "label_message_key": "timeout",
           "description_message_key": "timeoutHint",
           "value_format": "duration_ms",
-          "options": [{ "value": 10000 }, { "value": 30000 }, { "value": 60000 }]
+          "options": [
+            {
+              "value": 10000
+            },
+            {
+              "value": 30000
+            },
+            {
+              "value": 60000
+            }
+          ]
         },
         {
           "type": "field",
@@ -61,7 +77,121 @@
           "label_message_key": "retention",
           "description_message_key": "retentionHint",
           "value_format": "days",
-          "options": [{ "value": 30 }, { "value": 90 }, { "value": 180 }, { "value": 365 }]
+          "options": [
+            {
+              "value": 30
+            },
+            {
+              "value": 90
+            },
+            {
+              "value": 180
+            },
+            {
+              "value": 365
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "usage",
+      "title_message_key": "usageTitle",
+      "links": [
+        {
+          "url": "https://context7.com/dashboard",
+          "label_message_key": "dashboardLink"
+        },
+        {
+          "url": "https://context7.com/docs/howto/usage",
+          "label_message_key": "usageDocsLink"
+        }
+      ],
+      "data": {
+        "action": "usage-get",
+        "refreshable": true,
+        "refresh_topics": [
+          "context7.data"
+        ],
+        "arguments": [
+          {
+            "name": "rangeDays",
+            "label_message_key": "usageRange",
+            "value_format": "days",
+            "default": 30,
+            "options": [
+              {
+                "value": 7
+              },
+              {
+                "value": 30
+              },
+              {
+                "value": 90
+              },
+              {
+                "value": 365
+              }
+            ]
+          }
+        ]
+      },
+      "blocks": [
+        {
+          "type": "metrics",
+          "title_message_key": "localStatsTitle",
+          "help_message_key": "localUsageNotice",
+          "items": [
+            {
+              "label_message_key": "requests",
+              "path": "localStats.requests",
+              "format": "number"
+            },
+            {
+              "label_message_key": "successes",
+              "path": "localStats.successes",
+              "format": "number"
+            },
+            {
+              "label_message_key": "failures",
+              "path": "localStats.failures",
+              "format": "number"
+            },
+            {
+              "label_message_key": "averageDuration",
+              "path": "localStats.averageDurationMs",
+              "format": "duration_ms"
+            }
+          ]
+        },
+        {
+          "type": "metrics",
+          "title_message_key": "quotaTitle",
+          "help_message_key": "officialUsageNotice",
+          "source_path": "quotaSnapshot",
+          "empty_message_key": "noQuota",
+          "items": [
+            {
+              "label_message_key": "quotaTier",
+              "path": "quotaTier",
+              "format": "text"
+            },
+            {
+              "label_message_key": "quotaRemaining",
+              "path": "quotaRemaining",
+              "format": "number"
+            },
+            {
+              "label_message_key": "quotaLimit",
+              "path": "quotaLimit",
+              "format": "number"
+            },
+            {
+              "label_message_key": "quotaReset",
+              "path": "quotaResetUnixSec",
+              "format": "date_unix_sec"
+            }
+          ]
         }
       ]
     }

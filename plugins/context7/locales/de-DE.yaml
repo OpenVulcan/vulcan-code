@@ -1,16 +1,9 @@
 name: Context7
 capability: Aktuelle versionsbezogene Bibliotheksdokumentation für Programmieragenten
 messages:
-  errorDetails: Fehlerdetails
   navigationLabel: Context7
-  usageNavigationLabel: "Context7-Nutzung"
   allowanceDescription: Im anonymen Modus sind 200 Anfragen ohne API-Schlüssel möglich. Nach der Registrierung und Einrichtung eines kostenlosen API-Schlüssels sind 1.000 Anfragen möglich; die Kontonutzung ist im offiziellen Dashboard einsehbar.
-  refresh: Aktualisieren
-  loadError: Context7-Daten konnten nicht geladen werden.
-  retry: Erneut versuchen
   credentialTitle: Authentifizierung
-  anonymousMode: Anonymer Modus
-  apiKeyMode: API-Schlüssel-Modus
   apiKeyLabel: API-Schlüssel
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: Verbindung testen

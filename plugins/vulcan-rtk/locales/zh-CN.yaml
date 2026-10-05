@@ -2,12 +2,7 @@ name: Vulcan RTK
 capability: 命令路由、Git 上下文压缩与 Token 节省统计
 messages:
   sections.settings: 基础设置
-  retry: 重试
-  stats.loadFailed: 无法加载 RTK 统计
-  errorDetails: 查看错误详情
   navigationLabel: RTK 设置
-  statisticsNavigationLabel: "RTK 统计"
-  compliance.repositoryLink: "GitHub 上的 RTK"
   routeMode.label: "命令路由"
   routeMode.help: "选择 RTK 可以改写哪些 Shell 命令。"
   routeMode.disabled: "关闭"
@@ -17,11 +12,9 @@ messages:
   routes.selectedHelp: "只改写已勾选的路由。"
   routes.allHelp: "改写除未勾选以外的全部路由，包括未来 RTK 版本新增的路由。"
   compliance.githubAria: 打开 RTK GitHub 仓库
-  compliance.githubOpenFailed: 无法打开 GitHub 仓库
   compliance.licenseAria: 打开 Apache-2.0 许可证
   compliance.licenseTitle: RTK Apache-2.0 许可证
   compliance.licenseDescription: 许可证内容直接读取自当前安装的 RTK 插件包。
-  compliance.licenseLoading: 正在读取许可证
   enableRouting: 启用 RTK 路由
   enableRoutingHelp: 将支持的 shell_command 调用改写为随包 RTK 命令。
   gitContext: 提交生成使用 RTK
@@ -30,18 +23,9 @@ messages:
   disableTelemetryHelp: 为 rewrite 与代理命令进程注入 RTK_TELEMETRY_DISABLED=1。
   stats.title: RTK 上下文密度统计
   stats.description: Token 节省统计缓存三十分钟；切换日、周、月视图不会再次发送请求。
-  stats.loading: 读取中
-  stats.ready: 统计可用
-  stats.unavailable: 未统计
-  stats.refresh: 刷新
-  stats.refreshing: 刷新中
-  stats.lastLoaded: 上次统计
-  stats.generated: 数据生成
-  stats.none: 暂无
   stats.unavailableHelp: 统计当前不可用。
   stats.empty: 暂无统计
   stats.noCommandBreakdown: 暂无命令分类统计
-  stats.chartLabel: RTK Token 节省趋势
   stats.savedTokens: 节省 Token
   stats.averageSavings: 平均节省率
   stats.commands: 累计命令
@@ -60,3 +44,10 @@ messages:
   routes.description: 精确选择允许改写的受支持命令。
   routes.curated: 精选
   routes.extended: 扩展
+  sections.routes: "路由选择"
+  sections.statistics: "使用统计"
+  availability.ready: "RTK 可用"
+  availability.unavailable: "RTK 不可用"
+  stats.impact: "影响"
+  compliance.repositoryTag: "rtk-ai/rtk"
+  compliance.licenseTag: "Apache-2.0"

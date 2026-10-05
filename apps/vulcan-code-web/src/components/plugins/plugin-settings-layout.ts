@@ -3,6 +3,8 @@
 // The authoritative shape is docs/contracts/plugin-settings-layout.schema.json, generated from the Rust types.
 // 权威结构为由 Rust 类型生成的 docs/contracts/plugin-settings-layout.schema.json。
 
+import type { PluginDataBlock, PluginDataSource } from "./plugin-data-view";
+
 // PLUGIN_SETTINGS_LAYOUT_VERSION is the only layout format this renderer understands.
 // PLUGIN_SETTINGS_LAYOUT_VERSION 是此渲染器理解的唯一版面格式。
 export const PLUGIN_SETTINGS_LAYOUT_VERSION = 1;
@@ -71,14 +73,36 @@ export interface PluginSettingsAction {
 // PluginSettingsItem 是设置区块中的一行。
 export type PluginSettingsItem = PluginSettingsField | PluginSettingsCredential | PluginSettingsAction;
 
-// PluginSettingsSection is one titled section card.
-// PluginSettingsSection 是一张带标题的区块卡片。
+// PluginSettingsSection is one titled section card: settings rows, or a read-only data view.
+// PluginSettingsSection 是一张带标题的区块卡片：设置行或只读数据视图。
 export interface PluginSettingsSection {
   id: string;
   title_message_key: string;
   description_message_key?: string;
-  items: PluginSettingsItem[];
+  layout?: "rows" | "inline";
+  items?: PluginSettingsItem[];
+  data?: PluginDataSource;
+  blocks?: PluginDataBlock[];
   links?: Array<{ url: string; label_message_key: string }>;
+}
+
+// PluginSettingsHeader is the availability pill, metadata links and package documents beside the tabs.
+// PluginSettingsHeader 是标签旁的可用状态、元数据链接与包内文档。
+export interface PluginSettingsHeader {
+  status?: { ready_message_key: string; unavailable_message_key: string };
+  links?: Array<{ url: string; label_message_key: string; aria_label_message_key?: string; icon?: "link" | "github" }>;
+  documents?: Array<{
+    id: string; asset: string; label_message_key: string; title_message_key: string;
+    description_message_key?: string; aria_label_message_key?: string; icon?: "document" | "license";
+  }>;
+}
+
+// PluginSettingsTab groups sections under one page tab.
+// PluginSettingsTab 将区块归入一个页面标签。
+export interface PluginSettingsTab {
+  id: string;
+  title_message_key: string;
+  sections: string[];
 }
 
 // PluginSettingsLayout is one complete settings page.
@@ -86,6 +110,8 @@ export interface PluginSettingsSection {
 export interface PluginSettingsLayout {
   schema_version: number;
   config?: { read_action: string; write_action: string };
+  header?: PluginSettingsHeader;
+  tabs?: PluginSettingsTab[];
   sections: PluginSettingsSection[];
 }
 
@@ -127,7 +153,13 @@ export function parsePluginSettingsLayout(source: string): PluginSettingsLayout 
 // layoutFields lists every field of a layout in document order.
 // layoutFields 按文档顺序列出版面中的全部字段。
 export function layoutFields(layout: PluginSettingsLayout): PluginSettingsField[] {
-  return layout.sections.flatMap((section) => section.items.filter((item): item is PluginSettingsField => item.type === "field"));
+  return layout.sections.flatMap((section) => sectionFields(section));
+}
+
+// sectionFields lists the fields of one section; data sections have none.
+// sectionFields 列出单个区块的字段；数据区块没有字段。
+export function sectionFields(section: PluginSettingsSection): PluginSettingsField[] {
+  return (section.items ?? []).filter((item): item is PluginSettingsField => item.type === "field");
 }
 
 // propertySchema returns the configuration schema node of one top-level key.

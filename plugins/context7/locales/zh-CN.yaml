@@ -1,16 +1,9 @@
 name: Context7
 capability: 为编码智能体提供最新且支持版本定位的库文档
 messages:
-  errorDetails: 查看错误详情
   navigationLabel: Context7
-  usageNavigationLabel: "Context7 用量"
   allowanceDescription: 未配置 API Key 时使用匿名模式，可调用 200 次；注册并配置免费的 API Key 后，可调用 1000 次，并能在官方控制台查看账户用量。
-  refresh: 刷新
-  loadError: 无法加载 Context7 数据。
-  retry: 重试
   credentialTitle: 身份验证
-  anonymousMode: 匿名模式
-  apiKeyMode: API Key 模式
   apiKeyLabel: API Key
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: 测试连接

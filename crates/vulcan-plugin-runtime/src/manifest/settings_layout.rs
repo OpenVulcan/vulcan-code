@@ -6,6 +6,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod data_view;
+pub use data_view::*;
+
 /// Current settings layout format accepted by the host renderer.
 /// 宿主渲染器当前接受的设置版面格式版本。
 pub const VULCAN_PLUGIN_SETTINGS_LAYOUT_VERSION: u32 = 1;
@@ -27,9 +30,152 @@ pub struct VulcanPluginSettingsLayout {
     /// 读取并替换完整配置对象的 Action；存在任一字段时必填。
     #[serde(default)]
     pub config: Option<VulcanPluginSettingsConfigBinding>,
+    /// Page header beside the tabs: availability status, outbound links and package documents.
+    /// 标签旁的页面标题区：可用状态、外部链接与包内文档。
+    #[serde(default)]
+    pub header: Option<VulcanPluginSettingsHeader>,
+    /// Page tabs; when declared, every section belongs to exactly one tab.
+    /// 页面标签；声明后每个区块恰好属于一个标签。
+    #[serde(default)]
+    pub tabs: Vec<VulcanPluginSettingsTab>,
     /// Ordered page sections, each rendered as one host section card.
     /// 有序页面区块，每个渲染为一张宿主区块卡片。
     pub sections: Vec<VulcanPluginSettingsSection>,
+}
+
+/// Page header items shown at the trailing edge of the tab strip.
+/// 显示在标签条尾部的页面标题区条目。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub struct VulcanPluginSettingsHeader {
+    /// Availability pill reflecting whether the configuration read succeeded; requires `config`.
+    /// 反映配置读取是否成功的可用状态标签；需要 `config`。
+    #[serde(default)]
+    pub status: Option<VulcanPluginSettingsHeaderStatus>,
+    /// Compact metadata links, such as the upstream repository.
+    /// 紧凑元数据链接，例如上游仓库。
+    #[serde(default)]
+    pub links: Vec<VulcanPluginSettingsHeaderLink>,
+    /// Package text documents opened in a host dialog, such as the license.
+    /// 在宿主对话框中打开的包内文本文档，例如许可证。
+    #[serde(default)]
+    pub documents: Vec<VulcanPluginSettingsDocument>,
+}
+
+/// Availability pill labels.
+/// 可用状态标签文案。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub struct VulcanPluginSettingsHeaderStatus {
+    /// Plugin locale message key shown after the configuration was read.
+    /// 配置读取成功后显示的插件语言包消息键。
+    pub ready_message_key: String,
+    /// Plugin locale message key shown when the configuration read failed.
+    /// 配置读取失败时显示的插件语言包消息键。
+    pub unavailable_message_key: String,
+}
+
+/// One compact metadata link.
+/// 一个紧凑元数据链接。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub struct VulcanPluginSettingsHeaderLink {
+    /// Absolute HTTPS URL opened through the host URL boundary.
+    /// 经宿主地址边界打开的绝对 HTTPS 地址。
+    pub url: String,
+    /// Plugin locale message key for the visible tag text.
+    /// 可见标签文字使用的插件语言包消息键。
+    pub label_message_key: String,
+    /// Plugin locale message key for the accessible name.
+    /// 无障碍名称使用的插件语言包消息键。
+    #[serde(default)]
+    pub aria_label_message_key: Option<String>,
+    /// Host icon of the tag.
+    /// 标签的宿主图标。
+    #[serde(default)]
+    pub icon: VulcanPluginSettingsLinkIcon,
+}
+
+/// Host icons for header links.
+/// 标题区链接的宿主图标。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub enum VulcanPluginSettingsLinkIcon {
+    /// Generic external link.
+    /// 通用外部链接。
+    #[default]
+    Link,
+    /// Source repository.
+    /// 源代码仓库。
+    Github,
+}
+
+/// One package text document opened in a host dialog.
+/// 一个在宿主对话框中打开的包内文本文档。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub struct VulcanPluginSettingsDocument {
+    /// Stable layout-local document identifier.
+    /// 稳定的版面内文档标识。
+    pub id: String,
+    /// UTF-8 package file listed in `required_files`.
+    /// 列在 `required_files` 中的 UTF-8 包内文件。
+    pub asset: String,
+    /// Plugin locale message key for the visible tag text.
+    /// 可见标签文字使用的插件语言包消息键。
+    pub label_message_key: String,
+    /// Plugin locale message key for the dialog title.
+    /// 对话框标题使用的插件语言包消息键。
+    pub title_message_key: String,
+    /// Plugin locale message key for the dialog description.
+    /// 对话框说明使用的插件语言包消息键。
+    #[serde(default)]
+    pub description_message_key: Option<String>,
+    /// Plugin locale message key for the accessible name of the tag.
+    /// 标签无障碍名称使用的插件语言包消息键。
+    #[serde(default)]
+    pub aria_label_message_key: Option<String>,
+    /// Host icon of the tag.
+    /// 标签的宿主图标。
+    #[serde(default)]
+    pub icon: VulcanPluginSettingsDocumentIcon,
+}
+
+/// Host icons for header documents.
+/// 标题区文档的宿主图标。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub enum VulcanPluginSettingsDocumentIcon {
+    /// Generic document.
+    /// 通用文档。
+    #[default]
+    Document,
+    /// License text.
+    /// 许可证文本。
+    License,
+}
+
+/// One page tab grouping sections.
+/// 一个归组区块的页面标签。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub struct VulcanPluginSettingsTab {
+    /// Stable layout-local tab identifier.
+    /// 稳定的版面内标签标识。
+    pub id: String,
+    /// Plugin locale message key for the tab label.
+    /// 标签文字使用的插件语言包消息键。
+    pub title_message_key: String,
+    /// Ids of the sections shown in this tab, in order.
+    /// 此标签按顺序显示的区块标识。
+    pub sections: Vec<String>,
 }
 
 /// Declared configuration read and write actions.
@@ -62,13 +208,41 @@ pub struct VulcanPluginSettingsSection {
     /// 一句话用途说明使用的插件语言包消息键。
     #[serde(default)]
     pub description_message_key: Option<String>,
-    /// Ordered rows of the section.
-    /// 区块内的有序行。
+    /// Row presentation of `items`.
+    /// `items` 的行呈现方式。
+    #[serde(default)]
+    pub layout: VulcanPluginSettingsSectionLayout,
+    /// Ordered rows of the section; exclusive with `data`.
+    /// 区块内的有序行；与 `data` 互斥。
+    #[serde(default)]
     pub items: Vec<VulcanPluginSettingsItem>,
+    /// Read action shown by `blocks`; exclusive with `items`.
+    /// 由 `blocks` 显示的读取 Action；与 `items` 互斥。
+    #[serde(default)]
+    pub data: Option<VulcanPluginDataSource>,
+    /// Ordered data blocks of a data section.
+    /// 数据区块中的有序数据块。
+    #[serde(default)]
+    pub blocks: Vec<VulcanPluginDataBlock>,
     /// Fixed HTTPS links shown in the section footer and opened through the host URL boundary.
     /// 显示在区块页脚、经宿主地址边界打开的固定 HTTPS 链接。
     #[serde(default)]
     pub links: Vec<VulcanPluginSettingsLink>,
+}
+
+/// Row presentation of a settings section.
+/// 设置区块的行呈现方式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub enum VulcanPluginSettingsSectionLayout {
+    /// Label and description beside the control, one row per item.
+    /// 标签与说明位于控件旁，每个条目一行。
+    #[default]
+    Rows,
+    /// Compact checkbox options side by side with descriptions in help tooltips; switch fields only.
+    /// 并排的紧凑复选选项，说明放在帮助提示中；仅限开关字段。
+    Inline,
 }
 
 /// One outbound documentation or dashboard link.
@@ -302,6 +476,9 @@ pub(crate) struct SettingsLayoutContext<'a> {
     pub actions: BTreeMap<&'a str, SettingsActionContract<'a>>,
     pub config_schema: Option<Value>,
     pub messages: &'a BTreeMap<String, String>,
+    /// Package files readable as text assets, from the manifest `required_files`.
+    /// 来自清单 `required_files`、可作为文本资源读取的包内文件。
+    pub text_assets: BTreeSet<&'a str>,
 }
 
 /// Validate layout against the package's actions, configuration schema and fallback messages.
@@ -323,7 +500,11 @@ pub(crate) fn validate_settings_layout(
         return fail("must declare at least one section.".into());
     }
     let message = |key: &str| -> Result<(), String> {
-        if context.messages.get(key).is_some_and(|text| !text.trim().is_empty()) {
+        if context
+            .messages
+            .get(key)
+            .is_some_and(|text| !text.trim().is_empty())
+        {
             Ok(())
         } else {
             Err(format!(
@@ -344,21 +525,63 @@ pub(crate) fn validate_settings_layout(
         }
         message(&section.title_message_key)?;
         optional_message(&section.description_message_key)?;
-        if section.items.is_empty() {
-            return fail(format!("section `{}` must declare at least one item.", section.id));
+        match &section.data {
+            Some(source) => {
+                if !section.items.is_empty()
+                    || section.layout != VulcanPluginSettingsSectionLayout::Rows
+                {
+                    return fail(format!(
+                        "data section `{}` may not declare items or an item layout.",
+                        section.id
+                    ));
+                }
+                validate_data_section(
+                    mount_id,
+                    &section.id,
+                    source,
+                    &section.blocks,
+                    context,
+                    &message,
+                )?;
+            }
+            None if section.items.is_empty() || !section.blocks.is_empty() => {
+                return fail(format!(
+                    "section `{}` must declare items, or data with blocks.",
+                    section.id
+                ));
+            }
+            None => {}
+        }
+        if section.layout == VulcanPluginSettingsSectionLayout::Inline
+            && !section.items.iter().all(|item| {
+                matches!(
+                    item,
+                    VulcanPluginSettingsItem::Field {
+                        control: VulcanPluginSettingsControl::Switch,
+                        visible_when: None,
+                        ..
+                    }
+                )
+            })
+        {
+            return fail(format!(
+                "inline section `{}` may contain only unconditional switch fields.",
+                section.id
+            ));
         }
         for link in &section.links {
             message(&link.label_message_key)?;
-            if !link.url.starts_with("https://")
-                || link.url.len() <= "https://".len()
-                || link.url.chars().any(char::is_whitespace)
-            {
-                return fail(format!("link `{}` must be an absolute HTTPS URL.", link.url));
-            }
+            require_https(mount_id, &link.url)?;
         }
         for item in &section.items {
             match item {
-                VulcanPluginSettingsItem::Field { key, label_message_key, description_message_key, placeholder_message_key, .. } => {
+                VulcanPluginSettingsItem::Field {
+                    key,
+                    label_message_key,
+                    description_message_key,
+                    placeholder_message_key,
+                    ..
+                } => {
                     let Some(schema) = context.config_schema.as_ref() else {
                         return fail("fields require a plugin configuration schema.".into());
                     };
@@ -373,7 +596,8 @@ pub(crate) fn validate_settings_layout(
                     optional_message(description_message_key)?;
                     optional_message(placeholder_message_key)?;
                 }
-                VulcanPluginSettingsItem::Credential { id, .. } | VulcanPluginSettingsItem::Action { id, .. } => {
+                VulcanPluginSettingsItem::Credential { id, .. }
+                | VulcanPluginSettingsItem::Action { id, .. } => {
                     crate::catalog::validate_identifier(id, "settings item id")?;
                     if !item_ids.insert(id.as_str()) {
                         return fail(format!("duplicate item id `{id}`."));
@@ -386,70 +610,253 @@ pub(crate) fn validate_settings_layout(
         (None, false) => return fail("fields require a `config` binding.".into()),
         (Some(_), true) => return fail("a `config` binding requires at least one field.".into()),
         (Some(binding), false) => {
-            require_action(mount_id, context, &binding.read_action, VulcanPluginActionEffect::Read)?;
-            require_action(mount_id, context, &binding.write_action, VulcanPluginActionEffect::Mutation)?;
+            require_action(
+                mount_id,
+                context,
+                &binding.read_action,
+                VulcanPluginActionEffect::Read,
+            )?;
+            require_action(
+                mount_id,
+                context,
+                &binding.write_action,
+                VulcanPluginActionEffect::Mutation,
+            )?;
         }
         (None, true) => {}
     }
+    validate_page_chrome(mount_id, layout, &section_ids, context, &message)?;
     for item in layout.sections.iter().flat_map(|section| &section.items) {
         match item {
-            VulcanPluginSettingsItem::Field { key, control, options, value_format, option_groups, selection, visible_when, placeholder_message_key, .. } => {
-                validate_field(mount_id, key, *control, &FieldShape {
-                    property: fields[key.as_str()],
-                    options,
-                    value_format: *value_format,
-                    option_groups,
-                    selection: *selection,
-                    has_placeholder: placeholder_message_key.is_some(),
-                }, &message)?;
+            VulcanPluginSettingsItem::Field {
+                key,
+                control,
+                options,
+                value_format,
+                option_groups,
+                selection,
+                visible_when,
+                placeholder_message_key,
+                ..
+            } => {
+                validate_field(
+                    mount_id,
+                    key,
+                    *control,
+                    &FieldShape {
+                        property: fields[key.as_str()],
+                        options,
+                        value_format: *value_format,
+                        option_groups,
+                        selection: *selection,
+                        has_placeholder: placeholder_message_key.is_some(),
+                    },
+                    &message,
+                )?;
                 if let Some(condition) = visible_when {
                     let Some(controller) = fields.get(condition.key.as_str()) else {
-                        return fail(format!("field `{key}` visibility refers to undeclared field `{}`.", condition.key));
+                        return fail(format!(
+                            "field `{key}` visibility refers to undeclared field `{}`.",
+                            condition.key
+                        ));
                     };
                     if condition.key == *key || condition.values.is_empty() {
-                        return fail(format!("field `{key}` visibility must name another field and at least one value."));
+                        return fail(format!(
+                            "field `{key}` visibility must name another field and at least one value."
+                        ));
                     }
                     for value in &condition.values {
                         validate_value(mount_id, controller, value, &condition.key)?;
                     }
                 }
             }
-            VulcanPluginSettingsItem::Credential { label_message_key, description_message_key, placeholder_message_key, status_action, set_action, set_argument, delete_action, .. } => {
+            VulcanPluginSettingsItem::Credential {
+                label_message_key,
+                description_message_key,
+                placeholder_message_key,
+                status_action,
+                set_action,
+                set_argument,
+                delete_action,
+                ..
+            } => {
                 message(label_message_key)?;
                 optional_message(description_message_key)?;
                 optional_message(placeholder_message_key)?;
-                let status = require_action(mount_id, context, status_action, VulcanPluginActionEffect::Read)?;
-                if property_type(status.output.as_ref().and_then(|schema| schema.get("properties")).and_then(|properties| properties.get("configured"))) != Some("boolean") {
-                    return fail(format!("credential status action `{status_action}` must declare an output schema with boolean `configured`."));
+                let status = require_action(
+                    mount_id,
+                    context,
+                    status_action,
+                    VulcanPluginActionEffect::Read,
+                )?;
+                if property_type(
+                    status
+                        .output
+                        .as_ref()
+                        .and_then(|schema| schema.get("properties"))
+                        .and_then(|properties| properties.get("configured")),
+                ) != Some("boolean")
+                {
+                    return fail(format!(
+                        "credential status action `{status_action}` must declare an output schema with boolean `configured`."
+                    ));
                 }
-                let set = require_action(mount_id, context, set_action, VulcanPluginActionEffect::Mutation)?;
+                let set = require_action(
+                    mount_id,
+                    context,
+                    set_action,
+                    VulcanPluginActionEffect::Mutation,
+                )?;
                 let input = set.input.as_ref();
                 let single_string = input
                     .and_then(|schema| schema.get("properties"))
                     .and_then(Value::as_object)
-                    .is_some_and(|properties| properties.len() == 1 && property_type(properties.get(set_argument)) == Some("string"));
+                    .is_some_and(|properties| {
+                        properties.len() == 1
+                            && property_type(properties.get(set_argument)) == Some("string")
+                    });
                 let required = input
                     .and_then(|schema| schema.get("required"))
                     .and_then(Value::as_array)
-                    .is_some_and(|required| required.iter().any(|name| name.as_str() == Some(set_argument)));
+                    .is_some_and(|required| {
+                        required
+                            .iter()
+                            .any(|name| name.as_str() == Some(set_argument))
+                    });
                 if !single_string || !required {
-                    return fail(format!("credential set action `{set_action}` must accept exactly one required string property `{set_argument}`."));
+                    return fail(format!(
+                        "credential set action `{set_action}` must accept exactly one required string property `{set_argument}`."
+                    ));
                 }
                 if let Some(delete) = delete_action {
-                    require_empty_input(mount_id, require_action(mount_id, context, delete, VulcanPluginActionEffect::Mutation)?)?;
+                    require_empty_input(
+                        mount_id,
+                        require_action(
+                            mount_id,
+                            context,
+                            delete,
+                            VulcanPluginActionEffect::Mutation,
+                        )?,
+                    )?;
                 }
             }
-            VulcanPluginSettingsItem::Action { action, label_message_key, description_message_key, success_message_key, .. } => {
+            VulcanPluginSettingsItem::Action {
+                action,
+                label_message_key,
+                description_message_key,
+                success_message_key,
+                ..
+            } => {
                 message(label_message_key)?;
                 optional_message(description_message_key)?;
                 optional_message(success_message_key)?;
-                let contract = context.actions.get(action.as_str()).filter(|contract| contract.manifest.callers.contains(&VulcanPluginActionCaller::PluginUi));
+                let contract = context.actions.get(action.as_str()).filter(|contract| {
+                    contract
+                        .manifest
+                        .callers
+                        .contains(&VulcanPluginActionCaller::PluginUi)
+                });
                 let Some(contract) = contract else {
-                    return fail(format!("action `{action}` must be declared with the `plugin_ui` caller."));
+                    return fail(format!(
+                        "action `{action}` must be declared with the `plugin_ui` caller."
+                    ));
                 };
                 require_empty_input(mount_id, contract)?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Validate the header and tabs; section_ids lists every declared section.
+/// 校验标题区与标签；section_ids 列出全部已声明区块。
+fn validate_page_chrome(
+    mount_id: &str,
+    layout: &VulcanPluginSettingsLayout,
+    section_ids: &BTreeSet<&str>,
+    context: &SettingsLayoutContext<'_>,
+    message: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let fail = |text: String| Err(format!("Plugin settings mount `{mount_id}`: {text}"));
+    let optional = |key: &Option<String>| key.as_deref().map_or(Ok(()), message);
+    if let Some(header) = &layout.header {
+        if let Some(status) = &header.status {
+            if layout.config.is_none() {
+                return fail("a header status requires a `config` binding.".into());
+            }
+            message(&status.ready_message_key)?;
+            message(&status.unavailable_message_key)?;
+        }
+        for link in &header.links {
+            message(&link.label_message_key)?;
+            optional(&link.aria_label_message_key)?;
+            require_https(mount_id, &link.url)?;
+        }
+        let mut document_ids = BTreeSet::new();
+        for document in &header.documents {
+            crate::catalog::validate_identifier(&document.id, "settings document id")?;
+            if !document_ids.insert(document.id.as_str()) {
+                return fail(format!("duplicate document id `{}`.", document.id));
+            }
+            if !context.text_assets.contains(document.asset.as_str()) {
+                return fail(format!(
+                    "document `{}` must name a file listed in `required_files`.",
+                    document.asset
+                ));
+            }
+            message(&document.label_message_key)?;
+            message(&document.title_message_key)?;
+            optional(&document.description_message_key)?;
+            optional(&document.aria_label_message_key)?;
+        }
+    }
+    if layout.tabs.is_empty() {
+        return Ok(());
+    }
+    if layout.tabs.len() < 2 {
+        return fail("tabs must declare at least two tabs.".into());
+    }
+    let mut tab_ids = BTreeSet::new();
+    let mut placed = BTreeSet::new();
+    for tab in &layout.tabs {
+        crate::catalog::validate_identifier(&tab.id, "settings tab id")?;
+        if !tab_ids.insert(tab.id.as_str()) {
+            return fail(format!("duplicate tab id `{}`.", tab.id));
+        }
+        message(&tab.title_message_key)?;
+        if tab.sections.is_empty() {
+            return fail(format!("tab `{}` must list at least one section.", tab.id));
+        }
+        for section in &tab.sections {
+            if !section_ids.contains(section.as_str()) {
+                return fail(format!(
+                    "tab `{}` lists undeclared section `{section}`.",
+                    tab.id
+                ));
+            }
+            if !placed.insert(section.as_str()) {
+                return fail(format!(
+                    "section `{section}` is listed by more than one tab entry."
+                ));
+            }
+        }
+    }
+    if placed.len() != section_ids.len() {
+        return fail("every section must belong to a tab when tabs are declared.".into());
+    }
+    Ok(())
+}
+
+/// Require an absolute HTTPS URL without whitespace.
+/// 要求不含空白的绝对 HTTPS 地址。
+fn require_https(mount_id: &str, url: &str) -> Result<(), String> {
+    if !url.starts_with("https://")
+        || url.len() <= "https://".len()
+        || url.chars().any(char::is_whitespace)
+    {
+        return Err(format!(
+            "Plugin settings mount `{mount_id}`: link `{url}` must be an absolute HTTPS URL."
+        ));
     }
     Ok(())
 }
@@ -474,12 +881,18 @@ fn validate_field(
     shape: &FieldShape<'_>,
     message: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<(), String> {
-    let fail = |text: &str| Err(format!("Plugin settings mount `{mount_id}`: field `{key}` {text}"));
+    let fail = |text: &str| {
+        Err(format!(
+            "Plugin settings mount `{mount_id}`: field `{key}` {text}"
+        ))
+    };
     let kind = property_type(Some(shape.property));
     let compatible = match control {
         VulcanPluginSettingsControl::Switch => kind == Some("boolean"),
         VulcanPluginSettingsControl::Text => kind == Some("string"),
-        VulcanPluginSettingsControl::Number => matches!(kind, Some("integer" | "number" | "string")),
+        VulcanPluginSettingsControl::Number => {
+            matches!(kind, Some("integer" | "number" | "string"))
+        }
         VulcanPluginSettingsControl::Select => matches!(kind, Some("integer" | "string")),
         VulcanPluginSettingsControl::Checklist => {
             kind == Some("array") && property_type(shape.property.get("items")) == Some("string")
@@ -502,7 +915,12 @@ fn validate_field(
     if !is_checklist && shape.selection != VulcanPluginSettingsSelection::Include {
         return fail("may declare selection only for the checklist control.");
     }
-    if shape.has_placeholder && !matches!(control, VulcanPluginSettingsControl::Text | VulcanPluginSettingsControl::Number) {
+    if shape.has_placeholder
+        && !matches!(
+            control,
+            VulcanPluginSettingsControl::Text | VulcanPluginSettingsControl::Number
+        )
+    {
         return fail("may declare a placeholder only for text and number controls.");
     }
     let mut seen = BTreeSet::new();
@@ -538,7 +956,12 @@ fn validate_field(
 
 /// Validate value against one self-contained property schema.
 /// 依据一个自包含属性 Schema 校验 value。
-fn validate_value(mount_id: &str, property: &Value, value: &Value, key: &str) -> Result<(), String> {
+fn validate_value(
+    mount_id: &str,
+    property: &Value,
+    value: &Value,
+    key: &str,
+) -> Result<(), String> {
     crate::catalog::validate_json_schema_instance(
         property,
         value,
@@ -566,10 +989,18 @@ fn require_action<'context, 'a>(
 
 /// Require that an action either has no input schema or accepts the empty object.
 /// 要求 Action 没有输入 Schema 或接受空对象。
-fn require_empty_input(mount_id: &str, contract: &SettingsActionContract<'_>) -> Result<(), String> {
+fn require_empty_input(
+    mount_id: &str,
+    contract: &SettingsActionContract<'_>,
+) -> Result<(), String> {
     match &contract.input {
         None => Ok(()),
-        Some(schema) => validate_value(mount_id, schema, &Value::Object(Default::default()), &contract.manifest.id),
+        Some(schema) => validate_value(
+            mount_id,
+            schema,
+            &Value::Object(Default::default()),
+            &contract.manifest.id,
+        ),
     }
 }
 

@@ -2,12 +2,7 @@ name: Vulcan RTK
 capability: Command routing, compressed Git context, and token-saving statistics
 messages:
   sections.settings: Settings
-  retry: Retry
-  stats.loadFailed: Unable to load RTK statistics
-  errorDetails: Error details
   navigationLabel: RTK Settings
-  statisticsNavigationLabel: "RTK Statistics"
-  compliance.repositoryLink: "RTK on GitHub"
   routeMode.label: "Command routing"
   routeMode.help: "Choose which shell commands RTK may rewrite."
   routeMode.disabled: "Off"
@@ -17,11 +12,9 @@ messages:
   routes.selectedHelp: "Only checked routes are rewritten."
   routes.allHelp: "Every route is rewritten except the unchecked ones, including routes added by future RTK versions."
   compliance.githubAria: Open the RTK GitHub repository
-  compliance.githubOpenFailed: Failed to open GitHub repository
   compliance.licenseAria: Open the Apache-2.0 license
   compliance.licenseTitle: RTK Apache-2.0 License
   compliance.licenseDescription: License text read directly from the currently installed RTK plugin package.
-  compliance.licenseLoading: Loading license
   enableRouting: Enable RTK routing
   enableRoutingHelp: Rewrite supported shell_command calls through the bundled RTK binary.
   gitContext: Use RTK for commit generation
@@ -30,18 +23,9 @@ messages:
   disableTelemetryHelp: Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes.
   stats.title: RTK context-density statistics
   stats.description: Token savings are cached for thirty minutes. Switching daily, weekly, and monthly views never sends another request.
-  stats.loading: Loading
-  stats.ready: Stats ready
-  stats.unavailable: Unavailable
-  stats.refresh: Refresh
-  stats.refreshing: Refreshing
-  stats.lastLoaded: Last loaded
-  stats.generated: Generated
-  stats.none: None
   stats.unavailableHelp: Statistics are currently unavailable.
   stats.empty: No statistics yet
   stats.noCommandBreakdown: No command breakdown yet
-  stats.chartLabel: RTK token savings trend
   stats.savedTokens: Tokens saved
   stats.averageSavings: Average savings
   stats.commands: Commands
@@ -60,3 +44,10 @@ messages:
   routes.description: Choose exactly which supported commands may be rewritten.
   routes.curated: Curated
   routes.extended: Extended
+  sections.routes: "Routes"
+  sections.statistics: "Statistics"
+  availability.ready: "RTK available"
+  availability.unavailable: "RTK unavailable"
+  stats.impact: "Impact"
+  compliance.repositoryTag: "rtk-ai/rtk"
+  compliance.licenseTag: "Apache-2.0"

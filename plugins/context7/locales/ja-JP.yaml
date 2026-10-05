@@ -1,16 +1,9 @@
 name: Context7
 capability: コーディングエージェント向けの最新・バージョン対応ライブラリドキュメント
 messages:
-  errorDetails: エラーの詳細
   navigationLabel: Context7
-  usageNavigationLabel: "Context7 使用量"
   allowanceDescription: API キーなしの匿名モードでは 200 回リクエストできます。登録して無料の API キーを設定すると、1,000 回リクエストでき、公式ダッシュボードでアカウントの使用状況を確認できます。
-  refresh: 更新
-  loadError: Context7 のデータを読み込めませんでした。
-  retry: 再試行
   credentialTitle: 認証
-  anonymousMode: 匿名モード
-  apiKeyMode: API キーモード
   apiKeyLabel: API キー
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: 接続をテスト

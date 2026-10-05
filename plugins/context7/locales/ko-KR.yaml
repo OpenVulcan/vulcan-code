@@ -1,16 +1,9 @@
 name: Context7
 capability: 코딩 에이전트를 위한 최신 버전별 라이브러리 문서
 messages:
-  errorDetails: 오류 세부 정보
   navigationLabel: Context7
-  usageNavigationLabel: "Context7 사용량"
   allowanceDescription: API 키가 없는 익명 모드에서는 200회 요청할 수 있습니다. 가입 후 무료 API 키를 설정하면 1,000회 요청할 수 있으며 공식 대시보드에서 계정 사용량을 확인할 수 있습니다.
-  refresh: 새로 고침
-  loadError: Context7 데이터를 불러올 수 없습니다.
-  retry: 다시 시도
   credentialTitle: 인증
-  anonymousMode: 익명 모드
-  apiKeyMode: API 키 모드
   apiKeyLabel: API 키
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: 연결 테스트 실행

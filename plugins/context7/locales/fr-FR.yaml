@@ -1,16 +1,9 @@
 name: Context7
 capability: Documentation à jour des bibliothèques selon leur version pour les agents de programmation
 messages:
-  errorDetails: Détails de l’erreur
   navigationLabel: Context7
-  usageNavigationLabel: "Utilisation de Context7"
   allowanceDescription: Le mode anonyme permet 200 requêtes sans clé API. L’inscription et la configuration d’une clé gratuite donnent accès à 1 000 requêtes et au suivi de l’utilisation du compte dans le tableau de bord officiel.
-  refresh: Actualiser
-  loadError: Impossible de charger les données de Context7.
-  retry: Réessayer
   credentialTitle: Authentification
-  anonymousMode: Mode anonyme
-  apiKeyMode: Mode avec clé API
   apiKeyLabel: Clé API
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: Tester la connexion

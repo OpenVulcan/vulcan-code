@@ -1,16 +1,9 @@
 name: Context7
 capability: Актуальная документация библиотек с учётом версий для агентов программирования
 messages:
-  errorDetails: Подробности ошибки
   navigationLabel: Context7
-  usageNavigationLabel: "Использование Context7"
   allowanceDescription: Анонимный режим позволяет выполнить 200 запросов без ключа API. После регистрации и настройки бесплатного ключа доступны 1 000 запросов и просмотр использования учётной записи на официальной панели.
-  refresh: Обновить
-  loadError: Не удалось загрузить данные Context7.
-  retry: Повторить
   credentialTitle: Аутентификация
-  anonymousMode: Анонимный режим
-  apiKeyMode: Режим с ключом API
   apiKeyLabel: Ключ API
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: Проверить подключение

@@ -10,16 +10,40 @@ import { Button } from "@/components/ui/button"
 
 import type { VisualLabDemoProps, VisualLabText } from "./visual-lab-shared"
 
+// Real mounts load plugin-only styles at the mount boundary; the lab renders the same components directly, so it loads them here.
+// 真实挂载在挂载边界加载插件专用样式；实验室直接渲染相同组件，因此在此加载。
+import "@/styles/plugin-host-components.css"
+
 // DEMO_LATENCY_MS makes every synthetic action resolve asynchronously, like a real plugin action.
 // DEMO_LATENCY_MS 让每个合成 Action 都异步完成，与真实插件 Action 一致。
 export const DEMO_LATENCY_MS = 350
 
-// DEMO_LAYOUT is a complete settings layout v1 covering every control, a credential, an action and a link.
-// DEMO_LAYOUT 是覆盖全部控件、凭据、操作与链接的完整 v1 设置版面。
+// DEMO_LICENSE is the package document the header license tag opens.
+// DEMO_LICENSE 是标题区许可证标签打开的包内文档。
+const DEMO_LICENSE = "Example License 1.0\n\nPermission is granted to use this demo plugin for visual review only."
+
+// DEMO_LAYOUT is a complete settings layout v1: header, tabs, every control, an inline section, a credential, an action and a data view.
+// DEMO_LAYOUT 是完整的 v1 设置版面：标题区、标签、全部控件、行内区块、凭据、操作与数据视图。
 const DEMO_LAYOUT: PluginSettingsLayout = {
   schema_version: 1,
   config: { read_action: "settings-get", write_action: "settings-update" },
+  header: {
+    status: { ready_message_key: "status.ready", unavailable_message_key: "status.unavailable" },
+    links: [{ url: "https://github.com/example/plugin", label_message_key: "header.repository", icon: "github" }],
+    documents: [{ id: "license", asset: "LICENSE", label_message_key: "header.license", title_message_key: "header.licenseTitle", icon: "license" }],
+  },
+  tabs: [
+    { id: "general", title_message_key: "tab.general", sections: ["quick", "behavior", "account"] },
+    { id: "usage", title_message_key: "tab.usage", sections: ["usage"] },
+  ],
   sections: [
+    {
+      id: "quick", title_message_key: "quick.title", layout: "inline",
+      items: [
+        { type: "field", key: "telemetry", control: "switch", label_message_key: "telemetry.label", description_message_key: "telemetry.description" },
+        { type: "field", key: "compact", control: "switch", label_message_key: "compact.label", description_message_key: "compact.description" },
+      ],
+    },
     {
       id: "behavior", title_message_key: "behavior.title", description_message_key: "behavior.description",
       items: [
@@ -43,7 +67,63 @@ const DEMO_LAYOUT: PluginSettingsLayout = {
         { type: "action", id: "test", action: "connection-test", label_message_key: "test.label", description_message_key: "test.description", success_message_key: "test.success" },
       ],
     },
+    {
+      id: "usage", title_message_key: "usage.title", description_message_key: "usage.description",
+      data: {
+        action: "usage-get", refreshable: true, show_loaded_at: true,
+        arguments: [{ name: "rangeDays", label_message_key: "usage.range", value_format: "days", default: 30, options: [{ value: 7 }, { value: 30 }, { value: 90 }] }],
+      },
+      blocks: [
+        {
+          type: "metrics", web: { variant: "tiles", columns: 4 }, items: [
+            { label_message_key: "usage.saved", path: "summary.saved", format: "compact" },
+            { label_message_key: "usage.rate", path: "summary.rate", format: "percent" },
+            { label_message_key: "usage.commands", path: "summary.commands", format: "compact" },
+            { label_message_key: "usage.capacity", ratio: { numerator: "summary.input", denominator: "summary.output" }, format: "ratio" },
+          ],
+        },
+        {
+          type: "chart", value_label_message_key: "usage.saved", value_path: "saved", value_format: "number", detail: { path: "rate", format: "percent" },
+          empty_message_key: "usage.empty", web: { variant: "bars" }, tui: { variant: "sparkline" },
+          periods: [
+            { id: "daily", label_message_key: "usage.daily", path: "daily", label_paths: ["date"], label_format: "date" },
+            { id: "monthly", label_message_key: "usage.monthly", path: "monthly", label_paths: ["month"], label_format: "month" },
+          ],
+        },
+        {
+          type: "table", path: "byCommand", title_message_key: "usage.byCommand", count_message_key: "usage.top", rank: true, empty_message_key: "usage.empty",
+          columns: [
+            { path: "command", label_message_key: "usage.command", format: "code" },
+            { path: "count", label_message_key: "usage.count", format: "number" },
+            { path: "saved", label_message_key: "usage.saved", format: "number" },
+            { path: "avgMs", label_message_key: "usage.time", format: "duration_ms" },
+            { path: "saved", label_message_key: "usage.impact", format: "bar" },
+          ],
+        },
+      ],
+    },
   ],
+}
+
+// demoUsage returns deterministic synthetic statistics whose size follows the selected range.
+// demoUsage 返回确定的合成统计，数据量随所选范围变化。
+function demoUsage(rangeDays: number) {
+  const daily = Array.from({ length: Math.min(rangeDays, 14) }, (_, index) => ({
+    date: `2026-09-${String(16 + index).padStart(2, "0")}`,
+    saved: 18_000 + ((index * 7919) % 23) * 1_400,
+    rate: 60 + ((index * 31) % 25),
+  }))
+  return {
+    summary: { saved: rangeDays * 41_200, rate: 72.4, commands: rangeDays * 104, input: 5_400_000, output: 1_500_000 },
+    daily,
+    monthly: [{ month: "2026-07", saved: 820_000, rate: 70.2 }, { month: "2026-08", saved: 1_040_000, rate: 73.9 }, { month: "2026-09", saved: 1_236_000, rate: 74.1 }],
+    byCommand: [
+      { command: "git diff", count: 412, saved: 512_300, avgMs: 84 },
+      { command: "cargo test", count: 166, saved: 398_000, avgMs: 2_140 },
+      { command: "rg", count: 980, saved: 201_400, avgMs: 41 },
+      { command: "ls", count: 1_204, saved: 64_800, avgMs: 12 },
+    ],
+  }
 }
 
 // DEMO_SCHEMA is the configuration schema the renderer checks drafts against before Core re-validates.
@@ -52,6 +132,8 @@ const DEMO_SCHEMA = {
   type: "object",
   properties: {
     enabled: { type: "boolean" },
+    telemetry: { type: "boolean" },
+    compact: { type: "boolean" },
     timeoutMs: { type: "integer", enum: [15000, 30000, 60000] },
     maxResults: { type: "integer", minimum: 1, maximum: 50 },
     endpoint: { type: "string", pattern: "^https://" },
@@ -91,6 +173,34 @@ function demoMessages(text: VisualLabText): (key: string) => string {
     "test.label": text("测试连接", "Test connection"),
     "test.description": text("调用插件声明的操作 Action。", "Calls an action declared by the plugin."),
     "test.success": text("连接正常。", "Connection works."),
+    "status.ready": text("可用", "Available"),
+    "status.unavailable": text("不可用", "Unavailable"),
+    "header.repository": "example/plugin",
+    "header.license": "Example-1.0",
+    "header.licenseTitle": text("示例许可证", "Example license"),
+    "tab.general": text("设置", "Settings"),
+    "tab.usage": text("统计", "Statistics"),
+    "quick.title": text("快速开关", "Quick switches"),
+    "telemetry.label": text("关闭遥测", "Disable telemetry"),
+    "telemetry.description": text("行内区块把说明放进帮助提示。", "Inline sections put the description in a help tooltip."),
+    "compact.label": text("紧凑输出", "Compact output"),
+    "compact.description": text("仅限无条件的开关字段。", "Only unconditional switch fields may be inline."),
+    "usage.title": text("用量统计", "Usage statistics"),
+    "usage.description": text("数据视图：一个读取 Action 渲染为指标、周期图与表格；切换周期不再请求。", "A data view: one read action rendered as metrics, a period chart and a table; switching periods sends no request."),
+    "usage.range": text("统计范围", "Range"),
+    "usage.saved": text("节省 Token", "Tokens saved"),
+    "usage.rate": text("平均节省", "Average savings"),
+    "usage.commands": text("命令数", "Commands"),
+    "usage.capacity": text("上下文容量", "Context capacity"),
+    "usage.empty": text("暂无数据", "No data yet"),
+    "usage.daily": text("每日", "Daily"),
+    "usage.monthly": text("每月", "Monthly"),
+    "usage.byCommand": text("按命令", "By command"),
+    "usage.top": text("前 {{count}} 个命令", "Top {{count}} commands"),
+    "usage.command": text("命令", "Command"),
+    "usage.count": text("次数", "Count"),
+    "usage.time": text("耗时", "Time"),
+    "usage.impact": text("影响", "Impact"),
   }
   return (key) => table[key] ?? key
 }
@@ -101,7 +211,9 @@ function demoMessages(text: VisualLabText): (key: string) => string {
 // 参数：onAction 在实验室状态行记录宿主调用。返回除 message 外的稳定宿主能力。
 function useDemoSettingsHost(onAction: (label: string) => void): Omit<PluginSettingsHost, "message"> {
   const store = React.useRef({
-    config: { enabled: true, timeoutMs: 30000, maxResults: 20, endpoint: "https://api.example.com", scope: "selected", commands: [] as string[] } as Record<string, unknown>,
+    config: {
+      enabled: true, telemetry: false, compact: true, timeoutMs: 30000, maxResults: 20, endpoint: "https://api.example.com", scope: "selected", commands: [] as string[],
+    } as Record<string, unknown>,
     credential: { configured: false } as PluginCredentialStatus,
   })
   const recorder = React.useRef(onAction)
@@ -117,9 +229,15 @@ function useDemoSettingsHost(onAction: (label: string) => void): Omit<PluginSett
       if (actionId !== "settings-get" && actionId !== "credential-status") recorder.current(`invoke ${actionId}`)
       if (actionId === "settings-get" || actionId === "settings-update") return state.config as Result
       if (actionId.startsWith("credential-")) return state.credential as Result
+      if (actionId === "usage-get") return demoUsage((argumentsValue as { rangeDays: number }).rangeDays) as Result
       return {} as Result
     },
     openExternalUrl: async (url: string) => recorder.current(`openExternalUrl ${url}`),
+    readTextAsset: async (path: string) => {
+      recorder.current(`readTextAsset ${path}`)
+      return DEMO_LICENSE
+    },
+    subscribe: () => () => undefined,
   }), [])
 }
 

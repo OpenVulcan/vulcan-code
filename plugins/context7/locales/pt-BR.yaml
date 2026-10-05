@@ -1,16 +1,9 @@
 name: Context7
 capability: Documentação atualizada de bibliotecas por versão para agentes de programação
 messages:
-  errorDetails: Detalhes do erro
   navigationLabel: Context7
-  usageNavigationLabel: "Uso do Context7"
   allowanceDescription: O modo anônimo permite 200 solicitações sem chave de API. Ao se cadastrar e configurar uma chave gratuita, você obtém 1.000 solicitações e pode consultar o uso da conta no painel oficial.
-  refresh: Atualizar
-  loadError: Não foi possível carregar os dados do Context7.
-  retry: Tentar novamente
   credentialTitle: Autenticação
-  anonymousMode: Modo anônimo
-  apiKeyMode: Modo com chave de API
   apiKeyLabel: Chave de API
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: Testar conexão

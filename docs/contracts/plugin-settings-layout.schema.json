@@ -1,5 +1,602 @@
 {
   "$defs": {
+    "VulcanPluginDataArgument": {
+      "additionalProperties": false,
+      "description": "One action input property chosen from fixed options.\n一个从固定选项中选择的 Action 输入属性。",
+      "properties": {
+        "default": {
+          "description": "Initially selected option value.\n初始选中的选项值。"
+        },
+        "label_message_key": {
+          "description": "Plugin locale message key for the accessible control label.\n控件无障碍标签使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "name": {
+          "description": "Top-level input property name.\n顶层输入属性名。",
+          "type": "string"
+        },
+        "options": {
+          "description": "Offered values; each must satisfy the input schema.\n提供的取值；每个都必须满足输入 Schema。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginSettingsOption"
+          },
+          "type": "array"
+        },
+        "value_format": {
+          "$ref": "#/$defs/VulcanPluginSettingsValueFormat",
+          "description": "Host formatting for options without their own label.\n未提供标签的选项使用的宿主格式。"
+        }
+      },
+      "required": [
+        "name",
+        "label_message_key",
+        "options",
+        "default"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataBlock": {
+      "description": "One block of a data section.\n数据区块中的一个数据块。",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A group of key figures.\n一组关键数字。",
+          "properties": {
+            "empty_message_key": {
+              "default": null,
+              "description": "Plugin locale message key shown while `source_path` holds no object; required with it.\n`source_path` 没有对象时显示的插件语言包消息键；与其同时声明。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "help_message_key": {
+              "default": null,
+              "description": "Plugin locale message key for secondary help next to the title; requires a title.\n标题旁次要帮助使用的插件语言包消息键；需要标题。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "items": {
+              "description": "Ordered figures.\n有序数字。",
+              "items": {
+                "$ref": "#/$defs/VulcanPluginDataMetric"
+              },
+              "type": "array"
+            },
+            "source_path": {
+              "default": null,
+              "description": "Object path the metric paths are relative to; when it is null or absent the empty message shows.\n指标路径的相对对象路径；为 null 或缺失时显示空状态文案。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title_message_key": {
+              "default": null,
+              "description": "Plugin locale message key titling the group.\n分组标题使用的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tui": {
+              "$ref": "#/$defs/VulcanPluginDataTuiHints",
+              "description": "Terminal UI presentation hints.\n终端界面呈现提示。"
+            },
+            "type": {
+              "const": "metrics",
+              "type": "string"
+            },
+            "web": {
+              "$ref": "#/$defs/VulcanPluginDataWebHints",
+              "description": "WebUI presentation hints.\nWebUI 呈现提示。"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One numeric series per period, switchable without another request.\n每个周期一条数值序列，切换时不再发起请求。",
+          "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VulcanPluginDataValue"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional point value shown beside the plotted value in point details.\n在数据点详情中显示于所绘数值旁的可选数据点值。"
+            },
+            "empty_message_key": {
+              "description": "Plugin locale message key shown when the selected period has no points.\n所选周期没有数据点时显示的插件语言包消息键。",
+              "type": "string"
+            },
+            "limit": {
+              "default": 14,
+              "description": "Number of most recent points shown.\n显示的最近数据点数量。",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "periods": {
+              "description": "Selectable periods; the first is selected initially.\n可选周期；初始选中第一个。",
+              "items": {
+                "$ref": "#/$defs/VulcanPluginDataChartPeriod"
+              },
+              "type": "array"
+            },
+            "title_message_key": {
+              "default": null,
+              "description": "Plugin locale message key titling the chart.\n图表标题使用的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tui": {
+              "$ref": "#/$defs/VulcanPluginDataTuiHints",
+              "description": "Terminal UI presentation hints.\n终端界面呈现提示。"
+            },
+            "type": {
+              "const": "chart",
+              "type": "string"
+            },
+            "value_format": {
+              "$ref": "#/$defs/VulcanPluginDataFormat",
+              "description": "Host formatting of the plotted value.\n所绘数值的宿主格式。"
+            },
+            "value_label_message_key": {
+              "description": "Plugin locale message key naming the plotted value, used for the accessible label and point details.\n命名所绘数值的插件语言包消息键，用于无障碍标签与数据点详情。",
+              "type": "string"
+            },
+            "value_path": {
+              "description": "Numeric point path plotted as the bar or line height.\n作为柱高或折线高度绘制的数值数据点路径。",
+              "type": "string"
+            },
+            "web": {
+              "$ref": "#/$defs/VulcanPluginDataWebHints",
+              "description": "WebUI presentation hints.\nWebUI 呈现提示。"
+            }
+          },
+          "required": [
+            "type",
+            "value_label_message_key",
+            "periods",
+            "value_path",
+            "empty_message_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Rows of one result array.\n一个结果数组的各行。",
+          "properties": {
+            "columns": {
+              "description": "Ordered columns, each relative to one row.\n有序列，每列相对于单行。",
+              "items": {
+                "$ref": "#/$defs/VulcanPluginDataColumn"
+              },
+              "type": "array"
+            },
+            "count_message_key": {
+              "default": null,
+              "description": "Plugin locale message key with a `{{count}}` placeholder shown beside the title.\n显示在标题旁、含 `{{count}}` 占位符的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "empty_message_key": {
+              "description": "Plugin locale message key shown when the array is empty.\n数组为空时显示的插件语言包消息键。",
+              "type": "string"
+            },
+            "path": {
+              "description": "Array path of the rows.\n行所在的数组路径。",
+              "type": "string"
+            },
+            "rank": {
+              "default": false,
+              "description": "Prepends a 1-based rank column.\n在前方加入从 1 开始的名次列。",
+              "type": "boolean"
+            },
+            "title_message_key": {
+              "default": null,
+              "description": "Plugin locale message key titling the table.\n表格标题使用的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tui": {
+              "$ref": "#/$defs/VulcanPluginDataTuiHints",
+              "description": "Terminal UI presentation hints.\n终端界面呈现提示。"
+            },
+            "type": {
+              "const": "table",
+              "type": "string"
+            },
+            "web": {
+              "$ref": "#/$defs/VulcanPluginDataWebHints",
+              "description": "WebUI presentation hints.\nWebUI 呈现提示。"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "columns",
+            "empty_message_key"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VulcanPluginDataChartPeriod": {
+      "additionalProperties": false,
+      "description": "One selectable chart period.\n一个可选图表周期。",
+      "properties": {
+        "id": {
+          "description": "Stable chart-local period identifier.\n稳定的图表内周期标识。",
+          "type": "string"
+        },
+        "label_format": {
+          "$ref": "#/$defs/VulcanPluginDataFormat",
+          "description": "Host formatting of the axis label parts.\n坐标轴标签各部分的宿主格式。"
+        },
+        "label_message_key": {
+          "description": "Plugin locale message key for the period switch.\n周期切换使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "label_paths": {
+          "description": "One or two point paths forming the axis label; two are shown as a range.\n组成坐标轴标签的一个或两个数据点路径；两个时显示为区间。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "Array path of this period's points.\n此周期数据点所在的数组路径。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label_message_key",
+        "path",
+        "label_paths"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataColumn": {
+      "additionalProperties": false,
+      "description": "One table column.\n一个表格列。",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/VulcanPluginDataFormat",
+          "description": "Host formatting of the cell.\n单元格的宿主格式。"
+        },
+        "label_message_key": {
+          "description": "Plugin locale message key for the column header.\n列标题使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "path": {
+          "description": "Row-relative value path.\n相对于行的数值路径。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "label_message_key"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataFormat": {
+      "description": "Host value formats; absent or null values render as an em dash on every surface.\n宿主数值格式；缺失或 null 值在所有界面上都显示为破折号。",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "The value as text.\n原样文本。",
+          "type": "string"
+        },
+        {
+          "const": "code",
+          "description": "The value as inline code.\n行内代码文本。",
+          "type": "string"
+        },
+        {
+          "const": "number",
+          "description": "Locale-grouped number.\n本地化分组数字。",
+          "type": "string"
+        },
+        {
+          "const": "compact",
+          "description": "Locale compact number such as 12K.\n本地化紧凑数字，例如 12K。",
+          "type": "string"
+        },
+        {
+          "const": "percent",
+          "description": "A 0–100 percentage with one decimal.\n带一位小数的 0–100 百分比。",
+          "type": "string"
+        },
+        {
+          "const": "ratio",
+          "description": "A quotient shown as a multiplier; metrics with `ratio` only.\n显示为倍数的商；仅限带 `ratio` 的指标。",
+          "type": "string"
+        },
+        {
+          "const": "duration_ms",
+          "description": "Milliseconds as a compact duration.\n毫秒显示为紧凑时长。",
+          "type": "string"
+        },
+        {
+          "const": "date",
+          "description": "An ISO `YYYY-MM-DD` calendar date, never shifted across time zones.\nISO `YYYY-MM-DD` 日历日期，不跨时区偏移。",
+          "type": "string"
+        },
+        {
+          "const": "month",
+          "description": "An ISO `YYYY-MM` calendar month.\nISO `YYYY-MM` 日历月份。",
+          "type": "string"
+        },
+        {
+          "const": "timestamp_ms",
+          "description": "Unix milliseconds as a local date and time.\nUnix 毫秒显示为本地日期时间。",
+          "type": "string"
+        },
+        {
+          "const": "date_unix_sec",
+          "description": "Unix seconds as a local calendar date.\nUnix 秒显示为本地日历日期。",
+          "type": "string"
+        },
+        {
+          "const": "bar",
+          "description": "A bar relative to the largest value of its column; table columns only.\n相对于本列最大值的条形；仅限表格列。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginDataMetric": {
+      "additionalProperties": false,
+      "description": "One key figure: a path value or the ratio of two paths.\n一个关键数字：路径值或两个路径的比值。",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/VulcanPluginDataFormat",
+          "description": "Host formatting of the value.\n数值的宿主格式。"
+        },
+        "label_message_key": {
+          "description": "Plugin locale message key for the figure label.\n数字标签使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "path": {
+          "default": null,
+          "description": "Value path; exclusive with `ratio`.\n数值路径；与 `ratio` 互斥。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ratio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginDataRatio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Numerator and denominator paths; exclusive with `path` and shown with the `ratio` format.\n分子与分母路径；与 `path` 互斥，并以 `ratio` 格式显示。"
+        }
+      },
+      "required": [
+        "label_message_key"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataRatio": {
+      "additionalProperties": false,
+      "description": "Two numeric paths whose quotient is shown.\n显示其商的两个数值路径。",
+      "properties": {
+        "denominator": {
+          "description": "Denominator path; values below one count as one.\n分母路径；小于一的值按一计算。",
+          "type": "string"
+        },
+        "numerator": {
+          "description": "Numerator path.\n分子路径。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataSource": {
+      "additionalProperties": false,
+      "description": "One read action whose result the section's blocks display.\n一个读取 Action，其结果由区块的数据块显示。",
+      "properties": {
+        "action": {
+          "description": "Declared read action with the plugin UI caller.\n带 plugin UI 调用方的已声明读取 Action。",
+          "type": "string"
+        },
+        "arguments": {
+          "description": "User-selectable action arguments shown in the section header; together they form the complete input object.\n显示在区块标题栏、可由用户选择的 Action 参数；合起来构成完整输入对象。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginDataArgument"
+          },
+          "type": "array"
+        },
+        "available_path": {
+          "default": null,
+          "description": "Boolean result path; false shows the unavailable state instead of the blocks.\n布尔结果路径；为 false 时显示不可用状态而非数据块。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_path": {
+          "default": null,
+          "description": "String result path holding the reason shown in the unavailable state.\n保存不可用原因的字符串结果路径。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refresh_topics": {
+          "default": [],
+          "description": "Current-plugin invalidation topics that reload the data.\n触发重新读取数据的当前插件失效主题。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "refreshable": {
+          "default": false,
+          "description": "Shows a refresh button that bypasses the action's declared result cache.\n显示一个绕过 Action 声明结果缓存的刷新按钮。",
+          "type": "boolean"
+        },
+        "show_loaded_at": {
+          "default": false,
+          "description": "Shows when this page last received the result.\n显示本页最近一次收到结果的时间。",
+          "type": "boolean"
+        },
+        "unavailable_message_key": {
+          "default": null,
+          "description": "Plugin locale message key titling the unavailable state; required with `available_path`.\n不可用状态标题使用的插件语言包消息键；声明 `available_path` 时必填。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataTuiHints": {
+      "additionalProperties": false,
+      "description": "Presentation hints read only by a terminal UI.\n仅由终端界面读取的呈现提示。",
+      "properties": {
+        "hidden": {
+          "default": false,
+          "description": "Omits the block from a terminal UI.\n在终端界面中省略此数据块。",
+          "type": "boolean"
+        },
+        "variant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginDataTuiVariant"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Chart only: `sparkline` (default) or `table`.\n仅限图表：`sparkline`（默认）或 `table`。"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginDataTuiVariant": {
+      "description": "Terminal UI chart variants.\n终端界面图表变体。",
+      "oneOf": [
+        {
+          "const": "sparkline",
+          "description": "One-line block-character trend.\n单行块字符趋势。",
+          "type": "string"
+        },
+        {
+          "const": "table",
+          "description": "Period label and value rows.\n周期标签与数值行。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginDataValue": {
+      "additionalProperties": false,
+      "description": "One formatted path value.\n一个带格式的路径值。",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/VulcanPluginDataFormat",
+          "description": "Host formatting of the value.\n数值的宿主格式。"
+        },
+        "path": {
+          "description": "Value path.\n数值路径。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "format"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginDataWebHints": {
+      "additionalProperties": false,
+      "description": "Presentation hints read only by the WebUI.\n仅由 WebUI 读取的呈现提示。",
+      "properties": {
+        "columns": {
+          "default": null,
+          "description": "Metrics only: fixed column count on wide pages; narrow pages always reflow.\n仅限指标：宽页面上的固定列数；窄页面始终重新排布。",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hidden": {
+          "default": false,
+          "description": "Omits the block from the WebUI.\n在 WebUI 中省略此数据块。",
+          "type": "boolean"
+        },
+        "variant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginDataWebVariant"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Metrics: `cards` (default) or `tiles`; chart: `bars` (default) or `line`.\n指标：`cards`（默认）或 `tiles`；图表：`bars`（默认）或 `line`。"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginDataWebVariant": {
+      "description": "WebUI block variants.\nWebUI 数据块变体。",
+      "oneOf": [
+        {
+          "const": "cards",
+          "description": "Metrics as separate cards with an icon slot.\n指标显示为带图标位的独立卡片。",
+          "type": "string"
+        },
+        {
+          "const": "tiles",
+          "description": "Metrics as compact tinted tiles.\n指标显示为紧凑着色方块。",
+          "type": "string"
+        },
+        {
+          "const": "bars",
+          "description": "Chart as vertical bars.\n图表显示为竖直柱形。",
+          "type": "string"
+        },
+        {
+          "const": "line",
+          "description": "Chart as a line.\n图表显示为折线。",
+          "type": "string"
+        }
+      ]
+    },
     "VulcanPluginSettingsCondition": {
       "additionalProperties": false,
       "description": "Visibility condition on another field.\n依赖另一字段的可见条件。",
@@ -68,6 +665,152 @@
           "type": "string"
         }
       ]
+    },
+    "VulcanPluginSettingsDocument": {
+      "additionalProperties": false,
+      "description": "One package text document opened in a host dialog.\n一个在宿主对话框中打开的包内文本文档。",
+      "properties": {
+        "aria_label_message_key": {
+          "default": null,
+          "description": "Plugin locale message key for the accessible name of the tag.\n标签无障碍名称使用的插件语言包消息键。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "asset": {
+          "description": "UTF-8 package file listed in `required_files`.\n列在 `required_files` 中的 UTF-8 包内文件。",
+          "type": "string"
+        },
+        "description_message_key": {
+          "default": null,
+          "description": "Plugin locale message key for the dialog description.\n对话框说明使用的插件语言包消息键。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "$ref": "#/$defs/VulcanPluginSettingsDocumentIcon",
+          "description": "Host icon of the tag.\n标签的宿主图标。"
+        },
+        "id": {
+          "description": "Stable layout-local document identifier.\n稳定的版面内文档标识。",
+          "type": "string"
+        },
+        "label_message_key": {
+          "description": "Plugin locale message key for the visible tag text.\n可见标签文字使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "title_message_key": {
+          "description": "Plugin locale message key for the dialog title.\n对话框标题使用的插件语言包消息键。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "asset",
+        "label_message_key",
+        "title_message_key"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsDocumentIcon": {
+      "description": "Host icons for header documents.\n标题区文档的宿主图标。",
+      "oneOf": [
+        {
+          "const": "document",
+          "description": "Generic document.\n通用文档。",
+          "type": "string"
+        },
+        {
+          "const": "license",
+          "description": "License text.\n许可证文本。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginSettingsHeader": {
+      "additionalProperties": false,
+      "description": "Page header items shown at the trailing edge of the tab strip.\n显示在标签条尾部的页面标题区条目。",
+      "properties": {
+        "documents": {
+          "description": "Package text documents opened in a host dialog, such as the license.\n在宿主对话框中打开的包内文本文档，例如许可证。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginSettingsDocument"
+          },
+          "type": "array"
+        },
+        "links": {
+          "description": "Compact metadata links, such as the upstream repository.\n紧凑元数据链接，例如上游仓库。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginSettingsHeaderLink"
+          },
+          "type": "array"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginSettingsHeaderStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Availability pill reflecting whether the configuration read succeeded; requires `config`.\n反映配置读取是否成功的可用状态标签；需要 `config`。"
+        }
+      },
+      "type": "object"
+    },
+    "VulcanPluginSettingsHeaderLink": {
+      "additionalProperties": false,
+      "description": "One compact metadata link.\n一个紧凑元数据链接。",
+      "properties": {
+        "aria_label_message_key": {
+          "default": null,
+          "description": "Plugin locale message key for the accessible name.\n无障碍名称使用的插件语言包消息键。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "$ref": "#/$defs/VulcanPluginSettingsLinkIcon",
+          "description": "Host icon of the tag.\n标签的宿主图标。"
+        },
+        "label_message_key": {
+          "description": "Plugin locale message key for the visible tag text.\n可见标签文字使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "url": {
+          "description": "Absolute HTTPS URL opened through the host URL boundary.\n经宿主地址边界打开的绝对 HTTPS 地址。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "label_message_key"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsHeaderStatus": {
+      "additionalProperties": false,
+      "description": "Availability pill labels.\n可用状态标签文案。",
+      "properties": {
+        "ready_message_key": {
+          "description": "Plugin locale message key shown after the configuration was read.\n配置读取成功后显示的插件语言包消息键。",
+          "type": "string"
+        },
+        "unavailable_message_key": {
+          "description": "Plugin locale message key shown when the configuration read failed.\n配置读取失败时显示的插件语言包消息键。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ready_message_key",
+        "unavailable_message_key"
+      ],
+      "type": "object"
     },
     "VulcanPluginSettingsItem": {
       "description": "One settings row: a configuration field, a secret credential or a one-shot action.\n一个设置行：配置字段、密钥凭据或一次性操作。",
@@ -279,6 +1022,21 @@
       ],
       "type": "object"
     },
+    "VulcanPluginSettingsLinkIcon": {
+      "description": "Host icons for header links.\n标题区链接的宿主图标。",
+      "oneOf": [
+        {
+          "const": "link",
+          "description": "Generic external link.\n通用外部链接。",
+          "type": "string"
+        },
+        {
+          "const": "github",
+          "description": "Source repository.\n源代码仓库。",
+          "type": "string"
+        }
+      ]
+    },
     "VulcanPluginSettingsOption": {
       "additionalProperties": false,
       "description": "One select choice.\n一个下拉选项。",
@@ -331,6 +1089,24 @@
       "additionalProperties": false,
       "description": "One titled group of settings items.\n一组带标题的设置项。",
       "properties": {
+        "blocks": {
+          "description": "Ordered data blocks of a data section.\n数据区块中的有序数据块。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginDataBlock"
+          },
+          "type": "array"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VulcanPluginDataSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Read action shown by `blocks`; exclusive with `items`.\n由 `blocks` 显示的读取 Action；与 `items` 互斥。"
+        },
         "description_message_key": {
           "default": null,
           "description": "Plugin locale message key for a one-sentence purpose.\n一句话用途说明使用的插件语言包消息键。",
@@ -344,11 +1120,15 @@
           "type": "string"
         },
         "items": {
-          "description": "Ordered rows of the section.\n区块内的有序行。",
+          "description": "Ordered rows of the section; exclusive with `data`.\n区块内的有序行；与 `data` 互斥。",
           "items": {
             "$ref": "#/$defs/VulcanPluginSettingsItem"
           },
           "type": "array"
+        },
+        "layout": {
+          "$ref": "#/$defs/VulcanPluginSettingsSectionLayout",
+          "description": "Row presentation of `items`.\n`items` 的行呈现方式。"
         },
         "links": {
           "description": "Fixed HTTPS links shown in the section footer and opened through the host URL boundary.\n显示在区块页脚、经宿主地址边界打开的固定 HTTPS 链接。",
@@ -364,10 +1144,24 @@
       },
       "required": [
         "id",
-        "title_message_key",
-        "items"
+        "title_message_key"
       ],
       "type": "object"
+    },
+    "VulcanPluginSettingsSectionLayout": {
+      "description": "Row presentation of a settings section.\n设置区块的行呈现方式。",
+      "oneOf": [
+        {
+          "const": "rows",
+          "description": "Label and description beside the control, one row per item.\n标签与说明位于控件旁，每个条目一行。",
+          "type": "string"
+        },
+        {
+          "const": "inline",
+          "description": "Compact checkbox options side by side with descriptions in help tooltips; switch fields only.\n并排的紧凑复选选项，说明放在帮助提示中；仅限开关字段。",
+          "type": "string"
+        }
+      ]
     },
     "VulcanPluginSettingsSelection": {
       "description": "Checklist storage semantics.\n清单存储语义。",
@@ -383,6 +1177,33 @@
           "type": "string"
         }
       ]
+    },
+    "VulcanPluginSettingsTab": {
+      "additionalProperties": false,
+      "description": "One page tab grouping sections.\n一个归组区块的页面标签。",
+      "properties": {
+        "id": {
+          "description": "Stable layout-local tab identifier.\n稳定的版面内标签标识。",
+          "type": "string"
+        },
+        "sections": {
+          "description": "Ids of the sections shown in this tab, in order.\n此标签按顺序显示的区块标识。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title_message_key": {
+          "description": "Plugin locale message key for the tab label.\n标签文字使用的插件语言包消息键。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title_message_key",
+        "sections"
+      ],
+      "type": "object"
     },
     "VulcanPluginSettingsValueFormat": {
       "description": "Host formatting for option labels.\n选项标签的宿主格式。",
@@ -420,6 +1241,17 @@
       ],
       "description": "Actions that read and replace the complete configuration object; required when any field exists.\n读取并替换完整配置对象的 Action；存在任一字段时必填。"
     },
+    "header": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VulcanPluginSettingsHeader"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Page header beside the tabs: availability status, outbound links and package documents.\n标签旁的页面标题区：可用状态、外部链接与包内文档。"
+    },
     "schema_version": {
       "description": "Layout format version; must equal the host-supported version.\n版面格式版本；必须等于宿主支持的版本。",
       "format": "uint32",
@@ -430,6 +1262,13 @@
       "description": "Ordered page sections, each rendered as one host section card.\n有序页面区块，每个渲染为一张宿主区块卡片。",
       "items": {
         "$ref": "#/$defs/VulcanPluginSettingsSection"
+      },
+      "type": "array"
+    },
+    "tabs": {
+      "description": "Page tabs; when declared, every section belongs to exactly one tab.\n页面标签；声明后每个区块恰好属于一个标签。",
+      "items": {
+        "$ref": "#/$defs/VulcanPluginSettingsTab"
       },
       "type": "array"
     }

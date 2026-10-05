@@ -17,7 +17,6 @@ required_files:
   - LICENSE
   - config/schema.json
   - config/defaults.json
-  - ui/index.mjs
   - ui/settings.json
   - locales/en.yaml
   - locales/zh-CN.yaml
@@ -138,13 +137,6 @@ ui:
       icon: route
       kind: settings
       entry: ui/settings.json
-    - id: rtk-statistics
-      point: skills_plugin_detail
-      label: RTK Statistics
-      label_message_key: statisticsNavigationLabel
-      icon: route
-      entry: ui/index.mjs
-      export: createPluginPanel
 locales:
   en: locales/en.yaml
   en-US: locales/en.yaml

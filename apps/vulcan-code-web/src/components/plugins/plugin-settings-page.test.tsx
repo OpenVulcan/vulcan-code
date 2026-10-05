@@ -64,7 +64,8 @@ async function mountPage(config: Record<string, unknown>) {
     if (actionId === "credential-set") return { configured: true, validationStatus: "untested" };
     return {};
   });
-  const settingsHost: PluginSettingsHost = { invoke: invoke as PluginSettingsHost["invoke"], message: (key) => `msg:${key}`, openExternalUrl: async () => undefined };
+  const settingsHost: PluginSettingsHost = { invoke: invoke as PluginSettingsHost["invoke"], message: (key) => `msg:${key}`, openExternalUrl: async () => undefined,
+    readTextAsset: async () => "", subscribe: () => () => undefined };
   const Page = createPluginSettingsPage(layout, configSchema, settingsHost);
   await act(async () => root.render(<I18nProvider initialLocale="en-US"><Page /></I18nProvider>));
   return invoke;
@@ -129,7 +130,7 @@ it("writes credentials through the declared set action", async () => {
 // Verifies exclude checklists store unchecked offered values and keep values the layout does not offer.
 // 验证排除型清单保存未勾选的提供值，并保留版面未提供的值。
 it("maps checklist selection modes without dropping unknown stored values", () => {
-  const field = layout.sections[0]!.items[3] as PluginSettingsField;
+  const field = layout.sections[0]!.items![3] as PluginSettingsField;
   expect([...checkedValues(field, ["git", "custom"])]).toEqual(["ls"]);
   expect(storedValues(field, ["git", "custom"], new Set(["git"]))).toEqual(["custom", "ls"]);
   expect(valueIssue(configSchema.properties.timeout, 61)).toEqual({ kind: "range", min: 10, max: 60 });

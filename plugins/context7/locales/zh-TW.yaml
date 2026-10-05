@@ -1,16 +1,9 @@
 name: Context7
 capability: 為程式開發智慧代理提供最新且可指定版本的函式庫文件
 messages:
-  errorDetails: 查看錯誤詳細資訊
   navigationLabel: Context7
-  usageNavigationLabel: "Context7 用量"
   allowanceDescription: 未設定 API 金鑰時使用匿名模式，可呼叫 200 次；註冊並設定免費 API 金鑰後，可呼叫 1,000 次，並可在官方控制台查看帳戶用量。
-  refresh: 重新整理
-  loadError: 無法載入 Context7 資料。
-  retry: 重試
   credentialTitle: 身分驗證
-  anonymousMode: 匿名模式
-  apiKeyMode: API 金鑰模式
   apiKeyLabel: API 金鑰
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: 測試連線

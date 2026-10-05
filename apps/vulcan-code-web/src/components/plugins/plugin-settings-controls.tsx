@@ -4,17 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { SelectControl } from "@/components/plugins/plugin-host-components";
-import { PageHint, PageRow } from "@/components/page";
+import { HelpTooltip, SelectControl } from "@/components/plugins/plugin-host-components";
+import { PageRow } from "@/components/page";
 import { formatMessage, useI18n } from "@/i18n";
 import {
   checkedValues, checklistUniverse, formatOptionValue, numberInputValue, storedValues, valueIssue,
   type JsonSchemaNode, type PluginCredentialStatus, type PluginSettingsCredential, type PluginSettingsField,
 } from "./plugin-settings-layout";
+import type { PluginMessage } from "./plugin-settings-host";
 
-// PluginMessage resolves one plugin-owned message key validated by Core against the fallback locale.
-// PluginMessage 解析一个经 Core 依据回退语言校验的插件自有消息键。
-export type PluginMessage = (key: string) => string;
+export type { PluginMessage };
 
 // SettingsFieldRowProps binds one declarative field to its draft value.
 // SettingsFieldRowProps 将一个声明式字段绑定到其草稿值。
@@ -82,8 +81,8 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
   return <PageRow description={description} htmlFor={field.control === "select" ? undefined : id} label={label}>{control}</PageRow>;
 }
 
-// SettingsChecklist renders grouped checkboxes with per-group select-all and an optional filter.
-// SettingsChecklist 渲染分组复选框，每组可全选，并提供可选筛选。
+// SettingsChecklist renders a filter with a selection count, then each group as a header with bulk actions over a bordered option grid.
+// SettingsChecklist 渲染带已选计数的筛选框，再将每组渲染为带批量操作的标题与带边框的选项网格。
 function SettingsChecklist(props: { field: PluginSettingsField; value: unknown; label: string; disabled: boolean; message: PluginMessage; onChange: (value: unknown) => void }) {
   const { t } = useI18n();
   const [filter, setFilter] = React.useState("");
@@ -93,35 +92,51 @@ function SettingsChecklist(props: { field: PluginSettingsField; value: unknown; 
   // update stores the next checked set through the field's selection mode.
   // update 按字段的选择模式保存新的勾选集合。
   const update = (next: Set<string>) => props.onChange(storedValues(props.field, props.value, next));
+  const groups = (props.field.option_groups ?? []).map((group) => ({ group, visible: group.values.filter((value) => value.toLowerCase().includes(query)) }));
   return <div className="plugin-settings-checklist">
     <div className="plugin-settings-checklist-toolbar">
-      {universe.length > 12 && <Input aria-label={t("plugins.settings.filter")} className="plugin-settings-input" density="compact"
+      {universe.length > 12 && <Input aria-label={t("plugins.settings.filter")} className="plugin-settings-input" density="compact" type="search"
         onChange={(event) => setFilter(event.target.value)} placeholder={t("plugins.settings.filter")} value={filter} />}
-      <PageHint>{formatMessage(t("plugins.settings.selectedCount"), { selected: universe.filter((value) => checked.has(value)).length, total: universe.length })}</PageHint>
+      <Badge variant="outline">{formatMessage(t("plugins.settings.selectedCount"), { selected: universe.filter((value) => checked.has(value)).length, total: universe.length })}</Badge>
     </div>
-    {(props.field.option_groups ?? []).map((group) => {
-      const visible = group.values.filter((value) => value.toLowerCase().includes(query));
+    {groups.every(({ visible }) => visible.length === 0) ? <p className="plugin-settings-checklist-none" role="status">{t("plugins.settings.noMatches")}</p> : null}
+    {groups.map(({ group, visible }) => {
       if (visible.length === 0) return null;
-      const title = props.message(group.title_message_key);
       return <fieldset className="plugin-settings-checklist-group" disabled={props.disabled} key={group.id}>
-        <legend>{title}</legend>
+        <legend className="sr-only">{props.message(group.title_message_key)}</legend>
+        <div aria-hidden className="plugin-settings-checklist-header">
+          <strong>{props.message(group.title_message_key)}</strong>
+        </div>
         <div className="plugin-settings-checklist-actions">
           <Button onClick={() => update(new Set([...checked, ...group.values]))} size="xs" type="button" variant="ghost">{t("plugins.settings.selectAll")}</Button>
           <Button onClick={() => update(new Set([...checked].filter((value) => !group.values.includes(value))))} size="xs" type="button" variant="ghost">
             {t("plugins.settings.clear")}</Button>
         </div>
         <div className="plugin-settings-checklist-options">
-          {visible.map((value) => <label className="plugin-settings-checklist-option" key={value}>
+          {visible.map((value) => <label className="plugin-settings-checklist-option" key={value} title={value}>
             <Checkbox checked={checked.has(value)} onCheckedChange={(state) => {
               const next = new Set(checked);
               if (state === true) next.add(value); else next.delete(value);
               update(next);
             }} />
-            <code>{value}</code>
+            <span>{value}</span>
           </label>)}
         </div>
       </fieldset>;
     })}
+  </div>;
+}
+
+// SettingsInlineOption renders one switch field of an inline section as a compact checkbox with its description in help.
+// SettingsInlineOption 将行内区块的一个开关字段渲染为紧凑复选框，并把说明放入帮助提示。
+export function SettingsInlineOption(props: { field: PluginSettingsField; value: unknown; disabled: boolean; message: PluginMessage; onChange: (value: unknown) => void }) {
+  const label = props.message(props.field.label_message_key);
+  return <div className="plugin-settings-inline-option">
+    <label>
+      <Checkbox checked={props.value === true} disabled={props.disabled} onCheckedChange={(state) => props.onChange(state === true)} />
+      <span>{label}</span>
+    </label>
+    {props.field.description_message_key ? <HelpTooltip ariaLabel={label} content={props.message(props.field.description_message_key)} /> : null}
   </div>;
 }
 

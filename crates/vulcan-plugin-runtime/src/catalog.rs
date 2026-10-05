@@ -1160,18 +1160,25 @@ fn validate_settings_mounts(
         );
     }
     let config_schema = read_schema(
-        &manifest.config.as_ref().map(|config| config.schema_file.clone()),
+        &manifest
+            .config
+            .as_ref()
+            .map(|config| config.schema_file.clone()),
         "plugin configuration schema",
     )?;
     let context = crate::manifest::SettingsLayoutContext {
         actions,
         config_schema,
         messages,
+        text_assets: manifest.required_files.iter().map(String::as_str).collect(),
     };
     for mount in settings {
         let entry = resolve_package_file(package_root, &mount.entry, "plugin settings layout")?;
         let text = fs::read_to_string(&entry).map_err(|error| {
-            format!("Failed to read plugin settings layout `{}`: {error}", mount.id)
+            format!(
+                "Failed to read plugin settings layout `{}`: {error}",
+                mount.id
+            )
         })?;
         let layout: crate::VulcanPluginSettingsLayout = serde_json::from_str(&text)
             .map_err(|error| format!("Invalid plugin settings layout `{}`: {error}", mount.id))?;
@@ -1444,10 +1451,16 @@ pub(crate) fn validate_manifest_identity(
                 validate_lua_identifier(export, "UI mount export")?;
             }
             (crate::VulcanPluginUiMountKind::Module, None) => {
-                return Err(format!("Plugin UI module mount `{}` must declare an export.", mount.id));
+                return Err(format!(
+                    "Plugin UI module mount `{}` must declare an export.",
+                    mount.id
+                ));
             }
             (crate::VulcanPluginUiMountKind::Settings, Some(_)) => {
-                return Err(format!("Plugin UI settings mount `{}` must not declare an export.", mount.id));
+                return Err(format!(
+                    "Plugin UI settings mount `{}` must not declare an export.",
+                    mount.id
+                ));
             }
             (crate::VulcanPluginUiMountKind::Settings, None) => {}
         }

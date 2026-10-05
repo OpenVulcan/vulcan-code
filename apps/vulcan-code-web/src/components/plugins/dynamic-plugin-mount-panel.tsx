@@ -264,7 +264,8 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
         // 设置版面经宿主页面套件渲染；只有模块才运行插件工厂。
         if (moduleSource.kind === "settings") {
           const settings = createPluginSettingsPage(parsePluginSettingsLayout(moduleSource.source), moduleSource.configSchema,
-            { invoke: moduleSdk.invoke, message: key => moduleSdk.t(key, key), openExternalUrl: moduleSdk.openExternalUrl });
+            { invoke: moduleSdk.invoke, message: key => moduleSdk.t(key, key), openExternalUrl: moduleSdk.openExternalUrl,
+              readTextAsset: moduleSdk.readTextAsset, subscribe: (topic, listener) => moduleSdk.events.subscribe(topic, () => listener()) });
           if (!cancelled) setPanel(() => settings);
           return;
         }

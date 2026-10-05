@@ -1,16 +1,9 @@
 name: Context7
 capability: Current, version-aware library documentation for coding agents
 messages:
-  errorDetails: Error details
   navigationLabel: Context7
-  usageNavigationLabel: "Context7 Usage"
   allowanceDescription: Anonymous mode provides 200 requests without an API key. Registering and configuring a free API key provides 1,000 requests and account usage visibility in the official dashboard.
-  refresh: Refresh
-  loadError: Context7 data could not be loaded.
-  retry: Retry
   credentialTitle: Authentication
-  anonymousMode: Anonymous mode
-  apiKeyMode: API key mode
   apiKeyLabel: API key
   apiKeyPlaceholder: ctx7sk-…
   connectionTest: Test connection

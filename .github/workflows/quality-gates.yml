@@ -108,7 +108,7 @@ jobs:
       - name: Frontend behavior regressions
         run: pnpm --dir apps/vulcan-code-web exec vitest run --maxWorkers=4
       - name: Bundled plugin UI and locale regressions
-        run: node --test plugins/context7/ui/index.test.mjs plugins/vulcan-rtk/ui/index.test.mjs plugins/vulcan-usage-statistics/ui/index.test.mjs
+        run: node --test plugins/context7/ui/settings.test.mjs plugins/vulcan-rtk/ui/settings.test.mjs plugins/vulcan-usage-statistics/ui/index.test.mjs
       - name: Lint, typecheck, architecture, production build and size budgets
         run: pnpm --dir apps/vulcan-code-web run build
   desktop:

@@ -22,7 +22,6 @@ required_files:
   - schemas/usage-input.json
   - schemas/usage-output.json
   - model/instructions.md
-  - ui/index.mjs
   - ui/settings.json
   - locales/en.yaml
   - locales/zh-CN.yaml
@@ -168,13 +167,6 @@ ui:
       icon: plugin
       kind: settings
       entry: ui/settings.json
-    - id: context7-usage
-      point: skills_plugin_detail
-      label: Context7 Usage
-      label_message_key: usageNavigationLabel
-      icon: plugin
-      entry: ui/index.mjs
-      export: createPluginPanel
 prompt_contributions:
   - id: context7-documentation-workflow
     file: model/instructions.md

@@ -1,27 +1,18 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { PageActionBar, PageBody, PageNotice, PageRow, PageSection } from "@/components/page";
+import { PageActionBar, PageBody, PageNotice, PageRow, PageSection, PageTabPanel, PageTabs, PageToolbar } from "@/components/page";
 import { useI18n } from "@/i18n";
-import { SettingsCredentialRow, SettingsFieldRow, type PluginMessage } from "./plugin-settings-controls";
+import { PluginDataSection } from "./plugin-data-section";
+import { SettingsCredentialRow, SettingsFieldRow, SettingsInlineOption, type PluginMessage } from "./plugin-settings-controls";
+import { PluginSettingsHeaderActions } from "./plugin-settings-header";
+import type { PluginSettingsHost } from "./plugin-settings-host";
 import {
-  isFieldVisible, layoutFields, propertySchema, sameConfig, valueIssue,
-  type PluginCredentialStatus, type PluginSettingsAction, type PluginSettingsCredential, type PluginSettingsLayout,
+  isFieldVisible, layoutFields, propertySchema, sameConfig, sectionFields, valueIssue,
+  type PluginCredentialStatus, type PluginSettingsAction, type PluginSettingsCredential, type PluginSettingsLayout, type PluginSettingsSection,
 } from "./plugin-settings-layout";
 
-// PluginSettingsHost is the plugin-scoped host surface a declarative settings page uses.
-// PluginSettingsHost 是声明式设置页面使用的插件范围宿主能力。
-export interface PluginSettingsHost {
-  // invoke calls one action declared by the owning plugin manifest.
-  // invoke 调用所属插件清单声明的单个 Action。
-  invoke: <Result>(actionId: string, argumentsValue: unknown) => Promise<Result>;
-  // message resolves one plugin-owned message key in the active locale.
-  // message 以当前语言解析一个插件自有消息键。
-  message: PluginMessage;
-  // openExternalUrl opens one declared link through the host URL boundary.
-  // openExternalUrl 通过宿主地址边界打开一个已声明链接。
-  openExternalUrl: (url: string) => Promise<void>;
-}
+export type { PluginSettingsHost };
 
 // RowNotice is the latest inline outcome of one credential or action row.
 // RowNotice 是单个凭据或操作行的最新行内结果。
@@ -41,18 +32,20 @@ export function createPluginSettingsPage(layout: PluginSettingsLayout, configSch
   };
 }
 
-// PluginSettingsPageBody owns the draft; Core stays the only persistence authority.
-// PluginSettingsPageBody 持有草稿；Core 仍是唯一持久化权威。
+// PluginSettingsPageBody owns the draft shared by every tab; Core stays the only persistence authority.
+// PluginSettingsPageBody 持有所有标签共享的草稿；Core 仍是唯一持久化权威。
 function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSchema: unknown; host: PluginSettingsHost }) {
   const { t } = useI18n();
   const { layout, host } = props;
   const fields = React.useMemo(() => layoutFields(layout), [layout]);
   const credentials = React.useMemo(() => layout.sections.flatMap((section) =>
-    section.items.filter((item): item is PluginSettingsCredential => item.type === "credential")), [layout]);
+    (section.items ?? []).filter((item): item is PluginSettingsCredential => item.type === "credential")), [layout]);
+  const tabs = layout.tabs ?? [];
+  const [activeTab, setActiveTab] = React.useState(tabs[0]?.id ?? "");
   const [saved, setSaved] = React.useState<Record<string, unknown> | null>(null);
   const [draft, setDraft] = React.useState<Record<string, unknown> | null>(null);
   const [statuses, setStatuses] = React.useState<Record<string, PluginCredentialStatus | null>>({});
-  const [loading, setLoading] = React.useState(true);
+  const [loading, setLoading] = React.useState(layout.config !== undefined || credentials.length > 0);
   const [loadError, setLoadError] = React.useState("");
   const [busy, setBusy] = React.useState<string | null>(null);
   const [saveNotice, setSaveNotice] = React.useState<RowNotice | null>(null);
@@ -66,6 +59,7 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
   const busyRef = React.useRef(false);
 
   const load = React.useCallback(async () => {
+    if (!layout.config && credentials.length === 0) return;
     const current = ++sequence.current;
     setLoading(true);
     setLoadError("");
@@ -126,14 +120,8 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
     }, (reason) => setSaveNotice({ tone: "error", text: t("plugins.settings.saveFailed"), details: reasonText(reason) }));
   }
 
-  if (loading && saved === null && Object.keys(statuses).length === 0) {
-    return <StreamPlaceholder className="w-full min-w-0" label={t("skills.plugins.loadingPage")} shape="fields" />;
-  }
-  if (loadError && saved === null && Object.keys(statuses).length === 0) {
-    return <PageNotice actions={<Button onClick={() => void load()} size="sm" type="button" variant="outline">{t("plugins.mount.retry")}</Button>}
-      details={loadError} detailsLabel={t("plugins.mount.errorDetails")} tone="error">{t("plugins.settings.loadFailed")}</PageNotice>;
-  }
-
+  const settingsPending = loading && saved === null && Object.keys(statuses).length === 0;
+  const settingsFailed = loadError !== "" && saved === null && Object.keys(statuses).length === 0;
   const dirty = draft !== null && saved !== null && !sameConfig(draft, saved);
   const visibleFields = fields.filter((field) => draft !== null && isFieldVisible(field, draft));
   const invalid = visibleFields.some((field) => valueIssue(propertySchema(props.configSchema, field.key), draft?.[field.key]) !== null);
@@ -141,49 +129,93 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
     const current = rowNotices[id];
     return current ? <PageNotice details={current.details} detailsLabel={t("plugins.mount.errorDetails")} tone={current.tone}>{current.text}</PageNotice> : null;
   };
+  const loadNotice = loadError ? <PageNotice actions={<Button disabled={loading} onClick={() => void load()} size="sm" type="button" variant="outline">{t("plugins.mount.retry")}</Button>}
+    details={loadError} detailsLabel={t("plugins.mount.errorDetails")} tone="error">{t("plugins.settings.loadFailed")}</PageNotice> : null;
+  const setField = (key: string, value: unknown) => {
+    setDraft((current) => current === null ? current : { ...current, [key]: value });
+    setSaveNotice(null);
+  };
+  const links = (section: PluginSettingsSection) => section.links && section.links.length > 0
+    ? <>{section.links.map((link) => <Button key={link.url} onClick={() => void host.openExternalUrl(link.url)} size="sm" type="button" variant="link">
+      {host.message(link.label_message_key)}</Button>)}</>
+    : undefined;
+
+  // renderItems renders the rows of a settings section once the configuration and credential statuses are known.
+  // renderItems 在配置与凭据状态就绪后渲染设置区块的各行。
+  function renderItems(section: PluginSettingsSection): React.ReactNode {
+    if (settingsPending) return <StreamPlaceholder className="w-full min-w-0" label={t("skills.plugins.loadingPage")} shape="fields" count={sectionFields(section).length || 2} />;
+    if (settingsFailed) return null;
+    if (section.layout === "inline") {
+      return <div className="plugin-settings-inline">
+        {sectionFields(section).map((field) => draft === null ? null : <SettingsInlineOption disabled={busy !== null} field={field} key={field.key}
+          message={host.message} onChange={(value) => setField(field.key, value)} value={draft[field.key]} />)}
+      </div>;
+    }
+    return (section.items ?? []).map((item) => {
+      if (item.type === "field") {
+        if (draft === null || !isFieldVisible(item, draft)) return null;
+        return <SettingsFieldRow disabled={busy !== null} field={item} key={item.key} message={host.message}
+          onChange={(value) => setField(item.key, value)} schema={propertySchema(props.configSchema, item.key)} value={draft[item.key]} />;
+      }
+      if (item.type === "credential") {
+        return <React.Fragment key={item.id}>
+          <SettingsCredentialRow busy={busy !== null} item={item} message={host.message} status={statuses[item.id] ?? null}
+            onDelete={() => run(item.id, async () => {
+              const status = await host.invoke<PluginCredentialStatus>(item.delete_action!, {});
+              setStatuses((current) => ({ ...current, [item.id]: status }));
+              rowSuccess(item.id, t("plugins.settings.credentialDeleted"));
+            }, rowFailure(item.id))}
+            onSave={(secret) => run(item.id, async () => {
+              const status = await host.invoke<PluginCredentialStatus>(item.set_action, { [item.set_argument]: secret });
+              setStatuses((current) => ({ ...current, [item.id]: status }));
+              rowSuccess(item.id, t("plugins.settings.credentialSaved"));
+            }, rowFailure(item.id))} />
+          {notice(item.id)}
+        </React.Fragment>;
+      }
+      return <SettingsActionRow busy={busy !== null} item={item} key={item.id} message={host.message} notice={notice(item.id)}
+        onRun={() => void run(item.id, async () => {
+          await host.invoke(item.action, {});
+          rowSuccess(item.id, item.success_message_key ? host.message(item.success_message_key) : t("plugins.settings.actionDone"));
+          // A test or refresh may change credential validation, so statuses are re-read quietly.
+          // 测试或刷新可能改变凭据校验状态，因此静默重新读取状态。
+          if (credentials.length > 0) void load();
+        }, rowFailure(item.id))} />;
+    });
+  }
+
+  // renderSection dispatches one section to the data view or the settings rows.
+  // renderSection 将一个区块分派给数据视图或设置行。
+  function renderSection(section: PluginSettingsSection): React.ReactNode {
+    if (section.data) return <PluginDataSection footer={links(section)} host={host} key={section.id} section={section} />;
+    // A failed configuration read leaves only its notice; data sections stay independent of it.
+    // 配置读取失败时只保留其提示；数据区块不受其影响。
+    if (settingsFailed) return null;
+    return <PageSection description={section.description_message_key ? host.message(section.description_message_key) : undefined}
+      footer={links(section)} key={section.id} layout={section.layout === "inline" ? "padded" : "rows"} title={host.message(section.title_message_key)}>
+      {renderItems(section)}
+    </PageSection>;
+  }
+
+  const byId = new Map(layout.sections.map((section) => [section.id, section]));
+  // editable reports whether the visible part of the page holds fields, which decides the save bar.
+  // editable 表示页面可见部分是否包含字段，决定是否显示保存栏。
+  const editable = (tabs.length === 0 ? layout.sections : (tabs.find((tab) => tab.id === activeTab)?.sections ?? []).map((id) => byId.get(id)!))
+    .some((section) => sectionFields(section).length > 0);
+  const headerActions = layout.header
+    ? <PluginSettingsHeaderActions config={settingsPending ? "loading" : saved !== null ? "ready" : "unavailable"} header={layout.header} host={host} /> : null;
 
   return <PageBody>
-    {loadError && <PageNotice actions={<Button onClick={() => void load()} size="sm" type="button" variant="outline">{t("plugins.mount.retry")}</Button>}
-      details={loadError} detailsLabel={t("plugins.mount.errorDetails")} tone="error">{t("plugins.settings.loadFailed")}</PageNotice>}
-    {layout.sections.map((section) => <PageSection description={section.description_message_key ? host.message(section.description_message_key) : undefined}
-      footer={section.links && section.links.length > 0 ? <>{section.links.map((link) => <Button key={link.url} onClick={() => void host.openExternalUrl(link.url)}
-        size="sm" type="button" variant="link">{host.message(link.label_message_key)}</Button>)}</> : undefined}
-      key={section.id} layout="rows" title={host.message(section.title_message_key)}>
-      {section.items.map((item) => {
-        if (item.type === "field") {
-          if (draft === null || !isFieldVisible(item, draft)) return null;
-          return <SettingsFieldRow disabled={busy !== null} field={item} key={item.key} message={host.message}
-            onChange={(value) => { setDraft((current) => current === null ? current : { ...current, [item.key]: value }); setSaveNotice(null); }}
-            schema={propertySchema(props.configSchema, item.key)} value={draft[item.key]} />;
-        }
-        if (item.type === "credential") {
-          return <React.Fragment key={item.id}>
-            <SettingsCredentialRow busy={busy !== null} item={item} message={host.message} status={statuses[item.id] ?? null}
-              onDelete={() => run(item.id, async () => {
-                const status = await host.invoke<PluginCredentialStatus>(item.delete_action!, {});
-                setStatuses((current) => ({ ...current, [item.id]: status }));
-                rowSuccess(item.id, t("plugins.settings.credentialDeleted"));
-              }, rowFailure(item.id))}
-              onSave={(secret) => run(item.id, async () => {
-                const status = await host.invoke<PluginCredentialStatus>(item.set_action, { [item.set_argument]: secret });
-                setStatuses((current) => ({ ...current, [item.id]: status }));
-                rowSuccess(item.id, t("plugins.settings.credentialSaved"));
-              }, rowFailure(item.id))} />
-            {notice(item.id)}
-          </React.Fragment>;
-        }
-        return <SettingsActionRow busy={busy !== null} item={item} key={item.id} message={host.message} notice={notice(item.id)}
-          onRun={() => void run(item.id, async () => {
-            await host.invoke(item.action, {});
-            rowSuccess(item.id, item.success_message_key ? host.message(item.success_message_key) : t("plugins.settings.actionDone"));
-            // A test or refresh may change credential validation, so statuses are re-read quietly.
-            // 测试或刷新可能改变凭据校验状态，因此静默重新读取状态。
-            if (credentials.length > 0) void load();
-          }, rowFailure(item.id))} />;
-      })}
-    </PageSection>)}
-    {saveNotice && <PageNotice details={saveNotice.details} detailsLabel={t("plugins.mount.errorDetails")} tone={saveNotice.tone}>{saveNotice.text}</PageNotice>}
-    {layout.config && draft !== null && <PageActionBar actions={<>
+    {tabs.length > 0
+      ? <PageTabs actions={headerActions} ariaLabel={t("plugins.settings.tabs")} onValueChange={setActiveTab}
+        options={tabs.map((tab) => ({ value: tab.id, label: host.message(tab.title_message_key) }))} value={activeTab} />
+      : headerActions ? <PageToolbar actions={headerActions} /> : null}
+    {loadNotice}
+    {tabs.length > 0
+      ? tabs.map((tab) => <PageTabPanel active={tab.id === activeTab} key={tab.id}>{tab.sections.map((id) => renderSection(byId.get(id)!))}</PageTabPanel>)
+      : layout.sections.map(renderSection)}
+    {saveNotice && editable && <PageNotice details={saveNotice.details} detailsLabel={t("plugins.mount.errorDetails")} tone={saveNotice.tone}>{saveNotice.text}</PageNotice>}
+    {layout.config && draft !== null && editable && <PageActionBar actions={<>
       <Button disabled={!dirty || busy !== null} onClick={() => { setDraft(saved); setSaveNotice(null); }} size="sm" type="button" variant="ghost">
         {t("plugins.settings.discard")}</Button>
       <Button disabled={!dirty || invalid || busy !== null} onClick={() => void save()} size="sm" type="button">

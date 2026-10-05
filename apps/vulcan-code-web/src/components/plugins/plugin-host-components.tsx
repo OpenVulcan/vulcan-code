@@ -3,6 +3,7 @@ import { PageEmptyState } from "@/components/page";
 import {
   CircleHelp,
   CircleAlert,
+  ExternalLink,
   FileText,
   Github,
 } from "lucide-react";
@@ -67,7 +68,7 @@ export function HelpTooltip(props: HelpTooltipProps) {
 
 // PluginMetadataLinkIcon identifies the bounded host icon set for plugin metadata tags.
 // PluginMetadataLinkIcon 标识插件元数据标签可使用的有界宿主图标集合。
-export type PluginMetadataLinkIcon = "github" | "license";
+export type PluginMetadataLinkIcon = "github" | "license" | "link" | "document";
 
 // PluginMetadataLinkProps describes one compact actionable metadata tag.
 // PluginMetadataLinkProps 描述一个紧凑的可操作元数据标签。
@@ -102,7 +103,7 @@ export interface PluginMetadataLinkProps {
 export function PluginMetadataLink(props: PluginMetadataLinkProps) {
   // Icon resolves the bounded metadata kind to one current host icon component.
   // Icon 将有界元数据类型解析为当前宿主图标组件。
-  const Icon = props.icon === "github" ? Github : FileText;
+  const Icon = props.icon === "github" ? Github : props.icon === "link" ? ExternalLink : FileText;
   // content is shared by native links and local dialog buttons.
   // content 由原生链接与本地浮动框按钮共享。
   const content = (

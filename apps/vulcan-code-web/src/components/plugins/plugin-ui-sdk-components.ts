@@ -14,6 +14,7 @@ import {
   ActivityHeatmap, ActivityHeatmapLegend, ChartLegend, HelpTooltip, PluginMetadataLink, SelectControl,
   TextDocumentDialog, TimeSeriesLineChart,
 } from "@/components/plugins/plugin-host-components";
+import { BarChart } from "@/components/plugins/plugin-bar-chart";
 import { BrowserArea } from "@/components/features/browser/browser-area";
 import { ClientBrowserArea } from "@/components/features/browser/client-browser-area";
 
@@ -69,6 +70,7 @@ export const PLUGIN_UI_SDK_COMPONENTS = {
   ActivityHeatmap,
   ActivityHeatmapLegend,
   TimeSeriesLineChart,
+  BarChart,
   ChartLegend,
   // Host-owned browser projections for the bundled browser plugin.
   // 内置浏览器插件使用的宿主自有浏览器投影。
