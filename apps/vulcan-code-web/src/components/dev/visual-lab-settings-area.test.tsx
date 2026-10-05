@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VisualLabSettingsArea } from "./visual-lab-settings-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DEMO_LATENCY_MS } from "./visual-lab/visual-lab-plugin-pages";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
 // button resolves an exact visible action in the real component tree, including portals.
@@ -11,6 +12,20 @@ vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) =
 function button(name: string): HTMLButtonElement {
   const found = Array.from(document.querySelectorAll("button")).find((item) => item.textContent === name && !item.closest('[hidden]'));
   if (!found) throw new Error(`Missing button: ${name}`);
+  return found;
+}
+
+// settle waits past one synthetic plugin action so its result renders.
+// settle 等待一次合成插件 Action 完成，使其结果完成渲染。
+async function settle() {
+  await act(async () => new Promise((resolve) => setTimeout(resolve, DEMO_LATENCY_MS + 50)));
+}
+
+// region resolves one page section by its exact heading text.
+// region 按精确标题文字解析一个页面分区。
+function region(title: string): HTMLElement {
+  const found = Array.from(document.querySelectorAll<HTMLElement>('[role="region"]')).find((item) => item.querySelector("h3")?.textContent === title && !item.closest("[hidden]"));
+  if (!found) throw new Error(`Missing page section: ${title}; the heading may have changed`);
   return found;
 }
 
@@ -28,7 +43,7 @@ describe("visual lab local interactions", () => {
     expect(host.textContent).toContain("synthetic samples");
     await act(async () => button("Actions and status").click());
     await act(async () => button("Primary").click());
-    expect(host.querySelector("header [role=status]")?.textContent).toBe("Demo action: Primary");
+    expect(host.querySelector("[data-visual-lab-status]")?.textContent).toBe("Demo action: Primary");
     await act(async () => button("Navigation and feedback").click());
     await act(async () => button("Other page").click());
     expect(button("Other page").getAttribute("aria-current")).toBe("page");
@@ -37,7 +52,7 @@ describe("visual lab local interactions", () => {
     await act(async () => button("Content surfaces").click());
     const card = host.querySelector<HTMLElement>('[data-slot="card"][role="button"]')!;
     await act(async () => card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(host.querySelector("header [role=status]")?.textContent).toContain("Interactive card");
+    expect(host.querySelector("[data-visual-lab-status]")?.textContent).toContain("Interactive card");
     expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-label")).toBe("Demo progress");
   });
   it("persists checkbox and radio changes through real menu close and reopen", async () => {
@@ -73,5 +88,20 @@ describe("visual lab local interactions", () => {
     await act(async () => document.querySelector<HTMLElement>('[role="menuitemcheckbox"]')!.click());
     await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true })));
     expect(document.querySelector('[role="menuitemcheckbox"]')?.getAttribute("aria-checked")).toBe("false");
+  });
+  it("composes the page kit and reveals the save bar for an unsaved draft", async () => {
+    await act(async () => button("Page kit").click());
+    expect(region("Data table").querySelectorAll("tbody tr").length).toBeGreaterThan(0);
+    expect(document.querySelector('[data-slot="page-action-bar"]')).toBeNull();
+    await act(async () => region("Save bar").querySelector<HTMLElement>('[role="switch"]')!.click());
+    expect(document.querySelector('[data-slot="page-action-bar"]')).not.toBeNull();
+  });
+  it("renders the declarative plugin settings page against the in-memory host", async () => {
+    await act(async () => button("Plugin settings page").click());
+    await settle();
+    expect(region("Behavior").textContent).toContain("Enable plugin");
+    await act(async () => button("Test connection").click());
+    await settle();
+    expect(host.querySelector("[data-visual-lab-status]")?.textContent).toBe("Demo action: invoke connection-test");
   });
 });

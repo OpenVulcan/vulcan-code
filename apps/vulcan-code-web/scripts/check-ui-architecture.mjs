@@ -29,7 +29,6 @@ const oversizedComponentCeilings = new Map([
   ["components/composer/composer-panel.tsx#ComposerPanel", 727],
   ["components/conversation/chat-area.tsx#ChatArea", 496],
   ["components/conversation/conversation-workspace.tsx#ConversationWorkspace", 471],
-  ["components/dev/visual-lab-settings-area.tsx#VisualLabSettingsArea", 469],
   ["components/features/browser/browser-area.tsx#BrowserArea", 753],
   ["components/features/code-context/code-context-area.tsx#CodeContextArea", 423],
   ["components/features/knowledge/knowledge-base-area.tsx#KnowledgeBaseArea", 478],

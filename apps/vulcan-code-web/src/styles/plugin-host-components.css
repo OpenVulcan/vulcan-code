@@ -297,7 +297,6 @@
   gap: var(--vcn-space-2);
   padding-right: calc(var(--vcn-space-5) + var(--vcn-space-1));
 }
-.plugin-statistics-search { width: min(320px, 100%); }
 .plugin-statistics-toolbar-select { width: 138px; }
 .plugin-statistics-refresh-icon { width: 16px; height: 16px; transform-origin: center; }
 .plugin-statistics-refresh-icon.is-loading { animation: plugin-statistics-refresh-spin 800ms linear infinite; }

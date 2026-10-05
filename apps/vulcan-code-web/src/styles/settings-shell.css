@@ -38,10 +38,6 @@
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-lg);
 }
-/* Visual Lab keeps its intro copy but the feature header already shows the page title. */
-/* 视觉实验室保留介绍文案，但页面标题已由功能页头显示。 */
-.settings-page-body .visual-lab-intro > h2 { display: none; }
-
 /* AI capabilities: one row per capability, editing happens in the drawer. */
 /* AI 能力：每项能力一行，编辑在抽屉中完成。 */
 .ai-capabilities-page { display: flex; flex-direction: column; gap: 16px; min-height: 0; }

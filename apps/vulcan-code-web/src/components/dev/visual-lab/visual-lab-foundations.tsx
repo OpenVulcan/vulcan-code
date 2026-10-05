@@ -1,17 +1,23 @@
 import { useState, type CSSProperties } from "react"
 import { Play } from "lucide-react"
 
+import { PageSection } from "@/components/page"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 
-// VisualLanguageShowcaseProps supplies the locale-bound copy selector owned by the visual lab.
-// VisualLanguageShowcaseProps 提供由视觉实验室持有、已绑定语言的文案选择器。
-interface VisualLanguageShowcaseProps {
-  // text picks the Chinese or English copy for the active locale.
-  // text 按当前语言选择中文或英文文案。
-  text: (zh: string, en: string) => string
+import type { VisualLabDemoProps } from "./visual-lab-shared"
+
+// SurfaceToken describes one semantic foundation token shown as a swatch.
+// SurfaceToken 描述以色块展示的单个语义基础变量。
+interface SurfaceToken {
+  // label is the product-facing role of the token.
+  // label 是变量面向产品的角色。
+  label: string
+  // token is the CSS custom property name.
+  // token 是 CSS 自定义属性名称。
+  token: string
 }
 
 // ElevationStep describes one rung of the shadow ladder.
@@ -44,6 +50,17 @@ interface MotionCurve {
   en: string
 }
 
+// SURFACE_TOKENS is the stable semantic surface palette exposed for review.
+// SURFACE_TOKENS 是用于验收的稳定语义表面色板。
+const SURFACE_TOKENS: SurfaceToken[] = [
+  { label: "Page", token: "--vcn-surface-page" },
+  { label: "Panel", token: "--vcn-surface-panel" },
+  { label: "Subtle", token: "--vcn-surface-subtle" },
+  { label: "Floating", token: "--vcn-surface-floating" },
+  { label: "Toolbar", token: "--vcn-surface-toolbar" },
+  { label: "Border", token: "--vcn-border-default" },
+]
+
 // ELEVATION_STEPS lists the approved depth levels from page to modal.
 // ELEVATION_STEPS 列出从页面到模态的允许深度层级。
 const ELEVATION_STEPS: ElevationStep[] = [
@@ -73,13 +90,17 @@ const DURATION_STEPS: Array<[string, number]> = [
   ["--vcn-duration-slower", 320],
 ]
 
-// RADIUS_STEPS lists the corner radii used from small controls to the composer.
-// RADIUS_STEPS 列出从小控件到输入框使用的圆角。
+// LONGEST_DURATION_MS scales the duration bars; derived from the scale so the longest bar is always full width.
+// LONGEST_DURATION_MS 用于缩放时长条；由刻度派生，保证最长条始终占满宽度。
+const LONGEST_DURATION_MS = Math.max(...DURATION_STEPS.map(([, ms]) => ms))
+
+// RADIUS_STEPS lists the corner radius tokens used from small controls to the composer.
+// RADIUS_STEPS 列出从小控件到输入框使用的圆角变量。
 const RADIUS_STEPS: Array<[string, string]> = [
-  ["--vcn-radius-sm", "6px"],
-  ["--vcn-radius-md", "8px"],
-  ["--vcn-radius-lg", "12px"],
-  ["composer", "14px"],
+  ["--vcn-radius-sm", "var(--vcn-radius-sm)"],
+  ["--vcn-radius-md", "var(--vcn-radius-md)"],
+  ["--vcn-radius-lg", "var(--vcn-radius-lg)"],
+  ["--vcn-radius-xl", "var(--vcn-radius-xl)"],
 ]
 
 // curvePath draws a cubic-bezier easing as an SVG path inside a 48×48 box, y pointing up.
@@ -92,11 +113,11 @@ function curvePath(points: MotionCurve["points"]): string {
   return `M0 ${size} C ${x1 * size} ${size - y1 * size}, ${x2 * size} ${size - y2 * size}, ${size} 0`
 }
 
-// VisualLanguageShowcase renders the elevation, motion, material and radius tokens as live samples.
-// VisualLanguageShowcase 以实时样本展示层级、动效、材质与圆角变量。
+// VisualLabFoundations renders surface, elevation, motion, material and radius tokens as page sections.
+// VisualLabFoundations 以页面分区展示表面、层级、动效、材质与圆角变量。
 // Parameters: props provides the locale-bound copy selector. Returns local-only samples; nothing here touches product state.
 // 参数：props 提供已绑定语言的文案选择器。返回仅作用于本页的样本，不触及产品状态。
-export function VisualLanguageShowcase({ text }: VisualLanguageShowcaseProps) {
+export function VisualLabFoundations({ text }: VisualLabDemoProps) {
   // run toggles the lane dots between both ends; replay increments to remount the stagger sample.
   // run 让轨道圆点在两端之间切换；replay 递增以重新挂载错峰样本。
   const [run, setRun] = useState(false)
@@ -105,32 +126,49 @@ export function VisualLanguageShowcase({ text }: VisualLanguageShowcaseProps) {
   const [checked, setChecked] = useState(true)
 
   return (
-    <div className="visual-lang">
-      <div className="visual-lang-block">
-        <h4>{text("层级", "Elevation")}</h4>
-        <p>{text("越靠近用户的层，阴影越深、越柔。深色模式额外叠加一道顶部高光，避免阴影在近黑背景上消失。", "Layers closer to the user cast deeper, softer shadows. Dark mode adds a faint top highlight so depth survives on near-black.")}</p>
+    <>
+      <PageSection
+        title={text("语义表面", "Semantic surfaces")}
+        description={text("页面、面板、浮层、弱背景和工具栏的基础层级；组件只引用这些变量。", "Base hierarchy for pages, panels, floating surfaces, subtle regions and toolbars; components reference these tokens only.")}
+      >
+        <div className="visual-lab-token-grid">
+          {SURFACE_TOKENS.map((item) => (
+            <article key={item.token} className="visual-lab-token">
+              <div className="visual-lab-token-swatch" style={{ "--visual-lab-token-color": `var(${item.token})` } as CSSProperties} />
+              <div className="visual-lab-token-copy">
+                <strong>{item.label}</strong>
+                <code>{item.token}</code>
+              </div>
+            </article>
+          ))}
+        </div>
+      </PageSection>
+
+      <PageSection
+        title={text("层级", "Elevation")}
+        description={text("越靠近用户的层，阴影越深、越柔。深色模式额外叠加一道顶部高光，避免阴影在近黑背景上消失。", "Layers closer to the user cast deeper, softer shadows. Dark mode adds a faint top highlight so depth survives on near-black.")}
+      >
         <div className="visual-lang-elevation">
           {ELEVATION_STEPS.map((step, index) => (
-            <article key={step.zh} className="visual-lang-elevation-tile" style={{ boxShadow: step.token ? `var(${step.token})` : "none" } as CSSProperties}>
+            <article key={step.zh} className="visual-lang-elevation-tile" style={{ boxShadow: step.token ? `var(${step.token})` : "none" }}>
               <span className="visual-lang-elevation-level">{index}</span>
               <strong>{text(step.zh, step.en)}</strong>
               <code>{step.token || "none"}</code>
             </article>
           ))}
         </div>
-      </div>
+      </PageSection>
 
-      <div className="visual-lang-block">
-        <div className="visual-lang-block-heading">
-          <div>
-            <h4>{text("动效曲线", "Motion curves")}</h4>
-            <p>{text("每种变化只用一种曲线。下面的演示放慢了 4 倍，便于看清差别。", "Each kind of change uses one curve. The demo below is slowed 4× so the differences are visible.")}</p>
-          </div>
+      <PageSection
+        title={text("动效曲线", "Motion curves")}
+        description={text("每种变化只用一种曲线。下面的演示放慢了 4 倍，便于看清差别。", "Each kind of change uses one curve. The demo below is slowed 4× so the differences are visible.")}
+        actions={(
           <Button type="button" variant="outline" size="sm" onClick={() => { setRun((value) => !value); setReplay((value) => value + 1) }}>
             <Play data-icon="inline-start" />
             {text("播放", "Play")}
           </Button>
-        </div>
+        )}
+      >
         <div className="visual-lang-curves">
           {MOTION_CURVES.map((curve) => (
             <div key={curve.token} className="visual-lang-curve">
@@ -145,41 +183,38 @@ export function VisualLanguageShowcase({ text }: VisualLanguageShowcaseProps) {
                   <span
                     className="visual-lang-lane-dot"
                     data-run={run ? "true" : undefined}
-                    style={{ transitionTimingFunction: `var(${curve.token})`, transitionDuration: `calc(var(${curve.duration}) * 4)` } as CSSProperties}
+                    style={{ transitionTimingFunction: `var(${curve.token})`, transitionDuration: `calc(var(${curve.duration}) * 4)` }}
                   />
                 </div>
               </div>
             </div>
           ))}
         </div>
-      </div>
+      </PageSection>
 
       <div className="visual-lang-split">
-        <div className="visual-lang-block">
-          <h4>{text("时长刻度", "Duration scale")}</h4>
-          <p>{text("越小的元素越快；退出比进入快一档。", "Smaller elements move faster; exits run one step quicker than entrances.")}</p>
+        <PageSection title={text("时长刻度", "Duration scale")} description={text("越小的元素越快；退出比进入快一档。", "Smaller elements move faster; exits run one step quicker than entrances.")}>
           <div className="visual-lang-durations">
             {DURATION_STEPS.map(([token, ms]) => (
               <div key={token} className="visual-lang-duration">
                 <code>{token.replace("--vcn-duration-", "")}</code>
-                <span className="visual-lang-duration-bar" style={{ width: `${(ms / 320) * 100}%` }} />
+                <span className="visual-lang-duration-bar" style={{ width: `${(ms / LONGEST_DURATION_MS) * 100}%` }} />
                 <span className="visual-lang-duration-value">{ms}ms</span>
               </div>
             ))}
           </div>
-        </div>
-        <div className="visual-lang-block">
-          <h4>{text("错峰进入", "Staggered entrance")}</h4>
-          <p>{text("页面分区依次出现，间隔 32ms，第 5 个之后不再递增。", "Page sections arrive one after another, 32ms apart, capped after the fifth.")}</p>
+        </PageSection>
+        <PageSection title={text("错峰进入", "Staggered entrance")} description={text("页面分区依次出现，第 5 个之后不再递增。", "Page sections arrive one after another, capped after the fifth.")}>
           <div key={replay} className="visual-lang-stagger">
             {[0, 1, 2, 3, 4].map((index) => <span key={index} style={{ animationDelay: `calc(var(--vcn-stagger) * ${index} * 4)` }} />)}
           </div>
-        </div>
+        </PageSection>
       </div>
 
-      <div className="visual-lang-block">
-        <h4>{text("材质", "Materials")}</h4>
-        <p>{text("主按钮带纵向渐变和顶部高光，悬停时泛起品牌色光晕；浮层在支持的浏览器上使用磨砂玻璃；聚焦时在描边外加一圈柔和光环。", "Primary buttons carry a vertical gradient and top highlight, glowing in the brand colour on hover. Overlays use frosted glass where supported. Focus adds a soft halo outside the ring.")}</p>
+      <PageSection
+        title={text("材质", "Materials")}
+        description={text("主按钮带纵向渐变和顶部高光，悬停时泛起品牌色光晕；浮层在支持的浏览器上使用磨砂玻璃；聚焦时在描边外加一圈柔和光环。", "Primary buttons carry a vertical gradient and top highlight, glowing in the brand colour on hover. Overlays use frosted glass where supported. Focus adds a soft halo outside the ring.")}
+      >
         <div className="visual-lang-materials">
           <div className="visual-lang-material">
             <div className="visual-lang-material-stage">
@@ -208,21 +243,18 @@ export function VisualLanguageShowcase({ text }: VisualLanguageShowcaseProps) {
             <code>--vcn-ease-spring</code>
           </div>
         </div>
-      </div>
+      </PageSection>
 
-      <div className="visual-lang-block">
-        <h4>{text("圆角", "Radius")}</h4>
-        <p>{text("容器越大圆角越大；嵌套时内层圆角比外层小一档。", "Larger containers get larger radii; nested layers step one size down.")}</p>
+      <PageSection title={text("圆角", "Radius")} description={text("容器越大圆角越大；嵌套时内层圆角比外层小一档。", "Larger containers get larger radii; nested layers step one size down.")}>
         <div className="visual-lang-radii">
           {RADIUS_STEPS.map(([token, value]) => (
             <div key={token} className="visual-lang-radius">
               <span style={{ borderRadius: value }} />
               <code>{token}</code>
-              <small>{value}</small>
             </div>
           ))}
         </div>
-      </div>
-    </div>
+      </PageSection>
+    </>
   )
 }

@@ -37,6 +37,9 @@
   min-width: 0;
 }
 .page-toolbar-actions { margin-left: auto; }
+/* Toolbar search and filter inputs share one width so pages and plugins never size them individually. */
+/* 工具栏搜索与筛选输入框共用同一宽度，页面与插件不再各自设定尺寸。 */
+.page-toolbar-start > [data-slot="input"] { width: min(320px, 100%); }
 
 .page-tab-panel {
   display: flex;
@@ -123,6 +126,9 @@
   flex-direction: column;
   align-items: stretch;
 }
+/* In a column the text basis would become a height, so stacked rows size the text to its content. */
+/* 纵向排列时文字的伸缩基准会变成高度，因此堆叠行让文字按内容定高。 */
+.page-row[data-stacked="true"] > .page-row-text { flex: none; }
 .page-row-text {
   display: grid;
   flex: 1 1 260px;

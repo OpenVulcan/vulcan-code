@@ -1,94 +1,32 @@
-/* Presents real UI primitives on a stable, independently scrollable acceptance surface. */
-/* 在稳定且独立滚动的验收表面中展示真实 UI 基础组件。 */
+/* Visual lab: sample-only presentation; page structure comes from the page kit (styles/page-kit.css). */
+/* 视觉实验室：仅用于样本的呈现；页面结构来自页面套件（styles/page-kit.css）。 */
+
 .visual-lab {
   background: var(--vcn-surface-page);
   color: var(--vcn-content-primary);
 }
 
-.visual-lab-intro {
-  display: grid;
-  gap: 6px;
-  max-width: none;
-  margin-bottom: 20px;
-}
-
-.visual-lab-intro h2,
-.visual-lab-intro p,
-.visual-lab-section h3,
-.visual-lab-section p {
-  margin: 0;
-}
-
-.visual-lab-intro h2 {
-  font-size: 20px;
-  line-height: 1.25;
-}
-
-.visual-lab-intro p,
-.visual-lab-section-heading p,
-.visual-lab-caption {
-  color: var(--vcn-content-secondary);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.visual-lab-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
-}
-
-.visual-lab-section {
-  min-width: 0;
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--vcn-border-subtle);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--vcn-surface-panel);
-}
-
-/* Category switches preserve mounted demos without displaying inactive component families. */
-/* 分类切换保留已挂载演示，但不展示非当前组件分组。 */
-.visual-lab-section[hidden] {
-  display: none;
-}
-
-.visual-lab-section-heading {
-  display: grid;
-  gap: 4px;
-}
-
-.visual-lab-section-heading h3 {
-  font-size: 14px;
-  line-height: 1.3;
-}
+.visual-lab-status { overflow-wrap: anywhere; }
 
 .visual-lab-row {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--vcn-space-2);
 }
 
 .visual-lab-stack {
   min-width: 0;
   display: grid;
-  gap: 10px;
+  gap: var(--vcn-space-3);
 }
 
-.visual-lab-context-target {
-  display: grid;
-  min-height: 88px;
-  place-items: center;
-  border: 1px dashed var(--vcn-border-default);
-  border-radius: var(--radius-lg);
-  color: var(--muted-foreground);
-  font-size: 13px;
-  background: var(--vcn-surface-subtle);
-  user-select: none;
+.visual-lab-choice-line {
+  display: flex;
+  align-items: center;
+  gap: var(--vcn-space-2);
+  font-size: var(--vcn-font-size-sm);
 }
 
 .visual-lab-control-sizes > [data-slot="input"] {
@@ -99,7 +37,7 @@
 .visual-lab-token-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
-  gap: 8px;
+  gap: var(--vcn-space-2);
 }
 
 .visual-lab-token {
@@ -119,108 +57,111 @@
 .visual-lab-token-copy {
   display: grid;
   gap: 2px;
-  padding: 8px;
+  padding: var(--vcn-space-2);
 }
 
 .visual-lab-token-copy strong {
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--vcn-font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.visual-lab-token-copy code {
-  color: var(--vcn-content-secondary);
-  font-size: 10px;
-}
+.visual-lab-token-copy code { color: var(--vcn-content-secondary); font-size: var(--vcn-font-size-2xs); }
 
 .visual-lab-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--vcn-space-3);
 }
+
+.visual-lab-card-grid [data-slot="card"] { min-width: 0; }
 
 .visual-lab-surface-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--vcn-space-2);
 }
 
 .visual-lab-surface-sample {
   display: grid;
   min-height: 56px;
   place-items: center;
-  padding: 10px;
+  padding: var(--vcn-space-3);
   color: var(--vcn-content-secondary);
-  font-size: 12px;
-}
-
-.visual-lab-card-grid [data-slot="card"] {
-  min-width: 0;
-}
-
-.visual-lab-choice-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.visual-lab-progress {
-  display: grid;
-  gap: 6px;
+  font-size: var(--vcn-font-size-sm);
 }
 
 .visual-lab-navigation-samples {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--vcn-space-3);
 }
 
 .visual-lab-navigation-samples > * {
   display: grid;
   gap: 2px;
-  padding: 6px;
+  padding: var(--vcn-space-2);
   border: 1px solid var(--vcn-border-subtle);
   border-radius: var(--vcn-radius-md);
 }
 
-@media (max-width: 720px) {
-  .visual-lab {
-    padding: 14px;
-  }
-
-  .visual-lab-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .visual-lab-surface-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .visual-lab-navigation-samples {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-/* Visual language showcase: each block pairs a rule with a live sample that reads the real tokens. */
-/* 视觉语言展示：每个区块把一条规则和读取真实变量的实时样本放在一起。 */
-.visual-lang { display: grid; gap: 14px; min-width: 0; }
-.visual-lang-block {
+.visual-lab-progress {
   display: grid;
-  gap: 10px;
-  min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--vcn-border-subtle);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--vcn-surface-panel);
-  box-shadow: var(--vcn-shadow-raised);
+  gap: var(--vcn-space-2);
 }
-.visual-lang-block h4 { margin: 0; font-size: 13px; font-weight: 600; }
-.visual-lang-block p { margin: 2px 0 0; color: var(--vcn-content-secondary); font-size: 12px; line-height: 18px; }
-.visual-lang-block code { color: var(--vcn-content-secondary); font-size: 10.5px; overflow-wrap: anywhere; }
-.visual-lang-block-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.visual-lang-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+
+.visual-lab-context-target {
+  display: grid;
+  min-height: 88px;
+  place-items: center;
+  border: 1px dashed var(--vcn-border-default);
+  border-radius: var(--vcn-radius-lg);
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  background: var(--vcn-surface-subtle);
+  user-select: none;
+}
+
+.visual-lab-context-target:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.visual-lab-sheet-body { padding-inline: var(--vcn-space-4); }
+
+.visual-lab-code {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--vcn-space-3);
+  border-radius: var(--vcn-radius-md);
+  background: var(--vcn-surface-subtle);
+  color: var(--vcn-content-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--vcn-font-size-xs);
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.visual-lab-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  align-items: start;
+  gap: var(--vcn-space-3);
+}
+
+.visual-lab-usage-narrow { max-width: 280px; }
+
+@media (max-width: 720px) {
+  .visual-lab-surface-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .visual-lab-navigation-samples { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Foundation samples: drawings of elevation, motion, materials and radius tokens inside page sections. */
+/* 基础样本：在页面分区内绘制层级、动效、材质与圆角变量。 */
+
+.visual-lang-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--vcn-space-4); }
 
 .visual-lang-elevation {
   display: grid;
@@ -240,7 +181,7 @@
   border-radius: var(--vcn-radius-lg);
   background: var(--card);
 }
-.visual-lang-elevation-tile strong { font-size: 12px; font-weight: 600; }
+.visual-lang-elevation-tile strong { font-size: var(--vcn-font-size-sm); font-weight: 600; }
 .visual-lang-elevation-level {
   margin-bottom: auto;
   color: var(--primary);
@@ -263,7 +204,7 @@
 .visual-lang-curve-axis { fill: none; stroke: var(--border); stroke-width: 1; }
 .visual-lang-curve-line { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linecap: round; }
 .visual-lang-curve-copy { display: grid; gap: 4px; min-width: 0; }
-.visual-lang-curve-copy strong { font-size: 12px; font-weight: 600; }
+.visual-lang-curve-copy strong { font-size: var(--vcn-font-size-sm); font-weight: 600; }
 .visual-lang-lane {
   position: relative;
   height: 14px;
@@ -291,7 +232,7 @@
   border-radius: 999px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--primary) 45%, transparent), var(--primary));
 }
-.visual-lang-duration-value { color: var(--vcn-content-secondary); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.visual-lang-duration-value { color: var(--vcn-content-secondary); font-size: var(--vcn-font-size-xs); font-variant-numeric: tabular-nums; text-align: right; }
 
 .visual-lang-stagger { display: grid; gap: 6px; }
 .visual-lang-stagger span {
@@ -329,7 +270,7 @@
   border-radius: var(--vcn-radius-lg);
   background: var(--popover);
   box-shadow: var(--vcn-shadow-floating), 0 0 0 1px var(--border);
-  font-size: 12px;
+  font-size: var(--vcn-font-size-sm);
   font-weight: 500;
 }
 @supports (backdrop-filter: blur(1px)) {
@@ -346,4 +287,3 @@
   background: var(--card);
   box-shadow: var(--vcn-shadow-raised);
 }
-.visual-lang-radius small { color: var(--vcn-content-secondary); font-size: 10.5px; }

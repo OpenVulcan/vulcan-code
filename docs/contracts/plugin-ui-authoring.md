@@ -134,7 +134,7 @@
 页面根使用 `PageBody`，按以下顺序组合：
 
 1. `PageTabs`：页面内多个任务区域；`actions` 放页面状态（`StatusPill`）。每个区域内容放进 `PageTabPanel active={…}`，切换时保留已访问区域的状态。
-2. `PageToolbar`：起始侧放筛选与上下文徽标，`actions` 放刷新、时间范围等页面命令。
+2. `PageToolbar`：起始侧放筛选与上下文徽标，`actions` 放刷新、时间范围等页面命令。起始侧的 `Input` 由页面套件统一宽度，不要为搜索框另设尺寸类。
 3. 页面级反馈：`PageNotice tone="error|warning|info|success"`，原始诊断放 `details`，恢复命令放 `actions`。
 4. 内容：每个关注点一个 `PageSection`（`title`、`description`、`status`、`actions`、`footer`）；指标用 `MetricGrid` 加 `MetricCard`；表格用 `PageTable`；键值事实用 `PageFacts`；列表用 `PageItemList`/`PageItem`；空内容用 `PageEmptyState`；首屏加载用 `StreamPlaceholder`。
 5. 分页放在所属 `PageSection` 的 `footer`；表格局部加载与错误留在所属区块，不覆盖整页。
@@ -173,3 +173,4 @@
 - 插件包：上文的 `validate` 命令与 `make.ps1 sync`。
 - 模块：`node --test plugins/<id>/ui/*.test.mjs`；测试可以为 SDK 组件打桩，但应保留真实语义结构（区块、表格、提示）。
 - 宿主：在 `apps/vulcan-code-web` 运行 `pnpm run check:ui-architecture` 与 `pnpm exec vitest run src/components/plugins`。
+- 视觉对照：设置 → 视觉实验室的「页面套件」「插件设置页」「插件模块页」分类以真实组件渲染本文全部结构；设置页分类直接驱动真实的声明式渲染器（Action 在内存中模拟），可用于核对版面与样式。
