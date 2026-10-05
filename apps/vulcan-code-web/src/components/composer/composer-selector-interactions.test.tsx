@@ -174,6 +174,28 @@ it("asks for an account instead of displaying the first account for a missing ex
   expect(choose).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "a" }));
 });
 
+// The trigger hover card only displays the current state; the click-opened popover replaces it.
+// 触发器悬浮卡片只展示当前状态；点击打开的浮层会取代它。
+it("shows a read-only model, reasoning and plan usage summary until the popover opens", async () => {
+  vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
+  await render(<MergedHarness effort="low" options={["none", "low", "high"]} />);
+  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Model"]')!.focus(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 500)); });
+  // summary is the mounted hover card; it must not contain any interactive selection control.
+  // summary 是已挂载的悬浮卡片；其中不得包含任何交互式选择控件。
+  const summary = document.querySelector(".model-reasoning-summary");
+  expect(summary?.textContent).toContain("First");
+  expect(summary?.textContent).toContain("composer.reasoning.level.low");
+  expect(summary?.textContent).toContain("composer.modelReasoning.planUsage");
+  expect(summary?.querySelectorAll(".model-reasoning-summary-pips > span.on")).toHaveLength(2);
+  expect(summary?.querySelector('button, [role="slider"], input')).toBeNull();
+  expect(loadPublicAiSettings).toHaveBeenCalledOnce();
+  expect(queryPublicAiConnectionUsage).not.toHaveBeenCalled();
+  await click("Model");
+  expect(document.querySelector(".model-reasoning-summary")).toBeNull();
+  expect(document.querySelector('[role="slider"]')).not.toBeNull();
+});
+
 // Missing credential-profile metadata cannot authorize a provider-facing usage query.
 // 缺失凭据档案元数据不能授权面向供应商的用量查询。
 it("does not offer usage refresh without the declared credential profile", async () => {

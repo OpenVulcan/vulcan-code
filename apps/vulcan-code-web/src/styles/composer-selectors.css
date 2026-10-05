@@ -394,12 +394,12 @@
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 16px;
+  grid-template-columns: 24px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 10px;
   border: 0;
   border-radius: var(--vcn-radius-md);
-  padding: 7px 8px;
+  padding: 5px 8px;
   background: transparent;
   color: inherit;
   text-align: left;
@@ -426,8 +426,8 @@
 }
 
 .model-reasoning-model-icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   border-radius: var(--vcn-radius-sm);
@@ -438,7 +438,7 @@
 .model-reasoning-model-copy {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .model-reasoning-model-copy strong,
@@ -474,23 +474,31 @@
 .model-reasoning-scale-block,
 .model-reasoning-fixed {
   display: grid;
-  gap: 10px;
+  gap: 4px;
   border-top: 1px solid var(--vcn-border-subtle);
   margin-top: 2px;
-  padding: 12px 10px 8px;
+  padding: 8px 8px 4px;
+}
+
+.model-reasoning-fixed {
+  padding-bottom: 6px;
 }
 
 .model-reasoning-heading-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
+/* Label and current level share one line so the block stays short. */
+/* 标签与当前档位同处一行，使区块保持紧凑。 */
 .model-reasoning-heading {
   min-width: 0;
-  display: grid;
-  gap: 2px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .model-reasoning-eyebrow {
@@ -502,9 +510,9 @@
 .model-reasoning-title {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--foreground);
-  font-size: var(--vcn-font-size-lg, 15px);
+  font-size: var(--vcn-font-size-sm);
   font-weight: 650;
   line-height: 1.3;
 }
@@ -522,8 +530,8 @@
 }
 
 .model-reasoning-reset {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   color: var(--muted-foreground);
 }
@@ -539,7 +547,7 @@
 /* 滑杆从左到右由冷到热：火焰色填充随思考加深而延伸。 */
 .model-reasoning-slider {
   position: relative;
-  height: 22px;
+  height: 20px;
   margin: 0 8px;
   border-radius: var(--vcn-radius-pill);
   cursor: pointer;
@@ -611,8 +619,8 @@
 
 .model-reasoning-stop-labels {
   position: relative;
-  height: 16px;
-  margin: -4px 8px 0;
+  height: 14px;
+  margin: -3px 8px 0;
 }
 
 .model-reasoning-stop-label {
@@ -621,7 +629,7 @@
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-2xs, 10px);
   font-weight: 500;
-  line-height: 16px;
+  line-height: 14px;
   white-space: nowrap;
   transform: translateX(-50%);
   cursor: pointer;
@@ -654,8 +662,8 @@
 .model-reasoning-fixed .model-reasoning-heading::before {
   content: "";
   position: absolute;
-  top: 3px;
-  bottom: 3px;
+  top: 5px;
+  bottom: 5px;
   left: 0;
   width: 3px;
   border-radius: var(--vcn-radius-pill);
@@ -824,4 +832,93 @@
   color: var(--foreground);
   font-weight: 600;
   cursor: default;
+}
+
+/* Hovering the account row floats the usage card beside the popover, without a click. */
+/* 悬停账号行时，用量卡片浮现在浮层旁，无需点击。 */
+.model-reasoning-usage-hover {
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+}
+
+/* The trigger hover card is read-only: model, account, reasoning level and plan usage at a glance. */
+/* 触发器悬浮卡片为只读：一眼看到模型、账号、思考层级与方案用量。 */
+.model-reasoning-summary {
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px;
+}
+
+.model-reasoning-summary-body {
+  display: grid;
+  gap: 10px;
+}
+
+.model-reasoning-summary-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.model-reasoning-summary-head small.attention {
+  color: var(--warning-text);
+}
+
+.model-reasoning-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--vcn-border-subtle);
+  padding-top: 10px;
+}
+
+.model-reasoning-summary-level {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-reasoning-summary-level strong {
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-sm);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/* Pips mirror the popover slider: filled segments grow left to right with deeper reasoning. */
+/* 刻度点对应浮层滑杆：填充段随思考加深从左到右增加。 */
+.model-reasoning-summary-pips {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.model-reasoning-summary-pips > span {
+  width: 10px;
+  height: 4px;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--vcn-fill-active);
+}
+
+.model-reasoning-summary-pips > span.on {
+  background: linear-gradient(90deg, var(--vcn-brand-flame-start), var(--vcn-brand-flame-end));
+}
+
+.model-reasoning-summary-usage {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--vcn-border-subtle);
+  padding-top: 10px;
+}
+
+.model-reasoning-summary-foot {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-2xs, 10px);
+  line-height: 1.4;
 }

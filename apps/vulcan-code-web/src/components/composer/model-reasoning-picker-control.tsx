@@ -4,6 +4,7 @@ import {
   ModelAccountUsageCard,
   ModelAccountUsageSummary,
   useModelAccountDetails,
+  type ModelAccountDetails,
 } from "@/components/composer/model-account-details";
 import {
   ModelPickerList,
@@ -13,10 +14,13 @@ import {
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
+import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { Button } from "@/components/ui/button";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -237,6 +241,13 @@ export function ModelReasoningPickerControl(props: {
   // backButtonRef 在账号面板打开时获得焦点。
   const backButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const popoverOpen = open && !unavailable;
+  // summaryOpen shows the read-only summary card on hover; it never shows while the popover is open.
+  // summaryOpen 在悬停时显示只读摘要卡片；浮层打开期间从不显示。
+  const [summaryOpen, setSummaryOpen] = React.useState(false);
+  // summarySuppressedRef blocks the summary card after the popover closes and focus returns to the trigger,
+  // until the pointer leaves the trigger.
+  // summarySuppressedRef 在浮层关闭、焦点回到触发器后阻止摘要卡片弹出，直到指针离开触发器。
+  const summarySuppressedRef = React.useRef(false);
 
   React.useEffect(() => {
     const modelChanged = observedModelSignal.current !== props.modelOpenSignal;
@@ -310,17 +321,34 @@ export function ModelReasoningPickerControl(props: {
       onOpenChange={(nextOpen) => {
         if (nextOpen) {
           setView("reasoning");
+          setSummaryOpen(false);
+        } else {
+          summarySuppressedRef.current = true;
         }
         setOpen(nextOpen);
       }}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <HoverCard
+        closeDelay={120}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen && (popoverOpen || summarySuppressedRef.current)) {
+            return;
+          }
+          setSummaryOpen(nextOpen);
+          if (nextOpen && props.accounts.length > 0) {
+            void loadAccount();
+          }
+        }}
+        open={summaryOpen && !popoverOpen}
+        openDelay={450}
+      >
+        <HoverCardTrigger asChild>
           <PopoverTrigger asChild>
             <Button
               aria-label={props.ariaLabel}
               className="composer-select-trigger model-reasoning"
               disabled={unavailable}
+              onPointerLeave={() => { summarySuppressedRef.current = false; }}
               type="button"
               variant="outline"
             >
@@ -331,26 +359,19 @@ export function ModelReasoningPickerControl(props: {
               <ChevronDown aria-hidden="true" className="composer-select-chevron" />
             </Button>
           </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent className="composer-control-tooltip" side="top">
-          <strong>{t("composer.modelReasoning.tooltipTitle")}</strong>
-          <span>{t("composer.modelPicker.currentModel").replace("{model}", modelLabel)}</span>
-          {selectedChoice ? (
-            <span>{t("composer.modelPicker.currentProvider").replace("{provider}", selectedChoice.providerName || "-")}</span>
-          ) : null}
-          {account.selectedAccount ? (
-            <span>{t("composer.modelPicker.currentAccount").replace("{account}", account.selectedAccount.accountName)}</span>
-          ) : accountMissing ? (
-            <span>{t("composer.modelPicker.selectAccount").replace("{model}", modelLabel)}</span>
-          ) : null}
-          <span>
-            {t("composer.modelReasoning.currentLevel").replace(
-              "{level}",
-              reasoning.label ?? t("composer.reasoning.level.unavailable"),
-            )}
-          </span>
-        </TooltipContent>
-      </Tooltip>
+        </HoverCardTrigger>
+        <HoverCardContent align="end" className="model-reasoning-summary" collisionPadding={12} side="top" sideOffset={8} width="content">
+          <ModelReasoningSummary
+            account={account}
+            accountMissing={accountMissing}
+            hasAccounts={props.accounts.length > 0}
+            modelLabel={modelLabel}
+            options={props.reasoningOptions}
+            reasoning={reasoning}
+            selectedChoice={selectedChoice}
+          />
+        </HoverCardContent>
+      </HoverCard>
       <PopoverContent
         align="end"
         className={cn("model-reasoning-content", view === "models" ? "model-picker-content models" : view)}
@@ -447,7 +468,7 @@ export function ModelReasoningPickerControl(props: {
               type="button"
             >
               <span aria-hidden="true" className="model-reasoning-model-icon">
-                {selectedChoice ? <ProviderIcon className="size-7 shrink-0" providerId={selectedChoice.providerId} /> : <Cpu size={15} />}
+                {selectedChoice ? <ProviderIcon className="size-6 shrink-0" providerId={selectedChoice.providerId} /> : <Cpu size={15} />}
               </span>
               <span className="model-reasoning-model-copy">
                 <strong>{modelLabel}</strong>
@@ -456,19 +477,28 @@ export function ModelReasoningPickerControl(props: {
               <ChevronRight aria-hidden="true" className="model-reasoning-model-chevron" size={16} />
             </button>
             {props.accounts.length > 0 ? (
-              <button
-                aria-label={props.accountAriaLabel}
-                className={cn("model-reasoning-model-row account", accountMissing && "attention")}
-                onClick={() => openPane("account")}
-                type="button"
-              >
-                <span aria-hidden="true" className="model-reasoning-model-icon"><UserRound size={15} /></span>
-                <span className="model-reasoning-model-copy">
-                  <strong>{account.selectedAccount?.accountName ?? t("composer.aria.account")}</strong>
-                  <small>{accountSubtitle}</small>
-                </span>
-                <ChevronRight aria-hidden="true" className="model-reasoning-model-chevron" size={16} />
-              </button>
+              <HoverCard closeDelay={150} openDelay={250}>
+                <HoverCardTrigger asChild>
+                  <button
+                    aria-label={props.accountAriaLabel}
+                    className={cn("model-reasoning-model-row account", accountMissing && "attention")}
+                    onClick={() => openPane("account")}
+                    type="button"
+                  >
+                    <span aria-hidden="true" className="model-reasoning-model-icon"><UserRound size={15} /></span>
+                    <span className="model-reasoning-model-copy">
+                      <strong>{account.selectedAccount?.accountName ?? t("composer.aria.account")}</strong>
+                      <small>{accountSubtitle}</small>
+                    </span>
+                    <ChevronRight aria-hidden="true" className="model-reasoning-model-chevron" size={16} />
+                  </button>
+                </HoverCardTrigger>
+                {account.selectedAccount ? (
+                  <HoverCardContent align="start" className="model-reasoning-usage-hover" collisionPadding={12} side="left" sideOffset={10} width="content">
+                    <ModelAccountUsageCard details={account} />
+                  </HoverCardContent>
+                ) : null}
+              </HoverCard>
             ) : null}
             {reasoning.kind === "scale" ? (
               <ReasoningScale
@@ -665,6 +695,75 @@ function ReasoningScale(props: {
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ModelReasoningSummary is the read-only hover card of the trigger: model, account, reasoning level and plan usage.
+// ModelReasoningSummary 是触发器的只读悬浮卡片：展示模型、账号、思考层级与方案用量。
+// Parameters: the resolved model choice, account details and reasoning view of the control.
+// 参数：控件解析后的模型选项、账号详情与思考视图。
+// Returns: a compact summary; every change still happens through the click-opened popover.
+// 返回值：紧凑摘要；所有修改仍通过点击打开的浮层完成。
+function ModelReasoningSummary(props: {
+  modelLabel: string;
+  selectedChoice: ModelPickerChoice | undefined;
+  account: ModelAccountDetails;
+  accountMissing: boolean;
+  hasAccounts: boolean;
+  reasoning: ReasoningSelectionView;
+  options: ComposerSelectOption[];
+}) {
+  const { t } = useI18n();
+  const { account } = props;
+  const accountName = account.selectedAccount?.accountName
+    ?? (props.accountMissing ? t("composer.modelPicker.selectAccount").replace("{model}", props.modelLabel) : null);
+  const providerLine = [props.selectedChoice?.providerName, accountName].filter(Boolean).join(" · ");
+  const scaleIndex = props.reasoning.kind === "scale" ? props.reasoning.index : -1;
+  return (
+    <div className="model-reasoning-summary-body">
+      <div className="model-reasoning-summary-head">
+        <span aria-hidden="true" className="model-reasoning-model-icon">
+          {props.selectedChoice ? <ProviderIcon className="size-6 shrink-0" providerId={props.selectedChoice.providerId} /> : <Cpu size={15} />}
+        </span>
+        <span className="model-reasoning-model-copy">
+          <strong>{props.modelLabel}</strong>
+          {providerLine ? <small className={cn(props.accountMissing && "attention")}>{providerLine}</small> : null}
+        </span>
+      </div>
+      <div className="model-reasoning-summary-row">
+        <span className="model-reasoning-eyebrow">{t("composer.reasoning.tooltip")}</span>
+        <span className="model-reasoning-summary-level">
+          {props.reasoning.kind === "scale" ? (
+            <span aria-hidden="true" className="model-reasoning-summary-pips">
+              {props.options.map((option, index) => (
+                <span className={cn(index <= scaleIndex && "on")} key={option.value} />
+              ))}
+            </span>
+          ) : null}
+          <strong>{props.reasoning.label ?? t("composer.reasoning.level.unavailable")}</strong>
+        </span>
+      </div>
+      {props.hasAccounts && account.selectedAccount ? (
+        <div className="model-reasoning-summary-usage">
+          <span className="model-reasoning-eyebrow">{t("composer.modelReasoning.planUsage")}</span>
+          {account.connection && account.usageOverviewVisible ? (
+            <CredentialUsageOverview
+              connection={account.connection}
+              credentialProfile={account.credentialProfile}
+              showQuotaSection={account.quotaWindowsSupported}
+              usage={account.usage}
+            />
+          ) : !account.connection && account.loading ? (
+            <StreamPlaceholder className="py-1" label={t("composer.accountCard.loading")} shape="tiles" count={1} />
+          ) : (
+            <p className="model-reasoning-hint">
+              {account.connection ? t("composer.accountCard.usageNotQueried") : t("composer.accountCard.metadataUnavailable")}
+            </p>
+          )}
+        </div>
+      ) : null}
+      <p className="model-reasoning-summary-foot">{t("composer.modelReasoning.clickHint")}</p>
     </div>
   );
 }
