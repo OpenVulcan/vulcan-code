@@ -1,4 +1,5 @@
 import { useI18n } from "@/i18n"
+import { PageEmptyState } from "@/components/page"
 import type { WorkbenchSnapshot } from "@/types"
 import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
 import { ContextEngineArea } from "@/components/features/context-engine/context-engine-area"
@@ -84,9 +85,7 @@ export function SkillsArea(props: {
           <DynamicPluginMountPanel mount={pluginSelection.mount} plugin={pluginSelection.plugin} />
         </div>
       ) : null}
-      {!pluginSelection && isPluginDetailSubArea(props.activeTab) ? <div className="skill-empty-state" role="status">
-        {t("skills.thisPluginPageIs")}
-      </div> : null}
+      {!pluginSelection && isPluginDetailSubArea(props.activeTab) ? <PageEmptyState size="panel" title={t("skills.thisPluginPageIs")} /> : null}
     </section>
   )
 }

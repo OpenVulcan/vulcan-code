@@ -130,20 +130,6 @@
 
 .visual-lab-sheet-body { padding-inline: var(--vcn-space-4); }
 
-.visual-lab-code {
-  max-height: 360px;
-  margin: 0;
-  overflow: auto;
-  padding: var(--vcn-space-3);
-  border-radius: var(--vcn-radius-md);
-  background: var(--vcn-surface-subtle);
-  color: var(--vcn-content-secondary);
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--vcn-font-size-xs);
-  line-height: 1.55;
-  white-space: pre;
-}
-
 .visual-lab-usage-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));

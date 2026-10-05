@@ -277,16 +277,6 @@
   border-radius: 50%;
 }
 
-/* Exact diagnostics wrap within the pane; host LuaSkills views still use this recipe. */
-/* 精确诊断在面板内换行；宿主 LuaSkills 视图仍使用此样式。 */
-.plugin-control-error-details {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-width: 60ch;
-  font-size: var(--vcn-font-size-sm);
-  color: var(--muted-foreground);
-}
-
 /* Usage statistics: page structure comes from the page kit; these rules style only cell content and charts. */
 /* 用量统计：页面结构来自页面套件；以下规则仅修饰单元格内容与图表。 */
 .plugin-statistics-section-header {

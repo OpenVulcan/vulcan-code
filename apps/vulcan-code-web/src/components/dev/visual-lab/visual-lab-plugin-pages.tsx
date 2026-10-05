@@ -143,7 +143,7 @@ export function VisualLabPluginSettings({ text, onAction }: VisualLabDemoProps) 
       </PageNotice>
       <SettingsPage />
       <PageDetails label={text("版面声明（ui/settings.json，由 plugin.yaml 的 kind: settings 挂载引用）", "Layout declaration (ui/settings.json, referenced by a kind: settings mount in plugin.yaml)")}>
-        <pre className="visual-lab-code">{JSON.stringify(DEMO_LAYOUT, null, 2)}</pre>
+        <pre>{JSON.stringify(DEMO_LAYOUT, null, 2)}</pre>
       </PageDetails>
     </>
   )
@@ -201,7 +201,7 @@ export function VisualLabPluginModule({ text, onAction }: VisualLabDemoProps) {
         </PageSection>
       </PageBody>
       <PageDetails label={text("模块源码（ui/index.mjs）", "Module source (ui/index.mjs)")}>
-        <pre className="visual-lab-code">{MODULE_SOURCE}</pre>
+        <pre>{MODULE_SOURCE}</pre>
       </PageDetails>
     </>
   )

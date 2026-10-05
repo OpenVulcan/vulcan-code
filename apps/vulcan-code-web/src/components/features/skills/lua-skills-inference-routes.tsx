@@ -1,4 +1,5 @@
 import * as React from "react";
+import { PageNotice } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import {
@@ -253,14 +254,11 @@ export function LuaSkillsInferenceRoutes() {
     <section className="lua-settings-section lua-inference-routes">
       <h4>{t("skills.routes.internalModelRoutes")}</h4>
       <p>{t("skills.routes.luaskillsBindsOneExact")}</p>
-      {error ? <div role="alert" className="skill-empty-state warning">
-        <pre className="plugin-control-error-details">{error}</pre>
-      </div> : null}
+      {error ? <PageNotice tone="error"><pre>{error}</pre></PageNotice> : null}
       {notice ? <p role="status">{notice}</p> : null}
-      {llmUnavailable ? <div role="alert" className="skill-empty-state warning">
-        <p>{t("skills.routes.theSavedTemporaryQuestion")}</p>
-        {llmDiagnostic?.reason ? <pre className="plugin-control-error-details">{llmDiagnostic.reason}</pre> : null}
-      </div> : null}
+      {llmUnavailable ? <PageNotice details={llmDiagnostic?.reason} detailsLabel={t("skills.lua.errorDetails")} role="alert" tone="warning">
+        {t("skills.routes.theSavedTemporaryQuestion")}
+      </PageNotice> : null}
       <label className="lua-inference-route-row">
         <span>{t("skills.routes.temporaryQuestionAnsweringTemporary")}</span>
         <Combobox
@@ -283,10 +281,9 @@ export function LuaSkillsInferenceRoutes() {
         type="button"
         variant="outline"
       >{t("skills.routes.clearQuestionAnsweringRoute")}</Button>
-      {embeddingUnavailable ? <div role="alert" className="skill-empty-state warning">
-        <p>{t("skills.routes.theSavedEmbeddingRoute")}</p>
-        {embeddingDiagnostic?.reason ? <pre className="plugin-control-error-details">{embeddingDiagnostic.reason}</pre> : null}
-      </div> : null}
+      {embeddingUnavailable ? <PageNotice details={embeddingDiagnostic?.reason} detailsLabel={t("skills.lua.errorDetails")} role="alert" tone="warning">
+        {t("skills.routes.theSavedEmbeddingRoute")}
+      </PageNotice> : null}
       <label className="lua-inference-route-row">
         <span>{t("skills.routes.embeddingsEmbeddingCreate")}</span>
         <Combobox

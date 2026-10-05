@@ -126,6 +126,27 @@ describe("checkUiArchitecture", () => {
     })
   })
 
+  // Verifies new feedback shells fail, baseline shells pass, page kit classes are exempt and stale entries must be removed.
+  // 验证新反馈外壳失败、基线外壳通过、页面套件类名豁免，且失效条目必须删除。
+  it("ratchets bespoke empty-state and notice shells", async () => {
+    // shells is an explicit baseline for the fixture tree.
+    // shells 是样本源码树的显式基线。
+    const shells = new Set(["legacy-empty"])
+    await withFixture('export const a = <div className="legacy-empty page-notice" />\n', async (directory) => {
+      assert.deepEqual(await checkUiArchitecture(directory, new Map(), shells), [])
+    })
+    await withFixture('export const a = <div className="legacy-empty" />\nexport const b = <p className="fresh-notice" />\n', async (directory) => {
+      assert.deepEqual(await checkUiArchitecture(directory, new Map(), shells), [
+        'fixture.tsx: bespoke feedback shell "fresh-notice"; use PageEmptyState or PageNotice from @/components/page',
+      ])
+    })
+    await withFixture('export const a = <div className="page-empty-state" />\n', async (directory) => {
+      assert.deepEqual(await checkUiArchitecture(directory, new Map(), shells), [
+        "legacy-empty: feedback shell is no longer used; remove its legacyFeedbackShells entry",
+      ])
+    })
+  })
+
   // Verifies tests cannot assert on TypeScript source text while other fixture reads stay allowed.
   // 验证测试不能断言 TypeScript 源码文本，而其他样本读取仍被允许。
   it("rejects tests that read TypeScript source text", async () => {

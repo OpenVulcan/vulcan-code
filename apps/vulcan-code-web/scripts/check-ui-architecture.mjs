@@ -106,13 +106,31 @@ async function collectSourceFiles(directory) {
   return files.sort()
 }
 
+// feedbackShellPattern matches class names of hand-built empty-state and notice shells; page kit classes are exempt.
+// feedbackShellPattern 匹配手写空状态与提示外壳的类名；页面套件类名不受限制。
+const feedbackShellPattern = /^(?!page-)[a-z0-9-]+-(?:empty-state|empty|notice)$/
+
+// legacyFeedbackShells is the ratchet of bespoke feedback shells that predate the page kit; it may only shrink.
+// New pages use PageEmptyState and PageNotice; inline widgets that truly cannot must justify a new entry in review.
+// legacyFeedbackShells 是页面套件之前遗留的自定义反馈外壳棘轮表，只能缩减。
+// 新页面使用 PageEmptyState 与 PageNotice；确实无法使用的行内控件须在评审中说明理由后再新增条目。
+const legacyFeedbackShells = new Set([
+  "composer-capability-dialog-empty", "composer-capability-summary-empty", "context-empty-state", "context-injection-delete-notice",
+  "conversation-session-commit-empty", "diff-empty-state", "diff-file-tree-empty", "file-change-empty", "knowledge-empty",
+  "knowledge-operation-empty", "markdown-tool-empty", "model-account-card-empty", "model-picker-empty", "project-folder-picker-empty",
+  "project-folder-picker-notice", "project-terminal-empty", "session-review-repository-notice", "settings-archive-empty",
+  "settings-error-notice", "subagent-orchestration-empty", "system-error-reconciliation-notice", "workspace-files-panel-notice",
+  "workspace-subagent-empty",
+])
+
 // checkUiArchitecture validates boundaries that must not regress through ordinary component work.
 // checkUiArchitecture 验证普通组件工作不得破坏的架构边界。
-// Parameters: root is the source tree; componentCeilings defaults to the real-tree ratchet only when root is the real tree.
-// 参数：root 是源码树；仅当 root 为真实源码树时 componentCeilings 才默认使用真实棘轮表。
+// Parameters: root is the source tree; componentCeilings and feedbackShells default to the real-tree ratchets only when root is the real tree.
+// 参数：root 是源码树；仅当 root 为真实源码树时 componentCeilings 与 feedbackShells 才默认使用真实棘轮表。
 export async function checkUiArchitecture(
   root = sourceRoot,
   componentCeilings = root === sourceRoot ? oversizedComponentCeilings : new Map(),
+  feedbackShells = root === sourceRoot ? legacyFeedbackShells : new Set(),
 ) {
   // files is the exact source inventory under review.
   // files 是当前评审的精确源码清单。
@@ -123,6 +141,9 @@ export async function checkUiArchitecture(
   // measuredCeilings records ratchet entries whose component still exceeds the limit.
   // measuredCeilings 记录其组件仍超限的棘轮条目。
   const measuredCeilings = new Set()
+  // seenFeedbackShells records ratchet entries still referenced by a component.
+  // seenFeedbackShells 记录仍被组件引用的棘轮条目。
+  const seenFeedbackShells = new Set()
   for (const path of files) {
     // name is the package-relative path used in diagnostics.
     // name 是诊断使用的包相对路径。
@@ -155,6 +176,13 @@ export async function checkUiArchitecture(
       failures.push(`${name}: tests must not read TypeScript source text; assert rendered behavior or exported contracts instead`)
     }
     if (name.endsWith(".tsx") && !name.includes(".test.")) {
+      // shells lists this file's bespoke feedback shell classes, reported once each.
+      // shells 列出本文件的自定义反馈外壳类名，每个只报告一次。
+      const shells = [...new Set(moduleClassNames(source).filter((token) => feedbackShellPattern.test(token)))]
+      for (const shell of shells) {
+        if (feedbackShells.has(shell)) seenFeedbackShells.add(shell)
+        else failures.push(`${name}: bespoke feedback shell "${shell}"; use PageEmptyState or PageNotice from @/components/page`)
+      }
       for (const component of componentFunctionCodeLines(source)) {
         // key identifies the component in the ratchet table.
         // key 在棘轮表中标识该组件。
@@ -177,6 +205,11 @@ export async function checkUiArchitecture(
   for (const key of componentCeilings.keys()) {
     if (!measuredCeilings.has(key)) {
       failures.push(`${key}: component no longer exceeds ${componentCodeLineLimit} code lines or was renamed; remove its oversizedComponentCeilings entry`)
+    }
+  }
+  for (const shell of feedbackShells) {
+    if (!seenFeedbackShells.has(shell)) {
+      failures.push(`${shell}: feedback shell is no longer used; remove its legacyFeedbackShells entry`)
     }
   }
   return failures

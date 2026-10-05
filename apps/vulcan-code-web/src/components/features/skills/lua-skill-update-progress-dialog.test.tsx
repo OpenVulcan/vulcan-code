@@ -170,7 +170,7 @@ it("keeps a request failure visible in the modal even when no service event arri
   await act(async () => updateButton().click());
   await act(async () => reject(new Error("source unavailable")));
   expect(dialog().textContent).toContain("技能包更新失败");
-  expect(dialog().querySelector("details")?.textContent).toContain("source unavailable");
+  expect(dialog().querySelector('[data-slot="inline-disclosure"]')?.textContent).toContain("source unavailable");
   expect(host.querySelector('[role="alert"]')).toBeNull();
   expect(updateButton().disabled).toBe(false);
 });

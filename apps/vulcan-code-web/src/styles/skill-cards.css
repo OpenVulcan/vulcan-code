@@ -250,21 +250,11 @@
   overflow: hidden;
 }
 
-.agent-skill-card-list:has(> .skill-empty-state) {
+.agent-skill-card-list:has(> .page-empty-state) {
   min-height: max(240px, calc(100dvh - 300px));
   align-items: center;
-  justify-items: center;
   border: 0;
   background: transparent;
-}
-
-.agent-skill-card-list > .skill-empty-state {
-  align-self: center;
-  justify-self: center;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  text-align: center;
 }
 
 .agent-definition-row {

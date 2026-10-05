@@ -13,7 +13,7 @@ import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
-import { PageNotice } from "@/components/page";
+import { PageEmptyState, PageNotice } from "@/components/page";
 import type { PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
 import type { PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
@@ -660,9 +660,7 @@ export function VulcanPluginsPanel(props: {
               </div>
             </dl>
             {permissionPreview.permissions.includes("system_vldb_access") ? (
-              <div className="skill-empty-state warning">
-                {t("skills.plugins.highTrustPermissionThis")}
-              </div>
+              <PageNotice tone="warning">{t("skills.plugins.highTrustPermissionThis")}</PageNotice>
             ) : null}
             <label className="vulcan-plugin-permission-consent">
               <Checkbox
@@ -707,13 +705,13 @@ export function VulcanPluginsPanel(props: {
               </div>
             ) : null}
             {inspectedInstalledPlugin ? (
-              <div className={`skill-empty-state ${inspectedInstalledPlugin.extension?.origin === "userInstalled" && inspectedInstalledPlugin.runtimeState === "disabled" ? "" : "warning"}`}>
+              <PageNotice tone={inspectedInstalledPlugin.extension?.origin === "userInstalled" && inspectedInstalledPlugin.runtimeState === "disabled" ? "info" : "warning"}>
                 {inspectedInstalledPlugin.extension?.origin !== "userInstalled"
                   ? t("skills.plugins.thisIdIsOwned")
                   : inspectedInstalledPlugin.runtimeState === "disabled"
                     ? t("skills.plugins.thisWillUpdateThe")
                     : t("skills.plugins.disableAndFullyDrain")}
-              </div>
+              </PageNotice>
             ) : null}
             <Button
               disabled={mutationBusy
@@ -776,9 +774,7 @@ export function VulcanPluginsPanel(props: {
       <TooltipProvider delayDuration={300}>
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (
-          <div className="skill-empty-state">
-            {vulcanPlugins.length === 0 ? t("skills.plugins.emptyDetail") : t("skills.filter.empty")}
-          </div>
+          <PageEmptyState size="panel" title={vulcanPlugins.length === 0 ? t("skills.plugins.emptyDetail") : t("skills.filter.empty")} />
         ) : visiblePlugins.map((plugin) => {
           // installTask is the newest Core-owned installation attempt for this plugin generation.
           // installTask 是当前插件代次最近一次由 Core 持有的安装尝试。

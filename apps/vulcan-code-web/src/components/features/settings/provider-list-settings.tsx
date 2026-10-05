@@ -3,7 +3,7 @@ import * as React from "react"
 import { Boxes, KeyRound, ListChecks, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
-import { SettingsEmptyState } from "@/components/features/settings/settings-empty-state"
+import { PageEmptyState } from "@/components/page"
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import {
   localizedProviderDescription,
@@ -301,13 +301,13 @@ export function CredentialManagementArea() {
             })}
           </div>
         ) : activeProviderId ? (
-          <SettingsEmptyState
+          <PageEmptyState
             description={t("settings.credentials.emptyProviderDescription")}
             icon={<KeyRound />}
             title={t("settings.credentials.emptyProvider")}
           />
         ) : (
-          <SettingsEmptyState
+          <PageEmptyState
             action={<Button disabled={directoryLoading} onClick={() => void refresh()} type="button" variant="outline"><RefreshCw className="size-4" />{t("settings.providers.reloadDirectory")}</Button>}
             description={t("settings.providers.loadTheProviderDirectory")}
             icon={<Boxes />}

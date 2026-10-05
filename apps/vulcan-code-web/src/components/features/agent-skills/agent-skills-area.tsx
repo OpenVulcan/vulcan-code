@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm"
 import { agentSkillsCatalogSummary, type AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types"
 import { AgentSkillCategoryManagementDialog, AgentSkillEditorDialog } from "@/components/features/agent-skills/agent-skill-management-dialogs"
 import { hasLinkedGitHubSourceOrigin, SourceOriginLink } from "@/components/features/source-origin-link"
+import { PageEmptyState } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
 import { Button, IconButton } from "@/components/ui/button"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -307,7 +308,7 @@ export function AgentSkillsArea(props: {
 
         <div className="skill-card-list agent-skill-card-list">
           {visibleRecords.length === 0 ? (
-            <div className="skill-empty-state">{t("agentSkills.noSkillsMatchThe")}</div>
+            <PageEmptyState size="panel" title={t("agentSkills.noSkillsMatchThe")} />
           ) : visibleRecords.map((record) => (
             <article className="agent-definition-row" key={record.skillKey}>
               <button className="agent-definition-row-icon" onClick={() => setDetailRecord(record)} title={t("agentSkills.details")} type="button">

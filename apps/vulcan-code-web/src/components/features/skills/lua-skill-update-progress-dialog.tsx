@@ -1,4 +1,5 @@
 import { CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
+import { PageDetails } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
@@ -129,10 +130,7 @@ export function LuaSkillUpdateProgressDialog(props: {
           </p> : null}
           {props.progress?.message ? <p className="text-sm text-muted-foreground">{props.progress.message}</p> : null}
           {props.progress?.overflowed ? <p className="text-xs text-muted-foreground">{t("skills.update.somePhaseRecordsWere")}</p> : null}
-          {props.request?.error ? <details>
-            <summary>{t("skills.update.errorDetails")}</summary>
-            <pre className="plugin-control-error-details">{props.request.error}</pre>
-          </details> : null}
+          {props.request?.error ? <PageDetails label={t("skills.update.errorDetails")}><pre>{props.request.error}</pre></PageDetails> : null}
           {running ? <p className="text-xs text-muted-foreground">{t("skills.update.otherSkillOperationsWait")}</p> : null}
         </div>
         <DialogFooter>

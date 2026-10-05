@@ -3,7 +3,7 @@
 import * as React from "react"
 import { KeyRound, LoaderCircle, ListTree, LockKeyhole, Pencil, Plus, Search, ServerCog, Trash2 } from "lucide-react"
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
-import { SettingsEmptyState } from "@/components/features/settings/settings-empty-state"
+import { PageEmptyState } from "@/components/page"
 import { orderProvidersByPriority } from "@/components/features/settings/provider-ordering"
 import { localizedProviderDescription, localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder"
@@ -68,11 +68,11 @@ export function CustomProviderTable(props: {
       </div>
 
       <Input aria-label={t("settings.modelExperience.searchCustom")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-      {!props.loading && props.providers.length > 0 && visibleProviders.length === 0 ? <SettingsEmptyState icon={<Search />} title={t("settings.modelExperience.noProviders")} /> : null}
+      {!props.loading && props.providers.length > 0 && visibleProviders.length === 0 ? <PageEmptyState icon={<Search />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
         <StreamPlaceholder className="rounded-xl border p-1.5" fill label={t("settings.providers.loading")} shape="rows" count={4} />
       ) : props.providers.length === 0 ? (
-        <SettingsEmptyState
+        <PageEmptyState
           action={(
             <Button disabled={props.busyProviderId !== null} onClick={props.onCreate} size="sm" type="button">
               <Plus className="size-4" />
@@ -243,7 +243,7 @@ export function SystemProviderTable(props: {
   return (
     <section className="space-y-3">
       <Input aria-label={t("settings.modelExperience.searchProvider")} placeholder={t("settings.modelExperience.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
-      {!props.loading && visibleProviders.length === 0 ? <SettingsEmptyState icon={search.trim() ? <Search /> : props.variant === "system" ? <LockKeyhole /> : <ServerCog />} title={t("settings.modelExperience.noProviders")} /> : null}
+      {!props.loading && visibleProviders.length === 0 ? <PageEmptyState icon={search.trim() ? <Search /> : props.variant === "system" ? <LockKeyhole /> : <ServerCog />} title={t("settings.modelExperience.noProviders")} /> : null}
       {props.loading ? (
         <StreamPlaceholder className="rounded-xl border p-1.5" fill label={t("settings.providers.loading")} shape="rows" count={4} />
       ) : visibleProviders.length === 0 ? null : (

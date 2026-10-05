@@ -144,7 +144,7 @@
 
 /* Empty states and feature pages fade in so loading swaps do not flash. */
 /* 空状态与功能页淡入，避免加载切换时闪烁。 */
-.settings-empty-state,
+.page-empty-state,
 .feature-content > * { animation: vcn-fade-in var(--vcn-duration-base) var(--vcn-ease-out); }
 
 /* Settings pages assemble top-down: each section a beat after the previous, capped so long pages never feel slow. */

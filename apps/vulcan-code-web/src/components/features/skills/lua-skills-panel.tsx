@@ -1,5 +1,6 @@
 import * as React from "react";
 import { PackagePlus, Search } from "lucide-react";
+import { PageEmptyState, PageNotice } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { FilterChip, FilterChipGroup } from "@/components/ui/choice-controls";
@@ -280,13 +281,11 @@ export function LuaSkillsPanel(props: {
 
   return (
     <div className="skill-page-body lua-skill-page-body">
-      {actionError ? <div role="alert" className="skill-empty-state warning">
-        <p>{t("skills.lua.skillActionFailedTry")}</p>
-        <details><summary>{t("skills.lua.errorDetails")}</summary><pre className="plugin-control-error-details">{actionError}</pre></details>
-      </div> : null}
-      {operationProgress && operationProgress.action !== "update" ? <div
-        className={operationProgress.outcome === "failed" ? "skill-empty-state warning" : "skill-empty-state"}
-        role={operationProgress.outcome === "failed" ? "alert" : "status"}
+      {actionError ? <PageNotice details={actionError} detailsLabel={t("skills.lua.errorDetails")} tone="error">
+        {t("skills.lua.skillActionFailedTry")}
+      </PageNotice> : null}
+      {operationProgress && operationProgress.action !== "update" ? <PageNotice
+        tone={operationProgress.outcome === "failed" ? "error" : operationProgress.outcome === "succeeded" ? "success" : "info"}
       >
         <p>{t(operationProgress.inFlight
           ? (operationProgress.action === "update" ? "skills.lua.operationUpdating" : "skills.lua.operationInstalling")
@@ -319,17 +318,17 @@ export function LuaSkillsPanel(props: {
         {/* 引擎写锁在整次安装或更新期间持有，含下载与校验，因此无关的技能操作会在其后排队。
             并发方案要求把该排队作为明确限制显示，而不是隐藏。 */}
         {operationProgress.inFlight ? <p>{t("skills.lua.theSkillEngineIs")}</p> : null}
-      </div> : null}
-      {configWatchIssues.map((configWatchIssue) => <div
+      </PageNotice> : null}
+      {configWatchIssues.map((configWatchIssue) => <PageNotice
         key={`${configWatchIssue.storeScope}\0${configWatchIssue.skillId ?? ""}`}
         role="alert"
-        className="skill-empty-state warning"
+        tone="warning"
       >
         <p>{configWatchIssue.skillId
           ? formatMessage(t("skills.lua.configWatchSkill"), { skillId: configWatchIssue.skillId, storeScope: configWatchIssue.storeScope })
           : formatMessage(t("skills.lua.configWatchScope"), { storeScope: configWatchIssue.storeScope })}</p>
-        <pre className="plugin-control-error-details">{configWatchIssue.code}: {configWatchIssue.message}</pre>
-      </div>)}
+        <pre>{configWatchIssue.code}: {configWatchIssue.message}</pre>
+      </PageNotice>)}
       <div className="agent-catalog-filter-row skill-list-filter-row">
         <label className="agent-catalog-search-input skill-list-search-input">
           <Search size={15} />
@@ -358,9 +357,7 @@ export function LuaSkillsPanel(props: {
       </div>
       <div className="skill-card-list agent-skill-card-list">
         {visibleSkills.length === 0 ? (
-          <div className="skill-empty-state">
-            {props.skills.length === 0 ? t("skills.lua.emptyDetail") : t("skills.filter.empty")}
-          </div>
+          <PageEmptyState size="panel" title={props.skills.length === 0 ? t("skills.lua.emptyDetail") : t("skills.filter.empty")} />
         ) : visibleSkills.map((skill) => (
           <LuaSkillCard
             actions={props.actions}
@@ -399,7 +396,7 @@ export function LuaSkillsPanel(props: {
             <AlertDialogTitle>{t("skills.lua.uninstallSkill")}</AlertDialogTitle>
             <AlertDialogDescription>{pendingUninstall ? (formatMessage(t("skills.lua.removeSkillPackage"), { displayName: pendingUninstall.displayName })) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {actionError ? <details role="alert" className="text-sm text-destructive"><summary>{t("skills.lua.uninstallFailedRetry")}</summary><pre className="plugin-control-error-details">{actionError}</pre></details> : null}
+          {actionError ? <PageNotice details={actionError} detailsLabel={t("skills.lua.errorDetails")} tone="error">{t("skills.lua.uninstallFailedRetry")}</PageNotice> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busyAction !== null}>{t("skills.action.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={busyAction !== null} onClick={(event) => {
@@ -538,10 +535,9 @@ export function LuaSkillInstallDialog(props: {
               onChange={(event) => setSource(event.target.value)}
             />
           </label>
-          {installError ? <div role="alert">
-            <p>{t("skills.lua.skillInstallationFailedCheck")}</p>
-            <details><summary>{t("skills.lua.errorDetails")}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
-          </div> : null}
+          {installError ? <PageNotice details={installError} detailsLabel={t("skills.lua.errorDetails")} tone="error">
+            {t("skills.lua.skillInstallationFailedCheck")}
+          </PageNotice> : null}
         </form>
           <DialogFooter>
             <Button disabled={installing} onClick={() => props.onOpenChange(false)} type="button" variant="secondary">{t("skills.action.cancel")}</Button>

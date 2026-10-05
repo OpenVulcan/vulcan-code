@@ -1,4 +1,5 @@
 import * as React from "react";
+import { PageNotice } from "@/components/page";
 import {
   ChevronDown,
   Package,
@@ -391,10 +392,7 @@ function LuaSkillToolRow(props: {
       <div className="skill-tool-description">
         <p>{props.tool.description || props.tool.registrationHelp}</p>
       </div>
-      {syncError ? <details role="alert" className="text-xs text-destructive">
-        <summary>{t("skills.card.toolStateCouldNot")}</summary>
-        <pre className="plugin-control-error-details">{syncError}</pre>
-      </details> : null}
+      {syncError ? <PageNotice details={syncError} detailsLabel={t("skills.lua.errorDetails")} tone="error">{t("skills.card.toolStateCouldNot")}</PageNotice> : null}
     </article>
   );
 }
