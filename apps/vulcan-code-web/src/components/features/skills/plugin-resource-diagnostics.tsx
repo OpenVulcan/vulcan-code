@@ -7,7 +7,9 @@ import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection, PluginOperationPhase, PluginResourceDiagnostic, PluginResourceKind } from "@/types/plugin-resource-diagnostics";
 import { readPluginResourceDiagnostics, type PluginDiagnosticsObservation } from "@/service/plugin-resource-diagnostics-service";
-import { MaintenanceNotice, TechnicalDetails } from "./plugin-maintenance-section";
+import { PageEmptyState, PageFacts, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { TechnicalDetails } from "./plugin-maintenance-section";
 
 // PluginResourceDiagnosticsProps binds read-only selection to the existing workspace conversation action.
 // PluginResourceDiagnosticsProps 将只读选择绑定至既有工作台会话动作。
@@ -135,40 +137,39 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
   const owners = new Set(live.flatMap((row) => row.ownerSessionId === null ? [] : [row.ownerSessionId]));
   const blocking = live.filter((row) => row.isDrainBlocking).length;
   return <section aria-label={t("pluginDiagnostics.title")} className="plugin-usage" ref={section} tabIndex={-1}>
-    <div className="plugin-usage-toolbar">
-      <p className="plugin-usage-subject">{selection.kind === "plugin"
+    <PageToolbar actions={<>
+      {selection.kind !== "plugin" && <Button onClick={() => props.onSelect({ kind: "plugin", pluginId: selection.pluginId })} size="sm" type="button" variant="ghost">
+        <ArrowLeft data-icon="inline-start" />{t("pluginDiagnostics.showPlugin")}</Button>}
+      {busy
+        ? <Button onClick={() => { version.current += 1; setBusy(false); }} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
+        : <Button onClick={() => void load(selection)} size="sm" type="button" variant="outline"><RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
+    </>}>
+      <p className="page-row-label">{selection.kind === "plugin"
         ? formatMessage(t("pluginDiagnostics.subject.plugin"), { name })
         : formatMessage(t(selection.kind === "update" ? "pluginDiagnostics.subject.update" : "pluginDiagnostics.subject.uninstall"), { name })}</p>
-      <div className="plugin-usage-actions">
-        {selection.kind !== "plugin" && <Button onClick={() => props.onSelect({ kind: "plugin", pluginId: selection.pluginId })} size="sm" type="button" variant="ghost">
-          <ArrowLeft data-icon="inline-start" />{t("pluginDiagnostics.showPlugin")}</Button>}
-        {busy
-          ? <Button onClick={() => { version.current += 1; setBusy(false); }} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
-          : <Button onClick={() => void load(selection)} size="sm" type="button" variant="outline"><RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
-      </div>
-    </div>
-    {busy && current === null && <p className="plugin-usage-loading" role="status">{t("ui.loading")}</p>}
-    {current?.error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{current.error}</span></MaintenanceNotice>}
-    {current !== null && !current.fresh && current.report !== null && !busy && <MaintenanceNotice tone="info">{t("pluginUpdates.stale")}</MaintenanceNotice>}
-    {current?.report !== null && current?.report !== undefined && resources === null && <MaintenanceNotice tone="warning">{t("pluginDiagnostics.unavailable")}</MaintenanceNotice>}
+    </PageToolbar>
+    {busy && current === null && <StreamPlaceholder count={2} label={t("ui.loading")} shape="rows" />}
+    {current?.error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{current.error}</span></PageNotice>}
+    {current !== null && !current.fresh && current.report !== null && !busy && <PageNotice tone="info">{t("pluginUpdates.stale")}</PageNotice>}
+    {current?.report !== null && current?.report !== undefined && resources === null && <PageNotice tone="warning">{t("pluginDiagnostics.unavailable")}</PageNotice>}
     {resources && <>
-      <dl className="plugin-maintenance-stats">
-        <div><dt>{t("pluginDiagnostics.stat.conversations")}</dt><dd>{owners.size}</dd></div>
-        <div data-tone={blocking > 0 ? "warning" : undefined}><dt>{t("pluginDiagnostics.stat.blocking")}</dt><dd>{blocking}</dd></div>
-        <div><dt>{t("pluginDiagnostics.pinned")}</dt><dd>{resources.pinnedSessionCount}</dd></div>
-      </dl>
-      {live.length === 0 && <p className="plugin-usage-empty" role="status">{t("pluginDiagnostics.empty")}</p>}
-      {live.length > 0 && <div className="plugin-usage-list">
+      <PageFacts layout="tiles" items={[
+        { key: "conversations", label: t("pluginDiagnostics.stat.conversations"), value: owners.size },
+        { key: "blocking", label: t("pluginDiagnostics.stat.blocking"), value: blocking, tone: blocking > 0 ? "attention" : undefined },
+        { key: "pinned", label: t("pluginDiagnostics.pinned"), value: resources.pinnedSessionCount },
+      ]} />
+      {live.length === 0 && <PageEmptyState title={t("pluginDiagnostics.empty")} />}
+      {live.length > 0 && <PageItemList>
         {live.map((resource) => <PluginResourceRow conversations={props.conversations} key={`${resource.resourceKind}:${resource.resourceId}:${resource.pluginGeneration}`}
           onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} resource={resource} />)}
-      </div>}
+      </PageItemList>}
       {history.length > 0 && <InlineDisclosure keepMounted label={formatMessage(t("pluginDiagnostics.history"), { count: history.length })}>
-        <div className="plugin-usage-list">
+        <PageItemList>
           {history.map((resource) => <PluginResourceRow conversations={props.conversations} key={`${resource.resourceKind}:${resource.resourceId}:${resource.pluginGeneration}`}
             onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} resource={resource} />)}
-        </div>
+        </PageItemList>
       </InlineDisclosure>}
-      <p className="plugin-usage-footnote">{t("pluginDiagnostics.nonAtomic")}</p>
+      <PageHint>{t("pluginDiagnostics.nonAtomic")}</PageHint>
     </>}
     <TechnicalDetails entries={[
       [t("pluginUpdates.plugin"), <code key="plugin">{selection.pluginId}</code>],
@@ -228,21 +229,25 @@ function PluginResourceRow(props: { resource: PluginResourceDiagnostic; conversa
   };
   const ownerText = row.ownerSessionId === null ? t("pluginDiagnostics.internal") : owner !== undefined ? owner.title : t("pluginDiagnostics.missingOwner");
   const Icon = row.ownerSessionId === null ? Cog : row.resourceKind === "formal_call" ? Activity : MessageSquare;
-  return <article className="plugin-usage-row" data-blocking={row.isDrainBlocking ? "true" : undefined}>
-    <span aria-hidden="true" className="plugin-usage-row-icon"><Icon size={15} /></span>
-    <div className="plugin-usage-row-main">
-      <p className="plugin-usage-row-title">
-        <span>{t(kindLabels[row.resourceKind])}</span>
-        {row.isDrainBlocking && <Badge variant="warning">{t("pluginDiagnostics.blocking")}</Badge>}
-        {row.cleanupRecovery && <Badge variant="outline">{t("pluginDiagnostics.cleanupPending")}</Badge>}
-        {hasErrors(row) && <Badge variant="destructive">{t("pluginDiagnostics.hadErrors")}</Badge>}
-      </p>
-      <p className="plugin-usage-row-meta">
-        <span role={row.ownerSessionId !== null && !ownerExists ? "status" : undefined}>{ownerText}</span>
-        <span aria-hidden="true">·</span>
-        <span>{describeState(row, t)}</span>
-      </p>
-      {navigationError && <p className="plugin-usage-row-error" role="alert">{navigationError}</p>}
+  return <PageItem
+    actions={row.ownerSessionId !== null && ownerExists && props.onSelectPluginResourceOwner !== undefined
+      ? <Button disabled={navigating} onClick={() => void navigateOwner()} size="sm" type="button" variant="outline">{t("pluginDiagnostics.locate")}</Button>
+      : undefined}
+    description={<>
+      <span role={row.ownerSessionId !== null && !ownerExists ? "status" : undefined}>{ownerText}</span>
+      <span aria-hidden="true"> · </span>
+      <span>{describeState(row, t)}</span>
+    </>}
+    icon={<Icon />}
+    meta={<>
+      {row.isDrainBlocking && <Badge variant="warning">{t("pluginDiagnostics.blocking")}</Badge>}
+      {row.cleanupRecovery && <Badge variant="outline">{t("pluginDiagnostics.cleanupPending")}</Badge>}
+      {hasErrors(row) && <Badge variant="destructive">{t("pluginDiagnostics.hadErrors")}</Badge>}
+    </>}
+    title={t(kindLabels[row.resourceKind])}
+    tone={row.isDrainBlocking ? "attention" : "neutral"}
+  >
+      {navigationError && <PageNotice tone="error">{navigationError}</PageNotice>}
       <TechnicalDetails entries={[
         ["resourceId", <code key="resource">{row.resourceId}</code>],
         ["pluginGeneration", <code key="generation">{row.pluginGeneration}</code>],
@@ -260,9 +265,5 @@ function PluginResourceRow(props: { resource: PluginResourceDiagnostic; conversa
           {operation.errors.map((error) => ` · ${error.stage}: ${error.code ?? "—"}`).join("")}</code>] as const),
         ...row.errors.map((error, index) => [`error ${index + 1}`, <code key={`error:${index}`}>{error.stage}: {error.code ?? "—"}</code>] as const),
       ]} />
-    </div>
-    {row.ownerSessionId !== null && ownerExists && props.onSelectPluginResourceOwner !== undefined && <div className="plugin-usage-row-actions">
-      <Button disabled={navigating} onClick={() => void navigateOwner()} size="sm" type="button" variant="outline">{t("pluginDiagnostics.locate")}</Button>
-    </div>}
-  </article>;
+  </PageItem>;
 }

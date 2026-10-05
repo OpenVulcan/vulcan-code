@@ -1,18 +1,9 @@
 import * as React from "react";
 import {
-  Activity,
-  Bot,
-  Calendar,
-  CheckCircle2,
   CircleHelp,
   CircleAlert,
-  Clock3,
-  Database,
   FileText,
   Github,
-  MessageSquareText,
-  Network,
-  User,
 } from "lucide-react";
 import {
   Dialog,
@@ -269,61 +260,9 @@ export function SelectControl(props: SelectControlProps) {
   );
 }
 
-// METRIC_CARD_ICONS is the bounded host icon vocabulary available to plugin KPI cards.
-// METRIC_CARD_ICONS 是插件 KPI 卡片可使用的有界宿主图标词表。
-const METRIC_CARD_ICONS = {
-  activity: Activity,
-  agent: User,
-  calendar: Calendar,
-  duration: Clock3,
-  internal: Bot,
-  model: Bot,
-  requests: MessageSquareText,
-  success: CheckCircle2,
-  subagent: Network,
-  tokens: Database,
-} as const;
-
-// MetricCardIconName is one stable icon identifier supported by the plugin UI SDK.
-// MetricCardIconName 是插件 UI SDK 支持的一个稳定图标标识。
-export type MetricCardIconName = keyof typeof METRIC_CARD_ICONS;
-
-// MetricCardProps describes one theme-inheriting KPI card.
-// MetricCardProps 描述一个继承主题的 KPI 卡片。
-export interface MetricCardProps {
-  // Short metric label.
-  // 简短指标标签。
-  label: string;
-  // Formatted primary value.
-  // 已格式化主要数值。
-  value: React.ReactNode;
-  // Optional host icon rendered beside the title.
-  // 渲染在标题旁的可选宿主图标。
-  icon?: MetricCardIconName;
-  // Optional supporting detail.
-  // 可选辅助详情。
-  detail?: React.ReactNode;
-}
-
-// MetricCard renders one compact plugin KPI with host typography and colors.
-// MetricCard 使用宿主字体与颜色渲染一个紧凑插件 KPI。
-export function MetricCard(props: MetricCardProps) {
-  // Icon resolves the bounded SDK icon name to the current host icon component.
-  // Icon 将有界 SDK 图标名称解析为当前宿主图标组件。
-  const Icon = props.icon ? METRIC_CARD_ICONS[props.icon] : null;
-  return (
-    <section className="plugin-metric-card">
-      <div className="plugin-metric-card-header">
-        {Icon ? <Icon aria-hidden="true" size={14} /> : null}
-        <div className="plugin-metric-card-label" title={props.label}>{props.label}</div>
-      </div>
-      {/* Preserve complete text when compact cards truncate it; rich nodes retain their own interactions. */}
-      {/* 紧凑卡片截断时保留完整文本提示；富内容节点维持各自交互。 */}
-      <div className="plugin-metric-card-value" title={typeof props.value === "string" || typeof props.value === "number" ? String(props.value) : undefined}>{props.value}</div>
-      <div className="plugin-metric-card-detail" title={typeof props.detail === "string" || typeof props.detail === "number" ? String(props.detail) : undefined}>{props.detail ?? "\u00a0"}</div>
-    </section>
-  );
-}
+// MetricCard is the page-kit KPI card; the plugin SDK exposes the same component.
+// MetricCard 是页面套件 KPI 卡片；插件 SDK 暴露同一组件。
+export { MetricCard, type MetricCardIconName, type MetricCardProps } from "@/components/page";
 
 // ActivityHeatmapCell describes one calendar-day activity point.
 // ActivityHeatmapCell 描述一个自然日活动点。

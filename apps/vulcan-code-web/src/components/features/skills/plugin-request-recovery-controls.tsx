@@ -1,5 +1,6 @@
 import * as React from "react";
 import { KeyRound, PackagePlus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -7,7 +8,8 @@ import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginInstallPhase, PluginInstallStatus } from "@/service/plugin-install-recovery-service";
 import type { PluginSecretMutationPhase, PluginSecretMutationStatus } from "@/service/plugin-secret-recovery-service";
 import type { SkillActionProps } from "./skill-area-types";
-import { MaintenanceItem, MaintenanceNotice, TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
+import { PageItem, PageNotice } from "@/components/page";
+import { TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
 
 // RecoveryRecord is a non-secret observation of one actual retained service request.
 // RecoveryRecord 是单个实际保留服务请求的无秘密观测。
@@ -186,20 +188,21 @@ export function PluginRequestRecoveryControls(props: RecoveryProps) {
   useRecoveryReport(props.onReport, observation === null && !error, visible);
   const Icon = props.kind === "installation" ? PackagePlus : KeyRound;
   return <>
-    {showUncertain && <MaintenanceNotice tone="warning">{formatMessage(t("pluginRecovery.unknownNotice"), { name })}</MaintenanceNotice>}
-    {confirmed && <MaintenanceNotice tone="success">{formatMessage(t("pluginRecovery.confirmed"), { name })}</MaintenanceNotice>}
-    {error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{formatMessage(t("pluginRecovery.failed"), { name })}{"\n"}{error}</span></MaintenanceNotice>}
+    {showUncertain && <PageNotice tone="warning">{formatMessage(t("pluginRecovery.unknownNotice"), { name })}</PageNotice>}
+    {confirmed && <PageNotice tone="success">{formatMessage(t("pluginRecovery.confirmed"), { name })}</PageNotice>}
+    {error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{formatMessage(t("pluginRecovery.failed"), { name })}{"\n"}{error}</span></PageNotice>}
     {records.map((record) => {
       const stage = stageOf(record.phase);
       const title = formatMessage(t(props.kind === "installation" ? "pluginRecovery.installItemTitle" : "pluginRecovery.secretItemTitle"), { name });
-      return <MaintenanceItem
+      return <PageItem
         actions={stage === "executing" ? undefined : <Button disabled={!canWrite} onClick={() => { setConfirmation(record); setAcknowledgement(false); }} size="sm" type="button">
           {t(stageActions[props.kind][stage])}</Button>}
         description={t(stageHints[props.kind][stage])}
         icon={<Icon size={16} />}
         key={record.requestId}
-        label={title}
-        title={<>{title}<span className="plugin-maintenance-item-status">{t(stageLabels[stage])}</span></>}
+        aria-label={title}
+        meta={<Badge variant="secondary">{t(stageLabels[stage])}</Badge>}
+        title={title}
         tone={stage === "executing" ? "neutral" : "attention"}
       >
         <TechnicalDetails entries={[
@@ -207,7 +210,7 @@ export function PluginRequestRecoveryControls(props: RecoveryProps) {
           [t("pluginRecovery.phase"), <code key="phase">{record.phase}</code>],
           ...("serverId" in record ? [[t("pluginRecovery.credential"), <code key="secret">{record.serverId} / {record.secretKey}</code>] as const] : []),
         ]} />
-      </MaintenanceItem>;
+      </PageItem>;
     })}
     <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConfirmation(null); }}>
       <AlertDialogContent>

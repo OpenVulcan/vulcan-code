@@ -5,7 +5,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary, WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";
 import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
-import { MaintenanceSection, type MaintenanceGuide } from "./plugin-maintenance-section";
+import { PageGuide, PageSection } from "@/components/page";
 import { PluginPrewarmPolicyControls } from "./plugin-prewarm-policy-controls";
 import { PluginRecoveryCenter, type RecoveryKind } from "./plugin-recovery-center";
 import { PluginResourceDiagnostics } from "./plugin-resource-diagnostics";
@@ -69,13 +69,16 @@ const guideKeys: Record<"recovery" | "usage" | "capacity" | "prewarm", readonly 
   capacity: ["pluginMaintenance.capacity.when", "pluginMaintenance.capacity.how", "pluginMaintenance.capacity.effect"],
   prewarm: ["pluginMaintenance.prewarm.when", "pluginMaintenance.prewarm.how", "pluginMaintenance.prewarm.effect"],
 };
-
-// useMaintenanceGuide reads the when/how/effect explanation of one section.
-// useMaintenanceGuide 读取单个区块的何时／如何／效果说明。
-function useMaintenanceGuide(section: keyof typeof guideKeys): MaintenanceGuide {
+// useMaintenanceGuide resolves the when/how/effect answers of one section into the shared page guide.
+// useMaintenanceGuide 将单个区块的何时／如何／效果回答解析为共享页面说明。
+function useMaintenanceGuide(section: keyof typeof guideKeys): React.ReactNode {
   const { t } = useI18n();
   const [when, how, effect] = guideKeys[section];
-  return { when: t(when), how: t(how), effect: t(effect) };
+  return <PageGuide items={[
+    { term: t("pluginMaintenance.guide.when"), detail: t(when) },
+    { term: t("pluginMaintenance.guide.how"), detail: t(how) },
+    { term: t("pluginMaintenance.guide.effect"), detail: t(effect) },
+  ]} />;
 }
 
 // RecoveryMaintenanceSection scans for interrupted operations and offers one "check again" control.
@@ -95,16 +98,16 @@ export function RecoveryMaintenanceSection(props: PluginMaintenanceContext & {
   // scanToken 在每次明确重新检查时递增；挂载即完成首次扫描。
   const [scanToken, setScanToken] = React.useState(0);
   return (
-    <MaintenanceSection anchor="recovery" compact={props.compact} guide={guide}
+    <PageSection data-anchor="recovery" guide={guide} guideCollapsed={props.compact} guideLabel={t("pluginMaintenance.guide.toggle")}
       actions={<Button onClick={() => setScanToken((value) => value + 1)} size="sm" type="button" variant="outline">
         <RefreshCw data-icon="inline-start" />{t("pluginMaintenance.recovery.recheck")}</Button>}
-      summary={t(props.uninstallOnly ? "pluginMaintenance.uninstalls.summary" : "pluginMaintenance.recovery.summary")}
+      description={t(props.uninstallOnly ? "pluginMaintenance.uninstalls.summary" : "pluginMaintenance.recovery.summary")}
       title={t(props.uninstallOnly ? "pluginMaintenance.uninstalls.title" : "pluginMaintenance.recovery.title")}>
       <PluginRecoveryCenter actions={props.actions} gate={props.gate} kinds={props.kinds} onLocate={props.onLocate}
         onUninstallConfirmed={props.onUninstallConfirmed} onUninstallRecordsObserved={props.onUninstallRecordsObserved}
         pluginName={props.pluginName} plugins={props.plugins} scanToken={scanToken} scopePluginId={props.scopePluginId}
         uninstallUncertainty={props.uninstallUncertainty} />
-    </MaintenanceSection>
+    </PageSection>
   );
 }
 
@@ -119,12 +122,12 @@ export function UsageMaintenanceSection(props: Pick<PluginMaintenanceContext, "c
   const { t } = useI18n();
   const guide = useMaintenanceGuide("usage");
   return (
-    <MaintenanceSection anchor="usage" compact={props.compact} guide={guide}
+    <PageSection data-anchor="usage" guide={guide} guideCollapsed={props.compact} guideLabel={t("pluginMaintenance.guide.toggle")}
       actions={props.onClose ? <IconButton aria-label={t("pluginMaintenance.usage.close")} onClick={props.onClose} type="button"><X size={16} /></IconButton> : undefined}
-      summary={t("pluginMaintenance.usage.summary")} title={t("pluginMaintenance.usage.title")}>
+      description={t("pluginMaintenance.usage.summary")} title={t("pluginMaintenance.usage.title")}>
       <PluginResourceDiagnostics conversations={props.conversations} onSelect={props.onSelect}
         onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} pluginName={props.pluginName} selection={props.selection} />
-    </MaintenanceSection>
+    </PageSection>
   );
 }
 
@@ -134,10 +137,10 @@ export function CapacityMaintenanceSection(props: { plugins: PluginSummary[]; on
   const { t } = useI18n();
   const guide = useMaintenanceGuide("capacity");
   return (
-    <MaintenanceSection anchor="capacity" compact={props.compact} guide={guide}
-      summary={t("pluginMaintenance.capacity.summary")} title={t("pluginMaintenance.capacity.title")}>
+    <PageSection data-anchor="capacity" guide={guide} guideCollapsed={props.compact} guideLabel={t("pluginMaintenance.guide.toggle")}
+      description={t("pluginMaintenance.capacity.summary")} title={t("pluginMaintenance.capacity.title")}>
       <PluginRuntimeControls onRefreshCatalog={props.onRefreshCatalog} pluginId={props.pluginId} plugins={props.plugins} />
-    </MaintenanceSection>
+    </PageSection>
   );
 }
 
@@ -147,8 +150,8 @@ export function PrewarmMaintenanceSection(props: { plugins: PluginSummary[] }) {
   const { t } = useI18n();
   const guide = useMaintenanceGuide("prewarm");
   return (
-    <MaintenanceSection anchor="prewarm" guide={guide} summary={t("pluginMaintenance.prewarm.summary")} title={t("pluginMaintenance.prewarm.title")}>
+    <PageSection data-anchor="prewarm" guide={guide} description={t("pluginMaintenance.prewarm.summary")} title={t("pluginMaintenance.prewarm.title")}>
       <PluginPrewarmPolicyControls plugins={props.plugins} />
-    </MaintenanceSection>
+    </PageSection>
   );
 }

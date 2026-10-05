@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageBody, PageTabPanel, PageTabs } from "@/components/page";
 import { useI18n } from "@/i18n";
 import type { PluginSummary, WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";
@@ -39,9 +39,6 @@ const pageTabs: readonly PageTab[] = ["recovery", "capacity", "prewarm"];
 export function PluginMaintenancePage(props: PluginMaintenancePageProps) {
   const { locale, t } = useI18n();
   const [tab, setTab] = React.useState<PageTab>("recovery");
-  // visited mounts a tab on first visit only, then keeps it alive so unconfirmed state survives switching.
-  // visited 仅在首次访问时挂载分页，之后保持存活，使未确认状态在切换后保留。
-  const [visited, setVisited] = React.useState<ReadonlySet<PageTab>>(() => new Set(["recovery"]));
   const [selection, setSelection] = React.useState<PluginDiagnosticsSelection | null>(null);
   // admission closes the repeat-click window before React commits the busy state.
   // admission 在 React 提交忙碌状态前关闭重复点击窗口。
@@ -57,32 +54,27 @@ export function PluginMaintenancePage(props: PluginMaintenancePageProps) {
   const gate = React.useMemo<PluginMaintenanceGate>(() => ({ mutationBusy, acquireMutation, releaseMutation }),
     [mutationBusy, acquireMutation, releaseMutation]);
   const pluginName = React.useCallback((pluginId: string) => pluginDisplayName(props.plugins, locale, pluginId), [locale, props.plugins]);
-  const select = (value: string) => {
-    const next = value as PageTab;
-    setTab(next); setVisited((current) => current.has(next) ? current : new Set([...current, next]));
-  };
-  const panel = (value: PageTab, content: React.ReactNode) => visited.has(value)
-    ? <TabsContent className="plugin-maintenance-tab" forceMount hidden={tab !== value} value={value}>{content}</TabsContent>
-    : null;
   return (
-    <div className="skill-page-body plugin-maintenance-page">
-      <p className="plugin-maintenance-page-description">{t("pluginMaintenance.description")}</p>
-      <Tabs className="plugin-maintenance-workspace" onValueChange={select} value={tab}>
-        <TabsList aria-label={t("pluginMaintenance.title")} variant="line">
-          {pageTabs.map((value) => <TabsTrigger key={value} value={value}>{t(`pluginMaintenance.tab.${value}`)}</TabsTrigger>)}
-        </TabsList>
-        {panel("recovery", <>
-          <RecoveryMaintenanceSection actions={props.actions} conversations={props.conversations} gate={gate}
-            kinds={["update", "installation", "credential", "uninstall"]}
-            onLocate={(kind, pluginId, requestId) => setSelection({ kind, pluginId, requestId })}
-            onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} onUninstallConfirmed={() => undefined}
-            pluginName={pluginName} plugins={props.plugins} uninstallUncertainty={null} />
-          {selection !== null && <UsageMaintenanceSection conversations={props.conversations} onClose={() => setSelection(null)}
-            onSelect={setSelection} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} pluginName={pluginName} selection={selection} />}
-        </>)}
-        {panel("capacity", <CapacityMaintenanceSection onRefreshCatalog={props.actions.onRefreshLuaSkills} plugins={props.plugins} />)}
-        {panel("prewarm", <PrewarmMaintenanceSection plugins={props.plugins} />)}
-      </Tabs>
-    </div>
+    <PageBody className="plugin-maintenance-page">
+      <PageTabs ariaLabel={t("pluginMaintenance.title")} onValueChange={setTab} value={tab}
+        options={pageTabs.map((value) => ({ value, label: t(`pluginMaintenance.tab.${value}`) }))} />
+      {/* Visited panels stay mounted while hidden so unconfirmed state survives switching. */}
+      {/* 已访问面板隐藏时保持挂载，使未确认状态在切换后保留。 */}
+      <PageTabPanel active={tab === "recovery"}>
+        <RecoveryMaintenanceSection actions={props.actions} conversations={props.conversations} gate={gate}
+          kinds={["update", "installation", "credential", "uninstall"]}
+          onLocate={(kind, pluginId, requestId) => setSelection({ kind, pluginId, requestId })}
+          onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} onUninstallConfirmed={() => undefined}
+          pluginName={pluginName} plugins={props.plugins} uninstallUncertainty={null} />
+        {selection !== null && <UsageMaintenanceSection conversations={props.conversations} onClose={() => setSelection(null)}
+          onSelect={setSelection} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} pluginName={pluginName} selection={selection} />}
+      </PageTabPanel>
+      <PageTabPanel active={tab === "capacity"}>
+        <CapacityMaintenanceSection onRefreshCatalog={props.actions.onRefreshLuaSkills} plugins={props.plugins} />
+      </PageTabPanel>
+      <PageTabPanel active={tab === "prewarm"}>
+        <PrewarmMaintenanceSection plugins={props.plugins} />
+      </PageTabPanel>
+    </PageBody>
   );
 }

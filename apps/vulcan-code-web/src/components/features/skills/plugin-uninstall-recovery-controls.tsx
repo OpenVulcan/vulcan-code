@@ -1,12 +1,14 @@
 import * as React from "react";
 import { PackageMinus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { formatMessage, useI18n } from "@/i18n";
 import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
 import type { SkillActionProps } from "./skill-area-types";
-import { MaintenanceItem, MaintenanceNotice, TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
+import { PageItem, PageNotice } from "@/components/page";
+import { TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
 
 // The uncertain foreground identity is observation only, never a second service ownership ledger.
 // 不确定前台身份仅是观测，绝不是第二套服务所有权账本。
@@ -223,13 +225,13 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
   const visible = visibleRecords.length + (showUncertain ? 1 : 0) + (confirmed ? 1 : 0) + (error ? 1 : 0);
   useRecoveryReport(props.onReport, !fresh && !error && records.length === 0, visible);
   return <>
-    {showUncertain && <MaintenanceNotice tone="warning">{formatMessage(t("pluginRecovery.uninstallUnknownNotice"), { name: props.pluginName(uncertain.pluginId) })}</MaintenanceNotice>}
-    {confirmed && <MaintenanceNotice tone="success">{formatMessage(t("pluginRecovery.uninstallConfirmed"), { name: props.pluginName(confirmed.pluginId) })}</MaintenanceNotice>}
-    {error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{t("pluginRecovery.uninstallFailed")}{"\n"}{error}</span></MaintenanceNotice>}
+    {showUncertain && <PageNotice tone="warning">{formatMessage(t("pluginRecovery.uninstallUnknownNotice"), { name: props.pluginName(uncertain.pluginId) })}</PageNotice>}
+    {confirmed && <PageNotice tone="success">{formatMessage(t("pluginRecovery.uninstallConfirmed"), { name: props.pluginName(confirmed.pluginId) })}</PageNotice>}
+    {error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{t("pluginRecovery.uninstallFailed")}{"\n"}{error}</span></PageNotice>}
     {visibleRecords.map((record) => {
       const title = formatMessage(t("pluginRecovery.uninstallItemTitle"), { name: props.pluginName(record.pluginId) });
       const executing = record.phase === "executing";
-      return <MaintenanceItem
+      return <PageItem
         actions={<>
           {props.onLocateDiagnostics !== undefined && <Button onClick={() => props.onLocateDiagnostics?.(record.pluginId, record.requestId)} size="sm" type="button" variant="ghost">
             {t("pluginDiagnostics.locateRequest")}</Button>}
@@ -239,8 +241,9 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
         description={t(executing ? "pluginRecovery.hint.executing" : "pluginRecovery.hint.uninstall")}
         icon={<PackageMinus size={16} />}
         key={record.requestId}
-        label={title}
-        title={<>{title}<span className="plugin-maintenance-item-status">{t(executing ? "pluginRecovery.executing" : "pluginRecovery.pending")}</span></>}
+        aria-label={title}
+        meta={<Badge variant="secondary">{t(executing ? "pluginRecovery.executing" : "pluginRecovery.pending")}</Badge>}
+        title={title}
         tone={executing ? "neutral" : "attention"}
       >
         <TechnicalDetails entries={[
@@ -248,7 +251,7 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
           [t("pluginUpdates.request"), <code key="id">{record.requestId}</code>],
           [t("pluginRecovery.phase"), <code key="phase">{record.phase}</code>],
         ]} />
-      </MaintenanceItem>;
+      </PageItem>;
     })}
     <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConfirmation(null); }}>
       <AlertDialogContent>

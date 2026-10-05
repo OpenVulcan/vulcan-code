@@ -83,7 +83,7 @@ it("requires shared confirmation and discovers the original after uninstall fail
   // The unconfirmed outcome opens the maintenance drawer and leaves a page-level reminder.
   // 未确认结果会打开维护抽屉，并在页面上留下提醒。
   expect(host.querySelector<HTMLElement>("aside.plugin-maintenance-drawer")?.hidden).toBe(false);
-  expect(host.querySelector(".plugin-maintenance-attention")?.textContent).toContain(en("pluginMaintenance.attention.uncertain"));
+  expect(host.querySelector("[data-attention='plugin-maintenance']")?.textContent).toContain(en("pluginMaintenance.attention.uncertain"));
   // recheck is the recovery center's only read; it observes the retained original without dispatching anything.
   // recheck 是恢复中心唯一的读取；它观测保留原实例，不派发任何操作。
   const recheck = [...host.querySelectorAll("button")].find((button) => button.textContent === en("pluginMaintenance.recovery.recheck"))!;
@@ -290,7 +290,7 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   };
   // The retained original is announced on the page; its review button opens the maintenance drawer.
   // 保留原实例在页面上提示；其处理按钮打开维护抽屉。
-  expect(host.querySelector(".plugin-maintenance-attention")?.textContent).toContain(
+  expect(host.querySelector("[data-attention='plugin-maintenance']")?.textContent).toContain(
     formatMessage(readLocaleMessage("en-US", "pluginMaintenance.attention.retained"), { count: 1 }));
   await act(async () => find(en("pluginMaintenance.attention.open")).click());
   expect(host.querySelector<HTMLElement>("aside.plugin-maintenance-drawer")?.hidden).toBe(false);
@@ -307,6 +307,6 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   expect(toggle).not.toHaveBeenCalled(); expect(uninstall).not.toHaveBeenCalled(); expect(resume).toHaveBeenCalledTimes(1);
   read.mockResolvedValue([]); await act(async () => finish());
   expect(control.disabled).toBe(false); expect(remove.disabled).toBe(false);
-  expect(host.querySelector(".plugin-maintenance-attention")).toBeNull();
+  expect(host.querySelector("[data-attention='plugin-maintenance']")).toBeNull();
   expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
 });

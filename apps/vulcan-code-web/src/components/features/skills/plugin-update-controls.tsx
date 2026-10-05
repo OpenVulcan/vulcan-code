@@ -1,11 +1,13 @@
 import * as React from "react";
 import { ArrowUpCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { LocalPluginUpdateStatus } from "@/service/plugin-update-service";
 import type { SkillActionProps } from "./skill-area-types";
-import { MaintenanceItem, MaintenanceNotice, TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
+import { PageItem, PageNotice } from "@/components/page";
+import { TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
 
 // PluginUpdateControlProps binds one plugin's retained update requests to the existing service action chain.
 // PluginUpdateControlProps 将单个插件的保留更新请求绑定到既有服务动作链。
@@ -179,12 +181,12 @@ export function PluginUpdateControls(props: PluginUpdateControlProps) {
   const visible = pending.length + (showUnconfirmed ? 1 : 0) + (error ? 1 : 0) + (finished ? 1 : 0);
   useRecoveryReport(props.onReport, observation === null && !error, visible);
   return <>
-    {showUnconfirmed && <MaintenanceNotice tone="warning">{formatMessage(t("pluginUpdates.unconfirmed"), { name })}</MaintenanceNotice>}
-    {error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{formatMessage(t("pluginUpdates.failed"), { name })}{"\n"}{error}</span></MaintenanceNotice>}
-    {finished && <MaintenanceNotice tone="success">{formatMessage(t(finished === "resume" ? "pluginUpdates.finishedResume" : "pluginUpdates.finishedAbort"), { name })}</MaintenanceNotice>}
+    {showUnconfirmed && <PageNotice tone="warning">{formatMessage(t("pluginUpdates.unconfirmed"), { name })}</PageNotice>}
+    {error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{formatMessage(t("pluginUpdates.failed"), { name })}{"\n"}{error}</span></PageNotice>}
+    {finished && <PageNotice tone="success">{formatMessage(t(finished === "resume" ? "pluginUpdates.finishedResume" : "pluginUpdates.finishedAbort"), { name })}</PageNotice>}
     {pending.map((record) => {
       const phase: UpdatePhase = record.phase ?? "reserving";
-      return <MaintenanceItem
+      return <PageItem
         actions={<>
           {props.onLocateDiagnostics !== undefined && <Button onClick={() => props.onLocateDiagnostics?.(record.pluginId, record.requestId)} size="sm" type="button" variant="ghost">
             {t("pluginDiagnostics.locateRequest")}</Button>}
@@ -197,9 +199,10 @@ export function PluginUpdateControls(props: PluginUpdateControlProps) {
         description={<>{t(phaseHints[phase])}</>}
         icon={<ArrowUpCircle size={16} />}
         key={record.requestId}
-        label={formatMessage(t("pluginUpdates.itemTitle"), { name, version: record.candidate.version })}
-        title={<>{formatMessage(t("pluginUpdates.itemTitle"), { name, version: record.candidate.version })}
-          <span className="plugin-maintenance-item-status">{t(phaseLabels[phase])}</span></>}
+        aria-label={formatMessage(t("pluginUpdates.itemTitle"), { name, version: record.candidate.version })}
+        meta={<Badge variant="secondary">{t(phaseLabels[phase])}</Badge>}
+        title={formatMessage(t("pluginUpdates.itemTitle"), { name, version: record.candidate.version })}
+        tone="attention"
       >
         <TechnicalDetails entries={[
           [t("pluginUpdates.request"), <code key="id">{record.requestId}</code>],
@@ -208,7 +211,7 @@ export function PluginUpdateControls(props: PluginUpdateControlProps) {
           ...record.effects.map((effect) => [t(effectLabels[effect.operation]), effect.phase === "started" ? t("pluginUpdates.effectStarted")
             : effect.phase === "succeeded" ? t("pluginUpdates.installSucceeded") : t("pluginUpdates.installUncertain")] as const),
         ]} />
-      </MaintenanceItem>;
+      </PageItem>;
     })}
     <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConfirmation(null); }}>
       <AlertDialogContent>

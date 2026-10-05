@@ -100,7 +100,7 @@ function drawer(): HTMLElement {
 // stat reads one usage summary tile's number by its label, independently from tile order.
 // stat 按标签读取单个使用情况汇总卡片的数字，独立于卡片顺序。
 function stat(container: ParentNode, key: TranslationKey): string | undefined {
-  return [...container.querySelectorAll(".plugin-maintenance-stats > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))
+  return [...container.querySelectorAll(".page-facts[data-layout='tiles'] > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))
     ?.querySelector("dd")?.textContent ?? undefined;
 }
 // requestRow finds the recovery item whose technical details carry one original request UUID, never by list position.
@@ -149,7 +149,7 @@ it("copies the runtime identity from the card menu instead of printing it on the
 it("surfaces retained uninstalls and locates originals through diagnostics without recovery", async () => {
   // attention is the only page-level trace of retained work; it names the count, not the request.
   // attention 是保留工作在页面上的唯一痕迹；它显示数量而非请求。
-  const attention = host.querySelector(".plugin-maintenance-attention");
+  const attention = host.querySelector("[data-attention='plugin-maintenance']");
   expect(attention?.textContent).toContain(en("pluginMaintenance.attention.retained", { count: 1 }));
   await click(en("pluginMaintenance.attention.open"), attention!);
   expect(drawer().hidden).toBe(false);

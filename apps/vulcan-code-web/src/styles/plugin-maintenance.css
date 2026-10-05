@@ -1,45 +1,8 @@
-/* Plugin maintenance keeps low-frequency tools in tabs and a side drawer instead of the plugin list. */
-/* 插件维护将低频工具收纳到分页与侧边抽屉，而非插件列表。 */
-.plugin-maintenance-workspace {
-  gap: 12px;
-}
-
-.plugin-maintenance-tab {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-}
-
+/* Plugin maintenance: only the drawer shell and feature-specific editors; sections, notices and rows come from the page kit. */
+/* 插件维护：仅保留抽屉外壳与功能专属编辑器；区块、提示与列表行来自页面套件。 */
 .plugin-maintenance-page {
   grid-template-rows: none;
   align-content: start;
-}
-
-.plugin-maintenance-page-description {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-maintenance-attention {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--vcn-content-warning) 30%, var(--border));
-  border-radius: var(--vcn-radius-md);
-  background: var(--vcn-status-warning-background);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-maintenance-attention > svg {
-  flex: none;
-  color: var(--vcn-content-warning);
-}
-
-.plugin-maintenance-attention > span {
-  flex: 1;
-  min-width: 0;
 }
 
 .plugin-maintenance-drawer {
@@ -81,318 +44,16 @@
   padding: 12px 16px 24px;
 }
 
-/* A maintenance block: heading with one-line purpose, a when/how/effect guide, then the live content. */
-/* 维护区块：标题与一句话用途、何时／如何／效果说明，然后是实时内容。 */
-.plugin-maintenance-block {
-  container-type: inline-size;
+.plugin-maintenance-scope,
+.plugin-usage,
+.plugin-capacity,
+.plugin-prewarm {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--card);
-}
-
-.plugin-maintenance-block[data-compact="true"] {
-  gap: 10px;
-  padding: 12px;
-  border-radius: var(--vcn-radius-md);
-}
-
-.plugin-maintenance-block-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.plugin-maintenance-block-heading {
-  display: grid;
-  gap: 2px;
+  gap: var(--vcn-space-3);
   min-width: 0;
 }
 
-.plugin-maintenance-block-heading > h3 {
-  margin: 0;
-  font-size: var(--vcn-font-size-md);
-  font-weight: 650;
-}
-
-.plugin-maintenance-block-heading > p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-maintenance-block-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-}
-
-.plugin-maintenance-block-body {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-
-.plugin-maintenance-guide {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px 16px;
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
-}
-
-.plugin-maintenance-guide > div {
-  display: grid;
-  align-content: start;
-  gap: 2px;
-}
-
-.plugin-maintenance-guide dt {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-weight: 600;
-}
-
-.plugin-maintenance-guide dd {
-  margin: 0;
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.5;
-}
-
-.plugin-maintenance-guide-toggle {
-  font-size: var(--vcn-font-size-sm);
-}
-
-/* Finding rows: icon, explanation and actions, used for interrupted operations. */
-/* 发现项行：图标、说明与操作，用于中断的操作。 */
-.plugin-maintenance-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-}
-
-.plugin-maintenance-item-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--vcn-radius-sm);
-  background: var(--muted);
-  color: var(--muted-foreground);
-}
-
-.plugin-maintenance-item[data-tone="attention"] .plugin-maintenance-item-icon {
-  background: var(--vcn-status-warning-background);
-  color: var(--vcn-content-warning);
-}
-
-.plugin-maintenance-item-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.plugin-maintenance-item-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-}
-
-.plugin-maintenance-item-status {
-  padding: 1px 8px;
-  border-radius: var(--vcn-radius-pill);
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  font-weight: 500;
-}
-
-.plugin-maintenance-item-description {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.5;
-}
-
-.plugin-maintenance-item-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.plugin-maintenance-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-maintenance-notice[data-tone="warning"] {
-  border-color: color-mix(in srgb, var(--vcn-content-warning) 30%, var(--border));
-  background: var(--vcn-status-warning-background);
-}
-
-.plugin-maintenance-notice[data-tone="success"] {
-  border-color: color-mix(in srgb, var(--vcn-content-success) 30%, var(--border));
-  background: var(--vcn-status-success-background);
-}
-
-.plugin-maintenance-notice[data-tone="error"] {
-  border-color: color-mix(in srgb, var(--vcn-content-danger) 35%, var(--border));
-  background: color-mix(in srgb, var(--vcn-content-danger) 8%, var(--background));
-}
-
-.plugin-maintenance-notice[data-tone="info"] {
-  border-color: color-mix(in srgb, var(--vcn-content-info) 25%, var(--border));
-  background: color-mix(in srgb, var(--vcn-content-info) 6%, var(--background));
-}
-
-.plugin-maintenance-notice-text {
-  display: grid;
-  flex: 1 1 240px;
-  gap: 4px;
-  min-width: 0;
-}
-
-.plugin-maintenance-notice-text > p {
-  margin: 0;
-}
-
-.plugin-maintenance-notice-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.plugin-maintenance-technical {
-  font-size: var(--vcn-font-size-xs);
-}
-
-.plugin-maintenance-technical-list {
-  display: grid;
-  gap: 4px;
-  margin: 6px 0 0;
-}
-
-.plugin-maintenance-technical-list > div {
-  display: grid;
-  grid-template-columns: minmax(96px, max-content) minmax(0, 1fr);
-  gap: 8px;
-}
-
-.plugin-maintenance-technical-list dt {
-  color: var(--muted-foreground);
-}
-
-.plugin-maintenance-technical-list dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.plugin-maintenance-json {
-  max-height: 220px;
-  margin: 6px 0 0;
-  overflow: auto;
-  padding: 8px;
-  border-radius: var(--vcn-radius-sm);
-  background: var(--muted);
-  font-size: var(--vcn-font-size-2xs);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* Stat tiles summarise a list before it is shown. */
-/* 统计卡片在列表前给出概览。 */
-.plugin-maintenance-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 8px;
-  margin: 0;
-}
-
-.plugin-maintenance-stats > div {
-  display: grid;
-  gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-}
-
-.plugin-maintenance-stats dt {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-}
-
-.plugin-maintenance-stats dd {
-  margin: 0;
-  font-size: var(--vcn-font-size-lg);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
-.plugin-maintenance-stats > div[data-tone="warning"] dd {
-  color: var(--vcn-content-warning);
-}
-
-.plugin-maintenance-scope {
-  display: grid;
-  gap: 12px;
-}
-
-/* Recovery center: findings list, scanning text, all-clear state and the advanced lookup. */
-/* 恢复中心：发现项列表、扫描文本、一切正常状态及进阶查找。 */
-.plugin-recovery-center,
-.plugin-recovery-list {
-  display: grid;
-  gap: 8px;
-}
-
-.plugin-recovery-list:empty {
-  display: none;
-}
-
-.plugin-recovery-loading,
-.plugin-usage-loading,
-.plugin-capacity-loading,
-.plugin-usage-empty,
-.plugin-capacity-empty {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-recovery-clear {
-  padding-block: 20px;
-  border: 1px dashed var(--border);
-  border-radius: var(--vcn-radius-md);
-}
-
-.plugin-recovery-extra {
-  font-size: var(--vcn-font-size-sm);
-}
+.plugin-usage { outline: none; }
 
 .plugin-recovery-extra-form {
   display: flex;
@@ -405,155 +66,8 @@
   min-width: 0;
 }
 
-/* Usage: who still holds plugin resources. */
-/* 使用情况：谁仍持有插件资源。 */
-.plugin-usage {
-  display: grid;
-  gap: 10px;
-  outline: none;
-}
-
-.plugin-usage-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.plugin-usage-subject {
-  margin: 0;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-}
-
-.plugin-usage-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.plugin-usage-list {
-  display: grid;
-  gap: 6px;
-}
-
-.plugin-usage-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-}
-
-.plugin-usage-row[data-blocking="true"] {
-  border-color: color-mix(in srgb, var(--vcn-content-warning) 35%, var(--border));
-}
-
-.plugin-usage-row-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--vcn-radius-sm);
-  background: var(--muted);
-  color: var(--muted-foreground);
-}
-
-.plugin-usage-row-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.plugin-usage-row-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-}
-
-.plugin-usage-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-}
-
-.plugin-usage-row-error {
-  margin: 0;
-  color: var(--vcn-content-danger);
-  font-size: var(--vcn-font-size-xs);
-}
-
-.plugin-usage-footnote {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-}
-
-/* Runtime resources: one row per plugin purpose with usage meters. */
-/* 运行资源：每个插件用途一行，附带用量条。 */
-.plugin-capacity {
-  display: grid;
-  gap: 12px;
-}
-
-.plugin-capacity-toolbar:empty {
-  display: none;
-}
-
-.plugin-capacity-group {
-  display: grid;
-  gap: 6px;
-}
-
-.plugin-capacity-group-title {
-  margin: 0;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 650;
-}
-
-.plugin-capacity-row {
-  display: grid;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-}
-
-.plugin-capacity-row-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.plugin-capacity-row-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-}
-
-.plugin-capacity-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
+/* Runtime resources: usage meters inside each capacity row, the register form and the edit dialog grid. */
+/* 运行资源：每条容量行内的用量条、注册表单与编辑对话框网格。 */
 .plugin-capacity-meters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -578,14 +92,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.plugin-capacity-row-summary,
-.plugin-capacity-hint {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-  line-height: 1.5;
-}
-
 .plugin-capacity-register {
   display: grid;
   gap: 8px;
@@ -599,16 +105,6 @@
   gap: 8px;
 }
 
-.plugin-capacity-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
 .plugin-capacity-form {
   display: grid;
   gap: 14px;
@@ -620,79 +116,8 @@
   gap: 14px;
 }
 
-/* Auto prewarm rules: a read view list and an inline row editor. */
-/* 自动预热规则：只读列表与行内编辑器。 */
-.plugin-prewarm {
-  display: grid;
-  gap: 10px;
-}
-
-.plugin-prewarm-empty {
-  display: grid;
-  justify-items: start;
-  gap: 6px;
-  padding: 16px;
-  border: 1px dashed var(--border);
-  border-radius: var(--vcn-radius-md);
-}
-
-.plugin-prewarm-empty-title {
-  margin: 0;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-}
-
-.plugin-prewarm-rules {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.plugin-prewarm-rule {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-}
-
-.plugin-prewarm-rule .plugin-maintenance-item-icon {
-  background: var(--vcn-status-warning-background);
-  color: var(--vcn-content-warning);
-}
-
-.plugin-prewarm-rule-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.plugin-prewarm-rule-title {
-  overflow-wrap: anywhere;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-}
-
-.plugin-prewarm-rule-meta {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-xs);
-}
-
-.plugin-prewarm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.plugin-prewarm-actions-spacer {
-  flex: 1;
-}
-
+/* Auto prewarm editor: one grid row per rule. */
+/* 自动预热编辑器：每条规则一行网格。 */
 .plugin-prewarm-editor {
   display: grid;
   gap: 8px;
@@ -727,20 +152,9 @@
   font-weight: 600;
 }
 
-/* Narrow blocks (the plugin drawer, small windows) stack row actions under the text. */
-/* 窄区块（插件抽屉、小窗口）将行操作堆叠到文字下方。 */
-@container (max-width: 520px) {
-  .plugin-maintenance-item,
-  .plugin-usage-row {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .plugin-maintenance-item-actions,
-  .plugin-usage-row-actions {
-    grid-column: 2;
-    justify-content: flex-start;
-  }
-
+/* Narrow sections (the plugin drawer, small windows) stack the editor row. */
+/* 窄区块（插件抽屉、小窗口）堆叠编辑器行。 */
+@container page-section (max-width: 520px) {
   .plugin-prewarm-editor-head {
     display: none;
   }

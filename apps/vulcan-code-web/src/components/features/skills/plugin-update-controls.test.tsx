@@ -59,7 +59,7 @@ function button(key: TranslationKey): HTMLButtonElement {
 // details maps each technical-details term to its value inside root, so evidence is checked by meaning.
 // details 将 root 内每个技术详情术语映射到其值，使证据按含义校验。
 function details(scope: ParentNode = host): Map<string, string> {
-  return new Map([...scope.querySelectorAll(".plugin-maintenance-technical-list > div")]
+  return new Map([...scope.querySelectorAll(".page-details .page-facts > div")]
     .map((row) => [row.querySelector("dt")?.textContent ?? "", row.querySelector("dd")?.textContent ?? ""]));
 }
 

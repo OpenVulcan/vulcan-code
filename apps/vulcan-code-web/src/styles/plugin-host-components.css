@@ -154,55 +154,11 @@
   font-family: inherit;
 }
 
-.plugin-metric-card {
-  display: grid;
-  grid-template-rows: 18px minmax(28px, 1fr) 16px;
-  min-width: 0;
-  height: 96px;
-  padding: 11px 13px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--card) 92%, var(--muted));
-}
 
-.plugin-metric-card-header {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-foreground);
-}
 
-.plugin-metric-card-header svg {
-  flex: 0 0 auto;
-}
 
-.plugin-metric-card-label,
-.plugin-metric-card-detail {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.plugin-metric-card-value {
-  align-self: center;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--card-foreground);
-  font-size: clamp(18px, 2vw, 25px);
-  font-weight: 650;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.plugin-metric-card-detail {
-  align-self: end;
-}
 
 .plugin-activity-heatmap-scroll {
   display: grid;

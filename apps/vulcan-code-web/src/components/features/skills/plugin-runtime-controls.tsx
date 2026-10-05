@@ -15,7 +15,8 @@ import type { PluginSummary } from "@/types";
 import { PLUGIN_CAPACITY_PURPOSES, type PluginCapacityPurpose, type PluginCapacityReceipt, type PluginCapacityStatus } from "@/types/plugin-runtime";
 import type { PluginRuntimeCommand } from "@/service/plugin-runtime-service";
 import { capacityPredecessor, createCapacityDraft, draftStillCurrent, readCapacityDraft, type PluginCapacityDraft } from "./plugin-capacity-draft";
-import { MaintenanceNotice, TechnicalDetails } from "./plugin-maintenance-section";
+import { PageEmptyState, PageFacts, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
+import { TechnicalDetails } from "./plugin-maintenance-section";
 import { usePluginRuntimeManagement } from "./use-plugin-runtime-management";
 
 // PluginRuntimeControlProps supplies installed ownership and the existing explicit business-catalog refresh.
@@ -128,23 +129,22 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
   const usage = runtime?.resources;
   const receiptActive = receipt !== undefined && receipt !== null && (receipt.phase === "prepared" || receipt.phase === "applied");
   return <div className="plugin-capacity">
-    <div className="plugin-capacity-toolbar">
-      {state.busy && <span className="plugin-capacity-loading" role="status">{t("ui.loading")}</span>}
-      <Button disabled={state.busy || catalogBusy} onClick={() => void state.refresh()} size="sm" type="button" variant="outline">
-        <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>
-    </div>
-    {(state.error || formError) && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{state.error || formError}</span></MaintenanceNotice>}
-    {!state.fresh && state.observation && !state.busy && <MaintenanceNotice tone="info">{t("pluginRuntime.staleRead")}</MaintenanceNotice>}
-    {state.fresh && !runtime && <MaintenanceNotice tone="info">{t("pluginRuntime.noRuntime")}</MaintenanceNotice>}
-    {state.pending && <MaintenanceNotice actions={<>
+    <PageToolbar actions={<Button disabled={state.busy || catalogBusy} onClick={() => void state.refresh()} size="sm" type="button" variant="outline">
+      <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}>
+      {state.busy && <PageHint role="status">{t("ui.loading")}</PageHint>}
+    </PageToolbar>
+    {(state.error || formError) && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{state.error || formError}</span></PageNotice>}
+    {!state.fresh && state.observation && !state.busy && <PageNotice tone="info">{t("pluginRuntime.staleRead")}</PageNotice>}
+    {state.fresh && !runtime && <PageNotice tone="info">{t("pluginRuntime.noRuntime")}</PageNotice>}
+    {state.pending && <PageNotice actions={<>
       <Button disabled={state.busy || !state.fresh} onClick={() => setConfirmation({ title: "pluginRuntime.discardTracking", warning: "pluginRuntime.discardWarning", command: null })}
         size="sm" type="button" variant="ghost">{t("pluginRuntime.discardTracking")}</Button>
       <Button disabled={state.busy} onClick={() => { if (state.pending) void state.execute(state.pending); }} size="sm" type="button">{t("pluginRuntime.retry")}</Button>
     </>} tone="warning">
       <p>{t("pluginRuntime.unknown")}</p>
-      <TechnicalDetails entries={[]} extra={<pre className="plugin-maintenance-json">{JSON.stringify(state.pending, null, 2)}</pre>} />
-    </MaintenanceNotice>}
-    {receipt && <MaintenanceNotice actions={<>
+      <TechnicalDetails entries={[]} extra={<pre>{JSON.stringify(state.pending, null, 2)}</pre>} />
+    </PageNotice>}
+    {receipt && <PageNotice actions={<>
       {receiptActive && receipt.phase === "prepared" && <Button disabled={!canWrite} onClick={() => void state.execute({ kind: "cancel", updateId: receipt.request.updateId })}
         size="sm" type="button" variant="ghost">{t("pluginRuntime.cancelUpdate")}</Button>}
       {receiptActive && <Button disabled={!canWrite} onClick={() => void state.execute({ kind: "resume", updateId: receipt.request.updateId })} size="sm" type="button">
@@ -155,24 +155,24 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
       <p>{formatMessage(t(receiptLabels[receipt.phase]), { name: nameOf(receipt.request.pluginId), purpose: t(purposeLabels[receipt.request.purpose]) })}</p>
       {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
-        extra={<pre className="plugin-maintenance-json">{JSON.stringify(receipt.request, null, 2)}</pre>} />
-    </MaintenanceNotice>}
-    {usage && props.pluginId === undefined && <dl className="plugin-maintenance-stats">
-      <div><dt>{t("pluginRuntime.stat.resident")}</dt><dd>{usage.resident}</dd></div>
-      <div><dt>{t("pluginRuntime.stat.running")}</dt><dd>{usage.running}</dd></div>
-      <div><dt>{t("pluginRuntime.stat.idle")}</dt><dd>{usage.idle}</dd></div>
-      <div><dt>{t("pluginRuntime.stat.creating")}</dt><dd>{usage.creating}</dd></div>
-      <div><dt>{t("pluginRuntime.stat.retiring")}</dt><dd>{usage.retiring}</dd></div>
-    </dl>}
-    {catalog && groups.length === 0 && <p className="plugin-capacity-empty" role="status">{t("pluginRuntime.emptyList")}</p>}
-    {groups.map(([pluginId, rows]) => <section aria-label={nameOf(pluginId)} className="plugin-capacity-group" key={pluginId}>
-      {props.pluginId === undefined && <h4 className="plugin-capacity-group-title">{nameOf(pluginId)}</h4>}
+        extra={<pre>{JSON.stringify(receipt.request, null, 2)}</pre>} />
+    </PageNotice>}
+    {usage && props.pluginId === undefined && <PageFacts items={[
+      { key: "resident", label: t("pluginRuntime.stat.resident"), value: usage.resident },
+      { key: "running", label: t("pluginRuntime.stat.running"), value: usage.running },
+      { key: "idle", label: t("pluginRuntime.stat.idle"), value: usage.idle },
+      { key: "creating", label: t("pluginRuntime.stat.creating"), value: usage.creating },
+      { key: "retiring", label: t("pluginRuntime.stat.retiring"), value: usage.retiring, tone: usage.retiring > 0 ? "attention" : "neutral" },
+    ]} layout="tiles" />}
+    {catalog && groups.length === 0 && <PageEmptyState title={t("pluginRuntime.emptyList")} />}
+    {groups.map(([pluginId, rows]) => <PageItemList aria-label={nameOf(pluginId)} heading={props.pluginId === undefined ? nameOf(pluginId) : undefined}
+      key={pluginId} role="group">
       {rows.map((capacity) => <CapacityRow canEdit={canEdit(capacity)} canWrite={canWrite} capacity={capacity} key={capacity.snapshot.capacity_id}
         onConfirm={setConfirmation} onEdit={() => { setDraft(createCapacityDraft(capacity)); setFormError(""); }} receiptActive={receiptActive} />)}
-    </section>)}
+    </PageItemList>)}
     {catalog && luaPlugins.length > 0 && <InlineDisclosure label={t("pluginRuntime.registerToggle")}>
       <div className="plugin-capacity-register">
-        <p className="plugin-capacity-hint">{t("pluginRuntime.registerHint")}</p>
+        <PageHint>{t("pluginRuntime.registerHint")}</PageHint>
         <div className="plugin-capacity-register-fields">
           {props.pluginId === undefined && <Field>
             <FieldLabel htmlFor={`${fieldPrefix}-register-plugin`}>{t("pluginRuntime.plugin")}</FieldLabel>
@@ -197,10 +197,10 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
         </div>
       </div>
     </InlineDisclosure>}
-    <div className="plugin-capacity-footer">
-      <p className="plugin-capacity-hint">{t("pluginRuntime.refreshCatalogHint")}</p>
-      <Button disabled={state.busy || catalogBusy} onClick={() => void refreshCatalog()} size="sm" type="button" variant="ghost">{t("pluginRuntime.refreshCatalog")}</Button>
-    </div>
+    <PageToolbar actions={<Button disabled={state.busy || catalogBusy} onClick={() => void refreshCatalog()} size="sm" type="button" variant="ghost">
+      {t("pluginRuntime.refreshCatalog")}</Button>}>
+      <PageHint>{t("pluginRuntime.refreshCatalogHint")}</PageHint>
+    </PageToolbar>
     <Dialog onOpenChange={(open) => { if (!open) { setDraft(null); setFormError(""); } }} open={draft !== null}>
       <DialogContent size="md" scrollMode="fixed-footer">
         <DialogHeader>
@@ -208,8 +208,8 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
           <DialogDescription>{t("pluginRuntime.editDescription")}</DialogDescription>
         </DialogHeader>
         {draft && <div className="plugin-capacity-form">
-          {!draftCurrent && <MaintenanceNotice tone="warning">{t("pluginRuntime.staleDraft")}</MaintenanceNotice>}
-          {formError && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{formError}</span></MaintenanceNotice>}
+          {!draftCurrent && <PageNotice tone="warning">{t("pluginRuntime.staleDraft")}</PageNotice>}
+          {formError && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{formError}</span></PageNotice>}
           <Field>
             <FieldLabel htmlFor={`${fieldPrefix}-kind`}>{t("pluginRuntime.kind")}</FieldLabel>
             <Select onValueChange={(kind) => setDraft({ ...draft, kind: kind as PluginCapacityDraft["kind"],
@@ -227,7 +227,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
               <FieldDescription>{t(key === "min_resident_vms" && draft.kind === "shared" ? "pluginRuntime.minSharedHint" : hint)}</FieldDescription>
             </Field>)}
           </div>
-          <p className="plugin-capacity-hint">{t("pluginRuntime.boundsHint")}</p>
+          <PageHint>{t("pluginRuntime.boundsHint")}</PageHint>
         </div>}
         <DialogFooter>
           <Button disabled={state.busy} onClick={() => { setDraft(null); setFormError(""); }} type="button" variant="outline">{t("pluginRuntime.discardDraft")}</Button>
@@ -241,7 +241,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
           <AlertDialogTitle>{confirmation && t(confirmation.title)}</AlertDialogTitle>
           <AlertDialogDescription>{confirmation && t(confirmation.warning)}</AlertDialogDescription>
         </AlertDialogHeader>
-        {confirmation?.command && <TechnicalDetails entries={[]} extra={<pre className="plugin-maintenance-json">{JSON.stringify(confirmation.command, null, 2)}</pre>} />}
+        {confirmation?.command && <TechnicalDetails entries={[]} extra={<pre>{JSON.stringify(confirmation.command, null, 2)}</pre>} />}
         <AlertDialogFooter>
           <AlertDialogCancel>{t("skills.plugins.cancel")}</AlertDialogCancel>
           <AlertDialogAction disabled={state.busy || !state.fresh || (!!confirmation?.command && !!state.pending)}
@@ -276,50 +276,46 @@ function CapacityRow(props: {
     ["pluginRuntime.meter.queue", snapshot.queued_calls, config.max_queued_calls],
   ];
   const canForget = props.canWrite && snapshot.closing && capacity.preparingMembers === 0 && !props.receiptActive;
-  return <article aria-label={label} className="plugin-capacity-row">
-    <div className="plugin-capacity-row-header">
-      <div className="plugin-capacity-row-title">
-        <span>{label}</span>
-        <Badge variant="outline">{t(config.resources.kind === "shared" ? "pluginRuntime.shared" : "pluginRuntime.dedicated")}</Badge>
-        <Badge variant={capacity.budgetSource === "host_override" ? "secondary" : "ghost"}>
-          {t(capacity.budgetSource === "host_override" ? "pluginRuntime.override" : "pluginRuntime.inherited")}</Badge>
-        {capacity.pendingConvergence && <Badge variant="warning">{t("pluginRuntime.convergence")}</Badge>}
-        {snapshot.closing && <Badge variant="warning">{t("pluginRuntime.closing")}</Badge>}
-        {capacity.retirementRequested && <Badge variant="warning">{t("pluginRuntime.retiring")}</Badge>}
-      </div>
-      <div className="plugin-capacity-row-actions">
-        <Button disabled={!props.canEdit} onClick={props.onEdit} size="sm" type="button" variant="outline">
-          <SlidersHorizontal data-icon="inline-start" />{t("pluginRuntime.edit")}</Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <IconButton aria-label={formatMessage(t("pluginRuntime.moreActions"), { purpose: label })} type="button"><MoreHorizontal size={16} /></IconButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem disabled={!props.canEdit || capacity.budgetSource !== "host_override"} onSelect={() => props.onConfirm({
-              title: "pluginRuntime.reset", warning: "pluginRuntime.resetWarning",
-              command: { kind: "update", request: { ...capacityPredecessor(capacity), updateId: crypto.randomUUID(), config: null } },
-            })}>{t("pluginRuntime.reset")}</DropdownMenuItem>
-            <DropdownMenuItem disabled={!props.canWrite || snapshot.closing} onSelect={() => props.onConfirm({
-              title: "pluginRuntime.close", warning: "pluginRuntime.closeWarning",
-              command: { kind: "control", request: { ...capacityPredecessor(capacity), action: "close" } },
-            })}>{t("pluginRuntime.close")}</DropdownMenuItem>
-            <DropdownMenuItem disabled={!canForget} onSelect={() => props.onConfirm({
-              title: "pluginRuntime.forget", warning: "pluginRuntime.forgetWarning",
-              command: { kind: "control", request: { ...capacityPredecessor(capacity), action: "forget" } },
-            })}>{t("pluginRuntime.forget")}</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </div>
+  const attention = snapshot.closing || capacity.pendingConvergence || capacity.retirementRequested;
+  return <PageItem actions={<>
+    <Button disabled={!props.canEdit} onClick={props.onEdit} size="sm" type="button" variant="outline">
+      <SlidersHorizontal data-icon="inline-start" />{t("pluginRuntime.edit")}</Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <IconButton aria-label={formatMessage(t("pluginRuntime.moreActions"), { purpose: label })} type="button"><MoreHorizontal size={16} /></IconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem disabled={!props.canEdit || capacity.budgetSource !== "host_override"} onSelect={() => props.onConfirm({
+          title: "pluginRuntime.reset", warning: "pluginRuntime.resetWarning",
+          command: { kind: "update", request: { ...capacityPredecessor(capacity), updateId: crypto.randomUUID(), config: null } },
+        })}>{t("pluginRuntime.reset")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={!props.canWrite || snapshot.closing} onSelect={() => props.onConfirm({
+          title: "pluginRuntime.close", warning: "pluginRuntime.closeWarning",
+          command: { kind: "control", request: { ...capacityPredecessor(capacity), action: "close" } },
+        })}>{t("pluginRuntime.close")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={!canForget} onSelect={() => props.onConfirm({
+          title: "pluginRuntime.forget", warning: "pluginRuntime.forgetWarning",
+          command: { kind: "control", request: { ...capacityPredecessor(capacity), action: "forget" } },
+        })}>{t("pluginRuntime.forget")}</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </>} aria-label={label} meta={<>
+    <Badge variant="outline">{t(config.resources.kind === "shared" ? "pluginRuntime.shared" : "pluginRuntime.dedicated")}</Badge>
+    <Badge variant={capacity.budgetSource === "host_override" ? "secondary" : "ghost"}>
+      {t(capacity.budgetSource === "host_override" ? "pluginRuntime.override" : "pluginRuntime.inherited")}</Badge>
+    {capacity.pendingConvergence && <Badge variant="warning">{t("pluginRuntime.convergence")}</Badge>}
+    {snapshot.closing && <Badge variant="warning">{t("pluginRuntime.closing")}</Badge>}
+    {capacity.retirementRequested && <Badge variant="warning">{t("pluginRuntime.retiring")}</Badge>}
+  </>} title={label} tone={attention ? "attention" : "neutral"}>
     <div className="plugin-capacity-meters">
       {meters.map(([key, value, max]) => <div className="plugin-capacity-meter" key={key}>
         <div className="plugin-capacity-meter-label"><span>{t(key)}</span><span>{value} / {max}</span></div>
         <Progress aria-label={t(key)} max={max > 0 ? max : 1} value={max > 0 ? value : 0} />
       </div>)}
     </div>
-    <p className="plugin-capacity-row-summary">{formatMessage(t("pluginRuntime.rowSummary"), {
+    <PageHint>{formatMessage(t("pluginRuntime.rowSummary"), {
       min: config.resources.min_resident_vms, idle: snapshot.resources.idle, creating: snapshot.resources.creating,
-    })}</p>
+    })}</PageHint>
     <TechnicalDetails entries={[
       ["capacityId", <code key="capacity">{snapshot.capacity_id}</code>],
       ["policyRevision", <code key="revision">{capacity.policyRevision}</code>],
@@ -329,5 +325,5 @@ function CapacityRow(props: {
       ["preparingMembers", <code key="preparing">{capacity.preparingMembers}</code>],
       ...(capacity.managementRequest ? [["registrationId", <code key="registration">{capacity.managementRequest.registrationId}</code>] as const] : []),
     ]} />
-  </article>;
+  </PageItem>;
 }

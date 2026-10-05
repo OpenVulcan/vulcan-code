@@ -12,6 +12,8 @@ const alertVariants = cva(
     variants: {
       variant: {
         default: "text-card-foreground",
+        info: "border border-[color-mix(in_oklch,var(--vcn-content-info)_25%,transparent)] bg-[color-mix(in_oklch,var(--vcn-content-info)_7%,transparent)] text-card-foreground *:[svg]:text-[var(--vcn-content-info)]",
+        success: "border border-[color-mix(in_oklch,var(--vcn-content-success)_25%,transparent)] bg-[var(--vcn-status-success-background)] text-[var(--vcn-content-success)]",
         warning: "border border-[color-mix(in_oklch,var(--vcn-content-warning)_25%,transparent)] bg-[var(--vcn-status-warning-background)] text-[var(--vcn-content-warning)]",
         destructive:
           "border border-destructive/25 bg-destructive/6 text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",

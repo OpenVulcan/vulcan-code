@@ -6,7 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary } from "@/types";
 import type { PluginAutomaticPrewarmRule, PluginPrewarmPolicyPhase } from "@/types/plugin-prewarm-policy";
-import { MaintenanceNotice, TechnicalDetails } from "./plugin-maintenance-section";
+import { PageEmptyState, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
+import { TechnicalDetails } from "./plugin-maintenance-section";
 import { policyReceiptAllows, usePluginPrewarmPolicy } from "./use-plugin-prewarm-policy";
 
 // RuleDraft keeps editable text separate from the validated wire count and stable row identity.
@@ -109,17 +110,17 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
   };
 
   return <div className="plugin-prewarm">
-    {error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{error}</span></MaintenanceNotice>}
-    {status === null && busy && <p className="plugin-capacity-loading" role="status">{t("ui.loading")}</p>}
-    {status !== null && !fresh && !busy && <MaintenanceNotice actions={<Button onClick={() => void management.refresh()} size="sm" type="button" variant="outline">
-      {t("pluginRuntime.refresh")}</Button>} tone="info">{t("pluginPrewarmPolicy.stale")}</MaintenanceNotice>}
-    {status?.capacityUpdateRetained === true && <MaintenanceNotice tone="warning">{t("pluginPrewarmPolicy.capacityBlocked")}</MaintenanceNotice>}
-    {pending && <MaintenanceNotice actions={<Button disabled={busy || !fresh} onClick={management.acknowledgeUncertainty} size="sm" type="button" variant="outline">
+    {error && <PageNotice tone="error"><span className="whitespace-pre-wrap break-all">{error}</span></PageNotice>}
+    {status === null && busy && <PageHint role="status">{t("ui.loading")}</PageHint>}
+    {status !== null && !fresh && !busy && <PageNotice actions={<Button onClick={() => void management.refresh()} size="sm" type="button" variant="outline">
+      {t("pluginRuntime.refresh")}</Button>} tone="info">{t("pluginPrewarmPolicy.stale")}</PageNotice>}
+    {status?.capacityUpdateRetained === true && <PageNotice tone="warning">{t("pluginPrewarmPolicy.capacityBlocked")}</PageNotice>}
+    {pending && <PageNotice actions={<Button disabled={busy || !fresh} onClick={management.acknowledgeUncertainty} size="sm" type="button" variant="outline">
       {t("pluginPrewarmPolicy.acknowledge")}</Button>} tone="warning">
       <p>{t("pluginPrewarmPolicy.unknown")}</p>
-      <TechnicalDetails entries={[]} extra={<pre className="plugin-maintenance-json">{JSON.stringify(pending, null, 2)}</pre>} />
-    </MaintenanceNotice>}
-    {receipt && <MaintenanceNotice actions={<>
+      <TechnicalDetails entries={[]} extra={<pre>{JSON.stringify(pending, null, 2)}</pre>} />
+    </PageNotice>}
+    {receipt && <PageNotice actions={<>
       {policyReceiptAllows(receipt, "cancel") && <Button disabled={busy || !fresh || pending !== null} onClick={() => void management.execute({ kind: "cancel", request: receipt.request })}
         size="sm" type="button" variant="ghost">{t("pluginPrewarmPolicy.cancel")}</Button>}
       {((receipt.phase !== "committed" && receipt.phase !== "cancelled") || receipt.persistenceError !== undefined) && <Button disabled={busy || !fresh || pending !== null}
@@ -130,35 +131,26 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
       <p>{t(receiptLabels[receipt.phase])}</p>
       {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
-        extra={<pre className="plugin-maintenance-json">{JSON.stringify(receipt, null, 2)}</pre>} />
-    </MaintenanceNotice>}
+        extra={<pre>{JSON.stringify(receipt, null, 2)}</pre>} />
+    </PageNotice>}
     {status && draft === null && <>
       {status.rules.length === 0
-        ? <div className="plugin-prewarm-empty">
-          <p className="plugin-prewarm-empty-title">{t("pluginPrewarmPolicy.disabled")}</p>
-          <p className="plugin-capacity-hint">{t("pluginPrewarmPolicy.emptyHint")}</p>
-          <Button disabled={!writable} onClick={() => edit(true)} size="sm" type="button"><Plus data-icon="inline-start" />{t("pluginPrewarmPolicy.add")}</Button>
-        </div>
-        : <ul className="plugin-prewarm-rules">
-          {status.rules.map((rule) => <li className="plugin-prewarm-rule" key={rule.toolId}>
-            <span aria-hidden="true" className="plugin-maintenance-item-icon"><Flame size={15} /></span>
-            <span className="plugin-prewarm-rule-main">
-              <span className="plugin-prewarm-rule-title">{nameOf(rule.pluginId)} · <code>{rule.toolId}</code></span>
-              <span className="plugin-prewarm-rule-meta">{formatMessage(t("pluginPrewarmPolicy.ruleSummary"), { count: rule.targetIdle })}</span>
-            </span>
-          </li>)}
-        </ul>}
-      <div className="plugin-prewarm-actions">
+        ? <PageEmptyState action={<Button disabled={!writable} onClick={() => edit(true)} size="sm" type="button">
+          <Plus data-icon="inline-start" />{t("pluginPrewarmPolicy.add")}</Button>}
+          description={t("pluginPrewarmPolicy.emptyHint")} icon={<Flame />} title={t("pluginPrewarmPolicy.disabled")} />
+        : <PageItemList>
+          {status.rules.map((rule) => <PageItem description={formatMessage(t("pluginPrewarmPolicy.ruleSummary"), { count: rule.targetIdle })}
+            icon={<Flame />} key={rule.toolId} title={<>{nameOf(rule.pluginId)} · <code>{rule.toolId}</code></>} tone="success" />)}
+        </PageItemList>}
+      {/* A stale read already offers refresh in its notice, so this quiet control appears only for fresh data. */}
+      {/* 陈旧读取已在提示中提供刷新，因此此低调控件仅在数据最新时显示。 */}
+      <PageToolbar actions={fresh && <Button disabled={busy} onClick={() => void management.refresh()} size="sm" type="button" variant="ghost">
+        <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}>
         {status.rules.length > 0 && <Button disabled={!writable} onClick={() => edit(false)} size="sm" type="button" variant="outline">{t("pluginPrewarmPolicy.edit")}</Button>}
-        <span className="plugin-prewarm-actions-spacer" />
-        {/* A stale read already offers refresh in its notice, so this quiet control appears only for fresh data. */}
-        {/* 陈旧读取已在提示中提供刷新，因此此低调控件仅在数据最新时显示。 */}
-        {fresh && <Button disabled={busy} onClick={() => void management.refresh()} size="sm" type="button" variant="ghost">
-          <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
-      </div>
+      </PageToolbar>
     </>}
     {draft && <div className="plugin-prewarm-editor">
-      {!currentDraft && <MaintenanceNotice tone="warning">{t("pluginPrewarmPolicy.draftStale")}</MaintenanceNotice>}
+      {!currentDraft && <PageNotice tone="warning">{t("pluginPrewarmPolicy.draftStale")}</PageNotice>}
       {/* The fieldset locks only the rows; cancel stays reachable so a stale draft can always be discarded. */}
       {/* fieldset 仅锁定规则行；取消保持可用，使过期草稿始终可以丢弃。 */}
       <fieldset className="plugin-prewarm-editor-fields" disabled={!writable || !currentDraft}>
@@ -188,16 +180,16 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
               <Trash2 size={15} /></IconButton>
           </div>;
         })}
-        {draft.rows.length === 0 && <p className="plugin-capacity-hint">{t("pluginPrewarmPolicy.emptyDraft")}</p>}
-        {rules === null && <p className="plugin-capacity-hint" role="status">{t("pluginPrewarmPolicy.invalid")}</p>}
+        {draft.rows.length === 0 && <PageHint>{t("pluginPrewarmPolicy.emptyDraft")}</PageHint>}
+        {rules === null && <PageHint role="status">{t("pluginPrewarmPolicy.invalid")}</PageHint>}
       </fieldset>
-      <div className="plugin-prewarm-actions">
-        <Button disabled={!writable || !currentDraft} onClick={() => setDraft({ ...draft, rows: [...draft.rows, blankRow()] })}
-          size="sm" type="button" variant="ghost"><Plus data-icon="inline-start" />{t("pluginPrewarmPolicy.addRow")}</Button>
-        <span className="plugin-prewarm-actions-spacer" />
+      <PageToolbar actions={<>
         <Button onClick={() => setDraft(null)} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
         <Button disabled={!writable || !currentDraft || rules === null} onClick={save} size="sm" type="button">{t("pluginPrewarmPolicy.save")}</Button>
-      </div>
+      </>}>
+        <Button disabled={!writable || !currentDraft} onClick={() => setDraft({ ...draft, rows: [...draft.rows, blankRow()] })}
+          size="sm" type="button" variant="ghost"><Plus data-icon="inline-start" />{t("pluginPrewarmPolicy.addRow")}</Button>
+      </PageToolbar>
     </div>}
   </div>;
 }

@@ -13,6 +13,7 @@ import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
+import { PageNotice } from "@/components/page";
 import type { PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
 import type { PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
@@ -758,23 +759,20 @@ export function VulcanPluginsPanel(props: {
           <Plus aria-hidden="true" size={15} />{t("skills.plugins.installLocalPlugin")}
         </Button>
       </div>
-      {uninstallUncertainty !== null || (retainedUninstalls ?? 0) > 0 ? <div className="plugin-maintenance-attention" role="status">
-        <TriangleAlert aria-hidden="true" size={15} />
-        <span>{uninstallUncertainty !== null
-          ? t("pluginMaintenance.attention.uncertain")
-          : formatMessage(t("pluginMaintenance.attention.retained"), { count: retainedUninstalls ?? 0 })}</span>
+      {uninstallUncertainty !== null || (retainedUninstalls ?? 0) > 0 ? <PageNotice data-attention="plugin-maintenance" actions={
         <Button onClick={() => maintenance.open(ALL_PLUGINS_SCOPE, "recovery")} size="sm" type="button" variant="outline">
           {t("pluginMaintenance.attention.open")}
-        </Button>
-      </div> : null}
-      {installError ? <div className="skill-empty-state warning" role="alert">
-        <p>{t("skills.plugins.pluginActionFailedTry")}</p>
-        <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
-      </div> : null}
-      {secretError ? <div className="vulcan-plugin-install-error" role="alert">
-        <p>{t("skills.plugins.credentialActionFailedTry")}</p>
-        <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{secretError}</pre></details>
-      </div> : null}
+        </Button>} tone="warning">
+        {uninstallUncertainty !== null
+          ? t("pluginMaintenance.attention.uncertain")
+          : formatMessage(t("pluginMaintenance.attention.retained"), { count: retainedUninstalls ?? 0 })}
+      </PageNotice> : null}
+      {installError ? <PageNotice details={installError} detailsLabel={t("skills.plugins.errorDetails")} tone="error">
+        {t("skills.plugins.pluginActionFailedTry")}
+      </PageNotice> : null}
+      {secretError ? <PageNotice details={secretError} detailsLabel={t("skills.plugins.errorDetails")} tone="error">
+        {t("skills.plugins.credentialActionFailedTry")}
+      </PageNotice> : null}
       <TooltipProvider delayDuration={300}>
       <div className="skill-card-list agent-skill-card-list">
         {visiblePlugins.length === 0 ? (

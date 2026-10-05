@@ -2,8 +2,9 @@ import * as React from "react";
 import { CircleCheck, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineDisclosure } from "@/components/ui/disclosure";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
+import { PageEmptyState, PageHint, PageItemList } from "@/components/page";
 import { useI18n } from "@/i18n";
 import type { PluginSummary } from "@/types";
 import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
@@ -108,8 +109,8 @@ export function PluginRecoveryCenter(props: PluginRecoveryCenterProps) {
   };
   const gate = props.gate;
   return (
-    <div className="plugin-recovery-center">
-      <div className="plugin-recovery-list">
+    <>
+      <PageItemList>
         {[...owners].map(([pluginId, owner]) => <React.Fragment key={pluginId}>
           {owner.update && <PluginUpdateControls actions={props.actions} onReport={(next) => report(`update:${pluginId}`, next)}
             onLocateDiagnostics={props.onLocate ? (plugin, request) => props.onLocate?.("update", plugin, request) : undefined}
@@ -124,23 +125,18 @@ export function PluginRecoveryCenter(props: PluginRecoveryCenterProps) {
           onLocateDiagnostics={props.onLocate ? (plugin, request) => props.onLocate?.("uninstall", plugin, request) : undefined}
           onRecordsObserved={props.onUninstallRecordsObserved} onReport={(next) => report("uninstall", next)} pluginId={scoped}
           pluginName={props.pluginName} releaseMutation={gate.releaseMutation} scanToken={props.scanToken} />}
-      </div>
-      {loading && visible === 0 && <p className="plugin-recovery-loading" role="status">{t("pluginRecovery.scanning")}</p>}
-      {!loading && visible === 0 && <Empty className="plugin-recovery-clear">
-        <EmptyHeader>
-          <EmptyMedia variant="icon"><CircleCheck className="size-5" /></EmptyMedia>
-          <EmptyTitle>{t("pluginRecovery.allClear")}</EmptyTitle>
-          <EmptyDescription>{t(scoped === undefined ? "pluginRecovery.allClearHint" : "pluginRecovery.allClearScopedHint")}</EmptyDescription>
-        </EmptyHeader>
-      </Empty>}
-      {scoped === undefined && scanRequests && <InlineDisclosure className="plugin-recovery-extra" label={t("pluginRecovery.extraToggle")}>
-        <p className="plugin-capacity-hint">{t("pluginRecovery.extraHint")}</p>
+      </PageItemList>
+      {loading && visible === 0 && <StreamPlaceholder count={2} label={t("pluginRecovery.scanning")} shape="rows" />}
+      {!loading && visible === 0 && <PageEmptyState description={t(scoped === undefined ? "pluginRecovery.allClearHint" : "pluginRecovery.allClearScopedHint")}
+        icon={<CircleCheck />} title={t("pluginRecovery.allClear")} />}
+      {scoped === undefined && scanRequests && <InlineDisclosure label={t("pluginRecovery.extraToggle")}>
+        <PageHint>{t("pluginRecovery.extraHint")}</PageHint>
         <form className="plugin-recovery-extra-form" onSubmit={(event) => { event.preventDefault(); addExtra(); }}>
           <label className="sr-only" htmlFor={inputId}>{t("pluginRecovery.extraField")}</label>
           <Input id={inputId} onChange={(event) => setExtraDraft(event.target.value)} placeholder={t("pluginRecovery.extraField")} value={extraDraft} />
           <Button disabled={!extraDraft.trim()} size="sm" type="submit" variant="outline"><Plus data-icon="inline-start" />{t("pluginRecovery.extraAdd")}</Button>
         </form>
       </InlineDisclosure>}
-    </div>
+    </>
   );
 }
