@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { translateActive } from "@/i18n";
 import type { VceJobSummary } from "@/types";
 import { executeVceMaintenance, listVceFiles, listVceIntegrityIssues, loadVceBlobDetail, planVceMaintenance } from "./vce-service";
 
@@ -74,7 +75,7 @@ describe("confirmed VCE maintenance admission", () => {
   // 修复和暂存清理仍然要求已有的已发布检查点。
   it("rejects checkpoint-less non-rebuild maintenance before transport", async () => {
     await expect(executeVceMaintenance("project-a", "repair", 4, null, ["repair-action"], "click-repair", "sha256:current-model"))
-      .rejects.toThrow("要求一个已发布检查点");
+      .rejects.toThrow(translateActive("codeContext.service.maintenanceNeedsCheckpoint"));
     expect(transport.request).not.toHaveBeenCalled();
   });
 
@@ -91,7 +92,7 @@ describe("confirmed VCE maintenance admission", () => {
   it("requires a connected service", async () => {
     transport.available.mockReturnValue(false);
     await expect(executeVceMaintenance("project-a", "rebuild", 4, 7, ["action"], "click-c", "sha256:preview-target"))
-      .rejects.toThrow("桌面服务连接");
+      .rejects.toThrow(translateActive("codeContext.service.maintenanceNeedsService"));
     expect(transport.request).not.toHaveBeenCalled();
   });
 
@@ -110,7 +111,7 @@ describe("confirmed VCE maintenance admission", () => {
   // 离线模式不能为人为确认编造目标指纹或默认维度。
   it("rejects offline planning instead of fabricating an empty plan", async () => {
     transport.available.mockReturnValue(false);
-    await expect(planVceMaintenance("project-a", "rebuild")).rejects.toThrow("需要连接桌面服务");
+    await expect(planVceMaintenance("project-a", "rebuild")).rejects.toThrow(translateActive("codeContext.service.maintenancePlanNeedsService"));
     expect(transport.request).not.toHaveBeenCalled();
   });
 });

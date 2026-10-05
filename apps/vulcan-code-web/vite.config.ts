@@ -54,8 +54,8 @@ export default defineConfig(({ mode }) => {
       // The full-workbench audit requires its isolated transport aliases and dedicated Vitest configuration.
       // 完整工作台验收依赖隔离传输别名及其专属 Vitest 配置。
       exclude: [...configDefaults.exclude, "scripts/*.test.mjs", "tests/ui-audit/**"],
-      // Every locale catalog is preloaded so tests can read any language synchronously.
-      // 预加载全部语言目录，使测试可以同步读取任意语言。
+      // Common bilingual fixtures are preloaded; locale-specific suites await their own additional catalogs.
+      // 预加载通用中英夹具；特定语言测试等待加载自身所需的其他目录。
       setupFiles: ["src/test-setup/preload-locale-catalogs.ts"],
     },
     server: isRelease

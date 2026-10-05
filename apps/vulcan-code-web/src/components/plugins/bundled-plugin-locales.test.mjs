@@ -5,10 +5,15 @@ import path from "node:path";
 import { load } from "js-yaml";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { SUPPORTED_LOCALES } from "@/i18n-locales";
+import { ensureLocaleCatalog } from "@/i18n-catalogs";
 import { loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
 import { DynamicPluginMountPanel } from "./dynamic-plugin-mount-panel";
+
+// Locale-switching acceptance loads the real host catalogs once for this suite only.
+// 语言切换验收只在本测试组中加载一次真实宿主目录。
+beforeAll(async () => { await Promise.all(SUPPORTED_LOCALES.map(({ code }) => ensureLocaleCatalog(code))); });
 
 // selection supplies the actual host language to the mounted SDK on each rerender.
 // selection 在每次重新渲染时向挂载 SDK 提供真实宿主语言。

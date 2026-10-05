@@ -3,7 +3,7 @@ import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
 import { I18nProvider } from "@/i18n"
-import { loadedLocaleCatalog } from "@/i18n-catalogs"
+import { ensureLocaleCatalog } from "@/i18n-catalogs"
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench"
 import type { VmmMemoryActionResult } from "@/types"
 import { VmmDataPage } from "./vmm-data-page"
@@ -74,7 +74,7 @@ it.each<[string, string | undefined]>([
   ["omits the confirmation token", undefined],
 ])("localizes the purge phrase when the service %s", async (_case, requiredConfirmation) => {
   const locale = "de-DE"
-  const catalog = loadedLocaleCatalog(locale)!
+  const catalog = await ensureLocaleCatalog(locale)
   const snapshot = browserFallbackSnapshot().vmmMemory
   snapshot.runtime.processReady = true
   snapshot.runtime.postactionReady = true

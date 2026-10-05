@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
-import { loadedLocaleCatalog } from "@/i18n-catalogs"
+import { beforeAll, describe, expect, it } from "vitest"
+import { ensureLocaleCatalog, loadedLocaleCatalog } from "@/i18n-catalogs"
 import { detectDeviceLocale, matchLocaleTag, normalizeLocaleCode, pickBilingualText, SUPPORTED_LOCALES, type LocaleCode } from "@/i18n-locales"
 import { enUSTranslations } from "@/i18n-messages.en-US"
 import type { TranslationKey } from "@/i18n-messages"
@@ -60,6 +60,9 @@ describe("device language detection", () => {
 })
 
 describe("supported language registry", () => {
+  // Full catalog validation owns its loading cost instead of imposing it on unrelated behavior tests.
+  // 完整目录验证承担自身加载成本，不将其强加给无关行为测试。
+  beforeAll(async () => { await Promise.all(SUPPORTED_LOCALES.map(({ code }) => ensureLocaleCatalog(code))) })
   // The service validates saved selections against its own copy of the list.
   // 服务使用自己的列表副本校验已保存选择。
   it("matches the locales the service accepts when saving a selection", () => {
@@ -74,7 +77,7 @@ describe("supported language registry", () => {
   // 每个目录都定义全部键，且占位符与英文完全一致，使任何语言都不会渲染损坏的模板。
   it.each(SUPPORTED_LOCALES.map((entry) => entry.code))("%s covers every key with English placeholders", (locale) => {
     const catalog = loadedLocaleCatalog(locale)
-    expect(catalog, `${locale} catalog should be preloaded by the test setup`).toBeDefined()
+    expect(catalog, `${locale} catalog should be loaded by this suite`).toBeDefined()
     const mismatches = (Object.keys(enUSTranslations) as TranslationKey[]).filter((key) => (
       typeof catalog![key] !== "string"
       // Split-sentence fragments around an inline element may be empty when word order needs only one side.

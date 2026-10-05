@@ -256,7 +256,7 @@ describe("workbench activity observation", () => {
     await vi.advanceTimersByTimeAsync(0);
     f.load.mockResolvedValue(createVceActivityFixture("project-b", 9));
     await f.store.refresh("project-a");
-    expect(f.store.snapshot("project-a").error).toContain("其他项目");
+    expect(f.store.snapshot("project-a").error).toBe(translateActive("codeContext.observer.foreignProjectStatus"));
     expect(f.store.snapshot("project-a").activity?.settings.enabled).toBe(true);
     expect(f.store.snapshot("project-a").activity?.status.projectId).toBe("project-a");
     stop();

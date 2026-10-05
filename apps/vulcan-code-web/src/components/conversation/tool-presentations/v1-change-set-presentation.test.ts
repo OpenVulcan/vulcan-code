@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatMessage, translateActive } from "@/i18n";
 
 import { buildV1ChangeSetFilePresentation } from "./v1-change-set-presentation";
 import type { PersistentChangeSet } from "@/service/conversation-event-window-store";
@@ -48,7 +49,7 @@ describe("V1 ChangeSet file presentation", () => {
     expect(deleted?.rows.map((row) => row.content)).toEqual([
       "deleted 1",
       "deleted 2",
-      "省略 204 行",
+      formatMessage(translateActive("toolDomain.changeSet.omittedLines"), { count: 204 }),
       "deleted 207",
       "deleted 208",
     ]);
@@ -152,7 +153,7 @@ describe("V1 ChangeSet file presentation", () => {
     expect(file.rows).toEqual([{
       kind: "omitted",
       lineNumber: null,
-      content: "正文由产出方明确省略",
+      content: translateActive("toolDomain.changeSet.omittedByProducer"),
       logicalLineCount: 24,
     }]);
     expect(file.deletions).toBe(24);

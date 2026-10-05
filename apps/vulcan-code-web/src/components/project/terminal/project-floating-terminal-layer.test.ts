@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { translateActive } from "@/i18n";
 
 import {
   mergeVisibleTerminalChunks,
@@ -152,7 +153,7 @@ describe("project terminal data contracts", () => {
       5,
     );
     expect(gap.map((chunk) => chunk.seq)).toEqual([5, 6]);
-    expect(gap[0].text).toContain("较早的终端输出");
+    expect(gap.find((chunk) => chunk.seq === 5)?.text).toContain(translateActive("project.terminal.outputTruncated"));
   });
 
   // Verifies every nested floating-terminal body keeps a definite height for the absolute xterm viewport.

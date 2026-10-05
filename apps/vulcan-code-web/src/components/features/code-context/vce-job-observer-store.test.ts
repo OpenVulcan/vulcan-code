@@ -159,14 +159,14 @@ describe("workbench-owned VCE job observation", () => {
   it("reports mismatched reads without erasing the last valid receipt", async () => {
     rpc.load.mockResolvedValue(receipt("project-b")); observe("project-a");
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.snapshot("project-a").error).toContain("其他项目");
+    expect(store.snapshot("project-a").error).toBe(translateActive("codeContext.observer.foreignProjectJob"));
     rpc.subscribe.mock.calls[0][0](receipt());
     expect(store.snapshot("project-a").job?.projectId).toBe("project-a");
-    expect(store.snapshot("project-a").error).toContain("其他项目");
+    expect(store.snapshot("project-a").error).toBe(translateActive("codeContext.observer.foreignProjectJob"));
     rpc.load.mockResolvedValue(null); await vi.advanceTimersByTimeAsync(5000);
     expect(store.snapshot("project-a").error).toBeNull();
     expect(store.snapshot("project-a").job?.projectId).toBe("project-a");
-    expect(() => store.receive("project-a", receipt("project-b"))).toThrow("身份不匹配");
+    expect(() => store.receive("project-a", receipt("project-b"))).toThrow(translateActive("codeContext.observer.receiptMismatch"));
   });
 
   // Same-ID remounts cannot consume a retired read or event callback; late handles are released.
@@ -275,8 +275,8 @@ describe("workbench-owned VCE job observation", () => {
   it("rejects mismatched cancel receipts and allows an explicit retry", async () => {
     rpc.load.mockResolvedValue(receipt()); observe("project-a"); await vi.advanceTimersByTimeAsync(0);
     rpc.cancel.mockResolvedValueOnce(receipt("project-b")); await store.cancel("project-a", "job-1");
-    expect(store.snapshot("project-a").error).toContain("不匹配"); expect(store.snapshot("project-a").cancelPending).toBe(false);
-    await vi.advanceTimersByTimeAsync(5000); expect(store.snapshot("project-a").error).toContain("不匹配");
+    expect(store.snapshot("project-a").error).toBe(translateActive("codeContext.observer.cancelMismatch")); expect(store.snapshot("project-a").cancelPending).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000); expect(store.snapshot("project-a").error).toBe(translateActive("codeContext.observer.cancelMismatch"));
     rpc.cancel.mockResolvedValueOnce(receipt("project-a", { state: "cancelled", sequence: 3 }));
     await store.cancel("project-a", "job-1"); expect(store.snapshot("project-a").error).toBeNull();
     expect(store.snapshot("project-a").job?.state).toBe("cancelled");

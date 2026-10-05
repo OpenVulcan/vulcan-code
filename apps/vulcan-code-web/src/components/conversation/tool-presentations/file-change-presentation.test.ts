@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatMessage, translateActive } from "@/i18n";
 import type { PersistentChangeSetFile } from "@/service/conversation-event-window-store";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import {
@@ -89,7 +90,7 @@ describe("native file presentation mapping", () => {
     expect(presentation).toMatchObject({ interactive: true, totalAdded: added, totalRemoved: removed });
     expect(presentation?.files[0]).toMatchObject({ expandable: true, operation: file.change });
     expect(presentation?.files[0].diffFile).not.toBeNull();
-    if (file.change === "delete") expect(presentation?.files[0].rows).toContainEqual({ kind: "omit", lineNumber: null, content: "省略 198 行" });
+    if (file.change === "delete") expect(presentation?.files[0].rows).toContainEqual({ kind: "omit", lineNumber: null, content: formatMessage(translateActive("toolDomain.changeSet.omittedLines"), { count: 198 }) });
   });
 
   it("reports execution and effective-change axes independently", () => {
