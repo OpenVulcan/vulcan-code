@@ -10,12 +10,13 @@
     "build": "pnpm run lint && pnpm run typecheck && pnpm run check:ui-architecture && vite build && pnpm run check:build-budget",
     "check:build-budget": "node scripts/check-build-budget.mjs",
     "check:ui-architecture": "node scripts/check-ui-architecture.mjs",
+    "report:unused-css": "node scripts/report-unused-css.mjs",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -b --pretty false",
     "test:lint": "node --test scripts/check-lint.test.mjs",
     "test": "vitest run",
-    "test:architecture": "node --test scripts/check-build-budget.test.mjs scripts/check-ui-architecture.test.mjs",
+    "test:architecture": "node --test scripts/check-build-budget.test.mjs scripts/check-ui-architecture.test.mjs scripts/report-unused-css.test.mjs",
     "test:build-budget": "node --test scripts/check-build-budget.test.mjs"
   },
   "dependencies": {

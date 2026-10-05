@@ -1,4 +1,5 @@
 import * as React from "react";
+import "@/styles/knowledge.css";
 import { KnowledgeSkippedDocuments } from "./knowledge-skipped-documents";
 import { KnowledgeFileConfirmationDialog, type KnowledgeFileReviewTarget } from "./knowledge-file-confirmation-dialog";
 import type { KnowledgeFileConfirmation } from "@/types";

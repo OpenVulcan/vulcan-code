@@ -1,4 +1,5 @@
 import React from "react";
+import "@/styles/knowledge.css";
 import { BookMarked, LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";

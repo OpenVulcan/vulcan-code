@@ -80,35 +80,8 @@
 /* 表单根据内容可用宽度变化，同时兼顾桌面侧栏挤占空间的情况。 */
 @container workspace-page (max-width: 640px) {
   .settings-form-grid.two,
-  .settings-form-grid.three,
-  .knowledge-layout {
+  .settings-form-grid.three {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .knowledge-layout {
-    grid-template-rows: minmax(100px, 30%) minmax(0, 1fr);
-  }
-
-  .knowledge-toolbar,
-  .knowledge-detail-header {
-    flex-wrap: wrap;
-  }
-
-  .knowledge-toolbar {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .knowledge-create-row,
-  .knowledge-search {
-    grid-column: 1 / -1;
-    flex-basis: 100%;
-    max-width: none;
-    min-width: 0;
-  }
-
-  .knowledge-actions {
-    flex-wrap: wrap;
   }
 
   /* Provider records retain all controls while changing from comparison columns to labeled rows. */
@@ -368,19 +341,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-model-row,
-  .knowledge-actions,
-  .knowledge-detail-header {
+  .settings-model-row {
     flex-wrap: wrap;
-  }
-
-  .knowledge-title-editor {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .knowledge-binding-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   [data-slot="dialog-content"],
