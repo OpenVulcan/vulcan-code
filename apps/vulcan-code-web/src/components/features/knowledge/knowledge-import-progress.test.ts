@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { KnowledgeImportJobSummary } from "@/types";
 
-import { knowledgeImportHasCommittedContent, knowledgeImportProgressPercent } from "./knowledge-base-area";
+import { knowledgeImportHasCommittedContent } from "./knowledge-base-area";
 
-// importJob builds one exact progress snapshot for percentage tests.
-// importJob 为百分比测试构建一份准确的进度快照。
+// importJob builds one exact durable operation snapshot.
+// importJob 构建一份准确的持久化操作快照。
 function importJob(overrides: Partial<KnowledgeImportJobSummary> = {}): KnowledgeImportJobSummary {
   return {
     id: "job-1",
@@ -25,40 +25,6 @@ function importJob(overrides: Partial<KnowledgeImportJobSummary> = {}): Knowledg
     ...overrides,
   };
 }
-
-describe("knowledgeImportProgressPercent", () => {
-  it("keeps progress indeterminate until scanning establishes the total", () => {
-    expect(knowledgeImportProgressPercent(null)).toBeNull();
-    expect(knowledgeImportProgressPercent(importJob({ phase: "scanning", totalFiles: 0, processedFiles: 0 }))).toBeNull();
-  });
-
-  it("reports and bounds deterministic processing progress", () => {
-    expect(knowledgeImportProgressPercent(importJob())).toBe(40);
-    expect(knowledgeImportProgressPercent(importJob({ processedFiles: 11 }))).toBe(100);
-    expect(knowledgeImportProgressPercent(importJob({ processedFiles: -1 }))).toBe(0);
-  });
-
-  it("switches to index work progress during incremental and recovery indexing", () => {
-    expect(knowledgeImportProgressPercent(importJob({
-      phase: "rebuilding",
-      totalIndexItems: 0,
-      processedIndexItems: 0,
-    }))).toBeNull();
-    expect(knowledgeImportProgressPercent(importJob({
-      phase: "rebuilding",
-      processedFiles: 10,
-      totalIndexItems: 3826,
-      processedIndexItems: 1913,
-    }))).toBe(50);
-    expect(knowledgeImportProgressPercent(importJob({
-      operationKind: "repair",
-      phase: "repairing",
-      totalFiles: 0,
-      totalIndexItems: 40,
-      processedIndexItems: 10,
-    }))).toBe(25);
-  });
-});
 
 describe("knowledgeImportHasCommittedContent", () => {
   it("exposes authoritative counts as soon as an import reaches post-commit work", () => {
