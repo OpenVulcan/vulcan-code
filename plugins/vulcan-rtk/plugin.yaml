@@ -18,6 +18,7 @@ required_files:
   - config/schema.json
   - config/defaults.json
   - ui/index.mjs
+  - ui/settings.json
   - locales/en.yaml
   - locales/zh-CN.yaml
   - locales/zh-TW.yaml
@@ -130,10 +131,17 @@ config:
   defaults_file: config/defaults.json
 ui:
   mounts:
-    - id: settings-and-statistics
+    - id: rtk-settings
       point: skills_plugin_detail
       label: RTK Settings
       label_message_key: navigationLabel
+      icon: route
+      kind: settings
+      entry: ui/settings.json
+    - id: rtk-statistics
+      point: skills_plugin_detail
+      label: RTK Statistics
+      label_message_key: statisticsNavigationLabel
       icon: route
       entry: ui/index.mjs
       export: createPluginPanel

@@ -38,6 +38,7 @@ function plugin(overrides: Partial<WorkbenchSnapshot["plugins"][number]> = {}): 
         label: "AI Browser",
         labelByLocale: {},
         icon: "plugin",
+        kind: "module",
         exportName: "createPluginPanel",
       }],
       skills: [],

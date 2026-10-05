@@ -3,30 +3,16 @@ capability: Documentação atualizada de bibliotecas por versão para agentes de
 messages:
   errorDetails: Detalhes do erro
   navigationLabel: Context7
+  usageNavigationLabel: "Uso do Context7"
   allowanceDescription: O modo anônimo permite 200 solicitações sem chave de API. Ao se cadastrar e configurar uma chave gratuita, você obtém 1.000 solicitações e pode consultar o uso da conta no painel oficial.
   refresh: Atualizar
-  loading: Carregando as configurações do Context7…
   loadError: Não foi possível carregar os dados do Context7.
   retry: Tentar novamente
-  operationFailed: A operação falhou. Tente novamente.
   credentialTitle: Autenticação
   anonymousMode: Modo anônimo
   apiKeyMode: Modo com chave de API
-  configured: Chave de API configurada
-  notConfigured: Nenhuma chave de API configurada; as solicitações usam a cota anônima.
   apiKeyLabel: Chave de API
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: Salvar chave de API
-  replaceApiKey: Substituir chave de API
-  deleteApiKey: Excluir chave de API
-  confirmDeleteApiKey: Confirmar exclusão
-  apiKeySaved: A chave de API do Context7 foi salva.
-  apiKeyDeleted: A chave de API do Context7 foi excluída; o modo anônimo está ativo.
-  credentialInvalid: O Context7 rejeitou a chave de API configurada.
-  credentialValid: A chave de API configurada foi validada com sucesso.
-  credentialUntested: A chave de API configurada ainda não foi testada.
-  credentialUnknown: Nenhum resultado de validação da chave de API está disponível.
-  connectionTitle: Teste de conexão
   connectionTest: Testar conexão
   connectionTestHint: O teste consome uma solicitação do Context7 da cota atual.
   connectionSuccess: A conexão com o Context7 foi bem-sucedida.
@@ -37,8 +23,6 @@ messages:
   timeoutHint: Tempo máximo que uma solicitação do Context7 aguarda uma resposta.
   retention: Retenção das estatísticas locais
   retentionHint: Registros locais de solicitações anteriores a este período são removidos.
-  saveSettings: Salvar configurações
-  settingsSaved: As configurações do Context7 foram salvas.
   usageTitle: Uso e cota
   localStatsTitle: Estatísticas locais de solicitações
   usageRange: Período local
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Painel do Context7
   apiKeyDocsLink: Obter chave de API gratuita
   usageDocsLink: Documentação da API e do uso
-  saving: Salvando…
-  testing: Testando…
-  days: "{{days}} dias"

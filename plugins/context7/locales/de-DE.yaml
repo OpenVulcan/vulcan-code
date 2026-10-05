@@ -3,30 +3,16 @@ capability: Aktuelle versionsbezogene Bibliotheksdokumentation für Programmiera
 messages:
   errorDetails: Fehlerdetails
   navigationLabel: Context7
+  usageNavigationLabel: "Context7-Nutzung"
   allowanceDescription: Im anonymen Modus sind 200 Anfragen ohne API-Schlüssel möglich. Nach der Registrierung und Einrichtung eines kostenlosen API-Schlüssels sind 1.000 Anfragen möglich; die Kontonutzung ist im offiziellen Dashboard einsehbar.
   refresh: Aktualisieren
-  loading: Context7-Einstellungen werden geladen…
   loadError: Context7-Daten konnten nicht geladen werden.
   retry: Erneut versuchen
-  operationFailed: Der Vorgang ist fehlgeschlagen. Bitte erneut versuchen.
   credentialTitle: Authentifizierung
   anonymousMode: Anonymer Modus
   apiKeyMode: API-Schlüssel-Modus
-  configured: API-Schlüssel eingerichtet
-  notConfigured: Kein API-Schlüssel eingerichtet; Anfragen nutzen das anonyme Kontingent.
   apiKeyLabel: API-Schlüssel
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: API-Schlüssel speichern
-  replaceApiKey: API-Schlüssel ersetzen
-  deleteApiKey: API-Schlüssel löschen
-  confirmDeleteApiKey: Löschen bestätigen
-  apiKeySaved: Der Context7-API-Schlüssel wurde gespeichert.
-  apiKeyDeleted: Der Context7-API-Schlüssel wurde gelöscht; der anonyme Modus ist aktiv.
-  credentialInvalid: Context7 hat den eingerichteten API-Schlüssel abgelehnt.
-  credentialValid: Der eingerichtete API-Schlüssel wurde erfolgreich validiert.
-  credentialUntested: Der eingerichtete API-Schlüssel wurde noch nicht getestet.
-  credentialUnknown: Kein Validierungsergebnis für den API-Schlüssel verfügbar.
-  connectionTitle: Verbindungstest
   connectionTest: Verbindung testen
   connectionTestHint: Der Test verbraucht eine Context7-Anfrage aus dem aktuellen Kontingent.
   connectionSuccess: Die Verbindung zu Context7 war erfolgreich.
@@ -37,8 +23,6 @@ messages:
   timeoutHint: Maximale Wartezeit auf die Antwort einer einzelnen Context7-Anfrage.
   retention: Aufbewahrung lokaler Statistiken
   retentionHint: Lokale Anfrageaufzeichnungen, die älter als dieser Zeitraum sind, werden gelöscht.
-  saveSettings: Einstellungen speichern
-  settingsSaved: Context7-Einstellungen wurden gespeichert.
   usageTitle: Nutzung und Kontingent
   localStatsTitle: Lokale Anfragestatistiken
   usageRange: Lokaler Zeitraum
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Context7-Dashboard
   apiKeyDocsLink: Kostenlosen API-Schlüssel erhalten
   usageDocsLink: API- und Nutzungsdokumentation
-  saving: Wird gespeichert…
-  testing: Wird getestet…
-  days: "{{days}} Tage"

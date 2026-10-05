@@ -1576,17 +1576,62 @@
         }
       ]
     },
+    "VulcanPluginUiMountKind": {
+      "description": "How the host turns one mount entry into a page.\n宿主将挂载入口转为页面的方式。",
+      "oneOf": [
+        {
+          "const": "module",
+          "description": "A plugin-owned ESM factory renders the page with host SDK components.\n插件自有 ESM 工厂使用宿主 SDK 组件渲染页面。",
+          "type": "string"
+        },
+        {
+          "const": "settings",
+          "description": "The host page kit renders a declarative settings layout.\n宿主页面套件渲染声明式设置版面。",
+          "type": "string"
+        }
+      ]
+    },
     "VulcanPluginUiMountManifest": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "export"
+            ]
+          },
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "settings"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "export"
+              ]
+            }
+          }
+        }
+      ],
       "description": "One uncompressed ESM module mounted into a host-owned UI location.\n一个挂载到宿主持有界面位置的未压缩 ESM 模块。",
       "properties": {
         "entry": {
-          "description": "Package-relative uncompressed ESM file.\n插件包相对未压缩 ESM 文件。",
+          "description": "Package-relative entry: an uncompressed `.mjs` module, or a `.json` settings layout.\n插件包相对入口：未压缩 `.mjs` 模块，或 `.json` 设置版面。",
           "type": "string"
         },
         "export": {
-          "description": "Named ESM export containing the mount factory.\n包含挂载工厂的 ESM 命名导出。",
-          "type": "string"
+          "default": null,
+          "description": "Named ESM export containing the mount factory; required for modules, forbidden for settings.\n包含挂载工厂的 ESM 命名导出；模块必填，设置版面禁止。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "icon": {
           "$ref": "#/$defs/VulcanPluginUiMountIcon",
@@ -1595,6 +1640,10 @@
         "id": {
           "description": "Stable plugin-local mount identifier.\n稳定的插件内挂载标识。",
           "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/VulcanPluginUiMountKind",
+          "description": "Whether the entry is a plugin-owned ESM module or a host-rendered settings layout.\n入口是插件自有 ESM 模块，还是由宿主渲染的设置版面。"
         },
         "label": {
           "default": null,
@@ -1620,8 +1669,7 @@
       "required": [
         "id",
         "point",
-        "entry",
-        "export"
+        "entry"
       ],
       "type": "object"
     },

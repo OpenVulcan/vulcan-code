@@ -4,6 +4,7 @@
 use crate::{
     VULCAN_PLUGIN_LEGACY_MANIFEST_SCHEMA_VERSION, VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
     VulcanPluginManifest, VulcanPluginReusableToolManifest, VulcanPluginRuntimeRequirements,
+    VulcanPluginSettingsLayout, VulcanPluginUiMountKind, VulcanPluginUiMountManifest,
     VulcanPluginToolExecutionKind, VulcanPluginToolExecutionManifest,
 };
 use schemars::{JsonSchema, Schema, generate::SchemaSettings};
@@ -66,6 +67,18 @@ pub fn generated_schemas() -> Result<BTreeMap<&'static str, Vec<u8>>, String> {
             VulcanPluginToolExecutionKind::Stateless
         ).map_err(|error| error.to_string())?}}}
     }]);
+    // Mount kinds mirror the catalog gate: modules need an export, settings layouts forbid one.
+    // 挂载类型对应目录门控：模块必须声明导出，设置版面禁止声明导出。
+    let mount_name = VulcanPluginUiMountManifest::schema_name();
+    let mount = manifest["$defs"]
+        .get_mut(mount_name.as_ref())
+        .ok_or_else(|| "Generated manifest lost the UI mount definition.".to_string())?;
+    let settings_kind = VulcanPluginUiMountKind::Settings.key();
+    mount["allOf"] = json!([{
+        "if":{"required":["kind"],"properties":{"kind":{"const":settings_kind}}},
+        "then":{"not":{"required":["export"]}},
+        "else":{"required":["export"]}
+    }]);
     // One artifact set replaces both historical hand-written fragments as well as the full manifest.
     // 单个产物集合同时替换两份历史手写片段并提供完整清单。
     let schemas = [
@@ -77,6 +90,10 @@ pub fn generated_schemas() -> Result<BTreeMap<&'static str, Vec<u8>>, String> {
         (
             "plugin-tool-reuse.schema.json",
             input_schema::<VulcanPluginReusableToolManifest>()?,
+        ),
+        (
+            "plugin-settings-layout.schema.json",
+            input_schema::<VulcanPluginSettingsLayout>()?,
         ),
     ];
     schemas

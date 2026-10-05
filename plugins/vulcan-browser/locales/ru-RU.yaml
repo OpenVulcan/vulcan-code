@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: Время ожидания навигации (мс)
   settleTimeoutLabel: Ожидание после действия (мс)
   consoleLevelLabel: Уровень консоли
-  settingsSave: Сохранить настройки
-  settingsRetry: Загрузить повторно
-  settingsSaved: Настройки сохранены. Новые подключения браузера будут использовать обновлённые значения.
+  timeoutsTitle: "Тайм-ауты"
+  diagnosticsTitle: "Диагностика"
+  actionTimeoutHint: "От 100 до 999999 мс. Максимальное ожидание одного щелчка, ввода или другого действия на странице."
+  navigationTimeoutHint: "От 100 до 999999 мс. Максимальное ожидание завершения перехода."
+  settleTimeoutHint: "От 0 до 999999 мс. Пауза после каждого действия, чтобы страница стабилизировалась."
+  consoleLevelHint: "Минимальный уровень консоли браузера, включаемый в результаты инструментов."
   settingsHint: Эти настройки применяются при запуске нового подключения ИИ-браузера.
-  settingsInvalid: Перед сохранением введите допустимые значения времени ожидания.
-  settingsResponseInvalid: Ответ с настройками Playwright некорректен.
-  settingsPersistedInvalid: Сохранённые настройки Playwright некорректны.
   consoleLevel_error: Ошибка
   consoleLevel_warning: Предупреждение
   consoleLevel_info: Информация

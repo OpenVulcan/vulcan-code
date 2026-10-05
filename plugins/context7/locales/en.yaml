@@ -3,30 +3,16 @@ capability: Current, version-aware library documentation for coding agents
 messages:
   errorDetails: Error details
   navigationLabel: Context7
+  usageNavigationLabel: "Context7 Usage"
   allowanceDescription: Anonymous mode provides 200 requests without an API key. Registering and configuring a free API key provides 1,000 requests and account usage visibility in the official dashboard.
   refresh: Refresh
-  loading: Loading Context7 settings…
   loadError: Context7 data could not be loaded.
   retry: Retry
-  operationFailed: The operation failed. Please retry.
   credentialTitle: Authentication
   anonymousMode: Anonymous mode
   apiKeyMode: API key mode
-  configured: API key configured
-  notConfigured: No API key configured; requests use the anonymous allowance.
   apiKeyLabel: API key
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: Save API key
-  replaceApiKey: Replace API key
-  deleteApiKey: Delete API key
-  confirmDeleteApiKey: Confirm deletion
-  apiKeySaved: Context7 API key saved.
-  apiKeyDeleted: Context7 API key deleted; anonymous mode is active.
-  credentialInvalid: The configured API key was rejected by Context7.
-  credentialValid: The configured API key was validated successfully.
-  credentialUntested: The configured API key has not been tested yet.
-  credentialUnknown: No API key validation result is available.
-  connectionTitle: Connection test
   connectionTest: Test connection
   connectionTestHint: Testing consumes one Context7 request from the current allowance.
   connectionSuccess: Context7 connection succeeded.
@@ -37,8 +23,6 @@ messages:
   timeoutHint: The longest time one Context7 request waits for a response.
   retention: Local statistics retention
   retentionHint: Local request records older than this period are removed.
-  saveSettings: Save settings
-  settingsSaved: Context7 settings saved.
   usageTitle: Usage and quota
   localStatsTitle: Local request statistics
   usageRange: Local range
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Context7 dashboard
   apiKeyDocsLink: Get a free API key
   usageDocsLink: API and usage documentation
-  saving: Saving…
-  testing: Testing…
-  days: "{{days}} days"

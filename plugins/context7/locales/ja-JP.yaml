@@ -3,30 +3,16 @@ capability: コーディングエージェント向けの最新・バージョ�
 messages:
   errorDetails: エラーの詳細
   navigationLabel: Context7
+  usageNavigationLabel: "Context7 使用量"
   allowanceDescription: API キーなしの匿名モードでは 200 回リクエストできます。登録して無料の API キーを設定すると、1,000 回リクエストでき、公式ダッシュボードでアカウントの使用状況を確認できます。
   refresh: 更新
-  loading: Context7 の設定を読み込み中…
   loadError: Context7 のデータを読み込めませんでした。
   retry: 再試行
-  operationFailed: 操作に失敗しました。再試行してください。
   credentialTitle: 認証
   anonymousMode: 匿名モード
   apiKeyMode: API キーモード
-  configured: API キー設定済み
-  notConfigured: API キーが未設定のため、匿名モードの利用枠を使用します。
   apiKeyLabel: API キー
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: API キーを保存
-  replaceApiKey: API キーを変更
-  deleteApiKey: API キーを削除
-  confirmDeleteApiKey: 削除を確認
-  apiKeySaved: Context7 の API キーを保存しました。
-  apiKeyDeleted: Context7 の API キーを削除し、匿名モードを有効にしました。
-  credentialInvalid: 設定済みの API キーが Context7 に拒否されました。
-  credentialValid: 設定済みの API キーの検証に成功しました。
-  credentialUntested: 設定済みの API キーはまだテストされていません。
-  credentialUnknown: API キーの検証結果はありません。
-  connectionTitle: 接続テスト
   connectionTest: 接続をテスト
   connectionTestHint: テストには現在の利用枠から Context7 リクエストを 1 回消費します。
   connectionSuccess: Context7 に接続できました。
@@ -37,8 +23,6 @@ messages:
   timeoutHint: 1 回の Context7 リクエストで応答を待つ最大時間です。
   retention: ローカル統計の保持期間
   retentionHint: 保持期間を過ぎたローカルのリクエスト記録は削除されます。
-  saveSettings: 設定を保存
-  settingsSaved: Context7 の設定を保存しました。
   usageTitle: 使用状況と割り当て
   localStatsTitle: ローカルのリクエスト統計
   usageRange: ローカル統計の範囲
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Context7 ダッシュボード
   apiKeyDocsLink: 無料の API キーを取得
   usageDocsLink: API と使用状況のドキュメント
-  saving: 保存中…
-  testing: テスト中…
-  days: "{{days}} 日"

@@ -19,11 +19,11 @@ required_files:
   - schemas/credential-set-input.json
   - schemas/credential-status-output.json
   - schemas/connection-test-output.json
-  - schemas/bootstrap-output.json
   - schemas/usage-input.json
   - schemas/usage-output.json
   - model/instructions.md
   - ui/index.mjs
+  - ui/settings.json
   - locales/en.yaml
   - locales/zh-CN.yaml
 execution:
@@ -85,14 +85,6 @@ lua_runtime:
     disable: on_disable
     uninstall: on_uninstall
   actions:
-    - id: bootstrap-get
-      effect: read
-      function: bootstrap_get
-      input_schema_file: schemas/usage-input.json
-      output_schema_file: schemas/bootstrap-output.json
-      timeout_ms: 10000
-      callers:
-        - plugin_ui
     - id: settings-get
       effect: read
       function: settings_get
@@ -169,10 +161,17 @@ config:
   defaults_file: config/defaults.json
 ui:
   mounts:
-    - id: context7-settings-usage
+    - id: context7-settings
       point: skills_plugin_detail
       label: Context7
       label_message_key: navigationLabel
+      icon: plugin
+      kind: settings
+      entry: ui/settings.json
+    - id: context7-usage
+      point: skills_plugin_detail
+      label: Context7 Usage
+      label_message_key: usageNavigationLabel
       icon: plugin
       entry: ui/index.mjs
       export: createPluginPanel

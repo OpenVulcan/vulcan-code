@@ -102,9 +102,13 @@ pub struct PluginUiMountSummary {
     /// Stable host-owned navigation icon identifier.
     /// 稳定的宿主导航图标标识。
     pub icon: String,
-    /// Named ESM export containing the component factory.
-    /// 包含组件工厂的 ESM 命名导出。
-    pub export_name: String,
+    /// Entry kind: `module` for a plugin ESM factory, `settings` for a host-rendered layout.
+    /// 入口类型：`module` 为插件 ESM 工厂，`settings` 为宿主渲染的版面。
+    pub kind: String,
+    /// Named ESM export containing the component factory; absent for settings layouts.
+    /// 包含组件工厂的 ESM 命名导出；设置版面不存在此项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_name: Option<String>,
 }
 
 /// Summarizes one plugin-owned MCP server without exposing credentials or editable user-MCP fields.
@@ -297,12 +301,20 @@ pub struct PluginUiModuleSource {
     /// Exact plugin-local mount identifier.
     /// 精确的插件内挂载标识。
     pub mount_id: String,
-    /// Named ESM export containing the component factory.
-    /// 包含组件工厂的 ESM 命名导出。
-    pub export_name: String,
-    /// Untouched UTF-8 ESM source read from the validated package.
-    /// 从通过校验的插件包读取的原样 UTF-8 ESM 源码。
+    /// Entry kind: `module` for a plugin ESM factory, `settings` for a host-rendered layout.
+    /// 入口类型：`module` 为插件 ESM 工厂，`settings` 为宿主渲染的版面。
+    pub kind: String,
+    /// Named ESM export containing the component factory; absent for settings layouts.
+    /// 包含组件工厂的 ESM 命名导出；设置版面不存在此项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_name: Option<String>,
+    /// Untouched UTF-8 source read from the validated package: ESM for modules, layout JSON for settings.
+    /// 从通过校验的插件包读取的原样 UTF-8 源码：模块为 ESM，设置版面为版面 JSON。
     pub source: String,
+    /// Plugin configuration JSON Schema, supplied only to settings layouts for client-side field checks.
+    /// 插件配置 JSON Schema，仅提供给设置版面用于客户端字段校验。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<serde_json::Value>,
     /// Plugin-owned UI messages grouped by locale and stable message key.
     /// 按语言和稳定消息键组织的插件自有界面文案。
     #[serde(default)]

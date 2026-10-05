@@ -227,6 +227,7 @@ pub(crate) fn plugins_from_catalogs(
                                 VulcanPluginUiMountIcon::Route => String::from("route"),
                                 VulcanPluginUiMountIcon::Chart => String::from("chart"),
                             },
+                            kind: mount.kind.key().to_owned(),
                             export_name: mount.export.clone(),
                         })
                         .collect(),

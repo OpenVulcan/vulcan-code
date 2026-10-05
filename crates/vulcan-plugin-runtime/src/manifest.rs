@@ -7,11 +7,13 @@ use vulcan_hooks::{HookCapability, HookFailurePolicy, HookMode, HookScope};
 
 mod requirements;
 mod reuse;
+mod settings_layout;
 pub use requirements::{
     VulcanPluginCapacityRequirement, VulcanPluginHostCapabilityRequirement,
     VulcanPluginRuntimeRequirements,
 };
 pub use reuse::{VulcanPluginReusableToolManifest, VulcanPluginToolOrdering};
+pub use settings_layout::*;
 
 /// Current manifest schema version accepted by the host.
 /// 当前宿主接受的清单结构版本。
@@ -382,12 +384,52 @@ pub struct VulcanPluginUiMountManifest {
     /// 在导航名称旁渲染的宿主持有图标。
     #[serde(default)]
     pub icon: VulcanPluginUiMountIcon,
-    /// Package-relative uncompressed ESM file.
-    /// 插件包相对未压缩 ESM 文件。
+    /// Whether the entry is a plugin-owned ESM module or a host-rendered settings layout.
+    /// 入口是插件自有 ESM 模块，还是由宿主渲染的设置版面。
+    #[serde(default)]
+    pub kind: VulcanPluginUiMountKind,
+    /// Package-relative entry: an uncompressed `.mjs` module, or a `.json` settings layout.
+    /// 插件包相对入口：未压缩 `.mjs` 模块，或 `.json` 设置版面。
     pub entry: String,
-    /// Named ESM export containing the mount factory.
-    /// 包含挂载工厂的 ESM 命名导出。
-    pub export: String,
+    /// Named ESM export containing the mount factory; required for modules, forbidden for settings.
+    /// 包含挂载工厂的 ESM 命名导出；模块必填，设置版面禁止。
+    #[serde(default)]
+    pub export: Option<String>,
+}
+
+/// How the host turns one mount entry into a page.
+/// 宿主将挂载入口转为页面的方式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "manifest-schema", derive(schemars::JsonSchema))]
+pub enum VulcanPluginUiMountKind {
+    /// A plugin-owned ESM factory renders the page with host SDK components.
+    /// 插件自有 ESM 工厂使用宿主 SDK 组件渲染页面。
+    #[default]
+    Module,
+    /// The host page kit renders a declarative settings layout.
+    /// 宿主页面套件渲染声明式设置版面。
+    Settings,
+}
+
+impl VulcanPluginUiMountKind {
+    /// Return the only entry file extension accepted for this kind.
+    /// 返回此类型唯一接受的入口文件扩展名。
+    pub const fn entry_extension(self) -> &'static str {
+        match self {
+            Self::Module => "mjs",
+            Self::Settings => "json",
+        }
+    }
+
+    /// Return the stable serialized name shared with service projections.
+    /// 返回与服务投影共享的稳定序列化名称。
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Module => "module",
+            Self::Settings => "settings",
+        }
+    }
 }
 
 /// Stable host-owned icons available to dynamic plugin navigation entries.

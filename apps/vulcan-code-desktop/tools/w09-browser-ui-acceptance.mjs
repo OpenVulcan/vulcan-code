@@ -846,13 +846,14 @@ try {
   assert.equal(browserPlugin.extension?.uiMounts.some((mount) => mount.point === 'conversationRightPanel'), true);
   assert.equal(browserPlugin.extension?.uiMounts.some((mount) => mount.point === 'skillsPluginDetail'
     && mount.id === 'browser-settings'), true);
-  // The mounted settings page uses declared plugin Actions; Core validates and persists the
+  // The declarative settings layout binds declared plugin Actions; Core validates and persists the
   // complete configuration before a new Playwright MCP connection is started.
-  // 挂载的设置页使用已声明的插件 Action；Core 在启动新 Playwright MCP 连接前校验并持久化
+  // 声明式设置版面绑定已声明的插件 Action；Core 在启动新 Playwright MCP 连接前校验并持久化
   // 完整配置。
   const settingsMount = await rpc('service_load_plugin_ui_module', {
     pluginId: 'vulcan-browser', mountId: 'browser-settings',
   });
+  assert.equal(settingsMount.kind, 'settings');
   assert.ok(settingsMount.source.includes('settings-update'));
   const browserSettings = await rpc('service_invoke_plugin_action', {
     pluginId: 'vulcan-browser', actionId: 'settings-get', arguments: {},

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "config": {
+    "read_action": "settings-get",
+    "write_action": "settings-update"
+  },
+  "sections": [
+    {
+      "id": "timeouts",
+      "title_message_key": "timeoutsTitle",
+      "description_message_key": "settingsHint",
+      "items": [
+        {
+          "type": "field",
+          "key": "actionTimeoutMs",
+          "control": "number",
+          "label_message_key": "actionTimeoutLabel",
+          "description_message_key": "actionTimeoutHint"
+        },
+        {
+          "type": "field",
+          "key": "navigationTimeoutMs",
+          "control": "number",
+          "label_message_key": "navigationTimeoutLabel",
+          "description_message_key": "navigationTimeoutHint"
+        },
+        {
+          "type": "field",
+          "key": "settleTimeoutMs",
+          "control": "number",
+          "label_message_key": "settleTimeoutLabel",
+          "description_message_key": "settleTimeoutHint"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "title_message_key": "diagnosticsTitle",
+      "items": [
+        {
+          "type": "field",
+          "key": "consoleLevel",
+          "control": "select",
+          "label_message_key": "consoleLevelLabel",
+          "description_message_key": "consoleLevelHint",
+          "options": [
+            { "value": "error", "label_message_key": "consoleLevel_error" },
+            { "value": "warning", "label_message_key": "consoleLevel_warning" },
+            { "value": "info", "label_message_key": "consoleLevel_info" },
+            { "value": "debug", "label_message_key": "consoleLevel_debug" }
+          ]
+        }
+      ]
+    }
+  ]
+}

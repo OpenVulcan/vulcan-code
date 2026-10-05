@@ -29,7 +29,7 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 // id selects the plugin; returns a loader result without executing an external module.
 // id 选择插件；返回加载结果且不执行外部模块。
 function loaded(id: string): LoadedPluginUiModule {
-  return { source: { pluginId: id, mountId: "control", exportName: "create", source: "", messagesByLocale: {}, runtimeIdentity: "fixture:1", actionPolicies: [] },
+  return { source: { pluginId: id, mountId: "control", kind: "module", exportName: "create", source: "", messagesByLocale: {}, runtimeIdentity: "fixture:1", actionPolicies: [] },
     namespace: { create: () => () => <div>{id} loaded</div> } };
 }
 

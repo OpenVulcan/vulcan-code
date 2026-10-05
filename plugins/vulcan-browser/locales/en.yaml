@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: Navigation timeout (ms)
   settleTimeoutLabel: Settle time (ms)
   consoleLevelLabel: Console level
-  settingsSave: Save settings
-  settingsRetry: Retry loading
-  settingsSaved: Settings saved. New browser connections use the updated values.
+  timeoutsTitle: "Timeouts"
+  diagnosticsTitle: "Diagnostics"
+  actionTimeoutHint: "100 to 999999 ms. Maximum wait for one click, typing, or other page action."
+  navigationTimeoutHint: "100 to 999999 ms. Maximum wait for a page navigation to finish."
+  settleTimeoutHint: "0 to 999999 ms. Pause after each action so the page can settle."
+  consoleLevelHint: "Lowest browser console severity included in browser tool results."
   settingsHint: These settings apply when a new AI browser connection starts.
-  settingsInvalid: Enter valid timeouts before saving.
-  settingsResponseInvalid: Playwright settings response is invalid.
-  settingsPersistedInvalid: Persisted Playwright settings are invalid.
   consoleLevel_error: Error
   consoleLevel_warning: Warning
   consoleLevel_info: Information

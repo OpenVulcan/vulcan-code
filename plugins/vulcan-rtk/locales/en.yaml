@@ -1,40 +1,33 @@
 name: Vulcan RTK
 capability: Command routing, compressed Git context, and token-saving statistics
 messages:
-  sections.label: RTK sections
   sections.settings: Settings
-  sections.routes: Routes
-  sections.statistics: Statistics
-  routes.search: Search routes
-  routes.noMatches: No matching routes
   retry: Retry
-  settingsLoadFailed: Unable to load RTK settings
   stats.loadFailed: Unable to load RTK statistics
-  actionFailed: Action failed
   errorDetails: Error details
   navigationLabel: RTK Settings
-  hookBadge: Declarative hooks
-  loadingSettings: Loading settings
-  availability.ready: RTK available
-  availability.unavailable: RTK unavailable
+  statisticsNavigationLabel: "RTK Statistics"
+  compliance.repositoryLink: "RTK on GitHub"
+  routeMode.label: "Command routing"
+  routeMode.help: "Choose which shell commands RTK may rewrite."
+  routeMode.disabled: "Off"
+  routeMode.selected: "Only selected routes"
+  routeMode.all: "All routes except unchecked"
+  routes.allowed: "Routes RTK may rewrite"
+  routes.selectedHelp: "Only checked routes are rewritten."
+  routes.allHelp: "Every route is rewritten except the unchecked ones, including routes added by future RTK versions."
   compliance.githubAria: Open the RTK GitHub repository
   compliance.githubOpenFailed: Failed to open GitHub repository
   compliance.licenseAria: Open the Apache-2.0 license
   compliance.licenseTitle: RTK Apache-2.0 License
   compliance.licenseDescription: License text read directly from the currently installed RTK plugin package.
   compliance.licenseLoading: Loading license
-  enabled: Enabled
-  disabled: Disabled
-  densityTitle: High-density command context
   enableRouting: Enable RTK routing
   enableRoutingHelp: Rewrite supported shell_command calls through the bundled RTK binary.
   gitContext: Use RTK for commit generation
   gitContextHelp: Compress git status and git diff context used to generate commit messages.
   disableTelemetry: Disable RTK telemetry environment variable
   disableTelemetryHelp: Inject RTK_TELEMETRY_DISABLED=1 into rewrite and proxied command processes.
-  save: Save
-  saving: Saving
-  saved: Saved
   stats.title: RTK context-density statistics
   stats.description: Token savings are cached for thirty minutes. Switching daily, weekly, and monthly views never sends another request.
   stats.loading: Loading
@@ -62,16 +55,8 @@ messages:
   stats.savingsRate: Savings
   stats.byCommand: By command
   stats.time: Time
-  stats.impact: Impact
   stats.topCommands: "Top {{count}} commands"
   routes.title: RTK routes
   routes.description: Choose exactly which supported commands may be rewritten.
   routes.curated: Curated
-  routes.all: All
-  routes.selectAll: Select all
-  routes.clear: Clear
-  routes.command: Command
-  routes.group: Group
   routes.extended: Extended
-  routes.selected: RTK routes selected
-  routes.enable: Enable route

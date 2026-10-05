@@ -274,7 +274,7 @@ fn real_plugin_empty_database_stage_measurements() {
                     manager.invoke_action(VulcanPluginActionRequest {
                         plugin_id: plugin.into(),
                         action_id: if plugin == "context7" {
-                            "bootstrap-get"
+                            "usage-get"
                         } else {
                             "dashboard-get"
                         }
@@ -292,9 +292,8 @@ fn real_plugin_empty_database_stage_measurements() {
                 .unwrap();
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             if plugin == "context7" {
-                assert_eq!(result["usage"]["localStats"]["requests"], 0);
-                assert!(result["usageError"].is_null());
-                assert!(result["usage"]["quotaSnapshot"].is_null());
+                assert_eq!(result["localStats"]["requests"], 0);
+                assert!(result["quotaSnapshot"].is_null());
             } else {
                 assert_eq!(result["summary"]["attempts"], 0);
                 assert!(result["summary"]["costs"][0]["amount"].is_null());

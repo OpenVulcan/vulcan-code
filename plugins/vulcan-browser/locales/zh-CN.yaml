@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: 导航超时（毫秒）
   settleTimeoutLabel: 操作后等待（毫秒）
   consoleLevelLabel: 控制台级别
-  settingsSave: 保存设置
-  settingsRetry: 重新加载
-  settingsSaved: 设置已保存，新建浏览器连接将使用更新后的值。
+  timeoutsTitle: "超时"
+  diagnosticsTitle: "诊断"
+  actionTimeoutHint: "100 到 999999 毫秒。单次点击、输入或其他页面操作的最长等待时间。"
+  navigationTimeoutHint: "100 到 999999 毫秒。等待页面导览完成的最长时间。"
+  settleTimeoutHint: "0 到 999999 毫秒。每次操作后等待页面稳定的时间。"
+  consoleLevelHint: "浏览器工具结果中包含的最低主控台严重程度。"
   settingsHint: 设置在新建 AI 浏览器连接时生效。
-  settingsInvalid: 请填写有效的超时时间后再保存。
-  settingsResponseInvalid: Playwright 设置响应无效。
-  settingsPersistedInvalid: 已保存的 Playwright 设置无效。
   consoleLevel_error: 错误
   consoleLevel_warning: 警告
   consoleLevel_info: 信息

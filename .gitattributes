@@ -3,3 +3,4 @@
 /docs/contracts/plugin-manifest.schema.json text eol=lf
 /docs/contracts/plugin-runtime-requirements.schema.json text eol=lf
 /docs/contracts/plugin-tool-reuse.schema.json text eol=lf
+/docs/contracts/plugin-settings-layout.schema.json text eol=lf

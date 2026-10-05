@@ -20,87 +20,67 @@ const manifest = loadYaml(await readFile(new URL("../plugin.yaml", import.meta.u
 // catalogs 按语言代码保存每种宿主语言的实际包内翻译。
 const catalogs = new Map(await Promise.all(SUPPORTED_LOCALES.map(async ({ code }) => [code,
   loadYaml(await readFile(new URL(`../${manifest.locales[code]}`, import.meta.url), "utf8"))])));
-// settings uses the real declared default shape in an isolated in-memory copy.
-// settings 使用真实声明的默认结构，但只保留隔离内存副本。
-const settings = JSON.parse(await readFile(new URL("../config/defaults.json", import.meta.url), "utf8"));
+// defaults and layout are the shipped configuration defaults and declarative settings layout.
+// defaults 与 layout 是随包发布的配置默认值与声明式设置版面。
+const defaults = JSON.parse(await readFile(new URL("../config/defaults.json", import.meta.url), "utf8"));
+const layout = JSON.parse(await readFile(new URL("./settings.json", import.meta.url), "utf8"));
 // moduleId keeps each test's cache isolated while allowing explicit same-generation remount tests.
 // moduleId 隔离每个测试的缓存，并允许明确的同代次重新挂载测试。
 let moduleId = 0;
 beforeEach(() => invalidatePluginQueries("rtk-test"));
 
-// mount renders the authoritative plugin against controlled actions and native interaction adapters.
-// mount 使用受控 Action 与原生交互适配器渲染权威插件。
-// invoke supplies action responses; strict replays effects; factory retains the module cache; locale selects a real catalog. Returns DOM and cleanup.
-// invoke 提供 Action 响应；strict 重放 Effect；factory 保留模块缓存；locale 选择实际翻译。返回 DOM 与清理函数。
-async function mount(invoke, strict = false, factory = null, locale = null) {
-  // Exercise the production coordinator; only the backend action boundary is controlled.
-  // 使用生产协调器；仅控制后端 Action 边界。
+// mount renders the statistics page against controlled actions and page-kit stand-ins.
+// mount 使用受控 Action 与页面套件替身渲染统计页面。
+// invoke supplies action responses; factory retains the module cache; locale selects a real catalog. Returns DOM and cleanup.
+// invoke 提供 Action 响应；factory 保留模块缓存；locale 选择实际翻译。返回 DOM 与清理函数。
+async function mount(invoke, factory = null, locale = null) {
+  // Exercise the production query coordinator; only the backend action boundary is controlled.
+  // 使用生产查询协调器；仅控制后端 Action 边界。
   const client = createPluginQueryClient({ pluginId: "rtk-test", runtimeIdentity: "fixture:1", workspacePath: null, conversationId: null }, [
-    { id: "settings-get", effect: "read", resultCacheMs: 0 },
     { id: "statistics-get", effect: "read", resultCacheMs: 60_000 },
-    { id: "settings-update", effect: "mutation", resultCacheMs: 0 },
   ], invoke);
   const dom = new JSDOM("<!doctype html><div id='root'></div>");
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true });
-  // Host adapters retain accessible native controls without claiming host-layout verification.
-  // 宿主适配器保留可访问原生控件，不声称验证宿主布局。
-  const plain = ({ children, label }) => React.createElement("div", null, label, children);
+  // Page-kit stand-ins render every slot as text; the chart and table keep the cells the assertions read.
+  // 页面套件替身将每个插槽渲染为文字；图表与表格保留断言读取的单元格。
+  const block = (props) => React.createElement("div", null, props.title, props.status, props.description, props.actions, props.label, props.value, props.children, props.footer);
   const Button = ({ children, size, variant, ...props }) => React.createElement("button", props, children);
   const Metadata = ({ label, onActivate, ariaLabel }) => React.createElement("button", { onClick: onActivate, "aria-label": ariaLabel }, label);
-  // PageTabs keeps each tab a native button whose text is the exact label, plus the trailing actions.
-  // PageTabs 使每个标签保持为文本即精确标签的原生按钮，并保留尾部操作。
-  const PageTabs = ({ ariaLabel, options, onValueChange, actions }) => React.createElement("div", null, React.createElement("nav", { "aria-label": ariaLabel },
-    ...options.map((option) => React.createElement("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))),
-    actions);
+  const MetricGrid = ({ children }) => React.createElement("div", { className: "metric-grid" }, children);
+  const TimeSeriesLineChart = ({ series }) => React.createElement("div", { className: "chart" },
+    ...series[0].points.map((point) => React.createElement("small", { key: point.key }, point.key)));
+  const PageTable = ({ rows, columns, empty }) => rows.length === 0 ? empty : React.createElement("table", null, React.createElement("tbody", null,
+    ...rows.map((row) => React.createElement("tr", { key: row.key }, ...columns.map((column) => React.createElement("td", { key: column.key }, row.cells[column.key]))))));
   const createPanel = factory ?? (await import(`./index.mjs?test=${++moduleId}`)).createPluginPanel;
-  // sdk preserves existing English fixtures and optionally renders an actual package locale with host-equivalent formatting.
-  // sdk 保留原英文夹具，也可用宿主等效格式化方法渲染实际包内语言。
   const sdk = { React, invoke: client.invoke, locale: locale ?? "en-US",
     formatNumber: (value) => locale ? new Intl.NumberFormat(locale).format(value) : String(value),
     t: (key, fallback) => locale ? catalogs.get(locale).messages[key] ?? fallback : fallback,
-    components: { Button, Badge: plain, StatusPill: plain, PageTabs, HelpTooltip: plain, PluginMetadataLink: Metadata, TextDocumentDialog: plain, StreamPlaceholder: plain } };
+    notifications: { error: () => {} },
+    components: { Button, MetricCard: block, MetricGrid, PageBody: block, PageEmptyState: block, PageHint: block, PageNotice: block, PageSection: block, PageTable,
+      PageToolbar: block, PluginMetadataLink: Metadata, StatusPill: block, StreamPlaceholder: block, TextDocumentDialog: () => null, TimeSeriesLineChart } };
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
-  await React.act(async () => root.render(React.createElement(strict ? React.StrictMode : React.Fragment, null, React.createElement(createPanel(sdk)))));
+  await React.act(async () => root.render(React.createElement(createPanel(sdk))));
   return { container: document.getElementById("root"), factory: createPanel, close: async () => {
     await React.act(async () => root.unmount()); client.dispose(); dom.window.close();
   } };
 }
 
-// button finds one exact visible text contract in this plugin fixture.
-// button 在插件夹具中找到精确文本契约。
-// panel owns the DOM; label is exact button text. Returns the matching native control.
-// panel 持有 DOM；label 是精确按钮文本。返回匹配的原生控件。
+// button finds one button by its exact visible text.
+// button 按精确可见文字查找一个按钮。
 function button(panel, label) { return [...panel.container.querySelectorAll("button")].find((item) => item.textContent === label); }
 
-// Failed settings can be explicitly retried without reloading statistics or fabricating defaults.
-// 设置失败可明确重试，不重载统计或编造默认值。
-test("settings retry is independent, effect replay shares reads, and search preserves routes", async () => {
-  const calls = [];
-  let reads = 0;
-  const panel = await mount((action) => {
-    calls.push(action);
-    if (action === "settings-get") return ++reads === 1 ? Promise.reject(new Error("settings unavailable")) : Promise.resolve(settings);
-    return Promise.reject(new Error("statistics unavailable"));
-  }, true);
-  try {
-    assert.equal(reads, 1);
-    assert.equal(calls.filter((item) => item === "statistics-get").length, 0);
-    assert.equal(button(panel, "Save").disabled, true);
-    await React.act(async () => button(panel, "Retry").click());
-    assert.equal(reads, 2);
-    assert.doesNotMatch(panel.container.textContent, /settings unavailable/);
-    await React.act(async () => button(panel, "statistics").click());
-    assert.equal(calls.filter((item) => item === "statistics-get").length, 1);
-    assert.match(panel.container.textContent, /statistics unavailable/);
-    await React.act(async () => button(panel, "routes").click());
-    const selected = panel.container.querySelectorAll('input[type="checkbox"]:checked').length;
-    const search = panel.container.querySelector('input[type="search"]');
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-    await React.act(async () => { setter.call(search, "no-route-matches"); search.dispatchEvent(new window.Event("input", { bubbles: true })); });
-    assert.match(panel.container.querySelector('[role="status"]').textContent, /No matching routes/);
-    await React.act(async () => { setter.call(search, ""); search.dispatchEvent(new window.Event("input", { bubbles: true })); });
-    assert.equal(panel.container.querySelectorAll('input[type="checkbox"]:checked').length, selected);
-  } finally { await panel.close(); }
+// The declarative layout offers every route once, with the shipped defaults as the curated group.
+// 声明式版面恰好提供每条路由一次，并以随包默认值作为精选分组。
+test("settings layout route groups are disjoint and the curated group equals the default routes", () => {
+  const fields = layout.sections.flatMap((section) => section.items).filter((item) => item.control === "checklist");
+  assert.deepEqual(fields.map((field) => [field.key, field.selection, field.visible_when.values]),
+    [["enabledRoutes", "include", ["selected"]], ["disabledRoutes", "exclude", ["all"]]]);
+  for (const field of fields) {
+    const values = field.option_groups.flatMap((group) => group.values);
+    assert.equal(new Set(values).size, values.length, `${field.key} offers a route twice`);
+    assert.deepEqual(field.option_groups.find((group) => group.id === "curated").values, defaults.enabledRoutes);
+  }
+  assert.deepEqual(fields[0].option_groups, fields[1].option_groups);
 });
 
 // Shipped translations cover host languages and retain exact interpolation contracts.
@@ -111,8 +91,6 @@ test("all host locales have complete translated catalogs and required assets", (
   const baseline = catalogs.get("en-US");
   assert.equal(manifest.locales.en, manifest.locales["en-US"]);
   for (const { code } of SUPPORTED_LOCALES) {
-    // catalog is the actual declared asset for this host language.
-    // catalog 为此宿主语言实际声明的资源。
     const catalog = catalogs.get(code);
     assert.ok(manifest.required_files.includes(manifest.locales[code]), `${code} locale must be packaged`);
     assert.equal(catalog.name, "Vulcan RTK");
@@ -127,17 +105,15 @@ test("all host locales have complete translated catalogs and required assets", (
     }
     if (code !== "en-US") {
       assert.notEqual(catalog.capability, baseline.capability, `${code} capability must be translated`);
-      assert.notEqual(catalog.messages.save, baseline.messages.save, `${code} actions must be translated`);
+      assert.notEqual(catalog.messages["stats.refresh"], baseline.messages["stats.refresh"], `${code} actions must be translated`);
     }
   }
 });
 
-// Real localized panels preserve numeric units, calendar dates, and translations across all host languages.
-// 实际本地化面板在所有宿主语言中保留数字单位、日历日期与翻译。
-test("statistics render every host locale without English-only labels or numeric formatting", async () => {
+// Real localized pages preserve numeric units, calendar dates, and translations across all host languages.
+// 实际本地化页面在所有宿主语言中保留数字单位、日历日期与翻译。
+test("statistics render every host locale with regional numbers, units and dates", async () => {
   for (const { code } of SUPPORTED_LOCALES) {
-    // catalog supplies the exact language used by this mounted panel.
-    // catalog 提供此挂载面板实际使用的语言。
     const catalog = catalogs.get(code);
     // statistics includes all period shapes observed from the packaged RTK binary.
     // statistics 包含从随包 RTK 二进制实际观察到的全部周期格式。
@@ -149,69 +125,55 @@ test("statistics render every host locale without English-only labels or numeric
       byCommand: [{ command: "git", count: 1234, saved_tokens: 100, avg_savings_pct: 12.5, avg_time_ms: 1250 },
         { command: "cargo", count: 2, saved_tokens: 50, avg_savings_pct: 25, avg_time_ms: 25 },
         { command: "rg", count: 3, saved_tokens: 30, avg_savings_pct: 50, avg_time_ms: 61000 }] };
-    // panel mounts the production module with localized controls and deterministic action responses.
-    // panel 使用本地化控件与确定的 Action 响应挂载生产模块。
-    const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : statistics), false, null, code);
+    const panel = await mount(() => Promise.resolve(statistics), null, code);
     try {
-      assert.ok(button(panel, catalog.messages.save), `${code} save button`);
-      await React.act(async () => button(panel, catalog.messages["sections.statistics"]).click());
-      assert.ok(panel.container.querySelector(".rtk-command-stats-header").textContent.includes(catalog.messages["stats.topCommands"].replace("{{count}}", new Intl.NumberFormat(code).format(3))), code);
-      assert.ok(panel.container.querySelector(".rtk-command-table").textContent.includes(new Intl.NumberFormat(code, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(0.125)), `${code} percent`);
-      assert.ok(panel.container.querySelector(".rtk-command-table").textContent.includes(new Intl.NumberFormat(code, { style: "unit", unit: "second", unitDisplay: "short", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(1.25)), `${code} duration`);
-      assert.ok(panel.container.querySelector(".rtk-gain-summary-grid").textContent.includes(new Intl.NumberFormat(code, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(2.5)), `${code} ratio`);
-      assert.equal(panel.container.querySelector(".plugin-stat-chart-column small").textContent, new Intl.DateTimeFormat(code, { month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date("2026-10-05T00:00:00Z")), `${code} daily`);
+      const table = panel.container.querySelector("table").textContent;
+      const dayFormat = new Intl.DateTimeFormat(code, { month: "numeric", day: "numeric", timeZone: "UTC" });
+      assert.ok(panel.container.textContent.includes(catalog.messages["stats.topCommands"].replace("{{count}}", new Intl.NumberFormat(code).format(3))), code);
+      assert.ok(table.includes(new Intl.NumberFormat(code, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(0.125)), `${code} percent`);
+      assert.ok(table.includes(new Intl.NumberFormat(code, { style: "unit", unit: "second", unitDisplay: "short", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(1.25)), `${code} duration`);
+      assert.ok(panel.container.querySelector(".metric-grid").textContent.includes(new Intl.NumberFormat(code, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(2.5)), `${code} ratio`);
+      assert.equal(panel.container.querySelector(".chart small").textContent, dayFormat.format(new Date("2026-10-05T00:00:00Z")), `${code} daily`);
       await React.act(async () => button(panel, catalog.messages["stats.weekly"]).click());
-      assert.ok(panel.container.querySelector(".plugin-stat-chart-column small").textContent.includes(new Intl.DateTimeFormat(code, { month: "numeric", day: "numeric", timeZone: "UTC" }).format(new Date("2026-10-11T00:00:00Z"))), `${code} weekly`);
+      assert.ok(panel.container.querySelector(".chart small").textContent.includes(dayFormat.format(new Date("2026-10-11T00:00:00Z"))), `${code} weekly`);
       await React.act(async () => button(panel, catalog.messages["stats.monthly"]).click());
-      assert.equal(panel.container.querySelector(".plugin-stat-chart-column small").textContent, new Intl.DateTimeFormat(code, { year: "numeric", month: "short", timeZone: "UTC" }).format(new Date("2026-10-01T00:00:00Z")), `${code} monthly`);
+      assert.equal(panel.container.querySelector(".chart small").textContent,
+        new Intl.DateTimeFormat(code, { year: "numeric", month: "short", timeZone: "UTC" }).format(new Date("2026-10-01T00:00:00Z")), `${code} monthly`);
     } finally { await panel.close(); }
   }
 });
 
-// Same-event writes are serialized and a rejected write retains the exact visible draft for manual retry.
-// 同事件写入被串行化，写入拒绝保留精确可见草稿供手工重试。
-test("save holds a synchronous lock and preserves the route draft on rejection", async () => {
-  const writes = [];
-  let rejectSave;
-  const panel = await mount((action, args) => {
-    if (action === "settings-get") return Promise.resolve(settings);
-    if (action === "statistics-get") return Promise.resolve({ available: false });
-    writes.push(args);
-    return new Promise((_resolve, reject) => { rejectSave = reject; });
-  });
+// A failed read is retryable and an unavailable report explains itself instead of showing zeros.
+// 读取失败可重试；不可用报告给出说明，而不是显示零值。
+test("read failures are retryable and unavailable statistics show their reason", async () => {
+  let fail = true;
+  const panel = await mount(() => fail ? Promise.reject(new Error("statistics unavailable")) : Promise.resolve({ available: false, error: "rtk gain failed" }));
   try {
-    await React.act(async () => panel.container.querySelector('input[type="checkbox"]').click());
-    await React.act(async () => { button(panel, "Save").click(); button(panel, "Save").click(); });
-    assert.equal(writes.length, 1);
-    assert.deepEqual(writes[0], { ...settings, enabled: false });
-    assert.equal([...panel.container.querySelectorAll('input[type="checkbox"]')].every((input) => input.disabled), true);
-    await React.act(async () => rejectSave(new Error("save rejected")));
-    assert.match(panel.container.textContent, /save rejected/);
-    assert.equal(panel.container.querySelector('input[type="checkbox"]').checked, false);
-    assert.equal(button(panel, "Save").disabled, false);
-    assert.equal(writes.length, 1);
+    assert.match(panel.container.textContent, /Unable to load RTK statistics/);
+    fail = false;
+    await React.act(async () => button(panel, "Retry").click());
+    assert.doesNotMatch(panel.container.textContent, /Unable to load RTK statistics/);
+    assert.match(panel.container.textContent, /rtk gain failed/);
+    assert.equal(panel.container.querySelector(".metric-grid"), null);
   } finally { await panel.close(); }
 });
 
-// A completed request from an unmounted panel cannot overwrite the current generation's shared statistics cache.
-// 已卸载面板的请求完成结果不能覆盖当前代次的共享统计缓存。
-test("navigation shares a pending statistic and retains its result after every subscriber leaves", async () => {
+// A completed request from an unmounted page cannot overwrite the current generation's shared statistics cache.
+// 已卸载页面的请求完成结果不能覆盖当前代次的共享统计缓存。
+test("remounts share a pending statistic and retain its result after every subscriber leaves", async () => {
   let finishOld;
-  const old = await mount((action) => action === "settings-get" ? Promise.resolve(settings) : new Promise((resolve) => { finishOld = resolve; }));
+  const old = await mount(() => new Promise((resolve) => { finishOld = resolve; }));
   const factory = old.factory;
-  await React.act(async () => button(old, "statistics").click());
   await old.close();
   const fresh = { available: true, summary: { total_saved: 777 }, daily: [], byCommand: [] };
-  const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : fresh), false, factory);
-  await React.act(async () => button(panel, "statistics").click());
+  const panel = await mount(() => Promise.resolve(fresh), factory);
   await panel.close();
   await React.act(async () => finishOld(fresh));
   let statisticReads = 0;
-  const finalPanel = await mount((action) => { if (action === "statistics-get") statisticReads += 1; return Promise.resolve(settings); }, false, factory);
+  const finalPanel = await mount(() => { statisticReads += 1; return Promise.resolve({ available: true, summary: { total_saved: 111 } }); }, factory);
   try {
-    await React.act(async () => button(finalPanel, "statistics").click());
     assert.equal(statisticReads, 0);
-    assert.match(finalPanel.container.querySelector(".rtk-gain-summary-grid").textContent, /777/);
-    assert.doesNotMatch(finalPanel.container.querySelector(".rtk-gain-summary-grid").textContent, /111/);
+    assert.match(finalPanel.container.querySelector(".metric-grid").textContent, /777/);
+    assert.doesNotMatch(finalPanel.container.querySelector(".metric-grid").textContent, /111/);
   } finally { await finalPanel.close(); }
 });

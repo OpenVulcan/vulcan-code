@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use vulcan_plugin_runtime::{
     VulcanPluginActionCaller, VulcanPluginActionRequest, VulcanPluginRuntimeState,
+    VulcanPluginUiMountKind,
 };
 use vulcan_service_api::{PluginTextAssetSource, PluginUiActionPolicy, PluginUiModuleSource};
 
@@ -120,9 +121,19 @@ pub(crate) fn service_load_plugin_ui_module(
     // mountEntry is the exact package-relative module path from the stable snapshot.
     // mountEntry 是稳定快照中的精确插件包相对模块路径。
     let mount_entry = mount.entry.clone();
-    // mountExport is the exact named factory export from the stable snapshot.
-    // mountExport 是稳定快照中的精确命名工厂导出。
+    // mountExport is the exact named factory export from the stable snapshot; settings layouts have none.
+    // mountExport 是稳定快照中的精确命名工厂导出；设置版面没有导出。
     let mount_export = mount.export.clone();
+    // mountKind selects the accepted entry extension and whether the configuration schema is attached.
+    // mountKind 决定接受的入口扩展名，以及是否附带配置 Schema。
+    let mount_kind = mount.kind;
+    // configSchemaFile is the package-relative configuration schema exposed only to settings layouts.
+    // configSchemaFile 是仅向设置版面公开的插件包相对配置 Schema。
+    let config_schema_file = manifest
+        .config
+        .as_ref()
+        .filter(|_| mount_kind == VulcanPluginUiMountKind::Settings)
+        .map(|config| config.schema_file.clone());
     // contentFingerprint detects a catalog generation race during root resolution.
     // contentFingerprint 检测根目录解析期间的目录代次竞争。
     let content_fingerprint = plugin.content_fingerprint.clone();
@@ -161,23 +172,22 @@ pub(crate) fn service_load_plugin_ui_module(
         .map_err(|error| {
             format!("Failed to resolve Vulcan plugin `{plugin_id}` UI module: {error}")
         })?;
-    validate_plugin_ui_module_path(&package_root, &entry_path)?;
-    let metadata = std::fs::metadata(&entry_path).map_err(|error| {
-        format!("Failed to inspect Vulcan plugin `{plugin_id}` UI module: {error}")
-    })?;
-    if metadata.len() > PLUGIN_UI_MODULE_MAX_BYTES {
-        return Err(format!(
-            "Vulcan plugin `{plugin_id}` UI module exceeds {PLUGIN_UI_MODULE_MAX_BYTES} bytes."
-        ));
-    }
-    let source = std::fs::read_to_string(&entry_path).map_err(|error| {
-        format!("Failed to read Vulcan plugin `{plugin_id}` UI module as UTF-8: {error}")
-    })?;
-    if source.len() as u64 > PLUGIN_UI_MODULE_MAX_BYTES {
-        return Err(format!(
-            "Vulcan plugin `{plugin_id}` UI module changed while being read or exceeds {PLUGIN_UI_MODULE_MAX_BYTES} bytes."
-        ));
-    }
+    validate_plugin_ui_module_path(&package_root, &entry_path, mount_kind)?;
+    let source = read_bounded_plugin_ui_text(&plugin_id, &entry_path, "UI module")?;
+    // configSchema is re-read from the same execution copy so the layout and its schema share one generation.
+    // configSchema 从同一执行副本重新读取，使版面与其 Schema 同属一个代次。
+    let config_schema = config_schema_file
+        .map(|relative| {
+            let path = package_root.join(relative).canonicalize().map_err(|error| {
+                format!("Failed to resolve Vulcan plugin `{plugin_id}` configuration schema: {error}")
+            })?;
+            validate_plugin_text_asset_path(&package_root, &path)?;
+            let text = read_bounded_plugin_ui_text(&plugin_id, &path, "configuration schema")?;
+            serde_json::from_str::<Value>(&text).map_err(|error| {
+                format!("Vulcan plugin `{plugin_id}` configuration schema is not JSON: {error}")
+            })
+        })
+        .transpose()?;
     Ok(PluginUiModuleSource {
         runtime_identity: format!("{}:{}", snapshot.service_epoch, plugin.generation),
         action_policies: manifest.lua_runtime.as_ref().map_or_else(Vec::new, |lua| {
@@ -197,10 +207,44 @@ pub(crate) fn service_load_plugin_ui_module(
         }),
         plugin_id,
         mount_id,
+        kind: mount_kind.key().to_owned(),
         export_name: mount_export,
         source,
+        config_schema,
         messages_by_locale,
     })
+}
+
+/// Read one bounded UTF-8 package file served to the plugin UI boundary.
+/// 读取一个提供给插件界面边界、有大小上限的 UTF-8 插件包文件。
+///
+/// # Parameters
+/// 参数
+/// `plugin_id` and `label` name the file in errors; `path` is an already validated canonical path.
+/// `plugin_id` 与 `label` 在错误中命名文件；`path` 是已校验的规范路径。
+///
+/// # Returns
+/// 返回值
+/// Returns the complete text only when both the inspected and read sizes stay within the module limit.
+/// 仅当检查与读取时的大小都在模块上限内时返回完整文本。
+fn read_bounded_plugin_ui_text(plugin_id: &str, path: &Path, label: &str) -> Result<String, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        format!("Failed to inspect Vulcan plugin `{plugin_id}` {label}: {error}")
+    })?;
+    if metadata.len() > PLUGIN_UI_MODULE_MAX_BYTES {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` {label} exceeds {PLUGIN_UI_MODULE_MAX_BYTES} bytes."
+        ));
+    }
+    let source = std::fs::read_to_string(path).map_err(|error| {
+        format!("Failed to read Vulcan plugin `{plugin_id}` {label} as UTF-8: {error}")
+    })?;
+    if source.len() as u64 > PLUGIN_UI_MODULE_MAX_BYTES {
+        return Err(format!(
+            "Vulcan plugin `{plugin_id}` {label} changed while being read or exceeds {PLUGIN_UI_MODULE_MAX_BYTES} bytes."
+        ));
+    }
+    Ok(source)
 }
 
 /// Loads one bounded UTF-8 text asset explicitly declared by an enabled plugin manifest.
@@ -358,13 +402,18 @@ fn resolve_plugin_action_workspace_root(workspace_path: Option<&str>) -> Result<
 /// 返回值
 /// Returns success only for a contained regular ESM module.
 /// 仅对受目录约束的普通 ESM 模块返回成功。
-fn validate_plugin_ui_module_path(package_root: &Path, entry_path: &Path) -> Result<(), String> {
+fn validate_plugin_ui_module_path(
+    package_root: &Path,
+    entry_path: &Path,
+    kind: VulcanPluginUiMountKind,
+) -> Result<(), String> {
+    let extension = kind.entry_extension();
     if !entry_path.starts_with(package_root)
         || !entry_path.is_file()
-        || entry_path.extension().and_then(|value| value.to_str()) != Some("mjs")
+        || entry_path.extension().and_then(|value| value.to_str()) != Some(extension)
     {
-        return Err(String::from(
-            "Vulcan plugin UI module escapes its package root or is not a regular `.mjs` file.",
+        return Err(format!(
+            "Vulcan plugin UI entry escapes its package root or is not a regular `.{extension}` file."
         ));
     }
     Ok(())

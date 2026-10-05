@@ -99,6 +99,9 @@ export function loadPersistentPluginUiModule(
       if (entry.invalidated) {
         throw new Error(`Plugin UI module \`${pluginId}/${mountId}\` was disabled while loading.`);
       }
+      // Settings layouts are data rendered by the host, so nothing is imported or executed.
+      // 设置版面是由宿主渲染的数据，因此不导入也不执行任何代码。
+      if (source.kind === "settings") return { namespace: {}, source };
       entry.moduleUrl = URL.createObjectURL(new Blob([source.source], { type: "text/javascript" }));
       const namespace = await import(/* @vite-ignore */ entry.moduleUrl) as Record<string, unknown>;
       if (entry.invalidated) {

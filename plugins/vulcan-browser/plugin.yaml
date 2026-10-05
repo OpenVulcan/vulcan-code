@@ -12,7 +12,7 @@ permissions:
   - config
 required_files:
   - ui/index.mjs
-  - ui/settings.mjs
+  - ui/settings.json
   - runtime/plugin.bundle.lua
   - locales/en.yaml
   - locales/zh-CN.yaml
@@ -172,8 +172,8 @@ ui:
       label: Playwright Settings
       label_message_key: settingsLabel
       icon: plugin
-      entry: ui/settings.mjs
-      export: createPluginPanel
+      kind: settings
+      entry: ui/settings.json
 locales:
   en: locales/en.yaml
   en-US: locales/en.yaml

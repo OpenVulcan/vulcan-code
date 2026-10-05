@@ -3,30 +3,16 @@ capability: 為程式編寫智能代理提供最新且可指定版本的程式�
 messages:
   errorDetails: 查看錯誤詳情
   navigationLabel: Context7
+  usageNavigationLabel: "Context7 用量"
   allowanceDescription: 未設定 API 金鑰時使用匿名模式，可呼叫 200 次；註冊並設定免費 API 金鑰後，可呼叫 1,000 次，並可在官方控制台查看帳戶用量。
   refresh: 重新整理
-  loading: 正在載入 Context7 設定…
   loadError: 無法載入 Context7 資料。
   retry: 重試
-  operationFailed: 操作未成功，請重試。
   credentialTitle: 身分驗證
   anonymousMode: 匿名模式
   apiKeyMode: API 金鑰模式
-  configured: 已設定 API 金鑰
-  notConfigured: 尚未設定 API 金鑰；請求將使用匿名額度。
   apiKeyLabel: API 金鑰
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: 儲存 API 金鑰
-  replaceApiKey: 更換 API 金鑰
-  deleteApiKey: 刪除 API 金鑰
-  confirmDeleteApiKey: 確認刪除
-  apiKeySaved: Context7 API 金鑰已儲存。
-  apiKeyDeleted: Context7 API 金鑰已刪除，現已啟用匿名模式。
-  credentialInvalid: Context7 已拒絕目前設定的 API 金鑰。
-  credentialValid: 目前設定的 API 金鑰已驗證成功。
-  credentialUntested: 目前設定的 API 金鑰尚未測試。
-  credentialUnknown: 暫無 API 金鑰驗證結果。
-  connectionTitle: 連線測試
   connectionTest: 測試連線
   connectionTestHint: 測試會消耗目前額度中的一次 Context7 請求。
   connectionSuccess: Context7 連線成功。
@@ -37,8 +23,6 @@ messages:
   timeoutHint: 單次 Context7 請求等待回應的最長時間。
   retention: 本機統計保留期
   retentionHint: 超過保留期的本機呼叫記錄會被清除。
-  saveSettings: 儲存設定
-  settingsSaved: Context7 設定已儲存。
   usageTitle: 用量與配額
   localStatsTitle: 本機呼叫統計
   usageRange: 本機統計範圍
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Context7 控制台
   apiKeyDocsLink: 取得免費 API 金鑰
   usageDocsLink: API 與用量文件
-  saving: 正在儲存…
-  testing: 正在測試…
-  days: "{{days}} 天"

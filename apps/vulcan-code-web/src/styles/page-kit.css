@@ -46,6 +46,24 @@
 }
 .page-tab-panel[hidden] { display: none; }
 
+.page-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vcn-space-2) var(--vcn-space-3);
+  padding: var(--vcn-space-3) var(--vcn-space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.page-action-bar[data-pending="true"] { box-shadow: var(--vcn-shadow-raised); }
+.page-action-bar-status { min-width: 0; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
+.page-action-bar-actions { display: flex; flex-wrap: wrap; gap: var(--vcn-space-2); margin-left: auto; }
+
 /* Sections: one Card per concern; rows layout makes rows and items flush with dividers. */
 /* 区块：每个关注点一个 Card；rows 布局使行与列表项贴边并以分隔线排列。 */
 .page-section { container: page-section / inline-size; }
@@ -252,6 +270,14 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* PageTable: compact rows inside a section; numeric columns align to the end. */
+/* PageTable：区块内紧凑表格；数值列靠结束侧对齐。 */
+.page-table { font-size: var(--vcn-font-size-sm); }
+.page-table th { height: auto; padding: var(--vcn-space-2); font-size: var(--vcn-font-size-xs); font-weight: 600; }
+.page-table td { padding: var(--vcn-space-2); }
+.page-table :is(th, td)[data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
+.page-table tbody tr:hover { background: var(--muted); }
 
 .page-item-list {
   display: flex;

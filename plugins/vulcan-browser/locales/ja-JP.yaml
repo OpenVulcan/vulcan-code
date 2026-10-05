@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: ナビゲーションのタイムアウト（ミリ秒）
   settleTimeoutLabel: 操作後の待機時間（ミリ秒）
   consoleLevelLabel: コンソールのログレベル
-  settingsSave: 設定を保存
-  settingsRetry: 再読み込み
-  settingsSaved: 設定を保存しました。新しいブラウザー接続から更新後の値が使用されます。
+  timeoutsTitle: "タイムアウト"
+  diagnosticsTitle: "診断"
+  actionTimeoutHint: "100〜999999 ミリ秒。クリック、入力などのページ操作 1 回あたりの最大待機時間。"
+  navigationTimeoutHint: "100〜999999 ミリ秒。ページ遷移の完了を待つ最大時間。"
+  settleTimeoutHint: "0〜999999 ミリ秒。各操作後にページが落ち着くまで待つ時間。"
+  consoleLevelHint: "ブラウザーツールの結果に含めるコンソールの最低重大度。"
   settingsHint: 新しい AI ブラウザー接続の開始時に適用されます。
-  settingsInvalid: 保存する前に有効なタイムアウトを入力してください。
-  settingsResponseInvalid: Playwright の設定応答が無効です。
-  settingsPersistedInvalid: 保存された Playwright の設定が無効です。
   consoleLevel_error: エラー
   consoleLevel_warning: 警告
   consoleLevel_info: 情報

@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: 탐색 시간 제한(밀리초)
   settleTimeoutLabel: 작업 후 대기 시간(밀리초)
   consoleLevelLabel: 콘솔 로그 수준
-  settingsSave: 설정 저장
-  settingsRetry: 다시 불러오기
-  settingsSaved: 설정을 저장했습니다. 새 브라우저 연결에 변경된 값이 적용됩니다.
+  timeoutsTitle: "시간 제한"
+  diagnosticsTitle: "진단"
+  actionTimeoutHint: "100~999999밀리초. 클릭, 입력 등 페이지 작업 한 번의 최대 대기 시간입니다."
+  navigationTimeoutHint: "100~999999밀리초. 페이지 이동이 완료될 때까지의 최대 대기 시간입니다."
+  settleTimeoutHint: "0~999999밀리초. 각 작업 후 페이지가 안정될 때까지 기다리는 시간입니다."
+  consoleLevelHint: "브라우저 도구 결과에 포함할 콘솔의 최소 심각도입니다."
   settingsHint: 새 AI 브라우저 연결을 시작할 때 적용됩니다.
-  settingsInvalid: 저장하기 전에 유효한 시간 제한을 입력하세요.
-  settingsResponseInvalid: Playwright 설정 응답이 잘못되었습니다.
-  settingsPersistedInvalid: 저장된 Playwright 설정이 잘못되었습니다.
   consoleLevel_error: 오류
   consoleLevel_warning: 경고
   consoleLevel_info: 정보

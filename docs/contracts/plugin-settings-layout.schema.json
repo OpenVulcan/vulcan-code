@@ -1,0 +1,443 @@
+{
+  "$defs": {
+    "VulcanPluginSettingsCondition": {
+      "additionalProperties": false,
+      "description": "Visibility condition on another field.\n依赖另一字段的可见条件。",
+      "properties": {
+        "key": {
+          "description": "Configuration property controlled by another field of the same layout.\n由同一版面另一字段控制的配置属性。",
+          "type": "string"
+        },
+        "values": {
+          "description": "Values for which the row is visible.\n使此行可见的取值。",
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "values"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsConfigBinding": {
+      "additionalProperties": false,
+      "description": "Declared configuration read and write actions.\n已声明的配置读取与写入 Action。",
+      "properties": {
+        "read_action": {
+          "description": "Read action returning the complete configuration object.\n返回完整配置对象的读取 Action。",
+          "type": "string"
+        },
+        "write_action": {
+          "description": "Mutation action accepting and returning the complete configuration object.\n接收并返回完整配置对象的变更 Action。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "read_action",
+        "write_action"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsControl": {
+      "description": "Host controls available to declarative fields.\n声明式字段可用的宿主控件。",
+      "oneOf": [
+        {
+          "const": "switch",
+          "description": "Boolean switch.\n布尔开关。",
+          "type": "string"
+        },
+        {
+          "const": "select",
+          "description": "Single choice from explicit options.\n从明确选项中单选。",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "Single-line text.\n单行文本。",
+          "type": "string"
+        },
+        {
+          "const": "number",
+          "description": "Numeric entry for integer, number or digit-pattern string properties.\n用于整数、数字或数字模式字符串属性的数值输入。",
+          "type": "string"
+        },
+        {
+          "const": "checklist",
+          "description": "Multiple choice over a string array.\n针对字符串数组的多选清单。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginSettingsItem": {
+      "description": "One settings row: a configuration field, a secret credential or a one-shot action.\n一个设置行：配置字段、密钥凭据或一次性操作。",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Edits one top-level property of the configuration object.\n编辑配置对象的一个顶层属性。",
+          "properties": {
+            "control": {
+              "$ref": "#/$defs/VulcanPluginSettingsControl",
+              "description": "Host control used to edit the property.\n用于编辑属性的宿主控件。"
+            },
+            "description_message_key": {
+              "default": null,
+              "description": "Plugin locale message key explaining the effect.\n说明效果的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "description": "Top-level configuration property name.\n顶层配置属性名。",
+              "type": "string"
+            },
+            "label_message_key": {
+              "description": "Plugin locale message key for the row label.\n行标签使用的插件语言包消息键。",
+              "type": "string"
+            },
+            "option_groups": {
+              "description": "Checklist choices grouped under headings; every value must satisfy the item schema.\n按标题分组的清单选项；每个值都必须满足元素 Schema。",
+              "items": {
+                "$ref": "#/$defs/VulcanPluginSettingsOptionGroup"
+              },
+              "type": "array"
+            },
+            "options": {
+              "description": "Select choices; every value must satisfy the property schema.\n下拉选项；每个值都必须满足属性 Schema。",
+              "items": {
+                "$ref": "#/$defs/VulcanPluginSettingsOption"
+              },
+              "type": "array"
+            },
+            "placeholder_message_key": {
+              "default": null,
+              "description": "Plugin locale message key for text and number placeholders.\n文本与数字占位符使用的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "selection": {
+              "$ref": "#/$defs/VulcanPluginSettingsSelection",
+              "description": "Whether checked checklist entries are stored (include) or omitted (exclude).\n清单勾选项是被保存（include）还是被排除（exclude）。"
+            },
+            "type": {
+              "const": "field",
+              "type": "string"
+            },
+            "value_format": {
+              "$ref": "#/$defs/VulcanPluginSettingsValueFormat",
+              "description": "Host formatting for select options without their own label.\n未提供标签的下拉选项使用的宿主格式。"
+            },
+            "visible_when": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VulcanPluginSettingsCondition"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Shows the row only while another field holds one of the listed values.\n仅当另一字段取列出值之一时显示此行。"
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "control",
+            "label_message_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stores, replaces or deletes one write-only secret through declared actions.\n通过已声明 Action 保存、替换或删除一个只写密钥。",
+          "properties": {
+            "delete_action": {
+              "default": null,
+              "description": "Optional mutation action removing the stored secret.\n可选的删除已保存密钥的变更 Action。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description_message_key": {
+              "default": null,
+              "description": "Plugin locale message key explaining the credential.\n说明凭据的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "Stable layout-local item identifier.\n稳定的版面内条目标识。",
+              "type": "string"
+            },
+            "label_message_key": {
+              "description": "Plugin locale message key for the row label.\n行标签使用的插件语言包消息键。",
+              "type": "string"
+            },
+            "placeholder_message_key": {
+              "default": null,
+              "description": "Plugin locale message key for the password placeholder.\n密码占位符使用的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "set_action": {
+              "description": "Mutation action accepting an object with the single string `set_argument`.\n接收仅含字符串 `set_argument` 对象的变更 Action。",
+              "type": "string"
+            },
+            "set_argument": {
+              "description": "Input property name carrying the secret value.\n承载密钥值的输入属性名。",
+              "type": "string"
+            },
+            "status_action": {
+              "description": "Read action returning at least `configured: boolean`.\n至少返回 `configured: boolean` 的读取 Action。",
+              "type": "string"
+            },
+            "type": {
+              "const": "credential",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label_message_key",
+            "status_action",
+            "set_action",
+            "set_argument"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Runs one declared action without arguments, such as a connection test.\n无参数运行一个已声明 Action，例如连接测试。",
+          "properties": {
+            "action": {
+              "description": "Declared plugin action invoked with an empty object.\n以空对象调用的已声明插件 Action。",
+              "type": "string"
+            },
+            "description_message_key": {
+              "default": null,
+              "description": "Plugin locale message key explaining the effect or cost.\n说明效果或代价的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "Stable layout-local item identifier.\n稳定的版面内条目标识。",
+              "type": "string"
+            },
+            "label_message_key": {
+              "description": "Plugin locale message key for the row label and button text.\n行标签与按钮文字使用的插件语言包消息键。",
+              "type": "string"
+            },
+            "success_message_key": {
+              "default": null,
+              "description": "Plugin locale message key shown after success.\n成功后显示的插件语言包消息键。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "action",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "action",
+            "label_message_key"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VulcanPluginSettingsLink": {
+      "additionalProperties": false,
+      "description": "One outbound documentation or dashboard link.\n一个外部文档或控制台链接。",
+      "properties": {
+        "label_message_key": {
+          "description": "Plugin locale message key for the visible link text.\n可见链接文字使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "url": {
+          "description": "Absolute HTTPS URL.\n绝对 HTTPS 地址。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "label_message_key"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsOption": {
+      "additionalProperties": false,
+      "description": "One select choice.\n一个下拉选项。",
+      "properties": {
+        "label_message_key": {
+          "default": null,
+          "description": "Plugin locale message key for the label; omitted labels use `value_format`.\n标签使用的插件语言包消息键；省略时使用 `value_format`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "String or integer value stored in the configuration.\n保存到配置中的字符串或整数值。"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsOptionGroup": {
+      "additionalProperties": false,
+      "description": "One titled checklist group.\n一个带标题的清单分组。",
+      "properties": {
+        "id": {
+          "description": "Stable field-local group identifier.\n稳定的字段内分组标识。",
+          "type": "string"
+        },
+        "title_message_key": {
+          "description": "Plugin locale message key for the group heading.\n分组标题使用的插件语言包消息键。",
+          "type": "string"
+        },
+        "values": {
+          "description": "String values offered in this group, shown verbatim.\n此分组提供的字符串值，原样显示。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "title_message_key",
+        "values"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsSection": {
+      "additionalProperties": false,
+      "description": "One titled group of settings items.\n一组带标题的设置项。",
+      "properties": {
+        "description_message_key": {
+          "default": null,
+          "description": "Plugin locale message key for a one-sentence purpose.\n一句话用途说明使用的插件语言包消息键。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable layout-local section identifier.\n稳定的版面内区块标识。",
+          "type": "string"
+        },
+        "items": {
+          "description": "Ordered rows of the section.\n区块内的有序行。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginSettingsItem"
+          },
+          "type": "array"
+        },
+        "links": {
+          "description": "Fixed HTTPS links shown in the section footer and opened through the host URL boundary.\n显示在区块页脚、经宿主地址边界打开的固定 HTTPS 链接。",
+          "items": {
+            "$ref": "#/$defs/VulcanPluginSettingsLink"
+          },
+          "type": "array"
+        },
+        "title_message_key": {
+          "description": "Plugin locale message key for the section title.\n区块标题使用的插件语言包消息键。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title_message_key",
+        "items"
+      ],
+      "type": "object"
+    },
+    "VulcanPluginSettingsSelection": {
+      "description": "Checklist storage semantics.\n清单存储语义。",
+      "oneOf": [
+        {
+          "const": "include",
+          "description": "Checked entries are stored in the array.\n勾选项保存在数组中。",
+          "type": "string"
+        },
+        {
+          "const": "exclude",
+          "description": "Unchecked entries are stored in the array.\n未勾选项保存在数组中。",
+          "type": "string"
+        }
+      ]
+    },
+    "VulcanPluginSettingsValueFormat": {
+      "description": "Host formatting for option labels.\n选项标签的宿主格式。",
+      "oneOf": [
+        {
+          "const": "plain",
+          "description": "The raw value.\n原始值。",
+          "type": "string"
+        },
+        {
+          "const": "duration_ms",
+          "description": "Milliseconds shown as a localized duration.\n毫秒显示为本地化时长。",
+          "type": "string"
+        },
+        {
+          "const": "days",
+          "description": "Whole days shown as a localized day count.\n整天数显示为本地化天数。",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One complete settings page declared as data; the host owns every element and style.\n以数据声明的一个完整设置页面；宿主拥有全部元素与样式。",
+  "properties": {
+    "config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VulcanPluginSettingsConfigBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Actions that read and replace the complete configuration object; required when any field exists.\n读取并替换完整配置对象的 Action；存在任一字段时必填。"
+    },
+    "schema_version": {
+      "description": "Layout format version; must equal the host-supported version.\n版面格式版本；必须等于宿主支持的版本。",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sections": {
+      "description": "Ordered page sections, each rendered as one host section card.\n有序页面区块，每个渲染为一张宿主区块卡片。",
+      "items": {
+        "$ref": "#/$defs/VulcanPluginSettingsSection"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "sections"
+  ],
+  "title": "VulcanPluginSettingsLayout",
+  "type": "object"
+}

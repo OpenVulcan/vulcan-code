@@ -653,3 +653,42 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Declarative plugin settings: only control sizing; rows, sections and notices come from the page kit. */
+/* 声明式插件设置：仅控件尺寸；行、区块与提示来自页面套件。 */
+.plugin-settings-input { width: min(260px, 100%); }
+.plugin-settings-select { min-width: 140px; }
+.plugin-settings-issue { display: block; color: var(--vcn-content-danger); }
+.plugin-settings-checklist { display: grid; gap: var(--vcn-space-3); min-width: 0; }
+.plugin-settings-checklist-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--vcn-space-2); }
+.plugin-settings-checklist-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--vcn-space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.plugin-settings-checklist-group > legend {
+  float: left;
+  padding: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
+}
+.plugin-settings-checklist-actions { display: flex; justify-content: flex-end; gap: var(--vcn-space-1); }
+.plugin-settings-checklist-options {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: var(--vcn-space-1) var(--vcn-space-3);
+}
+.plugin-settings-checklist-option {
+  display: flex;
+  align-items: center;
+  gap: var(--vcn-space-2);
+  min-width: 0;
+  font-size: var(--vcn-font-size-sm);
+}
+.plugin-settings-checklist-option > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

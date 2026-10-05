@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "config": {
+    "read_action": "settings-get",
+    "write_action": "settings-update"
+  },
+  "sections": [
+    {
+      "id": "general",
+      "title_message_key": "sections.settings",
+      "items": [
+        {
+          "type": "field",
+          "key": "enabled",
+          "control": "switch",
+          "label_message_key": "enableRouting",
+          "description_message_key": "enableRoutingHelp"
+        },
+        {
+          "type": "field",
+          "key": "gitCommitContextEnabled",
+          "control": "switch",
+          "label_message_key": "gitContext",
+          "description_message_key": "gitContextHelp"
+        },
+        {
+          "type": "field",
+          "key": "telemetryDisabled",
+          "control": "switch",
+          "label_message_key": "disableTelemetry",
+          "description_message_key": "disableTelemetryHelp"
+        }
+      ],
+      "links": [
+        {
+          "url": "https://github.com/rtk-ai/rtk",
+          "label_message_key": "compliance.repositoryLink"
+        }
+      ]
+    },
+    {
+      "id": "routes",
+      "title_message_key": "routes.title",
+      "description_message_key": "routes.description",
+      "items": [
+        {
+          "type": "field",
+          "key": "routeMode",
+          "control": "select",
+          "label_message_key": "routeMode.label",
+          "description_message_key": "routeMode.help",
+          "options": [
+            {
+              "value": "disabled",
+              "label_message_key": "routeMode.disabled"
+            },
+            {
+              "value": "selected",
+              "label_message_key": "routeMode.selected"
+            },
+            {
+              "value": "all",
+              "label_message_key": "routeMode.all"
+            }
+          ]
+        },
+        {
+          "type": "field",
+          "key": "enabledRoutes",
+          "control": "checklist",
+          "label_message_key": "routes.allowed",
+          "description_message_key": "routes.selectedHelp",
+          "selection": "include",
+          "visible_when": {
+            "key": "routeMode",
+            "values": [
+              "selected"
+            ]
+          },
+          "option_groups": [
+            {
+              "id": "curated",
+              "title_message_key": "routes.curated",
+              "values": [
+                "cargo",
+                "find",
+                "git",
+                "go",
+                "grep",
+                "jest",
+                "ls",
+                "mypy",
+                "npm",
+                "npx",
+                "pnpm",
+                "pytest",
+                "read",
+                "ruff",
+                "tree",
+                "tsc",
+                "vitest",
+                "wc"
+              ]
+            },
+            {
+              "id": "extended",
+              "title_message_key": "routes.extended",
+              "values": [
+                "ansible-playbook",
+                "aws",
+                "brew",
+                "bundle",
+                "composer",
+                "curl",
+                "df",
+                "diff",
+                "docker",
+                "dotnet",
+                "du",
+                "fail2ban-client",
+                "gcloud",
+                "gh",
+                "glab",
+                "golangci-lint",
+                "gradlew",
+                "gt",
+                "hadolint",
+                "helm",
+                "iptables",
+                "kubectl",
+                "lint",
+                "liquibase",
+                "make",
+                "markdownlint",
+                "mix",
+                "mvn",
+                "next",
+                "oc",
+                "ping",
+                "pio",
+                "pip",
+                "playwright",
+                "poetry",
+                "pre-commit",
+                "prettier",
+                "prisma",
+                "ps",
+                "psql",
+                "pulumi",
+                "quarto",
+                "rake",
+                "rg",
+                "rspec",
+                "rsync",
+                "rubocop",
+                "shellcheck",
+                "shopify",
+                "sops",
+                "swift",
+                "systemctl",
+                "terraform",
+                "tofu",
+                "trunk",
+                "uv",
+                "wget",
+                "yamllint"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "field",
+          "key": "disabledRoutes",
+          "control": "checklist",
+          "label_message_key": "routes.allowed",
+          "description_message_key": "routes.allHelp",
+          "selection": "exclude",
+          "visible_when": {
+            "key": "routeMode",
+            "values": [
+              "all"
+            ]
+          },
+          "option_groups": [
+            {
+              "id": "curated",
+              "title_message_key": "routes.curated",
+              "values": [
+                "cargo",
+                "find",
+                "git",
+                "go",
+                "grep",
+                "jest",
+                "ls",
+                "mypy",
+                "npm",
+                "npx",
+                "pnpm",
+                "pytest",
+                "read",
+                "ruff",
+                "tree",
+                "tsc",
+                "vitest",
+                "wc"
+              ]
+            },
+            {
+              "id": "extended",
+              "title_message_key": "routes.extended",
+              "values": [
+                "ansible-playbook",
+                "aws",
+                "brew",
+                "bundle",
+                "composer",
+                "curl",
+                "df",
+                "diff",
+                "docker",
+                "dotnet",
+                "du",
+                "fail2ban-client",
+                "gcloud",
+                "gh",
+                "glab",
+                "golangci-lint",
+                "gradlew",
+                "gt",
+                "hadolint",
+                "helm",
+                "iptables",
+                "kubectl",
+                "lint",
+                "liquibase",
+                "make",
+                "markdownlint",
+                "mix",
+                "mvn",
+                "next",
+                "oc",
+                "ping",
+                "pio",
+                "pip",
+                "playwright",
+                "poetry",
+                "pre-commit",
+                "prettier",
+                "prisma",
+                "ps",
+                "psql",
+                "pulumi",
+                "quarto",
+                "rake",
+                "rg",
+                "rspec",
+                "rsync",
+                "rubocop",
+                "shellcheck",
+                "shopify",
+                "sops",
+                "swift",
+                "systemctl",
+                "terraform",
+                "tofu",
+                "trunk",
+                "uv",
+                "wget",
+                "yamllint"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: Délai d’attente de navigation (ms)
   settleTimeoutLabel: Attente après l’action (ms)
   consoleLevelLabel: Niveau de la console
-  settingsSave: Enregistrer les paramètres
-  settingsRetry: Recharger
-  settingsSaved: Paramètres enregistrés. Les nouvelles connexions du navigateur utiliseront les valeurs mises à jour.
+  timeoutsTitle: "Délais"
+  diagnosticsTitle: "Diagnostic"
+  actionTimeoutHint: "De 100 à 999999 ms. Attente maximale pour un clic, une saisie ou une autre action sur la page."
+  navigationTimeoutHint: "De 100 à 999999 ms. Attente maximale de la fin d’une navigation."
+  settleTimeoutHint: "De 0 à 999999 ms. Pause après chaque action pour laisser la page se stabiliser."
+  consoleLevelHint: "Gravité minimale de la console du navigateur incluse dans les résultats des outils."
   settingsHint: Ces paramètres s’appliquent au démarrage d’une nouvelle connexion du navigateur IA.
-  settingsInvalid: Saisissez des délais d’attente valides avant d’enregistrer.
-  settingsResponseInvalid: La réponse des paramètres de Playwright est invalide.
-  settingsPersistedInvalid: Les paramètres enregistrés de Playwright sont invalides.
   consoleLevel_error: Erreur
   consoleLevel_warning: Avertissement
   consoleLevel_info: Information

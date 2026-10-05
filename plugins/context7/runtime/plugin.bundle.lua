@@ -1747,32 +1747,6 @@ function M.usage_get(args)
     return success(usage_value(input, credential_status_value()))
 end
 
--- Return the complete initial Context7 settings-page projection through one serialized action.
--- 通过一次串行 Action 返回完整 Context7 设置页初始投影。
---
--- args contains one schema-enumerated rangeDays value.
--- args 包含一个由 Schema 枚举的 rangeDays 值。
--- Returns settings, non-secret credential status, local usage, and current quota.
--- 返回设置、非密钥凭据状态、本地用量与当前配额。
-function M.bootstrap_get(args)
-    ensure_schema()
-    -- input is shared with usage-get so both actions use one exact range contract.
-    -- input 与 usage-get 共用，从而让两个 Action 使用同一精确范围契约。
-    local input = action_arguments(args)
-    -- credential is loaded once and reused by the combined usage query.
-    -- credential 只加载一次，并由组合用量查询复用。
-    local credential = credential_status_value()
-    -- usage_ok isolates a local statistics failure from usable credentials and configuration.
-    -- usage_ok 将本地统计失败与可用的凭据、配置隔离。
-    local usage_ok, usage = pcall(usage_value, input, credential)
-    return success({
-        settings = read_config(),
-        credential = credential,
-        usage = usage_ok and usage or vulcan.json.null,
-        usageError = usage_ok and vulcan.json.null or tostring(usage),
-    })
-end
-
 -- Dispatch one provider-visible Context7 operation through the exact tool operation field.
 -- 通过精确工具操作字段分发一个 Provider 可见 Context7 操作。
 --

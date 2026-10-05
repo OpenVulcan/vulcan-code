@@ -3,30 +3,16 @@ capability: 코딩 에이전트를 위한 최신 버전별 라이브러리 문�
 messages:
   errorDetails: 오류 세부 정보
   navigationLabel: Context7
+  usageNavigationLabel: "Context7 사용량"
   allowanceDescription: API 키가 없는 익명 모드에서는 200회 요청할 수 있습니다. 가입 후 무료 API 키를 설정하면 1,000회 요청할 수 있으며 공식 대시보드에서 계정 사용량을 확인할 수 있습니다.
   refresh: 새로 고침
-  loading: Context7 설정을 불러오는 중…
   loadError: Context7 데이터를 불러올 수 없습니다.
   retry: 다시 시도
-  operationFailed: 작업에 실패했습니다. 다시 시도하세요.
   credentialTitle: 인증
   anonymousMode: 익명 모드
   apiKeyMode: API 키 모드
-  configured: API 키가 설정됨
-  notConfigured: API 키가 설정되지 않아 익명 요청 한도를 사용합니다.
   apiKeyLabel: API 키
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: API 키 저장
-  replaceApiKey: API 키 교체
-  deleteApiKey: API 키 삭제
-  confirmDeleteApiKey: 삭제 확인
-  apiKeySaved: Context7 API 키를 저장했습니다.
-  apiKeyDeleted: Context7 API 키를 삭제하고 익명 모드를 활성화했습니다.
-  credentialInvalid: Context7이 설정된 API 키를 거부했습니다.
-  credentialValid: 설정된 API 키를 확인했습니다.
-  credentialUntested: 설정된 API 키를 아직 테스트하지 않았습니다.
-  credentialUnknown: API 키 확인 결과가 없습니다.
-  connectionTitle: 연결 테스트
   connectionTest: 연결 테스트 실행
   connectionTestHint: 테스트는 현재 한도에서 Context7 요청 1회를 사용합니다.
   connectionSuccess: Context7에 연결했습니다.
@@ -37,8 +23,6 @@ messages:
   timeoutHint: Context7 요청 하나의 응답을 기다리는 최대 시간입니다.
   retention: 로컬 통계 보관 기간
   retentionHint: 보관 기간이 지난 로컬 요청 기록은 삭제됩니다.
-  saveSettings: 설정 저장
-  settingsSaved: Context7 설정을 저장했습니다.
   usageTitle: 사용량 및 할당량
   localStatsTitle: 로컬 요청 통계
   usageRange: 로컬 통계 범위
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Context7 대시보드
   apiKeyDocsLink: 무료 API 키 받기
   usageDocsLink: API 및 사용량 문서
-  saving: 저장 중…
-  testing: 테스트 중…
-  days: "{{days}}일"

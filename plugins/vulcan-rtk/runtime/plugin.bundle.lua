@@ -239,14 +239,14 @@ local function routes_allowed(routes, config)
     if #routes == 0 or config.routeMode == "disabled" then
         return false
     end
-    -- enabled contains the selected-mode allowlist.
-    -- enabled 包含精选模式白名单。
+    -- enabled is the allowlist of selected mode; disabled is the denylist of all mode.
+    -- Each list applies only in its own mode, matching the settings page that shows one list per mode.
+    -- enabled 是 selected 模式的允许列表；disabled 是 all 模式的拒绝列表。
+    -- 每个列表只在自身模式生效，与设置页按模式只显示一个列表保持一致。
     local enabled = route_lookup(config.enabledRoutes)
-    -- disabled contains the explicit denylist applied to all modes.
-    -- disabled 包含应用于全部模式的显式拒绝列表。
     local disabled = route_lookup(config.disabledRoutes)
     for _, route in ipairs(routes) do
-        if disabled[route] or (config.routeMode == "selected" and not enabled[route]) then
+        if (config.routeMode == "all" and disabled[route]) or (config.routeMode == "selected" and not enabled[route]) then
             return false
         end
     end

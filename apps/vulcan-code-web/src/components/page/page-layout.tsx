@@ -58,3 +58,25 @@ export function PageTabPanel({ active, keepMounted = true, className, children, 
   if (!active && (!keepMounted || !visited)) return null
   return <div className={cn("page-tab-panel", className)} data-slot="page-tab-panel" hidden={!active} {...props}>{children}</div>
 }
+
+// PageActionBarProps describes the commit bar of an editable page.
+// PageActionBarProps 描述可编辑页面的提交栏。
+export interface PageActionBarProps extends React.ComponentProps<"div"> {
+  // actions are the commit commands, primary last.
+  // actions 是提交命令，主操作放在最后。
+  actions: React.ReactNode
+  // pending marks unsaved changes, raising the bar above the content while it sticks.
+  // pending 标记存在未保存更改，吸附时将提交栏提升到内容之上。
+  pending?: boolean
+}
+
+// PageActionBar sticks to the bottom of the scrolling page so save and discard stay reachable.
+// PageActionBar 吸附在滚动页面底部，使保存与放弃始终可及。
+export function PageActionBar({ actions, pending, className, children, ...props }: PageActionBarProps) {
+  return (
+    <div className={cn("page-action-bar", className)} data-pending={pending ? "true" : undefined} data-slot="page-action-bar" {...props}>
+      <div className="page-action-bar-status">{children}</div>
+      <div className="page-action-bar-actions">{actions}</div>
+    </div>
+  )
+}

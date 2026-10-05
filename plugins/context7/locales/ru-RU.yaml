@@ -3,30 +3,16 @@ capability: Актуальная документация библиотек с 
 messages:
   errorDetails: Подробности ошибки
   navigationLabel: Context7
+  usageNavigationLabel: "Использование Context7"
   allowanceDescription: Анонимный режим позволяет выполнить 200 запросов без ключа API. После регистрации и настройки бесплатного ключа доступны 1 000 запросов и просмотр использования учётной записи на официальной панели.
   refresh: Обновить
-  loading: Загрузка настроек Context7…
   loadError: Не удалось загрузить данные Context7.
   retry: Повторить
-  operationFailed: Операция завершилась ошибкой. Повторите попытку.
   credentialTitle: Аутентификация
   anonymousMode: Анонимный режим
   apiKeyMode: Режим с ключом API
-  configured: Ключ API настроен
-  notConfigured: Ключ API не настроен; запросы используют анонимный лимит.
   apiKeyLabel: Ключ API
   apiKeyPlaceholder: ctx7sk-…
-  saveApiKey: Сохранить ключ API
-  replaceApiKey: Заменить ключ API
-  deleteApiKey: Удалить ключ API
-  confirmDeleteApiKey: Подтвердить удаление
-  apiKeySaved: Ключ API Context7 сохранён.
-  apiKeyDeleted: Ключ API Context7 удалён; включён анонимный режим.
-  credentialInvalid: Context7 отклонил настроенный ключ API.
-  credentialValid: Настроенный ключ API успешно проверен.
-  credentialUntested: Настроенный ключ API ещё не проверен.
-  credentialUnknown: Результат проверки ключа API отсутствует.
-  connectionTitle: Проверка подключения
   connectionTest: Проверить подключение
   connectionTestHint: Проверка расходует один запрос Context7 из текущего лимита.
   connectionSuccess: Подключение к Context7 установлено.
@@ -37,8 +23,6 @@ messages:
   timeoutHint: Максимальное время ожидания ответа на один запрос Context7.
   retention: Хранение локальной статистики
   retentionHint: Локальные записи запросов старше этого срока удаляются.
-  saveSettings: Сохранить настройки
-  settingsSaved: Настройки Context7 сохранены.
   usageTitle: Использование и квота
   localStatsTitle: Локальная статистика запросов
   usageRange: Локальный период
@@ -57,6 +41,3 @@ messages:
   dashboardLink: Панель Context7
   apiKeyDocsLink: Получить бесплатный ключ API
   usageDocsLink: Документация API и использования
-  saving: Сохранение…
-  testing: Проверка…
-  days: "{{days}} дн."

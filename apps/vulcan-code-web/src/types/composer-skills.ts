@@ -1060,9 +1060,12 @@ export interface PluginSummary {
       // Stable host-owned navigation icon identifier.
       // 稳定的宿主导航图标标识。
       icon: "plugin" | "route" | "chart";
-      // Named ESM export containing the component factory.
-      // 包含组件工厂的 ESM 命名导出。
-      exportName: string;
+      // Entry kind: a plugin ESM module or a host-rendered settings layout.
+      // 入口类型：插件 ESM 模块或宿主渲染的设置版面。
+      kind: PluginUiMountKind;
+      // Named ESM export containing the component factory; absent for settings layouts.
+      // 包含组件工厂的 ESM 命名导出；设置版面不存在此项。
+      exportName?: string;
     }>;
     // Read-only Agent Skill identifiers contributed by this plugin.
     // 当前插件贡献的只读 Agent Skill 标识。
@@ -1119,6 +1122,10 @@ export interface PluginSummary {
   } | null;
 }
 
+// PluginUiMountKind distinguishes plugin-rendered modules from host-rendered settings layouts.
+// PluginUiMountKind 区分插件渲染的模块与宿主渲染的设置版面。
+export type PluginUiMountKind = "module" | "settings";
+
 // PluginUiModuleSource carries one bounded uncompressed plugin ESM module.
 // PluginUiModuleSource 携带一个有大小边界的未压缩插件 ESM 模块。
 export interface PluginUiModuleSource {
@@ -1134,12 +1141,18 @@ export interface PluginUiModuleSource {
   // Exact plugin-local mount identifier.
   // 精确的插件内挂载标识。
   mountId: string;
-  // Named ESM export containing the component factory.
-  // 包含组件工厂的 ESM 命名导出。
-  exportName: string;
-  // Untouched UTF-8 ESM source returned by the authenticated service.
-  // 由已认证服务返回的原样 UTF-8 ESM 源码。
+  // Entry kind selects whether source is ESM or a settings layout document.
+  // 入口类型决定 source 是 ESM 还是设置版面文档。
+  kind: PluginUiMountKind;
+  // Named ESM export containing the component factory; absent for settings layouts.
+  // 包含组件工厂的 ESM 命名导出；设置版面不存在此项。
+  exportName?: string;
+  // Untouched UTF-8 source returned by the authenticated service: ESM or layout JSON.
+  // 由已认证服务返回的原样 UTF-8 源码：ESM 或版面 JSON。
   source: string;
+  // Plugin configuration JSON Schema, present only for settings layouts.
+  // 插件配置 JSON Schema，仅设置版面提供。
+  configSchema?: unknown;
   // Plugin-owned UI messages grouped by locale and stable message key.
   // 按语言与稳定消息键组织的插件自有界面文案。
   messagesByLocale: Record<string, Record<string, string>>;

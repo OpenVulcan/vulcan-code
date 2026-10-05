@@ -2,6 +2,7 @@ import * as React from "react"
 import { Activity, Bot, Calendar, CheckCircle2, Clock3, Database, MessageSquareText, Network, User } from "lucide-react"
 
 import { InlineDisclosure } from "@/components/ui/disclosure"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
 // PageFact is one labelled value of a facts list.
@@ -183,5 +184,56 @@ export function PageItem({ title, description, icon, meta, tone = "neutral", act
       </div>
       {actions ? <div className="page-item-actions">{actions}</div> : null}
     </article>
+  )
+}
+
+// PageTableColumn declares one column; numeric columns align to the end with tabular figures.
+// PageTableColumn 声明一列；数值列靠结束侧对齐并使用等宽数字。
+export interface PageTableColumn {
+  key: string
+  label: React.ReactNode
+  numeric?: boolean
+}
+
+// PageTableRow is one keyed row whose cells are addressed by column key.
+// PageTableRow 是一行带键记录，单元格按列键寻址。
+export interface PageTableRow {
+  key: string
+  cells: Readonly<Record<string, React.ReactNode>>
+}
+
+// PageTableProps describes one compact data table inside a section.
+// PageTableProps 描述区块内的一张紧凑数据表。
+export interface PageTableProps {
+  columns: readonly PageTableColumn[]
+  rows: readonly PageTableRow[]
+  // label names the table for assistive technology when the section title is not enough.
+  // label 在区块标题不足以说明时为辅助技术命名表格。
+  label?: string
+  // empty replaces the table when there are no rows, usually a PageEmptyState.
+  // empty 在没有行时替代表格，通常是 PageEmptyState。
+  empty?: React.ReactNode
+  className?: string
+}
+
+// PageTable renders rows through the shared table primitive; it scrolls horizontally instead of wrapping cells.
+// PageTable 通过共享表格原语渲染行；单元格不换行，必要时横向滚动。
+export function PageTable({ columns, rows, label, empty, className }: PageTableProps) {
+  if (rows.length === 0 && empty !== undefined) return <>{empty}</>
+  return (
+    <Table aria-label={label} className={cn("page-table", className)} data-slot="page-table">
+      <TableHeader>
+        <TableRow>
+          {columns.map((column) => <TableHead data-numeric={column.numeric ? "" : undefined} key={column.key} scope="col">{column.label}</TableHead>)}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={row.key}>
+            {columns.map((column) => <TableCell data-numeric={column.numeric ? "" : undefined} key={column.key}>{row.cells[column.key] ?? "—"}</TableCell>)}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }

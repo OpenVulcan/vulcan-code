@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: Tempo limite de navegação (ms)
   settleTimeoutLabel: Espera após a ação (ms)
   consoleLevelLabel: Nível do console
-  settingsSave: Salvar configurações
-  settingsRetry: Recarregar
-  settingsSaved: Configurações salvas. Novas conexões do navegador usarão os valores atualizados.
+  timeoutsTitle: "Tempos limite"
+  diagnosticsTitle: "Diagnóstico"
+  actionTimeoutHint: "De 100 a 999999 ms. Espera máxima por um clique, digitação ou outra ação na página."
+  navigationTimeoutHint: "De 100 a 999999 ms. Espera máxima para concluir uma navegação."
+  settleTimeoutHint: "De 0 a 999999 ms. Pausa após cada ação para a página se estabilizar."
+  consoleLevelHint: "Gravidade mínima do console do navegador incluída nos resultados das ferramentas."
   settingsHint: Estas configurações são aplicadas ao iniciar uma nova conexão do navegador de IA.
-  settingsInvalid: Insira tempos limite válidos antes de salvar.
-  settingsResponseInvalid: A resposta de configuração do Playwright é inválida.
-  settingsPersistedInvalid: As configurações salvas do Playwright são inválidas.
   consoleLevel_error: Erro
   consoleLevel_warning: Aviso
   consoleLevel_info: Informação

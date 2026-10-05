@@ -9,13 +9,13 @@ messages:
   navigationTimeoutLabel: Zeitlimit für Navigation (ms)
   settleTimeoutLabel: Wartezeit nach Aktionen (ms)
   consoleLevelLabel: Konsolenstufe
-  settingsSave: Einstellungen speichern
-  settingsRetry: Erneut laden
-  settingsSaved: Einstellungen gespeichert. Neue Browserverbindungen verwenden die aktualisierten Werte.
+  timeoutsTitle: "Zeitlimits"
+  diagnosticsTitle: "Diagnose"
+  actionTimeoutHint: "100 bis 999999 ms. Maximale Wartezeit für einen Klick, eine Eingabe oder eine andere Seitenaktion."
+  navigationTimeoutHint: "100 bis 999999 ms. Maximale Wartezeit, bis eine Navigation abgeschlossen ist."
+  settleTimeoutHint: "0 bis 999999 ms. Pause nach jeder Aktion, damit sich die Seite beruhigt."
+  consoleLevelHint: "Niedrigster Schweregrad der Browserkonsole, der in Werkzeugergebnisse aufgenommen wird."
   settingsHint: Diese Einstellungen gelten beim Start einer neuen KI-Browserverbindung.
-  settingsInvalid: Geben Sie vor dem Speichern gültige Zeitlimits ein.
-  settingsResponseInvalid: Die Antwort mit den Playwright-Einstellungen ist ungültig.
-  settingsPersistedInvalid: Die gespeicherten Playwright-Einstellungen sind ungültig.
   consoleLevel_error: Fehler
   consoleLevel_warning: Warnung
   consoleLevel_info: Information

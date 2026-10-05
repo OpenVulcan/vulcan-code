@@ -1098,7 +1098,86 @@ fn load_vulcan_plugin_package(
         };
         descriptor.locales.insert(locale.clone(), localized);
     }
+    // Settings layouts reference locale messages, so they are validated only after every locale loaded.
+    // 设置版面引用语言包文案，因此在全部语言包加载后才校验。
+    if let Err(error) =
+        validate_settings_mounts(&canonical_package_root, &manifest, &descriptor.locales)
+    {
+        descriptor.availability = VulcanPluginAvailability::Unavailable;
+        descriptor.runtime_state = VulcanPluginRuntimeState::Unavailable;
+        descriptor.diagnostics.push(error);
+        return descriptor;
+    }
     descriptor
+}
+
+/// Decode and semantically validate every declarative settings mount of one package.
+/// 解码并语义校验单个插件包的全部声明式设置挂载。
+/// Layouts must resolve against declared actions, the configuration schema and fallback-locale messages.
+/// 版面必须能依据已声明 Action、配置 Schema 与回退语言文案解析。
+fn validate_settings_mounts(
+    package_root: &Path,
+    manifest: &VulcanPluginManifest,
+    locales: &BTreeMap<String, crate::VulcanPluginLocaleManifest>,
+) -> Result<(), String> {
+    let settings = manifest
+        .ui
+        .mounts
+        .iter()
+        .filter(|mount| mount.kind == crate::VulcanPluginUiMountKind::Settings)
+        .collect::<Vec<_>>();
+    if settings.is_empty() {
+        return Ok(());
+    }
+    let messages = &locales
+        .get(crate::VULCAN_PLUGIN_SETTINGS_FALLBACK_LOCALE)
+        .ok_or_else(|| {
+            format!(
+                "Plugin settings mounts require the `{}` locale.",
+                crate::VULCAN_PLUGIN_SETTINGS_FALLBACK_LOCALE
+            )
+        })?
+        .messages;
+    let read_schema = |path: &Option<String>, label: &str| {
+        path.as_deref()
+            .map(|path| read_json_file(&resolve_package_file(package_root, path, label)?))
+            .transpose()
+    };
+    let mut actions = BTreeMap::new();
+    for action in manifest
+        .lua_runtime
+        .as_ref()
+        .map(|runtime| runtime.actions.as_slice())
+        .unwrap_or_default()
+    {
+        actions.insert(
+            action.id.as_str(),
+            crate::manifest::SettingsActionContract {
+                manifest: action,
+                input: read_schema(&action.input_schema_file, "plugin action input schema")?,
+                output: read_schema(&action.output_schema_file, "plugin action output schema")?,
+            },
+        );
+    }
+    let config_schema = read_schema(
+        &manifest.config.as_ref().map(|config| config.schema_file.clone()),
+        "plugin configuration schema",
+    )?;
+    let context = crate::manifest::SettingsLayoutContext {
+        actions,
+        config_schema,
+        messages,
+    };
+    for mount in settings {
+        let entry = resolve_package_file(package_root, &mount.entry, "plugin settings layout")?;
+        let text = fs::read_to_string(&entry).map_err(|error| {
+            format!("Failed to read plugin settings layout `{}`: {error}", mount.id)
+        })?;
+        let layout: crate::VulcanPluginSettingsLayout = serde_json::from_str(&text)
+            .map_err(|error| format!("Invalid plugin settings layout `{}`: {error}", mount.id))?;
+        crate::manifest::validate_settings_layout(&mount.id, &layout, &context)?;
+    }
+    Ok(())
 }
 
 /// Validates version, identity, host-owned package origin, and identifier grammar.
@@ -1360,7 +1439,18 @@ pub(crate) fn validate_manifest_identity(
     let mut mount_ids = BTreeSet::new();
     for mount in &manifest.ui.mounts {
         validate_identifier(&mount.id, "UI mount id")?;
-        validate_lua_identifier(&mount.export, "UI mount export")?;
+        match (mount.kind, &mount.export) {
+            (crate::VulcanPluginUiMountKind::Module, Some(export)) => {
+                validate_lua_identifier(export, "UI mount export")?;
+            }
+            (crate::VulcanPluginUiMountKind::Module, None) => {
+                return Err(format!("Plugin UI module mount `{}` must declare an export.", mount.id));
+            }
+            (crate::VulcanPluginUiMountKind::Settings, Some(_)) => {
+                return Err(format!("Plugin UI settings mount `{}` must not declare an export.", mount.id));
+            }
+            (crate::VulcanPluginUiMountKind::Settings, None) => {}
+        }
         if mount
             .label
             .as_ref()
@@ -2306,9 +2396,10 @@ fn validate_runtime_files(
     }
     for mount in &manifest.ui.mounts {
         let entry = resolve_package_file(package_root, &mount.entry, "plugin UI module")?;
-        if entry.extension().and_then(|extension| extension.to_str()) != Some("mjs") {
+        let extension = mount.kind.entry_extension();
+        if entry.extension().and_then(|extension| extension.to_str()) != Some(extension) {
             return Err(format!(
-                "Plugin UI mount `{}` entry must use the `.mjs` extension.",
+                "Plugin UI mount `{}` entry must use the `.{extension}` extension.",
                 mount.id
             ));
         }

@@ -1,27 +1,11 @@
 import * as React from "react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { StatusPill } from "@/components/shared/status";
-import { PageTabs } from "@/components/workspace/workspace-directory-layout";
-import {
-  ActivityHeatmap,
-  ActivityHeatmapLegend,
-  ChartLegend,
-  EmptyState,
-  ErrorState,
-  HelpTooltip,
-  MetricCard,
-  PluginMetadataLink,
-  SelectControl,
-  TextDocumentDialog,
-  TimeSeriesLineChart,
-} from "@/components/plugins/plugin-host-components";
+import { PLUGIN_UI_SDK_COMPONENTS, type PluginUiSdkComponents } from "./plugin-ui-sdk-components";
 import { useI18n } from "@/i18n";
+import { createPluginSettingsPage } from "./plugin-settings-page";
+import { parsePluginSettingsLayout } from "./plugin-settings-layout";
 import { invalidatePersistentPluginUiModules, loadPersistentPluginUiModule } from "@/service/plugin-ui-module-runtime";
 import { createPluginQueryClient, type PluginQueryOptions } from "@/service/plugin-ui-query-runtime";
 import { BROWSER_SERVICE_CONNECTION_EVENT, type BrowserServiceConnectionDetail } from "@/service/browser-service-discovery";
@@ -40,8 +24,6 @@ import {
 } from "@/service/plugin-ui-events";
 import type { PluginSummary } from "@/types";
 import { detectShellHost, type ShellHostMarker } from "@/host-shell/runtime";
-import { BrowserArea } from "@/components/features/browser/browser-area";
-import { ClientBrowserArea } from "@/components/features/browser/client-browser-area";
 
 // PluginUiSdk is the stable host context exposed to one authorized dynamic plugin module.
 // PluginUiSdk 是暴露给单个已授权动态插件模块的稳定宿主上下文。
@@ -73,80 +55,7 @@ interface PluginUiSdk {
   locale: string;
   // Stable host components preserve the active design system and theme.
   // 稳定宿主组件保持当前设计系统与主题。
-  components: {
-    // CoreBrowserArea is the host-owned projection for the enabled browser plugin.
-    // CoreBrowserArea 是已启用浏览器插件使用的宿主自有投影组件。
-    CoreBrowserArea: typeof BrowserArea;
-    // ClientBrowserArea is a client-local temporary page, independent of Core automation.
-    // ClientBrowserArea 是独立于 Core 自动化的客户端本地临时页面。
-    ClientBrowserArea: typeof ClientBrowserArea;
-    // Shared Vulcan badge component.
-    // Vulcan 共享徽标组件。
-    Badge: typeof Badge;
-    // Shared Vulcan button component.
-    // Vulcan 共享按钮组件。
-    Button: typeof Button;
-    // Shared modal root manages focus and dismissal for plugin editors.
-    // 共享弹窗根节点管理插件编辑器的焦点和关闭行为。
-    Dialog: typeof Dialog;
-    // Shared modal content preserves host sizing and scrolling.
-    // 共享弹窗内容保持宿主尺寸和滚动规则。
-    DialogContent: typeof DialogContent;
-    // Shared accessible modal title.
-    // 共享可访问弹窗标题。
-    DialogTitle: typeof DialogTitle;
-    // Shared accessible modal description.
-    // 共享可访问弹窗说明。
-    DialogDescription: typeof DialogDescription;
-    // Shared Vulcan status component.
-    // Vulcan 共享状态组件。
-    StatusPill: typeof StatusPill;
-    // Shared Vulcan page tab strip with trailing page actions.
-    // Vulcan 共享页面标签条，含尾部页面操作。
-    PageTabs: typeof PageTabs;
-    // Shared host contextual-help tooltip.
-    // 共享宿主上下文帮助 Tooltip。
-    HelpTooltip: typeof HelpTooltip;
-    // Shared host KPI card component.
-    // 共享宿主 KPI 卡片组件。
-    MetricCard: typeof MetricCard;
-    // Shared host streaming loading silhouette; plugins show it instead of a "Loading…" sentence.
-    // 共享宿主流式加载轮廓；插件用它代替「正在加载…」文案。
-    StreamPlaceholder: typeof StreamPlaceholder;
-    // Shared host single-line text field, including password inputs.
-    // 共享宿主单行文本输入框，包括密码输入。
-    Input: typeof Input;
-    // Shared host boolean switch for on/off settings.
-    // 共享宿主布尔开关，用于开/关类设置。
-    Switch: typeof Switch;
-    // Shared host compact actionable metadata tag.
-    // 共享宿主紧凑可操作元数据标签。
-    PluginMetadataLink: typeof PluginMetadataLink;
-    // Shared host select control.
-    // 共享宿主下拉控件。
-    SelectControl: typeof SelectControl;
-    // Shared host read-only text document dialog.
-    // 共享宿主只读文本文档浮动框。
-    TextDocumentDialog: typeof TextDocumentDialog;
-    // Shared host calendar activity heatmap.
-    // 共享宿主日历活动热力图。
-    ActivityHeatmap: typeof ActivityHeatmap;
-    // Shared host activity intensity legend.
-    // 共享宿主活动强度图例。
-    ActivityHeatmapLegend: typeof ActivityHeatmapLegend;
-    // Shared host responsive multi-series line chart.
-    // 共享宿主响应式多序列折线图。
-    TimeSeriesLineChart: typeof TimeSeriesLineChart;
-    // Shared host chart legend.
-    // 共享宿主图表图例。
-    ChartLegend: typeof ChartLegend;
-    // Shared host empty state.
-    // 共享宿主空状态。
-    EmptyState: typeof EmptyState;
-    // Shared host error state.
-    // 共享宿主错误状态。
-    ErrorState: typeof ErrorState;
-  };
+  components: PluginUiSdkComponents;
   // Revision-only event utilities keep plugin UI data synchronized without carrying business payloads.
   // 仅含修订号的事件工具在不携带业务载荷的前提下同步插件界面数据。
   events: {
@@ -297,32 +206,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
     },
     openExternalUrl: openPluginExternalUrl,
     locale,
-    components: {
-      CoreBrowserArea: BrowserArea,
-      ClientBrowserArea,
-      Badge,
-      Button,
-      Dialog,
-      DialogContent,
-      DialogTitle,
-      DialogDescription,
-      StatusPill,
-      PageTabs,
-      HelpTooltip,
-      MetricCard,
-      StreamPlaceholder,
-      Input,
-      Switch,
-      PluginMetadataLink,
-      SelectControl,
-      TextDocumentDialog,
-      ActivityHeatmap,
-      ActivityHeatmapLegend,
-      TimeSeriesLineChart,
-      ChartLegend,
-      EmptyState,
-      ErrorState,
-    },
+    components: PLUGIN_UI_SDK_COMPONENTS,
     events: {
       subscribe: (topic, listener) => subscribePluginUiInvalidation(props.plugin.id, topic, listener),
       latestRevision: (topic) => latestPluginUiInvalidationRevision(props.plugin.id, topic),
@@ -359,14 +243,6 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
         if (moduleSource.pluginId !== props.plugin.id || moduleSource.mountId !== props.mount.id) {
           throw new Error("Plugin UI module identity did not match the requested mount.");
         }
-        // factory is the exact manifest-declared export selected by the service.
-        // factory 是服务选择的精确清单声明导出。
-        const factory = moduleNamespace[moduleSource.exportName];
-        if (typeof factory !== "function") {
-          throw new Error(`Plugin UI export \`${moduleSource.exportName}\` is not a function.`);
-        }
-        // component is created only after exact source identity and export shape are verified.
-        // component 仅在精确源码身份与导出结构校验后创建。
         // moduleSdk binds translations from the same authenticated package generation as the loaded UI source.
         // moduleSdk 把与已加载界面源码同一认证包代次的翻译绑定到 SDK。
         const moduleSdk: PluginUiSdk = {
@@ -384,6 +260,20 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
           })(),
           t: (key, fallback) => localizedPluginMessage(moduleSource.messagesByLocale, locale, key) ?? fallback,
         };
+        // Settings layouts render through the host page kit; only modules run a plugin factory.
+        // 设置版面经宿主页面套件渲染；只有模块才运行插件工厂。
+        if (moduleSource.kind === "settings") {
+          const settings = createPluginSettingsPage(parsePluginSettingsLayout(moduleSource.source), moduleSource.configSchema,
+            { invoke: moduleSdk.invoke, message: key => moduleSdk.t(key, key), openExternalUrl: moduleSdk.openExternalUrl });
+          if (!cancelled) setPanel(() => settings);
+          return;
+        }
+        // factory is the exact manifest-declared export, used only after source identity is verified.
+        // factory 是精确的清单声明导出，仅在源码身份校验后使用。
+        const factory = moduleSource.exportName === undefined ? undefined : moduleNamespace[moduleSource.exportName];
+        if (typeof factory !== "function") {
+          throw new Error(`Plugin UI export \`${moduleSource.exportName}\` is not a function.`);
+        }
         const component = (factory as PluginUiFactory)(moduleSdk);
         if (typeof component !== "function") {
           throw new Error("Plugin UI factory did not return a React component.");
