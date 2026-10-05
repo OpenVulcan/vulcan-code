@@ -31,6 +31,50 @@
   margin-top: 12px;
 }
 
+/* Title and effect hint share one baseline; the close button keeps its own corner. */
+/* 标题与生效提示共用一条基线；关闭按钮保留其角落位置。 */
+.composer-capability-dialog-header {
+  /* Room reserved for the dialog close button; the tab strip below bleeds back over it. */
+  /* 为对话框关闭按钮预留的空间；下方标签条会延伸覆盖回去。 */
+  --composer-dialog-close-gutter: 28px;
+  min-width: 0;
+  flex-flow: row wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding-right: var(--composer-dialog-close-gutter);
+}
+
+.composer-capability-dialog-description {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+/* The intent tabs take a full header row and bleed to the dialog edges like a page tab strip. */
+/* 意图标签占据标题区整行，并像页面标签条一样延伸到弹窗边缘。 */
+.composer-capability-tabs {
+  flex: 1 0 100%;
+  margin: 8px calc(-1 * (var(--composer-dialog-padding) + var(--composer-dialog-close-gutter))) 0
+    calc(-1 * var(--composer-dialog-padding));
+  padding: 0 calc(var(--composer-dialog-padding) - 12px);
+}
+
+.composer-capability-tab-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-capability-tabs .composer-capability-tab-count svg {
+  width: 12px;
+  height: 12px;
+}
+
+.composer-capability-tab-count.conflict {
+  color: var(--destructive);
+}
+
 .composer-capability-dialog-left,
 .composer-capability-dialog-right {
   min-height: 0;
@@ -40,25 +84,11 @@
 .composer-capability-dialog-left {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 2px;
   padding-right: 10px;
   border-right: 1px solid var(--vcn-border-subtle);
 }
 
-/* Capabilities are grouped by the same intents as the settings page tabs. */
-/* 能力按与设置页标签相同的意图分组。 */
-.composer-capability-kind-group {
-  display: grid;
-  gap: 2px;
-}
-
-.composer-capability-kind-group-title {
-  padding: 0 8px 3px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
 
 .composer-capability-kind-row {
   position: relative;
@@ -351,6 +381,13 @@
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Restoring defaults only edits the draft, so it stays a quiet secondary action beside save. */
+/* 还原默认只修改草稿，因此作为保存旁的次要操作保持低调。 */
+.composer-capability-restore-defaults {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 

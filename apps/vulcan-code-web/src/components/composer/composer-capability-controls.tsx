@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   LoaderCircle,
   LockKeyhole,
+  RotateCcw,
   RotateCw,
   SlidersHorizontal,
   ChevronDown,
@@ -40,6 +41,7 @@ import {
 } from "@/components/ui/tooltip";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
+import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 import {
   ComposerCapabilitySummary,
   type ComposerCapabilitySummaryItem,
@@ -460,6 +462,9 @@ export function ComposerAiCapabilityControl(props: {
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [selectedCapability, setSelectedCapability] =
     React.useState<PublicAiProviderToolCapabilityKind>("web_search");
+  // lastCapabilityByTab remembers the capability viewed in each tab so switching back restores it.
+  // lastCapabilityByTab 记住每个标签中查看过的能力，切回时恢复。
+  const lastCapabilityByTab = React.useRef<Partial<Record<string, PublicAiProviderToolCapabilityKind>>>({});
   const [draft, setDraft] = React.useState<ComposerProviderToolSettingsSnapshot>({
     enabledCapabilities: [],
     selections: {},
@@ -541,12 +546,7 @@ export function ComposerAiCapabilityControl(props: {
             }
           : props.draftSettings
             ? normalizedComposerProviderToolSettings(props.draftSettings)
-            : {
-              enabledCapabilities: nextSnapshot.providerToolEnabledCapabilities,
-              selections: nextSnapshot.providerToolSelections,
-              extensionTargetSets: nextSnapshot.providerExtensionTargetSets,
-              mediaUnderstandingSelections: nextSnapshot.mediaUnderstandingSelections ?? {},
-            };
+            : defaultComposerProviderToolSettings(nextSnapshot);
         const capabilities = composerProviderToolCapabilities(nextSnapshot, nextDraft);
         // Prefer a configured family initially; fixed empty media categories remain selectable when none is configured.
         // 初次优先展示已有配置的能力族；无配置时仍可选中固定空媒体分类。
@@ -686,6 +686,19 @@ export function ComposerAiCapabilityControl(props: {
     .filter((selections) => selections && selections.length > 0).length;
   const hasUnsavedChanges = settingsReady
     && providerToolSettingsSignature(draft) !== baselineSignature;
+  // defaultSettings is what "restore defaults" writes into the draft; the action is idle when the draft already matches.
+  // defaultSettings 是“还原默认”写入草稿的内容；草稿已与之一致时该操作不可用。
+  const defaultSettings = settingsReady && snapshot ? defaultComposerProviderToolSettings(snapshot) : null;
+  const draftMatchesDefaults = defaultSettings !== null
+    && providerToolSettingsSignature(defaultSettings) === providerToolSettingsSignature(draft);
+  // restoreDefaults replaces only the unsaved draft; the session changes when the user saves.
+  // restoreDefaults 只替换未保存草稿；用户保存后会话才会改变。
+  const restoreDefaults = (): void => {
+    if (!defaultSettings || mutationPending.current) return;
+    setDraft(defaultSettings);
+    setMediaEditModes({});
+    setError(null);
+  };
   React.useEffect(() => {
     props.onConflictChange?.(!settingsReady || conflicts.length > 0);
   }, [settingsReady, conflicts.length, props.onConflictChange]);
@@ -840,6 +853,28 @@ export function ComposerAiCapabilityControl(props: {
   const selectedDescription = settingsReady && capabilities.includes(selectedCapability)
     ? describeCapability(selectedCapability)
     : null;
+  // capabilityTabs presents the shared intent groups as page tabs; capabilities no group declares yet get a trailing tab.
+  // capabilityTabs 将共享意图分组呈现为页面标签；尚未归组的能力放在末尾标签中。
+  const capabilityTabs = groupProviderToolCapabilities(capabilities).map(({ group, capabilities: members }) => ({
+    id: group?.id ?? "other",
+    label: t(group ? group.labelKey : "composer.capability.group.other"),
+    capabilities: members,
+  }));
+  // activeCapabilityTab is derived from the selected capability, so selection and tab can never disagree.
+  // activeCapabilityTab 由所选能力推导，因此选择与标签永远一致。
+  const activeCapabilityTab = capabilityTabs.find((tab) => tab.capabilities.includes(selectedCapability))
+    ?? capabilityTabs[0];
+  // selectCapabilityTab returns to the capability last viewed in that tab, or its first capability.
+  // selectCapabilityTab 回到该标签上次查看的能力，否则选中其第一项。
+  // Parameters: id is the clicked tab; returns nothing.
+  // 参数：id 是被点击的标签；无返回值。
+  const selectCapabilityTab = (id: string): void => {
+    const tab = capabilityTabs.find((candidate) => candidate.id === id);
+    if (!tab || !activeCapabilityTab || tab.id === activeCapabilityTab.id) return;
+    lastCapabilityByTab.current[activeCapabilityTab.id] = selectedCapability;
+    const remembered = lastCapabilityByTab.current[tab.id];
+    setSelectedCapability(remembered && tab.capabilities.includes(remembered) ? remembered : tab.capabilities[0]);
+  };
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => {
@@ -890,13 +925,41 @@ export function ComposerAiCapabilityControl(props: {
         </HoverCardContent>
       </HoverCard>
       <DialogContent className="composer-capability-dialog" scrollMode="fixed-footer">
-        <DialogHeader>
+        {/* Title and effect hint share one line so the tab strip and list start right under the header. */}
+        {/* 标题与生效提示共用一行，让标签条和列表紧贴标题下方。 */}
+        <DialogHeader className="composer-capability-dialog-header">
           <DialogTitle>{t("composer.capability.dialogTitle")}</DialogTitle>
-        </DialogHeader>
-        <div className="composer-capability-dialog-body flex min-h-0 flex-col overflow-hidden">
-          <DialogDescription className="mt-3 shrink-0 text-xs text-muted-foreground">
+          <DialogDescription className="composer-capability-dialog-description">
             {t("composer.capability.dialogDescription")}
           </DialogDescription>
+          {/* Intent tabs close the header block so their divider can run edge to edge above both panes. */}
+          {/* 意图标签收尾标题区，使其分隔线可贯通两侧面板上方。 */}
+          {settingsReady && activeCapabilityTab ? (
+            <PageTabs
+              ariaLabel={t("composer.capability.dialogTitle")}
+              className="composer-capability-tabs"
+              onValueChange={selectCapabilityTab}
+              options={capabilityTabs.map((tab) => {
+                const described = tab.capabilities.map(describeCapability);
+                const conflicted = described.some((description) => description.conflict);
+                return {
+                  value: tab.id,
+                  label: tab.label,
+                  disabled: saving,
+                  count: (
+                    <span className={cn("composer-capability-tab-count", conflicted && "conflict")}>
+                      {conflicted ? <AlertTriangle aria-hidden="true" size={12} /> : null}
+                      {conflicted ? <span className="sr-only">{t("composer.capability.conflict.tooltip")}</span> : null}
+                      {described.filter((description) => description.enabled).length}/{tab.capabilities.length}
+                    </span>
+                  ),
+                };
+              })}
+              value={activeCapabilityTab.id}
+            />
+          ) : null}
+        </DialogHeader>
+        <div className="composer-capability-dialog-body flex min-h-0 flex-col overflow-hidden">
         {loadState.conversationId === props.conversationId && error
           ? <div className="my-2 min-h-0 shrink-0 rounded-md border border-destructive/30 p-3">
               <p className="text-sm text-destructive" role="alert">
@@ -932,108 +995,98 @@ export function ComposerAiCapabilityControl(props: {
             </div>
           </div>
         ) : null}
-        {settingsReady ? <div className="composer-capability-dialog-grid vcn-stream-reveal flex-1">
-          <aside className="composer-capability-dialog-left">
-            {groupProviderToolCapabilities(capabilities).map(({ group, capabilities: members }) => (
-              <div
-                aria-label={group ? t(group.labelKey) : undefined}
-                className="composer-capability-kind-group"
-                key={group?.id ?? "ungrouped"}
-                role="group"
-              >
-                {group ? <div aria-hidden="true" className="composer-capability-kind-group-title">{t(group.labelKey)}</div> : null}
-                {members.map((capability) => {
-                  const { directMode, extensionSelectionCount, mediaAvailable, enabled, targets, targetCount, conflict, subtitle } =
-                    describeCapability(capability);
-                  return (
-                    <div
-                      className={cn(
-                        "composer-capability-kind-row",
-                        enabled && "enabled",
-                        selectedCapability === capability && "selected",
-                        conflict && "conflict",
-                      )}
-                      aria-invalid={conflict ? true : undefined}
-                      key={capability}
-                    >
-                      {directMode ? (
-                        <input
-                          aria-label={`${providerToolCapabilityLabel(capability, t)} · ${t("settings.providerTools.enabled")}`}
-                          checked={enabled}
-                          disabled={isMediaUnderstandingCapability(capability)
-                            ? mediaUnderstandingCapabilityToggleDisabled(saving, mediaAvailable, enabled)
-                            : providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
-                          onChange={(event) => {
-                            event.stopPropagation();
-                            const checked = event.currentTarget.checked;
-                            setDraft((current) => {
-                              const enabledCapabilities = new Set(current.enabledCapabilities);
-                              if (!checked) {
-                                enabledCapabilities.delete(capability);
-                                return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
-                              }
-                              enabledCapabilities.add(capability);
-                              if (isMediaUnderstandingCapability(capability)) {
-                                if (!mediaAvailable) return current;
-                                return {
-                                  ...current,
-                                  enabledCapabilities: Array.from(enabledCapabilities).sort(),
-                                };
-                              }
-                              const first = targets[0];
-                              if (first) {
-                                return {
-                                  ...current,
-                                  enabledCapabilities: Array.from(enabledCapabilities).sort(),
-                                  selections: current.selections[capability] ? current.selections : {
-                                    ...current.selections,
-                                    [capability]: selectionForTarget(first),
-                                  },
-                                };
-                              }
-                              return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
-                            });
-                          }}
-                          onClick={(event) => event.stopPropagation()}
-                          type="checkbox"
-                        />
-                      ) : (
-                        <span aria-hidden="true" className={cn("composer-capability-extension-count", extensionSelectionCount > 0 && "active")}>
-                          {extensionSelectionCount > 0 ? extensionSelectionCount : null}
-                        </span>
-                      )}
-                      <Button className="composer-capability-kind-select h-auto min-w-0 flex-1 justify-start whitespace-normal text-left" type="button" variant="ghost"
-                        ref={selectedCapability === capability ? selectedCategoryButton : undefined}
-                        aria-pressed={selectedCapability === capability} disabled={saving}
-                        onClick={() => setSelectedCapability(capability)}>
-                        <span className={cn(
-                          "composer-capability-colored-icon",
-                          enabled ? "enabled" : "disabled",
-                        )} style={{
-                          "--capability-color": providerToolCapabilityColor(capability),
-                        } as React.CSSProperties}>
-                          <ProviderToolCapabilityIcon capability={capability} size={16} />
-                        </span>
-                        <span className="composer-capability-kind-copy">
-                          <span className="composer-capability-kind-title">
-                            {providerToolCapabilityLabel(capability, t)}
-                            {conflict ? <AlertTriangle aria-hidden="true" size={13} /> : null}
-                          </span>
-                          <small>{subtitle}</small>
-                          {conflict ? (
-                            <small className="composer-capability-node-warning" role="alert">
-                              {t(conflict.kind === "missing_selection"
-                                ? "composer.capability.conflict.missingSelection"
-                                : "composer.capability.conflict.targetUnavailable")}
-                            </small>
-                          ) : null}
-                        </span>
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+        {settingsReady && activeCapabilityTab ? <div className="composer-capability-dialog-grid vcn-stream-reveal flex-1">
+          <aside aria-label={activeCapabilityTab.label} className="composer-capability-dialog-left">
+            {activeCapabilityTab.capabilities.map((capability) => {
+              const { directMode, extensionSelectionCount, mediaAvailable, enabled, targets, targetCount, conflict, subtitle } =
+                describeCapability(capability);
+              return (
+                <div
+                  className={cn(
+                    "composer-capability-kind-row",
+                    enabled && "enabled",
+                    selectedCapability === capability && "selected",
+                    conflict && "conflict",
+                  )}
+                  aria-invalid={conflict ? true : undefined}
+                  key={capability}
+                >
+                  {directMode ? (
+                    <input
+                      aria-label={`${providerToolCapabilityLabel(capability, t)} · ${t("settings.providerTools.enabled")}`}
+                      checked={enabled}
+                      disabled={isMediaUnderstandingCapability(capability)
+                        ? mediaUnderstandingCapabilityToggleDisabled(saving, mediaAvailable, enabled)
+                        : providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
+                      onChange={(event) => {
+                        event.stopPropagation();
+                        const checked = event.currentTarget.checked;
+                        setDraft((current) => {
+                          const enabledCapabilities = new Set(current.enabledCapabilities);
+                          if (!checked) {
+                            enabledCapabilities.delete(capability);
+                            return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                          }
+                          enabledCapabilities.add(capability);
+                          if (isMediaUnderstandingCapability(capability)) {
+                            if (!mediaAvailable) return current;
+                            return {
+                              ...current,
+                              enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                            };
+                          }
+                          const first = targets[0];
+                          if (first) {
+                            return {
+                              ...current,
+                              enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                              selections: current.selections[capability] ? current.selections : {
+                                ...current.selections,
+                                [capability]: selectionForTarget(first),
+                              },
+                            };
+                          }
+                          return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                        });
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                      type="checkbox"
+                    />
+                  ) : (
+                    <span aria-hidden="true" className={cn("composer-capability-extension-count", extensionSelectionCount > 0 && "active")}>
+                      {extensionSelectionCount > 0 ? extensionSelectionCount : null}
+                    </span>
+                  )}
+                  <Button className="composer-capability-kind-select h-auto min-w-0 flex-1 justify-start whitespace-normal text-left" type="button" variant="ghost"
+                    ref={selectedCapability === capability ? selectedCategoryButton : undefined}
+                    aria-pressed={selectedCapability === capability} disabled={saving}
+                    onClick={() => setSelectedCapability(capability)}>
+                    <span className={cn(
+                      "composer-capability-colored-icon",
+                      enabled ? "enabled" : "disabled",
+                    )} style={{
+                      "--capability-color": providerToolCapabilityColor(capability),
+                    } as React.CSSProperties}>
+                      <ProviderToolCapabilityIcon capability={capability} size={16} />
+                    </span>
+                    <span className="composer-capability-kind-copy">
+                      <span className="composer-capability-kind-title">
+                        {providerToolCapabilityLabel(capability, t)}
+                        {conflict ? <AlertTriangle aria-hidden="true" size={13} /> : null}
+                      </span>
+                      <small>{subtitle}</small>
+                      {conflict ? (
+                        <small className="composer-capability-node-warning" role="alert">
+                          {t(conflict.kind === "missing_selection"
+                            ? "composer.capability.conflict.missingSelection"
+                            : "composer.capability.conflict.targetUnavailable")}
+                        </small>
+                      ) : null}
+                    </span>
+                  </Button>
+                </div>
+              );
+            })}
           </aside>
           <section className="composer-capability-dialog-right">
             {selectedDescription ? (
@@ -1480,6 +1533,16 @@ export function ComposerAiCapabilityControl(props: {
               : t("composer.capability.saveHint.clean")}
           </span>
           <button
+            className="skill-action-button secondary composer-capability-restore-defaults"
+            disabled={!defaultSettings || saving || draftMatchesDefaults}
+            onClick={restoreDefaults}
+            title={t("composer.capability.restoreDefaults.hint").replace("{page}", t("settings.aiCapabilities"))}
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" size={13} />
+            {t("composer.capability.restoreDefaults")}
+          </button>
+          <button
             className="skill-action-button"
             disabled={!settingsReady || saving || !hasUnsavedChanges || conflicts.length > 0}
             onClick={() => void save()}
@@ -1493,6 +1556,21 @@ export function ComposerAiCapabilityControl(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+// defaultComposerProviderToolSettings is the single source of the global defaults a session starts from or restores.
+// defaultComposerProviderToolSettings 是会话初始值与还原默认所用全局默认值的唯一来源。
+// Parameters: snapshot is the authoritative public AI settings; returns a complete session snapshot copied from it.
+// 参数：snapshot 是权威公开 AI 设置；返回从中复制的完整会话快照。
+function defaultComposerProviderToolSettings(
+  snapshot: PublicAiSettingsSnapshot,
+): ComposerProviderToolSettingsSnapshot {
+  return {
+    enabledCapabilities: snapshot.providerToolEnabledCapabilities,
+    selections: snapshot.providerToolSelections,
+    extensionTargetSets: snapshot.providerExtensionTargetSets,
+    mediaUnderstandingSelections: snapshot.mediaUnderstandingSelections ?? {},
+  };
 }
 
 // providerToolSettingsSignature serializes one complete snapshot deterministically for dirty checks.

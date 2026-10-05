@@ -377,6 +377,34 @@ async function openCapabilities(value = session(), catalog = settings()) {
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
   await click("Capabilities");
 }
+// selectCapabilityTab clicks the intent tab whose visible label is the given translation key.
+// selectCapabilityTab 点击可见标签为指定翻译键的意图标签。
+async function selectCapabilityTab(labelKey: string) {
+  const tab = [...document.querySelectorAll<HTMLButtonElement>(".composer-capability-tabs button")]
+    .find((button) => button.querySelector(".settings-directory-label")?.textContent === labelKey);
+  expect(tab, `tab ${labelKey} may have been renamed or regrouped`).toBeDefined();
+  await act(async () => tab!.click());
+}
+// listedCapabilities returns the capability labels rendered in the visible list.
+// listedCapabilities 返回可见列表中渲染的能力名称。
+function listedCapabilities(): string[] {
+  return [...document.querySelectorAll(".composer-capability-kind-title")].map((title) => title.textContent ?? "");
+}
+
+it("shows one intent tab at a time and restores the capability last viewed in a tab", async () => {
+  // A saved image-generation set keeps the generation tab visible beside the understanding tab.
+  // 已保存的图片生成集合让生成标签与理解标签同时可见。
+  await openCapabilities({ ...session(), extensionTargetSets: { image_generate: [{ connection_id: "a", target_id: "generator" }] } });
+  expect(listedCapabilities()).toContain("settings.aiUnderstandImage");
+  expect(listedCapabilities()).not.toContain("settings.providerTools.imageGenerate");
+  await selectCapabilityTab("settings.aiCapabilities.tab.generate");
+  expect(listedCapabilities()).toContain("settings.providerTools.imageGenerate");
+  expect(listedCapabilities()).not.toContain("settings.aiUnderstandImage");
+  expect(document.querySelectorAll('.composer-capability-kind-select[aria-pressed="true"]')).toHaveLength(1);
+  await selectCapabilityTab("settings.aiCapabilities.tab.understand");
+  expect(document.querySelector('.composer-capability-kind-select[aria-pressed="true"]')?.textContent)
+    .toContain("settings.aiUnderstandImage");
+});
 
 it("opens the capability dialog from the hover summary footer action", async () => {
   vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
@@ -435,6 +463,7 @@ it("keeps a removed extension category recoverable and saves only the explicit r
   // configured 在无效扩展旁保存一条无关的有效媒体路由。
   const configured = { ...session(), extensionTargetSets: { image_generate: [{ connection_id: "removed-account", target_id: "removed-model" }] } };
   await openCapabilities(configured);
+  await selectCapabilityTab("settings.aiCapabilities.tab.generate");
   // category must remain visible even when the entire extension family has left the catalog.
   // 即使整个扩展能力族已离开目录，category 也必须保持可见。
   const category = [...document.querySelectorAll<HTMLButtonElement>(".composer-capability-kind-select")]
@@ -449,6 +478,27 @@ it("keeps a removed extension category recoverable and saves only the explicit r
   expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({
     conversationId: "c", ...configured, extensionTargetSets: { image_generate: [] },
   });
+});
+
+it("restores the global defaults into the draft and saves them only on explicit save", async () => {
+  await openCapabilities();
+  // button finds a footer action by its exact translated label.
+  // button 按精确翻译标签查找底部操作。
+  const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find((candidate) => candidate.textContent === label)!;
+  const restore = button("composer.capability.restoreDefaults");
+  expect(restore.disabled).toBe(false);
+  await act(async () => restore.click());
+  expect(savePublicAiSessionProviderToolSelections).not.toHaveBeenCalled();
+  expect(document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!.checked).toBe(false);
+  expect(document.querySelector(".composer-capability-dialog-save-hint")?.textContent).toBe("composer.capability.saveHint.unsaved");
+  expect(restore.disabled).toBe(true);
+  // defaults mirrors the empty global configuration of the synthetic catalog.
+  // defaults 对应合成目录中为空的全局配置。
+  const defaults = { enabledCapabilities: [], selections: {}, extensionTargetSets: {}, mediaUnderstandingSelections: {} };
+  vi.mocked(savePublicAiSessionProviderToolSelections).mockResolvedValue({ ...defaults, conflicts: [] });
+  await act(async () => button("composer.capability.save").click());
+  expect(savePublicAiSessionProviderToolSelections).toHaveBeenCalledExactlyOnceWith({ conversationId: "c", ...defaults });
 });
 
 it("requires manual activation after replacing a stale media target", async () => {
@@ -556,6 +606,7 @@ it("keeps keyboard focus on the next unavailable extension after a removal", asy
     { connection_id: "removed-account-2", target_id: "second" },
   ] } };
   await openCapabilities(configured);
+  await selectCapabilityTab("settings.aiCapabilities.tab.generate");
   await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".composer-capability-kind-select")]
     .find((button) => button.textContent?.includes("settings.providerTools.imageGenerate"))!.click());
   await click("composer.capability.removeUnavailable · first");
