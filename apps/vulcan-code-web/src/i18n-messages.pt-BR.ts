@@ -4645,6 +4645,7 @@ export const ptBRTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "Degradado",
     "skills.plugins.mcpStatus.failed": "Falhou",
     "skills.plugins.mcpStatus.draining": "Drenando",
+    "skills.plugins.mcpStatus.onDemand": "Inicia por conversa",
     "skills.plugins.mcpStatus.stopped": "Parado",
     "skills.plugins.mcpPrompts": "Prompts",
     "skills.plugins.mcpResources": "Recursos",

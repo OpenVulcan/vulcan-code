@@ -4645,6 +4645,7 @@ export const jaJPTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "機能低下",
     "skills.plugins.mcpStatus.failed": "失敗",
     "skills.plugins.mcpStatus.draining": "ドレイン中",
+    "skills.plugins.mcpStatus.onDemand": "会話ごとに起動",
     "skills.plugins.mcpStatus.stopped": "停止",
     "skills.plugins.mcpPrompts": "プロンプト",
     "skills.plugins.mcpResources": "リソース",

@@ -2,6 +2,8 @@
 //! skill catalog projection 辅助逻辑。
 
 use super::*;
+mod plugin_mcp_status;
+use plugin_mcp_status::{inactive_plugin_mcp_status, select_plugin_mcp_state};
 use vulcan_plugin_runtime::{
     VulcanPluginAvailability, VulcanPluginCatalogSnapshot, VulcanPluginMcpStdioLauncherManifest,
     VulcanPluginMcpTransportManifest, VulcanPluginPackageOrigin, VulcanPluginRuntimeState,
@@ -239,10 +241,11 @@ pub(crate) fn plugins_from_catalogs(
                         .mcp_servers
                         .iter()
                         .map(|server| {
-                            let runtime_state = mcp_server_states.iter().find(|state| {
-                                state.id == format!("{}:{}", plugin.id, server.id)
-                                    && state.generation == Some(plugin.generation)
-                            });
+                            let runtime_state = select_plugin_mcp_state(
+                                mcp_server_states,
+                                &format!("{}:{}", plugin.id, server.id),
+                                plugin.generation,
+                            );
                             plugin_mcp_server_summary(plugin, server, runtime_state)
                         })
                         .collect(),
@@ -269,15 +272,7 @@ fn plugin_mcp_server_summary(
         |state| state.endpoint.clone(),
     );
     let status = runtime_state.map_or_else(
-        || match plugin.runtime_state {
-            VulcanPluginRuntimeState::Disabled
-            | VulcanPluginRuntimeState::DisabledWithCleanupWarning => String::from("disabled"),
-            VulcanPluginRuntimeState::Enabling => String::from("preparing"),
-            VulcanPluginRuntimeState::Draining => String::from("draining"),
-            VulcanPluginRuntimeState::Enabled => String::from("stopped"),
-            VulcanPluginRuntimeState::UnsupportedPlatform
-            | VulcanPluginRuntimeState::Unavailable => String::from("failed"),
-        },
+        || inactive_plugin_mcp_status(plugin.runtime_state, server.manifest.scope).to_string(),
         |state| match state.status {
             vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Disabled => {
                 String::from("disabled")

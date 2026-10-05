@@ -4645,6 +4645,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "Eingeschränkt",
     "skills.plugins.mcpStatus.failed": "Fehlgeschlagen",
     "skills.plugins.mcpStatus.draining": "Wird geleert",
+    "skills.plugins.mcpStatus.onDemand": "Startet pro Unterhaltung",
     "skills.plugins.mcpStatus.stopped": "Gestoppt",
     "skills.plugins.mcpPrompts": "Prompts",
     "skills.plugins.mcpResources": "Ressourcen",

@@ -69,6 +69,7 @@ function pluginMcpStatusLabel(status: string, t: ReturnType<typeof useI18n>["t"]
     case "degraded": return t("skills.plugins.mcpStatus.degraded");
     case "failed": return t("skills.plugins.mcpStatus.failed");
     case "draining": return t("skills.plugins.mcpStatus.draining");
+    case "onDemand": return t("skills.plugins.mcpStatus.onDemand");
     case "stopped": return t("skills.plugins.mcpStatus.stopped");
     default: return status;
   }

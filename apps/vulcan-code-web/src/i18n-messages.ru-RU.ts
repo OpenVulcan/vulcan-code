@@ -4645,6 +4645,7 @@ export const ruRUTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "Ограниченная работа",
     "skills.plugins.mcpStatus.failed": "Ошибка",
     "skills.plugins.mcpStatus.draining": "Освобождение",
+    "skills.plugins.mcpStatus.onDemand": "Запускается для каждого диалога",
     "skills.plugins.mcpStatus.stopped": "Остановлен",
     "skills.plugins.mcpPrompts": "Промпты",
     "skills.plugins.mcpResources": "Ресурсы",

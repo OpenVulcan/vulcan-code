@@ -994,7 +994,12 @@ async fn refresh_plugin_catalog_local_state_with_original(
     let mcp_server_states = guard
         .agent_runtime
         .as_ref()
-        .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
+        .map(|runtime| {
+            runtime
+                .extension_generation
+                .mcp_runtime()
+                .plugin_server_states()
+        })
         .unwrap_or_default();
     // Display statistics come from the actual maps without replacing the catalog retained for Full publication.
     // 展示统计来自实际映射，不替换为 Full 发布保留的目录。
@@ -1086,7 +1091,12 @@ pub(crate) async fn refresh_luaskills_local_state(
     let mcp_server_states = guard
         .agent_runtime
         .as_ref()
-        .map(|runtime| runtime.extension_generation.mcp_runtime().server_states())
+        .map(|runtime| {
+            runtime
+                .extension_generation
+                .mcp_runtime()
+                .plugin_server_states()
+        })
         .unwrap_or_default();
     // Overlay the actual published catalog for display without preparing or publishing another routing generation.
     // 为展示覆盖实际已发布目录，不准备或发布另一条路由代次。

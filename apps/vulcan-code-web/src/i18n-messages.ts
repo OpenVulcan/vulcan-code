@@ -4786,6 +4786,7 @@ export type TranslationKey =
   | "skills.plugins.mcpStatus.degraded"
   | "skills.plugins.mcpStatus.failed"
   | "skills.plugins.mcpStatus.draining"
+  | "skills.plugins.mcpStatus.onDemand"
   | "skills.plugins.mcpStatus.stopped"
   | "skills.plugins.mcpPrompts"
   | "skills.plugins.mcpResources"

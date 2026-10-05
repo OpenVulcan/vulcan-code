@@ -4645,6 +4645,7 @@ export const koKRTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "성능 저하",
     "skills.plugins.mcpStatus.failed": "실패",
     "skills.plugins.mcpStatus.draining": "드레인 중",
+    "skills.plugins.mcpStatus.onDemand": "대화별 시작",
     "skills.plugins.mcpStatus.stopped": "중지됨",
     "skills.plugins.mcpPrompts": "프롬프트",
     "skills.plugins.mcpResources": "리소스",

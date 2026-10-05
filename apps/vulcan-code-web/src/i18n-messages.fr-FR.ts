@@ -4645,6 +4645,7 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "Dégradé",
     "skills.plugins.mcpStatus.failed": "Échec",
     "skills.plugins.mcpStatus.draining": "Vidage",
+    "skills.plugins.mcpStatus.onDemand": "Démarre par conversation",
     "skills.plugins.mcpStatus.stopped": "Arrêté",
     "skills.plugins.mcpPrompts": "Prompts",
     "skills.plugins.mcpResources": "Ressources",

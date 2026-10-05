@@ -4645,6 +4645,7 @@ export const esESTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "Degradado",
     "skills.plugins.mcpStatus.failed": "Fallido",
     "skills.plugins.mcpStatus.draining": "Vaciando",
+    "skills.plugins.mcpStatus.onDemand": "Se inicia por conversación",
     "skills.plugins.mcpStatus.stopped": "Detenido",
     "skills.plugins.mcpPrompts": "Prompts",
     "skills.plugins.mcpResources": "Recursos",

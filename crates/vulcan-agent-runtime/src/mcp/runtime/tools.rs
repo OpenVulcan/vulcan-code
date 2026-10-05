@@ -5,6 +5,8 @@ mod original_inventory_tests;
 #[cfg(test)]
 pub(super) mod owner_drain_tests;
 #[cfg(test)]
+mod plugin_status_tests;
+#[cfg(test)]
 mod user_admission_tests;
 use crate::mcp::config::runtime_mcp_server_configs;
 use crate::mcp::config::{McpServerSource, McpServerTransportConfig};
@@ -923,6 +925,52 @@ impl McpRuntimeAccess {
             .values()
             .flat_map(|lease| lease.runtime.server_states())
             .collect()
+    }
+
+    /// Returns management-only states, including conversation instances before publication and during drain.
+    /// 返回仅用于管理的状态，包含发布前及排空中的会话实例。
+    /// No arguments; returns independent snapshots without granting tools or retaining execution leases.
+    /// 无参数；返回独立快照，不授予工具权限，也不持有执行租约。
+    pub fn plugin_server_states(&self) -> Vec<McpRuntimeServerState> {
+        // Global routing stays separate: owner diagnostics must never expose tools to other sessions.
+        // 全局路由保持独立：所有者诊断绝不能将工具暴露给其他会话。
+        let mut states = self.server_states();
+        // Original admission observes startup and teardown as well as published owner leases.
+        // 原准入记录同时观察启动、拆除及已发布的所有者租约。
+        let admission = self
+            .blocked_owner_plugins
+            .lock()
+            .expect("blocked MCP owner plugin registry poisoned");
+        states.extend(
+            admission
+                .instances
+                .values()
+                .flatten()
+                .filter(|instance| !instance.released.is_released())
+                .flat_map(|instance| {
+                    // Admission closes synchronously; transport snapshots may update on the next task poll.
+                    // 入场同步关闭；传输快照可能要到下一次任务轮询才更新。
+                    let stopping = instance.runtime.shutdown_requested();
+                    instance
+                        .runtime
+                        .server_states()
+                        .into_iter()
+                        .map(move |mut state| {
+                            if stopping
+                                && !matches!(
+                                    state.status,
+                                    McpRuntimeServerStatus::Stopped
+                                        | McpRuntimeServerStatus::Failed
+                                )
+                            {
+                                state.status = McpRuntimeServerStatus::Stopping;
+                            }
+                            state
+                        })
+                })
+                .filter(|state| state.status != McpRuntimeServerStatus::Stopped),
+        );
+        states
     }
 
     /// Captures complete per-server catalogs from current live partitions only.

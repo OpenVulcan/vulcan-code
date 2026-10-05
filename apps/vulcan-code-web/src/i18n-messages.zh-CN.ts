@@ -4645,6 +4645,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "skills.plugins.mcpStatus.degraded": "降级运行",
     "skills.plugins.mcpStatus.failed": "失败",
     "skills.plugins.mcpStatus.draining": "排空中",
+    "skills.plugins.mcpStatus.onDemand": "按会话启动",
     "skills.plugins.mcpStatus.stopped": "已停止",
     "skills.plugins.mcpPrompts": "Prompt",
     "skills.plugins.mcpResources": "资源",
