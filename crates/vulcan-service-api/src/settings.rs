@@ -684,6 +684,10 @@ pub struct ReasoningSelectionSummary {
     /// Effective selected reasoning effort value.
     /// 当前生效的已选思考档位值。
     pub selected_effort: String,
+    /// Effort the execution resolver applies when no explicit choice is stored, used by "restore default".
+    /// 未保存显式选择时执行期解析器采用的档位，供“恢复默认”使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
     /// Optional note explaining model-specific reconciliation.
     /// 可选说明，用于解释模型特定的档位协调结果。
     #[serde(default, skip_serializing_if = "Option::is_none")]

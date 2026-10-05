@@ -5,7 +5,8 @@ import { TooltipProvider } from "../../src/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../src/components/ui/select";
 import { ModelBuiltinCapabilityIcons } from "../../src/components/shared/model-builtin-capabilities";
 import { ProviderToolExtensionModelCard } from "../../src/components/shared/provider-tool-extension-model-card";
-import { ModelPickerControl, ModelAccountPickerControl, modelPickerChoiceKey, modelPickerChoicesFromProviders } from "../../src/components/composer/model-picker-control";
+import { ModelPickerControl, modelPickerChoiceKey, modelPickerChoicesFromProviders } from "../../src/components/composer/model-picker-control";
+import { ModelReasoningPickerControl } from "../../src/components/composer/model-reasoning-picker-control";
 import type { ProviderSummary } from "../../src/types";
 
 /** Mounts model controls with exact synthetic route identities and local callbacks.
@@ -36,6 +37,9 @@ export function AuditModelSurface() {
   // checked 与 account 仅持有扩展卡片选择及其独立账号控件。
   const [checked, setChecked] = React.useState(false);
   const [account, setAccount] = React.useState("a");
+  // reasoning owns only the merged control's local level choice.
+  // reasoning 仅持有合并控件的本地档位选择。
+  const [reasoning, setReasoning] = React.useState("low");
   // choices derives the exact first-model account set from the same declared directory.
   // choices 从相同声明目录派生精确的首个模型账号集合。
   const choices = modelPickerChoicesFromProviders(providers).filter(choice => choice.modelId === "first");
@@ -44,7 +48,9 @@ export function AuditModelSurface() {
     <div className="flex flex-wrap gap-2"><Button onClick={() => setRoute("missing")}>设为失效路由</Button><Button onClick={() => setCatalog(value => !value)}>切换空目录</Button><Button onClick={() => setDisabled(value => !value)}>切换禁用</Button></div>
     <ModelPickerControl ariaLabel="验收模型" fallbackLabel="选择模型" unavailableValueLabel="请重新选择" filterPlaceholder="搜索模型或账号" noMatchesLabel="没有匹配模型" providers={catalog ? providers : []} disabled={disabled} value={route} onValueChange={choice => setRoute(modelPickerChoiceKey(choice))} />
     <ModelPickerControl ariaLabel="仅模型设置" fallbackLabel="选择模型" filterPlaceholder="过滤模型设置" noMatchesLabel="没有匹配模型" providers={providers} selectionScope="model" value={JSON.stringify(["custom:profile-audit", "second"])} onValueChange={choice => setRoute(JSON.stringify([choice.providerId, choice.modelId]))} />
-    <ModelAccountPickerControl ariaLabel="验收独立账号" accounts={catalog ? choices : []} disabled={disabled} value={account} onValueChange={choice => setAccount(choice.connectionId)} />
+    <ModelReasoningPickerControl ariaLabel="验收模型与账号" fallbackLabel="选择模型" filterPlaceholder="搜索模型或账号" noMatchesLabel="没有匹配模型" providers={catalog ? providers : []} disabled={disabled} value={route} onModelChange={choice => setRoute(modelPickerChoiceKey(choice))}
+      accountAriaLabel="验收账号" accounts={catalog ? choices : []} accountValue={account} onAccountChange={choice => setAccount(choice.connectionId)}
+      reasoningOptions={[{ value: "none", label: "none" }, { value: "low", label: "low" }, { value: "high", label: "high" }]} reasoningEffort={reasoning} defaultReasoningEffort="low" onReasoningEffortChange={setReasoning} />
     <div><span>全部内置能力：</span><ModelBuiltinCapabilityIcons inputResources={["image", "video", "audio"]} providerNativeTools={["web_search"]} /><span>空声明：</span><ModelBuiltinCapabilityIcons /></div>
     <ProviderToolExtensionModelCard title={long ? "LongExtensionTitle".repeat(12) : "扩展模型"} summary="模型行为说明" characteristics="精确路线的模型特性" constraints={long ? "LongConstraint".repeat(20) : "模型约束"} limitations="模型限制" checked={checked} checkboxDisabled={disabled} onCheckedChange={setChecked} providerId="custom:profile-audit" modelId={long ? "LongModelIdentity".repeat(12) : "first"} accountControl={<Select value={account} onValueChange={setAccount}><SelectTrigger aria-label="卡片账号"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="a">账号 a</SelectItem><SelectItem value="b">账号 b</SelectItem></SelectContent></Select>} />
     <Button variant="outline">末尾焦点</Button>

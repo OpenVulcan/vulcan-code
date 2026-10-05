@@ -1,31 +1,10 @@
 import * as React from "react";
-import { Check, ChevronDown, Cpu, RefreshCw, UserRound } from "lucide-react";
-import { ProviderIcon } from "@/components/features/settings/provider-icon";
+import { Check, ChevronDown, Cpu } from "lucide-react";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { ModelBuiltinCapabilityIcons } from "@/components/shared/model-builtin-capabilities";
-import {
-  CredentialUsageOverview,
-  usageCapabilitySupportsQuotaWindows,
-} from "@/components/public-ai/credential-usage-overview";
 import { Button } from "@/components/ui/button";
-import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -33,10 +12,6 @@ import {
 } from "@/components/ui/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
-import {
-  loadPublicAiSettings,
-  queryPublicAiConnectionUsage,
-} from "@/service/settings-actions-service";
 import type {
   ProviderSummary,
   PublicAiNativeToolKind,
@@ -158,13 +133,9 @@ export function ModelPickerControl(props: {
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
-  const [filter, setFilter] = React.useState("");
   // observedOpenSignal consumes each explicit command once, including commands arriving while unavailable.
   // observedOpenSignal 每条显式指令只消费一次，包括不可用期间到达的指令。
   const observedOpenSignal = React.useRef(props.openSignal);
-  // selectedRowRef anchors the exact active model row after the dropdown portal finishes layout.
-  // selectedRowRef 在下拉门户完成布局后锚定精确的当前模型行。
-  const selectedRowRef = React.useRef<HTMLElement | null>(null);
   // choices localizes built-in provider labels without changing exact provider or account identities.
   // choices 本地化内置供应商标签，同时不改变精确供应商或账号身份。
   const choices = React.useMemo(() => (
@@ -186,23 +157,6 @@ export function ModelPickerControl(props: {
   // selectedAccountLabel is the exact credential label owned by the selected connection.
   // selectedAccountLabel 是所选连接拥有的精确凭据标签。
   const selectedAccountLabel = selectedChoice?.accountName ?? "-";
-  const filteredChoices = React.useMemo(
-    () => filterModelPickerChoices(choices, filter),
-    [choices, filter],
-  );
-  // filteredGroups collapses credential duplicates only for the composer session picker.
-  // filteredGroups 仅为会话输入区模型选择器折叠凭据重复项。
-  const filteredGroups = React.useMemo(
-    () => groupModelPickerChoices(filteredChoices),
-    [filteredChoices],
-  );
-
-  React.useEffect(() => {
-    if (!open) {
-      setFilter("");
-    }
-  }, [open]);
-
   React.useEffect(() => {
     // changed distinguishes a new slash intent from mounting or restoring the model directory.
     // changed 区分新的斜杠意图与挂载或恢复模型目录。
@@ -214,26 +168,6 @@ export function ModelPickerControl(props: {
     }
     if (changed && props.openSignal !== undefined && props.openSignal > 0) setOpen(true);
   }, [props.openSignal, props.disabled, choices.length]);
-
-  React.useEffect(() => {
-    if (!open) {
-      return;
-    }
-    // Two animation frames place the row only after Radix positions the portal and ScrollArea viewport.
-    // 两帧动画确保 Radix 完成门户与 ScrollArea 视口定位后再滚动当前行。
-    let scrollFrame = 0;
-    const layoutFrame = window.requestAnimationFrame(() => {
-      scrollFrame = window.requestAnimationFrame(() => {
-        selectedRowRef.current?.scrollIntoView({ block: "center" });
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(layoutFrame);
-      if (scrollFrame) {
-        window.cancelAnimationFrame(scrollFrame);
-      }
-    };
-  }, [open]);
 
   return (
     <Popover open={open && !props.disabled && choices.length > 0} onOpenChange={setOpen}>
@@ -265,393 +199,168 @@ export function ModelPickerControl(props: {
         </TooltipContent>
       </Tooltip>
       <PopoverContent align="start" className="model-picker-content" sideOffset={8}>
-        <Command shouldFilter={false}>
-          <CommandInput
-            aria-label={props.filterPlaceholder}
-            autoFocus
-            onValueChange={setFilter}
-            onKeyDown={(event) => {
-              if (event.key === "Tab" || event.key === "Escape") {
-                event.stopPropagation();
-                setOpen(false);
-              }
-            }}
-            placeholder={props.filterPlaceholder}
-            value={filter}
-          />
-        <CommandList className="model-picker-scroll">
-          <div className="model-picker-list">
-            {filteredChoices.length === 0 ? (
-              <div className="model-picker-empty">{props.noMatchesLabel}</div>
-            ) : (
-              filteredGroups.map((group) => {
-                // exactGroupChoice is present only when this grouped model is currently selected.
-                // exactGroupChoice 仅在当前聚合模型已被选中时存在。
-                const exactGroupChoice = selectedChoice
-                  && selectedChoice.providerId === group.providerId
-                  && selectedChoice.modelId === group.modelId
-                  ? selectedChoice
-                  : undefined;
-                // resolvedGroupChoice makes an explicit model-row click adopt the current backend
-                // account preference. Exact account intent belongs to the separate account picker.
-                // resolvedGroupChoice 让显式模型行点击采用当前后端账号偏好；精确账号意图由独立账号选择器承载。
-                const resolvedGroupChoice = resolveModelPickerGroupChoice(
-                  group,
-                  exactGroupChoice,
-                  true,
-                );
-                // selected marks the grouped model independently from its chosen account.
-                // selected 独立于所选账号标记当前聚合模型。
-                const selected = props.selectionScope === "model"
-                  ? modelPickerGroupKey(group) === props.value
-                  : Boolean(exactGroupChoice);
-                return (
-                  <CommandItem
-                    className={cn(
-                      "model-picker-group-row",
-                      "[&>svg]:hidden",
-                      selected && "selected",
-                    )}
-                    key={modelPickerGroupKey(group)}
-                    value={modelPickerGroupKey(group)}
-                    onSelect={() => {
-                      props.onValueChange(resolvedGroupChoice);
-                      setOpen(false);
-                    }}
-                    ref={selected ? (element) => {
-                      selectedRowRef.current = element;
-                    } : undefined}
-                  >
-                    <span
-                      className="model-picker-group-main"
-                    >
-                      <span className="model-picker-selected-slot">
-                        {selected ? <Check size={15} /> : null}
-                      </span>
-                      <span className="model-picker-row-copy">
-                        <span className="model-picker-row-title" title={group.modelName}>{group.modelName}</span>
-                        <span className="model-picker-row-meta" title={group.providerName}>{group.providerName}</span>
-                      </span>
-                    </span>
-                    <span className="model-picker-row-side">
-                      <span className="model-picker-row-id" title={group.modelId}>{group.modelId}</span>
-                      <ModelBuiltinCapabilityIcons
-                        className="model-picker-row-capabilities"
-                        inputResources={resolvedGroupChoice.inputModalities}
-                        providerNativeTools={resolvedGroupChoice.providerNativeTools}
-                      />
-                    </span>
-                  </CommandItem>
-                );
-              })
-            )}
-          </div>
-        </CommandList>
-        </Command>
+        <ModelPickerList
+          choices={choices}
+          filterPlaceholder={props.filterPlaceholder}
+          noMatchesLabel={props.noMatchesLabel}
+          onDismiss={() => setOpen(false)}
+          onSelect={(choice) => {
+            props.onValueChange(choice);
+            setOpen(false);
+          }}
+          selectedChoice={selectedChoice}
+          selectionScope={props.selectionScope}
+          value={props.value}
+        />
       </PopoverContent>
     </Popover>
   );
 }
 
-// ModelAccountPickerControl renders a separate credential selector for the active model.
-// ModelAccountPickerControl 为当前模型渲染独立的凭据选择器。
-// Parameters: ariaLabel describes the control, accounts contains exact credential choices,
-// value identifies the selected connection, and onValueChange persists the chosen account.
-// 参数：ariaLabel 描述控件，accounts 包含精确凭据选项，value 标识当前连接，
-// onValueChange 持久化选中的账号。
-// Returns: a compact account control whenever the active model has an available account.
-// 返回值：当前模型存在可用账号时返回紧凑账号控件。
-export function ModelAccountPickerControl(props: {
-  // Accessible label for the credential selector.
-  // 凭据选择器的无障碍标签。
-  ariaLabel: string;
-  // Exact credential choices available to the active provider model.
-  // 当前 Provider 模型可用的精确凭据选项。
-  accounts: ModelPickerChoice[];
-  // Current exact credential connection identifier.
-  // 当前精确凭据连接标识。
+// ModelPickerList renders the searchable grouped model list shared by the standalone and merged pickers.
+// ModelPickerList 渲染独立选择器与合并选择器共用的可搜索分组模型列表。
+// Parameters: props supplies localized choices, the exact selection and row callbacks; returns a cmdk list
+// that starts with an empty filter on mount and scrolls the selected row into view once laid out.
+// 参数：props 提供本地化选项、精确选择与行回调；返回 cmdk 列表，挂载时过滤为空并在布局后滚动到选中行。
+export function ModelPickerList(props: {
+  // Localized flat choices from the authoritative provider snapshot.
+  // 来自权威 Provider 快照的本地化扁平选项。
+  choices: ModelPickerChoice[];
+  // Exact selected account row, absent for model-scope selections.
+  // 精确选中的账号行；模型作用域选择时缺省。
+  selectedChoice: ModelPickerChoice | undefined;
+  // Model scope compares grouped keys instead of exact account rows.
+  // 模型作用域比较分组键而非精确账号行。
+  selectionScope?: "account" | "model";
+  // Exact selected value, compared directly for model-scope selections.
+  // 精确选中值；模型作用域时直接比较。
   value: string;
-  // Persists one exact credential choice.
-  // 持久化一个精确凭据选项。
-  onValueChange: (choice: ModelPickerChoice) => void;
-  // Whether the host flow temporarily disables account switching.
-  // 宿主流程是否临时禁用账号切换。
-  disabled?: boolean;
+  // Placeholder shown in the filter input.
+  // 过滤输入框中显示的占位文案。
+  filterPlaceholder: string;
+  // Empty-state label when the filter yields no rows.
+  // 过滤后无匹配项时显示的空状态文案。
+  noMatchesLabel: string;
+  // Called with the resolved account choice when a model row is chosen.
+  // 选择模型行时以解析后的账号选项调用。
+  onSelect: (choice: ModelPickerChoice) => void;
+  // Called when Tab or Escape leaves the filter input.
+  // Tab 或 Escape 离开过滤输入框时调用。
+  onDismiss: () => void;
 }) {
-  // t resolves account-card copy in the active locale.
-  // t 使用当前语言解析账号卡片文案。
-  const { t } = useI18n();
-  // selectorOpen prevents the account details card from covering the account menu.
-  // selectorOpen 防止账号详情卡片遮挡账号菜单。
-  const [selectorOpen, setSelectorOpen] = React.useState(false);
-  // detailsOpen controls the hoverable account information card.
-  // detailsOpen 控制可驻留的账号信息悬浮卡片。
-  const [detailsOpen, setDetailsOpen] = React.useState(false);
-  // detailsSnapshot contains the latest process-memory credential and usage snapshot.
-  // detailsSnapshot 包含最新的进程内凭据与用量快照。
-  const [detailsSnapshot, setDetailsSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
-  // detailsLoading reports the memory-snapshot read in progress.
-  // detailsLoading 表示正在读取内存快照。
-  const [detailsLoading, setDetailsLoading] = React.useState(false);
-  // usageRefreshing reports an explicit provider usage refresh in progress.
-  // usageRefreshing 表示正在执行显式供应商用量刷新。
-  const [usageRefreshing, setUsageRefreshing] = React.useState(false);
-  // detailsError retains the latest account-card operation failure.
-  // detailsError 保留最近一次账号卡片操作失败。
-  const [detailsError, setDetailsError] = React.useState<string | null>(null);
-  // detailsOwner scopes read and refresh responses to the exact account and component lifetime.
-  // detailsOwner 将读取与刷新响应限定到精确账号及组件生命周期。
-  const detailsOwner = React.useRef({ value: props.value, active: true, readVersion: 0, refreshing: false });
-  if (detailsOwner.current.value !== props.value) {
-    detailsOwner.current.active = false;
-    detailsOwner.current = { value: props.value, active: true, readVersion: 0, refreshing: false };
-  }
-  React.useEffect(() => {
-    const owner = detailsOwner.current;
-    owner.active = true;
-    setDetailsLoading(false);
-    setUsageRefreshing(false);
-    return () => { owner.active = false; };
-  }, [props.value]);
-  // selectedAccount preserves exact identity; missing accounts require explicit reselection.
-  // selectedAccount 保留精确身份；账号失效时必须显式重新选择。
-  const selectedAccount = props.accounts.find((account) => account.connectionId === props.value);
-  // connection is the authoritative redacted credential metadata for this account.
-  // connection 是该账号的权威脱敏凭据元数据。
-  const connection = detailsSnapshot?.connections.find((candidate) => candidate.id === selectedAccount?.connectionId);
-  // effectiveProtocolId comes only from the backend-resolved provider/connection/model route.
-  // effectiveProtocolId 仅来自后端解析的供应商、连接与模型精确路由。
-  const effectiveProtocolId = modelAccountEffectiveProtocolId(detailsSnapshot, selectedAccount);
-  // provider is the registered adapter that owns the exact credential.
-  // provider 是拥有该精确凭据的已注册适配器。
-  const provider = detailsSnapshot?.providers.find((candidate) => candidate.id === connection?.provider_id);
-  // entry is the exact regional or plan service entry selected by the credential.
-  // entry 是该凭据选择的精确区域或套餐服务入口。
-  const entry = provider?.service_entries.find((candidate) => candidate.id === connection?.service_entry_id);
-  // credentialProfile is the exact acquisition and usage contract selected by the credential.
-  // credentialProfile 是该凭据选择的精确获取与用量契约。
-  const credentialProfile = entry?.credential_profiles.find((candidate) => candidate.id === connection?.credential_profile_id);
-  // usage is the latest cached or explicitly refreshed account observation.
-  // usage 是最新缓存或显式刷新的账号观测。
-  const usage = connection ? detailsSnapshot?.usageCache[connection.id] : undefined;
-  // quotaWindowsSupported follows the backend-declared account usage implementation.
-  // quotaWindowsSupported 遵循后端声明的账号用量实现。
-  const quotaWindowsSupported = connection
-    ? usageCapabilitySupportsQuotaWindows(connection.usage_capability)
-    : false;
-  // usageOverviewVisible keeps quota-capable accounts visible while showing balance-only accounts after observation.
-  // usageOverviewVisible 始终展示额度账号，并在余额账号取得观测后展示余额。
-  const usageOverviewVisible = quotaWindowsSupported || Boolean(usage);
-  // usageSupported follows the backend-declared credential requirement for this usage primitive.
-  // usageSupported 遵循后端为当前用量原语声明的凭据要求。
-  const usageSupported = Boolean(
-    connection
-    && credentialProfile
-    && credentialProfile.account_usage_query !== "unsupported"
-    && (!connection.usage_requires_management_key || connection.has_management_key),
+  const [filter, setFilter] = React.useState("");
+  // selectedRowRef anchors the exact active model row after the dropdown portal finishes layout.
+  // selectedRowRef 在下拉门户完成布局后锚定精确的当前模型行。
+  const selectedRowRef = React.useRef<HTMLElement | null>(null);
+  const filteredChoices = React.useMemo(
+    () => filterModelPickerChoices(props.choices, filter),
+    [props.choices, filter],
+  );
+  // filteredGroups collapses credential duplicates only for the composer session picker.
+  // filteredGroups 仅为会话输入区模型选择器折叠凭据重复项。
+  const filteredGroups = React.useMemo(
+    () => groupModelPickerChoices(filteredChoices),
+    [filteredChoices],
   );
 
-  // loadAccountDetails reads only the latest Core-managed memory snapshot.
-  // loadAccountDetails 仅读取最新的 Core 托管内存快照。
-  const loadAccountDetails = React.useCallback(async () => {
-    const owner = detailsOwner.current;
-    const version = ++owner.readVersion;
-    setDetailsLoading(true);
-    setDetailsError(null);
-    try {
-      // snapshot is the authoritative process-memory account and usage view.
-      // snapshot 是权威的进程内账号与用量视图。
-      const snapshot = await loadPublicAiSettings();
-      if (owner.active && owner.readVersion === version) setDetailsSnapshot(snapshot);
-    } catch (reason) {
-      if (owner.active && owner.readVersion === version) setDetailsError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (owner.active && owner.readVersion === version) setDetailsLoading(false);
-    }
+  React.useEffect(() => {
+    // Two animation frames place the row only after Radix positions the portal and ScrollArea viewport.
+    // 两帧动画确保 Radix 完成门户与 ScrollArea 视口定位后再滚动当前行。
+    let scrollFrame = 0;
+    const layoutFrame = window.requestAnimationFrame(() => {
+      scrollFrame = window.requestAnimationFrame(() => {
+        selectedRowRef.current?.scrollIntoView({ block: "center" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(layoutFrame);
+      if (scrollFrame) {
+        window.cancelAnimationFrame(scrollFrame);
+      }
+    };
   }, []);
 
-  // refreshAccountUsage performs the only provider-facing action available inside the card.
-  // refreshAccountUsage 执行卡片内唯一允许访问供应商的操作。
-  const refreshAccountUsage = React.useCallback(async () => {
-    const owner = detailsOwner.current;
-    if (!connection || !usageSupported || owner.refreshing) {
-      return;
-    }
-    owner.refreshing = true;
-    setUsageRefreshing(true);
-    setDetailsError(null);
-    try {
-      // refreshedUsage is the exact account-scoped provider observation.
-      // refreshedUsage 是精确账号作用域的供应商观测。
-      const refreshedUsage = await queryPublicAiConnectionUsage(connection.id);
-      if (!owner.active) return;
-      setDetailsSnapshot((current) => current ? {
-        ...current,
-        usageCache: {
-          ...current.usageCache,
-          [connection.id]: refreshedUsage,
-        },
-      } : current);
-    } catch (reason) {
-      if (owner.active) setDetailsError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      owner.refreshing = false;
-      if (owner.active) setUsageRefreshing(false);
-    }
-  }, [connection, usageSupported]);
-
-  React.useEffect(() => {
-    setDetailsOpen(false);
-    setDetailsError(null);
-  }, [props.value]);
-
-  if (!selectedAccount) {
-    return props.accounts.length ? (
-      <Select disabled={props.disabled} value="" onValueChange={(connectionId) => {
-        const account = props.accounts.find((choice) => choice.connectionId === connectionId);
-        if (account) props.onValueChange(account);
-      }}>
-        <SelectTrigger aria-label={props.ariaLabel} className="composer-select-trigger model-account" size="sm">
-          <SelectValue placeholder={t("settings.providerTools.selectAccount")} />
-        </SelectTrigger>
-        <SelectContent>{props.accounts.map((account) => (
-          <SelectItem key={account.connectionId} value={account.connectionId}>{account.accountName}</SelectItem>
-        ))}</SelectContent>
-      </Select>
-    ) : null;
-  }
-  // hasAlternativeAccounts controls whether the account control opens a selector.
-  // hasAlternativeAccounts 控制账号控件是否打开选择器。
-  const hasAlternativeAccounts = props.accounts.length > 1;
   return (
-    <HoverCard
-      closeDelay={250}
-      onOpenChange={(open) => {
-        if (open && selectorOpen) {
-          return;
-        }
-        setDetailsOpen(open);
-        if (open) {
-          void loadAccountDetails();
-        }
-      }}
-      open={detailsOpen}
-      openDelay={500}
-    >
-      {hasAlternativeAccounts ? (
-        <Select
-          disabled={props.disabled}
-          onOpenChange={(open) => {
-            setSelectorOpen(open);
-            if (open) {
-              setDetailsOpen(false);
-            }
-          }}
-          onValueChange={(connectionId) => {
-            // account is the exact model account selected by its stable connection id.
-            // account 是通过稳定连接标识选中的精确模型账号。
-            const account = props.accounts.find((choice) => choice.connectionId === connectionId);
-            if (account) {
-              props.onValueChange(account);
-            }
-          }}
-          open={selectorOpen}
-          value={props.value}
-        >
-          <HoverCardTrigger asChild>
-            <SelectTrigger
-              aria-label={props.ariaLabel}
-              className="composer-select-trigger model-account icon-only"
-              size="sm"
-            >
-              <span className="composer-select-icon"><UserRound size={15} /></span>
-              <span className="sr-only"><SelectValue /></span>
-            </SelectTrigger>
-          </HoverCardTrigger>
-          <SelectContent className="model-picker-account-content">
-            {props.accounts.map((account) => (
-              <SelectItem key={account.connectionId} value={account.connectionId}>
-                {account.accountName}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : (
-        <HoverCardTrigger asChild>
-          <Button
-            aria-label={props.ariaLabel}
-            className="composer-select-trigger model-account icon-only"
-            disabled={props.disabled}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            <span className="composer-select-icon"><UserRound size={15} /></span>
-            <span className="sr-only">{selectedAccount.accountName}</span>
-          </Button>
-        </HoverCardTrigger>
-      )}
-      <HoverCardContent align="start" className="w-[22rem] p-0" side="top" sideOffset={8}>
-        <Card className="w-full gap-0 border-0 ring-0 shadow-none" size="sm">
-          <CardHeader>
-            <div className="flex items-start gap-3">
-              <ProviderIcon
-                category={provider?.category}
-                className="size-8 shrink-0"
-                providerId={connection?.provider_id ?? selectedAccount.providerId}
-                serviceEntryId={connection?.service_entry_id}
-              />
-              <div className="min-w-0 flex-1">
-                <CardTitle className="truncate">{selectedAccount.accountName}</CardTitle>
-                <CardDescription className="truncate text-xs">
-                  {provider
-                    ? localizedProviderName(provider.id, provider.display_name, t)
-                    : selectedAccount.providerName}
-                </CardDescription>
-              </div>
-              {usageSupported ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label={t("composer.accountCard.refresh")}
-                      disabled={usageRefreshing || detailsLoading}
-                      onClick={() => void refreshAccountUsage()}
-                      size="icon-sm"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <RefreshCw className={`size-4 ${usageRefreshing ? "animate-spin" : ""}`} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">{t("composer.accountCard.refresh")}</TooltipContent>
-                </Tooltip>
-              ) : null}
-            </div>
-          </CardHeader>
-          <CardContent className="mt-3 flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-3 border-t pt-3 text-xs">
-              <p className="shrink-0 text-muted-foreground">{t("composer.accountCard.protocolType")}</p>
-              <p className="min-w-0 truncate font-medium">
-                {effectiveProtocolId ? modelAccountProtocolDisplayName(effectiveProtocolId) : "—"}
-              </p>
-            </div>
-            {connection && usageOverviewVisible ? (
-              <CredentialUsageOverview
-                connection={connection}
-                credentialProfile={credentialProfile}
-                showQuotaSection={quotaWindowsSupported}
-                usage={usage}
-              />
-            ) : !connection && detailsLoading ? (
-              <StreamPlaceholder className="py-1" label={t("composer.accountCard.loading")} shape="tiles" count={2} />
-            ) : !connection ? (
-              <p className="py-3 text-center text-xs text-muted-foreground">{t("composer.accountCard.metadataUnavailable")}</p>
-            ) : null}
-            {detailsError ? <p className="text-xs text-destructive" role="status">{detailsError}</p> : null}
-          </CardContent>
-        </Card>
-      </HoverCardContent>
-    </HoverCard>
+    <Command shouldFilter={false}>
+      <CommandInput
+        aria-label={props.filterPlaceholder}
+        autoFocus
+        onValueChange={setFilter}
+        onKeyDown={(event) => {
+          if (event.key === "Tab" || event.key === "Escape") {
+            event.stopPropagation();
+            props.onDismiss();
+          }
+        }}
+        placeholder={props.filterPlaceholder}
+        value={filter}
+      />
+      <CommandList className="model-picker-scroll">
+        <div className="model-picker-list">
+          {filteredChoices.length === 0 ? (
+            <div className="model-picker-empty">{props.noMatchesLabel}</div>
+          ) : (
+            filteredGroups.map((group) => {
+              // exactGroupChoice is present only when this grouped model is currently selected.
+              // exactGroupChoice 仅在当前聚合模型已被选中时存在。
+              const exactGroupChoice = props.selectedChoice
+                && props.selectedChoice.providerId === group.providerId
+                && props.selectedChoice.modelId === group.modelId
+                ? props.selectedChoice
+                : undefined;
+              // resolvedGroupChoice makes an explicit model-row click adopt the current backend
+              // account preference. Exact account intent belongs to the separate account picker.
+              // resolvedGroupChoice 让显式模型行点击采用当前后端账号偏好；精确账号意图由独立账号选择器承载。
+              const resolvedGroupChoice = resolveModelPickerGroupChoice(
+                group,
+                exactGroupChoice,
+                true,
+              );
+              // selected marks the grouped model independently from its chosen account.
+              // selected 独立于所选账号标记当前聚合模型。
+              const selected = props.selectionScope === "model"
+                ? modelPickerGroupKey(group) === props.value
+                : Boolean(exactGroupChoice);
+              return (
+                <CommandItem
+                  className={cn(
+                    "model-picker-group-row",
+                    "[&>svg]:hidden",
+                    selected && "selected",
+                  )}
+                  key={modelPickerGroupKey(group)}
+                  value={modelPickerGroupKey(group)}
+                  onSelect={() => props.onSelect(resolvedGroupChoice)}
+                  ref={selected ? (element) => {
+                    selectedRowRef.current = element;
+                  } : undefined}
+                >
+                  <span
+                    className="model-picker-group-main"
+                  >
+                    <span className="model-picker-selected-slot">
+                      {selected ? <Check size={15} /> : null}
+                    </span>
+                    <span className="model-picker-row-copy">
+                      <span className="model-picker-row-title" title={group.modelName}>{group.modelName}</span>
+                      <span className="model-picker-row-meta" title={group.providerName}>{group.providerName}</span>
+                    </span>
+                  </span>
+                  <span className="model-picker-row-side">
+                    <span className="model-picker-row-id" title={group.modelId}>{group.modelId}</span>
+                    <ModelBuiltinCapabilityIcons
+                      className="model-picker-row-capabilities"
+                      inputResources={resolvedGroupChoice.inputModalities}
+                      providerNativeTools={resolvedGroupChoice.providerNativeTools}
+                    />
+                  </span>
+                </CommandItem>
+              );
+            })
+          )}
+        </div>
+      </CommandList>
+    </Command>
   );
 }
 

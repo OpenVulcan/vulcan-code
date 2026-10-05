@@ -36,14 +36,8 @@ function renderToolbar(options: {
           draftInput={options.draftInput}
           isConversationRunning={options.isConversationRunning}
           modelContextLimit={null}
-          onReasoningEffortChange={vi.fn()}
           onSetSessionContextCompactionWindow={vi.fn()}
           onSend={vi.fn()}
-          reasoningAriaLabel="Reasoning"
-          reasoningEffort=""
-          reasoningEffortOptions={[]}
-          reasoningPickerOpenSignal={0}
-          selectFallbackLabel="Select"
           sendAriaLabel="Send"
           sendBlocked={false}
           stopPending={false}

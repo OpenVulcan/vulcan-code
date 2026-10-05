@@ -161,6 +161,7 @@ pub(crate) fn reasoning_selection(
                 label: String::from("关闭"),
             }],
             selected_effort: String::from("fixed-off"),
+            default_effort: Some(String::from("fixed-off")),
             note: None,
         });
     }
@@ -172,6 +173,7 @@ pub(crate) fn reasoning_selection(
                 label: String::from(if enabled { "开启" } else { "关闭" }),
             }],
             selected_effort: String::from(if enabled { "fixed-on" } else { "fixed-off" }),
+            default_effort: Some(String::from(if enabled { "fixed-on" } else { "fixed-off" })),
             note: None,
         });
     }
@@ -188,6 +190,7 @@ pub(crate) fn reasoning_selection(
                 }),
             }],
             selected_effort: reasoning_effort_wire_value(level).to_string(),
+            default_effort: Some(reasoning_effort_wire_value(level).to_string()),
             note: None,
         });
     }
@@ -230,6 +233,15 @@ pub(crate) fn reasoning_selection(
             configured,
         );
     let selected_effort = reasoning_effort_wire_value(effective_effort).to_string();
+    // defaultEffort resolves the same executor with no stored choice, so "restore default" matches dispatch.
+    // defaultEffort 以无已存选择的方式复用同一解析器，确保“恢复默认”与分发一致。
+    let default_effort = reasoning_effort_wire_value(
+        vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            capabilities,
+            None,
+        ),
+    )
+    .to_string();
     let note = configured
         .filter(|effort| reasoning_effort_wire_value(*effort) != selected_effort)
         .map(|effort| {
@@ -242,6 +254,7 @@ pub(crate) fn reasoning_selection(
     Some(ReasoningSelectionSummary {
         options,
         selected_effort,
+        default_effort: Some(default_effort),
         note,
     })
 }
@@ -668,6 +681,7 @@ mod tests {
             vec!["minimal", "high"]
         );
         assert_eq!(selection.selected_effort, "minimal");
+        assert_eq!(selection.default_effort.as_deref(), Some("minimal"));
         assert!(selection.note.is_some());
     }
 
@@ -714,6 +728,7 @@ mod tests {
             .expect("explicit reasoning preference should still expose a selector");
 
         assert_eq!(selection.selected_effort, "none");
+        assert_eq!(selection.default_effort.as_deref(), Some("medium"));
     }
 
     /// Verifies MiniMax exposes only its exact switch values and defaults to enabled adaptive thinking.

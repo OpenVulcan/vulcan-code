@@ -6,7 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
 import type { PublicAiSettingsSnapshot, ProviderSummary } from "@/types";
 import type { ComposerProviderToolSettingsSnapshot } from "./composer-model";
-import { ModelPickerControl, ModelAccountPickerControl, modelPickerChoicesFromProviders } from "./model-picker-control";
+import { ModelPickerControl, modelPickerChoicesFromProviders, type ModelPickerChoice } from "./model-picker-control";
+import { ModelReasoningPickerControl, describeReasoningSelection } from "./model-reasoning-picker-control";
 import { ComposerAiCapabilityControl, ComposerSelectControl, ContextUsageOrb } from "./composer-capability-controls";
 import { PendingPromptQueueStrip } from "./composer-prompt-controls";
 import { useComposerPlanMode } from "./composer-panel/use-composer-plan-mode";
@@ -78,11 +79,99 @@ it("keeps Tab available in the search field and dismisses with Escape", async ()
   expect(document.querySelector('[role="listbox"]')).toBeNull();
 });
 
-it("does not display the first account for a missing exact credential", async () => {
-  await render(<ModelAccountPickerControl ariaLabel="Account" accounts={modelPickerChoicesFromProviders(providers()).slice(0, 1)} value="deleted" onValueChange={vi.fn()} />);
-  expect(host.textContent).toContain("settings.providerTools.selectAccount");
-  expect(host.textContent).not.toContain("Account A");
-  expect(host.querySelector('button')?.disabled).toBe(false);
+// MergedHarness mounts the real merged model/account/reasoning control with explicit local callbacks.
+// MergedHarness 使用显式本地回调挂载真实的模型/账号/思考合并控件。
+function MergedHarness(props: {
+  accounts?: ModelPickerChoice[];
+  accountValue?: string;
+  options?: string[];
+  effort?: string;
+  defaultEffort?: string | null;
+  onAccountChange?: (choice: ModelPickerChoice) => void;
+  onModelChange?: (choice: ModelPickerChoice) => void;
+  onEffortChange?: (value: string) => void;
+  modelSignal?: number;
+}) {
+  return (
+    <ModelReasoningPickerControl
+      accountAriaLabel="Account"
+      accounts={props.accounts ?? modelPickerChoicesFromProviders(providers()).slice(0, 1)}
+      accountValue={props.accountValue ?? "a"}
+      ariaLabel="Model"
+      defaultReasoningEffort={props.defaultEffort ?? null}
+      fallbackLabel="Pick"
+      filterPlaceholder="Find"
+      modelOpenSignal={props.modelSignal}
+      noMatchesLabel="Empty"
+      onAccountChange={props.onAccountChange ?? vi.fn()}
+      onModelChange={props.onModelChange ?? vi.fn()}
+      onReasoningEffortChange={props.onEffortChange ?? vi.fn()}
+      providers={providers()}
+      reasoningEffort={props.effort ?? ""}
+      reasoningOptions={(props.options ?? []).map((value) => ({ value, label: value }))}
+      value={JSON.stringify(["p", "first", "a"])}
+    />
+  );
+}
+
+it("classifies reasoning options into a left-to-right scale or one explained fixed state", () => {
+  const options = (...values: string[]) => values.map((value) => ({ value, label: `raw-${value}` }));
+  expect(describeReasoningSelection(options("none", "low", "high"), "high", translate as never))
+    .toEqual({ kind: "scale", index: 2, label: "composer.reasoning.level.high" });
+  expect(describeReasoningSelection(options("none", "adaptive"), "gone", translate as never))
+    .toEqual({ kind: "scale", index: -1, label: null });
+  expect(describeReasoningSelection(options("fixed-on"), "fixed-on", translate as never)).toMatchObject({ kind: "fixed", tone: "on" });
+  expect(describeReasoningSelection(options("fixed-off"), "fixed-off", translate as never)).toMatchObject({ kind: "fixed", tone: "off" });
+  expect(describeReasoningSelection(options("adaptive"), "adaptive", translate as never)).toMatchObject({ kind: "fixed", tone: "adaptive" });
+  expect(describeReasoningSelection(options("off"), "off", translate as never)).toMatchObject({ kind: "fixed", tone: "default" });
+  expect(describeReasoningSelection(options("future"), "future", translate as never))
+    .toEqual({ kind: "fixed", tone: "level", label: "raw-future" });
+  expect(describeReasoningSelection([], "", translate as never)).toEqual({ kind: "fixed", tone: "unavailable", label: null });
+});
+
+it("opens on the reasoning pane, returns there after a model choice and restores the model default", async () => {
+  const changeModel = vi.fn();
+  const changeEffort = vi.fn();
+  await render(<MergedHarness defaultEffort="low" effort="high" onEffortChange={changeEffort} onModelChange={changeModel} options={["none", "low", "high"]} />);
+  await click("Model");
+  const slider = document.querySelector<HTMLElement>('[role="slider"]')!;
+  expect(document.activeElement).toBe(slider);
+  await press(slider, "ArrowLeft");
+  expect(changeEffort).toHaveBeenLastCalledWith("low");
+  await click("composer.reasoning.restoreDefault");
+  expect(changeEffort).toHaveBeenCalledTimes(2);
+  await click("composer.modelReasoning.switchModel");
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Find"]')!;
+  await press(input, "ArrowDown"); await press(input, "Enter");
+  expect(changeModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: "second" }));
+  expect(document.querySelector('input[aria-label="Find"]')).toBeNull();
+  expect(document.querySelector('[role="slider"]')).not.toBeNull();
+});
+
+it("opens the model list directly from the slash signal and closes it with Escape", async () => {
+  await render(<MergedHarness modelSignal={0} options={["low", "high"]} />);
+  await render(<MergedHarness modelSignal={1} options={["low", "high"]} />);
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Find"]')!;
+  expect(input).not.toBeNull();
+  expect(document.querySelector(".model-reasoning-back")).toBeNull();
+  await press(input, "Escape");
+  expect(document.querySelector(".model-reasoning-content")).toBeNull();
+});
+
+it("asks for an account instead of displaying the first account for a missing exact credential", async () => {
+  const choose = vi.fn();
+  vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
+  await render(<MergedHarness accountValue="deleted" onAccountChange={choose} />);
+  expect(host.querySelector(".composer-model-reasoning-alert")).not.toBeNull();
+  await click("Model");
+  const row = document.querySelector<HTMLButtonElement>('[aria-label="Account"]')!;
+  expect(row.textContent).not.toContain("Account A");
+  expect(row.textContent).toContain("composer.modelPicker.selectAccount");
+  await click("Account");
+  const option = document.querySelector<HTMLButtonElement>(".model-reasoning-account-option")!;
+  expect(option.textContent).toContain("Account A");
+  await act(async () => option.click());
+  expect(choose).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "a" }));
 });
 
 // Missing credential-profile metadata cannot authorize a provider-facing usage query.
@@ -96,10 +185,11 @@ it("does not offer usage refresh without the declared credential profile", async
     has_management_key: false, credential_mode: "token", credential_id: "synthetic", display_name: "Account A",
     enabled: true, prompt_cache_by_protocol: {}, pending_validation: false }];
   vi.mocked(loadPublicAiSettings).mockResolvedValue(snapshot);
-  await render(<ModelAccountPickerControl ariaLabel="Account" accounts={modelPickerChoicesFromProviders(providers()).slice(0, 1)} value="a" onValueChange={vi.fn()} />);
-  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.focus(); });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
+  await render(<MergedHarness />);
+  await click("Model");
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
+  await click("Account");
+  expect(document.querySelector(".model-account-card")?.textContent).toContain("Account A");
   expect(document.querySelector('[aria-label="composer.accountCard.refresh"]')).toBeNull();
 });
 
@@ -109,18 +199,20 @@ it("ignores an account detail failure after switching to another account", async
   // rejectRead owns the delayed response from account a; account b must not inherit its error.
   // rejectRead 持有账号 a 的延迟响应；账号 b 不得继承该错误。
   let rejectRead!: (reason: Error) => void;
-  vi.mocked(loadPublicAiSettings).mockReturnValue(new Promise((_, reject) => { rejectRead = reject; }));
+  vi.mocked(loadPublicAiSettings).mockReturnValueOnce(new Promise((_, reject) => { rejectRead = reject; }))
+    .mockReturnValue(new Promise(() => {}));
   // accounts contains two eligible identities for the same explicit model.
   // accounts 包含同一明确模型的两个可用身份。
   const accounts = modelPickerChoicesFromProviders(providers()).slice(0, 1);
   accounts.push({ ...accounts[0]!, connectionId: "b", accountName: "Account B" });
-  await render(<ModelAccountPickerControl ariaLabel="Account" accounts={accounts} value="a" onValueChange={vi.fn()} />);
-  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.focus(); });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
+  await render(<MergedHarness accounts={accounts} />);
+  await click("Model");
+  await click("Account");
   expect(loadPublicAiSettings).toHaveBeenCalledOnce();
-  await render(<ModelAccountPickerControl ariaLabel="Account" accounts={accounts} value="b" onValueChange={vi.fn()} />);
+  await render(<MergedHarness accounts={accounts} accountValue="b" />);
   await act(async () => rejectRead(new Error("old account failure")));
-  expect(host.textContent).toContain("Account B");
+  expect(document.querySelector(".model-account-card")?.textContent).toContain("Account B");
+  expect(document.querySelector('.model-reasoning-account-option[aria-pressed="true"]')?.textContent).toContain("Account B");
   expect(document.body.textContent).not.toContain("old account failure");
 });
 
@@ -141,16 +233,16 @@ it("refreshes declared account usage once and recovers from an explicit failure"
       authentication: "bearer_authorization", model_discovery: "manual", protocol_routes: [],
     }] }];
   vi.mocked(loadPublicAiSettings).mockResolvedValue(snapshot);
-  await render(<ModelAccountPickerControl ariaLabel="Account" accounts={modelPickerChoicesFromProviders(providers()).slice(0, 1)} value="a" onValueChange={vi.fn()} />);
-  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.focus(); });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 550)); });
+  await render(<MergedHarness />);
+  await click("Model");
+  await click("Account");
   expect(queryPublicAiConnectionUsage).not.toHaveBeenCalled();
   // rejectRefresh retains the sole in-flight provider request until the explicit failure arrives.
   // rejectRefresh 保留唯一在途供应商请求，直到显式失败到达。
   let rejectRefresh!: (reason: Error) => void;
   vi.mocked(queryPublicAiConnectionUsage).mockReturnValue(new Promise((_, reject) => { rejectRefresh = reject; }));
-  // refresh is the actual enabled action in the mounted hover card.
-  // refresh 是已挂载悬浮卡片中的实际启用操作。
+  // refresh is the actual enabled action in the mounted account pane.
+  // refresh 是已挂载账号面板中的实际启用操作。
   const refresh = document.querySelector<HTMLButtonElement>('[aria-label="composer.accountCard.refresh"]')!;
   await act(async () => { refresh.click(); refresh.click(); });
   expect(queryPublicAiConnectionUsage).toHaveBeenCalledExactlyOnceWith("a");
@@ -160,6 +252,11 @@ it("refreshes declared account usage once and recovers from an explicit failure"
   await act(async () => refresh.click());
   expect(document.body.textContent).not.toContain("explicit usage failure");
   expect(document.body.textContent).toContain("17.25");
+  // Escape steps back to the reasoning pane, whose account row now summarizes the observed balance.
+  // Escape 返回思考面板，其账号行此时概括已观测余额。
+  await press(document.activeElement ?? document.body, "Escape");
+  expect(document.querySelector(".model-account-card")).toBeNull();
+  expect(document.querySelector('[aria-label="Account"]')?.textContent).toContain("17.25");
 });
 
 // Model menus must discard an open state when their owner disables interaction.
@@ -263,9 +360,7 @@ function CapacityToolbar({ owner, change }: { owner: string; change: React.Compo
     contextUsage={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null, maxTokens: 950_000,
       percent: 8, severity: "normal", tooltipRows: [], tooltipTitle: "Context", usageBasisPoints: 800, usedTokens: 76_000 }}
     contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} sessionContextCompactionWindowNodeId={null} modelContextLimit={950_000}
-    onSetSessionContextCompactionWindow={change} onSend={vi.fn()} onReasoningEffortChange={vi.fn()}
-    reasoningAriaLabel="Reasoning" reasoningEffort="low" reasoningEffortOptions={[{ value: "low", label: "Low" }, { value: "high", label: "High" }]}
-    reasoningPickerOpenSignal={1} selectFallbackLabel="Choose" sendAriaLabel="Send" stopAriaLabel="Stop" />;
+    onSetSessionContextCompactionWindow={change} onSend={vi.fn()} sendAriaLabel="Send" stopAriaLabel="Stop" />;
 }
 
 it("isolates pending capacity writes and open popovers by the actual toolbar draft owner", async () => {

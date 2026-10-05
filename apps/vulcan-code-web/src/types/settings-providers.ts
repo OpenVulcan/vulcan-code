@@ -348,6 +348,9 @@ export interface ReasoningSelectionSummary {
   // Effective selected reasoning effort value.
   // 当前生效的已选思考档位值。
   selectedEffort: string;
+  // Effort the execution resolver applies when no explicit choice is stored; absent from older services.
+  // 未保存显式选择时执行期解析器采用的档位；旧版服务可能缺省。
+  defaultEffort?: string | null;
   // Optional backend reconciliation note.
   // 可选后端档位协调说明。
   note?: string | null;

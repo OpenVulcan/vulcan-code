@@ -6,6 +6,8 @@ import { ComposerKnowledgeControl } from "../../src/components/composer/composer
 import { ModelSecondaryRouteControl } from "../../src/components/composer/composer-panel/model-secondary-route-control";
 import { ComposerAiCapabilityControl } from "../../src/components/composer/composer-capability-controls";
 import { ComposerPanelToolbarRight } from "../../src/components/composer/composer-panel/toolbar-right";
+import { ModelReasoningPickerControl } from "../../src/components/composer/model-reasoning-picker-control";
+import { modelPickerChoiceKey, modelPickerChoicesFromProviders } from "../../src/components/composer/model-picker-control";
 import { ComposerPanelAttachmentPreviewStrip } from "../../src/components/composer/composer-panel/attachment-preview-strip";
 import { ComposerAttachmentMenu } from "../../src/components/composer/composer-attachment-controls";
 import type { ThinkingDisplayMode } from "../../src/components/conversation/thinking-display";
@@ -98,6 +100,11 @@ export function AuditComposerSurface() {
       { connection_id: "removed-account-2", target_id: "LongUnavailableModel名称".repeat(12) },
     ] },
   });
+  // auditModelKey and auditAccounts select the first fixture model and its accounts for the merged model control.
+  // auditModelKey 与 auditAccounts 为合并模型控件选取首个夹具模型及其账号。
+  const auditChoices = modelPickerChoicesFromProviders(workbench.providers);
+  const auditModelKey = modelPickerChoiceKey(auditChoices[0]);
+  const auditAccounts = auditChoices.filter((choice) => choice.modelId === auditChoices[0]?.modelId);
   return <I18nProvider initialLocale={query.get("locale") === "en-US" ? "en-US" : "zh-CN"}>
     <main style={{ padding: 16, maxWidth: 800 }}>
       <p>输入区合成验收 · 无模型调用、无宿主配置写入</p>
@@ -117,9 +124,12 @@ export function AuditComposerSurface() {
         sessionProviderUsage={{ providerCallCount: 4, inFlightCallCount: 0, unknownUsageCallCount: 2, cumulativeUsage: null, lastUsage: { totalTokens: 900 }, usageRevision: 1 }}
         contextCompactionWindowNodes={publicAi.contextCompactionWindowNodes.nodes} sessionContextCompactionWindowNodeId={capacityNode} modelContextLimit={320_000}
         onSetSessionContextCompactionWindow={async (node) => { if (rejectWrite) throw new Error("Synthetic capacity write failure · " + "long details ".repeat(70)); setCapacityNode(node); return true; }}
-        reasoningAriaLabel="推理验收" reasoningEffort={reasoning} reasoningEffortOptions={reasoningAvailable ? [{ value: "low", label: "低 · Low" }, { value: "high", label: "高 · High" }] : [{ value: reasoning, label: "固定档位" }]}
-        reasoningPickerOpenSignal={reasoningSignal} onReasoningEffortChange={setReasoning} onSend={() => setStopState("stopping")}
-        selectFallbackLabel="选择" sendAriaLabel="发送（夹具禁用）" stopAriaLabel="停止（仅视觉验收）" /></TooltipProvider>
+        modelControls={<ModelReasoningPickerControl ariaLabel="模型与推理验收" fallbackLabel="选择" filterPlaceholder="搜索模型" noMatchesLabel="没有匹配模型"
+          providers={workbench.providers} value={auditModelKey} onModelChange={() => undefined}
+          accountAriaLabel="账号验收" accounts={auditAccounts} accountValue={auditAccounts[0]?.connectionId ?? ""} onAccountChange={() => undefined}
+          reasoningEffort={reasoning} defaultReasoningEffort="low" reasoningOptions={reasoningAvailable ? [{ value: "low", label: "低 · Low" }, { value: "high", label: "高 · High" }] : [{ value: reasoning, label: "固定档位" }]}
+          reasoningOpenSignal={reasoningSignal} onReasoningEffortChange={setReasoning} />}
+        onSend={() => setStopState("stopping")} sendAriaLabel="发送（夹具禁用）" stopAriaLabel="停止（仅视觉验收）" /></TooltipProvider>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBlock: 16 }}>
         <TooltipProvider><ComposerAttachmentMenu
           capabilities={["image", "video", "audio", "pdf", "file"].map((kind) => ({ kind, label: kind, enabled: true, native: true, bridged: false, accept: "" }))}

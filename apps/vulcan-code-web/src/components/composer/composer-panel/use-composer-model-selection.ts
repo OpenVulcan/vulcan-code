@@ -69,6 +69,9 @@ export interface ComposerModelSelectionController {
   // Reasoning options resolved from backend capabilities or local preview fallback.
   // 从后端能力或本地预览回退解析出的推理选项。
   reasoningEffortOptions: ComposerSelectOption[];
+  // Level the backend applies with no stored choice, used by "restore default"; null when unreported.
+  // 未保存选择时后端采用的档位，供“恢复默认”使用；未上报时为 null。
+  defaultReasoningEffort: string | null;
   // Backend-confirmed effort safe to include in prompt submissions.
   // 可安全包含在提示词提交中的后端确认档位。
   submittedReasoningEffort: string | null;
@@ -245,6 +248,9 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     () => JSON.stringify(reasoningEffortOptions.map((option) => option.value)),
     [reasoningEffortOptions],
   );
+  // defaultReasoningEffort is the backend execution default for the effective selector.
+  // defaultReasoningEffort 是当前生效选择器的后端执行默认档位。
+  const defaultReasoningEffort = effectiveReasoningSelection?.defaultEffort ?? null;
   // serviceSelectedReasoningEffort is the authoritative selected effort from the backend snapshot.
   // serviceSelectedReasoningEffort 是后端快照中的权威选中档位。
   const serviceSelectedReasoningEffort = effectiveReasoningSelection?.selectedEffort;
@@ -421,6 +427,7 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     modelPickerOpenSignal,
     reasoningEffort,
     reasoningEffortOptions,
+    defaultReasoningEffort,
     submittedReasoningEffort,
     reasoningPickerOpenSignal,
     selectModel,

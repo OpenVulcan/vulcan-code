@@ -4,11 +4,8 @@ import {
   enqueueComposerPersistence,
   flushLatestComposerPersistence,
 } from "@/components/composer/composer-persistence-queue";
-import {
-  ModelAccountPickerControl,
-  ModelPickerControl,
-  type ModelPickerChoice,
-} from "@/components/composer/model-picker-control";
+import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
+import { ModelReasoningPickerControl } from "@/components/composer/model-reasoning-picker-control";
 import {
   hasBlockingComposerPopup,
   isComposerPrintableKey,
@@ -386,6 +383,7 @@ export function ComposerPanel(props: {
     modelPickerOpenSignal,
     reasoningEffort,
     reasoningEffortOptions,
+    defaultReasoningEffort,
     submittedReasoningEffort,
     reasoningPickerOpenSignal,
     selectModel: handleModelChoiceChange,
@@ -959,22 +957,6 @@ export function ComposerPanel(props: {
                 onClose={() => void handlePlanModeChange(false)}
               />
             ) : null}
-            <ModelPickerControl
-              ariaLabel={t("composer.aria.model")}
-              fallbackLabel={t("composer.modelPicker.placeholder")}
-              filterPlaceholder={t("composer.modelPicker.filter")}
-              noMatchesLabel={t("composer.modelPicker.noMatches")}
-              onValueChange={(choice) => void handlePersistedModelChoiceChange(choice)}
-              openSignal={modelPickerOpenSignal}
-              providers={props.providers}
-              value={modelChoice}
-            />
-            <ModelAccountPickerControl
-              accounts={activeModelAccounts}
-              ariaLabel={t("composer.aria.account")}
-              onValueChange={(choice) => void handlePersistedModelChoiceChange(choice)}
-              value={activeModelChoice?.connectionId ?? ""}
-            />
             <ComposerAiCapabilityControl
               ariaLabel={t("composer.aria.capability")}
               conversationId={props.conversationId}
@@ -1004,14 +986,32 @@ export function ComposerPanel(props: {
             isConversationRunning={props.isConversationRunning}
             sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
             stopPending={isStopping}
-            onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
             onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}
-            reasoningAriaLabel={t("composer.aria.reasoning")}
-            reasoningEffort={reasoningEffort}
-            reasoningEffortOptions={reasoningEffortOptions}
-            reasoningPickerOpenSignal={reasoningPickerOpenSignal}
-            selectFallbackLabel={t("composer.selectFallback")}
+            modelControls={(
+              <>
+                <ModelReasoningPickerControl
+                  key={`model-reasoning:${draftSlotKey}`}
+                  accountAriaLabel={t("composer.aria.account")}
+                  accounts={activeModelAccounts}
+                  accountValue={activeModelChoice?.connectionId ?? ""}
+                  ariaLabel={t("composer.aria.modelReasoning")}
+                  onAccountChange={(choice) => void handlePersistedModelChoiceChange(choice)}
+                  defaultReasoningEffort={defaultReasoningEffort}
+                  fallbackLabel={t("composer.modelPicker.placeholder")}
+                  filterPlaceholder={t("composer.modelPicker.filter")}
+                  modelOpenSignal={modelPickerOpenSignal}
+                  noMatchesLabel={t("composer.modelPicker.noMatches")}
+                  onModelChange={(choice) => void handlePersistedModelChoiceChange(choice)}
+                  onReasoningEffortChange={(value) => void handleReasoningEffortChange(value)}
+                  providers={props.providers}
+                  reasoningEffort={reasoningEffort}
+                  reasoningOpenSignal={reasoningPickerOpenSignal}
+                  reasoningOptions={reasoningEffortOptions}
+                  value={modelChoice}
+                />
+              </>
+            )}
             sendAriaLabel={t("composer.aria.send")}
             stopAriaLabel={t("composer.aria.stop")}
           />
