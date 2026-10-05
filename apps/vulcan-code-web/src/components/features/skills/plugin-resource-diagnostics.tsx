@@ -1,10 +1,13 @@
 import * as React from "react";
+import { Activity, ArrowLeft, Cog, MessageSquare, RefreshCw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { useI18n } from "@/i18n";
+import { InlineDisclosure } from "@/components/ui/disclosure";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
-import type { PluginDiagnosticsSelection, PluginResourceDiagnostic } from "@/types/plugin-resource-diagnostics";
+import type { PluginDiagnosticsSelection, PluginOperationPhase, PluginResourceDiagnostic, PluginResourceKind } from "@/types/plugin-resource-diagnostics";
 import { readPluginResourceDiagnostics, type PluginDiagnosticsObservation } from "@/service/plugin-resource-diagnostics-service";
+import { MaintenanceNotice, TechnicalDetails } from "./plugin-maintenance-section";
 
 // PluginResourceDiagnosticsProps binds read-only selection to the existing workspace conversation action.
 // PluginResourceDiagnosticsProps 将只读选择绑定至既有工作台会话动作。
@@ -15,23 +18,56 @@ interface PluginResourceDiagnosticsProps {
   // onSelect changes only diagnostic selection and never resumes or cancels service work.
   // onSelect 仅改变诊断选择，绝不恢复或取消服务工作。
   onSelect: (selection: PluginDiagnosticsSelection) => void;
-  // conversations contains the authoritative workspace conversation identities.
-  // conversations 包含权威工作台会话身份。
+  // conversations contains the authoritative workspace conversation identities and titles.
+  // conversations 包含权威工作台会话身份与标题。
   conversations: WorkbenchSnapshot["conversations"];
   // onSelectPluginResourceOwner confirms the exact service-selected owner before switching to chat.
   // onSelectPluginResourceOwner 切换聊天前确认服务选中的精确所有者。
   onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean>;
+  // pluginName resolves a display name; plugins absent from the catalog fall back to their ID.
+  // pluginName 解析显示名称；不在目录中的插件回退为其 ID。
+  pluginName?: (pluginId: string) => string;
 }
 
-// PluginResourceDiagnostics renders retained metadata for props.selection and returns readonly navigation controls.
-// PluginResourceDiagnostics 为 props.selection 渲染保留元数据，返回只读导航控件。
+// kindLabels names each resource registry as the user meets it in practice.
+// kindLabels 以用户实际接触的方式命名各资源注册表。
+const kindLabels: Record<PluginResourceKind, TranslationKey> = {
+  pinned_session: "pluginDiagnostics.kind.pinnedSession", formal_call: "pluginDiagnostics.kind.formalCall",
+  reusable_domain: "pluginDiagnostics.kind.reusableDomain", hook_runtime: "pluginDiagnostics.kind.hookRuntime",
+  ui_action_runtime: "pluginDiagnostics.kind.uiActionRuntime",
+};
+
+// activePhases are operation phases that still occupy the resource; their labels describe the current activity.
+// activePhases 是仍占用资源的操作阶段；其标签描述当前活动。
+const activePhases: Partial<Record<PluginOperationPhase, TranslationKey>> = {
+  queued: "pluginDiagnostics.state.queued", initializing: "pluginDiagnostics.state.initializing",
+  running: "pluginDiagnostics.state.running", waiting_for_host: "pluginDiagnostics.state.waitingForHost",
+  cleaning: "pluginDiagnostics.state.cleaning",
+};
+
+// describeState summarizes one resource in a single plain sentence, choosing the most relevant fact.
+// describeState 以一句平实描述概括单个资源，选取最相关的事实。
+function describeState(row: PluginResourceDiagnostic, t: (key: TranslationKey) => string): string {
+  const active = row.operations.find((operation) => activePhases[operation.phase] !== undefined);
+  if (active !== undefined) return t(activePhases[active.phase] as TranslationKey);
+  if (row.retired) return t("pluginDiagnostics.state.retired");
+  if (row.closing) return t("pluginDiagnostics.state.closing");
+  if (row.preparing) return t("pluginDiagnostics.state.preparing");
+  if (row.queuedCalls !== null && row.queuedCalls > 0) return formatMessage(t("pluginDiagnostics.state.waitingCalls"), { count: row.queuedCalls });
+  return t("pluginDiagnostics.state.idle");
+}
+
+// hasErrors reports whether this resource or any of its operations recorded a failure.
+// hasErrors 报告此资源或其任一操作是否记录了失败。
+function hasErrors(row: PluginResourceDiagnostic): boolean {
+  return row.errors.length > 0 || row.operations.some((operation) => operation.errors.length > 0);
+}
+
+// PluginResourceDiagnostics shows what is currently using a plugin, or what an update or uninstall is waiting for.
+// PluginResourceDiagnostics 显示当前正在使用插件的内容，或更新、卸载正在等待的内容。
+// It reads automatically for the selection and never changes any runtime resource.
+// 它按选择自动读取，绝不改变任何运行时资源。
 export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps) {
-  // expanded follows explicit card/request navigation while preserving the selected original across collapse.
-  // expanded 跟随明确卡片或请求导航，跨折叠保留选中原实例。
-  const [expanded, setExpanded] = React.useState(false);
-  // pluginDraft allows explicit reads for retained owners no longer present in the installed catalog.
-  // pluginDraft 允许明确读取已不在安装目录中的保留所有者。
-  const [pluginDraft, setPluginDraft] = React.useState("");
   // observation binds each report and failure to the exact selected object rather than merely a display name.
   // observation 将每份报告及失败绑定至精确选中对象，而非仅显示名称。
   const [observation, setObservation] = React.useState<{ selection: PluginDiagnosticsSelection; report: PluginDiagnosticsObservation | null; error: string; fresh: boolean } | null>(null);
@@ -41,30 +77,23 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
   // version rejects stale refreshes, cancelled observations and previous selection replies.
   // version 拒绝过期刷新、取消观测及先前选择响应。
   const version = React.useRef(0);
-  // alive suppresses asynchronous state writes after unmount.
-  // alive 抑制卸载后的异步状态写入。
   const alive = React.useRef(true);
-  // section provides a stable scroll and focus target for card/request navigation.
-  // section 为卡片或请求导航提供稳定滚动及聚焦目标。
+  // section is the focus target when a request row explicitly locates its blockers after mount.
+  // section 是挂载后请求行明确定位其阻塞项时的聚焦目标。
   const section = React.useRef<HTMLElement>(null);
-  // contentId connects the accessible expansion control with its content.
-  // contentId 连接无障碍展开控件及其内容。
-  const contentId = React.useId();
-  // t uses the existing locale catalog for every user-facing status.
-  // t 为每个面向用户状态使用既有语言目录。
+  // mounted suppresses focus stealing for the selection present at first render.
+  // mounted 抑制首次渲染时已有选择的焦点抢夺。
+  const mounted = React.useRef(false);
   const { t } = useI18n();
+  const nameOf = props.pluginName ?? ((pluginId: string) => pluginId);
 
-  // load reads one frozen selection; return completion without mutating any runtime resources.
+  // load reads one frozen selection; returns completion without mutating any runtime resources.
   // load 读取单个固定选择；返回完成，不变更任何运行时资源。
   const load = React.useCallback(async (selection: PluginDiagnosticsSelection): Promise<void> => {
-    // token owns this read independently from later selection or refresh changes.
-    // token 独立于后续选择或刷新变更拥有此读取。
     const token = ++version.current;
     setBusy(true);
     setObservation((current) => current !== null && current.selection === selection ? { ...current, fresh: false } : null);
     try {
-      // report contains safe original identity metadata only.
-      // report 仅包含安全原身份元数据。
       const report = await readPluginResourceDiagnostics(selection);
       if (alive.current && version.current === token) setObservation({ selection, report, error: "", fresh: true });
     } catch (reason) {
@@ -80,9 +109,11 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
   React.useEffect(() => {
     version.current += 1; setBusy(false);
     if (props.selection === null) return;
-    setExpanded(true); setPluginDraft(props.selection.pluginId);
-    section.current?.focus();
-    section.current?.scrollIntoView({ block: "nearest" });
+    if (mounted.current) {
+      section.current?.focus({ preventScroll: true });
+      section.current?.scrollIntoView({ block: "nearest" });
+    }
+    mounted.current = true;
     void load(props.selection);
     return () => { version.current += 1; };
   }, [props.selection, load]);
@@ -93,95 +124,100 @@ export function PluginResourceDiagnostics(props: PluginResourceDiagnosticsProps)
   // resources remains absent when the original live drain cannot be observed, never an invented empty list.
   // resources 在原实时排空无法观测时保持缺失，绝不虚构空列表。
   const resources = current?.report?.resources;
-  return <section ref={section} tabIndex={-1} className="space-y-3 rounded-md border p-3" aria-label={t("pluginDiagnostics.title")}>
-    <Button type="button" variant="ghost" size="sm" aria-expanded={expanded} aria-controls={contentId}
-      onClick={() => setExpanded(!expanded)}>{t("pluginDiagnostics.title")}</Button>
-    <div id={contentId} hidden={!expanded} className="space-y-3 text-sm">
-      <div className="flex flex-wrap gap-2">
-        <Input aria-label={t("pluginUpdates.plugin")} value={pluginDraft} onChange={(event) => setPluginDraft(event.target.value)} />
-        <Button type="button" size="sm" variant="outline" disabled={!pluginDraft.trim()}
-          onClick={() => props.onSelect({ kind: "plugin", pluginId: pluginDraft.trim() })}>{t("pluginUpdates.read")}</Button>
-        {props.selection !== null && <Button type="button" size="sm" variant="outline" disabled={busy}
-          onClick={() => { if (props.selection !== null) void load(props.selection); }}>{t("pluginRuntime.refresh")}</Button>}
-        {busy && <Button type="button" size="sm" variant="outline" onClick={() => { version.current += 1; setBusy(false); }}>{t("skills.plugins.cancel")}</Button>}
+  const selection = props.selection;
+  if (selection === null) return null;
+  const name = nameOf(selection.pluginId);
+  // rows lists blockers first; finished records are folded away because they need no attention.
+  // rows 先列出阻塞项；已结束记录被收起，因为它们无需关注。
+  const live = resources?.resources.filter((row) => row.isDrainBlocking || !row.retired) ?? [];
+  const history = resources?.resources.filter((row) => !row.isDrainBlocking && row.retired) ?? [];
+  live.sort((left, right) => Number(right.isDrainBlocking) - Number(left.isDrainBlocking));
+  const owners = new Set(live.flatMap((row) => row.ownerSessionId === null ? [] : [row.ownerSessionId]));
+  const blocking = live.filter((row) => row.isDrainBlocking).length;
+  return <section aria-label={t("pluginDiagnostics.title")} className="plugin-usage" ref={section} tabIndex={-1}>
+    <div className="plugin-usage-toolbar">
+      <p className="plugin-usage-subject">{selection.kind === "plugin"
+        ? formatMessage(t("pluginDiagnostics.subject.plugin"), { name })
+        : formatMessage(t(selection.kind === "update" ? "pluginDiagnostics.subject.update" : "pluginDiagnostics.subject.uninstall"), { name })}</p>
+      <div className="plugin-usage-actions">
+        {selection.kind !== "plugin" && <Button onClick={() => props.onSelect({ kind: "plugin", pluginId: selection.pluginId })} size="sm" type="button" variant="ghost">
+          <ArrowLeft data-icon="inline-start" />{t("pluginDiagnostics.showPlugin")}</Button>}
+        {busy
+          ? <Button onClick={() => { version.current += 1; setBusy(false); }} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
+          : <Button onClick={() => void load(selection)} size="sm" type="button" variant="outline"><RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
       </div>
-      {props.selection !== null && <p className="break-all">{props.selection.pluginId} / {props.selection.kind}
-        {props.selection.kind !== "plugin" && <> / {t("pluginUpdates.request")}: <code>{props.selection.requestId}</code></>}</p>}
-      {busy && <p role="status">{t("ui.loading")}</p>}
-      {current?.error && <p role="alert" className="whitespace-pre-wrap break-all">{current.error}</p>}
-      {current !== null && !current.fresh && current.report !== null && <p role="status">{t("pluginUpdates.stale")}</p>}
-      {current?.report?.update && <p className="break-all">serviceEpoch: {current.report.update.serviceEpoch} / predecessorGeneration: {current.report.update.predecessorGeneration} / drainingGeneration: {current.report.update.drainingGeneration}</p>}
-      {current?.report?.uninstall && <p className="break-all">serviceEpoch: {current.report.uninstall.serviceEpoch} / pluginGeneration: {current.report.uninstall.pluginGeneration}</p>}
-      {current?.report !== null && current?.report !== undefined && resources === null && <p role="status">{t("pluginDiagnostics.unavailable")}</p>}
-      {resources && <>
-        <p className="break-all">runtimeId: {resources.runtimeId} / serviceEpoch: {resources.serviceEpoch} / pluginGeneration: {resources.pluginGeneration === null ? "—" : resources.pluginGeneration}</p>
-        <p>{t("pluginDiagnostics.nonAtomic")}</p>
-        <p>{t("pluginDiagnostics.pinned")}: <strong>{resources.pinnedSessionCount}</strong></p>
-        {resources.resources.length === 0 && <p role="status">{t("pluginDiagnostics.empty")}</p>}
-        {resources.resources.map((resource) => <PluginResourceRow key={`${resource.resourceKind}:${resource.resourceId}:${resource.pluginGeneration}`} resource={resource}
-          conversations={props.conversations} navigationEnabled={expanded} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} />)}
-      </>}
     </div>
+    {busy && current === null && <p className="plugin-usage-loading" role="status">{t("ui.loading")}</p>}
+    {current?.error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{current.error}</span></MaintenanceNotice>}
+    {current !== null && !current.fresh && current.report !== null && !busy && <MaintenanceNotice tone="info">{t("pluginUpdates.stale")}</MaintenanceNotice>}
+    {current?.report !== null && current?.report !== undefined && resources === null && <MaintenanceNotice tone="warning">{t("pluginDiagnostics.unavailable")}</MaintenanceNotice>}
+    {resources && <>
+      <dl className="plugin-maintenance-stats">
+        <div><dt>{t("pluginDiagnostics.stat.conversations")}</dt><dd>{owners.size}</dd></div>
+        <div data-tone={blocking > 0 ? "warning" : undefined}><dt>{t("pluginDiagnostics.stat.blocking")}</dt><dd>{blocking}</dd></div>
+        <div><dt>{t("pluginDiagnostics.pinned")}</dt><dd>{resources.pinnedSessionCount}</dd></div>
+      </dl>
+      {live.length === 0 && <p className="plugin-usage-empty" role="status">{t("pluginDiagnostics.empty")}</p>}
+      {live.length > 0 && <div className="plugin-usage-list">
+        {live.map((resource) => <PluginResourceRow conversations={props.conversations} key={`${resource.resourceKind}:${resource.resourceId}:${resource.pluginGeneration}`}
+          onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} resource={resource} />)}
+      </div>}
+      {history.length > 0 && <InlineDisclosure keepMounted label={formatMessage(t("pluginDiagnostics.history"), { count: history.length })}>
+        <div className="plugin-usage-list">
+          {history.map((resource) => <PluginResourceRow conversations={props.conversations} key={`${resource.resourceKind}:${resource.resourceId}:${resource.pluginGeneration}`}
+            onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} resource={resource} />)}
+        </div>
+      </InlineDisclosure>}
+      <p className="plugin-usage-footnote">{t("pluginDiagnostics.nonAtomic")}</p>
+    </>}
+    <TechnicalDetails entries={[
+      [t("pluginUpdates.plugin"), <code key="plugin">{selection.pluginId}</code>],
+      ...(selection.kind !== "plugin" ? [[t("pluginUpdates.request"), <code key="request">{selection.requestId}</code>] as const] : []),
+      ...(resources ? [["runtimeId", <code key="runtime">{resources.runtimeId}</code>] as const, ["serviceEpoch", <code key="epoch">{resources.serviceEpoch}</code>] as const,
+        ["pluginGeneration", <code key="generation">{resources.pluginGeneration ?? "—"}</code>] as const] : []),
+      ...(current?.report?.update ? [["predecessorGeneration", <code key="predecessor">{current.report.update.predecessorGeneration}</code>] as const,
+        ["drainingGeneration", <code key="draining">{current.report.update.drainingGeneration}</code>] as const] : []),
+      ...(current?.report?.uninstall ? [["reservedGeneration", <code key="reserved">{current.report.uninstall.pluginGeneration}</code>] as const] : []),
+    ]} />
   </section>;
 }
 
-// PluginResourceRow displays resource metadata and navigates only the exact available owner conversation.
-// PluginResourceRow 展示 resource 元数据，仅导航至精确可用所有者会话。
-// conversations validates owner visibility; onSelectPluginResourceOwner is the existing service chain; returns one readonly row.
-// conversations 校验所有者可见性；onSelectPluginResourceOwner 是既有服务链；返回单个只读行。
-function PluginResourceRow(props: { resource: PluginResourceDiagnostic; conversations: WorkbenchSnapshot["conversations"]; navigationEnabled: boolean; onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean> }) {
-  // row keeps native and host metadata distinct throughout rendering.
-  // row 在整个渲染过程区分原生及宿主元数据。
+// PluginResourceRow describes one resource in plain words and navigates only to its exact available owner conversation.
+// PluginResourceRow 以平实语言描述单个资源，仅导航至其精确可用所有者会话。
+function PluginResourceRow(props: { resource: PluginResourceDiagnostic; conversations: WorkbenchSnapshot["conversations"]; onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean> }) {
   const row = props.resource;
-  // ownerExists uses only the original controller conversation ID, never coreSessionId or resourceId.
-  // ownerExists 仅使用原控制器会话 ID，绝不使用 coreSessionId 或 resourceId。
-  const ownerExists = row.ownerSessionId !== null && props.conversations.some((conversation) => conversation.id === row.ownerSessionId);
+  // owner uses only the original controller conversation ID, never coreSessionId or resourceId.
+  // owner 仅使用原控制器会话 ID，绝不使用 coreSessionId 或 resourceId。
+  const owner = row.ownerSessionId === null ? undefined : props.conversations.find((conversation) => conversation.id === row.ownerSessionId);
+  const ownerExists = owner !== undefined;
   // navigationError exposes missing originals and rejected selection without changing the diagnostic owner.
   // navigationError 暴露缺失原实例及选择拒绝，不改变诊断所有者。
   const [navigationError, setNavigationError] = React.useState("");
-  // navigating disables duplicate renderer requests until the exact confirmation is received.
-  // navigating 在收到精确确认前停用重复渲染器请求。
   const [navigating, setNavigating] = React.useState(false);
   // navigationVersion invalidates asynchronous replies after owner replacement, archival or disposal.
   // navigationVersion 在所有者替换、归档或销毁后使异步响应失效。
   const navigationVersion = React.useRef(0);
-  // navigationBusy closes admission before React commits its disabled state.
-  // navigationBusy 在 React 提交停用状态前关闭入场。
   const navigationBusy = React.useRef(false);
-  // navigationAlive prevents stale renderer errors after unmount.
-  // navigationAlive 阻止卸载后的过期渲染器错误。
   const navigationAlive = React.useRef(true);
   // navigationObservation cancels only the local confirmation decision, never the selection RPC or service work.
   // navigationObservation 仅取消本地确认决定，绝不取消选择 RPC 或服务工作。
   const navigationObservation = React.useRef<AbortController | null>(null);
-  // t resolves labels without translating opaque identities or native codes.
-  // t 解析标签，不翻译不透明身份或原生错误码。
   const { t } = useI18n();
   React.useLayoutEffect(() => {
     navigationAlive.current = true; navigationVersion.current += 1; navigationBusy.current = false;
     setNavigating(false);
     return () => { navigationAlive.current = false; navigationVersion.current += 1; navigationObservation.current?.abort(); };
-  }, [row.ownerSessionId, ownerExists, props.navigationEnabled]);
-  // navigateOwner requests this original owner and returns after observable service confirmation or refusal.
-  // navigateOwner 请求此原所有者，在可观测服务确认或拒绝后返回。
-  // No parameters; only an exact true response can authorize the workbench to leave diagnostics.
-  // 无参数；仅精确真值响应可以授权工作台离开诊断。
+  }, [row.ownerSessionId, ownerExists]);
+  // navigateOwner requests this original owner; only an exact true response lets the workbench leave diagnostics.
+  // navigateOwner 请求此原所有者；仅精确真值响应允许工作台离开诊断。
   const navigateOwner = async (): Promise<void> => {
-    // selectOwner is the exact confirmation callback provided by the real workbench.
-    // selectOwner 是真实工作台提供的精确确认回调。
     const selectOwner = props.onSelectPluginResourceOwner;
-    if (navigationBusy.current || !props.navigationEnabled || !ownerExists || row.ownerSessionId === null || selectOwner === undefined) return;
-    // token binds renderer status to the requested original owner.
-    // token 将渲染器状态绑定至请求原所有者。
+    if (navigationBusy.current || !ownerExists || row.ownerSessionId === null || selectOwner === undefined) return;
     const token = ++navigationVersion.current;
-    // observation belongs solely to this visible row and becomes aborted when its diagnostic owner is hidden.
-    // observation 仅属于此可见行，在其诊断所有者被隐藏时变为已取消。
     const observation = new AbortController();
     navigationObservation.current = observation;
     navigationBusy.current = true; setNavigating(true); setNavigationError("");
     try {
-      // selected is true only when the service has acknowledged this same owner identity.
-      // selected 仅在服务确认此相同所有者身份时为真。
       const selected = await selectOwner(row.ownerSessionId, observation.signal);
       if (navigationAlive.current && navigationVersion.current === token && !selected) setNavigationError(t("pluginDiagnostics.missingOwner"));
     } catch (reason) {
@@ -190,23 +226,43 @@ function PluginResourceRow(props: { resource: PluginResourceDiagnostic; conversa
       if (navigationAlive.current && navigationVersion.current === token) { navigationBusy.current = false; setNavigating(false); }
     }
   };
-  return <article className="space-y-2 rounded-md border p-3 break-all">
-    <p><strong>{row.resourceKind}</strong> / {row.resourceId} / pluginGeneration: {row.pluginGeneration}</p>
-    <p>{t(row.isDrainBlocking ? "pluginDiagnostics.blocking" : "pluginDiagnostics.nonBlocking")}</p>
-    <p>ownerSessionId: {row.ownerSessionId === null ? t("pluginDiagnostics.internal") : row.ownerSessionId}</p>
-    {row.ownerSessionId !== null && (ownerExists && props.onSelectPluginResourceOwner !== undefined
-      ? <Button type="button" size="sm" variant="outline" disabled={navigating} onClick={() => void navigateOwner()}>{t("pluginDiagnostics.locate")}</Button>
-      : <p role="status">{t("pluginDiagnostics.missingOwner")}</p>)}
-    {navigationError && <p role="alert" className="whitespace-pre-wrap">{navigationError}</p>}
-    <p>originalPoolId: {row.originalPoolId === null ? "—" : row.originalPoolId} / coreSessionId: {row.coreSessionId === null ? "—" : row.coreSessionId} / corePhase: {row.corePhase === null ? "—" : row.corePhase}</p>
-    <p>activeOperationId: {row.activeOperationId === null ? "—" : row.activeOperationId} / finalizationOperationId: {row.finalizationOperationId === null ? "—" : row.finalizationOperationId}</p>
-    <p>preparing: {String(row.preparing)} / closing: {String(row.closing)} / retired: {String(row.retired)} / cleanupRecovery: {String(row.cleanupRecovery)} / pendingFinalizations: {String(row.pendingFinalizations)}</p>
-    <p>queuedCalls: {row.queuedCalls === null ? "—" : row.queuedCalls} / borrowers: {row.borrowers === null ? "—" : row.borrowers}</p>
-    {row.finalizationOperationIds.map((id) => <p key={id}>finalizationOperationId: {id}</p>)}
-    {row.operations.map((operation) => <div key={operation.operationId}>
-      <p>operationId: {operation.operationId} / phase: {operation.phase} / cancellationRequested: {String(operation.cancellationRequested)}</p>
-      {operation.errors.map((error, index) => <p key={`${error.stage}:${index}`} role="status">{error.stage}: {error.code === null ? "—" : error.code}</p>)}
-    </div>)}
-    {row.errors.map((error, index) => <p key={`${error.stage}:${index}`} role="status">{error.stage}: {error.code === null ? "—" : error.code}</p>)}
+  const ownerText = row.ownerSessionId === null ? t("pluginDiagnostics.internal") : owner !== undefined ? owner.title : t("pluginDiagnostics.missingOwner");
+  const Icon = row.ownerSessionId === null ? Cog : row.resourceKind === "formal_call" ? Activity : MessageSquare;
+  return <article className="plugin-usage-row" data-blocking={row.isDrainBlocking ? "true" : undefined}>
+    <span aria-hidden="true" className="plugin-usage-row-icon"><Icon size={15} /></span>
+    <div className="plugin-usage-row-main">
+      <p className="plugin-usage-row-title">
+        <span>{t(kindLabels[row.resourceKind])}</span>
+        {row.isDrainBlocking && <Badge variant="warning">{t("pluginDiagnostics.blocking")}</Badge>}
+        {row.cleanupRecovery && <Badge variant="outline">{t("pluginDiagnostics.cleanupPending")}</Badge>}
+        {hasErrors(row) && <Badge variant="destructive">{t("pluginDiagnostics.hadErrors")}</Badge>}
+      </p>
+      <p className="plugin-usage-row-meta">
+        <span role={row.ownerSessionId !== null && !ownerExists ? "status" : undefined}>{ownerText}</span>
+        <span aria-hidden="true">·</span>
+        <span>{describeState(row, t)}</span>
+      </p>
+      {navigationError && <p className="plugin-usage-row-error" role="alert">{navigationError}</p>}
+      <TechnicalDetails entries={[
+        ["resourceId", <code key="resource">{row.resourceId}</code>],
+        ["pluginGeneration", <code key="generation">{row.pluginGeneration}</code>],
+        ["ownerSessionId", <code key="owner">{row.ownerSessionId ?? "—"}</code>],
+        ["originalPoolId", <code key="pool">{row.originalPoolId ?? "—"}</code>],
+        ["coreSessionId", <code key="core">{row.coreSessionId ?? "—"}</code>],
+        ["corePhase", <code key="phase">{row.corePhase ?? "—"}</code>],
+        ["activeOperationId", <code key="active">{row.activeOperationId ?? "—"}</code>],
+        ["finalizationOperationId", <code key="final">{[row.finalizationOperationId, ...row.finalizationOperationIds].filter((id) => id !== null).join(", ") || "—"}</code>],
+        ["queuedCalls / borrowers", <code key="counts">{row.queuedCalls ?? "—"} / {row.borrowers ?? "—"}</code>],
+        ["flags", <code key="flags">{[row.preparing && "preparing", row.closing && "closing", row.retired && "retired", row.cleanupRecovery && "cleanupRecovery",
+          row.pendingFinalizations && "pendingFinalizations"].filter(Boolean).join(", ") || "—"}</code>],
+        ...row.operations.map((operation) => [`operation ${operation.operationId}`, <code key={operation.operationId}>{operation.phase}
+          {operation.cancellationRequested ? " (cancellationRequested)" : ""}
+          {operation.errors.map((error) => ` · ${error.stage}: ${error.code ?? "—"}`).join("")}</code>] as const),
+        ...row.errors.map((error, index) => [`error ${index + 1}`, <code key={`error:${index}`}>{error.stage}: {error.code ?? "—"}</code>] as const),
+      ]} />
+    </div>
+    {row.ownerSessionId !== null && ownerExists && props.onSelectPluginResourceOwner !== undefined && <div className="plugin-usage-row-actions">
+      <Button disabled={navigating} onClick={() => void navigateOwner()} size="sm" type="button" variant="outline">{t("pluginDiagnostics.locate")}</Button>
+    </div>}
   </article>;
 }

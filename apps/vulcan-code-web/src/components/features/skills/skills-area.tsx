@@ -8,8 +8,7 @@ import { McpSettingsArea } from "@/components/features/settings/mcp-settings-are
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
-import { PluginPrewarmControls } from "./plugin-prewarm-controls"
-import { PluginPrewarmPolicyControls } from "./plugin-prewarm-policy-controls"
+import { PluginMaintenancePage } from "./plugin-maintenance-page"
 import {
   findEnabledPluginDetailMount,
   isPluginDetailSubArea,
@@ -55,16 +54,19 @@ export function SkillsArea(props: {
           skills={props.workbench.luaSkills.skills}
         />
       ) : props.activeTab === "plugins" ? (
-        <>
-          <VulcanPluginsPanel
-            actions={props.skillActions}
-            plugins={props.workbench.plugins}
-            conversations={props.workbench.conversations}
-            onSelectPluginResourceOwner={props.onSelectPluginResourceOwner}
-          />
-          <PluginPrewarmControls conversations={props.workbench.conversations} selectedConversationId={props.workbench.selectedConversationId} />
-          <PluginPrewarmPolicyControls />
-        </>
+        <VulcanPluginsPanel
+          actions={props.skillActions}
+          plugins={props.workbench.plugins}
+          conversations={props.workbench.conversations}
+          onSelectPluginResourceOwner={props.onSelectPluginResourceOwner}
+        />
+      ) : props.activeTab === "plugin-maintenance" ? (
+        <PluginMaintenancePage
+          actions={props.skillActions}
+          conversations={props.workbench.conversations}
+          onSelectPluginResourceOwner={props.onSelectPluginResourceOwner}
+          plugins={props.workbench.plugins}
+        />
       ) : props.activeTab === "settings" ? (
         <LuaSkillsSettingsPanel
           actions={props.skillActions}

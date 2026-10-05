@@ -35,6 +35,9 @@ export function activeSkillHeaderSummary(
   if (activeTab === "knowledge") {
     return { title: t("area.knowledge"), detail: t("area.knowledge.description") }
   }
+  if (activeTab === "plugin-maintenance") {
+    return { title: t("skills.navigation.pluginMaintenance"), detail: t("pluginMaintenance.description") }
+  }
   if (activeTab === "plugins") {
     // vulcanPlugins excludes ordinary Lua Skill projection rows from the plugin menu page.
     // vulcanPlugins 从插件菜单页面排除普通 Lua Skill 投影行。

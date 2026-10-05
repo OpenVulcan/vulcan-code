@@ -24,8 +24,14 @@ const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", 
     actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false, mcpServers: [] } };
 let root: Root;
 let host: HTMLDivElement;
+// en resolves the actual English copy for key, filling the fixture's display name.
+// en 解析 key 的实际英文文案，并填入夹具显示名称。
+const en = (key: import("@/i18n").TranslationKey) => formatMessage(readLocaleMessage("en-US", key), { name: plugin.name });
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // scrollIntoView is a browser API absent from jsdom; the usage view calls it when a selection changes.
+  // scrollIntoView 是 jsdom 缺少的浏览器 API；使用情况视图在选择变化时调用它。
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
@@ -68,19 +74,24 @@ it("requires shared confirmation and discovers the original after uninstall fail
   expect(dialog.textContent).toContain("configuration and isolated environment");
   const confirm = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
   await act(async () => confirm.click());
-  expect(host.textContent).toContain("busy runtime"); expect(host.textContent).toContain(original.requestId);
+  expect(host.textContent).toContain("busy runtime"); expect(host.textContent).toContain(en("pluginRecovery.uninstallUnknownNotice"));
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')?.disabled).toBe(true);
   expect(read).toHaveBeenCalledTimes(2); expect(read).toHaveBeenLastCalledWith();
   expect(uninstall).toHaveBeenCalledTimes(1);
   expect(uninstall).toHaveBeenLastCalledWith("fixture");
   expect(document.querySelector('[role="alertdialog"]')).toBeNull();
-  // refresh is the only visible read in the automatically expanded uninstall recovery surface.
-  // refresh 是自动展开卸载恢复界面中唯一可见读取。
-  const refresh = [...host.querySelectorAll("button")].find((button) => button.textContent === "Read original requests")!;
-  await act(async () => refresh.click());
+  // The unconfirmed outcome opens the maintenance drawer and leaves a page-level reminder.
+  // 未确认结果会打开维护抽屉，并在页面上留下提醒。
+  expect(host.querySelector<HTMLElement>("aside.plugin-maintenance-drawer")?.hidden).toBe(false);
+  expect(host.querySelector(".plugin-maintenance-attention")?.textContent).toContain(en("pluginMaintenance.attention.uncertain"));
+  // recheck is the recovery center's only read; it observes the retained original without dispatching anything.
+  // recheck 是恢复中心唯一的读取；它观测保留原实例，不派发任何操作。
+  const recheck = [...host.querySelectorAll("button")].find((button) => button.textContent === en("pluginMaintenance.recovery.recheck"))!;
+  await act(async () => recheck.click());
+  expect(read).toHaveBeenCalledTimes(3); expect(host.textContent).toContain(original.requestId);
   // continueButton reviews the same retained original rather than dispatching a replacement.
   // continueButton 审阅相同保留原实例，而非派发替代请求。
-  const continueButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "Continue original uninstall")!;
+  const continueButton = [...host.querySelectorAll("button")].find((button) => button.textContent === en("pluginRecovery.uninstallContinue"))!;
   await act(async () => continueButton.click()); read.mockResolvedValue([]);
   // finalConfirm belongs to the original request confirmation portal.
   // finalConfirm 属于原请求确认门户。
@@ -109,7 +120,8 @@ it.each(["empty", "failed"] as const)("shows an initial no-ID uninstall result a
   // confirm 是普通卸载确认，按当前语义文本选择。
   const confirm = [...document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
   await act(async () => confirm.click());
-  expect(host.textContent).toContain("Original uninstall outcome unconfirmed"); expect(host.textContent).toContain("response lost");
+  expect(host.textContent).toContain(en("pluginMaintenance.attention.uncertain")); expect(host.textContent).toContain("response lost");
+  expect(host.textContent).toContain(en("pluginRecovery.uninstallUnknownNotice"));
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')?.disabled).toBe(true);
   expect(uninstall).toHaveBeenCalledTimes(1); expect(read).toHaveBeenCalledTimes(2);
   if (outcome === "failed") expect(host.textContent).toContain("query unavailable");
@@ -206,7 +218,7 @@ it("holds the ordinary plugin controls closed during original installation recov
   const toggle = vi.fn().mockResolvedValue(undefined);
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
     onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null,
-    onReadPluginUninstallRequests: async () => [],
+    onReadPluginUninstallRequests: async () => [], onReadLocalPluginUpdates: async () => [], onReadPluginSecretMutations: async () => [],
     onReadPluginInstallRequests: read, onRecoverPluginInstallRequest: recover, onSetVulcanPluginEnabled: toggle,
   } as unknown as SkillActionProps} />));
   // find locates one actual visible English button or reports current fixture drift.
@@ -218,26 +230,25 @@ it("holds the ordinary plugin controls closed during original installation recov
     if (!matched) throw new Error(`Expected ${text}; the control label or availability may have changed`);
     return matched;
   };
-  await act(async () => find("Installation recovery").click());
-  // field is the explicit original namespace field, independent from installed-row position.
-  // field 是明确原命名空间字段，独立于已安装行位置。
-  const field = host.querySelector<HTMLInputElement>("input[list]");
-  if (!field) throw new Error("Expected recovery namespace field; its contract may have changed");
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, plugin.id);
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(async () => find("Read original requests").click());
-  await act(async () => find("Recover original request").click());
+  // The card's maintenance menu opens this plugin's recovery, which reads its retained originals on its own.
+  // 卡片维护菜单打开此插件的恢复检查，它会自行读取保留原实例。
+  const menu = host.querySelector<HTMLButtonElement>(`button[aria-label="${en("pluginMaintenance.menu")}"]`);
+  if (!menu) throw new Error("Expected the plugin card's maintenance menu; its label may have changed");
+  await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((candidate) => candidate.textContent === en("pluginMaintenance.action.recovery"));
+  if (!item) throw new Error("Expected the recovery menu item; its label may have changed");
+  await act(async () => item.click());
+  expect(read).toHaveBeenCalledWith(plugin.id); expect(recover).not.toHaveBeenCalled();
+  await act(async () => find(en("pluginRecovery.action.rollbackInstall")).click());
   await act(async () => find("Confirm").click());
   // control is the actual ordinary plugin toggle, not a test-only admission observer.
   // control 是实际普通插件开关，而非测试专用入场观察者。
   const control = host.querySelector<HTMLButtonElement>('[role="switch"]');
   if (!control) throw new Error("Expected ordinary plugin toggle; its contract may have changed");
-  expect(control.disabled).toBe(true); expect(field.disabled).toBe(true);
+  expect(control.disabled).toBe(true);
   await act(async () => control.click()); expect(toggle).not.toHaveBeenCalled();
   read.mockResolvedValue([]); await act(async () => finish());
-  expect(control.disabled).toBe(false); expect(field.disabled).toBe(false);
+  expect(control.disabled).toBe(false);
   expect(recover).toHaveBeenCalledExactlyOnceWith(plugin.id, request.requestId, false);
 });
 
@@ -277,8 +288,13 @@ it("holds ordinary controls closed during exact uninstall continuation without r
     if (!found) throw new Error(`Expected ${text}; the current label or availability may have changed`);
     return found;
   };
-  await act(async () => find("Uninstallation recovery").click());
-  await act(async () => find("Continue original uninstall").click());
+  // The retained original is announced on the page; its review button opens the maintenance drawer.
+  // 保留原实例在页面上提示；其处理按钮打开维护抽屉。
+  expect(host.querySelector(".plugin-maintenance-attention")?.textContent).toContain(
+    formatMessage(readLocaleMessage("en-US", "pluginMaintenance.attention.retained"), { count: 1 }));
+  await act(async () => find(en("pluginMaintenance.attention.open")).click());
+  expect(host.querySelector<HTMLElement>("aside.plugin-maintenance-drawer")?.hidden).toBe(false);
+  await act(async () => find(en("pluginRecovery.uninstallContinue")).click());
   await act(async () => find("Confirm").click());
   // control and remove are real ordinary plugin controls guarded by the parent's synchronous admission.
   // control 及 remove 是受父级同步入场保护的真实普通插件控件。
@@ -291,5 +307,6 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   expect(toggle).not.toHaveBeenCalled(); expect(uninstall).not.toHaveBeenCalled(); expect(resume).toHaveBeenCalledTimes(1);
   read.mockResolvedValue([]); await act(async () => finish());
   expect(control.disabled).toBe(false); expect(remove.disabled).toBe(false);
+  expect(host.querySelector(".plugin-maintenance-attention")).toBeNull();
   expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
 });

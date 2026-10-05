@@ -3,7 +3,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { readLocaleMessage, type TranslationKey } from "@/i18n";
+import { formatMessage, readLocaleMessage, type TranslationKey } from "@/i18n";
 import { readPluginResourceDiagnostics, type PluginDiagnosticsObservation } from "@/service/plugin-resource-diagnostics-service";
 import { diagnosticReport, diagnosticResource } from "@/service/__fixtures__/plugin-resource-diagnostics";
 import type { WorkbenchSnapshot } from "@/types";
@@ -58,16 +58,29 @@ function button(key: TranslationKey): HTMLButtonElement {
   if (!found) throw new Error(`Expected ${key}; label or availability may be outdated`);
   return found;
 }
+// en resolves the actual English message for key; values fill its placeholders.
+// en 解析 key 的实际英文文案；values 填充其占位符。
+function en(key: TranslationKey, values: Record<string, string | number> = {}): string { return formatMessage(readLocaleMessage("en-US", key), values); }
+// stat reads one summary tile's number by its label, independently from tile order.
+// stat 按标签读取单个汇总卡片的数字，独立于卡片顺序。
+function stat(key: TranslationKey): string | undefined {
+  return [...host.querySelectorAll(".plugin-maintenance-stats > div")].find((tile) => tile.querySelector("dt")?.textContent === en(key))?.querySelector("dd")?.textContent ?? undefined;
+}
 
 it("shows independent pinned count, retained terminal history, physical blockers and original error codes", async () => {
   await render({ kind: "plugin", pluginId: "fixture" });
-  expect(host.textContent).toContain("Pinned tool sessions (not physically retired): 1");
+  expect(stat("pluginDiagnostics.pinned")).toBe("1");
+  expect(stat("pluginDiagnostics.stat.blocking")).toBe("2");
+  expect(stat("pluginDiagnostics.stat.conversations")).toBe("1");
+  // Terminal history is folded under its own disclosure, apart from live blockers.
+  // 终态历史收在独立展开区，与实时阻塞项分开。
+  expect(host.textContent).toContain(en("pluginDiagnostics.history", { count: 1 }));
   expect(host.textContent).toContain("retired-host-session");
-  expect(host.textContent).toContain("Retained record; does not block drain");
-  expect(host.textContent).toContain("Blocks physical drain");
+  expect([...host.querySelectorAll('.plugin-usage-row[data-blocking="true"]')]).toHaveLength(2);
+  expect(host.textContent).toContain(en("pluginDiagnostics.blocking"));
   expect(host.textContent).toContain("cleanup_failed");
   expect(host.textContent).toContain("9007199254740993");
-  expect(host.textContent).toContain("Internal resource (no conversation owner)");
+  expect(host.textContent).toContain(en("pluginDiagnostics.internal"));
   await act(async () => button("pluginDiagnostics.locate").click());
   expect(selectConversation).toHaveBeenCalledExactlyOnceWith("conversation-original", expect.any(AbortSignal));
   expect(selectConversation).not.toHaveBeenCalledWith(diagnosticResource.coreSessionId);
@@ -81,8 +94,8 @@ it("retains the exact original request through refresh and keeps unavailable dra
   vi.mocked(readPluginResourceDiagnostics).mockResolvedValue({ resources: null, update: null, uninstall: null });
   await render(original);
   expect(host.textContent).toContain("original-update");
-  expect(host.textContent).toContain("does not prove drainage");
-  expect(host.textContent).not.toContain("No retained resources");
+  expect(host.textContent).toContain(en("pluginDiagnostics.unavailable"));
+  expect(host.textContent).not.toContain(en("pluginDiagnostics.empty"));
   await act(async () => button("pluginRuntime.refresh").click());
   expect(readPluginResourceDiagnostics).toHaveBeenLastCalledWith(original);
   expect(readPluginResourceDiagnostics).toHaveBeenCalledTimes(2);

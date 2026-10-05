@@ -46,7 +46,9 @@ export function usePluginPrewarmPolicy() {
   const mounted = React.useRef(false);
   React.useEffect(() => {
     mounted.current = true; epoch.current += 1;
-    return () => { mounted.current = false; epoch.current += 1; };
+    // Disposal releases admission so a StrictMode remount can read again; stale replies are fenced by epoch.
+    // 销毁释放入场，使 StrictMode 重新挂载可再次读取；过期回复由 epoch 隔离。
+    return () => { mounted.current = false; epoch.current += 1; busyRef.current = false; };
   }, []);
 
   // retain publishes one observation and synchronously updates action eligibility; returns nothing.
@@ -70,8 +72,7 @@ export function usePluginPrewarmPolicy() {
     } catch (reason) {
       if (mounted.current && token === epoch.current) retain({ ...original, fresh: false, error: String(reason) });
     } finally {
-      busyRef.current = false;
-      if (mounted.current && token === epoch.current) setBusy(false);
+      if (token === epoch.current) { busyRef.current = false; if (mounted.current) setBusy(false); }
     }
   };
 
@@ -108,8 +109,7 @@ export function usePluginPrewarmPolicy() {
     } catch (reason) {
       if (mounted.current && token === epoch.current) retain({ ...next, error: String(reason) });
     } finally {
-      busyRef.current = false;
-      if (mounted.current && token === epoch.current) setBusy(false);
+      if (token === epoch.current) { busyRef.current = false; if (mounted.current) setBusy(false); }
     }
   };
 

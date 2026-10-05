@@ -1,8 +1,12 @@
 import * as React from "react";
-import { Button } from "@/components/ui/button";
+import { Flame, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Button, IconButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useI18n } from "@/i18n";
-import type { PluginAutomaticPrewarmRule } from "@/types/plugin-prewarm-policy";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
+import type { PluginSummary } from "@/types";
+import type { PluginAutomaticPrewarmRule, PluginPrewarmPolicyPhase } from "@/types/plugin-prewarm-policy";
+import { MaintenanceNotice, TechnicalDetails } from "./plugin-maintenance-section";
 import { policyReceiptAllows, usePluginPrewarmPolicy } from "./use-plugin-prewarm-policy";
 
 // RuleDraft keeps editable text separate from the validated wire count and stable row identity.
@@ -25,22 +29,14 @@ interface RuleDraft {
 // PolicyDraft freezes the observed predecessor so refresh cannot silently rebase unsaved edits.
 // PolicyDraft 冻结已观测前驱，防止刷新静默重定位未保存编辑。
 interface PolicyDraft {
-  // runtimeId fences replacement native parents.
-  // runtimeId 隔离替换的原生父级。
   runtimeId: string;
-  // revision is the original effective policy observed when editing began.
-  // revision 为开始编辑时观测到的原生效策略。
   revision: string;
-  // rows retains full replacement intent, including an explicit empty collection.
-  // rows 保留全量替换意图，包括明确空集合。
   rows: RuleDraft[];
 }
 
 // draftRules validates explicit positive safe counts and unique tool ownership; null means invalid input.
 // draftRules 校验明确正安全整数及唯一工具归属；空值表示输入无效。
 function draftRules(rows: RuleDraft[]): PluginAutomaticPrewarmRule[] | null {
-  // seen and rules build only validated exact fields, leaving manifest limits to the host authority.
-  // seen 与 rules 仅构建已校验精确字段，清单限制仍归宿主权威。
   const seen = new Set<string>();
   const rules: PluginAutomaticPrewarmRule[] = [];
   for (const row of rows) {
@@ -52,102 +48,156 @@ function draftRules(rows: RuleDraft[]): PluginAutomaticPrewarmRule[] | null {
   return rules;
 }
 
-// PluginPrewarmPolicyControls renders an inert collapsed editor and retains uncertain writes across collapse.
-// PluginPrewarmPolicyControls 渲染初始无动作的折叠编辑器，跨折叠保留不确定写入。
-export function PluginPrewarmPolicyControls() {
-  // opened retains the observer after first expansion without mounting it on every navigation render.
-  // opened 在首次展开后保留观测者，不因导航渲染反复挂载。
-  const [opened, setOpened] = React.useState(false);
-  const [expanded, setExpanded] = React.useState(false);
-  const id = React.useId();
-  const { t } = useI18n();
-  return <section className="space-y-3 rounded-md border p-3">
-    <Button type="button" size="sm" variant="ghost" aria-expanded={expanded} aria-controls={id}
-      onClick={() => { setOpened(true); setExpanded(!expanded); }}>{t("pluginPrewarmPolicy.title")}</Button>
-    <div id={id} hidden={!expanded}>{opened && <PolicyManagement />}</div>
-  </section>;
-}
+// receiptLabels explains the last rule publication in plain words.
+// receiptLabels 以平实语言说明上一次规则发布。
+const receiptLabels: Record<PluginPrewarmPolicyPhase, TranslationKey> = {
+  prepared: "pluginPrewarmPolicy.receipt.prepared", publishing: "pluginPrewarmPolicy.receipt.publishing",
+  committed: "pluginPrewarmPolicy.receipt.committed", cancelled: "pluginPrewarmPolicy.receipt.cancelled",
+  interrupted: "pluginPrewarmPolicy.receipt.interrupted",
+};
 
-// PolicyManagement exposes full replacement and original transaction controls; it never initializes plugins.
-// PolicyManagement 暴露全量替换及原事务控件；绝不初始化插件。
-function PolicyManagement() {
-  // management keeps server authority separate from this editable local draft.
-  // management 将服务权威与本地可编辑草稿分离。
+// PluginPrewarmPolicyControls lists the automatic prewarm rules and edits them as one full replacement.
+// PluginPrewarmPolicyControls 列出自动预热规则，并以整体替换方式编辑。
+// Reading happens on mount; no write occurs until the user saves an explicit draft.
+// 挂载时读取；在用户保存明确草稿前不发生写入。
+export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] }) {
   const management = usePluginPrewarmPolicy();
   const { observation, busy } = management;
   const { status, fresh, pending, acknowledged, error } = observation;
   const { t } = useI18n();
   const prefix = React.useId();
   const [draft, setDraft] = React.useState<PolicyDraft | null>(null);
+  // refreshRef lets the mount effect call the latest reader exactly once per mount.
+  // refreshRef 使挂载效果每次挂载仅调用一次最新读取器。
+  const refreshRef = React.useRef(management.refresh);
+  React.useEffect(() => { refreshRef.current = management.refresh; });
+  React.useEffect(() => { void refreshRef.current(); }, []);
   // writable requires an atomic current read with no competing or uncertain transaction.
   // writable 要求原子当前读取，且没有竞争或未知事务。
   const writable = fresh && !busy && pending === null && status !== null && status.update === null && !status.capacityUpdateRetained;
   const currentDraft = draft !== null && status !== null && draft.runtimeId === status.runtimeId && draft.revision === status.revision;
   const rules = draft === null ? null : draftRules(draft.rows);
-  const receipt = status?.update;
+  // receipt prefers a write acknowledged after the last complete read, so a failed follow-up read never hides the outcome.
+  // receipt 优先采用最后完整读取之后确认的写入，使后续读取失败时也不会隐藏结果。
+  const receipt = !fresh && acknowledged ? acknowledged : status?.update;
+  const luaPlugins = props.plugins.filter((plugin) => plugin.extension?.hasLuaRuntime === true);
+  const nameOf = (pluginId: string) => props.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
 
-  // edit explicitly replaces the local draft from the last observed effective rules; returns nothing.
-  // edit 明确以最后观测的生效规则替换本地草稿；无返回值。
-  const edit = (): void => {
+  // edit replaces the local draft from the last observed effective rules; addFirst starts with one blank row.
+  // edit 以最后观测的生效规则替换本地草稿；addFirst 以一个空行开始。
+  // blankRow starts a new rule; the plugin is preselected only when exactly one Lua plugin exists, and stays visible and editable.
+  // blankRow 开始新规则；仅当恰有一个 Lua 插件时预选插件，且保持可见、可修改。
+  const blankRow = (): RuleDraft => ({ id: crypto.randomUUID(), pluginId: luaPlugins.length === 1 ? luaPlugins[0].id : "", toolId: "", target: "1" });
+  const edit = (addFirst: boolean): void => {
     if (!writable || !status) return;
-    setDraft({ runtimeId: status.runtimeId, revision: status.revision,
-      rows: status.rules.map((rule) => ({ id: crypto.randomUUID(), pluginId: rule.pluginId, toolId: rule.toolId, target: String(rule.targetIdle) })) });
+    const rows: RuleDraft[] = status.rules.map((rule) => ({ id: crypto.randomUUID(), pluginId: rule.pluginId, toolId: rule.toolId, target: String(rule.targetIdle) }));
+    if (addFirst) rows.push(blankRow());
+    setDraft({ runtimeId: status.runtimeId, revision: status.revision, rows });
   };
-  // update edits one stable local row without changing the original predecessor; returns nothing.
-  // update 编辑单个稳定本地行，不改变原前驱；无返回值。
+  // update edits one stable local row without changing the original predecessor.
+  // update 编辑单个稳定本地行，不改变原前驱。
   const update = (id: string, changes: Partial<Pick<RuleDraft, "pluginId" | "toolId" | "target">>): void => {
     setDraft((original) => original === null ? null : { ...original, rows: original.rows.map((row) => row.id === id ? { ...row, ...changes } : row) });
   };
-  // save signs one caller UUID for the frozen draft; the hook blocks duplicate same-tick submissions.
-  // save 为冻结草稿签发单个调用方 UUID；钩子阻止同一时刻重复提交。
+  // save signs one caller UUID for the frozen draft and closes the editor; the receipt reports the outcome.
+  // save 为冻结草稿签发单个调用方 UUID 并关闭编辑器；回执报告结果。
   const save = (): void => {
     if (!writable || !currentDraft || !draft || rules === null) return;
     void management.execute({ kind: "begin", request: { updateId: crypto.randomUUID(), runtimeId: draft.runtimeId,
       expectedRevision: draft.revision, rules } });
+    setDraft(null);
   };
 
-  return <div className="space-y-3 text-sm">
-    <p>{t("pluginPrewarmPolicy.description")}</p>
-    <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void management.refresh()}>{t("pluginPrewarmPolicy.read")}</Button>
-    {error && <p role="alert">{error}</p>}
-    {status && <>
-      <p>{t("pluginPrewarmPolicy.revision")}: <code>{status.runtimeId} / {status.revision}</code></p>
-      <div>{t("pluginPrewarmPolicy.effective")}: {status.rules.length === 0 ? t("pluginPrewarmPolicy.disabled") : <ul>
-        {status.rules.map((rule) => <li key={rule.toolId}>{rule.pluginId} / {rule.toolId}: {rule.targetIdle}</li>)}
-      </ul>}</div>
-      {!fresh && <p role="status">{t("pluginPrewarmPolicy.stale")}</p>}
-      {status.capacityUpdateRetained && <p role="status">{t("pluginPrewarmPolicy.capacityBlocked")}</p>}
-      <Button type="button" size="sm" variant="outline" disabled={!writable} onClick={edit}>{t("pluginPrewarmPolicy.edit")}</Button>
-    </>}
-    {draft && <fieldset className="space-y-3" disabled={!writable || !currentDraft}>
-      <legend>{t("pluginPrewarmPolicy.replacement")}</legend>
-      {!currentDraft && <p role="status">{t("pluginPrewarmPolicy.draftStale")}</p>}
-      {draft.rows.map((row) => <div key={row.id} className="grid gap-2 rounded border p-2 sm:grid-cols-4">
-        <label htmlFor={`${prefix}-${row.id}-plugin`}>{t("pluginPrewarmPolicy.plugin")}<Input id={`${prefix}-${row.id}-plugin`} value={row.pluginId} onChange={(event) => update(row.id, { pluginId: event.target.value })} /></label>
-        <label htmlFor={`${prefix}-${row.id}-tool`}>{t("pluginPrewarmPolicy.tool")}<Input id={`${prefix}-${row.id}-tool`} value={row.toolId} onChange={(event) => update(row.id, { toolId: event.target.value })} /></label>
-        <label htmlFor={`${prefix}-${row.id}-target`}>{t("pluginPrewarm.target")}<Input id={`${prefix}-${row.id}-target`} inputMode="numeric" value={row.target} onChange={(event) => update(row.id, { target: event.target.value })} /></label>
-        <Button type="button" size="sm" variant="outline" onClick={() => setDraft({ ...draft, rows: draft.rows.filter((candidate) => candidate.id !== row.id) })}>{t("pluginPrewarmPolicy.remove")}</Button>
-      </div>)}
-      {rules === null && <p role="status">{t("pluginPrewarmPolicy.invalid")}</p>}
-      {draft.rows.length === 0 && <p>{t("pluginPrewarmPolicy.emptyDraft")}</p>}
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={() => setDraft({ ...draft, rows: [...draft.rows, { id: crypto.randomUUID(), pluginId: "", toolId: "", target: "" }] })}>{t("pluginPrewarmPolicy.add")}</Button>
-        <Button type="button" size="sm" disabled={rules === null} onClick={save}>{t("pluginPrewarmPolicy.save")}</Button>
+  return <div className="plugin-prewarm">
+    {error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{error}</span></MaintenanceNotice>}
+    {status === null && busy && <p className="plugin-capacity-loading" role="status">{t("ui.loading")}</p>}
+    {status !== null && !fresh && !busy && <MaintenanceNotice actions={<Button onClick={() => void management.refresh()} size="sm" type="button" variant="outline">
+      {t("pluginRuntime.refresh")}</Button>} tone="info">{t("pluginPrewarmPolicy.stale")}</MaintenanceNotice>}
+    {status?.capacityUpdateRetained === true && <MaintenanceNotice tone="warning">{t("pluginPrewarmPolicy.capacityBlocked")}</MaintenanceNotice>}
+    {pending && <MaintenanceNotice actions={<Button disabled={busy || !fresh} onClick={management.acknowledgeUncertainty} size="sm" type="button" variant="outline">
+      {t("pluginPrewarmPolicy.acknowledge")}</Button>} tone="warning">
+      <p>{t("pluginPrewarmPolicy.unknown")}</p>
+      <TechnicalDetails entries={[]} extra={<pre className="plugin-maintenance-json">{JSON.stringify(pending, null, 2)}</pre>} />
+    </MaintenanceNotice>}
+    {receipt && <MaintenanceNotice actions={<>
+      {policyReceiptAllows(receipt, "cancel") && <Button disabled={busy || !fresh || pending !== null} onClick={() => void management.execute({ kind: "cancel", request: receipt.request })}
+        size="sm" type="button" variant="ghost">{t("pluginPrewarmPolicy.cancel")}</Button>}
+      {((receipt.phase !== "committed" && receipt.phase !== "cancelled") || receipt.persistenceError !== undefined) && <Button disabled={busy || !fresh || pending !== null}
+        onClick={() => void management.execute({ kind: "resume", request: receipt.request })} size="sm" type="button">{t("pluginPrewarmPolicy.resume")}</Button>}
+      {policyReceiptAllows(receipt, "forget") && <Button disabled={busy || !fresh || pending !== null} onClick={() => void management.execute({ kind: "forget", request: receipt.request })}
+        size="sm" type="button" variant="outline">{t("pluginPrewarmPolicy.forget")}</Button>}
+    </>} tone={receipt.phase === "committed" ? "success" : receipt.phase === "interrupted" ? "error" : receipt.phase === "cancelled" ? "info" : "warning"}>
+      <p>{t(receiptLabels[receipt.phase])}</p>
+      {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
+      <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
+        extra={<pre className="plugin-maintenance-json">{JSON.stringify(receipt, null, 2)}</pre>} />
+    </MaintenanceNotice>}
+    {status && draft === null && <>
+      {status.rules.length === 0
+        ? <div className="plugin-prewarm-empty">
+          <p className="plugin-prewarm-empty-title">{t("pluginPrewarmPolicy.disabled")}</p>
+          <p className="plugin-capacity-hint">{t("pluginPrewarmPolicy.emptyHint")}</p>
+          <Button disabled={!writable} onClick={() => edit(true)} size="sm" type="button"><Plus data-icon="inline-start" />{t("pluginPrewarmPolicy.add")}</Button>
+        </div>
+        : <ul className="plugin-prewarm-rules">
+          {status.rules.map((rule) => <li className="plugin-prewarm-rule" key={rule.toolId}>
+            <span aria-hidden="true" className="plugin-maintenance-item-icon"><Flame size={15} /></span>
+            <span className="plugin-prewarm-rule-main">
+              <span className="plugin-prewarm-rule-title">{nameOf(rule.pluginId)} · <code>{rule.toolId}</code></span>
+              <span className="plugin-prewarm-rule-meta">{formatMessage(t("pluginPrewarmPolicy.ruleSummary"), { count: rule.targetIdle })}</span>
+            </span>
+          </li>)}
+        </ul>}
+      <div className="plugin-prewarm-actions">
+        {status.rules.length > 0 && <Button disabled={!writable} onClick={() => edit(false)} size="sm" type="button" variant="outline">{t("pluginPrewarmPolicy.edit")}</Button>}
+        <span className="plugin-prewarm-actions-spacer" />
+        {/* A stale read already offers refresh in its notice, so this quiet control appears only for fresh data. */}
+        {/* 陈旧读取已在提示中提供刷新，因此此低调控件仅在数据最新时显示。 */}
+        {fresh && <Button disabled={busy} onClick={() => void management.refresh()} size="sm" type="button" variant="ghost">
+          <RefreshCw data-icon="inline-start" />{t("pluginRuntime.refresh")}</Button>}
       </div>
-    </fieldset>}
-    {pending && <div role="status" className="space-y-2">
-      <p>{t("pluginPrewarmPolicy.unknown")}</p><pre className="overflow-auto">{JSON.stringify(pending, null, 2)}</pre>
-      <Button type="button" size="sm" variant="outline" disabled={busy || !fresh} onClick={management.acknowledgeUncertainty}>{t("pluginPrewarmPolicy.acknowledge")}</Button>
+    </>}
+    {draft && <div className="plugin-prewarm-editor">
+      {!currentDraft && <MaintenanceNotice tone="warning">{t("pluginPrewarmPolicy.draftStale")}</MaintenanceNotice>}
+      {/* The fieldset locks only the rows; cancel stays reachable so a stale draft can always be discarded. */}
+      {/* fieldset 仅锁定规则行；取消保持可用，使过期草稿始终可以丢弃。 */}
+      <fieldset className="plugin-prewarm-editor-fields" disabled={!writable || !currentDraft}>
+        <legend className="sr-only">{t("pluginPrewarmPolicy.replacement")}</legend>
+        {draft.rows.length > 0 && <div className="plugin-prewarm-editor-head" aria-hidden="true">
+          <span>{t("pluginPrewarmPolicy.plugin")}</span><span>{t("pluginPrewarmPolicy.tool")}</span><span>{t("pluginPrewarmPolicy.count")}</span><span />
+        </div>}
+        {draft.rows.map((row) => {
+          const owner = props.plugins.find((plugin) => plugin.id === row.pluginId);
+          // options keeps an unavailable configured package selectable instead of silently dropping it.
+          // options 保留暂不可用的已配置包为可选项，而非静默丢弃。
+          const options = luaPlugins.map((plugin) => ({ id: plugin.id, name: plugin.name }));
+          if (owner === undefined && row.pluginId) options.push({ id: row.pluginId, name: row.pluginId });
+          return <div className="plugin-prewarm-editor-row" key={row.id}>
+            <label className="sr-only" htmlFor={`${prefix}-${row.id}-plugin`}>{t("pluginPrewarmPolicy.plugin")}</label>
+            <Select onValueChange={(value) => update(row.id, { pluginId: value, toolId: "" })} value={row.pluginId}>
+              <SelectTrigger id={`${prefix}-${row.id}-plugin`}><SelectValue placeholder={t("pluginPrewarmPolicy.plugin")} /></SelectTrigger>
+              <SelectContent>{options.map((plugin) => <SelectItem key={plugin.id} value={plugin.id}>{plugin.name}</SelectItem>)}</SelectContent>
+            </Select>
+            <label className="sr-only" htmlFor={`${prefix}-${row.id}-tool`}>{t("pluginPrewarmPolicy.tool")}</label>
+            <Input id={`${prefix}-${row.id}-tool`} list={`${prefix}-${row.id}-tools`} onChange={(event) => update(row.id, { toolId: event.target.value })}
+              placeholder={t("pluginPrewarmPolicy.toolPlaceholder")} value={row.toolId} />
+            <datalist id={`${prefix}-${row.id}-tools`}>{(owner?.tools ?? []).map((tool) => <option key={tool.id} value={tool.id} />)}</datalist>
+            <label className="sr-only" htmlFor={`${prefix}-${row.id}-target`}>{t("pluginPrewarmPolicy.count")}</label>
+            <Input id={`${prefix}-${row.id}-target`} inputMode="numeric" onChange={(event) => update(row.id, { target: event.target.value })} value={row.target} />
+            <IconButton aria-label={t("pluginPrewarmPolicy.remove")} onClick={() => setDraft({ ...draft, rows: draft.rows.filter((candidate) => candidate.id !== row.id) })} type="button">
+              <Trash2 size={15} /></IconButton>
+          </div>;
+        })}
+        {draft.rows.length === 0 && <p className="plugin-capacity-hint">{t("pluginPrewarmPolicy.emptyDraft")}</p>}
+        {rules === null && <p className="plugin-capacity-hint" role="status">{t("pluginPrewarmPolicy.invalid")}</p>}
+      </fieldset>
+      <div className="plugin-prewarm-actions">
+        <Button disabled={!writable || !currentDraft} onClick={() => setDraft({ ...draft, rows: [...draft.rows, blankRow()] })}
+          size="sm" type="button" variant="ghost"><Plus data-icon="inline-start" />{t("pluginPrewarmPolicy.addRow")}</Button>
+        <span className="plugin-prewarm-actions-spacer" />
+        <Button onClick={() => setDraft(null)} size="sm" type="button" variant="outline">{t("skills.plugins.cancel")}</Button>
+        <Button disabled={!writable || !currentDraft || rules === null} onClick={save} size="sm" type="button">{t("pluginPrewarmPolicy.save")}</Button>
+      </div>
     </div>}
-    {receipt && <div className="space-y-2">
-      <p>{t("pluginPrewarmPolicy.transaction")}: <code>{receipt.request.updateId}</code> / {receipt.phase}</p>
-      {receipt.error && <p role="alert">{receipt.error}</p>}
-      {receipt.persistenceError && <p role="alert">{receipt.persistenceError}</p>}
-      <div className="flex flex-wrap gap-2">{(["resume", "cancel", "forget"] as const).map((kind) =>
-        <Button key={kind} type="button" size="sm" variant="outline" disabled={busy || !fresh || pending !== null || !policyReceiptAllows(receipt, kind)}
-          onClick={() => void management.execute({ kind, request: receipt.request })}>{t(`pluginPrewarmPolicy.${kind}`)}</Button>)}</div>
-      <details><summary>{t("pluginPrewarm.evidence")}</summary><pre className="overflow-auto">{JSON.stringify(receipt, null, 2)}</pre></details>
-    </div>}
-    {!fresh && acknowledged && <details open><summary>{t("pluginPrewarmPolicy.acknowledged")}</summary><pre className="overflow-auto">{JSON.stringify(acknowledged, null, 2)}</pre></details>}
   </div>;
 }

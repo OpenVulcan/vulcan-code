@@ -1,10 +1,12 @@
 import * as React from "react";
+import { PackageMinus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { useI18n } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
 import type { SkillActionProps } from "./skill-area-types";
+import { MaintenanceItem, MaintenanceNotice, TechnicalDetails, useRecoveryReport, type RecoveryReport } from "./plugin-maintenance-section";
 
 // The uncertain foreground identity is observation only, never a second service ownership ledger.
 // 不确定前台身份仅是观测，绝不是第二套服务所有权账本。
@@ -41,16 +43,28 @@ export interface PluginUninstallRecoveryProps {
   // onLocateDiagnostics selects the original plugin/request pair for readonly blockers.
   // onLocateDiagnostics 为只读阻塞者选择原插件与请求组合。
   onLocateDiagnostics?: (pluginId: string, requestId: string) => void;
+  // pluginId narrows the displayed originals to one plugin's drawer; the full read and its checks are unchanged.
+  // pluginId 将显示的原实例收窄到单个插件抽屉；全量读取及其校验不变。
+  pluginId?: string;
+  // onRecordsObserved receives every successful full read so the page can surface retained originals.
+  // onRecordsObserved 接收每次成功全量读取，使页面可提示保留的原实例。
+  onRecordsObserved?: (records: PluginUninstallStatus[]) => void;
+  // pluginName resolves a display name; uninstalled plugins may be absent from the catalog and fall back to their ID.
+  // pluginName 解析显示名称；已卸载插件可能不在目录中，此时回退为其 ID。
+  pluginName: (pluginId: string) => string;
+  // scanToken changes whenever the container asks every reader to check again; the mount read is the first scan.
+  // scanToken 在容器要求所有读取器重新检查时变化；挂载读取即首次扫描。
+  scanToken?: number;
+  // onReport tells the container whether anything is shown.
+  // onReport 告知容器是否有显示内容。
+  onReport?: (report: RecoveryReport) => void;
 }
 
 // Observe all retained uninstalls on mount so hidden plugins remain discoverable after a full page refresh.
 // 挂载时观测全部保留卸载，使隐藏插件在整页刷新后仍可发现。
-// props supplies the declared protocol and gate; returns explicit continuation controls retaining collapse state.
-// props 提供声明协议及门；返回跨折叠保留状态的明确继续控件。
+// props supplies the declared protocol and gate; returns plain-language rows with explicit continuation.
+// props 提供声明协议及门；返回带明确继续操作的平实行。
 export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryProps) {
-  // expanded controls visibility without disposing original observations.
-  // expanded 控制可见性，不销毁原实例观测。
-  const [expanded, setExpanded] = React.useState(false);
   // records is the last successful full read, independent from the published plugin catalog.
   // records 是最近成功全量读取，独立于已发布插件目录。
   const [records, setRecords] = React.useState<PluginUninstallStatus[]>([]);
@@ -84,16 +98,13 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
   // alive guards component state after disposal.
   // alive 在销毁后保护组件状态。
   const alive = React.useRef(true);
-  // panelId provides a stable accessible collapse target.
-  // panelId 提供稳定无障碍折叠目标。
-  const panelId = React.useId();
   // t resolves locale-owned user copy.
   // t 解析语言目录持有的用户文案。
   const { t } = useI18n();
 
   React.useEffect(() => {
     if (props.initialUncertainty !== null) {
-      version.current += 1; setUncertain(props.initialUncertainty); setFresh(false); setExpanded(true); setConfirmation(null);
+      version.current += 1; setUncertain(props.initialUncertainty); setFresh(false); setConfirmation(null);
     }
   }, [props.initialUncertainty]);
 
@@ -117,6 +128,7 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
     if (alive.current && version.current === token) {
       setRecords(observed); setFresh(true);
       if (expected !== null) setUncertain(null);
+      props.onRecordsObserved?.(observed);
     }
   };
 
@@ -129,11 +141,23 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
     // token identifies this observation without changing the original request identity.
     // token 标识此观测，不改变原请求身份。
     const token = ++version.current;
-    busyRef.current = true; setBusy("read"); setFresh(false); setError(""); setConfirmation(null);
+    busyRef.current = true; setBusy("read"); setFresh(false); setError(""); setConfirmation(null); setConfirmed(null);
     try { await load(uncertain, token); }
     catch (reason) { if (alive.current && version.current === token) setError(String(reason)); }
-    finally { busyRef.current = false; if (alive.current) setBusy(null); }
+    finally { if (version.current === token) { busyRef.current = false; setBusy(null); } }
   };
+
+  // scanRef lets a later scan reuse the latest reader while re-running only when the token changes.
+  // scanRef 使后续扫描复用最新读取器，同时仅在令牌变化时重新运行。
+  const scanRef = React.useRef({ read, token: props.scanToken });
+  React.useEffect(() => { scanRef.current.read = read; });
+  React.useEffect(() => {
+    // The mount read below is the first scan; only a changed token reads again.
+    // 下方挂载读取即首次扫描；仅令牌变化时再次读取。
+    if (scanRef.current.token === props.scanToken) return;
+    scanRef.current.token = props.scanToken;
+    void scanRef.current.read();
+  }, [props.scanToken]);
 
   React.useEffect(() => {
     alive.current = true;
@@ -184,38 +208,54 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
       catch (reason) { failures.push(String(reason)); }
       if (alive.current && version.current === token) { setError(failures.join("\n")); setConfirmation(null); }
     } finally {
-      props.releaseMutation(); busyRef.current = false; if (alive.current) setBusy(null);
+      props.releaseMutation();
+      if (version.current === token) { busyRef.current = false; setBusy(null); }
     }
   };
 
   // canWrite requires fresh evidence and excludes unresolved foreground outcomes.
   // canWrite 要求新鲜证据，并排除未解决前台结果。
   const canWrite = fresh && busy === null && !props.mutationBusy && uncertain === null;
-  return <section className="space-y-3 rounded-md border p-3">
-    <Button type="button" size="sm" variant="ghost" aria-expanded={expanded} aria-controls={panelId}
-      onClick={() => setExpanded(!expanded)}>{t("pluginRecovery.uninstallTitle")}</Button>
-    {uncertain && <p role="status" className="break-all">{t("pluginRecovery.uninstallUnknown")} {uncertain.pluginId} {uncertain.requestId}</p>}
-    {confirmed && <p role="status" className="break-all">{t("pluginRecovery.uninstallConfirmed")} {confirmed.pluginId} / {confirmed.requestId}</p>}
-    <div id={panelId} hidden={!expanded} className="space-y-3 text-sm">
-      <p className="text-muted-foreground">{t("pluginRecovery.uninstallDescription")}</p>
-      <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={() => void read()}>{t("pluginRecovery.read")}</Button>
-      {error && <p role="alert" className="whitespace-pre-wrap">{error}</p>}
-      {!fresh && records.length > 0 && <p>{t("pluginUpdates.stale")}</p>}
-      {fresh && records.length === 0 && <p>{t("pluginRecovery.empty")}</p>}
-      {records.map((record) => <article key={record.requestId} className="space-y-2 rounded-md border p-3">
-        <p className="break-all">{record.pluginId} / {t("pluginUpdates.request")}: {record.requestId}</p>
-        <p>{t(record.phase === "executing" ? "pluginRecovery.executing" : "pluginRecovery.pending")}</p>
-        {props.onLocateDiagnostics !== undefined && <Button type="button" size="sm" variant="outline"
-          onClick={() => props.onLocateDiagnostics?.(record.pluginId, record.requestId)}>{t("pluginDiagnostics.locateRequest")}</Button>}
-        <Button type="button" size="sm" disabled={!canWrite || record.phase === "executing"}
-          onClick={() => { setConfirmation(record); setAcknowledgement(false); }}>{t("pluginRecovery.uninstallContinue")}</Button>
-      </article>)}
-    </div>
+  // visibleRecords keeps the exact observed objects so continuation still matches them by identity.
+  // visibleRecords 保留精确观测对象，使继续操作仍按身份匹配。
+  const visibleRecords = props.pluginId === undefined ? records : records.filter((record) => record.pluginId === props.pluginId);
+  const showUncertain = uncertain !== null && busy === null;
+  const visible = visibleRecords.length + (showUncertain ? 1 : 0) + (confirmed ? 1 : 0) + (error ? 1 : 0);
+  useRecoveryReport(props.onReport, !fresh && !error && records.length === 0, visible);
+  return <>
+    {showUncertain && <MaintenanceNotice tone="warning">{formatMessage(t("pluginRecovery.uninstallUnknownNotice"), { name: props.pluginName(uncertain.pluginId) })}</MaintenanceNotice>}
+    {confirmed && <MaintenanceNotice tone="success">{formatMessage(t("pluginRecovery.uninstallConfirmed"), { name: props.pluginName(confirmed.pluginId) })}</MaintenanceNotice>}
+    {error && <MaintenanceNotice tone="error"><span className="whitespace-pre-wrap break-all">{t("pluginRecovery.uninstallFailed")}{"\n"}{error}</span></MaintenanceNotice>}
+    {visibleRecords.map((record) => {
+      const title = formatMessage(t("pluginRecovery.uninstallItemTitle"), { name: props.pluginName(record.pluginId) });
+      const executing = record.phase === "executing";
+      return <MaintenanceItem
+        actions={<>
+          {props.onLocateDiagnostics !== undefined && <Button onClick={() => props.onLocateDiagnostics?.(record.pluginId, record.requestId)} size="sm" type="button" variant="ghost">
+            {t("pluginDiagnostics.locateRequest")}</Button>}
+          {!executing && <Button disabled={!canWrite} onClick={() => { setConfirmation(record); setAcknowledgement(false); }} size="sm" type="button">
+            {t("pluginRecovery.uninstallContinue")}</Button>}
+        </>}
+        description={t(executing ? "pluginRecovery.hint.executing" : "pluginRecovery.hint.uninstall")}
+        icon={<PackageMinus size={16} />}
+        key={record.requestId}
+        label={title}
+        title={<>{title}<span className="plugin-maintenance-item-status">{t(executing ? "pluginRecovery.executing" : "pluginRecovery.pending")}</span></>}
+        tone={executing ? "neutral" : "attention"}
+      >
+        <TechnicalDetails entries={[
+          [t("pluginUpdates.plugin"), <code key="plugin">{record.pluginId}</code>],
+          [t("pluginUpdates.request"), <code key="id">{record.requestId}</code>],
+          [t("pluginRecovery.phase"), <code key="phase">{record.phase}</code>],
+        ]} />
+      </MaintenanceItem>;
+    })}
     <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConfirmation(null); }}>
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>{t("pluginRecovery.uninstallContinue")}</AlertDialogTitle>
           <AlertDialogDescription>{t("pluginRecovery.uninstallWarning")}</AlertDialogDescription></AlertDialogHeader>
-        {confirmation && <p className="break-all text-sm">{confirmation.pluginId} / {confirmation.requestId}</p>}
+        {confirmation && <p className="text-sm">{formatMessage(t("pluginRecovery.uninstallItemTitle"), { name: props.pluginName(confirmation.pluginId) })}</p>}
+        {confirmation && <TechnicalDetails entries={[[t("pluginUpdates.request"), <code key="id">{confirmation.requestId}</code>]]} />}
         {confirmation?.requiresExternalEffectsAcknowledgement === true && <label className="flex items-start gap-2 text-sm">
           <Checkbox checked={acknowledgement} disabled={busy !== null} onCheckedChange={(checked) => setAcknowledgement(checked === true)} />
           {t("pluginRecovery.uninstallAcknowledgement")}
@@ -226,5 +266,5 @@ export function PluginUninstallRecoveryControls(props: PluginUninstallRecoveryPr
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  </section>;
+  </>;
 }

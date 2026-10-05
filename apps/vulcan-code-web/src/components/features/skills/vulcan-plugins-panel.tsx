@@ -1,9 +1,10 @@
 import * as React from "react";
-import { Bot, ChartNoAxesCombined, Cpu, FileText, FolderOpen, Hammer, Info, KeyRound, MessageSquareText, MessagesSquare, Puzzle, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Bot, ChartNoAxesCombined, Copy, Cpu, FileText, FolderOpen, Gauge, Hammer, History, Info, KeyRound, MessageSquareText, MessagesSquare, MoreHorizontal, Plus, Puzzle, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, IconButton } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -11,14 +12,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { StatusPill } from "@/components/shared/status";
 import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
-import { PluginRuntimeControls } from "./plugin-runtime-controls";
-import { PluginUpdateControls } from "./plugin-update-controls";
-import { PluginResourceDiagnostics } from "./plugin-resource-diagnostics";
-import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";
-import { PluginRequestRecoveryControls } from "./plugin-request-recovery-controls";
-import { PluginUninstallRecoveryControls, type PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
+import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
+import type { PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
 import type { PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
+import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
 
 // VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
 // VulcanPluginStatusFilter 标识 Vulcan 插件列表中显示的生命周期子集。
@@ -106,35 +104,6 @@ function PluginFact(props: { icon: LucideIcon; label: string; value?: number; it
   );
 }
 
-// localizedPluginText resolves plugin manifest text for the active WebUI locale.
-// localizedPluginText 为当前 WebUI 语言解析插件清单文案。
-//
-// Parameters: values contains locale-keyed manifest text, locale is the active WebUI locale, and fallback is the service-projected default text.
-// 参数：values 包含按语言标识组织的清单文案，locale 是当前 WebUI 语言，fallback 是服务投影的默认文案。
-// Returns: the exact-locale value, a same-language value, or the projected fallback in that order.
-// 返回值：依次返回完整语言匹配值、同语言匹配值或投影回退文案。
-function localizedPluginText(
-  values: Record<string, string>,
-  locale: string,
-  fallback: string,
-): string {
-  // exactValue preserves region-specific plugin translations when the package supplies them.
-  // exactValue 在插件包提供地区专用翻译时保留该翻译。
-  const exactValue = values[locale]?.trim();
-  if (exactValue) {
-    return exactValue;
-  }
-  // language identifies the configured base language for locale-compatible lookup.
-  // language 标识用于兼容语言查找的当前基础语言。
-  const language = locale.split("-")[0];
-  // languageValue follows the same exact-then-language convention as other localized catalogs.
-  // languageValue 遵循其他本地化目录使用的完整匹配后同语言匹配约定。
-  const languageValue = Object.entries(values).find(([candidate, value]) => (
-    (candidate === language || candidate.startsWith(`${language}-`)) && value.trim().length > 0
-  ))?.[1]?.trim();
-  return languageValue || fallback;
-}
-
 // vulcanPluginMatchesSearch checks one plugin against localized user-visible fields.
 // vulcanPluginMatchesSearch 使用本地化后的用户可见字段检查单个插件是否匹配搜索词。
 //
@@ -204,9 +173,18 @@ export function VulcanPluginsPanel(props: {
   // onSelectPluginResourceOwner 遵循既有服务支持的工作台选择链。
   onSelectPluginResourceOwner?: (conversationId: string, observation: AbortSignal) => Promise<boolean>;
 }) {
-  // diagnosticsSelection retains the exact card or original management request identity.
-  // diagnosticsSelection 保留精确卡片或原管理请求身份。
-  const [diagnosticsSelection, setDiagnosticsSelection] = React.useState<PluginDiagnosticsSelection | null>(null);
+  // maintenance owns the kept-alive maintenance drawer opened from card menus and the attention bar.
+  // maintenance 持有从卡片菜单与提醒条打开、保持存活的维护抽屉。
+  const maintenance = usePluginMaintenanceDrawer();
+  // retainedUninstalls is the latest full observation count of retained uninstall originals; null before any read.
+  // retainedUninstalls 是保留卸载原实例最近一次全量观测数量；尚未读取时为 null。
+  const [retainedUninstalls, setRetainedUninstalls] = React.useState<number | null>(null);
+  // installOpen shows the local package installer only when the user asks for it.
+  // installOpen 仅在用户需要时显示本地插件包安装器。
+  const [installOpen, setInstallOpen] = React.useState(false);
+  // installPanelId connects the install disclosure button with the installer it reveals.
+  // installPanelId 连接安装展开按钮与其显示的安装器。
+  const installPanelId = React.useId();
   // locale and t resolve plugin manifest text and stable plugin-page labels.
   // locale 与 t 分别解析插件清单文案和稳定的插件页面文案。
   const { locale, t } = useI18n();
@@ -557,11 +535,14 @@ export function VulcanPluginsPanel(props: {
       setUninstallUncertainty({ pluginId: plugin.id, requestId });
       setInstallError(failures.join("\n"));
       setPendingDestructive(null);
+      // The unconfirmed outcome is surfaced at once in the unscoped recovery, as the inline section used to expand.
+      // 未确认结果立即在不限定恢复中呈现，与原内联区块自动展开一致。
+      maintenance.open(ALL_PLUGINS_SCOPE, "recovery");
     } finally {
       actionRunningRef.current = false;
       setInstallBusy(false);
     }
-  }, [props.actions, t, uninstallUncertainty]);
+  }, [maintenance.open, props.actions, t, uninstallUncertainty]);
 
   // storePluginMcpSecret writes one blank-by-default replacement value and clears the draft on every outcome.
   // storePluginMcpSecret 写入一个默认空白的替换值，并在所有结果下清空草稿。
@@ -617,7 +598,7 @@ export function VulcanPluginsPanel(props: {
 
   return (
     <div className="skill-page-body lua-skill-page-body">
-      <section className="vulcan-plugin-install-panel" aria-label={t("skills.plugins.installLocalPlugin")}>
+      <section className="vulcan-plugin-install-panel" aria-label={t("skills.plugins.installLocalPlugin")} hidden={!installOpen} id={installPanelId}>
         <div className="vulcan-plugin-install-heading">
           <ShieldCheck size={17} />
           <div>
@@ -649,10 +630,6 @@ export function VulcanPluginsPanel(props: {
             {t("skills.plugins.inspect")}
           </Button>
         </div>
-        {installError ? <div className="skill-empty-state warning" role="alert">
-          <p>{t("skills.plugins.pluginActionFailedTry")}</p>
-          <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
-        </div> : null}
         {permissionPreview ? (
           <div className="vulcan-plugin-permission-preview">
             <div className="vulcan-plugin-permission-title">
@@ -755,18 +732,6 @@ export function VulcanPluginsPanel(props: {
           </div>
         ) : null}
       </section>
-      <PluginRuntimeControls plugins={props.plugins} onRefreshCatalog={props.actions.onRefreshLuaSkills} />
-      <PluginResourceDiagnostics selection={diagnosticsSelection} onSelect={setDiagnosticsSelection}
-        conversations={props.conversations ?? []} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} />
-      <PluginUpdateControls plugins={props.plugins} actions={props.actions}
-        onLocateDiagnostics={(pluginId, requestId) => setDiagnosticsSelection({ kind: "update", pluginId, requestId })} />
-      {(["installation", "credential"] as const).map((kind) => <PluginRequestRecoveryControls key={kind} kind={kind}
-        plugins={vulcanPlugins} actions={props.actions} suggestedPluginId={permissionPreview === null ? "" : permissionPreview.pluginId}
-        mutationBusy={mutationBusy} acquireMutation={acquireRecoveryMutation} releaseMutation={releaseRecoveryMutation} />)}
-      <PluginUninstallRecoveryControls actions={props.actions} initialUncertainty={uninstallUncertainty}
-        onLocateDiagnostics={(pluginId, requestId) => setDiagnosticsSelection({ kind: "uninstall", pluginId, requestId })}
-        onConfirmed={(pluginId) => { if (uninstallUncertainty?.pluginId === pluginId) { setUninstallUncertainty(null); setInstallError(""); } }}
-        mutationBusy={mutationBusy} acquireMutation={acquireRecoveryMutation} releaseMutation={releaseRecoveryMutation} />
       <div className="agent-catalog-filter-row skill-list-filter-row plugin-skill-filter-row">
         <label className="agent-catalog-search-input skill-list-search-input">
           <Search size={15} />
@@ -788,7 +753,24 @@ export function VulcanPluginsPanel(props: {
             <SelectItem value="issues">{t("skills.filter.issues")}</SelectItem>
           </SelectContent>
         </Select>
+        <Button aria-controls={installPanelId} aria-expanded={installOpen} onClick={() => setInstallOpen(!installOpen)} size="sm" type="button"
+          variant={installOpen ? "secondary" : "outline"}>
+          <Plus aria-hidden="true" size={15} />{t("skills.plugins.installLocalPlugin")}
+        </Button>
       </div>
+      {uninstallUncertainty !== null || (retainedUninstalls ?? 0) > 0 ? <div className="plugin-maintenance-attention" role="status">
+        <TriangleAlert aria-hidden="true" size={15} />
+        <span>{uninstallUncertainty !== null
+          ? t("pluginMaintenance.attention.uncertain")
+          : formatMessage(t("pluginMaintenance.attention.retained"), { count: retainedUninstalls ?? 0 })}</span>
+        <Button onClick={() => maintenance.open(ALL_PLUGINS_SCOPE, "recovery")} size="sm" type="button" variant="outline">
+          {t("pluginMaintenance.attention.open")}
+        </Button>
+      </div> : null}
+      {installError ? <div className="skill-empty-state warning" role="alert">
+        <p>{t("skills.plugins.pluginActionFailedTry")}</p>
+        <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{installError}</pre></details>
+      </div> : null}
       {secretError ? <div className="vulcan-plugin-install-error" role="alert">
         <p>{t("skills.plugins.credentialActionFailedTry")}</p>
         <details><summary>{t("skills.plugins.errorDetails")}</summary><pre className="plugin-control-error-details">{secretError}</pre></details>
@@ -844,12 +826,6 @@ export function VulcanPluginsPanel(props: {
                   </div>
                 </div>
                 <p>{localizedCapability}</p>
-                {plugin.extension !== undefined && plugin.extension !== null && <p className="break-all text-xs text-muted-foreground">
-                  {t("pluginDiagnostics.runtimeIdentity")}: <code>{plugin.extension.runtimeIdentity}</code>
-                </p>}
-                <Button type="button" size="sm" variant="outline" onClick={() => setDiagnosticsSelection({ kind: "plugin", pluginId: plugin.id })}>
-                  {t("pluginDiagnostics.title")}
-                </Button>
                 <div className="vulcan-plugin-facts">
                   <span className="agent-definition-row-path">{plugin.id}</span>
                   <PluginFact
@@ -987,6 +963,31 @@ export function VulcanPluginsPanel(props: {
                   <Trash2 size={15} />
                 </IconButton>
               ) : null}
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <IconButton aria-label={formatMessage(t("pluginMaintenance.menu"), { name: localizedName })} size="sm" title={t("pluginMaintenance.title")} type="button" variant="ghost">
+                    <MoreHorizontal size={15} />
+                  </IconButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => maintenance.open(plugin.id, "usage", { kind: "plugin", pluginId: plugin.id })}>
+                    <Activity aria-hidden="true" size={14} />{t("pluginMaintenance.action.usage")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => maintenance.open(plugin.id, "recovery")}>
+                    <History aria-hidden="true" size={14} />{t("pluginMaintenance.action.recovery")}
+                  </DropdownMenuItem>
+                  {plugin.extension?.hasLuaRuntime ? <DropdownMenuItem onSelect={() => maintenance.open(plugin.id, "capacity")}>
+                    <Gauge aria-hidden="true" size={14} />{t("pluginMaintenance.action.capacity")}
+                  </DropdownMenuItem> : null}
+                  {plugin.extension ? <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(plugin.extension?.runtimeIdentity ?? "")}
+                      title={plugin.extension.runtimeIdentity}>
+                      <Copy aria-hidden="true" size={14} />{t("pluginMaintenance.copyRuntimeIdentity")}
+                    </DropdownMenuItem>
+                  </> : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Switch
                 aria-busy={busyPluginId === plugin.id}
                 checked={plugin.desiredEnabled}
@@ -1008,6 +1009,18 @@ export function VulcanPluginsPanel(props: {
         })}
       </div>
       </TooltipProvider>
+      <PluginMaintenanceDrawer
+        actions={props.actions}
+        conversations={props.conversations ?? []}
+        drawer={maintenance}
+        gate={{ mutationBusy, acquireMutation: acquireRecoveryMutation, releaseMutation: releaseRecoveryMutation }}
+        onSelectPluginResourceOwner={props.onSelectPluginResourceOwner}
+        onUninstallConfirmed={(pluginId) => { if (uninstallUncertainty?.pluginId === pluginId) { setUninstallUncertainty(null); setInstallError(""); } }}
+        onUninstallRecordsObserved={(records) => setRetainedUninstalls(records.length)}
+        plugins={props.plugins}
+        pluginName={(pluginId) => pluginDisplayName(props.plugins, locale, pluginId)}
+        uninstallUncertainty={uninstallUncertainty}
+      />
       <AlertDialog open={pendingDestructive !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingDestructive(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

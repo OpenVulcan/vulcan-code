@@ -37,16 +37,22 @@ vi.mock("@/components/project/terminal/project-floating-terminal-layer", () => (
 vi.mock("@/components/workspace/workspace-shell", () => ({
   // WorkspaceShell substitutes only presentation; navigation callbacks are supplied by the actual WorkbenchLayout.
   // WorkspaceShell 仅替换展示；导航回调由实际 WorkbenchLayout 提供。
-  WorkspaceShell: (props: WorkspaceShellProps) => <div data-main-view={props.mainView} data-selected-owner={props.selectedConversationId}
+  // usageOpen models the maintenance drawer that hosts plugin usage; closing it disposes the diagnostic view.
+  // usageOpen 模拟承载插件使用情况的维护抽屉；关闭即销毁诊断视图。
+  WorkspaceShell: function Shell(props: WorkspaceShellProps) {
+    const [usageOpen, setUsageOpen] = React.useState(true);
+    return <div data-main-view={props.mainView} data-selected-owner={props.selectedConversationId}
     data-navigation-phase={props.conversationNavigation === null || props.conversationNavigation === undefined ? "none" : props.conversationNavigation.phase}>
     {props.rail}
-    <button onClick={() => { props.onSlashCommand({ id: "skills", command: "/skills" } as Parameters<WorkspaceShellProps["onSlashCommand"]>[0]); props.onSelectSkillSubArea("plugins"); }}>Open plugin diagnostics</button>
+    <button onClick={() => { setUsageOpen(true); props.onSlashCommand({ id: "skills", command: "/skills" } as Parameters<WorkspaceShellProps["onSlashCommand"]>[0]); props.onSelectSkillSubArea("plugins"); }}>Open plugin diagnostics</button>
+    <button onClick={() => setUsageOpen(false)}>Close plugin usage</button>
     <button onClick={() => props.onOpenMemory()}>Leave for memory</button>
     <button onClick={() => props.onSelectConversation("conversation-original")}>Sidebar selection</button>
     <button onClick={() => props.onSelectConversation("other-service-selected")}>Sidebar selection B</button>
-    {props.mainView === "skills" && <PluginResourceDiagnostics selection={diagnosticSelection} onSelect={() => undefined}
+    {props.mainView === "skills" && usageOpen && <PluginResourceDiagnostics selection={diagnosticSelection} onSelect={() => undefined}
       conversations={props.workbench.conversations} onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} />}
-  </div>,
+  </div>;
+  },
 }));
 // preview is the current detached browser fixture returned by its authoritative factory.
 // preview 是权威工厂返回的当前脱离引用浏览器夹具。
@@ -137,7 +143,7 @@ it.each(["leave", "collapse"] as const)("does not reopen chat after %s invalidat
   await click(readLocaleMessage("en-US", "pluginDiagnostics.locate"));
   expect(host.querySelector('[data-main-view="skills"]')).not.toBeNull();
   if (navigation === "leave") await click("Leave for memory");
-  else await click(readLocaleMessage("en-US", "pluginDiagnostics.title"));
+  else await click("Close plugin usage");
   await act(async () => finish({ ...workbench, revision: workbench.revision + 1, selectedConversationId: "conversation-original" }));
   expect(host.querySelector(`[data-main-view="${navigation === "leave" ? "memory" : "skills"}"]`)).not.toBeNull();
   expect(host.querySelector('[data-selected-owner]')?.getAttribute("data-selected-owner")).toBe(source.id);
@@ -227,7 +233,7 @@ it.each(["missing", "rejected", "cancelled"] as const)("clears a superseded side
   else vi.mocked(serviceClient.request).mockImplementationOnce(() => new Promise((resolve) => { finishOwner = resolve; }));
   await click(readLocaleMessage("en-US", "pluginDiagnostics.locate"));
   if (outcome === "cancelled") {
-    await click(readLocaleMessage("en-US", "pluginDiagnostics.title"));
+    await click("Close plugin usage");
     await act(async () => finishOwner({ ...workbench, revision: workbench.revision + 1, selectedConversationId: "conversation-original" }));
   }
   await click("Return through session rail");

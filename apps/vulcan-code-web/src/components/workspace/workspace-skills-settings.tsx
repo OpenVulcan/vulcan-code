@@ -9,6 +9,7 @@ import {
   Route,
   ScanSearch,
   Settings,
+  Wrench,
 } from "lucide-react";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skill-area-types";
 import {
@@ -105,6 +106,7 @@ export function PluginWorkspaceMenu(props: {
     { icon: <ScanSearch size={15} />, id: "context-engine", label: t("area.contextEngine") },
     { icon: <BookMarked size={15} />, id: "knowledge", label: t("area.knowledge") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
+    { icon: <Wrench size={15} />, id: "plugin-maintenance", label: t("skills.navigation.pluginMaintenance") },
   ];
 
   return (
@@ -142,6 +144,9 @@ export function skillSubAreaLabel(
   }
   if (subArea === "plugins") {
     return t("skills.navigation.plugins");
+  }
+  if (subArea === "plugin-maintenance") {
+    return t("skills.navigation.pluginMaintenance");
   }
   if (subArea === "mcp-servers") {
     return t("settings.mcpServers");

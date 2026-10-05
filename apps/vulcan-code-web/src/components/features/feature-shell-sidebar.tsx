@@ -12,6 +12,7 @@ import {
   Route,
   ScanSearch,
   Settings,
+  Wrench,
 } from "lucide-react"
 
 import { formatSkillText } from "@/components/features/featureText"
@@ -345,6 +346,7 @@ function featureSidebarRows(
       { id: "context-engine", label: t("area.contextEngine"), detail: t("area.contextEngine.description"), icon: <ScanSearch size={16} /> },
       { id: "knowledge", label: t("area.knowledge"), detail: t("area.knowledge.description"), icon: <BookMarked size={16} /> },
       { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin").length }), icon: <Puzzle size={16} /> },
+      { id: "luaskills-plugin-maintenance", label: t("skills.navigation.pluginMaintenance"), detail: t("pluginMaintenance.description"), icon: <Wrench size={16} /> },
       ...pluginRows,
     ]
   }
@@ -398,6 +400,9 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   }
   if (rowId === "luaskills-plugins") {
     return "plugins"
+  }
+  if (rowId === "luaskills-plugin-maintenance") {
+    return "plugin-maintenance"
   }
   if (rowId === "mcp-servers" || rowId === "context-engine" || rowId === "knowledge") {
     return rowId

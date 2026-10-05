@@ -3,7 +3,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { readLocaleMessage, type TranslationKey } from "@/i18n";
+import { formatMessage, readLocaleMessage, type TranslationKey } from "@/i18n";
 import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
 import { PluginUninstallRecoveryControls, type PluginUninstallRecoveryProps } from "./plugin-uninstall-recovery-controls";
 
@@ -38,10 +38,14 @@ let host: HTMLDivElement;
 // root owns React rendering and cleanup.
 // root 持有 React 渲染及清理。
 let root: Root;
+// scanToken and current mirror the recovery center's re-check token and the props of the latest render.
+// scanToken 及 current 对应恢复中心的重新检查令牌及最近一次渲染的属性。
+let scanToken = 0;
+let current: { overrides: Partial<PluginUninstallRecoveryProps>; strict: boolean } = { overrides: {}, strict: false };
 
-// label resolves the actual English translation for key; returns no synthetic copy.
-// label 解析 key 的实际英文翻译；不返回合成文案。
-function label(key: TranslationKey): string { return readLocaleMessage("en-US", key); }
+// label resolves the actual English translation for key, filling the fallback plugin name; returns no synthetic copy.
+// label 解析 key 的实际英文翻译并填入回退插件名称；不返回合成文案。
+function label(key: TranslationKey): string { return formatMessage(readLocaleMessage("en-US", key), { name: original.pluginId }); }
 // button finds key by semantic label; throws if the current fixture contract has changed.
 // button 按语义标签查找 key；当前夹具契约变化时抛错。
 function button(key: TranslationKey): HTMLButtonElement {
@@ -57,17 +61,21 @@ async function render(overrides: Partial<PluginUninstallRecoveryProps> = {}, str
   // controls use the same service mocks for mount, readback and explicit continuation.
   // controls 对挂载、回读及明确继续使用相同服务模拟。
   const controls = <PluginUninstallRecoveryControls actions={{ onReadPluginUninstallRequests: read, onResumePluginUninstallRequest: resume }}
-    initialUncertainty={null} onConfirmed={confirmed} mutationBusy={false} acquireMutation={acquire} releaseMutation={release} {...overrides} />;
+    initialUncertainty={null} onConfirmed={confirmed} mutationBusy={false} acquireMutation={acquire} releaseMutation={release}
+    pluginName={(pluginId) => pluginId} scanToken={scanToken} {...overrides} />;
+  current = { overrides, strict };
   await act(async () => root.render(strict ? <React.StrictMode>{controls}</React.StrictMode> : controls));
 }
+// recheck asks the mounted reader to check again, the way the recovery center's re-check button does.
+// recheck 以恢复中心重新检查按钮的方式要求已挂载读取器再次检查。
+async function recheck(): Promise<void> { scanToken += 1; await render(current.overrides, current.strict); }
 // openAndConfirm reviews the actual original in its confirmation portal without dispatching continuation.
 // openAndConfirm 在确认门户审阅实际原实例，不派发继续。
 async function openAndConfirm(): Promise<void> {
-  await act(async () => button("pluginRecovery.uninstallTitle").click());
   await act(async () => button("pluginRecovery.uninstallContinue").click());
 }
 beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.resetAllMocks();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.resetAllMocks(); scanToken = 0;
   read.mockResolvedValue([original]); resume.mockResolvedValue(); acquire.mockReturnValue(true);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host); await render();
 });
@@ -90,9 +98,7 @@ it("discovers hidden originals and confirms only a successful exact continuation
 // Only the explicit service flag exposes acknowledgement, which defaults false until checked.
 // 仅明确服务标志暴露确认，勾选前默认为假。
 it("shows acknowledgement only when required and sends true only after an explicit check", async () => {
-  read.mockResolvedValue([{ ...original, requiresExternalEffectsAcknowledgement: true }]);
-  await act(async () => button("pluginRecovery.uninstallTitle").click());
-  await act(async () => button("pluginRecovery.read").click());
+  read.mockResolvedValue([{ ...original, requiresExternalEffectsAcknowledgement: true }]); await recheck();
   await act(async () => button("pluginRecovery.uninstallContinue").click());
   // checkbox is the actual accessible acknowledgement inside the frozen original confirmation.
   // checkbox 是固定原实例确认中的实际无障碍确认框。
@@ -111,22 +117,22 @@ it("shows acknowledgement only when required and sends true only after an explic
 it("keeps a missing original unknown without replay and permits an explicit retry only after rediscovery", async () => {
   await openAndConfirm(); resume.mockRejectedValueOnce(new Error("response lost")); read.mockResolvedValue([]);
   await act(async () => button("skills.plugins.confirm").click());
-  expect(host.textContent).toContain(original.requestId); expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknown"));
+  expect(host.textContent).toContain("response lost"); expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknownNotice"));
   expect(confirmed).not.toHaveBeenCalled();
-  await act(async () => button("pluginRecovery.uninstallTitle").click());
-  await act(async () => button("pluginRecovery.uninstallTitle").click());
-  await act(async () => button("pluginRecovery.read").click()); expect(resume).toHaveBeenCalledTimes(1);
+  await recheck(); await recheck(); expect(resume).toHaveBeenCalledTimes(1);
   expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknown"));
-  read.mockResolvedValue([original]); await act(async () => button("pluginRecovery.read").click());
+  expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknownNotice"));
+  read.mockResolvedValue([original]); await recheck();
   expect(button("pluginRecovery.uninstallContinue").disabled).toBe(false); expect(resume).toHaveBeenCalledTimes(1);
+  expect(host.textContent).not.toContain(label("pluginRecovery.uninstallUnknownNotice"));
 });
 
 // A foreground response without a captured UUID remains explicitly unknown when the service has no matching owner.
 // 未捕获 UUID 的前台响应在服务没有匹配所有者时仍明确未知。
 it("retains the initial no-ID uncertainty across an empty registry", async () => {
-  await render({ initialUncertainty: { pluginId: original.pluginId, requestId: null } }); read.mockResolvedValue([]);
-  await act(async () => button("pluginRecovery.read").click());
-  expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknown")); expect(host.textContent).toContain(original.pluginId);
+  await render({ initialUncertainty: { pluginId: original.pluginId, requestId: null } }); read.mockResolvedValue([]); await recheck();
+  expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknown"));
+  expect(host.textContent).toContain(label("pluginRecovery.uninstallUnknownNotice"));
   expect(resume).not.toHaveBeenCalled(); expect(confirmed).not.toHaveBeenCalled();
 });
 
@@ -136,8 +142,8 @@ it("respects executing observations and the shared page gate", async () => {
   await openAndConfirm(); acquire.mockReturnValue(false); await act(async () => button("skills.plugins.confirm").click());
   expect(resume).not.toHaveBeenCalled(); expect(release).not.toHaveBeenCalled();
   await act(async () => root.render(null)); read.mockResolvedValue([{ ...original, phase: "executing" }]); await render();
-  await act(async () => button("pluginRecovery.uninstallTitle").click());
-  expect(button("pluginRecovery.uninstallContinue").disabled).toBe(true);
+  expect(host.textContent).toContain(label("pluginRecovery.executing"));
+  expect(() => button("pluginRecovery.uninstallContinue")).toThrow();
 });
 
 // Real RPC success remains confirmed when subsequent observation fails.
@@ -154,7 +160,6 @@ it("preserves confirmed completion alongside failed readback", async () => {
 // StrictMode 的丢弃挂载不能抑制活动读取或伪造继续。
 it("retains read-only discovery through StrictMode remount", async () => {
   await act(async () => root.render(null)); await render({}, true);
-  await act(async () => button("pluginRecovery.uninstallTitle").click());
   expect(button("pluginRecovery.uninstallContinue").disabled).toBe(false); expect(resume).not.toHaveBeenCalled();
 });
 
@@ -171,4 +176,17 @@ it("releases admission after an in-flight continuation outlives the renderer", a
   await act(async () => root.render(null)); read.mockResolvedValue([]); await act(async () => finish());
   expect(resume).toHaveBeenCalledExactlyOnceWith(original.pluginId, original.requestId, false);
   expect(release).toHaveBeenCalledTimes(1);
+});
+
+// A plugin drawer shows only its own originals while the full read and its duplicate checks stay unchanged.
+// 插件抽屉仅显示自身原实例，全量读取及其重复检查保持不变。
+it("narrows displayed originals to one plugin and reports what it shows", async () => {
+  // report observes the reader's settled visible count for the recovery center.
+  // report 观测读取器为恢复中心报告的已完成可见数量。
+  const report = vi.fn();
+  read.mockResolvedValue([original, { ...original, requestId: "12345678-1234-4234-8234-123456789abd", pluginId: "other" }]);
+  await act(async () => root.render(null)); await render({ pluginId: "other", onReport: report });
+  expect(host.querySelectorAll("article")).toHaveLength(1);
+  expect(host.textContent).toContain(formatMessage(readLocaleMessage("en-US", "pluginRecovery.uninstallItemTitle"), { name: "other" }));
+  expect(report).toHaveBeenLastCalledWith({ loading: false, visible: 1 });
 });

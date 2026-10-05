@@ -9,6 +9,7 @@ import { executePluginPrewarmCommand, readPluginPrewarmCatalog } from "@/service
 import { readPluginRuntime, type PluginRuntimeObservation } from "@/service/plugin-runtime-service";
 import type { ConversationSummary } from "@/types";
 import type { PluginPrewarmCatalog } from "@/types/plugin-prewarm";
+import { readLocaleMessage } from "@/i18n";
 import { PluginPrewarmControls } from "./plugin-prewarm-controls";
 
 vi.mock("@/service/plugin-runtime-service", () => ({ executePluginRuntimeCommand: vi.fn(), readPluginRuntime: vi.fn() }));
@@ -152,7 +153,7 @@ it("retains a lost preparation for inspection and never automatically repeats it
   vi.mocked(executePluginPrewarmCommand).mockRejectedValueOnce(new Error("response lost"));
   await act(async () => button("准备预热回执").click());
   expect(host.textContent).toContain("请求结果未确认");
-  expect(button("确认本地未知结果").disabled).toBe(true);
+  expect(button(readLocaleMessage("zh-CN", "pluginRuntime.discardTracking")).disabled).toBe(true);
   await act(async () => button("插件 VM 预热").click());
   await act(async () => button("插件 VM 预热").click());
   expect(executePluginPrewarmCommand).toHaveBeenCalledTimes(1);
@@ -161,7 +162,7 @@ it("retains a lost preparation for inspection and never automatically repeats it
   catalog = { ...catalog, targets: [receipt] };
   await act(async () => button("读取预热目录与回执").click());
   expect(button("启动原预热").disabled).toBe(true);
-  await act(async () => button("确认本地未知结果").click());
+  await act(async () => button(readLocaleMessage("zh-CN", "pluginRuntime.discardTracking")).click());
   expect(button("启动原预热").disabled).toBe(false);
   expect(executePluginPrewarmCommand).toHaveBeenCalledTimes(1);
 });
@@ -191,7 +192,7 @@ it("does not reuse old receipts after observing a replacement parent", async () 
   catalog = { ...catalog, targets: [receipt] };
   await openAndRead();
   parent = { runtime: { ...parent.runtime!, runtimeId: "replacement" }, catalog: { ...parent.catalog!, runtimeId: "replacement" } };
-  await act(async () => button("刷新运行时状态").click());
+  await act(async () => button(readLocaleMessage("zh-CN", "pluginRuntime.refresh")).click());
   expect(host.querySelector(`article[aria-label="${receipt.invocationId}"]`)).toBeNull();
   expect(host.textContent).toContain("旧运行时的保留证据（仅供核查，不能转移到当前运行时）");
   expect(host.textContent).toContain(receipt.invocationId);
