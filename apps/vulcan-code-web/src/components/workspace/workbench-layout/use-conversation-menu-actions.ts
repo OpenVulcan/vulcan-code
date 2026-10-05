@@ -1,0 +1,161 @@
+import React from "react";
+import { toast } from "sonner";
+import type { RenameTarget } from "@/components/project/project-action-dialogs";
+import type { ConversationMenuAction } from "@/components/project/project-sidebar";
+import { formatWorkbenchTranslation } from "@/components/workspace/workbench-layout/types";
+import type { TranslationKey } from "@/i18n";
+import { archiveConversation, openProjectDirectoryPath } from "@/service/project-actions-service";
+import { projectForConversation } from "@/state/workbench-selectors";
+import type { ConversationSummary, WorkbenchSnapshot } from "@/types";
+
+// ConversationMenuActionsOptions supplies the workbench state and appliers used by conversation-tree commands.
+// ConversationMenuActionsOptions 提供会话树命令使用的工作台状态与应用器。
+export interface ConversationMenuActionsOptions {
+  // Translates fixed workbench messages in the active locale.
+  // 以当前语言翻译固定工作台消息。
+  translate: (key: TranslationKey) => string;
+  // Current workbench used to resolve the owning project and the archive release boundary.
+  // 当前工作台，用于解析归属项目与归档释放边界。
+  workbenchState: WorkbenchSnapshot;
+  // Opens the shared rename dialog.
+  // 打开共享的重命名弹窗。
+  setRenameTarget: React.Dispatch<React.SetStateAction<RenameTarget | null>>;
+  // Merges an accepted service snapshot; returns false when the revision gate rejects it.
+  // 合并已接受的服务快照；版本闸门拒绝时返回 false。
+  applyProjectActionSnapshot: (snapshot: WorkbenchSnapshot) => boolean;
+  // Applies only the lifecycle fields of a rejected snapshot; returns false when nothing converged.
+  // 仅应用被拒绝快照中的生命周期字段；未收敛时返回 false。
+  applyLifecycleResponseSnapshot: (snapshot: WorkbenchSnapshot, conversationIds: string[]) => boolean;
+}
+
+// ConversationMenuActions exposes the local pin set and the conversation-tree command handler.
+// ConversationMenuActions 暴露本地置顶集合与会话树命令处理器。
+export interface ConversationMenuActions {
+  // Conversations pinned locally until persistence is added.
+  // 本地置顶的会话，直到后续接入持久化。
+  pinnedConversationIds: Set<string>;
+  // Executes one context-menu command for one conversation.
+  // 为单个会话执行一个右键菜单命令。
+  handleConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => Promise<void>;
+}
+
+// useConversationMenuActions owns conversation-tree context-menu commands and their archive request locks.
+// useConversationMenuActions 持有会话树右键菜单命令及其归档请求锁。
+// Parameters: options supplies translation, workbench state, the rename dialog setter and snapshot appliers.
+// 参数：options 提供翻译、工作台状态、重命名弹窗设置器与快照应用器。
+// Returns: the pin set and the menu command handler.
+// 返回值：置顶集合与菜单命令处理器。
+export function useConversationMenuActions(options: ConversationMenuActionsOptions): ConversationMenuActions {
+  const {
+    translate,
+    workbenchState,
+    setRenameTarget,
+    applyProjectActionSnapshot,
+    applyLifecycleResponseSnapshot,
+  } = options;
+  // pinnedConversationIds stores the locally pinned conversations until persistence is added.
+  // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
+  const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
+  // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
+  // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
+  const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
+
+  // handleConversationMenuAction executes conversation-tree context menu commands.
+  // handleConversationMenuAction 执行会话树右键菜单命令。
+  const handleConversationMenuAction = React.useCallback(async (action: ConversationMenuAction, conversation: ConversationSummary) => {
+    try {
+      if (action === "rename") {
+        setRenameTarget({ kind: "conversation", id: conversation.id, name: conversation.title });
+        return;
+      }
+      if (action === "pin") {
+        setPinnedConversationIds((current) => {
+          const next = new Set(current);
+          if (next.has(conversation.id)) {
+            next.delete(conversation.id);
+            toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.unpinned", { conversation: conversation.title }));
+          } else {
+            next.add(conversation.id);
+            toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.pinned", { conversation: conversation.title }));
+          }
+          return next;
+        });
+        return;
+      }
+      if (action === "archive") {
+        if (conversationArchivePendingIdsRef.current.has(conversation.id)) {
+          return;
+        }
+        conversationArchivePendingIdsRef.current.add(conversation.id);
+        // archiveCommitted keeps the request locked after success until the active row actually disappears.
+        // archiveCommitted 在成功后继续保持请求锁，直到活动行真正消失。
+        let archiveCommitted = false;
+        try {
+          const snapshot = await archiveConversation(conversation.id);
+          if (snapshot) {
+            const snapshotApplied = applyProjectActionSnapshot(snapshot);
+            if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, [conversation.id])) {
+              throw new Error(translate("workspace.lifecycle.archiveNotConverged"));
+            }
+          } else {
+            throw new Error(translate("workspace.lifecycle.archiveNoSnapshot"));
+          }
+          archiveCommitted = true;
+          toast.success(formatWorkbenchTranslation(translate, "workbenchConversation.archived", { conversation: conversation.title }));
+        } finally {
+          if (!archiveCommitted) {
+            conversationArchivePendingIdsRef.current.delete(conversation.id);
+          }
+        }
+        return;
+      }
+      if (action === "open-directory") {
+        const project = projectForConversation(workbenchState, conversation);
+        if (!project) {
+          toast.error(translate("workbenchConversation.noProject"));
+          return;
+        }
+        const message = await openProjectDirectoryPath(project.path);
+        toast.success(message ?? formatWorkbenchTranslation(translate, "projectActions.openRequested", { project: project.name }));
+        return;
+      }
+      if (action === "copy-workdir") {
+        const project = projectForConversation(workbenchState, conversation);
+        if (!project) {
+          toast.error(translate("workbenchConversation.noProject"));
+          return;
+        }
+        await navigator.clipboard.writeText(project.path);
+        toast.success(translate("workbenchConversation.copiedWorkspace"));
+        return;
+      }
+      if (action === "copy-title") {
+        await navigator.clipboard.writeText(conversation.title);
+        toast.success(translate("workbenchConversation.copiedTitle"));
+        return;
+      }
+      if (action === "copy-session-id") {
+        await navigator.clipboard.writeText(conversation.id);
+        toast.success(translate("workbenchConversation.copiedSessionId"));
+        return;
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, setRenameTarget, translate, workbenchState]);
+
+  // Release committed archive request locks only after the authoritative active row is no longer visible.
+  // 仅在权威活动行不再可见后释放已提交归档请求锁。
+  React.useEffect(() => {
+    // activeConversationIds is the current lifecycle boundary rendered by the sidebar.
+    // activeConversationIds 是侧栏当前渲染的生命周期边界。
+    const activeConversationIds = new Set(workbenchState.conversations.map((conversation) => conversation.id));
+    for (const conversationId of conversationArchivePendingIdsRef.current) {
+      if (!activeConversationIds.has(conversationId)) {
+        conversationArchivePendingIdsRef.current.delete(conversationId);
+      }
+    }
+  }, [workbenchState.conversations]);
+
+  return { pinnedConversationIds, handleConversationMenuAction };
+}

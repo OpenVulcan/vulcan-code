@@ -1,3 +1,4 @@
+import type { TranslationKey } from "@/i18n";
 import type {
   WorkbenchDeltaEnvelope,
 } from "@/types";
@@ -57,4 +58,17 @@ export async function copyText(text: string): Promise<void> {
     throw new Error("Clipboard writing is unavailable in this client.");
   }
   await navigator.clipboard.writeText(text);
+}
+
+// formatWorkbenchTranslation replaces named placeholders in localized workbench messages.
+// formatWorkbenchTranslation 替换工作台本地化消息中的具名占位符。
+export function formatWorkbenchTranslation(
+  t: (key: TranslationKey) => string,
+  key: TranslationKey,
+  values: Record<string, string>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
+    t(key),
+  );
 }

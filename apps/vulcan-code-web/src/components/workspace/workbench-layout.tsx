@@ -27,20 +27,13 @@ import {
   type ProjectIconDialogTarget,
 } from "@/components/project/project-icons";
 import {
-  projectConversationCount,
-} from "@/components/project/project-settings-utils";
-import {
   type ProjectSettingsDialogTarget,
 } from "@/components/project/project-settings-types";
-import {
-  ProjectSessionTree,
-  type ConversationMenuAction,
-} from "@/components/project/project-sidebar";
+import { ProjectSessionTree } from "@/components/project/project-sidebar";
 import {
   ProjectFloatingTerminalLayer,
   type ProjectTerminalVisibilityRequest,
 } from "@/components/project/terminal/project-floating-terminal-layer";
-import { clearProjectTerminalInputBuffers } from "@/components/project/terminal/project-terminal-input-buffer";
 import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
@@ -55,6 +48,7 @@ import { routeWorkspaceInputOwnerFromPointer } from "@/components/workspace/work
 import { useWorkbenchShellChrome } from "@/components/workspace/workbench-layout/shell-chrome";
 import {
   copyText,
+  formatWorkbenchTranslation,
   webuiClickTrace,
   type WorkbenchDeltaSignal,
 } from "@/components/workspace/workbench-layout/types";
@@ -63,6 +57,10 @@ import { useWorkbenchProjectActions } from "@/components/workspace/workbench-lay
 import { useWorkbenchSessionActions } from "@/components/workspace/workbench-layout/session-actions";
 import { useStopConversationRunDecision } from "@/components/workspace/workbench-layout/use-stop-conversation-run-decision";
 import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components/workspace/workbench-layout/use-workbench-revision-sync";
+import { useProjectTerminalRunningCounts } from "@/components/workspace/workbench-layout/use-project-terminal-running-counts";
+import { useProjectLifecycleConfirmation } from "@/components/workspace/workbench-layout/use-project-lifecycle-confirmation";
+import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
+import { useConversationSelectionNavigation } from "@/components/workspace/workbench-layout/use-conversation-selection-navigation";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
@@ -81,7 +79,7 @@ import {
 import type {
   MemorySubAreaId,
 } from "@/components/features/memory/memory-area";
-import { useI18n, type LocaleCode, type TranslationKey } from "@/i18n";
+import { useI18n, type LocaleCode } from "@/i18n";
 import { notificationCoordinator } from "@/notifications/coordinator";
 import {
   resetNotificationPresentationContext,
@@ -91,36 +89,26 @@ import type { NotificationPresentationContext } from "@/notifications/types";
 import { useConversationLiveStreamStore } from "@/state/conversation-live-stream-context";
 import type {
   ComposerSlashCommandSummary,
-  ConversationSummary,
   FeatureAreaSummary,
   MainAreaId,
   ProjectSummary,
-  ProjectTerminalRunningCountChangedEvent,
   SettingsSubAreaId,
   StartupSnapshot,
   WorkbenchSnapshot,
   MediaUploadProgressChangedDelta,
 } from "@/types";
-import { listProjectTerminals } from "@/service/terminal-service";
-import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import {
   rejectPendingQuestion,
   replyPendingQuestion,
   stageComposerAttachmentBytes,
 } from "@/service/conversation-actions-service";
 import {
-  archiveConversation,
-  archiveProjectConversations,
   browseProjectDirectories,
   deleteArchivedConversations,
-  markConversationRead,
   openExternalUrl,
-  openProjectDirectoryPath,
-  removeProject,
   renameConversation,
   renameProject,
   restoreArchivedConversations,
-  selectConversation,
 } from "@/service/project-actions-service";
 import {
   clearSelectedProviderApiTraceDirectory,
@@ -157,7 +145,6 @@ import {
   markConversationLocallyRead,
   workbenchWithSelectedConversationProjection,
 } from "@/state/workbench-state";
-import { projectForConversation } from "@/state/workbench-selectors";
 import { toast } from "sonner";
 
 // WorkbenchDialogs loads project and question dialogs only after one actually opens.
@@ -300,34 +287,6 @@ export function WorkbenchLayout(props: {
   // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
   // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
   const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
-  // conversationSelectionRequestVersionRef prevents an older selection response from committing after a newer click.
-  // conversationSelectionRequestVersionRef 防止较早的选择响应在较新的点击之后提交。
-  const conversationSelectionRequestVersionRef = React.useRef(0);
-  // pluginOwnerNavigationVersionRef cancels diagnostic-owner navigation when its source page leaves or disposes.
-  // pluginOwnerNavigationVersionRef 在来源页面离开或销毁时取消诊断所有者导航。
-  const pluginOwnerNavigationVersionRef = React.useRef(0);
-  React.useLayoutEffect(() => {
-    pluginOwnerNavigationVersionRef.current += 1;
-    return () => { pluginOwnerNavigationVersionRef.current += 1; };
-  }, [activeArea, workspaceMainView, activeWorkbenchSkillSubArea]);
-  // conversationNavigation owns visual feedback while the authoritative route remains on its previous session.
-  // conversationNavigation 在权威路由仍属于原会话期间管理视觉反馈。
-  const [conversationNavigation, setConversationNavigation] = React.useState<{
-    sourceId: string | null;
-    targetId: string;
-    phase: "exiting" | "loading" | "waiting-owner" | "entering";
-    showLoading: boolean;
-  } | null>(null);
-  // External route changes cancel an in-flight visual selection and invalidate its service response.
-  // 外部路由变化会取消正在进行的视觉选择，并使其服务响应失效。
-  React.useEffect(() => {
-    if (conversationNavigation
-      && selectedConversationId !== conversationNavigation.sourceId
-      && selectedConversationId !== conversationNavigation.targetId) {
-      conversationSelectionRequestVersionRef.current += 1;
-      setConversationNavigation(null);
-    }
-  }, [conversationNavigation, selectedConversationId]);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(
@@ -358,15 +317,6 @@ export function WorkbenchLayout(props: {
   // projectTerminalButtonRef exposes the exact top-bar target for the macOS-style Genie animation.
   // projectTerminalButtonRef 暴露 macOS 风格精灵动画使用的精确顶部栏目标。
   const projectTerminalButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  // projectTerminalRunningCounts stores count-only lifecycle state independently from terminal content.
-  // projectTerminalRunningCounts 独立于终端内容保存仅包含数量的生命周期状态。
-  const [projectTerminalRunningCounts, setProjectTerminalRunningCounts] = React.useState<Record<
-    string,
-    { runningCount: number; revision: number }
-  >>({});
-  // projectTerminalCountListenerReady closes the bootstrap race between event registration and the first query.
-  // projectTerminalCountListenerReady 消除事件注册与首次查询之间的初始竞态。
-  const [projectTerminalCountListenerReady, setProjectTerminalCountListenerReady] = React.useState(false);
   // mediaUploadProgresses keeps every active pre-dispatch or tool-triggered transfer keyed by its exact identity.
   // mediaUploadProgresses 按精确身份保存所有活跃的分派前或工具触发传输，避免并发上传互相覆盖。
   const [mediaUploadProgresses, setMediaUploadProgresses] = React.useState<Record<string, MediaUploadProgressChangedDelta>>({});
@@ -378,70 +328,9 @@ export function WorkbenchLayout(props: {
     ),
     [mediaUploadProgresses],
   );
-  React.useEffect(() => {
-    setProjectTerminalCountListenerReady(false);
-    setProjectTerminalRunningCounts({});
-    if (!hasServiceRuntime()) return undefined;
-    let cancelled = false;
-    let unsubscribe: (() => void) | null = null;
-    // subscription receives project metadata only; terminal output remains bound to visible display attachments.
-    // subscription 仅接收项目元数据；终端输出仍严格绑定可见显示挂接。
-    const subscription = serviceClient.subscribe<ProjectTerminalRunningCountChangedEvent>(
-      "project.terminal.running-count.changed",
-      (event) => {
-        if (cancelled) return;
-        setProjectTerminalRunningCounts((current) => {
-          const previous = current[event.projectId];
-          if (previous && previous.revision > event.revision) return current;
-          return {
-            ...current,
-            [event.projectId]: {
-              runningCount: event.runningCount,
-              revision: event.revision,
-            },
-          };
-        });
-      },
-    );
-    void subscription.then((nextUnsubscribe) => {
-      if (cancelled) nextUnsubscribe();
-      else {
-        unsubscribe = nextUnsubscribe;
-        setProjectTerminalCountListenerReady(true);
-      }
-    }).catch(() => undefined);
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-      unsubscribe = null;
-    };
-  }, [props.serviceInstanceEpoch]);
-  React.useEffect(() => {
-    if (!activeProjectId || !projectTerminalCountListenerReady || !hasServiceRuntime()) return undefined;
-    let cancelled = false;
-    // loadRunningCount performs one metadata bootstrap for the active project without attaching screen content.
-    // loadRunningCount 为当前活动项目执行一次元数据初始加载，不挂接屏幕内容。
-    const loadRunningCount = async (): Promise<void> => {
-      const catalog = await listProjectTerminals(activeProjectId);
-      if (cancelled || !catalog || catalog.projectId !== activeProjectId) return;
-      const runningCount = catalog.terminals.filter((terminal) => terminal.status === "running").length;
-      setProjectTerminalRunningCounts((current) => {
-        const previous = current[activeProjectId];
-        if (previous && previous.revision > catalog.runningCountRevision) return current;
-        return {
-          ...current,
-          [activeProjectId]: {
-            runningCount,
-            revision: catalog.runningCountRevision,
-          },
-        };
-      });
-    };
-    void loadRunningCount().catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProjectId, projectTerminalCountListenerReady, props.serviceInstanceEpoch]);
+  // projectTerminalRunningCounts stores count-only lifecycle state independently from terminal content.
+  // projectTerminalRunningCounts 独立于终端内容保存仅包含数量的生命周期状态。
+  const projectTerminalRunningCounts = useProjectTerminalRunningCounts(props.serviceInstanceEpoch, activeProjectId);
   React.useEffect(() => {
     if (
       isPluginDetailSubArea(activeWorkbenchSkillSubArea)
@@ -478,9 +367,6 @@ export function WorkbenchLayout(props: {
     projectSettingsRevisionById,
     globalProjectSettingsRevision,
   } = revisionGates;
-  // conversationArchivePendingIdsRef blocks duplicate archive RPCs until failure or visible lifecycle convergence.
-  // conversationArchivePendingIdsRef 在失败或可见生命周期收敛前阻止重复归档 RPC。
-  const conversationArchivePendingIdsRef = React.useRef<Set<string>>(new Set());
   // expandedProjectIdsLocallyEditedRef records whether the user has touched project expansion in this session.
   // expandedProjectIdsLocallyEditedRef 记录本轮会话中用户是否已经手动修改过项目展开状态。
   const expandedProjectIdsLocallyEditedRef = React.useRef(false);
@@ -540,24 +426,9 @@ export function WorkbenchLayout(props: {
   // archiveProjectTarget stores the project waiting for archive confirmation.
   // archiveProjectTarget 保存正在等待归档确认的项目。
   const [archiveProjectTarget, setArchiveProjectTarget] = React.useState<ProjectSummary | null>(null);
-  // archiveProjectSubmitting tracks a bulk archive request in the confirmation dialog.
-  // archiveProjectSubmitting 跟踪批量归档确认弹窗中的请求状态。
-  const [archiveProjectSubmitting, setArchiveProjectSubmitting] = React.useState(false);
-  // archiveProjectInFlightRef excludes synchronous duplicate bulk lifecycle requests.
-  // archiveProjectInFlightRef 排除同步重复的批量生命周期请求。
-  const archiveProjectInFlightRef = React.useRef(false);
   // removeProjectTarget stores the project waiting for removal confirmation.
   // removeProjectTarget 保存正在等待移除确认的项目。
   const [removeProjectTarget, setRemoveProjectTarget] = React.useState<ProjectSummary | null>(null);
-  // removeProjectSubmitting tracks an archive-then-remove project request.
-  // removeProjectSubmitting 跟踪先归档再移除项目的请求状态。
-  const [removeProjectSubmitting, setRemoveProjectSubmitting] = React.useState(false);
-  // removeProjectInFlightRef locks destructive removal before React publishes the busy state.
-  // removeProjectInFlightRef 在 React 发布忙碌状态前锁定破坏性移除。
-  const removeProjectInFlightRef = React.useRef(false);
-  // pinnedConversationIds stores the locally pinned conversations until persistence is added.
-  // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
-  const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
   // activeSettingsSubArea stores the selected settings sidebar page.
   // activeSettingsSubArea 保存设置侧栏当前选择的页面。
   const [activeSettingsSubArea, setActiveSettingsSubArea] = React.useState<SettingsSubAreaId>("model-providers");
@@ -624,6 +495,28 @@ export function WorkbenchLayout(props: {
     setActiveArea("chat");
     setWorkspaceMainView("chat");
   }, []);
+  // conversationSelection orders sidebar, notification and diagnostic-owner selections and their visual transition.
+  // conversationSelection 管理侧栏、通知与诊断所有者选择的先后顺序及其视觉过渡。
+  const {
+    conversationNavigation,
+    handleConversationNavigationReady,
+    handleSelectConversation,
+    handleSelectPluginResourceOwner,
+  } = useConversationSelectionNavigation({
+    selectedConversationId,
+    selectedConversationIdRef,
+    setSelectedConversationId,
+    setWorkbenchState,
+    workbenchStateRef,
+    mergeWorkbenchWithLocalCaches,
+    acceptServiceWorkbenchSnapshot,
+    liveStreamStore,
+    handleOpenWorkspaceChat,
+    isConversationInitialized: props.isConversationInitialized,
+    activeArea,
+    workspaceMainView,
+    activeSkillSubArea: activeWorkbenchSkillSubArea,
+  });
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -821,256 +714,15 @@ export function WorkbenchLayout(props: {
     requestStopConversationRunChoice,
   });
 
-  // handleConversationMenuAction executes conversation-tree context menu commands.
-  // handleConversationMenuAction 执行会话树右键菜单命令。
-  const handleConversationMenuAction = React.useCallback(async (action: ConversationMenuAction, conversation: ConversationSummary) => {
-    try {
-      if (action === "rename") {
-        setRenameTarget({ kind: "conversation", id: conversation.id, name: conversation.title });
-        return;
-      }
-      if (action === "pin") {
-        setPinnedConversationIds((current) => {
-          const next = new Set(current);
-          if (next.has(conversation.id)) {
-            next.delete(conversation.id);
-            toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.unpinned", { conversation: conversation.title }));
-          } else {
-            next.add(conversation.id);
-            toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.pinned", { conversation: conversation.title }));
-          }
-          return next;
-        });
-        return;
-      }
-      if (action === "archive") {
-        if (conversationArchivePendingIdsRef.current.has(conversation.id)) {
-          return;
-        }
-        conversationArchivePendingIdsRef.current.add(conversation.id);
-        // archiveCommitted keeps the request locked after success until the active row actually disappears.
-        // archiveCommitted 在成功后继续保持请求锁，直到活动行真正消失。
-        let archiveCommitted = false;
-        try {
-          const snapshot = await archiveConversation(conversation.id);
-          if (snapshot) {
-            const snapshotApplied = applyProjectActionSnapshot(snapshot);
-            if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, [conversation.id])) {
-              throw new Error(i18n.t("workspace.lifecycle.archiveNotConverged"));
-            }
-          } else {
-            throw new Error(i18n.t("workspace.lifecycle.archiveNoSnapshot"));
-          }
-          archiveCommitted = true;
-          toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archived", { conversation: conversation.title }));
-        } finally {
-          if (!archiveCommitted) {
-            conversationArchivePendingIdsRef.current.delete(conversation.id);
-          }
-        }
-        return;
-      }
-      if (action === "open-directory") {
-        const project = projectForConversation(workbenchState, conversation);
-        if (!project) {
-          toast.error(i18n.t("workbenchConversation.noProject"));
-          return;
-        }
-        const message = await openProjectDirectoryPath(project.path);
-        toast.success(message ?? formatWorkbenchTranslation(i18n.t, "projectActions.openRequested", { project: project.name }));
-        return;
-      }
-      if (action === "copy-workdir") {
-        const project = projectForConversation(workbenchState, conversation);
-        if (!project) {
-          toast.error(i18n.t("workbenchConversation.noProject"));
-          return;
-        }
-        await navigator.clipboard.writeText(project.path);
-        toast.success(i18n.t("workbenchConversation.copiedWorkspace"));
-        return;
-      }
-      if (action === "copy-title") {
-        await navigator.clipboard.writeText(conversation.title);
-        toast.success(i18n.t("workbenchConversation.copiedTitle"));
-        return;
-      }
-      if (action === "copy-session-id") {
-        await navigator.clipboard.writeText(conversation.id);
-        toast.success(i18n.t("workbenchConversation.copiedSessionId"));
-        return;
-      }
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
-  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, i18n.t, workbenchState]);
-
-  // handleConversationNavigationReady starts the 200 ms reveal only for the current target owner.
-  // handleConversationNavigationReady 仅为当前目标归属启动 200 毫秒入场。
-  const handleConversationNavigationReady = React.useCallback((conversationId: string) => {
-    const requestVersion = conversationSelectionRequestVersionRef.current;
-    setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "waiting-owner"
-      ? { ...current, phase: "entering" }
-      : current);
-    window.setTimeout(() => {
-      if (conversationSelectionRequestVersionRef.current === requestVersion) {
-        setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
-      }
-    }, 200);
-  }, []);
-
-  // handleSelectConversation selects a conversation with immediate sidebar feedback and exact-owner reveal.
-  // handleSelectConversation 以即时侧栏反馈和精确归属入场选择会话。
-  const handleSelectConversation = React.useCallback((conversationId: string) => {
-    handleOpenWorkspaceChat();
-    // requestVersion keeps old responses and animations from overtaking the newest click.
-    // requestVersion 防止旧响应和动画越过最新点击。
-    const requestVersion = conversationSelectionRequestVersionRef.current + 1;
-    conversationSelectionRequestVersionRef.current = requestVersion;
-    const sourceId = selectedConversationIdRef.current;
-    // showLoading is based on the registry's exact initialized window at click time.
-    // showLoading 根据点击时 registry 中精确会话的已初始化窗口判定。
-    const showLoading = !props.isConversationInitialized(conversationId);
-    setConversationNavigation({ sourceId, targetId: conversationId, phase: "exiting", showLoading });
-    const fadedOut = new Promise<void>((resolve) => {
-      window.setTimeout(() => {
-        if (conversationSelectionRequestVersionRef.current === requestVersion) {
-          setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "exiting"
-            ? { ...current, phase: "loading" }
-            : current);
-        }
-        resolve();
-      }, 200);
-    });
-    void selectConversation(conversationId)
-      .then(async (snapshot) => {
-        await fadedOut;
-        if (conversationSelectionRequestVersionRef.current !== requestVersion) {
-          return null;
-        }
-        // A non-null service snapshot is authoritative even when missing storage changed or cleared its selection.
-        // 非空服务快照始终具有权威性，即使存储缺失使其选择改变或清空。
-        if (snapshot && snapshot.selectedConversationId !== conversationId) {
-          selectedConversationIdRef.current = snapshot.selectedConversationId ?? null;
-          setSelectedConversationId(snapshot.selectedConversationId ?? null);
-          setConversationNavigation(null);
-          liveStreamStore.resetForWorkbenchSnapshot();
-          liveStreamStore.flushNotifications();
-          setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
-            current,
-            snapshot,
-            { selectedConversationSource: "incoming" },
-          ));
-          return null;
-        }
-        // Commit the route and its session-sensitive controls atomically after the exact selection response arrives.
-        // 精确选择响应到达后，原子提交路由及其会话敏感控制字段。
-        selectedConversationIdRef.current = conversationId;
-        setSelectedConversationId(conversationId);
-        if (snapshot && snapshot.selectedConversationId === conversationId) {
-          liveStreamStore.resetForWorkbenchSnapshot();
-          liveStreamStore.flushNotifications();
-          setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(
-            current,
-            snapshot,
-            { selectedConversationSource: "incoming" },
-          ));
-          setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading });
-        } else {
-          // Browser preview has no service snapshot but still owns a local-only route.
-          // 浏览器预览没有服务快照，但仍持有本地路由。
-          setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
-          setConversationNavigation({ sourceId, targetId: conversationId, phase: "entering", showLoading });
-          window.setTimeout(() => {
-            if (conversationSelectionRequestVersionRef.current === requestVersion) {
-              setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
-            }
-          }, 200);
-        }
-        // Read-marker persistence is ancillary and must never turn a successful navigation into an error toast.
-        // 已读标记持久化属于附属操作，绝不能把成功导航变成错误提示。
-        return markConversationRead(conversationId).catch((error) => {
-          console.warn("[workbench] conversation read marker update failed", error);
-          return null;
-        });
-      })
-      .then((snapshot) => {
-        // Read-marker responses can arrive after another conversation has already been selected.
-        // 已读标记响应可能在另一个会话已经被选中后才到达。
-        if (
-          snapshot
-          && conversationSelectionRequestVersionRef.current === requestVersion
-          && selectedConversationIdRef.current === conversationId
-          && snapshot.selectedConversationId === conversationId
-        ) {
-          liveStreamStore.resetForWorkbenchSnapshot();
-          liveStreamStore.flushNotifications();
-          setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-        }
-      })
-      .catch((error) => {
-        if (conversationSelectionRequestVersionRef.current !== requestVersion) {
-          return;
-        }
-        setConversationNavigation({ sourceId, targetId: conversationId, phase: "entering", showLoading });
-        window.setTimeout(() => {
-          if (conversationSelectionRequestVersionRef.current === requestVersion) {
-            setConversationNavigation((current) => current?.targetId === conversationId && current.phase === "entering" ? null : current);
-          }
-        }, 200);
-        const message = error instanceof Error ? error.message : String(error);
-        toast.error(message);
-      });
-  }, [
-    handleOpenWorkspaceChat,
-    props.isConversationInitialized,
-    liveStreamStore,
-    selectedConversationIdRef,
-    setSelectedConversationId,
-  ]);
-
-  // handleSelectPluginResourceOwner confirms the original conversation before leaving diagnostics.
-  // handleSelectPluginResourceOwner 离开诊断前确认原会话。
-  // conversationId is the retained host owner; observation cancels only local navigation, returning true after exact confirmation.
-  // conversationId 是保留宿主所有者；observation 仅取消本地导航，精确确认后返回真值。
-  const handleSelectPluginResourceOwner = React.useCallback(async (conversationId: string, observation: AbortSignal): Promise<boolean> => {
-    if (observation.aborted) return false;
-    // requestVersion prevents a late owner lookup from overtaking a newer sidebar or diagnostics selection.
-    // requestVersion 阻止迟到所有者查询越过较新侧栏或诊断选择。
-    const requestVersion = ++conversationSelectionRequestVersionRef.current;
-    // Retiring the previous selection also retires its visual transition, whose old response can no longer clear it.
-    // 使先前选择失效时也结束其视觉过渡，因为旧响应已无法清除该过渡。
-    setConversationNavigation(null);
-    // ownerVersion fences the original diagnostics page independently from generic sidebar selection.
-    // ownerVersion 独立于通用侧栏选择约束原诊断页面。
-    const ownerVersion = ++pluginOwnerNavigationVersionRef.current;
-    // sourceId preserves the currently displayed owner until the service confirms the requested identity.
-    // sourceId 保留当前显示所有者，直至服务确认请求身份。
-    const sourceId = selectedConversationIdRef.current;
-    // snapshot can legitimately select another remaining conversation after missing storage cleanup.
-    // snapshot 在缺失存储清理后可合法选中另一个剩余会话。
-    const snapshot = await selectConversation(conversationId);
-    if (observation.aborted || conversationSelectionRequestVersionRef.current !== requestVersion || pluginOwnerNavigationVersionRef.current !== ownerVersion || snapshot === null
-      || snapshot.selectedConversationId !== conversationId) return false;
-    // Both projections must still contain this owner; the shared gate rejects replies older than already accepted lifecycle updates.
-    // 两份投影必须仍包含此所有者；共享闸门拒绝早于已接受生命周期更新的响应。
-    if (!workbenchStateRef.current.conversations.some((conversation) => conversation.id === conversationId)
-      || !snapshot.conversations.some((conversation) => conversation.id === conversationId)
-      || !acceptServiceWorkbenchSnapshot(snapshot)) return false;
-    // Only this confirmed owner may publish a route change; sidebar fallback semantics remain separate.
-    // 仅此已确认所有者可以发布路由变更；侧栏回退语义保持独立。
-    handleOpenWorkspaceChat();
-    selectedConversationIdRef.current = conversationId;
-    setSelectedConversationId(conversationId);
-    liveStreamStore.resetForWorkbenchSnapshot();
-    liveStreamStore.flushNotifications();
-    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot, { selectedConversationSource: "incoming" }));
-    setConversationNavigation({ sourceId, targetId: conversationId, phase: "waiting-owner", showLoading: !props.isConversationInitialized(conversationId) });
-    // Read persistence is ancillary; a later marker snapshot must not change the exact navigation decision.
-    // 已读持久化属于附属操作；迟到标记快照不得改变精确导航决定。
-    void markConversationRead(conversationId).catch((error) => console.warn("[workbench] conversation read marker update failed", error));
-    return true;
-  }, [acceptServiceWorkbenchSnapshot, handleOpenWorkspaceChat, liveStreamStore, mergeWorkbenchWithLocalCaches, props.isConversationInitialized]);
+  // conversationMenu executes conversation-tree context menu commands and keeps the local pin set.
+  // conversationMenu 执行会话树右键菜单命令并保存本地置顶集合。
+  const { pinnedConversationIds, handleConversationMenuAction } = useConversationMenuActions({
+    translate: i18n.t,
+    workbenchState,
+    setRenameTarget,
+    applyProjectActionSnapshot,
+    applyLifecycleResponseSnapshot,
+  });
 
   // railEntries lists built-in areas first, then every enabled plugin detail page from the live catalog.
   // railEntries 先列出内置区域，再列出实时目录中每个已启用的插件详情页。
@@ -1178,78 +830,25 @@ export function WorkbenchLayout(props: {
     }
   }, [applyProjectActionSnapshot, i18n.t, workbenchState]);
 
-  // handleArchiveProjectConfirm archives all conversations under the selected project.
-  // handleArchiveProjectConfirm 归档选定项目下的全部对话。
-  const handleArchiveProjectConfirm = React.useCallback(async () => {
-    if (!archiveProjectTarget || archiveProjectInFlightRef.current) {
-      return;
-    }
-    archiveProjectInFlightRef.current = true;
-    setArchiveProjectSubmitting(true);
-    try {
-      // archivedConversationIds captures the exact visible child lifecycle set before the RPC commits.
-      // archivedConversationIds 捕获 RPC 提交前的精确可见子生命周期集合。
-      const archivedConversationIds = workbenchState.conversations
-        .filter((conversation) => conversation.projectId === archiveProjectTarget.id)
-        .map((conversation) => conversation.id);
-      const snapshot = await archiveProjectConversations(archiveProjectTarget.id);
-      if (snapshot) {
-        const snapshotApplied = applyProjectActionSnapshot(snapshot);
-        if (!snapshotApplied && !applyLifecycleResponseSnapshot(snapshot, archivedConversationIds)) {
-          throw new Error(i18n.t("workspace.lifecycle.batchArchiveNotConverged"));
-        }
-      } else {
-        throw new Error(i18n.t("workspace.lifecycle.batchArchiveNoSnapshot"));
-      }
-      toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedCount", {
-        count: String(projectConversationCount(workbenchState, archiveProjectTarget.id)),
-      }));
-      setArchiveProjectTarget(null);
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      archiveProjectInFlightRef.current = false;
-      setArchiveProjectSubmitting(false);
-    }
-  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, i18n.t, workbenchState]);
-
-  // handleRemoveProjectConfirm archives conversations and removes the selected project.
-  // handleRemoveProjectConfirm 归档对话并移除选中的项目。
-  const handleRemoveProjectConfirm = React.useCallback(async () => {
-    if (!removeProjectTarget || removeProjectInFlightRef.current) {
-      return;
-    }
-    removeProjectInFlightRef.current = true;
-    setRemoveProjectSubmitting(true);
-    try {
-      // archivedConversationIds captures the exact visible child lifecycle set before project removal commits.
-      // archivedConversationIds 捕获项目移除提交前的精确可见子生命周期集合。
-      const archivedConversationIds = workbenchState.conversations
-        .filter((conversation) => conversation.projectId === removeProjectTarget.id)
-        .map((conversation) => conversation.id);
-      const snapshot = await removeProject(removeProjectTarget.id);
-      if (snapshot) {
-        const snapshotApplied = applyProjectActionSnapshot(snapshot);
-        if (!snapshotApplied && !applyLifecycleResponseSnapshot(
-          snapshot,
-          archivedConversationIds,
-          removeProjectTarget.id,
-        )) {
-          throw new Error(i18n.t("workspace.lifecycle.projectRemoveNotConverged"));
-        }
-      } else {
-        throw new Error(i18n.t("workspace.lifecycle.projectRemoveNoSnapshot"));
-      }
-      clearProjectTerminalInputBuffers(removeProjectTarget.id);
-      toast.success(formatWorkbenchTranslation(i18n.t, "workbenchConversation.archivedAndRemovedProject", { project: removeProjectTarget.name }));
-      setRemoveProjectTarget(null);
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      removeProjectInFlightRef.current = false;
-      setRemoveProjectSubmitting(false);
-    }
-  }, [applyLifecycleResponseSnapshot, applyProjectActionSnapshot, i18n.t, removeProjectSubmitting, removeProjectTarget, workbenchState]);
+  // projectLifecycle confirms project archive and removal dialogs exactly once per request.
+  // projectLifecycle 对项目归档与移除弹窗的每次请求只确认一次。
+  const {
+    archiveProjectSubmitting,
+    removeProjectSubmitting,
+    handleArchiveProjectConfirm,
+    handleRemoveProjectConfirm,
+    handleCancelArchiveProject,
+    handleCancelRemoveProject,
+  } = useProjectLifecycleConfirmation({
+    translate: i18n.t,
+    workbenchState,
+    archiveProjectTarget,
+    setArchiveProjectTarget,
+    removeProjectTarget,
+    setRemoveProjectTarget,
+    applyProjectActionSnapshot,
+    applyLifecycleResponseSnapshot,
+  });
 
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
@@ -1278,19 +877,6 @@ export function WorkbenchLayout(props: {
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
   }, [draftConversation?.id]);
-
-  // Release committed archive request locks only after the authoritative active row is no longer visible.
-  // 仅在权威活动行不再可见后释放已提交归档请求锁。
-  React.useEffect(() => {
-    // activeConversationIds is the current lifecycle boundary rendered by the sidebar.
-    // activeConversationIds 是侧栏当前渲染的生命周期边界。
-    const activeConversationIds = new Set(workbenchState.conversations.map((conversation) => conversation.id));
-    for (const conversationId of conversationArchivePendingIdsRef.current) {
-      if (!activeConversationIds.has(conversationId)) {
-        conversationArchivePendingIdsRef.current.delete(conversationId);
-      }
-    }
-  }, [workbenchState.conversations]);
 
   // Route an empty active session collection to a draft owned by the last active project.
   // 将空活动会话集合路由到最后活动项目拥有的草稿。
@@ -1634,11 +1220,7 @@ export function WorkbenchLayout(props: {
         stopConversationAgents={stopConversationAgents}
         workbench={workbenchState}
         onBrowseProjectDirectories={browseProjectDirectories}
-        onCancelArchiveProject={() => {
-          if (!archiveProjectSubmitting && !archiveProjectInFlightRef.current) {
-            setArchiveProjectTarget(null);
-          }
-        }}
+        onCancelArchiveProject={handleCancelArchiveProject}
         onCancelProjectIcon={() => setProjectIconTarget(null)}
         onCancelProjectSettings={() => setProjectSettingsTarget(null)}
         onOpenEngineSettings={() => {
@@ -1646,11 +1228,7 @@ export function WorkbenchLayout(props: {
           handleOpenWorkspaceSkills();
           setActiveWorkbenchSkillSubArea("context-engine");
         }}
-        onCancelRemoveProject={() => {
-          if (!removeProjectSubmitting && !removeProjectInFlightRef.current) {
-            setRemoveProjectTarget(null);
-          }
-        }}
+        onCancelRemoveProject={handleCancelRemoveProject}
         onCancelRename={() => setRenameTarget(null)}
         onCancelStopConversationRun={() => resolveStopConversationRunChoice(null)}
         onConfirmArchiveProject={handleArchiveProjectConfirm}
@@ -1679,19 +1257,3 @@ export function WorkbenchLayout(props: {
     </ThinkingDisplaySystemContext.Provider>
   );
 }
-
-// defaultDraftConversationForEmptyWorkbench creates a local draft when projects exist but sessions do not.
-// defaultDraftConversationForEmptyWorkbench 在存在项目但没有会话时创建本地草稿。
-// formatWorkbenchTranslation replaces named placeholders in localized workbench messages.
-// formatWorkbenchTranslation 替换工作台本地化消息中的具名占位符。
-function formatWorkbenchTranslation(
-  t: (key: TranslationKey) => string,
-  key: TranslationKey,
-  values: Record<string, string>,
-): string {
-  return Object.entries(values).reduce(
-    (text, [name, value]) => text.replaceAll(`{${name}}`, value),
-    t(key),
-  );
-}
-
