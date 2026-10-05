@@ -13,16 +13,6 @@
   overflow: hidden;
 }
 
-.composer-capability-dialog-note {
-  margin-top: 6px;
-  border-left: 3px solid var(--vcn-content-danger);
-  padding: 5px 8px;
-  background: color-mix(in srgb, var(--vcn-content-danger) 10%, transparent);
-  color: var(--vcn-content-danger);
-  font-size: var(--vcn-font-size-sm);
-  line-height: 1.45;
-}
-
 .composer-capability-dialog-grid {
   min-height: 0;
   display: grid;
@@ -192,17 +182,14 @@
   box-shadow: var(--vcn-focus-halo), inset 0 0 0 1px var(--ring);
 }
 
-.composer-capability-kind-copy,
-.composer-capability-detail-copy,
-.composer-capability-target-copy {
+.composer-capability-kind-copy {
   min-width: 0;
   display: grid;
   gap: 3px;
   line-height: 1.15;
 }
 
-.composer-capability-kind-copy span,
-.composer-capability-target-copy span {
+.composer-capability-kind-copy span {
   overflow: hidden;
   color: var(--foreground);
   font-size: var(--vcn-font-size-md);
@@ -211,9 +198,7 @@
   white-space: nowrap;
 }
 
-.composer-capability-kind-copy small,
-.composer-capability-target-copy small,
-.composer-capability-detail-copy small {
+.composer-capability-kind-copy small {
   overflow: hidden;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-xs);
@@ -244,27 +229,6 @@
 .composer-capability-dialog-right {
   min-height: 0;
   display: block;
-}
-
-.composer-capability-target-table {
-  min-height: 100%;
-  display: grid;
-  align-content: start;
-  gap: 6px;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.composer-capability-target-row {
-  display: grid;
-  grid-template-columns: 15px minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 7px 8px;
-  background: var(--background);
-  cursor: pointer;
 }
 
 .composer-capability-route-selectors {
@@ -339,21 +303,6 @@
   gap: 8px;
 }
 
-.composer-capability-target-row:hover {
-  background: var(--accent);
-}
-
-.composer-capability-target-row.disabled {
-  opacity: 0.55;
-}
-
-.composer-capability-target-row input {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  accent-color: var(--primary);
-}
-
 .composer-capability-dialog-empty {
   min-height: 220px;
   display: grid;
@@ -389,36 +338,6 @@
 .composer-capability-restore-defaults {
   flex: 0 0 auto;
   white-space: nowrap;
-}
-
-.composer-capability-save-button {
-  min-width: 86px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-}
-
-.composer-capability-default-button {
-  min-width: 112px;
-}
-
-.composer-capability-save-button.saved {
-  background: color-mix(in srgb, var(--vcn-content-success) 16%, var(--primary));
-}
-
-.composer-capability-save-spinner {
-  animation: composer-capability-save-spin 0.86s linear infinite;
-}
-
-.composer-capability-close-confirm-dialog {
-  width: min(390px, calc(100vw - 48px));
-}
-
-@keyframes composer-capability-save-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* The detail pane opens with the selected capability's identity and state, mirroring the list row. */

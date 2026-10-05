@@ -6,24 +6,6 @@
   overflow: auto;
 }
 
-.settings-inline-control {
-  display: grid;
-  grid-template-columns: auto minmax(0, 13rem) minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.settings-inline-control small {
-  color: var(--muted-foreground);
-  line-height: 1.4;
-}
-
 .settings-panel-title-row,
 .settings-card-actions {
   min-width: 0;
@@ -38,22 +20,12 @@
   justify-content: flex-start;
 }
 
-.settings-provider-row,
-.settings-target-row,
 .settings-model-row {
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-md);
   background: var(--card);
 }
 
-.settings-provider-row {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-}
-
-.settings-provider-row header,
-.settings-target-row,
 .settings-model-row {
   display: flex;
   min-width: 0;
@@ -62,15 +34,11 @@
   gap: 12px;
 }
 
-.settings-provider-row strong,
-.settings-target-row strong,
 .settings-model-row strong {
   display: block;
   font-size: var(--vcn-font-size-lg);
 }
 
-.settings-provider-row span,
-.settings-target-row span,
 .settings-model-row span,
 .settings-muted-line {
   color: var(--muted-foreground);
@@ -78,8 +46,7 @@
   overflow-wrap: anywhere;
 }
 
-.settings-model-row,
-.settings-target-row {
+.settings-model-row {
   padding: 10px;
 }
 
@@ -112,21 +79,6 @@
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
   font-weight: 650;
-}
-
-.settings-split-layout {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  display: grid;
-  grid-template-columns: minmax(190px, 280px) minmax(0, 1fr);
-  gap: 18px;
-  overflow: hidden;
-}
-
-.settings-split-layout.modal {
-  height: min(560px, calc(100vh - 230px));
-  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
 }
 
 .settings-model-row {
@@ -191,12 +143,6 @@
 }
 
 @media (max-width: 760px) {
-  .settings-split-layout,
-  .settings-split-layout.modal {
-    height: auto;
-    grid-template-columns: 1fr;
-    overflow: auto;
-  }
 
   .settings-form-grid.two {
     grid-template-columns: 1fr;
@@ -409,46 +355,6 @@
 
 .assistant-final-meta time {
   white-space: nowrap;
-}
-
-.conversation-fork-source {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  background: transparent;
-  color: var(--primary);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--vcn-font-size-md);
-}
-
-.conversation-fork-source__line {
-  height: 1px;
-  min-width: 0;
-  background: var(--border);
-}
-
-.conversation-fork-source__label {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.conversation-fork-source:hover .conversation-fork-source__label,
-.conversation-fork-source:focus-visible .conversation-fork-source__label {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.conversation-fork-source:focus-visible {
-  outline: none;
 }
 .plugin-panel-rtk {
   min-width: 0;

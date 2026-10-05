@@ -79,15 +79,12 @@
 /* Form layouts respond to available content width, including a resized desktop side pane. */
 /* 表单根据内容可用宽度变化，同时兼顾桌面侧栏挤占空间的情况。 */
 @container workspace-page (max-width: 640px) {
-  .settings-inline-control,
   .settings-form-grid.two,
   .settings-form-grid.three,
-  .settings-split-layout,
   .knowledge-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-split-layout,
   .knowledge-layout {
     grid-template-rows: minmax(100px, 30%) minmax(0, 1fr);
   }
@@ -365,19 +362,12 @@
 
   .settings-form-grid.two,
   .settings-form-grid.three,
-  .settings-split-layout.modal,
   .badge-editor,
   .agent-skill-form-grid,
   .agent-definition-detail-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-split-layout.modal {
-    grid-template-rows: minmax(80px, 30%) minmax(0, 1fr);
-  }
-
-  .settings-provider-row header,
-  .settings-target-row,
   .settings-model-row,
   .knowledge-actions,
   .knowledge-detail-header {
