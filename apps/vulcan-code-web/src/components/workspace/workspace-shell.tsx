@@ -2,15 +2,12 @@ import { WorkspaceDirectoryLayout } from "@/components/workspace/workspace-direc
 import { FeatureLoadBoundary } from "@/components/features/feature-shell-content";
 import React from "react";
 import { toast } from "sonner";
-import { createWorkspaceGitRefreshOwnership } from "@/components/workspace/workspace-shell/git-refresh-ownership";
 import { useVceProjectVisibility } from "@/components/features/code-context/vce-project-surface";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
   ConversationSessionCommitDialog,
   ConversationSessionTodolistPanel,
-  type ConversationSessionCommitBusyState,
 } from "@/components/conversation/session-todolist-panel";
-import type { ConversationSessionGitBranchActions } from "@/components/conversation/session-todolist-panel/git-branch-controls";
 import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { terminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import { activeSkillHeaderSummary } from "@/components/features/skills/skill-area-header";
@@ -34,7 +31,7 @@ import {
 } from "@/components/workspace/workspace-memory-settings";
 import { WorkspaceFeaturePanel } from "@/components/workspace/workspace-feature-panel";
 import { SidebarInset, SidebarProvider, useSidebar, useSidebarNavigation } from "@/components/ui/sidebar";
-import { navigationColumnWidth, navigationShellStyle } from "@/components/shell/navigation-layout";
+import { navigationShellStyle } from "@/components/shell/navigation-layout";
 import {
   Tooltip,
   TooltipContent,
@@ -43,9 +40,6 @@ import {
 import {
   WorkspaceResizableBody,
   selectConversationRightPluginMounts,
-  WORKSPACE_CONVERSATION_RESERVED_WIDTH,
-  WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH,
-  WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH,
 } from "@/components/workspace/workspace-resizable-body";
 import { observeCoreBrowserSessions } from "@/service/core-browser-metadata";
 import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
@@ -55,28 +49,16 @@ import { resolveConversationLinkTarget } from "@/components/conversation/convers
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
-import type {
-  DiffReviewSelection,
-  WorkspaceDiffSnapshotResponse,
-  WorkspaceReviewFocusRequest,
-} from "@/diff/types";
-import {
-  loadWorkspaceGitBranches,
-  loadWorkspaceGitCatalog,
-  loadWorkspaceGitHistory,
-  setWorkspaceGitMonitoring,
-  switchWorkspaceGitBranch,
-} from "@/service/workbench-snapshot-service";
+import type { WorkspaceReviewFocusRequest } from "@/diff/types";
 import { refreshCommandSessions } from "@/service/conversation-actions-service";
 import {
   selectConversationSessionTerminalMutationTokenV1,
   selectLiveConversationSessionTerminalsV1,
   selectConversationSessionTodolistV1,
 } from "@/service/conversation-session-tools-v1";
-import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
+import { hasServiceRuntime } from "@/service/webui-service-runtime";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import type { WorkspaceGitChangedEvent } from "@/types";
 import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
 import { useI18n, formatMessage } from "@/i18n";
 import {
@@ -101,11 +83,8 @@ import {
   workspaceContextTabCacheKey,
   type WorkspaceContextTabStateEntry,
 } from "@/components/workspace/workspace-shell/context-tabs";
-import {
-  buildWorkspaceProjectGitSummary,
-  type WorkspaceProjectGitRepositoryState,
-  type WorkspaceProjectGitStateMap,
-} from "@/components/workspace/workspace-shell/git-summary";
+import { useWorkspaceGitState } from "@/components/workspace/workspace-shell/use-workspace-git-state";
+import { useWorkspacePanelLayout } from "@/components/workspace/workspace-shell/use-workspace-panel-layout";
 import {
   WORKSPACE_FEATURE_AREAS,
   type WorkspaceShellProps,
@@ -217,18 +196,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       props.onConversationNavigationReady?.(navigation.targetId);
     }
   }, [eventWindowOwnerSessionId, props.conversationNavigation, props.onConversationNavigationReady, props.selectedConversationId]);
-  // shellRef measures the available workspace width for automatic panel collapse.
-  // shellRef 测量工作台可用宽度，用于自动折叠面板。
-  const shellRef = React.useRef<HTMLDivElement | null>(null);
-  // previousShellWidthRef tracks resize direction so auto-restore only runs while width grows.
-  // previousShellWidthRef 跟踪尺寸变化方向，确保自动恢复只在宽度增长时执行。
-  const previousShellWidthRef = React.useRef<number | null>(null);
-  // rightPanelOpen stores whether the review and memory panel is visible.
-  // rightPanelOpen 保存审核与记忆面板是否可见。
-  const [rightPanelOpen, setRightPanelOpen] = React.useState(false);
-  // rightPanelFloating stores whether the right panel overlays instead of resizing the chat area.
-  // rightPanelFloating 保存右侧面板是否以浮动方式覆盖而不是压缩会话区。
-  const [rightPanelFloating, setRightPanelFloating] = React.useState(false);
   // contextTabCacheKey stores the current conversation-scoped right tab memory key.
   // contextTabCacheKey 保存当前会话范围的右侧页签记忆键。
   const contextTabCacheKey = React.useMemo(
@@ -262,9 +229,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     sequence: 0,
     repositoryKey: null,
   });
-  // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
-  // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
-  const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
   // selectedAgentCategoryId stores the active agents page category filter.
   // selectedAgentCategoryId 保存智能体页当前分类筛选。
   const [selectedAgentCategoryId, setSelectedAgentCategoryId] = React.useState("");
@@ -274,28 +238,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionToolExpanded stores the shared adaptive menu state for the chat tool panel.
   // sessionToolExpanded 保存会话工具共享自适应面板展开状态。
   const [sessionToolExpanded, setSessionToolExpanded] = React.useState(false);
-  // workspaceGitStateByProject stores project-level Git state shared by all conversations.
-  // workspaceGitStateByProject 保存所有会话共享的项目级 Git 状态。
-  const [workspaceGitStateByProject, setWorkspaceGitStateByProject] = React.useState<WorkspaceProjectGitStateMap>({});
-  // workspaceGitStateByProjectRef exposes the latest committed project map to long-running refresh callbacks.
-  // workspaceGitStateByProjectRef 向长生命周期刷新回调暴露最近提交的项目状态映射。
-  const workspaceGitStateByProjectRef = React.useRef<WorkspaceProjectGitStateMap>({});
-  workspaceGitStateByProjectRef.current = workspaceGitStateByProject;
-  // selectedGitRepositoryKey stores the repository node used by commit and push actions.
-  // selectedGitRepositoryKey 保存提交与推送动作当前使用的仓库节点。
-  const [selectedGitRepositoryKey, setSelectedGitRepositoryKey] = React.useState<string | null>(null);
-  // activeGitCommitRepositoryKey freezes the repository bound to an open or running commit dialog.
-  // activeGitCommitRepositoryKey 固定已打开或正在运行的提交弹窗所绑定的仓库。
-  const [activeGitCommitRepositoryKey, setActiveGitCommitRepositoryKey] = React.useState<string | null>(null);
-  // gitCommitDialogOpen stores the shared commit dialog state across chat and review surfaces.
-  // gitCommitDialogOpen 保存聊天区与审核区共享的提交弹窗状态。
-  const [gitCommitDialogOpen, setGitCommitDialogOpen] = React.useState(false);
-  // gitCommitBusyStateByWorkspace stores running Git actions by workspace path.
-  // gitCommitBusyStateByWorkspace 按工作区路径保存正在执行的 Git 动作状态。
-  const [gitCommitBusyStateByWorkspace, setGitCommitBusyStateByWorkspace] = React.useState<Record<string, NonNullable<ConversationSessionCommitBusyState>>>({});
-  // workspaceGitRefreshOwner restricts success, failure and selection writes to their current project request.
-  // workspaceGitRefreshOwner 将成功、失败与选择写入限制到所属项目的当前请求。
-  const workspaceGitRefreshOwner = React.useRef(createWorkspaceGitRefreshOwnership());
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -313,6 +255,16 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // hasSelectedChatConversation is true only for an existing persisted conversation surface.
   // hasSelectedChatConversation 仅在当前界面是已存在的持久化会话时为真。
   const hasSelectedChatConversation = props.mainView === "chat" && !routeDraftConversation && Boolean(props.selectedConversationId);
+  // panelLayout opens, floats and auto-collapses the side panels around the measured shell width.
+  // panelLayout 根据测量的外壳宽度打开、浮动并自动折叠两侧面板。
+  const {
+    shellRef,
+    rightPanelFloating,
+    effectiveRightPanelOpen,
+    openRightContextPanel,
+    handleLeftPanelToggle,
+    handleRightPanelToggle,
+  } = useWorkspacePanelLayout({ sidebar, hasSelectedChatConversation, notifyConversationLayoutWillChange });
   // aiBrowserAvailable never carries a previous conversation's browser into the selected route.
   // aiBrowserAvailable 绝不会把上一会话的浏览器带入当前路由。
   const aiBrowserAvailable = aiBrowserPluginEnabled && aiBrowserState.owner === props.selectedConversationId
@@ -320,108 +272,43 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // localBrowserAvailable follows this GUI window's native capability, independent of plugins and Core sessions.
   // localBrowserAvailable 取决于此 GUI 窗口的原生能力，与插件和 Core 会话无关。
   const localBrowserAvailable = readElectronLocalBrowserBridge() !== null;
-  // selectedChatProject resolves the selected persisted conversation project for Git review summaries.
-  // selectedChatProject 解析当前持久化会话所属项目以加载 Git 审查摘要。
-  const selectedChatProject = hasSelectedChatConversation && props.selectedConversation?.projectId
-    ? props.workbench.projects.find((project) => project.id === props.selectedConversation?.projectId) ?? null
-    : null;
-  // selectedGitCommitWorkspaceKey identifies the Git workspace whose commit state is currently shown.
-  // selectedGitCommitWorkspaceKey 标识当前展示提交状态的 Git 工作区。
-  const selectedGitCommitWorkspaceKey = selectedChatProject?.path ?? null;
-  // selectedGitWorkspaceRef prevents delayed refreshes from changing another project's visible selection.
-  // selectedGitWorkspaceRef 防止迟到刷新改变另一项目的可见仓库选择。
-  const selectedGitWorkspaceRef = React.useRef(selectedGitCommitWorkspaceKey);
-  selectedGitWorkspaceRef.current = selectedGitCommitWorkspaceKey;
-  // selectedWorkspaceGitState stores the selected project's shared Git state entry.
-  // selectedWorkspaceGitState 保存当前选中项目的共享 Git 状态条目。
-  const selectedWorkspaceGitState = selectedGitCommitWorkspaceKey
-    ? workspaceGitStateByProject[selectedGitCommitWorkspaceKey] ?? null
-    : null;
-  // sessionReviewRepositories exposes every independent repository node to the compact panel.
-  // sessionReviewRepositories 向紧凑面板暴露全部独立仓库节点。
-  const sessionReviewRepositories = selectedWorkspaceGitState?.repositories ?? [];
-  // selectedGitRepositoryState stores the repository currently targeted by commit and push.
-  // selectedGitRepositoryState 保存提交与推送当前指向的仓库。
-  const enabledReviewRepositories = sessionReviewRepositories.filter((repository) => repository.monitoringEnabled);
-  // sessionReviewSummary exposes only an actively monitored primary summary to action surfaces.
-  // sessionReviewSummary 只向操作界面暴露正在监听的主要仓库摘要。
-  const sessionReviewSummary = enabledReviewRepositories.length > 0
-    ? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedGitRepositoryKey)?.summary
-      ?? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedWorkspaceGitState?.primaryRepositoryKey)?.summary
-      ?? enabledReviewRepositories.find((repository) => repository.summary)?.summary
-      ?? null
-    : null;
-  const selectedGitRepositoryState = selectedGitRepositoryKey
-    ? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedGitRepositoryKey)
-      ?? enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedWorkspaceGitState?.primaryRepositoryKey)
-      ?? enabledReviewRepositories[0]
-      ?? null
-    : enabledReviewRepositories.find((repository) => repository.repositoryKey === selectedWorkspaceGitState?.primaryRepositoryKey)
-      ?? enabledReviewRepositories[0]
-      ?? null;
-  // selectedGitRepositoryForActions always has a deterministic repository key when a catalog exists.
-  // selectedGitRepositoryForActions 在存在仓库目录时始终具有确定性仓库键。
-  const selectedGitRepositoryForActions = selectedGitRepositoryState?.repositoryKey ?? null;
-  // selectedGitRepositoryForActionsRef lets a selection made in the same click reach the dialog opener before React re-renders.
-  // selectedGitRepositoryForActionsRef 让同一次点击中的仓库选择在 React 重渲染前即可被提交弹窗读取。
-  const selectedGitRepositoryForActionsRef = React.useRef(selectedGitRepositoryForActions);
-  selectedGitRepositoryForActionsRef.current = selectedGitRepositoryForActions;
-  // activeGitCommitRepositoryState keeps the dialog target independent from right-panel selection changes.
-  // activeGitCommitRepositoryState 让提交弹窗目标独立于右侧面板选择变化。
-  const activeGitCommitRepositoryState = activeGitCommitRepositoryKey
-    ? enabledReviewRepositories.find((repository) => repository.repositoryKey === activeGitCommitRepositoryKey) ?? null
-    : selectedGitRepositoryState;
-  // activeGitCommitRepositoryForActions never falls back after a target has been captured.
-  // activeGitCommitRepositoryForActions 在捕获目标后绝不回退到其他仓库，避免弹窗或异步动作漂移。
-  const activeGitCommitRepositoryForActions = activeGitCommitRepositoryKey !== null
-    ? activeGitCommitRepositoryState?.repositoryKey ?? null
-    : selectedGitRepositoryForActions;
-  // activeSessionReviewSummary is the independent repository summary used by commit controls.
-  // activeSessionReviewSummary 是提交控件使用的独立仓库摘要。
-  const activeSessionReviewSummary = activeGitCommitRepositoryState
-    ? activeGitCommitRepositoryState.summary
-    : sessionReviewSummary;
-  // gitCommitBusyState stores the selected workspace's shared Git action phase.
-  // gitCommitBusyState 保存当前选中工作区的共享 Git 操作阶段。
-  const gitCommitBusyState = selectedGitCommitWorkspaceKey && selectedGitRepositoryForActions
-    ? gitCommitBusyStateByWorkspace[`${selectedGitCommitWorkspaceKey}\u0000${selectedGitRepositoryForActions}`] ?? null
-    : null;
-  // updateGitCommitBusyState updates the running Git action state for the captured workspace.
-  // updateGitCommitBusyState 更新当前闭包捕获工作区的 Git 动作状态。
-  const updateGitCommitBusyState = React.useCallback((repositoryKey: string | null, state: ConversationSessionCommitBusyState) => {
-    const workspaceKey = selectedGitCommitWorkspaceKey && repositoryKey
-      ? `${selectedGitCommitWorkspaceKey}\u0000${repositoryKey}`
-      : null;
-    if (!workspaceKey) {
-      return;
-    }
-    setGitCommitBusyStateByWorkspace((current) => {
-      if (state) {
-        return { ...current, [workspaceKey]: state };
-      }
-      if (!Object.prototype.hasOwnProperty.call(current, workspaceKey)) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[workspaceKey];
-      return next;
-    });
-  }, [selectedGitCommitWorkspaceKey]);
-  // gitCommitBusyStateForRepository exposes independent action phases without cross-repository bleed.
-  // gitCommitBusyStateForRepository 暴露独立操作阶段，避免仓库之间串状态。
-  const gitCommitBusyStateForRepository = React.useCallback((repositoryKey: string) => {
-    if (!selectedGitCommitWorkspaceKey) {
-      return null;
-    }
-    return gitCommitBusyStateByWorkspace[
-      `${selectedGitCommitWorkspaceKey}\u0000${repositoryKey}`
-    ] ?? null;
-  }, [gitCommitBusyStateByWorkspace, selectedGitCommitWorkspaceKey]);
-  // activeGitCommitBusyState shows the action phase for the repository frozen by the dialog.
-  // activeGitCommitBusyState 显示提交弹窗固定仓库对应的操作阶段。
-  const activeGitCommitBusyState = activeGitCommitRepositoryForActions
-    ? gitCommitBusyStateForRepository(activeGitCommitRepositoryForActions)
-    : gitCommitBusyState;
+  // gitState holds the selected project's repositories, commit dialog target and Git actions.
+  // gitState 保存当前项目的仓库、提交弹窗目标与 Git 动作。
+  const {
+    selectedChatProject,
+    selectedGitCommitWorkspaceKey,
+    sessionReviewRepositories,
+    sessionReviewSummary,
+    selectedGitRepositoryForActions,
+    setSelectedGitRepositoryKey,
+    activeGitCommitRepositoryKey,
+    activeGitCommitRepositoryForActions,
+    activeSessionReviewSummary,
+    gitCommitDialogOpen,
+    gitCommitBusyState,
+    gitCommitBusyStateForRepository,
+    activeGitCommitBusyState,
+    updateGitCommitBusyState,
+    handleSelectReviewRepository,
+    handleGitCommitDialogOpenChange,
+    handleOpenGitCommitDialog,
+    sessionGitCommitActionAvailable,
+    sessionGitCommitActionVisible,
+    refreshProjectGitSummary,
+    refreshSelectedGitRepositorySummary,
+    commitBranchPrefix,
+    sessionGitBranchActions,
+    handleToggleReviewMonitoring,
+    recordWorkspaceDiffSnapshotForProject,
+  } = useWorkspaceGitState({
+    hasSelectedChatConversation,
+    selectedConversationId: props.selectedConversationId,
+    selectedConversation: props.selectedConversation,
+    projects: props.workbench.projects,
+    configuredBranchPrefix: props.workbench.gitCommit?.newBranchPrefix,
+    onLoadWorkspaceDiffSnapshot: props.onLoadWorkspaceDiffSnapshot,
+    setReviewFocusRequest,
+  });
   // sessionTerminalSessions uses the live runtime as the sole authority for currently visible terminals.
   // sessionTerminalSessions 使用实时运行时作为当前可见终端的唯一权威。
   const sessionTerminalSessions = React.useMemo(
@@ -465,9 +352,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       .filter((session) => session.canStop),
     [sessionTerminalSessions, t],
   );
-  // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
-  // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
-  const effectiveRightPanelOpen = hasSelectedChatConversation && rightPanelOpen;
   // activeContextTab is the exact right-panel tab currently rendered when the panel is visible.
   // activeContextTab 是右侧面板可见时当前真实渲染的页签。
   const activeContextTab = effectiveRightPanelOpen
@@ -575,16 +459,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: renameWorkspaceFileContextTab(current.state, tabId, title, t),
     }));
   }, [t]);
-  // openRightContextPanel opens the context rail and chooses floating mode from the current shell width.
-  // openRightContextPanel 打开上下文栏，并根据当前外壳宽度选择浮动模式。
-  const openRightContextPanel = React.useCallback(() => {
-    notifyConversationLayoutWillChange();
-    const width = shellRef.current?.getBoundingClientRect().width ?? 0;
-    const leftWidth = navigationColumnWidth(sidebar.isMobile, sidebar.open);
-    setRightPanelFloating(width > 0 && width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
-      - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH < WORKSPACE_CONVERSATION_RESERVED_WIDTH);
-    setRightPanelOpen(true);
-  }, [notifyConversationLayoutWillChange, sidebar.isMobile, sidebar.open]);
 
   // selectedConversationForLocalLinks rejects a link request after navigation changes its owner.
   // selectedConversationForLocalLinks 在会话切换后拒绝旧会话的链接请求。
@@ -663,24 +537,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     });
     return () => { cancelled = true; stop(); };
   }, [aiBrowserPluginEnabled, contextTabCacheKey, hasSelectedChatConversation, openRightContextPanel, props.selectedConversationId, t]);
-  // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
-  // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
-  const handleLeftPanelToggle = React.useCallback(() => {
-    notifyConversationLayoutWillChange();
-    setLeftAutoCollapsed(false);
-  }, [notifyConversationLayoutWillChange]);
-  // handleRightPanelToggle clears automatic restore intent when the user toggles the right panel manually.
-  // handleRightPanelToggle 在用户手动切换右侧面板时清除自动恢复意图。
-  const handleRightPanelToggle = React.useCallback(() => {
-    notifyConversationLayoutWillChange();
-    const nextOpen = !rightPanelOpen;
-    if (!nextOpen) {
-      setRightPanelFloating(false);
-      setRightPanelOpen(false);
-      return;
-    }
-    openRightContextPanel();
-  }, [notifyConversationLayoutWillChange, openRightContextPanel, rightPanelOpen]);
 
   // handleOpenReviewChanges opens the right panel and focuses the live uncommitted review source.
   // handleOpenReviewChanges 打开右侧面板并聚焦实时未提交审核来源。
@@ -699,38 +555,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     }));
     openRightContextPanel();
   }, [hasSelectedChatConversation, openContextTab, openRightContextPanel, selectedGitRepositoryForActions]);
-
-  // handleSelectReviewRepository updates the visible selection and freezes the next commit dialog target.
-  // handleSelectReviewRepository 更新可见选择，并固定下一次提交弹窗目标。
-  const handleSelectReviewRepository = React.useCallback((repositoryKey: string) => {
-    selectedGitRepositoryForActionsRef.current = repositoryKey;
-    setSelectedGitRepositoryKey(repositoryKey);
-    // Keep the open or running shared action bound to its original repository.
-    // 保持已打开或正在运行的共享动作绑定原始仓库。
-    if (!gitCommitDialogOpen && !activeGitCommitBusyState) {
-      setActiveGitCommitRepositoryKey(repositoryKey);
-    }
-  }, [activeGitCommitBusyState, gitCommitDialogOpen]);
-
-  // handleGitCommitDialogOpenChange preserves the selected repository identity across dialog close and reopen.
-  // handleGitCommitDialogOpenChange 在弹窗关闭与重开之间保留所选仓库身份。
-  const handleGitCommitDialogOpenChange = React.useCallback((open: boolean) => {
-    const repositoryKey = selectedGitRepositoryForActionsRef.current;
-    if (open && !gitCommitDialogOpen && repositoryKey) {
-      setActiveGitCommitRepositoryKey(repositoryKey);
-    }
-    setGitCommitDialogOpen(open);
-  }, [gitCommitDialogOpen]);
-
-  // handleOpenGitCommitDialog opens the shared dialog against the currently selected repository.
-  // handleOpenGitCommitDialog 针对当前选中仓库打开共享提交弹窗。
-  const handleOpenGitCommitDialog = React.useCallback(() => {
-    if (!selectedGitRepositoryForActions) {
-      return;
-    }
-    setActiveGitCommitRepositoryKey(selectedGitRepositoryForActions);
-    setGitCommitDialogOpen(true);
-  }, [selectedGitRepositoryForActions]);
 
   // handleOpenSubagentPanel opens a read-only subagent transcript tab in the right context panel.
   // handleOpenSubagentPanel 在右侧上下文面板中打开只读子代理转录页签。
@@ -778,14 +602,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     setSessionToolExpanded(expanded);
   }, [notifyConversationLayoutWillChange]);
 
-  React.useEffect(() => {
-    if (!hasSelectedChatConversation && rightPanelOpen) {
-      notifyConversationLayoutWillChange();
-      setRightPanelOpen(false);
-      setRightPanelFloating(false);
-    }
-  }, [hasSelectedChatConversation, notifyConversationLayoutWillChange, rightPanelOpen]);
-
   // runSkillHeaderAction wraps registered skill header actions with busy feedback.
   // runSkillHeaderAction 为注册的技能标题栏动作包裹忙碌反馈。
   //
@@ -825,18 +641,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       : null,
     [hasSelectedChatConversation, props.selectedConversationId],
   ), conversationSelectionEqual);
-  // sessionGitRepositoryAvailable tracks whether the current chat project resolved as a Git repository.
-  // sessionGitRepositoryAvailable 标记当前聊天项目是否已解析为 Git 仓库。
-  const sessionGitRepositoryAvailable = Boolean(sessionReviewRepositories.length || sessionReviewSummary || selectedWorkspaceGitState?.loading);
-  // sessionGitCommitActionAvailable tracks whether commit or push has a runnable target.
-  // sessionGitCommitActionAvailable 标记提交或推送是否存在可执行目标。
-  const sessionGitCommitActionAvailable = Boolean(activeSessionReviewSummary && (
-    activeSessionReviewSummary.changedFiles > 0
-    || activeSessionReviewSummary.unpushedCommits > 0
-  ));
-  // sessionGitCommitActionVisible keeps shared commit triggers visible for Git repositories or running Git work.
-  // sessionGitCommitActionVisible 在 Git 仓库或正在执行 Git 工作时保持共享提交入口可见。
-  const sessionGitCommitActionVisible = sessionGitRepositoryAvailable || Boolean(gitCommitBusyState);
   // sessionSubagentNavigation keeps subagent tool rows scoped to the selected parent conversation.
   // sessionSubagentNavigation 将子代理工具行限定在当前选中的父会话范围内。
   const sessionSubagentNavigation = hasSelectedChatConversation
@@ -856,473 +660,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     || visibleSessionTerminalSessions.length > 0
     || visibleSessionSubagentTaskCount > 0
   ));
-
-  // refreshProjectGitSummary reloads the shared Git summary for one project path.
-  // refreshProjectGitSummary 重新加载单个项目路径的共享 Git 摘要。
-  // Parameters: workspacePath is the cache owner; projectId/conversationId scope IO; optional repositoryKey limits diff refreshes.
-  // 参数：workspacePath 是缓存归属；projectId/conversationId 限定输入输出；可选 repositoryKey 限制差异刷新范围。
-  // Returns after the current request publishes a summary/error or loses ownership; it never writes another project's selection.
-  // 当前请求发布摘要/错误或失去归属后返回；绝不写入另一项目的选择。
-  const refreshProjectGitSummary = React.useCallback(async (
-    workspacePath: string,
-    projectId: string | null,
-    conversationId: string | null,
-    repositoryKey?: string | null,
-  ) => {
-    // ticket gates every terminal result, including failed catalog reads and visible selection updates.
-    // ticket 对所有终态结果设门，包括目录读取失败及可见选择更新。
-    const ticket = workspaceGitRefreshOwner.current.begin(workspacePath);
-    const requestId = ticket.requestId;
-    setWorkspaceGitStateByProject((current) => {
-      const previous = current[workspacePath];
-      return {
-        ...current,
-        [workspacePath]: {
-          error: null,
-          loading: true,
-          projectId,
-          refreshRequestId: requestId,
-          revision: previous?.revision ?? 0,
-          stagedSnapshot: previous?.stagedSnapshot ?? null,
-          summary: previous?.summary ?? null,
-          unstagedSnapshot: previous?.unstagedSnapshot ?? null,
-          workspacePath,
-          repositories: previous?.repositories.map((repository) => ({
-            ...repository,
-            error: repositoryKey && repository.repositoryKey !== repositoryKey ? repository.error : null,
-            loading: repository.monitoringEnabled
-              && (!repositoryKey || repository.repositoryKey === repositoryKey),
-          })) ?? [],
-          primaryRepositoryKey: previous?.primaryRepositoryKey ?? null,
-        },
-      };
-    });
-    let catalog;
-    try {
-      catalog = await loadWorkspaceGitCatalog(workspacePath, projectId, conversationId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setWorkspaceGitStateByProject((current) => workspaceGitRefreshOwner.current.owns(ticket) ? ({
-        ...current,
-        [workspacePath]: {
-          ...(current[workspacePath] ?? {
-            projectId,
-            revision: 0,
-            stagedSnapshot: null,
-            summary: null,
-            unstagedSnapshot: null,
-            workspacePath,
-            repositories: [],
-            primaryRepositoryKey: null,
-          }),
-          error: message,
-          loading: false,
-          projectId,
-          refreshRequestId: requestId,
-        },
-      }) : current);
-      return;
-    }
-    if (!workspaceGitRefreshOwner.current.owns(ticket)) return;
-    const previousEntry = workspaceGitStateByProjectRef.current[workspacePath];
-    const repositoryStates = await Promise.all(catalog.repositories.map(async (repository) => {
-      const previousRepository = previousEntry?.repositories.find((entry) => entry.repositoryKey === repository.repositoryKey);
-      if (repositoryKey && repository.repositoryKey !== repositoryKey) {
-        return previousRepository ?? {
-          error: null,
-          isPrimary: repository.isPrimary,
-          loading: false,
-          monitoringEnabled: repository.monitoringEnabled,
-          projectId,
-          relativePath: repository.relativePath,
-          repositoryKey: repository.repositoryKey,
-          repositoryName: repository.name,
-          revision: 0,
-          stagedSnapshot: null,
-          summary: null,
-          unstagedSnapshot: null,
-          workspacePath,
-        } satisfies WorkspaceProjectGitRepositoryState;
-      }
-      if (!repository.monitoringEnabled) {
-        return {
-          error: null,
-          isPrimary: repository.isPrimary,
-          loading: false,
-          monitoringEnabled: false,
-          projectId,
-          relativePath: repository.relativePath,
-          repositoryKey: repository.repositoryKey,
-          repositoryName: repository.name,
-          revision: (previousRepository?.revision ?? 0) + 1,
-          // Disabled repositories remain visible for settings but must not expose stale review counts.
-          // 已关闭监听的仓库仍保留设置入口，但不能继续展示过期审查统计。
-          stagedSnapshot: null,
-          summary: null,
-          unstagedSnapshot: null,
-          workspacePath,
-        } satisfies WorkspaceProjectGitRepositoryState;
-      }
-      const [unstagedResult, stagedResult] = await Promise.allSettled([
-        props.onLoadWorkspaceDiffSnapshot(workspacePath, projectId, conversationId, {
-          mode: "unstaged",
-          repositoryKey: repository.repositoryKey,
-        }),
-        props.onLoadWorkspaceDiffSnapshot(workspacePath, projectId, conversationId, {
-          mode: "staged",
-          repositoryKey: repository.repositoryKey,
-        }),
-      ]);
-      const rejectedError = [unstagedResult, stagedResult]
-        .find((result): result is PromiseRejectedResult => result.status === "rejected")
-        ?.reason;
-      const unstagedSnapshot = unstagedResult.status === "fulfilled"
-        ? unstagedResult.value
-        : previousRepository?.unstagedSnapshot ?? null;
-      const stagedSnapshot = stagedResult.status === "fulfilled"
-        ? stagedResult.value
-        : previousRepository?.stagedSnapshot ?? null;
-      return {
-        error: rejectedError instanceof Error ? rejectedError.message : rejectedError ? String(rejectedError) : null,
-        isPrimary: repository.isPrimary,
-        loading: false,
-        monitoringEnabled: true,
-        projectId,
-        relativePath: repository.relativePath,
-        repositoryKey: repository.repositoryKey,
-        repositoryName: repository.name,
-        revision: (previousRepository?.revision ?? 0) + 1,
-        stagedSnapshot,
-        summary: buildWorkspaceProjectGitSummary(unstagedSnapshot, stagedSnapshot),
-        unstagedSnapshot,
-        workspacePath,
-      } satisfies WorkspaceProjectGitRepositoryState;
-    }));
-    const primaryRepository = repositoryStates.find((repository) => (
-      catalog.repositories.find((candidate) => candidate.repositoryKey === repository.repositoryKey)?.isPrimary
-    )) ?? repositoryStates[0] ?? null;
-    setWorkspaceGitStateByProject((current) => {
-      const previous = current[workspacePath];
-      if (!workspaceGitRefreshOwner.current.owns(ticket)) {
-        return current;
-      }
-      return {
-        ...current,
-        [workspacePath]: {
-          error: repositoryStates.find((repository) => repository.error)?.error ?? null,
-          loading: repositoryStates.some((repository) => repository.loading),
-          projectId,
-          refreshRequestId: requestId,
-          revision: (previous?.revision ?? 0) + 1,
-          stagedSnapshot: primaryRepository?.stagedSnapshot ?? null,
-          summary: primaryRepository?.summary ?? null,
-          unstagedSnapshot: primaryRepository?.unstagedSnapshot ?? null,
-          workspacePath,
-          repositories: repositoryStates,
-          primaryRepositoryKey: primaryRepository?.repositoryKey ?? null,
-        },
-      };
-    });
-    setSelectedGitRepositoryKey((current) => (
-      !workspaceGitRefreshOwner.current.ownsSelection(ticket, selectedGitWorkspaceRef.current) ? current
-        : current && repositoryStates.some((repository) => repository.repositoryKey === current && repository.monitoringEnabled)
-        ? current
-        : repositoryStates.find((repository) => repository.monitoringEnabled && repository.repositoryKey === primaryRepository?.repositoryKey)?.repositoryKey
-          ?? repositoryStates.find((repository) => repository.monitoringEnabled)?.repositoryKey
-          ?? null
-    ));
-  }, [props.onLoadWorkspaceDiffSnapshot]);
-
-  // refreshSessionReviewSummary reloads Git state for the currently selected project.
-  // refreshSessionReviewSummary 重新加载当前选中项目的 Git 状态。
-  const refreshSessionReviewSummary = React.useCallback(async () => {
-    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
-      return;
-    }
-    await refreshProjectGitSummary(
-      selectedChatProject.path,
-      selectedChatProject.id ?? null,
-      props.selectedConversationId,
-    );
-  }, [
-    hasSelectedChatConversation,
-    props.selectedConversationId,
-    refreshProjectGitSummary,
-    selectedChatProject?.id,
-    selectedChatProject?.path,
-  ]);
-
-  // refreshSelectedGitRepositorySummary refreshes only the repository captured by the commit dialog.
-  // refreshSelectedGitRepositorySummary 只刷新提交弹窗捕获的目标仓库。
-  const refreshSelectedGitRepositorySummary = React.useCallback(async () => {
-    if (!hasSelectedChatConversation || !selectedChatProject?.path || !activeGitCommitRepositoryForActions) {
-      return;
-    }
-    await refreshProjectGitSummary(
-      selectedChatProject.path,
-      selectedChatProject.id ?? null,
-      props.selectedConversationId,
-      activeGitCommitRepositoryForActions,
-    );
-  }, [
-    hasSelectedChatConversation,
-    props.selectedConversationId,
-    refreshProjectGitSummary,
-    activeGitCommitRepositoryForActions,
-    selectedChatProject?.id,
-    selectedChatProject?.path,
-  ]);
-
-  // commitBranchPrefix is the configured prefix shared by commit and branch-creation recommendations.
-  // commitBranchPrefix 是提交与新建分支推荐共用的已配置前缀。
-  const commitBranchPrefix = props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/";
-
-  // sessionGitBranchActions binds branch listing, switching, and history paging to the selected project.
-  // sessionGitBranchActions 将分支列表、切换与历史分页绑定到当前选中项目。
-  const sessionGitBranchActions = React.useMemo<ConversationSessionGitBranchActions | null>(() => {
-    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
-      return null;
-    }
-    const workspacePath = selectedChatProject.path;
-    const projectId = selectedChatProject.id ?? null;
-    const conversationId = props.selectedConversationId;
-    return {
-      commitBranchPrefix,
-      loadBranches: (repositoryKey) => loadWorkspaceGitBranches(workspacePath, projectId, conversationId, repositoryKey),
-      loadHistory: (repositoryKey, skip) => loadWorkspaceGitHistory(workspacePath, projectId, conversationId, repositoryKey, skip),
-      switchBranch: async (repositoryKey, branchName, create) => {
-        await switchWorkspaceGitBranch(workspacePath, projectId, conversationId, repositoryKey, branchName, create);
-        await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
-      },
-    };
-  }, [
-    commitBranchPrefix,
-    hasSelectedChatConversation,
-    props.selectedConversationId,
-    refreshProjectGitSummary,
-    selectedChatProject?.id,
-    selectedChatProject?.path,
-  ]);
-
-  React.useEffect(() => {
-    if (!hasSelectedChatConversation || !selectedChatProject?.path || !hasServiceRuntime()) {
-      return undefined;
-    }
-    let cancelled = false;
-    let unsubscribe: (() => void) | null = null;
-    const workspacePath = selectedChatProject.path;
-    const projectId = selectedChatProject.id ?? null;
-    const conversationId = props.selectedConversationId;
-    const normalizeWorkspacePath = (value: string): string => value.replaceAll("\\", "/").replace(/\/+$/, "").toLocaleLowerCase();
-    // pendingRepositoryKeys coalesces bursts of file events so each repository refreshes at most once per drain round.
-    // pendingRepositoryKeys 合并突发文件事件，使每个仓库在一轮排空中最多刷新一次。
-    const pendingRepositoryKeys = new Set<string>();
-    let draining = false;
-    // drainPendingRefreshes serializes refreshes and reports one failure per drain instead of one per event.
-    // drainPendingRefreshes 串行执行刷新，每轮排空只报告一次失败而不是每个事件都报告。
-    const drainPendingRefreshes = async (): Promise<void> => {
-      if (draining) {
-        return;
-      }
-      draining = true;
-      let firstError: unknown = null;
-      try {
-        while (!cancelled && pendingRepositoryKeys.size > 0) {
-          const repositoryKey = pendingRepositoryKeys.values().next().value as string;
-          pendingRepositoryKeys.delete(repositoryKey);
-          try {
-            await refreshProjectGitSummary(workspacePath, projectId, conversationId, repositoryKey);
-          } catch (error: unknown) {
-            firstError ??= error;
-          }
-        }
-      } finally {
-        draining = false;
-      }
-      if (firstError !== null && !cancelled) {
-        toast.error(firstError instanceof Error ? firstError.message : String(firstError));
-      }
-    };
-    const subscription = serviceClient.subscribe<WorkspaceGitChangedEvent>("workspace.git.changed", (event) => {
-      if (cancelled || normalizeWorkspacePath(event.workspacePath) !== normalizeWorkspacePath(workspacePath)) {
-        return;
-      }
-      if (event.projectId && projectId && event.projectId !== projectId) {
-        return;
-      }
-      const repositoryKeys = [...new Set(event.repositoryKeys)].filter((key) => key.trim().length > 0);
-      if (repositoryKeys.length === 0) {
-        return;
-      }
-      for (const repositoryKey of repositoryKeys) {
-        pendingRepositoryKeys.add(repositoryKey);
-      }
-      void drainPendingRefreshes();
-    });
-    void subscription.then((nextUnsubscribe) => {
-      if (cancelled) {
-        nextUnsubscribe();
-      } else {
-        unsubscribe = nextUnsubscribe;
-      }
-    }).catch((error: unknown) => {
-      // A failed subscription must remain visible; stale surfaces never report a new connection's failure.
-      // 订阅失败必须可见；失效表面不会报告新连接的错误。
-      if (!cancelled) toast.error(error instanceof Error ? error.message : String(error));
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-      unsubscribe = null;
-      pendingRepositoryKeys.clear();
-    };
-  }, [
-    hasSelectedChatConversation,
-    props.selectedConversationId,
-    refreshProjectGitSummary,
-    selectedChatProject?.id,
-    selectedChatProject?.path,
-  ]);
-
-  // handleToggleReviewMonitoring persists one repository listener switch and refreshes its own node.
-  // handleToggleReviewMonitoring 持久化单个仓库监听开关并刷新该仓库节点。
-  // Parameters: repositoryKey identifies the exact node and enabled is the requested persisted state. Returns a rejecting promise on failure.
-  // 参数：repositoryKey 标识精确节点，enabled 是请求持久化的状态。失败时返回拒绝的 Promise。
-  const handleToggleReviewMonitoring = React.useCallback(async (repositoryKey: string, enabled: boolean) => {
-    if (!selectedChatProject?.path || !selectedChatProject.id || !props.selectedConversationId) {
-      return;
-    }
-    await setWorkspaceGitMonitoring(
-      selectedChatProject.path,
-      selectedChatProject.id,
-      props.selectedConversationId,
-      repositoryKey,
-      enabled,
-    );
-    await refreshProjectGitSummary(
-      selectedChatProject.path,
-      selectedChatProject.id,
-      props.selectedConversationId,
-    );
-    // Only the project still displayed may request a panel catalog refresh after persistence.
-    // 持久化结束后，仅仍在显示的项目可以请求面板目录刷新。
-    if (selectedGitWorkspaceRef.current === selectedChatProject.path) {
-      setReviewFocusRequest((current) => ({
-        repositoryKey: current.repositoryKey,
-        sequence: current.sequence + 1,
-      }));
-    }
-  }, [props.selectedConversationId, refreshProjectGitSummary, selectedChatProject?.id, selectedChatProject?.path]);
-
-  // recordWorkspaceDiffSnapshotForProject merges a panel-loaded snapshot into the shared project Git state.
-  // recordWorkspaceDiffSnapshotForProject 将面板加载的快照合并进共享项目 Git 状态。
-  const recordWorkspaceDiffSnapshotForProject = React.useCallback((
-    workspacePath: string,
-    projectId: string | null,
-    selection: DiffReviewSelection,
-    response: WorkspaceDiffSnapshotResponse,
-  ) => {
-    if (selection.mode !== "unstaged" && selection.mode !== "staged") {
-      return;
-    }
-    setWorkspaceGitStateByProject((current) => {
-      const previous = current[workspacePath];
-      if (previous?.loading) {
-        return current;
-      }
-      const repositoryKey = selection.repositoryKey ?? previous?.primaryRepositoryKey ?? ".";
-      const previousRepository = previous?.repositories.find((repository) => repository.repositoryKey === repositoryKey);
-      const nextUnstagedSnapshot = selection.mode === "unstaged"
-        ? response
-        : previousRepository?.unstagedSnapshot ?? null;
-      const nextStagedSnapshot = selection.mode === "staged"
-        ? response
-        : previousRepository?.stagedSnapshot ?? null;
-      const nextRepository: WorkspaceProjectGitRepositoryState = {
-        error: null,
-        isPrimary: previousRepository?.isPrimary ?? repositoryKey === (previous?.primaryRepositoryKey ?? "."),
-        loading: false,
-        monitoringEnabled: previousRepository?.monitoringEnabled ?? true,
-        projectId,
-        relativePath: previousRepository?.relativePath ?? repositoryKey,
-        repositoryKey,
-        repositoryName: previousRepository?.repositoryName ?? repositoryKey,
-        revision: (previousRepository?.revision ?? 0) + 1,
-        stagedSnapshot: nextStagedSnapshot,
-        summary: buildWorkspaceProjectGitSummary(nextUnstagedSnapshot, nextStagedSnapshot),
-        unstagedSnapshot: nextUnstagedSnapshot,
-        workspacePath,
-      };
-      const repositories = previous?.repositories.filter((repository) => repository.repositoryKey !== repositoryKey) ?? [];
-      repositories.push(nextRepository);
-      repositories.sort((left, right) => left.repositoryKey.localeCompare(right.repositoryKey));
-      const primaryRepository = repositories.find((repository) => repository.repositoryKey === (previous?.primaryRepositoryKey ?? "."))
-        ?? repositories[0]
-        ?? null;
-      return {
-        ...current,
-        [workspacePath]: {
-          error: null,
-          loading: false,
-          projectId,
-          revision: (previous?.revision ?? 0) + 1,
-          refreshRequestId: previous?.refreshRequestId ?? 0,
-          stagedSnapshot: primaryRepository?.stagedSnapshot ?? null,
-          summary: primaryRepository?.summary ?? null,
-          unstagedSnapshot: primaryRepository?.unstagedSnapshot ?? null,
-          workspacePath,
-          repositories,
-          primaryRepositoryKey: primaryRepository?.repositoryKey ?? null,
-        },
-      };
-    });
-  }, []);
-
-  React.useEffect(() => {
-    if (!hasSelectedChatConversation || (gitCommitDialogOpen && !activeSessionReviewSummary)) {
-      setGitCommitDialogOpen(false);
-    }
-  }, [activeSessionReviewSummary, gitCommitDialogOpen, hasSelectedChatConversation]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    if (
-      hasSelectedChatConversation
-      && selectedChatProject?.path
-      && !selectedWorkspaceGitState
-    ) {
-      void refreshSessionReviewSummary().catch((error) => {
-        if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          setWorkspaceGitStateByProject((current) => ({
-            ...current,
-            [selectedChatProject.path]: {
-              error: message,
-              loading: false,
-              projectId: selectedChatProject.id ?? null,
-              refreshRequestId: current[selectedChatProject.path]?.refreshRequestId ?? 0,
-              revision: current[selectedChatProject.path]?.revision ?? 0,
-              stagedSnapshot: current[selectedChatProject.path]?.stagedSnapshot ?? null,
-              summary: current[selectedChatProject.path]?.summary ?? null,
-              unstagedSnapshot: current[selectedChatProject.path]?.unstagedSnapshot ?? null,
-              workspacePath: selectedChatProject.path,
-              repositories: current[selectedChatProject.path]?.repositories ?? [],
-              primaryRepositoryKey: current[selectedChatProject.path]?.primaryRepositoryKey ?? null,
-            },
-          }));
-        }
-      });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    hasSelectedChatConversation,
-    refreshSessionReviewSummary,
-    selectedChatProject?.id,
-    selectedChatProject?.path,
-    selectedWorkspaceGitState,
-  ]);
 
   // activeTerminalProject is the project-level terminal owner selected by the workbench.
   // activeTerminalProject 是工作台选中的项目级终端归属项目。
@@ -1425,62 +762,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // memoryHeaderMeta stores the active memory page title detail for descriptor generation.
   // memoryHeaderMeta 保存当前记忆页 descriptor 使用的标题详情。
   const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench, t);
-
-  React.useEffect(() => {
-    const element = shellRef.current;
-    if (!element || typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(([entry]) => {
-      const width = entry.contentRect.width;
-      const previousWidth = previousShellWidthRef.current;
-      const isGrowing = previousWidth !== null && width > previousWidth + 1;
-      // Only initial layout or a real shrink may override desktop visibility; rerenders must respect a manual reopen.
-      // 只有初次布局或实际缩窄可以自动折叠；普通重绘不能覆盖用户手动重新展开的选择。
-      const canAutoCollapse = previousWidth === null || width < previousWidth - 1;
-      previousShellWidthRef.current = width;
-      const leftWidth = navigationColumnWidth(sidebar.isMobile, sidebar.open);
-      const dockedPanelFits = width - leftWidth - WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH
-        - WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH >= WORKSPACE_CONVERSATION_RESERVED_WIDTH;
-      const shouldFloatRightPanel = effectiveRightPanelOpen && !dockedPanelFits;
-      const dockedRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
-      const shellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
-      const mainWidth = width - leftWidth - dockedRightWidth - shellGaps;
-      if (effectiveRightPanelOpen) {
-        if (rightPanelFloating !== shouldFloatRightPanel) {
-          notifyConversationLayoutWillChange();
-        }
-        setRightPanelFloating(shouldFloatRightPanel);
-      }
-      // Phone navigation overlays the workspace; desktop auto-collapse must not dismiss it.
-      // 手机导航覆盖于工作区上方，桌面自动折叠不能将其关闭。
-      if (sidebar.isMobile) {
-        return;
-      }
-      if (canAutoCollapse && mainWidth < 800 && sidebar.open) {
-        notifyConversationLayoutWillChange();
-        sidebar.setOpen(false);
-        setLeftAutoCollapsed(true);
-        return;
-      }
-      if (!isGrowing) {
-        return;
-      }
-      if (leftAutoCollapsed && !sidebar.open) {
-        const restoredRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH : 0;
-        const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? WORKSPACE_CONTEXT_RESIZE_HANDLE_WIDTH : 0;
-        const restoredMainWidth = width - navigationColumnWidth(false, true) - restoredRightWidth - restoredShellGaps;
-        if (restoredMainWidth >= 800) {
-          notifyConversationLayoutWillChange();
-          sidebar.setOpen(true);
-          setLeftAutoCollapsed(false);
-          return;
-        }
-      }
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [effectiveRightPanelOpen, leftAutoCollapsed, notifyConversationLayoutWillChange, rightPanelFloating, sidebar]);
 
   // featureNavigation is the menu a feature page shows in the panel beside the rail, replacing the project tree.
   // featureNavigation 是功能页显示在轨道旁面板中的菜单，用于替换项目树。
