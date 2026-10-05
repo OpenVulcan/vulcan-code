@@ -1,15 +1,8 @@
-# Permanent checks apply to the main branch and every proposed merge.
-# 永久检查适用于主分支与所有拟合入变更。
+# Automatic CI is paused until the public launch; retain an explicit manual entry point.
+# 正式开源前暂停自动 CI，保留明确的手动执行入口。
 name: Quality gates
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
-  # Weekly full coverage catches classification drift without repeating it on every UI edit.
-  # 每周完整检查捕获分类规则漂移，避免每次界面编辑都重复执行。
-  schedule:
-    - cron: '23 19 * * 0'
 permissions:
   contents: read
 # Concurrency belongs to each domain so an unrelated UI push cannot cancel Rust cache creation.
