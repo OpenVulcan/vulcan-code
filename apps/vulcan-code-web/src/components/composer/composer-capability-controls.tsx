@@ -38,6 +38,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
+import {
+  ComposerCapabilitySummary,
+  type ComposerCapabilitySummaryItem,
+} from "@/components/composer/composer-capability-summary";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { ProviderToolExtensionModelCard } from "@/components/shared/provider-tool-extension-model-card";
 import type {
@@ -445,6 +451,12 @@ export function ComposerAiCapabilityControl(props: {
 }) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
+  // summaryOpen controls the read-only hover summary; it never opens while the editor dialog is open.
+  // summaryOpen 控制只读悬浮摘要；编辑对话框打开期间绝不打开。
+  const [summaryOpen, setSummaryOpen] = React.useState(false);
+  // summarySuppressed skips the focus-restoration open after the dialog closes until the next hover or blur.
+  // summarySuppressed 在对话框关闭后跳过焦点恢复引发的打开，直到下一次悬停或失焦。
+  const summarySuppressed = React.useRef(false);
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [selectedCapability, setSelectedCapability] =
     React.useState<PublicAiProviderToolCapabilityKind>("web_search");
@@ -761,16 +773,97 @@ export function ComposerAiCapabilityControl(props: {
     }
   }, [props.conversationId, saving]);
 
+  // summaryItems resolves the hover card rows from the same draft and conflicts the dialog edits.
+  // summaryItems 基于对话框编辑的同一份草稿与冲突解析悬浮卡片行。
+  const summaryItems: ComposerCapabilitySummaryItem[] = snapshot ? capabilities.map((capability) => ({
+    capability,
+    label: providerToolCapabilityLabel(capability, t),
+    color: providerToolCapabilityColor(capability),
+    enabled: composerCapabilityIsEnabled(draft, capability),
+    conflict: conflicts.some((conflict) => conflict.capability === capability),
+    detail: composerCapabilitySummaryDetail(snapshot, draft, capability, t),
+  })) : [];
+
+  // describeCapability resolves one capability's switch state, catalogs and the one-line status shared by list and header.
+  // describeCapability 解析单项能力的开关状态、目录与列表和标题共用的一行状态。
+  // Parameters: capability is the row being described; returns the values the dialog renders for it.
+  // 参数：capability 是被描述的行；返回弹窗为其渲染的值。
+  const describeCapability = (capability: PublicAiProviderToolCapabilityKind) => {
+    // directMode controls whether the capability uses one selected route and a switch.
+    // directMode 控制当前能力是否使用单路由与开关。
+    const directMode = isDirectProviderToolCapability(capability);
+    // extensionSelectionCount reports selected native models for one extension family.
+    // extensionSelectionCount 报告一个扩展能力族已选原生模型数量。
+    const extensionSelectionCount = draft.extensionTargetSets[capability]?.length ?? 0;
+    // enabled represents direct activation or a non-empty native extension set.
+    // enabled 表示直连启用或非空原生扩展集合。
+    const storedEnabled = directMode
+      ? draft.enabledCapabilities.includes(capability)
+      : extensionSelectionCount > 0;
+    // mediaAvailable reuses exact route conflicts, including reasoning support, independently from the stored switch.
+    // mediaAvailable 独立于已存开关复用精确路由冲突校验，包括思考档位支持。
+    const mediaAvailable = isMediaUnderstandingCapability(capability) && snapshot
+      ? (mediaEditModes[capability] ?? draft.mediaUnderstandingSelections[capability]?.mode ?? "provider_tool") === draft.mediaUnderstandingSelections[capability]?.mode
+        && !providerToolSettingsConflicts(snapshot, { ...draft, enabledCapabilities: [capability] })
+          .some((item) => item.capability === capability)
+      : true;
+    const enabled = storedEnabled && mediaAvailable;
+    const targets = snapshot?.providerToolTargets.filter(
+      (target) => target.target.contract.capability === capability
+        && (!isModelExtensionCapability(capability)
+          || target.manifestSourceLayer !== "custom"),
+    ) ?? [];
+    const mediaCandidates = snapshot && isMediaUnderstandingCapability(capability)
+      ? (snapshot.mediaUnderstandingModelCandidates ?? []).filter((candidate) => (
+        modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, capability)
+      ))
+      : [];
+    // targetCount reports every independently selectable session model across both backend families.
+    // targetCount 报告两种后端类型中全部可由会话独立选择的模型。
+    const targetCount = isMediaUnderstandingCapability(capability)
+      ? uniqueProviderToolModels(targets).length
+        + uniqueMediaUnderstandingModels(mediaCandidates).length
+      : uniqueProviderToolModels(targets).length;
+    const conflict = conflicts.find((item) => item.capability === capability);
+    // subtitle names the chosen model when enabled, the chosen share for extensions, or the available count otherwise.
+    // subtitle 在启用时给出所选模型，扩展能力给出已选占比，否则给出可用数量。
+    const subtitle = enabled
+      ? directMode
+        ? (snapshot ? composerCapabilitySummaryDetail(snapshot, draft, capability, t) : null)
+          ?? t("composer.capability.source.targets").replace("{count}", String(targetCount))
+        : t("composer.capability.source.targets").replace("{count}", `${extensionSelectionCount}/${targetCount}`)
+      : targetCount > 0
+        ? t("composer.capability.source.targets").replace("{count}", String(targetCount))
+        : t("composer.capability.source.noTargets");
+    return { directMode, extensionSelectionCount, mediaAvailable, enabled, targets, targetCount, conflict, subtitle };
+  };
+  const selectedDescription = settingsReady && capabilities.includes(selectedCapability)
+    ? describeCapability(selectedCapability)
+    : null;
+
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => {
-      if (!mutationPending.current) setOpen(nextOpen);
+      if (mutationPending.current) return;
+      setOpen(nextOpen);
+      if (nextOpen) setSummaryOpen(false);
+      else summarySuppressed.current = true;
     }}>
-      <Tooltip>
-        <TooltipTrigger asChild>
+      <HoverCard
+        closeDelay={150}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen && (open || summarySuppressed.current)) return;
+          setSummaryOpen(nextOpen);
+        }}
+        open={summaryOpen}
+        openDelay={300}
+      >
+        <HoverCardTrigger asChild>
           <DialogTrigger asChild>
             <button
               aria-label={props.ariaLabel}
               className="composer-capability-trigger composer-select-trigger capability"
+              onBlur={() => { summarySuppressed.current = false; }}
+              onPointerEnter={() => { summarySuppressed.current = false; }}
               type="button"
             >
               <span className="composer-select-icon" data-tone={loadStatus !== "loading" && (loadStatus === "failed" || conflicts.length) ? "warning" : undefined}>
@@ -778,36 +871,24 @@ export function ComposerAiCapabilityControl(props: {
                   : loadStatus === "failed" || conflicts.length ? <AlertTriangle size={15} />
                     : <SlidersHorizontal size={15} />}
               </span>
-              <span className="composer-select-copy">
-                <span className="composer-capability-icon-row">
-                  {capabilities.map((capability) => (
-                    <span
-                      className={cn(
-                        "composer-capability-colored-icon",
-                        composerCapabilityIsEnabled(draft, capability) ? "enabled" : "disabled",
-                      )}
-                      key={capability}
-                      style={{
-                        "--capability-color": providerToolCapabilityColor(capability),
-                      } as React.CSSProperties}
-                    >
-                      <ProviderToolCapabilityIcon capability={capability} size={11} />
-                    </span>
-                  ))}
-                </span>
-              </span>
+              {settingsReady && enabledCount > 0 ? (
+                <span aria-hidden="true" className="composer-capability-count">{enabledCount}</span>
+              ) : null}
               <ChevronDown aria-hidden="true" className="composer-select-chevron" />
             </button>
           </DialogTrigger>
-        </TooltipTrigger>
-        <TooltipContent className="composer-control-tooltip" side="top">
-          <strong>{t("composer.capability.tooltipTitle")}</strong>
-          <span>
-            {!settingsReady ? t(loadStatus === "failed" ? "composer.capability.loadFailed" : "composer.capability.loading")
-              : conflicts.length ? t("composer.capability.conflict.tooltip") : `${enabledCount} / ${capabilities.length}`}
-          </span>
-        </TooltipContent>
-      </Tooltip>
+        </HoverCardTrigger>
+        <HoverCardContent align="start" className="w-[21rem] p-3" side="top" sideOffset={8}>
+          <ComposerCapabilitySummary
+            items={summaryItems}
+            onConfigure={() => {
+              setSummaryOpen(false);
+              setOpen(true);
+            }}
+            status={loadStatus}
+          />
+        </HoverCardContent>
+      </HoverCard>
       <DialogContent className="composer-capability-dialog" scrollMode="fixed-footer">
         <DialogHeader>
           <DialogTitle>{t("composer.capability.dialogTitle")}</DialogTitle>
@@ -853,131 +934,131 @@ export function ComposerAiCapabilityControl(props: {
         ) : null}
         {settingsReady ? <div className="composer-capability-dialog-grid vcn-stream-reveal flex-1">
           <aside className="composer-capability-dialog-left">
-            {capabilities.map((capability) => {
-              // directMode controls whether the capability uses one selected route and a switch.
-              // directMode 控制当前能力是否使用单路由与开关。
-              const directMode = isDirectProviderToolCapability(capability);
-              // extensionSelectionCount reports selected native models for one extension family.
-              // extensionSelectionCount 报告一个扩展能力族已选原生模型数量。
-              const extensionSelectionCount = draft.extensionTargetSets[capability]?.length ?? 0;
-              // enabled represents direct activation or a non-empty native extension set.
-              // enabled 表示直连启用或非空原生扩展集合。
-              const storedEnabled = directMode
-                ? draft.enabledCapabilities.includes(capability)
-                : extensionSelectionCount > 0;
-              // mediaAvailable reuses exact route conflicts, including reasoning support, independently from the stored switch.
-              // mediaAvailable 独立于已存开关复用精确路由冲突校验，包括思考档位支持。
-              const mediaAvailable = isMediaUnderstandingCapability(capability) && snapshot
-                ? (mediaEditModes[capability] ?? draft.mediaUnderstandingSelections[capability]?.mode ?? "provider_tool") === draft.mediaUnderstandingSelections[capability]?.mode
-                  && !providerToolSettingsConflicts(snapshot, { ...draft, enabledCapabilities: [capability] })
-                    .some((item) => item.capability === capability)
-                : true;
-              const enabled = storedEnabled && mediaAvailable;
-              const targets = snapshot?.providerToolTargets.filter(
-                (target) => target.target.contract.capability === capability
-                  && (!isModelExtensionCapability(capability)
-                    || target.manifestSourceLayer !== "custom"),
-              ) ?? [];
-              const mediaCandidates = snapshot && isMediaUnderstandingCapability(capability)
-                ? (snapshot.mediaUnderstandingModelCandidates ?? []).filter((candidate) => (
-                  modelCapabilitiesSupportMediaUnderstanding(candidate.capabilities, capability)
-                ))
-                : [];
-              // targetCount reports every independently selectable session model across both backend families.
-              // targetCount 报告两种后端类型中全部可由会话独立选择的模型。
-              const targetCount = isMediaUnderstandingCapability(capability)
-                ? uniqueProviderToolModels(targets).length
-                  + uniqueMediaUnderstandingModels(mediaCandidates).length
-                : uniqueProviderToolModels(targets).length;
-              const conflict = conflicts.find((item) => item.capability === capability);
-              return (
-                <div
-                  className={cn(
-                    "composer-capability-kind-row",
-                    selectedCapability === capability && "selected",
-                    conflict && "conflict",
-                  )}
-                  aria-invalid={conflict ? true : undefined}
-                  key={capability}
-                >
-                  {directMode ? (
-                    <input
-                      aria-label={`${providerToolCapabilityLabel(capability, t)} · ${t("settings.providerTools.enabled")}`}
-                      checked={enabled}
-                      disabled={isMediaUnderstandingCapability(capability)
-                        ? mediaUnderstandingCapabilityToggleDisabled(saving, mediaAvailable, enabled)
-                        : providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
-                      onChange={(event) => {
-                        event.stopPropagation();
-                        const checked = event.currentTarget.checked;
-                        setDraft((current) => {
-                          const enabledCapabilities = new Set(current.enabledCapabilities);
-                          if (!checked) {
-                            enabledCapabilities.delete(capability);
-                            return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
-                          }
-                          enabledCapabilities.add(capability);
-                          if (isMediaUnderstandingCapability(capability)) {
-                            if (!mediaAvailable) return current;
-                            return {
-                              ...current,
-                              enabledCapabilities: Array.from(enabledCapabilities).sort(),
-                            };
-                          }
-                          const first = targets[0];
-                          if (first) {
-                            return {
-                              ...current,
-                              enabledCapabilities: Array.from(enabledCapabilities).sort(),
-                              selections: current.selections[capability] ? current.selections : {
-                                ...current.selections,
-                                [capability]: selectionForTarget(first),
-                              },
-                            };
-                          }
-                          return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
-                        });
-                      }}
-                      onClick={(event) => event.stopPropagation()}
-                      type="checkbox"
-                    />
-                  ) : (
-                    <span className="composer-capability-extension-count">
-                      {extensionSelectionCount}
-                    </span>
-                  )}
-                  <Button className="composer-capability-kind-select h-auto min-w-0 flex-1 justify-start whitespace-normal text-left" type="button" variant="ghost"
-                    ref={selectedCapability === capability ? selectedCategoryButton : undefined}
-                    aria-pressed={selectedCapability === capability} disabled={saving}
-                    onClick={() => setSelectedCapability(capability)}>
-                    <span className={cn(
-                      "composer-capability-colored-icon",
-                      enabled ? "enabled" : "disabled",
-                    )} style={{
-                      "--capability-color": providerToolCapabilityColor(capability),
-                    } as React.CSSProperties}>
-                      <ProviderToolCapabilityIcon capability={capability} size={16} />
-                    </span>
-                    <span className="composer-capability-kind-copy">
-                      <span className="composer-capability-kind-title">
-                        {providerToolCapabilityLabel(capability, t)}
-                        {conflict ? <AlertTriangle aria-hidden="true" size={13} /> : null}
-                      </span>
-                      <small>{targetCount} {t("settings.providerTools.targets")}</small>
-                      {conflict ? (
-                        <small className="composer-capability-node-warning" role="alert">
-                          {t(conflict.kind === "missing_selection"
-                            ? "composer.capability.conflict.missingSelection"
-                            : "composer.capability.conflict.targetUnavailable")}
-                        </small>
-                      ) : null}
-                    </span>
-                  </Button>
-                </div>
-              );
-            })}
+            {groupProviderToolCapabilities(capabilities).map(({ group, capabilities: members }) => (
+              <div
+                aria-label={group ? t(group.labelKey) : undefined}
+                className="composer-capability-kind-group"
+                key={group?.id ?? "ungrouped"}
+                role="group"
+              >
+                {group ? <div aria-hidden="true" className="composer-capability-kind-group-title">{t(group.labelKey)}</div> : null}
+                {members.map((capability) => {
+                  const { directMode, extensionSelectionCount, mediaAvailable, enabled, targets, targetCount, conflict, subtitle } =
+                    describeCapability(capability);
+                  return (
+                    <div
+                      className={cn(
+                        "composer-capability-kind-row",
+                        enabled && "enabled",
+                        selectedCapability === capability && "selected",
+                        conflict && "conflict",
+                      )}
+                      aria-invalid={conflict ? true : undefined}
+                      key={capability}
+                    >
+                      {directMode ? (
+                        <input
+                          aria-label={`${providerToolCapabilityLabel(capability, t)} · ${t("settings.providerTools.enabled")}`}
+                          checked={enabled}
+                          disabled={isMediaUnderstandingCapability(capability)
+                            ? mediaUnderstandingCapabilityToggleDisabled(saving, mediaAvailable, enabled)
+                            : providerToolCapabilitySwitchDisabled(saving, targetCount, enabled)}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            const checked = event.currentTarget.checked;
+                            setDraft((current) => {
+                              const enabledCapabilities = new Set(current.enabledCapabilities);
+                              if (!checked) {
+                                enabledCapabilities.delete(capability);
+                                return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                              }
+                              enabledCapabilities.add(capability);
+                              if (isMediaUnderstandingCapability(capability)) {
+                                if (!mediaAvailable) return current;
+                                return {
+                                  ...current,
+                                  enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                                };
+                              }
+                              const first = targets[0];
+                              if (first) {
+                                return {
+                                  ...current,
+                                  enabledCapabilities: Array.from(enabledCapabilities).sort(),
+                                  selections: current.selections[capability] ? current.selections : {
+                                    ...current.selections,
+                                    [capability]: selectionForTarget(first),
+                                  },
+                                };
+                              }
+                              return { ...current, enabledCapabilities: Array.from(enabledCapabilities).sort() };
+                            });
+                          }}
+                          onClick={(event) => event.stopPropagation()}
+                          type="checkbox"
+                        />
+                      ) : (
+                        <span aria-hidden="true" className={cn("composer-capability-extension-count", extensionSelectionCount > 0 && "active")}>
+                          {extensionSelectionCount > 0 ? extensionSelectionCount : null}
+                        </span>
+                      )}
+                      <Button className="composer-capability-kind-select h-auto min-w-0 flex-1 justify-start whitespace-normal text-left" type="button" variant="ghost"
+                        ref={selectedCapability === capability ? selectedCategoryButton : undefined}
+                        aria-pressed={selectedCapability === capability} disabled={saving}
+                        onClick={() => setSelectedCapability(capability)}>
+                        <span className={cn(
+                          "composer-capability-colored-icon",
+                          enabled ? "enabled" : "disabled",
+                        )} style={{
+                          "--capability-color": providerToolCapabilityColor(capability),
+                        } as React.CSSProperties}>
+                          <ProviderToolCapabilityIcon capability={capability} size={16} />
+                        </span>
+                        <span className="composer-capability-kind-copy">
+                          <span className="composer-capability-kind-title">
+                            {providerToolCapabilityLabel(capability, t)}
+                            {conflict ? <AlertTriangle aria-hidden="true" size={13} /> : null}
+                          </span>
+                          <small>{subtitle}</small>
+                          {conflict ? (
+                            <small className="composer-capability-node-warning" role="alert">
+                              {t(conflict.kind === "missing_selection"
+                                ? "composer.capability.conflict.missingSelection"
+                                : "composer.capability.conflict.targetUnavailable")}
+                            </small>
+                          ) : null}
+                        </span>
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </aside>
           <section className="composer-capability-dialog-right">
+            {selectedDescription ? (
+              <header className="composer-capability-detail-header">
+                <span
+                  aria-hidden="true"
+                  className={cn("composer-capability-colored-icon tile", selectedDescription.enabled ? "enabled" : "disabled")}
+                  style={{ "--capability-color": providerToolCapabilityColor(selectedCapability) } as React.CSSProperties}
+                >
+                  <ProviderToolCapabilityIcon capability={selectedCapability} size={17} />
+                </span>
+                <span className="composer-capability-detail-heading">
+                  <strong>{providerToolCapabilityLabel(selectedCapability, t)}</strong>
+                  <small>{selectedDescription.subtitle}</small>
+                </span>
+                <span className={cn(
+                  "composer-capability-status",
+                  selectedDescription.conflict ? "conflict" : selectedDescription.enabled ? "enabled" : "disabled",
+                )}>
+                  {selectedDescription.conflict
+                    ? t("composer.capability.conflict.tooltip")
+                    : t(selectedDescription.enabled ? "settings.providerTools.enabled" : "settings.providerTools.disabled")}
+                </span>
+              </header>
+            ) : null}
             {isMediaUnderstandingCapability(selectedCapability)
               && draft.enabledCapabilities.includes(selectedCapability)
               && conflicts.some((conflict) => conflict.capability === selectedCapability) ? (
@@ -1828,6 +1909,40 @@ function providerToolCapabilityColor(capability: PublicAiProviderToolCapabilityK
     return "var(--chart-2)";
   }
   return "var(--chart-3)";
+}
+
+// composerCapabilitySummaryDetail names the session's selected target for one capability, or its selected-model count.
+// composerCapabilitySummaryDetail 给出会话为某项能力所选目标的名称，或已选模型数量。
+// Parameters: snapshot owns the target catalogs, settings is the session draft; returns null when nothing is selected or resolvable.
+// 参数：snapshot 持有目标目录，settings 是会话草稿；无选择或无法解析时返回 null。
+function composerCapabilitySummaryDetail(
+  snapshot: PublicAiSettingsSnapshot,
+  settings: ComposerProviderToolSettingsSnapshot,
+  capability: PublicAiProviderToolCapabilityKind,
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  const targetName = (selection: PublicAiProviderToolTargetSelection | undefined) => selection
+    ? snapshot.providerToolTargets.find((target) => (
+      target.connectionId === selection.connection_id && target.target.target_id === selection.target_id
+    ))?.target.display_name ?? null
+    : null;
+  if (!isDirectProviderToolCapability(capability)) {
+    const count = settings.extensionTargetSets[capability]?.length ?? 0;
+    return count > 0 ? t("composer.capability.source.targets").replace("{count}", String(count)) : null;
+  }
+  if (isMediaUnderstandingCapability(capability)) {
+    const media = settings.mediaUnderstandingSelections[capability];
+    if (media?.mode === "provider_tool") return targetName(media.selection);
+    if (media?.mode === "model_replacement") {
+      return (snapshot.mediaUnderstandingModelCandidates ?? []).find((candidate) => (
+        candidate.selection.provider_id === media.selection.provider_id
+        && candidate.selection.model_id === media.selection.model_id
+        && candidate.selection.connection_id === media.selection.connection_id
+      ))?.modelDisplayName ?? null;
+    }
+    return null;
+  }
+  return targetName(settings.selections[capability]);
 }
 
 // providerToolCapabilityLabel localizes one provider tool capability.

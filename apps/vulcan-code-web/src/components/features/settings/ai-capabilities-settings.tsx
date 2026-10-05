@@ -1,6 +1,10 @@
 import * as React from "react";
 import { Settings2 } from "lucide-react";
 
+import {
+  PROVIDER_TOOL_CAPABILITY_GROUPS,
+  type ProviderToolCapabilityGroupId,
+} from "@/components/shared/provider-tool-capability-groups";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import { Button } from "@/components/ui/button";
 import { InlineStreamPlaceholder } from "@/components/ui/stream-placeholder";
@@ -19,10 +23,6 @@ import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 
 import { ProviderToolSelectionSettingsArea } from "./provider-tool-selection-settings";
 
-// AiCapabilityTabId groups the fourteen capabilities into four tabs by what the user is trying to do.
-// AiCapabilityTabId 按用户意图把 14 项能力归入 4 个标签页。
-type AiCapabilityTabId = "search" | "understand" | "generate" | "audio";
-
 // AiCapabilityDefinition binds one capability to its existing localized label and description keys.
 // AiCapabilityDefinition 将单项能力绑定到既有的本地化名称与说明键。
 interface AiCapabilityDefinition {
@@ -37,48 +37,36 @@ interface AiCapabilityDefinition {
   descriptionKey: Parameters<ReturnType<typeof useI18n>["t"]>[0];
 }
 
-// AI_CAPABILITY_TABS keeps the retired per-capability pages' labels, now ordered inside four tabs.
-// AI_CAPABILITY_TABS 沿用原单项能力页的文案，现按 4 个标签页排列。
-const AI_CAPABILITY_TABS: Array<{ id: AiCapabilityTabId; labelKey: AiCapabilityDefinition["labelKey"]; items: AiCapabilityDefinition[] }> = [
-  {
-    id: "search",
-    labelKey: "settings.aiCapabilities.tab.search",
-    items: [
-      { capability: "web_search", labelKey: "settings.aiWebSearch", descriptionKey: "settings.aiWebSearch.description" },
-      { capability: "web_extract", labelKey: "settings.aiWebExtract", descriptionKey: "settings.aiWebExtract.description" },
-    ],
-  },
-  {
-    id: "understand",
-    labelKey: "settings.aiCapabilities.tab.understand",
-    items: [
-      { capability: "image_understand", labelKey: "settings.aiUnderstandImage", descriptionKey: "settings.aiUnderstandImage.description" },
-      { capability: "video_understand", labelKey: "settings.aiUnderstandVideo", descriptionKey: "settings.aiUnderstandVideo.description" },
-      { capability: "audio_understand", labelKey: "settings.aiUnderstandAudio", descriptionKey: "settings.aiUnderstandAudio.description" },
-    ],
-  },
-  {
-    id: "generate",
-    labelKey: "settings.aiCapabilities.tab.generate",
-    items: [
-      { capability: "image_generate", labelKey: "settings.aiImageGeneration", descriptionKey: "settings.aiImageGeneration.description" },
-      { capability: "image_edit", labelKey: "settings.providerTools.imageEdit", descriptionKey: "settings.aiImageEdit.description" },
-      { capability: "video_generate", labelKey: "settings.aiVideoGeneration", descriptionKey: "settings.aiVideoGeneration.description" },
-      { capability: "video_edit", labelKey: "settings.providerTools.videoEdit", descriptionKey: "settings.aiVideoEdit.description" },
-      { capability: "video_extend", labelKey: "settings.providerTools.videoExtend", descriptionKey: "settings.aiVideoExtend.description" },
-    ],
-  },
-  {
-    id: "audio",
-    labelKey: "settings.aiCapabilities.tab.audio",
-    items: [
-      { capability: "speech_synthesize", labelKey: "settings.aiSpeechSynthesis", descriptionKey: "settings.aiSpeechSynthesis.description" },
-      { capability: "speech_transcribe", labelKey: "settings.providerTools.speechTranscribe", descriptionKey: "settings.aiSpeechTranscribe.description" },
-      { capability: "music_generate", labelKey: "settings.aiMusicGeneration", descriptionKey: "settings.aiMusicGeneration.description" },
-      { capability: "music_cover", labelKey: "settings.aiMusicCover", descriptionKey: "settings.aiMusicCover.description" },
-    ],
-  },
-];
+// AI_CAPABILITY_DEFINITIONS keeps the retired per-capability pages' labels; grouping comes from the shared groups.
+// AI_CAPABILITY_DEFINITIONS 沿用原单项能力页的文案；分组来自共享分组定义。
+const AI_CAPABILITY_DEFINITIONS: Partial<Record<PublicAiProviderToolCapabilityKind, Omit<AiCapabilityDefinition, "capability">>> = {
+  web_search: { labelKey: "settings.aiWebSearch", descriptionKey: "settings.aiWebSearch.description" },
+  web_extract: { labelKey: "settings.aiWebExtract", descriptionKey: "settings.aiWebExtract.description" },
+  image_understand: { labelKey: "settings.aiUnderstandImage", descriptionKey: "settings.aiUnderstandImage.description" },
+  video_understand: { labelKey: "settings.aiUnderstandVideo", descriptionKey: "settings.aiUnderstandVideo.description" },
+  audio_understand: { labelKey: "settings.aiUnderstandAudio", descriptionKey: "settings.aiUnderstandAudio.description" },
+  image_generate: { labelKey: "settings.aiImageGeneration", descriptionKey: "settings.aiImageGeneration.description" },
+  image_edit: { labelKey: "settings.providerTools.imageEdit", descriptionKey: "settings.aiImageEdit.description" },
+  video_generate: { labelKey: "settings.aiVideoGeneration", descriptionKey: "settings.aiVideoGeneration.description" },
+  video_edit: { labelKey: "settings.providerTools.videoEdit", descriptionKey: "settings.aiVideoEdit.description" },
+  video_extend: { labelKey: "settings.providerTools.videoExtend", descriptionKey: "settings.aiVideoExtend.description" },
+  speech_synthesize: { labelKey: "settings.aiSpeechSynthesis", descriptionKey: "settings.aiSpeechSynthesis.description" },
+  speech_transcribe: { labelKey: "settings.providerTools.speechTranscribe", descriptionKey: "settings.aiSpeechTranscribe.description" },
+  music_generate: { labelKey: "settings.aiMusicGeneration", descriptionKey: "settings.aiMusicGeneration.description" },
+  music_cover: { labelKey: "settings.aiMusicCover", descriptionKey: "settings.aiMusicCover.description" },
+};
+
+// AI_CAPABILITY_TABS orders the definitions inside the four shared intent groups.
+// AI_CAPABILITY_TABS 按四个共享意图分组排列能力定义。
+const AI_CAPABILITY_TABS: Array<{ id: ProviderToolCapabilityGroupId; labelKey: AiCapabilityDefinition["labelKey"]; items: AiCapabilityDefinition[] }> =
+  PROVIDER_TOOL_CAPABILITY_GROUPS.map((group) => ({
+    id: group.id,
+    labelKey: group.labelKey,
+    items: group.capabilities.flatMap((capability) => {
+      const definition = AI_CAPABILITY_DEFINITIONS[capability];
+      return definition ? [{ capability, ...definition }] : [];
+    }),
+  }));
 
 // AiCapabilitySummary is the read-only state one overview row shows.
 // AiCapabilitySummary 是单个概览行展示的只读状态。
@@ -106,7 +94,7 @@ export function AiCapabilitiesSettingsArea(props: {
   // reloadVersion refreshes the overview after the drawer, which owns its own snapshot, closes.
   // reloadVersion 在拥有独立快照的抽屉关闭后刷新概览。
   const [reloadVersion, setReloadVersion] = React.useState(0);
-  const [activeTab, setActiveTab] = React.useState<AiCapabilityTabId>(() => (
+  const [activeTab, setActiveTab] = React.useState<ProviderToolCapabilityGroupId>(() => (
     AI_CAPABILITY_TABS.find((tab) => tab.items.some((item) => item.capability === props.initialCapability))?.id ?? "search"
   ));
   // editing is the capability whose full editor is open in the drawer.

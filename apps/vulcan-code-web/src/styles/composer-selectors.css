@@ -225,6 +225,17 @@
   display: none;
 }
 
+/* A selected account shows only its glyph; name, provider and usage live in the hover card. */
+/* 已选账号只显示图标；名称、供应商与用量在悬浮卡片中展示。 */
+.composer-select-trigger.model-account.icon-only {
+  flex: 0 0 26px;
+  grid-template-columns: 15px;
+  justify-content: center;
+  width: 26px;
+  max-width: 26px;
+  padding: 4px 5px;
+}
+
 .model-picker-account-content {
   min-width: 150px;
 }

@@ -40,65 +40,126 @@
 .composer-capability-dialog-left {
   display: grid;
   align-content: start;
-  gap: 6px;
-  padding-right: 12px;
-  border-right: 1px solid var(--border);
+  gap: 12px;
+  padding-right: 10px;
+  border-right: 1px solid var(--vcn-border-subtle);
+}
+
+/* Capabilities are grouped by the same intents as the settings page tabs. */
+/* 能力按与设置页标签相同的意图分组。 */
+.composer-capability-kind-group {
+  display: grid;
+  gap: 2px;
+}
+
+.composer-capability-kind-group-title {
+  padding: 0 8px 3px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .composer-capability-kind-row {
+  position: relative;
   width: 100%;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   border: 0;
-  border-radius: 0;
-  padding: 5px 8px;
+  border-radius: var(--vcn-radius-md);
+  padding: 7px 10px;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background-color 120ms ease;
 }
 
 .composer-capability-kind-row:hover {
-  background: var(--accent);
+  background: var(--vcn-fill-hover);
 }
 
+/* The selected row carries the brand flame as a short leading bar instead of an outline. */
+/* 选中行以品牌火焰色短竖条标示，而不是描边。 */
 .composer-capability-kind-row.selected {
-  background: var(--accent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ring) 24%, transparent);
+  background: var(--vcn-fill-selected);
+}
+
+.composer-capability-kind-row.selected::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 3px;
+  border-radius: var(--vcn-radius-pill);
+  background: linear-gradient(180deg, var(--vcn-brand-flame-start), var(--vcn-brand-flame-end));
 }
 
 .composer-capability-kind-row.conflict {
-  background: color-mix(in srgb, var(--destructive) 7%, var(--background));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--destructive) 38%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--destructive) 30%, transparent);
 }
 
 .composer-capability-kind-row.conflict:hover,
 .composer-capability-kind-row.conflict.selected {
-  background: color-mix(in srgb, var(--destructive) 11%, var(--background));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--destructive) 58%, var(--border));
+  background: color-mix(in srgb, var(--destructive) 11%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--destructive) 48%, transparent);
+}
+
+.composer-capability-kind-row.conflict.selected::before {
+  background: var(--destructive);
 }
 
 .composer-capability-kind-row.unavailable {
   opacity: 0.55;
 }
 
+/* The switch sits above the stretched select target so both stay independently clickable. */
+/* 开关位于拉伸的选择目标之上，两者都可独立点击。 */
 .composer-capability-kind-row input {
+  position: relative;
+  z-index: 1;
   width: 15px;
   height: 15px;
   margin: 0;
   accent-color: var(--primary);
+  cursor: pointer;
 }
 
 .composer-capability-kind-select {
+  position: static;
   min-width: 0;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   padding: 0;
   color: inherit;
+}
+
+.composer-capability-kind-select:hover {
+  background: transparent;
+}
+
+/* The whole row, including the extension indicator, selects the capability. */
+/* 整行（包括扩展指示器）都可选中该能力。 */
+.composer-capability-kind-select::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.composer-capability-kind-select:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.composer-capability-kind-row:has(.composer-capability-kind-select:focus-visible) {
+  box-shadow: var(--vcn-focus-halo), inset 0 0 0 1px var(--ring);
 }
 
 .composer-capability-kind-copy,
@@ -190,12 +251,21 @@
   grid-template-columns: 72px minmax(0, 1fr);
   align-items: center;
   gap: 12px;
-  color: var(--muted-foreground);
+  color: var(--foreground);
   font-size: var(--vcn-font-size-sm);
 }
 
 .composer-capability-route-selectors > label > span:first-child {
+  color: var(--muted-foreground);
   line-height: 1.35;
+}
+
+/* The model combobox matches the account select surface so both read as the same kind of field. */
+/* 模型组合框与账号下拉框使用相同表面，使两者呈现为同一类字段。 */
+.composer-capability-route-selectors > label > [data-slot="popover-trigger"] {
+  border-color: var(--input);
+  background: var(--card);
+  box-shadow: none;
 }
 
 .composer-capability-route-selectors > label > [data-slot="select-trigger"] {
@@ -210,15 +280,26 @@
   line-height: 1.5;
 }
 
+/* Extension families have no switch: an empty dashed box means nothing chosen, a filled box shows the chosen count. */
+/* 扩展能力族没有开关：空虚线框表示未选择，实心框显示已选数量。 */
 .composer-capability-extension-count {
-  min-width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   display: inline-grid;
   place-items: center;
-  border-radius: var(--vcn-radius-md);
-  background: color-mix(in srgb, var(--primary) 14%, transparent);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-xs);
+  border: 1.5px dashed color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+  border-radius: 4px;
+  color: var(--primary-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.composer-capability-extension-count.active {
+  border: 0;
+  background: var(--vcn-primary-gradient);
+  box-shadow: var(--vcn-highlight-inset);
 }
 
 .composer-capability-extension-list {
@@ -301,4 +382,91 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* The detail pane opens with the selected capability's identity and state, mirroring the list row. */
+/* 详情面板以所选能力的标识与状态开头，与列表行相呼应。 */
+.composer-capability-detail-header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--vcn-border-subtle);
+  padding-bottom: 14px;
+}
+
+.composer-capability-detail-header > .composer-capability-colored-icon.tile {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--vcn-radius-md);
+}
+
+.composer-capability-detail-header > .composer-capability-colored-icon.tile.disabled {
+  background: var(--vcn-fill-hover);
+  box-shadow: inset 0 0 0 1px var(--vcn-border-subtle);
+}
+
+.composer-capability-detail-heading {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.composer-capability-detail-heading strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-detail-heading small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-status {
+  max-width: 180px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border-radius: var(--vcn-radius-pill);
+  padding: 0 10px;
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-status.enabled {
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
+  color: var(--primary);
+}
+
+.composer-capability-status.enabled::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--vcn-brand-flame-start), var(--vcn-brand-flame-end));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vcn-brand-flame-start) 22%, transparent);
+}
+
+.composer-capability-status.disabled {
+  background: var(--vcn-fill-active);
+  color: var(--muted-foreground);
+}
+
+.composer-capability-status.conflict {
+  background: color-mix(in srgb, var(--destructive) 11%, transparent);
+  color: var(--destructive);
 }

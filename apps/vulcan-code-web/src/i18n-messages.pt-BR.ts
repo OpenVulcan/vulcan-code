@@ -1090,7 +1090,7 @@ export const ptBRTranslations: Record<TranslationKey, string> = {
     "composer.capability.dialogDescription": "Escolha as capacidades e os destinos de execução desta sessão. As escolhas salvas valem para os próximos turnos.",
     "composer.capability.source.nativeWithTargets": "Nativo + {count} destinos",
     "composer.capability.source.native": "Modelo nativo",
-    "composer.capability.source.targets": "{count} destinos",
+    "composer.capability.source.targets": "Destinos: {count}",
     "composer.capability.source.noTargets": "Nenhum destino",
     "composer.capability.empty.native": "Esta capacidade é tratada nativamente pelo modelo selecionado.",
     "composer.capability.empty.noTargets": "Esta capacidade não tem destinos configurados.",

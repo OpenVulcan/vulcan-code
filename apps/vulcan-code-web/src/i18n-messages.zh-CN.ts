@@ -1072,7 +1072,7 @@ export const zhCNTranslations: Record<TranslationKey, string> = {
     "composer.capability.basic": "基础能力",
     "composer.capability.basic.subtitle": "仅文本与代码",
     "composer.capability.enabledCount": "{enabled}/{total} 已启用",
-    "composer.capability.tooltipTitle": "点击设置扩展能力",
+    "composer.capability.tooltipTitle": "设置扩展能力",
     "composer.capability.loading": "正在加载会话能力…",
     "composer.capability.loadFailed": "会话能力加载失败",
     "composer.capability.retry": "重新加载",

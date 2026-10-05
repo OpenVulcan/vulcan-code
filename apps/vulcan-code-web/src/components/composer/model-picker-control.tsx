@@ -561,11 +561,11 @@ export function ModelAccountPickerControl(props: {
           <HoverCardTrigger asChild>
             <SelectTrigger
               aria-label={props.ariaLabel}
-              className="composer-select-trigger model-account"
+              className="composer-select-trigger model-account icon-only"
               size="sm"
             >
               <span className="composer-select-icon"><UserRound size={15} /></span>
-              <SelectValue />
+              <span className="sr-only"><SelectValue /></span>
             </SelectTrigger>
           </HoverCardTrigger>
           <SelectContent className="model-picker-account-content">
@@ -580,14 +580,14 @@ export function ModelAccountPickerControl(props: {
         <HoverCardTrigger asChild>
           <Button
             aria-label={props.ariaLabel}
-            className="composer-select-trigger model-account"
+            className="composer-select-trigger model-account icon-only"
             disabled={props.disabled}
             size="sm"
             type="button"
             variant="ghost"
           >
             <span className="composer-select-icon"><UserRound size={15} /></span>
-            <span data-slot="select-value">{selectedAccount.accountName}</span>
+            <span className="sr-only">{selectedAccount.accountName}</span>
           </Button>
         </HoverCardTrigger>
       )}

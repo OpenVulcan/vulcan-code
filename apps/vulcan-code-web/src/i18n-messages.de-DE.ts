@@ -1090,7 +1090,7 @@ export const deDETranslations: Record<TranslationKey, string> = {
     "composer.capability.dialogDescription": "Wähle die Fähigkeiten und Ausführungsziele dieser Sitzung. Gespeicherte Auswahlen gelten für die folgenden Züge.",
     "composer.capability.source.nativeWithTargets": "Nativ + {count} Ziele",
     "composer.capability.source.native": "Natives Modell",
-    "composer.capability.source.targets": "{count} Ziele",
+    "composer.capability.source.targets": "Ziele: {count}",
     "composer.capability.source.noTargets": "Keine Ziele",
     "composer.capability.empty.native": "Diese Fähigkeit wird nativ vom ausgewählten Modell übernommen.",
     "composer.capability.empty.noTargets": "Für diese Fähigkeit sind keine Ziele konfiguriert.",

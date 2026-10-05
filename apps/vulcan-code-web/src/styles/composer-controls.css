@@ -522,15 +522,22 @@
 }
 
 .composer-capability-trigger {
-  display: grid;
-  grid-template-columns: 16px minmax(0, auto) 12px;
+  display: inline-flex;
   align-items: center;
+  gap: 4px;
   border: 0;
 }
 
-.composer-capability-trigger .composer-select-copy {
-  justify-items: start;
-  text-align: left;
+/* Enabled-capability count; the per-capability breakdown lives in the hover summary. */
+/* 已启用能力数量；逐项明细放在悬浮摘要中。 */
+.composer-capability-count {
+  min-width: 14px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 560;
+  line-height: 1;
+  text-align: center;
 }
 
 /* Shared dropdown indicator for popover and dialog triggers that are not Radix Select triggers. */
@@ -546,17 +553,6 @@
 
 .composer-select-trigger[data-state="open"] .composer-select-chevron {
   transform: rotate(180deg);
-}
-
-.composer-capability-icon-row {
-  min-width: 0;
-  display: inline-flex;
-  max-width: 100%;
-  height: 12px;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  overflow: hidden;
 }
 
 .composer-capability-colored-icon {
@@ -579,4 +575,254 @@
 
 .composer-capability-colored-icon svg {
   flex: 0 0 auto;
+}
+
+/* Enabled rows carry their glyph in a tinted tile, echoing the capability color without a loud fill. */
+/* 已启用行把图标放在着色方块中，呼应能力颜色但不使用强烈填充。 */
+.composer-capability-colored-icon.tile {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--vcn-radius-sm);
+  background: color-mix(in srgb, var(--capability-color, var(--foreground)) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--capability-color, var(--foreground)) 16%, transparent);
+}
+
+/* Capability hover summary shares the context-usage card rhythm: header, hairline sections, footer action. */
+/* 能力悬浮摘要沿用上下文用量卡片的节奏：标题、细线分区、底部操作。 */
+.composer-capability-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.composer-capability-summary-header {
+  display: grid;
+  gap: 8px;
+}
+
+/* The enabled share fills a hairline track with the brand flame, the same mark the startup progress uses. */
+/* 已启用占比以品牌火焰色填充细线轨道，与启动进度使用同一标识。 */
+.composer-capability-summary-meter {
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--vcn-radius-pill);
+  background: var(--vcn-fill-active);
+}
+
+.composer-capability-summary-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--vcn-brand-flame-start), var(--vcn-brand-flame-end));
+  transform-origin: left center;
+  transform: scaleX(var(--capability-enabled-ratio, 0));
+  transition: transform 240ms var(--vcn-ease-out, ease-out);
+}
+
+.composer-capability-summary-list,
+.composer-capability-summary-chips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-capability-summary-list {
+  display: grid;
+  gap: 2px;
+  margin: 0 -6px;
+}
+
+/* Each enabled capability stacks its name over its model, so the model gets the full card width in every locale. */
+/* 每个已启用能力将名称叠在模型之上，使模型在所有语言下都占满卡片宽度。 */
+.composer-capability-summary-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border-radius: var(--vcn-radius-sm);
+  padding: 4px 6px;
+  transition: background-color 120ms ease;
+}
+
+.composer-capability-summary-row:hover {
+  background: var(--vcn-fill-hover);
+}
+
+.composer-capability-summary-text {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.composer-capability-summary-label {
+  min-width: 0;
+  display: flex;
+  color: var(--popover-foreground);
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.composer-capability-summary-detail {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.composer-capability-summary-detail > svg {
+  flex: 0 0 auto;
+}
+
+.composer-capability-summary-row.is-conflict .composer-capability-summary-detail,
+.composer-capability-summary-empty.is-warning {
+  color: var(--destructive);
+}
+
+/* Clipped text ends in an ellipsis at rest; hovering its host scrolls it once per cycle. */
+/* 被裁切的文本静止时以省略号结尾；悬停其宿主时循环滚动。 */
+.composer-capability-marquee {
+  min-width: 0;
+  flex: 0 1 auto;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* max-content capped at the frame keeps scrollWidth equal to the natural text width for measurement. */
+/* 以容器为上限的 max-content 宽度让 scrollWidth 始终等于文本自然宽度，便于测量。 */
+.composer-capability-marquee > span {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Margin, not transform, moves the text: it stays in the normal paint path with crisp subpixel glyphs. */
+/* 使用 margin 而不是 transform 移动文本：保持常规绘制路径，字形清晰。 */
+.composer-capability-marquee-host:hover .composer-capability-marquee[data-overflow] > span {
+  max-width: none;
+  overflow: visible;
+  animation: composer-capability-marquee var(--marquee-duration, 5s) ease-in-out infinite;
+}
+
+@keyframes composer-capability-marquee {
+  0%, 20% { margin-left: 0; }
+  50%, 70% { margin-left: calc(-1 * var(--marquee-shift, 0px)); }
+  100% { margin-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-capability-marquee-host:hover .composer-capability-marquee[data-overflow] > span {
+    max-width: 100%;
+    overflow: hidden;
+    animation: none;
+  }
+}
+
+.composer-capability-summary-section {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid var(--vcn-border-subtle);
+  padding-top: 10px;
+}
+
+.composer-capability-summary-section-title {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Disabled capabilities sit in a grid of equal cells: 3 columns when every label fits, otherwise 2 (chosen by the component). */
+/* 未启用能力放在等宽单元格网格中：所有名称放得下时为 3 列，否则为 2 列（由组件决定）。 */
+.composer-capability-summary-chips {
+  display: grid;
+  grid-template-columns: repeat(var(--capability-chip-columns, 3), minmax(0, 1fr));
+  gap: 4px;
+}
+
+.composer-capability-summary-chip {
+  min-width: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--vcn-radius-sm);
+  background: var(--vcn-fill-subtle);
+  box-shadow: inset 0 0 0 1px var(--vcn-border-subtle);
+  color: var(--muted-foreground);
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.composer-capability-summary-chip > .composer-capability-colored-icon {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.composer-capability-summary-empty {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-xs);
+}
+
+/* Footer action opens the editor; the brand primary marks it as the card's only clickable target. */
+/* 底部操作打开编辑器；品牌主色标示它是卡片中唯一可点击的目标。 */
+.composer-capability-summary-footer {
+  border-top: 1px solid var(--vcn-border-subtle);
+  margin: 0 -6px -4px;
+  padding-top: 6px;
+}
+
+.composer-capability-summary-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: var(--vcn-radius-sm);
+  background: transparent;
+  color: var(--primary);
+  padding: 6px;
+  transition: background-color 120ms ease;
+  font-size: var(--vcn-font-size-xs);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-capability-summary-action:hover {
+  background: var(--vcn-fill-selected);
+}
+
+.composer-capability-summary-action > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-summary-action-arrow {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  transition: transform 140ms var(--vcn-ease-out, ease-out);
+}
+
+.composer-capability-summary-action:hover .composer-capability-summary-action-arrow,
+.composer-capability-summary-action:focus-visible .composer-capability-summary-action-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+.composer-capability-summary-action:focus-visible {
+  outline: none;
+  box-shadow: var(--vcn-focus-halo);
 }

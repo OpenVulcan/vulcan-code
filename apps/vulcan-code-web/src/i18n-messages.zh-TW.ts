@@ -1072,7 +1072,7 @@ export const zhTWTranslations: Record<TranslationKey, string> = {
     "composer.capability.basic": "基礎能力",
     "composer.capability.basic.subtitle": "僅文字與程式碼",
     "composer.capability.enabledCount": "已啟用 {enabled}/{total}",
-    "composer.capability.tooltipTitle": "點選設定擴充能力",
+    "composer.capability.tooltipTitle": "設定擴充能力",
     "composer.capability.loading": "正在載入對話能力…",
     "composer.capability.loadFailed": "對話能力載入失敗",
     "composer.capability.retry": "重新載入",

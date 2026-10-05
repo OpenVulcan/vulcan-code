@@ -1090,7 +1090,7 @@ export const enUSTranslations: Record<TranslationKey, string> = {
     "composer.capability.dialogDescription": "Choose this session's capabilities and execution targets. Saved choices apply to subsequent turns.",
     "composer.capability.source.nativeWithTargets": "Native + {count} targets",
     "composer.capability.source.native": "Native model",
-    "composer.capability.source.targets": "{count} targets",
+    "composer.capability.source.targets": "Targets: {count}",
     "composer.capability.source.noTargets": "No targets",
     "composer.capability.empty.native": "This capability is handled natively by the selected model.",
     "composer.capability.empty.noTargets": "This capability has no configured targets.",

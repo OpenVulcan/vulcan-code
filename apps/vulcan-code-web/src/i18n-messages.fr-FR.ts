@@ -1090,7 +1090,7 @@ export const frFRTranslations: Record<TranslationKey, string> = {
     "composer.capability.dialogDescription": "Choisissez les capacités et les cibles d’exécution de cette session. Les choix enregistrés s’appliquent aux tours suivants.",
     "composer.capability.source.nativeWithTargets": "Natif + {count} cibles",
     "composer.capability.source.native": "Modèle natif",
-    "composer.capability.source.targets": "{count} cibles",
+    "composer.capability.source.targets": "Cibles : {count}",
     "composer.capability.source.noTargets": "Aucune cible",
     "composer.capability.empty.native": "Cette capacité est gérée nativement par le modèle sélectionné.",
     "composer.capability.empty.noTargets": "Cette capacité n’a aucune cible configurée.",

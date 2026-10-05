@@ -330,7 +330,7 @@
     max-width: none;
   }
 
-  .composer-select-trigger.model-account {
+  .composer-select-trigger.model-account:not(.icon-only) {
     flex: 0 0 88px;
     width: 88px;
   }

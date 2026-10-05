@@ -378,6 +378,22 @@ async function openCapabilities(value = session(), catalog = settings()) {
   await click("Capabilities");
 }
 
+it("opens the capability dialog from the hover summary footer action", async () => {
+  vi.mocked(loadPublicAiSettings).mockResolvedValue(settings());
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockResolvedValue({ ...session(), conflicts: [] });
+  await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
+  await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Capabilities"]')!.focus(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+  // configure is the footer action rendered by the mounted hover summary.
+  // configure 是已挂载悬浮摘要渲染的底部操作。
+  const configure = document.querySelector<HTMLButtonElement>(".composer-capability-summary-action");
+  expect(configure?.textContent).toBe("composer.capability.tooltipTitle");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  await act(async () => configure!.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("composer.capability.dialogTitle");
+  expect(document.querySelector(".composer-capability-summary-action")).toBeNull();
+});
+
 it("keeps both empty media modes and disables a stale enabled route even with candidates", async () => {
   await openCapabilities(session("removed"));
   const checkbox = document.querySelector<HTMLInputElement>('.composer-capability-kind-row.selected input[type="checkbox"]')!;
