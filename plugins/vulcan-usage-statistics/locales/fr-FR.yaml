@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: La part de lecture du cache utilise l’entrée déclarée ; les compteurs de cache ne sont pas ajoutés à l’entrée ou à la sortie.
   cost.empty: Aucun coût enregistré dans cette période
   pricing.editor: Éditeur de prix des modèles
-  pricing.chooseModel: Sélectionnez un modèle dans le tableau ci-dessous pour modifier ses prix.
   pricing.editModel: 'Modifier le modèle · {{model}}'
   status.unknown: État des statistiques inconnu
   sections.label: Sections des statistiques

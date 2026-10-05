@@ -183,12 +183,97 @@ export async function checkUiArchitecture(
   return failures
 }
 
+// pluginsRoot holds the bundled plugin packages whose UI modules follow the plugin style contract.
+// pluginsRoot 保存其 UI 模块遵循插件样式契约的内置插件包。
+const pluginsRoot = resolve(scriptDirectory, "../../../plugins")
+// pluginStyleVocabulary is the published stylesheet whose classes plugin UI modules may name.
+// pluginStyleVocabulary 是插件 UI 模块可以引用其类名的已发布样式表。
+const pluginStyleVocabulary = resolve(sourceRoot, "styles/plugin-host-components.css")
+// pluginStyleRules are the custom-style limits of docs/contracts/plugin-ui-authoring.md; each pattern runs on non-test UI modules.
+// pluginStyleRules 是 docs/contracts/plugin-ui-authoring.md 中的自定义样式限制；每条规则作用于非测试 UI 模块。
+const pluginStyleRules = [
+  [/createElement\(\s*["'`]style["'`]|\bh\(\s*["'`]style["'`]|<style[\s>]|\bCSSStyleSheet\b|adoptedStyleSheets/, "style elements and stylesheet injection are forbidden"],
+  [/\bdocument\.|\binnerHTML\b|\bouterHTML\b|insertAdjacentHTML|dangerouslySetInnerHTML/, "direct DOM access is forbidden; render through sdk.React and sdk.components"],
+  [/["'`](?:[^"'`\n]*\s)?#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(/, "color literals are forbidden; use host theme tokens such as var(--primary)"],
+  [/\bposition\s*:\s*["'`](?:fixed|sticky)|\bzIndex\b|z-index/, "fixed or sticky positioning and z-index are reserved for the host shell"],
+  [/\bfontSize\s*:\s*(?:\d|["'`][^"'`]*px)/, "pixel font sizes are forbidden; use host typography tokens such as var(--vcn-font-size-sm)"],
+]
+
+// stylesheetClassNames returns every class selector declared in one stylesheet.
+// stylesheetClassNames 返回一个样式表中声明的全部类选择器。
+// Parameters: css is the exact stylesheet text. Returns the class names without their leading dot.
+// 参数：css 是精确样式表文本。返回不含前导点号的类名。
+export function stylesheetClassNames(css) {
+  // selectors is the stylesheet with comments removed so commented class names do not count.
+  // selectors 是移除注释后的样式表，使注释中的类名不被计入。
+  const selectors = css.replace(/\/\*[\s\S]*?\*\//g, "")
+  return new Set([...selectors.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((match) => match[1]))
+}
+
+// moduleClassNames returns every class token written in a className property of one plugin UI module.
+// moduleClassNames 返回一个插件 UI 模块 className 属性中写出的全部类名标记。
+// Parameters: source is the exact module text. Returns literal tokens; template interpolations are skipped.
+// 参数：source 是精确模块文本。返回字面量标记；模板插值部分被跳过。
+export function moduleClassNames(source) {
+  // tokens accumulates class tokens in source order.
+  // tokens 按源码顺序累积类名标记。
+  const tokens = []
+  for (const match of source.matchAll(/className\s*[:=]\s*\{?((?:\$\{[^}]*\}|[^,}\n])+)/g)) {
+    for (const literal of match[1].matchAll(/"([^"]*)"|'([^']*)'|`([^`]*)`/g)) {
+      const value = (literal[1] ?? literal[2] ?? literal[3]).replace(/\$\{[^}]*\}/g, " ")
+      tokens.push(...value.split(/\s+/).filter(Boolean))
+    }
+  }
+  return tokens
+}
+
+// checkPluginUiStyle enforces the plugin custom-style contract on every bundled plugin UI module.
+// checkPluginUiStyle 对每个内置插件 UI 模块执行插件自定义样式契约。
+// Parameters: root is the plugins directory; vocabularyPath is the published plugin stylesheet.
+// 参数：root 是插件目录；vocabularyPath 是已发布的插件样式表。
+// Returns actionable violations named by plugin-relative path.
+// 返回以插件相对路径命名的可操作违规项。
+export async function checkPluginUiStyle(root = pluginsRoot, vocabularyPath = pluginStyleVocabulary) {
+  // vocabulary is the exact set of class names plugins may reference.
+  // vocabulary 是插件可以引用的精确类名集合。
+  const vocabulary = stylesheetClassNames(await readFile(vocabularyPath, "utf8"))
+  // failures accumulates violations across all plugins.
+  // failures 累积全部插件的违规项。
+  const failures = []
+  for (const plugin of (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()) {
+    // uiDirectory is the conventional location of one plugin's mounted modules.
+    // uiDirectory 是单个插件挂载模块的约定位置。
+    const uiDirectory = join(root, plugin, "ui")
+    // modules lists the plugin's runtime UI modules; tests may stub freely.
+    // modules 列出插件的运行时 UI 模块；测试可以自由打桩。
+    const modules = await readdir(uiDirectory).catch(() => [])
+    for (const file of modules.filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs")).sort()) {
+      // name is the diagnostic path relative to the plugins directory.
+      // name 是相对插件目录的诊断路径。
+      const name = `${plugin}/ui/${file}`
+      // source is the module text with comments removed so prose cannot trigger a rule.
+      // source 是移除注释后的模块文本，使说明文字不会触发规则。
+      const source = (await readFile(join(uiDirectory, file), "utf8")).replace(/\/\*[\s\S]*?\*\/|(^|[^:"'`])\/\/.*$/gm, "$1")
+      for (const [pattern, message] of pluginStyleRules) {
+        if (pattern.test(source)) failures.push(`${name}: ${message}`)
+      }
+      // unknown lists class tokens outside the published vocabulary, reported once each.
+      // unknown 列出不在已发布词汇表中的类名标记，每个只报告一次。
+      const unknown = [...new Set(moduleClassNames(source).filter((token) => !vocabulary.has(token)))]
+      if (unknown.length > 0) {
+        failures.push(`${name}: class names ${unknown.join(", ")} are not defined in styles/plugin-host-components.css; use page kit components or add a plugin-scoped rule there`)
+      }
+    }
+  }
+  return failures
+}
+
 // runUiArchitectureCheck prints every violation and fails the calling process.
 // runUiArchitectureCheck 输出每个违规项并使调用进程失败。
 async function runUiArchitectureCheck() {
-  // failures contains the current exact architecture violations.
-  // failures 包含当前精确的架构违规项。
-  const failures = await checkUiArchitecture()
+  // failures contains the current exact architecture and plugin style violations.
+  // failures 包含当前精确的架构与插件样式违规项。
+  const failures = [...await checkUiArchitecture(), ...await checkPluginUiStyle()]
   if (failures.length > 0) {
     throw new Error(`WebUI architecture check failed:\n- ${failures.join("\n- ")}`)
   }

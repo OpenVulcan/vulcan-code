@@ -96,7 +96,7 @@ export function createPluginPanel(sdk) {
     }
 
     if (loading && usage === null && error === null) {
-      return h(StreamPlaceholder, { className: "w-full min-w-0", label: text("usageTitle", "Usage and quota"), shape: "cards" });
+      return h(PageBody, null, h(StreamPlaceholder, { label: text("usageTitle", "Usage and quota"), shape: "cards" }));
     }
 
     const stats = usage?.localStats ?? null;

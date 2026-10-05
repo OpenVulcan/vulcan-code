@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: キャッシュ読み取りの割合は報告済み入力を分母とし、キャッシュ数は入力と出力に加算しません。
   cost.empty: この範囲には費用の記録がありません
   pricing.editor: モデル料金エディター
-  pricing.chooseModel: 下の表からモデルを選択して料金を編集します。
   pricing.editModel: 'モデルを編集 · {{model}}'
   status.unknown: 統計の稼働状態は不明です
   sections.label: 統計のセクション

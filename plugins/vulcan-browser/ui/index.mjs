@@ -5,13 +5,15 @@
 export function createPluginPanel(sdk) {
   // CoreBrowserPanel renders only the selected conversation's AI browser projection.
   // CoreBrowserPanel 只渲染当前选中会话的 AI 浏览器投影。
-  // Returns the browser surface or a conversation-selection hint.
-  // 返回浏览器界面或会话选择提示。
+  // Returns the browser surface or a conversation-selection empty state.
+  // 返回浏览器界面或会话选择空状态。
   return function CoreBrowserPanel() {
     const conversationId = sdk.context.conversationId;
     return conversationId
       ? sdk.React.createElement(sdk.components.CoreBrowserArea, { ownerSessionId: conversationId })
-      : sdk.React.createElement("div", { className: "p-4 text-sm text-muted-foreground" },
-        sdk.t("conversationRequired", "Select a conversation to view its AI browser."));
+      : sdk.React.createElement(sdk.components.PageEmptyState, {
+        size: "panel",
+        title: sdk.t("conversationRequired", "Select a conversation to view its AI browser."),
+      });
   };
 }

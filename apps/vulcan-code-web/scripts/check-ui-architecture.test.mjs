@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { tmpdir } from "node:os"
 
-import { checkUiArchitecture, componentFunctionCodeLines } from "./check-ui-architecture.mjs"
+import { checkPluginUiStyle, checkUiArchitecture, componentFunctionCodeLines, moduleClassNames } from "./check-ui-architecture.mjs"
 
 // componentSource builds one component function whose body spans the requested code lines.
 // componentSource 构建一个函数体占用指定代码行数的组件函数。
@@ -141,5 +141,76 @@ describe("checkUiArchitecture", () => {
     await withFixture('import { readFileSync } from "node:fs"\nconst data = readFileSync("fixtures/panel.json", "utf8")\n', async (directory) => {
       assert.deepEqual(await checkUiArchitecture(directory), [])
     }, "panel.test.ts")
+  })
+})
+
+// withPluginFixture creates one plugins tree with a single UI module and a plugin stylesheet vocabulary.
+// withPluginFixture 创建只含单个 UI 模块的插件目录树与插件样式表词汇。
+// Parameters: files maps "<plugin>/ui/<file>" to module text; run receives the root and vocabulary path.
+// 参数：files 将 "<plugin>/ui/<file>" 映射到模块文本；run 接收根目录与词汇表路径。
+async function withPluginFixture(files, run) {
+  // directory is the exact temporary plugins root.
+  // directory 是精确的临时插件根目录。
+  const directory = await mkdtemp(join(tmpdir(), "vulcan-plugin-style-"))
+  try {
+    for (const [name, source] of Object.entries(files)) {
+      await mkdir(dirname(join(directory, "plugins", name)), { recursive: true })
+      await writeFile(join(directory, "plugins", name), source, "utf8")
+    }
+    await writeFile(join(directory, "vocabulary.css"), "/* .commented-out */\n.plugin-demo-cell, .plugin-demo-cell.is-active { color: var(--primary); }\n", "utf8")
+    await run(join(directory, "plugins"), join(directory, "vocabulary.css"))
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+describe("checkPluginUiStyle", () => {
+  // Verifies page kit composition with vocabulary classes and token colors passes.
+  // 验证使用词汇表类名与主题变量颜色的页面套件组合可以通过。
+  it("accepts kit components, vocabulary classes and theme tokens", async () => {
+    const source = [
+      "// A comment may mention document.body, #fff and position: fixed.",
+      'export const view = (h, kit, active) => h(kit.PageSection, { title: "Demo" },',
+      '  h("span", { className: active ? "plugin-demo-cell is-active" : "plugin-demo-cell", style: { color: "var(--chart-1)", width: "50%" } }),',
+      '  h(kit.Button, { onClick: () => window.open("https://example.com/#section") }, "Open"))',
+      "",
+    ].join("\n")
+    await withPluginFixture({ "demo/ui/index.mjs": source, "demo/ui/index.test.mjs": "document.body.innerHTML = '<style></style>'\n" }, async (root, vocabulary) => {
+      assert.deepEqual(await checkPluginUiStyle(root, vocabulary), [])
+    })
+  })
+
+  // Verifies each custom-style limit produces its own actionable diagnostic.
+  // 验证每条自定义样式限制都会产生各自的可操作诊断。
+  it("rejects stylesheets, DOM access, color literals, overlays and pixel fonts", async () => {
+    const source = [
+      'export const a = (h) => h("style", null, ".x{}")',
+      "export const b = () => document.querySelector(\"body\")",
+      'export const c = { color: "#ff0000" }',
+      'export const d = { position: "fixed", zIndex: 50 }',
+      "export const e = { fontSize: 13 }",
+      "",
+    ].join("\n")
+    await withPluginFixture({ "demo/ui/index.mjs": source }, async (root, vocabulary) => {
+      assert.deepEqual(await checkPluginUiStyle(root, vocabulary), [
+        "demo/ui/index.mjs: style elements and stylesheet injection are forbidden",
+        "demo/ui/index.mjs: direct DOM access is forbidden; render through sdk.React and sdk.components",
+        "demo/ui/index.mjs: color literals are forbidden; use host theme tokens such as var(--primary)",
+        "demo/ui/index.mjs: fixed or sticky positioning and z-index are reserved for the host shell",
+        "demo/ui/index.mjs: pixel font sizes are forbidden; use host typography tokens such as var(--vcn-font-size-sm)",
+      ])
+    })
+  })
+
+  // Verifies host utility classes and unpublished class names are rejected once each.
+  // 验证宿主工具类与未发布类名会被拒绝，且每个只报告一次。
+  it("rejects class names outside the published vocabulary", async () => {
+    const source = 'export const a = (h) => [h("div", { className: "p-4 text-sm" }), h("div", { className: `plugin-demo-cell ${state} p-4` }), h("i", { className: "commented-out" })]\n'
+    await withPluginFixture({ "demo/ui/index.mjs": source }, async (root, vocabulary) => {
+      assert.deepEqual(await checkPluginUiStyle(root, vocabulary), [
+        "demo/ui/index.mjs: class names p-4, text-sm, commented-out are not defined in styles/plugin-host-components.css; use page kit components or add a plugin-scoped rule there",
+      ])
+    })
+    assert.deepEqual(moduleClassNames('h("a", { className: cond ? "one two" : `three ${x}` })'), ["one", "two", "three"])
   })
 })

@@ -193,6 +193,12 @@ export interface PageTableColumn {
   key: string
   label: React.ReactNode
   numeric?: boolean
+  // wrap lets long identities and stacked details wrap instead of widening the table.
+  // wrap 让长标识与堆叠详情换行，而不是撑宽表格。
+  wrap?: boolean
+  // width is a CSS width such as "28%"; it only takes effect with layout="fixed".
+  // width 是 "28%" 等 CSS 宽度；仅在 layout="fixed" 时生效。
+  width?: string
 }
 
 // PageTableRow is one keyed row whose cells are addressed by column key.
@@ -200,6 +206,9 @@ export interface PageTableColumn {
 export interface PageTableRow {
   key: string
   cells: Readonly<Record<string, React.ReactNode>>
+  // selected highlights the row whose item is open in an editor.
+  // selected 高亮其条目正在编辑器中打开的行。
+  selected?: boolean
 }
 
 // PageTableProps describes one compact data table inside a section.
@@ -213,24 +222,30 @@ export interface PageTableProps {
   // empty replaces the table when there are no rows, usually a PageEmptyState.
   // empty 在没有行时替代表格，通常是 PageEmptyState。
   empty?: React.ReactNode
+  // layout="fixed" distributes declared column widths; minWidth keeps dense tables scrollable instead of crushed.
+  // layout="fixed" 按声明列宽分配；minWidth 让密集表格横向滚动而不被挤压。
+  layout?: "auto" | "fixed"
+  minWidth?: number
   className?: string
 }
 
-// PageTable renders rows through the shared table primitive; it scrolls horizontally instead of wrapping cells.
-// PageTable 通过共享表格原语渲染行；单元格不换行，必要时横向滚动。
-export function PageTable({ columns, rows, label, empty, className }: PageTableProps) {
+// PageTable renders rows through the shared table primitive; cells stay on one line unless their column wraps.
+// PageTable 通过共享表格原语渲染行；除非所在列允许换行，单元格保持单行。
+export function PageTable({ columns, rows, label, empty, layout = "auto", minWidth, className }: PageTableProps) {
   if (rows.length === 0 && empty !== undefined) return <>{empty}</>
+  const cellProps = (column: PageTableColumn) => ({ "data-numeric": column.numeric ? "" : undefined, "data-wrap": column.wrap ? "" : undefined })
   return (
-    <Table aria-label={label} className={cn("page-table", className)} data-slot="page-table">
+    <Table aria-label={label} className={cn("page-table", className)} data-layout={layout} data-slot="page-table" style={minWidth === undefined ? undefined : { minWidth }}>
       <TableHeader>
         <TableRow>
-          {columns.map((column) => <TableHead data-numeric={column.numeric ? "" : undefined} key={column.key} scope="col">{column.label}</TableHead>)}
+          {columns.map((column) => <TableHead {...cellProps(column)} key={column.key} scope="col"
+            style={layout === "fixed" && column.width ? { width: column.width } : undefined}>{column.label}</TableHead>)}
         </TableRow>
       </TableHeader>
       <TableBody>
         {rows.map((row) => (
-          <TableRow key={row.key}>
-            {columns.map((column) => <TableCell data-numeric={column.numeric ? "" : undefined} key={column.key}>{row.cells[column.key] ?? "—"}</TableCell>)}
+          <TableRow aria-selected={row.selected || undefined} data-state={row.selected ? "selected" : undefined} key={row.key}>
+            {columns.map((column) => <TableCell {...cellProps(column)} key={column.key}>{row.cells[column.key] ?? "—"}</TableCell>)}
           </TableRow>
         ))}
       </TableBody>

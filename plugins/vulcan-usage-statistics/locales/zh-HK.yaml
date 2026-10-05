@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: 快取讀取比例以已回報輸入為分母，快取不重複計入輸入與輸出。
   cost.empty: 此範圍尚無費用記錄
   pricing.editor: 模型價格編輯器
-  pricing.chooseModel: 在下方表格選取模型，即可在此編輯價格。
   pricing.editModel: '編輯模型 · {{model}}'
   status.unknown: 統計健康狀態未知
   sections.label: 統計區域

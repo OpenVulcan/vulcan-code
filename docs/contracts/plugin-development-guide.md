@@ -11,6 +11,7 @@
 | 要解决的问题 | 当前入口 |
 | --- | --- |
 | 清单、资源、依赖及显式迁移 | [清单编写](plugin-manifest-authoring.md) |
+| 设置页版面、模块页面组件与自定义样式限制 | [界面编写契约](plugin-ui-authoring.md) |
 | 工具复用、固定会话与关闭 | [执行引擎](plugin-execution-engine.md) |
 | 五个内置插件的性能适配 | [性能指南](plugin-performance-adaptation.md) |
 | 宿主配置的容量修订 | [容量事务](plugin-capacity-policy-transactions.md) |
@@ -26,7 +27,7 @@
 | 普通 Lua 工具 | 模型发起的独立操作 | 默认单次生命周期；需要 VM 复用时显式声明并实现清理 |
 | 固定会话工具 | 调试、协议连接等连续操作 | 会话拥有 VM 和受管资源；保持所有者、工作区及代次亲和 |
 | Hook | 宿主固定扩展点的注册、转换或调用治理 | 使用规定的输入输出及顺序，不能发明 Hook 阶段或取消安全校验 |
-| UI Action | 设置、统计和面板交互 | 当前宿主有持久会话路径；按区域加载、保留请求身份、拒绝迟到结果 |
+| UI Action | 设置、统计和面板交互 | 当前宿主有持久会话路径；按区域加载、保留请求身份、拒绝迟到结果；设置页用 `kind: settings` 版面，见[界面编写契约](plugin-ui-authoring.md) |
 | MCP | 独立工具服务及其进程协议 | 遵守清单范围和宿主依赖管理；其进程/连接寿命与 Lua VM 分开考虑 |
 
 内置示例在根 `plugins/`：Context7 提供普通工具和设置，调试插件展示固定会话与 sidecar，浏览器展示 MCP 与 Hook，RTK 展示受管进程 Hook，使用统计展示查询型 UI Action。

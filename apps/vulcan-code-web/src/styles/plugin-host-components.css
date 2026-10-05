@@ -65,40 +65,13 @@
   height: min(680px, calc(100vh - 48px));
 }
 
-/* Keep the date/time draft compact and use the same theme as other plugin dialogs. */
-/* 保持日期时间草稿紧凑，并沿用其他插件弹窗的主题。 */
+/* Usage statistics range dialog: shared Input and Checkbox controls in a compact two-column draft. */
+/* 用量统计时间范围对话框：在紧凑双列草稿中使用共享 Input 与 Checkbox 控件。 */
 .plugin-statistics-range-dialog { width: min(560px, calc(100vw - 32px)); }
-.plugin-statistics-range-presets, .plugin-statistics-range-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.plugin-statistics-range-actions { justify-content: flex-end; }
-.plugin-statistics-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.plugin-statistics-range-fields label { display: grid; gap: 8px; font-size: var(--vcn-font-size-sm); color: var(--muted-foreground); }
-.plugin-statistics-range-fields input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); color: var(--foreground); font: inherit; }
-.plugin-statistics-range-fields input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-.plugin-statistics-range-fields input:disabled { opacity: 0.5; }
-.plugin-statistics-range-follow { display: flex; align-items: center; gap: 8px; font-size: var(--vcn-font-size-sm); }
-
-/* RTK routes must not depend on the separately loaded system-settings stylesheet. */
-/* RTK 路由不能依赖单独加载的系统设置样式表。 */
-.plugin-panel-rtk .settings-route-groups { display: grid; gap: 16px; }
-.plugin-panel-rtk .settings-route-group { display: grid; gap: 8px; min-width: 0; }
-.plugin-panel-rtk .settings-route-group + .settings-route-group { padding-top: 16px; border-top: 1px solid var(--border); }
-.plugin-panel-rtk :is(.settings-route-group-header, .settings-route-header) { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.plugin-panel-rtk .settings-route-bulk-actions { display: flex; gap: 6px; }
-.plugin-panel-rtk .settings-route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
-.plugin-panel-rtk .settings-route-option { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
-.plugin-panel-rtk .settings-route-option:hover { background: var(--muted); }
-.plugin-panel-rtk .settings-route-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--vcn-font-size-sm); }
-/* Preserve native checkbox keyboard/label behavior while replacing browser-default blue paint. */
-/* 保留原生复选框的键盘与标签交互，同时替换浏览器默认蓝色样式。 */
-.plugin-panel-rtk input[type="checkbox"], .plugin-statistics-range-follow input {
-  appearance: none; display: inline-grid; place-content: center; flex: 0 0 16px;
-  width: 16px; height: 16px; margin: 0; border: 1px solid var(--input);
-  border-radius: var(--vcn-radius-xs); background: var(--background); cursor: pointer;
-}
-.plugin-panel-rtk input[type="checkbox"]:checked, .plugin-statistics-range-follow input:checked { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
-.plugin-panel-rtk input[type="checkbox"]:checked::after, .plugin-statistics-range-follow input:checked::after { content: ""; width: 8px; height: 5px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
-.plugin-panel-rtk input[type="checkbox"]:focus-visible, .plugin-statistics-range-follow input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-.plugin-panel-rtk input[type="checkbox"]:disabled { opacity: 0.5; cursor: default; }
+.plugin-statistics-range-presets { display: flex; flex-wrap: wrap; gap: var(--vcn-space-2); }
+.plugin-statistics-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--vcn-space-3); }
+.plugin-statistics-range-fields label { display: grid; gap: var(--vcn-space-2); min-width: 0; font-size: var(--vcn-font-size-sm); color: var(--muted-foreground); }
+.plugin-statistics-range-follow { display: flex; align-items: center; gap: var(--vcn-space-2); font-size: var(--vcn-font-size-sm); }
 
 /* Keep statistics details outside table flow, with readable aligned facts in the host tooltip. */
 /* 将统计详情移出表格排版，在宿主提示层内对齐展示可读事实。 */
@@ -304,46 +277,8 @@
   border-radius: 50%;
 }
 
-.plugin-chart-state {
-  display: grid;
-  place-items: center;
-  gap: 4px;
-  min-height: 120px;
-  padding: 20px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  color: var(--muted-foreground);
-  text-align: center;
-}
-
-.plugin-chart-state.warning {
-  color: var(--destructive);
-}
-
-.plugin-statistics-layout {
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  padding: 2px 2px 16px;
-  background: transparent;
-}
-
-/* Keep plugin task navigation compact and themed, with visible keyboard selection. */
-/* 保持插件任务导航紧凑且遵循主题，并提供可见键盘选择状态。 */
-.plugin-control-navigation {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding-block: 6px;
-  border-bottom: 1px solid var(--border);
-}
-
-/* Hidden task sections override layout display rules and remove keyboard targets. */
-/* 隐藏任务区域覆盖布局显示规则，并移除键盘聚焦目标。 */
-.plugin-statistics-layout [hidden] { display: none !important; }
-
-/* Exact diagnostics and amounts wrap within the settings pane. */
-/* 精确诊断与金额在设置面板内换行。 */
+/* Exact diagnostics wrap within the pane; host LuaSkills views still use this recipe. */
+/* 精确诊断在面板内换行；宿主 LuaSkills 视图仍使用此样式。 */
 .plugin-control-error-details {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -352,118 +287,23 @@
   color: var(--muted-foreground);
 }
 
-/* Token labels and values share a compact two-column detail layout. */
-/* 令牌标签与数值共用紧凑双列详情布局。 */
-.plugin-control-facts {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 12px;
-  margin: 8px 0;
-}
-.plugin-control-facts dd { margin: 0; font-variant-numeric: tabular-nums; }
-.plugin-statistics-table tr[aria-selected="true"] { background: var(--accent); }
-.plugin-statistics-table summary { cursor: pointer; }
-.plugin-statistics-table summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-
-.plugin-statistics-toolbar,
-.plugin-statistics-range-header,
+/* Usage statistics: page structure comes from the page kit; these rules style only cell content and charts. */
+/* 用量统计：页面结构来自页面套件；以下规则仅修饰单元格内容与图表。 */
 .plugin-statistics-section-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: var(--vcn-space-2);
+  padding-right: calc(var(--vcn-space-5) + var(--vcn-space-1));
 }
-
-.plugin-statistics-section-header p,
-.plugin-statistics-privacy {
-  margin: 4px 0 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-statistics-toolbar {
-  justify-content: flex-start;
-  gap: 6px;
-  flex-wrap: nowrap;
-}
-
-.plugin-statistics-range-header {
-  min-height: 28px;
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-statistics-toolbar-select {
-  width: 138px;
-  height: 28px;
-  min-height: 28px;
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-statistics-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: 96px;
-  gap: 8px;
-}
-
-.plugin-statistics-refresh-button {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-}
-
-.plugin-statistics-refresh-icon {
-  width: 16px;
-  height: 16px;
-  transform-origin: center;
-}
-
-.plugin-statistics-refresh-icon.is-loading {
-  animation: plugin-statistics-refresh-spin 800ms linear infinite;
-}
-
-@keyframes plugin-statistics-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
+.plugin-statistics-search { width: min(320px, 100%); }
+.plugin-statistics-toolbar-select { width: 138px; }
+.plugin-statistics-refresh-icon { width: 16px; height: 16px; transform-origin: center; }
+.plugin-statistics-refresh-icon.is-loading { animation: plugin-statistics-refresh-spin 800ms linear infinite; }
+@keyframes plugin-statistics-refresh-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .plugin-statistics-refresh-icon.is-loading {
-    animation-duration: 1600ms;
-  }
-}
-
-.plugin-statistics-card {
-  min-width: 0;
-  padding: 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-}
-
-/* Keep navigation feedback inside its table without moving neighboring cards or scroll position. */
-/* 将导航反馈限制在所属表格内，不移动相邻卡片或滚动位置。 */
-.plugin-statistics-paged-card { position: relative; }
-.plugin-statistics-table-feedback {
-  position: absolute;
-  top: 3rem;
-  right: 13px;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: calc(100% - 26px);
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
-  font-size: var(--vcn-font-size-sm);
-  overflow-wrap: anywhere;
+  .plugin-statistics-refresh-icon.is-loading { animation-duration: 1600ms; }
 }
 
 /* Cost and usage share the available panel width and wrap only when their content needs it. */
@@ -471,143 +311,54 @@
 .plugin-statistics-balance {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 10px;
+  gap: var(--vcn-space-4);
 }
-.plugin-statistics-cost { margin-top: 10px; }
-.plugin-statistics-cost-value { font-size: 26px; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.plugin-statistics-token-values { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-block: 10px; }
-.plugin-statistics-token-values > div { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; min-width: 0; }
+.plugin-statistics-cost { display: grid; justify-items: start; gap: var(--vcn-space-1); }
+.plugin-statistics-cost-value { font-size: clamp(18px, 2vw, 25px); font-weight: 650; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plugin-statistics-token-values { display: grid; grid-template-columns: 1fr 1fr; gap: var(--vcn-space-3); }
+.plugin-statistics-token-values > div { display: grid; grid-template-columns: 1fr auto; gap: 2px var(--vcn-space-2); min-width: 0; }
 .plugin-statistics-token-values > div > span:first-child { grid-column: 1 / -1; color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
-.plugin-statistics-token-values strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.plugin-statistics-token-values strong { font-size: var(--vcn-font-size-xl); font-variant-numeric: tabular-nums; }
 .plugin-statistics-token-share { align-self: center; font-size: var(--vcn-font-size-sm); color: var(--muted-foreground); }
 .plugin-statistics-token-bar { display: flex; height: 8px; overflow: hidden; border-radius: var(--vcn-radius-xs); background: var(--muted); }
 .plugin-statistics-token-bar > span:first-child { background: var(--chart-1); }
 .plugin-statistics-token-bar > span:last-child { background: var(--chart-2); }
 .plugin-statistics-cache-facts { font-size: var(--vcn-font-size-sm); }
-/* Edit prices in the host modal without a second bordered panel inside it. */
-/* 在宿主弹窗内编辑价格，避免再嵌套一层带边框的面板。 */
+
+/* Price editor: shared Input controls in a responsive grid inside the host dialog. */
+/* 价格编辑器：在宿主对话框内以响应式网格排列共享 Input 控件。 */
 .plugin-statistics-price-dialog { width: min(600px, calc(100vw - 32px)); }
-.plugin-statistics-price-editor { min-width: 0; }
-.plugin-statistics-price-editor > .plugin-statistics-section-header { padding-right: 24px; }
-.plugin-statistics-price-editor [role="alert"] { color: var(--destructive); margin: 12px 0 0; }
-
-/* Price editor layout stays host-themed while the mounted plugin owns its state. */
-/* 价格编辑器布局保持宿主主题，同时由挂载插件持有状态。 */
-.plugin-statistics-pricing-model {
-  min-width: 0;
-  margin: 0;
-  font-size: var(--vcn-font-size-lg);
-  overflow-wrap: anywhere;
-}
-
-/* Price dimensions remain independently editable at desktop and compact widths. */
-/* 各价格维度在桌面与紧凑宽度下均保持独立可编辑。 */
+.plugin-statistics-price-editor { display: grid; gap: var(--vcn-space-3); min-width: 0; }
+.plugin-statistics-pricing-model { min-width: 0; overflow-wrap: anywhere; }
 .plugin-statistics-price-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 12px 0;
+  gap: var(--vcn-space-2);
 }
-
-/* Each price field binds a visible dimension label to one exact decimal string. */
-/* 每个价格字段把可见维度标签绑定到一个精确十进制字符串。 */
 .plugin-statistics-price-field {
   display: grid;
-  gap: 5px;
+  gap: var(--vcn-space-1);
   min-width: 0;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-xs);
 }
 
-/* Raw plugin inputs inherit the same surface and focus contract as host forms. */
-/* 原生插件输入继承宿主表单相同的表面与焦点契约。 */
-.plugin-statistics-price-input {
-  width: 100%;
-  min-width: 0;
-  height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--input);
-  border-radius: calc(var(--radius) - 2px);
-  outline: none;
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-}
-
-.plugin-statistics-price-input:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 28%, transparent);
-}
-
-.plugin-statistics-price-input:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.plugin-statistics-table-wrap {
-  width: 100%;
-  margin-top: 10px;
-  overflow-x: auto;
-}
-
-.plugin-statistics-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--vcn-font-size-sm);
-}
-
-.plugin-statistics-table th,
-.plugin-statistics-table td {
-  padding: 8px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-  white-space: nowrap;
-}
-
-.plugin-statistics-table th {
-  color: var(--muted-foreground);
-  font-weight: 500;
-}
-
-/* Fixed detail columns leave model names the remaining width instead of forcing single-line overflow. */
-/* 明细固定列将剩余宽度留给模型名称，避免单行内容撑宽表格。 */
-.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) { table-layout: fixed; min-width: 1040px; }
-.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) :is(th, td) { padding: 10px 6px; vertical-align: middle; }
-.plugin-statistics-table:is(.plugin-statistics-daily-table, .plugin-statistics-recent-table) th { white-space: normal; }
-.plugin-statistics-table td:is(.plugin-statistics-consumer, .plugin-statistics-operation) { white-space: normal; overflow-wrap: anywhere; }
-/* Distribute available width across all facts instead of assigning every spare pixel to the model. */
-/* 将可用宽度分配给各项信息，避免模型列独占所有剩余空间。 */
-.plugin-statistics-recent-table th:nth-child(1) { width: 8%; }
-.plugin-statistics-daily-table th:nth-child(1) { width: 28%; }
-.plugin-statistics-daily-table th:nth-child(2) { width: 16%; }
-.plugin-statistics-daily-table th:nth-child(3) { width: 8%; }
-.plugin-statistics-daily-table th:nth-child(4) { width: 18%; }
-.plugin-statistics-daily-table th:nth-child(5) { width: 20%; }
-.plugin-statistics-daily-table th:nth-child(6) { width: 10%; }
-.plugin-statistics-recent-table th:nth-child(3) { width: 10%; }
-.plugin-statistics-recent-table th:nth-child(2) { width: 24%; }
-.plugin-statistics-recent-table th:nth-child(4) { width: 7%; }
-.plugin-statistics-recent-table th:nth-child(5) { width: 17%; }
-.plugin-statistics-recent-table th:nth-child(6) { width: 21%; }
-.plugin-statistics-recent-table th:nth-child(7) { width: 9%; }
-.plugin-statistics-recent-table th:nth-child(8) { width: 4%; }
-
 /* Keep caller and operation on separate lines within the same daily column. */
 /* 将每日用量的消费者与操作放在同列的独立两行中。 */
-.plugin-statistics-consumer-operation { display: grid; gap: 4px; }
+.plugin-statistics-consumer-operation { display: grid; gap: var(--vcn-space-1); }
 .plugin-statistics-consumer-operation > span:last-child { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
 
 /* Timing labels and values stay aligned on two lines, matching the adjacent Token cell density. */
 /* 计时标签和值保持双行对齐，与相邻 Token 单元格保持一致的信息密度。 */
 .plugin-statistics-latency {
   display: grid;
-  gap: 4px;
+  gap: var(--vcn-space-1);
   border-inline-start: 3px solid var(--chart-2);
-  padding-inline-start: 8px;
+  padding-inline-start: var(--vcn-space-2);
   font-size: var(--vcn-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
-.plugin-statistics-latency > div { display: flex; align-items: baseline; gap: 8px; }
+.plugin-statistics-latency > div { display: flex; align-items: baseline; gap: var(--vcn-space-2); }
 .plugin-statistics-latency > div > span:first-child { color: var(--muted-foreground); min-width: 42px; }
 .plugin-statistics-latency > div > span:last-child { color: var(--chart-2); }
 .plugin-statistics-latency-unknown { color: var(--muted-foreground); font-size: var(--vcn-font-size-xs); }
@@ -625,33 +376,11 @@
   stroke-width: 2;
 }
 
-.plugin-statistics-status[data-status="succeeded"] {
-  color: var(--chart-2);
-}
-
-.plugin-statistics-status[data-status="failed"] {
-  color: var(--destructive);
-}
-
-@media (max-width: 720px) {
-  .plugin-statistics-toolbar {
-    align-items: stretch;
-    flex-wrap: wrap;
-  }
-
-  .plugin-statistics-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .plugin-statistics-price-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+.plugin-statistics-status[data-status="succeeded"] { color: var(--chart-2); }
+.plugin-statistics-status[data-status="failed"] { color: var(--destructive); }
 
 @media (max-width: 480px) {
-  .plugin-statistics-price-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  .plugin-statistics-price-grid, .plugin-statistics-range-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Declarative plugin settings: only control sizing; rows, sections and notices come from the page kit. */

@@ -83,16 +83,35 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
   const PageTabs = ({ ariaLabel, options, onValueChange, actions }) => React.createElement("div", null, React.createElement("nav", { "aria-label": ariaLabel },
     ...options.map((option) => React.createElement("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))),
     actions);
+  // Page kit stubs keep the semantic landmarks the plugin relies on: sections, notices, tables and lazily mounted panels.
+  // 页面套件桩保留插件依赖的语义结构：区块、提示、表格与延迟挂载的面板。
+  const PageSection = ({ title, description, status, actions, footer, children }) => React.createElement("section", { "data-page-section": "" },
+    React.createElement("h3", null, title), description, status, actions, children, footer);
+  const PageNotice = ({ tone, title, actions, details, children }) => React.createElement("div", { role: tone === "error" ? "alert" : "status" },
+    title, children, details ? React.createElement("pre", null, details) : null, actions);
+  const PageTabPanel = ({ active, children }) => {
+    const [visited, setVisited] = React.useState(active);
+    if (active && !visited) setVisited(true);
+    return active || visited ? React.createElement("div", { hidden: !active }, children) : null;
+  };
+  const PageTable = ({ columns, rows, empty }) => rows.length === 0 && empty !== undefined ? empty : React.createElement("table", null,
+    React.createElement("tbody", null, rows.map((row) => React.createElement("tr", { key: row.key, "aria-selected": row.selected || undefined },
+      columns.map((column) => React.createElement("td", { key: column.key }, row.cells[column.key]))))));
+  const PageFacts = ({ items, className }) => React.createElement("dl", { className },
+    items.map((item) => React.createElement(React.Fragment, { key: item.key }, React.createElement("dt", null, item.label), React.createElement("dd", null, item.value))));
+  const PageToolbar = ({ actions, children }) => React.createElement("div", null, children, actions);
+  const Input = ({ density, ...props }) => React.createElement("input", props);
+  const Checkbox = ({ checked, onCheckedChange }) => React.createElement("input", { type: "checkbox", checked, onChange: (event) => onCheckedChange(event.currentTarget.checked) });
   // sdk supplies only the formally used host surface.
   // sdk 仅提供正式使用的宿主接口。
   const sdk = {
     React, locale, invoke: client.invoke, t: (key, fallback) => messages[key] ?? fallback,
-    components: { Badge: plain, Button, StatusPill: plain, PageTabs, MetricCard: plain, StreamPlaceholder: plain,
-      SelectControl, ActivityHeatmap, ActivityHeatmapLegend: plain,
-      TimeSeriesLineChart: plain, ChartLegend: plain, EmptyState: plain, ErrorState: plain,
+    components: { PageBody: plain, PageToolbar, PageTabs, PageTabPanel, PageSection, PageHint: plain, PageNotice, PageEmptyState: ({ title }) => React.createElement("p", null, title),
+      PageFacts, PageTable, MetricCard: plain, MetricGrid: plain, Badge: plain, Button, Input, Checkbox, SelectControl, StatusPill: plain, StreamPlaceholder: plain,
+      ActivityHeatmap, ActivityHeatmapLegend: plain, TimeSeriesLineChart: plain, ChartLegend: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),
       Dialog: ({ open, children }) => open ? React.createElement("div", null, children) : null,
-      DialogContent: plain, DialogTitle: plain, DialogDescription: plain },
+      DialogContent: plain, DialogHeader: plain, DialogTitle: plain, DialogDescription: plain, DialogFooter: plain },
   };
   // root mounts the real hook-based plugin component.
   // root 挂载真实的基于 Hook 的插件组件。
@@ -325,7 +344,10 @@ test("price settings retry recovers independently from a failed database", async
   });
   assert.match(panel.container.textContent, /settings unavailable/);
   assert.match(panel.container.textContent, /database unavailable/);
-  await React.act(async () => [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "Retry").click());
+  // Each failed read owns its retry; recover only the price settings notice.
+  // 每个失败读取各自拥有重试；只恢复价格设置提示。
+  const settingsNotice = [...panel.container.querySelectorAll('[role="alert"]')].find((notice) => notice.textContent.includes("settings unavailable"));
+  await React.act(async () => [...settingsNotice.querySelectorAll("button")].find((button) => button.textContent === "Retry").click());
   assert.equal(settingsCalls, 2);
   assert.doesNotMatch(panel.container.textContent, /settings unavailable/);
   await openPricing(panel);
@@ -392,7 +414,7 @@ test("overview shows input/output proportions without adding overlapping cache c
       summary: { ...dashboard.summary, inputTokens, outputTokens, cacheReadTokens: 400, cacheWriteTokens: 50, totalTokens: 1500 } }));
     try {
       const balance = panel.container.querySelector(".plugin-statistics-balance");
-      assert.equal(balance.querySelectorAll(":scope > article").length, 2);
+      assert.equal(balance.querySelectorAll(":scope > [data-page-section]").length, 2);
       const bar = balance.querySelector('[role="img"]');
       if (expectedLabel === null) assert.equal(bar, null);
       else {

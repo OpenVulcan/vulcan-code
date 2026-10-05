@@ -2,10 +2,11 @@
 
 开发入口见[插件开发指南](plugin-development-guide.md)，涵盖入口选择、能力注册、多语言、同步与验证。
 五个内置插件的当前状态、复用候选和测量方法见[插件性能适配指南](plugin-performance-adaptation.md)。
+界面挂载、设置版面与模块页面的编写规则见[插件界面编写契约](plugin-ui-authoring.md)。
 
 ## 契约归属
 
-完整清单结构的权威是 `manifest.rs`、`manifest/requirements.rs`、`manifest/reuse.rs`，
+完整清单结构的权威是 `manifest.rs`、`manifest/requirements.rs`、`manifest/reuse.rs`、`manifest/settings_layout.rs`，
 Hook 字段直接引用 `vulcan-hooks` 的生产枚举，运行时枚举直接引用 LuaSkills。
 `manifest_authoring.rs` 从这些类型生成完整 Schema 与两份片段，并加入清单版本及复用类别约束。
 生成器固定使用工作区的 Schemars 版本及 JSON Schema 2020-12，选择反序列化契约；
@@ -16,7 +17,8 @@ Hook 字段直接引用 `vulcan-hooks` 的生产枚举，运行时枚举直接�
 
 - [完整插件清单](plugin-manifest.schema.json)；
 - [运行时必需条件](plugin-runtime-requirements.schema.json)；
-- [无状态工具复用声明](plugin-tool-reuse.schema.json)。
+- [无状态工具复用声明](plugin-tool-reuse.schema.json)；
+- [声明式设置版面](plugin-settings-layout.schema.json)，即 `kind: settings` 挂载入口文件的结构。
 
 这些文件描述全部字段、枚举、字段存在性、类型及版本组合，不是插件激活许可。
 跨字段数值关系、唯一身份、支持的后端、资源文件、授权、宿主预算及实时回调仍由生产 Rust 校验。

@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: 캐시 읽기 비율은 보고된 입력을 기준으로 하며 캐시 수를 입력과 출력에 더하지 않습니다.
   cost.empty: 이 범위에 비용 기록이 없음
   pricing.editor: 모델 가격 편집기
-  pricing.chooseModel: 아래 표에서 모델을 선택하여 가격을 편집하세요.
   pricing.editModel: '모델 편집 · {{model}}'
   status.unknown: 통계 상태를 알 수 없음
   sections.label: 통계 영역

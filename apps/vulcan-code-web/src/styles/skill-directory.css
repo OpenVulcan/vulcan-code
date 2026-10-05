@@ -1036,8 +1036,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.vulcan-plugin-install-panel,
-.vulcan-plugin-detail-mount {
+.vulcan-plugin-install-panel {
   display: grid;
   gap: 12px;
   padding: 14px;

@@ -1,7 +1,6 @@
 /* Feature-only rules load with exact lazy owners; shared overrides stay global. */
 /* 功能专有规则随准确懒加载归属载入；共用覆盖保留全局。 */
 
-
 .provider-management-surface {
   box-sizing: border-box;
   width: 100%;
@@ -709,32 +708,6 @@
   flex: 0 0 auto;
 }
 
-.settings-route-index,
-.settings-route-separator {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 700;
-}
-
-.settings-route-main {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.settings-route-main strong,
-.settings-route-main small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-route-main small {
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
 .capability-target-choice {
   gap: 12px;
 }
@@ -1119,7 +1092,6 @@
 
 }
 
-.settings-route-header,
 .settings-panel-title-row {
   display: flex;
   align-items: center;
@@ -1128,101 +1100,3 @@
   flex-wrap: wrap;
 }
 
-.settings-route-header > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.settings-route-header p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-}
-
-.settings-route-groups {
-  display: grid;
-  gap: 14px;
-  min-width: 0;
-}
-
-.settings-route-group {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.settings-route-group + .settings-route-group {
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
-.settings-route-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.settings-route-bulk-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.settings-route-bulk-button {
-  min-height: 26px;
-  padding: 3px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--vcn-radius-sm);
-  background: transparent;
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: var(--vcn-font-size-sm);
-  cursor: pointer;
-}
-
-.settings-route-bulk-button:hover,
-.settings-route-bulk-button:focus-visible {
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--foreground);
-  outline: none;
-}
-
-.settings-route-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px 10px;
-  min-width: 0;
-}
-
-.settings-route-option {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 30px;
-  padding: 5px 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-sm);
-  cursor: pointer;
-}
-
-.settings-route-option:hover {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-.settings-route-option input {
-  flex: 0 0 auto;
-  margin: 0;
-}
-
-.settings-route-option span {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--vcn-font-size-sm);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}

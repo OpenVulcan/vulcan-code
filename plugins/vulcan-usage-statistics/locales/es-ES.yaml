@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: La proporción de lectura de caché usa la entrada declarada; los recuentos de caché no se suman a entrada y salida.
   cost.empty: No hay registros de costes en este intervalo
   pricing.editor: Editor de precios de modelos
-  pricing.chooseModel: Seleccione un modelo en la tabla inferior para editar sus precios.
   pricing.editModel: 'Editar modelo · {{model}}'
   status.unknown: Estado de las estadísticas desconocido
   sections.label: Secciones de estadísticas

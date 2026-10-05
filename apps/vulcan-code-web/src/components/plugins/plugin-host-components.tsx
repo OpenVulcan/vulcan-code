@@ -1,4 +1,5 @@
 import * as React from "react";
+import { PageEmptyState } from "@/components/page";
 import {
   CircleHelp,
   CircleAlert,
@@ -334,7 +335,7 @@ export function ActivityHeatmapLegend(props: ActivityHeatmapLegendProps) {
 // 参数：props 包含有序真实范围与本地化名称。返回值：每个提供的日期恰好出现一次。
 export function ActivityHeatmap(props: ActivityHeatmapProps) {
   if (props.cells.length === 0) {
-    return <EmptyState title={props.emptyLabel ?? "No activity"} />;
+    return <PageEmptyState title={props.emptyLabel ?? "No activity"} />;
   }
   // firstDate is the exact local calendar date represented by the first cell.
   // firstDate 是首个单元表示的精确本地自然日。
@@ -477,7 +478,7 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   // visibleSeries 排除空输入，同时保留全零数据集。
   const visibleSeries = props.series.filter((item) => item.points.length > 0);
   if (visibleSeries.length === 0) {
-    return <EmptyState title={props.emptyLabel ?? "No chart data"} />;
+    return <PageEmptyState title={props.emptyLabel ?? "No chart data"} />;
   }
   // pointCount is the maximum aligned x-axis length.
   // pointCount 是最大的对齐横轴长度。
@@ -623,38 +624,4 @@ export function ChartLegend(props: ChartLegendProps) {
       ))}
     </div>
   );
-}
-
-// EmptyStateProps describes one compact empty-state message.
-// EmptyStateProps 描述一个紧凑空状态消息。
-export interface EmptyStateProps {
-  // Primary empty-state text.
-  // 主要空状态文本。
-  title: string;
-  // Optional supporting text.
-  // 可选辅助文本。
-  description?: string;
-}
-
-// EmptyState renders one neutral host-themed empty panel.
-// EmptyState 渲染一个中性宿主主题空面板。
-export function EmptyState(props: EmptyStateProps) {
-  return <div className="plugin-chart-state"><strong>{props.title}</strong>{props.description ? <span>{props.description}</span> : null}</div>;
-}
-
-// ErrorStateProps describes one compact error-state message.
-// ErrorStateProps 描述一个紧凑错误状态消息。
-export interface ErrorStateProps {
-  // Primary error text.
-  // 主要错误文本。
-  title: string;
-  // Optional supporting diagnostic.
-  // 可选辅助诊断。
-  description?: string;
-}
-
-// ErrorState renders one host-themed warning panel.
-// ErrorState 渲染一个宿主主题警告面板。
-export function ErrorState(props: ErrorStateProps) {
-  return <div className="plugin-chart-state warning"><strong>{props.title}</strong>{props.description ? <span>{props.description}</span> : null}</div>;
 }

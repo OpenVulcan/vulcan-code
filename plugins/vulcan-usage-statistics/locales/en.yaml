@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: Cache read share uses reported input; cache counts are not added to input/output.
   cost.empty: No cost records in this range
   pricing.editor: Model price editor
-  pricing.chooseModel: Select a model in the table below to edit its prices.
   pricing.editModel: "Edit model · {{model}}"
   status.unknown: Statistics health is unknown
   sections.label: Statistics sections

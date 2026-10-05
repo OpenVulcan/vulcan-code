@@ -10,6 +10,14 @@ const MAX_DAILY_ROWS = 100;
 // MAX_RECENT_ATTEMPTS 限制单次面板渲染的物理请求证据数量。
 const MAX_RECENT_ATTEMPTS = 50;
 
+// PRICING_PAGE_SIZE is the pricing-get page length; request offsets and pagination both derive from it.
+// PRICING_PAGE_SIZE 是 pricing-get 的分页长度；请求偏移与分页导航均由其派生。
+const PRICING_PAGE_SIZE = 25;
+
+// DETAIL_TABLE_MIN_WIDTH keeps the dense detail tables scrollable instead of crushing their fixed columns.
+// DETAIL_TABLE_MIN_WIDTH 让密集明细表格横向滚动，而不是挤压其固定列宽。
+const DETAIL_TABLE_MIN_WIDTH = 1040;
+
 // Resolve a shortcut using local calendar days, except the exact trailing 24-hour shortcut.
 // 按本地自然日计算快捷范围，最近 24 小时快捷项除外。
 // days is 0, 1, 7, 14 or 30; now is Unix milliseconds; returns the committed query bounds.
@@ -113,48 +121,14 @@ export function createPluginPanel(sdk) {
   // h is the host React element factory used by this uncompiled ESM module.
   // h 是当前未编译 ESM 模块使用的宿主 React 元素工厂。
   const h = React.createElement;
-  // Badge is the shared Vulcan badge component.
-  // Badge 是 Vulcan 共享徽标组件。
-  const Badge = sdk.components.Badge;
-  // Button is the shared Vulcan compact action component.
-  // Button 是 Vulcan 共享紧凑操作按钮。
-  const Button = sdk.components.Button;
-  // StatusPill is the shared Vulcan lifecycle status component.
-  // StatusPill 是 Vulcan 共享生命周期状态组件。
-  const StatusPill = sdk.components.StatusPill;
-  // PageTabs is the shared Vulcan page tab strip; the host header already names this page.
-  // PageTabs 是 Vulcan 共享页面标签条；宿主标题栏已显示本页名称。
-  const PageTabs = sdk.components.PageTabs;
-  // MetricCard is the shared host KPI card.
-  // MetricCard 是共享宿主 KPI 卡片。
-  const MetricCard = sdk.components.MetricCard;
-  // SelectControl is the shared host-themed combobox component.
-  // SelectControl 是共享宿主主题下拉选择组件。
-  const SelectControl = sdk.components.SelectControl;
-  // ActivityHeatmap is the shared host calendar activity heatmap.
-  // ActivityHeatmap 是共享宿主日历活动热力图。
-  const ActivityHeatmap = sdk.components.ActivityHeatmap;
-  // ActivityHeatmapLegend is the shared host activity intensity legend.
-  // ActivityHeatmapLegend 是共享宿主活动强度图例。
-  const ActivityHeatmapLegend = sdk.components.ActivityHeatmapLegend;
-  // TimeSeriesLineChart is the shared host responsive daily line chart.
-  // TimeSeriesLineChart 是共享宿主响应式每日折线图。
-  const TimeSeriesLineChart = sdk.components.TimeSeriesLineChart;
-  // ChartLegend is the shared host interactive model-line legend.
-  // ChartLegend 是共享宿主交互式模型折线图例。
-  const ChartLegend = sdk.components.ChartLegend;
-  // EmptyState is the shared host empty-state component.
-  // EmptyState 是共享宿主空状态组件。
-  const EmptyState = sdk.components.EmptyState;
-  // ErrorState is the shared host error-state component.
-  // ErrorState 是共享宿主错误状态组件。
-  const ErrorState = sdk.components.ErrorState;
-  // StreamPlaceholder is the shared host loading silhouette shown in place of loading sentences.
-  // StreamPlaceholder 是共享宿主加载轮廓，用于代替加载文案。
-  const StreamPlaceholder = sdk.components.StreamPlaceholder;
-  // HelpTooltip renders structured details in the host portal, outside table clipping.
-  // HelpTooltip 在宿主门户中渲染结构化详情，避免表格裁切。
-  const HelpTooltip = sdk.components.HelpTooltip;
+  // components is the host SDK surface: the page kit owns page structure; controls, dialogs and charts fill it.
+  // components 是宿主 SDK 接口：页面套件负责页面结构，控件、对话框与图表填充其中。
+  const {
+    PageBody, PageToolbar, PageTabs, PageTabPanel, PageSection, PageHint, PageNotice, PageEmptyState, PageFacts, PageTable,
+    MetricCard, MetricGrid, Badge, Button, Input, Checkbox, SelectControl, StatusPill, HelpTooltip, StreamPlaceholder,
+    Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+    ActivityHeatmap, ActivityHeatmapLegend, TimeSeriesLineChart, ChartLegend,
+  } = sdk.components;
   // text resolves one plugin locale key with an explicit English source fallback.
   // text 使用明确英语源码回退解析一个插件语言键。
   const text = (key, fallback) => sdk.t(key, fallback);
@@ -304,10 +278,11 @@ export function createPluginPanel(sdk) {
         setExactBounds({ startAtMs: value.startAtMs, endAtMs: value.endAtMs ?? Date.now() });
         setFollowNow(value.endAtMs === null); setRangeError(""); setOpen(true);
       } }, timeRangeLabel(value)),
-      h(sdk.components.Dialog, { open, onOpenChange: setOpen },
-        h(sdk.components.DialogContent, { className: "plugin-statistics-range-dialog" },
-          h(sdk.components.DialogTitle, null, text("range.label", "Time range")),
-          h(sdk.components.DialogDescription, null, text("range.description", "Choose local dates and times.")),
+      h(Dialog, { open, onOpenChange: setOpen },
+        h(DialogContent, { className: "plugin-statistics-range-dialog" },
+          h(DialogHeader, null,
+            h(DialogTitle, null, text("range.label", "Time range")),
+            h(DialogDescription, null, text("range.description", "Choose local dates and times."))),
           h("div", { className: "plugin-statistics-range-presets" }, ...[0, 1, 7, 14, 30].map((days) => h(Button, {
             key: days, type: "button", size: "sm", variant: "outline", onClick: () => {
               // Only Today follows now; other shortcuts capture a fixed endpoint when selected.
@@ -319,12 +294,12 @@ export function createPluginPanel(sdk) {
             },
           }, days === 0 ? text("range.today", "Today") : days === 1 ? text("range.last24Hours", "1 day") : interpolate(text("range.lastDays", "{{days}} days"), { days })))),
           h("div", { className: "plugin-statistics-range-fields" },
-            h("label", null, h("span", null, text("range.start", "Start time")), h("input", { type: "datetime-local", value: start, onChange: (event) => { setStart(event.target.value); setExactBounds(null); } })),
-            h("label", null, h("span", null, text("range.end", "End time")), h("input", { type: "datetime-local", value: end, disabled: followNow, onChange: (event) => { setEnd(event.target.value); setExactBounds(null); } })),
+            h("label", null, h("span", null, text("range.start", "Start time")), h(Input, { type: "datetime-local", value: start, onChange: (event) => { setStart(event.target.value); setExactBounds(null); } })),
+            h("label", null, h("span", null, text("range.end", "End time")), h(Input, { type: "datetime-local", value: end, disabled: followNow, onChange: (event) => { setEnd(event.target.value); setExactBounds(null); } })),
           ),
-          h("label", { className: "plugin-statistics-range-follow" }, h("input", { type: "checkbox", checked: followNow, onChange: (event) => setFollowNow(event.target.checked) }), text("range.followNow", "End time follows now")),
-          rangeError ? h("p", { role: "alert" }, rangeError) : null,
-          h("div", { className: "plugin-statistics-range-actions" },
+          h("label", { className: "plugin-statistics-range-follow" }, h(Checkbox, { checked: followNow, onCheckedChange: (checked) => setFollowNow(checked === true) }), text("range.followNow", "End time follows now")),
+          rangeError ? h(PageNotice, { tone: "error" }, rangeError) : null,
+          h(DialogFooter, null,
             h(Button, { type: "button", variant: "ghost", onClick: () => setOpen(false) }, text("clear.cancel", "Cancel")),
             h(Button, { type: "button", onClick: () => {
               // Reject missing or reversed times before issuing a query.
@@ -714,17 +689,17 @@ export function createPluginPanel(sdk) {
           h("span", { className: "plugin-statistics-token-share" }, share === null ? "-" : formatPercent(share)),
         )),
       ),
-      inputShare === null ? h("p", { className: "plugin-statistics-privacy" }, text("tokens.noComposition", "Input/output share is unavailable"))
+      inputShare === null ? h(PageHint, null, text("tokens.noComposition", "Input/output share is unavailable"))
         : h("div", { className: "plugin-statistics-token-bar", role: "img", "aria-label": interpolate(text("tokens.composition", "Input {{input}} · Output {{output}}"), {
           input: formatPercent(inputShare), output: formatPercent(outputShare),
         }) }, h("span", { style: { width: `${inputShare}%` } }), h("span", { style: { width: `${outputShare}%` } })),
-      h("dl", { className: "plugin-control-facts plugin-statistics-cache-facts" },
-        h("dt", null, text("tokens.cacheReadTokens", "Cache read")),
-        h("dd", null, record.cacheReadTokens === null ? "-" : formatInteger(record.cacheReadTokens), ` · ${cacheShare}`),
-        h("dt", null, text("tokens.cacheWriteTokens", "Cache write")),
-        h("dd", null, record.cacheWriteTokens === null ? "-" : formatInteger(record.cacheWriteTokens)),
-      ),
-      h("p", { className: "plugin-statistics-privacy" }, text("tokens.cacheSeparate", "Cache read share uses reported input; cache counts are not added to input/output.")),
+      h(PageFacts, { className: "plugin-statistics-cache-facts", layout: "list", items: [
+        { key: "cacheRead", label: text("tokens.cacheReadTokens", "Cache read"),
+          value: `${record.cacheReadTokens === null ? "-" : formatInteger(record.cacheReadTokens)} · ${cacheShare}` },
+        { key: "cacheWrite", label: text("tokens.cacheWriteTokens", "Cache write"),
+          value: record.cacheWriteTokens === null ? "-" : formatInteger(record.cacheWriteTokens) },
+      ] }),
+      h(PageHint, null, text("tokens.cacheSeparate", "Cache read share uses reported input; cache counts are not added to input/output.")),
     );
   }
 
@@ -767,12 +742,12 @@ export function createPluginPanel(sdk) {
   // 渲染服务端分页导航，不将已加载行冒充完整数据集。
   // offset, size and total describe the server page; setOffset changes it and busy prevents overlap.
   // offset、size 与 total 描述服务端分页；setOffset 切换分页，busy 防止重叠。
-  // Returns one themed navigation row.
-  // 返回一行遵循主题的导航。
+  // Returns the position hint and both page buttons for a PageSection footer.
+  // 返回用于 PageSection 页脚的位置提示与前后翻页按钮。
   function pageControls(offset, size, total, setOffset, busy) {
-    return h("div", { className: "plugin-statistics-toolbar" },
+    return h(React.Fragment, null,
+      h(PageHint, null, `${Math.min(offset + 1, total)}–${Math.min(offset + size, total)} / ${formatInteger(total)}`),
       h(Button, { type: "button", size: "sm", variant: "outline", disabled: busy || offset === 0, onClick: () => setOffset(Math.max(0, offset - size)) }, text("page.previous", "Previous")),
-      h("span", null, `${Math.min(offset + 1, total)}–${Math.min(offset + size, total)} / ${formatInteger(total)}`),
       h(Button, { type: "button", size: "sm", variant: "outline", disabled: busy || offset + size >= total, onClick: () => setOffset(offset + size) }, text("page.next", "Next")),
     );
   }
@@ -1077,7 +1052,7 @@ export function createPluginPanel(sdk) {
       }
       setPricingDirectoryError("");
       const timer = window.setTimeout(() => {
-        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * 25 }, { signal: subscription.signal })
+        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * PRICING_PAGE_SIZE }, { signal: subscription.signal })
           .then((result) => { if (active) {
             pricingDirectoryScope.current = scope;
             setPricingDirectory(result);
@@ -1124,14 +1099,6 @@ export function createPluginPanel(sdk) {
     // Display counts from the committed page while a replacement page is pending or failed.
     // 新分页等待或失败时，计数继续采用已提交分页的位置。
     const displayedPage = dashboardKey.current === null ? { dailyOffset: 0, recentOffset: 0 } : JSON.parse(dashboardKey.current);
-    // Render navigation feedback within its owning card without collapsing the table height.
-    // 在所属卡片内渲染导航反馈，不收缩表格高度。
-    // kind selects a declared table; returns its pending or retry feedback, or no node.
-    // kind 选择已声明表格；返回加载、重试提示或空节点。
-    const tableFeedback = (kind) => !tableRefresh[kind] ? null : h("div", { role: tableRefresh.error ? "alert" : "status", className: "plugin-statistics-table-feedback" },
-      tableRefresh.error || text("page.loading", "Updating this table…"),
-      tableRefresh.error ? h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => void refresh() }, text("error.retry", "Retry")) : null,
-    );
     // summary is a display-only projection over already persisted host facts.
     // summary 是对已持久化宿主事实的纯展示投影。
     const summary = dashboard ? {
@@ -1158,7 +1125,27 @@ export function createPluginPanel(sdk) {
     // pricingDirty 比较精确字符串，确保打开默认值不会产生非预期覆盖。
     const pricingDirty = pricingSettings && PRICE_FIELDS.some((field) => pricingDraft[field.key] !== editablePrices(pricingSettings, selectedPricingModel)[field.key]);
 
-    return h("section", { className: "settings-detail-panel plugin-statistics-layout" },
+    // refreshLabel names the toolbar refresh button for its current state.
+    // refreshLabel 按当前状态命名工具栏刷新按钮。
+    const refreshLabel = loading ? text("refreshing", "Refreshing") : text("refresh", "Refresh");
+    // retryButton renders one recovery command for a notice.
+    // retryButton 为提示渲染一个恢复命令。
+    const retryButton = (onClick) => h(Button, { type: "button", size: "sm", variant: "outline", onClick }, text("error.retry", "Retry"));
+    // tableStatus reports pending navigation of one paged table beside its section title.
+    // tableStatus 在区块标题旁报告单个分页表格的待完成导航。
+    const tableStatus = (kind) => tableRefresh[kind] && !tableRefresh.error
+      ? h(PageHint, { role: "status" }, text("page.loading", "Updating this table…")) : null;
+    // tableError keeps a failed navigation inside its owning section, above the retained rows.
+    // tableError 将失败的导航保留在所属区块内，位于保留行之上。
+    const tableError = (kind) => tableRefresh[kind] && tableRefresh.error
+      ? h(PageNotice, { tone: "error", actions: retryButton(() => void refresh()) }, tableRefresh.error) : null;
+    // loadingPlaceholder stands in for dashboard content until the first snapshot arrives; a failed read shows only its notice.
+    // loadingPlaceholder 在首个快照到达前代替仪表盘内容；读取失败时只显示其提示。
+    const loadingPlaceholder = (withTiles) => error ? null : h(React.Fragment, null,
+      withTiles ? h(StreamPlaceholder, { label: text("status.loading", "Loading system statistics"), shape: "tiles", count: 4 }) : null,
+      h(StreamPlaceholder, withTiles ? { decorative: true, fill: true, shape: "rows" } : { label: text("status.loading", "Loading system statistics"), fill: true, shape: "rows" }));
+
+    return h(PageBody, null,
       h(PageTabs, {
         ariaLabel: text("sections.label", "Statistics sections"),
         value: section,
@@ -1173,18 +1160,11 @@ export function createPluginPanel(sdk) {
               : dashboard?.healthStatus === "ready" ? text("status.ready", "System statistics available") : text("status.unknown", "Statistics health is unknown"),
         }),
       }),
-      h("div", { className: "plugin-statistics-range-header", hidden: section === "pricing" },
-        h("div", { className: "plugin-statistics-toolbar" },
+      section === "pricing" ? null : h(PageToolbar, {
+        actions: h(React.Fragment, null,
           h(Button, {
-            "aria-busy": loading,
-            "aria-label": loading ? text("refreshing", "Refreshing") : text("refresh", "Refresh"),
-            className: "plugin-statistics-refresh-button",
-            disabled: loading,
-            onClick: () => void refresh(true),
-            size: "sm",
-            title: loading ? text("refreshing", "Refreshing") : text("refresh", "Refresh"),
-            type: "button",
-            variant: "outline",
+            "aria-busy": loading, "aria-label": refreshLabel, disabled: loading, onClick: () => void refresh(true),
+            size: "sm", title: refreshLabel, type: "button", variant: "outline",
           }, h("svg", {
             "aria-hidden": "true",
             className: loading ? "plugin-statistics-refresh-icon is-loading" : "plugin-statistics-refresh-icon",
@@ -1212,54 +1192,31 @@ export function createPluginPanel(sdk) {
             onValueChange: (value) => { setConsumerFilter(value); setDailyOffset(0); setRecentOffset(0); },
           }) : null,
         ),
-        modelQuery ? h("div", { className: "plugin-statistics-toolbar" },
-          h(Badge, { variant: "outline" }, `${text("pricing.model", "Model")}: ${modelQuery}`),
-          h(Button, { type: "button", size: "sm", variant: "ghost", onClick: () => {
-            setModelQuery(""); setModelDraft(""); setDailyOffset(0); setRecentOffset(0);
-          } }, text("usage.clearSearch", "Clear model search")),
-        ) : null,
-        dashboard ? h("div", { className: "plugin-statistics-toolbar" },
-          h(Badge, { variant: "outline" }, text("source.host", "Host data")),
-          h(Badge, { variant: "outline" },
-            `${text("pricing.catalog", "Reference catalog")} · ${currencyAmount("", dashboard.pricingCatalog.currency).trim()} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`,
-          ),
-          h("span", { className: "plugin-statistics-privacy" },
-            `${text("revision", "Revision")} ${formatInteger(dashboard.aggregateRevision)} · ${formatTimestamp(dashboard.generatedAtMs)}`,
-          ),
-        ) : null,
-        dashboard && (loading || error) ? h("p", { role: "status", className: "plugin-statistics-privacy" },
-          text("snapshot.retained", "Showing the previous result until a refresh succeeds.")) : null,
+      },
+        dashboard ? h(Badge, { variant: "outline" }, text("source.host", "Host data")) : null,
+        dashboard ? h(Badge, { variant: "outline" },
+          `${text("pricing.catalog", "Reference catalog")} · ${currencyAmount("", dashboard.pricingCatalog.currency).trim()} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`) : null,
+        modelQuery ? h(Badge, { variant: "outline" }, `${text("pricing.model", "Model")}: ${modelQuery}`) : null,
+        modelQuery ? h(Button, { type: "button", size: "sm", variant: "ghost", onClick: () => {
+          setModelQuery(""); setModelDraft(""); setDailyOffset(0); setRecentOffset(0);
+        } }, text("usage.clearSearch", "Clear model search")) : null,
+        dashboard ? h(PageHint, null, `${text("revision", "Revision")} ${formatInteger(dashboard.aggregateRevision)} · ${formatTimestamp(dashboard.generatedAtMs)}`) : null,
       ),
-      error ? h("div", { role: "alert" },
-        h(ErrorState, { title: text("error.title", "Unable to read system statistics") }),
-        h("details", null, h("summary", null, text("error.details", "Error details")),
-          h("pre", { className: "plugin-control-error-details" }, error)),
-      ) : null,
-      settingsError ? h("div", { role: "alert" },
-        h(ErrorState, { title: text("pricing.loadError", "Unable to load price settings") }),
-        h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => {
-          setSettingsRetry((revision) => revision + 1);
-        } }, text("error.retry", "Retry")),
-        h("details", null, h("summary", null, text("error.details", "Error details")),
-          h("pre", { className: "plugin-control-error-details" }, settingsError)),
-      ) : null,
-      h("form", { className: "plugin-statistics-toolbar", hidden: section !== "details",
-        onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); } },
-        h("input", { className: "plugin-statistics-price-input", type: "search", maxLength: 256,
-          "aria-label": text("usage.search", "Search usage by model"), placeholder: text("usage.search", "Search usage by model"),
-          value: modelDraft, onChange: (event) => setModelDraft(event.currentTarget.value) }),
-        h(Button, { type: "submit", size: "sm", variant: "outline", disabled: loading }, text("usage.applySearch", "Search")),
-        h(SelectControl, { ariaLabel: text("usage.order", "Time order"), value: sortOrder,
-          options: ["newest", "oldest"].map((value) => ({ value, label: text(`usage.${value}`, value) })),
-          onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
-      ),
-      notice ? h("p", { className: "plugin-statistics-privacy" }, notice) : null,
-      !dashboard && !error && section !== "pricing" ? h(React.Fragment, null,
-        h(StreamPlaceholder, { label: text("status.loading", "Loading system statistics"), shape: "tiles", count: 4 }),
-        h(StreamPlaceholder, { decorative: true, fill: true, shape: "rows" }),
-      ) : null,
-      dashboard || pricingSettings ? h(React.Fragment, null,
-        h("div", { className: "plugin-statistics-summary-grid", hidden: section !== "overview" || !dashboard },
+      section !== "pricing" && dashboard && (loading || error)
+        ? h(PageHint, { role: "status" }, text("snapshot.retained", "Showing the previous result until a refresh succeeds.")) : null,
+      error ? h(PageNotice, {
+        tone: "error", title: text("error.title", "Unable to read system statistics"),
+        details: error, detailsLabel: text("error.details", "Error details"),
+        actions: loading ? null : retryButton(() => void refresh(true)),
+      }) : null,
+      settingsError ? h(PageNotice, {
+        tone: "error", title: text("pricing.loadError", "Unable to load price settings"),
+        details: settingsError, detailsLabel: text("error.details", "Error details"),
+        actions: retryButton(() => setSettingsRetry((revision) => revision + 1)),
+      }) : null,
+      notice ? h(PageNotice, { tone: "success" }, notice) : null,
+      h(PageTabPanel, { active: section === "overview" }, !dashboard ? loadingPlaceholder(true) : h(React.Fragment, null,
+        h(MetricGrid, null,
           h(MetricCard, {
             icon: "requests",
             label: text("summary.requests", "Physical attempts"),
@@ -1285,224 +1242,232 @@ export function createPluginPanel(sdk) {
             detail: text("summary.usageCoverageDetail", "Directly Provider-reported"),
           }),
         ),
-        h("div", { className: "plugin-statistics-balance", hidden: section !== "overview" || !dashboard },
-          h("article", { className: "plugin-statistics-card" },
-            h("div", { className: "plugin-statistics-section-header" }, h("strong", null, text("cost.title", "Reference cost for the selected range")),
-              h(Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setSection("pricing") }, text("sections.pricing", "Model pricing"))),
-            ...(dashboard?.summary.costs ?? []).map((cost) => h("div", { className: "plugin-statistics-cost", key: cost.currency },
+        h("div", { className: "plugin-statistics-balance" },
+          h(PageSection, {
+            title: text("cost.title", "Reference cost for the selected range"),
+            actions: h(Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setSection("pricing") }, text("sections.pricing", "Model pricing")),
+          },
+            ...dashboard.summary.costs.map((cost) => h("div", { className: "plugin-statistics-cost", key: cost.currency },
               h("strong", { className: "plugin-statistics-cost-value", title: cost.amount === null ? "" : cost.amount }, cost.amount === null ? "-" : currencyAmount(formatMoney(cost.amount, sdk.locale), cost.currency)),
-              h("p", { className: "plugin-statistics-privacy" }, interpolate(text("cost.coverage", "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"), {
+              h(PageHint, null, interpolate(text("cost.coverage", "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"), {
                 priced: formatInteger(cost.pricedRows), unpriced: formatInteger(cost.unpricedRows), incomplete: formatInteger(cost.incompleteRows),
               })),
               cost.unpricedRows + cost.incompleteRows > 0 ? h(Badge, { variant: "outline" }, text("cost.partial", "Partial coverage")) : null,
             )),
-            !dashboard?.summary.costs.length ? h("p", { className: "plugin-statistics-privacy" }, text("cost.empty", "No cost records in this range")) : null,
+            dashboard.summary.costs.length === 0 ? h(PageHint, null, text("cost.empty", "No cost records in this range")) : null,
           ),
-          h("article", { className: "plugin-statistics-card" },
-            h("strong", null, text("tokens.breakdown", "Input, output and cache")),
-            dashboard ? tokenOverview(summary) : null,
-          ),
+          h(PageSection, { title: text("tokens.breakdown", "Input, output and cache") }, tokenOverview(summary)),
         ),
-        h("article", { className: "plugin-statistics-card", hidden: section !== "overview" || !dashboard },
-          h("div", { className: "plugin-statistics-section-header" },
-            h("strong", null, text("heatmap.title", "Activity heatmap")),
-            h(ActivityHeatmapLegend, {
-              lowLabel: text("heatmap.less", "Less"),
-              highLabel: text("heatmap.more", "More"),
-            }),
-          ),
-          h("div", { className: "plugin-statistics-chart-wrap" },
-            h(ActivityHeatmap, {
-              ariaLabel: text("heatmap.aria", "Token activity heatmap for the selected range"),
-              cells: heatmapCells,
-              emptyLabel: text("heatmap.empty", "No token activity yet"),
-              formatMonth: formatMonthLabel,
-              tooltipDelayMs: TOOLTIP_DELAY_MS,
-            }),
-          ),
+        h(PageSection, {
+          title: text("heatmap.title", "Activity heatmap"),
+          actions: h(ActivityHeatmapLegend, { lowLabel: text("heatmap.less", "Less"), highLabel: text("heatmap.more", "More") }),
+        },
+          h(ActivityHeatmap, {
+            ariaLabel: text("heatmap.aria", "Token activity heatmap for the selected range"),
+            cells: heatmapCells,
+            emptyLabel: text("heatmap.empty", "No token activity yet"),
+            formatMonth: formatMonthLabel,
+            tooltipDelayMs: TOOLTIP_DELAY_MS,
+          }),
         ),
-        h("article", { className: "plugin-statistics-card", hidden: section !== "overview" || !dashboard },
-          h("div", { className: "plugin-statistics-section-header" },
-            h("strong", null, text("trend.title", "Daily token usage")),
-            h(Badge, { variant: "outline" }, timeRangeLabel(timeRange)),
-          ),
-          h("div", { className: "plugin-statistics-chart-wrap" },
-            h(TimeSeriesLineChart, {
-              ariaLabel: text("trend.aria", "Daily token usage line chart grouped by model"),
-              emptyLabel: text("trend.empty", "No trend data in this range"),
-              formatValue: formatInteger,
-              series: visibleSeries,
-              tooltipDelayMs: TOOLTIP_DELAY_MS,
-            }),
-          ),
+        h(PageSection, { title: text("trend.title", "Daily token usage"), status: h(Badge, { variant: "outline" }, timeRangeLabel(timeRange)) },
+          h(TimeSeriesLineChart, {
+            ariaLabel: text("trend.aria", "Daily token usage line chart grouped by model"),
+            emptyLabel: text("trend.empty", "No trend data in this range"),
+            formatValue: formatInteger,
+            series: visibleSeries,
+            tooltipDelayMs: TOOLTIP_DELAY_MS,
+          }),
           h(ChartLegend, { items: legendItems, onToggle: toggleSeries }),
         ),
-        h("article", { className: "plugin-statistics-card plugin-statistics-paged-card", "aria-busy": pricingDirectoryLoading, hidden: section !== "pricing" },
-          h("div", { className: "plugin-statistics-section-header" },
-            h("div", null,
-              h("strong", null, text("pricing.title", "Model reference prices")),
-              h("p", { className: "plugin-statistics-privacy" },
-                text("pricing.description", "Overrides belong to this plugin configuration. Estimates are recomputed and never written to the statistics database."),
-              ),
-            ),
-          ),
-          h("div", { className: "plugin-statistics-toolbar" },
-            h("input", { className: "plugin-statistics-price-input", type: "search",
-              "aria-label": text("pricing.search", "Search models"), placeholder: text("pricing.search", "Search models"),
-              value: pricingSearch, onChange: (event) => { setPricingSearch(event.currentTarget.value); setPricingPage(0); } }),
-            h(SelectControl, { ariaLabel: text("pricing.filter", "Price filter"), value: pricingFilter,
-              options: ["all", "unpriced", "override", "used"].map((value) => ({ value, label: text(`pricing.filter.${value}`, value) })),
-              onValueChange: (value) => { setPricingFilter(value); setPricingPage(0); } }),
-          ),
-          h(sdk.components.Dialog, { open: section === "pricing" && selectedPricingModel !== "", onOpenChange: (open) => {
-            // Keep the selected model stable until the pending configuration write finishes.
-            // 配置写入完成前保持所选模型稳定。
-            if (!open && !settingsBusyRef.current) setSelectedPricingModel("");
-          } }, h(sdk.components.DialogContent, { scrollMode: "body-scroll", className: "plugin-statistics-price-dialog" },
-          h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
-            pricingSettings === null ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "fields", count: 4 })
-              : !selectedPricingModel ? h("p", { className: "plugin-statistics-privacy", role: "status" }, text("pricing.chooseModel", "Select a model in the table below to edit its prices."))
-                : h(React.Fragment, null,
-                  h("div", { className: "plugin-statistics-section-header" },
-                    h(sdk.components.DialogTitle, { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
-                    h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
-                      : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
-                  ),
-                  h(sdk.components.DialogDescription, null, text("pricing.description", "Enter all four prices, using zero only for explicitly free dimensions.")),
-                  h("div", { className: "plugin-statistics-price-grid" },
-                    ...PRICE_FIELDS.map((field) => h("label", { className: "plugin-statistics-price-field", key: field.key },
-                      h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
-                      h("input", { "aria-label": text(field.messageKey, field.fallback), className: "plugin-statistics-price-input",
-                        disabled: settingsBusy, inputMode: "decimal", maxLength: 64, spellCheck: false, type: "text", value: pricingDraft[field.key],
-                        onChange: (event) => {
-                          // Capture the exact string before React releases the event's currentTarget.
-                          // 在 React 释放事件 currentTarget 前捕获精确字符串。
-                          const value = event.currentTarget.value.trim();
-                          setPricingDraft((current) => ({ ...current, [field.key]: value }));
-                        },
-                      }),
-                    )),
-                  ),
-                  h("div", { className: "plugin-statistics-toolbar" },
-                    h(Button, { "aria-busy": settingsBusy, disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid || !pricingDirty,
-                      onClick: savePricingOverride, size: "sm", type: "button" }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
-                    h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" }, text("pricing.reset", "Restore catalog default")),
-                    !pricingDraftValid ? h("span", { className: "plugin-statistics-privacy" }, text("pricing.validation", "Enter four non-negative decimal prices.")) : null,
-                  ),
-                ),
-            settingsError ? h("p", { role: "alert" }, settingsError) : null,
-          ))),
-          h("p", { className: "plugin-statistics-privacy" }, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."), pricingDirectory ? ` · ${currencyAmount("", pricingDirectory.currency).trim()}` : ""),
-          pricingDirectoryLoading && !pricingDirectory ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "rows", count: 8 })
-            : pricingDirectoryLoading ? h("p", { role: "status", className: "plugin-statistics-table-feedback" }, text("pricing.loading", "Loading model prices")) : null,
-          pricingDirectoryError ? h("div", { role: "alert", className: "plugin-statistics-table-feedback" }, text("pricing.loadError", "Unable to load model prices"),
-            h(Button, { type: "button", size: "sm", variant: "outline", onClick: () => setPricingRetry((revision) => revision + 1) }, text("error.retry", "Retry")),
-            h("details", null, h("summary", null, text("error.details", "Error details")), h("pre", { className: "plugin-control-error-details" }, pricingDirectoryError))) : null,
-          h("div", { className: "plugin-statistics-table-wrap" }, h("table", { className: "plugin-statistics-table" },
-            h("thead", null, h("tr", null,
-              h("th", null, text("pricing.model", "Model")),
-              ...PRICE_FIELDS.map((field) => h("th", { key: field.key }, text(field.messageKey, field.fallback))),
-              h("th", null, text("pricing.source", "Source")),
-              h("th", null, text("pricing.actions", "Actions")),
-            )),
-            h("tbody", null, ...visiblePricingModels.map((entry) => h("tr", { key: entry.modelId, "aria-selected": selectedPricingModel === entry.modelId },
-              h("td", null, h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy || pricingSettings === null, onClick: () => selectPricingModel(entry.modelId) }, entry.modelId)),
-              ...PRICE_FIELDS.map((field) => h("td", { key: field.key, title: entry.prices === null ? "" : entry.prices[field.key] }, formatMoney(entry.prices === null ? null : entry.prices[field.key], sdk.locale))),
-              h("td", null, text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source")),
-              h("td", null, h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy || pricingSettings === null,
-                onClick: () => selectPricingModel(entry.modelId) }, text("pricing.edit", "Edit"))),
-            ))),
-          )),
-          h("div", { className: "plugin-statistics-toolbar" },
-            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || pricingDirectoryPage === 0, onClick: () => setPricingPage(pricingDirectoryPage - 1) }, text("page.previous", "Previous")),
-            h("span", null, `${Math.min(pricingDirectoryPage * 25 + 1, pricingDirectory?.totalCount ?? 0)}–${Math.min(pricingDirectoryPage * 25 + 25, pricingDirectory?.totalCount ?? 0)} / ${pricingDirectory?.totalCount ?? 0}`),
-            h(Button, { size: "sm", variant: "outline", disabled: pricingDirectoryLoading || (pricingDirectoryPage + 1) * 25 >= (pricingDirectory?.totalCount ?? 0), onClick: () => setPricingPage(pricingDirectoryPage + 1) }, text("page.next", "Next")),
+      )),
+      h(PageTabPanel, { active: section === "details" },
+        h("form", { role: "search", onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); } },
+          h(PageToolbar, {
+            actions: h(SelectControl, { ariaLabel: text("usage.order", "Time order"), value: sortOrder,
+              options: ["newest", "oldest"].map((value) => ({ value, label: text(`usage.${value}`, value) })),
+              onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
+          },
+            h(Input, { className: "plugin-statistics-search", density: "compact", type: "search", maxLength: 256,
+              "aria-label": text("usage.search", "Search usage by model"), placeholder: text("usage.search", "Search usage by model"),
+              value: modelDraft, onChange: (event) => setModelDraft(event.currentTarget.value) }),
+            h(Button, { type: "submit", size: "sm", variant: "outline", disabled: loading }, text("usage.applySearch", "Search")),
           ),
         ),
-        h("article", { className: "plugin-statistics-card plugin-statistics-paged-card", "aria-busy": tableRefresh.daily && !tableRefresh.error, hidden: section !== "details" || !dashboard },
-          h("div", { className: "plugin-statistics-section-header" },
-            h("strong", null, text("daily.title", "Model usage")),
-            h(Badge, { variant: "outline" }, `${displayedPage.dailyOffset + filteredDaily.length} / ${dashboard?.dailyCount ?? 0}`),
-          ),
-          tableFeedback("daily"),
-          filteredDaily.length === 0 ? h(EmptyState, {
-            title: text("daily.empty", "No usage in this range"),
-          }) : h("div", { className: "plugin-statistics-table-wrap" },
-            h("table", { className: "plugin-statistics-table plugin-statistics-daily-table" },
-              h("thead", null, h("tr", null,
-                h("th", null, text("daily.provider", "Provider / model")),
-                h("th", null, text("daily.consumerOperation", "Consumer / operation")),
-                h("th", null, text("daily.attempts", "Attempts")),
-                h("th", null, text("daily.tokens", "Tokens")),
-                h("th", null, text("daily.averageDuration", "Average duration")),
-                h("th", null, text("daily.cost", "Reference estimate")),
-              )),
-              h("tbody", null, ...filteredDaily.slice(0, MAX_DAILY_ROWS).map((row) => h("tr", {
+        !dashboard ? loadingPlaceholder(false) : h(React.Fragment, null,
+          h(PageSection, {
+            title: text("daily.title", "Model usage"),
+            "aria-busy": tableRefresh.daily && !tableRefresh.error,
+            status: h(React.Fragment, null,
+              h(Badge, { variant: "outline" }, `${displayedPage.dailyOffset + filteredDaily.length} / ${dashboard.dailyCount}`),
+              tableStatus("daily")),
+            footer: pageControls(displayedPage.dailyOffset, MAX_DAILY_ROWS, dashboard.dailyCount, setDailyOffset, loading || (tableRefresh.daily && !tableRefresh.error)),
+          },
+            tableError("daily"),
+            h(PageTable, {
+              label: text("daily.title", "Model usage"),
+              layout: "fixed", minWidth: DETAIL_TABLE_MIN_WIDTH,
+              columns: [
+                { key: "model", label: text("daily.provider", "Provider / model"), width: "28%", wrap: true },
+                { key: "consumer", label: text("daily.consumerOperation", "Consumer / operation"), width: "16%", wrap: true },
+                { key: "attempts", label: text("daily.attempts", "Attempts"), width: "8%", numeric: true },
+                { key: "tokens", label: text("daily.tokens", "Tokens"), width: "18%", wrap: true },
+                { key: "duration", label: text("daily.averageDuration", "Average duration"), width: "20%", wrap: true },
+                { key: "cost", label: text("daily.cost", "Reference estimate"), width: "10%", wrap: true },
+              ],
+              rows: filteredDaily.slice(0, MAX_DAILY_ROWS).map((row) => ({
                 key: `${row.providerId}/${row.serviceEntryId}/${row.consumerId}/${row.operation}/${row.modelId}`,
-              },
-                h("td", null, modelIdentity(row)),
-                h("td", { className: "plugin-statistics-consumer" },
-                  h("div", { className: "plugin-statistics-consumer-operation" },
+                cells: {
+                  model: modelIdentity(row),
+                  consumer: h("div", { className: "plugin-statistics-consumer-operation" },
                     h("span", { title: row.consumerId }, consumerLabel(row.consumerId)),
-                    h("span", { title: row.operation }, operationLabel(row.operation)),
-                  ),
-                ),
-                h("td", null, `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`),
-                h("td", null, tokenDetails(row, true)),
-                h("td", null, latencyDetails(row, true)),
-                h("td", null, estimateDetails(row)),
-              ))),
-            ),
+                    h("span", { title: row.operation }, operationLabel(row.operation))),
+                  attempts: `${formatInteger(row.successfulAttemptCount)} / ${formatInteger(row.attemptCount)}`,
+                  tokens: tokenDetails(row, true),
+                  duration: latencyDetails(row, true),
+                  cost: estimateDetails(row),
+                },
+              })),
+              empty: h(PageEmptyState, { title: text("daily.empty", "No usage in this range") }),
+            }),
           ),
-          pageControls(displayedPage.dailyOffset, MAX_DAILY_ROWS, dashboard?.dailyCount ?? 0, setDailyOffset, loading || (tableRefresh.daily && !tableRefresh.error)),
+          h(PageSection, {
+            title: text("recent.title", "Recent physical attempts"),
+            "aria-busy": tableRefresh.recent && !tableRefresh.error,
+            status: h(React.Fragment, null,
+              h(Badge, { variant: "outline" }, `${displayedPage.recentOffset + filteredAttempts.length} / ${dashboard.recentCount}`),
+              tableStatus("recent")),
+            actions: h(SelectControl, {
+              ariaLabel: text("recent.modelTypes", "Model types"),
+              value: recentModelType,
+              options: [{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }]
+                .map(({ value, label }) => ({ value, label: text(`recent.group.${value}`, label) })),
+              onValueChange: (value) => { setRecentModelType(value); setRecentOffset(0); },
+            }),
+            footer: pageControls(displayedPage.recentOffset, MAX_RECENT_ATTEMPTS, dashboard.recentCount, setRecentOffset, loading || (tableRefresh.recent && !tableRefresh.error)),
+          },
+            tableError("recent"),
+            h(PageTable, {
+              label: text("recent.title", "Recent physical attempts"),
+              layout: "fixed", minWidth: DETAIL_TABLE_MIN_WIDTH,
+              columns: [
+                { key: "time", label: text("recent.time", "Time"), width: "8%", wrap: true },
+                { key: "model", label: text("recent.model", "Provider / model"), width: "24%", wrap: true },
+                { key: "consumer", label: text("recent.consumer", "Consumer"), width: "10%", wrap: true },
+                { key: "status", label: text("recent.status", "Status"), width: "7%", wrap: true },
+                { key: "tokens", label: text("recent.tokens", "Tokens"), width: "17%", wrap: true },
+                { key: "latency", label: text("timing.column", "Latency"), width: "21%", wrap: true },
+                { key: "cost", label: text("recent.cost", "Reference estimate"), width: "9%", wrap: true },
+                { key: "error", label: text("recent.error", "Error"), width: "4%" },
+              ],
+              rows: filteredAttempts.slice(0, MAX_RECENT_ATTEMPTS).map((attempt) => ({
+                key: attempt.attemptId,
+                cells: {
+                  time: h("div", { className: "plugin-statistics-time" },
+                    h("span", null, new Intl.DateTimeFormat(sdk.locale, { dateStyle: "short" }).format(new Date(attempt.terminalAtMs))),
+                    h("small", null, new Intl.DateTimeFormat(sdk.locale, { timeStyle: "medium" }).format(new Date(attempt.terminalAtMs)))),
+                  model: modelIdentity(attempt),
+                  consumer: h("span", { title: attempt.consumerId }, consumerLabel(attempt.consumerId)),
+                  status: h("span", { className: "plugin-statistics-status", "data-status": attempt.status }, text(`status.${attempt.status}`, attempt.status)),
+                  tokens: tokenDetails(attempt),
+                  latency: latencyDetails(attempt),
+                  cost: estimateDetails(attempt),
+                  error: errorDetails(attempt),
+                },
+              })),
+              empty: h(PageEmptyState, { title: text("recent.empty", "No physical attempt records") }),
+            }),
+          ),
         ),
-        h("article", { className: "plugin-statistics-card plugin-statistics-paged-card", "aria-busy": tableRefresh.recent && !tableRefresh.error, hidden: section !== "details" },
-          h("div", { className: "plugin-statistics-section-header" },
-            h("strong", null, text("recent.title", "Recent physical attempts")),
-            dashboard ? h(Badge, { variant: "outline" }, `${displayedPage.recentOffset + filteredAttempts.length} / ${dashboard.recentCount}`) : null,
+      ),
+      h(PageTabPanel, { active: section === "pricing" },
+        pricingSettings === null
+          ? settingsError ? null : h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "rows", count: 8 })
+          : h(PageSection, {
+            title: text("pricing.title", "Model reference prices"),
+            description: text("pricing.description", "Overrides belong to this plugin configuration. Estimates are recomputed and never written to the statistics database."),
+            "aria-busy": pricingDirectoryLoading,
+            status: pricingDirectoryLoading && pricingDirectory ? h(PageHint, { role: "status" }, text("pricing.loading", "Loading model prices")) : null,
+            footer: pricingDirectory ? pageControls(pricingDirectoryPage * PRICING_PAGE_SIZE, PRICING_PAGE_SIZE, pricingDirectory.totalCount,
+              (offset) => setPricingPage(offset / PRICING_PAGE_SIZE), pricingDirectoryLoading) : null,
+          },
+            h(PageToolbar, null,
+              h(Input, { className: "plugin-statistics-search", density: "compact", type: "search",
+                "aria-label": text("pricing.search", "Search models"), placeholder: text("pricing.search", "Search models"),
+                value: pricingSearch, onChange: (event) => { setPricingSearch(event.currentTarget.value); setPricingPage(0); } }),
+              h(SelectControl, { ariaLabel: text("pricing.filter", "Price filter"), value: pricingFilter,
+                options: ["all", "unpriced", "override", "used"].map((value) => ({ value, label: text(`pricing.filter.${value}`, value) })),
+                onValueChange: (value) => { setPricingFilter(value); setPricingPage(0); } }),
+              h(PageHint, null, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."),
+                pricingDirectory ? ` · ${currencyAmount("", pricingDirectory.currency).trim()}` : ""),
+            ),
+            pricingDirectoryError ? h(PageNotice, {
+              tone: "error", title: text("pricing.loadError", "Unable to load model prices"),
+              details: pricingDirectoryError, detailsLabel: text("error.details", "Error details"),
+              actions: retryButton(() => setPricingRetry((revision) => revision + 1)),
+            }) : null,
+            pricingDirectoryLoading && !pricingDirectory
+              ? h(StreamPlaceholder, { label: text("pricing.loading", "Loading model prices"), shape: "rows", count: 8 })
+              : h(PageTable, {
+                label: text("pricing.title", "Model reference prices"),
+                columns: [
+                  { key: "model", label: text("pricing.model", "Model"), wrap: true },
+                  ...PRICE_FIELDS.map((field) => ({ key: field.key, label: text(field.messageKey, field.fallback), numeric: true })),
+                  { key: "source", label: text("pricing.source", "Source") },
+                  { key: "actions", label: text("pricing.actions", "Actions") },
+                ],
+                rows: visiblePricingModels.map((entry) => ({
+                  key: entry.modelId,
+                  selected: selectedPricingModel === entry.modelId,
+                  cells: {
+                    model: h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy, onClick: () => selectPricingModel(entry.modelId) }, entry.modelId),
+                    ...Object.fromEntries(PRICE_FIELDS.map((field) => [field.key,
+                      h("span", { title: entry.prices === null ? "" : entry.prices[field.key] }, formatMoney(entry.prices === null ? null : entry.prices[field.key], sdk.locale))])),
+                    source: text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source"),
+                    actions: h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy,
+                      onClick: () => selectPricingModel(entry.modelId) }, text("pricing.edit", "Edit")),
+                  },
+                })),
+                empty: pricingDirectory ? h(PageEmptyState, { title: text("pricing.empty", "No model identities available") }) : undefined,
+              }),
           ),
-          h("nav", { className: "plugin-control-navigation", "aria-label": text("recent.modelTypes", "Model types") },
-            ...[{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }].map(({ value, label }) => h(Button, {
-              key: value, type: "button", size: "sm", variant: recentModelType === value ? "secondary" : "ghost",
-              "aria-pressed": recentModelType === value,
-              onClick: () => { setRecentModelType(value); setRecentOffset(0); },
-            }, text(`recent.group.${value}`, label))),
-          ),
-          tableFeedback("recent"),
-          !dashboard ? null : filteredAttempts.length === 0 ? h(EmptyState, {
-            title: text("recent.empty", "No physical attempt records"),
-          }) : h("div", { className: "plugin-statistics-table-wrap" },
-            h("table", { className: "plugin-statistics-table plugin-statistics-recent-table" },
-              h("thead", null, h("tr", null,
-                h("th", null, text("recent.time", "Time")),
-                h("th", null, text("recent.model", "Provider / model")),
-                h("th", null, text("recent.consumer", "Consumer")),
-                h("th", null, text("recent.status", "Status")),
-                h("th", null, text("recent.tokens", "Tokens")),
-                h("th", null, text("timing.column", "Latency")),
-                h("th", null, text("recent.cost", "Reference estimate")),
-                h("th", null, text("recent.error", "Error")),
+        h(Dialog, { open: section === "pricing" && selectedPricingModel !== "", onOpenChange: (open) => {
+          // Keep the selected model stable until the pending configuration write finishes.
+          // 配置写入完成前保持所选模型稳定。
+          if (!open && !settingsBusyRef.current) setSelectedPricingModel("");
+        } }, h(DialogContent, { scrollMode: "body-scroll", className: "plugin-statistics-price-dialog" },
+          h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
+            h(DialogHeader, null,
+              h("div", { className: "plugin-statistics-section-header" },
+                h(DialogTitle, { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
+                h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
+                  : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
+              ),
+              h(DialogDescription, null, text("pricing.description", "Enter all four prices, using zero only for explicitly free dimensions.")),
+            ),
+            h("div", { className: "plugin-statistics-price-grid" },
+              ...PRICE_FIELDS.map((field) => h("label", { className: "plugin-statistics-price-field", key: field.key },
+                h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
+                h(Input, { "aria-label": text(field.messageKey, field.fallback),
+                  disabled: settingsBusy, inputMode: "decimal", maxLength: 64, spellCheck: false, type: "text", value: pricingDraft[field.key],
+                  onChange: (event) => {
+                    // Capture the exact string before React releases the event's currentTarget.
+                    // 在 React 释放事件 currentTarget 前捕获精确字符串。
+                    const value = event.currentTarget.value.trim();
+                    setPricingDraft((current) => ({ ...current, [field.key]: value }));
+                  },
+                }),
               )),
-              h("tbody", null, ...filteredAttempts.slice(0, MAX_RECENT_ATTEMPTS).map((attempt) => h("tr", { key: attempt.attemptId },
-                h("td", null, h("div", { className: "plugin-statistics-time" },
-                  h("span", null, new Intl.DateTimeFormat(sdk.locale, { dateStyle: "short" }).format(new Date(attempt.terminalAtMs))),
-                  h("small", null, new Intl.DateTimeFormat(sdk.locale, { timeStyle: "medium" }).format(new Date(attempt.terminalAtMs))))),
-                h("td", null, modelIdentity(attempt)),
-                h("td", { className: "plugin-statistics-consumer", title: attempt.consumerId }, consumerLabel(attempt.consumerId)),
-                h("td", {
-                  className: "plugin-statistics-status",
-                  "data-status": attempt.status,
-                }, text(`status.${attempt.status}`, attempt.status)),
-                h("td", null, tokenDetails(attempt)),
-                h("td", null, latencyDetails(attempt)),
-                h("td", null, estimateDetails(attempt)),
-                h("td", null, errorDetails(attempt)),
-              ))),
             ),
-          ),
-          pageControls(displayedPage.recentOffset, MAX_RECENT_ATTEMPTS, dashboard?.recentCount ?? 0, setRecentOffset, loading || (tableRefresh.recent && !tableRefresh.error)),
-        ),
-      ) : null,
+            !pricingDraftValid ? h(PageHint, null, text("pricing.validation", "Enter four non-negative decimal prices.")) : null,
+            settingsError ? h(PageNotice, { tone: "error" }, settingsError) : null,
+            h(DialogFooter, null,
+              h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" }, text("pricing.reset", "Restore catalog default")),
+              h(Button, { "aria-busy": settingsBusy, disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid || !pricingDirty,
+                onClick: savePricingOverride, size: "sm", type: "button" }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
+            ),
+          ))),
+      ),
     );
   }
 

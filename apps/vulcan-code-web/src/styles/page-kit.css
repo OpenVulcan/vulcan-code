@@ -277,6 +277,9 @@
 .page-table th { height: auto; padding: var(--vcn-space-2); font-size: var(--vcn-font-size-xs); font-weight: 600; }
 .page-table td { padding: var(--vcn-space-2); }
 .page-table :is(th, td)[data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
+.page-table[data-layout="fixed"] { table-layout: fixed; }
+.page-table :is(th, td)[data-wrap] { white-space: normal; overflow-wrap: anywhere; }
+.page-table td { vertical-align: middle; }
 .page-table tbody tr:hover { background: var(--muted); }
 
 .page-item-list {

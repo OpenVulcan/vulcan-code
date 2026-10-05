@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: Der Cache-Leseanteil bezieht sich auf die gemeldete Eingabe; Cache-Zahlen werden nicht zu Eingabe und Ausgabe addiert.
   cost.empty: Keine Kostenaufzeichnungen in diesem Zeitraum
   pricing.editor: Modellpreis-Editor
-  pricing.chooseModel: Wählen Sie unten ein Modell aus, um seine Preise zu bearbeiten.
   pricing.editModel: 'Modell bearbeiten · {{model}}'
   status.unknown: Statistikzustand unbekannt
   sections.label: Statistikbereiche

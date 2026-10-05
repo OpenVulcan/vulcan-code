@@ -3,19 +3,23 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPluginPanel } from "../../../../../plugins/vulcan-usage-statistics/ui/index.mjs";
+import * as pageKit from "@/components/page";
 
 // Keep the real plugin state machine while replacing only host design-system presentation.
 // 保留真实插件状态机，仅替换宿主设计系统展示。
 const h = React.createElement;
 const components = {
+  // The real page kit renders sections, tables and notices so selectors follow the production structure.
+  // 真实页面套件渲染区块、表格与提示，使选择器遵循生产结构。
+  ...pageKit,
   Button: ({ children, onClick, disabled, type, ...rest }) => h("button", { onClick, disabled, type, "aria-pressed": rest["aria-pressed"] }, children),
   Badge: ({ children }) => h("span", null, children),
+  Input: ({ density, ...props }) => h("input", props),
+  Checkbox: () => null,
   StatusPill: ({ label }) => h("span", null, label),
   PageTabs: ({ ariaLabel, options, onValueChange, actions }) => h("div", null, h("nav", { "aria-label": ariaLabel }, ...options.map((option) => h("button", { key: option.value, type: "button", disabled: option.disabled, onClick: () => onValueChange(option.value) }, option.label))), actions),
-  EmptyState: ({ title }) => h("span", null, title),
-  ErrorState: ({ title }) => h("span", null, title),
   StreamPlaceholder: ({ label }) => (label ? h("span", { role: "status" }, label) : null),
-  SelectControl: ({ options, value, onValueChange }) => h("select", { value, onChange: (event) => onValueChange(event.target.value) }, options.map((option) => h("option", { key: option.value, value: option.value }, option.label))),
+  SelectControl: ({ ariaLabel, options, value, onValueChange }) => h("select", { "aria-label": ariaLabel, value, onChange: (event) => onValueChange(event.target.value) }, options.map((option) => h("option", { key: option.value, value: option.value }, option.label))),
   Dialog: () => null,
   MetricCard: () => null,
   ActivityHeatmap: () => null,
@@ -65,16 +69,32 @@ async function click(label, scope = host) {
   await act(async () => button.click());
 }
 
+// section returns the visible page-kit region titled label.
+// section 返回标题为 label 的可见页面套件区域。
+function section(label) {
+  const region = [...host.querySelectorAll('[role="region"]')].find((entry) => entry.querySelector("h3")?.textContent === label && !entry.closest("[hidden]"));
+  expect(region).toBeTruthy();
+  return region;
+}
+
+// choose selects one option of the labelled select inside scope and flushes the production effects.
+// choose 在 scope 内选择带标签下拉框的一个选项，并执行生产 Effect。
+async function choose(label, value, scope = host) {
+  const select = scope.querySelector(`select[aria-label="${label}"]`);
+  expect(select).toBeTruthy();
+  await act(async () => { select.value = value; select.dispatchEvent(new Event("change", { bubbles: true })); });
+}
+
 it("requests isolated table pages, retains neighboring cards and rejects stale category responses", async () => {
   await click("details");
   // Capture mounted cards so a whole-dashboard clear cannot masquerade as local refresh.
   // 捕获已挂载卡片，防止整份仪表盘清空伪装成局部刷新。
-  const [daily, recent] = [...host.querySelectorAll(".plugin-statistics-paged-card")].filter((card) => !card.hidden);
-  await click("Embedding models", recent);
+  const [daily, recent] = [section("Model usage"), section("Recent physical attempts")];
+  await choose("Model types", "embedding", recent);
   expect(requests[0].args.view).toBe("recent-page");
   expect(daily.hidden).toBe(false);
   expect(daily.getAttribute("aria-busy")).toBe("false");
-  await click("Reranking models", recent);
+  await choose("Model types", "rerank", recent);
   expect(requests[1].args.recentModelType).toBe("rerank");
   await act(async () => requests[1].resolve({ recentAttempts: [], recentCount: 75 }));
   await act(async () => requests[0].resolve({ recentAttempts: [], recentCount: 999 }));
@@ -90,9 +110,9 @@ it("requests isolated table pages, retains neighboring cards and rejects stale c
   await click("Retry", daily);
   await act(async () => requests[3].resolve({ daily: [], dailyCount: 150 }));
   expect(daily.textContent).toContain("100 / 150");
-  await click("Embedding models", recent);
+  await choose("Model types", "embedding", recent);
   expect(requests).toHaveLength(5);
-  await click("Reranking models", recent);
+  await choose("Model types", "rerank", recent);
   expect(requests).toHaveLength(5);
   expect(recent.getAttribute("aria-busy")).toBe("false");
   await act(async () => requests[4].resolve({ recentAttempts: [], recentCount: 999 }));
@@ -106,7 +126,7 @@ it("keeps pricing rows and committed page numbers during loading, failure and re
   // 不同记录在异步替换期间标识精确的已提交定价页。
   const prices = (name) => ({ totalCount: 60, currency: "USD", models: [{ modelId: name, source: "unpriced", prices: null }] });
   await act(async () => requests[0].resolve(prices("first-page-model")));
-  const pricing = host.querySelector('.plugin-statistics-paged-card:not([hidden])');
+  const pricing = section("Model reference prices");
   const firstRow = pricing.querySelector("tbody tr");
   await click("Next", pricing);
   expect(pricing.querySelector("tbody tr")).toBe(firstRow);
@@ -141,10 +161,10 @@ it("hides token generation timing for embeddings and reranking in both tables", 
   await click("details");
   // These stable cards receive independent aggregate and attempt responses through the real host boundary.
   // 通过真实宿主边界向稳定卡片分别提供聚合和请求响应。
-  const [daily, recent] = [...host.querySelectorAll(".plugin-statistics-paged-card")].filter((card) => !card.hidden);
+  const [daily, recent] = [section("Model usage"), section("Recent physical attempts")];
   await click("Next", daily);
   await act(async () => requests[0].resolve({ daily: rows, dailyCount: 103 }));
-  await click("Embedding models", recent);
+  await choose("Model types", "embedding", recent);
   await act(async () => requests[1].resolve({ recentAttempts: rows, recentCount: 3 }));
   for (const card of [daily, recent]) {
     // Each table must retain duration for every operation while only conversation requests expose token timing.

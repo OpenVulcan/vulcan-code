@@ -87,7 +87,6 @@ messages:
   tokens.cacheSeparate: 缓存读取比例以已报告输入为分母，缓存不重复计入输入与输出。
   cost.empty: 此范围暂无费用记录
   pricing.editor: 模型价格编辑器
-  pricing.chooseModel: 在下方表格选择模型，即可在此编辑价格。
   pricing.editModel: "编辑模型 · {{model}}"
   navigationLabel: 使用统计
   status.ready: 系统统计可用

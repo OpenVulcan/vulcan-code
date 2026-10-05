@@ -1,16 +1,17 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/shared/status";
 import {
   MetricCard, MetricGrid, PageActionBar, PageBody, PageDetails, PageEmptyState, PageFacts, PageGuide, PageHint, PageItem, PageItemList,
   PageNotice, PageRow, PageSection, PageTable, PageTabPanel, PageTabs, PageToolbar,
 } from "@/components/page";
 import {
-  ActivityHeatmap, ActivityHeatmapLegend, ChartLegend, EmptyState, ErrorState, HelpTooltip, PluginMetadataLink, SelectControl,
+  ActivityHeatmap, ActivityHeatmapLegend, ChartLegend, HelpTooltip, PluginMetadataLink, SelectControl,
   TextDocumentDialog, TimeSeriesLineChart,
 } from "@/components/plugins/plugin-host-components";
 import { BrowserArea } from "@/components/features/browser/browser-area";
@@ -49,6 +50,7 @@ export const PLUGIN_UI_SDK_COMPONENTS = {
   Badge,
   Button,
   Input,
+  Checkbox,
   Switch,
   SelectControl,
   StatusPill,
@@ -58,18 +60,16 @@ export const PLUGIN_UI_SDK_COMPONENTS = {
   // Dialogs. / 对话框。
   Dialog,
   DialogContent,
+  DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
   TextDocumentDialog,
   // Charts. / 图表。
   ActivityHeatmap,
   ActivityHeatmapLegend,
   TimeSeriesLineChart,
   ChartLegend,
-  // Chart-area placeholders; full pages use PageEmptyState and PageNotice instead.
-  // 图表区占位；完整页面改用 PageEmptyState 与 PageNotice。
-  EmptyState,
-  ErrorState,
   // Host-owned browser projections for the bundled browser plugin.
   // 内置浏览器插件使用的宿主自有浏览器投影。
   CoreBrowserArea: BrowserArea,
