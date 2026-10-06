@@ -276,6 +276,9 @@ pub struct LanceDbTableStatisticsInput {
     /// Stable table name to inspect.
     /// 需要检查的稳定表名。
     pub table_name: String,
+    /// Compaction options the caller would execute; the native planner sizes its plan with them.
+    /// 调用方将要执行的整理参数；原生计划器以其确定计划规模。
+    pub compaction: LanceDbCompactionOptions,
 }
 
 /// Fragment row-count summary reported by LanceDB.
@@ -327,24 +330,22 @@ pub struct LanceDbTableStatisticsResult {
     /// Number of data fragments in the current table version.
     /// 当前表版本的数据片段数量。
     pub fragment_count: u64,
-    /// Number of fragments LanceDB classifies as small.
-    /// LanceDB 判定为小片段的数量。
+    /// Number of fragments LanceDB classifies as small; informational only.
+    /// LanceDB 判定为小片段的数量；仅供展示。
     pub small_fragment_count: u64,
+    /// Tasks the native compaction planner would run with the requested options; the only
+    /// authority on whether compaction is still needed.
+    /// 原生整理计划器按所请求参数将执行的任务数；是否仍需整理的唯一权威。
+    pub compaction_task_count: u64,
     /// Distribution summary of rows per current fragment.
     /// 当前每个片段行数的分布摘要。
     pub fragment_rows: LanceDbFragmentSummary,
 }
 
-/// Safe file-compaction input with optional bounded LanceDB overrides.
-/// 安全文件合并输入，包含可选且有界的 LanceDB 参数覆盖。
-#[derive(Debug, Clone)]
-pub struct LanceDbCompactTableInput {
-    /// Stable table name to compact.
-    /// 需要整理的稳定表名。
-    pub table_name: String,
-    /// Optional optimistic-concurrency version that must still be current.
-    /// 可选的乐观并发版本，执行时必须仍为当前版本。
-    pub expected_version: Option<u64>,
+/// Bounded native compaction options shared by planning and execution.
+/// 计划与执行共用的有界原生整理参数。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanceDbCompactionOptions {
     /// Optional desired row count for each output fragment.
     /// 可选的每个输出片段目标行数。
     pub target_rows_per_fragment: Option<usize>,
@@ -363,6 +364,21 @@ pub struct LanceDbCompactTableInput {
     /// Optional maximum source-fragment count admitted in one operation.
     /// 单次操作允许接纳的可选源片段数上限。
     pub max_source_fragments: Option<usize>,
+}
+
+/// Safe file-compaction input with optional bounded LanceDB overrides.
+/// 安全文件合并输入，包含可选且有界的 LanceDB 参数覆盖。
+#[derive(Debug, Clone)]
+pub struct LanceDbCompactTableInput {
+    /// Stable table name to compact.
+    /// 需要整理的稳定表名。
+    pub table_name: String,
+    /// Optional optimistic-concurrency version that must still be current.
+    /// 可选的乐观并发版本，执行时必须仍为当前版本。
+    pub expected_version: Option<u64>,
+    /// Options for this operation; the reported statistics are planned with the same options.
+    /// 本次操作的参数；所报告统计信息以同一参数计划。
+    pub options: LanceDbCompactionOptions,
 }
 
 /// Physical file-compaction metrics returned by LanceDB.

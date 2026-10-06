@@ -9084,6 +9084,7 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "futures",
+ "lance",
  "lancedb",
  "serde",
  "serde_json",

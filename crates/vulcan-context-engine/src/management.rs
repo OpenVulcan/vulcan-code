@@ -413,12 +413,27 @@ pub struct VcePhysicalTableStatistics {
     /// Current physical fragment count.
     /// 当前物理片段数量。
     pub fragment_count: u64,
-    /// Fragments below the engine's documented small-fragment threshold.
-    /// 低于引擎已说明小片段阈值的片段数量。
+    /// Fragments below the engine's documented small-fragment threshold; informational only.
+    /// 低于引擎已说明小片段阈值的片段数量；仅供展示。
     pub small_fragment_count: u64,
+    /// Tasks the native compaction planner would run with the bound VCE compaction options.
+    /// 原生整理计划器按已绑定 VCE 整理参数将执行的任务数。
+    ///
+    /// Receipts written before this field existed carry no plan and decode as zero.
+    /// 此字段出现前写入的回执不含计划，解码为零。
+    #[serde(default)]
+    pub compaction_task_count: u64,
     /// Physical row-count distribution across fragments.
     /// 各物理片段的行数分布。
     pub fragment_rows: VcePhysicalFragmentSummary,
+}
+
+impl VcePhysicalTableStatistics {
+    /// Returns whether compaction still has work; the single decision every VCE layer consults.
+    /// 返回整理是否仍有工作；这是各 VCE 层共同参考的唯一判定。
+    pub fn requires_compaction(&self) -> bool {
+        self.compaction_task_count > 0
+    }
 }
 
 /// Lifecycle state of one in-process physical compaction operation.
@@ -1217,8 +1232,7 @@ fn validate_physical_table_plan(
         || statistics.small_fragment_count > statistics.fragment_count
         || values.contains(&0)
         || options.num_threads > 8
-        || table.compaction_required
-            != (statistics.fragment_count > 1 && statistics.small_fragment_count > 0)
+        || table.compaction_required != statistics.requires_compaction()
     {
         return Err(VceManagementContractError::InvalidResponse {
             reason: "physical compaction plan contains invalid statistics or options".to_owned(),
@@ -1285,6 +1299,7 @@ mod tests {
                 index_count: 1,
                 fragment_count,
                 small_fragment_count: u64::from(compaction_required),
+                compaction_task_count: u64::from(compaction_required),
                 fragment_rows: VcePhysicalFragmentSummary {
                     minimum_rows: 1,
                     maximum_rows: 32,

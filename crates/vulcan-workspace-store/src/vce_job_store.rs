@@ -413,10 +413,7 @@ impl VceCompactionTableReceipt {
                 "VCE compaction table diagnostic does not match its state",
             ));
         }
-        if self.state == VceCompactionTableState::Succeeded
-            && latest.fragment_count > 1
-            && latest.small_fragment_count > 0
-        {
+        if self.state == VceCompactionTableState::Succeeded && latest.requires_compaction() {
             return Err(String::from(
                 "VCE compaction table succeeded while still requiring compaction",
             ));
@@ -1633,6 +1630,7 @@ mod tests {
             index_count: 0,
             fragment_count: 8,
             small_fragment_count: 8,
+            compaction_task_count: 1,
             fragment_rows: vulcan_context_engine::VcePhysicalFragmentSummary {
                 minimum_rows: 4,
                 maximum_rows: 4,
@@ -2031,6 +2029,7 @@ mod tests {
         table.latest_statistics.version = 10;
         table.latest_statistics.fragment_count = 1;
         table.latest_statistics.small_fragment_count = 1;
+        table.latest_statistics.compaction_task_count = 0;
         table.latest_statistics.fragment_rows.minimum_rows = 32;
         table.latest_statistics.fragment_rows.maximum_rows = 32;
         table.latest_statistics.fragment_rows.mean_rows = 32;
@@ -2060,6 +2059,7 @@ mod tests {
             .expect("compaction table should exist");
         table.latest_statistics.fragment_count = 2;
         table.latest_statistics.small_fragment_count = 2;
+        table.latest_statistics.compaction_task_count = 1;
         assert!(unfinished_table.validate().is_err());
 
         let mut changed_rows = receipt.clone();

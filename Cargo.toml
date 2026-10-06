@@ -126,6 +126,10 @@ arrow-schema = "58.1.0"
 fs4 = "1.1.0"
 jieba-rs = "0.10.3"
 lancedb = { version = "0.38.0", features = ["remote"] }
+# The native compaction planner is reachable only through lance itself; it stays on the exact
+# generation lancedb pins and adds no features of its own.
+# 原生整理计划器只能经由 lance 本身访问；它保持 lancedb 固定的精确代际，且不额外启用任何特性。
+lance = { version = "=11.0.0", default-features = false }
 rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype", "pointer"] }
 async-stream = "0.3.6"
 async-trait = "0.1.92"

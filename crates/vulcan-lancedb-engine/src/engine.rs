@@ -57,11 +57,11 @@ use crate::error::{EngineResult, LanceDbEngineError};
 use crate::storage_format::{blob_v2_refusal_reason, verify_table_format};
 use crate::types::{
     LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCompactTableResult,
-    LanceDbCompactionMetrics, LanceDbCreateTableInput, LanceDbCreateTableResult,
-    LanceDbDeleteInput, LanceDbDeleteResult, LanceDbDropTableInput, LanceDbDropTableResult,
-    LanceDbFragmentSummary, LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput,
-    LanceDbSearchResult, LanceDbTableStatisticsInput, LanceDbTableStatisticsResult,
-    LanceDbUpsertInput, LanceDbUpsertResult,
+    LanceDbCompactionMetrics, LanceDbCompactionOptions, LanceDbCreateTableInput,
+    LanceDbCreateTableResult, LanceDbDeleteInput, LanceDbDeleteResult, LanceDbDropTableInput,
+    LanceDbDropTableResult, LanceDbFragmentSummary, LanceDbInputFormat, LanceDbOutputFormat,
+    LanceDbSearchInput, LanceDbSearchResult, LanceDbTableStatisticsInput,
+    LanceDbTableStatisticsResult, LanceDbUpsertInput, LanceDbUpsertResult,
 };
 
 /// Largest worker-thread count a compaction request may ask for.
@@ -631,10 +631,12 @@ impl LanceDbEngine {
             ));
         }
 
+        validate_compaction_options(&input.compaction)?;
+
         let _table_guard = self.acquire_table_read(&table_name).await;
         let _concurrency_permit = self.acquire_concurrency_permit().await?;
         let table = self.open_table(&table_name).await?;
-        collect_table_statistics(&table, &table_name).await
+        collect_table_statistics(&table, &table_name, &input.compaction).await
     }
 
     /// Compacts small physical files without pruning historical table versions.
@@ -650,12 +652,12 @@ impl LanceDbEngine {
                 "table_name must not be empty",
             ));
         }
-        validate_compaction_input(&input)?;
+        validate_compaction_options(&input.options)?;
 
         let _table_guard = self.acquire_table_compaction(&table_name).await;
         let _concurrency_permit = self.acquire_concurrency_permit().await?;
         let table = self.open_table(&table_name).await?;
-        let before = collect_table_statistics(&table, &table_name).await?;
+        let before = collect_table_statistics(&table, &table_name, &input.options).await?;
 
         // Optimistic concurrency: refuse to compact a table that moved since the caller looked.
         // 乐观并发：若表在调用方观察之后已变化，则拒绝整理。
@@ -668,21 +670,7 @@ impl LanceDbEngine {
             )));
         }
 
-        let mut options = CompactionOptions::default();
-        if let Some(value) = input.target_rows_per_fragment {
-            options.target_rows_per_fragment = value;
-        }
-        if let Some(value) = input.max_rows_per_group {
-            options.max_rows_per_group = value;
-        }
-        options.max_bytes_per_file = input.max_bytes_per_file;
-        options.num_threads = input.num_threads;
-        options.batch_size = input.batch_size;
-        options.max_source_fragments = input.max_source_fragments;
-        // Materializing deletions would physically rewrite rows, which is out of scope for a v1
-        // layout-only compaction.
-        // 物化删除会物理重写行，超出 v1 仅整理布局的范围。
-        options.materialize_deletions = false;
+        let options = native_compaction_options(&input.options);
 
         // Native compaction never merges fragments covered by different index sets, so the
         // unindexed tail left by incremental writes must join the indexes first; otherwise an
@@ -703,7 +691,7 @@ impl LanceDbEngine {
             .await
             .map_err(map_lancedb_error)?;
         let native_metrics = optimize.compaction.unwrap_or_default();
-        let after = collect_table_statistics(&table, &table_name).await?;
+        let after = collect_table_statistics(&table, &table_name, &input.options).await?;
         let metrics = LanceDbCompactionMetrics {
             fragments_removed: native_metrics.fragments_removed as u64,
             fragments_added: native_metrics.fragments_added as u64,
@@ -823,14 +811,50 @@ async fn fold_unindexed_rows_into_indexes(table: &Table) -> EngineResult<()> {
     Ok(())
 }
 
-/// Collects one table's physical statistics through the public LanceDB API.
-/// 通过 LanceDB 公共 API 收集一张表的物理统计信息。
+/// Translates bounded caller options into the one native option set used to plan and to compact.
+/// 将有界调用方参数转换为计划与整理共用的唯一原生参数集。
+fn native_compaction_options(input: &LanceDbCompactionOptions) -> CompactionOptions {
+    let mut options = CompactionOptions::default();
+    if let Some(value) = input.target_rows_per_fragment {
+        options.target_rows_per_fragment = value;
+    }
+    if let Some(value) = input.max_rows_per_group {
+        options.max_rows_per_group = value;
+    }
+    options.max_bytes_per_file = input.max_bytes_per_file;
+    options.num_threads = input.num_threads;
+    options.batch_size = input.batch_size;
+    options.max_source_fragments = input.max_source_fragments;
+    // Materializing deletions would physically rewrite rows, which is out of scope for a v1
+    // layout-only compaction.
+    // 物化删除会物理重写行，超出 v1 仅整理布局的范围。
+    options.materialize_deletions = false;
+    options
+}
+
+/// Collects one table's physical statistics, sizing the native compaction plan with `compaction`.
+/// 收集一张表的物理统计信息，并以 `compaction` 确定原生整理计划规模。
+///
+/// The task count comes from the same planner that compaction executes, so "needs compaction"
+/// and "compaction would do something" can never disagree.
+/// 任务数来自整理实际执行的同一计划器，因此“需要整理”与“整理会有动作”永远一致。
 async fn collect_table_statistics(
     table: &Table,
     table_name: &str,
+    compaction: &LanceDbCompactionOptions,
 ) -> EngineResult<LanceDbTableStatisticsResult> {
     let version = table.version().await.map_err(map_lancedb_error)?;
     let statistics = table.stats().await.map_err(map_lancedb_error)?;
+    let dataset = table
+        .dataset()
+        .ok_or_else(|| LanceDbEngineError::internal("compaction planning requires a native table"))?
+        .get()
+        .await
+        .map_err(map_lancedb_error)?;
+    let plan =
+        lance::dataset::optimize::plan_compaction(&dataset, &native_compaction_options(compaction))
+            .await
+            .map_err(|error| map_lancedb_error(error.into()))?;
 
     Ok(LanceDbTableStatisticsResult {
         table_name: table_name.to_string(),
@@ -840,6 +864,7 @@ async fn collect_table_statistics(
         index_count: statistics.num_indices as u64,
         fragment_count: statistics.fragment_stats.num_fragments as u64,
         small_fragment_count: statistics.fragment_stats.num_small_fragments as u64,
+        compaction_task_count: plan.num_tasks() as u64,
         fragment_rows: LanceDbFragmentSummary {
             minimum_rows: statistics.fragment_stats.lengths.min as u64,
             maximum_rows: statistics.fragment_stats.lengths.max as u64,
@@ -852,9 +877,9 @@ async fn collect_table_statistics(
     })
 }
 
-/// Validates compaction overrides before any table mutation starts.
-/// 在任何表变更开始前校验整理参数覆盖值。
-fn validate_compaction_input(input: &LanceDbCompactTableInput) -> EngineResult<()> {
+/// Validates compaction overrides before any planning or table mutation starts.
+/// 在任何计划或表变更开始前校验整理参数覆盖值。
+fn validate_compaction_options(input: &LanceDbCompactionOptions) -> EngineResult<()> {
     let positive_values = [
         ("target_rows_per_fragment", input.target_rows_per_fragment),
         ("max_rows_per_group", input.max_rows_per_group),
@@ -1532,14 +1557,14 @@ fn map_external_error(error: impl std::fmt::Display) -> LanceDbEngineError {
 mod tests {
     use super::{
         LanceDbEngine, LanceDbEngineOptions, TableAccessCoordinator, build_arrow_schema,
-        normalize_output_format, normalize_table_name, validate_compaction_input,
+        normalize_output_format, normalize_table_name, validate_compaction_options,
         validate_compaction_transition,
     };
     use crate::types::{
         LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCompactionMetrics,
-        LanceDbCreateTableInput, LanceDbDeleteInput, LanceDbFragmentSummary, LanceDbInputFormat,
-        LanceDbOutputFormat, LanceDbSearchInput, LanceDbTableStatisticsInput,
-        LanceDbTableStatisticsResult, LanceDbUpsertInput,
+        LanceDbCompactionOptions, LanceDbCreateTableInput, LanceDbDeleteInput,
+        LanceDbFragmentSummary, LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput,
+        LanceDbTableStatisticsInput, LanceDbTableStatisticsResult, LanceDbUpsertInput,
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -1651,6 +1676,7 @@ mod tests {
             engine
                 .table_statistics(LanceDbTableStatisticsInput {
                     table_name: name.to_string(),
+                    compaction: LanceDbCompactionOptions::default(),
                 })
                 .await
                 .unwrap_or_else(|error| {
@@ -1828,6 +1854,7 @@ mod tests {
                 engine
                     .table_statistics(LanceDbTableStatisticsInput {
                         table_name: "blocked".to_string(),
+                        compaction: LanceDbCompactionOptions::default(),
                     })
                     .await
             }));
@@ -1838,6 +1865,7 @@ mod tests {
             std::time::Duration::from_secs(1),
             engine.table_statistics(LanceDbTableStatisticsInput {
                 table_name: "unrelated".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             }),
         )
         .await;
@@ -1917,36 +1945,27 @@ mod tests {
     }
     #[test]
     fn compaction_input_rejects_zero_and_excessive_values() {
-        let base = LanceDbCompactTableInput {
-            table_name: "demo".to_string(),
-            expected_version: None,
-            target_rows_per_fragment: None,
-            max_rows_per_group: None,
-            max_bytes_per_file: None,
-            num_threads: None,
-            batch_size: None,
-            max_source_fragments: None,
-        };
+        let base = LanceDbCompactionOptions::default();
 
-        assert!(validate_compaction_input(&base).is_ok());
+        assert!(validate_compaction_options(&base).is_ok());
 
-        let zero = LanceDbCompactTableInput {
+        let zero = LanceDbCompactionOptions {
             batch_size: Some(0),
             ..base.clone()
         };
-        assert!(validate_compaction_input(&zero).is_err());
+        assert!(validate_compaction_options(&zero).is_err());
 
-        let too_many_threads = LanceDbCompactTableInput {
+        let too_many_threads = LanceDbCompactionOptions {
             num_threads: Some(9),
             ..base.clone()
         };
-        assert!(validate_compaction_input(&too_many_threads).is_err());
+        assert!(validate_compaction_options(&too_many_threads).is_err());
 
-        let bounded_threads = LanceDbCompactTableInput {
+        let bounded_threads = LanceDbCompactionOptions {
             num_threads: Some(8),
             ..base
         };
-        assert!(validate_compaction_input(&bounded_threads).is_ok());
+        assert!(validate_compaction_options(&bounded_threads).is_ok());
     }
 
     /// Builds deterministic statistics for the compaction postcondition guard.
@@ -1965,6 +1984,7 @@ mod tests {
             index_count: indexes,
             fragment_count: fragments,
             small_fragment_count: fragments,
+            compaction_task_count: u64::from(fragments > 1),
             fragment_rows: LanceDbFragmentSummary {
                 minimum_rows: rows.checked_div(fragments).unwrap_or(0),
                 maximum_rows: rows,
@@ -2111,6 +2131,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");
@@ -2224,6 +2245,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");
@@ -2328,6 +2350,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");
@@ -2367,6 +2390,7 @@ mod tests {
         let result = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await;
 
@@ -2389,6 +2413,7 @@ mod tests {
             engine
                 .table_statistics(LanceDbTableStatisticsInput {
                     table_name: "   ".to_string(),
+                    compaction: LanceDbCompactionOptions::default(),
                 })
                 .await
                 .is_err()
@@ -2466,12 +2491,14 @@ mod tests {
             .compact_table(LanceDbCompactTableInput {
                 table_name: "docs".to_string(),
                 expected_version: None,
-                target_rows_per_fragment: Some(128),
-                max_rows_per_group: Some(1_024),
-                max_bytes_per_file: None,
-                num_threads: Some(2),
-                batch_size: Some(128),
-                max_source_fragments: Some(512),
+                options: LanceDbCompactionOptions {
+                    target_rows_per_fragment: Some(128),
+                    max_rows_per_group: Some(1_024),
+                    max_bytes_per_file: None,
+                    num_threads: Some(2),
+                    batch_size: Some(128),
+                    max_source_fragments: Some(512),
+                },
             })
             .await
             .expect("compaction must succeed");
@@ -2481,6 +2508,10 @@ mod tests {
             "compaction must not change the logical row count"
         );
         assert!(compacted.after.version >= compacted.before.version);
+        // The planner that sized the work must find nothing left once the same options ran.
+        // 确定工作量的计划器在以同一参数执行后必须不再找到剩余工作。
+        assert!(compacted.before.compaction_task_count > 0);
+        assert_eq!(compacted.after.compaction_task_count, 0);
         // Fragment evidence for plan §10: the per-fragment row statistics before and after compaction.
         // 方案 §10 的片段证据：整理前后逐片段的行统计。
         eprintln!(
@@ -2527,6 +2558,7 @@ mod tests {
         let statistics = engine
             .table_statistics(crate::types::LanceDbTableStatisticsInput {
                 table_name: "large_batch".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");
@@ -2618,6 +2650,7 @@ mod tests {
                 engine
                     .table_statistics(crate::types::LanceDbTableStatisticsInput {
                         table_name: table.clone(),
+                        compaction: LanceDbCompactionOptions::default(),
                     })
                     .await
                     .expect("statistics");
@@ -2638,12 +2671,14 @@ mod tests {
                     .compact_table(LanceDbCompactTableInput {
                         table_name: table.clone(),
                         expected_version: None,
-                        target_rows_per_fragment: Some(128),
-                        max_rows_per_group: Some(1_024),
-                        max_bytes_per_file: None,
-                        num_threads: Some(2),
-                        batch_size: Some(128),
-                        max_source_fragments: Some(512),
+                        options: LanceDbCompactionOptions {
+                            target_rows_per_fragment: Some(128),
+                            max_rows_per_group: Some(1_024),
+                            max_bytes_per_file: None,
+                            num_threads: Some(2),
+                            batch_size: Some(128),
+                            max_source_fragments: Some(512),
+                        },
                     })
                     .await
                     .expect("compaction");
@@ -2704,12 +2739,7 @@ mod tests {
             .compact_table(LanceDbCompactTableInput {
                 table_name: "docs".to_string(),
                 expected_version: Some(0),
-                target_rows_per_fragment: None,
-                max_rows_per_group: None,
-                max_bytes_per_file: None,
-                num_threads: None,
-                batch_size: None,
-                max_source_fragments: None,
+                options: LanceDbCompactionOptions::default(),
             })
             .await;
 
@@ -2933,6 +2963,7 @@ mod tests {
         let statistics = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");
@@ -2999,6 +3030,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");
@@ -3038,6 +3070,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("the original table must survive the refused create");
@@ -3077,6 +3110,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics after overwrite");
@@ -3182,6 +3216,7 @@ mod tests {
         let stats = engine
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: "docs".to_string(),
+                compaction: LanceDbCompactionOptions::default(),
             })
             .await
             .expect("statistics");

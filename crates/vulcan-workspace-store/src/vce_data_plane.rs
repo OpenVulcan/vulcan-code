@@ -36,9 +36,10 @@ use vulcan_context_engine::{
 };
 use vulcan_lancedb_engine::engine::LanceDbEngine;
 use vulcan_lancedb_engine::types::{
-    LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCreateTableInput,
-    LanceDbDeleteInput, LanceDbInputFormat, LanceDbOutputFormat, LanceDbSearchInput,
-    LanceDbTableStatisticsInput, LanceDbTableStatisticsResult, LanceDbUpsertInput,
+    LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCompactionOptions,
+    LanceDbCreateTableInput, LanceDbDeleteInput, LanceDbInputFormat, LanceDbOutputFormat,
+    LanceDbSearchInput, LanceDbTableStatisticsInput, LanceDbTableStatisticsResult,
+    LanceDbUpsertInput,
 };
 use vulcan_sqlite_engine::runtime::{
     SqliteHardeningOptions, SqliteOpenOptions, SqlitePragmaOptions,
@@ -1547,6 +1548,33 @@ fn physical_compaction_options() -> VceCompactionOptions {
     }
 }
 
+/// Narrows VCE compaction options into the engine options used to plan and to compact.
+/// 将 VCE 整理参数收窄为计划与整理共用的引擎参数。
+///
+/// The maintenance contract states these options as u64 while the engine takes platform-sized
+/// values, so the narrowing is explicit and refuses silently truncated settings.
+/// 维护契约把这些选项表述为 u64，而引擎取平台字长的值，故收窄是显式的，并拒绝被静默截断的设置。
+fn engine_compaction_options(
+    options: &VceCompactionOptions,
+) -> Result<LanceDbCompactionOptions, String> {
+    let narrowing = |value: u64, name: &str| {
+        usize::try_from(value)
+            .map(Some)
+            .map_err(|_| format!("VCE compaction option {name} exceeds platform limits"))
+    };
+    Ok(LanceDbCompactionOptions {
+        target_rows_per_fragment: narrowing(
+            options.target_rows_per_fragment,
+            "target_rows_per_fragment",
+        )?,
+        max_rows_per_group: narrowing(options.max_rows_per_group, "max_rows_per_group")?,
+        max_bytes_per_file: narrowing(options.max_bytes_per_file, "max_bytes_per_file")?,
+        num_threads: narrowing(options.num_threads, "num_threads")?,
+        batch_size: narrowing(options.batch_size, "batch_size")?,
+        max_source_fragments: narrowing(options.max_source_fragments, "max_source_fragments")?,
+    })
+}
+
 /// Projects engine statistics into the VCE maintenance contract.
 /// 将引擎统计信息投影到 VCE 维护契约。
 fn map_physical_table_statistics(
@@ -1562,6 +1590,7 @@ fn map_physical_table_statistics(
         index_count: statistics.index_count,
         fragment_count: statistics.fragment_count,
         small_fragment_count: statistics.small_fragment_count,
+        compaction_task_count: statistics.compaction_task_count,
         fragment_rows: VcePhysicalFragmentSummary {
             minimum_rows: statistics.fragment_rows.minimum_rows,
             maximum_rows: statistics.fragment_rows.maximum_rows,
@@ -8902,6 +8931,7 @@ impl VceProjectIndex {
             .await?
             .table_statistics(LanceDbTableStatisticsInput {
                 table_name: table_name.to_string(),
+                compaction: engine_compaction_options(&physical_compaction_options())?,
             })
             .await
             .map_err(|error| format!("读取 VCE 物理表统计失败：{error}"))?;
@@ -8958,13 +8988,7 @@ impl VceProjectIndex {
         // The in-process engine performs one synchronous compaction step, so the operation is already
         // terminal when this returns and no queued, running or cancellable window ever exists.
         // 进程内引擎执行一次同步整理步骤，故本函数返回时操作已处于终态，不存在排队、运行或可取消窗口。
-        // The maintenance contract states these options as u64 while the engine takes platform-sized
-        // values, so the narrowing is explicit and refuses silently truncated settings.
-        // 维护契约把这些选项表述为 u64，而引擎取平台字长的值，故收窄是显式的，并拒绝被静默截断的设置。
-        let narrowing = |value: u64, name: &str| {
-            usize::try_from(value)
-                .map_err(|_| format!("VCE compaction option {name} exceeds platform limits"))
-        };
+        let options = engine_compaction_options(options)?;
         let outcome = self
             .data_plane
             .vector_engine()
@@ -8972,24 +8996,7 @@ impl VceProjectIndex {
             .compact_table(LanceDbCompactTableInput {
                 table_name: table_name.clone(),
                 expected_version: Some(expected_version),
-                target_rows_per_fragment: Some(narrowing(
-                    options.target_rows_per_fragment,
-                    "target_rows_per_fragment",
-                )?),
-                max_rows_per_group: Some(narrowing(
-                    options.max_rows_per_group,
-                    "max_rows_per_group",
-                )?),
-                max_bytes_per_file: Some(narrowing(
-                    options.max_bytes_per_file,
-                    "max_bytes_per_file",
-                )?),
-                num_threads: Some(narrowing(options.num_threads, "num_threads")?),
-                batch_size: Some(narrowing(options.batch_size, "batch_size")?),
-                max_source_fragments: Some(narrowing(
-                    options.max_source_fragments,
-                    "max_source_fragments",
-                )?),
+                options,
             })
             .await;
         let operation = match outcome {
@@ -11803,8 +11810,7 @@ COMMIT;"#,
         let physical_tables = [content, path]
             .into_iter()
             .map(|statistics| VcePhysicalTablePlan {
-                compaction_required: statistics.fragment_count > 1
-                    && statistics.small_fragment_count > 0,
+                compaction_required: statistics.requires_compaction(),
                 statistics,
                 options: options.clone(),
             })

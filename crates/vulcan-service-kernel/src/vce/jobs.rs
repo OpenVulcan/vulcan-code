@@ -2368,7 +2368,7 @@ impl VceRuntimeManager {
                                 };
                             }
                         };
-                        let requires_more = physical_table_requires_compaction(&after);
+                        let requires_more = after.requires_compaction();
                         let cancelled = job.control.check().is_err();
                         if requires_more
                             && (metrics.fragments_removed == 0
@@ -3832,16 +3832,6 @@ fn validate_compaction_statistics_transition(
     Ok(())
 }
 
-/// Apply the same physical-fragment predicate used by read-only compaction planning.
-/// 应用与只读整理计划相同的物理片段判定条件。
-///
-/// `statistics` is an authoritative post-operation snapshot. Returns whether another bounded
-/// native compaction round is needed.
-/// `statistics` 是权威操作后快照。返回是否仍需下一轮有界原生整理。
-fn physical_table_requires_compaction(statistics: &VcePhysicalTableStatistics) -> bool {
-    statistics.fragment_count > 1 && statistics.small_fragment_count > 0
-}
-
 /// Freeze command identity from exact host facts; display names and current job state are excluded.
 /// 根据精确宿主事实冻结命令身份；不包含展示名与当前作业状态。
 ///
@@ -3979,6 +3969,7 @@ mod tests {
             index_count,
             fragment_count,
             small_fragment_count: fragment_count,
+            compaction_task_count: u64::from(fragment_count > 1),
             fragment_rows: vulcan_context_engine::VcePhysicalFragmentSummary {
                 minimum_rows: row_count.checked_div(fragment_count).unwrap_or(0),
                 maximum_rows: row_count,
