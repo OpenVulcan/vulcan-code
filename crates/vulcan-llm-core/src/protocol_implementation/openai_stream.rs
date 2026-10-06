@@ -2271,6 +2271,9 @@ fn normalize_openai_error(
             AiErrorCategory::Authentication
         }
         Some("permission_denied") | Some("permission_error") => AiErrorCategory::PermissionDenied,
+        // OpenAI reports an exhausted plan or balance as `insufficient_quota`; retrying cannot succeed.
+        // OpenAI 以 `insufficient_quota` 报告套餐或余额耗尽；重试不可能成功。
+        Some("insufficient_quota") => AiErrorCategory::PaymentRequired,
         Some("rate_limit_exceeded") | Some("rate_limit_error") => AiErrorCategory::RateLimited,
         Some("server_is_overloaded" | "slow_down" | "provider_overloaded" | "overloaded_error") => {
             AiErrorCategory::ProviderOverloaded
@@ -3559,6 +3562,25 @@ mod tests {
             event,
             AiStreamEvent::ResponseFailed { error }
                 if error.category == AiErrorCategory::ContextLengthExceeded
+        )));
+    }
+
+    /// Verifies an in-stream exhausted quota is a terminal payment failure, not an unclassified one.
+    /// 验证流内额度耗尽是终止的付费失败，而不是未分类失败。
+    #[test]
+    fn responses_insufficient_quota_error_is_payment_required() {
+        let mut decoder = OpenAiResponsesStreamDecoder::new(String::from("execution"));
+        let events = decoder
+            .push_sse(
+                Some("error"),
+                r#"{"type":"error","error":{"type":"insufficient_quota","code":"insufficient_quota","message":"quota exhausted"}}"#,
+            )
+            .expect("insufficient quota Responses error should decode");
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ResponseFailed { error }
+                if error.category == AiErrorCategory::PaymentRequired && !error.retryable
         )));
     }
 

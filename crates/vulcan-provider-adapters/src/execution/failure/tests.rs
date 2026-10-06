@@ -183,6 +183,20 @@ fn empty_http_error_response_reports_status() {
     );
 }
 
+/// Verifies OpenAI's HTTP 429 exhausted quota is a terminal payment failure, not a retryable rate limit.
+/// 验证 OpenAI 的 HTTP 429 额度耗尽是终止的付费失败，而不是可重试的限流。
+#[test]
+fn http_insufficient_quota_is_payment_required() {
+    let failure = http_failure(
+        429,
+        None,
+        r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"quota exhausted"}}"#,
+    );
+
+    assert_eq!(failure.error.category, AiErrorCategory::PaymentRequired);
+    assert!(!failure.error.retryable);
+}
+
 /// Verifies the official Codex overload code overrides a generic HTTP proxy error type.
 /// 验证官方 Codex 过载代码会覆盖 HTTP 代理返回的通用错误类型。
 #[test]

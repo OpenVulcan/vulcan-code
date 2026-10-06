@@ -663,7 +663,9 @@ pub(crate) fn http_failure(
         match error_type {
             Some("authentication" | "authentication_error") => AiErrorCategory::Authentication,
             Some("permission_denied" | "permission_error") => AiErrorCategory::PermissionDenied,
-            Some("payment_required") => AiErrorCategory::PaymentRequired,
+            // OpenAI sends `insufficient_quota` with HTTP 429; it is an exhausted balance, not a rate limit.
+            // OpenAI 以 HTTP 429 发送 `insufficient_quota`；这是余额耗尽，不是限流。
+            Some("payment_required" | "insufficient_quota") => AiErrorCategory::PaymentRequired,
             Some("rate_limit_exceeded" | "rate_limit_error") => AiErrorCategory::RateLimited,
             Some("provider_overloaded" | "overloaded_error") => AiErrorCategory::ProviderOverloaded,
             Some("provider_unavailable" | "server" | "api_error") => {
