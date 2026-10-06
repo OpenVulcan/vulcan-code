@@ -88,7 +88,7 @@ fn remote_compaction_round_trip_preserves_opaque_output_and_exact_terminal() {
         document.runtime_lock.clone(),
         nodes,
         Vec::new(),
-        document.events.clone(),
+        document.events.to_vec(),
     )
     .unwrap();
     assert_eq!(restored.compactions, document.compactions);

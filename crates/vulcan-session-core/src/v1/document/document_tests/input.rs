@@ -40,7 +40,7 @@ fn steering_waits_for_physical_request_boundary() -> Result<(), DomainError> {
         doc.runtime_lock.clone(),
         doc.compactions.clone(),
         doc.segment_catalog.clone(),
-        doc.events.clone(),
+        doc.events.to_vec(),
     )?;
     Ok(())
 }

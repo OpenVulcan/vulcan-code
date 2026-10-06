@@ -219,8 +219,8 @@ impl SessionDocument {
         // base_revision is the only revision visible before the isolated composite transition.
         // base_revision 是隔离复合转换开始前唯一对外可见的修订号。
         let base_revision = self.memory_revision;
-        // candidate keeps the original document untouched until every fallible transition succeeds.
-        // candidate 在所有可能失败的转换完成前保持原文档不变。
+        // candidate rolls the document back unless every fallible transition succeeds.
+        // 除非所有可能失败的转换都成功，candidate 会回滚文档。
         let mut candidate = self.begin_atomic_mutation()?;
         // failure_event_start isolates facts appended by the failure-and-closure half of the transaction.
         // failure_event_start 隔离失败与关闭半段事务新追加的事实。
@@ -249,29 +249,32 @@ impl SessionDocument {
         if let Some((api_call_id, turn_id)) = failed_api_identity {
             // failure_note is the unique newly appended SystemError correlated to the failed API.
             // failure_note 是与失败 API 关联的唯一新追加 SystemError。
-            let failure_note = candidate.events[failure_event_start..]
-                .iter_mut()
-                .find_map(|event| {
-                    if event.turn_id != Some(turn_id) {
-                        return None;
-                    }
-                    match &mut event.event {
-                        EventBody::DisplayNote(note)
-                            if note.notice_kind == DisplayNoticeKind::SystemError
-                                && note.reason_code == reason_code =>
-                        {
-                            Some(note)
-                        }
-                        _ => None,
-                    }
+            let missing_note =
+                || DomainError::reference("execution_failure_display_note", api_call_id.value());
+            let failure_index = candidate.events[failure_event_start..]
+                .iter()
+                .position(|event| {
+                    event.turn_id == Some(turn_id)
+                        && matches!(
+                            &event.event,
+                            EventBody::DisplayNote(note)
+                                if note.notice_kind == DisplayNoticeKind::SystemError
+                                    && note.reason_code == reason_code
+                        )
                 })
-                .ok_or_else(|| {
-                    DomainError::reference("execution_failure_display_note", api_call_id.value())
-                })?;
+                .map(|offset| failure_event_start + offset)
+                .ok_or_else(missing_note)?;
+            let Some(ConversationEvent {
+                event: EventBody::DisplayNote(failure_note),
+                ..
+            }) = candidate.events.get_mut(failure_index)
+            else {
+                return Err(missing_note());
+            };
             failure_note.api_call_id = Some(api_call_id);
             candidate.validate_execution_failure_revision(base_revision)?;
         }
-        self.commit_atomic_mutation(candidate);
+        candidate.commit();
         Ok(true)
     }
 
@@ -293,13 +296,16 @@ impl SessionDocument {
             self.interrupt_active_api_state(now_ms, ApiEndReason::ProcessInterrupted, false)?;
         // Only the new terminal event can be rewritten before this transaction is published.
         // 只有当前新终态事件可在事务发布前被改写。
-        let stats_event = self
+        let stats_index = self
             .events
-            .iter_mut()
-            .find(|event| event.seq == completion.stats_seq)
+            .iter()
+            .position(|event| event.seq == completion.stats_seq)
             .ok_or_else(|| {
                 DomainError::reference("api_stats_event", completion.stats_seq.value())
             })?;
+        let stats_event = self.events.get_mut(stats_index).ok_or_else(|| {
+            DomainError::reference("api_stats_event", completion.stats_seq.value())
+        })?;
         // The exact receipt must refer to an API statistic, never an unrelated event.
         // 精确回执必须引用 API 统计，而非无关事件。
         let EventBody::ApiStats(stats) = &mut stats_event.event else {
@@ -380,7 +386,7 @@ impl SessionDocument {
             let turn_id = staged.require_open_turn()?.turn_id;
             // Resolve the exact execution before staging any externally visible state.
             // 在暂存任何对外可见状态前解析精确执行。
-            let execution_id = self
+            let execution_id = staged
                 .metadata
                 .context_maintenance
                 .as_ref()
@@ -405,7 +411,7 @@ impl SessionDocument {
                 crate::v1::event::TurnClosureReason::Failed,
                 now_ms,
             )?;
-            self.commit_atomic_mutation(staged);
+            staged.commit();
             return Ok(true);
         }
         // One reserved revision owns question attempt closure, business closure and idle control.
@@ -430,12 +436,13 @@ impl SessionDocument {
         if let Some(turn_id) = business_turn_id
             && staged.collaboration_run_control() == CollaborationRunControl::Running
         {
+            let operation_id = CollaborationOperationId::try_new(format!(
+                "business-failure-idle:{}:{}",
+                staged.segment_generation(),
+                turn_id.value()
+            ))?;
             staged.set_collaboration_run_control(SetRunControlInput {
-                operation_id: CollaborationOperationId::try_new(format!(
-                    "business-failure-idle:{}:{}",
-                    staged.segment_generation(),
-                    turn_id.value()
-                ))?,
+                operation_id,
                 state: CollaborationRunControl::NaturallyIdle,
                 changed_at_ms: now_ms,
             })?;
@@ -443,7 +450,7 @@ impl SessionDocument {
         if let Some(turn_id) = business_turn_id {
             staged.record_task_results_for_turn(turn_id, now_ms)?;
         }
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(true)
     }
 

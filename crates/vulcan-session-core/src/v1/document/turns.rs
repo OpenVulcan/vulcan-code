@@ -657,7 +657,7 @@ impl SessionDocument {
         staged.fail_unapplied_task_steering_for_turn(turn_id, steering_failure, now_ms)?;
         let receipt = staged.close_turn_after_question_attempts(outcome, duration_ms, now_ms)?;
         staged.record_task_results_for_turn(turn_id, now_ms)?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(receipt)
     }
 
@@ -835,7 +835,7 @@ impl SessionDocument {
         let receipt =
             staged.complete_turn_after_question_attempts(expected_turn_id, now_ms, usage)?;
         staged.record_task_results_for_turn(expected_turn_id, now_ms)?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(receipt)
     }
 

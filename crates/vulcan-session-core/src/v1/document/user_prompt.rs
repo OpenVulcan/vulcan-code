@@ -81,7 +81,7 @@ impl SessionDocument {
             .map(|(_, event)| event.seq())
             .collect::<Vec<_>>();
         for (index, event) in staged {
-            self.events[index] = event;
+            self.events.replace(index, event);
         }
         self.bump_revision(&[DirtyFile::ActiveTail], now_ms, &changed_seqs);
         Ok(true)
@@ -175,7 +175,7 @@ impl SessionDocument {
             input.parameters = Some(preparing);
         })?;
         self.ensure_transition_capacity(0, 0)?;
-        self.events[index] = updated;
+        self.events.replace(index, updated);
         self.bump_revision(&[DirtyFile::ActiveTail], now_ms, &[binding.prompt_seq]);
         Ok(true)
     }

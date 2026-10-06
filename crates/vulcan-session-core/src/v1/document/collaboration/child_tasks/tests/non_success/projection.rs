@@ -251,7 +251,7 @@ fn child_non_success_projection_checks_api_and_recovery_proofs() {
         .project_child_task_non_success_before_api(execution, T0 + 8)
         .unwrap()
         .into_value();
-    for event in &mut parent.events {
+    for event in parent.events.iter_mut() {
         if event.seq == projection.inputs[0].input_seq
             && let EventBody::UserInput(input) = &mut event.event
         {

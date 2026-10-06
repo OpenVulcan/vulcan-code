@@ -89,7 +89,7 @@ fn subagent_return_rejects_auxiliary_final_proofs() -> Result<(), DomainError> {
     // 即使 API 正常完成，辅助边界也被独立拒绝。
     let (mut child, request) =
         closed_child(ApiPurposeKind::MainGeneration, TurnOutcome::Completed)?;
-    for event in &mut child.events {
+    for event in child.events.iter_mut() {
         if let EventBody::TurnBoundary(boundary) = &mut event.event {
             boundary.purpose = crate::v1::event::TurnBoundaryPurpose::QuestionExecution;
         }

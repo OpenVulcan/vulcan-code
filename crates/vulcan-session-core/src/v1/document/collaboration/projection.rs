@@ -50,8 +50,8 @@ pub(super) fn append_late_result_context(
 
 /// Appends one authenticated envelope and returns its exact provider-input proof.
 /// 追加一条已认证信封，并返回其精确 Provider 输入凭据。
-/// The caller stages a document clone so any later proof failure leaves the live document intact.
-/// 调用方暂存文档副本，保证后续凭据失败不改变当前文档。
+/// The caller holds an atomic mutation so any later proof failure rolls the live document back.
+/// 调用方持有原子修改，保证后续凭据失败时当前文档被回滚。
 pub(super) fn append_envelope(
     document: &mut SessionDocument,
     envelope: HostMessageEnvelope,
@@ -181,7 +181,7 @@ impl SessionDocument {
         receipt.execution = execution.clone();
         let projected = staged.project_question_before_api(question, now_ms)?;
         if started_changed || matches!(projected, IdempotentMutation::Committed(_)) {
-            self.commit_atomic_mutation(staged);
+            staged.commit();
             Ok(IdempotentMutation::Committed(receipt))
         } else {
             Ok(IdempotentMutation::Idempotent(receipt))
@@ -313,7 +313,7 @@ impl SessionDocument {
             tool_result_seq: None,
             delivered_at_ms: now_ms,
         })?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(receipt)
     }
 
@@ -434,7 +434,7 @@ impl SessionDocument {
             projected_turn_id,
             projected_at_ms: now_ms,
         })?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(receipt)
     }
 
@@ -508,7 +508,7 @@ impl SessionDocument {
             projected_turn_id,
             projected_at_ms: now_ms,
         })?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(receipt)
     }
 }

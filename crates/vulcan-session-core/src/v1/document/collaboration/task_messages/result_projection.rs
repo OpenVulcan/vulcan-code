@@ -156,7 +156,7 @@ impl SessionDocument {
             now_ms,
         )?;
         staged.validate_task_result_projection_facts()?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(IdempotentMutation::Committed(projection))
     }
 

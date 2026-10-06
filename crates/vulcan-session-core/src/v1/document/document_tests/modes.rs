@@ -588,7 +588,7 @@ fn create_goal_requires_running_native_tool_during_api() -> Result<(), DomainErr
         doc.runtime_lock.clone(),
         doc.compactions.clone(),
         doc.segment_catalog.clone(),
-        doc.events.clone(),
+        doc.events.to_vec(),
     )?;
     assert_eq!(restored.metadata.mode.goal, doc.metadata.mode.goal);
     Ok(())

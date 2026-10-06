@@ -131,7 +131,7 @@ fn subagent_return_round_trips_and_exact_retry_is_idempotent() -> Result<(), Dom
         parent.runtime_lock.clone(),
         parent.compactions.clone(),
         parent.segment_catalog.clone(),
-        parent.events.clone(),
+        parent.events.to_vec(),
     )?;
     let restored_revision = restored.memory_revision();
     let replayed = restored.append_subagent_return(input, T0 + 3)?;
@@ -201,7 +201,7 @@ fn subagent_return_after_parent_completion_opens_durable_successor() -> Result<(
         parent.runtime_lock.clone(),
         parent.compactions.clone(),
         parent.segment_catalog.clone(),
-        parent.events.clone(),
+        parent.events.to_vec(),
     )?;
     assert_eq!(restored.active_turn(), parent.active_turn());
     // A real next prompt supersedes an undispatched return instead of failing with an open-turn error.
@@ -231,7 +231,7 @@ fn subagent_return_after_parent_completion_opens_durable_successor() -> Result<(
         user_resume.runtime_lock,
         user_resume.compactions,
         user_resume.segment_catalog,
-        user_resume.events,
+        user_resume.events.into_vec(),
     )?;
     restored.close_turn(TurnOutcome::Completed, 1, T0 + 3)?;
     let after_completion = restored.clone();
@@ -320,7 +320,7 @@ fn subagent_return_distinguishes_multiple_child_completions() -> Result<(), Doma
         parent.runtime_lock,
         parent.compactions,
         parent.segment_catalog,
-        parent.events,
+        parent.events.into_vec(),
     )?;
     Ok(())
 }
@@ -384,7 +384,7 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
     ));
     assert_eq!(parent, before_drift);
 
-    let mut broken_events = parent.events.clone();
+    let mut broken_events = parent.events.to_vec();
     // A historical paired return must still reject its missing statistics partner.
     // 历史成对回流仍须拒绝缺失的统计配对。
     if let EventBody::SubagentReturn(returned) = &mut broken_events.last_mut().unwrap().event {
@@ -405,7 +405,7 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
         })
     ));
 
-    let mut wrong_visibility = parent.events.clone();
+    let mut wrong_visibility = parent.events.to_vec();
     let stats_event = wrong_visibility
         .iter_mut()
         .find(|event| matches!(&event.event, EventBody::SubagentReturn(_)))

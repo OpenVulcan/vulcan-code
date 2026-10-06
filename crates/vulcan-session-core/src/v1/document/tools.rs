@@ -741,7 +741,7 @@ impl SessionDocument {
         // receipt 保留普通完成流程使用的同一 ToolCall 身份。
         let receipt = staged.finish_tool_terminal(api_call_id, tool_call_id, completion)?;
         staged.deliver_completed_question_wait(tool_call_id, finished_at_ms)?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(receipt)
     }
 
@@ -885,7 +885,7 @@ impl SessionDocument {
         };
         validate_tool_lifecycle_shape(staged_tool)?;
         let receipt = tool_completion_receipt(seq, staged_tool)?;
-        self.events[index] = staged_event;
+        self.events.replace(index, staged_event);
         self.bump_revision(&[DirtyFile::ActiveTail], completion.finished_at_ms, &[seq]);
         Ok(IdempotentMutation::Committed(receipt))
     }

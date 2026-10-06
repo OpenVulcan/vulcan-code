@@ -512,13 +512,13 @@ impl SessionDocument {
             document.runtime_lock.clone(),
             document.compactions.clone(),
             Vec::new(),
-            document.events.clone(),
+            document.events.to_vec(),
         )?;
         Ok(GenerationBuildOutput {
             metadata: validated.metadata,
             runtime_lock: validated.runtime_lock,
             compactions: validated.compactions,
-            events: validated.events,
+            events: validated.events.into_vec(),
             history_target_seq: target_seq,
         })
     }

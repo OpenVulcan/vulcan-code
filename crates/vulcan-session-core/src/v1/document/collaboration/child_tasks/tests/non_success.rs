@@ -81,7 +81,7 @@ fn child_non_success_closure_reason_is_strict() {
     // Keep the valid document available for deliberate corruption checks.
     // 保留有效文档以执行刻意损坏检查。
     let (mut child, _) = failed_child(&execution);
-    for event in &mut child.events {
+    for event in child.events.iter_mut() {
         if let EventBody::TurnBoundary(boundary) = &mut event.event {
             // A missing reason is not a supported legacy format in this unreleased contract.
             // 本未发布契约不支持缺失原因的历史格式。
@@ -392,7 +392,7 @@ fn child_non_success_rejects_changed_proof_and_orphaned_metadata() {
         .unwrap();
     // Simulate an inconsistent source snapshot under the same immutable execution identity.
     // 模拟同一不可变执行身份下的不一致来源快照。
-    for event in &mut child.events {
+    for event in child.events.iter_mut() {
         if let EventBody::DisplayNote(note) = &mut event.event {
             note.redacted_detail = Some(String::from("changed diagnostic"));
         }

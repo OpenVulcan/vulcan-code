@@ -805,7 +805,7 @@ impl SessionDocument {
             .map(|(_, event)| event.seq())
             .collect::<Vec<_>>();
         for (index, event) in staged_prompt_events {
-            self.events[index] = event;
+            self.events.replace(index, event);
         }
         changed_seqs.push(started_seq);
         self.runtime_lock = staged_runtime_lock;
@@ -1694,7 +1694,7 @@ impl SessionDocument {
             .collect();
         changed_event_seqs.extend(staged_events.iter().map(ConversationEvent::seq));
         for (index, event) in staged_event_updates {
-            self.events[index] = event;
+            self.events.replace(index, event);
         }
         self.id_allocator = staged_allocator;
         self.metadata = staged_metadata;
@@ -1925,7 +1925,7 @@ impl SessionDocument {
             .collect();
         changed_event_seqs.extend(staged_events.iter().map(ConversationEvent::seq));
         for (index, event) in staged_event_updates {
-            self.events[index] = event;
+            self.events.replace(index, event);
         }
         self.id_allocator = staged_allocator;
         self.metadata = staged_metadata;

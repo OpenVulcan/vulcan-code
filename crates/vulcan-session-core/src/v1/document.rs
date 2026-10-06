@@ -60,6 +60,7 @@ mod modes;
 mod persistence;
 mod provider_source;
 mod recovery;
+mod resident_events;
 mod selection;
 mod subagent;
 mod terminal_settlement;
@@ -96,6 +97,7 @@ pub use turns::{
 use api::validate_api_terminal_facts;
 use api::validate_execution_control_event;
 use input::validate_user_input;
+use resident_events::ResidentEvents;
 pub(super) use selection::validate_provider_tool_selection_config;
 #[cfg(test)]
 use tools::tool_status_name;
@@ -260,7 +262,7 @@ pub struct SessionDocument {
     pub compactions: Vec<CompactionNode>,
     /// Authoritative contiguous fact stream (`seq i` lives at index `i - 1`).
     /// 权威连续事实流(`seq i` 位于索引 `i - 1`)。
-    events: Vec<ConversationEvent>,
+    events: ResidentEvents,
     /// Derivable index: tool call id -> event seq.
     /// 可派生索引：工具调用 id -> 事件 seq。
     tool_seq_by_id: HashMap<ToolCallId, Seq>,
@@ -341,7 +343,7 @@ impl SessionDocument {
             metadata,
             runtime_lock: RuntimeLock::default(),
             compactions: Vec::new(),
-            events: Vec::new(),
+            events: ResidentEvents::default(),
             tool_seq_by_id: HashMap::new(),
             active_turn: None,
             active_api: None,
@@ -496,7 +498,7 @@ impl SessionDocument {
             metadata,
             runtime_lock,
             compactions,
-            events,
+            events: ResidentEvents::new(events),
             tool_seq_by_id: HashMap::new(),
             active_turn: None,
             active_api: None,
@@ -892,13 +894,16 @@ impl SessionDocument {
         &mut self,
         transition: impl FnOnce(&mut Self) -> Result<T, DomainError>,
     ) -> Result<T, DomainError> {
+        let entry_memory_revision = self.memory_revision;
+        let entry_durable_revision = self.durable_revision;
+        let entry_issued_revisions = self.issued_revisions.clone();
         // Draft revisions and embedded receipts use the same reserved publication identity.
         // 草稿修订及其内嵌回执使用同一个预留发布身份。
         let mut staged = self.begin_atomic_mutation()?;
         // The result cannot escape until every domain transition succeeds.
         // 只有全部领域转换成功后，结果才可离开草稿。
         let result = transition(&mut staged)?;
-        if staged.memory_revision != self.memory_revision
+        if staged.memory_revision != entry_memory_revision
             && Some(staged.memory_revision) != staged.staged_commit_revision
         {
             return Err(DomainError::ImmutableFieldMutation {
@@ -906,42 +911,93 @@ impl SessionDocument {
                 field: "document_revision",
             });
         }
-        if staged.durable_revision != self.durable_revision
-            || staged.issued_revisions != self.issued_revisions
+        if staged.durable_revision != entry_durable_revision
+            || staged.issued_revisions != entry_issued_revisions
         {
             return Err(DomainError::ImmutableFieldMutation {
                 entity: "atomic_transition",
                 field: "persistence_boundary",
             });
         }
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(result)
     }
 
-    /// Creates an isolated composite draft whose suboperations share one future publication revision.
-    /// 创建隔离复合草稿，其子操作共享一个待发布修订。
-    /// Returns the clone or an overflow error; dropping it rolls back every staged suboperation.
-    /// 返回副本或溢出错误；丢弃副本即可回滚全部暂存子操作。
-    fn begin_atomic_mutation(&self) -> Result<Self, DomainError> {
+    /// Opens a composite in-place draft whose suboperations share one future publication revision.
+    /// 打开原地复合草稿，其子操作共享一个待发布修订。
+    /// Returns the guard or an overflow error; dropping the guard uncommitted rolls back every staged suboperation.
+    /// 返回守卫或溢出错误；未提交即丢弃守卫会回滚全部暂存子操作。
+    fn begin_atomic_mutation(&mut self) -> Result<AtomicMutation<'_>, DomainError> {
         // Nested drafts inherit the original publication identity, including receipt-embedded revisions.
         // 嵌套草稿继承原始发布身份，包括回执内部的修订字段。
         let revision = self.next_mutation_revision()?;
-        // Only the clone carries the reservation; the live document remains untouched on failure.
-        // 只有副本携带预留；失败时当前文档保持不变。
-        let mut staged = self.clone();
-        staged.staged_commit_revision = Some(revision);
-        Ok(staged)
+        // The snapshot excludes the event stream, which journals its own minimal undo frame.
+        // 快照不含事件流；事件流自行记录最小撤销帧。
+        let mut events = std::mem::take(&mut self.events);
+        let rollback = Box::new(self.clone());
+        events.open_frame();
+        self.events = events;
+        self.staged_commit_revision = Some(revision);
+        Ok(AtomicMutation {
+            document: self,
+            rollback: Some(rollback),
+        })
     }
+}
 
-    /// Installs a successful draft and restores the enclosing mutation's revision reservation.
-    /// 安装成功草稿，并恢复外层修改的修订预留。
-    /// `staged` must originate from `begin_atomic_mutation` on this exclusively borrowed owner.
-    /// `staged` 必须来自此独占借用所有者的 `begin_atomic_mutation`。
-    fn commit_atomic_mutation(&mut self, mut staged: Self) {
-        staged.staged_commit_revision = self.staged_commit_revision;
-        *self = staged;
+/// Exclusive in-place draft of one failure-atomic composite mutation.
+/// 一次失败原子复合修改的独占原地草稿。
+/// Mutations go straight to the live document; `commit` keeps them, while dropping the guard
+/// uncommitted (an error return or an unwind) restores the exact entry state.
+/// 修改直接作用于当前文档；`commit` 保留修改，未提交即丢弃守卫(错误返回或展开)会恢复精确入口状态。
+struct AtomicMutation<'a> {
+    /// The live owner being mutated in place.
+    /// 正在原地修改的当前所有者。
+    document: &'a mut SessionDocument,
+    /// Entry state of every field except the self-journaling event stream; `None` once committed.
+    /// 除自记录事件流外全部字段的入口状态；提交后为 `None`。
+    rollback: Option<Box<SessionDocument>>,
+}
+
+impl AtomicMutation<'_> {
+    /// Keeps every staged suboperation and restores the enclosing mutation's revision reservation.
+    /// 保留全部暂存子操作，并恢复外层修改的修订预留。
+    fn commit(mut self) {
+        let rollback = self
+            .rollback
+            .take()
+            .expect("an uncommitted atomic mutation keeps its rollback state");
+        self.document.staged_commit_revision = rollback.staged_commit_revision;
+        self.document.events.commit_frame();
     }
+}
 
+impl std::ops::Deref for AtomicMutation<'_> {
+    type Target = SessionDocument;
+
+    fn deref(&self) -> &SessionDocument {
+        self.document
+    }
+}
+
+impl std::ops::DerefMut for AtomicMutation<'_> {
+    fn deref_mut(&mut self) -> &mut SessionDocument {
+        self.document
+    }
+}
+
+impl Drop for AtomicMutation<'_> {
+    fn drop(&mut self) {
+        if let Some(rollback) = self.rollback.take() {
+            let mut events = std::mem::take(&mut self.document.events);
+            events.rollback_frame();
+            *self.document = *rollback;
+            self.document.events = events;
+        }
+    }
+}
+
+impl SessionDocument {
     /// Bumps one real memory revision, touches session metadata monotonically,
     /// and records the exact event seq values changed by that revision.
     /// 递增一次真实内存修订、单调更新会话 metadata，并记录该修订真实变化的事件 seq。

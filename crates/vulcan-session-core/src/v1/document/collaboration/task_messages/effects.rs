@@ -139,7 +139,7 @@ impl SessionDocument {
             },
             now_ms,
         )?;
-        self.commit_atomic_mutation(staged);
+        staged.commit();
         Ok(IdempotentMutation::Committed(effect))
     }
 

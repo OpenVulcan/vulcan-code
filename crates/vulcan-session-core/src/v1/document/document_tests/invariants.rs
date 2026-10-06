@@ -305,3 +305,59 @@ fn system_context_ttl_shape_is_symmetric_and_atomic() -> Result<(), DomainError>
     ));
     Ok(())
 }
+
+/// Nested resident event frames restore every replaced, truncated and appended event exactly.
+/// 嵌套常驻事件帧精确恢复每个被替换、截断及追加的事件。
+#[test]
+fn resident_event_frames_restore_exact_entry_streams() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("prompt".to_owned(), Vec::new(), T0)?;
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        crate::v1::event::ApiRequestSnapshot::new("openai", "gpt-5"),
+        0,
+    )?;
+    doc.append_reasoning(
+        api,
+        "think".to_owned(),
+        AssistantSemanticStatus::Completed,
+        T0,
+    )?;
+    doc.append_assistant_text(
+        api,
+        "answer".to_owned(),
+        AssistantSemanticStatus::Completed,
+        T0,
+    )?;
+    let source = doc.events().to_vec();
+    assert!(source.len() >= 4, "fixture must yield at least four events");
+
+    // An outer rollback undoes committed inner truncation and in-place edits as well.
+    // 外层回滚同样撤销已提交内层的截断与原位编辑。
+    let mut stream = ResidentEvents::new(source[..2].to_vec());
+    let entry = stream.to_vec();
+    stream.open_frame();
+    stream.replace(0, source[2].clone());
+    stream.extend([source[3].clone()]);
+    stream.open_frame();
+    stream.truncate(1);
+    stream.get_mut(0).expect("resident event").updated_at_ms += 1;
+    stream.extend([source[1].clone(), source[2].clone()]);
+    stream.commit_frame();
+    stream.rollback_frame();
+    assert_eq!(stream.to_vec(), entry);
+
+    // An inner rollback keeps the enclosing frame's edits, which its commit then keeps.
+    // 内层回滚保留外层帧的编辑，外层提交随后保留这些编辑。
+    stream.open_frame();
+    stream.replace(1, source[3].clone());
+    let outer_edit = stream.to_vec();
+    stream.open_frame();
+    stream.truncate(0);
+    stream.extend([source[2].clone()]);
+    stream.rollback_frame();
+    assert_eq!(stream.to_vec(), outer_edit);
+    stream.commit_frame();
+    assert_eq!(stream.into_vec(), outer_edit);
+    Ok(())
+}

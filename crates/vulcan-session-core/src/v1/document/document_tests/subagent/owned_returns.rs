@@ -130,7 +130,7 @@ fn owned_return_with_dynamic_context_releases_parent_completion_gate() -> Result
             child.runtime_lock.clone(),
             child.compactions.clone(),
             child.segment_catalog.clone(),
-            child.events.clone(),
+            child.events.to_vec(),
         )?;
         assert!(
             restored
@@ -320,7 +320,7 @@ fn owned_return_publishes_completion_atomically_and_replays_after_reload() -> Re
         parent.runtime_lock.clone(),
         parent.compactions.clone(),
         parent.segment_catalog.clone(),
-        parent.events.clone(),
+        parent.events.to_vec(),
     )?;
     let snapshot = restored.clone();
     let retry = restored.complete_child_task_with_return(execution, input, T0 + 31)?;
@@ -543,7 +543,7 @@ fn owned_return_generation_partitions_sequences_and_frontiers() -> Result<(), Do
         parent.runtime_lock,
         parent.compactions,
         parent.segment_catalog,
-        parent.events,
+        parent.events.into_vec(),
     )?;
     Ok(())
 }

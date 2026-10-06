@@ -586,7 +586,7 @@ fn auxiliary_question_completion_does_not_consume_business_context_lifetime() {
         // A mismatched boundary purpose cannot be accepted when its opening fact is resident.
         // 当起始事实常驻时，不能接纳用途不匹配的闭合边界。
         let mut forged = reloaded.clone();
-        for event in &mut forged.events {
+        for event in forged.events.iter_mut() {
             if let EventBody::TurnBoundary(boundary) = &mut event.event {
                 boundary.purpose = TurnBoundaryPurpose::Business;
             }
