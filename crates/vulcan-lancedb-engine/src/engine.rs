@@ -684,6 +684,13 @@ impl LanceDbEngine {
         // 物化删除会物理重写行，超出 v1 仅整理布局的范围。
         options.materialize_deletions = false;
 
+        // Native compaction never merges fragments covered by different index sets, so the
+        // unindexed tail left by incremental writes must join the indexes first; otherwise an
+        // indexed table can never converge to one small fragment.
+        // 原生整理绝不合并索引覆盖不同的片段，因此增量写入留下的未索引尾部必须先并入索引；
+        // 否则带索引的表永远无法收敛为单个小片段。
+        fold_unindexed_rows_into_indexes(&table).await?;
+
         #[cfg(test)]
         let _native_compaction_observation =
             NativeCompactionObservationGuard::begin(&self.state.native_compaction_active);
@@ -790,6 +797,30 @@ impl Drop for NativeCompactionObservationGuard<'_> {
         self.active
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
+}
+
+/// Brings every index up to date when any of them leaves rows unindexed.
+/// 任一索引存在未索引行时，将全部索引更新到最新。
+///
+/// Index optimization rewrites index files only; rows, fragments and the index set stay unchanged,
+/// so the compaction transition checks still hold. Missing index statistics are an error.
+/// 索引优化只重写索引文件；行、片段与索引集合保持不变，整理转换校验仍然成立。索引统计缺失视为错误。
+async fn fold_unindexed_rows_into_indexes(table: &Table) -> EngineResult<()> {
+    for index in table.list_indices().await.map_err(map_lancedb_error)? {
+        let statistics = table
+            .index_stats(&index.name)
+            .await
+            .map_err(map_lancedb_error)?
+            .ok_or_else(|| LanceDbEngineError::internal("index statistics disappeared"))?;
+        if statistics.num_unindexed_rows > 0 {
+            table
+                .optimize(OptimizeAction::Index(Default::default()))
+                .await
+                .map_err(map_lancedb_error)?;
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 /// Collects one table's physical statistics through the public LanceDB API.

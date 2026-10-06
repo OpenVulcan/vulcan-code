@@ -2354,6 +2354,12 @@ impl McpRuntimeAccess {
                 }
             }
         }
+        // The original-owner inventory also retains handles; prune it in its own scope, never nested with the registry above.
+        // 原所有者清单同样保留句柄；在独立作用域中清理，绝不与上方登记表嵌套加锁。
+        self.blocked_owner_plugins
+            .lock()
+            .expect("blocked MCP owner plugin registry poisoned")
+            .prune_released();
         // The grace timer must not extend a caller's right to execute old-generation tools.
         // 宽限计时器不得延长调用方执行旧代次工具的权利。
         let retired_leases = retired_partitions

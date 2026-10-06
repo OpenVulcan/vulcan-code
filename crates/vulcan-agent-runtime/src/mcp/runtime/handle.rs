@@ -4223,13 +4223,17 @@ mod optional_capability_tests {
             "actual transport cleanup remains unconfirmed"
         );
 
+        // A hand-written Stopped snapshot never proves cleanup; this declared-disabled server was never
+        // launched, so returning to Disabled is its only legitimate completed state.
+        // 手写 Stopped 快照不能证明清理；该声明停用的服务器从未启动，回到 Disabled 是其唯一合法完成状态。
         update_server_status(
             &runtime.inner,
             "fixture:server",
-            McpRuntimeServerStatus::Stopped,
+            McpRuntimeServerStatus::Disabled,
             None,
             Vec::new(),
         );
+        assert!(runtime.is_fully_stopped());
         // Retain only a weak observation to prove that later retirement releases completed history.
         // 仅保留弱观测，证明后续退役会释放已经完成的历史。
         let completed_runtime = Arc::downgrade(&runtime.inner);
@@ -4251,6 +4255,10 @@ mod optional_capability_tests {
             completed_runtime.upgrade().is_none(),
             "repeated updates must release successfully completed runtime history"
         );
+        // The just-retired empty partition is safe only after its last lease requests shutdown.
+        // 刚退役的空分区只有在最后租约请求关闭后才安全。
+        assert!(replacement_generation.has_usable_retired_plugin_partitions("fixture"));
+        drop(next_generation);
         assert!(!replacement_generation.has_usable_retired_plugin_partitions("fixture"));
     }
 
