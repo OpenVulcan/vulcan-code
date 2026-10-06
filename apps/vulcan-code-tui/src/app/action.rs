@@ -267,6 +267,10 @@ pub enum UiAction {
     /// 打开文件夹选择器以安装本地插件目录。
     InstallPlugin,
     Area(Area),
+    /// An activity bar entry: opens its area; the workbench entry clicked inside the workbench
+    /// toggles the conversation sidebar instead, as in the WebUI.
+    /// 活动栏条目：打开其区域；在工作台内点击工作台条目则改为切换会话侧栏，与 WebUI 一致。
+    Activity(Area),
     GoPage(PageId),
     OpenAreaPicker,
     SelectConversation(ConversationId),
@@ -443,6 +447,10 @@ pub fn perform(app: &mut App, action: UiAction) {
         }
         UiAction::InstallPlugin => open_folder(app, FolderMode::Plugin, None),
         UiAction::Area(area) => app.set_area(area),
+        UiAction::Activity(Area::Chat) if app.area == Area::Chat => {
+            input::execute(app, AppCommand::ToggleSidebar, None);
+        }
+        UiAction::Activity(area) => app.set_area(area),
         UiAction::GoPage(page) => {
             let index = page
                 .area()

@@ -4,13 +4,17 @@
 // Layout (wide):
 // 布局（宽屏）：
 //
-//   ┌ header ───────────────────────────────────────────────────────────┐
-//   │ sidebar │ transcript            [thinking box ⇢ float] │ panel     │
-//   │         │ [thinking box ⇢ docked]                       │ Changes…  │
-//   │         │ [ask panel] [queued prompts]                  │           │
-//   │         │ session bar                                   │           │
-//   │         │ composer                                      │           │
-//   └ status bar ───────────────────────────────────────────────────────┘
+//   ┌ header ─────────────────────────────────────────────────────────────────┐
+//   │ ▤ │ sidebar │ transcript            [thinking box ⇢ float] │ panel     │
+//   │ ◫ │         │ [thinking box ⇢ docked]                       │ Changes…  │
+//   │ … │         │ [ask panel] [queued prompts]                  │           │
+//   │   │         │ session bar                                   │           │
+//   │ ⚙ │         │ composer                                      │           │
+//   └ status bar ─────────────────────────────────────────────────────────────┘
+//
+// The activity bar on the left switches areas in every area; system areas replace the sidebar,
+// conversation and panel with their own navigation and page.
+// 左侧活动栏在所有区域中切换区域；系统区域以自身的导航与页面取代侧栏、对话与面板。
 //
 // The sidebar is either the full list or a narrow rail. A rail, or a full list without room,
 // opens the list as a drawer over the conversation while the sidebar has focus; the panel does the
@@ -19,6 +23,7 @@
 // 侧栏为完整列表或窄栏。窄栏，或放不下的完整列表，在侧栏获得焦点时以抽屉形式覆盖对话区打开；
 // 终端过窄时面板同样如此。宽度连窄栏都放不下时，侧栏只以抽屉形式出现。
 
+mod activity;
 mod ask;
 pub mod brand;
 mod chrome;
@@ -96,7 +101,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(area);
     let in_chat = app.area == Area::Chat;
-    chrome::header(app, header, buf);
+    // The activity bar takes the left edge; everything else lays out in the remaining body.
+    // 活动栏占据左边缘；其余内容在剩余主体中排布。
+    let workbench = sidebar_width(body.width) + CENTER_MIN_WIDTH + panel_width(body.width);
+    let activity_width = activity::width(body.width, workbench, CENTER_MIN_WIDTH);
+    let [activity_area, body] =
+        Layout::horizontal([Constraint::Length(activity_width), Constraint::Fill(1)]).areas(body);
+    chrome::header(app, header, buf, activity_width == 0);
+    if activity_width > 0 {
+        activity::render(app, activity_area, buf);
+    }
     // The center column is as tall as the body, so the session bar's visibility is known here.
     // 对话列与主体等高，因此此处即可确定会话栏是否显示。
     let session_bar = in_chat && session_bar::visible(app, body.height);

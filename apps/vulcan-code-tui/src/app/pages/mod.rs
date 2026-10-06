@@ -43,17 +43,28 @@ pub enum Area {
 }
 
 impl Area {
-    /// Areas in the same order as the WebUI's activity bar.
-    /// 与 WebUI 活动栏相同顺序的区域。
+    /// Areas in the same order as the WebUI's activity bar; Knowledge is a plugin page there, so it
+    /// follows Plugins.
+    /// 与 WebUI 活动栏相同顺序的区域；知识库在其中是插件页面，因此紧随插件之后。
     pub const ALL: [Area; 7] = [
         Area::Chat,
-        Area::AgentSkills,
         Area::Plugins,
+        Area::Knowledge,
+        Area::AgentSkills,
         Area::Agents,
         Area::Memory,
-        Area::Knowledge,
         Area::Settings,
     ];
+
+    /// Area an entry is nested under in the activity bar: plugin-provided areas sit beneath
+    /// Plugins, as plugin detail pages do in the WebUI.
+    /// 活动栏中该条目所嵌套的区域：插件提供的区域位于插件之下，与 WebUI 的插件详情页一致。
+    pub fn parent(self) -> Option<Area> {
+        match self {
+            Area::Knowledge => Some(Area::Plugins),
+            _ => None,
+        }
+    }
 
     pub fn label(self) -> String {
         match self {

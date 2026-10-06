@@ -51,7 +51,7 @@
 1. 根 `.cargo/config.toml` 限制 `build.jobs = 4` 与 `RUST_TEST_THREADS = 4`，不得绕过。
 2. 常规验证：`cargo clippy -p vulcan-code-tui --all-targets -- -D warnings`、
    `cargo nextest run -p vulcan-code-tui`、`cargo fmt --check`。
-3. `src/render_smoke_tests.rs` 以无头后端在宽、窄两种尺寸下渲染全部区域与浮层，并用 `hits.find` 驱动鼠标点击；
+3. `src/render_smoke_tests.rs` 以无头后端在宽、窄尺寸下渲染全部区域与浮层（快照另含超宽尺寸），并用 `hits.find` 驱动鼠标点击；
    需要目视检查布局时先创建快照目录，再设置 `VULCAN_TUI_SNAPSHOT_DIR=<目录>` 运行该测试。
 4. 默认使用模拟数据或本地合成 HTTP/WebSocket 服务器验证；不得对真实服务执行有副作用或付费的操作。
    模拟后端未知写入的成功回执不能证明真实协议已适配。

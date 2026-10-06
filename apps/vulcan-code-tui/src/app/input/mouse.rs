@@ -175,7 +175,7 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
             }
             app.focus = focus;
         }
-        Target::AreaTab(area) => app.set_area(area),
+        Target::AreaTab(area) => action::perform(app, UiAction::Activity(area)),
         Target::PanelTab(tab) => {
             app.panel_tab = tab;
             app.focus = Focus::Panel;

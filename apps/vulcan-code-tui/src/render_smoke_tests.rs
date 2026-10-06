@@ -1028,3 +1028,75 @@ fn single_click_selects_and_double_click_expands() {
     press(&mut app, rect);
     assert!(app.page_state(page).expanded.contains(&id));
 }
+
+/// The activity bar labels its entries on wide terminals, shows icons on narrower ones and gives
+/// way to the header switcher on the narrowest; the workbench entry toggles the sidebar when the
+/// workbench is already open.
+/// 活动栏在宽终端显示名称，较窄时只显示图标，最窄时让位于顶栏切换按钮；工作台已打开时点击工作台
+/// 条目会切换侧栏。
+#[test]
+fn activity_bar_adapts_and_toggles_the_sidebar() {
+    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let mut app = App::new(mock::spawn(), Theme::dark(), true);
+    let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
+    pump(
+        &mut app,
+        &mut wide,
+        &mut narrow,
+        Instant::now() + Duration::from_millis(1500),
+    );
+    let entry_width = |app: &App, area: Area| {
+        app.hits
+            .find(|t| matches!(t, Target::AreaTab(a) if *a == area))
+            .map(|rect| rect.width)
+    };
+    // The status bar keeps its own F2 button; only a header switcher sits on the first row.
+    // 状态栏保留自身的 F2 按钮；只有顶栏切换按钮位于第一行。
+    let switcher = |app: &App| {
+        app.hits
+            .find(|t| matches!(t, Target::Do(UiAction::OpenAreaPicker)))
+            .is_some_and(|rect| rect.y == 0)
+    };
+
+    wide.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let labeled = entry_width(&app, Area::Chat).expect("labeled activity bar");
+    assert!(!switcher(&app), "the bar replaces the header switcher");
+    narrow.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let icons = entry_width(&app, Area::Chat).expect("icon activity bar");
+    assert!(icons < labeled, "narrow terminals show the icon form");
+    let mut tiny = Terminal::new(TestBackend::new(50, 20)).unwrap();
+    tiny.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_eq!(entry_width(&app, Area::Chat), None);
+    assert!(
+        switcher(&app),
+        "without the bar the header offers the switcher"
+    );
+
+    // Every area is reachable from the bar, Knowledge included.
+    // 每个区域都能从活动栏进入，包括知识库。
+    for area in Area::ALL {
+        wide.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        click(
+            &mut app,
+            "activity entry",
+            |t| matches!(t, Target::AreaTab(a) if *a == area),
+        );
+        assert_eq!(app.area, area);
+    }
+
+    // Inside the workbench its entry folds and unfolds the sidebar instead of reopening it.
+    // 在工作台内，工作台条目改为折叠与展开侧栏，而不是重新打开工作台。
+    wide.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    click(&mut app, "workbench entry", |t| {
+        matches!(t, Target::AreaTab(Area::Chat))
+    });
+    assert_eq!(app.area, Area::Chat);
+    let before = app.sidebar;
+    wide.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    click(&mut app, "workbench entry", |t| {
+        matches!(t, Target::AreaTab(Area::Chat))
+    });
+    assert_eq!(app.area, Area::Chat);
+    assert_ne!(app.sidebar, before);
+}

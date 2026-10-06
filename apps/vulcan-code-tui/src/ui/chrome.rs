@@ -67,10 +67,11 @@ pub fn splash(app: &App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// Header: wordmark, area tabs (or the current area with a switcher when narrow), Git branch and
-/// connection state.
-/// 标题栏：字标、区域标签（过窄时显示当前区域与切换按钮）、Git 分支与连接状态。
-pub fn header(app: &App, area: Rect, buf: &mut Buffer) {
+/// Top bar: wordmark, then Git and connection state on the right. `switcher` adds the area switcher
+/// button used when the activity bar has no room; it takes precedence over the right-hand state.
+/// 顶栏：品牌字标，右侧为 Git 与连接状态。`switcher` 为真时加入区域切换按钮，供活动栏放不下时使用；
+/// 其优先级高于右侧状态。
+pub fn header(app: &App, area: Rect, buf: &mut Buffer, switcher: bool) {
     let theme = &app.theme;
     let bg = theme.sidebar;
     buf.set_style(area, Style::new().bg(bg).fg(theme.sidebar_fg));
@@ -113,8 +114,15 @@ pub fn header(app: &App, area: Rect, buf: &mut Buffer) {
     }
     right.push(Span::raw(" "));
     let right_line = Line::from(right);
+    let wordmark = brand::wordmark(theme);
+    let brand_width = wordmark.width() as u16 + 2;
+    // The current area plus a switcher that opens the area picker.
+    // 当前区域加一个打开区域选择器的切换按钮。
+    let switch_text = switcher.then(|| format!(" {} ▾ F2 ", app.area.label()));
+    let switch_width = switch_text.as_deref().map_or(0, |t| width_of(t) as u16 + 1);
     let right_width = right_line.width() as u16;
-    if right_width < area.width {
+    let right_shown = brand_width + 1 + switch_width + right_width <= area.width;
+    if right_shown {
         right_line.render(
             Rect {
                 x: area.right() - right_width,
@@ -125,8 +133,6 @@ pub fn header(app: &App, area: Rect, buf: &mut Buffer) {
         );
     }
 
-    let wordmark = brand::wordmark(theme);
-    let brand_width = wordmark.width() as u16 + 2;
     wordmark.render(
         Rect {
             x: area.x + 1,
@@ -136,56 +142,31 @@ pub fn header(app: &App, area: Rect, buf: &mut Buffer) {
         buf,
     );
 
-    let mut x = area.x + brand_width + 1;
-    let limit = area.right().saturating_sub(right_width + 1);
-    let tabs: Vec<(Area, String)> = Area::ALL
-        .iter()
-        .map(|a| (*a, format!(" {} ", a.label())))
-        .collect();
-    let tabs_width: u16 = tabs.iter().map(|(_, t)| width_of(t) as u16 + 1).sum();
-    if x + tabs_width <= limit {
-        for (tab_area, text) in tabs {
-            let w = width_of(&text) as u16;
-            let style = if tab_area == app.area {
-                Style::new()
-                    .fg(theme.primary_fg)
-                    .bg(theme.primary)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-                    .fg(theme.sidebar_fg)
-                    .bg(mix(theme.accent, bg, 0.5))
-            };
-            let rect = Rect {
-                x,
-                width: w,
-                ..area
-            };
-            buf.set_string(x, area.y, &text, style);
-            app.hits.add(rect, Target::AreaTab(tab_area));
-            x += w + 1;
-        }
+    let Some(text) = switch_text else {
+        return;
+    };
+    let x = area.x + brand_width + 1;
+    let limit = if right_shown {
+        area.right().saturating_sub(right_width + 1)
     } else {
-        // Narrow: the current area plus a switcher that opens the area picker.
-        // 窄屏：当前区域加一个打开区域选择器的切换按钮。
-        let text = format!(" {} ▾ F2 ", app.area.label());
-        let text = truncate(&text, limit.saturating_sub(x) as usize);
-        let w = width_of(&text) as u16;
-        buf.set_string(
+        area.right()
+    };
+    let text = truncate(&text, limit.saturating_sub(x) as usize);
+    let w = width_of(&text) as u16;
+    buf.set_string(
+        x,
+        area.y,
+        &text,
+        Style::new().fg(theme.primary_fg).bg(theme.primary),
+    );
+    app.hits.add(
+        Rect {
             x,
-            area.y,
-            &text,
-            Style::new().fg(theme.primary_fg).bg(theme.primary),
-        );
-        app.hits.add(
-            Rect {
-                x,
-                width: w,
-                ..area
-            },
-            Target::Do(UiAction::OpenAreaPicker),
-        );
-    }
+            width: w,
+            ..area
+        },
+        Target::Do(UiAction::OpenAreaPicker),
+    );
 }
 
 fn focus_hint(app: &App) -> String {
