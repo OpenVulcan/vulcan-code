@@ -15,6 +15,76 @@ mod json_lexer;
 use crate::agent_runtime::tool_request_argument_assembler::ToolCallDraftAssembler;
 use json_lexer::IncrementalJsonLexer;
 
+/// Stable cause for stopping one tool request before host execution begins.
+/// 在宿主执行开始前停止一条工具请求的稳定原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolRequestAbortReason {
+    /// The provider stream ended without a terminal fragment for the request.
+    /// Provider 流结束时该请求没有终结碎片。
+    ProviderStreamCompletedWithoutRequestTerminal,
+    /// A context-compaction policy refresh restarts the request boundary.
+    /// 上下文压缩策略刷新重启请求边界。
+    ContextCompactionPolicyRefreshRequired,
+    /// A provider route switch restarts the request boundary.
+    /// Provider 路由切换重启请求边界。
+    ProviderRouteSwitchRequired,
+    /// Context compaction must run before the request can continue.
+    /// 请求继续前必须先执行上下文压缩。
+    ContextCompactionRequired,
+    /// Repeated tool-argument parse failures exhausted their budget.
+    /// 重复的工具参数解析失败已耗尽预算。
+    ToolArgumentParseFailureExhausted,
+    /// The provider rejected the request for exceeding its context length.
+    /// Provider 因超出上下文长度拒绝请求。
+    ProviderContextLengthExceeded,
+    /// A provider retry replaces the failed physical attempt.
+    /// Provider 重试替换失败的物理尝试。
+    ProviderRetrySuperseded,
+    /// The provider attempt failed without a retry.
+    /// Provider 尝试失败且不重试。
+    ProviderAttemptFailed,
+    /// A new physical request reused the same request-stream identifier.
+    /// 新的物理请求复用了同一请求流标识。
+    RequestStreamSuperseded,
+}
+
+impl ToolRequestAbortReason {
+    /// Returns the stable diagnostic code published with the abort event.
+    /// 返回随中止事件发布的稳定诊断代码。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderStreamCompletedWithoutRequestTerminal => {
+                "provider_stream_completed_without_request_terminal"
+            }
+            Self::ContextCompactionPolicyRefreshRequired => {
+                "context_compaction_policy_refresh_required"
+            }
+            Self::ProviderRouteSwitchRequired => "provider_route_switch_required",
+            Self::ContextCompactionRequired => "context_compaction_required",
+            Self::ToolArgumentParseFailureExhausted => "tool_argument_parse_failure_exhausted",
+            Self::ProviderContextLengthExceeded => "provider_context_length_exceeded",
+            Self::ProviderRetrySuperseded => "provider_retry_superseded",
+            Self::ProviderAttemptFailed => "provider_attempt_failed",
+            Self::RequestStreamSuperseded => "request_stream_superseded",
+        }
+    }
+
+    /// Returns the card state: replacements are `superseded`, every other cause is `stopped`.
+    /// 返回卡片状态：替换为 `superseded`，其余原因均为 `stopped`。
+    fn display_state(self) -> &'static str {
+        match self {
+            Self::ProviderRetrySuperseded | Self::RequestStreamSuperseded => "superseded",
+            Self::ProviderStreamCompletedWithoutRequestTerminal
+            | Self::ContextCompactionPolicyRefreshRequired
+            | Self::ProviderRouteSwitchRequired
+            | Self::ContextCompactionRequired
+            | Self::ToolArgumentParseFailureExhausted
+            | Self::ProviderContextLengthExceeded
+            | Self::ProviderAttemptFailed => "stopped",
+        }
+    }
+}
+
 /// One provider-normalized fragment of a model-side tool request.
 /// 单条由 Provider 规范化后的模型侧工具请求碎片。
 #[derive(Clone, PartialEq, Eq)]
@@ -77,9 +147,9 @@ pub(crate) enum ToolRequestFragment {
         /// Stable request-stream identifier selected by the provider adapter.
         /// Provider 适配器选择的稳定请求流标识。
         request_stream_id: String,
-        /// Stable diagnostic reason that does not contain raw arguments.
-        /// 不包含原始参数的稳定诊断原因。
-        reason: String,
+        /// Stable cause that never carries raw arguments.
+        /// 绝不携带原始参数的稳定原因。
+        reason: ToolRequestAbortReason,
     },
 }
 
@@ -379,7 +449,7 @@ impl ToolRequestStreamCoordinator {
             ToolRequestFragment::Aborted {
                 request_stream_id,
                 reason,
-            } => self.abort_request(&request_stream_id, &reason),
+            } => self.abort_request(&request_stream_id, reason),
         }
     }
 
@@ -408,8 +478,8 @@ impl ToolRequestStreamCoordinator {
                 RuntimeEventKind::ToolRequestAborted,
                 &request_stream_id,
                 &previous_draft,
-                "superseded",
-                Some("request_stream_superseded"),
+                ToolRequestAbortReason::RequestStreamSuperseded.display_state(),
+                Some(ToolRequestAbortReason::RequestStreamSuperseded.as_str()),
                 None,
                 None,
             ));
@@ -865,7 +935,11 @@ impl ToolRequestStreamCoordinator {
 
     /// Aborts one active request without exposing its accumulated argument content.
     /// 在不暴露累计参数内容的前提下中止一条活动请求。
-    fn abort_request(&mut self, request_stream_id: &str, reason: &str) -> Vec<RuntimeEvent> {
+    fn abort_request(
+        &mut self,
+        request_stream_id: &str,
+        reason: ToolRequestAbortReason,
+    ) -> Vec<RuntimeEvent> {
         // draft is removed so temporary request state is released immediately.
         // draft 被移除，以便立即释放临时请求状态。
         let Some(mut draft) = self.drafts.remove(request_stream_id) else {
@@ -873,19 +947,12 @@ impl ToolRequestStreamCoordinator {
         };
         abort_draft_parser(&mut draft);
         draft.revision = draft.revision.saturating_add(1);
-        // displayState distinguishes retry replacement from ordinary cancellation without exposing provider content.
-        // displayState 在不暴露 Provider 内容的前提下区分重试替换与普通取消。
-        let display_state = if reason.contains("superseded") {
-            "superseded"
-        } else {
-            "stopped"
-        };
         vec![self.runtime_event_for_draft(
             RuntimeEventKind::ToolRequestAborted,
             request_stream_id,
             &draft,
-            display_state,
-            Some(reason),
+            reason.display_state(),
+            Some(reason.as_str()),
             None,
             None,
         )]
@@ -2144,7 +2211,7 @@ mod tests {
         });
         let events = coordinator.apply(ToolRequestFragment::Aborted {
             request_stream_id: String::from("stream-retry"),
-            reason: String::from("provider_retry_superseded"),
+            reason: ToolRequestAbortReason::ProviderRetrySuperseded,
         });
         let aborted = events
             .iter()

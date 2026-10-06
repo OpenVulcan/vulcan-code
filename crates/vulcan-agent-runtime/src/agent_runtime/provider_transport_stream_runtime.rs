@@ -23,7 +23,7 @@ use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRunti
 use crate::agent_runtime::provider_transport_vulcan::OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY;
 use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
-use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
+use crate::agent_runtime::tool_request_stream::{ToolRequestAbortReason, ToolRequestFragment};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
 use async_stream::stream;
@@ -415,7 +415,7 @@ where
                         abort_active_tool_request_streams(
                             &task_sender,
                             &mut active_tool_request_streams,
-                            "provider_stream_completed_without_request_terminal",
+                            ToolRequestAbortReason::ProviderStreamCompletedWithoutRequestTerminal,
                         );
                         let last_successful_provider_usage =
                             controller.last_successful_provider_usage().cloned();
@@ -438,7 +438,7 @@ where
                             abort_active_tool_request_streams(
                                 &task_sender,
                                 &mut active_tool_request_streams,
-                                "context_compaction_policy_refresh_required",
+                                ToolRequestAbortReason::ContextCompactionPolicyRefreshRequired,
                             );
                             let last_successful_provider_usage =
                                 controller.last_successful_provider_usage().cloned();
@@ -471,7 +471,7 @@ where
                             abort_active_tool_request_streams(
                                 &task_sender,
                                 &mut active_tool_request_streams,
-                                "provider_route_switch_required",
+                                ToolRequestAbortReason::ProviderRouteSwitchRequired,
                             );
                             let last_successful_provider_usage =
                                 controller.last_successful_provider_usage().cloned();
@@ -502,7 +502,7 @@ where
                             abort_active_tool_request_streams(
                                 &task_sender,
                                 &mut active_tool_request_streams,
-                                "context_compaction_required",
+                                ToolRequestAbortReason::ContextCompactionRequired,
                             );
                             let last_successful_provider_usage =
                                 controller.last_successful_provider_usage().cloned();
@@ -556,7 +556,7 @@ where
                             abort_active_tool_request_streams(
                                 &task_sender,
                                 &mut active_tool_request_streams,
-                                "tool_argument_parse_failure_exhausted",
+                                ToolRequestAbortReason::ToolArgumentParseFailureExhausted,
                             );
                             let last_successful_provider_usage =
                                 controller.last_successful_provider_usage().cloned();
@@ -605,7 +605,7 @@ where
                             abort_active_tool_request_streams(
                                 &task_sender,
                                 &mut active_tool_request_streams,
-                                "provider_context_length_exceeded",
+                                ToolRequestAbortReason::ProviderContextLengthExceeded,
                             );
                             let last_successful_provider_usage =
                                 controller.last_successful_provider_usage().cloned();
@@ -673,9 +673,9 @@ where
                             &task_sender,
                             &mut active_tool_request_streams,
                             if retry_decision.is_some() {
-                                "provider_retry_superseded"
+                                ToolRequestAbortReason::ProviderRetrySuperseded
                             } else {
-                                "provider_attempt_failed"
+                                ToolRequestAbortReason::ProviderAttemptFailed
                             },
                         );
                         if let Some(decision) = retry_decision {
@@ -1073,8 +1073,8 @@ fn observe_active_tool_request_streams(
 /// `sender` 是运行时投影所观察的外层流通道。
 /// `active_request_streams` owns the sorted request identifiers requiring cleanup.
 /// `active_request_streams` 持有需要清理的已排序请求标识。
-/// `reason` is a stable non-content diagnostic reason.
-/// `reason` 是不含正文的稳定诊断原因。
+/// `reason` is the stable cause published with every abort fragment.
+/// `reason` 是随每条中止碎片发布的稳定原因。
 ///
 /// # Returns
 /// 返回值
@@ -1083,13 +1083,13 @@ fn observe_active_tool_request_streams(
 fn abort_active_tool_request_streams(
     sender: &ProviderLiveDeltaSender,
     active_request_streams: &mut BTreeSet<String>,
-    reason: &str,
+    reason: ToolRequestAbortReason,
 ) {
     for request_stream_id in std::mem::take(active_request_streams) {
         let _ = sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
             ToolRequestFragment::Aborted {
                 request_stream_id,
-                reason: reason.to_string(),
+                reason,
             },
         )));
     }
