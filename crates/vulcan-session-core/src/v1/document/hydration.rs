@@ -184,7 +184,7 @@ impl SessionDocument {
             let mut started_count = 0usize;
             let mut last_provider_index: Option<usize> = None;
             let mut provider_source_index: Option<usize> = None;
-            for (index, rank) in entries {
+            for &(index, rank) in &entries {
                 if let Some(before) = previous_rank
                     && rank < before
                 {
@@ -264,9 +264,10 @@ impl SessionDocument {
                     value: api_id,
                 });
             }
-            let started_event = self
-                .events
-                .iter()
+            // Every lookup below stays inside this group's own indexed events, never the whole stream.
+            // 以下查找只在本组已索引的事件内进行，绝不扫描整个事件流。
+            let group_events = || entries.iter().map(|&(index, _)| &self.events[index]);
+            let started_event = group_events()
                 .find(|event| {
                     matches!(
                         &event.event,
@@ -291,7 +292,7 @@ impl SessionDocument {
                     field: "segment_generation",
                 });
             }
-            if let Some(stats) = self.events.iter().find_map(|event| match &event.event {
+            if let Some(stats) = group_events().find_map(|event| match &event.event {
                 EventBody::ApiStats(stats) if stats.api_call_id.value() == api_id => Some(stats),
                 _ => None,
             }) {
@@ -322,11 +323,7 @@ impl SessionDocument {
                     &stats.temperature,
                 )?;
             }
-            for source in self.events.iter().filter_map(|event| {
-                (group_event_api_id(event) == Some(api_id))
-                    .then(|| provider_source_of(event))
-                    .flatten()
-            }) {
+            for source in group_events().filter_map(provider_source_of) {
                 ensure_api_request_field(
                     "provider_source.provider",
                     &started.request.provider,
@@ -349,9 +346,7 @@ impl SessionDocument {
                 )?;
             }
             if stats_rank == usize::MAX {
-                let has_source = self.events.iter().any(|event| {
-                    group_event_api_id(event) == Some(api_id) && provider_source_of(event).is_some()
-                });
+                let has_source = group_events().any(|event| provider_source_of(event).is_some());
                 last_open_api = Some((api_id, has_source));
             }
         }
