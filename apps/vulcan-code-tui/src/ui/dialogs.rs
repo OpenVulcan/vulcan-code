@@ -165,7 +165,7 @@ pub fn render_prompt(app: &App, dialog: &mut PromptDialog, area: Rect, buf: &mut
     let theme = &app.theme;
     // Modal width leaves the shared close control inside the frame.
     // 模态宽度使共享关闭控件保留在边框内。
-    let width = 64u16.min(area.width.saturating_sub(2));
+    let width = super::overlays::content_modal_width(area, 64);
     // Instructions wrap independently from editable text.
     // 说明与可编辑文本分别换行。
     let description = if dialog.description.is_empty() {
@@ -330,7 +330,7 @@ pub fn render_folder(app: &App, picker: &mut FolderPicker, area: Rect, buf: &mut
         FolderMode::Plugin => tr!("tui.plugins.installLocal"),
     };
     let height = area.height.saturating_sub(4).clamp(10, 26);
-    let rect = centered(area, 84, height);
+    let rect = centered(area, super::overlays::content_modal_width(area, 84), height);
     let footer = if picker.typing.is_some() {
         "Enter · Esc".to_string()
     } else {
@@ -602,7 +602,7 @@ pub fn render_folder(app: &App, picker: &mut FolderPicker, area: Rect, buf: &mut
 /// 详情面板：对齐的字段表、带标题的文本段落与一排操作按钮。
 pub fn render_detail(app: &App, sheet: &mut DetailSheet, area: Rect, buf: &mut Buffer) {
     let theme = &app.theme;
-    let width = 76u16.min(area.width.saturating_sub(2));
+    let width = super::overlays::content_modal_width(area, 76);
     let text_width = width.saturating_sub(6) as usize;
     let label_width = sheet
         .fields

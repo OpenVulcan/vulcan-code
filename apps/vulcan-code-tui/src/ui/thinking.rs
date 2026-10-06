@@ -73,7 +73,9 @@ pub fn float_area(transcript: Rect) -> Option<Rect> {
     if transcript.width < 40 || transcript.height < 10 {
         return None;
     }
-    let width = (transcript.width * 11 / 20).clamp(36, 72);
+    // The box takes a little over half the transcript, so it never covers the reply it floats beside.
+    // 浮动框占会话记录略多于一半的宽度，不会遮住其旁边的回复。
+    let width = (transcript.width * 11 / 20).max(36);
     Some(Rect {
         x: transcript.right() - width - 1,
         y: transcript.y,

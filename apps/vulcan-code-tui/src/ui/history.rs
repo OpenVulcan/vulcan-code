@@ -35,7 +35,7 @@ fn kind_icon(theme: &Theme, kind: EntryKind) -> (&'static str, Style) {
 }
 
 fn big_rect(area: Rect) -> Rect {
-    let width = area.width.saturating_sub(8).min(110);
+    let width = area.width.saturating_sub(8);
     Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + 1,

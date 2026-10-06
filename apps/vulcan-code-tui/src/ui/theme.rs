@@ -158,6 +158,49 @@ impl Theme {
     pub fn selection_bg(&self) -> Color {
         mix(self.primary, self.bg, 0.16)
     }
+
+    /// Surface of chips, plain buttons and switch tracks: the WebUI input token, so a control stays
+    /// visible on the page, the sidebar and a selected row alike.
+    /// 按钮片、普通按钮与开关轨道的底色：取 WebUI 输入框令牌，使控件在页面、侧栏与选中行上都清晰可见。
+    pub fn control_bg(&self) -> Color {
+        mix(self.input, self.bg, 0.75)
+    }
+
+    /// Switch drawn as a track with a knob; both states have the same width so rows never shift.
+    /// 以轨道加滑块绘制的开关；两种状态宽度相同，行内容不会跳动。
+    /// `on` is the current state and `labels` the localized on/off words; returns the switch spans.
+    /// `on` 为当前状态，`labels` 为本地化的开/关文字；返回开关片段。
+    pub fn switch(&self, on: bool, labels: (&str, &str)) -> Vec<ratatui::text::Span<'static>> {
+        use ratatui::text::Span;
+        let (on_label, off_label) = labels;
+        let width = crate::ui::text::width_of(on_label).max(crate::ui::text::width_of(off_label));
+        let pad = |label: &str| {
+            format!(
+                " {label}{}",
+                " ".repeat(width - crate::ui::text::width_of(label))
+            )
+        };
+        if on {
+            vec![
+                Span::styled(
+                    " ━━● ",
+                    Style::new()
+                        .fg(self.primary_fg)
+                        .bg(self.success)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    pad(on_label),
+                    Style::new().fg(self.success).add_modifier(Modifier::BOLD),
+                ),
+            ]
+        } else {
+            vec![
+                Span::styled(" ●━━ ", Style::new().fg(self.fg).bg(self.control_bg())),
+                Span::styled(pad(off_label), Style::new().fg(self.fg)),
+            ]
+        }
+    }
 }
 
 /// Linear blend `a * t + b * (1 - t)` for RGB colors; non-RGB colors return `a`.

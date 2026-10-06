@@ -418,7 +418,11 @@ fn snapshot(app: &mut App, name: &str) {
     let Ok(dir) = std::env::var("VULCAN_TUI_SNAPSHOT_DIR") else {
         return;
     };
-    for (size, width, height) in [("wide", 160, 45), ("narrow", 64, 20)] {
+    for (size, width, height) in [
+        ("ultrawide", 240, 50),
+        ("wide", 160, 45),
+        ("narrow", 64, 20),
+    ] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let frame = terminal.draw(|frame| ui::draw(frame, app)).unwrap();
         let text: Vec<String> = (0..height)

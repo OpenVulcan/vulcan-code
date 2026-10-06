@@ -232,7 +232,7 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
     // Right side, laid out from the right edge; items that do not fit are dropped from the left.
     // 右侧从右边缘向左排布；放不下的项从左侧开始省略。
     let model = app.model().map(|m| m.label.clone()).unwrap_or_default();
-    let chip = Style::new().fg(theme.fg).bg(mix(theme.accent, bg, 0.9));
+    let chip = Style::new().fg(theme.fg).bg(theme.control_bg());
     let mut right: Vec<(String, Style, UiAction)> = vec![
         (
             format!("{} ▾", truncate(&model, 28)),

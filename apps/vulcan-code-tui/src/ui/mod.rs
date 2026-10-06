@@ -50,9 +50,23 @@ use crate::backend::ConnectionState;
 use crate::model::ReasoningEffort;
 use crate::tr;
 
+/// Narrowest sidebar and session panel; both grow on wide terminals so titles and paths fit.
+/// 侧栏与会话面板的最小宽度；两者在宽终端上增宽，使标题与路径完整显示。
 const SIDEBAR_WIDTH: u16 = 30;
 const PANEL_WIDTH: u16 = 46;
 const CENTER_MIN_WIDTH: u16 = 60;
+
+/// Sidebar width for a body `width`: a seventh of it, never below [`SIDEBAR_WIDTH`].
+/// 主体宽度为 `width` 时的侧栏宽度：取七分之一，不低于 [`SIDEBAR_WIDTH`]。
+fn sidebar_width(width: u16) -> u16 {
+    SIDEBAR_WIDTH.max(width / 7)
+}
+
+/// Session panel width for a body `width`: a quarter of it, never below [`PANEL_WIDTH`].
+/// 主体宽度为 `width` 时的会话面板宽度：取四分之一，不低于 [`PANEL_WIDTH`]。
+fn panel_width(width: u16) -> u16 {
+    PANEL_WIDTH.max(width / 4)
+}
 
 pub fn effort_label(effort: ReasoningEffort) -> String {
     match effort {
@@ -91,13 +105,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The project and conversation list belongs to the workbench; system areas show only their
     // own navigation.
     // 项目与会话列表只属于工作台；系统区域只显示自身的导航。
+    let sidebar_width = sidebar_width(body.width);
+    let panel_width = panel_width(body.width);
     let sidebar_inline = in_chat
         && app.sidebar == SidebarMode::Expanded
-        && body.width >= CENTER_MIN_WIDTH + SIDEBAR_WIDTH;
+        && body.width >= CENTER_MIN_WIDTH + sidebar_width;
     let rail_inline =
         in_chat && !sidebar_inline && body.width >= CENTER_MIN_WIDTH + sidebar::RAIL_WIDTH;
     let used = if sidebar_inline {
-        SIDEBAR_WIDTH
+        sidebar_width
     } else if rail_inline {
         sidebar::RAIL_WIDTH
     } else {
@@ -106,11 +122,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The session panel belongs to the workbench as well.
     // 会话面板同样只属于工作台。
     let panel_inline =
-        in_chat && app.panel_visible && body.width >= CENTER_MIN_WIDTH + PANEL_WIDTH + used;
+        in_chat && app.panel_visible && body.width >= CENTER_MIN_WIDTH + panel_width + used;
     let [sidebar_area, center, panel_area] = Layout::horizontal([
         Constraint::Length(used),
         Constraint::Fill(1),
-        Constraint::Length(if panel_inline { PANEL_WIDTH } else { 0 }),
+        Constraint::Length(if panel_inline { panel_width } else { 0 }),
     ])
     .areas(body);
 
@@ -133,14 +149,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // 窄终端的抽屉。
     if in_chat && !sidebar_inline && app.focus == Focus::Sidebar {
         let drawer = Rect {
-            width: SIDEBAR_WIDTH.min(body.width),
+            width: sidebar_width.min(body.width),
             ..body
         };
         text::clear_area(drawer, buf);
         sidebar::render(app, drawer, buf);
     }
     if in_chat && !panel_inline && app.panel_visible && app.focus == Focus::Panel {
-        let width = PANEL_WIDTH.min(body.width);
+        let width = panel_width.min(body.width);
         let drawer = Rect {
             x: body.right() - width,
             width,

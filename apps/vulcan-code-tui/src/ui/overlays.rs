@@ -63,6 +63,17 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.overlay = Some(overlay);
 }
 
+/// Width of a modal that lists or edits content: its preferred width, growing to half of a wide
+/// terminal so long names and values are not cut.
+/// 列出或编辑内容的模态宽度：取其首选宽度，并在宽终端上增长到一半，避免长名称与值被截断。
+/// `area` is the screen and `preferred` the width on a normal terminal; returns the width.
+/// `area` 为屏幕，`preferred` 为常规终端上的宽度；返回宽度。
+pub(super) fn content_modal_width(area: Rect, preferred: u16) -> u16 {
+    preferred
+        .max(area.width / 2)
+        .min(area.width.saturating_sub(2))
+}
+
 pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));
     let height = height.min(area.height.saturating_sub(2));
@@ -147,7 +158,7 @@ fn render_picker(app: &App, picker: &mut Picker, area: Rect, buf: &mut Buffer) {
     let theme = &app.theme;
     let visible_len = picker.visible().len();
     let rows = (visible_len.max(1) as u16).min(16);
-    let rect = centered(area, 72, rows + 4);
+    let rect = centered(area, content_modal_width(area, 72), rows + 4);
     let inner = modal(
         app,
         rect,

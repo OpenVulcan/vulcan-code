@@ -22,17 +22,17 @@ use crate::app::pages::{self, Row, RowKind, Tone};
 use crate::app::{App, Focus};
 use crate::tr;
 
-/// Width of the navigation column.
-/// 导航列宽度。
-const NAV_WIDTH: u16 = 28;
-/// Page content never grows wider than this, for readability on wide terminals.
-/// 页面内容最宽不超过此值，以便在宽终端上阅读。
-const MAX_CONTENT: u16 = 100;
+/// Narrowest navigation column; it grows to fit its entries up to a third of the area.
+/// 导航列最小宽度；随条目增宽，最多占区域的三分之一。
+const NAV_MIN_WIDTH: u16 = 20;
+/// Narrowest label column of a page; it grows to fit the page's labels.
+/// 页面标签列最小宽度；随页面标签增宽。
+const LABEL_MIN_WIDTH: usize = 12;
 
 pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     let theme = app.theme;
     buf.set_style(area, theme.base());
-    let nav_width = NAV_WIDTH.min(area.width / 3);
+    let nav_width = nav_width(app, area.width);
     let nav = Rect {
         width: nav_width,
         ..area
@@ -55,6 +55,35 @@ fn tone_color(theme: &Theme, tone: Tone) -> Color {
         Tone::Bad => theme.danger,
         Tone::Accent => theme.primary,
     }
+}
+
+/// Fits the navigation column to its longest entry, so labels are not cut on wide terminals.
+/// 使导航列适配最长条目，宽终端上标签不再被截断。
+/// `total` is the area width; returns the column width including its border.
+/// `total` 为区域宽度；返回含边框的列宽。
+fn nav_width(app: &App, total: u16) -> u16 {
+    // Marker, padding, badge gap and border around each label.
+    // 每个标签周围的标记、留白、徽标间隔与边框。
+    const CHROME: usize = 6;
+    let widest = pages::navigation(app)
+        .iter()
+        .flat_map(|(group, entries)| {
+            let group = group.as_deref().map_or(0, width_of);
+            entries
+                .iter()
+                .map(move |entry| {
+                    width_of(&entry.label)
+                        + entry
+                            .badge
+                            .as_ref()
+                            .map_or(0, |(text, _)| width_of(text) + 1)
+                })
+                .chain(std::iter::once(group))
+        })
+        .max()
+        .unwrap_or(0);
+    let wanted = (widest + CHROME).max(width_of(&app.area.label()) + CHROME) as u16;
+    wanted.max(NAV_MIN_WIDTH).min(total / 3)
 }
 
 fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
@@ -184,7 +213,7 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
     let Some(page) = app.current_page() else {
         return;
     };
-    let content_width = area.width.saturating_sub(4).min(MAX_CONTENT);
+    let content_width = area.width.saturating_sub(4);
     let content = Rect {
         x: area.x + 2,
         y: area.y,
@@ -241,10 +270,21 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
     {
         state.cursor = first;
     }
+    let label_width = label_width(&rows, list.width as usize);
     let laid: Vec<Laid> = rows
         .iter()
         .enumerate()
-        .map(|(i, row)| lay_out(&theme, row, i, &state, list.width as usize, i == 0))
+        .map(|(i, row)| {
+            lay_out(
+                &theme,
+                row,
+                i,
+                &state,
+                list.width as usize,
+                label_width,
+                i == 0,
+            )
+        })
         .collect();
     let tops: Vec<usize> = laid
         .iter()
@@ -425,17 +465,42 @@ fn padded(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(pad))
 }
 
+/// Aligns every labelled value of a page in one column sized to its longest label, leaving at
+/// least three fifths of the width to the values.
+/// 将页面所有带标签的值对齐到同一列，列宽取最长标签，并至少为值保留五分之三的宽度。
+/// `rows` are the page rows and `width` the content width; returns the label column width.
+/// `rows` 为页面行，`width` 为内容宽度；返回标签列宽度。
+fn label_width(rows: &[Row], width: usize) -> usize {
+    let widest = rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.kind,
+                RowKind::Info { .. }
+                    | RowKind::Toggle { .. }
+                    | RowKind::Choice { .. }
+                    | RowKind::Number { .. }
+                    | RowKind::Text { .. }
+                    | RowKind::Meter { .. }
+            )
+        })
+        .map(|row| width_of(&row.label) + 3)
+        .max()
+        .unwrap_or(0);
+    widest.max(LABEL_MIN_WIDTH).min(width * 2 / 5)
+}
+
 fn lay_out(
     theme: &Theme,
     row: &Row,
     index: usize,
     state: &pages::PageState,
     width: usize,
+    label_width: usize,
     first: bool,
 ) -> Laid {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut chips = Vec::new();
-    let label_width = (width * 2 / 5).clamp(16, 40);
     let value_width = width.saturating_sub(label_width + 1);
     let muted = theme.muted_text();
     let detail_lines = |lines: &mut Vec<Line<'static>>| {
@@ -500,25 +565,7 @@ fn lay_out(
             lines.extend(super::text::wrap_verbatim(content, width, theme.base()));
         }
         RowKind::Toggle { on, .. } => {
-            let switch = if *on {
-                vec![
-                    Span::styled(" ━━", Style::new().fg(theme.success)),
-                    Span::styled(
-                        "●",
-                        Style::new().fg(theme.success).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(" {}", tr!("tui.page.on")),
-                        Style::new().fg(theme.success),
-                    ),
-                ]
-            } else {
-                vec![
-                    Span::styled(" ○", muted),
-                    Span::styled("━━", Style::new().fg(mix(theme.muted_fg, theme.bg, 0.5))),
-                    Span::styled(format!(" {}", tr!("tui.page.off")), muted),
-                ]
-            };
+            let switch = theme.switch(*on, (&tr!("tui.page.on"), &tr!("tui.page.off")));
             lines.push(labeled(theme, &row.label, label_width, switch));
             detail_lines(&mut lines);
         }
@@ -610,9 +657,7 @@ fn lay_out(
                     .fg(theme.primary_fg)
                     .bg(theme.danger)
                     .add_modifier(Modifier::BOLD),
-                _ => Style::new()
-                    .fg(theme.fg)
-                    .bg(mix(theme.accent, theme.bg, 0.8)),
+                _ => Style::new().fg(theme.fg).bg(theme.control_bg()),
             };
             lines.push(Line::from(Span::styled(
                 format!(" {} ", truncate(&row.label, width.saturating_sub(2))),
@@ -752,7 +797,7 @@ fn lay_out(
                             })
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::new().fg(color).bg(mix(theme.accent, theme.bg, 0.85))
+                        Style::new().fg(color).bg(theme.control_bg())
                     };
                     spans.push(Span::styled(text, style));
                     spans.push(Span::raw(" "));

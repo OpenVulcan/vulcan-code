@@ -418,7 +418,7 @@ pub fn button_style(app: &App, kind: ButtonKind, bg: Color) -> Style {
             .fg(theme.primary_fg)
             .bg(theme.primary)
             .add_modifier(Modifier::BOLD),
-        ButtonKind::Normal => Style::new().fg(theme.fg).bg(mix(theme.accent, bg, 0.9)),
+        ButtonKind::Normal => Style::new().fg(theme.fg).bg(theme.control_bg()),
         ButtonKind::Danger => Style::new()
             .fg(theme.primary_fg)
             .bg(theme.danger)
