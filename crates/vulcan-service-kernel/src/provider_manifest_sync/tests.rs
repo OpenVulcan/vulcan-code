@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Builds one valid per-provider sync state for conditional-Index tests.
