@@ -156,21 +156,34 @@ fn formal_ui_caller_executor_loss_keeps_initialization_and_business_running() {
         // 跨中断及清理保留原实例身份。
         let original = owner.ui_actions.lock().expect("UI registry")["hook-plugin"].clone();
         drop(runtime);
-        // Supervision belongs to the manager, so the blocked callback is still executing.
-        // 监督属于管理器，因此被阻塞的回调仍在执行。
-        let status = fixture
-            .manager
-            .action_status("hook-plugin", &incarnation, &identity, false)
-            .expect("owned status");
-        assert!(!status.terminal);
-        assert_eq!(
-            status.phase,
-            if initialization {
-                "initializing"
-            } else {
-                "executing"
+        // Supervision belongs to the manager, so the blocked callback keeps running. Dropping the
+        // caller also drops its waiter: a read that never started records cancellation and then
+        // waits for its initialization, while started business stays executing. The supervisor
+        // records that cancellation asynchronously, so wait for the settled phase.
+        // 监督属于管理器，因此被阻塞的回调继续运行。丢弃调用方也会丢弃其等待者：尚未开始的读取
+        // 记录取消后等待其初始化，已开始的业务保持执行中。监督器异步记录该取消，因此等待阶段稳定。
+        let settled = if initialization {
+            "cleanup_wait"
+        } else {
+            "executing"
+        };
+        let expires = Instant::now() + WAIT;
+        loop {
+            let status = fixture
+                .manager
+                .action_status("hook-plugin", &incarnation, &identity, false)
+                .expect("owned status");
+            assert!(!status.terminal, "phase {}", status.phase);
+            if status.phase == settled {
+                break;
             }
-        );
+            assert!(
+                Instant::now() < expires,
+                "action never settled in {settled}; last phase {}",
+                status.phase
+            );
+            std::thread::sleep(OBSERVATION_INTERVAL);
+        }
         assert!(fixture.manager.admit_action("hook-plugin", 1).is_err());
         if !initialization {
             assert!(original.operation_gate.try_lock().is_err());
