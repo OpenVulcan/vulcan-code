@@ -148,7 +148,34 @@ impl Drop for PinnedObservation {
 
 /// A monitor guard records executor interruption even if its task never starts polling.
 /// 即使任务从未开始轮询，监控守卫也会记录执行器中断。
-struct PinnedMonitorGuard(Arc<PinnedSession>);
+/// `released` is set once the task ended supervision itself, so dropping never clobbers a successor monitor.
+/// 任务自行结束监督后设置 `released`，使丢弃绝不覆盖后继监控。
+struct PinnedMonitorGuard {
+    session: Arc<PinnedSession>,
+    released: bool,
+}
+
+impl PinnedMonitorGuard {
+    /// Guard `session`'s supervision until the task ends it or is dropped.
+    /// 守卫 `session` 的监督，直至任务结束监督或被丢弃。
+    fn new(session: Arc<PinnedSession>) -> Self {
+        Self {
+            session,
+            released: false,
+        }
+    }
+
+    /// End supervision and publish `error` in one lock scope, so an observer woken by the error
+    /// already sees the session as needing cleanup recovery.
+    /// 在同一锁作用域内结束监督并发布 `error`，使被错误唤醒的观测者已看到会话需要清理恢复。
+    fn fail(&mut self, error: String) {
+        if let Ok(mut state) = self.session.lock() {
+            state.monitored = false;
+            state.cleanup_error = Some(error);
+            self.released = true;
+        }
+    }
+}
 
 /// Queued preparation owns its checkpoint even if the executor drops the closure before execution.
 /// 即使执行器在执行前丢弃闭包，排队准备也拥有其检查点。
@@ -174,7 +201,9 @@ impl Drop for PinnedMonitorGuard {
     /// Release only supervision ownership; the original core resources remain retained.
     /// 仅释放监督所有权；原核心资源继续保留。
     fn drop(&mut self) {
-        if let Ok(mut state) = self.0.lock() {
+        if !self.released
+            && let Ok(mut state) = self.session.lock()
+        {
             state.monitored = false;
         }
     }

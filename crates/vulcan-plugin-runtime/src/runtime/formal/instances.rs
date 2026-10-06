@@ -200,13 +200,42 @@ impl Drop for PersistentPreparation {
 
 /// Dropping supervision never releases core resources.
 /// 丢弃监督绝不释放核心资源。
-struct PersistentMonitor(Arc<PersistentRuntime>);
+/// `released` is set once the task ended supervision itself, so dropping never clobbers a successor monitor.
+/// 任务自行结束监督后设置 `released`，使丢弃绝不覆盖后继监控。
+struct PersistentMonitor {
+    runtime: Arc<PersistentRuntime>,
+    released: bool,
+}
+
+impl PersistentMonitor {
+    /// Guard `runtime`'s supervision until the task ends it or is dropped.
+    /// 守卫 `runtime` 的监督，直至任务结束监督或被丢弃。
+    fn new(runtime: Arc<PersistentRuntime>) -> Self {
+        Self {
+            runtime,
+            released: false,
+        }
+    }
+
+    /// End supervision and publish `error` in one lock scope, so an observer woken by the error
+    /// already sees the instance as needing cleanup recovery.
+    /// 在同一锁作用域内结束监督并发布 `error`，使被错误唤醒的观测者已看到实例需要清理恢复。
+    fn fail(&mut self, error: String) {
+        if let Ok(mut state) = self.runtime.lock() {
+            state.monitored = false;
+            state.cleanup_error = Some(error);
+            self.released = true;
+        }
+    }
+}
 
 impl Drop for PersistentMonitor {
     /// Preserve interrupted cleanup for the next explicit drain.
     /// 为下一次显式排空保留中断清理。
     fn drop(&mut self) {
-        if let Ok(mut state) = self.0.lock() {
+        if !self.released
+            && let Ok(mut state) = self.runtime.lock()
+        {
             state.monitored = false;
         }
     }

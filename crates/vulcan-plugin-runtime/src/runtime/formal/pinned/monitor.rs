@@ -25,9 +25,9 @@ impl VulcanPluginRuntimeManager {
         let weak = Arc::downgrade(&self.state);
         let owner = Arc::clone(owner);
         let session = Arc::clone(session);
-        let guard = PinnedMonitorGuard(Arc::clone(&session));
+        let guard = PinnedMonitorGuard::new(Arc::clone(&session));
         executor.spawn(async move {
-            let _guard = guard;
+            let mut guard = guard;
             loop {
                 let done = {
                     let Some(state) = weak.upgrade() else {
@@ -44,9 +44,7 @@ impl VulcanPluginRuntimeManager {
                     match progress {
                         Ok(done) => done,
                         Err(error) => {
-                            if let Ok(mut state) = session.lock() {
-                                state.cleanup_error = Some(error.to_string());
-                            }
+                            guard.fail(error.to_string());
                             let _ = manager.record_cleanup_failure(
                                 &session.plugin.id,
                                 with_session(error, &session.id).to_string(),

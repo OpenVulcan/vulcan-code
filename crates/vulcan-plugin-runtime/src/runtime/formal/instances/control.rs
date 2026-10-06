@@ -84,11 +84,11 @@ impl VulcanPluginRuntimeManager {
         let runtime = Arc::clone(runtime);
         // Preserve supervision interruption evidence if this task is dropped.
         // 此任务被丢弃时保留监督中断证据。
-        let monitor = PersistentMonitor(Arc::clone(&runtime));
+        let monitor = PersistentMonitor::new(Arc::clone(&runtime));
         executor.spawn(async move {
             // Keep the supervision guard alive for exactly this monitoring task.
             // 仅在此监控任务期间保持监督守卫存活。
-            let _monitor = monitor;
+            let mut monitor = monitor;
             loop {
                 // Release strong manager ownership before the next asynchronous wait.
                 // 在下一次异步等待之前释放管理器强所有权。
@@ -103,9 +103,7 @@ impl VulcanPluginRuntimeManager {
                     match manager.advance_instance(&owner, &runtime) {
                         Ok(done) => done,
                         Err(error) => {
-                            if let Ok(mut state) = runtime.lock() {
-                                state.cleanup_error = Some(error.to_string());
-                            }
+                            monitor.fail(error.to_string());
                             let _ = manager
                                 .record_cleanup_failure(&runtime.plugin.id, error.to_string());
                             return;
