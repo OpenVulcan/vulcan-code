@@ -113,10 +113,10 @@ fn collect_arrays<'a>(value: &'a Value, key: &str, collected: &mut Vec<&'a Vec<V
         }
         Value::Object(map) => {
             for (name, item) in map {
-                if name == key {
-                    if let Some(items) = item.as_array() {
-                        collected.push(items);
-                    }
+                if name == key
+                    && let Some(items) = item.as_array()
+                {
+                    collected.push(items);
                 }
                 collect_arrays(item, key, collected);
             }

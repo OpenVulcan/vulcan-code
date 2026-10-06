@@ -714,7 +714,7 @@ fn golden_compactions_document() {
 /// 锁定来源使用 snake_case 种类序列化。
 #[test]
 fn golden_locked_source_kinds() {
-    let sources = vec![
+    let sources = [
         LockedSource {
             node_id: "memory-profile".to_string(),
             order: 0,

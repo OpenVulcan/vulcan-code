@@ -498,6 +498,7 @@ impl ProviderExecutionClient {
 
     /// Submits one exact planned remote Batch task using a previously durable file when required.
     /// 使用需要时已持久化的文件提交一个精确规划的远端 Batch 任务。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn submit_embedding_batch(
         &self,
         route: &ProviderExecutionRoute,

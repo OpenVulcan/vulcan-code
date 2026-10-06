@@ -2092,7 +2092,7 @@ async fn reconcile_canonical_collaboration_outbox(
     // Repair task intents independently of the question transaction stream.
     // 独立于问题事务流修复任务意图。
     let (mut repaired, mut failures) =
-        match task_delivery::reconcile_task_message_outbox(app, &invocation).await {
+        match task_delivery::reconcile_task_message_outbox(app, invocation).await {
             Ok(count) => (count, Vec::new()),
             Err(error) => (0, vec![error]),
         };
@@ -2104,7 +2104,7 @@ async fn reconcile_canonical_collaboration_outbox(
                 continue;
             }
         };
-        let (_, target) = match resolve_question_target(&invocation, &question).await {
+        let (_, target) = match resolve_question_target(invocation, &question).await {
             Ok(value) => value,
             Err(error) => {
                 failures.push(format!(
@@ -2133,7 +2133,7 @@ async fn reconcile_canonical_collaboration_outbox(
             // A source settlement can win while the process is between source commit and target
             // acceptance; replay acceptance before recording the target terminal settlement.
             // 来源结算可能发生在源提交与目标接纳之间；先重放接纳，再记录目标终态结算。
-            match recover_target_acceptance(&invocation, &question).await {
+            match recover_target_acceptance(invocation, &question).await {
                 Ok(_receipt) => {
                     repaired = repaired.saturating_add(1);
                     read_target_inbound_delivery(&target.handle, &delivery.delivery_id).map_err(
@@ -2147,7 +2147,7 @@ async fn reconcile_canonical_collaboration_outbox(
                 }
                 Err(error) => {
                     match fail_question_before_target_acceptance(
-                        &invocation,
+                        invocation,
                         &target,
                         target_session_id,
                         &question.question_id,
@@ -2209,7 +2209,7 @@ async fn reconcile_canonical_collaboration_outbox(
                     target_event_seq,
                     updated_at_ms: now_ms()?,
                 };
-                match mutate_source(&invocation, move |document| {
+                match mutate_source(invocation, move |document| {
                     document.record_delivery_progress(progress)
                 })
                 .await
@@ -2331,7 +2331,7 @@ async fn reconcile_canonical_collaboration_outbox(
                     target_revision,
                     acknowledged_at_ms: now_ms()?,
                 };
-                match mutate_source(&invocation, move |document| {
+                match mutate_source(invocation, move |document| {
                     document.acknowledge_delivery_settlement(ack_input)
                 })
                 .await
@@ -2368,7 +2368,7 @@ async fn reconcile_canonical_collaboration_outbox(
         .map_err(|error| format!("failed to read notification outbox snapshot: {error}"))?;
     for record in pending_notifications {
         let (target_session_id, target) =
-            match resolve_participant_target(&invocation, &record.target, "notification").await {
+            match resolve_participant_target(invocation, &record.target, "notification").await {
                 Ok(value) => value,
                 Err(error) => {
                     failures.push(format!(
@@ -2384,7 +2384,7 @@ async fn reconcile_canonical_collaboration_outbox(
         // A target receipt can precede its source progress write. Confirm the existing durable
         // acceptance or projection before attempting new delivery under today's grant state.
         // 目标回执可能早于来源进度写入；按今天的授权尝试新投递前，先确认既有可靠接纳或投影。
-        match notifications::recover_existing_notification_progress(&invocation, &record, &target)
+        match notifications::recover_existing_notification_progress(invocation, &record, &target)
             .await
         {
             Ok(true) => {
@@ -2404,7 +2404,7 @@ async fn reconcile_canonical_collaboration_outbox(
             == vulcan_session_core::v1::collaboration::CollaborationNotificationState::Recorded
         {
             let delivery = notifications::deliver_recorded_notification(
-                &invocation,
+                invocation,
                 target_session_id,
                 &target,
                 record.delivery_id.clone(),

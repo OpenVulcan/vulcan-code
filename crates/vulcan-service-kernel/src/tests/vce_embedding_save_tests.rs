@@ -123,8 +123,7 @@ async fn assert_save_rejected(
         request,
     )
     .await
-    .err()
-    .expect("invalid save must fail");
+    .expect_err("invalid save must fail");
     assert!(error.contains(reason), "expected {reason:?}: {error}");
     assert_eq!(
         std::fs::read(path).expect("private after-image"),

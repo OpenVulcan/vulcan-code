@@ -390,7 +390,12 @@ mod tests {
             .expect("new admission");
         assert_ne!(current.id(), old.id());
         runtime
-            .replace_session_projection(session, &Default::default(), &[entry.clone()], None)
+            .replace_session_projection(
+                session,
+                &Default::default(),
+                std::slice::from_ref(&entry),
+                None,
+            )
             .expect("stale session mirror");
         assert!(
             runtime

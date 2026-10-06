@@ -218,12 +218,14 @@ fn question_request_profile(
     // Profile settings deliberately differ from the request template's defaults.
     // 配置设置故意与请求模板默认值不同。
     let root = Uuid::new_v4();
-    let mut effective = SessionEffectiveConfig::default();
-    effective.provider_model = ProviderModelSnapshot {
-        provider_id: Some(String::from("child-provider")),
-        model_id: Some(String::from("child-model")),
-        reasoning_effort: Some(String::from("low")),
-        execution_mode: Some(String::from("plan")),
+    let mut effective = SessionEffectiveConfig {
+        provider_model: ProviderModelSnapshot {
+            provider_id: Some(String::from("child-provider")),
+            model_id: Some(String::from("child-model")),
+            reasoning_effort: Some(String::from("low")),
+            execution_mode: Some(String::from("plan")),
+        },
+        ..SessionEffectiveConfig::default()
     };
     effective.prompt_skills.enabled = vec![String::from("child-skill")];
     effective.context_compaction.context_budget = Some(32_000);

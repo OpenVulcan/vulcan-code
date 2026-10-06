@@ -382,6 +382,13 @@ fn duration(start: Option<i64>, end: Option<i64>) -> Option<u64> {
         .map(|(start, end)| end.abs_diff(start))
 }
 
+/// Adds monotonic counters; returns a visible error instead of wrapping or saturating.
+/// 累加单调计数；溢出时明确报错，不回绕或饱和。
+fn add(left: u64, right: u64) -> Result<u64, String> {
+    left.checked_add(right)
+        .ok_or_else(|| "Session usage counter overflow".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,10 +410,11 @@ mod tests {
     /// Goal 基线抵消此前未知历史，但不抵消新增未知历史。
     #[test]
     fn goal_difference_includes_live_children_and_preserves_unknowns() {
-        let mut current = GoalUsageSnapshot::default();
-        current.main =
-            SessionUsageBucket::from_api(&UsageSnapshot::default(), &ApiTimings::default())
-                .unwrap();
+        let mut current = GoalUsageSnapshot {
+            main: SessionUsageBucket::from_api(&UsageSnapshot::default(), &ApiTimings::default())
+                .unwrap(),
+            ..GoalUsageSnapshot::default()
+        };
         let baseline = current.clone();
         current
             .main
@@ -536,11 +544,4 @@ mod tests {
         assert!(ledger.apply("root", &increment, 1).is_err());
         assert_eq!(ledger, before);
     }
-}
-
-/// Adds monotonic counters; returns a visible error instead of wrapping or saturating.
-/// 累加单调计数；溢出时明确报错，不回绕或饱和。
-fn add(left: u64, right: u64) -> Result<u64, String> {
-    left.checked_add(right)
-        .ok_or_else(|| "Session usage counter overflow".to_owned())
 }

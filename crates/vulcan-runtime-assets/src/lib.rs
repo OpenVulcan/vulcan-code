@@ -562,6 +562,10 @@ fn current_executable_directory() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Canonical compile-time usage guide for implicit LuaSkills dispatch.
+/// 隐式 LuaSkills 调度使用的规范编译期指引。
+pub const CALL_LUASKILL_USAGE_MD: &str = include_str!("../resources/tool-guides/call-luaskill.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,7 +653,3 @@ mod tests {
         );
     }
 }
-
-/// Canonical compile-time usage guide for implicit LuaSkills dispatch.
-/// 隐式 LuaSkills 调度使用的规范编译期指引。
-pub const CALL_LUASKILL_USAGE_MD: &str = include_str!("../resources/tool-guides/call-luaskill.md");

@@ -751,12 +751,14 @@ mod tests {
                 )
                 .unwrap()
                 .into_value();
-            let mut effective = SessionEffectiveConfig::default();
-            effective.provider_model = ProviderModelSnapshot {
-                provider_id: Some("openai".into()),
-                model_id: Some("gpt-test".into()),
-                reasoning_effort: Some("off".into()),
-                execution_mode: Some("build".into()),
+            let effective = SessionEffectiveConfig {
+                provider_model: ProviderModelSnapshot {
+                    provider_id: Some("openai".into()),
+                    model_id: Some("gpt-test".into()),
+                    reasoning_effort: Some("off".into()),
+                    execution_mode: Some("build".into()),
+                },
+                ..SessionEffectiveConfig::default()
             };
             let profile = ChildExecutionProfile {
                 version: 1,

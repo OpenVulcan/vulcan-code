@@ -121,7 +121,7 @@ async fn recover_indexed_collaboration_owned(
                 .map_err(|error| error.to_string())?;
             // Native descendants have no SQLite rows; discover them through exact durable reservations.
             // 原生后代没有 SQLite 行；通过精确可靠预留发现它们。
-            let discovery = tree::discover(state, &registry, locator).await?;
+            let discovery = tree::discover(state, registry, locator).await?;
             failures.extend(discovery.failures);
             let nodes = discovery.nodes;
             for (index, node) in nodes.iter().enumerate() {
@@ -140,7 +140,7 @@ async fn recover_indexed_collaboration_owned(
                 let repair = async {
                     // Full canonical loading revalidates event coverage and the current generation.
                     // 完整规范加载重新校验事件覆盖及当前代际。
-                    let handle = tree::load_selected(state, &registry, &nodes, index).await?;
+                    let handle = tree::load_selected(state, registry, &nodes, index).await?;
                     worker::require_active_owner(state, registry)?;
                     if let Some((parent_index, records)) = &node.parent {
                         // Loading the selected ancestry already established this exact canonical parent.
@@ -156,7 +156,7 @@ async fn recover_indexed_collaboration_owned(
                         // 加载祖先链已建立此精确规范存储所有者。
                         let root = registry.get(root_id).map_err(|error| error.to_string())?;
                         if let Err(error) = native_results::recover_terminal_returns(
-                            state, &registry, root, nodes[0].snapshot.segment_generation,
+                            state, registry, root, nodes[0].snapshot.segment_generation,
                             parent.clone(), handle.clone(), records.clone(),
                         ).await {
                             failures.push(format!("session {session_id} native results: {error}"));

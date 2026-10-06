@@ -209,20 +209,28 @@ mod tests {
     /// 验证畸形忽略规则与越界预算会在持久化前失败。
     #[test]
     fn project_vce_validation_rejects_invalid_bounds() {
-        let mut settings = ProjectVceSettings::default();
-        settings.revision = 0;
+        let settings = ProjectVceSettings {
+            revision: 0,
+            ..ProjectVceSettings::default()
+        };
         assert!(settings.validate().is_err());
 
-        let mut settings = ProjectVceSettings::default();
-        settings.extra_ignore_patterns = vec![String::from("src\nprivate")];
+        let settings = ProjectVceSettings {
+            extra_ignore_patterns: vec![String::from("src\nprivate")],
+            ..ProjectVceSettings::default()
+        };
         assert!(settings.validate().is_err());
 
-        let mut settings = ProjectVceSettings::default();
-        settings.embedding_max_concurrency = 17;
+        let settings = ProjectVceSettings {
+            embedding_max_concurrency: 17,
+            ..ProjectVceSettings::default()
+        };
         assert!(settings.validate().is_err());
 
-        let mut settings = ProjectVceSettings::default();
-        settings.max_context_chars = 1_023;
+        let settings = ProjectVceSettings {
+            max_context_chars: 1_023,
+            ..ProjectVceSettings::default()
+        };
         assert!(settings.validate().is_err());
     }
 }

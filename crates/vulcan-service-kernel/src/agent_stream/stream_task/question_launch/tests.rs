@@ -347,7 +347,7 @@ fn question_launch_admits_main_only_resume_and_refuses_stop_states_unchanged() {
                 .collaboration_state()
                 .inbound_deliveries
                 .values()
-                .map(|delivery| (delivery.state.clone(), delivery.bound_turn_id))
+                .map(|delivery| (delivery.state, delivery.bound_turn_id))
                 .collect::<Vec<_>>(),
             document.durable_revision(),
         );
@@ -392,7 +392,7 @@ fn question_launch_admits_main_only_resume_and_refuses_stop_states_unchanged() {
                 .collaboration_state()
                 .inbound_deliveries
                 .values()
-                .map(|delivery| (delivery.state.clone(), delivery.bound_turn_id))
+                .map(|delivery| (delivery.state, delivery.bound_turn_id))
                 .collect::<Vec<_>>(),
             document.durable_revision(),
         );

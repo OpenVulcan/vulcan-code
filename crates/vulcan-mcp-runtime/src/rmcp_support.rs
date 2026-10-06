@@ -122,14 +122,13 @@ pub(crate) fn rmcp_call_tool_result_to_value(
         return Err(McpRuntimeError::transport(message));
     }
 
-    if let Some(value) = result.structured_content.as_ref() {
-        if !result
+    if let Some(value) = result.structured_content.as_ref()
+        && !result
             .content
             .iter()
             .any(|content| content.as_image().is_some())
-        {
-            return Ok(value.clone());
-        }
+    {
+        return Ok(value.clone());
     }
 
     if result
@@ -211,7 +210,7 @@ fn validate_mcp_image_content(data: &str, mime_type: &str) -> Result<(), String>
 /// 仅为校验语法并限制解码字节数而解码标准带填充 Base64。
 fn decode_standard_base64_bounded(data: &str) -> Result<Vec<u8>, String> {
     let bytes = data.as_bytes();
-    if bytes.is_empty() || bytes.len() % 4 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
         return Err(String::from("MCP image content has invalid Base64 data."));
     }
     let padding = bytes.iter().rev().take_while(|byte| **byte == b'=').count();

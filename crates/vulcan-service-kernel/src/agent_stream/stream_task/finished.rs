@@ -232,8 +232,8 @@ pub(super) async fn handle_finished_stream_event(
             terminal_persistence_owner,
         )
         .await;
-        if settled {
-            if let Err(error) = super::question_finished::start_question_queued_successor(
+        if settled
+            && let Err(error) = super::question_finished::start_question_queued_successor(
                 app,
                 task_state,
                 controller_runtime,
@@ -242,11 +242,10 @@ pub(super) async fn handle_finished_stream_event(
                 &execution_id,
             )
             .await
-            {
-                tracing::warn!(
-                    "[webui-service] question successor dispatch failed: session={finished_session_id} error={error}"
-                );
-            }
+        {
+            tracing::warn!(
+                "[webui-service] question successor dispatch failed: session={finished_session_id} error={error}"
+            );
         }
         return FinishedStreamEventOutcome::Handled;
     }
@@ -411,15 +410,14 @@ pub(super) async fn handle_finished_stream_event(
     // 释放终态准入后重新读取：子任务可能在 sink 快照之后完成。
     // Return exact task results after terminal ownership is released; failures retain durable retry state.
     // 释放终态归属后回传精确任务结果；失败保留可靠重试状态。
-    if terminal_authority_settled {
-        if let Err(error) = crate::agent_collaboration::reconcile_task_results_for_session(
+    if terminal_authority_settled
+        && let Err(error) = crate::agent_collaboration::reconcile_task_results_for_session(
             task_state,
             finished_session_id,
         )
         .await
-        {
-            tracing::warn!(session_id = %finished_session_id, %error, "Task result return remains pending after terminal settlement");
-        }
+    {
+        tracing::warn!(session_id = %finished_session_id, %error, "Task result return remains pending after terminal settlement");
     }
     let pending_subagent_return = if terminal_authority_settled {
         match registered_session_v1_handle_from_state(task_state, finished_session_id).and_then(

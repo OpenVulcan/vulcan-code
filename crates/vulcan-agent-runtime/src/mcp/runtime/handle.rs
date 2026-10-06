@@ -1392,12 +1392,9 @@ pub async fn replace_plugin_mcp_runtime_partition(
     let runtime = current.start_preparing_plugin_partition(plugin_id, servers)?;
     let mut startup_guard = McpRuntimeStartupGuard::new();
     startup_guard.track(&runtime);
-    if let Err(error) = runtime
+    runtime
         .wait_until_ready(MCP_PARTITION_READINESS_TIMEOUT)
-        .await
-    {
-        return Err(error);
-    }
+        .await?;
     current.finish_preparing_plugin_partition(plugin_id, &runtime)?;
     let access = current.with_replaced_plugin_partition(plugin_id, generation, overview, runtime);
     startup_guard.mark_published();

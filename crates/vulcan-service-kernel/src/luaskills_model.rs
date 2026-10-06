@@ -29,6 +29,13 @@
 //! - 出现工具调用项或非 `completed` 终态属于契约错误，而不是被静默截断的回答。
 //! - 供应商细节绝不回传进 Lua；错误经过脱敏。
 
+// The bridge returns the frozen diagnostic-rich HostAiError contract directly.
+// 该桥直接返回已冻结且富含诊断信息的 HostAiError 契约。
+#![allow(
+    clippy::result_large_err,
+    reason = "the bridge must preserve the frozen HostAiError boundary contract"
+)]
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;

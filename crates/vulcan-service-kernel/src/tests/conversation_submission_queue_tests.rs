@@ -657,12 +657,11 @@ fn resolved_v1_admission_retry_does_not_rebuild_process_mirror_or_hook() {
             0
         );
         assert!(
-            state
+            !state
                 .lock()
                 .expect("service state should remain readable")
                 .pending_prompt_process_mirrors
-                .get(&session_id)
-                .is_none()
+                .contains_key(&session_id)
         );
         assert!(
             !agent_runtime
@@ -752,12 +751,11 @@ fn superseded_goal_admission_returns_scheduled_turn_without_queue_mirror() {
         0
     );
     assert!(
-        state
+        !state
             .lock()
             .expect("service state should remain readable")
             .pending_prompt_process_mirrors
-            .get(&session_id)
-            .is_none()
+            .contains_key(&session_id)
     );
     assert!(
         !agent_runtime

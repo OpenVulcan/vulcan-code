@@ -403,17 +403,16 @@ impl BrowserManager {
                     slot: &slot,
                 };
                 let mut connection = slot.lock().await;
-                if let Some(current) = connection.take() {
-                    if let Err(error) = CoreNativeBrowserRuntime::retire_connection(
+                if let Some(current) = connection.take()
+                    && let Err(error) = CoreNativeBrowserRuntime::retire_connection(
                         &manager,
                         owner_session_id,
                         current,
                         &mut connection,
                     )
                     .await
-                    {
-                        failures.push(error);
-                    }
+                {
+                    failures.push(error);
                 }
             }
             if failures.is_empty() {
@@ -1275,18 +1274,17 @@ impl CoreNativeBrowserRuntime {
         })
         .await
         .map_err(|error| format!("browser host task failed: {error}"))??;
-        if let Some(previous) = connection.take() {
-            if let Err(error) = Self::retire_connection(
+        if let Some(previous) = connection.take()
+            && let Err(error) = Self::retire_connection(
                 &environment.manager,
                 owner_session_id,
                 previous,
                 &mut connection,
             )
             .await
-            {
-                let _ = environment.manager.close_session(&browser_id);
-                return Err(error);
-            }
+        {
+            let _ = environment.manager.close_session(&browser_id);
+            return Err(error);
         }
         let next = match Self::establish_connection(
             &environment,

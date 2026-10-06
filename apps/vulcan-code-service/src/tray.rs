@@ -153,28 +153,27 @@ pub fn run_with_tray() {
                 if matches!(*control_flow, ControlFlow::ExitWithCode(_)) {
                     return;
                 }
-                if let Some((tray, status)) = &native_tray {
-                    if std::time::Instant::now() >= next_status_refresh {
-                        if !ready_reported {
-                            ready_reported = acknowledge_tray_ready(tray);
-                        }
-                        let current_status = tray_service_status_text(&handles);
-                        if current_status != last_status {
-                            status.set_text(&current_status);
-                            last_status = current_status;
-                        }
-                        if !bridge_reported {
-                            // Release the bridge lock before calling the operating system notification API.
-                            // 调用操作系统通知接口之前释放桥接锁。
-                            let failure =
-                                handles.bridge_failure.lock().ok().and_then(|v| v.clone());
-                            if let Some(failure) = failure {
-                                report_tray_failure(&format!("Core HTTP bridge failed: {failure}"));
-                                bridge_reported = true;
-                            }
-                        }
-                        next_status_refresh = std::time::Instant::now() + TRAY_STATUS_INTERVAL;
+                if let Some((tray, status)) = &native_tray
+                    && std::time::Instant::now() >= next_status_refresh
+                {
+                    if !ready_reported {
+                        ready_reported = acknowledge_tray_ready(tray);
                     }
+                    let current_status = tray_service_status_text(&handles);
+                    if current_status != last_status {
+                        status.set_text(&current_status);
+                        last_status = current_status;
+                    }
+                    if !bridge_reported {
+                        // Release the bridge lock before calling the operating system notification API.
+                        // 调用操作系统通知接口之前释放桥接锁。
+                        let failure = handles.bridge_failure.lock().ok().and_then(|v| v.clone());
+                        if let Some(failure) = failure {
+                            report_tray_failure(&format!("Core HTTP bridge failed: {failure}"));
+                            bridge_reported = true;
+                        }
+                    }
+                    next_status_refresh = std::time::Instant::now() + TRAY_STATUS_INTERVAL;
                 }
                 *control_flow = ControlFlow::WaitUntil(next_status_refresh);
             }

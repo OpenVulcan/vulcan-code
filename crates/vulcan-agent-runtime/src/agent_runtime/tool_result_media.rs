@@ -431,10 +431,10 @@ fn validate_image_content(data: &str, mime_type: &str) -> Result<(), String> {
             "MCP image content uses an unsupported MIME type.",
         ));
     }
-    if data.is_empty() || data.len() % 4 != 0 {
+    if data.is_empty() || !data.len().is_multiple_of(4) {
         return Err(String::from("MCP image content has invalid Base64 data."));
     }
-    let max_encoded_len = ((MAX_IMAGE_BYTES + 2) / 3) * 4;
+    let max_encoded_len = MAX_IMAGE_BYTES.div_ceil(3) * 4;
     if data.len() > max_encoded_len {
         return Err(String::from("MCP image content exceeds the 20 MiB limit."));
     }
@@ -604,8 +604,7 @@ mod tests {
             .is_ok(),
             "the unmodified canonical envelope must project"
         );
-        envelope[TOOL_RESULT_MEDIA_MARKER] =
-            Value::from(u64::from(TOOL_RESULT_MEDIA_ENVELOPE_VERSION) + 1);
+        envelope[TOOL_RESULT_MEDIA_MARKER] = Value::from(TOOL_RESULT_MEDIA_ENVELOPE_VERSION + 1);
         let error = project_tool_result_content(
             envelope.to_string().as_str(),
             vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,

@@ -151,16 +151,16 @@ impl PluginEnvironmentInstallTaskRegistry {
                 .tasks
                 .get(&task_id)
                 .map(|record| record.status.clone());
-            if let Some(status) = retained_status {
-                if matches!(status.state.as_str(), "queued" | "running") {
-                    return Ok(PluginEnvironmentInstallEnqueueResult {
-                        status,
-                        should_start: false,
-                    });
-                }
-                // Terminal records remain queryable by task id but do not block an explicit retry.
-                // 终态记录仍可按任务标识查询，但不能阻止用户显式重试。
+            if let Some(status) = retained_status
+                && matches!(status.state.as_str(), "queued" | "running")
+            {
+                return Ok(PluginEnvironmentInstallEnqueueResult {
+                    status,
+                    should_start: false,
+                });
             }
+            // Terminal records remain queryable by task id but do not block an explicit retry.
+            // 终态记录仍可按任务标识查询，但不能阻止用户显式重试。
             guard.keys.remove(&key);
         }
 

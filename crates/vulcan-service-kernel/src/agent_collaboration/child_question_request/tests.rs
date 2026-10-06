@@ -22,12 +22,14 @@ fn child_question_request_preserves_history_without_parent_template() {
             .unwrap();
     // Captured values deliberately differ from both global defaults and UI selection.
     // 捕获值刻意区别于全局默认值及界面选择。
-    let mut effective = SessionEffectiveConfig::default();
-    effective.provider_model = ProviderModelSnapshot {
-        provider_id: Some("child-provider".into()),
-        model_id: Some("child-model".into()),
-        reasoning_effort: Some("low".into()),
-        execution_mode: Some("build".into()),
+    let effective = SessionEffectiveConfig {
+        provider_model: ProviderModelSnapshot {
+            provider_id: Some("child-provider".into()),
+            model_id: Some("child-model".into()),
+            reasoning_effort: Some("low".into()),
+            execution_mode: Some("build".into()),
+        },
+        ..SessionEffectiveConfig::default()
     };
     let profile = ChildExecutionProfile {
         version: 1,

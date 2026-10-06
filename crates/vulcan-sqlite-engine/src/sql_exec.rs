@@ -2357,7 +2357,7 @@ mod tests {
         )
         .expect("execute_script must accept the bracket-quoted identifier");
 
-        let result = query_json(&mut connection, "SELECT value FROM [odd;name]", &[])
+        let result = query_json(&connection, "SELECT value FROM [odd;name]", &[])
             .expect("query_json must accept the bracket-quoted identifier");
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(&result.json_data).expect("decode query_json payload");
@@ -2435,7 +2435,7 @@ mod tests {
             "the refusal must say what was wrong: {error}"
         );
 
-        query_json(&mut connection, "SELECT id FROM items", &[])
+        query_json(&connection, "SELECT id FROM items", &[])
             .expect("the connection must remain usable after a refused parameter");
     }
 
@@ -2647,7 +2647,7 @@ mod tests {
         .expect("insert row");
 
         let result = query_json(
-            &mut connection,
+            &connection,
             "SELECT id, name, weight, payload, optional FROM items",
             &[],
         )
@@ -2679,7 +2679,7 @@ mod tests {
         .expect("insert");
 
         let result = query_json(
-            &mut connection,
+            &connection,
             "SELECT name FROM items WHERE name = ?1",
             &[SqliteValue::Text("needle".to_string())],
         )
@@ -2687,7 +2687,7 @@ mod tests {
         assert_eq!(result.row_count, 1);
 
         assert!(
-            query_json(&mut connection, "SELECT 1; SELECT 2;", &[]).is_err(),
+            query_json(&connection, "SELECT 1; SELECT 2;", &[]).is_err(),
             "multi-statement JSON queries must be refused"
         );
     }
@@ -2706,7 +2706,7 @@ mod tests {
             .expect("insert");
         }
         let sql = "SELECT name FROM items ORDER BY name";
-        let unbounded = query_json(&mut connection, sql, &[]).expect("unbounded query");
+        let unbounded = query_json(&connection, sql, &[]).expect("unbounded query");
         let expected = serde_json::to_string(&serde_json::json!([
             {"name": "a"}, {"name": "b"}, {"name": "c"}
         ]))
@@ -2715,7 +2715,7 @@ mod tests {
         assert_eq!(unbounded.row_count, 3);
 
         let exact = query_json_bounded(
-            &mut connection,
+            &connection,
             sql,
             &[],
             QueryJsonLimits {
@@ -2727,7 +2727,7 @@ mod tests {
         assert_eq!(exact.json_data, expected);
 
         let rows_error = query_json_bounded(
-            &mut connection,
+            &connection,
             sql,
             &[],
             QueryJsonLimits {
@@ -2742,7 +2742,7 @@ mod tests {
         ));
 
         let bytes_error = query_json_bounded(
-            &mut connection,
+            &connection,
             sql,
             &[],
             QueryJsonLimits {
@@ -2757,7 +2757,7 @@ mod tests {
         ));
 
         let empty = query_json_bounded(
-            &mut connection,
+            &connection,
             "SELECT name FROM items WHERE name = 'missing'",
             &[],
             QueryJsonLimits {

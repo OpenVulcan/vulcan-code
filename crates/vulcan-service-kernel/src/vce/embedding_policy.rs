@@ -460,7 +460,7 @@ mod tests {
         let target = candidate('c', 1024);
         let first = approval(&source, 'a', &target);
         assert_eq!(
-            impact(&source, &target, &[first.clone()]).confirmation_required,
+            impact(&source, &target, std::slice::from_ref(&first)).confirmation_required,
             BTreeSet::from([fingerprint('b')])
         );
         assert!(impact(&source, &target, &[first, approval(&source, 'b', &target)]).compatible());
@@ -494,7 +494,7 @@ mod tests {
                 &source,
                 Ok(&"f".repeat(64)),
                 &target,
-                &[record.clone()]
+                std::slice::from_ref(&record)
             )
             .unwrap()
             .unwrap()

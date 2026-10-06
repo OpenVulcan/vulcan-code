@@ -1730,7 +1730,7 @@ fn validate_protocol_route(
     {
         errors.push(ManifestValidationError::new(
             "agentspace_recovery_policy_scope_mismatch",
-            &format!("{path}.responses_features.recovery"),
+            format!("{path}.responses_features.recovery"),
             "AgentSpace reconciliation recovery is restricted to provider 'agentspace' service entry 'chatgpt-plan'",
         ));
     }
@@ -1739,7 +1739,7 @@ fn validate_protocol_route(
     }) {
         errors.push(ManifestValidationError::new(
             "responses_inline_compaction_v2_runtime_unavailable",
-            &format!("{path}.responses_features.remote_compaction"),
+            format!("{path}.responses_features.remote_compaction"),
             "Responses inline compaction V2 is unavailable because this runtime has no registered streamed compaction-trigger executor",
         ));
     }

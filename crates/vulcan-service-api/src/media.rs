@@ -279,6 +279,133 @@ fn is_allowed_service_media_asset_path(path: &Path) -> bool {
     has_supported_service_media_asset_extension(path)
 }
 
+/// Returns whether a local path extension is supported by the media route.
+/// 返回本地路径扩展名是否受媒体路由支持。
+fn has_supported_service_media_asset_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("png")
+            | Some("jpg")
+            | Some("jpeg")
+            | Some("webp")
+            | Some("gif")
+            | Some("bmp")
+            | Some("svg")
+            | Some("mp4")
+            | Some("mpeg")
+            | Some("mpg")
+            | Some("webm")
+            | Some("mov")
+            | Some("m4v")
+            | Some("mkv")
+            | Some("avi")
+            | Some("flv")
+            | Some("wmv")
+            | Some("3gp")
+            | Some("3gpp")
+            | Some("3g2")
+            | Some("mp3")
+            | Some("wav")
+            | Some("m4a")
+            | Some("aac")
+            | Some("flac")
+            | Some("ogg")
+            | Some("pdf")
+    )
+}
+
+/// Parses one bounded HTTP range for media playback.
+/// 解析一个有上限的媒体播放 HTTP 范围。
+fn single_service_media_http_range(range_header: &str, file_len: u64) -> Result<HttpRange, String> {
+    let mut ranges = HttpRange::parse(range_header, file_len)
+        .map_err(|error| format!("媒体 Range 请求无效：{error:?}"))?;
+    let Some(mut range) = ranges.drain(..).next() else {
+        return Err(String::from("媒体 Range 请求为空。"));
+    };
+    if range.start >= file_len || range.length == 0 {
+        return Err(String::from("媒体 Range 请求越界。"));
+    }
+    range.length = range.length.min(SERVICE_MEDIA_RANGE_MAX_BYTES);
+    Ok(range)
+}
+
+/// Builds one plain text error response for the generated media route.
+/// 为生成媒体路由构建一个纯文本错误响应。
+pub fn service_media_error_response(status: u16, message: &str) -> ServiceMediaResponse {
+    ServiceMediaResponse {
+        status,
+        headers: vec![
+            (
+                String::from("access-control-allow-origin"),
+                String::from("*"),
+            ),
+            (
+                String::from("content-type"),
+                String::from("text/plain; charset=utf-8"),
+            ),
+        ],
+        body: message.as_bytes().to_vec(),
+    }
+}
+
+/// Builds common headers shared by media success responses.
+/// 构建媒体成功响应共享的公共响应头。
+fn service_media_base_headers(mime_type: String) -> Vec<(String, String)> {
+    vec![
+        (
+            String::from("access-control-allow-origin"),
+            String::from("*"),
+        ),
+        (
+            String::from("access-control-expose-headers"),
+            String::from("content-range"),
+        ),
+        (String::from("accept-ranges"), String::from("bytes")),
+        (String::from("cache-control"), String::from("no-store")),
+        (String::from("content-type"), mime_type),
+    ]
+}
+
+/// Infers a conservative MIME type from a generated media path extension.
+/// 根据生成媒体路径扩展名推断保守 MIME 类型。
+fn infer_service_media_asset_mime_type(path: &Path) -> String {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => String::from("image/png"),
+        Some("jpg") | Some("jpeg") => String::from("image/jpeg"),
+        Some("webp") => String::from("image/webp"),
+        Some("gif") => String::from("image/gif"),
+        Some("bmp") => String::from("image/bmp"),
+        Some("svg") => String::from("image/svg+xml"),
+        Some("mp4") => String::from("video/mp4"),
+        Some("mpeg") | Some("mpg") => String::from("video/mpeg"),
+        Some("webm") => String::from("video/webm"),
+        Some("mov") => String::from("video/quicktime"),
+        Some("m4v") => String::from("video/x-m4v"),
+        Some("mkv") => String::from("video/x-matroska"),
+        Some("avi") => String::from("video/x-msvideo"),
+        Some("flv") => String::from("video/x-flv"),
+        Some("wmv") => String::from("video/x-ms-wmv"),
+        Some("3gp") | Some("3gpp") => String::from("video/3gpp"),
+        Some("3g2") => String::from("video/3gpp2"),
+        Some("mp3") => String::from("audio/mpeg"),
+        Some("wav") => String::from("audio/wav"),
+        Some("m4a") => String::from("audio/mp4"),
+        Some("aac") => String::from("audio/aac"),
+        Some("flac") => String::from("audio/flac"),
+        Some("ogg") => String::from("audio/ogg"),
+        Some("pdf") => String::from("application/pdf"),
+        _ => String::from("application/octet-stream"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,132 +597,5 @@ mod tests {
             infer_service_media_asset_mime_type(Path::new("clip.3g2")),
             "video/3gpp2"
         );
-    }
-}
-
-/// Returns whether a local path extension is supported by the media route.
-/// 返回本地路径扩展名是否受媒体路由支持。
-fn has_supported_service_media_asset_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some("png")
-            | Some("jpg")
-            | Some("jpeg")
-            | Some("webp")
-            | Some("gif")
-            | Some("bmp")
-            | Some("svg")
-            | Some("mp4")
-            | Some("mpeg")
-            | Some("mpg")
-            | Some("webm")
-            | Some("mov")
-            | Some("m4v")
-            | Some("mkv")
-            | Some("avi")
-            | Some("flv")
-            | Some("wmv")
-            | Some("3gp")
-            | Some("3gpp")
-            | Some("3g2")
-            | Some("mp3")
-            | Some("wav")
-            | Some("m4a")
-            | Some("aac")
-            | Some("flac")
-            | Some("ogg")
-            | Some("pdf")
-    )
-}
-
-/// Parses one bounded HTTP range for media playback.
-/// 解析一个有上限的媒体播放 HTTP 范围。
-fn single_service_media_http_range(range_header: &str, file_len: u64) -> Result<HttpRange, String> {
-    let mut ranges = HttpRange::parse(range_header, file_len)
-        .map_err(|error| format!("媒体 Range 请求无效：{error:?}"))?;
-    let Some(mut range) = ranges.drain(..).next() else {
-        return Err(String::from("媒体 Range 请求为空。"));
-    };
-    if range.start >= file_len || range.length == 0 {
-        return Err(String::from("媒体 Range 请求越界。"));
-    }
-    range.length = range.length.min(SERVICE_MEDIA_RANGE_MAX_BYTES);
-    Ok(range)
-}
-
-/// Builds one plain text error response for the generated media route.
-/// 为生成媒体路由构建一个纯文本错误响应。
-pub fn service_media_error_response(status: u16, message: &str) -> ServiceMediaResponse {
-    ServiceMediaResponse {
-        status,
-        headers: vec![
-            (
-                String::from("access-control-allow-origin"),
-                String::from("*"),
-            ),
-            (
-                String::from("content-type"),
-                String::from("text/plain; charset=utf-8"),
-            ),
-        ],
-        body: message.as_bytes().to_vec(),
-    }
-}
-
-/// Builds common headers shared by media success responses.
-/// 构建媒体成功响应共享的公共响应头。
-fn service_media_base_headers(mime_type: String) -> Vec<(String, String)> {
-    vec![
-        (
-            String::from("access-control-allow-origin"),
-            String::from("*"),
-        ),
-        (
-            String::from("access-control-expose-headers"),
-            String::from("content-range"),
-        ),
-        (String::from("accept-ranges"), String::from("bytes")),
-        (String::from("cache-control"), String::from("no-store")),
-        (String::from("content-type"), mime_type),
-    ]
-}
-
-/// Infers a conservative MIME type from a generated media path extension.
-/// 根据生成媒体路径扩展名推断保守 MIME 类型。
-fn infer_service_media_asset_mime_type(path: &Path) -> String {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => String::from("image/png"),
-        Some("jpg") | Some("jpeg") => String::from("image/jpeg"),
-        Some("webp") => String::from("image/webp"),
-        Some("gif") => String::from("image/gif"),
-        Some("bmp") => String::from("image/bmp"),
-        Some("svg") => String::from("image/svg+xml"),
-        Some("mp4") => String::from("video/mp4"),
-        Some("mpeg") | Some("mpg") => String::from("video/mpeg"),
-        Some("webm") => String::from("video/webm"),
-        Some("mov") => String::from("video/quicktime"),
-        Some("m4v") => String::from("video/x-m4v"),
-        Some("mkv") => String::from("video/x-matroska"),
-        Some("avi") => String::from("video/x-msvideo"),
-        Some("flv") => String::from("video/x-flv"),
-        Some("wmv") => String::from("video/x-ms-wmv"),
-        Some("3gp") | Some("3gpp") => String::from("video/3gpp"),
-        Some("3g2") => String::from("video/3gpp2"),
-        Some("mp3") => String::from("audio/mpeg"),
-        Some("wav") => String::from("audio/wav"),
-        Some("m4a") => String::from("audio/mp4"),
-        Some("aac") => String::from("audio/aac"),
-        Some("flac") => String::from("audio/flac"),
-        Some("ogg") => String::from("audio/ogg"),
-        Some("pdf") => String::from("application/pdf"),
-        _ => String::from("application/octet-stream"),
     }
 }

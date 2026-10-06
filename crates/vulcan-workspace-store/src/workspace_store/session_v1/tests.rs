@@ -236,7 +236,7 @@ fn fresh_layout(tag: &str) -> (tempfile::TempDir, SessionV1Layout) {
         root.path().join("code").join("sessions"),
         "project-1",
         "2026-08-26",
-        &format!("sess-{tag}-{}", std::process::id()),
+        format!("sess-{tag}-{}", std::process::id()),
     );
     (root, layout)
 }
@@ -1048,7 +1048,6 @@ fn rollover_seals_old_tail_and_keeps_all_events() {
     };
     // Append one more event to force the rollover at the next flush.
     // 再追加一条事件以在下次 flush 触发滚段。
-    let mut document = document;
     document
         .append_display_note(
             None,
@@ -1246,7 +1245,6 @@ fn fault_injection_keeps_old_state_loadable() {
         let mut document = filled_document(&layout.session_id, 0);
         document.metadata = publish_initial(&layout, &document);
         let original_tail = std::fs::read(layout.segment_path(1, 1)).unwrap();
-        let mut document = document;
         document
             .append_display_note(
                 None,
@@ -1363,7 +1361,6 @@ fn compaction_publish_keeps_old_generation_on_runtime_failure() {
     let (root, layout) = fresh_layout("compaction-fault");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-compaction-root", "compact turn"),
@@ -1533,7 +1530,6 @@ fn tail_rewrite_keeps_sealed_segments_untouched() {
         max_lines: 8,
         max_bytes: 8 * 1024 * 1024,
     };
-    let mut document = document;
     document
         .append_display_note(
             None,
@@ -1571,7 +1567,6 @@ fn tail_rewrite_keeps_sealed_segments_untouched() {
     let meta = read_metadata(&layout.metadata_path()).unwrap();
     let sealed_path = layout.segment_entry_path(1, &meta.split_list[0].file_name);
     let sealed_before_second_flush = std::fs::read(&sealed_path).unwrap();
-    let mut document = document;
     document
         .append_display_note(
             None,
@@ -1626,7 +1621,6 @@ fn edit_generation_byte_copies_prefix_and_switches() {
         max_lines: 3,
         max_bytes: 8 * 1024 * 1024,
     };
-    let mut document = document;
     for index in 0..4u64 {
         document
             .append_display_note(
@@ -1931,7 +1925,6 @@ fn stale_active_tail_cache_fields_do_not_break_load() {
     document.metadata = publish_initial(&layout, &document);
     // Grow the tail without marking metadata dirty.
     // 增长尾段但不标记 metadata dirty。
-    let mut document = document;
     document
         .append_display_note(
             None,
@@ -1977,7 +1970,6 @@ fn context_candidate_rejects_unpublished_compaction_tail() {
     let (root, layout) = fresh_layout("unpub-node");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     // First compaction is published together with the runtime pointer.
     // 第一次压缩与 runtime 指针一起发布。
     document
@@ -2019,7 +2011,6 @@ fn context_candidate_rejects_unpublished_compaction_tail() {
     // pointer write fails (crash window) so the pointer stays at node 1.
     // 第二次压缩：compactions.json 增加节点，但 runtime 指针写入失败(崩溃
     // 窗口)，指针停留在节点 1。
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-compaction-root-2", "compact turn 2"),
@@ -2123,7 +2114,7 @@ fn id_frontier_ahead_of_facts_is_rejected() {
     document.metadata = publish_initial(&layout, &document);
     let persisted = read_metadata(&layout.metadata_path()).unwrap();
     let mut metadata = persisted.clone();
-    metadata.id_frontier.next_seq = metadata.id_frontier.next_seq + 5;
+    metadata.id_frontier.next_seq += 5;
     write_json_document(&layout.metadata_path(), &metadata, "metadata").unwrap();
     let result = load_session(&layout);
     assert!(matches!(
@@ -2286,7 +2277,6 @@ fn runtime_write_failure_keeps_old_generation() {
     let (root, layout) = fresh_layout("runtime-fail");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-compaction-root", "compact turn"),
@@ -2358,7 +2348,6 @@ fn failed_flush_keeps_new_memory_state() {
     let (root, layout) = fresh_layout("mem-keep");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .append_display_note(
             None,
@@ -2478,7 +2467,6 @@ fn edit_mid_segments_byte_copies_sealed_prefix() {
         max_lines: 3,
         max_bytes: 8 * 1024 * 1024,
     };
-    let mut document = document;
     // Turn two provides a second user input beyond the first sealed segment.
     // 第二个回合在第一个封口分片之后提供第二个用户输入。
     document
@@ -2620,7 +2608,6 @@ fn flush_accepts_tail_only_event_slice() {
     let (root, layout) = fresh_layout("tail-only-flush");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-second-turn", "second turn"),
@@ -3191,7 +3178,6 @@ fn same_process_runtime_failure_trims_candidates_on_next_record() {
     let (root, layout) = fresh_layout("same-proc-runtime-fail");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-compaction-root", "compact turn"),
@@ -3338,7 +3324,6 @@ fn edit_reselects_compaction_pointer_in_deleted_history() {
     let (root, layout) = fresh_layout("edit-reselect");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-compaction-root", "compact turn"),
@@ -3507,7 +3492,6 @@ fn fork_reselects_pointer_and_preserves_kept_nodes() {
     let (root, layout) = fresh_layout("fork-remap");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document
         .submit_root_input(
             test_submission("workspace-store-compaction-root", "compact turn"),
@@ -3651,7 +3635,6 @@ fn context_compaction_node_does_not_control_physical_rollover() {
     let (root, layout) = fresh_layout("compaction-window");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document.set_context_compaction_window_node_id(
         Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2),
         2,
@@ -3709,7 +3692,6 @@ fn context_compaction_window_node_persists_across_reload() {
     let (root, layout) = fresh_layout("window-persist");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let mut document = document;
     document.set_context_compaction_window_node_id(
         Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow4),
         1,

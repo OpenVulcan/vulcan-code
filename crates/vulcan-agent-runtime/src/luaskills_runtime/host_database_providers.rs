@@ -379,9 +379,11 @@ mod tests {
         let successor = install_or_panic(database_runtime(), runtime.handle().clone());
         drop(old);
 
-        let mut host_options = LuaRuntimeHostOptions::default();
-        host_options.sqlite_provider_mode = provider_mode();
-        host_options.lancedb_provider_mode = provider_mode();
+        let host_options = LuaRuntimeHostOptions {
+            sqlite_provider_mode: provider_mode(),
+            lancedb_provider_mode: provider_mode(),
+            ..LuaRuntimeHostOptions::default()
+        };
         LuaEngine::new(LuaEngineOptions::new(
             LuaVmPoolConfig {
                 min_size: 1,

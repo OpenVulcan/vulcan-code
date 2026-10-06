@@ -68,6 +68,10 @@ pub(in crate::skills_services::local_plugin_update) struct PreparingLocalPluginU
 
 /// Each variant owns the concrete original resources; public phase always comes from actual durable observation.
 /// 每个变体拥有具体原资源；公开阶段始终来自实际持久观察。
+#[allow(
+    clippy::large_enum_variant,
+    reason = "every stage owns kilobytes of resources and exactly one value exists per update"
+)]
 pub(in crate::skills_services::local_plugin_update) enum PendingLocalPluginUpdateStage {
     /// First journal publication still uses the actual retained namespace owner.
     /// 首份日志发布仍使用实际保留命名空间所有者。

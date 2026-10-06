@@ -118,7 +118,7 @@ mod tests {
             index.insert(id, &key(root.join(format!("r{id:05}"))));
         }
         let event = root.join("r05000/file.txt");
-        let affected = index.affected(&[event.clone()]);
+        let affected = index.affected(std::slice::from_ref(&event));
         assert_eq!(affected.len(), 1);
         assert_eq!(
             affected.values().next().expect("one owner"),
@@ -129,7 +129,7 @@ mod tests {
                 .affected(&[root.join("r05000suffix/file.txt")])
                 .is_empty()
         );
-        assert_eq!(index.affected(&[root.clone()]).len(), 10_000);
+        assert_eq!(index.affected(std::slice::from_ref(&root)).len(), 10_000);
     }
 
     /// Alias namespaces, shared roots and removed registrations keep exact ownership.

@@ -515,7 +515,7 @@ pub(crate) fn goal_created_response_value(goal: &NativeGoalSnapshot) -> Value {
     // The immutable guidance already owns the objective; avoid echoing it in the receipt.
     // 不可变指引已经包含目标正文，回执不再重复。
     let mut body = goal_response_markdown(Some(goal), false, false);
-    body.push_str("\n");
+    body.push('\n');
     body.push_str(&render_active_session_goal_context(
         &goal.goal_id,
         &goal.objective,

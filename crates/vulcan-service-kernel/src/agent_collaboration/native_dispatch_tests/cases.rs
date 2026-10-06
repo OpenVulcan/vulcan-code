@@ -82,7 +82,7 @@ async fn native_dispatch_ask_question_records_question_and_delivery() {
         .unwrap();
     assert_eq!(observed["status"], "ok");
     assert_eq!(observed["operation_id"], dispatch.operation_id());
-    assert_eq!(observed["question_id"].as_str().is_some(), true);
+    assert!(observed["question_id"].as_str().is_some());
     // The source must own exactly one durable outbound delivery for this question.
     // 来源必须为该问题持有且仅持有一条可靠出站投递。
     let (deliveries, questions) = dispatch
@@ -222,7 +222,7 @@ async fn native_dispatch_cancel_question_settles_pending_question() {
                 .questions
                 .values()
                 .next()
-                .map(|question| question.state.clone())
+                .map(|question| question.state)
         })
         .unwrap();
     assert_eq!(
@@ -397,7 +397,7 @@ async fn native_dispatch_wait_question_returns_bounded_pending_snapshot() {
                 .questions
                 .values()
                 .next()
-                .map(|question| question.state.clone())
+                .map(|question| question.state)
         })
         .unwrap();
     assert_eq!(

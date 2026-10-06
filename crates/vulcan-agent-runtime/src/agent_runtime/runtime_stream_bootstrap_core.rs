@@ -141,7 +141,7 @@ pub(crate) fn build_runtime_bootstrap_core(
         .iter()
         .map(|tool| tool.id.clone())
         .collect::<Vec<_>>();
-    let system_update_policy = ProviderSystemUpdateLoweringPolicy::default();
+    let system_update_policy = ProviderSystemUpdateLoweringPolicy;
     let lowering_repair_events = collect_system_update_lowering_repairs(
         preparation,
         &request.runtime_system_updates,

@@ -60,13 +60,13 @@ fn native_identity_action_hook_and_ui_keep_original_internal_ownership() {
                 .clone();
             // Initialization owns this real session; no identity is inferred from callback ordering.
             // 初始化持有此真实会话，不根据回调顺序推导身份。
-            let session = original
+
+            original
                 .lock()
                 .expect("original UI state")
                 .session
                 .clone()
-                .expect("successful UI invocation must have its original Core session");
-            session
+                .expect("successful UI invocation must have its original Core session")
         };
         fixture
             .manager

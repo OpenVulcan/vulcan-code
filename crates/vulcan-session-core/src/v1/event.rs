@@ -151,6 +151,10 @@ pub enum EventVisibility {
 /// 按稳定 kind 打标签的强类型事件体。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "several variants exceed 700 bytes, so boxing the largest one would not shrink the enum"
+)]
 pub enum EventBody {
     /// Dynamic system/developer semantic upsert or remove.
     /// 动态系统/developer 语义的 upsert 或 remove。

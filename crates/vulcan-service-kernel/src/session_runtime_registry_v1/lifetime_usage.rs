@@ -44,11 +44,11 @@ impl SessionUsageOwner {
                 return Err(error);
             }
         }
-        if let Some(locator) = &self.locator {
-            if let Err(error) = save_session_lifetime_usage(locator, &next) {
-                *guard = Err(error.clone());
-                return Err(error);
-            }
+        if let Some(locator) = &self.locator
+            && let Err(error) = save_session_lifetime_usage(locator, &next)
+        {
+            *guard = Err(error.clone());
+            return Err(error);
         }
         *guard = Ok(next);
         Ok(())
@@ -70,8 +70,8 @@ impl SessionHandle {
             } else {
                 let (document, baseline) =
                     load_session_lifetime_usage_with_goal_baseline(&locator)?;
-                if let Some(baseline) = baseline {
-                    if let Err(error) = self.mutate_durable_if_changed(
+                if let Some(baseline) = baseline
+                    && let Err(error) = self.mutate_durable_if_changed(
                         SessionMutationAdmission::MetadataOnly,
                         SessionFlushReason::MetadataChanged,
                         |session| {
@@ -85,9 +85,9 @@ impl SessionHandle {
                                 },
                             )
                         },
-                    ) {
-                        tracing::warn!("[session-usage] legacy Goal baseline: {error}");
-                    }
+                    )
+                {
+                    tracing::warn!("[session-usage] legacy Goal baseline: {error}");
                 }
                 document
             };

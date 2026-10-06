@@ -5,6 +5,10 @@ use super::*;
 
 /// Managed and flat removals borrow their existing concrete protocols, without a parallel ledger.
 /// 受管及平铺移除借用既有具体协议，不建立并行账本。
+#[allow(
+    clippy::large_enum_variant,
+    reason = "exactly one value exists per in-flight uninstall and is never stored in a collection"
+)]
 pub(super) enum OriginalRemoval {
     /// Same physical selection and pre-callback local state originals.
     /// 相同物理选择及回调前本地状态原实例。

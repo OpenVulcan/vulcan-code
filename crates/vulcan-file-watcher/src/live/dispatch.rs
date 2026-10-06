@@ -247,7 +247,7 @@ mod tests {
         let (subscriber, _receiver) = watcher.add_subscriber();
         let root = std::fs::canonicalize(std::env::temp_dir()).expect("temporary root");
         let first = subscriber.register_path(root.clone(), true);
-        let inputs = capture(&watcher.state, &[root.clone()]);
+        let inputs = capture(&watcher.state, std::slice::from_ref(&root));
         assert_eq!(inputs.len(), 1);
         // Filesystem work occurs after capture's read guard has been released.
         // 捕获阶段的读守卫释放后，才进行文件系统操作。

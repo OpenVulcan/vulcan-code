@@ -189,13 +189,12 @@ fn run(
                     .is_some_and(|origin| origin.trigger_id != accepted.trigger_id)
                     && target.satisfied.is_some()
             })
+            && let Err(error) = manager.forget_formal_call(&call.invocation_id, &accepted.owner)
         {
-            if let Err(error) = manager.forget_formal_call(&call.invocation_id, &accepted.owner) {
-                failures.push(format!(
-                    "Previous automatic receipt {} acknowledgement failed: {error}",
-                    call.invocation_id
-                ));
-            }
+            failures.push(format!(
+                "Previous automatic receipt {} acknowledgement failed: {error}",
+                call.invocation_id
+            ));
         }
     }
     let catalog = manager.snapshot();

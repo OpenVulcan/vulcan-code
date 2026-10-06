@@ -178,13 +178,17 @@ fn rejects_unknown_keys() {
     assert!(serde_json::from_value::<VulcanPluginSettingsLayout>(value).is_err());
 }
 
+/// One in-place mutation applied to a valid layout document.
+/// 作用于有效版面文档的一次原地修改。
+type LayoutMutation = fn(&mut serde_json::Value);
+
 /// Verifies each semantic rule reports its own violation.
 /// 验证每条语义规则都报告自身的违规。
 #[test]
 fn rejects_semantic_violations() {
     // cases pairs one mutation of the valid layout with a fragment of the expected error.
     // cases 将对有效版面的一次修改与预期错误片段配对。
-    let cases: Vec<(fn(&mut serde_json::Value), &str)> = vec![
+    let cases: Vec<(LayoutMutation, &str)> = vec![
         (|value| value["schema_version"] = json!(2), "schema_version"),
         (
             |value| value["sections"][0]["items"][0]["key"] = json!("absent"),
@@ -338,7 +342,7 @@ fn rejects_page_and_data_violations() {
             .last_mut()
             .expect("stats section")
     }
-    let cases: Vec<(fn(&mut serde_json::Value), &str)> = vec![
+    let cases: Vec<(LayoutMutation, &str)> = vec![
         (
             |value| value["tabs"][1]["sections"] = json!(["stats", "behavior"]),
             "more than one tab",

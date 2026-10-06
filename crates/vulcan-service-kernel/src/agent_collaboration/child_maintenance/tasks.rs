@@ -94,7 +94,7 @@ pub(crate) async fn run(
     let app = app.clone();
     // The completion receiver can be dropped without cancelling the owned worker or its cleanup.
     // 完成接收端可以被丢弃，不会取消所属工作任务或清理。
-    let result = spawn(&state, &registry, &handle, profile, async move {
+    let result = spawn(state, &registry, &handle, profile, async move {
         // Acquire shared task exclusion before waiting, so an idle QA cannot replace the maintenance source.
         // 等待前获取共享任务互斥，防止空闲答疑替换维护来源。
         let Some(admission) = runtime.try_reserve_child_context_maintenance(

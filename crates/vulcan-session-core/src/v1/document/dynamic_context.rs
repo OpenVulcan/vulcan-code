@@ -191,16 +191,15 @@ impl SessionDocument {
                     });
                 }
             }
-            if input.operation == DynamicContextOperation::Remove {
-                if input.raw_content.is_none()
+            if input.operation == DynamicContextOperation::Remove
+                && (input.raw_content.is_none()
                     || input.ttl_turns.is_some()
-                    || input.occurrence.is_none()
-                {
-                    return Err(DomainError::ImmutableFieldMutation {
-                        entity: "dynamic_context",
-                        field: "remove_input",
-                    });
-                }
+                    || input.occurrence.is_none())
+            {
+                return Err(DomainError::ImmutableFieldMutation {
+                    entity: "dynamic_context",
+                    field: "remove_input",
+                });
             }
             if desired.insert(input.producer_key.clone(), input).is_some() {
                 return Err(DomainError::ImmutableFieldMutation {
@@ -421,6 +420,7 @@ impl SessionDocument {
 
     /// Stages one raw dynamic-context event without publishing partial state.
     /// 暂存一条原始动态上下文事件且不发布部分状态。
+    #[allow(clippy::too_many_arguments)]
     fn stage_dynamic_context_event(
         &self,
         staged_allocator: &mut IdAllocator,

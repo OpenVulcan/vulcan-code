@@ -59,10 +59,11 @@ struct TemplateCache {
 
 impl TemplateCache {
     fn get(&mut self, path: &Path, stamp: &Stamp, now: Instant) -> Option<Arc<str>> {
-        if let Some(entry) = self.entries.get(path) {
-            if &entry.stamp == stamp && now.saturating_duration_since(entry.loaded) < MAX_AGE {
-                return Some(Arc::clone(&entry.content));
-            }
+        if let Some(entry) = self.entries.get(path)
+            && &entry.stamp == stamp
+            && now.saturating_duration_since(entry.loaded) < MAX_AGE
+        {
+            return Some(Arc::clone(&entry.content));
         }
         self.remove(path);
         None
@@ -116,27 +117,26 @@ pub(super) fn read(path: &Path) -> io::Result<Arc<str>> {
     };
     let mut file = File::open(&path)?;
     let before = stamp(&file.metadata()?);
-    if let Some(before) = &before {
-        if let Some(content) = CACHE
+    if let Some(before) = &before
+        && let Some(content) = CACHE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&path, before, Instant::now())
-        {
-            return Ok(content);
-        }
+    {
+        return Ok(content);
     }
     let mut text = String::new();
     file.read_to_string(&mut text)?;
     let content: Arc<str> = text.into();
-    if let Some(before) = before {
-        if stamp(&file.metadata()?).as_ref() == Some(&before) {
-            // Never hold the process-wide cache mutex across filesystem reads.
-            // 绝不跨文件系统读取持有进程级缓存互斥锁。
-            CACHE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(path, before, Arc::clone(&content), Instant::now());
-        }
+    if let Some(before) = before
+        && stamp(&file.metadata()?).as_ref() == Some(&before)
+    {
+        // Never hold the process-wide cache mutex across filesystem reads.
+        // 绝不跨文件系统读取持有进程级缓存互斥锁。
+        CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(path, before, Arc::clone(&content), Instant::now());
     }
     Ok(content)
 }

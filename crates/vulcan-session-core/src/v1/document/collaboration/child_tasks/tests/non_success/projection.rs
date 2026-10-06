@@ -252,10 +252,10 @@ fn child_non_success_projection_checks_api_and_recovery_proofs() {
         .unwrap()
         .into_value();
     for event in &mut parent.events {
-        if event.seq == projection.inputs[0].input_seq {
-            if let EventBody::UserInput(input) = &mut event.event {
-                input.text.push_str("tampered");
-            }
+        if event.seq == projection.inputs[0].input_seq
+            && let EventBody::UserInput(input) = &mut event.event
+        {
+            input.text.push_str("tampered");
         }
     }
     assert!(reload(&parent).is_err());

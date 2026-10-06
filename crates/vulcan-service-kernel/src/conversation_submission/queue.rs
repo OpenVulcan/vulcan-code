@@ -439,20 +439,20 @@ pub(crate) fn queue_existing_submission(
         // A duplicate admission can be the first opportunity to finish a lease handoff that
         // failed after the original V1 commit. Only a still-queued row may regain queue ownership.
         // 重复准入可能是原 V1 提交后租约转交失败的首次修复机会；仅仍在队列中的记录可重新取得队列所有权。
-        if currently_queued {
-            if let Err(error) = transfer_committed_queue_attachment_lease(
+        if currently_queued
+            && let Err(error) = transfer_committed_queue_attachment_lease(
                 &workspace_path,
                 session_id,
                 client_submission_id.as_str(),
                 true,
                 &attachments,
                 attachment_draft_scope.as_deref(),
-            ) {
-                webui_trace(
-                    "queued_attachment_lease_handoff_retry_failed",
-                    format!("session={session_id} error={error}"),
-                );
-            }
+            )
+        {
+            webui_trace(
+                "queued_attachment_lease_handoff_retry_failed",
+                format!("session={session_id} error={error}"),
+            );
         }
         let (revision, run_phase) = current_queued_submission_ack_state(state, session_id)?;
         webui_submit_trace(

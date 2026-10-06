@@ -993,8 +993,8 @@ pub fn query_json<'a>(
     sql: impl AsRef<str>,
     params: &[SqliteValue],
 ) -> Result<QueryJsonResult, String> {
-    let mut connection = connect(runtime, target)?;
-    sql_exec::query_json(&mut connection, sql.as_ref(), params).map_err(render)
+    let connection = connect(runtime, target)?;
+    sql_exec::query_json(&connection, sql.as_ref(), params).map_err(render)
 }
 
 /// Runs one query and returns its rows as Arrow IPC bytes.

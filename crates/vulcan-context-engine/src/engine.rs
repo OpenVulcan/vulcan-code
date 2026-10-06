@@ -4074,6 +4074,7 @@ impl VceEngine {
 
     /// Ensure every remote task for one purpose is durably planned before provider I/O.
     /// 在供应商 I/O 前确保一个用途的全部远端任务均已持久规划。
+    #[allow(clippy::too_many_arguments)]
     async fn ensure_embedding_remote_batch_records(
         &self,
         plan: &EmbeddingPlan,
@@ -6457,6 +6458,7 @@ fn observe_remote_batch_progress(
 
 /// Publish provider-reported request counts while one durable remote task is running.
 /// 在一个持久远端任务运行期间发布供应商报告的请求计数。
+#[allow(clippy::too_many_arguments)]
 fn observe_remote_request_progress(
     control: &VceRefreshControl,
     request_id: &str,
@@ -9014,7 +9016,7 @@ mod tests {
                     ),
                     FileObservation::present(
                         "src/large.rs",
-                        &"x".repeat(65),
+                        "x".repeat(65),
                         Some(1),
                         crate::FileSource::Filesystem,
                     ),
@@ -10278,14 +10280,15 @@ mod tests {
                 .flat_map(|batch| batch.request_input_ids())
                 .collect::<Vec<_>>()
         );
-        let records = index.remote_batch_records.lock().unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records.values().next().unwrap().first_logical_batch_index,
-            1
-        );
-        assert_eq!(records.values().next().unwrap().logical_batch_count, 1);
-        drop(records);
+        {
+            let records = index.remote_batch_records.lock().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(
+                records.values().next().unwrap().first_logical_batch_index,
+                1
+            );
+            assert_eq!(records.values().next().unwrap().logical_batch_count, 1);
+        }
         // No remote records are required when every result is already durable.
         // 全部结果已持久化时无需任何远端记录。
         index.remote_batch_records.lock().unwrap().clear();

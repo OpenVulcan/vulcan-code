@@ -694,7 +694,7 @@ fn existing_submission_commit_moves_runtime_state_without_transcript_projection(
         Some("review")
     );
     assert!(
-        candidate.session_runtime_state.get(&session_id).is_none(),
+        !candidate.session_runtime_state.contains_key(&session_id),
         "runtime state should transfer instead of cloning at commit"
     );
 }

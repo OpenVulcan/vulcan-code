@@ -637,11 +637,10 @@ async fn notification_stranded_before_acceptance_is_repaired_by_the_outbox_pass(
     assert_eq!(stranded.target_revision, None);
     assert!(
         target
-            .read(|document| document
+            .read(|document| !document
                 .collaboration_state()
                 .inbound_notifications
-                .get(&notification_id)
-                .is_none())
+                .contains_key(&notification_id))
             .unwrap(),
         "the crash window must leave the target without the notification"
     );
@@ -1689,11 +1688,10 @@ async fn stranded_notification_is_refused_after_the_target_stops() {
     // 已停止的目标必须未被本次投递尝试改动。
     assert!(
         target
-            .read(|document| document
+            .read(|document| !document
                 .collaboration_state()
                 .inbound_notifications
-                .get(&notification_id)
-                .is_none())
+                .contains_key(&notification_id))
             .unwrap(),
         "a stopped target must not receive the notification"
     );
@@ -1869,11 +1867,10 @@ async fn revoked_cross_project_grant_blocks_stranded_notification_recovery() {
     // 已撤销授权的目标必须未被改动。
     assert!(
         target
-            .read(|document| document
+            .read(|document| !document
                 .collaboration_state()
                 .inbound_notifications
-                .get(&notification_id)
-                .is_none())
+                .contains_key(&notification_id))
             .unwrap(),
         "a revoked grant must keep the notification off the target"
     );

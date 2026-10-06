@@ -1543,11 +1543,13 @@ fn profile_publication_rechecks_sources_for_failure_and_delayed_success() {
             vulcan_vmm::VmmMemoryReadSource::new(old_source.owner.clone(), vec![7, 8])
                 .expect("linked scope changed")
         };
-        let mut runtime_state = SessionRuntimeStateEntry::default();
-        runtime_state.vmm_profile_sync = VmmProfileSyncState {
-            read_source: Some(old_source),
-            base_profile_content: Some("old-profile-secret".to_owned()),
-            ..Default::default()
+        let mut runtime_state = SessionRuntimeStateEntry {
+            vmm_profile_sync: VmmProfileSyncState {
+                read_source: Some(old_source),
+                base_profile_content: Some("old-profile-secret".to_owned()),
+                ..Default::default()
+            },
+            ..SessionRuntimeStateEntry::default()
         };
         let old_profile = runtime_state.vmm_profile_sync.clone();
         let start = begin_user_prompt(&mut runtime_state);

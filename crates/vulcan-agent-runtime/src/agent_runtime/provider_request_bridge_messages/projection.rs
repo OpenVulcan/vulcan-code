@@ -24,7 +24,7 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
         protocol_profile_id,
         capabilities,
         &[],
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
 }
 

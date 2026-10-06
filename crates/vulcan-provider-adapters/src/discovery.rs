@@ -4921,7 +4921,8 @@ mod manifest_migration_tests {
     fn deepseek_rules_equal_legacy_enrichment() {
         // v4-flash is retired on the official provider, so it has no manifest rule to compare.
         // v4-flash 已从官方下线，清单中没有可比较的规则。
-        for model_id in ["deepseek-v4-pro"] {
+        {
+            let model_id = "deepseek-v4-pro";
             assert_rule_equals_legacy(
                 "deepseek",
                 "official-api",

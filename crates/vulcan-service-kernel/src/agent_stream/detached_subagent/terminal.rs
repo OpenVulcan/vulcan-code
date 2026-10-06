@@ -252,12 +252,12 @@ pub(super) async fn handle_parent_event(
             cleaned
         };
         if cleaned_current_listener {
-            if closed_by_runtime && question_return_settled {
-                if let Err(error) =
+            if closed_by_runtime
+                && question_return_settled
+                && let Err(error) =
                     crate::agent_collaboration::release_closed_child_handle(state, task_id).await
-                {
-                    tracing::warn!(%task_id, %error, "Closed child V1 handle remains registered");
-                }
+            {
+                tracing::warn!(%task_id, %error, "Closed child V1 handle remains registered");
             }
             emit_webui_subagent_navigation_changed_delta_for_parent(app, state, parent_session_id)?;
         }

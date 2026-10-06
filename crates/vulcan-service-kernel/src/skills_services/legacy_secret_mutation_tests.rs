@@ -1446,35 +1446,37 @@ async fn legacy_secret_mutation_published_return_loss_keeps_committed_native_own
     assert!(fixture.value().as_deref() == Some("candidate-fixture-value"));
     // Projection advances only its complete service pointer while retaining the same original native lease.
     // 投影仅推进其完整服务指针，同时保留相同原原生租约。
-    let state = fixture
-        .state
-        .lock()
-        .expect("completed committed projection");
-    assert_eq!(state.workbench_generation, workbench_before + 1);
-    assert_eq!(state.workbench.revision, state.workbench_generation);
-    assert_eq!(
-        state
-            .agent_runtime
-            .as_ref()
-            .expect("real bridge")
-            .extension_generation
-            .revision(),
-        committed.revision() + 1
-    );
-    // Exactly one actual client event has the same authoritative workbench revision and no credential bytes.
-    // 恰好一个实际客户端事件具有相同权威工作台修订，且没有凭据字节。
-    let delivered = events.events.lock().expect("delivered committed recovery");
-    assert_eq!(delivered.len(), 1);
-    assert!(delivered.iter().any(|event| matches!(event,
-        vulcan_service_api::ServiceEvent::WorkbenchDelta(envelope)
-        if envelope.generation == state.workbench_generation
-            && matches!(&envelope.delta, vulcan_service_api::WorkbenchDelta::PluginCatalogChanged(_)))));
-    // Serialization exercises the actual public event, independently of status redaction.
-    // 序列化验证实际公开事件，与状态脱敏相互独立。
-    let wire = serde_json::to_string(&*delivered).expect("actual public recovery projection");
-    assert!(!wire.contains("original-fixture-value") && !wire.contains("candidate-fixture-value"));
-    drop(delivered);
-    drop(state);
+    {
+        let state = fixture
+            .state
+            .lock()
+            .expect("completed committed projection");
+        assert_eq!(state.workbench_generation, workbench_before + 1);
+        assert_eq!(state.workbench.revision, state.workbench_generation);
+        assert_eq!(
+            state
+                .agent_runtime
+                .as_ref()
+                .expect("real bridge")
+                .extension_generation
+                .revision(),
+            committed.revision() + 1
+        );
+        // Exactly one actual client event has the same authoritative workbench revision and no credential bytes.
+        // 恰好一个实际客户端事件具有相同权威工作台修订，且没有凭据字节。
+        let delivered = events.events.lock().expect("delivered committed recovery");
+        assert_eq!(delivered.len(), 1);
+        assert!(delivered.iter().any(|event| matches!(event,
+            vulcan_service_api::ServiceEvent::WorkbenchDelta(envelope)
+            if envelope.generation == state.workbench_generation
+                && matches!(&envelope.delta, vulcan_service_api::WorkbenchDelta::PluginCatalogChanged(_)))));
+        // Serialization exercises the actual public event, independently of status redaction.
+        // 序列化验证实际公开事件，与状态脱敏相互独立。
+        let wire = serde_json::to_string(&*delivered).expect("actual public recovery projection");
+        assert!(
+            !wire.contains("original-fixture-value") && !wire.contains("candidate-fixture-value")
+        );
+    }
     // Dropping historical control cannot shut down the same actually published native process.
     // 销毁历史控制不能关闭相同实际已发布原生进程。
     let again = binding

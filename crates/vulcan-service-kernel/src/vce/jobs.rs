@@ -5132,8 +5132,10 @@ mod tests {
     /// 无参数。断言无启动调度、耗时有界及精确剩余延时。
     #[test]
     fn restored_admission_preserves_cooldown_without_scheduling() {
-        let mut settings = ProjectVceSettings::default();
-        settings.update_mode = vulcan_workbench_model::ProjectVceUpdateMode::Automatic;
+        let mut settings = ProjectVceSettings {
+            update_mode: vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
+            ..ProjectVceSettings::default()
+        };
         let mut schedule = VceJobSchedule::new(&settings);
         let now = tokio::time::Instant::now();
         schedule.restore_admission(10_000, 40_000, now);

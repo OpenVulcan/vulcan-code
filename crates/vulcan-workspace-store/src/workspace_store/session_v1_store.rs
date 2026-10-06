@@ -2753,7 +2753,7 @@ connection.close()
         local_sql::execute_script(
             app,
             LogicalDatabase::AppState,
-            &crate::data_plane::build_application_schema_script(),
+            crate::data_plane::build_application_schema_script(),
             &[],
         )
         .expect("create the production application schema");

@@ -25,10 +25,8 @@ fn truncate_after_keeps_contiguity() {
     let kept = doc.events().len();
     doc.truncate_after(Seq::try_new(kept as u64).unwrap(), T0 + 10)
         .unwrap();
-    let mut expected = 1u64;
-    for event in doc.events() {
+    for (expected, event) in (1u64..).zip(doc.events()) {
         assert_eq!(event.seq.value(), expected);
-        expected += 1;
     }
 }
 
@@ -361,7 +359,7 @@ fn event_candidate_copies_only_active_tail() {
         candidate
             .tail_events
             .iter()
-            .all(|event| event.seq().value() >= first_tail_seq + 1)
+            .all(|event| event.seq().value() > first_tail_seq)
     );
     doc.advance_durable(candidate.revision).unwrap();
     assert_eq!(doc.durable_revision(), doc.memory_revision());

@@ -79,19 +79,18 @@ fn validate_owner(
             field: "child_compaction.business_owner",
         });
     }
-    if let Some(maintenance) = maintenance {
-        if document.metadata.context_maintenance.as_ref() != Some(maintenance)
+    if let Some(maintenance) = maintenance
+        && (document.metadata.context_maintenance.as_ref() != Some(maintenance)
             || maintenance.terminal.is_some()
             || maintenance.turn_id != turn.turn_id
             || turn.origin != TurnOrigin::ContextMaintenance
             || maintenance.business_turn_id != profile.business_turn_id
             || maintenance.business_execution_id.as_str() != profile.business_execution_id
-            || maintenance.segment_generation != document.segment_generation()
-        {
-            return Err(DomainError::CollaborationStateViolation {
-                field: "child_compaction.maintenance_owner",
-            });
-        }
+            || maintenance.segment_generation != document.segment_generation())
+    {
+        return Err(DomainError::CollaborationStateViolation {
+            field: "child_compaction.maintenance_owner",
+        });
     }
     if document.active_api().is_some() {
         return Err(DomainError::CollaborationStateViolation {

@@ -677,6 +677,7 @@ impl ProviderExecutionClient {
     /// 返回值
     /// A normalized all-or-nothing embedding response or a structured failure.
     /// 返回归一化的整批成功向量响应或结构化失败。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_embedding(
         &self,
         route: &ProviderExecutionRoute,

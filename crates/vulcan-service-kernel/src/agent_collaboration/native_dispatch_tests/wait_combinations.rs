@@ -46,7 +46,7 @@ async fn question_wait_timeout_does_not_consume_the_question_for_a_later_wait() 
                 .questions
                 .values()
                 .next()
-                .map(|question| (question.state.clone(), question.answer.is_some()))
+                .map(|question| (question.state, question.answer.is_some()))
         })
         .unwrap();
     assert_eq!(
@@ -147,7 +147,7 @@ async fn question_wait_cursor_resumes_instead_of_waking_on_session_revision() {
                     .questions
                     .values()
                     .next()
-                    .map(|question| (question.state.clone(), question.answer.is_some()))
+                    .map(|question| (question.state, question.answer.is_some()))
             })
             .unwrap(),
         Some((
@@ -266,7 +266,7 @@ async fn cancel_after_observation_settles_the_question_and_blocks_further_waitin
                 .questions
                 .values()
                 .next()
-                .map(|question| question.state.clone())
+                .map(|question| question.state)
         })
         .unwrap();
     assert_eq!(

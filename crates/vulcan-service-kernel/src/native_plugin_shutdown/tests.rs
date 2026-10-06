@@ -209,8 +209,7 @@ fn failed_native_registration_remains_owned_by_the_original_service_shutdown() {
         fixture
             .manager
             .formal_runtime_status()
-            .err()
-            .expect("failed original is not absence")
+            .expect_err("failed original is not absence")
             .message,
         original_error
     );
@@ -249,8 +248,7 @@ fn failed_native_registration_remains_owned_by_the_original_service_shutdown() {
         fixture
             .manager
             .formal_runtime_status()
-            .err()
-            .expect("original failure persists")
+            .expect_err("original failure persists")
             .message,
         original_error
     );

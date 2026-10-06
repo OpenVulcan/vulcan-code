@@ -47,7 +47,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
             Some(&preparation.model_blueprint.public_capabilities),
             &bridge_tool_ids,
             &preparation.runtime_system_updates,
-            ProviderSystemUpdateLoweringPolicy::default(),
+            ProviderSystemUpdateLoweringPolicy,
         )?;
     append_provider_visible_agent_messages_to_core_snapshot(
         &mut core_snapshot,

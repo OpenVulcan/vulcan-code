@@ -1408,11 +1408,11 @@ mod tests {
                                 "a retained operation exceeded its event cap"
                             );
                             assert!(
-                                view.percent.map_or(true, |percent| percent <= 100),
+                                view.percent.is_none_or(|percent| percent <= 100),
                                 "a percentage escaped its clamp"
                             );
                         }
-                        let _ = global_operation_progress_view(&correlation_id);
+                        let _ = global_operation_progress_view(correlation_id);
                     }
                 });
             }

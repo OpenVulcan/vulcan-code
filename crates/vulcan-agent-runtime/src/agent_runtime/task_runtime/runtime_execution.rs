@@ -226,15 +226,14 @@ pub(crate) async fn run_task_with_shared_runtime_context(
     // 发布启动前认领可信坐标；在宿主创建子文档后预留。
     let lifecycle_binding =
         task_runtime.take_child_task_lifecycle_binding(request.execution_id.as_str())?;
-    if let Some(binding) = &lifecycle_binding {
-        if binding.reservation.execution.task_session_id != request.task_id
-            || binding.reservation.execution.execution_id != request.execution_id
-        {
-            return Err(format!(
-                "Child lifecycle binding does not match task `{}` execution `{}`.",
-                request.task_id, request.execution_id
-            ));
-        }
+    if let Some(binding) = &lifecycle_binding
+        && (binding.reservation.execution.task_session_id != request.task_id
+            || binding.reservation.execution.execution_id != request.execution_id)
+    {
+        return Err(format!(
+            "Child lifecycle binding does not match task `{}` execution `{}`.",
+            request.task_id, request.execution_id
+        ));
     }
     // The startup guard owns explicit abort publication; the host settles any durable reservation.
     // 启动守卫拥有明确中止发布责任；宿主结算已有持久预留。

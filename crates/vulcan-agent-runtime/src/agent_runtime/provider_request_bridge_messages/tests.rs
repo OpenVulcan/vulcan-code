@@ -122,7 +122,7 @@ fn provider_visible_history_applies_system_update_as_user_wrapper() {
         Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
     .expect("system update wrapper should project");
 
@@ -179,7 +179,7 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
         Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
     .expect("system update in a tool-result gap should be moved");
 
@@ -249,7 +249,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
         Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
     .expect("system update in a parallel tool-result gap should be moved");
 
@@ -852,7 +852,7 @@ fn canonical_fixture_dynamic_injection_projects_as_system_update_wrapper() {
         Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
     .expect("dynamic injection wrapper should project");
 
@@ -1420,7 +1420,7 @@ fn provider_visible_history_inserts_system_update_after_media_message_outside_to
         Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         Some(&capabilities),
         &updates,
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
     .expect("a media-anchored system update should project");
 
@@ -1481,7 +1481,7 @@ fn provider_visible_history_keeps_same_anchor_system_updates_in_input_order() {
         Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         None,
         &updates,
-        ProviderSystemUpdateLoweringPolicy::default(),
+        ProviderSystemUpdateLoweringPolicy,
     )
     .expect("two updates sharing one anchor should project");
 

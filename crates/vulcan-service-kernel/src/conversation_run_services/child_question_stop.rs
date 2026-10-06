@@ -108,10 +108,10 @@ pub(crate) async fn stop_owned_child_question_execution(
     if let Some(task) = &active_task {
         task.abort();
     }
-    if let Some(task) = preparation_task {
-        if let Err(error) = task.task.abort_and_wait().await {
-            tracing::warn!("[webui-service] child question preparation aborted task join: {error}");
-        }
+    if let Some(task) = preparation_task
+        && let Err(error) = task.task.abort_and_wait().await
+    {
+        tracing::warn!("[webui-service] child question preparation aborted task join: {error}");
     }
     if let Some(active_task) = active_task {
         // An aborted task may report cancellation; its completed join is the quiescence evidence.

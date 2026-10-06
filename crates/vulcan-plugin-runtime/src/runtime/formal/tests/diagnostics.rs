@@ -99,8 +99,10 @@ fn formal_resource_diagnostics_registry_contention_is_explicit() {
 fn formal_resource_diagnostics_read_during_real_drain_and_exclude_terminal_ownership() {
     // A short drain budget leaves authentic pending physical ownership, never fabricated state.
     // 较短排空预算保留真实待完成物理所有权，绝不伪造状态。
-    let mut settings = VulcanPluginRuntimeSettings::default();
-    settings.shutdown_timeout_ms = 30;
+    let settings = VulcanPluginRuntimeSettings {
+        shutdown_timeout_ms: 30,
+        ..VulcanPluginRuntimeSettings::default()
+    };
     // The fixture's callback waits until explicit release regardless of cooperative cancellation.
     // 夹具回调无论协作取消状态如何，都等待显式放行。
     let fixture = Fixture::new(settings);

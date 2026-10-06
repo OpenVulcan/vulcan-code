@@ -54,10 +54,10 @@ pub(super) fn render(tool: &str, output: &Value) -> Result<Option<String>, Strin
                 append_failure(&mut body, &answer.delivery.failure);
                 // The reply tool already supplied its own body. Other receipts may reveal an existing winning answer.
                 // 回复工具已提交自身正文；其他回执可能揭示已有的胜出答案。
-                if tool != REPLY_QUESTION_TOOL_ID {
-                    if let Some(answer_body) = &answer.body {
-                        body.push_str(&format!("\n## Answer\n\n{}\n", fenced_code(answer_body)));
-                    }
+                if tool != REPLY_QUESTION_TOOL_ID
+                    && let Some(answer_body) = &answer.body
+                {
+                    body.push_str(&format!("\n## Answer\n\n{}\n", fenced_code(answer_body)));
                 }
             }
             if let Some(unable) = receipt.unable_to_answer {

@@ -138,10 +138,10 @@ impl BrowserManager {
             .runtime_maintenance
             .lock()
             .map_err(|_| "browser runtime maintenance lock poisoned")?;
-        if let Some(task) = &maintenance.task {
-            if task.state == "running" {
-                return Ok(task.clone());
-            }
+        if let Some(task) = &maintenance.task
+            && task.state == "running"
+        {
+            return Ok(task.clone());
         }
         let installer = maintenance.installer.clone().ok_or("This Core distribution has no browser installer. Rebuild or update the desktop runtime package.")?;
         let task = BrowserRuntimeInstallTask {

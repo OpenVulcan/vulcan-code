@@ -382,12 +382,11 @@ pub async fn convert(
     if bytes.len() as u64 != byte_len {
         return Err("source size changed during image conversion".into());
     }
-    if let Some(expected) = identity {
-        if expected.byte_len != byte_len
-            || expected.content_sha256 != hex::encode(Sha256::digest(&bytes))
-        {
-            return Err("media source changed from its registered identity".into());
-        }
+    if let Some(expected) = identity
+        && (expected.byte_len != byte_len
+            || expected.content_sha256 != hex::encode(Sha256::digest(&bytes)))
+    {
+        return Err("media source changed from its registered identity".into());
     }
     tokio::task::spawn_blocking(move || encode_png(&bytes, codec.format))
         .await

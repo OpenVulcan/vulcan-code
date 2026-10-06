@@ -3028,10 +3028,9 @@ async fn finished_pre_api_failure_persists_error_and_reopens_admission() {
             .lock()
             .expect("terminal owner table should remain readable");
         assert!(
-            guard
+            !guard
                 .session_terminal_persistence_owners
-                .get(&session_id)
-                .is_none()
+                .contains_key(&session_id)
         );
     }
     let first_revision = handle
@@ -3492,10 +3491,9 @@ async fn post_terminal_failure_persists_error_without_rewriting_completed_api() 
         .lock()
         .expect("terminal owner table should remain readable");
     assert!(
-        owner_release
+        !owner_release
             .session_terminal_persistence_owners
-            .get(&session_id)
-            .is_none()
+            .contains_key(&session_id)
     );
 }
 
@@ -3656,10 +3654,9 @@ async fn finished_active_api_failure_persists_exact_error_and_reopens_admission(
         .lock()
         .expect("terminal owner table should remain readable");
     assert!(
-        guard
+        !guard
             .session_terminal_persistence_owners
-            .get(&session_id)
-            .is_none()
+            .contains_key(&session_id)
     );
 }
 
@@ -3770,9 +3767,8 @@ fn preparation_failure_boundary_rejects_replacement_kernel_turn() {
     let guard = shared_state.lock().expect("inspect replacement owner");
     assert!(webui_session_kernel_has_active_turn(&guard, session_id));
     assert!(
-        guard
+        !guard
             .session_terminal_persistence_owners
-            .get(&session_id)
-            .is_none()
+            .contains_key(&session_id)
     );
 }

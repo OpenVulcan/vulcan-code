@@ -101,25 +101,22 @@ mod tests {
     /// 活动请求保留冻结节点，替代请求取得新节点。
     #[test]
     fn context_window_change_applies_only_to_the_next_safe_request_boundary() {
-        let frozen_node_id = Some(
-            "compression-window-1"
-                .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-                .expect("valid frozen node"),
-        );
+        let frozen_node_id = "compression-window-1"
+            .parse::<vulcan_context::ContextCompactionWindowNodeId>()
+            .expect("valid frozen node");
         let retained_node_id = Some(
             "compression-window-4"
                 .parse::<vulcan_context::ContextCompactionWindowNodeId>()
                 .expect("valid retained node"),
         );
 
-        let next_node_id =
-            next_context_compaction_window_node_at_safe_boundary(frozen_node_id, retained_node_id)
-                .expect("changed node should be admitted at the safe boundary");
+        let next_node_id = next_context_compaction_window_node_at_safe_boundary(
+            Some(frozen_node_id),
+            retained_node_id,
+        )
+        .expect("changed node should be admitted at the safe boundary");
 
-        assert_eq!(
-            frozen_node_id.expect("frozen node").as_str(),
-            "compression-window-1"
-        );
+        assert_eq!(frozen_node_id.as_str(), "compression-window-1");
         assert_eq!(
             next_node_id.expect("next node").as_str(),
             "compression-window-4"

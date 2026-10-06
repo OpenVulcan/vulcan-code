@@ -102,7 +102,7 @@ async fn run_live_saved_fixed_model_acceptance() {
     let credential_record = {
         // connection is a short-lived, strictly read-only view of the authoritative saved database.
         // connection 是权威持久化数据库的短期严格只读视图。
-        let mut connection = open_sqlite_connection(
+        let connection = open_sqlite_connection(
             &config_path
                 .parent()
                 .unwrap()
@@ -113,7 +113,7 @@ async fn run_live_saved_fixed_model_acceptance() {
         // rows never leave this process or enter test output; the filter is bound, not interpolated.
         // rows 不离开当前进程且不进入测试输出；筛选条件使用绑定，不进行插值。
         let rows = query_json(
-            &mut connection,
+            &connection,
             "SELECT * FROM ai_credential_secrets WHERE secret_reference = ?1 LIMIT 1",
             &[SqliteValue::Text(
                 selection.route.connection.secret_reference.clone(),

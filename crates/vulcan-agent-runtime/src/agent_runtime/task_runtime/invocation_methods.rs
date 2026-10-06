@@ -409,10 +409,10 @@ impl TaskRuntime {
                     .durable_return_mailboxes
                     .read()
                     .map_err(|_| "The durable return registry is locked.")?;
-                if let Some((_, cached)) = returns.get(&task_id) {
-                    if cached.is_none() {
-                        session_ids.insert(entry.session_id);
-                    }
+                if let Some((_, cached)) = returns.get(&task_id)
+                    && cached.is_none()
+                {
+                    session_ids.insert(entry.session_id);
                 }
             }
             if entry.status.is_running()

@@ -2091,9 +2091,7 @@ impl McpRuntimeAccess {
                 .owned_stdio_partitions
                 .lock()
                 .expect("owned MCP stdio partition registry poisoned");
-            let Some(existing) = registry.get(key).cloned() else {
-                return None;
-            };
+            let existing = registry.get(key).cloned()?;
             if !existing.is_revoked() && !existing.runtime.is_fully_stopped() {
                 return Some(existing);
             }

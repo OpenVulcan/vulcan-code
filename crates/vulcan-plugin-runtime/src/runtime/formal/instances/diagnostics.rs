@@ -65,11 +65,11 @@ pub(in crate::runtime::formal) fn sample(
             {
                 row.session(owner.host.runtime().session(id).map_err(core_error)?);
             }
-            if let Some(handle) = &state.initialization {
-                if !state.initialization_forgotten {
-                    row.operations
-                        .push(operation(&handle.snapshot().map_err(core_error)?));
-                }
+            if let Some(handle) = &state.initialization
+                && !state.initialization_forgotten
+            {
+                row.operations
+                    .push(operation(&handle.snapshot().map_err(core_error)?));
             }
             for retained in state.operations.values() {
                 row.operations

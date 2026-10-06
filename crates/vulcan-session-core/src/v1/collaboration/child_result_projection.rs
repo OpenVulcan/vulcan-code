@@ -254,8 +254,7 @@ impl CollaborationState {
                 execution_id,
                 result_seq,
             } = &operation.semantic
-            {
-                if !self
+                && !self
                     .child_tasks
                     .get(execution_id)
                     .and_then(|task| task.non_success_projection.as_ref())
@@ -264,11 +263,10 @@ impl CollaborationState {
                             && projection.event_seq == operation.event_seq
                             && projection.result_seq == *result_seq
                     })
-                {
-                    return Err(DomainError::CollaborationStateViolation {
-                        field: "collaboration.child_result.projection_operation_owner",
-                    });
-                }
+            {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "collaboration.child_result.projection_operation_owner",
+                });
             }
         }
         Ok(())

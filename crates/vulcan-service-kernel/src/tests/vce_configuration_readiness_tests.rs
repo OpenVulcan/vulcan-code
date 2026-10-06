@@ -84,7 +84,7 @@ fn real_host_storage_vce_route_save_is_atomic_and_preserves_peer_profiles() {
                 let before_revision = state.lock().expect("state").workbench.revision;
                 let error = service_save_public_ai_inference_route(
                     crate::ServiceEventEmitter::new(Vec::new()), state.clone(), stale_request)
-                    .await.err().expect("stale review must fail");
+                    .await.expect_err("stale review must fail");
                 assert!(error.contains("changed after preflight"), "{error}");
                 assert_eq!(std::fs::read(&config_path).expect("rejected bytes"), before_bytes);
                 assert_eq!(runtime.configuration_snapshot().expect("rejected runtime"), configuration);

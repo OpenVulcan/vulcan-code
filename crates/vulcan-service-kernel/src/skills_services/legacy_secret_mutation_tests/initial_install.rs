@@ -521,8 +521,7 @@ async fn initial_install_original_second_write_panic_retains_same_request_for_rp
     assert_eq!(
         independent
             .acquire_legacy_mutation_guard(&fixture.actual.plugin_id, None)
-            .err()
-            .expect("retained actual original file")
+            .expect_err("retained actual original file")
             .code,
         vulcan_plugin_runtime::VulcanPluginStoreErrorCode::Busy
     );
@@ -732,7 +731,7 @@ async fn initial_install_original_native_ready_panic_keeps_physical_owner_until_
         )
     );
     assert!(
-        fixture
+        !fixture
             .actual
             .state
             .lock()
@@ -744,8 +743,7 @@ async fn initial_install_original_native_ready_panic_keeps_physical_owner_until_
             .plugin_catalog()
             .expect("actual uncommitted catalog")
             .plugins
-            .get(&fixture.actual.plugin_id)
-            .is_none()
+            .contains_key(&fixture.actual.plugin_id)
     );
     fixture
         .recover(ServiceEventEmitter::new(Vec::new()), &request)

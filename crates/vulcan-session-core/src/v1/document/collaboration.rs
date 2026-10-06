@@ -511,14 +511,13 @@ impl SessionDocument {
                 });
             }
         }
-        if let Some(transition) = latest_run_control {
-            if self.metadata.collaboration.state.run_control_history.last() != Some(transition)
-                || self.metadata.collaboration.state.run_control != transition.state
-            {
-                return Err(DomainError::CollaborationStateViolation {
-                    field: "collaboration.resident.run_control_after_state",
-                });
-            }
+        if let Some(transition) = latest_run_control
+            && (self.metadata.collaboration.state.run_control_history.last() != Some(transition)
+                || self.metadata.collaboration.state.run_control != transition.state)
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.resident.run_control_after_state",
+            });
         }
         if let Some(last) = last_event_seq {
             if last.value() == 0 {
@@ -2684,13 +2683,12 @@ impl SessionDocument {
                 }
             }
         }
-        let answer =
-            question
-                .answer
-                .as_mut()
-                .ok_or_else(|| DomainError::CollaborationStateViolation {
-                    field: "collaboration.answer_delivery.answer_missing",
-                })?;
+        let answer = question
+            .answer
+            .as_mut()
+            .ok_or(DomainError::CollaborationStateViolation {
+                field: "collaboration.answer_delivery.answer_missing",
+            })?;
         if question.state != CollaborationQuestionState::Answered {
             return Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.answer_delivery.question_state",

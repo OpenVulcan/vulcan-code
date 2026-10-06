@@ -129,8 +129,10 @@ fn native_timeout_retains_original_owner_until_real_finalization_and_retry_join(
         .expect("real native finalizer service");
     // A test-specific setting makes timeout deterministic while the finalizer waits for explicit acknowledgement.
     // 测试专用设置使超时确定，同时关闭器等待明确确认。
-    let mut settings = VulcanPluginRuntimeSettings::default();
-    settings.shutdown_timeout_ms = 25;
+    let settings = VulcanPluginRuntimeSettings {
+        shutdown_timeout_ms: 25,
+        ..VulcanPluginRuntimeSettings::default()
+    };
     fixture.initialize(settings).expect("real native parent");
     fixture
         .manager

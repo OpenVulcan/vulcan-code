@@ -1418,8 +1418,8 @@ impl CollaborationState {
             }
         }
         for child in self.child_tasks.values() {
-            if let Some(result) = &child.non_success_result {
-                if !self
+            if let Some(result) = &child.non_success_result
+                && !self
                     .operations
                     .get(&result.operation_id)
                     .is_some_and(|operation| {
@@ -1436,11 +1436,10 @@ impl CollaborationState {
                                     state: CollaborationChildTaskState::Terminal,
                                 })
                     })
-                {
-                    return Err(DomainError::CollaborationStateViolation {
-                        field: "collaboration.child_result.operation",
-                    });
-                }
+            {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "collaboration.child_result.operation",
+                });
             }
             // Terminal callbacks stay anchored to the authenticated reservation.
             // 终态回调始终锚定已认证预留。
@@ -1698,8 +1697,7 @@ impl CollaborationState {
                         execution_id: owner,
                         proof,
                     } = &operation.semantic
-                    {
-                        if owner != execution_id
+                        && (owner != execution_id
                             || !self
                                 .child_tasks
                                 .get(owner)
@@ -1708,12 +1706,11 @@ impl CollaborationState {
                                     result.proof == *proof
                                         && result.operation_id == operation.operation_id
                                         && result.event_seq == operation.event_seq
-                                })
-                        {
-                            return Err(DomainError::CollaborationStateViolation {
-                                field: "collaboration.child_result.operation_owner",
-                            });
-                        }
+                                }))
+                    {
+                        return Err(DomainError::CollaborationStateViolation {
+                            field: "collaboration.child_result.operation_owner",
+                        });
                     }
                     if !self
                         .child_tasks
@@ -2045,6 +2042,10 @@ pub enum CollaborationEventKind {
 /// 一条协作事件只保存其变更实体的强类型后状态。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "several variants exceed 700 bytes, so boxing the largest one would not shrink the enum"
+)]
 pub enum CollaborationAfterState {
     /// Exact immutable proof of result insertion, without duplicating its body.
     /// 结果插入的精确不可变凭据，不重复其正文。

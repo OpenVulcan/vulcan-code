@@ -268,13 +268,12 @@ pub(crate) async fn project_collaboration_before_api(
                             })
                     })
                     .map_err(|error| error.to_string())?;
-                if failed {
-                    if let Err(error) =
+                if failed
+                    && let Err(error) =
                         reconcile_task_results_for_session(state, handle.session_id()).await
-                    {
-                        tracing::warn!(session_id = %handle.session_id(), %error,
+                {
+                    tracing::warn!(session_id = %handle.session_id(), %error,
                             "Steering application failure return remains pending");
-                    }
                 }
             }
             PendingProjection::Question(inbound) => {

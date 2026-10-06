@@ -417,12 +417,6 @@ fn preserve_active_session_run_state_keeps_runtime_context_without_hydrated_mark
     );
 }
 
-/// Verifies live pending-question projections do not broadcast unrelated hydrated transcript bodies.
-/// 验证实时待回答问题投影不会广播无关已水合会话正文。
-
-/// Verifies display hydration does not copy unrelated hydrated transcript windows.
-/// 验证显示水合不会复制无关的已水合转录窗口。
-
 /// Verifies stale running markers do not revive a session without an active kernel turn.
 /// 验证没有活动内核回合时过时运行标记不会复活会话。
 #[test]

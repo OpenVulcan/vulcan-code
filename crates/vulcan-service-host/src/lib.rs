@@ -635,13 +635,12 @@ async fn webui_service_browser_stream_ws_handler(
             "A browser stream requires a pageId.",
         );
     };
-    let cursor = match query.get("pageGeneration") {
-        Some(page_generation) => Some(serde_json::json!({
+    let cursor = query.get("pageGeneration").map(|page_generation| {
+        serde_json::json!({
             "pageGeneration": page_generation,
             "frameSequence": query.get("frameSequence"),
-        })),
-        None => None,
-    };
+        })
+    });
     websocket.on_upgrade(move |socket| {
         webui_service_browser_stream_socket(
             socket,
@@ -2959,9 +2958,13 @@ mod tests {
         })
     }
 
+    /// Browser stream releases recorded by the test facade as `(session, subscription)` pairs.
+    /// 测试门面记录的浏览器流释放，形如 `(session, subscription)` 对。
+    type RecordedStreamReleases = Arc<Mutex<Vec<(String, String)>>>;
+
     /// Builds a test router with an injected browser stream facade.
     /// 构建一个注入了浏览器流门面的测试路由。
-    fn test_router_with_browser_stream() -> (Router, Arc<Mutex<Vec<(String, String)>>>) {
+    fn test_router_with_browser_stream() -> (Router, RecordedStreamReleases) {
         let releases = Arc::new(Mutex::new(Vec::new()));
         let mut config = WebuiServiceHttpConfig {
             discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(

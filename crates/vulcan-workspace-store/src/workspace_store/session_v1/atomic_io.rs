@@ -129,6 +129,31 @@ fn create_staging_file(
     ))
 }
 
+/// Fails the current write when the test hook is armed for the stage.
+/// 当测试钩子为当前阶段挂载失败时使本次写入失败。
+#[cfg(test)]
+fn maybe_fail(stage: WriteStage, path: &Path, artifact_kind: &str) -> Result<(), SessionV1Error> {
+    if test_hooks::should_fail(stage, artifact_kind) {
+        return Err(SessionV1Error::atomic_write(
+            path,
+            "fault-injection",
+            format!("injected failure at {artifact_kind} stage"),
+        ));
+    }
+    Ok(())
+}
+
+/// Returns whether one in-closure stage should fail right now.
+/// 返回某个闭包内阶段当前是否应该失败。
+#[cfg(test)]
+fn should_fail_io(stage: WriteStage, path: &Path, artifact_kind: &str) -> bool {
+    if test_hooks::should_fail(stage, artifact_kind) {
+        let _ = (path, artifact_kind);
+        return true;
+    }
+    false
+}
+
 /// Synchronizes the renamed parent directory on POSIX systems.
 /// 在 POSIX 系统上同步重命名后的父目录。
 #[cfg(unix)]
@@ -228,31 +253,6 @@ pub(crate) mod test_hooks {
             matched
         })
     }
-}
-
-/// Fails the current write when the test hook is armed for the stage.
-/// 当测试钩子为当前阶段挂载失败时使本次写入失败。
-#[cfg(test)]
-fn maybe_fail(stage: WriteStage, path: &Path, artifact_kind: &str) -> Result<(), SessionV1Error> {
-    if test_hooks::should_fail(stage, artifact_kind) {
-        return Err(SessionV1Error::atomic_write(
-            path,
-            "fault-injection",
-            format!("injected failure at {artifact_kind} stage"),
-        ));
-    }
-    Ok(())
-}
-
-/// Returns whether one in-closure stage should fail right now.
-/// 返回某个闭包内阶段当前是否应该失败。
-#[cfg(test)]
-fn should_fail_io(stage: WriteStage, path: &Path, artifact_kind: &str) -> bool {
-    if test_hooks::should_fail(stage, artifact_kind) {
-        let _ = (path, artifact_kind);
-        return true;
-    }
-    false
 }
 
 /// Production builds never fail via the test hook.

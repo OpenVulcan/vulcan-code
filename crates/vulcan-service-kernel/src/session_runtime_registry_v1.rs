@@ -5260,11 +5260,10 @@ mod tests {
                     }));
                 })
                 .expect("read active request facts");
-            assert_eq!(
+            assert!(
                 handle
                     .read(|document| document.memory_revision() == document.durable_revision())
-                    .expect("read durable revision"),
-                true
+                    .expect("read durable revision")
             );
         }
     }

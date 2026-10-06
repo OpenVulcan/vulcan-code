@@ -4863,7 +4863,7 @@ mod tests {
                 // The fixture's binding installs only schema and its own deliberate collision.
                 // 夹具绑定仅安装结构及其自有的有意碰撞。
                 let store = super::prepare_vce_storage_binding(
-                    &host_runtime,
+                    host_runtime,
                     paths.root,
                     config.project_id.clone(),
                     true,
@@ -6834,20 +6834,21 @@ mod tests {
                 .iter()
                 .all(|batch| batch.state == VceEmbeddingBatchState::Succeeded)
         );
-        let requests = resumed_ai
-            .embedding_requests
-            .lock()
-            .expect("read resumed requests");
-        assert_eq!(requests.len(), completed.batches.len() - 1);
-        assert!(
-            !requests.contains(
-                &interrupted_ai
-                    .embedding_requests
-                    .lock()
-                    .expect("read original requests")[0]
-            )
-        );
-        drop(requests);
+        {
+            let requests = resumed_ai
+                .embedding_requests
+                .lock()
+                .expect("read resumed requests");
+            assert_eq!(requests.len(), completed.batches.len() - 1);
+            assert!(
+                !requests.contains(
+                    &interrupted_ai
+                        .embedding_requests
+                        .lock()
+                        .expect("read original requests")[0]
+                )
+            );
+        }
         // A new forced run must reuse exact successful vectors instead of repeating provider requests.
         // 新的强制运行必须复用精确成功向量，而非重复供应商请求。
         let mut retry = request;

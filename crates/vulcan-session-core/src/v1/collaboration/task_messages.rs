@@ -243,16 +243,14 @@ impl CollaborationTaskMessageEffect {
         if let CollaborationTaskMessageEffectKind::Steered {
             turn_id, input_seq, ..
         } = &self.outcome
-        {
-            if acceptance.message.kind != CollaborationTaskMessageKind::TaskSteer
+            && (acceptance.message.kind != CollaborationTaskMessageKind::TaskSteer
                 || acceptance.message.target.turn_id != Some(*turn_id)
                 || *input_seq <= acceptance.event_seq
-                || *input_seq >= self.event_seq
-            {
-                return Err(DomainError::CollaborationStateViolation {
-                    field: "collaboration.task_message.steering_effect",
-                });
-            }
+                || *input_seq >= self.event_seq)
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_message.steering_effect",
+            });
         }
         if let CollaborationTaskMessageEffectKind::Claimed {
             execution_id,
@@ -260,16 +258,14 @@ impl CollaborationTaskMessageEffect {
             input_id,
             input_seq,
         } = &self.outcome
-        {
-            if acceptance.message.kind != CollaborationTaskMessageKind::TaskStart
+            && (acceptance.message.kind != CollaborationTaskMessageKind::TaskStart
                 || execution_id.as_str() != format!("{}:task-execution", self.delivery_id.as_str())
                 || turn_id.value().checked_add(1) != Some(input_id.value())
-                || self.event_seq.value().checked_add(1) != Some(input_seq.value())
-            {
-                return Err(DomainError::CollaborationStateViolation {
-                    field: "collaboration.task_message.claim_effect",
-                });
-            }
+                || self.event_seq.value().checked_add(1) != Some(input_seq.value()))
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "collaboration.task_message.claim_effect",
+            });
         }
         Ok(())
     }

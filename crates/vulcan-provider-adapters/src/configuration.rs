@@ -573,7 +573,7 @@ impl ConnectionModelAccessPolicy {
         self.model_enabled_overrides
             .get(model_id)
             .copied()
-            .unwrap_or_else(|| {
+            .unwrap_or({
                 if self.inherit_model_defaults {
                     inherited_default
                 } else {
@@ -3713,8 +3713,10 @@ mod tests {
     fn schema_thirteen_discards_pre_extension_provider_tool_state() {
         // historical carries every old scalar selection store plus a forged extension entry.
         // historical 携带全部旧标量选择存储以及一条伪造扩展记录。
-        let mut historical = PersistedAiConfiguration::default();
-        historical.schema_version = 13;
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 13,
+            ..PersistedAiConfiguration::default()
+        };
         historical.provider_tool_selections.insert(
             ProviderToolCapabilityKind::MediaAnalyze,
             ProviderToolTargetSelection {
@@ -3755,8 +3757,10 @@ mod tests {
     /// 验证从 Schema 十四迁移时丢弃旧按操作开关，同时保留 Provider Tool 设置。
     #[test]
     fn schema_fourteen_replaces_internal_switches_without_erasing_provider_tools() {
-        let mut historical = PersistedAiConfiguration::default();
-        historical.schema_version = 14;
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 14,
+            ..PersistedAiConfiguration::default()
+        };
         historical.internal_model_enabled_overrides.insert(
             PersistedAiConfiguration::internal_model_operation_key(
                 "opencode-go",
@@ -3862,8 +3866,10 @@ mod tests {
     /// 验证 Schema 十七只迁移无歧义图片后端，并禁用推断式媒体配置。
     #[test]
     fn schema_seventeen_migrates_only_explicit_image_understanding_backend() {
-        let mut historical = PersistedAiConfiguration::default();
-        historical.schema_version = 17;
+        let mut historical = PersistedAiConfiguration {
+            schema_version: 17,
+            ..PersistedAiConfiguration::default()
+        };
         let image_selection = ProviderToolTargetSelection {
             connection_id: String::from("vision-account"),
             target_id: String::from("vision-target"),
@@ -4395,9 +4401,8 @@ mod tests {
         );
 
         configuration.set_connection_model_enabled("account-a", "model-a", true);
-        assert_eq!(
-            configuration.connection_model_access_policies["account-a"].model_enabled_overrides["model-a"],
-            true
+        assert!(
+            configuration.connection_model_access_policies["account-a"].model_enabled_overrides["model-a"]
         );
         assert!(!configuration.connection_model_is_enabled_with_default(
             "account-a",
@@ -6255,10 +6260,12 @@ mod tests {
     fn behavior_only_session_policy_inherits_selected_route_window() {
         let provider_id = "custom:proxy";
         let model_id = "gpt-5.6-luna";
-        let mut configuration = PersistedAiConfiguration::default();
-        configuration.context_window_policy_overrides = ContextWindowPolicyOverrides {
-            effective_context_window_percent: Some(92),
-            ..ContextWindowPolicyOverrides::default()
+        let configuration = PersistedAiConfiguration {
+            context_window_policy_overrides: ContextWindowPolicyOverrides {
+                effective_context_window_percent: Some(92),
+                ..ContextWindowPolicyOverrides::default()
+            },
+            ..PersistedAiConfiguration::default()
         };
 
         let behavior_only = ContextCompactionPolicy {

@@ -742,8 +742,8 @@ fn public_ai_configuration_app_data_root() -> PathBuf {
     // 测试可以明确持有私有目标；生产环境始终使用用户路径。
     #[cfg(test)]
     {
-        return crate::tests::public_ai_persistence_scope::current_root()
-            .unwrap_or_else(vulcan_workspace_store::data_plane::application_data_root);
+        crate::tests::public_ai_persistence_scope::current_root()
+            .unwrap_or_else(vulcan_workspace_store::data_plane::application_data_root)
     }
     #[cfg(not(test))]
     {

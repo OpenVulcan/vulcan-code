@@ -379,9 +379,13 @@ mod tests {
         }
     }
 
+    /// One checked id constructor reduced to its accepted raw value.
+    /// 归约为其接受原始值的一个受检 id 构造函数。
+    type IdConstructor = fn(u64) -> Result<u64, ()>;
+
     /// Collects one checked constructor per id kind for shared validation.
     /// 为共享校验收集每种 id 种类的一个受检构造函数。
-    fn id_constructors() -> Vec<(fn(u64) -> Result<u64, ()>, &'static str)> {
+    fn id_constructors() -> Vec<(IdConstructor, &'static str)> {
         vec![
             (|v| Seq::try_new(v).map(|_| v).map_err(|_| ()), "seq"),
             (|v| TurnId::try_new(v).map(|_| v).map_err(|_| ()), "turn_id"),

@@ -727,12 +727,12 @@ fn validate_text(value: &str, field: &str, tool_id: &str) -> Result<(), String> 
 /// Validates a bounded pagination cursor.
 /// 校验有界分页游标。
 fn validate_cursor(value: Option<&str>, tool_id: &str) -> Result<(), String> {
-    if let Some(cursor) = value {
-        if cursor.chars().count() > MAX_AGENT_COLLABORATION_CURSOR_CHARS {
-            return Err(format!(
-                "{tool_id} cursor exceeds the maximum length of {MAX_AGENT_COLLABORATION_CURSOR_CHARS} characters."
-            ));
-        }
+    if let Some(cursor) = value
+        && cursor.chars().count() > MAX_AGENT_COLLABORATION_CURSOR_CHARS
+    {
+        return Err(format!(
+            "{tool_id} cursor exceeds the maximum length of {MAX_AGENT_COLLABORATION_CURSOR_CHARS} characters."
+        ));
     }
     Ok(())
 }

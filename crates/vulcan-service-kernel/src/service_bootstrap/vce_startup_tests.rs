@@ -202,7 +202,7 @@ fn run_bootstrap_phase(root: &Path, phase: &str) {
                 .unwrap()
                 .task_projects
                 .len(),
-            project_count as usize
+            project_count
         );
         // Startup may prepare an inactive native backend; no VMM consumer may be enabled for this fixture.
         // 启动可以准备停用的原生后端；此夹具不得启用任何记忆消费者。

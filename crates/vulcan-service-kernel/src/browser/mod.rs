@@ -1339,7 +1339,7 @@ impl BrowserManager {
             .lock()
             .map_err(|error| format!("failed to lock browser hosts: {error}"))?;
         let mut closed = 0;
-        for (_session_id, ownership) in hosts.iter() {
+        for ownership in hosts.values() {
             if let Ok(ownership) = ownership.lock() {
                 closed += 1;
                 let _ = &ownership.host_generation;
@@ -2399,16 +2399,14 @@ impl BrowserManager {
         // 保留每条被驱逐记录的读取门，直到其磁盘下载文件清理完成。
         let mut evicted_downloads = Vec::new();
         while state.closed_session_order.len() > BROWSER_MAX_RETAINED_CLOSED_SESSIONS {
-            if let Some(oldest) = state.closed_session_order.pop_front() {
-                if state
+            if let Some(oldest) = state.closed_session_order.pop_front()
+                && state
                     .sessions
                     .get(&oldest)
                     .is_some_and(|record| record.projection.status == BrowserSessionStatus::Closed)
-                {
-                    if let Some(record) = state.sessions.remove(&oldest) {
-                        evicted_downloads.push((oldest, record.download_gate));
-                    }
-                }
+                && let Some(record) = state.sessions.remove(&oldest)
+            {
+                evicted_downloads.push((oldest, record.download_gate));
             }
         }
         drop(state);
@@ -4584,10 +4582,10 @@ pub async fn service_browser_session_create(
             }
             manager.start_host(&session.session_id)
         })();
-        if result.is_err() {
-            if let Some(session_id) = created_id {
-                let _ = manager.close_session(&session_id);
-            }
+        if result.is_err()
+            && let Some(session_id) = created_id
+        {
+            let _ = manager.close_session(&session_id);
         }
         if let Err(Ok(running)) = sender.send(result) {
             let _ = manager.close_session(&running.session_id);

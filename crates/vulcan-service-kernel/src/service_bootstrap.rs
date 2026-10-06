@@ -741,7 +741,7 @@ fn run_service_bootstrap(
                 ),
                 (
                     "luaskills",
-                    luaskills_step_status.clone(),
+                    luaskills_step_status,
                     luaskills_step_message.as_str(),
                 ),
                 (
@@ -788,7 +788,7 @@ fn run_service_bootstrap(
                     ),
                     (
                         "luaskills",
-                        luaskills_step_status.clone(),
+                        luaskills_step_status,
                         luaskills_step_message.as_str(),
                     ),
                     (
@@ -960,7 +960,7 @@ fn run_service_bootstrap(
                     ),
                     (
                         "luaskills",
-                        luaskills_step_status.clone(),
+                        luaskills_step_status,
                         luaskills_step_message.as_str(),
                     ),
                     (
@@ -1597,7 +1597,7 @@ fn run_service_bootstrap(
                 ),
                 (
                     "luaskills",
-                    luaskills_step_status.clone(),
+                    luaskills_step_status,
                     luaskills_step_message.as_str(),
                 ),
                 ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
@@ -1730,7 +1730,7 @@ fn run_service_bootstrap(
                 ),
                 (
                     "luaskills",
-                    luaskills_step_status.clone(),
+                    luaskills_step_status,
                     luaskills_step_message.as_str(),
                 ),
                 ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),

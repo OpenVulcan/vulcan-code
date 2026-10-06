@@ -99,8 +99,7 @@ async fn cancelled_materialization_produces_no_prompt_delivery()
         None,
     )
     .await
-    .err()
-    .expect("cancelled materializer");
+    .expect_err("cancelled materializer");
     assert!(error.to_string().contains("V1 media preparation cancelled"));
     assert_eq!(std::fs::read_dir(project.path())?.count(), 0);
     Ok(())

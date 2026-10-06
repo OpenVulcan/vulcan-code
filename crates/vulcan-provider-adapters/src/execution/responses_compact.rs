@@ -584,6 +584,7 @@ fn decode_responses_compact_result(
 /// 返回值
 /// The complete bounded body, or a structured transport timeout/failure.
 /// 返回完整的有界正文，或结构化传输超时/失败。
+#[allow(clippy::too_many_arguments)]
 async fn read_responses_compact_body_with_timeout(
     response: reqwest::Response,
     max_bytes: usize,

@@ -705,7 +705,7 @@ fn sse_frame_data(frame: &[u8]) -> Result<Option<String>, String> {
 /// 在分配前拒绝填充后解码长度超过所选限制的编码输入。
 fn validate_base64_decoded_size(encoded: &str, maximum: u64) -> Result<(), String> {
     let length = encoded.len();
-    if length == 0 || length % 4 != 0 {
+    if length == 0 || !length.is_multiple_of(4) {
         return Err(String::from(
             "Provider multipart Data URL must contain non-empty padded base64.",
         ));
@@ -2058,7 +2058,7 @@ async fn fetch_provider_batch_item(
     for text in texts {
         append_bounded_provider_result(
             &mut fetched,
-            &text,
+            text,
             follow_up.response_item_separator.as_str(),
         )?;
     }

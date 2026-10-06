@@ -539,8 +539,7 @@ mod failed_initialization_tests {
         assert_eq!(
             manager
                 .formal_runtime_status()
-                .err()
-                .expect("reject partial status")
+                .expect_err("reject partial status")
                 .message,
             original_error.message
         );
@@ -555,8 +554,7 @@ mod failed_initialization_tests {
         assert_eq!(
             manager
                 .formal_plugin_status("valid-owner")
-                .err()
-                .expect("reject partial business")
+                .expect_err("reject partial business")
                 .message,
             original_error.message
         );
@@ -594,8 +592,7 @@ mod failed_initialization_tests {
         assert_eq!(
             manager
                 .formal_runtime_status()
-                .err()
-                .expect("startup error survives closing")
+                .expect_err("startup error survives closing")
                 .message,
             original_error.message
         );

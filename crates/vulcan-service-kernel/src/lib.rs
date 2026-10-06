@@ -563,7 +563,7 @@ pub fn service_prepare_for_app_shutdown(
             .pending_local_plugin_installs,
     );
     if let Some(service_runtime) = service_runtime.as_ref() {
-        service_runtime.block_on(pending_local_plugin_installs.drain_for_shutdown(&state))?;
+        service_runtime.block_on(pending_local_plugin_installs.drain_for_shutdown(state))?;
     } else {
         pending_local_plugin_installs.require_empty_without_runtime()?;
     }

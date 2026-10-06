@@ -304,10 +304,10 @@ impl ContextInjectionState {
             }
             let before_item_count = group.items.len();
             for item in group.items.values() {
-                if item.remaining_turns == Some(0) {
-                    if let Some(turn_id) = item.last_consumed_turn_id.as_deref() {
-                        expired_events.push(expiry_event_for_item(tag, item, turn_id));
-                    }
+                if item.remaining_turns == Some(0)
+                    && let Some(turn_id) = item.last_consumed_turn_id.as_deref()
+                {
+                    expired_events.push(expiry_event_for_item(tag, item, turn_id));
                 }
             }
             group

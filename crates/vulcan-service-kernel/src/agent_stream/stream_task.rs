@@ -93,78 +93,6 @@ fn runtime_event_settles_started_tool(event: &RuntimeEvent) -> bool {
     )
 }
 
-#[cfg(test)]
-mod rejected_provider_boundary_tests {
-    use super::*;
-
-    /// Verifies a rejected Started boundary retains its original error through terminal cleanup.
-    /// 验证被拒绝的 Started 边界会把原始错误保留到终态清理。
-    #[test]
-    fn checkpoint_error_survives_started_and_closes_on_completed() {
-        // retainedError models one retry-checkpoint persistence failure before Provider dispatch.
-        // retainedError 模拟 Provider 分派前的一次重试 checkpoint 持久化失败。
-        let mut retained_error = Some(String::from("exact checkpoint failure"));
-
-        assert_eq!(
-            rejected_provider_boundary_error(
-                &mut retained_error,
-                ProviderRequestTelemetryEventKind::Started,
-            )
-            .as_deref(),
-            Some("exact checkpoint failure")
-        );
-        assert_eq!(retained_error.as_deref(), Some("exact checkpoint failure"));
-        assert_eq!(
-            rejected_provider_boundary_error(
-                &mut retained_error,
-                ProviderRequestTelemetryEventKind::Completed,
-            )
-            .as_deref(),
-            Some("exact checkpoint failure")
-        );
-        assert!(retained_error.is_none());
-    }
-
-    /// Verifies a prior sibling failure still admits terminal facts but rejects new execution.
-    /// 验证较早兄弟失败后仍接纳终态事实，同时拒绝新的执行。
-    #[test]
-    fn checkpoint_error_allows_only_started_tool_settlement() {
-        // finished_event represents a real tool body whose external execution already completed.
-        // finished_event 表示外部执行已经完成的真实工具主体。
-        let finished_event = RuntimeEvent::new(
-            vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolFinished,
-            "finished",
-            "finished",
-        )
-        .with_tool_execution_boundary(
-            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Finished(
-                vulcan_core::types::ToolInvocationResult {
-                    tool_call_id: String::from("sibling-call"),
-                    tool_name: String::from("sibling"),
-                    model_output: String::from("settled"),
-                    host_result: None,
-                    is_error: false,
-                },
-            ),
-        );
-        // prepared_event represents new execution admission that must remain closed after failure.
-        // prepared_event 表示失败后必须保持关闭的新执行准入。
-        let prepared_event = RuntimeEvent::new(
-            vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolBatchPrepared,
-            "prepared",
-            "prepared",
-        )
-        .with_tool_execution_boundary(
-            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::BatchPrepared(
-                Vec::new(),
-            ),
-        );
-
-        assert!(runtime_event_settles_started_tool(&finished_event));
-        assert!(!runtime_event_settles_started_tool(&prepared_event));
-    }
-}
-
 /// Persists one owned stream failure in the authoritative V1 event ledger.
 /// 在权威 V1 事件账本中持久化一次自有流失败。
 ///
@@ -1323,8 +1251,8 @@ fn spawn_agent_stream_task_with_restart_state(
                         | vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestProgress
                         | vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestPreviewUpdated
                         | vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolRequestReady
-                    ) {
-                        if let Some(sink) = provider_v1_sink.as_ref() {
+                    )
+                        && let Some(sink) = provider_v1_sink.as_ref() {
                             match sink.request_preview_api_id() {
                                 Ok(api_call_id) => {
                                     if let Some(serde_json::Value::Object(metadata)) = event.metadata.as_mut() {
@@ -1336,7 +1264,6 @@ fn spawn_agent_stream_task_with_restart_state(
                                 }
                             }
                         }
-                    }
                     if let Some(boundary_error) = prepared_retry_checkpoint_error.as_deref()
                         && !runtime_event_settles_started_tool(&event)
                     {
@@ -2101,3 +2028,75 @@ async fn resolve_turn_knowledge_access(
     }))
 }
 use content_delta::trace_content_delta_stream_event;
+
+#[cfg(test)]
+mod rejected_provider_boundary_tests {
+    use super::*;
+
+    /// Verifies a rejected Started boundary retains its original error through terminal cleanup.
+    /// 验证被拒绝的 Started 边界会把原始错误保留到终态清理。
+    #[test]
+    fn checkpoint_error_survives_started_and_closes_on_completed() {
+        // retainedError models one retry-checkpoint persistence failure before Provider dispatch.
+        // retainedError 模拟 Provider 分派前的一次重试 checkpoint 持久化失败。
+        let mut retained_error = Some(String::from("exact checkpoint failure"));
+
+        assert_eq!(
+            rejected_provider_boundary_error(
+                &mut retained_error,
+                ProviderRequestTelemetryEventKind::Started,
+            )
+            .as_deref(),
+            Some("exact checkpoint failure")
+        );
+        assert_eq!(retained_error.as_deref(), Some("exact checkpoint failure"));
+        assert_eq!(
+            rejected_provider_boundary_error(
+                &mut retained_error,
+                ProviderRequestTelemetryEventKind::Completed,
+            )
+            .as_deref(),
+            Some("exact checkpoint failure")
+        );
+        assert!(retained_error.is_none());
+    }
+
+    /// Verifies a prior sibling failure still admits terminal facts but rejects new execution.
+    /// 验证较早兄弟失败后仍接纳终态事实，同时拒绝新的执行。
+    #[test]
+    fn checkpoint_error_allows_only_started_tool_settlement() {
+        // finished_event represents a real tool body whose external execution already completed.
+        // finished_event 表示外部执行已经完成的真实工具主体。
+        let finished_event = RuntimeEvent::new(
+            vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolFinished,
+            "finished",
+            "finished",
+        )
+        .with_tool_execution_boundary(
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::Finished(
+                vulcan_core::types::ToolInvocationResult {
+                    tool_call_id: String::from("sibling-call"),
+                    tool_name: String::from("sibling"),
+                    model_output: String::from("settled"),
+                    host_result: None,
+                    is_error: false,
+                },
+            ),
+        );
+        // prepared_event represents new execution admission that must remain closed after failure.
+        // prepared_event 表示失败后必须保持关闭的新执行准入。
+        let prepared_event = RuntimeEvent::new(
+            vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::ToolBatchPrepared,
+            "prepared",
+            "prepared",
+        )
+        .with_tool_execution_boundary(
+            vulcan_agent_runtime::agent_runtime::events::ToolExecutionRecoveryBoundary::BatchPrepared(
+                Vec::new(),
+            ),
+        );
+
+        assert!(runtime_event_settles_started_tool(&finished_event));
+        assert!(!runtime_event_settles_started_tool(&prepared_event));
+    }
+}

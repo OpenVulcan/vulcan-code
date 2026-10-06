@@ -850,6 +850,7 @@ struct PreparedLocalPluginUpdate {
 /// runtime 拥有目录，提交秘密满足其已检查要求；返回持久请求所有者。
 /// Configuration supplies the original retained user policy and must agree with the predecessor catalog.
 /// configuration 提供原保留用户策略，必须与前驱目录一致。
+#[allow(clippy::too_many_arguments)]
 fn reserve_update(
     runtime: &VulcanPluginRuntimeManager,
     configuration: &vulcan_provider_config::config::PersistedLuaSkillsConfiguration,
@@ -1021,6 +1022,7 @@ fn reserve_update(
 /// Production registers before publication; this helper supplies no production owner.
 /// 生产在发布之前注册；此辅助方法不提供生产所有者。
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn prepare_update(
     runtime: &VulcanPluginRuntimeManager,
     configuration: &vulcan_provider_config::config::PersistedLuaSkillsConfiguration,

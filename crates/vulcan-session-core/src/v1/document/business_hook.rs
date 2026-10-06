@@ -203,12 +203,11 @@ impl SessionDocument {
                 .events()
                 .iter()
                 .find(|event| event.seq == binding.start_seq)
+                && event.turn_id != Some(binding.turn_id)
             {
-                if event.turn_id != Some(binding.turn_id) {
-                    return Err(DomainError::CollaborationStateViolation {
-                        field: "business_hook.start_owner",
-                    });
-                }
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "business_hook.start_owner",
+                });
             }
         }
         if self

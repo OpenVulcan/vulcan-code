@@ -17,7 +17,7 @@ enum CompactionSourceSelection {
     LocalFull,
     /// Local summarization uses exact selected text plus protected native checkpoints.
     /// 本地摘要使用精确选定文字及受保护原生检查点。
-    LocalPruned(SessionConversationState),
+    LocalPruned(Box<SessionConversationState>),
     /// Remote compaction replaces only this prefix of the frozen projected items.
     /// 远端压缩只替换冻结投影项的此前缀。
     RemoteNative { source_item_count: usize },
@@ -144,7 +144,7 @@ impl CompactionSourceWindow {
         let pruned_state = vulcan_context_compaction::NativeCompactionSources::capture(&full_state)
             .and_then(|native| native.restore(&source.source_messages))
             .map_err(provider_projection_runtime_error)?;
-        self.selection = CompactionSourceSelection::LocalPruned(pruned_state);
+        self.selection = CompactionSourceSelection::LocalPruned(Box::new(pruned_state));
         Ok(())
     }
 
@@ -181,7 +181,7 @@ impl CompactionSourceWindow {
     /// 借用选定本地最小状态；其他明确选择的模式返回 None。
     fn pruned_state(&self) -> Option<&SessionConversationState> {
         match &self.selection {
-            CompactionSourceSelection::LocalPruned(state) => Some(state),
+            CompactionSourceSelection::LocalPruned(state) => Some(state.as_ref()),
             _ => None,
         }
     }

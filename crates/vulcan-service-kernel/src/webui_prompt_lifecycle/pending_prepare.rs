@@ -507,6 +507,10 @@ pub(crate) fn queued_dispatch_authority_for_client_action(
 
 /// Exact durable authority consumed by one process-local Provider admission.
 /// 一次进程内 Provider 准入所消费的精确可靠权威。
+#[allow(
+    clippy::large_enum_variant,
+    reason = "both dispatch variants are large and each value is consumed once by one admission"
+)]
 pub(super) enum ExactPendingPromptDispatch {
     /// Accepted business guidance resumes its own original turn.
     /// 已接纳业务方向恢复其原回合。

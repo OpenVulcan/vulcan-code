@@ -104,7 +104,7 @@ enum Observation {
     Core(String),
     /// Already-whitelisted immutable host identity copied before forget.
     /// 遗忘前已复制且已列白名单的不可变宿主身份。
-    Identity(VulcanPluginNativeIdentityEvent),
+    Identity(Box<VulcanPluginNativeIdentityEvent>),
 }
 
 /// Nonblocking handoff shared by both immutable callback identities.
@@ -150,7 +150,7 @@ impl Ingress {
             // 观察器自身账本仅计数一次，也包含没有发出事件的失败。
             self.losses.incomplete.store(true, Ordering::Release);
         }
-        self.send(Observation::Identity(event));
+        self.send(Observation::Identity(Box::new(event)));
     }
 
     /// Try to deliver `observation` without waiting; classify every rejected handoff.

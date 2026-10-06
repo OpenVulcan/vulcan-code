@@ -34,7 +34,7 @@ enum WorkKind {
     Question(CollaborationQuestionId),
     /// Immutable native child execution.
     /// 不可变原生子执行。
-    Child(vulcan_session_core::v1::collaboration::CollaborationChildTaskRecord),
+    Child(Box<vulcan_session_core::v1::collaboration::CollaborationChildTaskRecord>),
     /// Accepted queue or steering identity.
     /// 已接纳排队或引导身份。
     Task(vulcan_session_core::v1::collaboration::CollaborationDeliveryId),
@@ -65,7 +65,7 @@ fn pending_work(state: &CollaborationState) -> Vec<PendingWork> {
             pending.push(PendingWork {
                 id: format!("child:{}", task.execution_id.as_str()),
                 target: task.child.clone(),
-                kind: WorkKind::Child(task.clone()),
+                kind: WorkKind::Child(Box::new(task.clone())),
             });
         }
     }
@@ -140,32 +140,6 @@ fn persisted_report_identities(output: &Value) -> BTreeSet<String> {
         .flatten()
         .filter_map(report_identity)
         .collect()
-}
-
-#[cfg(test)]
-mod acknowledgement_tests {
-    use super::*;
-
-    /// Verifies historical and new acknowledgements deduplicate identically without parsing prose.
-    /// 验证历史和新确认信息去重一致且不解析正文。
-    #[test]
-    fn persisted_wait_acknowledgements_support_markdown_and_legacy_json() {
-        let reports =
-            json!({"reports":[{"work_id":"task:a","outcome":"stopped","reason":"user_stopped"}]});
-        let old = json!({"model_output":reports.to_string(),"host_result":null});
-        let current = json!({"model_output":"# Agent wait\nStopped.","host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":reports}});
-        assert!(!persisted_report_identities(&old).is_empty());
-        assert_eq!(
-            persisted_report_identities(&old),
-            persisted_report_identities(&current)
-        );
-        let invalid = json!({"model_output":old["model_output"],"host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":{}}});
-        assert!(persisted_report_identities(&invalid).is_empty());
-        assert!(
-            persisted_report_identities(&json!({"model_output":"# Agent wait\nNo pending work."}))
-                .is_empty()
-        );
-    }
 }
 
 /// Keys one acknowledged observation by work, outcome and reason, without suppressing later changes.
@@ -432,8 +406,8 @@ async fn observe_work(
         }
         // Launch and final-result publication use these same gates, so an absent owner cannot race this settlement.
         // 启动与最终结果发布使用相同锁，因此所有者缺失结算不会与它们竞态。
-        if let WorkKind::Child(record) = &work.kind {
-            if !live {
+        if let WorkKind::Child(record) = &work.kind
+            && !live {
                 let input = vulcan_session_core::v1::collaboration::TerminalChildTaskInput {
                     operation_id: CollaborationOperationId::try_new(format!("wait-lost-child:{}", record.execution_id.as_str())).map_err(|error| error.to_string())?,
                     execution_id: record.execution_id.clone(), task_id: record.task_id.clone(),
@@ -445,7 +419,6 @@ async fn observe_work(
                     SessionFlushReason::SubagentReturned, move |document| document.terminal_child_task(input).map(session_change))
                     .map_err(|error| error.to_string())?;
             }
-        }
         // Child loss is persisted above; its first report must match later durable replays even at deadline.
         // 子任务丢失已在上方持久化；即使到达截止点，首次报告也必须与后续持久重放一致。
         Ok((false, Some(json!({"work_id":work.id,"session_id":session_id,
@@ -570,7 +543,7 @@ async fn inspect_work(
                 generation,
                 invocation.source_handle.clone(),
                 target.clone(),
-                vec![record.clone()],
+                vec![record.as_ref().clone()],
             )
             .await?;
         }
@@ -744,5 +717,31 @@ pub(super) async fn wait_agents_result(
                 .min(COLLABORATION_WAIT_RECHECK_INTERVAL),
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod acknowledgement_tests {
+    use super::*;
+
+    /// Verifies historical and new acknowledgements deduplicate identically without parsing prose.
+    /// 验证历史和新确认信息去重一致且不解析正文。
+    #[test]
+    fn persisted_wait_acknowledgements_support_markdown_and_legacy_json() {
+        let reports =
+            json!({"reports":[{"work_id":"task:a","outcome":"stopped","reason":"user_stopped"}]});
+        let old = json!({"model_output":reports.to_string(),"host_result":null});
+        let current = json!({"model_output":"# Agent wait\nStopped.","host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":reports}});
+        assert!(!persisted_report_identities(&old).is_empty());
+        assert_eq!(
+            persisted_report_identities(&old),
+            persisted_report_identities(&current)
+        );
+        let invalid = json!({"model_output":old["model_output"],"host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":{}}});
+        assert!(persisted_report_identities(&invalid).is_empty());
+        assert!(
+            persisted_report_identities(&json!({"model_output":"# Agent wait\nNo pending work."}))
+                .is_empty()
+        );
     }
 }

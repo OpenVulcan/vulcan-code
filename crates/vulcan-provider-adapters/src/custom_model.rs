@@ -608,14 +608,13 @@ impl CustomModelDefinition {
                 "Custom conversation models cannot declare non-text output resources.",
             ));
         }
-        if let Some(binding) = &self.system_binding {
-            if binding.service_entry_id.trim().is_empty()
-                || binding.protocol_profile_id.trim().is_empty()
-            {
-                return Err(String::from(
-                    "System manual model binding requires a service entry and protocol profile.",
-                ));
-            }
+        if let Some(binding) = &self.system_binding
+            && (binding.service_entry_id.trim().is_empty()
+                || binding.protocol_profile_id.trim().is_empty())
+        {
+            return Err(String::from(
+                "System manual model binding requires a service entry and protocol profile.",
+            ));
         }
         self.validate_model_parameter_definitions()?;
         for effort in self.request_projection.reasoning.keys() {
@@ -801,20 +800,16 @@ pub fn validate_system_manual_model_definition(
                 binding.protocol_profile_id, model.id
             ));
         }
-        match resource {
-            vulcan_ai_contract::ResourceKind::Video => {
-                if !route
-                    .input_resource_constraints
-                    .iter()
-                    .any(|constraint| constraint.resource_kind == *resource)
-                {
-                    return Err(format!(
-                        "Service entry `{}` protocol `{}` does not declare video input for manual model `{}`.",
-                        binding.service_entry_id, binding.protocol_profile_id, model.id
-                    ));
-                }
-            }
-            _ => {}
+        if resource == &vulcan_ai_contract::ResourceKind::Video
+            && !route
+                .input_resource_constraints
+                .iter()
+                .any(|constraint| constraint.resource_kind == *resource)
+        {
+            return Err(format!(
+                "Service entry `{}` protocol `{}` does not declare video input for manual model `{}`.",
+                binding.service_entry_id, binding.protocol_profile_id, model.id
+            ));
         }
     }
     Ok(())

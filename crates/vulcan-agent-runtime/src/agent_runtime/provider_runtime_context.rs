@@ -393,23 +393,19 @@ pub(crate) fn synchronize_runtime_host_events(
         if candidate.occurrence_id.is_none()
             && candidate.event_id.is_none()
             && !candidate.expires_source
-        {
-            if let Some(latest) = metadata_rows
+            && let Some(latest) = metadata_rows
                 .iter()
                 .filter(|metadata| {
                     metadata.source_id == candidate.source_id && !metadata.expires_source
                 })
                 .max_by_key(|metadata| metadata.occurrence)
-            {
-                if latest.body_hash == body_hash
-                    && !metadata_rows.iter().any(|event| {
-                        event.expires_source && event.occurrence_id == latest.occurrence_id
-                    })
-                    && matches_message(latest, &render_event(&latest.event_id)?)
-                {
-                    continue;
-                }
-            }
+            && latest.body_hash == body_hash
+            && !metadata_rows
+                .iter()
+                .any(|event| event.expires_source && event.occurrence_id == latest.occurrence_id)
+            && matches_message(latest, &render_event(&latest.event_id)?)
+        {
+            continue;
         }
         // Source sequence orders physical events, while occurrence identity binds update and expiry together.
         // 来源序号排序物理事件，发生点身份则关联更新及其失效事件。
@@ -1653,17 +1649,20 @@ mod tests {
         // 无关投影记录不属于本生产者的 Schema 归属。
         let candidate = host_candidate("ttl", "one", Some("occ-1"), None, false);
         let mut snapshot = CoreConversationSnapshot::default();
-        synchronize_runtime_host_events(&mut snapshot, &[candidate.clone()], None).unwrap();
+        synchronize_runtime_host_events(&mut snapshot, std::slice::from_ref(&candidate), None)
+            .unwrap();
         let mut unrelated = snapshot.records[0].clone();
         unrelated.id = String::from("another-producer");
         unrelated.metadata = Some(serde_json::json!({"version": 99}));
         snapshot.records.push(unrelated);
-        synchronize_runtime_host_events(&mut snapshot, &[candidate.clone()], None).unwrap();
+        synchronize_runtime_host_events(&mut snapshot, std::slice::from_ref(&candidate), None)
+            .unwrap();
         assert!(synchronize_runtime_host_events(&mut snapshot, &[], Some("missing-user")).is_err());
         snapshot.records[0].metadata.as_mut().unwrap()["version"] = serde_json::json!(99);
         let before = serde_json::to_value(&snapshot).unwrap();
         assert!(
-            synchronize_runtime_host_events(&mut snapshot, &[candidate.clone()], None).is_err()
+            synchronize_runtime_host_events(&mut snapshot, std::slice::from_ref(&candidate), None)
+                .is_err()
         );
         assert_eq!(serde_json::to_value(&snapshot).unwrap(), before);
         snapshot.records[0].metadata = None;
@@ -2175,14 +2174,15 @@ mod tests {
             Some("late-ttl"),
             true,
         );
-        synchronize_runtime_host_events(&mut snapshot, &[late_ttl.clone()], None).unwrap();
+        synchronize_runtime_host_events(&mut snapshot, std::slice::from_ref(&late_ttl), None)
+            .unwrap();
         let late = serde_json::to_value(&snapshot).unwrap();
         synchronize_runtime_host_events(&mut snapshot, &[late_ttl], None).unwrap();
         assert_eq!(serde_json::to_value(&snapshot).unwrap(), late);
         let fresh = host_candidate("memory-slot", "instruction", Some("new-occ"), None, false);
         synchronize_runtime_host_request_context(
             &mut snapshot,
-            &[fresh.clone()],
+            std::slice::from_ref(&fresh),
             None,
             ExecutionPromptPurpose::UserTurn,
         )
@@ -2907,31 +2907,33 @@ mod tests {
     /// 验证锁定基线投影只信任生产者持有的强类型来源信息。
     #[test]
     fn runtime_locked_baseline_does_not_infer_from_titles_or_hook_tags() {
-        let mut output = PromptAssemblyOutput::default();
-        output.system_segments = vec![
-            PromptSegment::new(
-                "dynamic-lookalike",
-                "dynamic-cache",
-                vulcan_prompt_composer::PromptNodeKind::System,
-                PromptTarget::System,
-                "AGENTS.md",
-                "same-looking body",
-            )
-            .with_source_label("dynamic AGENTS.md lookalike"),
-            PromptSegment::new(
-                "authoritative-agents",
-                "locked-cache",
-                vulcan_prompt_composer::PromptNodeKind::System,
-                PromptTarget::System,
-                "AGENTS.md",
-                "same-looking body",
-            )
-            .with_source_label("D:/repo/AGENTS.md")
-            .with_baseline_provenance(PromptBaselineProvenance::new(
-                PromptBaselineKind::AgentsMd,
-                "D:/repo/AGENTS.md",
-            )),
-        ];
+        let output = PromptAssemblyOutput {
+            system_segments: vec![
+                PromptSegment::new(
+                    "dynamic-lookalike",
+                    "dynamic-cache",
+                    vulcan_prompt_composer::PromptNodeKind::System,
+                    PromptTarget::System,
+                    "AGENTS.md",
+                    "same-looking body",
+                )
+                .with_source_label("dynamic AGENTS.md lookalike"),
+                PromptSegment::new(
+                    "authoritative-agents",
+                    "locked-cache",
+                    vulcan_prompt_composer::PromptNodeKind::System,
+                    PromptTarget::System,
+                    "AGENTS.md",
+                    "same-looking body",
+                )
+                .with_source_label("D:/repo/AGENTS.md")
+                .with_baseline_provenance(PromptBaselineProvenance::new(
+                    PromptBaselineKind::AgentsMd,
+                    "D:/repo/AGENTS.md",
+                )),
+            ],
+            ..PromptAssemblyOutput::default()
+        };
         let hooks = vec![
             SystemPromptHookBlock::new("vmm_profile", "dynamic lookalike"),
             SystemPromptHookBlock {

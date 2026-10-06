@@ -532,6 +532,182 @@ pub(crate) fn public_ai_provider_rows_for_selection(
     Ok(rows)
 }
 
+/// Resolves the exact current session model capability snapshot without using global selection.
+/// 按当前会话的精确模型解析能力快照，不使用全局选择。
+///
+/// # Parameters
+/// 参数
+/// `runtime` owns the process-local route, `session_id` identifies its lease, and
+/// `runtime_state` supplies the persisted current route when no coherent lease exists.
+/// `runtime` 持有进程内路由，`session_id` 标识其租约；没有一致租约时，
+/// `runtime_state` 提供持久化的当前路由。
+///
+/// # Returns
+/// 返回值
+/// The current session model capabilities when its exact route remains executable.
+/// 当前会话精确路由仍可执行时返回该模型的能力。
+pub(crate) fn session_public_ai_model_capabilities(
+    runtime: Option<&vulcan_provider_adapters::PublicAiRuntime>,
+    session_id: crate::SessionId,
+    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
+) -> Option<vulcan_ai_contract::ModelCapabilities> {
+    let runtime = runtime?;
+    let runtime_state = runtime_state?;
+    if let Ok(Some(selection)) =
+        session_process_public_ai_selection(runtime, session_id, Some(runtime_state))
+    {
+        return Some(selection.model.capabilities);
+    }
+    let provider_id = runtime_state.active_provider_id.as_deref()?;
+    let connection_id = runtime_state.active_connection_id.as_deref()?;
+    let model_id = runtime_state.active_model_id.as_deref()?;
+    let configuration = runtime.configuration_snapshot().ok()?;
+    runtime
+        .resolve_connection_model_selection(&configuration, connection_id, provider_id, model_id)
+        .ok()
+        .map(|selection| selection.model.capabilities)
+}
+
+/// Maps one public resource kind to the established WebUI modality label.
+/// 把一个公共资源类别映射为既有 WebUI 模态标签。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the exact registered public resource kind.
+/// `kind` 是精确注册的公共资源类别。
+///
+/// # Returns
+/// 返回值
+/// A stable lowercase modality label.
+/// 返回稳定的小写模态标签。
+fn public_resource_kind_label(kind: &vulcan_ai_contract::ResourceKind) -> String {
+    match kind {
+        vulcan_ai_contract::ResourceKind::Image => String::from("image"),
+        vulcan_ai_contract::ResourceKind::Audio => String::from("audio"),
+        vulcan_ai_contract::ResourceKind::Video => String::from("video"),
+        vulcan_ai_contract::ResourceKind::File => String::from("file"),
+    }
+}
+
+/// Returns the stable public label for one provider-native tool kind.
+/// 返回一项供应商原生工具类型的稳定公共标签。
+///
+/// # Parameters
+/// 参数
+/// `kind` is the exact tool capability resolved for the model route.
+/// `kind` 是为模型路由解析出的精确工具能力。
+///
+/// # Returns
+/// 返回值
+/// A stable lowercase tool label shared with the WebUI contract.
+/// 与 WebUI 契约共享的稳定小写工具标签。
+fn public_native_tool_label(kind: &vulcan_ai_contract::NativeToolKind) -> String {
+    match kind {
+        vulcan_ai_contract::NativeToolKind::WebSearch => String::from("web_search"),
+        vulcan_ai_contract::NativeToolKind::CodeInterpreter => String::from("code_interpreter"),
+        vulcan_ai_contract::NativeToolKind::ImageGeneration => String::from("image_generation"),
+    }
+}
+
+/// Creates MCP server summaries from the shared provider configuration.
+/// 从共享 Provider 配置创建 MCP 服务器摘要。
+pub(crate) fn mcp_servers(
+    provider_configuration: &ProviderConfigurationFile,
+) -> Vec<McpServerSummary> {
+    provider_configuration
+        .mcp
+        .servers
+        .iter()
+        .map(|(server_id, entry)| McpServerSummary {
+            id: server_id.clone(),
+            name: entry.name.clone(),
+            enabled: entry.enabled,
+            transport: entry.transport.label().to_string(),
+            command: entry.command.clone(),
+            args: entry.args.clone(),
+            url: entry.url.clone().unwrap_or_default(),
+            bearer_token: entry.bearer_token.clone().unwrap_or_default(),
+            headers: key_value_summaries(&entry.headers),
+            headers_from_env: key_value_summaries(&entry.headers_from_env),
+            oauth_client_id: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_id.clone())
+                .unwrap_or_default(),
+            oauth_client_secret: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_secret.clone())
+                .unwrap_or_default(),
+            oauth_scopes: entry
+                .oauth
+                .as_ref()
+                .map(|oauth| oauth.scopes.clone())
+                .unwrap_or_default(),
+            oauth_redirect_uri: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.redirect_uri.clone())
+                .unwrap_or_default(),
+            cwd: entry.cwd.clone().unwrap_or_default(),
+            env: key_value_summaries(&entry.env),
+            env_passthrough: entry.env_passthrough.clone(),
+        })
+        .collect()
+}
+
+/// Creates MCP runtime tool summaries from the cached MCP runtime catalog.
+/// 从缓存的 MCP 运行时目录创建 MCP 工具摘要。
+pub(crate) fn mcp_tools(mcp_catalog: &TauriMcpRuntimeCatalog) -> Vec<McpToolSummary> {
+    mcp_catalog
+        .tools
+        .iter()
+        .map(|tool| McpToolSummary {
+            id: tool.id.clone(),
+            server_id: tool.server_id.clone(),
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            origin_tool_id: tool.origin_tool_id.clone(),
+        })
+        .collect()
+}
+
+/// Converts one ordered map into WebUI key/value summaries.
+/// 将单个有序映射转换为 WebUI 键值摘要。
+pub(crate) fn key_value_summaries(values: &BTreeMap<String, String>) -> Vec<KeyValueSummary> {
+    values
+        .iter()
+        .map(|(key, value)| KeyValueSummary {
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .collect()
+}
+
+/// Creates VMM memory summaries from restored workspace state.
+/// 从已恢复工作区状态创建 VMM 记忆摘要。
+pub(crate) fn memories(
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> Vec<MemorySummary> {
+    vec![
+        MemorySummary {
+            id: String::from("projects"),
+            title: String::from("项目绑定"),
+            category: String::from("Project"),
+            state: format!("已恢复 {} 个项目", workspace.task_projects.len()),
+        },
+        MemorySummary {
+            id: String::from("sessions"),
+            title: String::from("会话绑定"),
+            category: String::from("Conversation"),
+            state: format!(
+                "已恢复 {} 个会话运行态",
+                workspace.session_runtime_state.len()
+            ),
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -777,180 +953,4 @@ mod tests {
 
         assert!(selection.is_none());
     }
-}
-
-/// Resolves the exact current session model capability snapshot without using global selection.
-/// 按当前会话的精确模型解析能力快照，不使用全局选择。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns the process-local route, `session_id` identifies its lease, and
-/// `runtime_state` supplies the persisted current route when no coherent lease exists.
-/// `runtime` 持有进程内路由，`session_id` 标识其租约；没有一致租约时，
-/// `runtime_state` 提供持久化的当前路由。
-///
-/// # Returns
-/// 返回值
-/// The current session model capabilities when its exact route remains executable.
-/// 当前会话精确路由仍可执行时返回该模型的能力。
-pub(crate) fn session_public_ai_model_capabilities(
-    runtime: Option<&vulcan_provider_adapters::PublicAiRuntime>,
-    session_id: crate::SessionId,
-    runtime_state: Option<&vulcan_workbench_model::SessionRuntimeStateEntry>,
-) -> Option<vulcan_ai_contract::ModelCapabilities> {
-    let runtime = runtime?;
-    let runtime_state = runtime_state?;
-    if let Ok(Some(selection)) =
-        session_process_public_ai_selection(runtime, session_id, Some(runtime_state))
-    {
-        return Some(selection.model.capabilities);
-    }
-    let provider_id = runtime_state.active_provider_id.as_deref()?;
-    let connection_id = runtime_state.active_connection_id.as_deref()?;
-    let model_id = runtime_state.active_model_id.as_deref()?;
-    let configuration = runtime.configuration_snapshot().ok()?;
-    runtime
-        .resolve_connection_model_selection(&configuration, connection_id, provider_id, model_id)
-        .ok()
-        .map(|selection| selection.model.capabilities)
-}
-
-/// Maps one public resource kind to the established WebUI modality label.
-/// 把一个公共资源类别映射为既有 WebUI 模态标签。
-///
-/// # Parameters
-/// 参数
-/// `kind` is the exact registered public resource kind.
-/// `kind` 是精确注册的公共资源类别。
-///
-/// # Returns
-/// 返回值
-/// A stable lowercase modality label.
-/// 返回稳定的小写模态标签。
-fn public_resource_kind_label(kind: &vulcan_ai_contract::ResourceKind) -> String {
-    match kind {
-        vulcan_ai_contract::ResourceKind::Image => String::from("image"),
-        vulcan_ai_contract::ResourceKind::Audio => String::from("audio"),
-        vulcan_ai_contract::ResourceKind::Video => String::from("video"),
-        vulcan_ai_contract::ResourceKind::File => String::from("file"),
-    }
-}
-
-/// Returns the stable public label for one provider-native tool kind.
-/// 返回一项供应商原生工具类型的稳定公共标签。
-///
-/// # Parameters
-/// 参数
-/// `kind` is the exact tool capability resolved for the model route.
-/// `kind` 是为模型路由解析出的精确工具能力。
-///
-/// # Returns
-/// 返回值
-/// A stable lowercase tool label shared with the WebUI contract.
-/// 与 WebUI 契约共享的稳定小写工具标签。
-fn public_native_tool_label(kind: &vulcan_ai_contract::NativeToolKind) -> String {
-    match kind {
-        vulcan_ai_contract::NativeToolKind::WebSearch => String::from("web_search"),
-        vulcan_ai_contract::NativeToolKind::CodeInterpreter => String::from("code_interpreter"),
-        vulcan_ai_contract::NativeToolKind::ImageGeneration => String::from("image_generation"),
-    }
-}
-
-/// Creates MCP server summaries from the shared provider configuration.
-/// 从共享 Provider 配置创建 MCP 服务器摘要。
-pub(crate) fn mcp_servers(
-    provider_configuration: &ProviderConfigurationFile,
-) -> Vec<McpServerSummary> {
-    provider_configuration
-        .mcp
-        .servers
-        .iter()
-        .map(|(server_id, entry)| McpServerSummary {
-            id: server_id.clone(),
-            name: entry.name.clone(),
-            enabled: entry.enabled,
-            transport: entry.transport.label().to_string(),
-            command: entry.command.clone(),
-            args: entry.args.clone(),
-            url: entry.url.clone().unwrap_or_default(),
-            bearer_token: entry.bearer_token.clone().unwrap_or_default(),
-            headers: key_value_summaries(&entry.headers),
-            headers_from_env: key_value_summaries(&entry.headers_from_env),
-            oauth_client_id: entry
-                .oauth
-                .as_ref()
-                .and_then(|oauth| oauth.client_id.clone())
-                .unwrap_or_default(),
-            oauth_client_secret: entry
-                .oauth
-                .as_ref()
-                .and_then(|oauth| oauth.client_secret.clone())
-                .unwrap_or_default(),
-            oauth_scopes: entry
-                .oauth
-                .as_ref()
-                .map(|oauth| oauth.scopes.clone())
-                .unwrap_or_default(),
-            oauth_redirect_uri: entry
-                .oauth
-                .as_ref()
-                .and_then(|oauth| oauth.redirect_uri.clone())
-                .unwrap_or_default(),
-            cwd: entry.cwd.clone().unwrap_or_default(),
-            env: key_value_summaries(&entry.env),
-            env_passthrough: entry.env_passthrough.clone(),
-        })
-        .collect()
-}
-
-/// Creates MCP runtime tool summaries from the cached MCP runtime catalog.
-/// 从缓存的 MCP 运行时目录创建 MCP 工具摘要。
-pub(crate) fn mcp_tools(mcp_catalog: &TauriMcpRuntimeCatalog) -> Vec<McpToolSummary> {
-    mcp_catalog
-        .tools
-        .iter()
-        .map(|tool| McpToolSummary {
-            id: tool.id.clone(),
-            server_id: tool.server_id.clone(),
-            name: tool.name.clone(),
-            description: tool.description.clone(),
-            origin_tool_id: tool.origin_tool_id.clone(),
-        })
-        .collect()
-}
-
-/// Converts one ordered map into WebUI key/value summaries.
-/// 将单个有序映射转换为 WebUI 键值摘要。
-pub(crate) fn key_value_summaries(values: &BTreeMap<String, String>) -> Vec<KeyValueSummary> {
-    values
-        .iter()
-        .map(|(key, value)| KeyValueSummary {
-            key: key.clone(),
-            value: value.clone(),
-        })
-        .collect()
-}
-
-/// Creates VMM memory summaries from restored workspace state.
-/// 从已恢复工作区状态创建 VMM 记忆摘要。
-pub(crate) fn memories(
-    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
-) -> Vec<MemorySummary> {
-    vec![
-        MemorySummary {
-            id: String::from("projects"),
-            title: String::from("项目绑定"),
-            category: String::from("Project"),
-            state: format!("已恢复 {} 个项目", workspace.task_projects.len()),
-        },
-        MemorySummary {
-            id: String::from("sessions"),
-            title: String::from("会话绑定"),
-            category: String::from("Conversation"),
-            state: format!(
-                "已恢复 {} 个会话运行态",
-                workspace.session_runtime_state.len()
-            ),
-        },
-    ]
 }

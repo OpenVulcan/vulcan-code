@@ -188,7 +188,7 @@ async fn full_failure_reuses_same_actual_lua_hook_and_node_predecessor() {
     assert_eq!(original_starts.len(), 1);
     // Select recorded identity by its field, never by an evolving record index.
     // 按字段选择记录身份，绝不按会演进的记录下标选择。
-    let original_pid = original_starts.iter().next().expect("actual A start")["pid"]
+    let original_pid = original_starts.first().expect("actual A start")["pid"]
         .as_u64()
         .expect("actual A PID");
     assert!(

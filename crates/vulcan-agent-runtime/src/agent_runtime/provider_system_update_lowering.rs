@@ -133,8 +133,7 @@ mod tests {
     #[test]
     fn trusted_update_uses_user_envelope_when_native_was_requested() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
-        let lowered =
-            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy);
 
         assert!(matches!(
             lowered,
@@ -149,8 +148,7 @@ mod tests {
     #[test]
     fn automatic_lowering_uses_user_envelope() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::Auto);
-        let lowered =
-            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy);
 
         let ProviderSystemUpdateLowering::User { text } = lowered else {
             panic!("expected shared User envelope");
@@ -165,8 +163,7 @@ mod tests {
     fn untrusted_update_uses_user_envelope() {
         let mut update = trusted_update(RuntimeSystemUpdateLoweringHint::PreferNative);
         update.trust = RuntimeSystemUpdateTrust::UntrustedExternal;
-        let lowered =
-            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy);
 
         assert!(matches!(lowered, ProviderSystemUpdateLowering::User { .. }));
     }
@@ -176,8 +173,7 @@ mod tests {
     #[test]
     fn require_native_uses_user_envelope() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::RequireNative);
-        let lowered =
-            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy);
 
         assert!(matches!(lowered, ProviderSystemUpdateLowering::User { .. }));
     }
@@ -187,8 +183,7 @@ mod tests {
     #[test]
     fn user_lowering_has_no_repair_event() {
         let update = trusted_update(RuntimeSystemUpdateLoweringHint::Auto);
-        let lowered =
-            lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy::default());
+        let lowered = lower_provider_system_update(&update, ProviderSystemUpdateLoweringPolicy);
 
         let repair = provider_system_update_repair_event(
             &update,

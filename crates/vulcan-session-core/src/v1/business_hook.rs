@@ -163,19 +163,18 @@ impl BusinessHookMetadata {
                 field: "business_hook.timeline_identity",
             });
         }
-        if let Some(binding) = &self.binding {
-            if generation == 0
+        if let Some(binding) = &self.binding
+            && (generation == 0
                 || generation > JS_SAFE_INTEGER_MAX
                 || binding.segment_generation != generation
                 || binding.session_id.trim().is_empty()
                 || binding.session_id.trim() != binding.session_id
                 || binding.hook_turn_id.trim().is_empty()
-                || binding.hook_turn_id.trim() != binding.hook_turn_id
-            {
-                return Err(DomainError::CollaborationStateViolation {
-                    field: "business_hook.identity",
-                });
-            }
+                || binding.hook_turn_id.trim() != binding.hook_turn_id)
+        {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "business_hook.identity",
+            });
         }
         Ok(())
     }

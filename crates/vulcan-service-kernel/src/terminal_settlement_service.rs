@@ -271,17 +271,12 @@ fn install_unreadable_settlement_owner(
             return;
         }
     };
-    if !guard
+    guard
         .session_terminal_persistence_owners
-        .contains_key(&session_id)
-    {
-        guard.session_terminal_persistence_owners.insert(
-            session_id,
-            SessionTerminalPersistenceOwner::RecoveredSettlement {
-                generation: format!("unreadable:{session_id}"),
-            },
-        );
-    }
+        .entry(session_id)
+        .or_insert_with(|| SessionTerminalPersistenceOwner::RecoveredSettlement {
+            generation: format!("unreadable:{session_id}"),
+        });
 }
 
 /// Result of one controlled terminal-settlement retry.

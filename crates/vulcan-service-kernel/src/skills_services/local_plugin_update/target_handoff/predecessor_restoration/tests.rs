@@ -156,7 +156,7 @@ async fn failed_old_secret_read_retains_same_physical_preparation_for_retry() {
     let original_starts = starts(&fixture.marker);
     assert_eq!(original_starts.len(), 1);
     assert_eq!(
-        original_starts.iter().next().expect("actual retired A")["token"],
+        original_starts.first().expect("actual retired A")["token"],
         value
     );
     // Freeze the complete actual old binding and prove the candidate owns a distinct credential revision.

@@ -493,12 +493,10 @@ async fn service_stop_conversation_run_owned(
     if let Some(task) = &active_task {
         task.abort();
     }
-    if let Some(task) = preparation_task {
-        if let Err(error) = task.task.abort_and_wait().await {
-            tracing::warn!(
-                "[webui-service] stopped question preparation teardown warning: {error}"
-            );
-        }
+    if let Some(task) = preparation_task
+        && let Err(error) = task.task.abort_and_wait().await
+    {
+        tracing::warn!("[webui-service] stopped question preparation teardown warning: {error}");
     }
     let active_task_join_error = if let Some(active_task) = active_task {
         active_task.abort_and_wait().await.err()

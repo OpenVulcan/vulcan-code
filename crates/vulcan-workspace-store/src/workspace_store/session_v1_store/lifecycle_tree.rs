@@ -50,7 +50,7 @@ impl SessionV1StorageLocator {
                 // 检查文件类型时不跟随符号链接。
                 let kind = entry
                     .file_type()
-                    .map_err(|error| SessionV1StorageError::io(&entry.path(), error.to_string()))?;
+                    .map_err(|error| SessionV1StorageError::io(entry.path(), error.to_string()))?;
                 if !kind.is_dir() || kind.is_symlink() {
                     return Err(tree_error(
                         &parent,

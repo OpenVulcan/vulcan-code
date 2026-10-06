@@ -521,7 +521,7 @@ impl VulcanPluginEmbeddedHost {
             runtime_id: runtime.id().to_string(),
             max_domains: config.max_registered_pools,
             domains: Mutex::new(BTreeMap::new()),
-            workspaces: Mutex::new(WorkspaceRequests::new(&config)),
+            workspaces: Mutex::new(WorkspaceRequests::new(config)),
         });
         // Publish the entire fixed native surface as one registry transaction.
         // 将完整固定原生接口作为一个注册表事务发布。

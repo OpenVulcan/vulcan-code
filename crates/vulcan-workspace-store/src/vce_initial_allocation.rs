@@ -349,7 +349,7 @@ pub(super) fn verify_initial_allocation_failures(
         // Only this project's schema and private host bindings are prepared.
         // 仅准备此项目的结构及私有宿主绑定。
         let store =
-            prepare_vce_storage_binding(&host_runtime, paths.root, config.project_id.clone(), true)
+            prepare_vce_storage_binding(host_runtime, paths.root, config.project_id.clone(), true)
                 .expect("prepare initial failure store");
         store
             .activate_bindings(true)
@@ -390,12 +390,12 @@ pub(super) fn verify_initial_allocation_failures(
             // 该引用在下方撤销，因为重试需要干净状态——这也正是"夹具注入"而非"改动生产规则"的原因。
             // 失败消息前缀未变，故下方断言观察到的仍是它一向观察的那个属性。
             let blocker = format!(
-                "INSERT INTO vce_project_bindings (namespace_id, project_id, root_path, root_hash, checkpoint_chain_id, schema_version, vector_space_id, physical_fingerprint, preprocessing_version, chunker_version, dimension, content_table, path_table, config_revision, active, lifecycle_state, created_at_unix_ms, updated_at_unix_ms) VALUES ('{}', '{}', 'fixture', '{}', '{}', 1, '{}', '{}', '{}', '{}', {}, '{}', '{}', 1, 0, 'orphaned', 0, 0);",
-                format!("fixture-cleanup-blocker-{}", uuid::Uuid::new_v4()),
+                "INSERT INTO vce_project_bindings (namespace_id, project_id, root_path, root_hash, checkpoint_chain_id, schema_version, vector_space_id, physical_fingerprint, preprocessing_version, chunker_version, dimension, content_table, path_table, config_revision, active, lifecycle_state, created_at_unix_ms, updated_at_unix_ms) VALUES ('fixture-cleanup-blocker-{}', '{}', 'fixture', '{}', 'fixture-chain-{}', 1, 'fixture-space-{}', '{}', '{}', '{}', {}, '{}', '{}', 1, 0, 'orphaned', 0, 0);",
+                uuid::Uuid::new_v4(),
                 config.project_id,
                 "0".repeat(64),
-                format!("fixture-chain-{}", uuid::Uuid::new_v4()),
-                format!("fixture-space-{}", uuid::Uuid::new_v4()),
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
                 config.physical_fingerprint,
                 config.preprocessing_version,
                 config.chunker_version,

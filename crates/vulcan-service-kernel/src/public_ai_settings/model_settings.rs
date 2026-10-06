@@ -278,18 +278,18 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
             request.connection_id, request.model_id
         ));
     };
-    if request.enabled {
-        if let Some(issue) = model_capability_limit_issue(
+    if request.enabled
+        && let Some(issue) = model_capability_limit_issue(
             request.connection_id.as_str(),
             request.model_id.as_str(),
             &management_model.capabilities,
             &management_model.capability_evidence,
-        ) {
-            return Err(format!(
-                "Model `{}` cannot be enabled until its configuration is repaired: {issue}",
-                request.model_id
-            ));
-        }
+        )
+    {
+        return Err(format!(
+            "Model `{}` cannot be enabled until its configuration is repaired: {issue}",
+            request.model_id
+        ));
     }
     if request.enabled
         && !runtime.model_is_enabled_for_connection(
