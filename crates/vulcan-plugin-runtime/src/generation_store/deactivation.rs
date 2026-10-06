@@ -329,7 +329,7 @@ impl VulcanPluginGenerationStore {
         request_id: Uuid,
         expected: &VulcanPluginActivation,
     ) -> Result<VulcanPluginDeactivationReservation> {
-        if request_id.is_nil() || expected.generation.is_none() {
+        if request_id.is_nil() || expected.generation().is_none() {
             return Err(Error::invalid(
                 "Original removal requires a nonnil request and an explicitly active selection.",
             ));

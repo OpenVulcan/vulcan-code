@@ -303,7 +303,7 @@ fn owned_reconciliation_rejects_changed_full_original_record_without_repair() {
             "schema_version" => image[changed] = serde_json::json!(99),
             "predecessor" => image[changed]["approved_permissions"] = serde_json::json!(null),
             "target" => {
-                image[changed]["credential_revision"] =
+                image[changed]["settings"]["credential_revision"] =
                     serde_json::to_value(VulcanPluginCredentialRevision::allocate())
                         .expect("different exact revision")
             }
@@ -517,7 +517,7 @@ fn owned_reconciliation_rejects_selection_mismatches_without_changing_memory() {
         if altered_equal_revision {
             // Same revision cannot hide changed credential authority.
             // 相同修订不能隐藏已变凭据权威。
-            selected["credential_revision"] =
+            selected["settings"]["credential_revision"] =
                 serde_json::to_value(VulcanPluginCredentialRevision::allocate())
                     .expect("different selected credential revision");
         }

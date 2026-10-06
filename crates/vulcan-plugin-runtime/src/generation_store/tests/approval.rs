@@ -83,7 +83,7 @@ fn managed_approval_publication_is_exact() {
         .expect("publish approval");
     assert_eq!(published.schema_version, ACTIVATION_RECORD_VERSION);
     assert_eq!(published.approved_permissions(), approved.as_slice());
-    assert_eq!(published.generation.as_ref(), Some(generation.identity()));
+    assert_eq!(published.generation(), Some(generation.identity()));
     assert_eq!(published.revision, 1);
     // Reopening must recover exactly the selected approval without another file or write.
     // 重新打开必须恢复精确选定批准，不依赖其他文件或写入。
@@ -102,7 +102,7 @@ fn managed_approval_publication_is_exact() {
     let removed = store
         .deactivate("sample-plugin", 1)
         .expect("remove approved selection");
-    assert!(removed.generation.is_none());
+    assert!(removed.generation().is_none());
     assert!(removed.approved_permissions().is_empty());
     assert_eq!(
         store
@@ -170,7 +170,7 @@ fn managed_approval_corrupt_records_never_use_legacy_authority() {
     }
     // Every version other than the sole current format fails closed.
     // 唯一当前格式以外的每个版本都拒绝。
-    for version in [1, 2, 3, 99] {
+    for version in [1, 2, 3, 4, 99] {
         let mut changed = document.clone();
         changed["schema_version"] = version.into();
         fs::write(
@@ -182,13 +182,21 @@ fn managed_approval_corrupt_records_never_use_legacy_authority() {
     }
     // Every selection authority is a required field.
     // 每个选择权威都是必需字段。
-    for field in [
-        "approved_permissions",
-        "credential_revision",
-        "configuration",
+    for (parent, field) in [
+        ("", "approved_permissions"),
+        ("", "package"),
+        ("", "settings"),
+        ("/settings", "revision"),
+        ("/settings", "credential_revision"),
+        ("/settings", "configuration"),
     ] {
         let mut changed = document.clone();
-        changed.as_object_mut().expect("record").remove(field);
+        changed
+            .pointer_mut(parent)
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("record object")
+            .remove(field)
+            .expect("field present in the current record format");
         fs::write(
             &path,
             serde_json::to_vec(&changed).expect("encode missing-field fixture"),
@@ -220,10 +228,10 @@ fn managed_approval_corrupt_records_never_use_legacy_authority() {
             .message
             .contains("capability set")
     );
-    // A null selection must never carry permission grants for a nonexistent selected package.
-    // 空选择绝不能携带对不存在选中包的权限授予。
+    // A tombstone must never carry permission grants for a nonexistent selected package.
+    // 停用记录绝不能携带对不存在选中包的权限授予。
     let mut invalid_tombstone = document;
-    invalid_tombstone["generation"] = serde_json::Value::Null;
+    invalid_tombstone["package"] = serde_json::json!({"kind": "uninstalled"});
     fs::write(
         &path,
         serde_json::to_vec(&invalid_tombstone).expect("encode tombstone"),
@@ -346,7 +354,7 @@ fn managed_approval_locked_record_retains_the_complete_previous_selection() {
     let committed = store
         .activate_for_test(&second, 1, second_permissions)
         .expect("retry original replacement");
-    assert_eq!(committed.generation.as_ref(), Some(second.identity()));
+    assert_eq!(committed.generation(), Some(second.identity()));
     assert_eq!(
         store
             .pin_active("sample-plugin")

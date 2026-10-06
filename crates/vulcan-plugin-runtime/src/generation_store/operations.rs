@@ -6,8 +6,8 @@ use super::{
     PinnedVulcanPluginGeneration, RECORD_VERSION, STORE_DIRECTORY, VulcanPluginActivation,
     VulcanPluginActiveGeneration, VulcanPluginConfigurationSelection,
     VulcanPluginCredentialRevision, VulcanPluginGenerationIdentity, VulcanPluginGenerationStore,
-    VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
-    VulcanPluginStoreResult as Result, files,
+    VulcanPluginPackageSelection, VulcanPluginSettings, VulcanPluginStoreError as Error,
+    VulcanPluginStoreErrorCode as Code, VulcanPluginStoreResult as Result, files,
 };
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -294,7 +294,7 @@ impl VulcanPluginGenerationStore {
         // 可选性表示缺失或声明的停用记录，不表示猜测恢复。
         let generation = activation
             .as_ref()
-            .and_then(|record| record.generation.as_ref())
+            .and_then(|record| record.generation())
             .map(|identity| self.pin_locked(identity))
             .transpose()?;
         // A selected package must agree with every authority frozen beside it.
@@ -415,7 +415,7 @@ impl VulcanPluginGenerationStore {
         let active = self.read_activation(&identity.plugin_id)?;
         if active
             .as_ref()
-            .and_then(|record| record.generation.as_ref())
+            .and_then(|record| record.generation())
             .is_some_and(|selected| selected.generation_id == identity.generation_id)
         {
             return Err(Error::new(
@@ -607,12 +607,15 @@ impl VulcanPluginGenerationStore {
             || permissions
                 .iter()
                 .any(|key| key.is_empty() || key.contains('\0'))
-            || (record.generation.is_none() && !permissions.is_empty())
+            || (record.generation().is_none() && !permissions.is_empty())
         {
             return Err(Error::invalid("Activation approval is not canonical."));
         }
-        record.configuration.validate_size()?;
-        if let Some(identity) = &record.generation {
+        if record.settings.revision == 0 {
+            return Err(Error::invalid("Activation settings have no revision."));
+        }
+        record.configuration().validate_size()?;
+        if let Some(identity) = record.generation() {
             files::validate_identity(identity)?;
             if identity.plugin_id != plugin_id {
                 return Err(Error::invalid(
@@ -670,19 +673,26 @@ impl VulcanPluginGenerationStore {
         let revision = expected_revision
             .checked_add(1)
             .ok_or_else(|| Error::invalid("Plugin activation revision is exhausted."))?;
-        let (generation, approved_permissions, credential_revision, configuration) = match successor
-        {
+        // A commit is also a settings change, so both halves advance together.
+        // 提交同时也是设置变更，因此两部分一同递增。
+        let settings_revision = VulcanPluginActivation::next_settings_revision(original)?;
+        // This single record is the storage-level selection authority, not a claim of route readiness.
+        // 此单一记录为存储层选择权威，不表示路由已就绪。
+        match successor {
             ActivationSuccessor::Select {
                 generation,
                 approved_permissions,
                 credential_revision,
                 configuration,
-            } => (
-                Some(generation),
+            } => Ok(VulcanPluginActivation::generation_selection(
+                plugin_id.to_owned(),
+                revision,
+                generation,
                 approved_permissions,
-                credential_revision,
+                settings_revision,
                 configuration,
-            ),
+                credential_revision,
+            )),
             ActivationSuccessor::Deactivate => {
                 // A tombstone needs a published original whose cleanup identities it retains.
                 // 停用记录需要已发布原记录，并保留其清理身份。
@@ -692,25 +702,19 @@ impl VulcanPluginGenerationStore {
                         "Plugin deactivation requires a published selection.",
                     )
                 })?;
-                (
-                    None,
-                    Vec::new(),
-                    original.credential_revision.clone(),
-                    original.configuration.clone(),
-                )
+                Ok(VulcanPluginActivation {
+                    schema_version: ACTIVATION_RECORD_VERSION,
+                    plugin_id: plugin_id.to_owned(),
+                    revision,
+                    package: VulcanPluginPackageSelection::Uninstalled {},
+                    approved_permissions: Vec::new(),
+                    settings: VulcanPluginSettings {
+                        revision: settings_revision,
+                        ..original.settings.clone()
+                    },
+                })
             }
-        };
-        // This single record is the storage-level selection authority, not a claim of route readiness.
-        // 此单一记录为存储层选择权威，不表示路由已就绪。
-        Ok(VulcanPluginActivation {
-            schema_version: ACTIVATION_RECORD_VERSION,
-            plugin_id: plugin_id.to_owned(),
-            revision,
-            generation,
-            approved_permissions,
-            credential_revision,
-            configuration,
-        })
+        }
     }
 
     /// Publish the prevalidated `next` selection while its caller retains the namespace fence.

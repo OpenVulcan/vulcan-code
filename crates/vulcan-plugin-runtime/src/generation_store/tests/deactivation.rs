@@ -106,7 +106,7 @@ fn retained_deactivation_reserves_before_effects_and_keeps_the_original_file() {
     let original = fixture.reserve();
     assert_eq!(original.original(), &fixture.selected);
     assert_eq!(original.intended().revision, fixture.selected.revision + 1);
-    assert!(original.intended().generation.is_none());
+    assert!(original.intended().generation().is_none());
     assert!(original.intended().approved_permissions().is_empty());
     assert_eq!(
         fs::read(fixture.store.root.join("active/sample-plugin.json"))

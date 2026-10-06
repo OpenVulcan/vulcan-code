@@ -90,7 +90,7 @@ impl VulcanPluginGenerationStore {
         let selected = self
             .read_activation(&expected.plugin_id)?
             .ok_or_else(|| Error::new(Code::Conflict, "Published MCP activation is missing."))?;
-        if selected != *expected || selected.generation.is_none() {
+        if selected != *expected || selected.generation().is_none() {
             return Err(Error::new(
                 Code::Conflict,
                 "Published MCP requires its exact complete active selection.",

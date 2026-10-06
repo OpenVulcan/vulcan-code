@@ -54,15 +54,19 @@ impl VulcanPluginGenerationStore {
             schema_version: preparation.record.schema_version,
             request_id: preparation.record.request_id,
             predecessor: preparation.record.predecessor.clone(),
-            target: VulcanPluginActivation {
-                schema_version: ACTIVATION_RECORD_VERSION,
-                plugin_id: intent.generation.plugin_id.clone(),
-                revision: intent.activation_revision,
-                generation: Some(intent.generation.clone()),
-                approved_permissions: intent.approved_permissions.clone(),
-                credential_revision: intent.credential_revision.clone(),
+            // The frozen predecessor alone derives the settings revision, so retries rebuild the same target.
+            // 设置修订仅由固定前驱派生，因此重试会重建相同目标。
+            target: VulcanPluginActivation::generation_selection(
+                intent.generation.plugin_id.clone(),
+                intent.activation_revision,
+                intent.generation.clone(),
+                intent.approved_permissions.clone(),
+                VulcanPluginActivation::next_settings_revision(
+                    preparation.record.predecessor.as_ref(),
+                )?,
                 configuration,
-            },
+                intent.credential_revision.clone(),
+            ),
             preparation: Some(intent.clone()),
             phase: Phase::Prepared,
         };

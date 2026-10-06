@@ -1703,7 +1703,7 @@ async fn immutable_service_update_rejects_changed_predecessor_authority() {
     let mut activation: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&activation_path).expect("activation bytes"))
             .expect("activation JSON");
-    activation["configuration"]["value"]["mode"] = json!("changed-with-same-revision");
+    activation["settings"]["configuration"]["value"]["mode"] = json!("changed-with-same-revision");
     std::fs::write(
         &activation_path,
         serde_json::to_vec(&activation).expect("changed bytes"),

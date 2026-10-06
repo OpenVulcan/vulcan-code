@@ -79,7 +79,7 @@ impl VulcanPluginGenerationStore {
     /// 使用 `retired` 区分已暂存回收与未完成丢弃，清理精确保留清单。
     /// Returns true on confirmed completion, false for an existing terminal record, and an error retaining recovery state.
     /// 确认完成时返回 true，既有终态返回 false，失败返回错误并保留恢复状态。
-    pub(super) fn cleanup_credentials(
+    pub(in crate::generation_store) fn cleanup_credentials(
         &self,
         plugin_id: &str,
         revision: &VulcanPluginCredentialRevision,
@@ -97,7 +97,7 @@ impl VulcanPluginGenerationStore {
         // 退役允许停用记录，但未完成候选丢弃仍须拒绝任何被引用身份。
         if let Some(activation) = self.read_activation(plugin_id)?
             && activation.credential_revision() == revision
-            && (!retired || activation.generation.is_some())
+            && (!retired || activation.generation().is_some())
         {
             return Err(Error::invalid(
                 "Referenced credential revision cannot be cleaned in this phase.",

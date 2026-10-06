@@ -105,8 +105,7 @@ async fn release_acceptance_service_one_hundred_actual_updates_and_rollbacks() {
                 previous_revision = selected.revision;
                 assert_eq!(
                     selected
-                        .generation
-                        .as_ref()
+                        .generation()
                         .expect("selected physical generation")
                         .content_fingerprint,
                     preview.content_fingerprint

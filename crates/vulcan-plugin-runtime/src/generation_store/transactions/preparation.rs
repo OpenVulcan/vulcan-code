@@ -80,7 +80,7 @@ impl VulcanPluginActivationPreparationIntent {
     /// Compare `target` with all identities fixed before preparation; configuration must be validated from its pinned copy.
     /// 比较 `target` 与准备前固定的全部身份；配置必须按其固定副本校验。
     pub(super) fn matches_target(&self, target: &VulcanPluginActivation) -> bool {
-        target.generation.as_ref() == Some(&self.generation)
+        target.generation() == Some(&self.generation)
             && target.credential_revision() == &self.credential_revision
             && target.approved_permissions() == self.approved_permissions.as_slice()
             && target.revision == self.activation_revision
@@ -174,7 +174,7 @@ impl VulcanPluginActivationRequestRecord {
     pub fn candidate(&self) -> Option<&VulcanPluginGenerationIdentity> {
         match self {
             Self::Preparation(record) => Some(&record.preparation.generation),
-            Self::Activation(record) => record.target.generation.as_ref(),
+            Self::Activation(record) => record.target.generation(),
         }
     }
     /// Borrow the planned or selected credential revision without claiming that staging is complete.

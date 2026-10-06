@@ -867,7 +867,7 @@ fn activation_preparation_startup_gate_tracks_same_original_through_promotion() 
     // This changes only the configured target, leaving the early frozen resource intent identical.
     // 此处仅改变已配置目标，保持早期固定资源意图完全相同。
     let mut changed: serde_json::Value = serde_json::from_slice(&original_bytes).expect("wire");
-    changed["target"]["configuration"] =
+    changed["target"]["settings"]["configuration"] =
         serde_json::to_value(VulcanPluginConfigurationSelection::Document {
             value: serde_json::json!({"unexpected":"replacement"}),
         })

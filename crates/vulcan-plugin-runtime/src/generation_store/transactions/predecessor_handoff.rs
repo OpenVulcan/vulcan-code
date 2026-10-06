@@ -164,12 +164,8 @@ impl VulcanPluginGenerationStore {
             .expect("validated predecessor");
         // Retain verified immutable old bytes, not the ordinary mutable user plugin directory.
         // 保留已验证不可变旧字节，而非普通可变用户插件目录。
-        let generation = self.pin_locked(
-            predecessor
-                .generation
-                .as_ref()
-                .expect("validated generation"),
-        )?;
+        let generation =
+            self.pin_locked(predecessor.generation().expect("validated generation"))?;
         if predecessor.approved_permissions() != generation.required_permissions.as_slice() {
             return Err(Error::invalid(
                 "Predecessor reservation permissions differ from its package.",
@@ -454,7 +450,7 @@ impl VulcanPluginGenerationStore {
                     .original
                     .predecessor
                     .as_ref()
-                    .and_then(|old| old.generation.as_ref())
+                    .and_then(|old| old.generation())
                     == Some(identity)
             {
                 return Err(Error::new(
@@ -506,7 +502,7 @@ impl VulcanPluginGenerationStore {
         ) || !original
             .predecessor
             .as_ref()
-            .is_some_and(|old| old.generation.is_some())
+            .is_some_and(|old| old.generation().is_some())
         {
             return Err(Error::invalid(
                 "Predecessor handoff requires the complete immutable old managed selection.",
@@ -532,7 +528,7 @@ impl VulcanPluginGenerationStore {
             .expect("validated predecessor");
         if reservation.store_root != self.root
             || reservation.generation.store_root != self.root
-            || old.generation.as_ref() != Some(reservation.generation.identity())
+            || old.generation() != Some(reservation.generation.identity())
             || old.credential_revision() != reservation.credentials.record().revision()
         {
             return Err(Error::new(

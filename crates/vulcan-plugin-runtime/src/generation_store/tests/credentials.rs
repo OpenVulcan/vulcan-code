@@ -148,7 +148,7 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
     let rotated = store
         .activate_with_credentials_for_test(&package, 1, Vec::new(), second.clone())
         .expect("rotate credentials");
-    assert_eq!(rotated.generation.as_ref(), Some(package.identity()));
+    assert_eq!(rotated.generation(), Some(package.identity()));
     assert_eq!(selected.credential_revision(), &first);
     assert_eq!(rotated.credential_revision(), &second);
     assert_eq!(
@@ -165,7 +165,7 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
     let removed = store
         .deactivate("sample-plugin", 2)
         .expect("remove selection");
-    assert!(removed.generation.is_none());
+    assert!(removed.generation().is_none());
     assert_eq!(removed.credential_revision(), &second);
     assert!(
         store
@@ -225,7 +225,7 @@ fn credential_binding_record_rejects_null_malformed_and_duplicate_fields() {
         // Invalid credential authority must not be reinterpreted as legacy storage.
         // 无效凭据权威不得重新解释为旧存储。
         let mut changed = document.clone();
-        changed["credential_revision"] = invalid;
+        changed["settings"]["credential_revision"] = invalid;
         fs::write(
             &path,
             serde_json::to_vec(&changed).expect("encode credential corruption"),

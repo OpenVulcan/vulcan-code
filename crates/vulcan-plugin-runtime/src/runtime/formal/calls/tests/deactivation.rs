@@ -312,7 +312,7 @@ fn deactivation_lifecycle_real_native_cancellation_keeps_same_selection_and_orig
                 .activation("hook-plugin")
                 .expect("exact actual tombstone")
                 .expect("selected tombstone")
-                .generation
+                .generation()
                 .is_none()
         );
     }

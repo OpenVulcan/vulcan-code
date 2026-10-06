@@ -463,7 +463,7 @@ fn activation_transaction_rejects_corruption_and_changed_predecessors() {
     // 仅相同修订不能授权已经改变的文档或不同选定插件包。
     let mut changed = serde_json::from_slice::<serde_json::Value>(&original_activation)
         .expect("decode actual predecessor");
-    changed["generation"] =
+    changed["package"]["identity"] =
         serde_json::to_value(second.identity()).expect("encode another physical identity");
     fs::write(
         store.root.join("active/sample-plugin.json"),

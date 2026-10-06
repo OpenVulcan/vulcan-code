@@ -161,6 +161,8 @@ impl VulcanPluginGenerationStore {
         let revision = expected_revision
             .checked_add(1)
             .ok_or_else(|| Error::invalid("Plugin activation revision is exhausted."))?;
+        let settings_revision =
+            VulcanPluginActivation::next_settings_revision(predecessor.as_ref())?;
         // Reinspect the exact physical target before persisting any intent.
         // 持久保存任何意图前，重新检查精确物理目标。
         let verified = self.pin_locked(&generation.identity)?;
@@ -180,15 +182,15 @@ impl VulcanPluginGenerationStore {
             schema_version: TRANSACTION_RECORD_VERSION,
             request_id,
             predecessor,
-            target: VulcanPluginActivation {
-                schema_version: ACTIVATION_RECORD_VERSION,
-                plugin_id: plugin_id.clone(),
+            target: VulcanPluginActivation::generation_selection(
+                plugin_id.clone(),
                 revision,
-                generation: Some(generation.identity.clone()),
-                approved_permissions: permissions,
-                credential_revision: credentials,
+                generation.identity.clone(),
+                permissions,
+                settings_revision,
                 configuration,
-            },
+                credentials,
+            ),
             phase: Phase::Prepared,
             preparation: None,
         };
@@ -622,10 +624,10 @@ impl VulcanPluginGenerationStore {
     {
         // Use the exact physical package identity, including its inspected content fingerprint.
         // 使用精确物理插件包身份，包含已检查内容指纹。
-        let identity =
-            record.target.generation.as_ref().ok_or_else(|| {
-                Error::invalid("Activation transaction target package is missing.")
-            })?;
+        let identity = record
+            .target
+            .generation()
+            .ok_or_else(|| Error::invalid("Activation transaction target package is missing."))?;
         // Retain actual package ownership after verifying its immutable contents.
         // 校验不可变内容后保留实际插件包所有权。
         let generation = self.pin_locked(identity)?;

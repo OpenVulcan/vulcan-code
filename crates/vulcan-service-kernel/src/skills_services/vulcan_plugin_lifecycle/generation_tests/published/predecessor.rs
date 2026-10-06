@@ -252,8 +252,7 @@ pub(in crate::skills_services) async fn failed_update_with_fixture(
     assert_eq!(
         prepared
             .target()
-            .generation
-            .as_ref()
+            .generation()
             .expect("actual target")
             .content_fingerprint,
         preview.content_fingerprint

@@ -375,8 +375,7 @@ fn predecessor_handoff_sealed_transfer_preserves_aborted_and_exact_physical_rete
                 original
                     .predecessor()
                     .expect("original old selection")
-                    .generation
-                    .as_ref()
+                    .generation()
                     .expect("managed old generation")
             )
             .expect("old package becomes collectible after actual last pin release")

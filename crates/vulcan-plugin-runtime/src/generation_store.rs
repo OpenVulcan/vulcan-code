@@ -19,6 +19,7 @@ mod legacy_mutation;
 pub use legacy_mutation::VulcanPluginLegacyMutationGuard;
 mod operations;
 mod published_dispatch;
+mod settings;
 pub(crate) use published_dispatch::PublishedDispatchFence;
 mod transactions;
 pub(crate) use transactions::EffectAttempt;
@@ -53,11 +54,11 @@ use std::sync::Arc;
 /// Private generation marker format.
 /// 私有代次标记格式。
 const RECORD_VERSION: u32 = 1;
-/// Sole activation format: package, complete approval, credential revision and configuration form one selection.
-/// 唯一激活格式：插件包、完整批准、凭据修订及配置构成单个选择。
+/// Sole activation format: a package selection with complete approval, beside an independently revisioned settings section.
+/// 唯一激活格式：带完整批准的插件包选择，旁附独立修订的设置段。
 /// Other versions are rejected as invalid; earlier unreleased formats are intentionally not recognized.
 /// 其他版本按无效拒绝；较早未发布格式有意不再识别。
-const ACTIVATION_RECORD_VERSION: u32 = 4;
+const ACTIVATION_RECORD_VERSION: u32 = 5;
 /// Activation records retain the common metadata allowance plus the sole configuration value budget.
 /// 激活记录保留通用元数据额度，并加上唯一配置值预算。
 const MAX_ACTIVATION_BYTES: u64 = MAX_RECORD_BYTES + MAX_PLUGIN_CONFIGURATION_BYTES;
@@ -159,6 +160,70 @@ pub struct VulcanPluginGenerationIdentity {
     pub content_fingerprint: String,
 }
 
+/// Package half of an activation: which package runs, changed only by install, update and uninstall transactions.
+/// 激活的插件包部分：运行哪个插件包，仅由安装、更新及卸载交易改变。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VulcanPluginPackageSelection {
+    /// One immutable managed generation.
+    /// 单个不可变受管代次。
+    Generation {
+        /// Exact selected generation identity.
+        /// 精确所选代次身份。
+        identity: VulcanPluginGenerationIdentity,
+    },
+    /// The package shipped with the host; only its settings are stored here.
+    /// 随宿主分发的插件包；此处只保存其设置。
+    /// Keep a struct variant so Serde rejects unknown fields that a unit variant would otherwise ignore.
+    /// 保持结构体分支，使 Serde 拒绝单位分支原本会忽略的未知字段。
+    Bundled {},
+    /// Explicit removal tombstone that prevents revision reuse.
+    /// 防止修订复用的显式移除停用记录。
+    Uninstalled {},
+}
+
+/// Settings half of an activation, edited in place without changing the package selection.
+/// 激活的设置部分，可就地编辑而不改变插件包选择。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VulcanPluginSettings {
+    /// Monotonic nonzero settings revision; edits and transaction commits advance it.
+    /// 单调非零设置修订；编辑及交易提交使其递增。
+    pub revision: u64,
+    /// Complete configuration selection; a tombstone retains its last value.
+    /// 完整配置选择；停用记录保留最后值。
+    configuration: VulcanPluginConfigurationSelection,
+    /// Exact credential revision; a tombstone retains its last revision for cleanup.
+    /// 精确凭据修订；停用记录保留最后修订以供清理。
+    credential_revision: VulcanPluginCredentialRevision,
+}
+
+impl VulcanPluginSettings {
+    /// Borrow the selected configuration.
+    /// 借用所选配置。
+    pub fn configuration(&self) -> &VulcanPluginConfigurationSelection {
+        &self.configuration
+    }
+
+    /// Return the selected credential revision without exposing any secret value.
+    /// 返回所选凭据修订，不暴露任何秘密值。
+    pub fn credential_revision(&self) -> &VulcanPluginCredentialRevision {
+        &self.credential_revision
+    }
+}
+
+/// One settings edit; absent parts keep their current value.
+/// 单次设置编辑；缺省部分保留当前值。
+#[derive(Clone, Debug, Default)]
+pub struct VulcanPluginSettingsChange {
+    /// Replacement configuration, validated against the selected package.
+    /// 替换配置，按所选插件包校验。
+    pub configuration: Option<VulcanPluginConfigurationSelection>,
+    /// Replacement credential revision, already staged for the selected package.
+    /// 替换凭据修订，须已为所选插件包暂存。
+    pub credential_revision: Option<VulcanPluginCredentialRevision>,
+}
+
 /// Explicit activation state; a retained tombstone prevents revision reuse after deactivation.
 /// 显式激活状态；保留停用记录以防止停用后复用修订号。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -170,52 +235,98 @@ pub struct VulcanPluginActivation {
     /// Plugin namespace selected by the activation file name.
     /// 由激活文件名选择的插件命名空间。
     pub plugin_id: String,
-    /// Monotonic nonzero revision; a never-published namespace is observed as revision zero.
-    /// 非零单调修订；从未发布的命名空间观察为修订零。
+    /// Monotonic nonzero package-selection revision; a never-published namespace is observed as revision zero.
+    /// 非零单调插件包选择修订；从未发布的命名空间观察为修订零。
     pub revision: u64,
-    /// Selected immutable generation, or an explicit deactivation tombstone.
-    /// 选定不可变代次，或显式停用记录。
-    #[serde(deserialize_with = "deserialize_required_generation")]
-    pub generation: Option<VulcanPluginGenerationIdentity>,
+    /// Selected package, or an explicit removal tombstone.
+    /// 所选插件包，或显式移除停用记录。
+    package: VulcanPluginPackageSelection,
     /// Exact sorted permissions approved for the selected package; a tombstone retains an empty list.
     /// 为所选插件包批准的精确有序权限；停用记录保留空列表。
     approved_permissions: Vec<String>,
-    /// Exact credential revision; a tombstone retains its last revision for cleanup.
-    /// 精确凭据修订；停用记录保留最后修订以供清理。
-    credential_revision: VulcanPluginCredentialRevision,
-    /// Complete configuration selection; a tombstone retains its last value.
-    /// 完整配置选择；停用记录保留最后值。
-    configuration: VulcanPluginConfigurationSelection,
+    /// Independently revisioned settings of this namespace.
+    /// 此命名空间独立修订的设置。
+    settings: VulcanPluginSettings,
 }
 
 impl VulcanPluginActivation {
+    /// Build a managed selection at `revision` whose settings revision is `settings_revision`.
+    /// 在 `revision` 构造受管选择，其设置修订为 `settings_revision`。
+    pub(in crate::generation_store) fn generation_selection(
+        plugin_id: String,
+        revision: u64,
+        identity: VulcanPluginGenerationIdentity,
+        approved_permissions: Vec<String>,
+        settings_revision: u64,
+        configuration: VulcanPluginConfigurationSelection,
+        credential_revision: VulcanPluginCredentialRevision,
+    ) -> Self {
+        Self {
+            schema_version: ACTIVATION_RECORD_VERSION,
+            plugin_id,
+            revision,
+            package: VulcanPluginPackageSelection::Generation { identity },
+            approved_permissions,
+            settings: VulcanPluginSettings {
+                revision: settings_revision,
+                configuration,
+                credential_revision,
+            },
+        }
+    }
+
+    /// Settings revision a commit after `predecessor` takes; the first selection starts at one.
+    /// 在 `predecessor` 之后提交所取的设置修订；首个选择从一开始。
+    pub(in crate::generation_store) fn next_settings_revision(
+        predecessor: Option<&Self>,
+    ) -> VulcanPluginStoreResult<u64> {
+        predecessor
+            .map_or(0, |record| record.settings.revision)
+            .checked_add(1)
+            .ok_or_else(|| {
+                VulcanPluginStoreError::invalid("Plugin settings revision is exhausted.")
+            })
+    }
+
+    /// Borrow the package selection.
+    /// 借用插件包选择。
+    pub fn package(&self) -> &VulcanPluginPackageSelection {
+        &self.package
+    }
+
+    /// Return the selected managed generation; bundled packages and tombstones have none.
+    /// 返回所选受管代次；内建插件包及停用记录没有代次。
+    pub fn generation(&self) -> Option<&VulcanPluginGenerationIdentity> {
+        match &self.package {
+            VulcanPluginPackageSelection::Generation { identity } => Some(identity),
+            VulcanPluginPackageSelection::Bundled {}
+            | VulcanPluginPackageSelection::Uninstalled {} => None,
+        }
+    }
+
     /// Return approval frozen in this selection; an empty slice approves a zero-permission package or belongs to a tombstone.
     /// 返回此选择中固定的批准权限；空切片批准零权限插件包，或属于停用记录。
     pub fn approved_permissions(&self) -> &[String] {
         &self.approved_permissions
     }
 
+    /// Borrow the independently revisioned settings section.
+    /// 借用独立修订的设置段。
+    pub fn settings(&self) -> &VulcanPluginSettings {
+        &self.settings
+    }
+
     /// Return the selected credential revision without exposing any secret value.
     /// 返回所选凭据修订，不暴露任何秘密值。
     pub fn credential_revision(&self) -> &VulcanPluginCredentialRevision {
-        &self.credential_revision
+        &self.settings.credential_revision
     }
 
-    /// Borrow the configuration frozen in this activation.
-    /// 借用此激活中固定的配置。
+    /// Borrow the selected configuration.
+    /// 借用所选配置。
     pub fn configuration(&self) -> &VulcanPluginConfigurationSelection {
-        &self.configuration
+        &self.settings.configuration
     }
-}
-
-/// Decode a required nullable generation field; missing data must not become a deactivation tombstone.
-/// 解码必需但可空的代次字段；缺失数据不得成为停用记录。
-/// `deserializer` owns the explicitly present JSON value; returns its declared optional identity.
-/// `deserializer` 持有明确存在的 JSON 值；返回其声明的可选身份。
-fn deserialize_required_generation<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Option<VulcanPluginGenerationIdentity>, D::Error> {
-    Option::<VulcanPluginGenerationIdentity>::deserialize(deserializer)
 }
 
 /// Persistent preparation, readiness, and collection state for one exact generation identity.

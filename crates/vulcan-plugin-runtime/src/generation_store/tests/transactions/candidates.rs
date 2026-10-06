@@ -430,7 +430,7 @@ fn candidate_inspection_rejects_changed_authorities_without_repair() {
     let mut changed: serde_json::Value =
         serde_json::from_slice(&fs::read(&active).expect("read predecessor"))
             .expect("decode predecessor");
-    changed["generation"] =
+    changed["package"]["identity"] =
         serde_json::to_value(second.identity()).expect("encode changed package identity");
     // The rejected read must preserve this exact conflicting evidence.
     // 被拒绝读取必须保留此精确冲突证据。

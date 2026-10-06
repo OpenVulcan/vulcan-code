@@ -377,9 +377,9 @@ fn preparation_promotion_retained_rejects_changed_authority_without_repair() {
                             serde_json::to_value(VulcanPluginCredentialRevision::allocate())
                                 .expect("valid replacement identity");
                         wire["preparation"]["credential_revision"] = replacement.clone();
-                        wire["target"]["credential_revision"] = replacement;
+                        wire["target"]["settings"]["credential_revision"] = replacement;
                     } else {
-                        wire["predecessor"]["configuration"] =
+                        wire["predecessor"]["settings"]["configuration"] =
                             serde_json::to_value(VulcanPluginConfigurationSelection::Document {
                                 value: serde_json::Value::Null,
                             })

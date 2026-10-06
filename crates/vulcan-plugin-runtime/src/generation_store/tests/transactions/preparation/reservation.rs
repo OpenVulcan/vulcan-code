@@ -561,7 +561,7 @@ fn preparation_reservation_rejects_changed_selection_and_missing_original_index(
             let mut wire: serde_json::Value =
                 serde_json::from_slice(&fs::read(&path).expect("actual selected predecessor"))
                     .expect("selection wire");
-            wire["configuration"] =
+            wire["settings"]["configuration"] =
                 serde_json::to_value(VulcanPluginConfigurationSelection::Document {
                     value: serde_json::Value::Null,
                 })

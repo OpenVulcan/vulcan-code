@@ -387,7 +387,7 @@ fn preparation_abort_retained_rejects_changed_original_authority() {
                             serde_json::to_value(VulcanPluginCredentialRevision::allocate())
                                 .expect("valid replacement revision");
                     } else if corruption == "predecessor" {
-                        wire["predecessor"]["configuration"] =
+                        wire["predecessor"]["settings"]["configuration"] =
                             serde_json::to_value(VulcanPluginConfigurationSelection::Document {
                                 value: serde_json::Value::Null,
                             })

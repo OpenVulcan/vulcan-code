@@ -317,7 +317,7 @@ impl VulcanPluginManagedPackage {
     pub fn matches_activation(&self, activation: &crate::VulcanPluginActivation) -> bool {
         self.activation_revision == activation.revision
             && self.generation.identity().plugin_id == activation.plugin_id
-            && activation.generation.as_ref() == Some(self.generation.identity())
+            && activation.generation() == Some(self.generation.identity())
             && self.approved_permissions() == activation.approved_permissions()
             && self.configuration() == activation.configuration()
             && self.credential_binding
@@ -448,7 +448,7 @@ pub(crate) fn load_pinned_package(
     // A snapshot must never combine one persistent selection with another physical package.
     // 快照绝不能把一个持久选择与另一个物理插件包组合。
     let identity = generation.identity();
-    if activation.generation.as_ref() != Some(identity)
+    if activation.generation() != Some(identity)
         || activation.plugin_id != identity.plugin_id
         || package.id != identity.plugin_id
         || package.version.as_deref() != Some(identity.version.as_str())

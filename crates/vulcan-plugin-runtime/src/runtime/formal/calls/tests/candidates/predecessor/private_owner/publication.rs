@@ -558,7 +558,7 @@ fn predecessor_publication_rejects_actual_original_phase_and_complete_old_select
                 let old = changed
                     .get_mut("predecessor")
                     .expect("declared full predecessor");
-                *old.get_mut("configuration")
+                *old.pointer_mut("/settings/configuration")
                     .expect("declared original configuration") =
                     serde_json::to_value(VulcanPluginConfigurationSelection::Document {
                         value: json!({"label":"different-old-selection"}),

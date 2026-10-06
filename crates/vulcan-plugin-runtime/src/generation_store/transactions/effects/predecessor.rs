@@ -89,8 +89,7 @@ impl VulcanPluginActivationEffects {
             // Managed originals have complete durable package authority; tombstones cannot represent enabled predecessors.
             // 受管原请求具有完整持久插件包权威；停用记录不能表示启用前驱。
             let generation = predecessor
-                .generation
-                .as_ref()
+                .generation()
                 .ok_or_else(|| Error::invalid("Draining predecessor has no selected package."))?;
             if generation.version != identity.version
                 || generation.content_fingerprint != identity.content_fingerprint

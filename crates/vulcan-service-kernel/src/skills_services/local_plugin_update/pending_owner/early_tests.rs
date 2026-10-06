@@ -1295,8 +1295,7 @@ async fn manager_replacement_cleanup(prepared: bool) {
         .expect("managed current target is present");
     assert_eq!(
         current_selection
-            .generation
-            .as_ref()
+            .generation()
             .expect("actual selected immutable generation")
             .version,
         "3.0.0"

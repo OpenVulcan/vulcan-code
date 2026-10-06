@@ -12,6 +12,7 @@ mod approval;
 mod configuration;
 mod credentials;
 mod deactivation;
+mod settings;
 mod transactions;
 
 /// Write a valid content plugin beneath `root` and return its path; `body` distinguishes real package bytes.
@@ -99,8 +100,8 @@ fn immutable_generations_keep_original_paths_and_real_clone_ownership() {
             .activation("sample-plugin")
             .expect("read original selection")
             .expect("original selection")
-            .generation,
-        Some(first_identity.clone())
+            .generation(),
+        Some(&first_identity)
     );
     assert_ne!(first_path, second.package_root());
     assert_eq!(
@@ -424,11 +425,11 @@ fn generation_validation_rejects_tampering_and_retains_exact_failure_bytes() {
     // 构造合法 JSON 的无效记录，使语义校验必须拒绝。
     let base: serde_json::Value =
         serde_json::from_slice(&original).expect("decode activation fixture");
-    for field in ["schema_version", "plugin_id", "revision", "generation"] {
+    for field in ["schema_version", "plugin_id", "revision", "package"] {
         // Every corruption starts from the same original record rather than a previous damaged record.
         // 每次损坏从相同原始记录开始，而非沿用前次损坏记录。
         let mut corrupted = base.clone();
-        if field == "generation" {
+        if field == "package" {
             corrupted
                 .as_object_mut()
                 .expect("activation object")

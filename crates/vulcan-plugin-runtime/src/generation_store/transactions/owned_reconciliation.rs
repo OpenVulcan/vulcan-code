@@ -61,8 +61,7 @@ impl VulcanPluginGenerationStore {
         // The actual original package and credentials must still be bound to the complete retained target.
         // 实际原插件包及凭据必须仍绑定至完整保留目标。
         if transaction.generation.store_root != self.root
-            || transaction.record.target.generation.as_ref()
-                != Some(transaction.generation.identity())
+            || transaction.record.target.generation() != Some(transaction.generation.identity())
             || transaction.credentials.record().package() != transaction.generation.identity()
             || transaction.record.target.credential_revision()
                 != transaction.credentials.record().revision()

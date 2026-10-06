@@ -19,8 +19,7 @@ impl VulcanPluginGenerationStore {
         // 使用完整原身份，绝不使用新候选或从当前发现复制的路径。
         let identity = original
             .original
-            .generation
-            .as_ref()
+            .generation()
             .ok_or_else(|| Error::invalid("Original removal has no package identity."))?;
         self.collect_deactivation_inventory_package_retained(original, identity)
     }

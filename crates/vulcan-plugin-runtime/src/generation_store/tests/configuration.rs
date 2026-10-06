@@ -209,7 +209,7 @@ fn configuration_selection_rejects_corruption_without_repair_or_value_diagnostic
         // 每次变更仅针对已声明配置权威字段。
         let mut corrupt: Value =
             serde_json::from_str(&baseline).expect("decode original selection");
-        corrupt["configuration"] = replacement;
+        corrupt["settings"]["configuration"] = replacement;
         // Exact input remains available for manual recovery after the failed read.
         // 读取失败后，精确输入仍可供手动恢复。
         let bytes = serde_json::to_vec(&corrupt).expect("encode corrupt selection");
@@ -221,10 +221,11 @@ fn configuration_selection_rejects_corruption_without_repair_or_value_diagnostic
     // 此夹具模式下显式文档空值合法，区别于选择字段缺失。
     let mut corrupt: Value =
         serde_json::from_str(&baseline).expect("decode field mutation baseline");
-    corrupt
+    corrupt["settings"]
         .as_object_mut()
-        .expect("activation object")
-        .remove("configuration");
+        .expect("settings object")
+        .remove("configuration")
+        .expect("configuration field present");
     fs::write(
         &path,
         serde_json::to_vec(&corrupt).expect("encode missing field"),
@@ -249,7 +250,7 @@ fn configuration_selection_rejects_corruption_without_repair_or_value_diagnostic
     .expect("inject actual duplicate selection key");
     assert!(store.activation("configured-plugin").is_err());
     corrupt = serde_json::from_str(&baseline).expect("restore schema mutation baseline");
-    corrupt["configuration"]["value"] = json!({"label":123,"private":"must-not-leak"});
+    corrupt["settings"]["configuration"]["value"] = json!({"label":123,"private":"must-not-leak"});
     fs::write(
         &path,
         serde_json::to_vec(&corrupt).expect("encode invalid schema value"),
@@ -384,7 +385,7 @@ fn configuration_selection_enforces_exact_limits_and_explicit_null_semantics() {
     // 此变更必须在受管目录消费记录前被拒绝。
     let mut invalid_plain: Value =
         serde_json::from_slice(&original_plain).expect("decode undeclared selection");
-    invalid_plain["configuration"]["unexpected"] = json!("fixture-private");
+    invalid_plain["settings"]["configuration"]["unexpected"] = json!("fixture-private");
     // Keep exact invalid bytes to prove ordinary inspection performs no silent repair.
     // 保留精确非法字节，证明普通检查不执行静默修复。
     let invalid_bytes =

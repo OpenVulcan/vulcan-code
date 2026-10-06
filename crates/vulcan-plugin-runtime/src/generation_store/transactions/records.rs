@@ -165,7 +165,7 @@ impl VulcanPluginGenerationStore {
         ) || record.phase == VulcanPluginActivationTransactionPhase::Preparing
             || record.request_id != request_id
             || record.target.schema_version != ACTIVATION_RECORD_VERSION
-            || record.target.generation.is_none()
+            || record.target.generation().is_none()
         {
             return Err(Error::invalid(
                 "Activation transaction identity or format is invalid.",
@@ -381,7 +381,7 @@ impl VulcanPluginGenerationStore {
             && (record.candidate() == Some(identity)
                 || record
                     .predecessor()
-                    .is_some_and(|activation| activation.generation.as_ref() == Some(identity)))
+                    .is_some_and(|activation| activation.generation() == Some(identity)))
         {
             return Err(Error::new(
                 Code::Busy,
