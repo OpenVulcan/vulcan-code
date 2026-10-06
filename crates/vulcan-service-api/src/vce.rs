@@ -1419,7 +1419,8 @@ mod tests {
                 "kind": "rebuild", "state": "queued", "sequence": 1,
                 "createdAtUnixMs": 10, "updatedAtUnixMs": 10,
                 "sourceCheckpointVersion": 1, "resultCheckpointVersion": null,
-                "progress": null, "followupRequested": false, "error": null
+                "progress": null, "compaction": null,
+                "followupRequested": false, "error": null
             }
         });
         // response decodes exactly the fields previously consumed by the browser.

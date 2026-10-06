@@ -189,8 +189,30 @@ impl NativeAgentCollaborationRuntime for PreparationAdmissionHost {
 /// 即使驻留历史为空，原生压缩仍委托宿主，并传递宿主结果。
 /// Returns nothing; compares ordinary execution history with control-only compaction preparation.
 /// 不返回值；对比普通执行历史与仅携带控制的压缩准备。
-#[tokio::test]
-async fn native_compaction_uses_host_history_and_preserves_execution_identity() {
+#[test]
+fn native_compaction_uses_host_history_and_preserves_execution_identity() {
+    // The compaction path polls the full agent stream, so it gets the same stack production reserves.
+    // 压缩路径会轮询完整的智能体流，因此使用与生产相同的预留栈。
+    std::thread::Builder::new()
+        .name(String::from("native-compaction-identity"))
+        .stack_size(crate::AGENT_STREAM_WORKER_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("native compaction test runtime")
+                .block_on(
+                    native_compaction_uses_host_history_and_preserves_execution_identity_body(),
+                )
+        })
+        .expect("spawn native compaction test thread")
+        .join()
+        .expect("native compaction test thread completed");
+}
+
+/// Body of `native_compaction_uses_host_history_and_preserves_execution_identity`.
+/// `native_compaction_uses_host_history_and_preserves_execution_identity` 的测试主体。
+async fn native_compaction_uses_host_history_and_preserves_execution_identity_body() {
     for resident_history_present in [false, true] {
         // The host owns durable history independently from the resident snapshot.
         // 宿主独立于驻留快照持有可靠历史。

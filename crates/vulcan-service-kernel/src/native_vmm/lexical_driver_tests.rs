@@ -697,8 +697,17 @@ async fn isolated_controller() -> (tempfile::TempDir, HostRuntimeHandle) {
 
 /// Verifies production indexing and reads against temporary SQLite, never the user's databases or model route.
 /// 对临时 SQLite 验证生产索引与读取，绝不使用用户数据库或模型路由。
-#[test]
-fn real_controller_lexical_driver_pages_and_tracks_mutations() {
+/// Stack size for tests that drive the in-process engine; see `run_on_engine_stack`.
+/// 驱动进程内引擎的测试所用栈大小；见 `run_on_engine_stack`。
+const ENGINE_TEST_STACK_BYTES: usize = 32 * 1024 * 1024;
+
+/// Runs `body` to completion on a dedicated large-stack thread with its own multi-thread runtime.
+/// 在专用大栈线程及其独立多线程运行时上运行 `body` 直至完成。
+fn run_on_engine_stack<F, Fut>(name: &str, body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
     // The in-process engine runs this indexing and query workload on the caller's stack, and a debug build of
     // the vector layer needs far more than a default test thread provides: on the default stack this test
     // overflows rather than failing an assertion, and it passes once the stack is large enough. The external
@@ -709,25 +718,26 @@ fn real_controller_lexical_driver_pages_and_tracks_mutations() {
     // 本测试会溢出而不是断言失败，栈足够大时即通过。本测试过去驱动的是外部控制器，同样的工作跑在另一个进程里，
     // 这正是宿主自身栈此前从不是约束的原因。显式的大栈把该要求留在测试内部，而不是留在一个未来读者不会知道要设
     // 的环境变量里。
-    let executor = std::sync::Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("isolated VMM lexical runtime"),
-    );
+    let executor = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("isolated VMM engine runtime");
     std::thread::Builder::new()
-        .name(String::from("vmm-lexical-driver"))
-        .stack_size(32 * 1024 * 1024)
-        .spawn({
-            let executor = std::sync::Arc::clone(&executor);
-            move || {
-                executor.block_on(real_controller_lexical_driver_pages_and_tracks_mutations_body())
-            }
-        })
-        .expect("spawn isolated VMM lexical thread")
+        .name(name.to_owned())
+        .stack_size(ENGINE_TEST_STACK_BYTES)
+        .spawn(move || executor.block_on(body()))
+        .expect("spawn isolated VMM engine thread")
         .join()
-        .expect("isolated VMM lexical thread completed");
+        .expect("isolated VMM engine thread completed");
+}
+
+#[test]
+fn real_controller_lexical_driver_pages_and_tracks_mutations() {
+    run_on_engine_stack(
+        "vmm-lexical-driver",
+        real_controller_lexical_driver_pages_and_tracks_mutations_body,
+    );
 }
 
 /// Runs the production indexing and read workload driven by the test above.
@@ -1140,14 +1150,16 @@ async fn real_controller_precheck_history_policy_preserves_mixed_turns() {
 
 /// Verifies nonempty extraction, both profile roles and physical indexes through the actual native queue.
 /// 通过实际原生队列验证非空提炼、两种画像角色及物理索引。
-#[tokio::test]
-async fn real_controller_nonempty_analysis_materializes_memory_and_profiles() {
-    let (_temporary, controller) = isolated_controller().await;
-    crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::verify_nonempty_analysis(
-        bootstrap_vmm_data_plane(&controller).await.expect("nonempty data plane"),
-        super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
-        false,
-    ).await;
+#[test]
+fn real_controller_nonempty_analysis_materializes_memory_and_profiles() {
+    run_on_engine_stack("vmm-nonempty-analysis", || async {
+        let (_temporary, controller) = isolated_controller().await;
+        crate::native_vmm::client::pending_analysis_acceptance_tests::nonempty::verify_nonempty_analysis(
+            bootstrap_vmm_data_plane(&controller).await.expect("nonempty data plane"),
+            super::tests::embedding_capability_handle(BTreeSet::from([EmbeddingTask::ProviderDefault])).snapshot,
+            false,
+        ).await;
+    });
 }
 
 /// Runs public native-tool registration, manager exposure and physical execution in a private child process.

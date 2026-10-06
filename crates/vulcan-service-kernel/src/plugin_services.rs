@@ -227,7 +227,11 @@ pub(crate) fn service_load_plugin_ui_module(
 /// 返回值
 /// Returns the complete text only when both the inspected and read sizes stay within the module limit.
 /// 仅当检查与读取时的大小都在模块上限内时返回完整文本。
-fn read_bounded_plugin_ui_text(plugin_id: &str, path: &Path, label: &str) -> Result<String, String> {
+fn read_bounded_plugin_ui_text(
+    plugin_id: &str,
+    path: &Path,
+    label: &str,
+) -> Result<String, String> {
     let metadata = std::fs::metadata(path).map_err(|error| {
         format!("Failed to inspect Vulcan plugin `{plugin_id}` {label}: {error}")
     })?;

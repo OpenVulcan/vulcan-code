@@ -14,6 +14,11 @@
     reason = "runtime launch preparation returns owned terminal reports for existing stream error paths."
 )]
 
+/// Worker-thread stack that any thread polling agent streams must reserve; deeply nested stream
+/// futures exceed the platform default in debug builds.
+/// 轮询智能体流的任何线程都必须预留的工作线程栈；深层嵌套的流 Future 在 debug 构建中会超过平台默认值。
+pub const AGENT_STREAM_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 pub mod agent_profile;
 pub mod agent_runtime;
 pub mod attachment_asset_index;

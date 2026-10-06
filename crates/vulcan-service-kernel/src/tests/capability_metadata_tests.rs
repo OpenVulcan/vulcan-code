@@ -164,8 +164,28 @@ async fn capability_metadata_rpc_does_not_load_turns_or_write_on_read() {
 
 /// A fresh process reads saved choices and can rebuild a malformed addon via the actual RPC router.
 /// 新进程可读取已存选择，并通过实际 RPC 路由重建结构损坏的附加项。
-#[tokio::test(flavor = "current_thread")]
-async fn capability_metadata_reopen_and_rebuild_rpc_preserves_conversation() {
+#[test]
+fn capability_metadata_reopen_and_rebuild_rpc_preserves_conversation() {
+    // The reopened service bridge polls agent streams, so it gets the same stack production reserves.
+    // 重开的服务桥会轮询智能体流，因此使用与生产相同的预留栈。
+    std::thread::Builder::new()
+        .name(String::from("capability-metadata-reopen"))
+        .stack_size(vulcan_agent_runtime::AGENT_STREAM_WORKER_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("capability metadata test runtime")
+                .block_on(capability_metadata_reopen_and_rebuild_rpc_preserves_conversation_body())
+        })
+        .expect("spawn capability metadata test thread")
+        .join()
+        .expect("capability metadata test thread completed");
+}
+
+/// Body of `capability_metadata_reopen_and_rebuild_rpc_preserves_conversation`.
+/// `capability_metadata_reopen_and_rebuild_rpc_preserves_conversation` 的测试主体。
+async fn capability_metadata_reopen_and_rebuild_rpc_preserves_conversation_body() {
     // scenario is heap-owned because the complete reopened service bridge and RPC futures exceed the default test-thread stack when combined.
     // scenario 固定在堆上，因为完整重开服务桥与RPC Future组合后会超过默认测试线程栈。
     Box::pin(async {

@@ -4,8 +4,8 @@
 use crate::{
     VULCAN_PLUGIN_LEGACY_MANIFEST_SCHEMA_VERSION, VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION,
     VulcanPluginManifest, VulcanPluginReusableToolManifest, VulcanPluginRuntimeRequirements,
-    VulcanPluginSettingsLayout, VulcanPluginUiMountKind, VulcanPluginUiMountManifest,
-    VulcanPluginToolExecutionKind, VulcanPluginToolExecutionManifest,
+    VulcanPluginSettingsLayout, VulcanPluginToolExecutionKind, VulcanPluginToolExecutionManifest,
+    VulcanPluginUiMountKind, VulcanPluginUiMountManifest,
 };
 use schemars::{JsonSchema, Schema, generate::SchemaSettings};
 use serde_json::{Value, json};

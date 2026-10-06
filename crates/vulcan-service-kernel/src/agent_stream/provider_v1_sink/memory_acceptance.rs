@@ -8,6 +8,15 @@ use vulcan_ai_contract::{AiExecutionRequest, AiOperation, ModelCapabilities};
 use vulcan_core::types::{ControllerConfig, ProviderContextInjection};
 use vulcan_session_core::v1::event::{ApiPurposeKind, ApiRequestSnapshot};
 
+/// Returns the empty locked baseline completed with the fixed host guidance a real first request locks.
+/// 返回补齐固定宿主指引的空锁定基线，与真实首个请求锁定的基线一致。
+/// Fixtures that initialize a session baseline must use it, because rebuilds reject a baseline without guidance.
+/// 初始化会话基线的夹具必须使用它，因为重建会拒绝缺少指引的基线。
+pub(crate) fn host_guided_locked_baseline() -> LockedBaselineProjection {
+    initial_locked_baseline_with_host_guidance(&LockedBaselineProjection::empty())
+        .expect("the fixed host guidance must project onto an empty baseline")
+}
+
 /// Builds a text-only fixture candidate and passes its real V1 snapshot through production reconstruction.
 /// 构造纯文本夹具候选，并将其真实 V1 快照送入生产重建。
 /// Takes the authoritative snapshot and admitted overlay; returns the actual request, budget and canonical projections.
@@ -16,6 +25,32 @@ pub(crate) fn rebuild_memory_acceptance_request(
     snapshot: SessionProviderProjectionSnapshot,
     injection: ProviderContextInjection,
 ) -> Result<ProviderRequestPreparationCandidate, String> {
+    let (facts, candidate) = memory_acceptance_candidate(injection);
+    rebuild_memory_acceptance_candidate(snapshot, &facts, candidate)
+}
+
+/// Publishes `injection` as durable dynamic context on `handle`, then rebuilds from the committed snapshot.
+/// 先把 `injection` 作为可靠动态上下文发布到 `handle`，再从已提交快照重建。
+/// Persistent memory reaches the wire only through durable dynamic context, exactly as on the production path.
+/// 持久记忆只经由可靠动态上下文进入线上请求，与生产路径一致。
+pub(crate) fn rebuild_memory_acceptance_request_for_handle(
+    handle: &SessionHandle,
+    injection: ProviderContextInjection,
+) -> Result<ProviderRequestPreparationCandidate, String> {
+    let (facts, candidate) = memory_acceptance_candidate(injection);
+    context_injection::synchronize_request_dynamic_context(handle, &facts, &candidate)
+        .map_err(|error| error.to_string())?;
+    let snapshot = handle
+        .capture_controller_projection_snapshot()
+        .map_err(|error| error.to_string())?;
+    rebuild_memory_acceptance_candidate(snapshot, &facts, candidate)
+}
+
+/// Builds the fixed request facts and the text-only candidate carrying `injection`.
+/// 构建固定请求事实及携带 `injection` 的纯文本候选。
+fn memory_acceptance_candidate(
+    injection: ProviderContextInjection,
+) -> (ProviderV1RequestFacts, ProviderRequestPreparationCandidate) {
     // The fixed transport fixture carries no credentials and performs no Provider dispatch.
     // 固定传输夹具不携带凭证，也不执行 Provider 分派。
     let facts = ProviderV1RequestFacts {
@@ -87,15 +122,25 @@ pub(crate) fn rebuild_memory_acceptance_request(
             None,
         )),
         dynamic_prompt_layers: ProviderPromptLayers::default(),
-        locked_baseline: LockedBaselineProjection::empty(),
+        locked_baseline: host_guided_locked_baseline(),
     };
+    (facts, candidate)
+}
+
+/// Passes `candidate` and its real V1 `snapshot` through production reconstruction.
+/// 将 `candidate` 及其真实 V1 `snapshot` 送入生产重建。
+fn rebuild_memory_acceptance_candidate(
+    snapshot: SessionProviderProjectionSnapshot,
+    facts: &ProviderV1RequestFacts,
+    candidate: ProviderRequestPreparationCandidate,
+) -> Result<ProviderRequestPreparationCandidate, String> {
     // Resource-bearing fixtures are rejected by the production builder without fabricated media delivery.
     // 带资源的夹具由生产构建器拒绝，不伪造媒体投递。
     let prepared_media = media::PreparedV1UserMedia {
         prompts: BTreeMap::new(),
         bindings: Vec::new(),
     };
-    rebuild_provider_transport_candidate(snapshot, &facts, candidate, prepared_media)
+    rebuild_provider_transport_candidate(snapshot, facts, candidate, prepared_media)
         .map(|prepared| prepared.transport)
         .map_err(|error| error.to_string())
 }

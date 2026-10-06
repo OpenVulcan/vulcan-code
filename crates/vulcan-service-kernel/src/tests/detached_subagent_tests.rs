@@ -726,7 +726,9 @@ async fn context_compaction_without_v1_durability_cannot_write_legacy_checkpoint
         Ok(_) => panic!("missing V1 durability must reject before any projection mutation"),
         Err(error) => error,
     };
-    assert!(error.contains("exact durable assistant semantic receipt"));
+    // The first missing durable fact, the API terminal receipt, rejects before the semantic receipt check.
+    // 首个缺失的可靠事实（API 终态回执）会在语义回执检查之前拒绝。
+    assert!(error.contains("no durable API terminal receipt"), "{error}");
 
     // guard proves no legacy checkpoint was written and ownership remains available for retry.
     // guard 证明进程内所有权仍可用于重试。
@@ -1629,8 +1631,8 @@ fn delegate_finished_ingest_terminalizes_stale_running_payload() {
     );
 }
 
-/// Verifies close-agent cleanup removes closed tasks while preserving other unclosed agents.
-/// 验证关闭代理清理会移除已关闭任务，同时保留其他未关闭代理。
+/// Verifies close-agent cleanup removes closed task surfaces while preserving other agents and admitted terminals.
+/// 验证关闭代理清理会移除已关闭任务界面，同时保留其他代理及已准入终态。
 #[test]
 fn close_agent_cleanup_unloads_runtime_state_and_retains_current_navigation_round() {
     let parent_session_id = SessionId::new_v4();
@@ -1674,8 +1676,10 @@ fn close_agent_cleanup_unloads_runtime_state_and_retains_current_navigation_roun
             .subagent_surface_detail_cache
             .contains_key(&retained_task_id)
     );
+    // Closing a runtime slot cannot revoke ownership of an already admitted child terminal.
+    // 关闭运行时槽位不能撤销已准入子终态的归属。
     assert!(
-        !guard
+        guard
             .detached_subagent_task_listeners
             .contains_key(&closed_task_id)
     );

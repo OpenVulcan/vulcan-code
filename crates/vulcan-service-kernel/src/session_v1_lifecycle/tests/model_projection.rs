@@ -227,11 +227,22 @@ async fn automatic_model_restore_ignores_failures_and_deletes_missing_sessions()
     }
     // An existing non-file path is a read failure, never evidence authorizing index deletion.
     // 已存在的非文件路径属于读取失败，绝非允许删除索引的依据。
-    std::fs::remove_file(&metadata_path).unwrap();
-    std::fs::create_dir(&metadata_path).unwrap();
+    // Capture the publishable index while the damaged metadata is still a regular file.
+    // 在损坏元数据仍是普通文件时捕获可发布索引。
     let mut workspace = load_workspace_index_snapshot(fixture.controller.clone())
         .await
         .unwrap();
+    std::fs::remove_file(&metadata_path).unwrap();
+    std::fs::create_dir(&metadata_path).unwrap();
+    // A full index reload refuses to publish a replacement instead of treating the path as absence.
+    // 完整索引重载拒绝发布替换快照，而不是把该路径视为缺失。
+    let reload_error = load_workspace_index_snapshot(fixture.controller.clone())
+        .await
+        .expect_err("a non-file metadata path must block index publication");
+    assert!(
+        reload_error.contains("io_failure"),
+        "unexpected reload error: {reload_error}"
+    );
     workspace.selected_session = damaged_id;
     read_automatic_session_model_projection_v1(&fixture.controller, &registry, damaged_id)
         .await

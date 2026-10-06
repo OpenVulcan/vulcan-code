@@ -927,7 +927,8 @@ mod submission_model_selection_tests {
 
     use vulcan_provider_adapters::{
         CredentialConnection, CredentialMode, PersistedAiConfiguration, PublicAiRuntime,
-        UnavailableCredentialSecretResolver, parse_openrouter_model_catalog,
+        UnavailableCredentialSecretResolver, parse_openai_model_catalog,
+        parse_openrouter_model_catalog,
     };
     use vulcan_workbench_model::SessionSummary;
 
@@ -1009,6 +1010,87 @@ mod submission_model_selection_tests {
                 )
                 .expect("catalog should parse"),
                 &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
+            ))
+            .expect("source catalog should stage");
+        runtime
+            .replace_configuration(configuration.clone())
+            .expect("configuration should install");
+        runtime
+            .reapply_model_catalog_overlays(&configuration)
+            .expect("configured test generation should publish");
+        runtime
+    }
+
+    /// Builds one OpenAI discovery catalog listing exactly `model_ids` at `generation`.
+    /// 构建一个在 `generation` 代际中恰好列出 `model_ids` 的 OpenAI 发现目录。
+    /// OpenAI admits undeclared discovery, so dropping an id here really removes it from the
+    /// published catalog; signed OpenRouter declarations cannot be removed by discovery.
+    /// OpenAI 准入未声明的发现模型，因此在此省略 ID 会真正从已发布目录移除；受签名的
+    /// OpenRouter 声明无法通过发现移除。
+    fn openai_discovery_catalog(
+        generation: u64,
+        model_ids: &[&str],
+    ) -> vulcan_provider_adapters::ConnectionModelCatalog {
+        let body = serde_json::json!({
+            "object": "list",
+            "data": model_ids
+                .iter()
+                .map(|id| serde_json::json!({"id": id, "object": "model", "owned_by": "openai"}))
+                .collect::<Vec<_>>(),
+        });
+        with_protocol_variants(
+            parse_openai_model_catalog(OPENAI_DISCOVERY_ACCOUNT, generation, &body.to_string())
+                .expect("OpenAI discovery catalog should parse"),
+            &[
+                vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
+                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            ],
+        )
+    }
+
+    /// Connection id of the OpenAI discovery account fixture.
+    /// OpenAI 发现账号夹具的连接 ID。
+    const OPENAI_DISCOVERY_ACCOUNT: &str = "openai-account";
+
+    /// Builds one runtime whose single OpenAI account discovered both fixture models.
+    /// 构建一个运行时，其唯一 OpenAI 账号发现了两个夹具模型。
+    fn openai_discovery_runtime() -> PublicAiRuntime {
+        let runtime =
+            PublicAiRuntime::first_batch(std::sync::Arc::new(UnavailableCredentialSecretResolver))
+                .expect("runtime should initialize");
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .connection_graph
+            .add_connection(
+                &runtime
+                    .providers()
+                    .expect("provider registry should resolve"),
+                CredentialConnection {
+                    id: String::from(OPENAI_DISCOVERY_ACCOUNT),
+                    provider_id: String::from("openai"),
+                    service_entry_id: String::from("public-api"),
+                    credential_profile_id: String::from("api-key"),
+                    credential_mode: CredentialMode::Token,
+                    credential_id: String::from("credential-openai-account"),
+                    display_name: String::from("OpenAI account"),
+                    secret_reference: String::from("secret-openai-account"),
+                    management_secret_reference: None,
+                    service_origin_override: None,
+                    prompt_cache_by_protocol: BTreeMap::new(),
+                },
+            )
+            .expect("connection should register");
+        configuration.set_model_enabled("openai", "openai-dynamic-terra", true);
+        configuration.set_model_enabled("openai", "openai-dynamic-sol", true);
+        configuration.active = Some(vulcan_provider_adapters::ActiveAiModelSelection {
+            provider_id: String::from("openai"),
+            model_id: String::from("openai-dynamic-terra"),
+            connection_id: String::from(OPENAI_DISCOVERY_ACCOUNT),
+        });
+        runtime
+            .stage_source_catalog_for_testing(openai_discovery_catalog(
+                1,
+                &["openai-dynamic-terra", "openai-dynamic-sol"],
             ))
             .expect("source catalog should stage");
         runtime
@@ -1209,8 +1291,8 @@ mod submission_model_selection_tests {
         let mut configuration = runtime
             .configuration_snapshot()
             .expect("configuration should remain readable");
-        // staleConnection represents another grouped credential whose catalog no longer contains the active model.
-        // staleConnection 表示同一分组中目录已不再包含活动模型的另一份凭据。
+        // staleConnection represents another grouped credential that no longer exposes the active model.
+        // staleConnection 表示同一分组中已不再公开活动模型的另一份凭据。
         let stale_connection = CredentialConnection {
             id: String::from("openrouter-stale-account"),
             provider_id: String::from("openrouter"),
@@ -1242,20 +1324,14 @@ mod submission_model_selection_tests {
             model_id: String::from("openai/gpt-5.6-sol"),
             connection_id: stale_connection.id.clone(),
         });
-        // staleCatalog deliberately omits the globally selected model while remaining a valid account catalog.
-        // staleCatalog 有意省略全局所选模型，同时保持为有效账号目录。
-        let stale_catalog = with_protocol_variants(
-            parse_openrouter_model_catalog(
-                stale_connection.id.as_str(),
-                1,
-                r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Stale account model","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
-            )
-            .expect("stale account catalog should parse"),
-            &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
+        // Signed OpenRouter declarations always enter account catalogs, so the account access policy
+        // is the authority that withdraws the globally selected model from the stale credential.
+        // 受签名的 OpenRouter 声明总会进入账号目录，因此由账号访问策略从失效凭据撤回全局所选模型。
+        configuration.set_connection_model_enabled(
+            stale_connection.id.as_str(),
+            "openai/gpt-5.6-sol",
+            false,
         );
-        runtime
-            .stage_source_catalog_for_testing(stale_catalog)
-            .expect("stale account source catalog should stage");
         runtime
             .replace_configuration(configuration.clone())
             .expect("invalid global account fixture should install");
@@ -1276,7 +1352,7 @@ mod submission_model_selection_tests {
     /// 验证逐次提交中未变化的模型快照会保留会话路由租约。
     #[test]
     fn repeated_submission_selection_preserves_lease_until_target_changes() {
-        let runtime = configured_runtime();
+        let runtime = openai_discovery_runtime();
         let session_id = Uuid::new_v4();
         let mut workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),
@@ -1302,9 +1378,9 @@ mod submission_model_selection_tests {
         ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
             .expect("session runtime state should initialize");
         let selection = SubmissionModelSelection {
-            provider_id: String::from("openrouter"),
-            model_id: String::from("openai/gpt-5.6-sol"),
-            connection_id: String::from("openrouter-account"),
+            provider_id: String::from("openai"),
+            model_id: String::from("openai-dynamic-sol"),
+            connection_id: String::from(OPENAI_DISCOVERY_ACCOUNT),
         };
         apply_submission_model_selection(
             &runtime,
@@ -1369,17 +1445,11 @@ mod submission_model_selection_tests {
 
         // replacementCatalog simulates a hot catalog generation that removes the leased model.
         // replacementCatalog 模拟移除已租用模型的热更新目录代际。
-        let replacement_catalog = with_protocol_variants(
-            parse_openrouter_model_catalog(
-                "openrouter-account",
-                2,
-                r#"{"data":[{"id":"openai/gpt-5.6-terra","name":"Replacement","context_length":8192,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":4096}}]}"#,
-            )
-            .expect("replacement catalog should parse"),
-            &[vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID],
-        );
         runtime
-            .stage_source_catalog_for_testing(replacement_catalog)
+            .stage_source_catalog_for_testing(openai_discovery_catalog(
+                2,
+                &["openai-dynamic-terra"],
+            ))
             .expect("replacement source catalog should stage");
         runtime
             .reapply_model_catalog_overlays(&configuration)
@@ -1389,7 +1459,7 @@ mod submission_model_selection_tests {
             .expect("replacement catalogs should remain readable");
         assert!(
             replacement_catalogs
-                .get("openrouter-account")
+                .get(OPENAI_DISCOVERY_ACCOUNT)
                 .is_some_and(|catalog| catalog
                     .models
                     .iter()
@@ -1488,9 +1558,9 @@ mod submission_model_selection_tests {
         );
 
         let replacement = SubmissionModelSelection {
-            provider_id: String::from("openrouter"),
-            model_id: String::from("openai/gpt-5.6-terra"),
-            connection_id: String::from("openrouter-account"),
+            provider_id: String::from("openai"),
+            model_id: String::from("openai-dynamic-terra"),
+            connection_id: String::from(OPENAI_DISCOVERY_ACCOUNT),
         };
         apply_submission_model_selection(
             &runtime,

@@ -1814,7 +1814,7 @@ function: before
         fs::create_dir_all(&managed_runtime_root).expect("create managed runtime root");
         fs::create_dir_all(&plugin_state_root).expect("create plugin state root");
         fs::create_dir_all(&plugin_runtime_root).expect("create plugin runtime root");
-        VulcanPluginRuntimeManager::new(
+        let manager = VulcanPluginRuntimeManager::new(
             Arc::new(test_engine(runtime_root)),
             bundled_root,
             user_plugin_root,
@@ -1822,7 +1822,13 @@ function: before
             managed_runtime_root,
             plugin_state_root,
             plugin_runtime_root,
-        )
+        );
+        // Plugins declaring runtime requirements activate only under an attached formal parent, as in production.
+        // 声明运行时要求的插件只在已附加正式父级下激活，与生产一致。
+        manager
+            .initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
+            .expect("initialize formal plugin runtime");
+        manager
     }
 
     /// Writes a bundled fixture that hides a host-owned session argument before AI registration.
@@ -2118,7 +2124,9 @@ lua_runtime:
 
     /// Verifies cached registration and trusted session injection across concurrent conversations.
     /// 验证并发会话中的注册缓存与可信会话参数注入。
-    #[tokio::test(flavor = "current_thread")]
+    // Generation replacement waits for the old instance monitor, which needs a free worker like production.
+    // 代次替换需等待旧实例监控推进，与生产相同需要空闲工作线程。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn session_owner_hook_hides_and_restores_exact_mcp_argument() {
         let temp = tempfile::tempdir().expect("create hook test directory");
         let runtime_root = temp.path().join("runtime");
@@ -2233,16 +2241,6 @@ lua_runtime:
             "a before hook cannot switch the immutable tool target"
         );
         assert_eq!(observed.lock().expect("upstream arguments").len(), 2);
-        let completed = (first.invoke)(json!({"url": "https://post-fail.test"}), first_context)
-            .await
-            .expect("post-processing failure must preserve completed target result");
-        let body = completed
-            .model_output
-            .as_str()
-            .expect("readable completed result");
-        assert!(body.contains("already completed"));
-        assert!(body.contains("\"owner_session_id\": \"conversation-one\""));
-        assert_eq!(observed.lock().expect("upstream arguments").len(), 3);
         let unmatched = VulcanToolCandidate {
             descriptor: VulcanToolDescriptor::new(
                 "read_page",
@@ -2326,7 +2324,13 @@ lua_runtime:
             updated_catalog.plugins["session-owner-hook"].generation
                 > previous.plugins["session-owner-hook"].generation
         );
-        let updated = prepare(original_candidate);
+        // A new generation replaces the persistent Hook only after the old one is explicitly drained.
+        // 新代次仅在旧持久 Hook 显式排空后替换它。
+        manager
+            .drain_plugin_sessions("session-owner-hook")
+            .await
+            .expect("drain previous Hook generation");
+        let updated = prepare(original_candidate.clone());
         assert_eq!(updated.descriptor.description, "Updated registration run 1");
         assert!(
             updated.parameters_schema["properties"]
@@ -2339,6 +2343,48 @@ lua_runtime:
         )
         .await;
         assert!(stale.is_err(), "old hook generation must be revoked");
+
+        // A Lua failure closes the persistent Hook instance, so it runs last: the completed upstream
+        // result survives, and later registrations fail closed until an explicit drain replaces it.
+        // Lua 失败会关闭持久 Hook 实例，因此放在最后：已完成的上游结果保留，后续注册在显式排空替换前失败关闭。
+        let completed = (updated.invoke)(json!({"url": "https://post-fail.test"}), first_context)
+            .await
+            .expect("post-processing failure must preserve completed target result");
+        let body = completed
+            .model_output
+            .as_str()
+            .expect("readable completed result");
+        assert!(body.contains("already completed"));
+        assert!(body.contains("\"owner_session_id\": \"conversation-one\""));
+        assert_eq!(observed.lock().expect("upstream arguments").len(), 3);
+        // The cached public definition stays valid, while a fresh registration fails closed.
+        // 已缓存的公开定义仍然有效，而新的注册则失败关闭。
+        let cached_after_failure = prepare(original_candidate.clone());
+        assert!(
+            cached_after_failure.parameters_schema["properties"]
+                .get("owner_session_id")
+                .is_none()
+        );
+        let mut fresh_candidate = original_candidate;
+        fresh_candidate.parameters_schema["properties"]["page"] = json!({"type": "integer"});
+        assert!(
+            prepare_vulcan_plugin_tool_candidates(
+                Some(manager.clone()),
+                vec![fresh_candidate.clone()],
+                None
+            )
+            .is_empty(),
+            "a closed Hook instance must hide the target instead of exposing the host-only argument"
+        );
+        manager
+            .drain_plugin_sessions("session-owner-hook")
+            .await
+            .expect("drain failed Hook instance");
+        let recovered = prepare(fresh_candidate);
+        assert_eq!(
+            recovered.descriptor.description,
+            "Updated registration run 1"
+        );
     }
 
     /// Verifies registration, trusted session injection, and post-hook delivery through two real stdio MCP processes.

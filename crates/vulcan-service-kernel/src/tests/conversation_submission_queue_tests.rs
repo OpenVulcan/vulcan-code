@@ -424,8 +424,8 @@ fn existing_session_submission_without_v1_authority_fails_closed() {
     assert!(error.contains("V1 document authority"));
 }
 
-/// Verifies a repeated committed browser action cannot duplicate its process mirror or Hook dispatch.
-/// 验证重复的已提交浏览器动作无法重复创建进程镜像或 Hook 分发。
+/// Verifies a repeated committed browser action cannot duplicate its process mirror or fabricate a Hook turn.
+/// 验证重复的已提交浏览器动作无法重复创建进程镜像，也不能伪造 Hook 回合。
 #[test]
 fn queue_service_idempotent_retry_does_not_duplicate_process_mirror_or_hook() {
     let session_id = SessionId::new_v4();
@@ -456,13 +456,16 @@ fn queue_service_idempotent_retry_does_not_duplicate_process_mirror_or_hook() {
 
     queue_existing_submission(&app, &state, &agent_runtime, queue_input())
         .expect("first queue submission should commit");
-    let first_hook_turn_id = agent_runtime
-        .conversation_hook_runtime
-        .lock()
-        .expect("Hook runtime should remain readable after first dispatch")
-        .active_turn_id(session_id)
-        .expect("first queue submission should create one Hook turn")
-        .to_string();
+    // Queued notifications only record into an existing business Hook turn; they never create one.
+    // 排队通知只记录到已有业务 Hook 回合中，绝不创建新回合。
+    assert_eq!(
+        agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("Hook runtime should remain readable after first dispatch")
+            .active_turn_id(session_id),
+        None
+    );
     queue_existing_submission(&app, &state, &agent_runtime, queue_input())
         .expect("idempotent retry should return the existing receipt");
 
@@ -484,7 +487,8 @@ fn queue_service_idempotent_retry_does_not_duplicate_process_mirror_or_hook() {
         .expect("Hook runtime should remain readable");
     assert_eq!(
         hook_runtime.active_turn_id(session_id),
-        Some(first_hook_turn_id.as_str())
+        None,
+        "an idempotent retry must not fabricate a Hook turn"
     );
 }
 

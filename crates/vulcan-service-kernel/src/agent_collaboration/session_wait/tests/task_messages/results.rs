@@ -287,10 +287,10 @@ fn close_requester_api(invocation: &ValidatedInvocation) {
         .unwrap();
 }
 
-/// Actual request-boundary projection survives disk reload and cannot leak an old result into new work.
-/// 实际请求边界投影经磁盘重载保留，且不能把旧结果泄露到新任务。
+/// Actual request-boundary projection survives disk reload and lets a late result enter the current receiving turn.
+/// 实际请求边界投影经磁盘重载保留，迟到结果进入当前接收回合。
 #[tokio::test]
-async fn session_task_result_projection_uses_only_original_requester_turn() {
+async fn session_task_result_projection_enters_current_requester_turn() {
     for replace_turn in [false, true] {
         let (_root, invocation, target, context) = message_fixture(false).await;
         let delivery = finish_steered_target(&invocation, &target, context).await;
@@ -325,10 +325,6 @@ async fn session_task_result_projection_uses_only_original_requester_turn() {
                 )
                 .unwrap();
         }
-        let before = invocation
-            .source_handle
-            .read(|document| document.memory_revision())
-            .unwrap();
         project_collaboration_before_api(&invocation.state, &invocation.source_handle, 11)
             .await
             .unwrap();
@@ -336,32 +332,24 @@ async fn session_task_result_projection_uses_only_original_requester_turn() {
             load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
                 .unwrap()
                 .document;
-        if replace_turn {
-            assert_eq!(source.memory_revision(), before);
-            assert!(
-                source
-                    .collaboration_state()
-                    .task_result_projections
-                    .is_empty()
-            );
-            assert!(
-                source
-                    .collaboration_state()
-                    .received_task_results
-                    .contains_key(&delivery)
-            );
-        } else {
-            let proof = &source.collaboration_state().task_result_projections[&delivery];
-            assert_eq!(proof.turn_id.value(), invocation.source_turn_id);
-            assert_eq!(
-                proof.inputs.len(),
-                1,
-                "stopped result still carries an explicit outcome"
-            );
-            assert_eq!(proof.receiver_revision, source.durable_revision());
-            assert!(source.events().iter().any(|event| event.seq == proof.inputs[0].input_seq
-                && matches!(&event.event, EventBody::UserInput(input) if input.text.contains("<vulcan_agent_message") && input.text.contains("stopped"))));
-        }
+        // Late results keep their source identity but project into the open receiving turn.
+        // 迟到结果保留来源身份，但投影到开放的接收回合。
+        let receiving_turn = source.active_turn().unwrap().turn_id;
+        let proof = &source.collaboration_state().task_result_projections[&delivery];
+        assert_eq!(proof.turn_id, receiving_turn);
+        assert_eq!(
+            proof.turn_id.value() == invocation.source_turn_id,
+            !replace_turn,
+            "a replacement turn receives the late result instead of the closed source turn"
+        );
+        assert_eq!(
+            proof.inputs.len(),
+            1,
+            "stopped result still carries an explicit outcome"
+        );
+        assert_eq!(proof.receiver_revision, source.durable_revision());
+        assert!(source.events().iter().any(|event| event.seq == proof.inputs[0].input_seq
+            && matches!(&event.event, EventBody::UserInput(input) if input.text.contains("<vulcan_agent_message") && input.text.contains("stopped"))));
         let revision = source.memory_revision();
         project_collaboration_before_api(&invocation.state, &invocation.source_handle, 12)
             .await

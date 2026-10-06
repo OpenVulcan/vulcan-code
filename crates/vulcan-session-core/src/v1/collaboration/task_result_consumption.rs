@@ -42,8 +42,8 @@ pub struct CollaborationTaskResultProjection {
     /// Exact local result acceptance event.
     /// 精确本地结果接纳事件。
     pub acceptance_seq: Seq,
-    /// Original requesting business turn; never the executor's turn.
-    /// 原请求业务回合，绝不是执行者回合。
+    /// Requester business turn that received the result (the source turn or a later one); never the executor's turn.
+    /// 接收结果的请求者业务回合（来源回合或其后的回合），绝不是执行者回合。
     pub turn_id: TurnId,
     /// Frozen content decision made under the requester's canonical lifecycle gate.
     /// 在请求者规范生命周期锁内冻结的内容决策。

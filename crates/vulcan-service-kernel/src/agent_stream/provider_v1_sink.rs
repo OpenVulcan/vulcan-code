@@ -90,7 +90,9 @@ mod host_guidance;
 #[cfg(test)]
 mod memory_acceptance;
 #[cfg(test)]
-pub(crate) use memory_acceptance::rebuild_memory_acceptance_request;
+pub(crate) use memory_acceptance::{
+    host_guided_locked_baseline, rebuild_memory_acceptance_request_for_handle,
+};
 mod media;
 pub(crate) use media::frozen_prompt_media_projection;
 

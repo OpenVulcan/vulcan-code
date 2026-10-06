@@ -24,7 +24,6 @@ use vulcan_context::ContextCompactionPolicy;
 use vulcan_context_compaction::{CompactionPlan, CompactionResult, CompactionTailSelectionReport};
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_session_core::v1::{
-    context::LockedBaselineProjection,
     document::{ApiCompletion, ClientInputSubmission, PrepareAndStartApiInput},
     event::{
         ApiCallStatus, ApiEndReason, ApiPurposeKind, ApiRequestSnapshot, ApiTimings,
@@ -202,7 +201,8 @@ pub(super) async fn verify(
                     )
                     .expect("fingerprint"),
                 },
-                locked_baseline: LockedBaselineProjection::empty(),
+                locked_baseline: crate::agent_stream::provider_v1_sink::host_guided_locked_baseline(
+                ),
                 continuation_action_id: None,
                 now_ms: 3,
             }
@@ -332,7 +332,8 @@ pub(super) async fn verify(
         seq: semantic.value,
         text: summary.to_owned(),
     });
-    durability.locked_baseline = Some(LockedBaselineProjection::empty());
+    durability.locked_baseline =
+        Some(crate::agent_stream::provider_v1_sink::host_guided_locked_baseline());
     let outcome = finish_webui_context_compaction_execution(
         &ServiceEventEmitter::new(Vec::new()),
         &state,
@@ -477,10 +478,14 @@ pub(super) async fn verify(
     );
     // Inspect the actual outgoing message array, not only the intermediate overlay.
     // 检查实际传出消息数组，而非仅检查中间覆盖层。
-    let physical = crate::agent_stream::provider_v1_sink::rebuild_memory_acceptance_request(
-        projection, injection,
-    )
-    .expect("physical request after compaction");
+    // Persistent memory enters the wire through durable dynamic context, so publish it first.
+    // 持久记忆经由可靠动态上下文进入线上请求，因此先发布它。
+    drop(projection);
+    let physical =
+        crate::agent_stream::provider_v1_sink::rebuild_memory_acceptance_request_for_handle(
+            &handle, injection,
+        )
+        .expect("physical request after compaction");
     let occurrences = physical
         .exact_request
         .messages
@@ -507,10 +512,38 @@ pub(super) async fn verify(
         })
         .sum::<usize>();
     assert_eq!(summary_occurrences, 1, "canonical summary must occur once");
+    // Canonical history carries active memory only through the typed persistent context update,
+    // never through ordinary user or assistant content.
+    // 规范历史只通过类型化持久上下文更新携带活动记忆，绝不经由普通用户或助手内容。
+    let carriers = physical
+        .controller_snapshot
+        .messages
+        .iter()
+        .filter_map(|message| match &message.payload {
+            vulcan_core::types::ConversationPayload::UserText { text, .. }
+                if text.contains(&memory.abstract_text) =>
+            {
+                Some(Some(text.as_str()))
+            }
+            payload
+                if serde_json::to_string(payload)
+                    .expect("canonical payload")
+                    .contains(&memory.abstract_text) =>
+            {
+                Some(None)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        carriers.len(),
+        1,
+        "canonical history must carry memory once"
+    );
     assert!(
-        !serde_json::to_string(&physical.controller_snapshot)
-            .expect("canonical history")
-            .contains(&memory.abstract_text)
+        carriers[0].is_some_and(|text| text.starts_with("<vulcan_context_update")
+            && text.contains("injection.persistent")),
+        "active memory must stay inside the persistent context update envelope"
     );
     binding_cache_acceptance::verify(
         &state,

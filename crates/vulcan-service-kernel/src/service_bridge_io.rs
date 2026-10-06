@@ -19,7 +19,8 @@ const EXTERNAL_URL_CONFIRMATION_REQUIRED: &str = "confirmation_required";
 
 /// Explicit worker-stack capacity reserved for deeply nested agent stream polling on the WebUI bridge runtime.
 /// 为 WebUI 桥接运行时中的深层智能体流轮询显式预留的工作线程栈容量。
-const WEBUI_SERVICE_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+const WEBUI_SERVICE_WORKER_STACK_BYTES: usize =
+    vulcan_agent_runtime::AGENT_STREAM_WORKER_STACK_BYTES;
 
 /// Returns the one process-lifetime generation timestamp shared by discovery and status.
 /// 返回发现记录与状态接口共用的进程生命周期代次时间戳。
