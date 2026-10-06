@@ -45,6 +45,7 @@ fn usage_report(
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: Vec::new(),
     }
 }
@@ -159,6 +160,7 @@ fn terminal_report_backfills_complete_usage_when_checkpoint_omits_usage() {
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: Vec::new(),
     };
 

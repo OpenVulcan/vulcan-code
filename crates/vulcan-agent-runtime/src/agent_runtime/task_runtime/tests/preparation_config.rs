@@ -2427,6 +2427,7 @@ fn task_execution_outcome_from_report_preserves_final_assistant_message_id() {
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: vec![vulcan_core::types::CoreEvent {
             kind: vulcan_core::types::CoreEventKind::ToolFinished,
             title: String::from("工具调用完成"),

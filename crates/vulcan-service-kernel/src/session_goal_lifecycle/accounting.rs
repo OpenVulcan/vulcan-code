@@ -1,6 +1,7 @@
 //! Session Goal V1 statistics projection helpers.
 //! 会话 Goal V1 统计投影辅助逻辑。
 
+use vulcan_ai_contract::AiErrorCategory;
 use vulcan_session_core::v1::config::GoalState;
 
 use super::*;
@@ -46,6 +47,7 @@ pub(crate) async fn account_session_goal_from_report(
     }
     if let Some(error) = report.error.as_deref() {
         let next_state = session_goal_error_state(error);
+        let reason_code = session_goal_error_reason_code(report.provider_failure_category);
         let now_ms = current_v1_goal_unix_millis()?;
         handle
             .mutate_durable_if_changed(
@@ -56,7 +58,7 @@ pub(crate) async fn account_session_goal_from_report(
                         && document.metadata.mode.goal.state == GoalState::Active
                     {
                         debug_assert_eq!(next_state, GoalState::Blocked);
-                        document.block_goal(session_goal_error_reason_code(error), now_ms)?;
+                        document.block_goal(reason_code, now_ms)?;
                         Ok(SessionMutationChange::Changed(()))
                     } else {
                         Ok(SessionMutationChange::Unchanged(()))
@@ -141,15 +143,42 @@ pub(crate) fn session_goal_error_state(_error: &str) -> GoalState {
 
 /// Returns a stable display reason without exposing provider error text.
 /// 返回稳定显示原因，同时不暴露 Provider 错误正文。
-fn session_goal_error_reason_code(error: &str) -> &'static str {
-    let normalized = error.to_ascii_lowercase();
-    if normalized.contains("usage limit")
-        || normalized.contains("rate limit")
-        || normalized.contains("quota")
-        || normalized.contains("insufficient_quota")
-    {
-        "goal_usage_limited"
-    } else {
-        "goal_blocked"
+///
+/// The reason comes from the structured Provider failure category, never from the error text.
+/// 原因来自结构化 Provider 失败类别，绝不来自错误文本。
+fn session_goal_error_reason_code(category: Option<AiErrorCategory>) -> &'static str {
+    match category {
+        Some(AiErrorCategory::RateLimited | AiErrorCategory::PaymentRequired) => {
+            "goal_usage_limited"
+        }
+        _ => "goal_blocked",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Quota and rate exhaustion read as usage-limited; every other ending, typed or not, blocks.
+    /// 额度与速率耗尽视为用量受限；其他任何结束原因，无论是否有类型，都视为阻塞。
+    #[test]
+    fn goal_reason_follows_the_provider_failure_category() {
+        for category in [
+            AiErrorCategory::RateLimited,
+            AiErrorCategory::PaymentRequired,
+        ] {
+            assert_eq!(
+                session_goal_error_reason_code(Some(category)),
+                "goal_usage_limited"
+            );
+        }
+        for category in [
+            Some(AiErrorCategory::Authentication),
+            Some(AiErrorCategory::ProviderOverloaded),
+            Some(AiErrorCategory::Unclassified),
+            None,
+        ] {
+            assert_eq!(session_goal_error_reason_code(category), "goal_blocked");
+        }
     }
 }

@@ -203,6 +203,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: Vec::new(),
     };
 
@@ -324,6 +325,7 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: Vec::new(),
     };
 
@@ -477,6 +479,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: Vec::new(),
     };
     // outcome proves a stopped service cannot inject a stale VMM identity check into terminal commit.
@@ -1021,6 +1024,7 @@ fn task_session_execution_report_fast_path_projects_live_usage_stats() {
         mcp_discovery_errors: Vec::new(),
         warnings: Vec::new(),
         error: None,
+        provider_failure_category: None,
         controller_events: Vec::new(),
     };
 

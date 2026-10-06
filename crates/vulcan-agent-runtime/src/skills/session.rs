@@ -318,6 +318,7 @@ mod tests {
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),
             error: None,
+            provider_failure_category: None,
             controller_events: Vec::new(),
         };
 

@@ -14,6 +14,7 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fmt, path::PathBuf, sync::Arc};
+use vulcan_ai_contract::AiErrorCategory;
 use vulcan_ai_contract::HostMessageKind;
 use vulcan_context::{
     ContextAssembly, ContextBaseline, ContextRequestMode, RuntimeSystemUpdateEvent,
@@ -1142,6 +1143,14 @@ pub struct ExecutionRunReport {
     /// Terminal error when the run failed.
     /// 当运行失败时的最终错误信息。
     pub error: Option<String>,
+    /// Structured category of the Provider request whose non-retried failure ended the run.
+    /// 以不再重试的失败结束本次运行的 Provider 请求的结构化类别。
+    ///
+    /// `None` means the run succeeded or ended for a reason other than a classified Provider
+    /// failure; consumers decide on this category instead of the display text in `error`.
+    /// `None` 表示运行成功，或因已分类 Provider 失败以外的原因结束；调用方依据此类别判定，
+    /// 而不是解析 `error` 中的展示文本。
+    pub provider_failure_category: Option<AiErrorCategory>,
     /// Controller-owned event trace captured while the run was executing.
     /// 运行执行期间捕获的控制器自有事件轨迹。
     pub controller_events: Vec<CoreControllerEvent>,
@@ -1181,6 +1190,7 @@ impl ExecutionRunReport {
             mcp_discovery_errors,
             warnings,
             error: None,
+            provider_failure_category: None,
             controller_events,
             embedded_turn_usage_segments,
         }
@@ -1218,9 +1228,20 @@ impl ExecutionRunReport {
             mcp_discovery_errors,
             warnings,
             error: Some(error.into()),
+            provider_failure_category: None,
             controller_events,
             embedded_turn_usage_segments,
         }
+    }
+
+    /// Records the structured category of the Provider failure that ended this run.
+    /// 记录结束本次运行的 Provider 失败的结构化类别。
+    pub(crate) fn with_provider_failure_category(
+        mut self,
+        category: Option<AiErrorCategory>,
+    ) -> Self {
+        self.provider_failure_category = category;
+        self
     }
 
     /// Returns whether the current report completed successfully.

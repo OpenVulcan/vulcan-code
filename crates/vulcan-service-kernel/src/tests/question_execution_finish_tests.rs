@@ -299,6 +299,7 @@ fn question_finish_report(session_id: SessionId, text: &str) -> ExecutionRunRepo
         mcp_discovery_errors: vec![],
         warnings: vec![],
         error: None,
+        provider_failure_category: None,
         controller_events: vec![],
     }
 }

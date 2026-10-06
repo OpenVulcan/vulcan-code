@@ -1807,6 +1807,7 @@ mod mid_turn_compaction_tests {
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),
             error: None,
+            provider_failure_category: None,
             controller_events: Vec::new(),
             embedded_turn_usage_segments: Vec::new(),
         };

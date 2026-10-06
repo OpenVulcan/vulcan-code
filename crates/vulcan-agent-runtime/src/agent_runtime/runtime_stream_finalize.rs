@@ -197,6 +197,7 @@ pub(crate) fn build_failure_terminal_events(
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
     let cumulative_successful_provider_usage =
         stream_state.take_cumulative_successful_provider_usage();
+    let provider_failure_category = stream_state.take_terminal_provider_failure_category();
     stream_state.controller_mut().mark_failed(error.clone());
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
@@ -215,7 +216,8 @@ pub(crate) fn build_failure_terminal_events(
             stream_state.controller().events().to_vec(),
             last_safe_conversation_state,
             error,
-        ),
+        )
+        .with_provider_failure_category(provider_failure_category),
     ));
     events
 }
@@ -288,6 +290,7 @@ mod tests {
     use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use crate::context_budget::ContextBudgetSnapshot;
     use uuid::Uuid;
+    use vulcan_ai_contract::AiErrorCategory;
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::types::{
         ControllerConfig, ConversationSnapshot, ProviderContinuation as CoreProviderContinuation,
@@ -581,6 +584,101 @@ mod tests {
                 && report.mcp_discovery_errors == vec![String::from("mcp-error")]
                 && report.warnings == vec![String::from("warning")]
         ));
+    }
+
+    /// The failure report carries the category of the request that ended the run, and only that.
+    /// 失败报告携带结束本次运行的那次请求的类别，且仅携带该类别。
+    #[test]
+    fn failure_report_carries_only_the_ending_request_category() {
+        let session_id = Uuid::nil();
+        let request_failed = |will_retry, category| {
+            Ok(ProviderStreamDelta::RequestFailed {
+                will_retry,
+                retry_number: 0,
+                max_retries: 0,
+                delay_ms: 0,
+                error_category: String::from("provider_error"),
+                error: Some(Box::new(test_execution_error(category))),
+            })
+        };
+        let finished_category = |stream_state: &mut RuntimeStreamDeltaState| {
+            build_failure_terminal_events(
+                session_id,
+                build_test_preparation(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                stream_state,
+                String::from("provider failed"),
+            )
+            .into_iter()
+            .find_map(|event| match event {
+                ExecutionStreamEvent::Finished(report) => Some(report.provider_failure_category),
+                _ => None,
+            })
+            .expect("a failure batch always finishes with a report")
+        };
+        let snapshot = || {
+            Ok(ProviderStreamDelta::RequestSnapshot(
+                build_request_snapshot(),
+            ))
+        };
+
+        // A retried failure does not end the run; the final non-retried one does.
+        // 被重试的失败不会结束运行；最后一次不再重试的失败才会。
+        let mut ended_by_provider = build_stream_state();
+        for delta in [
+            snapshot(),
+            request_failed(true, AiErrorCategory::ProviderOverloaded),
+            snapshot(),
+            request_failed(false, AiErrorCategory::RateLimited),
+        ] {
+            let _ = process_provider_stream_delta(session_id, &mut ended_by_provider, delta);
+        }
+        assert_eq!(
+            finished_category(&mut ended_by_provider),
+            Some(AiErrorCategory::RateLimited)
+        );
+
+        // A later request supersedes an earlier failure, so a non-Provider ending has no category.
+        // 后续请求会取代先前失败，因此非 Provider 原因的结束不带类别。
+        let mut ended_elsewhere = build_stream_state();
+        for delta in [
+            snapshot(),
+            request_failed(false, AiErrorCategory::ContextLengthExceeded),
+            snapshot(),
+        ] {
+            let _ = process_provider_stream_delta(session_id, &mut ended_elsewhere, delta);
+        }
+        assert_eq!(finished_category(&mut ended_elsewhere), None);
+    }
+
+    /// Builds one structured Provider failure with the given category.
+    /// 以给定类别构建一条结构化 Provider 失败。
+    fn test_execution_error(category: AiErrorCategory) -> vulcan_ai_contract::AiExecutionError {
+        vulcan_ai_contract::AiExecutionError {
+            category,
+            subcategory: None,
+            stage: String::from("response_headers"),
+            http_status: None,
+            transport: None,
+            websocket_close_code: None,
+            upstream_code: None,
+            upstream_type: None,
+            upstream_parameter: None,
+            upstream_message: None,
+            request_id: None,
+            provider_id: None,
+            entry_id: None,
+            model_id: None,
+            message: String::from("Provider request failed."),
+            dispatch_outcome: vulcan_ai_contract::DispatchOutcome::Dispatched,
+            semantic_output_observed: false,
+            side_effect_observed: false,
+            terminal: true,
+            retryable: false,
+            retry_after: None,
+        }
     }
 
     /// Rebuilds the latest request snapshot while preserving previously observed usage for recalibration.

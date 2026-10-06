@@ -20,6 +20,7 @@ use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
 use std::mem;
+use vulcan_ai_contract::{AiErrorCategory, AiExecutionError};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -75,6 +76,12 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Terminal provider error captured from the stream, if one has occurred.
     /// 如果已经发生，则保存从流中捕获到的终态 Provider 错误。
     terminal_error: Option<String>,
+    /// Structured category of the latest physical request when it failed without a retry.
+    /// 最近一次真实请求在不再重试地失败时的结构化类别。
+    ///
+    /// Every new request clears it, so it only describes the request that ended the run.
+    /// 每次新请求都会清空它，因此它只描述结束本次运行的那次请求。
+    terminal_provider_failure_category: Option<AiErrorCategory>,
     /// Host-owned context compaction request captured at a replay-safe boundary.
     /// 在可回放安全边界捕获的宿主上下文压缩请求。
     context_compaction_required: Option<(SessionConversationState, String)>,
@@ -138,6 +145,7 @@ impl RuntimeStreamDeltaState {
             active_provider_usage: None,
             cumulative_usage_accounted_assistant_turns: 0,
             terminal_error: None,
+            terminal_provider_failure_category: None,
             context_compaction_required: None,
             provider_route_switch_required: None,
             context_compaction_policy_refresh_required: None,
@@ -262,6 +270,22 @@ impl RuntimeStreamDeltaState {
     /// 提取并返回已经捕获到的终态流错误（如果存在）。
     pub(crate) fn take_terminal_error(&mut self) -> Option<String> {
         self.terminal_error.take()
+    }
+
+    /// Drains the category of the Provider failure that ended the latest physical request.
+    /// 提取结束最近一次真实请求的 Provider 失败类别。
+    pub(crate) fn take_terminal_provider_failure_category(&mut self) -> Option<AiErrorCategory> {
+        self.terminal_provider_failure_category.take()
+    }
+
+    /// Records the category of a request failure only when no retry follows it.
+    /// 仅在请求失败后不再重试时记录其类别。
+    fn record_request_failure(&mut self, will_retry: bool, error: Option<&AiExecutionError>) {
+        self.terminal_provider_failure_category = if will_retry {
+            None
+        } else {
+            error.map(|error| error.category)
+        };
     }
 
     /// Returns whether one terminal stream error has already been captured and is waiting for finalization.
@@ -502,6 +526,7 @@ pub(crate) fn process_provider_stream_delta(
     match item {
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
             state.active_provider_usage = None;
+            state.terminal_provider_failure_category = None;
             state.latest_request_snapshot = Some(snapshot.clone());
             state.provider_request_count = state.provider_request_count.saturating_add(1);
             // events begins with telemetry so an effect Hook can observe the request before UI timing markers.
@@ -582,6 +607,7 @@ pub(crate) fn process_provider_stream_delta(
             context_budget,
         }) => {
             state.active_provider_usage = None;
+            state.terminal_provider_failure_category = None;
             state.latest_request_snapshot = Some(request_snapshot.clone());
             state.provider_request_count = state.provider_request_count.saturating_add(1);
             let event = match state
@@ -702,6 +728,7 @@ pub(crate) fn process_provider_stream_delta(
             error_category,
             error,
         }) => {
+            state.record_request_failure(will_retry, error.as_deref());
             let mut events = state
                 .provider_request_telemetry
                 .complete_failure(
@@ -730,6 +757,7 @@ pub(crate) fn process_provider_stream_delta(
             error,
             completion,
         }) => {
+            state.record_request_failure(will_retry, error.as_deref());
             let events = state.provider_request_telemetry.complete_failure(
                 will_retry,
                 retry_number,
