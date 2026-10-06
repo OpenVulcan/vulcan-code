@@ -13,7 +13,8 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@catalogs/*": ["../../crates/vulcan-i18n/catalogs/*"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,

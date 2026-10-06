@@ -1,30 +1,26 @@
-// SUPPORTED_LOCALES is the single authority for the WebUI languages, their native names and picker marks.
-// SUPPORTED_LOCALES 是 WebUI 语言、其本地名称与选择器标记的唯一权威来源。
-//
-// The service accepts the same codes when persisting a selection (`parse_webui_locale` in the service kernel);
-// a web test keeps both lists aligned.
-// 服务持久化选择时接受同一组代码（服务内核的 `parse_webui_locale`）；一个 Web 测试保证两份列表一致。
-export const SUPPORTED_LOCALES = [
-  { code: "en-US", nativeName: "English", mark: "EN" },
-  { code: "zh-CN", nativeName: "简体中文", mark: "简" },
-  { code: "zh-TW", nativeName: "中国台湾（繁体）", mark: "繁" },
-  { code: "zh-HK", nativeName: "中国香港（繁体）", mark: "港" },
-  { code: "ja-JP", nativeName: "日本語", mark: "日" },
-  { code: "ko-KR", nativeName: "한국어", mark: "한" },
-  { code: "es-ES", nativeName: "Español", mark: "ES" },
-  { code: "fr-FR", nativeName: "Français", mark: "FR" },
-  { code: "de-DE", nativeName: "Deutsch", mark: "DE" },
-  { code: "pt-BR", nativeName: "Português (Brasil)", mark: "PT" },
-  { code: "ru-RU", nativeName: "Русский", mark: "RU" },
-] as const
+import type { LocaleCode } from "@/i18n-catalogs"
+import registry from "@catalogs/locales.json"
 
-// LocaleCode describes one supported WebUI language.
-// LocaleCode 描述一种受支持的 WebUI 语言。
-export type LocaleCode = (typeof SUPPORTED_LOCALES)[number]["code"]
+export type { LocaleCode } from "@/i18n-catalogs"
+
+// LocaleEntry is one language of the shared registry.
+// LocaleEntry 是共享注册表中的一种语言。
+export interface LocaleEntry {
+  readonly code: LocaleCode
+  readonly nativeName: string
+  readonly mark: string
+}
+
+// SUPPORTED_LOCALES lists the languages, native names and picker marks of `catalogs/locales.json` in the
+// vulcan-i18n crate, the single registry shared with the service, the TUI and the desktop shell. A test
+// keeps its codes aligned with the catalog loaders.
+// SUPPORTED_LOCALES 列出 vulcan-i18n crate 中 `catalogs/locales.json` 的语言、本地名称与选择器标记；
+// 该注册表由服务、TUI 与桌面壳共用。一个测试保证其代码与目录加载器一致。
+export const SUPPORTED_LOCALES = registry.locales as readonly LocaleEntry[]
 
 // DEFAULT_LOCALE is used when no device language matches and completes every catalog's missing keys.
 // DEFAULT_LOCALE 在没有匹配的设备语言时使用，并补全各目录缺失的文案键。
-export const DEFAULT_LOCALE: LocaleCode = "en-US"
+export const DEFAULT_LOCALE = registry.default as LocaleCode
 
 // SUPPORTED_LOCALE_CODES indexes the registry for exact code validation.
 // SUPPORTED_LOCALE_CODES 为精确代码校验索引注册表。

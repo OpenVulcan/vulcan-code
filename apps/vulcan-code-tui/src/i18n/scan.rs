@@ -2,14 +2,14 @@
 // 收集 TUI 源码实际使用的文案键。
 //
 // Only literal `tr!("key" ...)` invocations count. Dynamic keys are deliberately unsupported so the
-// synced catalog is always exactly the set of keys reachable from code. Line comments are ignored so
+// catalog tests always see exactly the keys reachable from code. Line comments are ignored so
 // documentation examples such as `tr!("key")` never become real keys.
-// 只统计字面量 `tr!("key" ...)` 调用。刻意不支持动态键，使同步出的目录始终恰好是代码可达的键集合。
+// 只统计字面量 `tr!("key" ...)` 调用。刻意不支持动态键，使目录测试始终看到恰好由代码可达的键。
 // 忽略行注释，避免 `tr!("key")` 之类的文档示例被当作真实键。
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -20,18 +20,15 @@ fn key_pattern() -> Regex {
     Regex::new(r#"\btr!\(\s*"([^"\\]+)""#).expect("tr! key regex")
 }
 
-/// Scans every `.rs` file under `src_dir`, skipping `exclude` subtrees, for `tr!` keys.
-/// 扫描 `src_dir` 下除 `exclude` 子树外的所有 `.rs` 文件中的 `tr!` 键。
-pub fn used_keys(src_dir: &Path, exclude: &[PathBuf]) -> Result<BTreeSet<String>> {
+/// Scans every `.rs` file under `src_dir` for `tr!` keys.
+/// 扫描 `src_dir` 下所有 `.rs` 文件中的 `tr!` 键。
+pub fn used_keys(src_dir: &Path) -> Result<BTreeSet<String>> {
     let pattern = key_pattern();
     let mut keys = BTreeSet::new();
     let mut stack = vec![src_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
             let path = entry?.path();
-            if exclude.iter().any(|skip| path.starts_with(skip)) {
-                continue;
-            }
             if path.is_dir() {
                 stack.push(path);
             } else if path.extension().is_some_and(|ext| ext == "rs") {

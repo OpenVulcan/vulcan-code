@@ -3,7 +3,7 @@ import { UiTextProvider } from "@/components/ui/ui-text"
 import { ensureLocaleCatalog, loadedLocaleCatalog, registerLocaleCatalog } from "@/i18n-catalogs"
 import { DEFAULT_LOCALE, normalizeLocaleCode, resolveAppLocale, type LocaleCode } from "@/i18n-locales"
 import type { TranslationKey } from "@/i18n-messages"
-import { enUSTranslations } from "@/i18n-messages.en-US"
+import enUSTranslations from "@catalogs/webui/en-US.json"
 
 export type { LocaleCode, TranslationKey } from "@/i18n-messages"
 export { normalizeLocaleCode, pickBilingualText, resolveAppLocale, SUPPORTED_LOCALES } from "@/i18n-locales"

@@ -87,19 +87,9 @@ cargo nextest run -p vulcan-code-tui
 
 ### 多语言
 
-文案只使用 `tr!("key")` 字面量键。WebUI 语言目录是权威来源，同步工具只拉取 TUI 实际用到的键；TUI 专属
-文案使用 `tui.*` 键，写在 `i18n/overlay/<locale>.json`。新增或修改文案后执行：
-
-```bash
-cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync
-```
-
-```bash
-cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check
-```
-
-不要直接编辑 `i18n/generated/`。上游目录位置由 [`i18n/sync.json`](i18n/sync.json) 指定，即同一工作区的
-`apps/vulcan-code-web/src`。
+文案只使用 `tr!("key")` 字面量键。语言清单与文案来自与 WebUI、服务共用的
+[`crates/vulcan-i18n/catalogs`](../../crates/vulcan-i18n/catalogs)：TUI 先读 WebUI 的键，再读 `tui.*` 专属键
+（`catalogs/tui/<locale>.json`）。测试会检查每个 `tr!` 键都存在、且 TUI 目录没有无人使用的键。
 
 ### 目录结构
 
@@ -111,7 +101,7 @@ cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check
 | `src/backend/mock/` | 脚本化模拟后端 |
 | `src/app/` | 应用状态、输入分派与唯一的副作用入口 |
 | `src/ui/` | 纯渲染 |
-| `src/i18n*`、`src/bin/vulcan-tui-i18n.rs` | 运行时翻译与语言目录同步工具 |
+| `src/i18n/` | 基于共享目录的运行时翻译与键检查 |
 
 更多结构与交互约定见 [`tui-design.md`](../../docs/contracts/tui-design.md)，参与开发的约定见 [`AGENTS.md`](AGENTS.md)。
 

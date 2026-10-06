@@ -1,0 +1,40 @@
+{
+  "tags": [
+    { "tag": "zh-Hant-HK", "locale": "zh-HK" },
+    { "tag": "zh-Hant", "locale": "zh-TW" },
+    { "tag": "zh-Hant-TW", "locale": "zh-TW" },
+    { "tag": "zh-TW", "locale": "zh-TW" },
+    { "tag": "zh-HK", "locale": "zh-HK" },
+    { "tag": "zh_HK", "locale": "zh-HK" },
+    { "tag": "zh_MO", "locale": "zh-TW" },
+    { "tag": "zh-Hans-HK", "locale": "zh-CN" },
+    { "tag": "zh-Hans-SG", "locale": "zh-CN" },
+    { "tag": "zh", "locale": "zh-CN" },
+    { "tag": "ja", "locale": "ja-JP" },
+    { "tag": "ko-KR", "locale": "ko-KR" },
+    { "tag": "es-MX", "locale": "es-ES" },
+    { "tag": "fr-CA", "locale": "fr-FR" },
+    { "tag": "de-AT", "locale": "de-DE" },
+    { "tag": "pt-PT", "locale": "pt-BR" },
+    { "tag": "ru", "locale": "ru-RU" },
+    { "tag": "EN", "locale": "en-US" },
+    { "tag": "en-GB", "locale": "en-US" },
+    { "tag": "ar-SA", "locale": null },
+    { "tag": "", "locale": null }
+  ],
+  "preferences": [
+    { "tags": ["ar-SA", "hi-IN", "de-CH"], "locale": "de-DE" },
+    { "tags": ["ar-SA"], "locale": "en-US" },
+    { "tags": [], "locale": "en-US" }
+  ],
+  "savedSelections": [
+    { "value": "zh-TW", "locale": "zh-TW" },
+    { "value": "zh-HK", "locale": "zh-HK" },
+    { "value": "zh", "locale": null },
+    { "value": "en", "locale": null },
+    { "value": "zh-MO", "locale": null },
+    { "value": "ZH-CN", "locale": null },
+    { "value": "ar-SA", "locale": null },
+    { "value": "", "locale": null }
+  ]
+}

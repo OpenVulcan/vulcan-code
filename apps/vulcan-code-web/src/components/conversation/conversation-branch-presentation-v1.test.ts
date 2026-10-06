@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { zhCNTranslations } from "@/i18n-messages.zh-CN";
+import zhCNTranslations from "@catalogs/webui/zh-CN.json";
 import { parseConversationBlocks } from "./conversation-transcript-parser";
 import { parseSystemProviderError } from "./conversation-system-error-card";
 

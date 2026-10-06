@@ -9,8 +9,8 @@ import {
   systemProviderEditableOverrides,
 } from "@/components/features/settings/direct-provider-model-settings"
 import type { CustomProviderModelRow } from "@/components/features/settings/custom-provider-models-state"
-import { zhCNTranslations } from "@/i18n-messages.zh-CN"
-import { enUSTranslations } from "@/i18n-messages.en-US"
+import zhCNTranslations from "@catalogs/webui/zh-CN.json"
+import enUSTranslations from "@catalogs/webui/en-US.json"
 import type { TranslationKey } from "@/i18n-messages"
 
 // rowWithCapabilities creates the exact minimal merged row required by direct settings projection tests.

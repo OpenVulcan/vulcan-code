@@ -14,6 +14,7 @@ members = [
     "crates/vulcan-change-set",
     "crates/vulcan-apply-patch",
     "crates/vulcan-host-tools",
+    "crates/vulcan-i18n",
     "crates/vulcan-process-lifecycle",
     "crates/vulcan-terminal-host-protocol",
     "crates/vulcan-terminal-host",
@@ -81,6 +82,7 @@ vulcan-core = { path = "crates/vulcan-core" }
 vulcan-change-set = { path = "crates/vulcan-change-set" }
 vulcan-apply-patch = { path = "crates/vulcan-apply-patch" }
 vulcan-host-tools = { path = "crates/vulcan-host-tools" }
+vulcan-i18n = { path = "crates/vulcan-i18n" }
 vulcan-process-lifecycle = { path = "crates/vulcan-process-lifecycle" }
 vulcan-terminal-host-protocol = { path = "crates/vulcan-terminal-host-protocol" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }

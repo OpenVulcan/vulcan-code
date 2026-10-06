@@ -15,24 +15,22 @@ path = "src/lib.rs"
 name = "vulcan-tui"
 path = "src/main.rs"
 
-[[bin]]
-name = "vulcan-tui-i18n"
-path = "src/bin/vulcan-tui-i18n.rs"
-
 [dependencies]
 anyhow.workspace = true
 ratatui.workspace = true
 ratatui-textarea.workspace = true
-regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sys-locale.workspace = true
 # Plain-HTTP and WebSocket clients for the loopback core service; no TLS is needed on 127.0.0.1.
 # 访问本机回环核心服务的纯 HTTP 与 WebSocket 客户端；127.0.0.1 上无需 TLS。
 tungstenite.workspace = true
 unicode-width.workspace = true
 ureq.workspace = true
+vulcan-i18n.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+regex.workspace = true
 
 [lints]
 workspace = true

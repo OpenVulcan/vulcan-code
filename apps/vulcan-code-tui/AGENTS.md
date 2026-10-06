@@ -40,13 +40,11 @@
 ## 三、多语言
 
 1. 只用 `tr!("key", name = value)` 字面量键；占位符写作 `{name}`。
-2. 上游 WebUI 目录（`i18n/sync.json` 的 `webuiSrc`）是权威来源：用到哪些键就同步哪些，语言种类同步上游。
-3. TUI 专属文案使用 `tui.*` 键，写入 `i18n/overlay/<locale>.json`（en-US 为默认语言，另有 zh-CN、
-   zh-TW、zh-HK）；其他语言缺失时回退到 en-US。
-4. 修改文案或新增 `tr!` 调用后执行：
-   - `cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync`
-   - `cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check`
-5. 不直接编辑 `i18n/generated/`。
+2. 文案与语言清单来自共享目录 `crates/vulcan-i18n/catalogs/`（见
+   [`shared-language-catalogs.md`](../../docs/contracts/shared-language-catalogs.md)）：先查 `webui` 分面，
+   再查 `tui` 分面；不在 TUI 内另建语言清单或文案副本。
+3. TUI 专属文案使用 `tui.*` 键，写入 `catalogs/tui/<locale>.json`；其他语言缺失时按键回退到 en-US。
+4. `src/i18n/` 的测试要求每个 `tr!` 键都能解析，且 `tui` 分面没有无人使用的键。
 
 ## 四、验证
 

@@ -9682,10 +9682,10 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sys-locale",
  "tungstenite",
  "unicode-width",
  "ureq",
+ "vulcan-i18n",
  "workspace-hack",
 ]
 
@@ -9805,6 +9805,15 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-terminal-host-protocol",
  "vulcan-workbench-model",
+ "workspace-hack",
+]
+
+[[package]]
+name = "vulcan-i18n"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sys-locale",
  "workspace-hack",
 ]
 
@@ -10154,6 +10163,7 @@ dependencies = [
  "vulcan-file-watcher",
  "vulcan-hooks",
  "vulcan-host-tools",
+ "vulcan-i18n",
  "vulcan-lancedb-engine",
  "vulcan-llm-core",
  "vulcan-luaskills-config",

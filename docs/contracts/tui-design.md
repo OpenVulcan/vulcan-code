@@ -28,7 +28,7 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
 | `apps/vulcan-code-tui/src/app/` | 状态机：焦点、区域、浮层、提问、历史索引、命中表，以及 `action::perform` 单一副作用入口 |
 | `apps/vulcan-code-tui/src/app/input/` | 键盘与鼠标输入，按焦点与浮层分派 |
 | `apps/vulcan-code-tui/src/ui/` | 纯渲染：工作台、侧栏、会话记录、思考框、输入框、右侧面板、系统页面、浮层 |
-| `apps/vulcan-code-tui/src/i18n*`、`src/bin/vulcan-tui-i18n.rs` | 运行时翻译与上游目录同步工具 |
+| `apps/vulcan-code-tui/src/i18n/` | 基于共享目录（`crates/vulcan-i18n`）的运行时翻译与键检查 |
 
 ## 界面
 
@@ -114,8 +114,7 @@ TUI 是工作区成员，沿用根 `.cargo/config.toml` 的四任务编译与测
 ```bash
 cargo fmt --check
 cargo clippy -p vulcan-code-tui --all-targets -- -D warnings
-cargo nextest run -p vulcan-code-tui
-cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check
+cargo nextest run -p vulcan-code-tui -p vulcan-i18n
 ```
 
 Windows 上运行中的 TUI 会锁住其可执行文件；此时加 `--target-dir target/verification` 在独立目录验证。

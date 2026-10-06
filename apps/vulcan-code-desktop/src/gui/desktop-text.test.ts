@@ -24,12 +24,12 @@ test('every desktop language covers every text with matching placeholders', () =
   }
 });
 
-// The desktop list mirrors the WebUI registry that owns the supported languages.
-// 桌面列表与持有受支持语言的 WebUI 注册表保持一致。
-test('desktop languages match the WebUI language registry', () => {
-  const registry = readFileSync(new URL('../../../vulcan-code-web/src/i18n-locales.ts', import.meta.url), 'utf8');
-  const webLocales = [...registry.matchAll(/code: "([a-z]{2}-[A-Z]{2})"/g)].map((match) => match[1]).sort();
-  assert.deepEqual(Object.keys(DESKTOP_TEXT).sort(), webLocales, 'update DESKTOP_TEXT when the WebUI language list changes');
+// The desktop list mirrors the shared registry that owns the supported languages.
+// 桌面列表与持有受支持语言的共享注册表保持一致。
+test('desktop languages match the shared language registry', () => {
+  const registry = JSON.parse(readFileSync(new URL('../../../../crates/vulcan-i18n/catalogs/locales.json', import.meta.url), 'utf8')) as { locales: Array<{ code: string }> };
+  const locales = registry.locales.map((entry) => entry.code).sort();
+  assert.deepEqual(Object.keys(DESKTOP_TEXT).sort(), locales, 'update DESKTOP_TEXT when the shared language list changes');
 });
 
 // Device tags resolve by language, Chinese by script and region, and unsupported languages fall back to English.

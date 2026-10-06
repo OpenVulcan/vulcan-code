@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -6,6 +6,10 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { configDefaults } from "vitest/config";
 import { VULCAN_DEV_WEBUI_ORIGIN } from "./src/service/vite-service-discovery-origin";
+
+// catalogsDir holds the language registry and catalogs shared with the TUI, the desktop shell and Core.
+// catalogsDir 保存与 TUI、桌面壳及 Core 共用的语言注册表与目录。
+const catalogsDir = path.resolve(__dirname, "../../crates/vulcan-i18n/catalogs");
 
 // Configure the Vite app served by Core and loaded by the desktop shell.
 // 配置由 Core 提供页面并供桌面壳加载的 Vite 应用。
@@ -27,6 +31,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
+        "@catalogs": catalogsDir,
       },
     },
     clearScreen: false,
@@ -44,7 +49,7 @@ export default defineConfig(({ mode }) => {
           // 每种语言目录拥有独立分块与缓存身份。只有英文回退目录是静态导入并计入首次工作台预算；
           // 其他语言按需加载。
           manualChunks(id) {
-            const localeCatalog = /i18n-messages\.([a-z]{2}-[A-Z]{2})\.ts$/u.exec(id);
+            const localeCatalog = /\/catalogs\/webui\/([a-z]{2}-[A-Z]{2})\.json$/u.exec(id);
             return localeCatalog ? `i18n-messages.${localeCatalog[1]}` : undefined;
           },
         },
@@ -61,6 +66,9 @@ export default defineConfig(({ mode }) => {
     server: isRelease
       ? undefined
       : {
+          // The shared language catalogs live in the vulcan-i18n crate, outside this package.
+          // 共享语言目录位于本包之外的 vulcan-i18n crate。
+          fs: { allow: [searchForWorkspaceRoot(process.cwd()), catalogsDir] },
           host: new URL(VULCAN_DEV_WEBUI_ORIGIN).hostname,
           port: Number(new URL(VULCAN_DEV_WEBUI_ORIGIN).port),
           strictPort: true,
