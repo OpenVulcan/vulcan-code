@@ -58,7 +58,7 @@ fn real_startup_and_restart_leave_uninitialized_projects_cold() {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW);
         }
         // Retain the exact child handle so timeout cleanup cannot affect any user or parallel process.
         // 持有精确子进程句柄，确保超时清理不会影响用户或并行进程。

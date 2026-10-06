@@ -321,7 +321,9 @@ fn diagnose_mcp_launcher(config: &McpServerConfig, endpoint: &str) {
                 process.env(key, value);
             }
         }
-        process.envs(env).creation_flags(0x08000000);
+        process
+            .envs(env)
+            .creation_flags(vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW);
         let mut child = process.spawn().expect("probe official MCP launcher");
         child.stdin.take().expect("MCP stdin").write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"w08-diagnostic\",\"version\":\"1.0.0\"}}\n").expect("probe initialize");
         std::thread::sleep(Duration::from_millis(800));
@@ -353,7 +355,9 @@ fn diagnose_mcp_launcher(config: &McpServerConfig, endpoint: &str) {
     if let Some(cwd) = cwd {
         process.current_dir(cwd);
     }
-    process.envs(env).creation_flags(0x08000000);
+    process
+        .envs(env)
+        .creation_flags(vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW);
     let mut child = process
         .spawn()
         .expect("probe inherited official MCP launcher");

@@ -25,6 +25,7 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"] }
 uuid.workspace = true
 vulcan-hooks.workspace = true
+vulcan-host-tools.workspace = true
 vulcan-prompt-skills.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-task-session.workspace = true

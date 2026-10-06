@@ -166,7 +166,7 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            command.creation_flags(vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW);
         }
         // Preserve the actual child result and diagnostics instead of manufacturing a parent pass.
         // 保留子进程实际结果和诊断，不能在父进程伪造通过。

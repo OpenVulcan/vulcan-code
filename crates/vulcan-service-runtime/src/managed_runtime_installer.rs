@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 use tar::Archive;
+use vulcan_host_tools::process_creation::apply_windows_release_no_window_to_std_command;
 use vulcan_runtime_assets::text_decode::decode_complete_user_text;
 use xz2::read::XzDecoder;
 use zip::ZipArchive;
@@ -37,26 +38,6 @@ const DOWNLOAD_BUFFER_BYTES: usize = 128 * 1024;
 /// Maximum subprocess output included in one installation error.
 /// 单次安装错误包含的子进程输出上限。
 const MAX_PROCESS_DIAGNOSTIC_BYTES: usize = 8 * 1024;
-
-/// Windows creation flag that prevents a console window for a child process.
-/// 防止子进程创建控制台窗口的 Windows 创建标志。
-#[cfg(all(windows, not(debug_assertions)))]
-const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// Apply the Release-only no-console flag to a managed-runtime child process.
-/// 为受管运行时子进程应用仅 Release 生效的无控制台标志。
-fn apply_release_no_window_to_command(command: &mut Command) {
-    #[cfg(all(windows, not(debug_assertions)))]
-    {
-        use std::os::windows::process::CommandExt;
-
-        command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
-    }
-    #[cfg(any(not(windows), debug_assertions))]
-    {
-        let _ = command;
-    }
-}
 
 /// Immutable native installation request for one managed runtime bootstrap.
 /// 单次受管运行时初始化使用的不可变原生安装请求。
@@ -477,7 +458,7 @@ where
         .env("UV_CACHE_DIR", &process_cache_root)
         .env("UV_MANAGED_PYTHON", "1")
         .env("UV_NO_CONFIG", "1");
-    apply_release_no_window_to_command(&mut install_command);
+    apply_windows_release_no_window_to_std_command(&mut install_command);
     let install_output = install_command.output().map_err(|error| {
         format!(
             "failed to start managed uv {}: {error}",
@@ -496,7 +477,7 @@ where
         .env("UV_CACHE_DIR", &process_cache_root)
         .env("UV_MANAGED_PYTHON", "1")
         .env("UV_NO_CONFIG", "1");
-    apply_release_no_window_to_command(&mut find_command);
+    apply_windows_release_no_window_to_std_command(&mut find_command);
     let find_output = find_command
         .output()
         .map_err(|error| format!("failed to resolve managed Python interpreter: {error}"))?;
@@ -1555,7 +1536,7 @@ where
     // command 持有带 Release 无控制台处理的可执行文件版本校验调用。
     let mut command = Command::new(&process_executable);
     command.args(&process_arguments);
-    apply_release_no_window_to_command(&mut command);
+    apply_windows_release_no_window_to_std_command(&mut command);
     let output = command
         .output()
         .map_err(|error| format!("failed to start {}: {error}", executable.display()))?;
@@ -1763,7 +1744,7 @@ mod tests {
             .args(["/C", "mklink", "/J"])
             .arg(&alias)
             .arg(&interpreter_root)
-            .creation_flags(0x0800_0000)
+            .creation_flags(vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW)
             .status()
             .expect("junction command should launch");
         assert!(status.success(), "junction creation should succeed");

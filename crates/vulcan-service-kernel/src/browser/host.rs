@@ -1273,7 +1273,7 @@ impl BrowserHostSpawner for SystemBrowserHostSpawner {
             use std::os::windows::process::CommandExt;
             // A background browser must not open a separate Node console window.
             // 后台浏览器不应弹出额外 Node 控制台窗口。
-            command.creation_flags(0x08000000);
+            command.creation_flags(vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW);
         }
         // The child owns its inherited file handle even after this local Command is dropped.
         // 即使本地 Command 被销毁，子进程仍拥有继承的文件句柄。

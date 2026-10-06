@@ -24,11 +24,6 @@ mod leases;
 pub(super) use leases::lock_plugin_execution_environment_cleanup;
 pub(super) use leases::retain_plugin_execution_environment;
 
-/// Windows creation flag that prevents a console window for a child process.
-/// 防止子进程创建控制台窗口的 Windows 创建标志。
-#[cfg(windows)]
-const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// Immutable identity marker for one Vulcan-owned plugin process environment.
 /// 单个 Vulcan 自有插件进程环境的不可变身份标记。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,6 +62,7 @@ fn apply_windows_no_window_to_command(command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        use vulcan_host_tools::process_creation::WINDOWS_CREATE_NO_WINDOW;
 
         command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
     }
