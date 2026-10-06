@@ -523,10 +523,10 @@ fn formal_hook_timeout_retains_physical_owner_until_native_return() {
     });
 }
 
-/// Executor shutdown preserves original identities and later drain resumes cleanup without replay.
-/// 执行器关闭保留原身份，后续排空恢复清理且不重放。
+/// Dropping the caller's executor leaves supervision running, and drain retains shutdown failures.
+/// 丢弃调用方执行器不影响监督继续运行，排空保留关闭失败。
 #[test]
-fn formal_hook_executor_interruption_and_shutdown_failure_are_retained() {
+fn formal_hook_supervision_survives_caller_executor_and_shutdown_failure_is_retained() {
     // Retain the isolated production fixture until actual cleanup is observed.
     // 保留隔离生产夹具至观测到实际清理。
     let fixture = Fixture::new(VulcanPluginRuntimeSettings::default(), 1000);
@@ -550,13 +550,15 @@ fn formal_hook_executor_interruption_and_shutdown_failure_are_retained() {
     // 冻结必须在执行器销毁后存活的身份。
     let original = owner.hooks.lock().expect("registry")["hook-plugin"].clone();
     drop(runtime);
-    assert!(!original.lock().expect("evidence").monitored);
+    // The monitor belongs to the manager's supervisor, not to the executor that admitted the call.
+    // 监控属于管理器监督器，而非接纳调用的执行器。
+    assert!(original.lock().expect("evidence").monitored);
     fixture
         .manager
         .begin_draining("hook-plugin")
         .expect("begin drain");
-    // Resume cleanup on a new executor without creating a new plugin instance.
-    // 在新执行器上恢复清理，不创建新插件实例。
+    // Drain from a new executor without creating a new plugin instance.
+    // 从新执行器排空，不创建新插件实例。
     let replacement = executor();
     replacement.block_on(async {
         // Check physical retirement separately from graceful shutdown diagnostics.
@@ -612,6 +614,14 @@ fn formal_hook_preparation_is_owned_before_blocking_and_rejected_after_drain() {
     // Retain the isolated production fixture until actual cleanup is observed.
     // 保留隔离生产夹具至观测到实际清理。
     let fixture = Fixture::new(settings, 1000);
+    // Preparation runs on the manager's supervisor, so its single blocking worker is the one held.
+    // 准备在管理器监督器上运行，因此被占据的是其唯一阻塞工作线程。
+    let supervisor = fixture
+        .manager
+        .state
+        .supervisor
+        .start_with_blocking_limit(1)
+        .expect("start bounded supervisor");
     // Use the explicitly constructed observer executor for this test.
     // 为此测试使用显式构建的观测执行器。
     let runtime = executor();
@@ -619,9 +629,8 @@ fn formal_hook_preparation_is_owned_before_blocking_and_rejected_after_drain() {
     runtime.block_on(async {
         // Occupy the sole preparation worker until the test explicitly releases it.
         // 占据唯一准备工作线程，直至测试显式释放。
-        let blocker = tokio::task::spawn_blocking(move || {
-            receive.recv().expect("release preparation worker")
-        });
+        let blocker =
+            supervisor.spawn_blocking(move || receive.recv().expect("release preparation worker"));
         // Retain the production manager for the exact invocation under test.
         // 为待测精确调用保留生产管理器。
         let manager = fixture.manager.clone();
@@ -791,8 +800,8 @@ fn formal_hook_supervisor_queue_cannot_renew_deadline() {
     // Prewarm removes initialization timing from the scheduling regression.
     // 预热从调度回归中排除初始化耗时。
     let fixture = Fixture::new(VulcanPluginRuntimeSettings::default(), timeout_ms);
-    // A current-thread executor lets the test delay exactly the queued supervisor.
-    // 当前线程执行器允许测试精确延迟已排队监督者。
+    // The caller's executor only observes; supervision is delayed on the manager's supervisor.
+    // 调用方执行器只负责观测；监督在管理器监督器上被延迟。
     let runtime = executor();
     runtime.block_on(async {
         fixture
@@ -803,8 +812,15 @@ fn formal_hook_supervisor_queue_cannot_renew_deadline() {
         // Keep declaration and envelope alive through manual first polling.
         // 手动首次轮询期间保持声明及信封存活。
         let hook = fixture.hook();
-        // Only the initial poll runs before the deliberately blocked executor.
-        // 仅首次轮询在刻意阻塞执行器前运行。
+        // Hold every supervisor worker beyond the original budget before the hook is queued,
+        // without affecting core workers.
+        // 在 Hook 排队前让每个监督工作线程阻塞超过原预算，不影响核心工作线程。
+        fixture
+            .manager
+            .state
+            .supervisor
+            .occupy_workers(Duration::from_millis(timeout_ms * 2))
+            .expect("occupy supervisor");
         let mut invocation = Box::pin(
             fixture
                 .manager
@@ -819,9 +835,6 @@ fn formal_hook_supervisor_queue_cannot_renew_deadline() {
             }
         })
         .await;
-        // Deliberately block this test executor beyond the original budget, without affecting core workers.
-        // 刻意阻塞本测试执行器超过原预算，不影响核心工作线程。
-        std::thread::sleep(Duration::from_millis(timeout_ms * 2));
         assert!(
             invocation.await.is_err(),
             "expired supervisor must reject business"

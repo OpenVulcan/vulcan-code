@@ -484,7 +484,8 @@ impl VulcanPluginRuntimeManager {
         // Cloning this opaque handle does not create a new durable attempt.
         // 克隆此不透明句柄不创建新的持久尝试。
         let authority = Arc::clone(&drain.authority);
-        tokio::spawn(async move { manager.drain_activation_predecessor_owned(authority).await })
+        self.supervisor_handle()?
+            .spawn(async move { manager.drain_activation_predecessor_owned(authority).await })
             .await
             .map_err(|failure| error(format!("Predecessor drain supervisor failed: {failure}")))?
     }

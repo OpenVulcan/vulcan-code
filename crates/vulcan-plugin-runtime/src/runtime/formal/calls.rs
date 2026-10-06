@@ -414,8 +414,10 @@ pub struct VulcanPluginFormalCallStatus {
     /// 保留原核心观察者期间，可以查询实际临时会话初始化。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initialization: Option<OperationSnapshot>,
-    /// True only after request cleanup and exclusive pool retirement or completed reusable borrow release.
-    /// 仅在请求清理完成，以及独占池退役或已完成复用借用释放后为真。
+    /// True only after request cleanup and exclusive pool retirement or completed reusable borrow release,
+    /// once supervision has recorded the result; a retired record can be acknowledged.
+    /// 仅在请求清理完成，以及独占池退役或已完成复用借用释放，且监督已记录结果后为真；
+    /// 已退役记录可被确认。
     pub retired: bool,
     /// An interrupted supervisor requires explicit drain recovery, while actual resources stay owned.
     /// 中断的监督者需要显式排空恢复，真实资源仍保持归属。
@@ -546,7 +548,10 @@ impl FormalCall {
                 .map(OperationHandle::snapshot)
                 .transpose()
                 .map_err(core_error)?,
-            retired: state.retired,
+            // Report retirement only once supervision has recorded its result, the same condition
+            // acknowledgement requires, so an observer never sees a retired record it cannot forget.
+            // 仅在监督记录结果后报告退役，与确认所需条件一致，使观测者不会看到无法遗忘的已退役记录。
+            retired: state.retired && !state.supervised && state.result.is_some(),
             requires_cleanup_recovery: state.pending.is_none()
                 && !state.supervised
                 && !state.retired,
@@ -621,6 +626,9 @@ impl VulcanPluginRuntimeManager {
         owner: &Arc<ManagedFormalRuntime>,
         call: &Arc<FormalCall>,
     ) -> Result<(), VulcanPluginRuntimeError> {
+        // Reject a missing executor before supervision ownership is transferred.
+        // 在转移监督归属前拒绝缺失的执行器。
+        let supervisor = self.supervisor_handle()?;
         let previous = {
             let mut state = call.lock()?;
             if state.supervised || state.preparing || state.retired {
@@ -641,7 +649,7 @@ impl VulcanPluginRuntimeManager {
             call: Arc::clone(call),
             completed: false,
         };
-        tokio::spawn(async move {
+        supervisor.spawn(async move {
             let mut supervision = supervision;
             let result = manager
                 .finish_formal_call(&retry_owner, &retry_call, previous.map(|_| ()))

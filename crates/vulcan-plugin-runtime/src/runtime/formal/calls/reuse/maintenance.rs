@@ -231,7 +231,12 @@ impl VulcanPluginRuntimeManager {
         // 守卫在 spawn 前位于 future 中，因此覆盖首次轮询前取消。
         let guard = ObserverGuard(Arc::downgrade(owner));
         let manager = Arc::downgrade(&self.state);
-        tokio::spawn(async move {
+        // A supervisor that cannot start drops the future, and its guard clears the claim for a retry.
+        // 监督器无法启动时会丢弃 future，其守卫清除占用以便重试。
+        let Ok(supervisor) = self.supervisor_handle() else {
+            return;
+        };
+        supervisor.spawn(async move {
             let _guard = guard;
             // Bound unhealthy retries without relinquishing ownership or repeatedly spawning supervisors.
             // 限制不健康重试，不放弃归属，也不反复派生监督者。

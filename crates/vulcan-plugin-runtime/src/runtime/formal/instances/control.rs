@@ -62,8 +62,7 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<(), VulcanPluginRuntimeError> {
         // Require a current Tokio executor before starting supervision.
         // 启动监督前要求存在当前 Tokio 执行器。
-        let executor = tokio::runtime::Handle::try_current()
-            .map_err(|_| instance_error("persistent monitoring requires a Tokio executor."))?;
+        let executor = self.supervisor_handle()?;
         {
             // Keep the exact lifecycle evidence within this synchronous lock scope.
             // 在当前同步锁作用域内保留精确生命周期证据。

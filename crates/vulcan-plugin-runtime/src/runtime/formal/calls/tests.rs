@@ -672,6 +672,14 @@ fn formal_lifecycle_preparation_preserves_deadline_and_generation() {
             .manager
             .begin_enabling("hook-plugin")
             .expect("begin enabling");
+        // Preparation runs on the manager's supervisor, so its single blocking worker is the one held.
+        // 准备在管理器监督器上运行，因此被占据的是其唯一阻塞工作线程。
+        let supervisor = fixture
+            .manager
+            .state
+            .supervisor
+            .start_with_blocking_limit(1)
+            .expect("start bounded supervisor");
         // Use a deterministic observer executor independent of core workers.
         // 使用独立于核心工作者的确定性观测执行器。
         let runtime = executor();
@@ -681,7 +689,7 @@ fn formal_lifecycle_preparation_preserves_deadline_and_generation() {
             let events = fixture.events.clone();
             // Occupy the sole preparation worker until the test releases the condition.
             // 占用唯一准备工作者，直至测试释放条件。
-            let blocked = tokio::task::spawn_blocking(move || {
+            let blocked = supervisor.spawn_blocking(move || {
                 events.publish(VulcanPluginUiInvalidation {
                     plugin_id: "blocker".into(),
                     topic: "enable".into(),

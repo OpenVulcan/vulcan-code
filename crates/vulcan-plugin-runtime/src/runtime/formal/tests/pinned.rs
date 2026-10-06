@@ -322,10 +322,11 @@ fn formal_pinned_preparation_cancellation_keeps_exact_ownership() {
     });
 }
 
-/// Executor shutdown retains the original core identity and explicit drain resumes cleanup without replay.
-/// 执行器退出保留原核心身份，显式排空只恢复清理而不重放。
+/// Shutting down the caller's executor leaves the original session supervised; explicit drain then
+/// retires it without replay.
+/// 调用方执行器退出后原会话仍受监督；随后显式排空将其退役且不重放。
 #[test]
-fn formal_pinned_executor_shutdown_recovers_original_session() {
+fn formal_pinned_caller_executor_shutdown_keeps_original_session_supervised() {
     let mut fixture = Fixture::new(VulcanPluginRuntimeSettings::default());
     let id = fixture.runtime.block_on(opened(&fixture));
     let manager = fixture.manager.clone();
@@ -349,14 +350,14 @@ fn formal_pinned_executor_shutdown_recovers_original_session() {
     let previous = std::mem::replace(&mut fixture.runtime, replacement);
     previous.shutdown_timeout(WAIT);
     drop(waiter);
-    let interrupted = fixture
+    let supervised = fixture
         .manager
         .formal_session_status(&id, "owner")
-        .expect("interrupted supervision");
-    assert!(interrupted.requires_cleanup_recovery);
-    assert!(!interrupted.retired);
+        .expect("continued supervision");
+    assert!(!supervised.requires_cleanup_recovery);
+    assert!(!supervised.retired);
     assert_eq!(
-        interrupted.core.expect("same core identity").session_id,
+        supervised.core.expect("same core identity").session_id,
         original
     );
     assert!(
@@ -369,7 +370,7 @@ fn formal_pinned_executor_shutdown_recovers_original_session() {
     let report = fixture
         .runtime
         .block_on(fixture.manager.drain_owner_sessions("owner"))
-        .expect("recover original cleanup");
+        .expect("drain original session");
     assert_eq!(report.closed_sessions, 1);
     assert!(report.failures.is_empty(), "{report:?}");
     fixture.runtime.block_on(retired(&fixture, &id));

@@ -129,13 +129,6 @@ impl VulcanPluginRuntimeManager {
             ));
         }
         if status.requires_cleanup_recovery {
-            // Reject missing executor before the cleanup helper transfers supervision ownership.
-            // 在清理帮助函数转移监督归属前拒绝缺失执行器。
-            tokio::runtime::Handle::try_current().map_err(|error| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Prewarm cleanup requires an executor: {error}"
-                ))
-            })?;
             self.resume_formal_cleanup(&owner, &call)?;
         }
         call.status()

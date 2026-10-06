@@ -16,9 +16,7 @@ impl VulcanPluginRuntimeManager {
         payload: Value,
         timeout_ms: u64,
     ) -> Result<Value, VulcanPluginRuntimeError> {
-        let executor = tokio::runtime::Handle::try_current().map_err(|_| {
-            VulcanPluginRuntimeError::new("Formal session admission requires a Tokio executor.")
-        })?;
+        let executor = self.supervisor_handle()?;
         let owner = self.formal_runtime_owner()?.ok_or_else(|| {
             VulcanPluginRuntimeError::new("Formal plugin runtime is not attached.")
         })?;

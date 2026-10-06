@@ -796,11 +796,9 @@ fn pending_predecessor_drain_retires_original(reuse_enabled_runtime: bool) {
             // 等待原监控器退役检查点；释放或业务取消本身不足以证明完成。
             tokio::time::timeout(WAIT, async {
                 loop {
-                    let rows = fixture
-                        .manager
-                        .formal_plugin_resource_diagnostics("hook-plugin", None)
-                        .expect("same persistent owner observation")
-                        .expect("original parent");
+                    let Some(rows) = idle_diagnostics(&fixture.manager).await else {
+                        continue;
+                    };
                     let row = rows
                         .resources
                         .iter()
@@ -995,11 +993,9 @@ fn formal_predecessor_drain_terminal_failure_survives_later_empty_cleanup() {
         // 等待剩余原 UI 检查点，不假定取消释放了原生资源。
         tokio::time::timeout(WAIT, async {
             loop {
-                let rows = fixture
-                    .manager
-                    .formal_plugin_resource_diagnostics("hook-plugin", None)
-                    .expect("actual UI observation")
-                    .expect("original parent");
+                let Some(rows) = idle_diagnostics(&fixture.manager).await else {
+                    continue;
+                };
                 if rows.resources.iter().all(|row| row.retired) {
                     break;
                 }
@@ -1082,4 +1078,25 @@ fn formal_predecessor_drain_terminal_failure_survives_later_empty_cleanup() {
             1
         );
     });
+}
+
+/// Samples resource diagnostics, yielding instead when concurrent supervision holds a record.
+/// 采样资源诊断；并发监督持有记录时改为让出并返回空。
+///
+/// Diagnostics never wait for a lock, and monitors run on the supervisor in parallel with the test.
+/// 诊断从不等待锁，且监控在监督器上与测试并行运行。
+async fn idle_diagnostics(
+    manager: &VulcanPluginRuntimeManager,
+) -> Option<crate::runtime::formal::VulcanPluginResourceDiagnostics> {
+    match manager.formal_plugin_resource_diagnostics("hook-plugin", None) {
+        Err(error) if error.message == "Plugin resource diagnostics are busy." => {
+            tokio::task::yield_now().await;
+            None
+        }
+        result => Some(
+            result
+                .expect("same persistent owner observation")
+                .expect("original parent"),
+        ),
+    }
 }

@@ -482,10 +482,11 @@ impl RecoveryFixture {
     }
 }
 
-/// Replacing an executor cannot release or replay the original VM, operation, domain or request borrow.
-/// 替换执行器不能释放或重放原 VM、操作、域或请求借用。
+/// Losing the caller's executor neither interrupts supervision nor releases or replays the original
+/// VM, operation, domain or request borrow.
+/// 调用方执行器丢失既不中断监督，也不释放或重放原 VM、操作、域或请求借用。
 #[test]
-fn hot_reuse_executor_loss_recovers_original_initialization_and_business() {
+fn hot_reuse_caller_executor_loss_keeps_original_initialization_and_business() {
     for initialization in [true, false] {
         // Two real execution phases must preserve the same ownership checkpoints.
         // 两个真实执行阶段必须保留同一归属检查点。
@@ -535,15 +536,15 @@ fn hot_reuse_executor_loss_recovers_original_initialization_and_business() {
         });
         previous.shutdown_timeout(WAIT);
         assert!(
-            !recovery
+            recovery
                 .fixture
                 .owner()
                 .reuse_observer
                 .load(Ordering::Acquire),
-            "stopped observer must release only its observer flag"
+            "the reuse observer runs on the supervisor and survives the caller executor"
         );
-        // The replacement executor resumes cleanup for those exact identities.
-        // 替代执行器为这些精确身份恢复清理。
+        // A new caller executor drains those exact identities.
+        // 新的调用方执行器排空这些精确身份。
         let replacement = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -553,8 +554,8 @@ fn hot_reuse_executor_loss_recovers_original_initialization_and_business() {
                 .fixture
                 .manager
                 .formal_call_status(&invocation_id, "owner")
-                .expect("interrupted status");
-            assert!(before.requires_cleanup_recovery && !before.retired);
+                .expect("supervised status");
+            assert!(!before.requires_cleanup_recovery && !before.retired);
             let pending = recovery
                 .fixture
                 .manager

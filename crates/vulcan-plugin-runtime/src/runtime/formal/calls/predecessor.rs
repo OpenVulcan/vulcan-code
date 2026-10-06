@@ -234,41 +234,38 @@ impl VulcanPluginRuntimeManager {
         &self,
         request_id: Uuid,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        tokio::runtime::Handle::try_current().map_err(|failure| {
-            VulcanPluginRuntimeError::new(format!(
-                "Predecessor callback drain requires a Tokio runtime: {failure}"
-            ))
-        })?;
         // Retain only the existing manager for the owned drain supervisor.
         // 仅为自有排空监督器保留既有管理器。
         let manager = self.clone();
-        tokio::spawn(async move {
-            // No parent means no retained callback; inspection never creates one.
-            // 没有父级表示没有保留回调；检查绝不创建父级。
-            let Some(owner) = manager.formal_runtime_owner()? else {
-                return Ok(VulcanPluginDrainReport::default());
-            };
-            // Select both the exact request and old-version operation class.
-            // 同时选择精确请求及旧版本操作类别。
-            let calls = owner
-                .calls
-                .lock()
-                .map_err(|_| calls_error())?
-                .values()
-                .filter(|call| {
-                    call.source.activation().is_some_and(|authority| {
-                        authority.request_id == request_id && !authority.operation.is_candidate()
+        self.supervisor_handle()?
+            .spawn(async move {
+                // No parent means no retained callback; inspection never creates one.
+                // 没有父级表示没有保留回调；检查绝不创建父级。
+                let Some(owner) = manager.formal_runtime_owner()? else {
+                    return Ok(VulcanPluginDrainReport::default());
+                };
+                // Select both the exact request and old-version operation class.
+                // 同时选择精确请求及旧版本操作类别。
+                let calls = owner
+                    .calls
+                    .lock()
+                    .map_err(|_| calls_error())?
+                    .values()
+                    .filter(|call| {
+                        call.source.activation().is_some_and(|authority| {
+                            authority.request_id == request_id
+                                && !authority.operation.is_candidate()
+                        })
                     })
-                })
-                .cloned()
-                .collect();
-            manager.drain_selected_formal_calls(&owner, calls).await
-        })
-        .await
-        .map_err(|failure| {
-            VulcanPluginRuntimeError::new(format!(
-                "Predecessor callback drain supervisor failed: {failure}"
-            ))
-        })?
+                    .cloned()
+                    .collect();
+                manager.drain_selected_formal_calls(&owner, calls).await
+            })
+            .await
+            .map_err(|failure| {
+                VulcanPluginRuntimeError::new(format!(
+                    "Predecessor callback drain supervisor failed: {failure}"
+                ))
+            })?
     }
 }

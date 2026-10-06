@@ -201,7 +201,8 @@ impl VulcanPluginRuntimeManager {
         // Freeze the exact catalog identity supplied to this public invocation.
         // 冻结本次公开调用提供的精确目录身份。
         let hook = hook.clone();
-        tokio::spawn(async move { manager.invoke_hook_owned(&hook, invocation, expires).await })
+        self.supervisor_handle()?
+            .spawn(async move { manager.invoke_hook_owned(&hook, invocation, expires).await })
             .await
             .map_err(|error| {
                 VulcanPluginRuntimeError::new(format!("Plugin hook supervisor failed: {error}"))

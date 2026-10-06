@@ -13,9 +13,7 @@ impl VulcanPluginRuntimeManager {
         owner: &Arc<ManagedFormalRuntime>,
         session: &Arc<PinnedSession>,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        let executor = tokio::runtime::Handle::try_current().map_err(|_| {
-            VulcanPluginRuntimeError::new("Formal session monitoring requires a Tokio executor.")
-        })?;
+        let executor = self.supervisor_handle()?;
         {
             let mut state = session.lock()?;
             if state.monitored || state.retired {

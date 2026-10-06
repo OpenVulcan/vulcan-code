@@ -271,11 +271,9 @@ impl VulcanPluginRuntimeManager {
         if call.lock()?.pending.is_none() {
             return Ok(());
         }
-        tokio::runtime::Handle::try_current().map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Formal invocation requires a Tokio runtime: {error}"
-            ))
-        })?;
+        // Start supervision before consuming pending input, so a missing executor loses nothing.
+        // 消费待处理输入前启动监督，使执行器缺失时不丢失任何内容。
+        let supervisor = self.supervisor_handle()?;
         self.ensure_reuse_observer(owner);
         // A retained legacy callback may start only under its same actual routing original.
         // 保留旧格式回调仅可在相同实际路由原实例内启动。
@@ -342,7 +340,7 @@ impl VulcanPluginRuntimeManager {
         // The supervisor observes the original invocation rather than recreating it.
         // 监督者观测原调用，不重新创建调用。
         let supervisor_call = Arc::clone(call);
-        tokio::spawn(async move {
+        supervisor.spawn(async move {
             // This guard records interruption without releasing actual work.
             // 此守卫记录中断，不释放实际工作。
             let mut supervision = supervision;

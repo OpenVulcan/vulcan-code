@@ -109,10 +109,11 @@ M.on_disable = M.dispatch
     }
 }
 
-/// Actual initialization and business callbacks retain capacity after executor destruction and bounded drain.
-/// 真实初始化及业务回调在执行器销毁和有界排空后保留容量。
+/// Actual initialization and business callbacks keep running on the supervisor after the caller's
+/// executor is destroyed, and retain capacity through a bounded drain.
+/// 调用方执行器销毁后，真实初始化及业务回调仍在监督器上运行，并在有界排空中保留容量。
 #[test]
-fn formal_ui_executor_loss_retains_initialization_and_running_ownership() {
+fn formal_ui_caller_executor_loss_keeps_initialization_and_business_running() {
     for initialization in [false, true] {
         // Cleanup must expire while the native callback is deliberately blocked.
         // 原生回调刻意阻塞时，清理必须到期。
@@ -155,14 +156,21 @@ fn formal_ui_executor_loss_retains_initialization_and_running_ownership() {
         // 跨中断及清理保留原实例身份。
         let original = owner.ui_actions.lock().expect("UI registry")["hook-plugin"].clone();
         drop(runtime);
-        // Abnormal supervision is pending, not proof of physical completion.
-        // 异常监督退出仍待完成，不是物理完成证明。
+        // Supervision belongs to the manager, so the blocked callback is still executing.
+        // 监督属于管理器，因此被阻塞的回调仍在执行。
         let status = fixture
             .manager
             .action_status("hook-plugin", &incarnation, &identity, false)
             .expect("owned status");
         assert!(!status.terminal);
-        assert_eq!(status.phase, "cleanup_wait");
+        assert_eq!(
+            status.phase,
+            if initialization {
+                "initializing"
+            } else {
+                "executing"
+            }
+        );
         assert!(fixture.manager.admit_action("hook-plugin", 1).is_err());
         if !initialization {
             assert!(original.operation_gate.try_lock().is_err());
@@ -171,8 +179,8 @@ fn formal_ui_executor_loss_retains_initialization_and_running_ownership() {
             .manager
             .begin_draining("hook-plugin")
             .expect("stop old generation");
-        // Restart supervision on the same physical owner, without replaying business work.
-        // 在同一物理所有者上重启监督，不重放业务。
+        // Drain from a new caller executor, without replaying business work.
+        // 从新的调用方执行器排空，不重放业务。
         let recovery = executor();
         recovery.block_on(async {
             // Inspect physical retirement separately from logical execution outcomes.
@@ -203,7 +211,17 @@ fn formal_ui_executor_loss_retains_initialization_and_running_ownership() {
                 .action_status("hook-plugin", &incarnation, &identity, false)
                 .expect("final status");
             assert!(status.terminal);
-            assert_eq!(status.phase, "supervisor_failed");
+            // The vanished waiter cancels a read that never started; started business fails
+            // because the drain closed its instance.
+            // 消失的等待方取消尚未开始的读取；已开始的业务因排空关闭其实例而失败。
+            assert_eq!(
+                status.phase,
+                if initialization {
+                    "cancelled"
+                } else {
+                    "failed"
+                }
+            );
             assert!(fixture.manager.admit_action("hook-plugin", 1).is_ok());
             // Inspect physical retirement separately from logical execution outcomes.
             // 将物理退役与逻辑执行结果分开检查。
@@ -517,10 +535,12 @@ fn formal_ui_output_schema_cache_observes_current_file_and_releases_work() {
     });
 }
 
-/// A supervisor dropped before its first poll still completes its record and returns unused capacity.
-/// 监督任务首次轮询前被丢弃时，仍完成记录并归还未使用容量。
+/// A caller that polls admission once and disappears cancels its cancellable action; the manager's
+/// supervisor, not the caller's executor, records that outcome and returns the capacity.
+/// 仅轮询一次入场便消失的调用方会取消其可取消 Action；由管理器监督器而非调用方执行器记录该结果
+/// 并归还容量。
 #[test]
-fn formal_ui_unpolled_supervisor_returns_unused_admission() {
+fn formal_ui_action_abandoned_by_its_caller_is_cancelled_by_the_supervisor() {
     // Retain the isolated package and real native recorder through verification.
     // 跨验证保留隔离包及真实原生记录器。
     let fixture = Fixture::ui(1000, false, VulcanPluginRuntimeSettings::default());
@@ -539,29 +559,26 @@ fn formal_ui_unpolled_supervisor_returns_unused_admission() {
             &incarnation,
             identity.clone(),
         ));
-        // Poll only the external future to isolate admission from supervisor execution.
-        // 仅轮询外部 Future，使入场与监督执行隔离。
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(std::future::Future::poll(call.as_mut(), &mut context).is_pending());
     }
     drop(runtime);
     // Query the original invocation without replaying its business effects.
     // 查询原调用，不重放其业务副作用。
-    let status = fixture
-        .manager
-        .action_status("hook-plugin", &incarnation, &identity, false)
-        .expect("unpolled status");
-    assert!(status.terminal);
-    assert_eq!(status.phase, "supervisor_failed");
+    let expires = Instant::now() + WAIT;
+    let status = loop {
+        let status = fixture
+            .manager
+            .action_status("hook-plugin", &incarnation, &identity, false)
+            .expect("supervised status");
+        if status.terminal {
+            break status;
+        }
+        assert!(Instant::now() < expires, "supervised action did not finish");
+        std::thread::sleep(OBSERVATION_INTERVAL);
+    };
+    assert_eq!(status.phase, "cancelled");
     assert!(fixture.manager.admit_action("hook-plugin", 1).is_ok());
-    assert!(
-        fixture
-            .owner()
-            .ui_actions
-            .lock()
-            .expect("no preparation")
-            .is_empty()
-    );
 }
 
 /// A business deadline cannot release UI admission while its native callback is still executing.

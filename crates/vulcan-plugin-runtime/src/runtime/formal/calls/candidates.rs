@@ -264,39 +264,35 @@ impl VulcanPluginRuntimeManager {
         &self,
         request_id: Uuid,
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
-        tokio::runtime::Handle::try_current().map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Candidate drain requires a Tokio runtime: {error}"
-            ))
-        })?;
         // The drain supervisor survives an interrupted external waiter.
         // 排空监督者在外部等待者中断后继续存活。
         let manager = self.clone();
-        tokio::spawn(async move {
-            // Query original ownership only; absence never creates a replacement parent.
-            // 仅查询原所有权；缺失绝不创建替代父级。
-            let Some(owner) = manager.formal_runtime_owner()? else {
-                return Ok(VulcanPluginDrainReport::default());
-            };
-            // Exact request filtering prevents cancelling old-version work in the same plugin namespace.
-            // 精确请求过滤防止取消相同插件命名空间中的旧版本工作。
-            let calls = owner
-                .calls
-                .lock()
-                .map_err(|_| calls_error())?
-                .values()
-                .filter(|call| {
-                    call.source.activation().is_some_and(|authority| {
-                        authority.request_id == request_id && authority.operation.is_candidate()
+        self.supervisor_handle()?
+            .spawn(async move {
+                // Query original ownership only; absence never creates a replacement parent.
+                // 仅查询原所有权；缺失绝不创建替代父级。
+                let Some(owner) = manager.formal_runtime_owner()? else {
+                    return Ok(VulcanPluginDrainReport::default());
+                };
+                // Exact request filtering prevents cancelling old-version work in the same plugin namespace.
+                // 精确请求过滤防止取消相同插件命名空间中的旧版本工作。
+                let calls = owner
+                    .calls
+                    .lock()
+                    .map_err(|_| calls_error())?
+                    .values()
+                    .filter(|call| {
+                        call.source.activation().is_some_and(|authority| {
+                            authority.request_id == request_id && authority.operation.is_candidate()
+                        })
                     })
-                })
-                .cloned()
-                .collect();
-            manager.drain_selected_formal_calls(&owner, calls).await
-        })
-        .await
-        .map_err(|error| {
-            VulcanPluginRuntimeError::new(format!("Candidate drain supervisor failed: {error}"))
-        })?
+                    .cloned()
+                    .collect();
+                manager.drain_selected_formal_calls(&owner, calls).await
+            })
+            .await
+            .map_err(|error| {
+                VulcanPluginRuntimeError::new(format!("Candidate drain supervisor failed: {error}"))
+            })?
     }
 }

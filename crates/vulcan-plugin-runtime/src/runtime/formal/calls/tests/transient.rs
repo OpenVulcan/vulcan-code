@@ -379,10 +379,11 @@ fn formal_transient_disconnect_distinguishes_read_and_mutation() {
     }
 }
 
-/// Executor loss preserves both initialization and running Action owners until the original native work ends.
-/// 执行器丢失后保留初始化及运行中 Action 所有者，直到原原生工作结束。
+/// Losing the caller's executor preserves both initialization and running Action owners, which keep
+/// running on the supervisor until the original native work ends.
+/// 调用方执行器丢失后，初始化及运行中 Action 所有者均被保留，并在监督器上继续运行直至原原生工作结束。
 #[test]
-fn formal_transient_executor_loss_retains_original_owner() {
+fn formal_transient_caller_executor_loss_retains_original_owner() {
     for initialization in [true, false] {
         // Block either real initialization or the sole admitted business operation.
         // 阻塞真实初始化或唯一已接纳业务操作。
@@ -425,7 +426,7 @@ fn formal_transient_executor_loss_retains_original_owner() {
             !fixture
                 .manager
                 .action_status("hook-plugin", &incarnation, &identity, false)
-                .expect("interrupted status")
+                .expect("supervised status")
                 .terminal
         );
         assert!(fixture.manager.admit_action("hook-plugin", 1).is_err());
@@ -452,9 +453,16 @@ fn formal_transient_executor_loss_retains_original_owner() {
             );
             assert!(fixture.manager.admit_action("hook-plugin", 1).is_err());
             fixture.events.release();
+            // The vanished waiter cancels a read that never started; started business fails
+            // because the drain closed its owner.
+            // 消失的等待方取消尚未开始的读取；已开始的业务因排空关闭其所有者而失败。
             assert_eq!(
                 fixture.terminal_action(&identity, &incarnation).await,
-                "supervisor_failed"
+                if initialization {
+                    "cancelled"
+                } else {
+                    "failed"
+                }
             );
             fixture.empty().await;
             assert!(original.lock().expect("original retirement").retired);

@@ -44,6 +44,7 @@ pub use routing::VulcanPluginRoutingReservation;
 mod requirements;
 mod sessions;
 mod settings;
+mod supervisor;
 
 // Preserve the existing public plugin API at its original module path.
 // 在原模块路径保留既有公开插件API。
@@ -279,6 +280,9 @@ struct VulcanPluginManagerState {
     /// Original startup recovery obligations survive refreshes and missing journal files.
     /// 原始启动恢复义务在刷新及日志文件缺失后仍保留。
     activation_recovery: Mutex<Option<recovery::ActivationRecovery>>,
+    /// Manager-owned executor for every supervision task; declared last so it stops last.
+    /// 管理器持有的全部监督任务执行器；最后声明以便最后停止。
+    supervisor: supervisor::PluginSupervisor,
 }
 
 impl Drop for VulcanPluginManagerState {
@@ -447,6 +451,7 @@ impl VulcanPluginRuntimeManager {
                 update_drains: Mutex::new(BTreeMap::new()),
                 cleanup_diagnostics: Mutex::new(BTreeMap::new()),
                 activation_recovery: Mutex::new(None),
+                supervisor: supervisor::PluginSupervisor::new(),
             }),
         };
         if has_engine {

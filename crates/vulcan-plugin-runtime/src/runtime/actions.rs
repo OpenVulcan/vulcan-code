@@ -141,7 +141,7 @@ impl VulcanPluginRuntimeManager {
         // Own completion before spawning so an unpolled task cannot leak active admission.
         // 派发之前拥有完成记录，避免未轮询任务泄漏活动入场。
         let completion = super::action_status::ActionCompletionGuard(record.clone());
-        let task = tokio::spawn(async move {
+        let task = self.supervisor_handle()?.spawn(async move {
             let _completion = completion;
             let _mutation_waiter = mutation_waiter;
             ACTION_RECORD

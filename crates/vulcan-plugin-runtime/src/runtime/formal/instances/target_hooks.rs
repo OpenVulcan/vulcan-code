@@ -178,7 +178,7 @@ impl VulcanPluginRuntimeManager {
         // Retain the original registry instance throughout preparation and observation.
         // 在准备及观察全程保留原注册表实例。
         let runtime = Arc::clone(runtime);
-        tokio::task::spawn_blocking(move || {
+        self.supervisor_handle()?.spawn_blocking(move || {
             // Keep interruption ownership until the actual blocking closure finishes.
             // 保留中断所有权至实际阻塞闭包结束。
             let _preparation = preparation;

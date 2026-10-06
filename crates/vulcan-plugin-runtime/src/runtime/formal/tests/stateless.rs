@@ -533,10 +533,10 @@ fn formal_stateless_retention_and_input_budgets_are_bounded() {
     );
 }
 
-/// Replacing the observer executor requires cleanup recovery but never a second Lua submission.
-/// 替换观测执行器需要清理恢复，但绝不产生第二次 Lua 提交。
+/// Replacing the caller's executor leaves the call supervised and never causes a second Lua submission.
+/// 替换调用方执行器后调用仍受监督，且绝不产生第二次 Lua 提交。
 #[test]
-fn formal_stateless_executor_shutdown_retains_recoverable_ownership() {
+fn formal_stateless_caller_executor_shutdown_keeps_call_supervised() {
     let mut fixture = Fixture::new(VulcanPluginRuntimeSettings::default());
     let manager = fixture.manager.clone();
     let request = fixture.request("block");
@@ -552,15 +552,15 @@ fn formal_stateless_executor_shutdown_retains_recoverable_ownership() {
     let previous = std::mem::replace(&mut fixture.runtime, replacement);
     previous.shutdown_timeout(WAIT);
     drop(waiter);
-    let interrupted = fixture
+    let supervised = fixture
         .manager
         .formal_calls("owner")
-        .expect("retained interrupted call")
+        .expect("retained supervised call")
         .into_iter()
         .next()
         .expect("original host identity");
-    assert!(interrupted.requires_cleanup_recovery);
-    assert!(!interrupted.retired);
+    assert!(!supervised.requires_cleanup_recovery);
+    assert!(!supervised.retired);
     assert!(
         !fixture
             .manager
@@ -571,18 +571,18 @@ fn formal_stateless_executor_shutdown_retains_recoverable_ownership() {
     let report = fixture
         .runtime
         .block_on(fixture.manager.drain_owner_sessions("owner"))
-        .expect("recover original cleanup");
+        .expect("drain original call");
     assert_eq!(report.closed_formal_calls, 1);
     assert!(report.failures.is_empty(), "{report:?}");
     let completed = fixture.runtime.block_on(fixture.retired());
-    assert_eq!(completed.invocation_id, interrupted.invocation_id);
+    assert_eq!(completed.invocation_id, supervised.invocation_id);
     assert_eq!(
         completed
             .operation
             .as_ref()
             .expect("completed core")
             .operation_id,
-        interrupted
+        supervised
             .operation
             .as_ref()
             .expect("original core")

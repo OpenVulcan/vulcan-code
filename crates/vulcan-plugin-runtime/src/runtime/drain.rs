@@ -213,7 +213,8 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
         let manager = self.clone();
         let plugin_id = plugin_id.to_owned();
-        tokio::spawn(async move { manager.drain_plugin_sessions_owned(&plugin_id).await })
+        self.supervisor_handle()?
+            .spawn(async move { manager.drain_plugin_sessions_owned(&plugin_id).await })
             .await
             .map_err(|error| {
                 VulcanPluginRuntimeError::new(format!("Plugin drain supervisor failed: {error}"))

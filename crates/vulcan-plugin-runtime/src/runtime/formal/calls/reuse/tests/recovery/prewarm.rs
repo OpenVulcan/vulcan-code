@@ -1,13 +1,15 @@
-//! Interrupted prewarming retains original initialization across catalog updates and owner drainage.
-//! 中断预热在目录更新及所有者排空期间保留原初始化。
+//! Prewarming retains original initialization across caller loss, catalog updates and owner drainage.
+//! 预热在调用方丢失、目录更新及所有者排空期间保留原初始化。
 
 use super::super::targets::wait_target;
 use super::*;
 
-/// Executor loss resumes only cleanup for the original target; repeated startup never replays initialization.
-/// 执行器丢失仅恢复原目标清理；重复启动绝不重放初始化。
+/// A prewarm target starts without a caller executor and survives that caller's executor; repeated
+/// startup only observes the original receipt and never replays initialization.
+/// 预热目标无需调用方执行器即可启动，并在该调用方执行器消失后继续存活；重复启动只观测原回执，
+/// 绝不重放初始化。
 #[test]
-fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
+fn hot_reuse_target_survives_caller_executor_and_preserves_receipt() {
     // The native callback remains independently alive until the fixture explicitly releases it.
     // 原生回调独立存活，直到夹具显式释放。
     let recovery = RecoveryFixture::new(true);
@@ -19,31 +21,20 @@ fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
     let prepared = manager
         .prepare_reusable_tool_prewarm(recovery.fixture.target(1))
         .expect("register original prewarm target");
-    assert!(
-        manager
-            .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
-            .is_err()
-    );
-    assert!(
-        !manager
-            .formal_call_status(&prepared.invocation_id, "owner")
-            .expect("query original target")
-            .prewarm
-            .expect("retained target progress")
-            .started
-    );
-    // Stop only the original executor after observing its real native callback.
-    // 仅在观测真实原生回调后停止原执行器。
+    // Supervision belongs to the manager, so synchronous code may start the target directly.
+    // 监督属于管理器，因此同步代码可直接启动目标。
+    manager
+        .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
+        .expect("start original target without a caller executor");
+    // Stop only the observing executor after observing the real native callback.
+    // 仅在观测真实原生回调后停止观测执行器。
     let previous = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
         .expect("create test executor");
-    // Capture the actual core operation before interrupting its observer.
-    // 在中断观测者前捕获真实核心操作。
+    // Capture the actual core operation before dropping the observer.
+    // 在丢弃观测者前捕获真实核心操作。
     let operation = previous.block_on(async {
-        manager
-            .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
-            .expect("start or observe original target");
         recovery.events.wait_entered().await;
         manager
             .formal_call_status(&prepared.invocation_id, "owner")
@@ -52,27 +43,21 @@ fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
             .expect("original native operation")
     });
     previous.shutdown_timeout(WAIT);
-    // An already-started receipt can be observed even when no executor is entered.
-    // 即使没有进入执行器，也可以观测已启动回执。
-    let interrupted = manager
+    // Repeated startup only observes the original receipt, which needs no recovery.
+    // 重复启动只观测原回执，且无需恢复。
+    let observed = manager
         .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
         .expect("start or observe original target");
-    assert!(interrupted.requires_cleanup_recovery);
-    assert!(
-        manager
-            .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
-            .is_err(),
-        "missing executor must preserve the interrupted cleanup owner"
-    );
+    assert!(!observed.requires_cleanup_recovery);
     assert_eq!(
-        interrupted
+        observed
             .operation
             .expect("original native operation")
             .operation_id,
         operation.operation_id
     );
-    // The replacement executor may resume cleanup but must not restart convergence.
-    // 替代执行器可以恢复清理，但不得重启目标收敛。
+    // A new caller executor may cancel and observe cleanup but must not restart convergence.
+    // 新的调用方执行器可以取消并观测清理，但不得重启目标收敛。
     let replacement = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -87,8 +72,8 @@ fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
         manager
             .cancel_formal_call(&prepared.invocation_id, "owner")
             .expect("cancel original target");
-        // Explicit recovery transfers only cleanup while the native callback still owns the VM.
-        // 原生回调仍拥有 VM 时，明确恢复仅转移清理。
+        // Cleanup observation changes nothing while the native callback still owns the VM.
+        // 原生回调仍拥有 VM 时，清理观测不改变任何内容。
         let pending = manager
             .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
             .expect("recover original cleanup");
@@ -108,15 +93,15 @@ fn hot_reuse_target_executor_loss_and_missing_executor_preserve_receipt() {
             );
             tokio::task::yield_now().await;
         }
-        // Retirement preserves the original operation and explicit interrupted-target failure.
-        // 退役保留原操作及明确目标中断失败。
+        // Retirement preserves the original operation and explicit cancelled-target failure.
+        // 退役保留原操作及明确目标取消失败。
         let terminal = manager
             .formal_call_status(&prepared.invocation_id, "owner")
             .expect("query original target");
         assert!(terminal.retired);
         assert!(
             terminal.error.is_some(),
-            "interrupted convergence cannot become successful"
+            "cancelled convergence cannot become successful"
         );
         assert!(
             terminal

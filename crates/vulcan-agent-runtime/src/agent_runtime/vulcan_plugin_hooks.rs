@@ -2,7 +2,6 @@
 //! 面向共享宿主调度器的 Vulcan 插件 Lua hook 注册桥。
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -605,48 +604,6 @@ async fn dispatch_tool_hook_descriptors(
         .await
 }
 
-/// Runs one async hook chain from the synchronous candidate-construction boundary.
-/// 从同步候选构建边界运行一次异步 Hook 链。
-///
-/// Inside a multi-thread Tokio runtime the blocking wait is wrapped in `block_in_place`, so the
-/// worker hands its other tasks to peers instead of stalling them. Runtime construction, worker
-/// spawn and worker panics are returned as errors instead of aborting the caller.
-/// 位于多线程 Tokio 运行时内时，阻塞等待包裹在 `block_in_place` 中，让当前工作线程把其他任务
-/// 移交给同伴线程而不是拖住它们；运行时构建、工作线程启动与工作线程 panic 均以错误返回，
-/// 不会中止调用方。
-fn run_hook_future_from_sync<F>(future: F) -> Result<F::Output, String>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    fn block_on_private_runtime<F: Future>(future: F) -> Result<F::Output, String> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map(|runtime| runtime.block_on(future))
-            .map_err(|error| format!("tool hook runtime failed to build: {error}"))
-    }
-
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        return block_on_private_runtime(future);
-    };
-    // A nested runtime cannot block on the caller's runtime thread, so a dedicated worker owns it.
-    // 嵌套运行时不能在调用方运行时线程上阻塞，因此由独立工作线程持有。
-    let worker = std::thread::Builder::new()
-        .name(String::from("vulcan-tool-hook"))
-        .spawn(move || block_on_private_runtime(future))
-        .map_err(|error| format!("tool hook worker failed to start: {error}"))?;
-    let join = move || {
-        worker
-            .join()
-            .map_err(|_| String::from("tool hook worker panicked"))?
-    };
-    match handle.runtime_flavor() {
-        tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(join),
-        _ => join(),
-    }
-}
-
 /// Verifies that a Lua response still carries the immutable source identity.
 /// 验证 Lua 响应仍携带不可变来源身份。
 fn response_identity_matches_origin(value: &Value, origin: &VulcanToolOrigin) -> bool {
@@ -769,14 +726,18 @@ fn apply_registration_hooks(
     let key = registration_cache_key(snapshot, &candidate, hooks);
     let outcome = cached_or_compute_registration_outcome(&key, || {
         let payload = registration_payload(&candidate);
-        let report = run_hook_future_from_sync(dispatch_tool_hook_descriptors(
-            runtime.clone(),
-            hooks.to_vec(),
-            registration_hook_context(),
-            payload,
-        ))
-        .map_err(|error| format!("tool.registration failed: {error}"))?
-        .map_err(|error| format!("tool.registration failed: {error}"))?;
+        // Candidate construction is synchronous; the chain runs on the plugin supervisor so this
+        // thread only waits, whatever runtime it belongs to.
+        // 候选构建是同步的；Hook 链在插件监督器上运行，因此无论本线程属于何种运行时都只负责等待。
+        let report = runtime
+            .block_on_supervised(dispatch_tool_hook_descriptors(
+                runtime.clone(),
+                hooks.to_vec(),
+                registration_hook_context(),
+                payload,
+            ))
+            .map_err(|error| format!("tool.registration failed: {error}"))?
+            .map_err(|error| format!("tool.registration failed: {error}"))?;
         if report.decision == HookDecision::Block {
             // A declared Block is stable, while Defer and execution errors remain retryable.
             // 显式 Block 稳定有效，Defer 与执行错误则保持可重试。
@@ -1239,31 +1200,6 @@ mod tests {
     use vulcan_tools_manager::{
         VulcanPlanToolPolicy, VulcanToolDescriptor, VulcanToolOrigin, VulcanToolSourceKind,
     };
-
-    /// Verifies the sync hook bridge works without a runtime, inside both runtime flavors, and
-    /// reports a panicking hook worker as an error instead of aborting the caller.
-    /// 验证同步 Hook 桥在无运行时与两种运行时内均可工作，且 Hook 工作线程 panic 时返回错误而不是
-    /// 中止调用方。
-    #[test]
-    fn sync_hook_bridge_runs_in_every_context_and_reports_worker_panics() {
-        assert_eq!(run_hook_future_from_sync(async { 1 }), Ok(1));
-        for mut builder in [
-            tokio::runtime::Builder::new_current_thread(),
-            tokio::runtime::Builder::new_multi_thread(),
-        ] {
-            let runtime = builder
-                .enable_all()
-                .build()
-                .expect("build bridge test runtime");
-            runtime.block_on(async {
-                assert_eq!(run_hook_future_from_sync(async { 2 }), Ok(2));
-                let panicked = run_hook_future_from_sync(async {
-                    panic!("hook worker panic fixture");
-                });
-                assert_eq!(panicked, Err(String::from("tool hook worker panicked")));
-            });
-        }
-    }
 
     /// Verifies simultaneous cold misses invoke one registration transform and release its flight lock.
     /// 验证并发首次缓存未命中只执行一次注册变换，并在结束后释放飞行锁。
@@ -2124,9 +2060,10 @@ lua_runtime:
 
     /// Verifies cached registration and trusted session injection across concurrent conversations.
     /// 验证并发会话中的注册缓存与可信会话参数注入。
-    // Generation replacement waits for the old instance monitor, which needs a free worker like production.
-    // 代次替换需等待旧实例监控推进，与生产相同需要空闲工作线程。
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // A current-thread caller blocks its only thread in synchronous registration; instance
+    // monitors live on the plugin supervisor, so generation replacement still makes progress.
+    // 单线程调用方在同步注册中阻塞其唯一线程；实例监控位于插件监督器上，代次替换仍可推进。
+    #[tokio::test(flavor = "current_thread")]
     async fn session_owner_hook_hides_and_restores_exact_mcp_argument() {
         let temp = tempfile::tempdir().expect("create hook test directory");
         let runtime_root = temp.path().join("runtime");
