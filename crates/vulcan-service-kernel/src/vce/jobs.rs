@@ -13,8 +13,8 @@ use vulcan_context_engine::{
 };
 use vulcan_workspace_store::vce_data_plane::{
     VceCompactionJobReceipt, VceCompactionMetrics, VceCompactionTableReceipt,
-    VceCompactionTableState, VceCompletedJobUpdate, VceJobKind, VceJobState, VceProjectIndex,
-    VceProjectJobStore, VceProjectWriterLease, VceStoredJob,
+    VceCompactionTableState, VceCompletedJobUpdate, VceJobKind, VceJobState, VceJobStoreError,
+    VceProjectIndex, VceProjectJobStore, VceProjectWriterLease, VceStoredJob,
 };
 
 /// Maximum number of additional attempts for transient progress-receipt contention.
@@ -33,21 +33,6 @@ const VCE_JOB_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// 已提交存储整理操作的轮询间隔。
 const VCE_COMPACTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Identify storage failures that may clear without cancelling the admitted refresh.
-/// 识别可能自行消退、因此不应取消已准入刷新的存储失败。
-///
-/// `error` is the fully contextualized persistence error emitted by the job store.
-/// `error` 是作业存储发出的完整上下文持久化错误。
-/// Returns true only for the existing transient transport and SQLite-busy contracts.
-/// 仅当错误匹配现有瞬时传输或 SQLite 忙合约时返回 true。
-fn is_transient_progress_persistence_error(error: &str) -> bool {
-    let normalized = error.to_ascii_lowercase();
-    normalized.contains("transport error")
-        || normalized.contains("database is locked")
-        || normalized.contains("database busy")
-        || normalized.contains("sqlite_busy")
-}
-
 /// Retry one progress receipt update without blocking the indexing worker forever.
 /// 在不永久阻塞索引工作任务的前提下重试一次进度回执更新。
 ///
@@ -61,9 +46,11 @@ fn is_transient_progress_persistence_error(error: &str) -> bool {
 async fn persist_progress_with_retry<P>(
     persist_progress: &P,
     progress: VceRefreshProgress,
-) -> Result<(), String>
+) -> Result<(), VceJobStoreError>
 where
-    P: Fn(VceRefreshProgress) -> futures_util::future::BoxFuture<'static, Result<(), String>>
+    P: Fn(
+            VceRefreshProgress,
+        ) -> futures_util::future::BoxFuture<'static, Result<(), VceJobStoreError>>
         + Send
         + Sync
         + 'static,
@@ -72,10 +59,7 @@ where
     for attempt in 0..=VCE_PROGRESS_PERSIST_RETRIES {
         match persist_progress(progress.clone()).await {
             Ok(()) => return Ok(()),
-            Err(error)
-                if is_transient_progress_persistence_error(&error)
-                    && attempt < VCE_PROGRESS_PERSIST_RETRIES =>
-            {
+            Err(error) if error.is_busy() && attempt < VCE_PROGRESS_PERSIST_RETRIES => {
                 last_error = Some(error);
                 let delay_ms = VCE_PROGRESS_PERSIST_RETRY_BASE_MS * (attempt as u64 + 1);
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -84,7 +68,7 @@ where
         }
     }
     Err(last_error.unwrap_or_else(|| {
-        String::from("VCE progress persistence retry loop ended without an error")
+        String::from("VCE progress persistence retry loop ended without an error").into()
     }))
 }
 
@@ -379,7 +363,7 @@ impl VceJobSelection<'_> {
     async fn read(&self, store: &VceProjectJobStore) -> Result<Option<VceStoredJob>, String> {
         match self {
             Self::Latest => store.latest().await,
-            Self::Exact(id) => store.get(id).await,
+            Self::Exact(id) => store.get(id).await.map_err(Into::into),
             Self::LastSuccessfulUpdate => store.latest_successful_update().await,
         }
     }
@@ -627,7 +611,7 @@ impl VceManagedJob {
         &self,
         store: &VceProjectJobStore,
         change: impl FnOnce(&mut VceStoredJob),
-    ) -> Result<VceStoredJob, String> {
+    ) -> Result<VceStoredJob, VceJobStoreError> {
         self.persist_checked(store, |receipt| {
             change(receipt);
             Ok(())
@@ -647,7 +631,7 @@ impl VceManagedJob {
         &self,
         store: &VceProjectJobStore,
         change: impl FnOnce(&mut VceStoredJob) -> Result<(), String>,
-    ) -> Result<VceStoredJob, String> {
+    ) -> Result<VceStoredJob, VceJobStoreError> {
         // The gate serializes compare-and-swap transitions while the receipt lock remains short-lived.
         // 闸门串行化比较交换转换，同时让回执锁只覆盖短暂的内存快照。
         let _persistence = self.persistence_gate.lock().await;
@@ -1717,16 +1701,17 @@ impl VceRuntimeManager {
                     }
                 })
                 .await
+                .map_err(Into::into)
             }
             VceCancelOutcome::Committing => Err(String::from(
                 "VCE checkpoint is committing; cancellation cannot undo publication",
             )),
             // The completed batch cannot be undone, but cancellation must still remove its pending successor.
             // 已完成批次不能撤销，但取消仍必须移除其待执行后续批次。
-            VceCancelOutcome::Finished => {
-                job.persist(&job.store, |receipt| receipt.followup_requested = false)
-                    .await
-            }
+            VceCancelOutcome::Finished => job
+                .persist(&job.store, |receipt| receipt.followup_requested = false)
+                .await
+                .map_err(Into::into),
         }
     }
 
@@ -2907,7 +2892,7 @@ impl VceRuntimeManager {
             let progress_store = store.clone();
             let persist_progress = move |
                 progress: VceRefreshProgress,
-            | -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+            | -> futures_util::future::BoxFuture<'static, Result<(), VceJobStoreError>> {
                 let job = Arc::clone(&progress_job);
                 let store = progress_store.clone();
                 Box::pin(async move {
@@ -2943,7 +2928,10 @@ impl VceRuntimeManager {
     ) -> Result<u64, String>
     where
         F: std::future::Future<Output = Result<u64, String>> + Send + 'static,
-        P: Fn(VceRefreshProgress) -> futures_util::future::BoxFuture<'static, Result<(), String>>
+        P: Fn(
+                VceRefreshProgress,
+            )
+                -> futures_util::future::BoxFuture<'static, Result<(), VceJobStoreError>>
             + Send
             + Sync
             + 'static,
@@ -2993,7 +2981,7 @@ impl VceRuntimeManager {
                         if let Err(error) =
                             persist_progress_with_retry(&persist_progress, progress.clone()).await
                         {
-                            if !is_transient_progress_persistence_error(&error) {
+                            if !error.is_busy() {
                                 control.cancel();
                             }
                             progress_error = Some(error);
@@ -3015,7 +3003,7 @@ impl VceRuntimeManager {
                             if let Err(error) =
                                 persist_progress_with_retry(&persist_progress, progress.clone()).await
                             {
-                                if !is_transient_progress_persistence_error(&error) {
+                                if !error.is_busy() {
                                     control.cancel();
                                 }
                                 progress_error = Some(error);
@@ -3044,15 +3032,11 @@ impl VceRuntimeManager {
         match (result, progress_error) {
             (Ok(checkpoint), None) => Ok(checkpoint),
             (Err(error), None) => Err(error),
-            (Ok(checkpoint), Some(error)) if is_transient_progress_persistence_error(&error) => {
-                Ok(checkpoint)
-            }
+            (Ok(checkpoint), Some(error)) if error.is_busy() => Ok(checkpoint),
             (Ok(_), Some(error)) => Err(format!(
                 "VCE checkpoint completed but progress persistence failed: {error}"
             )),
-            (Err(execution), Some(error)) if is_transient_progress_persistence_error(&error) => {
-                Err(execution)
-            }
+            (Err(execution), Some(error)) if error.is_busy() => Err(execution),
             (Err(execution), Some(error)) => {
                 Err(format!("{execution}; persist VCE job progress: {error}"))
             }

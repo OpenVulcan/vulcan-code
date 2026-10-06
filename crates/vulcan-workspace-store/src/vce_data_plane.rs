@@ -54,7 +54,7 @@ mod jobs;
 pub use jobs::{
     VCE_JOB_RECEIPT_SCHEMA_VERSION, VceCompactionJobReceipt, VceCompactionMetrics,
     VceCompactionTableReceipt, VceCompactionTableState, VceCompletedJobUpdate, VceJobKind,
-    VceJobReplacement, VceJobState, VceProjectJobStore, VceStoredJob,
+    VceJobReplacement, VceJobState, VceJobStoreError, VceProjectJobStore, VceStoredJob,
 };
 
 #[path = "vce_embedding_provenance.rs"]
@@ -3341,6 +3341,40 @@ impl VceDataPlaneHandle {
                 .map_err(|error| format!("查询 VCE SQLite 失败：{error}"))?;
         serde_json::from_str(&result.json_data)
             .map_err(|error| format!("解析 VCE SQLite 查询结果失败：{error}"))
+    }
+
+    /// Executes one statement and keeps SQLite's typed failure for callers that classify it.
+    /// 执行一条语句，并为需要分类的调用方保留 SQLite 类型化失败。
+    async fn execute_classified(
+        &self,
+        sql: &str,
+        params: Vec<SqliteValue>,
+    ) -> Result<(), local_sql::typed::LocalSqlError> {
+        local_sql::typed::execute_script_async(
+            &self.local_runtime,
+            &self.sqlite_binding,
+            sql.to_owned(),
+            params,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Queries rows as JSON text and keeps SQLite's typed failure for callers that classify it.
+    /// 以 JSON 文本查询行，并为需要分类的调用方保留 SQLite 类型化失败。
+    async fn query_json_classified(
+        &self,
+        sql: &str,
+        params: Vec<SqliteValue>,
+    ) -> Result<String, local_sql::typed::LocalSqlError> {
+        local_sql::typed::query_json_async(
+            &self.local_runtime,
+            &self.sqlite_binding,
+            sql.to_owned(),
+            params,
+        )
+        .await
+        .map(|result| result.json_data)
     }
 
     /// Validate an operation belongs to the physical project's exact owner.

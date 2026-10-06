@@ -975,12 +975,12 @@ fn supervised_execution_keeps_polling_during_progress_persistence() {
             let persistence_started_signal = Arc::clone(&persistence_started);
             let persist_progress = move |
                 _progress: VceRefreshProgress,
-            | -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+            | -> futures_util::future::BoxFuture<'static, Result<(), VceJobStoreError>> {
                 persistence_started_signal.notify_one();
                 let persistence_gate = Arc::clone(&persistence_gate);
                 Box::pin(async move {
                     let _gate = persistence_gate.lock().await;
-                    Ok::<(), String>(())
+                    Ok::<(), VceJobStoreError>(())
                 })
             };
             let supervisor = tokio::spawn(VceRuntimeManager::supervise_job_execution(
@@ -1105,11 +1105,11 @@ fn transient_progress_persistence_is_retried() {
         let persist_progress = {
             let attempts = Arc::clone(&attempts);
             move |_progress: VceRefreshProgress|
-                    -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+                    -> futures_util::future::BoxFuture<'static, Result<(), VceJobStoreError>> {
                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async move {
                         if attempt == 0 {
-                            Err(String::from(
+                            Err(VceJobStoreError::busy(
                                 "Update VCE job receipt: sqlite execute failed: database is locked",
                             ))
                         } else {
@@ -1154,7 +1154,7 @@ fn supervised_execution_rethrows_worker_panics() {
             let (_progress_sender, progress_receiver) = watch::channel(None);
             let persist_progress = move |
                 _progress: VceRefreshProgress,
-            | -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+            | -> futures_util::future::BoxFuture<'static, Result<(), VceJobStoreError>> {
                 Box::pin(async { Ok(()) })
             };
             let panic = AssertUnwindSafe(VceRuntimeManager::supervise_job_execution(

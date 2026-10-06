@@ -27,13 +27,76 @@ const VCE_RECEIPT_CONFIRM_RETRIES: usize = 7;
 /// SQLite 返回忙状态后进行有界回执收敛时使用的基础延迟。
 const VCE_RECEIPT_CONFIRM_RETRY_BASE_MS: u64 = 250;
 
-/// Identify SQLite busy failures that are safe to reconcile after an ambiguous receipt operation.
-/// 识别可以在回执操作结果不明确时收敛处理的 SQLite 忙错误。
-fn is_retryable_receipt_storage_error(error: &str) -> bool {
-    let normalized = error.to_ascii_lowercase();
-    normalized.contains("database is locked")
-        || normalized.contains("database busy")
-        || normalized.contains("sqlite_busy")
+/// A job-store failure whose busy signal comes from SQLite's result code, never from its text.
+/// 作业存储失败；其忙信号来自 SQLite 结果码，绝不来自文本。
+///
+/// The display text is unchanged from the former string errors, so callers that only report it
+/// keep converting with `?` through `From<VceJobStoreError> for String`.
+/// 展示文本与原字符串错误一致，只负责上报的调用方仍可经 `From<VceJobStoreError> for String`
+/// 使用 `?` 转换。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VceJobStoreError {
+    /// Complete diagnostic text, including the storage context.
+    /// 完整诊断文本，包含存储上下文。
+    message: String,
+    /// Whether SQLite answered busy or locked, so the same work may succeed on a later attempt.
+    /// SQLite 是否回复忙或已锁定，即同一工作在后续尝试中可能成功。
+    busy: bool,
+}
+
+impl VceJobStoreError {
+    /// Wraps one typed SQLite failure under `context`, keeping its busy classification.
+    /// 以 `context` 包装一次类型化 SQLite 失败，并保留其忙分类。
+    fn storage(context: &str, error: crate::local_sql::typed::LocalSqlError) -> Self {
+        Self {
+            busy: error.is_busy(),
+            message: format!("{context}：{error}"),
+        }
+    }
+
+    /// Builds a busy failure for job-store test doubles that cannot provoke real SQLite contention.
+    /// 为无法制造真实 SQLite 竞争的作业存储测试替身构建忙失败。
+    pub fn busy(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            busy: true,
+        }
+    }
+
+    /// Reports whether the store was busy rather than the operation being invalid.
+    /// 报告存储是否处于忙状态，而非操作本身无效。
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+}
+
+impl std::fmt::Display for VceJobStoreError {
+    /// Writes the complete diagnostic text.
+    /// 写出完整诊断文本。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for VceJobStoreError {}
+
+impl From<String> for VceJobStoreError {
+    /// Domain and validation failures are never busy.
+    /// 领域与校验失败绝不属于忙。
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            busy: false,
+        }
+    }
+}
+
+impl From<VceJobStoreError> for String {
+    /// Keeps reporting-only callers on their existing string errors.
+    /// 让只负责上报的调用方继续使用既有字符串错误。
+    fn from(error: VceJobStoreError) -> Self {
+        error.message
+    }
 }
 
 /// Calculate exponential backoff without allowing one ambiguous write to spin.
@@ -1023,7 +1086,7 @@ impl VceProjectJobStore {
     ///
     /// `job_id` is the exact displayed identity. Returns a validated receipt or absence.
     /// `job_id` 是精确显示身份。返回已校验回执或空值。
-    pub async fn get(&self, job_id: &str) -> Result<Option<VceStoredJob>, String> {
+    pub async fn get(&self, job_id: &str) -> Result<Option<VceStoredJob>, VceJobStoreError> {
         if !self.table_exists().await? {
             return Ok(None);
         }
@@ -1042,14 +1105,11 @@ impl VceProjectJobStore {
     pub async fn get_after_storage_retry(
         &self,
         job_id: &str,
-    ) -> Result<Option<VceStoredJob>, String> {
+    ) -> Result<Option<VceStoredJob>, VceJobStoreError> {
         for attempt in 0..=VCE_RECEIPT_CONFIRM_RETRIES {
             match self.get(job_id).await {
                 Ok(receipt) => return Ok(receipt),
-                Err(error)
-                    if is_retryable_receipt_storage_error(&error)
-                        && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
-                {
+                Err(error) if error.is_busy() && attempt < VCE_RECEIPT_CONFIRM_RETRIES => {
                     tokio::time::sleep(receipt_retry_delay(attempt)).await;
                 }
                 Err(error) => return Err(error),
@@ -1090,7 +1150,10 @@ impl VceProjectJobStore {
             .checked_add(1)
             .ok_or_else(|| String::from("VCE job interruption sequence overflow"))?;
         next.updated_at_unix_ms = now.max(previous.updated_at_unix_ms);
-        self.update(&previous, &next).await.map(Some)
+        self.update(&previous, &next)
+            .await
+            .map(Some)
+            .map_err(Into::into)
     }
 
     /// Settle a receipt whose executor has ended, using exact committed refresh evidence.
@@ -1165,7 +1228,11 @@ impl VceProjectJobStore {
                     .sequence
                     .checked_add(1)
                     .ok_or("VCE job sequence overflow")?;
-                return self.update(&previous, &finished).await.map(Some);
+                return self
+                    .update(&previous, &finished)
+                    .await
+                    .map(Some)
+                    .map_err(Into::into);
             }
         }
         self.interrupt_unfinished("VCE executor ended before a complete job publication could be confirmed; stored index data has been preserved").await
@@ -1184,7 +1251,7 @@ impl VceProjectJobStore {
             "SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? AND idempotency_key = ?;",
             key,
         )
-        .await
+        .await.map_err(Into::into)
     }
 
     /// Resolve a primary or coalesced submission without creating storage or executing work.
@@ -1337,7 +1404,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         if !self.table_exists().await? {
             return Ok(None);
         }
-        self.read_receipt("SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? ORDER BY created_at_unix_ms DESC, job_id DESC LIMIT 1;", vec![sqlite_text(&self.project_id)]).await
+        self.read_receipt("SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? ORDER BY created_at_unix_ms DESC, job_id DESC LIMIT 1;", vec![sqlite_text(&self.project_id)]).await.map_err(Into::into)
     }
 
     /// Read the latest successful content batch, even if a later batch in that job failed.
@@ -1350,7 +1417,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         }
         // The only freshness authority is a fully published batch, including one retained after failure.
         // 唯一新鲜度权威是完全发布的批次，包括失败后保留的成功批次。
-        self.read_receipt("SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? AND json_extract(snapshot_json, '$.completed_update') IS NOT NULL ORDER BY json_extract(snapshot_json, '$.completed_update.at_unix_ms') DESC, job_id DESC LIMIT 1;", vec![sqlite_text(&self.project_id)]).await
+        self.read_receipt("SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? AND json_extract(snapshot_json, '$.completed_update') IS NOT NULL ORDER BY json_extract(snapshot_json, '$.completed_update.at_unix_ms') DESC, job_id DESC LIMIT 1;", vec![sqlite_text(&self.project_id)]).await.map_err(Into::into)
     }
 
     /// Find the sole unfinished owner before an explicit new job can be admitted.
@@ -1362,7 +1429,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         if !self.table_exists().await? {
             return Ok(None);
         }
-        self.read_receipt("SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? AND json_extract(snapshot_json, '$.state') IN ('queued', 'running', 'cancelling') LIMIT 2;", vec![sqlite_text(&self.project_id)]).await
+        self.read_receipt("SELECT project_id, job_id, owner_run_id, idempotency_key, request_fingerprint, sequence, created_at_unix_ms, updated_at_unix_ms, snapshot_json FROM vce_host_jobs WHERE project_id = ? AND json_extract(snapshot_json, '$.state') IN ('queued', 'running', 'cancelling') LIMIT 2;", vec![sqlite_text(&self.project_id)]).await.map_err(Into::into)
     }
 
     /// Persist a monotonic update only if the exact prior receipt still owns the job.
@@ -1376,7 +1443,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         &self,
         previous: &VceStoredJob,
         next: &VceStoredJob,
-    ) -> Result<VceStoredJob, String> {
+    ) -> Result<VceStoredJob, VceJobStoreError> {
         self.validate_owner(previous)?;
         self.validate_owner(next)?;
         if let (Some(previous_compaction), Some(next_compaction)) =
@@ -1422,7 +1489,8 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         {
             return Err(String::from(
                 "VCE job update violates immutable ownership or terminal state",
-            ));
+            )
+            .into());
         }
         // current guards against stale same-sequence receipts before the database compare-and-swap.
         // current 在数据库比较交换前防止相同序号的过期回执。
@@ -1431,7 +1499,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
             .await?
             .ok_or_else(|| String::from("VCE job to update does not exist"))?;
         if current != *previous {
-            return Err(String::from("VCE job receipt changed before update"));
+            return Err(String::from("VCE job receipt changed before update").into());
         }
         let serialized = serde_json::to_string(next)
             .map_err(|error| format!("Encode VCE job update: {error}"))?;
@@ -1447,15 +1515,15 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         for attempt in 0..=VCE_RECEIPT_CONFIRM_RETRIES {
             match self
                 .data_plane
-                .execute(
+                .execute_classified(
                     "UPDATE vce_host_jobs SET sequence = ?, snapshot_json = ?, updated_at_unix_ms = ? WHERE project_id = ? AND job_id = ? AND sequence = ? AND owner_run_id = ?;",
                     update_params.clone(),
-                    "Update VCE job receipt",
                 )
                 .await
+                .map_err(|error| VceJobStoreError::storage("Update VCE job receipt", error))
             {
                 Ok(()) => break,
-                Err(error) if is_retryable_receipt_storage_error(&error) => {
+                Err(error) if error.is_busy() => {
                     // The write may already have committed; reconcile before attempting it again.
                     // 写入可能已经提交，重试写入前先读取并收敛到已提交结果。
                     match self.get_after_storage_retry(&next.job_id).await {
@@ -1467,12 +1535,13 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
                         }
                         Ok(Some(receipt)) if receipt == *previous => return Err(error),
                         Ok(Some(_)) => {
-                            return Err(String::from("VCE job receipt changed during update"));
+                            return Err(String::from("VCE job receipt changed during update").into());
                         }
-                        Ok(None) => return Err(String::from("VCE job to update does not exist")),
+                        Ok(None) => {
+                            return Err(String::from("VCE job to update does not exist").into());
+                        }
                         Err(read_error)
-                            if is_retryable_receipt_storage_error(&read_error)
-                                && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
+                            if read_error.is_busy() && attempt < VCE_RECEIPT_CONFIRM_RETRIES =>
                         {
                             tokio::time::sleep(receipt_retry_delay(attempt)).await;
                         }
@@ -1487,7 +1556,7 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
             .await?
             .ok_or_else(|| String::from("VCE updated job receipt is missing"))?;
         if persisted != *next {
-            return Err(String::from("VCE job receipt changed during update"));
+            return Err(String::from("VCE job receipt changed during update").into());
         }
         Ok(persisted)
     }
@@ -1510,8 +1579,8 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
     ///
     /// Takes no parameters. Returns false for an index that has never admitted a host job.
     /// 无参数。从未准入宿主作业的索引返回假。
-    async fn table_exists(&self) -> Result<bool, String> {
-        let rows: Vec<CountRow> = self.data_plane.query_rows("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'vce_host_jobs';", Vec::new()).await?;
+    async fn table_exists(&self) -> Result<bool, VceJobStoreError> {
+        let rows: Vec<CountRow> = self.classified_rows("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'vce_host_jobs';", Vec::new()).await?;
         Ok(rows.first().is_some_and(|row| row.count == 1))
     }
 
@@ -1520,7 +1589,11 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
     ///
     /// `sql` is one repository-owned query and `key` its exact lookup identity. Returns zero or one receipt.
     /// `sql` 是仓库自有查询，`key` 是其精确查找身份。返回零或一个回执。
-    async fn read_one(&self, sql: &str, key: &str) -> Result<Option<VceStoredJob>, String> {
+    async fn read_one(
+        &self,
+        sql: &str,
+        key: &str,
+    ) -> Result<Option<VceStoredJob>, VceJobStoreError> {
         self.read_receipt(sql, vec![sqlite_text(&self.project_id), sqlite_text(key)])
             .await
     }
@@ -1534,10 +1607,10 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
         &self,
         sql: &str,
         params: Vec<SqliteValue>,
-    ) -> Result<Option<VceStoredJob>, String> {
-        let rows: Vec<JobRow> = self.data_plane.query_rows(sql, params).await?;
+    ) -> Result<Option<VceStoredJob>, VceJobStoreError> {
+        let rows: Vec<JobRow> = self.classified_rows(sql, params).await?;
         if rows.len() > 1 {
-            return Err(String::from("VCE job query returned duplicate ownership"));
+            return Err(String::from("VCE job query returned duplicate ownership").into());
         }
         rows.first()
             .map(|row| {
@@ -1560,6 +1633,23 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
                 Ok(job)
             })
             .transpose()
+            .map_err(Into::into)
+    }
+
+    /// Queries receipt rows while keeping SQLite's busy classification for reconciliation.
+    /// 查询回执行，同时为收敛保留 SQLite 忙分类。
+    async fn classified_rows<T: for<'de> Deserialize<'de>>(
+        &self,
+        sql: &str,
+        params: Vec<SqliteValue>,
+    ) -> Result<Vec<T>, VceJobStoreError> {
+        let json = self
+            .data_plane
+            .query_json_classified(sql, params)
+            .await
+            .map_err(|error| VceJobStoreError::storage("查询 VCE SQLite 失败", error))?;
+        serde_json::from_str(&json)
+            .map_err(|error| format!("解析 VCE SQLite 查询结果失败：{error}").into())
     }
 }
 
@@ -1688,21 +1778,6 @@ mod tests {
             completed_update: None,
             error: None,
         }
-    }
-
-    // SQLite lock conflicts require receipt reconciliation, not blind duplicate writes.
-    // SQLite 锁冲突必须走回执收敛，而不是盲目重复写入。
-    #[test]
-    fn receipt_reconciliation_recognizes_sqlite_lock_conflicts() {
-        assert!(is_retryable_receipt_storage_error(
-            "Update VCE job receipt: sqlite execute failed: database is locked"
-        ));
-        assert!(!is_retryable_receipt_storage_error(
-            "storage engine returned an invalid receipt"
-        ));
-        assert!(!is_retryable_receipt_storage_error(
-            "VCE job receipt has invalid ownership"
-        ));
     }
 
     /// Reject a durable receipt whose whole-job progress exceeds its declared denominator.

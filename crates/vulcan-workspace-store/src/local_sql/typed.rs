@@ -36,6 +36,16 @@ pub enum LocalSqlError {
 }
 
 impl LocalSqlError {
+    /// Reports whether SQLite answered busy or locked, whether during open or execution.
+    /// 报告 SQLite 在打开或执行期间是否回复忙或已锁定。
+    pub fn is_busy(&self) -> bool {
+        match self {
+            Self::Engine(error)
+            | Self::Database(LocalDatabaseError::Sqlite { source: error, .. }) => error.is_busy(),
+            _ => false,
+        }
+    }
+
     /// Returns a stable machine code independent of the diagnostic message; takes only this error.
     /// 仅接收当前错误，返回不依赖诊断文案的稳定机器码。
     pub fn code(&self) -> &'static str {
@@ -169,6 +179,34 @@ pub async fn query_json_bounded_until_async(
             return Err(LocalSqlError::DeadlineExceeded);
         }
         result.map_err(Into::into)
+    })
+    .await
+}
+
+/// Executes sql with params on target without a deadline; returns the engine result or typed failure.
+/// 在目标上无截止时间地执行 SQL 与参数；返回引擎结果或类型化失败。
+pub async fn execute_script_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<SqliteValue>,
+) -> Result<sql_exec::ExecuteScriptResult, LocalSqlError> {
+    with_connection_until_async(runtime, target, None, move |connection| {
+        sql_exec::execute_script(connection, &sql, &params).map_err(Into::into)
+    })
+    .await
+}
+
+/// Queries sql with params on target without a deadline; returns JSON rows or typed failure.
+/// 在目标上无截止时间地查询 SQL 与参数；返回 JSON 行或类型化失败。
+pub async fn query_json_async(
+    runtime: &Arc<LocalDatabaseRuntime>,
+    target: impl Into<OwnedDatabaseTarget>,
+    sql: String,
+    params: Vec<SqliteValue>,
+) -> Result<QueryJsonResult, LocalSqlError> {
+    with_connection_until_async(runtime, target, None, move |connection| {
+        sql_exec::query_json(connection, &sql, &params).map_err(Into::into)
     })
     .await
 }

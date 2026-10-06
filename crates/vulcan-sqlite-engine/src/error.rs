@@ -186,4 +186,60 @@ impl SqliteEngineError {
             detail: detail.into(),
         }
     }
+
+    /// Reports whether SQLite itself answered busy or locked, so the same work may succeed later.
+    /// 报告 SQLite 本身是否回复忙或已锁定，即同一工作稍后可能成功。
+    ///
+    /// The decision reads SQLite's result code and never the rendered message.
+    /// 判定读取 SQLite 结果码，绝不读取渲染后的消息。
+    pub fn is_busy(&self) -> bool {
+        match self {
+            Self::Sql { source } | Self::BatchItem { source, .. } => rusqlite_is_busy(source),
+            Self::Open { source, .. } => source
+                .downcast_ref::<rusqlite::Error>()
+                .is_some_and(rusqlite_is_busy),
+            _ => false,
+        }
+    }
+}
+
+/// Matches the two SQLite result codes that mean another connection holds the database.
+/// 匹配表示另一连接持有数据库的两个 SQLite 结果码。
+fn rusqlite_is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A second connection blocked by an exclusive writer is busy; a malformed statement is not.
+    /// 被独占写入者阻塞的第二个连接属于忙；格式错误的语句则不属于。
+    #[test]
+    fn busy_is_decided_by_the_sqlite_result_code() {
+        let directory = tempfile::tempdir().expect("temporary database directory");
+        let path = directory.path().join("busy.sqlite");
+        let holder = rusqlite::Connection::open(&path).expect("open holder connection");
+        holder
+            .execute_batch("CREATE TABLE t(v INTEGER); BEGIN EXCLUSIVE;")
+            .expect("hold the database exclusively");
+        let contender = rusqlite::Connection::open(&path).expect("open contending connection");
+        contender
+            .busy_timeout(std::time::Duration::ZERO)
+            .expect("fail immediately on contention");
+
+        let blocked = contender
+            .execute("INSERT INTO t(v) VALUES (1)", [])
+            .expect_err("the exclusive holder must block the write");
+        assert!(SqliteEngineError::sql(blocked).is_busy());
+
+        let malformed = contender
+            .execute("NOT A STATEMENT", [])
+            .expect_err("malformed SQL must fail");
+        assert!(!SqliteEngineError::sql(malformed).is_busy());
+        assert!(!SqliteEngineError::invalid_argument("empty").is_busy());
+    }
 }
