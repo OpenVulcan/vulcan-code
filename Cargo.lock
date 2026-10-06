@@ -691,10 +691,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
- "sha1 0.10.7",
+ "sha1",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite 0.29.0",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -7588,17 +7588,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha1"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.0",
- "digest 0.11.3",
-]
-
-[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8263,24 +8252,12 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
- "tokio",
- "tungstenite 0.29.0",
-]
-
-[[package]]
-name = "tokio-tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
-dependencies = [
- "futures-util",
- "log",
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
- "tungstenite 0.30.0",
+ "tungstenite",
 ]
 
 [[package]]
@@ -8521,21 +8498,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tower-http"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b11f75e912b0c2be01b63d8cf8057b8c3f97cf34abb3d431a3a4c8675498e233"
-dependencies = [
- "bitflags 2.13.1",
- "bytes",
- "http",
- "percent-encoding",
- "pin-project-lite",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8661,25 +8623,9 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
- "sha1 0.10.7",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.10.2",
  "rustls",
  "rustls-pki-types",
- "sha1 0.11.0",
+ "sha1",
  "thiserror 2.0.20",
 ]
 
@@ -9093,13 +9039,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vulcan-hello"
-version = "0.1.0"
-dependencies = [
- "workspace-hack",
-]
-
-[[package]]
 name = "vulcan-hooks"
 version = "0.1.0"
 dependencies = [
@@ -9164,7 +9103,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite 0.30.0",
+ "tokio-tungstenite",
  "vulcan-ai-contract",
  "workspace-hack",
 ]
@@ -9354,7 +9293,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "tokio-tungstenite 0.30.0",
+ "tokio-tungstenite",
  "tokio-util",
  "uuid",
  "vulcan-ai-contract",
@@ -9437,7 +9376,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
- "tower-http 0.7.0",
+ "tower-http 0.6.11",
  "uuid",
  "vulcan-service-api",
  "workspace-hack",
@@ -10486,7 +10425,6 @@ dependencies = [
  "prost-types",
  "pulldown-cmark",
  "quote",
- "rand 0.10.2",
  "regex",
  "regex-automata",
  "regex-syntax",
@@ -10515,6 +10453,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tokio-tungstenite",
  "tokio-util",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
@@ -10522,6 +10461,7 @@ dependencies = [
  "tower",
  "tower-http 0.6.11",
  "tracing",
+ "tungstenite",
  "twox-hash",
  "typenum",
  "url",

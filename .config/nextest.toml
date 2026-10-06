@@ -16,3 +16,18 @@ test(/provider_manifest|bundled_manifest|bind_ports|loopback|websocket|tcp_liste
 | (package(vulcan-service-kernel) & test(registry))
 '''
 test-group = "shared-runtime-resources"
+
+# The fast profile is the local inner-loop entry (`make test`). It skips tests whose cost is real
+# elapsed time or full plugin lifecycles (measured at 13–200 s each); `make test full` runs them.
+# fast 配置是本地内循环入口（`make test`）。它跳过成本来自真实流逝时间或完整插件生命周期的测试
+# （实测每项 13–200 秒）；`make test full` 会执行它们。
+[profile.fast]
+default-filter = '''
+not (package(vulcan-service-kernel) & (
+    test(/^native_vmm::driver::lexical_driver_tests::real_controller_(lexical_driver_pages|replacement_policy|hybrid_policy|precheck_history_policy|weibull_policy)/)
+    | test(/^skills_services::vulcan_plugin_lifecycle::generation_tests::published::/)
+    | test(/^skills_services::legacy_secret_mutation_tests::/)
+    | test(/^skills_services::local_plugin_update::target_handoff::predecessor_restoration::/)
+    | test(/::real_host_storage_(hundred_cold_projects|human_jobs)/)
+))
+'''

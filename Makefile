@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release service core-build core-restart br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync vite start stop status build build-release release run run-release service core-build core-restart br br-release licenses test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -75,6 +75,8 @@ help:
 	@echo "  make br            # build Core/WebUI/Electron and run desktop with Vite"
 	@echo "  make br-release    # build Core/WebUI/Electron and run desktop"
 	@echo "  make licenses      # generate Rust third-party notices"
+	@echo "  make test          # Rust tests without long real-time and plugin-lifecycle tests"
+	@echo "  make test full     # every Rust test, isolated LuaSkills callbacks, and doctests"
 	@echo "  make deps          # install host, bundled tools, and Lua dependencies"
 	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
 	@echo "  make deps-host     # install host dependencies"
@@ -183,6 +185,21 @@ br-release:
 # licenses 路由 Rust 第三方声明生成命令。
 licenses:
 	$(call route-command,licenses)
+
+# test routes the fast Rust suite, or the full suite when the full companion goal is present.
+# test 默认路由快速 Rust 测试，存在 full 伴随目标时路由完整测试。
+test:
+	$(call route-command,$(if $(filter full,$(MAKECMDGOALS)),test full,test))
+
+# full is a companion no-op for `make test full` and rejects ambiguous standalone use.
+# full 在 `make test full` 中作为伴随空目标，并拒绝含义不明确的单独调用。
+full:
+ifneq ($(filter test,$(MAKECMDGOALS)),)
+	@:
+else
+	@echo "Use 'make test full'." >&2
+	@exit 2
+endif
 
 # deps routes all dependency installation steps.
 # deps 路由全部依赖安装步骤。

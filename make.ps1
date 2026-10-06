@@ -335,6 +335,8 @@ function Show-Usage {
     Write-Host "  ./make release     # Core/Electron/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
+    Write-Host "  ./make test        # Rust tests without long real-time and plugin-lifecycle tests"
+    Write-Host "  ./make test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
     Write-Host "  ./make run         # run Electron desktop; start Vite when needed"
     Write-Host "  ./make run release # run Core/Electron/WebUI release build"
     Write-Host "  ./make service     # start the tray/background Core only"
@@ -423,6 +425,16 @@ switch ($NormalizedMode) {
             exit 1
         }
         Invoke-RustDependencyCheck
+    }
+    "test" {
+        if ($NormalizedVariant -ne "" -and $NormalizedVariant -ne "full") {
+            Write-Error "Unsupported test command: '$CommandVariant'"
+            Show-Usage
+            exit 1
+        }
+        $TestMode = if ($NormalizedVariant -eq "full") { "full" } else { "fast" }
+        & node (Join-Path $ScriptDir 'scripts/test-rust.mjs') $TestMode
+        exit $LASTEXITCODE
     }
     "run" {
         if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {

@@ -6,6 +6,10 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+# Integration tests are declared explicitly as one suite binary (tests/suite.rs).
+# 集成测试显式声明为单一套件二进制（tests/suite.rs）。
+autotests = false
+
 [dependencies]
 hex.workspace = true
 serde.workspace = true
@@ -16,3 +20,7 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"

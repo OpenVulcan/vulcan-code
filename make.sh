@@ -182,6 +182,8 @@ show_usage() {
     echo "  ./make.sh release     # Core/Electron/WebUI release build"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
+    echo "  ./make.sh test        # Rust tests without long real-time and plugin-lifecycle tests"
+    echo "  ./make.sh test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
     echo "  ./make.sh run         # run Electron desktop; start Vite when needed"
     echo "  ./make.sh run release # run Core/Electron/WebUI release build"
     echo "  ./make.sh service     # start the tray/background Core only"
@@ -267,6 +269,17 @@ case "$NormalizedMode" in
             exit 1
         fi
         invoke_powershell_route check-deps
+        ;;
+    test)
+        case "$NormalizedVariant" in
+            "") node "$ScriptDir/scripts/test-rust.mjs" fast ;;
+            full) node "$ScriptDir/scripts/test-rust.mjs" full ;;
+            *)
+                echo "Unsupported test command: '$CommandVariant'" >&2
+                show_usage
+                exit 1
+                ;;
+        esac
         ;;
     service)
         # Select one explicit build profile for the background-only entry point.
