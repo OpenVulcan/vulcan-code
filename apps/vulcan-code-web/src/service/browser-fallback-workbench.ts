@@ -604,7 +604,6 @@ export function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnap
     version: skill.version,
     name: skill.displayName,
     kind: `LuaSkill / ${skill.rootName}`,
-    status: skill.enabled ? "已启用" : "已停用",
     runtimeState: skill.enabled ? "enabled" : "disabled",
     capability: `${skill.entryCount} 个入口`,
     nameByLocale: {},

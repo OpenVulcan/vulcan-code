@@ -24,7 +24,7 @@ vi.mock("@/service/core-browser-service", () => ({ getCoreBrowserRuntimeStatus: 
 // 输入为服务状态键；返回包含一行 MCP 投影的已启用浏览器插件。
 function browserPlugin(status: string): PluginSummary {
   return {
-    id: "vulcan-browser", name: "Browser", kind: "plugin", status: "enabled", runtimeState: "enabled",
+    id: "vulcan-browser", name: "Browser", kind: "plugin", runtimeState: "enabled",
     capability: "Browser tools", nameByLocale: {}, capabilityByLocale: {}, enabled: true, desiredEnabled: true,
     available: true, toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
     diagnostics: [], managementKind: "vulcanPlugin", extension: {

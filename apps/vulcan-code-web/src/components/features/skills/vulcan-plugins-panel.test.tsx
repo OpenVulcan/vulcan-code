@@ -17,7 +17,7 @@ vi.mock("@/service/core-browser-service", () => ({
 }));
 // plugin is a complete disabled user-installed package without real runtime or external connections.
 // plugin 是完整的已停用用户安装包，不使用真实运行时或外部连接。
-const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", status: "disabled", runtimeState: "disabled",
+const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", runtimeState: "disabled",
   capability: "Synthetic", nameByLocale: {}, capabilityByLocale: {}, enabled: false, desiredEnabled: false,
   available: true, toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
   diagnostics: [], managementKind: "vulcanPlugin", extension: { runtimeIdentity: "fixture:1", origin: "userInstalled", permissions: [], hooks: [],

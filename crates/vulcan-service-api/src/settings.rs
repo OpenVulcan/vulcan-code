@@ -251,9 +251,6 @@ pub struct PluginSummary {
     /// Plugin kind such as LuaSkill or native Rust.
     /// 插件类型，例如 LuaSkill 或原生 Rust。
     pub kind: String,
-    /// Plugin lifecycle status.
-    /// 插件生命周期状态。
-    pub status: String,
     /// Stable machine-readable runtime lifecycle state.
     /// 稳定的机器可读运行时生命周期状态。
     #[serde(default)]
@@ -768,7 +765,6 @@ mod plugin_summary_tests {
             version: Some(String::from("1.0.0")),
             name: String::from("Hook-only Plugin"),
             kind: String::from("Vulcan Plugin"),
-            status: String::from("已启用"),
             runtime_state: String::from("enabled"),
             capability: String::from("Host hook integration"),
             name_by_locale: BTreeMap::new(),

@@ -16,7 +16,7 @@ vi.mock("@/service/webui-service-runtime", () => ({ hasServiceRuntime: () => tru
 vi.mock("@/service/plugin-resource-diagnostics-service", () => ({ readPluginResourceDiagnostics: vi.fn() }));
 // plugin carries a real routing identity distinct from its package version.
 // plugin 携带与包版本区分的真实路由身份。
-const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", status: "disabled", runtimeState: "disabled", version: "2.0.0",
+const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", runtimeState: "disabled", version: "2.0.0",
   capability: "Synthetic", nameByLocale: {}, capabilityByLocale: {}, enabled: false, desiredEnabled: false, available: true,
   toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 17, diagnostics: [], managementKind: "vulcanPlugin",
   extension: { runtimeIdentity: "epoch-original:9007199254740993", origin: "userInstalled", permissions: [], hooks: [], actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: true, mcpServers: [] } };

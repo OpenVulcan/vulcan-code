@@ -306,7 +306,6 @@ export async function setVulcanPluginEnabled(pluginId: string, enabled: boolean)
       const plugin = snapshot.plugins.find((item) => item.id === pluginId && item.managementKind === "vulcanPlugin");
       if (plugin) {
         plugin.enabled = enabled;
-        plugin.status = enabled ? "已启用" : "已停用";
       }
     }));
   }

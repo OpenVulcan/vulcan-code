@@ -38,18 +38,12 @@ pub(crate) fn plugins_from_catalogs(
             version: Some(skill.version.clone()),
             name: skill.display_name.clone(),
             kind: format!("LuaSkill / {}", skill.root_name),
-            status: if skill.enabled {
-                "已启用"
-            } else {
-                "已停用"
-            }
-            .to_string(),
             runtime_state: if skill.enabled {
                 String::from("enabled")
             } else {
                 String::from("disabled")
             },
-            capability: format!("{} 个入口：{}", skill.entry_count, skill.capability),
+            capability: skill.capability.clone(),
             name_by_locale: BTreeMap::new(),
             capability_by_locale: BTreeMap::new(),
             enabled: skill.enabled,
@@ -84,18 +78,14 @@ pub(crate) fn plugins_from_catalogs(
             plugin.availability,
             VulcanPluginAvailability::Enabled | VulcanPluginAvailability::Disabled
         );
-        let (runtime_state, status) = match plugin.runtime_state {
-            VulcanPluginRuntimeState::Enabled => ("enabled", "已启用"),
-            VulcanPluginRuntimeState::Disabled => ("disabled", "已停用"),
-            VulcanPluginRuntimeState::Enabling => ("enabling", "正在启用"),
-            VulcanPluginRuntimeState::Draining => ("draining", "正在排空会话"),
-            VulcanPluginRuntimeState::DisabledWithCleanupWarning => {
-                ("disabledWithCleanupWarning", "已停用（清理警告）")
-            }
-            VulcanPluginRuntimeState::UnsupportedPlatform => {
-                ("unsupportedPlatform", "当前平台不支持")
-            }
-            VulcanPluginRuntimeState::Unavailable => ("unavailable", "不可用"),
+        let runtime_state = match plugin.runtime_state {
+            VulcanPluginRuntimeState::Enabled => "enabled",
+            VulcanPluginRuntimeState::Disabled => "disabled",
+            VulcanPluginRuntimeState::Enabling => "enabling",
+            VulcanPluginRuntimeState::Draining => "draining",
+            VulcanPluginRuntimeState::DisabledWithCleanupWarning => "disabledWithCleanupWarning",
+            VulcanPluginRuntimeState::UnsupportedPlatform => "unsupportedPlatform",
+            VulcanPluginRuntimeState::Unavailable => "unavailable",
         };
         let (name, capability) = plugin.localized_display(
             provider_configuration
@@ -126,7 +116,6 @@ pub(crate) fn plugins_from_catalogs(
             } else {
                 String::from("Content Plugin")
             },
-            status: status.to_owned(),
             runtime_state: runtime_state.to_owned(),
             capability: capability.to_owned(),
             name_by_locale,

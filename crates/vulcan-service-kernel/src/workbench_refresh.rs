@@ -1513,7 +1513,6 @@ mod tests {
             version: Some(String::from("1.0.0")),
             name: String::from("Current Plugin"),
             kind: String::from("LuaSkill / USER"),
-            status: String::from("已启用"),
             runtime_state: String::from("enabled"),
             capability: String::from("1 个入口"),
             name_by_locale: BTreeMap::new(),

@@ -987,9 +987,6 @@ export interface PluginSummary {
   // Plugin kind such as LuaSkill or native Rust.
   // 插件类型，例如 LuaSkill 或原生 Rust。
   kind: string;
-  // Current plugin lifecycle status.
-  // 当前插件生命周期状态。
-  status: string;
   // Stable machine-readable runtime lifecycle state.
   // 稳定的机器可读运行时生命周期状态。
   runtimeState: string;

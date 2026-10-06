@@ -10,7 +10,6 @@ function plugin(overrides: Partial<WorkbenchSnapshot["plugins"][number]> = {}): 
     version: "0.1.0",
     name: "Vulcan Browser",
     kind: "Vulcan Plugin",
-    status: "enabled",
     runtimeState: "enabled",
     capability: "Core browser projection",
     enabled: true,
