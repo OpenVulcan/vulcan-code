@@ -1,0 +1,7 @@
+# Tests state their preconditions with unwrap/expect; the workspace `unwrap_used` lint targets
+# production paths only. Clippy reads the nearest clippy.toml without merging, so crates with
+# their own file repeat these two keys.
+# 测试用 unwrap/expect 声明前置条件；工作区 `unwrap_used` 只针对生产路径。Clippy 只读取最近的
+# clippy.toml 且不合并，因此拥有独立文件的 crate 需重复这两个键。
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

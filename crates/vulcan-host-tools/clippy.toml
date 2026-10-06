@@ -5,3 +5,8 @@ disallowed-methods = [
     { path = "std::process::Command::new", reason = "use vulcan_host_tools::process_creation::new_background_std_command" },
     { path = "tokio::process::Command::new", reason = "use vulcan_host_tools::process_creation::new_background_tokio_command" },
 ]
+
+# Mirrors the root clippy.toml; clippy does not merge configuration files.
+# 与根 clippy.toml 保持一致；clippy 不合并配置文件。
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
