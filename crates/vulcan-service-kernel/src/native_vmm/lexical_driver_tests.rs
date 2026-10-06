@@ -657,14 +657,66 @@ async fn verify_saved_cleanup_policy_on_real_storage(runtime: NativeVmmCoreRunti
     // 模拟端口没有注册能力；真实清洗不得尝试 AI 准入。
     assert!(!maintenance.host_ai_status().checked);
     project_retention_acceptance_tests::verify(&runtime, &maintenance).await;
+}
+
+/// Verifies both production cleanup workers against saved cadence on a private controller.
+/// 在私有控制器上验证两个生产清洗工作器遵循已保存的执行周期。
+/// The cadence is real elapsed time, so this test is excluded from the fast profile.
+/// 执行周期使用真实流逝时间，因此本测试不在 fast 配置中运行。
+#[test]
+fn real_controller_retention_workers_follow_saved_cadence() {
+    run_on_engine_stack(
+        "vmm-retention-workers",
+        real_controller_retention_workers_follow_saved_cadence_body,
+    );
+}
+
+/// Bootstraps a private runtime and maintenance facade, then hands both workers to the lifecycle acceptance.
+/// 引导私有运行时与维护门面，再将两个工作器交给生命周期验收。
+async fn real_controller_retention_workers_follow_saved_cadence_body() {
+    // Retain the isolated directory until the workers are aborted and joined.
+    // 保留隔离目录，直到工作器被中止并收回。
+    let (_temporary, controller) = isolated_controller().await;
+    // runtime uses the production bootstrap; the unregistered mock AI port must remain unused.
+    // runtime 使用生产引导；未注册能力的模拟 AI 端口必须保持未使用。
+    let runtime = NativeVmmCoreRuntime::bootstrap(
+        Arc::new(vulcan_ai_contract::test_support::MockHostAiPort::new()),
+        bootstrap_vmm_data_plane(&controller)
+            .await
+            .expect("worker data plane"),
+    )
+    .await
+    .expect("worker runtime");
+    // The fixture explicitly owns the vector generation of its scheduled record; no capability is registered.
+    // 夹具明确拥有其排期记录的向量代次；不注册任何能力。
+    runtime
+        .host
+        .data_plane
+        .ensure_vector_space("test-generation", 2, r#"{"fixture":"native-retention-v1"}"#)
+        .await
+        .expect("fixture vector binding");
+    let data_plane = runtime.host.data_plane.clone();
+    let runtime = Arc::new(runtime);
+    let maintenance = crate::native_vmm::NativeVmmMaintenance::new(
+        Arc::clone(&runtime),
+        data_plane,
+        Arc::new(tokio::sync::RwLock::new(())),
+    );
+    maintenance.set_native_backend_enabled(true);
+    let mut settings = runtime.retention_settings().await.expect("read cleanup");
+    settings.protected_memory_level_floor = 4;
+    maintenance
+        .update_retention_settings(settings)
+        .await
+        .expect("save protection floor");
     // A real terminal vector-bearing record is admitted only after the worker's initial pass finishes.
     // 真实带向量终态记录仅在工作器首轮完成后准入。
     let mut scheduled = indexed_memory(9300, "vmm-project:1");
     scheduled.embedding = Some(vec![0.6, 0.8]);
     scheduled.source_subject_id = Some(SubjectId::new("vmm-subject:1").expect("fixed subject"));
     scheduled.state = MemoryState::Deleted;
-    // Environment scope is protected independently of access class; use a level below the configured floor.
-    // 环境作用域的保护独立于访问类别；此处使用低于已配置保护阈值的等级。
+    // Environment scope is protected independently of access class; use a level below the saved floor.
+    // 环境作用域的保护独立于访问类别；此处使用低于已保存保护阈值的等级。
     scheduled.memory_level = MemoryLevel::Phase;
     crate::native_vmm::maintenance::retention_worker_tests::verify_worker_lifecycle(
         maintenance,
