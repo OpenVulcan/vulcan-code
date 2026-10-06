@@ -86,7 +86,7 @@ pub(super) async fn respond(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {chunk}\n\ndata: {terminal}\n\ndata: [DONE]\n\n"
     );
     stream.write_all(response.as_bytes()).await.unwrap();
-    stream.shutdown().await.unwrap();
+    finish_response(stream).await;
 }
 
 /// Extracts the text of a declared Chat `message`; rejects nontext blocks in this text-only fixture.

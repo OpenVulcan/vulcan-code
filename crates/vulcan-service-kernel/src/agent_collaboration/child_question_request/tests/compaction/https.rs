@@ -358,7 +358,7 @@ async fn serve(
         }]})
         .to_string();
         stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
-        stream.shutdown().await.unwrap();
+        finish_response(stream).await;
         return;
     }
     assert!(header.lines().next().unwrap().starts_with("POST "));
@@ -396,7 +396,7 @@ async fn serve(
         })
         .to_string();
         stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
-        stream.shutdown().await.unwrap();
+        finish_response(stream).await;
         return;
     }
     assert!(header.lines().next().unwrap().ends_with(if native {
@@ -434,7 +434,7 @@ async fn serve(
             let response =
                 r#"{"error":{"message":"fixture token expired","type":"authentication_error"}}"#;
             stream.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
-            stream.shutdown().await.unwrap();
+            finish_response(stream).await;
             return;
         }
         assert_eq!(attempt, 2);
@@ -450,7 +450,7 @@ async fn serve(
         })
         .to_string();
         stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
-        stream.shutdown().await.unwrap();
+        finish_response(stream).await;
         return;
     }
     // Produce semantic output and terminal usage through the real streaming parser.
@@ -465,5 +465,25 @@ async fn serve(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {delta}\n\ndata: {terminal}\n\ndata: [DONE]\n\n"
     );
     stream.write_all(response.as_bytes()).await.unwrap();
-    stream.shutdown().await.unwrap();
+    finish_response(stream).await;
+}
+
+/// Closes `stream` after a complete `Connection: close` response; returns nothing.
+/// 在完整的 `Connection: close` 响应之后关闭 `stream`；无返回值。
+/// The client may close first once it has read the whole response, so only a peer-closed error is
+/// expected here; any other shutdown failure still fails the fixture.
+/// 客户端读完整个响应后可能先行关闭，因此这里仅预期对端已关闭类错误；其他关闭失败仍使夹具失败。
+async fn finish_response(stream: &mut tokio_rustls::server::TlsStream<tokio::net::TcpStream>) {
+    if let Err(error) = stream.shutdown().await {
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+            ),
+            "fixture response shutdown failed: {error}"
+        );
+    }
 }
