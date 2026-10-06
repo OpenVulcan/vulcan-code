@@ -481,19 +481,51 @@ pub(crate) async fn service_update_vce_project_settings(
     // Project intent is independently persistable; only indexing and retrieval require global readiness.
     // 项目意图可以独立持久化；仅索引和检索要求全局就绪。
     let project_id = stable_project_id(&request.project_id)?;
+    // The commit helper owns both locks, so they end before the fallible full workbench refresh:
+    // that refresh performs workspace I/O and must not block unrelated public-AI configuration mutations.
+    // 提交辅助函数持有两把锁，因此它们在可能失败的完整工作台刷新前结束：
+    // 该刷新执行工作区 I/O，不应阻塞无关的公共 AI 配置变更。
+    let next = commit_vce_project_settings(&state, &project_id, request).await?;
+    refresh_workbench_snapshot(state.clone())
+        .await
+        .map_err(|error| format!("VCE 设置已保存，但工作台刷新失败：{error}"))?;
+    let reconcile_error = reconcile_vce_project(&state, &project_id).await.err();
+    commit_and_emit_project_settings_changed_delta(
+        &app,
+        &state,
+        Some(project_id.clone()),
+        api::ProjectSettingsDomain::Vce,
+    )?;
+    emit_vce_project_changed(&app, &state, &project_id).await;
+    if let Some(error) = reconcile_error {
+        return Err(format!("VCE 设置已保存，但运行时协调失败：{error}"));
+    }
+    Ok(vce_settings_summary(&next))
+}
+
+/// Persist one project's next VCE settings and publish them into the authoritative snapshot.
+/// 持久化单个项目的下一版 VCE 设置，并发布到权威快照。
+///
+/// The workspace persist lock and the process-wide public-AI configuration transaction live only
+/// inside this function, so no caller-side refresh can run while they are held.
+/// 工作区持久化锁与进程级公共 AI 配置事务只存在于本函数内，调用方的刷新不可能在持锁期间运行。
+///
+/// `state` owns persistence, `project_id` is the validated identity and `request` carries the
+/// expected revision; returns the committed settings or a revision/persistence error.
+/// `state` 持有持久化，`project_id` 为已校验身份，`request` 携带预期修订；返回已提交设置或修订/持久化错误。
+async fn commit_vce_project_settings(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+    request: api::VceProjectSettingsUpdateRequest,
+) -> Result<ProjectVceSettings, String> {
     let persist_lock = webui_workspace_persist_lock();
-    let persist_guard = persist_lock.lock().await;
-    // Hold the publication transaction through authoritative snapshot replacement, not runtime drain
-    // and never across the full workbench refresh: that refresh performs workspace I/O and would
-    // otherwise block unrelated public-AI configuration mutations while it runs.
-    // 持有发布事务直到权威快照替换，不跨运行时排空持有，也绝不跨越完整工作台刷新：
-    // 该刷新执行工作区 I/O，否则会在其执行期间阻塞无关的公共 AI 配置变更。
-    let publication_guard = crate::begin_public_ai_configuration_transaction().await;
+    let _persist_guard = persist_lock.lock().await;
+    let _publication_guard = crate::begin_public_ai_configuration_transaction().await;
     let (project, host_runtime) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let project = active_project_from_guard(&guard, &project_id)?;
+        let project = active_project_from_guard(&guard, project_id)?;
         let host_runtime = guard
             .controller_runtime
             .clone()
@@ -518,7 +550,7 @@ pub(crate) async fn service_update_vce_project_settings(
     next.validate()?;
     vulcan_workspace_store::workspace_store::persist_project_vce_settings(
         host_runtime,
-        &project_id,
+        project_id,
         request.expected_revision,
         &next,
     )
@@ -548,28 +580,7 @@ pub(crate) async fn service_update_vce_project_settings(
         }
         current.vce = next.clone();
     }
-    // Release the process-wide configuration transaction and the workspace persist lock before the
-    // fallible full workbench refresh: durable CAS and the authoritative snapshot replacement are
-    // already committed, while a slow refresh must not block unrelated configuration mutations.
-    // 在可能失败的完整工作台刷新前释放进程级配置事务与工作区持久化锁：
-    // 持久化比较交换与权威快照替换已经提交，慢速刷新不应阻塞无关配置变更。
-    drop(publication_guard);
-    drop(persist_guard);
-    refresh_workbench_snapshot(state.clone())
-        .await
-        .map_err(|error| format!("VCE 设置已保存，但工作台刷新失败：{error}"))?;
-    let reconcile_error = reconcile_vce_project(&state, &project_id).await.err();
-    commit_and_emit_project_settings_changed_delta(
-        &app,
-        &state,
-        Some(project_id.clone()),
-        api::ProjectSettingsDomain::Vce,
-    )?;
-    emit_vce_project_changed(&app, &state, &project_id).await;
-    if let Some(error) = reconcile_error {
-        return Err(format!("VCE 设置已保存，但运行时协调失败：{error}"));
-    }
-    Ok(vce_settings_summary(&next))
+    Ok(next)
 }
 
 /// Preserve newer persisted VCE settings during an older asynchronous whole-workbench refresh.
