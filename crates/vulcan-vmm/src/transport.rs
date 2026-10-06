@@ -1161,4 +1161,13 @@ mod tests {
         );
         assert_eq!(response.trace_id, "trace");
     }
+
+    /// Only the gRPC Unimplemented status marks an RPC as unsupported; labels and text never do.
+    /// 只有 gRPC Unimplemented 状态表示 RPC 不受支持；类型标签与正文绝不起作用。
+    #[test]
+    fn unimplemented_is_decided_by_the_grpc_status_code_alone() {
+        assert!(status_error(Status::unimplemented("DeleteMemories")).is_unimplemented());
+        assert!(!status_error(Status::unavailable("unimplemented")).is_unimplemented());
+        assert!(!VmmClientError::new("unimplemented", "unimplemented").is_unimplemented());
+    }
 }

@@ -920,10 +920,7 @@ fn normalize_delete_memory_reason(reason: String) -> String {
 /// Formats VMM delete-memory transport errors with upgrade guidance.
 /// 将 VMM 删除记忆传输错误格式化为带升级指引的错误。
 fn format_delete_memory_error(error: vulcan_vmm::VmmClientError) -> String {
-    if error.grpc_code == Some(12)
-        || error.kind.eq_ignore_ascii_case("unimplemented")
-        || error.message.to_ascii_lowercase().contains("unimplemented")
-    {
+    if error.is_unimplemented() {
         String::from("当前 VMM 服务版本不支持删除记忆，请更新 VulcanMemoryMesh 后重试。")
     } else {
         error.to_string()

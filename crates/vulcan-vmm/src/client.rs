@@ -53,6 +53,17 @@ impl VmmClientError {
             trace_id: None,
         }
     }
+
+    /// Reports whether the remote service declared the called RPC unimplemented.
+    /// 判断远端服务是否声明所调用的 RPC 未实现。
+    ///
+    /// The gRPC status code is the only authority; `kind` and `message` are diagnostics and are
+    /// never parsed, so an older service is detected the same way under every transport.
+    /// gRPC 状态码是唯一权威；`kind` 与 `message` 仅用于诊断且绝不被解析，因此在任何传输下
+    /// 都以同一方式识别旧版服务。
+    pub fn is_unimplemented(&self) -> bool {
+        self.grpc_code == Some(tonic::Code::Unimplemented as i32)
+    }
 }
 
 impl Display for VmmClientError {

@@ -660,10 +660,7 @@ async fn execute_vmm_memory_delete_tool(
 /// Converts VMM memory-delete errors into model-facing native tool errors.
 /// 将 VMM 记忆删除错误转换为面向模型的原生工具错误。
 fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeToolError {
-    if error.grpc_code == Some(12)
-        || error.kind.eq_ignore_ascii_case("unimplemented")
-        || error.message.to_ascii_lowercase().contains("unimplemented")
-    {
+    if error.is_unimplemented() {
         NativeToolError::new(
             "The connected VMM service does not support DeleteMemories. Update VulcanMemoryMesh before using vmm_memory_delete.",
         )
