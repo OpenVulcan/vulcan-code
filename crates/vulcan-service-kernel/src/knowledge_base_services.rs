@@ -1347,12 +1347,34 @@ fn knowledge_display_schema_repair_request(
 
 /// Identifies the only structured-output failure that receives a bounded curation retry.
 /// 识别唯一允许资料库整理进行有界重试的结构化输出失败类型。
-fn knowledge_display_requires_schema_repair_retry(error_message: &str) -> bool {
-    error_message.contains("Restricted LLM response was not valid JSON")
-        || error_message
-            .contains("Restricted LLM response did not produce the requested JSON object")
-        || error_message
-            .contains("Restricted LLM response did not satisfy the requested JSON Schema")
+fn knowledge_display_requires_schema_repair_retry(error: &HostAiError) -> bool {
+    error.provider_error.as_deref().is_some_and(|detail| {
+        detail.stage
+            == crate::configured_inference::ConfiguredInferenceFailureStage::StructuredOutputValidation
+                .as_str()
+    })
+}
+
+/// Failure of one curation attempt: display text plus whether a schema-repair retry applies.
+/// 单次整理尝试的失败：展示文本，以及是否适用 Schema 修复重试。
+struct KnowledgeDisplayAttemptFailure {
+    /// Controlled diagnostic shown in the curation error.
+    /// 整理错误中展示的受控诊断。
+    message: String,
+    /// True only when the model output failed its structured-output contract.
+    /// 仅当模型输出未满足其结构化输出契约时为 true。
+    schema_repair_eligible: bool,
+}
+
+impl KnowledgeDisplayAttemptFailure {
+    /// Wraps a failure that never qualifies for a schema-repair retry; `message` is its diagnostic.
+    /// 包装一项绝不适用 Schema 修复重试的失败；`message` 为其诊断。
+    fn other(message: impl std::fmt::Display) -> Self {
+        Self {
+            message: message.to_string(),
+            schema_repair_eligible: false,
+        }
+    }
 }
 
 /// Observes replayed and live events for one detached LLM execution until a terminal event arrives.
@@ -1387,19 +1409,19 @@ async fn execute_knowledge_display_attempt(
     label: &str,
     reporter: &KnowledgeOperationReporter,
     is_retry: bool,
-) -> Result<ResponsesExecutionResult, String> {
+) -> Result<ResponsesExecutionResult, KnowledgeDisplayAttemptFailure> {
     let (context, _cancellation_monitor) = reporter.cancellable_ai_context(context);
     let execution = port
         .start_response_execution(capability, context, request.clone())
         .await
-        .map_err(|error| format!("{error}"))?;
+        .map_err(KnowledgeDisplayAttemptFailure::other)?;
     let execution_snapshot = port
         .execution_status(&execution)
-        .map_err(|error| format!("{error}"))?;
+        .map_err(KnowledgeDisplayAttemptFailure::other)?;
     let route = execution_snapshot
         .route
         .as_ref()
-        .ok_or_else(|| String::from("资料库整理 LLM 执行尚未解析路由"))?;
+        .ok_or_else(|| KnowledgeDisplayAttemptFailure::other("资料库整理 LLM 执行尚未解析路由"))?;
     let protocol = knowledge_execution_route_protocol(route);
     reporter
         .begin_request(
@@ -1417,7 +1439,7 @@ async fn execute_knowledge_display_attempt(
         Ok(stream) => stream,
         Err(error) => {
             reporter.finish_request_error("failed").await;
-            return Err(format!("{error}"));
+            return Err(KnowledgeDisplayAttemptFailure::other(error));
         }
     };
     let observer = observe_knowledge_llm_stream(reporter, event_stream);
@@ -1439,7 +1461,10 @@ async fn execute_knowledge_display_attempt(
                 _ => "failed",
             };
             reporter.finish_request_error(status).await;
-            Err(format!("{error}"))
+            Err(KnowledgeDisplayAttemptFailure {
+                schema_repair_eligible: knowledge_display_requires_schema_repair_retry(&error),
+                message: error.to_string(),
+            })
         }
     }
 }
@@ -1466,7 +1491,7 @@ async fn execute_knowledge_display_request(
     .await
     {
         Ok(response) => Ok(response),
-        Err(error) if knowledge_display_requires_schema_repair_retry(&error) => {
+        Err(failure) if failure.schema_repair_eligible => {
             let repair_request =
                 knowledge_display_schema_repair_request(request).map_err(|repair_error| {
                     format!("整理 {label} 无法构建 Schema 修复重试：{repair_error}")
@@ -1485,11 +1510,14 @@ async fn execute_knowledge_display_request(
                 true,
             )
             .await
-            .map_err(|retry_error| {
-                format!("整理 {label} 在 Schema 修复重试后仍失败：{retry_error}")
+            .map_err(|retry_failure| {
+                format!(
+                    "整理 {label} 在 Schema 修复重试后仍失败：{}",
+                    retry_failure.message
+                )
             })
         }
-        Err(error) => Err(format!("整理 {label} 失败：{error}")),
+        Err(failure) => Err(format!("整理 {label} 失败：{}", failure.message)),
     }
 }
 
@@ -4112,18 +4140,35 @@ mod tests {
         assert!(repaired_prompt.contains("根 JSON 对象"));
     }
 
-    /// Verifies provider JSON and schema failures are eligible for one repair retry.
-    /// 验证供应商 JSON 与 Schema 失败都允许进行一次修复重试。
+    /// Verifies only the structured-output validation stage is eligible for one repair retry.
+    /// 验证只有结构化输出校验阶段允许进行一次修复重试。
     #[test]
-    fn knowledge_display_schema_repair_retry_filter_covers_structured_output_failures() {
-        assert!(knowledge_display_requires_schema_repair_retry(
-            "Restricted LLM response did not satisfy the requested JSON Schema at ``: \"markdown\" is a required property."
+    fn knowledge_display_schema_repair_retry_follows_the_failure_stage() {
+        use crate::configured_inference::{
+            ConfiguredInferenceError, ConfiguredInferenceErrorCategory,
+            ConfiguredInferenceFailureStage, configured_inference_stream_error,
+        };
+        let failure_at = |stage| {
+            let error = ConfiguredInferenceError {
+                category: ConfiguredInferenceErrorCategory::Execution,
+                message: String::from("model output failed"),
+                provider_error: None,
+                route: None,
+                stage,
+            };
+            let mut host_error =
+                HostAiError::new(vulcan_ai_contract::HostAiErrorCode::Provider, "failed");
+            host_error.provider_error = Some(Box::new(configured_inference_stream_error(&error)));
+            host_error
+        };
+        assert!(knowledge_display_requires_schema_repair_retry(&failure_at(
+            ConfiguredInferenceFailureStage::StructuredOutputValidation
+        )));
+        assert!(!knowledge_display_requires_schema_repair_retry(
+            &failure_at(ConfiguredInferenceFailureStage::ConfiguredInference)
         ));
-        assert!(knowledge_display_requires_schema_repair_retry(
-            "Restricted LLM response did not satisfy the requested JSON Schema at ``: Additional properties are not allowed ('id' was unexpected)."
-        ));
-        assert!(knowledge_display_requires_schema_repair_retry(
-            "Restricted LLM response was not valid JSON."
+        assert!(!knowledge_display_requires_schema_repair_retry(
+            &HostAiError::new(vulcan_ai_contract::HostAiErrorCode::Provider, "failed")
         ));
     }
 

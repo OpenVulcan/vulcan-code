@@ -199,6 +199,31 @@ pub enum ConfiguredInferenceErrorCategory {
     Cancelled,
 }
 
+/// Host-classified execution stage of one configured-inference failure without provider detail.
+/// 不含供应商详情的已配置推理失败所属的宿主分类执行阶段。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfiguredInferenceFailureStage {
+    /// Generic host-owned failure; no stage detail beyond the category is published.
+    /// 通用宿主自有失败；除类别外不发布阶段详情。
+    #[default]
+    ConfiguredInference,
+    /// The model response failed the requested JSON object or JSON Schema contract.
+    /// 模型响应未满足请求的 JSON 对象或 JSON Schema 契约。
+    StructuredOutputValidation,
+}
+
+impl ConfiguredInferenceFailureStage {
+    /// Returns the sole wire value of this stage in `AiExecutionError::stage`.
+    /// 返回此阶段在 `AiExecutionError::stage` 中的唯一线上取值。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ConfiguredInference => "configured_inference",
+            Self::StructuredOutputValidation => "structured_output_validation",
+        }
+    }
+}
+
 /// Carries one controlled configured-inference failure.
 /// 承载一项受控的已配置推理失败。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -215,6 +240,10 @@ pub struct ConfiguredInferenceError {
     /// Exact non-secret route when provider selection completed before the failure.
     /// 失败前已完成 Provider 选择时的准确非敏感路由。
     pub route: Option<Box<ExecutionRouteSnapshot>>,
+    /// Host-classified stage, published as typed detail when it is not the generic stage.
+    /// 宿主分类阶段；非通用阶段时作为类型化详情发布。
+    #[serde(default)]
+    pub stage: ConfiguredInferenceFailureStage,
 }
 
 impl ConfiguredInferenceError {
@@ -254,6 +283,18 @@ impl ConfiguredInferenceError {
             message: message.into(),
             provider_error: None,
             route: None,
+            stage: ConfiguredInferenceFailureStage::ConfiguredInference,
+        }
+    }
+
+    /// Builds the execution failure of a model response that broke its structured-output contract.
+    /// 构建模型响应违反结构化输出契约时的执行失败。
+    /// `message` is the controlled diagnostic; returns a failure carrying the validation stage.
+    /// `message` 是受控诊断；返回携带校验阶段的失败。
+    fn structured_output_violation(message: impl Into<String>) -> Self {
+        Self {
+            stage: ConfiguredInferenceFailureStage::StructuredOutputValidation,
+            ..Self::new(ConfiguredInferenceErrorCategory::Execution, message)
         }
     }
 
@@ -276,6 +317,7 @@ impl ConfiguredInferenceError {
             message,
             provider_error: Some(failure.error),
             route: None,
+            stage: ConfiguredInferenceFailureStage::ConfiguredInference,
         }
     }
 
@@ -336,6 +378,7 @@ impl ConfiguredInferenceError {
             message: error.message.clone(),
             provider_error: Some(Box::new(error)),
             route: None,
+            stage: ConfiguredInferenceFailureStage::ConfiguredInference,
         }
     }
 
@@ -4458,7 +4501,9 @@ fn is_semantic_inference_response(event: &AiStreamEvent) -> bool {
 
 /// Converts one host-controlled configured-inference failure into the shared normalized stream error.
 /// 将一项宿主控制的已配置推理失败转换为共享归一化流错误。
-fn configured_inference_stream_error(error: &ConfiguredInferenceError) -> AiExecutionError {
+pub(crate) fn configured_inference_stream_error(
+    error: &ConfiguredInferenceError,
+) -> AiExecutionError {
     if let Some(provider_error) = error.provider_error.as_deref() {
         return provider_error.clone();
     }
@@ -4473,7 +4518,7 @@ fn configured_inference_stream_error(error: &ConfiguredInferenceError) -> AiExec
     AiExecutionError {
         category,
         subcategory: Some(error.category_label().to_string()),
-        stage: String::from("configured_inference"),
+        stage: String::from(error.stage.as_str()),
         http_status: None,
         transport: None,
         websocket_close_code: None,
@@ -4794,8 +4839,7 @@ fn finalize_restricted_structured_output(
         StructuredOutputPolicy::JsonObject => {
             let value = materialize_restricted_structured_output(output_text, structured_output)?;
             if !value.is_object() {
-                return Err(ConfiguredInferenceError::new(
-                    ConfiguredInferenceErrorCategory::Execution,
+                return Err(ConfiguredInferenceError::structured_output_violation(
                     "Restricted LLM response did not produce the requested JSON object.",
                 ));
             }
@@ -4817,8 +4861,7 @@ fn finalize_restricted_structured_output(
                 discard_additional_object_fields(schema, value);
             }
             if let Err(error) = validator.validate(value) {
-                return Err(ConfiguredInferenceError::new(
-                    ConfiguredInferenceErrorCategory::Execution,
+                return Err(ConfiguredInferenceError::structured_output_violation(
                     format!(
                         "Restricted LLM response did not satisfy the requested JSON Schema at `{}`: {}.",
                         error.instance_path(),
@@ -4900,8 +4943,7 @@ fn materialize_restricted_structured_output<'a>(
 ) -> Result<&'a mut serde_json::Value, ConfiguredInferenceError> {
     if structured_output.is_none() {
         let value = parse_restricted_json_text(output_text).ok_or_else(|| {
-            ConfiguredInferenceError::new(
-                ConfiguredInferenceErrorCategory::Execution,
+            ConfiguredInferenceError::structured_output_violation(
                 "Restricted LLM response was not valid JSON.",
             )
         })?;

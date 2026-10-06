@@ -28,8 +28,8 @@ use vulcan_ai_contract::{
 };
 
 use crate::configured_inference::{
-    ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceService,
-    ConfiguredLlmExecutionPhase,
+    ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceFailureStage,
+    ConfiguredInferenceService, ConfiguredLlmExecutionPhase, configured_inference_stream_error,
 };
 
 /// Implements the native HostAiPort over the host's configured inference service.
@@ -281,11 +281,17 @@ impl ConfiguredInferenceHostAiPort {
         request_id: Option<&str>,
         handle: Option<&HostAiExecutionHandle>,
     ) -> HostAiError {
+        // A host-classified stage travels as typed detail, so callers never parse the message text.
+        // 宿主分类阶段作为类型化详情传递，调用方无需解析消息文本。
+        let stage_detail = (error.provider_error.is_none()
+            && error.stage != ConfiguredInferenceFailureStage::ConfiguredInference)
+            .then(|| Box::new(configured_inference_stream_error(&error)));
         let ConfiguredInferenceError {
             category,
             message,
             provider_error,
             route,
+            stage: _,
         } = error;
         let mut mapped = match provider_error {
             Some(provider_error) => HostAiError::from_execution_error(*provider_error),
@@ -305,6 +311,9 @@ impl ConfiguredInferenceHostAiPort {
                 message,
             ),
         };
+        if mapped.provider_error.is_none() {
+            mapped.provider_error = stage_detail;
+        }
         mapped.route = route;
         if let Some(context) = context {
             mapped = mapped.with_request_context(context, request_id);
@@ -1124,7 +1133,9 @@ mod tests {
     use super::{
         ConfiguredInferenceHostAiPort, authorize_embedding_batch_cancellation, earliest_deadline,
     };
-    use crate::configured_inference::{ConfiguredInferenceError, ConfiguredInferenceErrorCategory};
+    use crate::configured_inference::{
+        ConfiguredInferenceError, ConfiguredInferenceErrorCategory, ConfiguredInferenceFailureStage,
+    };
     use std::collections::BTreeSet;
     use vulcan_ai_contract::{
         DispatchOutcome, ExecutionRouteSnapshot, HostAiCallContext, InferenceCallerBudget,
@@ -1216,10 +1227,48 @@ mod tests {
             message: String::from("provider failed"),
             provider_error: None,
             route: Some(Box::new(route.clone())),
+            stage: ConfiguredInferenceFailureStage::ConfiguredInference,
         };
 
         let mapped = ConfiguredInferenceHostAiPort::map_error(error, None, None, None);
 
         assert_eq!(mapped.route.as_deref(), Some(&route));
+    }
+
+    /// Verifies a structured-output violation keeps the Provider code and publishes its typed stage.
+    /// 验证结构化输出违规保持 Provider 代码，并发布其类型化阶段。
+    #[test]
+    fn structured_output_violation_publishes_its_stage_without_changing_the_code() {
+        let error = ConfiguredInferenceError {
+            category: ConfiguredInferenceErrorCategory::Execution,
+            message: String::from("schema mismatch"),
+            provider_error: None,
+            route: None,
+            stage: ConfiguredInferenceFailureStage::StructuredOutputValidation,
+        };
+
+        let mapped = ConfiguredInferenceHostAiPort::map_error(error, None, None, None);
+
+        assert_eq!(mapped.code, vulcan_ai_contract::HostAiErrorCode::Provider);
+        assert_eq!(
+            mapped
+                .provider_error
+                .as_deref()
+                .map(|detail| detail.stage.as_str()),
+            Some(ConfiguredInferenceFailureStage::StructuredOutputValidation.as_str())
+        );
+
+        let generic = ConfiguredInferenceError {
+            category: ConfiguredInferenceErrorCategory::Execution,
+            message: String::from("provider failed"),
+            provider_error: None,
+            route: None,
+            stage: ConfiguredInferenceFailureStage::ConfiguredInference,
+        };
+        assert!(
+            ConfiguredInferenceHostAiPort::map_error(generic, None, None, None)
+                .provider_error
+                .is_none()
+        );
     }
 }
