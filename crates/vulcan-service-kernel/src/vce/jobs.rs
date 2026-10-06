@@ -2135,6 +2135,11 @@ impl VceRuntimeManager {
                         .await
                     {
                         Ok(operation) => operation,
+                        // The in-process engine runs the step synchronously and reports local typed
+                        // failures, so a submit error is never an uncertain admission: either the
+                        // step was recorded and can be read back, or it definitively failed.
+                        // 进程内引擎同步执行步骤并报告本地类型化失败，因此提交错误绝不是不确定准入：
+                        // 要么步骤已记录且可回读，要么确定失败。
                         Err(submit_error) => match index
                             .physical_compaction_operation(
                                 table.plan.statistics.role,
@@ -2143,20 +2148,6 @@ impl VceRuntimeManager {
                             .await
                         {
                             Ok(operation) => operation,
-                            Err(query_error) if is_uncertain_compaction_error(&submit_error) => {
-                                let error = format!(
-                                    "VCE compaction submission is uncertain and its operation cannot be queried: {submit_error}; {query_error}"
-                                );
-                                return VceCompactionJobOutcome::InterruptedWithTableUpdate {
-                                    table_update: compaction_table_terminal_update(
-                                        table_index,
-                                        &table,
-                                        VceCompactionTableState::StateLost,
-                                        Some(error.clone()),
-                                    ),
-                                    error,
-                                };
-                            }
                             Err(_) => {
                                 return VceCompactionJobOutcome::FailedWithTableUpdate {
                                     table_update: compaction_table_terminal_update(
@@ -3713,20 +3704,6 @@ fn compaction_progress(
         provider_batch_state: None,
         current_path: None,
     }
-}
-
-/// Identify submit failures whose server-side admission may have succeeded before reply loss.
-/// 识别服务端可能已准入、但回复丢失的提交失败。
-///
-/// `error` is the engine error projected through the data plane. Returns true only for the
-/// typed uncertain-admission prefix rather than interpreting domain validation failures.
-/// `error` 是经数据面投影的引擎错误。仅对类型化不确定准入前缀返回真，
-/// 不会把领域校验失败解释为不确定结果。
-fn is_uncertain_compaction_error(error: &str) -> bool {
-    error
-        .trim_start()
-        .to_ascii_lowercase()
-        .starts_with("transport error:")
 }
 
 /// Report whether the engine has durably acknowledged cancellation or already settled the work.
