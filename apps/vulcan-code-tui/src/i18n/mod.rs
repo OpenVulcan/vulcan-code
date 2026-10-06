@@ -210,11 +210,16 @@ mod tests {
         assert_eq!(out, "tui.test.missing {x}");
     }
 
+    /// Source scanner shared with the `vulcan-tui-i18n` binary.
+    /// 与 `vulcan-tui-i18n` 二进制共用的源码扫描器。
+    #[path = "../../i18n_sync/scan.rs"]
+    mod scan;
+
     #[test]
     fn every_used_key_resolves_in_default_catalog() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let src = root.join("src");
-        let used = crate::i18n_sync::scan::used_keys(&src, &[src.join("i18n_sync")]).unwrap();
+        let used = scan::used_keys(&src, &[src.join("i18n_sync")]).unwrap();
         let default: HashMap<String, String> = parse_locale(DEFAULT_LOCALE);
         let missing: Vec<_> = used.iter().filter(|k| !default.contains_key(*k)).collect();
         assert!(

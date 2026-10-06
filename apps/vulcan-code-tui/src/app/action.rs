@@ -20,7 +20,7 @@ use crate::i18n;
 use crate::model::*;
 use crate::service_api::setter::Setter;
 use crate::tr;
-use crate::ui::theme::{Theme, ThemeMode};
+use crate::ui::theme::Theme;
 
 /// Settings that live only in this TUI process and are never written to the service.
 /// 只存在于本 TUI 进程、从不写回服务的设置。
@@ -34,9 +34,6 @@ pub enum LocalSetting {
     Thinking,
     Sidebar,
     Panel,
-    /// The knowledge library shown on the library details page.
-    /// 知识库详情页显示的知识库。
-    Library,
     /// Selected knowledge view, independent from the library list.
     /// 所选知识视图，独立于知识库列表。
     KnowledgeView,
@@ -235,6 +232,9 @@ pub enum UiAction {
         options: Vec<(String, String)>,
         current: String,
     },
+    /// Applies one edit directly; production edits go through pickers and forms.
+    /// 直接应用一项编辑；生产编辑经由选择器与表单。
+    #[cfg(test)]
     Edit(Edit, SettingValue),
     /// Starts a multi-field WebUI request form.
     /// 启动多字段 WebUI 请求表单。
@@ -395,6 +395,7 @@ pub fn perform(app: &mut App, action: UiAction) {
             options,
             current,
         } => open_choice(app, title, edit, options, current),
+        #[cfg(test)]
         UiAction::Edit(edit, value) => apply_edit(app, edit, value),
         UiAction::Navigate(index) => {
             // Resolve a current row before dispatch so changed catalogs never address stale indexes.
@@ -734,7 +735,6 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     }),
                 ),
                 LocalSetting::Panel => app.panel_visible = value.as_bool(),
-                LocalSetting::Library => app.select_library(Some(value.as_str().to_string())),
                 LocalSetting::KnowledgeView => {
                     if let Some(page) = super::pages::knowledge_view(value.as_str()) {
                         app.knowledge_page = page;
@@ -787,15 +787,6 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
             }
             app.load_page();
         }
-    }
-}
-
-/// Current theme as a choice id.
-/// 当前主题对应的选项 ID。
-pub fn theme_id(app: &App) -> &'static str {
-    match app.theme.mode {
-        ThemeMode::Dark => "dark",
-        ThemeMode::Light => "light",
     }
 }
 

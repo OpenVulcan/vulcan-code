@@ -29,7 +29,6 @@ pub struct Theme {
     pub accent: Color,
     pub border: Color,
     pub input: Color,
-    pub destructive: Color,
     pub sidebar: Color,
     pub sidebar_fg: Color,
     pub sidebar_accent: Color,
@@ -41,7 +40,6 @@ pub struct Theme {
     pub violet: Color,
     pub teal: Color,
     pub flame_top: Color,
-    pub flame_bottom: Color,
 }
 
 const fn rgb(hex: u32) -> Color {
@@ -82,7 +80,6 @@ impl Theme {
             accent: rgb(0x2a2e34),
             border: rgb(0x2f3339),
             input: rgb(0x3f444b),
-            destructive: rgb(0xf17070),
             sidebar: rgb(0x111418),
             sidebar_fg: rgb(0xced1d6),
             sidebar_accent: rgb(0x22262b),
@@ -94,7 +91,6 @@ impl Theme {
             violet: rgb(0xbe9bdf),
             teal: rgb(0x6ec4af),
             flame_top: rgb(0xff6527),
-            flame_bottom: rgb(0xf44e1c),
         }
     }
 
@@ -112,7 +108,6 @@ impl Theme {
             accent: rgb(0xeae9e6),
             border: rgb(0xe3e1de),
             input: rgb(0xd1cfcb),
-            destructive: rgb(0xca3134),
             sidebar: rgb(0xf0efec),
             sidebar_fg: rgb(0x31302d),
             sidebar_accent: rgb(0xe5e3e0),
@@ -124,7 +119,6 @@ impl Theme {
             violet: rgb(0x9970b8),
             teal: rgb(0x368b7c),
             flame_top: rgb(0xff6527),
-            flame_bottom: rgb(0xf44e1c),
         }
     }
 

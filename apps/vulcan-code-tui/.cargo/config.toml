@@ -1,7 +1,0 @@
-# Bound local build and test concurrency, matching the vulcan-code repository defaults.
-# 限制本地编译与测试并发，与 vulcan-code 仓库默认值保持一致。
-[build]
-jobs = 4
-
-[env]
-RUST_TEST_THREADS = "4"

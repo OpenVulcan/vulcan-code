@@ -1,13 +1,16 @@
-// `vulcan-tui-i18n sync [--check] [--webui-src <dir>]`
-//
-// Pulls the keys used by the TUI from the WebUI catalogs. See `src/i18n_sync/mod.rs`.
-// 从 WebUI 目录拉取 TUI 使用的文案键。详见 `src/i18n_sync/mod.rs`。
+//! `vulcan-tui-i18n sync [--check] [--webui-src <dir>]`
+//!
+//! Pulls the keys used by the TUI from the WebUI catalogs. See `src/i18n_sync/mod.rs`.
+//! 从 WebUI 目录拉取 TUI 使用的文案键。详见 `src/i18n_sync/mod.rs`。
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use vulcan_code_tui::i18n_sync::{SyncOptions, load_config, run};
+#[path = "../i18n_sync/mod.rs"]
+mod i18n_sync;
+
+use i18n_sync::{SyncOptions, load_config, run};
 
 fn main() -> ExitCode {
     match real_main() {

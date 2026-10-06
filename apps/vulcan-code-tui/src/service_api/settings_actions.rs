@@ -211,29 +211,6 @@ pub fn save_public_ai_model_enabled(
     )
 }
 
-/// Builds the request for `service_save_public_ai_internal_model_enabled`.
-/// 构建 `service_save_public_ai_internal_model_enabled` 的请求。
-/// `provider_id` is the provider ID from the public AI catalog.
-/// `provider_id` 为公开 AI 目录中的提供方标识。
-/// `model_id` is the provider-owned model ID.
-/// `model_id` 为提供方持有的模型标识。
-/// `enabled` is the explicit requested enabled state.
-/// `enabled` 为明确请求的启用状态。
-/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
-/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
-pub fn save_public_ai_internal_model_enabled(
-    provider_id: &str,
-    model_id: &str,
-    enabled: bool,
-) -> ServiceCall {
-    ServiceCall::mutate(
-        "save_public_ai_internal_model_enabled",
-        "service_save_public_ai_internal_model_enabled",
-        json!({ "request": { "providerId": provider_id, "modelId": model_id, "enabled": enabled } }),
-        PUBLIC_AI,
-    )
-}
-
 /// `route` is a `PublicAiInferenceRoute` (`null` clears the route).
 /// `route` 为 `PublicAiInferenceRoute`（`null` 表示清除路由）。
 /// Builds the request for `service_save_public_ai_inference_route`.

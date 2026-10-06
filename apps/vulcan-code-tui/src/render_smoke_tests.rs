@@ -5,6 +5,15 @@
 
 use std::time::{Duration, Instant};
 
+use crate::app::action::UiAction;
+use crate::app::hit::Target;
+use crate::app::overlay::Overlay;
+use crate::app::pages::Area;
+use crate::app::{App, PanelTab, SidebarMode, input};
+use crate::backend::mock;
+use crate::i18n;
+use crate::model::{AgentState, GoalStatus};
+use crate::ui::{self, theme::Theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -12,27 +21,18 @@ use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::Rect;
-use vulcan_code_tui::app::action::UiAction;
-use vulcan_code_tui::app::hit::Target;
-use vulcan_code_tui::app::overlay::Overlay;
-use vulcan_code_tui::app::pages::Area;
-use vulcan_code_tui::app::{App, PanelTab, SidebarMode, input};
-use vulcan_code_tui::backend::mock;
-use vulcan_code_tui::i18n;
-use vulcan_code_tui::model::{AgentState, GoalStatus};
-use vulcan_code_tui::ui::{self, theme::Theme};
 /// Dynamic catalog navigation and managed document reading are reachable by real hits and keys.
 /// 动态目录导航及托管文档阅读可通过真实命中与按键触达。
 /// Both terminal widths use inert channels and never connect to a real service.
 /// 两种终端宽度均使用静默通道，绝不连接真实服务。
 #[test]
 fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
+    use crate::app::pages::{PageId, RowKind, navigation, rows};
+    use crate::app::{Focus, action::perform};
+    use crate::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
+    use crate::service_api::{Slot, knowledge_base as kb, workbench_snapshot};
     use serde_json::{Value, json};
     use std::sync::mpsc;
-    use vulcan_code_tui::app::pages::{PageId, RowKind, navigation, rows};
-    use vulcan_code_tui::app::{Focus, action::perform};
-    use vulcan_code_tui::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
-    use vulcan_code_tui::service_api::{Slot, knowledge_base as kb, workbench_snapshot};
     // Synthetic catalog source contains real category and managed-document fields.
     // 合成目录来源包含真实分类及托管文档字段。
     let fixture: Value =
@@ -189,10 +189,8 @@ fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
         perform(
             &mut app,
             UiAction::Edit(
-                vulcan_code_tui::app::action::Edit::Local(
-                    vulcan_code_tui::app::action::LocalSetting::KnowledgeCorpus,
-                ),
-                vulcan_code_tui::model::SettingValue::Text("display".into()),
+                crate::app::action::Edit::Local(crate::app::action::LocalSetting::KnowledgeCorpus),
+                crate::model::SettingValue::Text("display".into()),
             ),
         );
         app.apply(BackendEvent::SlotFailed {
@@ -213,10 +211,10 @@ fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
 /// 不运行工作器或服务发现；仅观察最终请求。
 #[test]
 fn preview_review_mouse_confirmation_and_subset_input_render() {
+    use crate::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
+    use crate::service_api::knowledge_base;
     use serde_json::{Value, json};
     use std::sync::mpsc;
-    use vulcan_code_tui::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
-    use vulcan_code_tui::service_api::knowledge_base;
     // Wide and narrow layouts must expose the same approval actions.
     // 宽窄布局必须公开相同的批准动作。
     for (width, height) in [(160, 45), (64, 20)] {
@@ -636,7 +634,7 @@ fn session_bar_composer_pastes_and_sidebar_rail() {
 
     // Sending expands the paste; the long message folds in the transcript.
     // 发送时展开粘贴；较长的消息在会话记录中折叠。
-    app.focus = vulcan_code_tui::app::Focus::Composer;
+    app.focus = crate::app::Focus::Composer;
     input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
     assert!(app.pastes.is_empty(), "sending clears the draft's pastes");
     // Draw as soon as the prompt lands: the transcript follows the bottom, so the new message
@@ -649,7 +647,7 @@ fn session_bar_composer_pastes_and_sidebar_rail() {
             .iter()
             .rev()
             .find_map(|e| match &e.body {
-                vulcan_code_tui::model::EventBody::UserInput { text, .. } => {
+                crate::model::EventBody::UserInput { text, .. } => {
                     text.ends_with("second line").then(|| text.clone())
                 }
                 _ => None,
@@ -794,7 +792,7 @@ fn mouse_reaches_areas_overlays_and_dialogs() {
         );
         // Dynamic catalogs have category/library rows instead of one row per content view.
         // 动态目录使用分类、知识库行，而非每个内容视图一行。
-        let count = vulcan_code_tui::app::pages::navigation(&app)
+        let count = crate::app::pages::navigation(&app)
             .into_iter()
             .map(|(_, entries)| entries.len())
             .sum::<usize>();
@@ -817,13 +815,13 @@ fn mouse_reaches_areas_overlays_and_dialogs() {
     // Library subviews use the shared view selector and independent page state.
     // 知识库子视图使用共享视图选择器及独立页面状态。
     for page in Area::Knowledge.pages() {
-        if page == vulcan_code_tui::app::pages::PageId::KnowledgeDocument {
-            vulcan_code_tui::app::action::perform(
+        if page == crate::app::pages::PageId::KnowledgeDocument {
+            crate::app::action::perform(
                 &mut app,
                 UiAction::OpenKnowledgeDocument("demo-document".into()),
             );
         } else {
-            vulcan_code_tui::app::action::perform(&mut app, UiAction::GoPage(page));
+            crate::app::action::perform(&mut app, UiAction::GoPage(page));
         }
         pump(
             &mut app,

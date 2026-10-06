@@ -33,6 +33,10 @@ impl SettingValue {
 /// 带进度的后台任务，以稳定 ID 寻址以便重新查询实时状态。
 #[derive(Debug, Clone)]
 pub struct Job {
+    #[expect(
+        dead_code,
+        reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+    )]
     pub id: String,
     pub label: String,
     /// 0..=100; `None` while the job has not reported progress.

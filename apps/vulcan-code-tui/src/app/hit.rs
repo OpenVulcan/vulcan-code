@@ -128,8 +128,9 @@ impl HitMap {
             .map(|(_, target)| *target)
     }
 
-    /// Rectangle of the first target matching `pred`, for tests and anchoring menus.
-    /// 首个满足 `pred` 的目标矩形，用于测试与菜单定位。
+    /// Rectangle of the first target matching `pred`, for tests.
+    /// 首个满足 `pred` 的目标矩形，用于测试。
+    #[cfg(test)]
     pub fn find(&self, pred: impl Fn(&Target) -> bool) -> Option<Rect> {
         self.targets
             .borrow()

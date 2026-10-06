@@ -1,12 +1,13 @@
 # Vulcan Code TUI Agent Notes
 
-本文件只保存进入本仓库的任何会话都必须知道的长期约定。结构说明见
-[`docs/tui-design.md`](docs/tui-design.md)，页面与 RPC 对照见
-[`docs/service-adaptation.md`](docs/service-adaptation.md)。
+本文件只保存修改 `apps/vulcan-code-tui` 的会话必须知道的长期约定，仓库根 `AGENTS.md` 的约定同样适用。
+结构说明见 [`tui-design.md`](../../docs/contracts/tui-design.md)，页面与 RPC 对照见
+[`tui-service-adaptation.md`](../../docs/contracts/tui-service-adaptation.md)。
 
 ## 一、边界
 
-1. **独立项目。** 本仓库是独立 crate，不修改 `../vulcan-code`；上游是协议、类型、i18n 的只读权威来源。
+1. **工作区成员。** TUI 是根工作区的 crate，沿用工作区依赖、lint 与 `workspace-hack`；协议、类型与 i18n 的
+   权威来源是核心服务与 WebUI，TUI 跟随它们，不在本地另造同功能、不同名的接口或文案。
 2. **两个后端，同一边界。** `src/backend/service/` 连接真实服务（默认），`src/backend/mock/` 按脚本模拟；
    UI 与 `app/` 只通过 `backend::Command` / `BackendEvent` 交互，不直接访问后端内部。系统页面使用
    `service_api::ServiceCall` 一对一镜像 WebUI 函数、方法与参数，未有服务契约的动作不创建入口。
@@ -43,15 +44,16 @@
 3. TUI 专属文案使用 `tui.*` 键，写入 `i18n/overlay/<locale>.json`（en-US 为默认语言，另有 zh-CN、
    zh-TW、zh-HK）；其他语言缺失时回退到 en-US。
 4. 修改文案或新增 `tr!` 调用后执行：
-   - `cargo run --bin vulcan-tui-i18n -- sync`
-   - `cargo run --bin vulcan-tui-i18n -- sync --check`（CI 同款检查）
+   - `cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync`
+   - `cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check`
 5. 不直接编辑 `i18n/generated/`。
 
 ## 四、验证
 
-1. `.cargo/config.toml` 限制 `build.jobs = 4` 与 `RUST_TEST_THREADS = 4`，不得绕过。
-2. 常规验证：`cargo clippy --all-targets`、`cargo test`、`cargo fmt --check`。
-3. `tests/render_smoke.rs` 以无头后端在宽、窄两种尺寸下渲染全部区域与浮层，并用 `hits.find` 驱动鼠标点击；
-   需要目视检查布局时先创建快照目录，再执行：`VULCAN_TUI_SNAPSHOT_DIR=<目录> cargo test --test render_smoke`。
-4. 默认使用模拟数据或本地合成 HTTP/WebSocket 服务器验证；本阶段不得对真实服务执行有副作用或付费的操作。
-   模拟后端未知写入的成功回执不能证明真实协议已适配。用户未要求时不提交 Git。
+1. 根 `.cargo/config.toml` 限制 `build.jobs = 4` 与 `RUST_TEST_THREADS = 4`，不得绕过。
+2. 常规验证：`cargo clippy -p vulcan-code-tui --all-targets -- -D warnings`、
+   `cargo nextest run -p vulcan-code-tui`、`cargo fmt --check`。
+3. `src/render_smoke_tests.rs` 以无头后端在宽、窄两种尺寸下渲染全部区域与浮层，并用 `hits.find` 驱动鼠标点击；
+   需要目视检查布局时先创建快照目录，再设置 `VULCAN_TUI_SNAPSHOT_DIR=<目录>` 运行该测试。
+4. 默认使用模拟数据或本地合成 HTTP/WebSocket 服务器验证；不得对真实服务执行有副作用或付费的操作。
+   模拟后端未知写入的成功回执不能证明真实协议已适配。

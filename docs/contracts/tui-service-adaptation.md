@@ -1,8 +1,9 @@
 # WebUI 服务适配说明
 
-本文记录本轮交接改造的完成范围。协议权威来源为上游 WebUI 的
-`apps/vulcan-code-web/src/service/*-service.ts`、对应 `types/*.ts` 及服务实现；
-上游仓库只读，TUI 是独立 Rust crate。
+本文记录 TUI（`apps/vulcan-code-tui`）与核心服务的对接矩阵。协议权威来源为 WebUI 的
+`apps/vulcan-code-web/src/service/*-service.ts`、对应 `types/*.ts` 及服务实现；TUI 一对一镜像这些
+函数、方法与参数，不另造同功能、不同名的接口。
+同步触发点：WebUI 服务函数、RPC 方法或参数形状变化时，回读上述源码并同步本文与 `service_api`。
 
 ## 调用与状态边界
 
@@ -240,14 +241,7 @@ VMM 按项目独立保存记录，预检核对版本与目标，回收恢复只�
 
 ## 验证范围
 
-- `rtk cargo fmt --check`
-- `rtk cargo clippy --all-targets`
-- `rtk cargo test`
-- `rtk cargo run --bin vulcan-tui-i18n -- sync --check`
-
-Windows 上运行中的 TUI 会锁住其可执行文件；此时使用
-`rtk cargo test --target-dir target/verification` 在独立目录完成全套验证，保留配置中的编译与测试并发限制。
-
+验证命令与范围见 [TUI 结构说明](tui-design.md#验证)。
 测试覆盖同级字段保护、数值边界、预检指纹/版本/目标、密钥回显清理与单次发送、
 HTTP 认证信封、WebSocket 帧、乱序读取、重连代际、工作器关闭、页面归属过滤、
 模拟状态修改及回收恢复、分类与生效版本筛选、目录分页、正文与语料读取、持久错误重试及无重叠任务轮询。
@@ -255,15 +249,3 @@ HTTP 认证信封、WebSocket 帧、乱序读取、重连代际、工作器关�
 阅读页检查实际终端单元格中的正文缩进及读取失败消息。
 服务表单、资源正文及数组设置保留多行粘贴；Alt/Shift+Enter 换行，普通 Enter 仍确认。
 Ctrl+U 清空后可粘贴替换全文或文件键列表，输入框显示末尾六行；凭据粘贴保留原始字节并始终遮蔽。
-
-实际服务写入、付费模型调用及真实终端人工验收未执行；上游没有修改，Git 没有提交。
-
-### 2026-10-01 验收记录
-
-- 格式与 Clippy 检查通过，Clippy 零警告。
-- 全套测试在独立构建目录 `target/verification` 通过：76 项单元测试、6 项无头渲染测试，共 82 项；
-  运行中的旧 TUI 未被终止。
-- 多语言同步及 `sync --check` 通过，11 种语言目录一致；核心覆盖为英语、简体及两种繁体中文。
-- 宽窄快照已检查，分类导航、真实库名、文档列表及正文、读取错误、来源与索引维护均可显示；
-  导入预检与多行选择在两种尺寸下可通过鼠标确认。
-- `git diff --check` 通过。临时交接文件已删除，后续以本文与 `tui-design.md`、`AGENTS.md` 为准。

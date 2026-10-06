@@ -103,9 +103,6 @@ pub enum Command {
     RenameProject { project_id: String, name: String },
     /// `toggleProjectPinned`
     ToggleProjectPinned { project_id: String },
-    /// `openProjectDirectory`: the service opens the folder in the host's file manager.
-    /// 服务在宿主文件管理器中打开该目录。
-    OpenProjectDirectory { project_id: String },
     /// `archiveProjectConversations`
     ArchiveProjectConversations { project_id: String },
     /// `removeProject`
@@ -216,6 +213,10 @@ pub enum BackendEvent {
         seq: u64,
         text: String,
     },
+    #[expect(
+        dead_code,
+        reason = "neither backend streams run phases yet; mapped once the TUI shares service DTOs"
+    )]
     RunPhase {
         conversation_id: ConversationId,
         phase: RunPhase,

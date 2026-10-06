@@ -1,11 +1,11 @@
 [package]
 name = "vulcan-code-tui"
 description = "Terminal user interface client for the Vulcan Code core service."
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97.1"
-authors = ["OpenVulcan"]
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
 publish = false
 
 [lib]
@@ -20,15 +20,19 @@ name = "vulcan-tui-i18n"
 path = "src/bin/vulcan-tui-i18n.rs"
 
 [dependencies]
-anyhow = "1"
-ratatui = "0.30"
-ratatui-textarea = "0.9"
-regex = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sys-locale = "0.3"
+anyhow.workspace = true
+ratatui.workspace = true
+ratatui-textarea.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sys-locale.workspace = true
 # Plain-HTTP and WebSocket clients for the loopback core service; no TLS is needed on 127.0.0.1.
 # 访问本机回环核心服务的纯 HTTP 与 WebSocket 客户端；127.0.0.1 上无需 TLS。
-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
-unicode-width = "0.2"
-ureq = { version = "3", default-features = false }
+tungstenite.workspace = true
+unicode-width.workspace = true
+ureq.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[lints]
+workspace = true

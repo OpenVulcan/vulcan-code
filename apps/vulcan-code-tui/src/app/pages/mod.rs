@@ -29,7 +29,7 @@ use crate::tr;
 use serde_json::{Value, json};
 
 pub use knowledge::knowledge_view;
-pub use navigation::{NavigationEntry, navigation};
+pub use navigation::navigation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Area {
@@ -88,6 +88,7 @@ impl Area {
             Area::AgentSkills => vec![(None, vec![SkillList])],
             Area::Plugins => vec![
                 (Some("LuaSkills".into()), vec![LuaSkills, LuaSettings]),
+                (Some(tr!("settings.mcpServers")), vec![Mcp]),
                 (
                     Some(tr!("area.contextEngine")),
                     vec![IndexProjects, EngineSettings],
@@ -137,13 +138,8 @@ impl Area {
                 ),
                 (
                     Some(tr!("settings.group.models")),
-                    vec![Providers, Credentials, Models],
+                    vec![Providers, Credentials, Models, Capabilities],
                 ),
-                (
-                    Some(tr!("settings.group.aiCapabilities")),
-                    vec![Capabilities],
-                ),
-                (Some(tr!("settings.group.extensions")), vec![Mcp]),
                 (Some(tr!("settings.group.data")), vec![Archived]),
                 (Some(tr!("settings.group.about")), vec![Diagnostics, About]),
             ],
@@ -465,16 +461,6 @@ pub enum Tone {
     Warn,
     Bad,
     Accent,
-}
-
-impl Tone {
-    pub fn of(severity: Severity) -> Tone {
-        match severity {
-            Severity::Info => Tone::Good,
-            Severity::Warning => Tone::Warn,
-            Severity::Error => Tone::Bad,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

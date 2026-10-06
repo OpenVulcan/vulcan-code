@@ -1,11 +1,11 @@
 # Vulcan Code TUI 结构说明
 
-> 实现细节以源码为准；本文只描述分层与交互约定。
+> 实现细节以源码为准；本文只描述 `apps/vulcan-code-tui` 的分层与交互约定。
 
 ## 运行
 
 ```bash
-cargo run --bin vulcan-tui -- --locale zh-TW
+cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
 ```
 
 参数：
@@ -21,14 +21,14 @@ cargo run --bin vulcan-tui -- --locale zh-TW
 
 | 目录 | 职责 |
 | --- | --- |
-| `src/model/` | 与服务协议对齐的数据模型（会话、事件、工具调用、Git、页面标量） |
-| `src/backend/` | `Command` / `BackendEvent` 通道；`service/` 连接真实服务，`mock/` 为脚本化模拟服务 |
-| `src/backend/service/` | 发现文件 → `POST /rpc` + `/events` WebSocket；单工作线程持有工作台投影与事件窗口（见下文） |
-| `src/service_api/` | WebUI 服务函数的一对一请求构建器、槽位、字段编辑器与两步预检确认协议 |
-| `src/app/` | 状态机：焦点、区域、浮层、提问、历史索引、命中表，以及 `action::perform` 单一副作用入口 |
-| `src/app/input/` | 键盘与鼠标输入，按焦点与浮层分派 |
-| `src/ui/` | 纯渲染：工作台、侧栏、会话记录、思考框、输入框、右侧面板、系统页面、浮层 |
-| `src/i18n*`、`src/bin/vulcan-tui-i18n.rs` | 运行时翻译与上游目录同步工具 |
+| `apps/vulcan-code-tui/src/model/` | 与服务协议对齐的数据模型（会话、事件、工具调用、Git、页面标量） |
+| `apps/vulcan-code-tui/src/backend/` | `Command` / `BackendEvent` 通道；`service/` 连接真实服务，`mock/` 为脚本化模拟服务 |
+| `apps/vulcan-code-tui/src/backend/service/` | 发现文件 → `POST /rpc` + `/events` WebSocket；单工作线程持有工作台投影与事件窗口（见下文） |
+| `apps/vulcan-code-tui/src/service_api/` | WebUI 服务函数的一对一请求构建器、槽位、字段编辑器与两步预检确认协议 |
+| `apps/vulcan-code-tui/src/app/` | 状态机：焦点、区域、浮层、提问、历史索引、命中表，以及 `action::perform` 单一副作用入口 |
+| `apps/vulcan-code-tui/src/app/input/` | 键盘与鼠标输入，按焦点与浮层分派 |
+| `apps/vulcan-code-tui/src/ui/` | 纯渲染：工作台、侧栏、会话记录、思考框、输入框、右侧面板、系统页面、浮层 |
+| `apps/vulcan-code-tui/src/i18n*`、`src/bin/vulcan-tui-i18n.rs` | 运行时翻译与上游目录同步工具 |
 
 ## 界面
 
@@ -105,15 +105,24 @@ cargo run --bin vulcan-tui -- --locale zh-TW
 - **系统区域**：使用与 WebUI 完全相同的函数、RPC 方法和参数形状。原始 DTO 放入命名槽位，工作台只投影页面所需的允许字段；聊天与 Git 保留类型化事件，因为后端需要管理其会话、草稿和工作区。不存在独立的系统命令或设置草稿协议。
 - **变更刷新**：`CallKind::Mutate` 成功后使用受影响槽位最近登记的加载器刷新。刷新失败清空旧值并保留重试加载器；当前页面可手动重新加载。项目、知识库及画像选择改变后清空依赖槽位，文档读取还检查目录、分页、文档身份及语料。新搜索立即清空旧命中。加载失败以 `SlotFailed` 保留脱敏原因，匹配重试时清除；旧归属的失败不能覆盖当前页面。
 - **事件与重连**：重新连接后加载当前页面。VCE 概览变更按项目刷新，任务事件按项目、任务身份及序号过滤，终态刷新概览；界面关闭时显式终止工作线程及事件读取器。
-- **模拟服务**：`backend/mock/service.rs` 持有仓库内合成 DTO。已实现写入会修改后续加载器读取的状态，项目与知识库相互隔离；预检冻结版本与目标，回收恢复只合并已移动记录。未知演示写入沿用成功回执，不能用作真实协议验收证据。完整对接矩阵见 [服务适配说明](service-adaptation.md)。
+- **模拟服务**：`backend/mock/service.rs` 持有仓库内合成 DTO。已实现写入会修改后续加载器读取的状态，项目与知识库相互隔离；预检冻结版本与目标，回收恢复只合并已移动记录。未知演示写入沿用成功回执，不能用作真实协议验收证据。完整对接矩阵见 [服务适配说明](tui-service-adaptation.md)。
 
 ## 验证
 
-执行 `rtk cargo fmt --check`、`rtk cargo clippy --all-targets`、`rtk cargo test` 和
-`rtk cargo run --bin vulcan-tui-i18n -- sync --check`，保留仓库的四任务构建与测试限制。
+TUI 是工作区成员，沿用根 `.cargo/config.toml` 的四任务编译与测试限制及工作区 lint：
+
+```bash
+cargo fmt --check
+cargo clippy -p vulcan-code-tui --all-targets -- -D warnings
+cargo nextest run -p vulcan-code-tui
+cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check
+```
+
+Windows 上运行中的 TUI 会锁住其可执行文件；此时加 `--target-dir target/verification` 在独立目录验证。
 
 协议测试使用本地合成 HTTP/WebSocket 服务器，验证认证信封、密钥错误回显清理、乱序读取、连接代际与后台线程退出。
 回归测试验证完整 DTO 的同级字段、预检指纹和版本、幂等任务、选择作用域、回收恢复与输入遮蔽。
-无头渲染覆盖全部系统页面及工作台浮层，在 160×45 和 64×20 尺寸下通过命中表驱动鼠标操作。
+无头渲染（`src/render_smoke_tests.rs`）覆盖全部系统页面及工作台浮层，在 160×45 和 64×20 尺寸下通过命中表驱动
+鼠标操作；需要目视检查布局时设置 `VULCAN_TUI_SNAPSHOT_DIR=<目录>` 后运行该测试输出快照。
 
 这些检查不包含真实服务的写入、付费模型调用或真实终端的人工验收。

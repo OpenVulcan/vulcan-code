@@ -125,11 +125,6 @@ impl ReasoningEffort {
         ReasoningEffort::High,
         ReasoningEffort::Max,
     ];
-
-    pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|e| *e == self).unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
 }
 
 /// Initial state delivered once the backend is connected (`service_workbench_snapshot`).
@@ -218,16 +213,28 @@ pub enum EventBody {
         attachments: Vec<String>,
     },
     AssistantReasoning {
+        #[expect(
+            dead_code,
+            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+        )]
         api_call_id: String,
         text: String,
         status: StreamStatus,
     },
     AssistantText {
+        #[expect(
+            dead_code,
+            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+        )]
         api_call_id: String,
         text: String,
         status: StreamStatus,
     },
     ToolCall {
+        #[expect(
+            dead_code,
+            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+        )]
         tool_call_id: String,
         tool_name: String,
         input: Value,
@@ -254,6 +261,13 @@ pub enum EventBody {
 #[derive(Debug, Clone)]
 pub struct ConversationEvent {
     pub seq: u64,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+        )
+    )]
     pub turn_id: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -286,6 +300,10 @@ pub struct PendingQuestion {
 
 #[derive(Debug, Clone)]
 pub struct PendingPrompt {
+    #[expect(
+        dead_code,
+        reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+    )]
     pub id: String,
     pub preview: String,
 }
@@ -421,6 +439,10 @@ pub struct GitCommit {
 
 #[derive(Debug, Clone)]
 pub struct GitSnapshot {
+    #[expect(
+        dead_code,
+        reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+    )]
     pub repository: String,
     pub branch: String,
     pub upstream: Option<String>,

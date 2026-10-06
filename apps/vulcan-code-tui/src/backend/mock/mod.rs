@@ -1052,7 +1052,6 @@ impl World {
             }
             // The demo has no host file manager to open.
             // demo 没有可打开的宿主文件管理器。
-            Command::OpenProjectDirectory { .. } => {}
             Command::ArchiveProjectConversations { project_id } => {
                 let count = self.archive_project(&project_id);
                 self.emit(BackendEvent::Notice(Notice::ArchivedCount(count)));

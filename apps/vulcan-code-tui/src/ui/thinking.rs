@@ -83,6 +83,9 @@ pub fn float_area(transcript: Rect) -> Option<Rect> {
 }
 
 pub fn render(app: &App, view: &ThinkingView, area: Rect, buf: &mut Buffer) {
+    // Clicking the box opens the live reasoning in the inspector.
+    // 点击该框会在检查器中打开实时推理。
+    app.hits.add(area, crate::app::hit::Target::ThinkingBox);
     let theme = &app.theme;
     let phase = app.phase();
     let bg = mix(theme.popover, theme.bg, 0.9);

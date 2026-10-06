@@ -153,7 +153,6 @@ pub struct CommitDialog {
 pub struct DiffView {
     pub file_index: usize,
     pub scroll: usize,
-    pub staged_view: bool,
 }
 
 #[derive(Debug, Clone)]

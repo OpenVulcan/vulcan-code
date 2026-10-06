@@ -6,7 +6,7 @@
 
 Rust · ratatui · 全鼠标操作
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 
 </div>
 
@@ -14,7 +14,7 @@ Rust · ratatui · 全鼠标操作
 
 ## 关于项目
 
-VulcanCode TUI 是 [Vulcan Code](https://github.com/OpenVulcan/vulcan-code) 的终端版客户端。它连接本机运行的
+VulcanCode TUI 是 [Vulcan Code](../../README.md) 的终端版客户端，位于工作区的 `apps/vulcan-code-tui`。它连接本机运行的
 Vulcan Code 核心服务，在终端里提供与 WebUI 相同的工作台：项目与会话、对话与思考过程、工具调用、提问、
 Git 变更与提交，以及记忆、知识库、代码语义引擎、技能、代理、插件管理和系统设置。
 
@@ -29,7 +29,7 @@ Git 变更与提交，以及记忆、知识库、代码语义引擎、技能、�
 
 ## 环境要求
 
-- Rust 工具链由 [`rust-toolchain.toml`](rust-toolchain.toml) 固定，`rustup` 会自动安装对应版本。
+- Rust 工具链由仓库根的 [`rust-toolchain.toml`](../../rust-toolchain.toml) 固定，`rustup` 会自动安装对应版本。
 - 连接真实服务时，需要在本机运行 Vulcan Code（桌面版或服务宿主）。TUI 读取服务自己发布的发现文件取得
   地址，无需手动配置。
 - 支持鼠标与真彩色的终端（Windows Terminal、iTerm2、WezTerm、Kitty 等）。
@@ -38,10 +38,10 @@ Git 变更与提交，以及记忆、知识库、代码语义引擎、技能、�
 
 ```bash
 # 连接本机运行中的 Vulcan Code 服务
-cargo run --release --bin vulcan-tui
+cargo run --release -p vulcan-code-tui --bin vulcan-tui
 
 # 不连接服务，使用脚本化的模拟后端体验界面
-cargo run --release --bin vulcan-tui -- --backend mock
+cargo run --release -p vulcan-code-tui --bin vulcan-tui -- --backend mock
 ```
 
 | 参数 | 说明 |
@@ -77,13 +77,13 @@ cargo run --release --bin vulcan-tui -- --backend mock
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets
-cargo test
+cargo clippy -p vulcan-code-tui --all-targets -- -D warnings
+cargo nextest run -p vulcan-code-tui
 ```
 
-- [`.cargo/config.toml`](.cargo/config.toml) 将编译并发限制为 4、测试线程限制为 4，请勿在验证命令中绕过。
-- `tests/render_smoke.rs` 以无头后端在宽、窄两种尺寸下渲染全部区域与浮层；需要目视检查时可输出快照：
-  `VULCAN_TUI_SNAPSHOT_DIR=<目录> cargo test --test render_smoke`。
+- 仓库根的 [`.cargo/config.toml`](../../.cargo/config.toml) 将编译并发限制为 4、测试线程限制为 4，请勿在验证命令中绕过。
+- `src/render_smoke_tests.rs` 以无头后端在宽、窄两种尺寸下渲染全部区域与浮层；需要目视检查时设置
+  `VULCAN_TUI_SNAPSHOT_DIR=<目录>` 后运行该测试输出快照。
 
 ### 多语言
 
@@ -91,15 +91,15 @@ cargo test
 文案使用 `tui.*` 键，写在 `i18n/overlay/<locale>.json`。新增或修改文案后执行：
 
 ```bash
-cargo run --bin vulcan-tui-i18n -- sync
+cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync
 ```
 
 ```bash
-cargo run --bin vulcan-tui-i18n -- sync --check
+cargo run -p vulcan-code-tui --bin vulcan-tui-i18n -- sync --check
 ```
 
-不要直接编辑 `i18n/generated/`。上游目录位置由 [`i18n/sync.json`](i18n/sync.json) 指定，默认是与本仓库
-并列的 `vulcan-code` 仓库。
+不要直接编辑 `i18n/generated/`。上游目录位置由 [`i18n/sync.json`](i18n/sync.json) 指定，即同一工作区的
+`apps/vulcan-code-web/src`。
 
 ### 目录结构
 
@@ -113,7 +113,7 @@ cargo run --bin vulcan-tui-i18n -- sync --check
 | `src/ui/` | 纯渲染 |
 | `src/i18n*`、`src/bin/vulcan-tui-i18n.rs` | 运行时翻译与语言目录同步工具 |
 
-更多结构与交互约定见 [`docs/tui-design.md`](docs/tui-design.md)，参与开发的约定见 [`AGENTS.md`](AGENTS.md)。
+更多结构与交互约定见 [`tui-design.md`](../../docs/contracts/tui-design.md)，参与开发的约定见 [`AGENTS.md`](AGENTS.md)。
 
 ## 安全
 
@@ -122,4 +122,4 @@ cargo run --bin vulcan-tui-i18n -- sync --check
 
 ## 许可证
 
-本项目以 [MIT 许可证](LICENSE) 开源。
+随 Vulcan Code 以 [MIT 许可证](../../LICENSE) 开源。

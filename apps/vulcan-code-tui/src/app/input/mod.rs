@@ -30,7 +30,7 @@ use crate::i18n;
 use crate::model::*;
 use crate::tr;
 
-pub use regions::{ask_step, scroll_transcript};
+pub use regions::ask_step;
 
 pub fn handle_event(app: &mut App, event: Event) {
     match event {
@@ -642,7 +642,6 @@ pub fn open_diff(app: &mut App, index: usize) {
     app.overlay = Some(Overlay::Diff(DiffView {
         file_index: index.min(app.git.ordered_files().len() - 1),
         scroll: 0,
-        staged_view: false,
     }));
     app.request_visible_diff();
 }

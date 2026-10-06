@@ -1766,12 +1766,6 @@ impl Worker {
                     self.absorb(&result);
                 }
             }
-            Command::OpenProjectDirectory { project_id } => {
-                self.call(
-                    "service_open_project_directory",
-                    json!({ "projectId": project_id }),
-                );
-            }
             Command::ArchiveProjectConversations { project_id } => {
                 // Count.
                 // 当前计数。

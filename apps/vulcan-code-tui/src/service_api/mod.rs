@@ -300,22 +300,6 @@ impl ServiceCall {
     pub fn param(&self, pointer: &str) -> &Value {
         self.params.pointer(pointer).unwrap_or(&Value::Null)
     }
-
-    /// Reads one exact string request parameter, empty only when absent or mistyped.
-    /// 读取一个准确字符串请求参数，仅在缺失或类型不符时为空。
-    /// Returns `String`.
-    /// 返回 `String`。
-    pub fn str_param(&self, pointer: &str) -> String {
-        self.param(pointer).as_str().unwrap_or_default().to_string()
-    }
-
-    /// Reads one exact boolean request parameter, false when absent or mistyped.
-    /// 读取一个准确布尔请求参数，缺失或类型不符时为 false。
-    /// Returns `bool`.
-    /// 返回 `bool`。
-    pub fn bool_param(&self, pointer: &str) -> bool {
-        self.param(pointer).as_bool().unwrap_or(false)
-    }
 }
 
 /// The latest result of one slot and the loader that produced it.
