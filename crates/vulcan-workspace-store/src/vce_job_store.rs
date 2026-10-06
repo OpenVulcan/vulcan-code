@@ -337,7 +337,7 @@ impl VceCompactionTableReceipt {
                 options.max_source_fragments,
             ]
             .contains(&0)
-            || options.num_threads > 8
+            || options.num_threads > vulcan_context_engine::VCE_MAX_COMPACTION_THREADS
         {
             return Err(String::from(
                 "VCE compaction table receipt has invalid identity, statistics, or options",

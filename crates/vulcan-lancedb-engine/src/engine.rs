@@ -66,7 +66,7 @@ use crate::types::{
 
 /// Largest worker-thread count a compaction request may ask for.
 /// 整理请求可要求的最大工作线程数。
-const MAX_COMPACTION_THREADS: usize = 8;
+pub const MAX_COMPACTION_THREADS: usize = 8;
 
 /// Default search limit applied when a request asks for zero rows.
 /// 请求行数为零时采用的默认检索条数。
@@ -1556,9 +1556,9 @@ fn map_external_error(error: impl std::fmt::Display) -> LanceDbEngineError {
 #[cfg(test)]
 mod tests {
     use super::{
-        LanceDbEngine, LanceDbEngineOptions, TableAccessCoordinator, build_arrow_schema,
-        normalize_output_format, normalize_table_name, validate_compaction_options,
-        validate_compaction_transition,
+        LanceDbEngine, LanceDbEngineOptions, MAX_COMPACTION_THREADS, TableAccessCoordinator,
+        build_arrow_schema, normalize_output_format, normalize_table_name,
+        validate_compaction_options, validate_compaction_transition,
     };
     use crate::types::{
         LanceDbColumnDef, LanceDbColumnType, LanceDbCompactTableInput, LanceDbCompactionMetrics,
@@ -1956,13 +1956,13 @@ mod tests {
         assert!(validate_compaction_options(&zero).is_err());
 
         let too_many_threads = LanceDbCompactionOptions {
-            num_threads: Some(9),
+            num_threads: Some(MAX_COMPACTION_THREADS + 1),
             ..base.clone()
         };
         assert!(validate_compaction_options(&too_many_threads).is_err());
 
         let bounded_threads = LanceDbCompactionOptions {
-            num_threads: Some(8),
+            num_threads: Some(MAX_COMPACTION_THREADS),
             ..base
         };
         assert!(validate_compaction_options(&bounded_threads).is_ok());

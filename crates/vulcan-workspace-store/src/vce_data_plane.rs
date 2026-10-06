@@ -117,6 +117,16 @@ const VCE_COMPACTION_MAX_BYTES_PER_FILE: u64 = 256 * 1024 * 1024;
 /// 单次 VCE 整理操作使用的有界存储引擎工作线程数。
 const VCE_COMPACTION_THREADS: u64 = 2;
 
+// The frozen worker count must satisfy the maintenance contract, and the contract must stay within
+// what the storage engine accepts; this crate is the only one that sees both bounds.
+// 冻结的工作线程数必须满足维护契约，契约也必须保持在存储引擎接受的范围内；只有本 crate 同时
+// 看得到这两个上限。
+const _: () = assert!(
+    VCE_COMPACTION_THREADS <= vulcan_context_engine::VCE_MAX_COMPACTION_THREADS
+        && vulcan_context_engine::VCE_MAX_COMPACTION_THREADS
+            <= vulcan_lancedb_engine::engine::MAX_COMPACTION_THREADS as u64
+);
+
 /// Input scan batch size used by VCE physical compaction.
 /// VCE 物理整理使用的输入扫描批次行数。
 const VCE_COMPACTION_SCAN_BATCH_ROWS: u64 = 8_192;

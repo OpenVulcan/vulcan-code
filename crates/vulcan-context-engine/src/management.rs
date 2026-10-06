@@ -534,6 +534,15 @@ pub struct VcePhysicalCompactionOperation {
     pub metrics: Option<VcePhysicalCompactionMetrics>,
 }
 
+/// Largest `num_threads` the maintenance contract accepts for one compaction operation.
+/// 维护契约对单次整理操作接受的最大 `num_threads`。
+///
+/// Every VCE plan and receipt validator reads this bound. The storage engine keeps its own request
+/// limit; the data plane asserts at compile time that this contract never exceeds it.
+/// 所有 VCE 计划与回执校验都读取此上限。存储引擎保留自身请求上限；数据平面在编译期断言此契约
+/// 绝不超过该上限。
+pub const VCE_MAX_COMPACTION_THREADS: u64 = 8;
+
 /// Frozen bounded parameters for one native physical compaction operation.
 /// 一项原生物理整理操作的冻结有界参数。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1231,7 +1240,7 @@ fn validate_physical_table_plan(
         || statistics.version == 0
         || statistics.small_fragment_count > statistics.fragment_count
         || values.contains(&0)
-        || options.num_threads > 8
+        || options.num_threads > VCE_MAX_COMPACTION_THREADS
         || table.compaction_required != statistics.requires_compaction()
     {
         return Err(VceManagementContractError::InvalidResponse {

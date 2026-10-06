@@ -52,14 +52,15 @@ pub use indexing::{
     IndexStatus, IndexingConfig, IndexingEngine, IngestResult, PendingIndex, ReadyIndex,
 };
 pub use management::{
-    VceBlobDetail, VceChannelState, VceChunkSummary, VceCompactionOptions, VceFileQuery,
-    VceFileSummary, VceIntegrityIssue, VceIntegrityIssueKind, VceMaintenanceAction,
-    VceMaintenanceMode, VceMaintenancePlan, VceManagementContractError, VceManagementQuery,
-    VceManagementQueryRequest, VceManagementQueryResponse, VceManagementQueryResult,
-    VceOperationKind, VceOperationPhase, VceOperationSummary, VcePage, VcePageRequest,
-    VcePhysicalCompactionMetrics, VcePhysicalCompactionOperation, VcePhysicalCompactionState,
-    VcePhysicalFragmentSummary, VcePhysicalTablePlan, VcePhysicalTableRole,
-    VcePhysicalTableStatistics, validate_management_query, validate_management_response,
+    VCE_MAX_COMPACTION_THREADS, VceBlobDetail, VceChannelState, VceChunkSummary,
+    VceCompactionOptions, VceFileQuery, VceFileSummary, VceIntegrityIssue, VceIntegrityIssueKind,
+    VceMaintenanceAction, VceMaintenanceMode, VceMaintenancePlan, VceManagementContractError,
+    VceManagementQuery, VceManagementQueryRequest, VceManagementQueryResponse,
+    VceManagementQueryResult, VceOperationKind, VceOperationPhase, VceOperationSummary, VcePage,
+    VcePageRequest, VcePhysicalCompactionMetrics, VcePhysicalCompactionOperation,
+    VcePhysicalCompactionState, VcePhysicalFragmentSummary, VcePhysicalTablePlan,
+    VcePhysicalTableRole, VcePhysicalTableStatistics, validate_management_query,
+    validate_management_response,
 };
 pub use manifest::{
     VCE_EMBEDDING_MANIFEST_SCHEMA_VERSION, VceCodeNodeSnapshot, VceEmbeddingBatchRecord,
