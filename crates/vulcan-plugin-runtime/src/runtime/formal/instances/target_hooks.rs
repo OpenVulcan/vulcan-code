@@ -27,12 +27,12 @@ impl Drop for TargetHookObservation {
             match self.runtime.lock() {
                 Ok(state) => {
                     if state.private_origin.is_some() {
-                        self.runtime.closing.store(true, Ordering::Release);
+                        self.runtime.lifecycle.close();
                     }
                 }
                 // Poison cannot prove that ownership transferred; retain the existing explicit closed behavior.
                 // 锁中毒不能证明所有权已转交；保留既有明确关闭行为。
-                Err(_) => self.runtime.closing.store(true, Ordering::Release),
+                Err(_) => self.runtime.lifecycle.close(),
             }
         }
     }
@@ -186,7 +186,7 @@ impl VulcanPluginRuntimeManager {
             // 保留实际准备或业务结果，不虚构完成。
             let result = manager.prepare_formal_instance(&owner, &runtime, expires);
             if result.is_err() {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.lifecycle.close();
             }
             if let Ok(mut state) = runtime.lock() {
                 state.prepared = Some(result);
@@ -284,7 +284,7 @@ impl VulcanPluginRuntimeManager {
                     || original.target != authority.target
                     || runtime.plugin.generation != authority.plugin.generation
                     || !Arc::ptr_eq(&original.staged, staged)
-                    || runtime.closing.load(Ordering::Acquire)
+                    || runtime.lifecycle.is_closing()
                     || state.retired
                 {
                     return Err(instance_error(
@@ -314,8 +314,7 @@ impl VulcanPluginRuntimeManager {
                     kind: VulcanPluginPersistentRuntimeKind::Hook,
                     operation_gate: Arc::new(tokio::sync::Mutex::new(())),
                     plugin: authority.plugin.clone(),
-                    closing: AtomicBool::new(false),
-                    faulted: AtomicBool::new(false),
+                    lifecycle: lifecycle::InstanceLifecycle::new(),
                     state: Mutex::new(PersistentState {
                         preparing: true,
                         private_origin: Some(
@@ -389,7 +388,7 @@ impl VulcanPluginRuntimeManager {
                         return Ok(true);
                     }
                 }
-                if runtime.closing.load(Ordering::Acquire) || state.retired {
+                if runtime.lifecycle.is_closing() || state.retired {
                     return Err(instance_error(
                         "Private target Hook initialization was cancelled; original ownership remains retained.",
                     ));
@@ -437,7 +436,7 @@ impl VulcanPluginRuntimeManager {
             .as_ref()
             .ok_or_else(|| instance_error("Original private Hook authority is missing."))?;
         if runtime.kind != VulcanPluginPersistentRuntimeKind::Hook
-            || runtime.closing.load(Ordering::Acquire)
+            || runtime.lifecycle.is_closing()
             || state.preparing
             || state.retired
             || !state.operations.is_empty()

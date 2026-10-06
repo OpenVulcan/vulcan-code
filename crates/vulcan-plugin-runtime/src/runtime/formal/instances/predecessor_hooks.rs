@@ -108,7 +108,7 @@ impl VulcanPluginRuntimeManager {
                 let state = runtime.lock()?;
                 if !matches!(&state.private_origin, Some(PrivateHookOrigin::Predecessor(original)) if Arc::ptr_eq(original, source))
                     || runtime.plugin.generation != source.plugin().generation
-                    || runtime.closing.load(Ordering::Acquire)
+                    || runtime.lifecycle.is_closing()
                     || state.retired
                 {
                     return Err(instance_error(
@@ -131,8 +131,7 @@ impl VulcanPluginRuntimeManager {
                     kind: VulcanPluginPersistentRuntimeKind::Hook,
                     operation_gate: Arc::new(tokio::sync::Mutex::new(())),
                     plugin: source.plugin().clone(),
-                    closing: AtomicBool::new(false),
-                    faulted: AtomicBool::new(false),
+                    lifecycle: lifecycle::InstanceLifecycle::new(),
                     state: Mutex::new(PersistentState {
                         preparing: true,
                         private_origin: Some(PrivateHookOrigin::Predecessor(Arc::clone(source))),

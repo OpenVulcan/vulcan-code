@@ -19,6 +19,7 @@ mod admission;
 mod control;
 pub(in crate::runtime::formal) mod diagnostics;
 mod handoff;
+mod lifecycle;
 mod predecessor_handoff;
 mod predecessor_hooks;
 mod target_hooks;
@@ -46,16 +47,13 @@ pub(in crate::runtime) struct PersistentRuntime {
     /// Immutable descriptor retains the original executable package.
     /// 不可变描述符保留原可执行包。
     plugin: VulcanPluginDescriptor,
-    /// Closing intent never proves physical termination.
-    /// 关闭意图绝不证明物理终止。
-    closing: AtomicBool,
-    /// Set before closing when the instance's own failure, not a lifecycle request, closed it.
-    /// 当实例因自身失败而非生命周期请求关闭时，在关闭前设置。
+    /// Closing intent and whether the instance's own failure caused it.
+    /// 关闭意图及其是否由实例自身失败引起。
     ///
     /// Only a faulted instance may be replaced by the next call; drains and disables keep
     /// rejecting admission until they finish.
     /// 只有故障实例可由下一次调用替换；排空与停用在完成前继续拒绝入场。
-    faulted: AtomicBool,
+    lifecycle: lifecycle::InstanceLifecycle,
     /// Short evidence lock never spans Lua execution or asynchronous waiting.
     /// 短证据锁绝不跨越 Lua 执行或异步等待。
     state: Mutex<PersistentState>,
@@ -195,7 +193,7 @@ impl Drop for PersistentPreparation {
                 "persistent preparation was interrupted.",
             )));
             state.preparing = false;
-            self.0.closing.store(true, Ordering::Release);
+            self.0.lifecycle.close();
         }
     }
 }
@@ -215,19 +213,6 @@ impl Drop for PersistentMonitor {
 }
 
 impl PersistentRuntime {
-    /// Close this instance because it failed, unless a lifecycle request is already closing it.
-    /// 因实例失败而关闭它，除非生命周期请求已在关闭它。
-    ///
-    /// `faulted` is published before `closing`, so any reader that observes `closing` also
-    /// observes why it was set.
-    /// `faulted` 在 `closing` 之前发布，因此观测到 `closing` 的读取方也能观测到其原因。
-    fn mark_faulted(&self) {
-        if !self.closing.load(Ordering::Acquire) {
-            self.faulted.store(true, Ordering::Release);
-        }
-        self.closing.store(true, Ordering::Release);
-    }
-
     /// Borrow original persistent ownership; internal Hook/UI operations have no controller or host call/session.
     /// 借用原持久所有权；内部 Hook/UI 操作没有控制器及宿主调用／会话。
     fn native_identity_owner(&self) -> crate::runtime::native_identity::NativeIdentityOwner<'_> {

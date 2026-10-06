@@ -19,7 +19,7 @@ impl ManagedFormalRuntime {
                 .map_err(|_| instance_error("Persistent registry lock is poisoned."))?
                 .values()
             {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.lifecycle.close();
             }
         }
         Ok(())
@@ -149,7 +149,7 @@ impl VulcanPluginRuntimeManager {
             core.phase,
             EmbeddedSessionPhase::Closing | EmbeddedSessionPhase::Closed
         ) {
-            runtime.mark_faulted();
+            runtime.lifecycle.fault();
         }
         Ok(())
     }
@@ -218,7 +218,7 @@ impl VulcanPluginRuntimeManager {
         // 持久观测失败关闭转交，同时继续清理实际原资源。
         if let Err(error) = self.observe_target_hook_initialization(owner, &mut state) {
             state.target_receipt_error = Some(error.to_string());
-            runtime.closing.store(true, Ordering::Release);
+            runtime.lifecycle.close();
         }
         if let Some(initialization) = &state.initialization
             && initialization
@@ -243,9 +243,9 @@ impl VulcanPluginRuntimeManager {
                 core.phase,
                 EmbeddedSessionPhase::Closing | EmbeddedSessionPhase::Closed
             ) {
-                runtime.mark_faulted();
+                runtime.lifecycle.fault();
             }
-            if !runtime.closing.load(Ordering::Acquire) {
+            if !runtime.lifecycle.is_closing() {
                 return Ok(false);
             }
             if core.phase != EmbeddedSessionPhase::Closed {
@@ -285,7 +285,7 @@ impl VulcanPluginRuntimeManager {
                 .forget_session(&id)
                 .map_err(core_error)?;
             state.session_forgotten = true;
-        } else if !runtime.closing.load(Ordering::Acquire) {
+        } else if !runtime.lifecycle.is_closing() {
             return Ok(false);
         }
         // Each acknowledgement has its own checkpoint so a failed later step is safely retryable.
@@ -429,7 +429,7 @@ impl VulcanPluginRuntimeManager {
                 .map_err(|_| instance_error("persistent registry lock is poisoned."))?
                 .get(plugin_id)
             {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.lifecycle.close();
             }
         }
         // Keep initialization ordering within the original finite admission budget.
@@ -477,7 +477,7 @@ impl VulcanPluginRuntimeManager {
                 .get(plugin_id)
                 .cloned();
             if let Some(runtime) = &runtime {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.lifecycle.close();
             }
             runtime
         };

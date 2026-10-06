@@ -56,7 +56,7 @@ pub(in crate::runtime::formal) fn sample(
             row.original_pool_id = state.pool.clone();
             row.core_session_id = state.session.clone();
             row.preparing = state.preparing;
-            row.closing = instance.closing.load(Ordering::Acquire);
+            row.closing = instance.lifecycle.is_closing();
             row.retired = state.retired;
             row.is_drain_blocking = !state.retired || state.preparing;
             row.cleanup_recovery = !state.monitored && !state.retired;

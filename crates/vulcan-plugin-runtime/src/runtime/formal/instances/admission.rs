@@ -60,7 +60,7 @@ impl VulcanPluginRuntimeManager {
         // 失败只终止失败的调用：其普通实例在本次调用预算内退役，并在下方接纳新实例。此处绝不替换
         // 生命周期关闭。
         if let Some(faulted) = existing.take_if(|runtime| {
-            runtime.faulted.load(Ordering::Acquire)
+            runtime.lifecycle.is_faulted()
                 && runtime.plugin.generation == generation
                 && runtime
                     .lock()
@@ -78,14 +78,14 @@ impl VulcanPluginRuntimeManager {
                 ));
             }
             if runtime.plugin.generation != generation {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.lifecycle.close();
                 self.start_instance_monitor(&owner, &runtime)?;
                 self.wait_instance_retired(&runtime, expires).await?;
                 return Err(instance_error(
                     "Previous persistent generation must be drained before replacement.",
                 ));
             }
-            if runtime.closing.load(Ordering::Acquire) {
+            if runtime.lifecycle.is_closing() {
                 return Err(instance_error(
                     "persistent instance is closing; explicit drain is required.",
                 ));
@@ -131,8 +131,7 @@ impl VulcanPluginRuntimeManager {
                     kind,
                     operation_gate: Arc::new(tokio::sync::Mutex::new(())),
                     plugin,
-                    closing: AtomicBool::new(false),
-                    faulted: AtomicBool::new(false),
+                    lifecycle: lifecycle::InstanceLifecycle::new(),
                     state: Mutex::new(PersistentState {
                         preparing: true,
                         preparation_action: crate::runtime::action_status::ACTION_RECORD
@@ -177,23 +176,23 @@ impl VulcanPluginRuntimeManager {
                 let snapshot = initialization.snapshot().map_err(core_error)?;
                 if snapshot.phase.is_terminal() {
                     if let Some(error) = snapshot.error {
-                        runtime.mark_faulted();
+                        runtime.lifecycle.fault();
                         return Err(core_error(error));
                     }
-                    if runtime.closing.load(Ordering::Acquire) {
+                    if runtime.lifecycle.is_closing() {
                         return Err(instance_error("persistent closed during initialization."));
                     }
                     self.ensure_current_persistent_generation(plugin_id, generation)?;
                     return Ok(runtime);
                 }
             }
-            if runtime.closing.load(Ordering::Acquire) {
+            if runtime.lifecycle.is_closing() {
                 return Err(instance_error(
                     "persistent initialization was closed; original ownership remains retained.",
                 ));
             }
             if remaining(expires).is_err() {
-                runtime.mark_faulted();
+                runtime.lifecycle.fault();
                 return Err(instance_error(
                     "persistent initialization timed out; ownership remains retained.",
                 ));
@@ -242,7 +241,7 @@ impl VulcanPluginRuntimeManager {
         expires: Instant,
     ) -> Result<(), VulcanPluginRuntimeError> {
         remaining(expires)?;
-        if runtime.closing.load(Ordering::Acquire) {
+        if runtime.lifecycle.is_closing() {
             return Err(instance_error("persistent cancelled before preparation."));
         }
         // Capture the explicit private origin before any filesystem materialization begins.
@@ -369,7 +368,7 @@ impl VulcanPluginRuntimeManager {
             .lock()
             .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
         self.validate_persistent_preparation(runtime, private_origin.as_ref())?;
-        if runtime.closing.load(Ordering::Acquire) {
+        if runtime.lifecycle.is_closing() {
             return Err(instance_error(
                 "persistent cancelled before core admission.",
             ));
@@ -439,7 +438,7 @@ impl VulcanPluginRuntimeManager {
             // Keep the exact lifecycle evidence within this synchronous lock scope.
             // 在当前同步锁作用域内保留精确生命周期证据。
             let mut state = runtime.lock()?;
-            if runtime.closing.load(Ordering::Acquire) || state.retired {
+            if runtime.lifecycle.is_closing() || state.retired {
                 return Err(instance_error("Hook instance is closing."));
             }
             // Issue a checked monotonic correlation that Lua cannot replace.
@@ -576,7 +575,7 @@ impl VulcanPluginRuntimeManager {
             // 在短证据锁下读取或更新一条精确所有权记录。
             let mut state = runtime.lock()?;
             if runtime.kind != VulcanPluginPersistentRuntimeKind::UiAction
-                || runtime.closing.load(Ordering::Acquire)
+                || runtime.lifecycle.is_closing()
                 || state.retired
             {
                 return Err(instance_error(
