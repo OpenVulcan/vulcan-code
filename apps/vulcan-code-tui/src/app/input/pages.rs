@@ -18,6 +18,9 @@ pub enum Activate {
     Left,
     Right,
     Click,
+    /// The second click of a double click: expands items and leaves controls as the first click set them.
+    /// 双击中的第二次点击：展开条目，控件保持第一次点击设定的状态。
+    DoubleClick,
 }
 
 pub(super) fn on_nav_key(app: &mut App, key: KeyEvent) {
@@ -142,6 +145,7 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
     };
     let label = row.label.clone();
     match row.kind.clone() {
+        RowKind::Toggle { .. } if how == Activate::DoubleClick => {}
         RowKind::Toggle { on, edit } => {
             let value = match how {
                 Activate::Left => false,
@@ -166,6 +170,7 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
                     current,
                 },
             ),
+            Activate::DoubleClick => {}
             Activate::Space | Activate::Right | Activate::Left => {
                 if options.is_empty() {
                     return;
@@ -187,6 +192,7 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
             edit,
         } => {
             let next = match how {
+                Activate::DoubleClick => return,
                 Activate::Left => (value - step).max(min),
                 Activate::Right | Activate::Space => (value + step).min(max),
                 Activate::Enter | Activate::Click => {
@@ -245,6 +251,9 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
                 Activate::Enter if !actions.is_empty() => {
                     action::perform(app, actions[chosen].action.clone());
                 }
+                // A single click only selects an item; most clicks aim at the item, not its details.
+                // 单击只选中条目；多数点击是为了选取条目而非展开其详情。
+                Activate::Click => {}
                 _ if !lines.is_empty() => {
                     let expanded = &mut app.page_state_mut(page).expanded;
                     if !expanded.remove(&id) {
@@ -301,7 +310,9 @@ pub fn row_action(app: &mut App, page: PageId, index: usize, chip: usize) {
 
 /// Mouse click on a page row: move the cursor there and activate it.
 /// 鼠标点击页面行：将光标移到该行并激活。
-pub fn click_row(app: &mut App, page: PageId, index: usize) {
+/// `double` marks the second click of a double click.
+/// `double` 表示双击中的第二次点击。
+pub fn click_row(app: &mut App, page: PageId, index: usize, double: bool) {
     app.focus = Focus::AreaPage;
     let rows = pages::rows(app, page);
     if !rows.get(index).is_some_and(|r| r.selectable()) {
@@ -310,5 +321,10 @@ pub fn click_row(app: &mut App, page: PageId, index: usize) {
     let state = app.page_state_mut(page);
     state.cursor = index;
     state.free_scroll = true;
-    activate(app, page, index, Activate::Click);
+    let how = if double {
+        Activate::DoubleClick
+    } else {
+        Activate::Click
+    };
+    activate(app, page, index, how);
 }

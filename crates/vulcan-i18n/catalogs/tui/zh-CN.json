@@ -287,7 +287,7 @@
   "tui.form.step": "第 {current} 项，共 {total} 项；Esc 取消整个请求。",
   "tui.help.focus": "在各区域间切换焦点",
   "tui.help.interrupt": "停止运行 / 清空输入 / 退出",
-  "tui.help.mouse": "单击聚焦或激活，双击打开，右键打开菜单，滚轮滚动",
+  "tui.help.mouse": "单击选中或操作控件，双击展开或打开，右键查看详情与菜单，滚轮滚动",
   "tui.help.mouseKey": "鼠标",
   "tui.help.short": "帮助",
   "tui.help.title": "快捷键",

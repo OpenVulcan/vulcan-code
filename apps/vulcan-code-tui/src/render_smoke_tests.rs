@@ -883,3 +883,92 @@ fn mouse_reaches_areas_overlays_and_dialogs() {
     );
     assert!(!app.should_quit);
 }
+
+/// Presses the left button at `rect`'s first cell; two presses in a row form a double click.
+/// 在 `rect` 的首个单元格按下左键；连续两次按下构成双击。
+fn press(app: &mut App, rect: Rect) {
+    let event = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x,
+        row: rect.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    input::handle_event(app, Event::Mouse(event));
+}
+
+/// A single click only selects transcript blocks and page items; a double click expands them.
+/// 单击只选中会话记录块与页面条目；双击才展开。
+#[test]
+fn single_click_selects_and_double_click_expands() {
+    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let mut app = App::new(mock::spawn(), Theme::dark(), true);
+    let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
+    pump(
+        &mut app,
+        &mut wide,
+        &mut narrow,
+        Instant::now() + Duration::from_millis(1500),
+    );
+    wide.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+
+    // Transcript: the first fully visible block.
+    // 会话记录：首个完整可见的块。
+    let area = app.hits.transcript;
+    let top = app.hits.transcript_top;
+    let (seq, start, _) = app
+        .hits
+        .transcript_items
+        .iter()
+        .copied()
+        .find(|(_, start, _)| *start >= top && *start < top + area.height as usize)
+        .expect("a visible transcript block");
+    let row = Rect {
+        y: area.y + (start - top) as u16,
+        height: 1,
+        ..area
+    };
+    let folded = |app: &App| app.session().is_some_and(|s| s.toggled.contains(&seq));
+    let before = folded(&app);
+    press(&mut app, row);
+    assert_eq!(app.session().and_then(|s| s.selected), Some(seq));
+    assert_eq!(folded(&app), before, "a single click must not fold");
+    press(&mut app, row);
+    assert_ne!(folded(&app), before, "a double click folds or unfolds");
+
+    // Page items: find an expandable item on the plugin pages.
+    // 页面条目：在插件页面中查找可展开的条目。
+    crate::app::action::perform(&mut app, UiAction::Area(Area::Plugins));
+    let mut found = None;
+    for _ in 0..2 {
+        pump(
+            &mut app,
+            &mut wide,
+            &mut narrow,
+            Instant::now() + Duration::from_millis(400),
+        );
+        wide.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        let page = app.current_page().expect("plugin page");
+        found = crate::app::pages::rows(&app, page)
+            .iter()
+            .enumerate()
+            .find_map(|(index, row)| match &row.kind {
+                crate::app::pages::RowKind::Item { id, lines, .. } if !lines.is_empty() => {
+                    Some((page, index, id.clone()))
+                }
+                _ => None,
+            });
+        if found.is_some() {
+            break;
+        }
+    }
+    let (page, index, id) = found.expect("an expandable plugin item");
+    let rect = app
+        .hits
+        .find(|t| matches!(t, Target::PageRow(i) if *i == index))
+        .expect("item row target");
+    press(&mut app, rect);
+    assert!(!app.page_state(page).expanded.contains(&id));
+    press(&mut app, rect);
+    assert!(app.page_state(page).expanded.contains(&id));
+}

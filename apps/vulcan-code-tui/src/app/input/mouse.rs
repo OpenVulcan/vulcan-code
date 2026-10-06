@@ -17,7 +17,6 @@ use crate::app::hit::{ScrollTarget, Target};
 use crate::app::overlay::Overlay;
 use crate::app::pages::Area;
 use crate::app::{App, Focus, PanelTab, SidebarRow, history};
-use crate::model::EventBody;
 
 /// Lines moved per wheel notch.
 /// 每格滚轮移动的行数。
@@ -243,7 +242,7 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
         Target::NavItem(index) => action::perform(app, UiAction::Navigate(index)),
         Target::PageRow(index) => {
             if let Some(page) = app.current_page() {
-                pages::click_row(app, page, index);
+                pages::click_row(app, page, index, double);
             }
         }
         Target::PageRowAction(index, chip) => {
@@ -315,29 +314,18 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
     }
 }
 
-/// A click inside the transcript selects the block under it; its first line (the header) toggles
-/// the fold, and a double click opens the block in the inspector.
-/// 在会话记录内点击会选中其下方的块；点击首行（标题）切换折叠，双击则在检视器中打开该块。
+/// A click inside the transcript only selects the block under it, because most clicks aim at a
+/// block rather than at its fold; a double click folds or unfolds it, like Enter, and a right click
+/// opens the inspector, like `i`.
+/// 在会话记录内单击只选中其下方的块，因为多数点击是为了选取而非展开；双击才折叠或展开（同 Enter），
+/// 右键打开检视器（同 `i`）。
 fn click_transcript(app: &mut App, at: Position, double: bool) {
     app.focus = Focus::Transcript;
-    let Some(item) = transcript_item_at(app, at) else {
+    let Some((seq, _, _)) = transcript_item_at(app, at) else {
         return;
     };
-    let (seq, start, _) = item;
     select_seq(app, seq);
-    // A click on a block's first line folds or unfolds it; a long user message folds from any
-    // of its lines, including the `▸ … more lines` marker at its end.
-    // 点击块的首行折叠或展开该块；较长的用户消息点击任意一行（包括末尾的 `▸ … 更多行` 标记）均可。
-    let user_message = app.session().is_some_and(|s| {
-        s.events
-            .iter()
-            .any(|e| e.seq == seq && matches!(e.body, EventBody::UserInput { .. }))
-    });
     if double {
-        action::perform(app, UiAction::Inspect(seq));
-    } else if user_message
-        || app.hits.transcript_top + (at.y - app.hits.transcript.y) as usize == start
-    {
         toggle_selected(app);
     }
 }

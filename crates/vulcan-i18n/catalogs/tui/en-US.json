@@ -287,7 +287,7 @@
   "tui.form.step": "Field {current} of {total}; Esc cancels the entire request.",
   "tui.help.focus": "Move focus between regions",
   "tui.help.interrupt": "Stop run / clear input / quit",
-  "tui.help.mouse": "Click to focus or activate, double-click to open, right-click for menus, wheel to scroll",
+  "tui.help.mouse": "Click to select or press a control, double-click to expand or open, right-click for details and menus, wheel to scroll",
   "tui.help.mouseKey": "Mouse",
   "tui.help.short": "Help",
   "tui.help.title": "Keyboard shortcuts",
