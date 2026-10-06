@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release run run-release service core-build core-restart br br-release licenses test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync vite start stop status build build-release release run run-release service core-build core-restart br br-release licenses check test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -75,6 +75,7 @@ help:
 	@echo "  make br            # build Core/WebUI/Electron and run desktop with Vite"
 	@echo "  make br-release    # build Core/WebUI/Electron and run desktop"
 	@echo "  make licenses      # generate Rust third-party notices"
+	@echo "  make check         # static gates: fmt, clippy -D warnings, lint, typecheck"
 	@echo "  make test          # Rust tests without long real-time and plugin-lifecycle tests"
 	@echo "  make test full     # every Rust test, isolated LuaSkills callbacks, and doctests"
 	@echo "  make deps          # install host, bundled tools, and Lua dependencies"
@@ -185,6 +186,11 @@ br-release:
 # licenses 路由 Rust 第三方声明生成命令。
 licenses:
 	$(call route-command,licenses)
+
+# check routes the static quality gates that stand in for paused hosted CI.
+# check 路由静态质量门禁，在托管 CI 暂停期间替代其检查。
+check:
+	$(call route-command,check)
 
 # test routes the fast Rust suite, or the full suite when the full companion goal is present.
 # test 默认路由快速 Rust 测试，存在 full 伴随目标时路由完整测试。

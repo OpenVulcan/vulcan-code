@@ -182,6 +182,7 @@ show_usage() {
     echo "  ./make.sh release     # Core/Electron/WebUI release build"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
+    echo "  ./make.sh check       # static gates: fmt, clippy -D warnings, lint, typecheck"
     echo "  ./make.sh test        # Rust tests without long real-time and plugin-lifecycle tests"
     echo "  ./make.sh test full   # every Rust test, isolated LuaSkills callbacks, and doctests"
     echo "  ./make.sh run         # run Electron desktop; start Vite when needed"
@@ -269,6 +270,14 @@ case "$NormalizedMode" in
             exit 1
         fi
         invoke_powershell_route check-deps
+        ;;
+    check)
+        if [ "$NormalizedVariant" != "" ]; then
+            echo "Unsupported check command: '$CommandVariant'" >&2
+            show_usage
+            exit 1
+        fi
+        node "$ScriptDir/scripts/check.mjs"
         ;;
     test)
         case "$NormalizedVariant" in
