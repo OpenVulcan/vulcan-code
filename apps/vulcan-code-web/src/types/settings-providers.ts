@@ -1,6 +1,8 @@
 import type { MainAreaId } from "./startup";
 import type { PublicAiNativeToolKind, PublicAiResourceKind } from "./public-ai";
 
+// FeatureAreaSummary is one main-navigation entry the WebUI builds and localizes itself.
+// FeatureAreaSummary 是 WebUI 自行构建并本地化的一个主导航条目。
 export interface FeatureAreaSummary {
   // Stable feature area identifier.
   // 稳定功能区域标识。

@@ -80,9 +80,6 @@ pub struct WorkbenchSnapshot {
     /// Tool calls shown in the tool panel.
     /// 工具面板展示的工具调用。
     pub tool_calls: Vec<ToolCallSummary>,
-    /// Feature areas shown by the main navigation.
-    /// 主导航展示的功能区域。
-    pub feature_areas: Vec<FeatureAreaSummary>,
     /// Plugin summaries shown in the plugin center.
     /// 插件中心展示的插件摘要。
     pub plugins: Vec<PluginSummary>,

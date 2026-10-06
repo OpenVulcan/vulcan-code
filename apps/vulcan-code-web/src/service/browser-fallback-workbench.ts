@@ -99,13 +99,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   archivedConversations: [],
   selectedConversationId: "preview",
   toolCalls: [{ id: "preview-tool", name: "service_startup_snapshot", status: "preview", detail: "Browser mode is using fallback data." }],
-  featureAreas: [
-    { id: "chat", label: "Workspace", description: "Project conversations, message stream, and model input", status: "Available" },
-    { id: "skills", label: "Skills", description: "LuaSkills, tool capabilities, and skill packages", status: "Preview" },
-    { id: "agents", label: "Agents", description: "Agents, expert profiles, and delegation prompts", status: "Preview" },
-    { id: "memory", label: "Memory", description: "VMM user, project, and conversation memory", status: "Preview" },
-    { id: "settings", label: "Settings", description: "Project, model, tool, diagnostics, and system settings", status: "Preview" },
-  ],
   composerSlashCommands: browserFallbackSlashCommands,
   outputStyleCatalog: {
     defaultId: "balanced",

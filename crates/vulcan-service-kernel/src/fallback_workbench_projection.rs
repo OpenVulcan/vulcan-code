@@ -62,7 +62,6 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         selected_conversation_id: None,
         subagent_navigation: None,
         tool_calls: tool_calls(),
-        feature_areas: feature_areas(),
         plugins: Vec::new(),
         lua_skills: lua_skills_catalog_summary(&empty_luaskills_catalog(), &provider_configuration),
         agent_skills: agent_skills_catalog_summary(&provider_configuration, None),
@@ -121,56 +120,5 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         context_injection: None,
         context_injection_by_conversation: Vec::new(),
         context_usage: None,
-    }
-}
-
-/// Creates feature areas matching the WebUI navigation surface.
-/// 创建与 WebUI 导航面相匹配的功能区域。
-pub(crate) fn feature_areas() -> Vec<FeatureAreaSummary> {
-    vec![
-        feature_area("chat", "控制台", "控制台、消息流与模型输入区", "真实快照"),
-        feature_area("projects", "项目", "工作区项目列表与绑定状态", "真实快照"),
-        feature_area(
-            "providers",
-            "模型",
-            "Provider、模型、能力配置",
-            "待接入配置详情",
-        ),
-        feature_area("tools", "工具", "工具调用、命令会话与输出", "待接入运行态"),
-        feature_area(
-            "plugins",
-            "插件",
-            "LuaSkills 与高级插件控制面板",
-            "真实目录",
-        ),
-        feature_area(
-            "memory",
-            "VMM 记忆",
-            "用户、项目、画像与记忆节点",
-            "会话绑定快照",
-        ),
-        feature_area(
-            "settings",
-            "设置",
-            "运行时、界面、权限与远程访问设置",
-            "基础区域",
-        ),
-        feature_area("logs", "诊断", "启动日志、错误与运行时事件", "真实启动日志"),
-    ]
-}
-
-/// Creates one feature area summary.
-/// 创建单个功能区域摘要。
-pub(crate) fn feature_area(
-    id: &str,
-    label: &str,
-    description: &str,
-    status: &str,
-) -> FeatureAreaSummary {
-    FeatureAreaSummary {
-        id: id.to_string(),
-        label: label.to_string(),
-        description: description.to_string(),
-        status: status.to_string(),
     }
 }

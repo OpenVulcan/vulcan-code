@@ -1315,7 +1315,6 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         selected_conversation_id,
         subagent_navigation,
         tool_calls: tool_calls(),
-        feature_areas: feature_areas(),
         plugins: plugins_from_catalogs(
             luaskills_catalog,
             provider_configuration,

@@ -218,25 +218,6 @@ pub struct ContextUsageSnapshot {
     pub tooltip_rows: Vec<String>,
 }
 
-/// Summarizes one primary workbench feature area.
-/// 汇总工作台中的单个主功能区域。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FeatureAreaSummary {
-    /// Stable feature area identifier.
-    /// 稳定功能区域标识。
-    pub id: String,
-    /// User-facing feature area label.
-    /// 面向用户显示的功能区域名称。
-    pub label: String,
-    /// Short feature area description.
-    /// 简短功能区域描述。
-    pub description: String,
-    /// Feature area status text.
-    /// 功能区域状态文本。
-    pub status: String,
-}
-
 /// Summarizes a project in the WebUI sidebar.
 /// 汇总 WebUI 侧栏中的项目。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

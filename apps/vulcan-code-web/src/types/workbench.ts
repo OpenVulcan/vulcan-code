@@ -44,7 +44,6 @@ import type {
   LogEntrySummary,
 } from "./runtime-context";
 import type {
-  FeatureAreaSummary,
   HostToolsSettingsSummary,
   McpServerSummary,
   McpToolSummary,
@@ -159,9 +158,6 @@ export interface WorkbenchSnapshot {
   // Tool call summaries.
   // 工具调用摘要。
   toolCalls: ToolCallSummary[];
-  // Main feature areas.
-  // 主功能区域。
-  featureAreas: FeatureAreaSummary[];
   // Plugin rows projected from the committed LuaSkills and Vulcan Plugin catalogs.
   // 从已提交的 LuaSkills 与 Vulcan 插件目录投影的插件行。
   plugins: PluginSummary[];
