@@ -1,6 +1,6 @@
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
 import type { McpSettingsActionProps } from "@/components/features/settings/mcp-server-dialog"
-import type { LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor, LuaSkillConfigEventBatch, LuaSkillConfigSetRequest, LuaSkillConfigSetResult, LuaSkillConfigValidation, LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
+import type { LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor, LuaSkillConfigEventBatch, LuaSkillConfigSetRequest, LuaSkillConfigSetResult, LuaSkillConfigValidation, LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginCredentialChange, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
 
 // SkillActionProps groups service-backed actions used by the skill page, including the MCP server page it hosts.
 // SkillActionProps 分组技能页面使用的服务端动作，包括其承载的 MCP 服务器页面。
@@ -68,12 +68,12 @@ export interface SkillActionProps extends McpSettingsActionProps {
   // Uninstalls one disabled user plugin.
   // 卸载单个已停用用户插件。
   onUninstallUserPlugin: (pluginId: string) => Promise<void>
-  // Stores one exact plugin MCP secret without returning its value.
-  // 存储单个精确插件 MCP Secret，且不返回其值。
-  onSetPluginMcpSecret: (pluginId: string, serverId: string, secretKey: string, value: string) => Promise<void>
-  // Deletes one exact plugin MCP secret.
-  // 删除单个精确插件 MCP Secret。
-  onDeletePluginMcpSecret: (pluginId: string, serverId: string, secretKey: string) => Promise<void>
+  // Applies plugin MCP secret changes as one credential revision without returning any value.
+  // 将插件 MCP Secret 变更作为单个凭据修订应用，且不返回任何值。
+  onSetVulcanPluginCredentials: (pluginId: string, changes: VulcanPluginCredentialChange[]) => Promise<void>
+  // Replaces one plugin's stored configuration with its package defaults.
+  // 将单个插件的已存配置替换为插件包默认值。
+  onResetVulcanPluginConfig: (pluginId: string) => Promise<void>
   // Uninstalls one ordinary Lua Skill package.
   // 卸载单个普通 Lua Skill 包。
   onUninstallLuaSkill: (skillId: string) => Promise<void>

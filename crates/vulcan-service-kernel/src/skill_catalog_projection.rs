@@ -242,6 +242,7 @@ pub(crate) fn plugins_from_catalogs(
                         .collect(),
                     agents: plugin.agents.iter().map(|agent| agent.id.clone()).collect(),
                     has_lua_runtime: manifest.has_lua_runtime(),
+                    has_configuration: manifest.config.is_some(),
                     mcp_servers: plugin
                         .mcp_servers
                         .iter()

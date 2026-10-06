@@ -15,6 +15,7 @@ import type {
   LuaSkillsRuntimeSettings,
   PluginUiModuleSource,
   PluginTextAssetSource,
+  VulcanPluginCredentialChange,
   VulcanPluginInitialSecret,
   VulcanPluginPermissionPreview,
   SubagentCatalogUpdate,
@@ -481,40 +482,28 @@ export async function uninstallUserPlugin(pluginId: string): Promise<LuaSkillsCa
   return update;
 }
 
-// setPluginMcpSecret stores one exact plugin-owned MCP secret through the OS credential store.
-// setPluginMcpSecret 通过操作系统凭据库存储单个精确插件自有 MCP Secret。
-export async function setPluginMcpSecret(
+// setVulcanPluginCredentials applies every change as one new credential revision of the plugin.
+// setVulcanPluginCredentials 将全部变更作为插件的单个新凭据修订应用。
+export async function setVulcanPluginCredentials(
   pluginId: string,
-  serverId: string,
-  secretKey: string,
-  value: string,
+  changes: VulcanPluginCredentialChange[],
 ): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    throw new Error("Plugin MCP secret storage requires the Vulcan service runtime.");
+    throw new Error("Plugin credential storage requires the Vulcan service runtime.");
   }
-  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_plugin_mcp_secret", {
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_vulcan_plugin_credentials", {
     pluginId,
-    serverId,
-    secretKey,
-    value,
+    changes,
   });
 }
 
-// deletePluginMcpSecret removes one exact plugin-owned MCP secret without reading it into the WebUI.
-// deletePluginMcpSecret 删除单个精确插件自有 MCP Secret，且不会把其值读入 WebUI。
-export async function deletePluginMcpSecret(
-  pluginId: string,
-  serverId: string,
-  secretKey: string,
-): Promise<LuaSkillsCatalogUpdate> {
+// resetVulcanPluginConfig replaces the plugin's stored configuration with its package defaults.
+// resetVulcanPluginConfig 将插件已存配置替换为插件包默认值。
+export async function resetVulcanPluginConfig(pluginId: string): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
-    throw new Error("Plugin MCP secret deletion requires the Vulcan service runtime.");
+    throw new Error("Plugin configuration reset requires the Vulcan service runtime.");
   }
-  return serviceClient.request<LuaSkillsCatalogUpdate>("service_delete_plugin_mcp_secret", {
-    pluginId,
-    serverId,
-    secretKey,
-  });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_reset_vulcan_plugin_config", { pluginId });
 }
 
 // loadPluginUiModule loads one exact manifest-declared uncompressed ESM module.

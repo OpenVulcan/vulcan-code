@@ -937,6 +937,20 @@ export interface VulcanPluginInitialSecret extends VulcanPluginInstallSecretRequ
   value: string;
 }
 
+// VulcanPluginCredentialChange names one declared MCP secret slot of an installed plugin.
+// VulcanPluginCredentialChange 指定已安装插件的单个已声明 MCP 秘密槽位。
+export interface VulcanPluginCredentialChange {
+  // Declaring MCP server within the plugin.
+  // 插件内声明该秘密的 MCP 服务器。
+  serverId: string;
+  // Declared secret key.
+  // 声明的秘密键。
+  secretKey: string;
+  // New nonempty value, or null to clear the secret.
+  // 新的非空值；为 null 时清除该秘密。
+  value: string | null;
+}
+
 // PluginUiInvalidatedEvent describes one revision-only plugin UI data invalidation.
 // PluginUiInvalidatedEvent 描述一次仅含修订号的插件界面数据失效。
 export interface PluginUiInvalidatedEvent {
@@ -1097,6 +1111,9 @@ export interface PluginSummary {
     // Whether this plugin owns an executable Lua runtime.
     // 当前插件是否拥有可执行 Lua 运行时。
     hasLuaRuntime: boolean;
+    // Whether the manifest declares a configuration schema whose stored values can be reset.
+    // 清单是否声明可重置已存值的配置模式。
+    hasConfiguration: boolean;
     // Read-only plugin-owned MCP server diagnostics.
     // 只读插件自有 MCP 服务器诊断。
     mcpServers: Array<{

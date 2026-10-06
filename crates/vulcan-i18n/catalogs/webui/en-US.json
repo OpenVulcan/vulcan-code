@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "Delete credential",
   "skills.plugins.uninstallingRemovesItsPackage": "Uninstalling “{name}” removes its package, configuration and isolated environment.",
   "skills.plugins.deleteCredentialEnabledServers": "Delete credential “{secretKey}”? Enabled servers must first pass readiness checks.",
+  "skills.plugins.resetConfiguration": "Reset settings",
+  "skills.plugins.resetConfigurationRestoresDefaults": "Reset all settings of “{name}” to the package defaults? Saved credentials are not affected.",
   "skills.plugins.cancel": "Cancel",
   "skills.plugins.working": "Working…",
   "skills.plugins.confirm": "Confirm",

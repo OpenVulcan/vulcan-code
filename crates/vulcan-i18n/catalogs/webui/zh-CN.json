@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "删除凭据",
   "skills.plugins.uninstallingRemovesItsPackage": "卸载“{name}”会删除插件包、配置和隔离环境。",
   "skills.plugins.deleteCredentialEnabledServers": "删除凭据“{secretKey}”？已启用服务器必须先通过就绪检查。",
+  "skills.plugins.resetConfiguration": "重置设置",
+  "skills.plugins.resetConfigurationRestoresDefaults": "将“{name}”的全部设置重置为插件包默认值？已保存的凭据不受影响。",
   "skills.plugins.cancel": "取消",
   "skills.plugins.working": "处理中…",
   "skills.plugins.confirm": "确认",

@@ -29,7 +29,7 @@ function browserPlugin(status: string): PluginSummary {
     available: true, toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
     diagnostics: [], managementKind: "vulcanPlugin", extension: {
       runtimeIdentity: "vulcan-browser:5", origin: "bundled", permissions: [], hooks: [],
-      actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false,
+      actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false, hasConfiguration: false,
       mcpServers: [{ id: "playwright", name: "Playwright Browser", transport: "stdio", endpoint: "playwright-mcp",
         status, generation: 5, retryCount: 0, toolCount: status === "ready" ? 2 : 0, promptCount: 0, resourceCount: 0,
         secretKeys: [], recentLogs: [], ...(status === "failed" ? { lastError: "fixture connection failed" } : {}) }],

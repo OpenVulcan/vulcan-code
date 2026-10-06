@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "Supprimer l’identifiant",
   "skills.plugins.uninstallingRemovesItsPackage": "La désinstallation de « {name} » supprime son paquet, sa configuration et son environnement isolé.",
   "skills.plugins.deleteCredentialEnabledServers": "Supprimer l’identifiant « {secretKey} » ? Les serveurs activés doivent d’abord réussir les contrôles de disponibilité.",
+  "skills.plugins.resetConfiguration": "Réinitialiser les paramètres",
+  "skills.plugins.resetConfigurationRestoresDefaults": "Réinitialiser tous les paramètres de « {name} » aux valeurs par défaut du paquet ? Les identifiants enregistrés ne sont pas affectés.",
   "skills.plugins.cancel": "Annuler",
   "skills.plugins.working": "Traitement…",
   "skills.plugins.confirm": "Confirmer",

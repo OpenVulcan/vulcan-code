@@ -19,7 +19,7 @@ vi.mock("@/service/plugin-resource-diagnostics-service", () => ({ readPluginReso
 const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", runtimeState: "disabled", version: "2.0.0",
   capability: "Synthetic", nameByLocale: {}, capabilityByLocale: {}, enabled: false, desiredEnabled: false, available: true,
   toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 17, diagnostics: [], managementKind: "vulcanPlugin",
-  extension: { runtimeIdentity: "epoch-original:9007199254740993", origin: "userInstalled", permissions: [], hooks: [], actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: true, mcpServers: [] } };
+  extension: { runtimeIdentity: "epoch-original:9007199254740993", origin: "userInstalled", permissions: [], hooks: [], actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: true, hasConfiguration: false, mcpServers: [] } };
 // workbench includes the original conversation owner projected by the workspace.
 // workbench 包含工作台投影的原会话所有者。
 const workbench = { plugins: [plugin], conversations: [{ id: "conversation-original" }], selectedConversationId: null } as WorkbenchSnapshot;

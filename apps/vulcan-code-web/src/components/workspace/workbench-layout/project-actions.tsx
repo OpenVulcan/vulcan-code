@@ -23,7 +23,6 @@ import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
 import {
   deleteSubagentDefinition,
   deleteLuaSkillConfig,
-  deletePluginMcpSecret,
   installLuaSkill,
   installLocalPlugin,
   inspectLocalPlugin,
@@ -56,7 +55,8 @@ import {
   setLuaSkillEnabled,
   setVulcanPluginEnabled,
   setLuaSkillToolRegistrationState,
-  setPluginMcpSecret,
+  setVulcanPluginCredentials,
+  resetVulcanPluginConfig,
   uninstallLuaSkill,
   uninstallUserPlugin,
   updateLocalPlugin,
@@ -347,12 +347,10 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onReadPluginUninstallRequests: readPluginUninstallRequests,
     onResumePluginUninstallRequest: (pluginId, requestId, acknowledgeExternalEffects) => runLuaSkillsCatalogAction(() => resumePluginUninstallRequest(pluginId, requestId, acknowledgeExternalEffects)),
     onUninstallUserPlugin: (pluginId) => runLuaSkillsCatalogAction(() => uninstallUserPlugin(pluginId)),
-    onSetPluginMcpSecret: (pluginId, serverId, secretKey, value) => runLuaSkillsCatalogAction(
-      () => setPluginMcpSecret(pluginId, serverId, secretKey, value),
+    onSetVulcanPluginCredentials: (pluginId, changes) => runLuaSkillsCatalogAction(
+      () => setVulcanPluginCredentials(pluginId, changes),
     ),
-    onDeletePluginMcpSecret: (pluginId, serverId, secretKey) => runLuaSkillsCatalogAction(
-      () => deletePluginMcpSecret(pluginId, serverId, secretKey),
-    ),
+    onResetVulcanPluginConfig: (pluginId) => runLuaSkillsCatalogAction(() => resetVulcanPluginConfig(pluginId)),
     onUninstallLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => uninstallLuaSkill(skillId)),
     onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
       runLuaSkillsCatalogAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))

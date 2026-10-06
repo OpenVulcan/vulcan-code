@@ -918,56 +918,6 @@ pub(crate) async fn service_inspect_local_plugin(
     .await
 }
 
-/// Stores one manifest-declared plugin MCP secret and transactionally refreshes an enabled plugin partition.
-/// 存储一个清单声明的插件 MCP Secret，并事务化刷新已启用插件分区。
-pub(crate) async fn service_set_plugin_mcp_secret(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-    server_id: String,
-    secret_key: String,
-    value: String,
-) -> Result<LuaSkillsCatalogUpdate, String> {
-    mutate_plugin_mcp_secret(app, state, plugin_id, server_id, secret_key, Some(value)).await
-}
-
-/// Deletes one manifest-declared plugin MCP secret and rejects the change when an enabled candidate cannot remain Ready.
-/// 删除一个清单声明的插件 MCP Secret；若已启用候选无法保持 Ready，则拒绝该变更。
-pub(crate) async fn service_delete_plugin_mcp_secret(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-    server_id: String,
-    secret_key: String,
-) -> Result<LuaSkillsCatalogUpdate, String> {
-    mutate_plugin_mcp_secret(app, state, plugin_id, server_id, secret_key, None).await
-}
-
-/// Applies one secret change as a single-slot credential revision edit of the plugin.
-/// 将单个秘密变更作为插件的单槽凭据修订编辑应用。
-/// Identifiers select one declared slot; the optional value chooses set or delete.
-/// 标识选择单个已声明槽位；可选值选择设置或删除。
-async fn mutate_plugin_mcp_secret(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-    server_id: String,
-    secret_key: String,
-    next_value: Option<String>,
-) -> Result<LuaSkillsCatalogUpdate, String> {
-    service_set_vulcan_plugin_credentials(
-        app,
-        state,
-        plugin_id,
-        vec![vulcan_service_api::VulcanPluginCredentialChange {
-            server_id,
-            secret_key,
-            value: next_value,
-        }],
-    )
-    .await
-}
-
 /// Validates installation Secret inputs against the exact inspected local-MCP requirement set.
 /// 根据已检查的精确本地 MCP 要求集合校验安装 Secret 输入。
 ///
@@ -1673,26 +1623,30 @@ pub(crate) async fn service_set_vulcan_plugin_enabled(
 ///
 /// # Parameters
 /// 参数
-/// `state` owns the plugin runtime and `plugin_id` selects the plugin whose settings are replaced.
-/// `state` 持有插件运行时，`plugin_id` 选择其设置被替换的插件。
+/// `app` broadcasts the refreshed catalog, `state` owns the plugin runtime and `plugin_id` selects the
+/// plugin whose settings are replaced.
+/// `app` 广播刷新后的目录，`state` 持有插件运行时，`plugin_id` 选择其设置被替换的插件。
 ///
 /// # Returns
 /// 返回值
-/// Returns the defaults now stored; an unfinished package transaction refuses the reset instead of waiting.
-/// 返回现已存储的默认值；未完成的插件包交易会拒绝重置而不等待。
+/// Returns the refreshed catalog update; an unfinished package transaction refuses the reset instead of waiting.
+/// 返回刷新后的目录更新；未完成的插件包交易会拒绝重置而不等待。
 pub(crate) async fn service_reset_vulcan_plugin_config(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     plugin_id: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<LuaSkillsCatalogUpdate, String> {
     // runtime owns the settings section and republishes the edited plugin itself.
     // runtime 持有设置段，并自行重新发布被编辑的插件。
     let runtime = service_vulcan_plugin_runtime(&state)?;
     run_extension_management_blocking("reset plugin configuration", move || {
         runtime
             .reset_plugin_config(&plugin_id)
+            .map(|_| ())
             .map_err(|error| error.to_string())
     })
-    .await
+    .await?;
+    refresh_plugin_catalog_local_state_and_emit(&app, &state).await
 }
 
 /// Reads the exact current plugin environment readiness without installing dependencies.

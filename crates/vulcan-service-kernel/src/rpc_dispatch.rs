@@ -263,8 +263,8 @@ mod tests {
         assert!(methods.contains("service_plugin_environment_install_status"));
         assert!(methods.contains("service_plugin_environment_install_status_for_plugin"));
         assert!(methods.contains("service_update_local_plugin"));
-        assert!(methods.contains("service_set_plugin_mcp_secret"));
-        assert!(methods.contains("service_delete_plugin_mcp_secret"));
+        assert!(methods.contains("service_set_vulcan_plugin_credentials"));
+        assert!(methods.contains("service_reset_vulcan_plugin_config"));
         assert!(methods.contains("workspace.diff.snapshot"));
         assert!(methods.contains("workspace.git.catalog"));
         assert!(methods.contains("workspace.git.setMonitoring"));

@@ -43,6 +43,7 @@ function plugin(overrides: Partial<WorkbenchSnapshot["plugins"][number]> = {}): 
       skills: [],
       agents: [],
       hasLuaRuntime: false,
+      hasConfiguration: false,
       mcpServers: [],
     },
     ...overrides,

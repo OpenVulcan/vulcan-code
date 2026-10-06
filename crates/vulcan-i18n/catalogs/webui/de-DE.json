@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "Zugangsdaten löschen",
   "skills.plugins.uninstallingRemovesItsPackage": "Beim Deinstallieren von „{name}“ werden Paket, Konfiguration und isolierte Umgebung entfernt.",
   "skills.plugins.deleteCredentialEnabledServers": "Zugangsdaten „{secretKey}“ löschen? Aktivierte Server müssen zuerst die Bereitschaftsprüfungen bestehen.",
+  "skills.plugins.resetConfiguration": "Einstellungen zurücksetzen",
+  "skills.plugins.resetConfigurationRestoresDefaults": "Alle Einstellungen von „{name}“ auf die Paketstandards zurücksetzen? Gespeicherte Zugangsdaten bleiben unverändert.",
   "skills.plugins.cancel": "Abbrechen",
   "skills.plugins.working": "Wird bearbeitet…",
   "skills.plugins.confirm": "Bestätigen",

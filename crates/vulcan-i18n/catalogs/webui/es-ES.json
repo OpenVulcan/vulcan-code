@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "Eliminar credencial",
   "skills.plugins.uninstallingRemovesItsPackage": "Desinstalar «{name}» elimina su paquete, su configuración y su entorno aislado.",
   "skills.plugins.deleteCredentialEnabledServers": "¿Eliminar la credencial «{secretKey}»? Los servidores habilitados deben superar antes las comprobaciones de disponibilidad.",
+  "skills.plugins.resetConfiguration": "Restablecer ajustes",
+  "skills.plugins.resetConfigurationRestoresDefaults": "¿Restablecer todos los ajustes de «{name}» a los valores predeterminados del paquete? Las credenciales guardadas no se ven afectadas.",
   "skills.plugins.cancel": "Cancelar",
   "skills.plugins.working": "Procesando…",
   "skills.plugins.confirm": "Confirmar",

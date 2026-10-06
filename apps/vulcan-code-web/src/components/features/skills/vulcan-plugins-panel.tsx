@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Activity, Bot, ChartNoAxesCombined, Copy, Cpu, FileText, FolderOpen, Gauge, Hammer, History, Info, KeyRound, MessageSquareText, MessagesSquare, MoreHorizontal, Plus, Puzzle, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
+import { Activity, Bot, ChartNoAxesCombined, Copy, Cpu, FileText, FolderOpen, Gauge, Hammer, History, Info, KeyRound, MessageSquareText, MessagesSquare, MoreHorizontal, Plus, Puzzle, RotateCcw, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { InlineDisclosure } from "@/components/ui/disclosure";
 import { Button, IconButton } from "@/components/ui/button";
@@ -273,7 +273,10 @@ export function VulcanPluginsPanel(props: {
   // pendingDestructive retains exact public identities without retaining secret values.
   // pendingDestructive 保留精确公开身份，不保留秘密值。
   const [pendingDestructive, setPendingDestructive] = React.useState<
-    { kind: "uninstall"; plugin: PluginSummary } | { kind: "secret"; pluginId: string; serverId: string; secretKey: string } | null
+    | { kind: "uninstall"; plugin: PluginSummary }
+    | { kind: "resetConfig"; plugin: PluginSummary }
+    | { kind: "secret"; pluginId: string; serverId: string; secretKey: string }
+    | null
   >(null);
   // mutationBusy synchronizes every lifecycle, installation and credential control on this page.
   // mutationBusy 同步当前页面所有生命周期、安装与凭据控件。
@@ -591,7 +594,7 @@ export function VulcanPluginsPanel(props: {
     setSecretBusyKey(draftKey);
     setSecretError("");
     try {
-      await props.actions.onSetPluginMcpSecret(pluginId, serverId, secretKey, value);
+      await props.actions.onSetVulcanPluginCredentials(pluginId, [{ serverId, secretKey, value }]);
     } catch (reason: unknown) {
       setSecretError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -616,7 +619,7 @@ export function VulcanPluginsPanel(props: {
     setSecretBusyKey(draftKey);
     setSecretError("");
     try {
-      await props.actions.onDeletePluginMcpSecret(pluginId, serverId, secretKey);
+      await props.actions.onSetVulcanPluginCredentials(pluginId, [{ serverId, secretKey, value: null }]);
       setPendingDestructive(null);
     } catch (reason: unknown) {
       setSecretError(reason instanceof Error ? reason.message : String(reason));
@@ -626,6 +629,26 @@ export function VulcanPluginsPanel(props: {
       setSecretBusyKey(null);
     }
   }, [locale, props.actions, secretBusyKey]);
+
+  // resetPluginConfig replaces one plugin's stored configuration with its package defaults after confirmation.
+  // resetPluginConfig 经确认后将单个插件的已存配置替换为插件包默认值。
+  const resetPluginConfig = React.useCallback(async (plugin: PluginSummary) => {
+    if (actionRunningRef.current || plugin.extension?.hasConfiguration !== true) {
+      return;
+    }
+    actionRunningRef.current = true;
+    setBusyPluginId(plugin.id);
+    setInstallError("");
+    try {
+      await props.actions.onResetVulcanPluginConfig(plugin.id);
+      setPendingDestructive(null);
+    } catch (reason: unknown) {
+      setInstallError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      actionRunningRef.current = false;
+      setBusyPluginId(null);
+    }
+  }, [props.actions]);
 
   return (
     <div className="skill-page-body lua-skill-page-body">
@@ -1004,6 +1027,10 @@ export function VulcanPluginsPanel(props: {
                   {plugin.extension?.hasLuaRuntime ? <DropdownMenuItem onSelect={() => maintenance.open(plugin.id, "capacity")}>
                     <Gauge aria-hidden="true" size={14} />{t("pluginMaintenance.action.capacity")}
                   </DropdownMenuItem> : null}
+                  {plugin.extension?.hasConfiguration ? <DropdownMenuItem disabled={mutationBusy}
+                    onSelect={() => { setInstallError(""); setPendingDestructive({ kind: "resetConfig", plugin }); }}>
+                    <RotateCcw aria-hidden="true" size={14} />{t("skills.plugins.resetConfiguration")}
+                  </DropdownMenuItem> : null}
                   {plugin.extension ? <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(plugin.extension?.runtimeIdentity ?? "")}
@@ -1049,17 +1076,22 @@ export function VulcanPluginsPanel(props: {
       <AlertDialog open={pendingDestructive !== null} onOpenChange={(open) => { if (!open && !actionRunningRef.current) setPendingDestructive(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{pendingDestructive?.kind === "uninstall" ? t("skills.plugins.uninstallPlugin") : t("skills.plugins.deleteCredential")}</AlertDialogTitle>
+            <AlertDialogTitle>{pendingDestructive?.kind === "uninstall"
+              ? t("skills.plugins.uninstallPlugin")
+              : pendingDestructive?.kind === "resetConfig" ? t("skills.plugins.resetConfiguration") : t("skills.plugins.deleteCredential")}</AlertDialogTitle>
             <AlertDialogDescription>{pendingDestructive?.kind === "uninstall"
               ? (formatMessage(t("skills.plugins.uninstallingRemovesItsPackage"), { name: pendingDestructive.plugin.name }))
-              : pendingDestructive ? (formatMessage(t("skills.plugins.deleteCredentialEnabledServers"), { secretKey: pendingDestructive.secretKey })) : ""}</AlertDialogDescription>
+              : pendingDestructive?.kind === "resetConfig"
+                ? (formatMessage(t("skills.plugins.resetConfigurationRestoresDefaults"), { name: pendingDestructive.plugin.name }))
+                : pendingDestructive ? (formatMessage(t("skills.plugins.deleteCredentialEnabledServers"), { secretKey: pendingDestructive.secretKey })) : ""}</AlertDialogDescription>
           </AlertDialogHeader>
-          {(pendingDestructive?.kind === "uninstall" ? installError : secretError) ? <p role="alert" className="text-sm text-destructive">{pendingDestructive?.kind === "uninstall" ? installError : secretError}</p> : null}
+          {(pendingDestructive?.kind === "secret" ? secretError : installError) ? <p role="alert" className="text-sm text-destructive">{pendingDestructive?.kind === "secret" ? secretError : installError}</p> : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={mutationBusy}>{t("skills.plugins.cancel")}</AlertDialogCancel>
             <AlertDialogAction disabled={mutationBusy} onClick={(event) => {
               event.preventDefault();
               if (pendingDestructive?.kind === "uninstall") void uninstallPlugin(pendingDestructive.plugin);
+              else if (pendingDestructive?.kind === "resetConfig") void resetPluginConfig(pendingDestructive.plugin);
               else if (pendingDestructive) void deletePluginMcpSecret(pendingDestructive.pluginId, pendingDestructive.serverId, pendingDestructive.secretKey);
             }}>{mutationBusy ? t("skills.plugins.working") : t("skills.plugins.confirm")}</AlertDialogAction>
           </AlertDialogFooter>

@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "Удалить учётные данные",
   "skills.plugins.uninstallingRemovesItsPackage": "Удаление «{name}» удалит его пакет, конфигурацию и изолированную среду.",
   "skills.plugins.deleteCredentialEnabledServers": "Удалить учётные данные «{secretKey}»? Включённые серверы сначала должны пройти проверки готовности.",
+  "skills.plugins.resetConfiguration": "Сбросить настройки",
+  "skills.plugins.resetConfigurationRestoresDefaults": "Сбросить все настройки «{name}» к значениям пакета по умолчанию? Сохранённые учётные данные не затрагиваются.",
   "skills.plugins.cancel": "Отмена",
   "skills.plugins.working": "Обработка…",
   "skills.plugins.confirm": "Подтвердить",

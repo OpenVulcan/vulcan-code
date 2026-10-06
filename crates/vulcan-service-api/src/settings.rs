@@ -227,6 +227,10 @@ pub struct PluginExtensionSummary {
     /// 当前插件是否拥有可执行 Lua 运行时。
     #[serde(default)]
     pub has_lua_runtime: bool,
+    /// Whether the manifest declares a configuration schema whose stored values can be reset.
+    /// 清单是否声明可重置已存值的配置模式。
+    #[serde(default)]
+    pub has_configuration: bool,
     /// Read-only plugin-owned MCP server diagnostics.
     /// 只读插件自有 MCP 服务器诊断。
     #[serde(default)]

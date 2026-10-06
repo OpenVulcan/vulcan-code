@@ -21,7 +21,7 @@ const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", 
   capability: "Synthetic", nameByLocale: {}, capabilityByLocale: {}, enabled: false, desiredEnabled: false,
   available: true, toolCount: 0, tools: [], hookCount: 0, skillCount: 0, agentCount: 0, activeSessionCount: 0,
   diagnostics: [], managementKind: "vulcanPlugin", extension: { runtimeIdentity: "fixture:1", origin: "userInstalled", permissions: [], hooks: [],
-    actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false, mcpServers: [] } };
+    actions: [], uiMounts: [], skills: [], agents: [], hasLuaRuntime: false, hasConfiguration: false, mcpServers: [] } };
 let root: Root;
 let host: HTMLDivElement;
 // en resolves the actual English copy for key, filling the fixture's display name.
@@ -273,4 +273,42 @@ it("lists retained runtime errors newest first behind a folded disclosure", asyn
   expect(items[0]).toContain(formatMessage(readLocaleMessage("en-US", "skills.plugins.runtimeErrorAction"), { name: "refresh" }));
   expect(items[0]).toContain("newer action failure");
   expect(items[1]).toContain(formatMessage(readLocaleMessage("en-US", "skills.plugins.runtimeErrorHook"), { name: "precheck" }));
+});
+
+it("offers a confirmed configuration reset only for plugins that declare configuration", async () => {
+  // reset fails once so the dialog shows the service error, then succeeds on the second confirmation.
+  // reset 先失败一次以便对话框展示服务错误，第二次确认时成功。
+  const reset = vi.fn().mockRejectedValueOnce(new Error("store busy")).mockResolvedValue(undefined);
+  // openMenu opens the card maintenance menu through the keyboard path Radix supports in jsdom.
+  // openMenu 通过 Radix 在 jsdom 中支持的键盘路径打开卡片维护菜单。
+  const openMenu = async () => {
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="More actions for Fixture"]');
+    if (!trigger) throw new Error("Expected the card maintenance menu; its label may have changed");
+    await act(async () => { trigger.focus(); trigger.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })); });
+  };
+  // resetItem finds the reset entry in the menu portal by its current label.
+  // resetItem 按当前标签在菜单门户中查找重置入口。
+  const resetItem = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    .find((item) => item.textContent === en("skills.plugins.resetConfiguration"));
+  const actions = { onResetVulcanPluginConfig: reset, onReadPluginUninstallRequests: async () => [],
+    onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps;
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={actions} />));
+  await openMenu();
+  expect(resetItem()).toBeUndefined();
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
+  const configured: PluginSummary = { ...plugin, extension: { ...plugin.extension!, hasConfiguration: true } };
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[configured]} actions={actions} />));
+  await openMenu();
+  const item = resetItem();
+  if (!item) throw new Error("Expected the reset menu item; its label or availability may have changed");
+  await act(async () => item.click());
+  expect(reset).not.toHaveBeenCalled();
+  const dialog = () => document.querySelector('[role="alertdialog"]');
+  expect(dialog()?.textContent).toContain(en("skills.plugins.resetConfigurationRestoresDefaults"));
+  const confirm = () => [...dialog()!.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
+  await act(async () => confirm().click());
+  expect(dialog()?.textContent).toContain("store busy");
+  await act(async () => confirm().click());
+  expect(reset).toHaveBeenCalledTimes(2); expect(reset).toHaveBeenLastCalledWith("fixture");
+  expect(dialog()).toBeNull();
 });

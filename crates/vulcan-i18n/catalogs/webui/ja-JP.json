@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "認証情報を削除",
   "skills.plugins.uninstallingRemovesItsPackage": "「{name}」をアンインストールすると、パッケージ、設定、分離環境が削除されます。",
   "skills.plugins.deleteCredentialEnabledServers": "認証情報「{secretKey}」を削除しますか？有効なサーバーは先に準備チェックに合格する必要があります。",
+  "skills.plugins.resetConfiguration": "設定をリセット",
+  "skills.plugins.resetConfigurationRestoresDefaults": "「{name}」のすべての設定をパッケージの既定値にリセットしますか？保存済みの認証情報は影響を受けません。",
   "skills.plugins.cancel": "キャンセル",
   "skills.plugins.working": "処理中…",
   "skills.plugins.confirm": "確認",

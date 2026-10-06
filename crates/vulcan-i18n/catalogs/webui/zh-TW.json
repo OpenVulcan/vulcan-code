@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "刪除憑證",
   "skills.plugins.uninstallingRemovesItsPackage": "解除安裝「{name}」會刪除外掛套件、設定和隔離環境。",
   "skills.plugins.deleteCredentialEnabledServers": "刪除憑證「{secretKey}」？已啟用的伺服器必須先通過就緒檢查。",
+  "skills.plugins.resetConfiguration": "重設設定",
+  "skills.plugins.resetConfigurationRestoresDefaults": "將「{name}」的全部設定重設為外掛程式套件預設值？已儲存的憑證不受影響。",
   "skills.plugins.cancel": "取消",
   "skills.plugins.working": "處理中…",
   "skills.plugins.confirm": "確認",

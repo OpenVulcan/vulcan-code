@@ -24,8 +24,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_local_plugin_uninstall_requests",
     "service_resume_local_plugin_uninstall",
     "service_set_vulcan_plugin_credentials",
-    "service_set_plugin_mcp_secret",
-    "service_delete_plugin_mcp_secret",
     "service_load_plugin_ui_module",
     "service_read_plugin_text_asset",
     "service_invoke_plugin_action",
@@ -206,27 +204,6 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_set_plugin_mcp_secret" => rpc_json_result(
-            service_set_plugin_mcp_secret(
-                app.clone(),
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "serverId")?,
-                rpc_required_param(params, "secretKey")?,
-                rpc_required_param(params, "value")?,
-            )
-            .await,
-        ),
-        "service_delete_plugin_mcp_secret" => rpc_json_result(
-            service_delete_plugin_mcp_secret(
-                app.clone(),
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "serverId")?,
-                rpc_required_param(params, "secretKey")?,
-            )
-            .await,
-        ),
         "service_load_plugin_ui_module" => rpc_json_result(service_load_plugin_ui_module(
             state,
             rpc_required_param(params, "pluginId")?,
@@ -311,8 +288,12 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_reset_vulcan_plugin_config" => rpc_json_result(
-            service_reset_vulcan_plugin_config(state, rpc_required_param(params, "pluginId")?)
-                .await,
+            service_reset_vulcan_plugin_config(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+            )
+            .await,
         ),
         "service_plugin_environment_ready" => rpc_json_result(
             service_plugin_environment_ready(state, rpc_required_param(params, "pluginId")?).await,

@@ -4742,6 +4742,8 @@
   "skills.plugins.deleteCredential": "자격 증명 삭제",
   "skills.plugins.uninstallingRemovesItsPackage": "\"{name}\"을(를) 제거하면 패키지, 구성, 격리 환경이 삭제됩니다.",
   "skills.plugins.deleteCredentialEnabledServers": "자격 증명 \"{secretKey}\"을(를) 삭제하시겠습니까? 활성화된 서버는 먼저 준비 상태 검사를 통과해야 합니다.",
+  "skills.plugins.resetConfiguration": "설정 초기화",
+  "skills.plugins.resetConfigurationRestoresDefaults": "\"{name}\"의 모든 설정을 패키지 기본값으로 초기화하시겠습니까? 저장된 자격 증명에는 영향을 주지 않습니다.",
   "skills.plugins.cancel": "취소",
   "skills.plugins.working": "처리 중…",
   "skills.plugins.confirm": "확인",
