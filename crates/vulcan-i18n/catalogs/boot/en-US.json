@@ -1,0 +1,11 @@
+{
+  "loadingWorkspace": "Loading Workspace",
+  "connectingService": "Connecting to Vulcan Core Service",
+  "loadingProjectIndex": "Loading project and conversation indexes",
+  "loadingStep": "Loading {step}",
+  "failedPrefix": "Startup failed: ",
+  "errorDetails": "View details",
+  "downloadProgress": "Download progress",
+  "completedSteps": "Completed {completed}/{total} steps",
+  "reloadApplication": "Reload application"
+}

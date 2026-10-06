@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Vulcan Code is starting",
+  "closeWindow": "Close window",
+  "preparing": "Preparing…",
+  "startupFailed": "Startup failed",
+  "checkingInstance": "Checking for a running service…",
+  "reusingInstance": "Connected to the running service (process {pid}).",
+  "startingService": "Starting the background service…",
+  "awaitingReady": "Waiting for the service to become ready…",
+  "serviceReady": "The service is ready (process {pid}).",
+  "launchFailed": "Unable to start the background service: {error}",
+  "exitedBeforeReady": "The service process exited before becoming ready (exit code {code}).",
+  "serviceUnavailable": "The background service is not available yet. Current status: {status}.",
+  "readyTimeout": "The service did not publish its ready discovery document within {seconds} seconds: {path}",
+  "workbenchLoadFailed": "Unable to load the workbench {url}: {error}",
+  "closeBrowserTitle": "Close built-in browser",
+  "closeBrowserMessage": "{count} pages are open. Close all of them?",
+  "closeBrowserDetail": "This releases the resources used by these pages and then closes the browser tab.",
+  "cancel": "Cancel",
+  "closeAll": "Close all"
+}

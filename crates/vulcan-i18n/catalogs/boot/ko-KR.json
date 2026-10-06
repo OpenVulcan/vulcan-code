@@ -1,0 +1,11 @@
+{
+  "loadingWorkspace": "Workspace를 불러오는 중",
+  "connectingService": "Vulcan Core Service에 연결하는 중",
+  "loadingProjectIndex": "프로젝트 및 대화 인덱스를 불러오는 중",
+  "loadingStep": "{step} 불러오는 중",
+  "failedPrefix": "시작 실패: ",
+  "errorDetails": "자세히 보기",
+  "downloadProgress": "다운로드 진행률",
+  "completedSteps": "{total}단계 중 {completed}단계 완료",
+  "reloadApplication": "앱 다시 불러오기"
+}

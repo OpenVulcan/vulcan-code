@@ -1,0 +1,11 @@
+{
+  "loadingWorkspace": "Загрузка Workspace",
+  "connectingService": "Подключение к Vulcan Core Service",
+  "loadingProjectIndex": "Загрузка индексов проектов и бесед",
+  "loadingStep": "Загрузка: {step}",
+  "failedPrefix": "Не удалось запустить: ",
+  "errorDetails": "Подробнее",
+  "downloadProgress": "Ход загрузки",
+  "completedSteps": "Выполнено шагов: {completed} из {total}",
+  "reloadApplication": "Перезагрузить приложение"
+}

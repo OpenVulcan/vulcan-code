@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Vulcan Code 启动中",
+  "closeWindow": "关闭窗口",
+  "preparing": "正在准备…",
+  "startupFailed": "启动失败",
+  "checkingInstance": "正在检查已在运行的服务…",
+  "reusingInstance": "已连接到运行中的服务（进程 {pid}）。",
+  "startingService": "正在启动后台服务…",
+  "awaitingReady": "正在等待服务完成业务就绪…",
+  "serviceReady": "服务已就绪（进程 {pid}）。",
+  "launchFailed": "无法启动后台服务：{error}",
+  "exitedBeforeReady": "服务进程在就绪前退出，退出码 {code}。",
+  "serviceUnavailable": "后台服务尚不可用，当前状态：{status}。",
+  "readyTimeout": "服务在 {seconds} 秒内未发布就绪发现文档：{path}",
+  "workbenchLoadFailed": "无法加载工作台 {url}：{error}",
+  "closeBrowserTitle": "关闭内置浏览器",
+  "closeBrowserMessage": "当前有 {count} 个正在访问的页面，是否全部关闭？",
+  "closeBrowserDetail": "全部关闭将释放这些网页占用的资源，然后关闭内置浏览器页签。",
+  "cancel": "取消",
+  "closeAll": "全部关闭"
+}

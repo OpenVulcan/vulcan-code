@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Запуск Vulcan Code",
+  "closeWindow": "Закрыть окно",
+  "preparing": "Подготовка…",
+  "startupFailed": "Не удалось запустить",
+  "checkingInstance": "Поиск запущенной службы…",
+  "reusingInstance": "Подключено к запущенной службе (процесс {pid}).",
+  "startingService": "Запуск фоновой службы…",
+  "awaitingReady": "Ожидание готовности службы…",
+  "serviceReady": "Служба готова (процесс {pid}).",
+  "launchFailed": "Не удалось запустить фоновую службу: {error}",
+  "exitedBeforeReady": "Процесс службы завершился до готовности (код выхода {code}).",
+  "serviceUnavailable": "Фоновая служба пока недоступна. Текущее состояние: {status}.",
+  "readyTimeout": "Служба не опубликовала документ обнаружения за {seconds} с: {path}",
+  "workbenchLoadFailed": "Не удалось загрузить рабочую среду {url}: {error}",
+  "closeBrowserTitle": "Закрыть встроенный браузер",
+  "closeBrowserMessage": "Открыто страниц: {count}. Закрыть все?",
+  "closeBrowserDetail": "Ресурсы, занятые этими страницами, будут освобождены, после чего вкладка браузера закроется.",
+  "cancel": "Отмена",
+  "closeAll": "Закрыть все"
+}

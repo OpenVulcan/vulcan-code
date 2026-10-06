@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Vulcan Code を起動しています",
+  "closeWindow": "ウィンドウを閉じる",
+  "preparing": "準備しています…",
+  "startupFailed": "起動に失敗しました",
+  "checkingInstance": "実行中のサービスを確認しています…",
+  "reusingInstance": "実行中のサービスに接続しました（プロセス {pid}）。",
+  "startingService": "バックグラウンドサービスを起動しています…",
+  "awaitingReady": "サービスの準備完了を待っています…",
+  "serviceReady": "サービスの準備ができました（プロセス {pid}）。",
+  "launchFailed": "バックグラウンドサービスを起動できません：{error}",
+  "exitedBeforeReady": "サービスプロセスが準備完了前に終了しました（終了コード {code}）。",
+  "serviceUnavailable": "バックグラウンドサービスはまだ利用できません。現在の状態：{status}。",
+  "readyTimeout": "サービスが {seconds} 秒以内に準備完了の検出ドキュメントを公開しませんでした：{path}",
+  "workbenchLoadFailed": "ワークベンチ {url} を読み込めません：{error}",
+  "closeBrowserTitle": "内蔵ブラウザーを閉じる",
+  "closeBrowserMessage": "{count} 個のページが開いています。すべて閉じますか？",
+  "closeBrowserDetail": "これらのページが使用しているリソースを解放してから、ブラウザータブを閉じます。",
+  "cancel": "キャンセル",
+  "closeAll": "すべて閉じる"
+}

@@ -12,7 +12,9 @@ import { JOBS, classifyChanges, eventChanges, verifyRequired } from './ci-scope.
 // cases 将有意义的归属边界映射到精确的必需作业集合。
 const cases = [
   ['apps/vulcan-code-web/src/view.tsx', ['frontend']],
-  ['apps/vulcan-code-web/src/i18n-messages.zh-CN.ts', ['frontend']],
+  ['apps/vulcan-code-web/src/i18n-catalogs.ts', ['frontend']],
+  ['crates/vulcan-i18n/catalogs/webui/zh-CN.json', ['frontend', 'desktop', 'rustfmt', 'rust']],
+  ['apps/vulcan-code-tui/src/ui/theme.rs', ['rustfmt', 'rust']],
   ['apps/vulcan-code-desktop/src/gui/main.ts', ['desktop']],
   ['docs/contracts/plugin-execution-engine.md', []],
   ['README.md', []],

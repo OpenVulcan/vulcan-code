@@ -1,0 +1,11 @@
+{
+  "loadingWorkspace": "正在載入 Workspace",
+  "connectingService": "正在連線 Vulcan Core Service",
+  "loadingProjectIndex": "正在載入專案與對話索引",
+  "loadingStep": "正在載入 {step}",
+  "failedPrefix": "啟動失敗：",
+  "errorDetails": "檢視詳細資訊",
+  "downloadProgress": "下載進度",
+  "completedSteps": "已完成 {completed}/{total} 個步驟",
+  "reloadApplication": "重新載入應用程式"
+}

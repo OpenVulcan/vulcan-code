@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Iniciando o Vulcan Code",
+  "closeWindow": "Fechar janela",
+  "preparing": "Preparando…",
+  "startupFailed": "Falha ao iniciar",
+  "checkingInstance": "Procurando um serviço em execução…",
+  "reusingInstance": "Conectado ao serviço em execução (processo {pid}).",
+  "startingService": "Iniciando o serviço em segundo plano…",
+  "awaitingReady": "Aguardando o serviço ficar pronto…",
+  "serviceReady": "O serviço está pronto (processo {pid}).",
+  "launchFailed": "Não foi possível iniciar o serviço em segundo plano: {error}",
+  "exitedBeforeReady": "O processo do serviço foi encerrado antes de ficar pronto (código de saída {code}).",
+  "serviceUnavailable": "O serviço em segundo plano ainda não está disponível. Status atual: {status}.",
+  "readyTimeout": "O serviço não publicou o documento de descoberta em {seconds} segundos: {path}",
+  "workbenchLoadFailed": "Não foi possível carregar o ambiente de trabalho {url}: {error}",
+  "closeBrowserTitle": "Fechar o navegador integrado",
+  "closeBrowserMessage": "Há {count} páginas abertas. Fechar todas?",
+  "closeBrowserDetail": "Isso libera os recursos usados por essas páginas e depois fecha a aba do navegador.",
+  "cancel": "Cancelar",
+  "closeAll": "Fechar todas"
+}

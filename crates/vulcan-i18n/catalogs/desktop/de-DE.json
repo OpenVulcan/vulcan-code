@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Vulcan Code wird gestartet",
+  "closeWindow": "Fenster schließen",
+  "preparing": "Wird vorbereitet…",
+  "startupFailed": "Start fehlgeschlagen",
+  "checkingInstance": "Suche nach einem laufenden Dienst…",
+  "reusingInstance": "Mit dem laufenden Dienst verbunden (Prozess {pid}).",
+  "startingService": "Hintergrunddienst wird gestartet…",
+  "awaitingReady": "Warten, bis der Dienst bereit ist…",
+  "serviceReady": "Der Dienst ist bereit (Prozess {pid}).",
+  "launchFailed": "Der Hintergrunddienst kann nicht gestartet werden: {error}",
+  "exitedBeforeReady": "Der Dienstprozess wurde beendet, bevor er bereit war (Exitcode {code}).",
+  "serviceUnavailable": "Der Hintergrunddienst ist noch nicht verfügbar. Aktueller Status: {status}.",
+  "readyTimeout": "Der Dienst hat sein Discovery-Dokument nicht innerhalb von {seconds} Sekunden veröffentlicht: {path}",
+  "workbenchLoadFailed": "Die Arbeitsumgebung {url} kann nicht geladen werden: {error}",
+  "closeBrowserTitle": "Integrierten Browser schließen",
+  "closeBrowserMessage": "{count} Seiten sind geöffnet. Alle schließen?",
+  "closeBrowserDetail": "Dadurch werden die von diesen Seiten belegten Ressourcen freigegeben und anschließend der Browser-Tab geschlossen.",
+  "cancel": "Abbrechen",
+  "closeAll": "Alle schließen"
+}

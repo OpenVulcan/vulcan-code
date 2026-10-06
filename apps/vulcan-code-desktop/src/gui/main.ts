@@ -30,7 +30,7 @@ import {
 } from './service-launcher.js';
 import { renderStartupDocument } from './startup-page.js';
 import {
-  DESKTOP_TEXT,
+  desktopText,
   detectDesktopLocale,
   formatDesktopText,
   type DesktopLocale,
@@ -453,7 +453,7 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
 async function runDesktopGui(): Promise<void> {
   const options = parseDesktopGuiOptions(process.argv.slice(1));
   const locale = deviceDesktopLocale();
-  const text = DESKTOP_TEXT[locale];
+  const text = desktopText(locale);
   const startupWindow = await createStartupWindow(locale);
   try {
     const executable = await resolveServiceExecutable(options.serviceExecutable);

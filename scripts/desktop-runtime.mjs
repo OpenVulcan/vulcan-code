@@ -445,6 +445,10 @@ async function main() {
     });
   }
   await cp(path.join(desktop, 'dist/gui'), path.join(appRoot, 'gui'), { recursive: true });
+  // The shell text reads the shared language catalogs beside gui/.
+  // 桌面壳文本读取 gui/ 旁边的共享语言目录。
+  const { copyDesktopCatalogs } = await import(pathToFileURL(path.join(desktop, 'tools/copy-i18n-catalogs.mjs')).href);
+  await copyDesktopCatalogs(path.join(appRoot, 'i18n'));
   // Sandboxed Electron needs this CommonJS entry beside gui/, even though the app uses ESM.
   // 即使应用使用 ESM，沙箱 Electron 仍需要位于 gui/ 同级目录的 CommonJS 预加载入口。
   await cp(path.join(desktop, 'dist/preload.cjs'), path.join(appRoot, 'preload.cjs'));

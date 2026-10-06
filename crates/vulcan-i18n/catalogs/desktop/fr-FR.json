@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Démarrage de Vulcan Code",
+  "closeWindow": "Fermer la fenêtre",
+  "preparing": "Préparation…",
+  "startupFailed": "Échec du démarrage",
+  "checkingInstance": "Recherche d’un service en cours d’exécution…",
+  "reusingInstance": "Connecté au service en cours d’exécution (processus {pid}).",
+  "startingService": "Démarrage du service en arrière-plan…",
+  "awaitingReady": "En attente que le service soit prêt…",
+  "serviceReady": "Le service est prêt (processus {pid}).",
+  "launchFailed": "Impossible de démarrer le service en arrière-plan : {error}",
+  "exitedBeforeReady": "Le processus du service s’est arrêté avant d’être prêt (code de sortie {code}).",
+  "serviceUnavailable": "Le service en arrière-plan n’est pas encore disponible. État actuel : {status}.",
+  "readyTimeout": "Le service n’a pas publié son document de découverte en {seconds} secondes : {path}",
+  "workbenchLoadFailed": "Impossible de charger l’espace de travail {url} : {error}",
+  "closeBrowserTitle": "Fermer le navigateur intégré",
+  "closeBrowserMessage": "{count} pages sont ouvertes. Les fermer toutes ?",
+  "closeBrowserDetail": "Les ressources utilisées par ces pages seront libérées, puis l’onglet du navigateur sera fermé.",
+  "cancel": "Annuler",
+  "closeAll": "Tout fermer"
+}

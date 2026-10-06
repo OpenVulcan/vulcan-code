@@ -1,0 +1,21 @@
+{
+  "startupTitle": "Vulcan Code 啟動中",
+  "closeWindow": "關閉視窗",
+  "preparing": "正在準備…",
+  "startupFailed": "啟動失敗",
+  "checkingInstance": "正在檢查已在執行的服務…",
+  "reusingInstance": "已連線到執行中的服務（處理程序 {pid}）。",
+  "startingService": "正在啟動背景服務…",
+  "awaitingReady": "正在等待服務完成就緒…",
+  "serviceReady": "服務已就緒（處理程序 {pid}）。",
+  "launchFailed": "無法啟動背景服務：{error}",
+  "exitedBeforeReady": "服務處理程序在就緒前結束，結束代碼 {code}。",
+  "serviceUnavailable": "背景服務尚無法使用，目前狀態：{status}。",
+  "readyTimeout": "服務未在 {seconds} 秒內發布就緒探索文件：{path}",
+  "workbenchLoadFailed": "無法載入工作台 {url}：{error}",
+  "closeBrowserTitle": "關閉內建瀏覽器",
+  "closeBrowserMessage": "目前有 {count} 個開啟中的頁面，要全部關閉嗎？",
+  "closeBrowserDetail": "全部關閉會釋放這些網頁佔用的資源，然後關閉內建瀏覽器分頁。",
+  "cancel": "取消",
+  "closeAll": "全部關閉"
+}

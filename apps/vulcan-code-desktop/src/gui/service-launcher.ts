@@ -11,7 +11,7 @@ import { execFile, spawn } from 'node:child_process';
 import { readFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { DEFAULT_DESKTOP_LOCALE, DESKTOP_TEXT, formatDesktopText, type DesktopText } from './desktop-text.js';
+import { DEFAULT_DESKTOP_LOCALE, desktopText, formatDesktopText, type DesktopText } from './desktop-text.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -226,7 +226,7 @@ export async function ensureServiceInstance(
   description: ServiceLaunchDescription,
   forwardedArguments: string[],
   report: ServiceStartupReporter,
-  text: DesktopText = DESKTOP_TEXT[DEFAULT_DESKTOP_LOCALE],
+  text: DesktopText = desktopText(DEFAULT_DESKTOP_LOCALE),
 ): Promise<LiveServiceInstance> {
   report({ stage: 'checking-instance', message: text.checkingInstance });
   const existing = await readLiveServiceInstance(description.discoveryPath);

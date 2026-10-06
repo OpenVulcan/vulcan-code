@@ -1,0 +1,11 @@
+{
+  "loadingWorkspace": "Workspace を読み込んでいます",
+  "connectingService": "Vulcan Core Service に接続しています",
+  "loadingProjectIndex": "プロジェクトと会話のインデックスを読み込んでいます",
+  "loadingStep": "{step} を読み込んでいます",
+  "failedPrefix": "起動に失敗しました：",
+  "errorDetails": "詳細を表示",
+  "downloadProgress": "ダウンロードの進行状況",
+  "completedSteps": "{completed}/{total} ステップ完了",
+  "reloadApplication": "アプリを再読み込み"
+}

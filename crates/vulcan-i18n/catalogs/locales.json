@@ -14,6 +14,8 @@
     { "code": "ru-RU", "nativeName": "Русский", "mark": "RU" }
   ],
   "surfaces": {
+    "boot": { "complete": true },
+    "desktop": { "complete": true },
     "webui": { "complete": true },
     "tui": { "complete": false }
   }

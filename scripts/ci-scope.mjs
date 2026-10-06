@@ -38,10 +38,10 @@ export function classifyChanges(files, full = false) {
       select(['frontend'], `plugin UI: ${file}`);
     } else if (file.startsWith('plugins/')) {
       select(['frontend', 'rustfmt', 'rust'], `plugin runtime: ${file}`);
-    } else if (/^crates\/(?:vulcan-service-api|vulcan-ai-contract|vulcan-workbench-model|vulcan-provider-config|vulcan-terminal-host-protocol|vulcan-plugin-runtime)\//.test(file)
+    } else if (/^crates\/(?:vulcan-service-api|vulcan-ai-contract|vulcan-workbench-model|vulcan-provider-config|vulcan-terminal-host-protocol|vulcan-plugin-runtime|vulcan-i18n)\//.test(file)
       || /^docs\/contracts\/.*\.(?:json|yaml|yml|proto)$/.test(file)) {
       select(['frontend', 'desktop', 'rustfmt', 'rust'], `shared contract: ${file}`);
-    } else if (/^(?:crates\/|apps\/vulcan-code-service\/|Cargo\.(?:toml|lock)$|rust-toolchain\.toml$|\.cargo\/|\.config\/nextest\.toml$)/.test(file)) {
+    } else if (/^(?:crates\/|apps\/vulcan-code-service\/|apps\/vulcan-code-tui\/|Cargo\.(?:toml|lock)$|rust-toolchain\.toml$|\.cargo\/|\.config\/nextest\.toml$)/.test(file)) {
       select(['rustfmt', 'rust'], `rust: ${file}`);
     } else if (/^docs\/.*\.md$/.test(file) || /^(?:README(?:[.-].*)?\.md|AGENTS\.md|LICENSE(?:[.-].*)?|CHANGELOG\.md)$/.test(file)) {
       scope.reasons.push(`documentation: ${file}`);

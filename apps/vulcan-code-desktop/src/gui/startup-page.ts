@@ -5,7 +5,7 @@
 // progress and never hides a failure behind an indefinite spinner.
 // 此处展示的每个阶段与错误都是真实上报值；该文档绝不伪造进度，也不用无限转圈掩盖失败。
 
-import { DESKTOP_TEXT, type DesktopLocale } from './desktop-text.js';
+import { desktopText, type DesktopLocale } from './desktop-text.js';
 
 /** Escapes text placed into the startup HTML document. */
 function escapeHtml(value: string): string {
@@ -14,7 +14,7 @@ function escapeHtml(value: string): string {
 
 /** Renders the startup document as one self-contained HTML string in the given language. */
 export function renderStartupDocument(locale: DesktopLocale): string {
-  const text = DESKTOP_TEXT[locale];
+  const text = desktopText(locale);
   return `<!doctype html>
 <html lang="${locale}">
   <head>

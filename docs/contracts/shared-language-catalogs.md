@@ -14,11 +14,15 @@
 当前分面：
 
 - `webui`（完整）：WebUI 全部文案；TUI 也复用这些键。
+- `boot`（完整）：WebUI 启动屏文案，在完整目录下载前即可显示，因此单独成面并静态打包。
+- `desktop`（完整）：Electron 桌面壳文案。构建（`pnpm run build`）与打包（`scripts/desktop-runtime.mjs`）通过
+  `apps/vulcan-code-desktop/tools/copy-i18n-catalogs.mjs` 把 `locales.json` 与该分面复制为 `gui/` 旁的 `i18n/`；
+  启动时缺失或默认语言缺字段直接失败。
 - `tui`（不完整）：TUI 专属 `tui.*` 键；缺少的语言按键回退到默认语言。
 
 ## 规则
 
-1. **只有一份语言清单。** 服务（保存 `uiLocale` 时的校验）、TUI、WebUI 都从 `locales.json` 读取；不得在消费方
+1. **只有一份语言清单。** 服务（保存 `uiLocale` 时的校验）、TUI、WebUI、桌面壳都从 `locales.json` 读取；不得在消费方
    另建语言列表或匹配规则。WebUI 的 `catalogLoaders` 因打包器需要字面路径而重复代码，由测试保证与注册表一致。
 2. **默认语言补全一切。** 每个分面必须有默认语言文件；完整分面要求每种语言都覆盖默认语言的全部键（WebUI 在编译期
    通过 `satisfies` 检查，crate 测试再统一检查）；非默认语言不得出现默认语言之外的键，占位符集合必须一致。

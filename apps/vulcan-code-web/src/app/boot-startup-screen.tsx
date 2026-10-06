@@ -3,6 +3,7 @@ import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
 import { StartupProgressPanel, type StartupProgressLabels } from "@/components/shell/startup-progress-panel";
 import type { StartupSnapshot } from "@/types";
 import { resolveAppLocale, type LocaleCode } from "@/i18n-locales";
+import defaultBootCatalog from "@catalogs/boot/en-US.json";
 
 // BootText stores the minimal boot-screen labels: the shared progress copy plus the boot failure copy.
 // BootText 保存最小启动屏文案：共用进度文案加上启动失败文案。
@@ -18,131 +19,22 @@ interface BootText extends StartupProgressLabels {
   reloadApplication: string;
 }
 
-// BOOT_TEXT maps startup labels without importing the full application translation catalog.
-// BOOT_TEXT 在不导入完整应用翻译表的情况下映射启动文案。
-const BOOT_TEXT: Record<LocaleCode, BootText> = {
-  "zh-CN": {
-    loadingWorkspace: "正在加载 Workspace",
-    connectingService: "正在连接 Vulcan Core Service",
-    loadingProjectIndex: "正在加载项目与会话索引",
-    loadingStep: "正在加载 {step}",
-    failedPrefix: "启动失败：",
-    errorDetails: "查看详情",
-    downloadProgress: "下载进度",
-    completedSteps: "已完成 {completed}/{total} 个步骤",
-    reloadApplication: "重新加载应用",
-  },
-  "en-US": {
-    loadingWorkspace: "Loading Workspace",
-    connectingService: "Connecting to Vulcan Core Service",
-    loadingProjectIndex: "Loading project and conversation indexes",
-    loadingStep: "Loading {step}",
-    failedPrefix: "Startup failed: ",
-    errorDetails: "View details",
-    downloadProgress: "Download progress",
-    completedSteps: "Completed {completed}/{total} steps",
-    reloadApplication: "Reload application",
-  },
-  "zh-TW": {
-    loadingWorkspace: "正在載入 Workspace",
-    connectingService: "正在連線 Vulcan Core Service",
-    loadingProjectIndex: "正在載入專案與對話索引",
-    loadingStep: "正在載入 {step}",
-    failedPrefix: "啟動失敗：",
-    errorDetails: "檢視詳細資訊",
-    downloadProgress: "下載進度",
-    completedSteps: "已完成 {completed}/{total} 個步驟",
-    reloadApplication: "重新載入應用程式",
-  },
-  "zh-HK": {
-    loadingWorkspace: "正在載入 Workspace",
-    connectingService: "正在連接 Vulcan Core Service",
-    loadingProjectIndex: "正在載入項目與對話索引",
-    loadingStep: "正在載入 {step}",
-    failedPrefix: "啟動失敗：",
-    errorDetails: "查看詳細資訊",
-    downloadProgress: "下載進度",
-    completedSteps: "已完成 {completed}/{total} 個步驟",
-    reloadApplication: "重新載入應用程式",
-  },
-  "ja-JP": {
-    loadingWorkspace: "Workspace を読み込んでいます",
-    connectingService: "Vulcan Core Service に接続しています",
-    loadingProjectIndex: "プロジェクトと会話のインデックスを読み込んでいます",
-    loadingStep: "{step} を読み込んでいます",
-    failedPrefix: "起動に失敗しました：",
-    errorDetails: "詳細を表示",
-    downloadProgress: "ダウンロードの進行状況",
-    completedSteps: "{completed}/{total} ステップ完了",
-    reloadApplication: "アプリを再読み込み",
-  },
-  "ko-KR": {
-    loadingWorkspace: "Workspace를 불러오는 중",
-    connectingService: "Vulcan Core Service에 연결하는 중",
-    loadingProjectIndex: "프로젝트 및 대화 인덱스를 불러오는 중",
-    loadingStep: "{step} 불러오는 중",
-    failedPrefix: "시작 실패: ",
-    errorDetails: "자세히 보기",
-    downloadProgress: "다운로드 진행률",
-    completedSteps: "{total}단계 중 {completed}단계 완료",
-    reloadApplication: "앱 다시 불러오기",
-  },
-  "es-ES": {
-    loadingWorkspace: "Cargando Workspace",
-    connectingService: "Conectando con Vulcan Core Service",
-    loadingProjectIndex: "Cargando los índices de proyectos y conversaciones",
-    loadingStep: "Cargando {step}",
-    failedPrefix: "Error al iniciar: ",
-    errorDetails: "Ver detalles",
-    downloadProgress: "Progreso de la descarga",
-    completedSteps: "{completed}/{total} pasos completados",
-    reloadApplication: "Recargar la aplicación",
-  },
-  "fr-FR": {
-    loadingWorkspace: "Chargement du Workspace",
-    connectingService: "Connexion à Vulcan Core Service",
-    loadingProjectIndex: "Chargement des index de projets et de conversations",
-    loadingStep: "Chargement de {step}",
-    failedPrefix: "Échec du démarrage : ",
-    errorDetails: "Voir les détails",
-    downloadProgress: "Progression du téléchargement",
-    completedSteps: "{completed}/{total} étapes terminées",
-    reloadApplication: "Recharger l’application",
-  },
-  "de-DE": {
-    loadingWorkspace: "Workspace wird geladen",
-    connectingService: "Verbindung mit Vulcan Core Service wird hergestellt",
-    loadingProjectIndex: "Projekt- und Unterhaltungsindizes werden geladen",
-    loadingStep: "{step} wird geladen",
-    failedPrefix: "Start fehlgeschlagen: ",
-    errorDetails: "Details anzeigen",
-    downloadProgress: "Download-Fortschritt",
-    completedSteps: "{completed}/{total} Schritte abgeschlossen",
-    reloadApplication: "Anwendung neu laden",
-  },
-  "pt-BR": {
-    loadingWorkspace: "Carregando o Workspace",
-    connectingService: "Conectando ao Vulcan Core Service",
-    loadingProjectIndex: "Carregando os índices de projetos e conversas",
-    loadingStep: "Carregando {step}",
-    failedPrefix: "Falha ao iniciar: ",
-    errorDetails: "Ver detalhes",
-    downloadProgress: "Progresso do download",
-    completedSteps: "{completed}/{total} etapas concluídas",
-    reloadApplication: "Recarregar o aplicativo",
-  },
-  "ru-RU": {
-    loadingWorkspace: "Загрузка Workspace",
-    connectingService: "Подключение к Vulcan Core Service",
-    loadingProjectIndex: "Загрузка индексов проектов и бесед",
-    loadingStep: "Загрузка: {step}",
-    failedPrefix: "Не удалось запустить: ",
-    errorDetails: "Подробнее",
-    downloadProgress: "Ход загрузки",
-    completedSteps: "Выполнено шагов: {completed} из {total}",
-    reloadApplication: "Перезагрузить приложение",
-  },
-};
+// DEFAULT_BOOT_TEXT is the English boot catalog; assigning it proves the shared catalog covers BootText.
+// DEFAULT_BOOT_TEXT 是英文启动目录；该赋值证明共享目录覆盖 BootText。
+const DEFAULT_BOOT_TEXT: BootText = defaultBootCatalog;
+
+// BOOT_CATALOGS bundles the small shared boot catalogs without importing the full application catalogs.
+// BOOT_CATALOGS 打包体积很小的共享启动目录，而不导入完整应用目录。
+const BOOT_CATALOGS = new Map(
+  Object.entries(import.meta.glob<Partial<BootText>>("@catalogs/boot/*.json", { eager: true, import: "default" }))
+    .map(([path, catalog]) => [/([a-z]{2}-[A-Z]{2})\.json$/u.exec(path)?.[1], catalog] as const),
+);
+
+// bootText returns the boot labels of one language, completing missing keys from English.
+// bootText 返回一种语言的启动文案，并用英文补全缺失的键。
+function bootText(locale: LocaleCode): BootText {
+  return { ...DEFAULT_BOOT_TEXT, ...BOOT_CATALOGS.get(locale) };
+}
 
 // STARTUP_SURFACE_FADE_MS is the single duration of the startup surface hand-off fade; the stylesheet reads it
 // through --startup-surface-fade.
@@ -168,7 +60,7 @@ export function BootLoadingScreen(props: {
   const { leaving = false, onLeft } = props;
   // text stores localized labels for the boot screen without importing the full translation catalog.
   // text 保存启动屏本地化文案，而不导入完整翻译表。
-  const text = BOOT_TEXT[bootLocale(props.startup?.uiLocale)];
+  const text = bootText(bootLocale(props.startup?.uiLocale));
 
   React.useEffect(() => {
     if (!leaving || !onLeft) {
@@ -205,7 +97,7 @@ export function BootErrorScreen(props: {
 }) {
   // text stores localized labels for the boot error.
   // text 保存启动错误的本地化文案。
-  const text = BOOT_TEXT[bootLocale(props.uiLocale)];
+  const text = bootText(bootLocale(props.uiLocale));
   return (
     <main className="loading-screen error">
       <section className="startup-error-panel" aria-live="assertive">
