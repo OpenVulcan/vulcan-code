@@ -712,6 +712,18 @@ pub(super) fn spawn_admitted_task_execution(
         let mut active_task_run_guard = Some(active_task_run_guard);
         let _child_run_abort_guard = child_run_abort_guard;
         let child_run_result = child_run_task.await;
+        // The registry stop flag is the only authority for a stopped outcome; error text is never parsed.
+        // 注册表停止标记是判定已停止结果的唯一权威；绝不解析错误正文。
+        let stop_requested = matches!(child_run_result, Ok(Err(_)))
+            && active_task_run_guard
+                .as_ref()
+                .is_some_and(|guard| match guard.stop_requested() {
+                    Ok(stop_requested) => stop_requested,
+                    Err(error) => {
+                        eprintln!("[task-runtime] {error}");
+                        false
+                    }
+                });
         match child_run_result {
             Ok(Ok(completion)) => {
                 let outcome = completion.outcome;
@@ -779,7 +791,7 @@ pub(super) fn spawn_admitted_task_execution(
                     }
                 }
             }
-            Ok(Err(error)) if task_execution_error_is_stopped(error.as_str()) => {
+            Ok(Err(_)) if stop_requested => {
                 let stopped_snapshot =
                     stopped_task_snapshot_from_runtime_or_request(&task_runtime, task_id, &request)
                         .unwrap_or_else(|| request.snapshot.clone());

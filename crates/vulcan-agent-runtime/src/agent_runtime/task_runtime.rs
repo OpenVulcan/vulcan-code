@@ -746,6 +746,13 @@ impl ActiveTaskRunGuard {
         self.release_in_place()
     }
 
+    /// Reports whether this exact run received a stop request.
+    /// 报告此精确运行是否收到了停止请求。
+    pub(crate) fn stop_requested(&self) -> Result<bool, String> {
+        self.runtime
+            .active_task_run_stop_requested(self.task_id, self.run_id)
+    }
+
     /// Attaches the provider abort handle to this exact reserved run.
     /// 将 Provider 中止句柄附加到本守卫对应的精确预留运行。
     ///

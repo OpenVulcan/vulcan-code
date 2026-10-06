@@ -277,16 +277,6 @@ pub(super) fn task_invocation_status_text(is_resumed: bool) -> &'static str {
     if is_resumed { "resumed" } else { "created" }
 }
 
-/// Returns whether one task execution error most likely came from a user-visible stop or transport cancellation rather than a real logical failure.
-/// 返回某条任务执行错误是否更可能源于用户可见的停止或传输取消，而不是真正的逻辑失败。
-pub(super) fn task_execution_error_is_stopped(error: &str) -> bool {
-    let normalized = error.to_ascii_lowercase();
-    normalized.contains("cancelled")
-        || normalized.contains("canceled")
-        || normalized.contains("aborted")
-        || normalized.contains("stopped")
-}
-
 /// Prefix marking a child-task backend error that happened before a task session actually started.
 /// 标记子任务后端错误发生在任务会话真正启动前的前缀。
 const TASK_EXECUTION_PRESTART_CANCELLED_PREFIX: &str = "[task-prestart-cancelled]";

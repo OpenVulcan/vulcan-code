@@ -1025,6 +1025,25 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Returns whether a stop was requested for this exact run generation.
+    /// 返回此精确运行代次是否已收到停止请求。
+    pub(super) fn active_task_run_stop_requested(
+        &self,
+        task_id: SessionId,
+        run_id: Uuid,
+    ) -> Result<bool, String> {
+        Ok(self
+            .active_task_runs
+            .read()
+            .map_err(|_| {
+                format!(
+                    "The active task registry is locked and cannot read the stop state of task `{task_id}`."
+                )
+            })?
+            .get(&task_id)
+            .is_some_and(|entry| entry.run_id == run_id && entry.stop_requested))
+    }
+
     /// Returns whether any known descendant task still has an active provider run.
     /// 返回任一已知后代任务是否仍持有活动 Provider 运行。
     ///
