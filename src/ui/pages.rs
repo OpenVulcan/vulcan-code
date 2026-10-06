@@ -1,10 +1,10 @@
 // System area view: a navigation column and one generic renderer for every declarative page.
 // 系统区域视图：导航列，以及服务所有声明式页面的通用渲染器。
 //
-// Rows have different heights (wrapped notes, item details, expanded lines, the logo), so the page
+// Rows have different heights (wrapped notes, item details, expanded lines), so the page
 // is laid out first into blocks of lines, then scrolled by line. Every row registers a `PageRow`
 // hit over its whole block; steppers and item actions register `PageRowAction` chips on top.
-// 行高度各不相同（换行的说明、条目详情、展开行、标志），因此页面先排版为若干行块，再按行滚动。
+// 行高度各不相同（换行的说明、条目详情、展开行），因此页面先排版为若干行块，再按行滚动。
 // 每行在其整个块上登记 `PageRow` 命中；步进器与条目操作在其上登记 `PageRowAction` 按钮。
 
 use ratatui::buffer::Buffer;
@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
-use super::brand::Logo;
+use super::brand;
 use super::chrome::{ButtonKind, button, button_style};
 use super::text::{spinner, truncate, width_of, wrap};
 use super::theme::{Theme, mix};
@@ -28,9 +28,6 @@ const NAV_WIDTH: u16 = 28;
 /// Page content never grows wider than this, for readability on wide terminals.
 /// 页面内容最宽不超过此值，以便在宽终端上阅读。
 const MAX_CONTENT: u16 = 100;
-/// Columns of the logo on the About page.
-/// 关于页面上标志的列数。
-const LOGO_COLS: u16 = 20;
 
 pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     let theme = app.theme;
@@ -99,9 +96,9 @@ fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
         lines.push((line, None));
     }
     lines.push((Line::default(), None));
-    let current = app.nav.get(&app.area).copied().unwrap_or(0);
+    let current = app.navigation_index();
     let mut index = 0;
-    for (group, pages) in app.area.nav() {
+    for (group, entries) in pages::navigation(app) {
         if let Some(group) = group {
             lines.push((
                 Line::from(Span::styled(
@@ -111,8 +108,8 @@ fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
                 None,
             ));
         }
-        for page in pages {
-            let selected = index == current;
+        for entry in entries {
+            let selected = entry.selected;
             let marker = if selected && focused { "▌" } else { " " };
             let style = if selected {
                 Style::new().fg(theme.fg).add_modifier(Modifier::BOLD)
@@ -121,11 +118,9 @@ fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
             };
             // Counts and unsaved-draft markers sit right-aligned after the label.
             // 计数与未保存草稿标记右对齐显示在标签之后。
-            let badge = page
-                .badge(app)
-                .map(|(text, tone)| (format!(" {text}"), tone));
+            let badge = entry.badge.map(|(text, tone)| (format!(" {text}"), tone));
             let badge_width = badge.as_ref().map_or(0, |(text, _)| width_of(text));
-            let label = truncate(&page.label(), width.saturating_sub(2 + badge_width));
+            let label = truncate(&entry.label, width.saturating_sub(2 + badge_width));
             let pad = width.saturating_sub(1 + width_of(&label) + badge_width);
             let mut spans = vec![
                 Span::styled(marker, Style::new().fg(theme.primary)),
@@ -181,7 +176,6 @@ fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
 struct Laid {
     lines: Vec<Line<'static>>,
     chips: Vec<(usize, u16, u16, usize)>,
-    logo: bool,
 }
 
 fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
@@ -210,7 +204,7 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
         truncate(&title, content.width as usize),
         theme.strong().add_modifier(Modifier::BOLD),
     );
-    if let Some(search) = page.search() {
+    if let Some(search) = page.search(app) {
         let label = format!("⌕ {}  /", tr!("tui.page.search"));
         let x = content.right().saturating_sub(width_of(&label) as u16 + 2);
         button(
@@ -237,15 +231,6 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.hits.page_height = list.height;
     app.hits.add_scroll(list, ScrollTarget::Page);
 
-    if app.system.is_none() {
-        buf.set_string(
-            list.x,
-            list.y + 1,
-            format!("{} {}", spinner(app.phase()), tr!("tui.page.loading")),
-            theme.muted_text(),
-        );
-        return;
-    }
     let rows = pages::rows(app, page);
     let mut state = app.page_state(page);
     let focused = app.focus == Focus::AreaPage;
@@ -327,23 +312,6 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         if rows[index].selectable() {
             app.hits.add(rect, Target::PageRow(index));
-        }
-        if block.logo {
-            let logo = Logo::new(LOGO_COLS);
-            let x = list.x + list.width.saturating_sub(logo.cols) / 2;
-            if top >= scroll {
-                logo.render(
-                    Rect {
-                        x,
-                        width: logo.cols,
-                        ..rect
-                    },
-                    buf,
-                    theme.bg,
-                    0.0,
-                );
-            }
-            continue;
         }
         for (line_index, line) in block.lines.iter().enumerate() {
             let at = top + line_index;
@@ -525,6 +493,11 @@ fn lay_out(
                 &[],
                 &[],
             ));
+        }
+        RowKind::Document { content } => {
+            // Document whitespace carries code/list structure and must survive the generic row renderer.
+            // 文档空白承载代码及列表结构，必须通过通用行渲染器保留。
+            lines.extend(super::text::wrap_verbatim(content, width, theme.base()));
         }
         RowKind::Toggle { on, .. } => {
             let switch = if *on {
@@ -827,20 +800,12 @@ fn lay_out(
             lines.push(leadered(theme, &row.label, label_width, right));
             detail_lines(&mut lines);
         }
-        RowKind::Logo => {
-            let rows = Logo::new(LOGO_COLS).cols / 2;
-            lines.extend((0..rows).map(|_| Line::default()));
-            return Laid {
-                lines,
-                chips,
-                logo: true,
-            };
+        RowKind::Brand => {
+            lines.push(Line::default());
+            lines.push(brand::wordmark(theme).centered());
+            lines.push(Line::default());
         }
         RowKind::Spacer => lines.push(Line::default()),
     }
-    Laid {
-        lines,
-        chips,
-        logo: false,
-    }
+    Laid { lines, chips }
 }

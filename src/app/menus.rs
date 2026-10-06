@@ -45,9 +45,8 @@ pub fn project_menu(app: &App, project_id: &str) -> Option<Menu> {
                 tr!("projectMenu.pin")
             },
             "p",
-            UiAction::Send(Command::SetProjectPinned {
+            UiAction::Send(Command::ToggleProjectPinned {
                 project_id: id.clone(),
-                pinned: !project.pinned,
             }),
         ),
         entry(
@@ -82,7 +81,6 @@ pub fn project_menu(app: &App, project_id: &str) -> Option<Menu> {
                 tr!("conversationMenu.archive"),
                 UiAction::Send(Command::ArchiveProjectConversations {
                     project_id: id.clone(),
-                    remove_project: false,
                 }),
             ),
         ));
@@ -94,10 +92,7 @@ pub fn project_menu(app: &App, project_id: &str) -> Option<Menu> {
             tr!("projectMenu.removeProject"),
             tr!("tui.confirm.removeProjectBody", name = project.name),
             tr!("projectMenu.removeProject"),
-            UiAction::Send(Command::ArchiveProjectConversations {
-                project_id: id,
-                remove_project: true,
-            }),
+            UiAction::Send(Command::RemoveProject { project_id: id }),
         ),
     ));
     Some(Menu {
@@ -111,39 +106,16 @@ pub fn project_menu(app: &App, project_id: &str) -> Option<Menu> {
 pub fn conversation_menu(app: &App, conversation_id: &str) -> Option<Menu> {
     let conversation = app.conversations.iter().find(|c| c.id == conversation_id)?;
     let id = conversation.id.clone();
-    let mut items = vec![
-        entry(
-            if conversation.pinned {
-                tr!("conversationMenu.unpin")
-            } else {
-                tr!("conversationMenu.pin")
-            },
-            "p",
-            UiAction::Send(Command::SetConversationPinned {
-                conversation_id: id.clone(),
-                pinned: !conversation.pinned,
-            }),
-        ),
-        entry(
+    let mut items = vec![entry(
+        tr!("conversationMenu.rename"),
+        "r",
+        prompt(
             tr!("conversationMenu.rename"),
-            "r",
-            prompt(
-                tr!("conversationMenu.rename"),
-                String::new(),
-                conversation.title.clone(),
-                PromptThen::RenameConversation(id.clone()),
-            ),
+            String::new(),
+            conversation.title.clone(),
+            PromptThen::RenameConversation(id.clone()),
         ),
-    ];
-    if !conversation.unread {
-        items.push(entry(
-            tr!("conversationMenu.markUnread"),
-            "u",
-            UiAction::Send(Command::MarkUnread {
-                conversation_id: id.clone(),
-            }),
-        ));
-    }
+    )];
     if app.selected.as_deref() == Some(conversation_id) {
         items.push(entry(
             tr!("tui.history.title"),

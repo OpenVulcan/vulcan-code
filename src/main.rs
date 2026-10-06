@@ -1,8 +1,9 @@
-// `vulcan-tui [--locale <tag>] [--theme dark|light]`
+// `vulcan-tui [--backend service|mock] [--service-root <dir>] [--locale <tag>] [--theme dark|light]`
 //
-// Runs the TUI against the scripted mock backend. The terminal is restored on exit and on panic
-// (`ratatui::init` installs the panic hook).
-// 以脚本化模拟后端运行 TUI。退出与 panic 时都会恢复终端（`ratatui::init` 会安装 panic 钩子）。
+// Runs the TUI against the running Vulcan Code service (default) or the scripted mock backend.
+// The terminal is restored on exit and on panic (`ratatui::init` installs the panic hook).
+// 连接运行中的 Vulcan Code 服务（默认）或脚本化模拟后端运行 TUI。退出与 panic 时都会恢复终端
+// （`ratatui::init` 会安装 panic 钩子）。
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -13,7 +14,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use vulcan_code_tui::app::{App, composer, input};
-use vulcan_code_tui::backend::mock;
+use vulcan_code_tui::backend::{BackendHandle, mock, service};
 use vulcan_code_tui::i18n;
 use vulcan_code_tui::ui::{self, theme::Theme};
 
@@ -26,9 +27,13 @@ const IDLE_POLL: Duration = Duration::from_millis(250);
 /// 等待以单独按键到达的粘贴剩余部分的时长（不支持括号粘贴的终端）。
 const BURST_WAIT: Duration = Duration::from_millis(3);
 
+const USAGE: &str = "usage: vulcan-tui [--backend service|mock] [--service-root <dir>] [--locale <tag>] [--theme dark|light]";
+
 struct Args {
     locale: Option<String>,
     theme: Theme,
+    mock: bool,
+    service: service::Options,
 }
 
 fn parse_args() -> Result<Args> {
@@ -36,6 +41,8 @@ fn parse_args() -> Result<Args> {
     let mut parsed = Args {
         locale: None,
         theme: Theme::dark(),
+        mock: false,
+        service: service::Options::default(),
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -48,8 +55,17 @@ fn parse_args() -> Result<Args> {
                 Some("light") => parsed.theme = Theme::light(),
                 _ => bail!("--theme expects `dark` or `light`"),
             },
+            "--backend" => match args.next().as_deref() {
+                Some("service") => parsed.mock = false,
+                Some("mock") => parsed.mock = true,
+                _ => bail!("--backend expects `service` or `mock`"),
+            },
+            "--service-root" => match args.next() {
+                Some(dir) => parsed.service.root = Some(dir.into()),
+                None => bail!("--service-root needs the directory holding webui-service.json"),
+            },
             "-h" | "--help" => {
-                println!("usage: vulcan-tui [--locale <tag>] [--theme dark|light]");
+                println!("{USAGE}");
                 std::process::exit(0);
             }
             other => bail!("unknown argument `{other}`"),
@@ -71,7 +87,12 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let args = parse_args()?;
     i18n::set_active_locale(i18n::resolve_locale(args.locale.as_deref(), None));
-    let mut app = App::new(mock::spawn(), args.theme, args.locale.is_some());
+    let backend: BackendHandle = if args.mock {
+        mock::spawn()
+    } else {
+        service::spawn(args.service)
+    };
+    let mut app = App::new(backend, args.theme, args.locale.is_some());
 
     let mut terminal = ratatui::init();
     execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;

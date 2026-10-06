@@ -1,6 +1,6 @@
-// Small modal dialogs: context menus, confirmations, single-line prompts and the folder picker used
+// Small modal dialogs: context menus, confirmations, text prompts and the folder picker used
 // to add projects and attach files.
-// 小型模态对话框：上下文菜单、确认框、单行输入框，以及用于添加项目与附加文件的文件夹选择器。
+// 小型模态对话框：上下文菜单、确认框、文本输入框，以及用于添加项目与附加文件的文件夹选择器。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -153,9 +153,21 @@ pub fn render_confirm(app: &App, dialog: &mut ConfirmDialog, area: Rect, buf: &m
     );
 }
 
+/// Renders transient text with visible line boundaries and an append-position cursor.
+/// 渲染临时文本，显示真实行边界及追加位置光标。
+/// `app` provides theme and hit registration; `dialog` owns the transient field value.
+/// `app` 提供主题及命中登记；`dialog` 持有临时字段值。
+/// `area` bounds the modal; `buf` receives its cells. Returns no value.
+/// `area` 限制模态范围；`buf` 接收单元格。无返回值。
 pub fn render_prompt(app: &App, dialog: &mut PromptDialog, area: Rect, buf: &mut Buffer) {
+    // Shared theme used by input, validation and buttons.
+    // 输入、校验及按钮使用的共享主题。
     let theme = &app.theme;
+    // Modal width leaves the shared close control inside the frame.
+    // 模态宽度使共享关闭控件保留在边框内。
     let width = 64u16.min(area.width.saturating_sub(2));
+    // Instructions wrap independently from editable text.
+    // 说明与可编辑文本分别换行。
     let description = if dialog.description.is_empty() {
         Vec::new()
     } else {
@@ -165,21 +177,62 @@ pub fn render_prompt(app: &App, dialog: &mut PromptDialog, area: Rect, buf: &mut
             theme.muted_text(),
         )
     };
-    let rect = centered(area, width, description.len() as u16 + 8);
+    // Preserve line boundaries even when masking; no credential value enters a rendered cell.
+    // 遮蔽时也保留行边界；任何凭据值都不进入渲染单元格。
+    let shown = if dialog.secret {
+        dialog
+            .input
+            .split('\n')
+            .map(|line| "•".repeat(line.chars().count()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        dialog.input.clone()
+    };
+    // Split keeps a trailing empty line so a newly inserted newline has its own cursor.
+    // 分割保留末尾空行，使新插入的换行有独立光标位置。
+    let lines: Vec<&str> = shown.split('\n').collect();
+    // Show the append position and at most six lines, retaining the complete input in the dialog.
+    // 显示追加位置及最多六行，在输入框中保留完整输入。
+    let desired_rows = lines.len().min(6) as u16;
+    // Shared geometry clamps the modal to the terminal.
+    // 共享几何逻辑将模态范围限制在终端内。
+    let rect = centered(area, width, description.len() as u16 + desired_rows + 7);
+    // Multiline continuations expose their explicit newline shortcut.
+    // 多行后续步骤显示明确的换行快捷键。
+    let footer = if dialog.accepts_multiline() {
+        "Alt+Enter ↵ · Ctrl+U · Enter · Esc"
+    } else {
+        "Enter · Ctrl+U · Esc"
+    };
+    // Modal clears wide-character spill and registers the existing close action.
+    // 模态清除宽字符溢出并登记现有关闭动作。
     let inner = modal(
         app,
         rect,
         frame(
             theme,
-            dialog.title.clone(),
-            "Enter · Ctrl+U · Esc".to_string(),
+            truncate(&dialog.title, width.saturating_sub(8) as usize),
+            footer.into(),
         ),
         buf,
     );
+    if inner.height < 5 || inner.width < 5 {
+        return;
+    }
+    // Inset input origin.
+    // 内缩的输入起点。
     let x = inner.x + 2;
+    // Input columns reserve one leading space and a cursor cell.
+    // 输入列保留一个前导空格及一个光标单元格。
     let field_width = inner.width.saturating_sub(4);
+    // Reserve input, validation and the shared button row before rendering descriptions.
+    // 渲染说明前预留输入、校验及共享按钮行。
+    let description_limit = inner.height.saturating_sub(desired_rows + 4) as usize;
+    // Current body row.
+    // 当前主体行。
     let mut y = inner.y + 1;
-    for line in &description {
+    for line in description.iter().take(description_limit) {
         line.render(
             Rect {
                 x,
@@ -191,38 +244,48 @@ pub fn render_prompt(app: &App, dialog: &mut PromptDialog, area: Rect, buf: &mut
         );
         y += 1;
     }
-    y += u16::from(!description.is_empty());
-    // Secret input is masked on screen; the TUI never keeps it after sending.
-    // 机密输入在屏幕上遮蔽；发送后 TUI 不再保留。
-    let shown = if dialog.secret {
-        "•".repeat(dialog.input.chars().count())
-    } else {
-        dialog.input.clone()
-    };
-    let room = field_width.saturating_sub(2) as usize;
-    let tail: String = {
-        let chars: Vec<char> = shown.chars().collect();
-        let mut start = chars.len();
-        let mut used = 0;
-        while start > 0 && used + width_of(&chars[start - 1].to_string()) <= room {
-            used += width_of(&chars[start - 1].to_string());
-            start -= 1;
-        }
-        chars[start..].iter().collect()
-    };
+    y += u16::from(!description.is_empty() && description_limit > 0);
+    // Actual visible input rows after terminal clamping.
+    // 终端限制后的实际可见输入行数。
+    let rows = desired_rows.min(inner.bottom().saturating_sub(y + 2));
+    // First visible source line; older lines remain in the submitted value.
+    // 首条可见来源行；更早的行仍保留在提交值中。
+    let first_line = lines.len().saturating_sub(rows as usize);
+    // Complete input background, preserving indentation and source newline boundaries.
+    // 完整输入背景，保留缩进及来源换行边界。
     let field = Rect {
         x,
         y,
         width: field_width,
-        height: 1,
+        height: rows,
     };
     buf.set_style(field, Style::new().bg(mix(theme.input, theme.popover, 0.5)));
-    Line::from(vec![
-        Span::styled(format!(" {tail}"), Style::new().fg(theme.fg)),
-        Span::styled("▏", theme.primary_text()),
-    ])
-    .render(field, buf);
-    y += 1;
+    for (offset, line) in lines.iter().skip(first_line).enumerate() {
+        // The end of a long source line stays visible during append-only editing.
+        // 在仅追加的编辑方式下，较长来源行的末尾保持可见。
+        let tail = truncate_left(line, field_width.saturating_sub(2) as usize);
+        // Cursor belongs only to the final logical line.
+        // 光标仅属于最后一条逻辑行。
+        let cursor = if first_line + offset + 1 == lines.len() {
+            "▏"
+        } else {
+            ""
+        };
+        Line::from(vec![
+            Span::styled(format!(" {tail}"), Style::new().fg(theme.fg)),
+            Span::styled(cursor, theme.primary_text()),
+        ])
+        .render(
+            Rect {
+                x,
+                y: y + offset as u16,
+                width: field_width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+    y += rows;
     if let Some(error) = &dialog.error {
         buf.set_string(
             x,

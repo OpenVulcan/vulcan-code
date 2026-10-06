@@ -21,6 +21,288 @@ use vulcan_code_tui::backend::mock;
 use vulcan_code_tui::i18n;
 use vulcan_code_tui::model::{AgentState, GoalStatus};
 use vulcan_code_tui::ui::{self, theme::Theme};
+/// Dynamic catalog navigation and managed document reading are reachable by real hits and keys.
+/// 动态目录导航及托管文档阅读可通过真实命中与按键触达。
+/// Both terminal widths use inert channels and never connect to a real service.
+/// 两种终端宽度均使用静默通道，绝不连接真实服务。
+#[test]
+fn catalog_navigation_and_managed_reader_are_mouse_keyboard_accessible() {
+    use serde_json::{Value, json};
+    use std::sync::mpsc;
+    use vulcan_code_tui::app::pages::{PageId, RowKind, navigation, rows};
+    use vulcan_code_tui::app::{Focus, action::perform};
+    use vulcan_code_tui::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
+    use vulcan_code_tui::service_api::{Slot, knowledge_base as kb, workbench_snapshot};
+    // Synthetic catalog source contains real category and managed-document fields.
+    // 合成目录来源包含真实分类及托管文档字段。
+    let fixture: Value =
+        serde_json::from_str(include_str!("../src/backend/mock/service-fixtures.json")).unwrap();
+    for (width, height) in [(160, 45), (64, 20)] {
+        // Requests are observed and never executed.
+        // 只观察请求，不执行。
+        let (commands, observer) = mpsc::channel();
+        // No worker produces external events.
+        // 不运行产生外部事件的工作器。
+        let (_, events) = mpsc::channel();
+        // Isolated application uses actual page rendering and input dispatch.
+        // 隔离应用使用真实页面渲染及输入分派。
+        let mut app = App::new(
+            BackendHandle {
+                commands,
+                events,
+                label: "test".into(),
+                is_mock: true,
+            },
+            Theme::dark(),
+            true,
+        );
+        app.apply(BackendEvent::Connection(ConnectionState::Connected));
+        app.apply(BackendEvent::Slot {
+            slot: Slot::Workbench,
+            call: workbench_snapshot::load_workbench_snapshot(),
+            value: fixture["workbench"].clone(),
+        });
+        app.apply(BackendEvent::Slot {
+            slot: Slot::KnowledgeLibraries,
+            call: kb::list_knowledge_libraries(),
+            value: fixture["loads"]["service_list_knowledge_libraries"].clone(),
+        });
+        // Fresh terminal buffers prevent old wide-character cells from masking layout defects.
+        // 全新终端缓冲区防止旧宽字符单元格掩盖布局缺陷。
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        for area in [Area::Agents, Area::AgentSkills] {
+            perform(&mut app, UiAction::Area(area));
+            terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+            assert_eq!(
+                navigation(&app)
+                    .into_iter()
+                    .map(|(_, entries)| entries.len())
+                    .sum::<usize>(),
+                3
+            );
+            click(&mut app, "development category", |target| {
+                matches!(target, Target::NavItem(1))
+            });
+            assert_eq!(
+                if area == Area::Agents {
+                    &app.agent_category
+                } else {
+                    &app.skill_category
+                },
+                "development"
+            );
+            input::handle_event(&mut app, key(KeyCode::Down, KeyModifiers::NONE));
+            assert_eq!(
+                if area == Area::Agents {
+                    &app.agent_category
+                } else {
+                    &app.skill_category
+                },
+                "analysis"
+            );
+            terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+            // Wheel movement uses the same current category mapping as keyboard and clicks.
+            // 滚轮移动与键盘、点击使用相同当前分类映射。
+            let rect = app
+                .hits
+                .find(|target| matches!(target, Target::NavItem(2)))
+                .unwrap();
+            input::handle_event(
+                &mut app,
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column: rect.x,
+                    row: rect.y,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            );
+            assert_eq!(
+                if area == Area::Agents {
+                    &app.agent_category
+                } else {
+                    &app.skill_category
+                },
+                "development"
+            );
+            snapshot(&mut app, &format!("category-{area:?}-{width}"));
+        }
+        perform(&mut app, UiAction::Area(Area::Knowledge));
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        assert!(buffer_text(terminal.backend().buffer()).contains("Demo Knowledge"));
+        click(&mut app, "real library", |target| {
+            matches!(target, Target::NavItem(1))
+        });
+        assert_eq!(app.library.as_deref(), Some("demo-library"));
+        assert_eq!(app.current_page(), Some(PageId::KnowledgeLibrary));
+        observer.try_iter().for_each(drop);
+        app.focus = Focus::AreaPage;
+        input::handle_event(&mut app, key(KeyCode::Home, KeyModifiers::NONE));
+        // The overview's first selectable row is the real shared view selector.
+        // 概览首个可选行是真实共享视图选择器。
+        input::handle_event(&mut app, key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.current_page(), Some(PageId::KnowledgeDocuments));
+        assert!(observer.try_iter().any(|command|matches!(command,Command::Call(call)
+            if call.method == "service_list_knowledge_library_documents" && call.param("/request/libraryId") == "demo-library" && call.param("/request/limit") == 21)));
+        app.apply(BackendEvent::Slot {
+            slot: Slot::KnowledgeFolders,
+            call: kb::list_managed_knowledge_document_folders("demo-library"),
+            value: json!(["", "guide"]),
+        });
+        app.apply(BackendEvent::Slot {
+            slot: Slot::KnowledgeDocuments,
+            call: kb::list_managed_knowledge_documents("demo-library", None, 21, 0),
+            value: Value::Array(
+                fixture["knowledgeDocuments"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .take(21)
+                    .map(|entry| entry["document"].clone())
+                    .collect(),
+            ),
+        });
+        // Exact reader action is located from its rendered document row.
+        // 从已渲染文档行定位准确阅读动作。
+        let row = rows(&app, PageId::KnowledgeDocuments)
+            .iter()
+            .position(|row| matches!(&row.kind,RowKind::Item{id,..} if id == "demo-document"))
+            .unwrap();
+        app.page_state_mut(PageId::KnowledgeDocuments).cursor = row;
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        snapshot(&mut app, &format!("managed-documents-{width}"));
+        click(
+            &mut app,
+            "read document",
+            |target| matches!(target,Target::PageRowAction(index,0) if *index == row),
+        );
+        assert_eq!(app.current_page(), Some(PageId::KnowledgeDocument));
+        assert!(observer.try_iter().any(|command|matches!(command,Command::Call(call)
+            if call.method == "service_read_knowledge_library_document" && call.param("/documentId") == "demo-document" && call.param("/corpus") == "raw")));
+        app.apply(BackendEvent::Slot {slot:Slot::KnowledgeDocument,call:kb::read_managed_knowledge_document("demo-library","demo-document","raw"),
+            value:json!({"document":fixture["knowledgeDocuments"][0]["document"],"content":fixture["knowledgeDocuments"][0]["raw"]})});
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        input::handle_event(&mut app, key(KeyCode::PageDown, KeyModifiers::NONE));
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        assert!(buffer_text(terminal.backend().buffer()).contains("Synthetic demo"));
+        assert!(buffer_text(terminal.backend().buffer()).contains("    indented line"));
+        snapshot(&mut app, &format!("managed-reader-{width}"));
+        perform(
+            &mut app,
+            UiAction::Edit(
+                vulcan_code_tui::app::action::Edit::Local(
+                    vulcan_code_tui::app::action::LocalSetting::KnowledgeCorpus,
+                ),
+                vulcan_code_tui::model::SettingValue::Text("display".into()),
+            ),
+        );
+        app.apply(BackendEvent::SlotFailed {
+            slot: Slot::KnowledgeDocument,
+            call: kb::read_managed_knowledge_document("demo-library", "demo-document", "display"),
+            message: "Display document is not built".into(),
+        });
+        app.toasts.clear();
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        assert!(buffer_text(terminal.backend().buffer()).contains("not built"));
+        snapshot(&mut app, &format!("managed-reader-error-{width}"));
+    }
+}
+
+/// Renders and clicks a guarded import flow using inert channels at both terminal widths.
+/// 在两种终端宽度下使用静默通道渲染并点击受保护导入流程。
+/// No worker or service discovery runs; only the final request is observed.
+/// 不运行工作器或服务发现；仅观察最终请求。
+#[test]
+fn preview_review_mouse_confirmation_and_subset_input_render() {
+    use serde_json::{Value, json};
+    use std::sync::mpsc;
+    use vulcan_code_tui::backend::{BackendEvent, BackendHandle, Command, ConnectionState};
+    use vulcan_code_tui::service_api::knowledge_base;
+    // Wide and narrow layouts must expose the same approval actions.
+    // 宽窄布局必须公开相同的批准动作。
+    for (width, height) in [(160, 45), (64, 20)] {
+        let (commands, observer) = mpsc::channel();
+        let (_, events) = mpsc::channel();
+        let mut app = App::new(
+            BackendHandle {
+                commands,
+                events,
+                label: "test".into(),
+                is_mock: true,
+            },
+            Theme::dark(),
+            true,
+        );
+        app.apply(BackendEvent::Connection(ConnectionState::Connected));
+        // Many preview rows exercise scrolling without moving the approval button out of reach.
+        // 较多预检行验证滚动，且不能让批准按钮无法触达。
+        let entries: Vec<Value> = (0..40)
+            .map(|index| json!({"key":format!("file-{index}.md"),"disposition":"ready"}))
+            .collect();
+        app.apply(BackendEvent::Preview {
+            call: knowledge_base::preview_knowledge_import("demo", "C:/demo", None),
+            result: json!({"fingerprint":"preview-1","entries":entries}),
+        });
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        assert!(matches!(app.overlay, Some(Overlay::Detail(_))));
+        snapshot(&mut app, &format!("import-preview-{width}"));
+        click(&mut app, "preview approval", |target| {
+            matches!(target, Target::Do(UiAction::SheetPick(0)))
+        });
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        click(&mut app, "final confirmation", |target| {
+            matches!(target, Target::Do(UiAction::ConfirmAccept))
+        });
+        assert!(matches!(app.overlay, Some(Overlay::Prompt(_))));
+        input::handle_event(&mut app, key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        input::handle_event(&mut app, Event::Paste("outside.md".into()));
+        input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(&app.overlay,Some(Overlay::Prompt(dialog)) if dialog.error.is_some()));
+        assert!(observer.try_recv().is_err());
+        // Replace the ready list through the same paste and newline events available in a terminal.
+        // 通过终端可用的相同粘贴及换行事件替换就绪列表。
+        input::handle_event(&mut app, key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        input::handle_event(&mut app, Event::Paste("file-3.md".into()));
+        input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::ALT));
+        input::handle_event(&mut app, Event::Paste("file-7.md".into()));
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt(dialog))
+            if dialog.input == "file-3.md\nfile-7.md" && dialog.error.is_none()));
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        // Each selected key must occupy its own visible row, without accidental concatenation.
+        // 每个选中键必须占据独立可见行，不能意外拼接。
+        let rendered = terminal.backend().buffer();
+        // Text rows observed directly from the rendered terminal cells.
+        // 从已渲染终端单元格直接观察的文本行。
+        let key_rows: Vec<String> = (0..height)
+            .map(|row| {
+                (0..width)
+                    .map(|column| rendered[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        assert!(
+            key_rows
+                .iter()
+                .any(|row| row.contains("file-3.md") && !row.contains("file-7.md"))
+        );
+        assert!(
+            key_rows
+                .iter()
+                .any(|row| row.contains("file-7.md") && !row.contains("file-3.md"))
+        );
+        snapshot(&mut app, &format!("import-selection-{width}"));
+        input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+        let Command::Call(call) = observer.try_recv().unwrap() else {
+            panic!("import call")
+        };
+        assert_eq!(
+            call.param("/request/selectedFileKeys"),
+            &json!(["file-3.md", "file-7.md"])
+        );
+        assert_eq!(call.param("/request/previewFingerprint"), "preview-1");
+        assert!(observer.try_recv().is_err());
+    }
+}
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
     Event::Key(KeyEvent::new(code, modifiers))
@@ -69,7 +351,7 @@ fn mock_turn_renders_at_wide_and_narrow_sizes() {
     wide.draw(|frame| ui::draw(frame, &mut app))
         .expect("splash draw");
     assert!(
-        buffer_text(wide.backend().buffer()).contains("V U L C A N"),
+        buffer_text(wide.backend().buffer()).contains("VulcanCode"),
         "splash shows the wordmark"
     );
     pump(
@@ -374,9 +656,14 @@ fn session_bar_composer_pastes_and_sidebar_rail() {
             })
     };
     let deadline = Instant::now() + Duration::from_secs(5);
+    // Events are applied one at a time so a quick reply cannot land in the same batch.
+    // 逐个应用事件，避免快速到达的回复落入同一批次。
     while sent(&app).is_none() && Instant::now() < deadline {
         while let Ok(event) = app.backend.events.try_recv() {
             app.apply(event);
+            if sent(&app).is_some() {
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -498,7 +785,20 @@ fn mouse_reaches_areas_overlays_and_dialogs() {
             &mut narrow,
             Instant::now() + Duration::from_millis(300),
         );
-        for page in 0..area.pages().len() {
+        redraw(&mut app, &mut wide);
+        assert!(
+            app.hits
+                .find(|t| matches!(t, Target::Sidebar(_) | Target::Do(UiAction::OpenSidebar)))
+                .is_none(),
+            "system area {area:?} must not show the project and conversation list"
+        );
+        // Dynamic catalogs have category/library rows instead of one row per content view.
+        // 动态目录使用分类、知识库行，而非每个内容视图一行。
+        let count = vulcan_code_tui::app::pages::navigation(&app)
+            .into_iter()
+            .map(|(_, entries)| entries.len())
+            .sum::<usize>();
+        for page in 0..count {
             redraw(&mut app, &mut wide);
             click(
                 &mut app,
@@ -513,6 +813,25 @@ fn mouse_reaches_areas_overlays_and_dialogs() {
             );
             snapshot(&mut app, &format!("{area:?}-{page}"));
         }
+    }
+    // Library subviews use the shared view selector and independent page state.
+    // 知识库子视图使用共享视图选择器及独立页面状态。
+    for page in Area::Knowledge.pages() {
+        if page == vulcan_code_tui::app::pages::PageId::KnowledgeDocument {
+            vulcan_code_tui::app::action::perform(
+                &mut app,
+                UiAction::OpenKnowledgeDocument("demo-document".into()),
+            );
+        } else {
+            vulcan_code_tui::app::action::perform(&mut app, UiAction::GoPage(page));
+        }
+        pump(
+            &mut app,
+            &mut wide,
+            &mut narrow,
+            Instant::now() + Duration::from_millis(120),
+        );
+        snapshot(&mut app, &format!("{page:?}"));
     }
     redraw(&mut app, &mut wide);
     click(&mut app, "chat tab", |t| {

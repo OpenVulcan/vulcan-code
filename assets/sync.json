@@ -1,8 +1,0 @@
-{
-  "files": [
-    {
-      "from": "../vulcan-code/apps/vulcan-code-web/public/vulcan-logo.png",
-      "to": "assets/vulcan-logo.png"
-    }
-  ]
-}

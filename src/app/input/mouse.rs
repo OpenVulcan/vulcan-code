@@ -80,12 +80,17 @@ fn wheel(app: &mut App, at: Position, direction: isize) {
             app.sidebar_scroll = step(app.sidebar_scroll);
         }
         ScrollTarget::Nav => {
-            let count = app.area.pages().len();
-            let index = app.nav.get(&app.area).copied().unwrap_or(0) as isize + direction;
-            app.nav.insert(
-                app.area,
-                index.clamp(0, count.saturating_sub(1) as isize) as usize,
-            );
+            // Catalog movement must also load the selected library, just like a click.
+            // 目录移动也必须加载所选知识库，与点击一致。
+            let count = crate::app::pages::navigation(app)
+                .into_iter()
+                .map(|(_, entries)| entries.len())
+                .sum::<usize>();
+            // Clamp a navigation index only; server identities are resolved by Navigate.
+            // 只限制导航下标；服务端身份由 Navigate 解析。
+            let index = (app.navigation_index() as isize + direction)
+                .clamp(0, count.saturating_sub(1) as isize) as usize;
+            action::perform(app, UiAction::Navigate(index));
         }
         ScrollTarget::Page => {
             if let Some(page) = app.current_page() {
@@ -185,7 +190,7 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
                 SidebarRow::Project(_) | SidebarRow::Conversation(_) => {
                     activate_sidebar_row(app, &row)
                 }
-                SidebarRow::PinnedHeader | SidebarRow::Unlinked => {}
+                SidebarRow::Unlinked => {}
             }
             // Selecting a conversation from the sidebar moves focus to the composer; a click
             // keeps it in the sidebar only for projects.
@@ -235,10 +240,7 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
             app.focus = Focus::Ask;
             app.ask.go_to(index, total);
         }
-        Target::NavItem(index) => {
-            app.nav.insert(app.area, index);
-            app.focus = Focus::AreaNav;
-        }
+        Target::NavItem(index) => action::perform(app, UiAction::Navigate(index)),
         Target::PageRow(index) => {
             if let Some(page) = app.current_page() {
                 pages::click_row(app, page, index);

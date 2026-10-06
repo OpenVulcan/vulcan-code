@@ -1,0 +1,1678 @@
+{
+  "workbench": {
+    "appVersion": "demo",
+    "uiLocale": "en-US",
+    "modules": [
+      {
+        "id": "demo-service",
+        "label": "Demo Service",
+        "status": "ready",
+        "message": "Synthetic service"
+      }
+    ],
+    "projects": [],
+    "archivedConversations": [],
+    "plugins": [
+      {
+        "id": "demo-plugin",
+        "name": "Demo Plugin",
+        "kind": "lua",
+        "runtimeState": "running",
+        "status": "available",
+        "desiredEnabled": true,
+        "enabled": true,
+        "available": true,
+        "extension": {
+          "origin": "userInstalled",
+          "uiMounts": []
+        }
+      }
+    ],
+    "luaSkills": {
+      "runtimeRoot": "C:\\demo\\lua",
+      "restartRequired": false,
+      "runtimeSettings": {
+        "schemaVersion": 1,
+        "vmPool": {
+          "minSize": 0,
+          "maxSize": 4,
+          "idleTtlSecs": 60
+        },
+        "runLuaPool": {
+          "minSize": 0,
+          "maxSize": 4,
+          "idleTtlSecs": 60
+        },
+        "toolCache": {
+          "maxEntries": 64,
+          "defaultTtlSecs": 60,
+          "maxTtlSecs": 3600
+        },
+        "network": {
+          "allowDownloads": true,
+          "githubBaseUrl": "https://github.com",
+          "githubApiBaseUrl": "https://api.github.com",
+          "officialSkillHubBaseUrl": "https://example.invalid/skills",
+          "enablePrivateUrlSkillInstall": false,
+          "privateSkillSourceAllowlist": []
+        },
+        "capabilities": {
+          "defaultTextEncoding": "utf-8",
+          "enableSkillManagementBridge": true,
+          "enableManagedIoCompat": true
+        },
+        "managedRuntime": {
+          "workerPoolMaxSizePerEnvironment": 4,
+          "workerIdleTtlSecs": 60,
+          "persistentSessionLimitPerEngine": 4,
+          "persistentSessionDefaultBufferLimitBytesPerStream": 1048576,
+          "invokeDefaultTimeoutMs": 60000
+        },
+        "aiTools": {
+          "enableRunLua": true,
+          "enableRunLuaSession": true
+        }
+      },
+      "skills": [
+        {
+          "skillId": "demo-lua",
+          "displayName": "Demo Lua Skill",
+          "version": "1.0.0",
+          "enabled": true,
+          "systemOwned": false,
+          "managed": true,
+          "sourceType": "github",
+          "sourceLocator": "example/demo",
+          "skillDir": "C:\\demo\\lua\\demo-lua",
+          "tools": [
+            {
+              "localName": "read",
+              "canonicalName": "demo.read",
+              "description": "Demo tool",
+              "registrationState": "explicit"
+            }
+          ]
+        }
+      ]
+    },
+    "agentSkills": {
+      "records": [
+        {
+          "skillKey": "user:demo-skill",
+          "name": "demo-skill",
+          "displayName": "Demo Skill",
+          "scopeKey": "user",
+          "enabled": true,
+          "canToggle": true,
+          "canDelete": true,
+          "canRestoreDefault": true,
+          "canEdit": true,
+          "body": "Synthetic skill instructions",
+          "skillFile": "C:\\demo\\skills\\demo-skill\\SKILL.md",
+          "categoryId": "development",
+          "locales": {},
+          "effective": true,
+          "baseDir": "C:/demo/skills/demo-skill",
+          "tags": [
+            "demo"
+          ],
+          "standard": {
+            "description": "Synthetic skill instructions",
+            "metadata": {}
+          }
+        }
+      ],
+      "categories": [
+        {
+          "categoryId": "development",
+          "name": "Development",
+          "emoji": "🛠",
+          "color": "#5b8cff",
+          "order": 0,
+          "locales": {
+            "zh-CN": {
+              "name": "开发"
+            },
+            "zh-TW": {
+              "name": "開發"
+            },
+            "en-US": {
+              "name": "Development"
+            }
+          }
+        },
+        {
+          "categoryId": "analysis",
+          "name": "Analysis",
+          "emoji": "🔎",
+          "color": "#59b89a",
+          "order": 1,
+          "locales": {
+            "zh-CN": {
+              "name": "分析"
+            },
+            "zh-TW": {
+              "name": "分析"
+            },
+            "en-US": {
+              "name": "Analysis"
+            }
+          }
+        }
+      ],
+      "errors": []
+    },
+    "subagentCatalog": {
+      "definitions": [
+        {
+          "agentId": "demo-agent",
+          "name": "Demo Agent",
+          "scopeKey": "user",
+          "enabled": true,
+          "canToggle": true,
+          "canDelete": true,
+          "canRestoreDefault": true,
+          "canEdit": true,
+          "definitionFile": "C:\\demo\\agents\\demo-agent.md",
+          "systemPrompt": "Synthetic agent instructions",
+          "categoryId": "development",
+          "locales": {}
+        }
+      ],
+      "categories": [
+        {
+          "categoryId": "development",
+          "name": "Development",
+          "emoji": "🛠",
+          "color": "#5b8cff",
+          "order": 0,
+          "locales": {
+            "zh-CN": {
+              "name": "开发"
+            },
+            "zh-TW": {
+              "name": "開發"
+            },
+            "en-US": {
+              "name": "Development"
+            }
+          }
+        },
+        {
+          "categoryId": "analysis",
+          "name": "Analysis",
+          "emoji": "🔎",
+          "color": "#59b89a",
+          "order": 1,
+          "locales": {
+            "zh-CN": {
+              "name": "分析"
+            },
+            "zh-TW": {
+              "name": "分析"
+            },
+            "en-US": {
+              "name": "Analysis"
+            }
+          }
+        }
+      ]
+    },
+    "thinkingDisplayMode": "inline_output",
+    "toolCollapseDefaultEnabled": false,
+    "gitCommit": {
+      "newBranchPrefix": "codex/",
+      "summaryModel": {
+        "mode": "session"
+      },
+      "summaryExtraPrompt": ""
+    },
+    "providerRetry": {
+      "enabled": true,
+      "maxRetries": 3,
+      "initialDelayMs": 1000,
+      "maxDelayMs": 10000,
+      "backoffFactorMilli": 2000,
+      "jitterPercent": 10,
+      "respectRetryAfter": true,
+      "retry429": true,
+      "rateLimit": {
+        "maxRetries": 5,
+        "initialDelayMs": 2000,
+        "maxDelayMs": 60000,
+        "backoffFactorMilli": 2000
+      }
+    },
+    "providerRequestTraceEnabled": false,
+    "logs": [],
+    "hostTools": [],
+    "providers": [],
+    "mcpServers": [
+      {
+        "name": "Demo MCP",
+        "enabled": true,
+        "transport": "http",
+        "url": "https://example.invalid/mcp",
+        "command": "",
+        "args": [],
+        "bearerToken": "",
+        "headers": [],
+        "headersFromEnv": [],
+        "oauthClientId": "",
+        "oauthClientSecret": "",
+        "oauthScopes": [],
+        "oauthRedirectUri": "",
+        "cwd": "",
+        "env": [],
+        "envPassthrough": [],
+        "id": "demo-mcp"
+      }
+    ],
+    "mcpTools": [],
+    "contextCompactionWindowNodes": {
+      "nodes": [
+        {
+          "id": "window-1",
+          "tokens": 32000
+        },
+        {
+          "id": "window-2",
+          "tokens": 64000
+        },
+        {
+          "id": "window-3",
+          "tokens": 96000
+        },
+        {
+          "id": "window-4",
+          "tokens": 128000
+        },
+        {
+          "id": "window-5",
+          "tokens": 160000
+        }
+      ]
+    },
+    "outputStyleCatalog": {
+      "defaultId": "default",
+      "selectedId": "default",
+      "entries": [
+        {
+          "id": "default",
+          "labelEn": "Default",
+          "labelZh": "默认"
+        }
+      ]
+    },
+    "vmmMemory": {}
+  },
+  "loads": {
+    "service_public_ai_settings_snapshot": {
+      "providers": [
+        {
+          "id": "demo-provider",
+          "display_name": "Demo Provider",
+          "category": "official",
+          "service_entries": [
+            {
+              "id": "demo-api",
+              "display_name": "Demo API",
+              "kind": "openai",
+              "base_url": "https://example.invalid/v1",
+              "credential_profiles": [
+                {
+                  "id": "demo-token",
+                  "display_name": "Token",
+                  "credential_mode": "token"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "connections": [
+        {
+          "id": "demo-connection",
+          "provider_id": "demo-provider",
+          "service_entry_id": "demo-api",
+          "credential_profile_id": "demo-token",
+          "display_name": "Demo Account",
+          "credential_mode": "token",
+          "enabled": true,
+          "pending_validation": false,
+          "has_management_key": false
+        }
+      ],
+      "providerDefaults": {
+        "demo-provider": "demo-connection"
+      },
+      "modelAccessRecords": [
+        {
+          "providerId": "demo-provider",
+          "modelId": "demo-model-0",
+          "enabled": true,
+          "defaultEnabled": true,
+          "customized": false
+        },
+        {
+          "providerId": "demo-provider",
+          "modelId": "demo-model-1",
+          "enabled": true,
+          "defaultEnabled": true,
+          "customized": false
+        },
+        {
+          "providerId": "demo-provider",
+          "modelId": "demo-model-2",
+          "enabled": true,
+          "defaultEnabled": true,
+          "customized": false
+        }
+      ],
+      "providerToolTargets": [],
+      "providerToolSelections": {},
+      "providerToolEnabledCapabilities": [],
+      "contextCompactionWindowNodes": {
+        "nodes": [
+          {
+            "id": "window-1",
+            "tokens": 32000
+          },
+          {
+            "id": "window-2",
+            "tokens": 64000
+          },
+          {
+            "id": "window-3",
+            "tokens": 96000
+          },
+          {
+            "id": "window-4",
+            "tokens": 128000
+          },
+          {
+            "id": "window-5",
+            "tokens": 160000
+          }
+        ]
+      },
+      "newSessionContextCompactionWindowNodeId": null,
+      "usageRefreshIntervalSeconds": 60,
+      "internalInferenceCandidates": [
+        {
+          "providerDisplayName": "Demo Provider",
+          "serviceEntryDisplayName": "Demo API",
+          "connectionDisplayName": "Demo Account",
+          "modelDisplayName": "demo-model-0",
+          "route": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-0",
+            "operation": "conversation_respond"
+          },
+          "enabled": true,
+          "usageScopes": [
+            "internal_background"
+          ],
+          "capabilities": {
+            "reasoning_control": "fixed_off",
+            "reasoning_efforts": [
+              "none"
+            ],
+            "structured_output": "json_schema",
+            "embedding": {
+              "tasks": [
+                "document",
+                "query"
+              ],
+              "output_kinds": [
+                "dense"
+              ],
+              "encodings": [
+                "float"
+              ],
+              "dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "normalization": "l2",
+              "distance_metric": "cosine"
+            },
+            "rerank": {
+              "truncation": [
+                "disabled"
+              ],
+              "score_semantics": "relevance"
+            }
+          },
+          "catalogGeneration": 1
+        },
+        {
+          "providerDisplayName": "Demo Provider",
+          "serviceEntryDisplayName": "Demo API",
+          "connectionDisplayName": "Demo Account",
+          "modelDisplayName": "demo-model-1",
+          "route": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-1",
+            "operation": "embedding_create"
+          },
+          "enabled": true,
+          "usageScopes": [
+            "internal_background"
+          ],
+          "capabilities": {
+            "reasoning_control": "fixed_off",
+            "reasoning_efforts": [
+              "none"
+            ],
+            "structured_output": "json_schema",
+            "embedding": {
+              "tasks": [
+                "document",
+                "query"
+              ],
+              "output_kinds": [
+                "dense"
+              ],
+              "encodings": [
+                "float"
+              ],
+              "dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "normalization": "l2",
+              "distance_metric": "cosine"
+            },
+            "rerank": {
+              "truncation": [
+                "disabled"
+              ],
+              "score_semantics": "relevance"
+            }
+          },
+          "catalogGeneration": 1
+        },
+        {
+          "providerDisplayName": "Demo Provider",
+          "serviceEntryDisplayName": "Demo API",
+          "connectionDisplayName": "Demo Account",
+          "modelDisplayName": "demo-model-2",
+          "route": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-2",
+            "operation": "rerank_documents"
+          },
+          "enabled": true,
+          "usageScopes": [
+            "internal_background"
+          ],
+          "capabilities": {
+            "reasoning_control": "fixed_off",
+            "reasoning_efforts": [
+              "none"
+            ],
+            "structured_output": "json_schema",
+            "embedding": {
+              "tasks": [
+                "document",
+                "query"
+              ],
+              "output_kinds": [
+                "dense"
+              ],
+              "encodings": [
+                "float"
+              ],
+              "dimensions": [
+                384
+              ],
+              "default_dimensions": 384,
+              "normalization": "l2",
+              "distance_metric": "cosine"
+            },
+            "rerank": {
+              "truncation": [
+                "disabled"
+              ],
+              "score_semantics": "relevance"
+            }
+          },
+          "catalogGeneration": 1
+        }
+      ],
+      "inferenceProfiles": {
+        "vmm": {
+          "embedding": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-1",
+            "operation": "embedding_create"
+          },
+          "rerank": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-2",
+            "operation": "rerank_documents"
+          },
+          "llm_routes": {
+            "precheck_l1": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            },
+            "precheck_l2": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            },
+            "postaction_l1": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            },
+            "postaction_l2": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            },
+            "profile_instruction": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            },
+            "reserve": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            }
+          }
+        },
+        "vce": {
+          "embedding": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-1",
+            "operation": "embedding_create"
+          },
+          "embedding_dimensions": 384,
+          "rerank": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "protocol",
+              "protocol_profile_id": "demo-protocol"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-model-2",
+            "operation": "rerank_documents"
+          },
+          "llm_routes": {
+            "code_retrieval.query_rewrite": {
+              "provider_id": "demo-provider",
+              "service_entry_id": "demo-api",
+              "connection_id": "demo-connection",
+              "binding": {
+                "kind": "protocol",
+                "protocol_profile_id": "demo-protocol"
+              },
+              "usage_scope": "internal_background",
+              "model_id": "demo-model-0",
+              "operation": "conversation_respond"
+            }
+          }
+        }
+      },
+      "inferenceRouteDiagnostics": []
+    },
+    "service_list_knowledge_libraries": [
+      {
+        "id": "demo-library",
+        "name": "Demo Knowledge",
+        "description": "Synthetic Markdown corpus",
+        "settings": {
+          "retrievalMode": "raw_bm25",
+          "fallbackPolicy": "explicit_only",
+          "curation": {
+            "enabled": false
+          },
+          "embedding": {
+            "enabled": false
+          },
+          "displayIndex": {
+            "status": "not_created"
+          },
+          "vectorIndex": {
+            "status": "not_created"
+          }
+        },
+        "lifecycleState": "ready",
+        "documentCount": 24,
+        "chunkCount": 24,
+        "indexStatus": "ready",
+        "createdAtMs": 0,
+        "updatedAtMs": 0
+      }
+    ],
+    "service_list_knowledge_sources": [
+      {
+        "id": "demo-source",
+        "canonicalRoot": "C:\\demo\\knowledge",
+        "displayName": "Demo Source",
+        "documentCount": 24,
+        "chunkCount": 24,
+        "createdAtMs": 0,
+        "lastScannedAtMs": 0
+      }
+    ],
+    "service_list_knowledge_project_bindings": [
+      {
+        "libraryId": "demo-library",
+        "projectId": "p-tui",
+        "defaultEnabled": true
+      }
+    ],
+    "service_get_knowledge_index_integrity": {
+      "libraryId": "demo-library",
+      "indexExists": true,
+      "searchable": true,
+      "indexStatus": "ready",
+      "tokenizer": "jieba",
+      "contentRevision": 1,
+      "indexedContentRevision": 1,
+      "dictionaryRevision": 1,
+      "indexedDictionaryRevision": 1,
+      "authoritativeChunkCount": 24,
+      "indexedChunkCount": 24,
+      "missingOrMismatchedCount": 0,
+      "orphanOrMismatchedCount": 0
+    },
+    "service_get_knowledge_import_job": null,
+    "service_get_vce_configuration_status": {
+      "ready": true,
+      "consumerProfileId": "vce",
+      "queryRewritePurposeId": "code_retrieval.query_rewrite",
+      "reasoningPolicy": "fixed_off",
+      "embedding": {
+        "configured": true,
+        "available": true
+      },
+      "queryRewrite": {
+        "configured": true,
+        "available": true
+      },
+      "rerank": {
+        "configured": true,
+        "available": true
+      },
+      "issues": []
+    },
+    "service_get_vce_project_overview": {
+      "configuration": {
+        "ready": true,
+        "consumerProfileId": "vce",
+        "queryRewritePurposeId": "code_retrieval.query_rewrite",
+        "reasoningPolicy": "fixed_off",
+        "embedding": {
+          "configured": true,
+          "available": true
+        },
+        "queryRewrite": {
+          "configured": true,
+          "available": true
+        },
+        "rerank": {
+          "configured": true,
+          "available": true
+        },
+        "issues": []
+      },
+      "settings": {
+        "enabled": true,
+        "updateMode": "manual",
+        "autoUpdateMinIntervalSeconds": 60,
+        "revision": 1,
+        "migratedFromCodebaseMemory": false,
+        "maxFileBytes": 1048576,
+        "defaultIgnorePatterns": [
+          "target/**"
+        ],
+        "extraIgnorePatterns": [],
+        "allowQueryRewrite": true,
+        "allowRerank": true,
+        "embeddingMaxConcurrency": 4,
+        "queryMaxConcurrency": 4,
+        "maxResults": 20,
+        "maxContextChars": 16000
+      },
+      "status": {
+        "projectId": "p-tui",
+        "enabled": true,
+        "settingsRevision": 1,
+        "lifecycle": "ready",
+        "checkpointVersion": 1,
+        "presentFiles": 2,
+        "checkpointBlobs": 2,
+        "lastError": null
+      },
+      "counts": {
+        "files": 2,
+        "chunks": 2
+      },
+      "integrity": {
+        "state": "ok"
+      }
+    },
+    "service_get_vce_job": null,
+    "service_output_style_catalog": {
+      "defaultId": "default",
+      "selectedId": "default",
+      "entries": [
+        {
+          "id": "default",
+          "labelEn": "Default",
+          "labelZh": "默认"
+        }
+      ]
+    },
+    "service_mcp_runtime_snapshot": [
+      {
+        "state": {
+          "id": "demo-mcp",
+          "name": "Demo MCP",
+          "status": "connected",
+          "source": "user"
+        }
+      }
+    ],
+    "service_mcp_server_capabilities": {
+      "serverId": "demo-mcp",
+      "tools": [],
+      "resources": [],
+      "prompts": []
+    },
+    "service_license_catalog": {
+      "schema_version": 2,
+      "scope": "rust-desktop-dependencies",
+      "source_file": "THIRD_PARTY_NOTICES.md",
+      "source_sha256": "demo-sha",
+      "licenses": [
+        {
+          "title": "Demo License",
+          "sections": [
+            {
+              "id": "demo-license",
+              "title": "Demo dependency"
+            }
+          ]
+        }
+      ]
+    },
+    "service_license_body": {
+      "section_id": "demo-license",
+      "text": "Synthetic license body"
+    },
+    "service_search_knowledge_library": {
+      "libraryId": "demo-library",
+      "query": "",
+      "hits": [
+        {
+          "libraryId": "demo-library",
+          "documentId": "demo-document",
+          "chunkId": "demo-chunk",
+          "content": "Synthetic demo knowledge content",
+          "score": 1.0,
+          "retrievalMode": "raw_bm25",
+          "title": "Demo readme",
+          "relativePath": "readme.md",
+          "libraryName": "Demo Knowledge",
+          "headingPath": "",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ],
+      "failures": [],
+      "ftsQueries": []
+    }
+  },
+  "memory": {
+    "native_project_catalog": {
+      "projects": [
+        {
+          "projectId": 101,
+          "name": "Demo Memory",
+          "tag": "demo-memory",
+          "protected": false,
+          "ownerVulcanProjectIds": [
+            "p-tui"
+          ],
+          "linkedVulcanProjectIds": []
+        },
+        {
+          "projectId": 102,
+          "name": "Second Memory",
+          "tag": "demo-other",
+          "protected": false,
+          "ownerVulcanProjectIds": [],
+          "linkedVulcanProjectIds": []
+        }
+      ],
+      "bindings": [
+        {
+          "vulcanProjectId": "p-tui",
+          "ownerProjectId": 101,
+          "linkedProjectIds": []
+        }
+      ]
+    },
+    "native_memory_records": {
+      "storageVersion": 1,
+      "projectId": 101,
+      "sessions": [
+        {
+          "sessionSourceId": "demo-session",
+          "displayTitle": "Demo Session",
+          "status": "active",
+          "turnCount": 1,
+          "turnStatuses": {
+            "pending": 0,
+            "completed": 1,
+            "processedUnknown": 0,
+            "analysisBypassed": 0,
+            "corrupted": 0
+          },
+          "memoryCount": 1,
+          "profileNodeCount": 0,
+          "directMemoryCount": 0,
+          "memoryLevels": {
+            "session": 0,
+            "phase": 0,
+            "stable": 1,
+            "persistent": 0
+          }
+        }
+      ],
+      "turns": [
+        {
+          "turnId": 201,
+          "sessionSourceId": "demo-session",
+          "status": "completed",
+          "userPreview": "Demo question",
+          "assistantPreview": "Demo answer",
+          "timeline": [
+            {
+              "role": "user",
+              "content": "Demo question",
+              "occurredAtUnixMs": 0
+            }
+          ],
+          "previousTurnIds": [],
+          "nextTurnIds": [],
+          "createdAtUnixMs": 0,
+          "generatedMemoryIds": [
+            301
+          ],
+          "generatedProfileNodeIds": [],
+          "memoryLevels": {
+            "session": 0,
+            "phase": 0,
+            "stable": 1,
+            "persistent": 0
+          },
+          "analysisAttemptCount": 1
+        }
+      ],
+      "memories": [
+        {
+          "memoryId": 301,
+          "sourceTurnId": 201,
+          "sessionSourceId": "demo-session",
+          "summary": "Demo memory",
+          "content": "Synthetic persisted fact",
+          "category": "general",
+          "sourceKind": "turn",
+          "state": "active",
+          "memoryLevel": "stable",
+          "priority": 50,
+          "tags": [
+            "demo"
+          ],
+          "createdAtUnixMs": 0,
+          "updatedAtUnixMs": 0
+        }
+      ],
+      "profileNodes": []
+    },
+    "native_profile_records": {
+      "storageVersion": 1,
+      "projectId": 101,
+      "target": "user",
+      "counts": {
+        "active": 1,
+        "inactive": 0,
+        "pending": 0,
+        "expired": 0,
+        "scheduled": 0
+      },
+      "nodes": [
+        {
+          "profileNodeId": 401,
+          "target": "user",
+          "storedState": "active",
+          "effectiveState": "active",
+          "activeForInjection": true,
+          "content": "Demo profile",
+          "priority": 50,
+          "level": "stable",
+          "sourceKind": "system_seed",
+          "sourceTurnIds": [],
+          "updatedAtUnixMs": 0
+        }
+      ]
+    },
+    "native_runtime_policy": {
+      "recall": {
+        "precheckHistoryTurnLimit": 8,
+        "precheckMaxInputTokens": 8192,
+        "precheckRecallTopK": 8,
+        "precheckReviewCandidateLimit": 24,
+        "precheckMinReviewScore": 0.6,
+        "maxSearchQueries": 4,
+        "postactionHistoryTurnLimit": 8,
+        "postactionMaxInputTokens": 8192,
+        "postactionMemoryPriority": 50,
+        "postactionMemoryStability": "stable",
+        "postactionMemoryLevel": "stable",
+        "postactionMemoryRefreshWeight": 1,
+        "postactionMemoryExpiryMs": 86400000
+      },
+      "retrieval": {
+        "hybridEnabled": true,
+        "lexicalCandidateFloor": 20,
+        "rrfK": "60",
+        "replaceMinSimilarity": 0.8,
+        "hardDedupeCosineThreshold": 0.95,
+        "hardDedupePoolTopK": 20,
+        "replacementTopK": 10,
+        "rerankTopN": 20,
+        "mmrEnabled": true,
+        "mmrLambda": 0.7,
+        "weibullEnabled": false,
+        "weibullShape": 1.5,
+        "weibullScaleHours": 72,
+        "weibullMinMultiplier": 0.1,
+        "weibullReinforceWeight": 0.2,
+        "weibullCrossSessionBoost": 0.2
+      },
+      "retention": {
+        "enabled": true,
+        "scanIntervalMinutes": 60,
+        "profileExpiryIntervalSeconds": 60,
+        "turnHotWindowSize": 10,
+        "sessionIdleMs": 86400000,
+        "trashRetentionMs": 604800000,
+        "protectedPriorityFloor": 80,
+        "protectedMemoryLevelFloor": 3,
+        "skipProtectedSharedMemories": true
+      },
+      "text": {
+        "foldMachineText": true,
+        "maxFragmentTokens": 2048
+      },
+      "profiles": {
+        "user": {
+          "transient": {
+            "baseMs": 3600000,
+            "stepMs": 60000,
+            "maxMs": 86400000
+          },
+          "situational": {
+            "baseMs": 86400000,
+            "stepMs": 3600000,
+            "maxMs": 604800000
+          },
+          "stable": {
+            "baseMs": 604800000,
+            "stepMs": 86400000,
+            "maxMs": 31536000000
+          }
+        },
+        "project": {
+          "transient": {
+            "baseMs": 3600000,
+            "stepMs": 60000,
+            "maxMs": 86400000
+          },
+          "situational": {
+            "baseMs": 86400000,
+            "stepMs": 3600000,
+            "maxMs": 604800000
+          },
+          "stable": {
+            "baseMs": 604800000,
+            "stepMs": 86400000,
+            "maxMs": 31536000000
+          }
+        }
+      },
+      "defaults": {
+        "precheckHistoryTurnLimit": 8,
+        "precheckMaxInputTokens": 8192,
+        "precheckRecallTopK": 8,
+        "precheckReviewCandidateLimit": 24,
+        "precheckMinReviewScore": 0.6,
+        "maxSearchQueries": 4,
+        "postactionHistoryTurnLimit": 8,
+        "postactionMaxInputTokens": 8192,
+        "postactionMemoryPriority": 50,
+        "postactionMemoryStability": "stable",
+        "postactionMemoryLevel": "stable",
+        "postactionMemoryRefreshWeight": 1,
+        "postactionMemoryExpiryMs": 86400000
+      },
+      "retrievalDefaults": {
+        "hybridEnabled": true,
+        "lexicalCandidateFloor": 20,
+        "rrfK": "60",
+        "replaceMinSimilarity": 0.8,
+        "hardDedupeCosineThreshold": 0.95,
+        "hardDedupePoolTopK": 20,
+        "replacementTopK": 10,
+        "rerankTopN": 20,
+        "mmrEnabled": true,
+        "mmrLambda": 0.7,
+        "weibullEnabled": false,
+        "weibullShape": 1.5,
+        "weibullScaleHours": 72,
+        "weibullMinMultiplier": 0.1,
+        "weibullReinforceWeight": 0.2,
+        "weibullCrossSessionBoost": 0.2
+      },
+      "retentionDefaults": {
+        "enabled": true,
+        "scanIntervalMinutes": 60,
+        "profileExpiryIntervalSeconds": 60,
+        "turnHotWindowSize": 10,
+        "sessionIdleMs": 86400000,
+        "trashRetentionMs": 604800000,
+        "protectedPriorityFloor": 80,
+        "protectedMemoryLevelFloor": 3,
+        "skipProtectedSharedMemories": true
+      },
+      "textDefaults": {
+        "foldMachineText": true,
+        "maxFragmentTokens": 2048
+      },
+      "profileDefaults": {
+        "user": {
+          "transient": {
+            "baseMs": 3600000,
+            "stepMs": 60000,
+            "maxMs": 86400000
+          },
+          "situational": {
+            "baseMs": 86400000,
+            "stepMs": 3600000,
+            "maxMs": 604800000
+          },
+          "stable": {
+            "baseMs": 604800000,
+            "stepMs": 86400000,
+            "maxMs": 31536000000
+          }
+        },
+        "project": {
+          "transient": {
+            "baseMs": 3600000,
+            "stepMs": 60000,
+            "maxMs": 86400000
+          },
+          "situational": {
+            "baseMs": 86400000,
+            "stepMs": 3600000,
+            "maxMs": 604800000
+          },
+          "stable": {
+            "baseMs": 604800000,
+            "stepMs": 86400000,
+            "maxMs": 31536000000
+          }
+        }
+      },
+      "userOverride": false
+    },
+    "native_resource_catalog": {
+      "overrideRoot": "C:\\demo\\overrides",
+      "settings": {
+        "promptBundle": "en-US",
+        "piiLanguage": "en-US",
+        "noiseLanguage": "en-US",
+        "noiseEnabled": true,
+        "noiseSemanticEnabled": false,
+        "noiseSemanticThreshold": 0.7
+      },
+      "promptBundles": [
+        "en-US",
+        "zh-CN"
+      ],
+      "promptScenes": [
+        "default"
+      ],
+      "piiLanguages": [
+        "en-US",
+        "zh-CN"
+      ],
+      "noiseLanguages": [
+        "en-US",
+        "zh-CN"
+      ],
+      "files": [
+        {
+          "path": "prompts/en-US/default.md",
+          "group": "prompt",
+          "selector": "en-US",
+          "fileName": "default.md",
+          "highRisk": true,
+          "hasUserOverride": false
+        }
+      ]
+    },
+    "native_resource_read": {
+      "path": "prompts/en-US/default.md",
+      "builtInText": "Demo native resource",
+      "effectiveText": "Demo native resource",
+      "userOverrideText": null,
+      "hasUserOverride": false,
+      "highRisk": true
+    },
+    "native_vector_status": {
+      "configured": true,
+      "currentVectorSpaceId": "demo-vector",
+      "embeddingDimension": 384,
+      "activeMemoryCount": 1,
+      "recycleBinMemoryCount": 0,
+      "currentMemoryCount": 1,
+      "currentRecycleBinMemoryCount": 0,
+      "rebuildRequiredMemoryCount": 0,
+      "activeRebuildRequiredMemoryCount": 0,
+      "recycleBinRebuildRequiredMemoryCount": 0,
+      "legacyVectorSpaceCount": 0,
+      "pendingAnalysisJobCount": 0
+    },
+    "native_lexical_status": {
+      "storageVersion": 1,
+      "activeMemoryCount": 1,
+      "documentCount": 1,
+      "indexedRowCount": 1
+    },
+    "native_retention_status": {
+      "enabled": true,
+      "running": false,
+      "profileExpiryRunning": false,
+      "intervalMinutes": 60,
+      "profileExpiryIntervalSeconds": 60,
+      "policy": {
+        "enabled": true,
+        "scanIntervalMinutes": 60,
+        "profileExpiryIntervalSeconds": 60,
+        "turnHotWindowSize": 10,
+        "sessionIdleMs": 86400000,
+        "trashRetentionMs": 604800000,
+        "protectedPriorityFloor": 80,
+        "protectedMemoryLevelFloor": 3,
+        "skipProtectedSharedMemories": true
+      },
+      "pendingColdJobs": 0,
+      "recycleBatchCount": 0,
+      "lastResult": null
+    },
+    "native_recycle_bin": {
+      "storageVersion": 1,
+      "batches": []
+    }
+  },
+  "knowledgeDocuments": [
+    {
+      "document": {
+        "id": "demo-document",
+        "sourceId": "demo-source",
+        "relativePath": "readme.md",
+        "folderPath": "",
+        "title": "Demo readme",
+        "byteSize": 65,
+        "lineCount": 5,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Demo readme\n\nSynthetic demo knowledge content\n\n  indented line\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-1",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-01.md",
+        "folderPath": "guide",
+        "title": "Document 1",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 1\n\nSynthetic guide content 1\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-2",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-02.md",
+        "folderPath": "guide",
+        "title": "Document 2",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 2\n\nSynthetic guide content 2\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-3",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-03.md",
+        "folderPath": "guide",
+        "title": "Document 3",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 3\n\nSynthetic guide content 3\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-4",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-04.md",
+        "folderPath": "guide",
+        "title": "Document 4",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 4\n\nSynthetic guide content 4\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-5",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-05.md",
+        "folderPath": "guide",
+        "title": "Document 5",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 5\n\nSynthetic guide content 5\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-6",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-06.md",
+        "folderPath": "guide",
+        "title": "Document 6",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 6\n\nSynthetic guide content 6\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-7",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-07.md",
+        "folderPath": "guide",
+        "title": "Document 7",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 7\n\nSynthetic guide content 7\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-8",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-08.md",
+        "folderPath": "guide",
+        "title": "Document 8",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 8\n\nSynthetic guide content 8\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-9",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-09.md",
+        "folderPath": "guide",
+        "title": "Document 9",
+        "byteSize": 40,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 9\n\nSynthetic guide content 9\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-10",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-10.md",
+        "folderPath": "guide",
+        "title": "Document 10",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 10\n\nSynthetic guide content 10\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-11",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-11.md",
+        "folderPath": "guide",
+        "title": "Document 11",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 11\n\nSynthetic guide content 11\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-12",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-12.md",
+        "folderPath": "guide",
+        "title": "Document 12",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 12\n\nSynthetic guide content 12\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-13",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-13.md",
+        "folderPath": "guide",
+        "title": "Document 13",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 13\n\nSynthetic guide content 13\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-14",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-14.md",
+        "folderPath": "guide",
+        "title": "Document 14",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 14\n\nSynthetic guide content 14\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-15",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-15.md",
+        "folderPath": "guide",
+        "title": "Document 15",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 15\n\nSynthetic guide content 15\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-16",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-16.md",
+        "folderPath": "guide",
+        "title": "Document 16",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 16\n\nSynthetic guide content 16\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-17",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-17.md",
+        "folderPath": "guide",
+        "title": "Document 17",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 17\n\nSynthetic guide content 17\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-18",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-18.md",
+        "folderPath": "guide",
+        "title": "Document 18",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 18\n\nSynthetic guide content 18\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-19",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-19.md",
+        "folderPath": "guide",
+        "title": "Document 19",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 19\n\nSynthetic guide content 19\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-20",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-20.md",
+        "folderPath": "guide",
+        "title": "Document 20",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 20\n\nSynthetic guide content 20\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-21",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-21.md",
+        "folderPath": "guide",
+        "title": "Document 21",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 21\n\nSynthetic guide content 21\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-22",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-22.md",
+        "folderPath": "guide",
+        "title": "Document 22",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 22\n\nSynthetic guide content 22\n",
+      "display": null
+    },
+    {
+      "document": {
+        "id": "demo-document-23",
+        "sourceId": "demo-source",
+        "relativePath": "guide/document-23.md",
+        "folderPath": "guide",
+        "title": "Document 23",
+        "byteSize": 42,
+        "lineCount": 3,
+        "chunkCount": 1,
+        "updatedAtMs": 0
+      },
+      "raw": "# Document 23\n\nSynthetic guide content 23\n",
+      "display": null
+    }
+  ]
+}

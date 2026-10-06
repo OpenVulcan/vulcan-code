@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use super::brand::Logo;
+use super::brand;
 use super::text::{compact_count, shimmer, spinner, truncate, width_of};
 use super::theme::{Theme, mix};
 use super::transcript::severity_icon;
@@ -25,37 +25,10 @@ pub fn splash(app: &App, area: Rect, buf: &mut Buffer) {
     let theme = &app.theme;
     buf.set_style(area, theme.base());
     let phase = app.phase();
-    // Square tile: `cols` columns by `cols / 2` rows; leave room for the wordmark and status.
-    // 方形图块：`cols` 列 × `cols / 2` 行；为字标与状态留出空间。
-    let cols = (area.width / 3)
-        .min(area.height.saturating_sub(7) * 2)
-        .clamp(8, 36);
-    let logo = Logo::new(cols);
-    let total = logo.rows() + 6;
-    let top = area.y + area.height.saturating_sub(total) / 2;
-    let left = area.x + area.width.saturating_sub(logo.cols) / 2;
-    let glow = 0.5 + 0.5 * (phase * 2.2).sin();
-    logo.render(
-        Rect {
-            x: left,
-            y: top,
-            width: logo.cols,
-            height: logo.rows(),
-        },
-        buf,
-        theme.bg,
-        glow,
-    );
-
     let center = |w: usize| area.x + area.width.saturating_sub(w as u16) / 2;
-    let y = top + logo.rows() + 1;
-    let wordmark = Line::from(vec![
-        Span::styled("V U L C A N  ", theme.strong()),
-        Span::styled(
-            "C O D E",
-            Style::new().fg(theme.primary).add_modifier(Modifier::BOLD),
-        ),
-    ]);
+    let top = area.y + area.height.saturating_sub(5) / 2;
+    let y = top;
+    let wordmark = brand::wordmark(theme);
     let w = wordmark.width();
     wordmark.render(
         Rect {
@@ -151,17 +124,12 @@ pub fn header(app: &App, area: Rect, buf: &mut Buffer) {
         );
     }
 
-    let brand = Line::from(vec![
-        Span::styled(" Vulcan", theme.strong()),
-        Span::styled(
-            " Code ",
-            Style::new().fg(theme.primary).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    let brand_width = brand.width() as u16;
-    brand.render(
+    let wordmark = brand::wordmark(theme);
+    let brand_width = wordmark.width() as u16 + 2;
+    wordmark.render(
         Rect {
-            width: brand_width.min(area.width),
+            x: area.x + 1,
+            width: (brand_width - 1).min(area.width.saturating_sub(1)),
             ..area
         },
         buf,

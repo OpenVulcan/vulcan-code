@@ -1,7 +1,7 @@
 // Keys of modal overlays. An open overlay receives every key except Ctrl+C / Ctrl+Q.
 // 模态浮层的按键。浮层打开时接收除 Ctrl+C / Ctrl+Q 以外的所有按键。
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{
     alt, ctrl, diff_step, generate_commit_message, open_commit, submit_commit, toggle_stage, typed,
@@ -115,12 +115,26 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent) {
         },
         Overlay::Prompt(dialog) => match key.code {
             KeyCode::Esc => app.overlay = None,
+            // Modified Enter adds a real newline; plain Enter keeps the shared submit action.
+            // 带修饰键的 Enter 添加真实换行；普通 Enter 保持统一提交动作。
+            KeyCode::Enter
+                if dialog.accepts_multiline()
+                    && key
+                        .modifiers
+                        .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
+            {
+                dialog.input.push('\n');
+                dialog.error = None;
+            }
             KeyCode::Enter => action::perform(app, UiAction::PromptAccept),
             KeyCode::Backspace => {
                 dialog.input.pop();
                 dialog.error = None;
             }
-            _ if ctrl(&key, 'u') => dialog.input.clear(),
+            _ if ctrl(&key, 'u') => {
+                dialog.input.clear();
+                dialog.error = None;
+            }
             _ => {
                 if let Some(ch) = typed(&key) {
                     dialog.input.push(ch);

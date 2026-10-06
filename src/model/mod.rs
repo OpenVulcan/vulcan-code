@@ -55,7 +55,6 @@ pub struct ConversationSummary {
     /// A pending question or failure needs the user.
     /// 有等待中的提问或失败需要用户处理。
     pub attention: bool,
-    pub pinned: bool,
 }
 
 /// One entry of a directory listing used by the folder and attachment pickers.
@@ -380,14 +379,6 @@ pub struct AgentInfo {
     pub activity: Vec<String>,
     pub result: Option<String>,
     pub usage: UsageBucket,
-}
-
-/// Subagent controls (`conversation.subagent.detail.interruptControl` / `closeControl`).
-/// 子代理控制。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentOp {
-    Stop,
-    Close,
 }
 
 // ---- Git ----

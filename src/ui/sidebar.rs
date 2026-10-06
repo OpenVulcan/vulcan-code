@@ -1,4 +1,4 @@
-// Left sidebar: new-conversation and add-project buttons, pinned conversations, projects with their
+// Left sidebar: new-conversation and add-project buttons, projects with their
 // conversations, and conversations without a project.
 // 左侧栏：新建会话与添加项目按钮、置顶会话、项目及其会话，以及无项目的会话。
 
@@ -100,11 +100,12 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.hits.sidebar_height = list.height;
     app.hits.add_scroll(list, ScrollTarget::Sidebar);
     if app.projects.is_empty() && app.conversations.is_empty() {
-        let text = if app.system.is_some() || !app.models.is_empty() {
-            tr!("sidebar.noProjects")
-        } else {
-            tr!("sidebar.waitingWorkspace")
-        };
+        let text =
+            if app.slots.loaded(crate::service_api::Slot::Workbench) || !app.models.is_empty() {
+                tr!("sidebar.noProjects")
+            } else {
+                tr!("sidebar.waitingWorkspace")
+            };
         buf.set_string(
             list.x + 1,
             list.y,
@@ -150,11 +151,8 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         };
         let is_cursor = cursor_row.as_ref() == Some(entry);
         match entry {
-            SidebarRow::PinnedHeader | SidebarRow::Unlinked => {
-                let label = match entry {
-                    SidebarRow::PinnedHeader => format!("⚲ {}", tr!("sidebar.pinned")),
-                    _ => tr!("sidebar.unlinkedConversations"),
-                };
+            SidebarRow::Unlinked => {
+                let label = tr!("sidebar.unlinkedConversations");
                 buf.set_string(
                     list.x + 1,
                     y,
@@ -170,7 +168,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                 let count = app
                     .conversations
                     .iter()
-                    .filter(|c| !c.pinned && c.project_id.as_ref() == Some(id))
+                    .filter(|c| c.project_id.as_ref() == Some(id))
                     .count();
                 let running = app
                     .conversations

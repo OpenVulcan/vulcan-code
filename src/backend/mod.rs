@@ -2,167 +2,170 @@
 // 后端边界：界面访问数据的唯一通道。
 //
 // The UI thread never blocks on I/O. It sends `Command`s and drains `BackendEvent`s from a
-// `BackendHandle` once per frame. `mock` provides a scripted in-process backend for the display
-// demo; the service backend (HTTP RPC + `/events` WebSocket) will implement the same handle so the
-// app state and views stay unchanged when wiring.
+// `BackendHandle` once per frame. `service` talks to the running Vulcan Code service (HTTP RPC +
+// `/events` WebSocket); `mock` is a scripted in-process backend for the display demo. Both
+// implement the same handle, so app state and views do not know which one is attached.
 // 界面线程从不阻塞于 I/O。它通过 `BackendHandle` 发送 `Command`，并在每帧消费 `BackendEvent`。
-// `mock` 为展示 demo 提供脚本化的进程内后端；服务后端（HTTP RPC + `/events` WebSocket）将实现同一
-// 句柄，使对接时应用状态与视图无需改动。
+// `service` 连接运行中的 Vulcan Code 服务（HTTP RPC + `/events` WebSocket）；`mock` 为展示 demo
+// 提供脚本化的进程内后端。两者实现同一句柄，应用状态与视图无需知道接入的是哪一个。
 
 pub mod mock;
+pub mod service;
 
 use std::sync::mpsc::{Receiver, Sender};
 
 use crate::model::*;
 
-/// User intents sent to the backend; each maps onto one service RPC.
-/// 发送给后端的用户意图；每个对应一个服务 RPC。
+/// User intents sent to the backend. Each variant is named after the WebUI service function
+/// (`apps/vulcan-code-web/src/service/*-service.ts`) it mirrors and sends the same RPC with the
+/// same parameters; system areas use `Call` with a request built by `crate::service_api`.
+/// 发送给后端的用户意图。每个变体以其对应的 WebUI 服务函数命名，并以相同参数发送相同 RPC；
+/// 系统区域使用 `Call`，其请求由 `crate::service_api` 构建。
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// `service_select_conversation`
+    /// `selectConversation` (`service_select_conversation`), then `markConversationRead`.
+    /// 选择会话，随后标记为已读。
     SelectConversation(ConversationId),
-    /// Creates a draft conversation in a project (`draftSlotKey = new:<projectId>`).
-    /// 在项目中创建草稿会话。
-    NewConversation {
-        project_id: Option<String>,
-    },
-    /// `service_submit_conversation_prompt`
-    Submit {
+    /// Opens a local draft slot (the WebUI's `draftSlotKey = new:<projectId>`); the service only
+    /// sees it with the first prompt.
+    /// 打开本地草稿槽（对应 WebUI 的 `draftSlotKey`）；服务在首次提交时才看到它。
+    NewConversation { project_id: Option<String> },
+    /// `submitConversationPrompt`
+    SubmitConversationPrompt {
         conversation_id: ConversationId,
         prompt: String,
         mode: ExecutionMode,
         effort: ReasoningEffort,
         model_id: String,
-        /// Attached file paths (`composer.attachment`).
-        /// 附件文件路径。
+        /// Attached file paths, staged through `stageComposerAttachmentBytes`.
+        /// 附件文件路径，经 `stageComposerAttachmentBytes` 暂存。
         attachments: Vec<String>,
     },
-    /// `service_stop_conversation_run`
-    Stop {
-        conversation_id: ConversationId,
-    },
-    /// `service_reply_pending_question`
-    ReplyQuestion {
+    /// `stopConversationRun`
+    StopConversationRun { conversation_id: ConversationId },
+    /// `replyPendingQuestion`
+    ReplyPendingQuestion {
         request_id: String,
         answers: Vec<Vec<String>>,
     },
-    /// `service_reject_pending_question`
-    RejectQuestion {
-        request_id: String,
-    },
-    /// `service_set_session_plan_mode`
-    SetPlanMode {
+    /// `rejectPendingQuestion`
+    RejectPendingQuestion { request_id: String },
+    /// `setSessionPlanMode`
+    SetSessionPlanMode {
         conversation_id: ConversationId,
         enabled: bool,
     },
-    /// `service_workspace_diff_snapshot` / `workspace.git.catalog`
-    GitRefresh,
-    /// `service_workspace_git_file_action` (stage / unstage)
-    GitStage {
-        paths: Vec<String>,
-        stage: bool,
+    /// `selectPublicAiModel`; `model_id` is a `ModelInfo::id`.
+    /// `model_id` 为 `ModelInfo::id`。
+    SelectPublicAiModel {
+        conversation_id: Option<ConversationId>,
+        model_id: String,
     },
-    /// `service_workspace_diff_file_detail`
-    GitLoadDiff {
-        path: String,
+    /// `selectWorkbenchReasoningEffort`
+    SelectWorkbenchReasoningEffort {
+        conversation_id: Option<ConversationId>,
+        effort: ReasoningEffort,
     },
-    /// `workspace.git.branches`
-    GitLoadBranches,
-    /// `workspace.git.switchBranch`, `create` for a new branch from HEAD
-    GitSwitchBranch {
-        name: String,
-        create: bool,
-    },
-    /// `service_generate_git_commit_message`
-    GitGenerateCommitMessage,
-    /// `service_run_git_commit_action`
-    GitCommit {
+    /// `loadWorkspaceGitCatalog` + `loadWorkspaceDiffSnapshot` (unstaged and staged).
+    /// 加载 Git 目录与差异快照（未暂存与已暂存）。
+    LoadWorkspaceDiffSnapshot,
+    /// `runWorkspaceGitFileAction` (`stageFile` / `unstageFile`)
+    RunWorkspaceGitFileAction { paths: Vec<String>, stage: bool },
+    /// `loadWorkspaceDiffFileDetail`
+    LoadWorkspaceDiffFileDetail { path: String },
+    /// `loadWorkspaceGitBranches`
+    LoadWorkspaceGitBranches,
+    /// `switchWorkspaceGitBranch`; `create` makes a new branch from HEAD.
+    /// `create` 表示从 HEAD 新建分支。
+    SwitchWorkspaceGitBranch { name: String, create: bool },
+    /// `generateGitCommitMessage`
+    GenerateGitCommitMessage,
+    /// `runGitCommitAction`; an empty message with `push` only pushes.
+    /// 消息为空且 `push` 时只推送。
+    RunGitCommitAction {
         message: String,
         new_branch: Option<String>,
         include_unstaged: bool,
         push: bool,
     },
-    GitPush,
-    /// `service_list_directory`; `None` lists the user's home directory.
-    /// 列出目录；`None` 列出用户主目录。
-    ListDirectory {
-        path: Option<String>,
-        show_hidden: bool,
-        /// Include files (attachment picker) or only directories (project picker).
-        /// 是否包含文件（附件选择器），否则只列目录（项目选择器）。
-        files: bool,
-    },
-    /// `service_add_project`
-    AddProject {
-        path: String,
-    },
-    /// `service_rename_project`
-    RenameProject {
-        project_id: String,
-        name: String,
-    },
-    /// `service_set_project_pinned`
-    SetProjectPinned {
-        project_id: String,
-        pinned: bool,
-    },
-    /// `service_archive_project_conversations`; `remove_project` also forgets the project.
-    /// 归档项目下全部会话；`remove_project` 同时移除该项目。
-    ArchiveProjectConversations {
-        project_id: String,
-        remove_project: bool,
-    },
-    /// `service_rename_conversation`
+    /// `browseProjectDirectories`; `None` starts at the service's default directory.
+    /// `None` 从服务的默认目录开始。
+    BrowseProjectDirectories { path: Option<String> },
+    /// Lists local files for the attachment picker. This stands in for the browser's own file
+    /// input, which the WebUI uses without any RPC; the bytes are then staged through
+    /// `stageComposerAttachmentBytes`.
+    /// 为附件选择器列出本地文件。它对应 WebUI 不经 RPC 使用的浏览器文件输入；字节随后经
+    /// `stageComposerAttachmentBytes` 暂存。
+    ListLocalFiles { path: Option<String> },
+    /// `addProjectFromPath`
+    AddProjectFromPath { path: String },
+    /// `renameProject`
+    RenameProject { project_id: String, name: String },
+    /// `toggleProjectPinned`
+    ToggleProjectPinned { project_id: String },
+    /// `openProjectDirectory`: the service opens the folder in the host's file manager.
+    /// 服务在宿主文件管理器中打开该目录。
+    OpenProjectDirectory { project_id: String },
+    /// `archiveProjectConversations`
+    ArchiveProjectConversations { project_id: String },
+    /// `removeProject`
+    RemoveProject { project_id: String },
+    /// `renameConversation`
     RenameConversation {
         conversation_id: ConversationId,
         title: String,
     },
-    /// `service_set_conversation_pinned`
-    SetConversationPinned {
-        conversation_id: ConversationId,
-        pinned: bool,
+    /// `archiveConversation`
+    ArchiveConversation { conversation_id: ConversationId },
+    /// `stopSubagentTask`
+    StopSubagentTask {
+        parent_conversation_id: ConversationId,
+        task_id: String,
     },
-    /// `service_archive_conversation`
-    ArchiveConversation {
-        conversation_id: ConversationId,
+    /// `closeSubagentTask`
+    CloseSubagentTask {
+        parent_conversation_id: ConversationId,
+        task_id: String,
     },
-    /// `service_mark_conversation_unread`
-    MarkUnread {
-        conversation_id: ConversationId,
-    },
-    /// Stops or ends one subagent of a conversation.
-    /// 停止或结束会话中的一个子代理。
-    AgentControl {
-        conversation_id: ConversationId,
-        agent_id: String,
-        op: AgentOp,
-    },
-    /// Sends a steering or follow-up message to a subagent (`conversation.subagent.detail.message`).
-    /// 向子代理发送引导或后续消息。
-    AgentMessage {
-        conversation_id: ConversationId,
-        agent_id: String,
-        message: AgentMessage,
-    },
-    /// Stops injecting one dynamic memory into this conversation (`workspaceMemory.suppressForSession`).
-    /// 停止向本会话注入某条动态记忆。
-    SuppressMemory {
+    /// `runVmmMemoryAction` with `suppress_context_injection_item`, as the workspace memory
+    /// panel's "suppress for this session".
+    /// 以 `suppress_context_injection_item` 调用 `runVmmMemoryAction`，对应工作区记忆面板的
+    /// “本会话不再注入”。
+    SuppressContextInjectionItem {
         conversation_id: ConversationId,
         memory_id: String,
     },
-    /// Permanently deletes an invalid memory (`workspaceMemory.permanentDeleteInvalid`).
-    /// 永久删除无效记忆。
-    DeleteMemory {
+    /// `runVmmMemoryAction` with `delete_memories`, as the panel's "permanently delete invalid".
+    /// 以 `delete_memories` 调用 `runVmmMemoryAction`，对应面板的“永久删除无效记忆”。
+    DeleteMemories {
         conversation_id: ConversationId,
         memory_id: String,
     },
-    Goal {
+    /// `saveSessionGoal`
+    SaveSessionGoal {
         conversation_id: ConversationId,
-        op: GoalOp,
+        objective: String,
+        token_budget: Option<u64>,
     },
-    /// Settings, system plugins and other system areas.
-    /// 设置、系统插件与其他系统区域。
-    System(SystemCommand),
+    /// `resumeSessionGoal`: restarts a stopped goal as a fresh budget stage.
+    /// 将已停止的目标恢复为新的预算阶段。
+    ResumeSessionGoal {
+        conversation_id: ConversationId,
+        objective: String,
+        token_budget: Option<u64>,
+    },
+    /// `clearSessionGoal`
+    ClearSessionGoal { conversation_id: ConversationId },
+    /// `updateSessionGoalStatus`; only `Active` and `Paused` are user updates.
+    /// 只有 `Active` 与 `Paused` 属于用户可设置的状态。
+    UpdateSessionGoalStatus {
+        conversation_id: ConversationId,
+        status: GoalStatus,
+    },
+    /// Any other WebUI service function, built by the same-named function in
+    /// `crate::service_api`.
+    /// 其他任意 WebUI 服务函数，由 `crate::service_api` 中的同名函数构建。
+    Call(crate::service_api::ServiceCall),
 }
 
 /// Connection state of the data source.
@@ -183,6 +186,17 @@ pub enum BackendEvent {
     Workbench(WorkbenchSnapshot),
     /// `conversationSummaryChanged` / `updateConversationRunPhase`.
     ConversationSummary(ConversationSummary),
+    /// The backend moved the selection, e.g. to a newly created conversation.
+    /// 后端移动了选中项，例如移到新建的会话。
+    Selected(ConversationId),
+    /// Model and reasoning effort of the selected conversation; `efforts` lists what the model
+    /// accepts (empty when unknown).
+    /// 选中会话的模型与推理强度；`efforts` 列出模型接受的取值（未知时为空）。
+    ModelSelection {
+        model_id: String,
+        effort: Option<ReasoningEffort>,
+        efforts: Vec<ReasoningEffort>,
+    },
     /// `service_session_event_hydration_v1` result: replaces the local event window.
     /// 替换本地事件窗口。
     ConversationHydrated {
@@ -259,11 +273,38 @@ pub enum BackendEvent {
     /// The conversation was archived or deleted and leaves the sidebar.
     /// 会话已归档或删除，从侧边栏移除。
     ConversationRemoved(ConversationId),
-    /// `service_list_directory` result.
+    /// `browseProjectDirectories` or local file listing result.
+    /// 浏览项目目录或本地文件列表的结果。
     Directory(DirectoryListing),
-    /// System areas snapshot, replaced as a whole.
-    /// 系统区域快照，整体替换。
-    System(Box<SystemSnapshot>),
+    /// A loader result: the raw WebUI DTO (credentials blanked) replaces the slot.
+    /// 加载器结果：原始 WebUI DTO（凭据已清空）替换该槽位。
+    Slot {
+        slot: crate::service_api::Slot,
+        call: crate::service_api::ServiceCall,
+        value: serde_json::Value,
+    },
+    /// A scoped loader failed; retains its exact request and already-sanitized cause for retry.
+    /// 限定范围加载失败；保留准确请求及已脱敏原因以便重试。
+    SlotFailed {
+        /// Read projection that could not be loaded.
+        /// 无法加载的读取投影。
+        slot: crate::service_api::Slot,
+        /// Exact loader envelope used for owner and pagination checks.
+        /// 用于归属及分页检查的准确加载器结构。
+        call: crate::service_api::ServiceCall,
+        /// Sanitized transport/service message, without credential-bearing request text.
+        /// 脱敏传输或服务消息，不包含持有凭据的请求文本。
+        message: String,
+    },
+    /// The result of a preview call; the UI asks for confirmation before the second step.
+    /// 预检调用的结果；界面在第二步前请求确认。
+    Preview {
+        call: crate::service_api::ServiceCall,
+        result: serde_json::Value,
+    },
+    /// A system operation and its authoritative reloads have all settled.
+    /// 系统操作与其权威刷新已全部结束。
+    CallFinished,
     /// A finished action; the UI localizes the notice.
     /// 已完成的操作；由界面本地化提示。
     Notice(Notice),
@@ -289,19 +330,7 @@ pub enum Notice {
     ProjectRemoved(String),
     Archived(String),
     ArchivedCount(usize),
-    Restored(String),
-    Deleted,
     Renamed,
-    SettingsSaved,
-    CredentialAdded,
-    CredentialTested {
-        ok: bool,
-    },
-    NotificationSent,
-    LogsCleaned,
-    MemoryUpdated,
-    JobStarted(String),
-    JobFinished(String),
     MemorySuppressed,
     MemoryDeleted,
     /// The goal changed; `None` means it was removed.
@@ -309,9 +338,15 @@ pub enum Notice {
     Goal(Option<GoalStatus>),
     AgentStopped(String),
     AgentClosed(String),
-    /// A plugin, skill or index action finished; carries the item name.
-    /// 插件、技能或索引操作已完成；携带条目名称。
-    Done(String),
+    /// A `service_api` mutation succeeded; carries its WebUI function name.
+    /// `service_api` 变更调用成功；携带其 WebUI 函数名。
+    Completed(&'static str),
+    /// The service could not be reached; carries the technical cause.
+    /// 无法连接服务；携带技术原因。
+    ServiceUnavailable(String),
+    /// An action needs the service but the connection is not up yet.
+    /// 操作需要服务，但连接尚未建立。
+    NotConnected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

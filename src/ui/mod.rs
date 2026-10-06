@@ -88,9 +88,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let session_bar = in_chat && session_bar::visible(app, body.height);
     chrome::status_bar(app, status, buf, !session_bar);
 
-    let sidebar_inline =
-        app.sidebar == SidebarMode::Expanded && body.width >= CENTER_MIN_WIDTH + SIDEBAR_WIDTH;
-    let rail_inline = !sidebar_inline && body.width >= CENTER_MIN_WIDTH + sidebar::RAIL_WIDTH;
+    // The project and conversation list belongs to the workbench; system areas show only their
+    // own navigation.
+    // 项目与会话列表只属于工作台；系统区域只显示自身的导航。
+    let sidebar_inline = in_chat
+        && app.sidebar == SidebarMode::Expanded
+        && body.width >= CENTER_MIN_WIDTH + SIDEBAR_WIDTH;
+    let rail_inline =
+        in_chat && !sidebar_inline && body.width >= CENTER_MIN_WIDTH + sidebar::RAIL_WIDTH;
     let used = if sidebar_inline {
         SIDEBAR_WIDTH
     } else if rail_inline {
@@ -98,8 +103,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
-    // System areas use the full width beside the sidebar; the session panel belongs to chat.
-    // 系统区域占用侧栏旁的全部宽度；会话面板只属于对话区域。
+    // The session panel belongs to the workbench as well.
+    // 会话面板同样只属于工作台。
     let panel_inline =
         in_chat && app.panel_visible && body.width >= CENTER_MIN_WIDTH + PANEL_WIDTH + used;
     let [sidebar_area, center, panel_area] = Layout::horizontal([
@@ -126,7 +131,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Drawers for narrow terminals.
     // 窄终端的抽屉。
-    if !sidebar_inline && app.focus == Focus::Sidebar {
+    if in_chat && !sidebar_inline && app.focus == Focus::Sidebar {
         let drawer = Rect {
             width: SIDEBAR_WIDTH.min(body.width),
             ..body

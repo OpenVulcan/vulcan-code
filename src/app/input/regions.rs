@@ -214,7 +214,7 @@ pub(super) fn on_sidebar_key(app: &mut App, key: KeyEvent) {
                 SidebarRow::Conversation(id) => app
                     .conversations
                     .iter()
-                    .find(|c| &c.id == id && !c.pinned)
+                    .find(|c| &c.id == id)
                     .and_then(|c| c.project_id.clone()),
                 _ => None,
             };
@@ -314,7 +314,7 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('c') => open_commit(app),
                 KeyCode::Char('b') => execute(app, AppCommand::SwitchBranch, None),
                 KeyCode::Char('p') => execute(app, AppCommand::Push, None),
-                KeyCode::Char('r') => app.backend.send(Command::GitRefresh),
+                KeyCode::Char('r') => app.backend.send(Command::LoadWorkspaceDiffSnapshot),
                 _ => {}
             }
         }
@@ -358,7 +358,7 @@ fn on_panel_list_key(app: &mut App, key: KeyEvent) {
             let static_view = !app.panel.memory_static;
             action::perform(app, UiAction::MemoryView(static_view));
         }
-        KeyCode::Char(ch @ ('m' | 's' | 'x')) if tab == PanelTab::Agents => {
+        KeyCode::Char(ch @ ('s' | 'x')) if tab == PanelTab::Agents => {
             let (Some(conversation_id), Some(agent)) = (
                 app.selected.clone(),
                 app.session().and_then(|s| s.agents.get(cursor)).cloned(),
@@ -366,11 +366,6 @@ fn on_panel_list_key(app: &mut App, key: KeyEvent) {
                 return;
             };
             let action = match ch {
-                'm' if agent.state != AgentState::Closed => Some(insight::message_agent(
-                    &conversation_id,
-                    &agent,
-                    agent.state == AgentState::Running,
-                )),
                 's' if agent.state == AgentState::Running => {
                     Some(insight::stop_agent(&conversation_id, &agent))
                 }
@@ -412,15 +407,9 @@ fn on_stats_key(app: &mut App, key: KeyEvent) {
             action::perform(app, insight::edit_goal(&conversation_id, goal.as_ref()))
         }
         KeyCode::Char('p') => {
-            let op = match goal.map(|g| g.status) {
-                Some(GoalStatus::Active) => GoalOp::Pause,
-                Some(status) if status.resumable() => GoalOp::Resume,
-                _ => return,
-            };
-            app.backend.send(Command::Goal {
-                conversation_id,
-                op,
-            });
+            if let Some(command) = goal.and_then(|g| insight::toggle_goal(&conversation_id, &g)) {
+                app.backend.send(command);
+            }
         }
         _ => {}
     }
@@ -531,7 +520,7 @@ pub fn ask_step(app: &mut App, step: AskStep) {
             ask.go_to(next, total);
         }
         AskStep::Next | AskStep::Submit => match ask.answers(&pending) {
-            Ok(answers) => app.backend.send(Command::ReplyQuestion {
+            Ok(answers) => app.backend.send(Command::ReplyPendingQuestion {
                 request_id: pending.id.clone(),
                 answers,
             }),
@@ -544,7 +533,7 @@ pub fn ask_step(app: &mut App, step: AskStep) {
         AskStep::RejectCancel => ask.confirm_reject = false,
         AskStep::RejectConfirm => {
             ask.confirm_reject = false;
-            app.backend.send(Command::RejectQuestion {
+            app.backend.send(Command::RejectPendingQuestion {
                 request_id: pending.id.clone(),
             });
         }

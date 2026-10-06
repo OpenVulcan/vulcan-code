@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use serde_json::Value;
 
-use super::brand::Logo;
+use super::brand;
 use super::markdown;
 use super::text::{compact_count, compact_duration, shimmer, spinner, truncate, width_of, wrap};
 use super::theme::{Theme, mix};
@@ -87,7 +87,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     let Some(session) = app.session() else {
         app.hits.transcript_items.clear();
         app.hits.transcript_lines = 0;
-        welcome(&theme, area, buf, app.phase(), false);
+        welcome(&theme, area, buf, false);
         return;
     };
     if !session.hydrated {
@@ -120,7 +120,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     if session.events.is_empty() {
         app.hits.transcript_items.clear();
         app.hits.transcript_lines = 0;
-        welcome(&theme, area, buf, app.phase(), true);
+        welcome(&theme, area, buf, true);
         return;
     }
     let gutter = 2u16;
@@ -686,45 +686,21 @@ fn stats(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     ])]
 }
 
-/// Empty-conversation hero: the Vulcan mark with the wordmark and a start hint.
-/// 空会话主视觉：Vulcan 标志、字标与开始提示。
-fn welcome(theme: &Theme, area: Rect, buf: &mut Buffer, phase: f32, has_conversation: bool) {
-    let cols = (area.width / 4)
-        .min(area.height.saturating_sub(5) * 2)
-        .clamp(8, 24);
-    let logo = Logo::new(cols);
-    let block_height = logo.rows() + 4;
-    if area.height < block_height || area.width < logo.cols + 4 {
+/// Empty-conversation hero: the text wordmark with a start hint.
+/// 空会话主视觉：文字字标与开始提示。
+fn welcome(theme: &Theme, area: Rect, buf: &mut Buffer, has_conversation: bool) {
+    if area.height < 3 {
         return;
     }
-    let top = area.y + (area.height - block_height) / 2;
-    let left = area.x + (area.width - logo.cols) / 2;
-    let glow = 0.5 + 0.5 * (phase * 1.2).sin();
-    logo.render(
-        Rect {
-            x: left,
-            y: top,
-            width: logo.cols,
-            height: logo.rows(),
-        },
-        buf,
-        theme.bg,
-        glow * 0.4,
-    );
-    let wordmark = Line::from(vec![
-        Span::styled("V U L C A N ", theme.strong()),
-        Span::styled(
-            "C O D E",
-            Style::new().fg(theme.primary).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    let y = top + logo.rows() + 1;
+    let y = area.y + (area.height - 3) / 2;
     let centered = |text_width: usize| area.x + area.width.saturating_sub(text_width as u16) / 2;
+    let wordmark = brand::wordmark(theme);
+    let w = wordmark.width();
     wordmark.render(
         Rect {
-            x: centered(23),
+            x: centered(w),
             y,
-            width: 23.min(area.width),
+            width: (w as u16).min(area.width),
             height: 1,
         },
         buf,

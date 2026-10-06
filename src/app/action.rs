@@ -18,6 +18,7 @@ use super::{App, Focus, PanelTab, SidebarMode, SidebarRow, ThinkingPlacement};
 use crate::backend::Command;
 use crate::i18n;
 use crate::model::*;
+use crate::service_api::setter::Setter;
 use crate::tr;
 use crate::ui::theme::{Theme, ThemeMode};
 
@@ -36,28 +37,42 @@ pub enum LocalSetting {
     /// The knowledge library shown on the library details page.
     /// 知识库详情页显示的知识库。
     Library,
+    /// Selected knowledge view, independent from the library list.
+    /// 所选知识视图，独立于知识库列表。
+    KnowledgeView,
+    /// Exact selected managed-document folder.
+    /// 准确的托管文档目录选择。
+    KnowledgeFolder,
+    /// Raw/display corpus for the selected document.
+    /// 所选文档的原始或展示语料。
+    KnowledgeCorpus,
+    /// Local agent enabled-state filter.
+    /// 本地智能体启用状态筛选。
+    AgentStatus,
+    /// Local prompt-skill state filter.
+    /// 本地提示词技能状态筛选。
+    SkillStatus,
+    /// WebUI effective/source override filter for prompt skills.
+    /// 提示词技能的 WebUI 生效、来源覆盖筛选。
+    SkillSource,
+    /// Selected native VMM project; changing it reloads the visible records.
+    /// 选中的原生 VMM 项目；变更后重新加载可见记录。
+    VmmProject,
+    /// Selected host project for the VCE overview.
+    /// VCE 概览选中的宿主项目。
+    VceProject,
+    /// Native profile target, as defined by `native_profile_records`.
+    /// 原生画像目标，由 `native_profile_records` 定义。
+    ProfileTarget,
 }
 
 /// Where an edited value goes.
 /// 编辑后的值写往何处。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Edit {
-    /// Saved immediately (`SetSetting`).
-    /// 立即保存。
-    Setting(String),
-    /// Held as an unsaved draft until the page is saved.
-    /// 作为未保存草稿保留，直到页面保存。
-    Draft(String),
-    Enabled(EntityKind, String),
-    /// Model route; an empty value turns the route off.
-    /// 模型路由；空值表示关闭。
-    Route(EntityKind, String),
-    /// One field of a catalog entity (`SetField`), saved immediately.
-    /// 目录实体的某个字段（`SetField`），立即保存。
-    Field(EntityKind, String, String),
-    /// A secret setting: sent once, never kept in drafts or in the local snapshot.
-    /// 密钥类设置：只发送一次，从不保存在草稿或本地快照中。
-    Secret(String),
+    /// A confirmed WebUI request builder; values are persisted by the service.
+    /// 已确认的 WebUI 请求构建器；值由服务持久化。
+    Call(Setter),
     Local(LocalSetting),
 }
 
@@ -88,19 +103,16 @@ pub struct ConfirmDialog {
 pub enum PromptThen {
     RenameProject(String),
     RenameConversation(ConversationId),
-    AddCredential(String),
     Edit(Edit),
     MemorySearch,
-    MemoryCorrect,
     KnowledgeSearch,
+    /// Filters agent definitions using the catalog's searchable metadata.
+    /// 使用目录可搜索元数据筛选智能体定义。
+    AgentSearch,
+    /// Filters prompt-skill records using their searchable metadata.
+    /// 使用可搜索元数据筛选提示词技能记录。
+    SkillSearch,
     SetGoal(ConversationId),
-    /// Types a message for a subagent; `steering` interrupts its current step.
-    /// 为子代理输入消息；`steering` 会中断其当前步骤。
-    AgentMessage {
-        conversation_id: ConversationId,
-        agent_id: String,
-        steering: bool,
-    },
     /// A typed number, validated against the row's range before it is applied.
     /// 输入的数字，在应用前按该行的范围校验。
     Number {
@@ -109,11 +121,12 @@ pub enum PromptThen {
         max: i64,
     },
     KnowledgeCreate,
-    MemoryProjectCreate,
-    /// Moves every item of the memory project with this id into the typed project.
-    /// 将此 ID 的记忆项目中的全部条目迁移到输入的项目。
-    MemoryMigrate(String),
-    LuaInstall,
+    /// Collects replacement text after confirming the native resource's purpose.
+    /// 确认原生资源用途后收集替换正文。
+    ResourceWrite(String),
+    /// Continuation of transient multi-field request input.
+    /// 临时多字段请求输入的后续步骤。
+    Form(Box<super::form::Form>),
 }
 
 impl PromptThen {
@@ -122,26 +135,74 @@ impl PromptThen {
     fn allows_empty(&self) -> bool {
         matches!(
             self,
-            PromptThen::MemorySearch | PromptThen::KnowledgeSearch | PromptThen::Edit(_)
-        )
+            PromptThen::MemorySearch
+                | PromptThen::KnowledgeSearch
+                | PromptThen::AgentSearch
+                | PromptThen::SkillSearch
+                | PromptThen::Edit(_)
+                | PromptThen::ResourceWrite(_)
+        ) || matches!(self, PromptThen::Form(form) if form.fields[form.index].optional)
     }
 }
 
-/// Single-line text input dialog.
-/// 单行文本输入对话框。
-#[derive(Debug, Clone)]
+/// Transient text input preserving multiline service fields and masking credential values.
+/// 保留多行服务字段并遮蔽凭据值的临时文本输入框。
+#[derive(Clone)]
 pub struct PromptDialog {
+    /// Localized purpose of this input step.
+    /// 此输入步骤的本地化用途。
     pub title: String,
+    /// Localized field instructions or request-step context.
+    /// 本地化字段说明或请求步骤上下文。
     pub description: String,
+    /// Exact transient input; form and resource submission preserve its whitespace.
+    /// 准确临时输入；表单及资源提交保留其空白。
     pub input: String,
     /// Masks the input on screen; the value is still sent once, never stored by the TUI.
     /// 在屏幕上遮蔽输入；值只发送一次，TUI 从不保存。
     pub secret: bool,
+    /// Exact continuation that determines parsing, validation and request ownership.
+    /// 决定解析、校验及请求归属的准确后续步骤。
     pub then: PromptThen,
+    /// Localized validation failure cleared on the next input change.
+    /// 下一次输入变化时清除的本地化校验失败。
     pub error: Option<String>,
 }
 
+impl std::fmt::Debug for PromptDialog {
+    /// Redacts all prompt input, including credentials in a partial request form.
+    /// 遮蔽全部输入框内容，包括部分请求表单内的凭据。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PromptDialog")
+            .field("secret", &self.secret)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PromptDialog {
+    /// Whether this declared continuation accepts multiline input without first-line truncation.
+    /// 此已声明后续步骤是否接受多行输入而不截断到首行。
+    /// Returns true for service forms, resource text, editable settings and goal instructions.
+    /// 服务表单、资源文本、可编辑设置及目标说明返回 true。
+    pub fn accepts_multiline(&self) -> bool {
+        matches!(
+            self.then,
+            PromptThen::Form(_)
+                | PromptThen::ResourceWrite(_)
+                | PromptThen::Edit(_)
+                | PromptThen::SetGoal(_)
+        )
+    }
+
+    /// Builds a transient input step with its explicit continuation and masking behavior.
+    /// 使用明确的后续步骤及遮蔽行为构建临时输入步骤。
+    /// `title` and `description` provide localized purpose and field instructions.
+    /// `title` 及 `description` 提供本地化用途及字段说明。
+    /// `input` contains the authoritative initial value; `then` owns the submission continuation.
+    /// `input` 包含权威初始值；`then` 持有提交后续步骤。
+    /// `secret` masks display; returns the initialized dialog with no validation error.
+    /// `secret` 遮蔽显示；返回没有校验错误的已初始化输入框。
     pub fn new(
         title: String,
         description: String,
@@ -175,13 +236,30 @@ pub enum UiAction {
         current: String,
     },
     Edit(Edit, SettingValue),
-    /// Saves the drafts whose keys start with one of these prefixes.
-    /// 保存键以这些前缀之一开头的草稿。
-    SaveDrafts(Vec<&'static str>),
-    DiscardDrafts(Vec<&'static str>),
+    /// Starts a multi-field WebUI request form.
+    /// 启动多字段 WebUI 请求表单。
+    Form(Box<super::form::Form>),
+    /// Reloads the current page using its exact service loaders.
+    /// 使用当前页面对应的精确服务加载器重新加载。
+    ReloadPage,
     /// Selects the knowledge library shown on the library details page.
     /// 选择知识库详情页显示的知识库。
     OpenLibrary(String),
+    /// Activates the exact dynamic navigation row through the shared dispatcher.
+    /// 通过共享分发器激活准确的动态导航行。
+    Navigate(usize),
+    /// Selects a server-owned agent category, or the empty all-categories filter.
+    /// 选择服务端智能体分类，或空的全部分类筛选。
+    AgentCategory(String),
+    /// Selects a server-owned prompt-skill category, or the empty all-categories filter.
+    /// 选择服务端提示词技能分类，或空的全部分类筛选。
+    SkillCategory(String),
+    /// Opens one immutable managed document in the current library.
+    /// 打开当前知识库中的单个不可变托管文档。
+    OpenKnowledgeDocument(String),
+    /// Moves the managed listing to an explicit page offset.
+    /// 将托管列表移动到明确分页偏移量。
+    KnowledgeOffset(usize),
     /// Opens the folder picker to add a source directory to this library.
     /// 打开文件夹选择器，为此知识库添加来源目录。
     AddKnowledgeSource(String),
@@ -283,7 +361,25 @@ pub fn prompt(title: String, description: String, input: String, then: PromptThe
 
 pub fn perform(app: &mut App, action: UiAction) {
     match action {
-        UiAction::Send(command) => app.backend.send(command),
+        UiAction::Send(command) => {
+            if let Command::Call(call) = &command
+                && !matches!(call.kind, crate::service_api::CallKind::Load(_))
+            {
+                if app.call_pending {
+                    app.toast(Severity::Info, tr!("tui.notice.waitForOperation"));
+                    return;
+                }
+                app.call_pending = true;
+            }
+            if let Command::Call(call) = &command
+                && let crate::service_api::CallKind::Load(slot) = call.kind
+            {
+                app.slot_errors.remove(&slot);
+            }
+            app.backend.send(command);
+        }
+        UiAction::Form(form) => form.open(app),
+        UiAction::ReloadPage => app.load_page(),
         UiAction::App(command) => input::execute(app, command, None),
         UiAction::Confirm(dialog) => app.overlay = Some(Overlay::Confirm(dialog)),
         UiAction::ConfirmAccept => {
@@ -300,45 +396,62 @@ pub fn perform(app: &mut App, action: UiAction) {
             current,
         } => open_choice(app, title, edit, options, current),
         UiAction::Edit(edit, value) => apply_edit(app, edit, value),
-        UiAction::SaveDrafts(prefixes) => {
-            let keys = draft_keys(app, &prefixes);
-            let values: Vec<(String, SettingValue)> = keys
+        UiAction::Navigate(index) => {
+            // Resolve a current row before dispatch so changed catalogs never address stale indexes.
+            // 分派前解析当前行，避免变化后的目录使用旧下标。
+            let destination = super::pages::navigation(app)
                 .into_iter()
-                .filter_map(|key| app.drafts.remove_entry(&key))
-                .collect();
-            if values.is_empty() {
-                return;
+                .flat_map(|(_, entries)| entries)
+                .nth(index);
+            if let Some(entry) = destination {
+                perform(app, entry.action);
+                app.focus = Focus::AreaNav;
             }
-            if let Some(system) = app.system.as_mut() {
-                system.settings.extend(values.iter().cloned());
-            }
-            app.backend
-                .send(Command::System(SystemCommand::SaveSettings(values)));
         }
-        UiAction::DiscardDrafts(prefixes) => {
-            for key in draft_keys(app, &prefixes) {
-                app.drafts.remove(&key);
-            }
+        UiAction::AgentCategory(id) => {
+            app.agent_category = id;
+            app.pages.remove(&PageId::AgentList);
+        }
+        UiAction::SkillCategory(id) => {
+            app.skill_category = id;
+            app.pages.remove(&PageId::SkillList);
         }
         UiAction::OpenLibrary(id) => {
-            app.library = Some(id);
+            app.select_library(Some(id));
             perform(app, UiAction::GoPage(PageId::KnowledgeLibrary));
         }
+        UiAction::OpenKnowledgeDocument(id) => {
+            app.knowledge_document = Some(id);
+            app.slots.clear(crate::service_api::Slot::KnowledgeDocument);
+            app.pages.remove(&PageId::KnowledgeDocument);
+            perform(app, UiAction::GoPage(PageId::KnowledgeDocument));
+        }
+        UiAction::KnowledgeOffset(offset) => {
+            app.knowledge_offset = offset;
+            app.slots
+                .clear(crate::service_api::Slot::KnowledgeDocuments);
+            app.pages.remove(&PageId::KnowledgeDocuments);
+            app.load_page();
+        }
         UiAction::AddKnowledgeSource(library) => {
-            app.library = Some(library);
+            app.select_library(Some(library));
             open_folder(app, FolderMode::KnowledgeSource, None);
         }
         UiAction::InstallPlugin => open_folder(app, FolderMode::Plugin, None),
         UiAction::Area(area) => app.set_area(area),
         UiAction::GoPage(page) => {
-            app.set_area(page.area());
             let index = page
                 .area()
                 .pages()
                 .iter()
                 .position(|p| *p == page)
                 .unwrap_or(0);
-            app.nav.insert(page.area(), index);
+            if page.area() == Area::Knowledge {
+                app.knowledge_page = page;
+            } else {
+                app.nav.insert(page.area(), index);
+            }
+            app.set_area(page.area());
             app.focus = Focus::AreaPage;
         }
         UiAction::OpenAreaPicker => open_area_picker(app),
@@ -486,12 +599,14 @@ pub fn perform(app: &mut App, action: UiAction) {
         }
         UiAction::OpenSidebar => {
             app.overlay = None;
+            app.area = Area::Chat;
             app.sidebar = SidebarMode::Expanded;
             app.sidebar_free_scroll = false;
             app.focus = Focus::Sidebar;
         }
         UiAction::RailProject(id) => {
             app.overlay = None;
+            app.area = Area::Chat;
             app.collapsed_projects.remove(&id);
             app.sidebar_cursor = Some(SidebarRow::Project(id));
             app.sidebar_free_scroll = false;
@@ -533,7 +648,7 @@ fn fold_all_projects(app: &mut App) {
         Some(SidebarRow::Conversation(id)) => app
             .conversations
             .iter()
-            .find(|c| &c.id == id && !c.pinned)
+            .find(|c| &c.id == id)
             .and_then(|c| c.project_id.clone())
             .filter(|p| app.collapsed_projects.contains(p)),
         _ => None,
@@ -587,89 +702,91 @@ fn paste_sheet(app: &App, index: usize) -> Option<DetailSheet> {
 
 /// Draft keys matching any of the prefixes.
 /// 匹配任一前缀的草稿键。
-pub fn draft_keys(app: &App, prefixes: &[&str]) -> Vec<String> {
-    app.drafts
-        .keys()
-        .filter(|key| prefixes.iter().any(|p| key.starts_with(p)))
-        .cloned()
-        .collect()
-}
-
 /// Applies one edited value to wherever `edit` points.
 /// 将编辑后的值写入 `edit` 指向的位置。
 pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
     match edit {
-        Edit::Setting(key) => {
-            if let Some(system) = app.system.as_mut() {
-                system.settings.insert(key.clone(), value.clone());
-            }
-            app.backend
-                .send(Command::System(SystemCommand::SetSetting { key, value }));
-        }
-        Edit::Draft(key) => {
-            let stored = app.system.as_ref().and_then(|s| s.setting(&key)).cloned();
-            if stored.as_ref() == Some(&value) {
-                app.drafts.remove(&key);
-            } else {
-                app.drafts.insert(key, value);
-            }
-        }
-        Edit::Enabled(kind, id) => {
-            app.backend.send(Command::System(SystemCommand::SetEnabled {
-                kind,
-                id,
-                enabled: value.as_bool(),
-            }));
-        }
-        Edit::Route(kind, id) => {
-            let model = value.as_str().to_string();
-            app.backend.send(Command::System(SystemCommand::SetRoute {
-                kind,
-                id,
-                model: (!model.is_empty()).then_some(model),
-            }));
-        }
-        Edit::Field(kind, id, field) => {
-            app.backend.send(Command::System(SystemCommand::SetField {
-                kind,
-                id,
-                field,
-                value,
-            }));
-        }
-        Edit::Secret(key) => {
-            // Blank means "keep the stored secret"; nothing is echoed back locally.
-            // 留空表示“保留已存储的密钥”；本地不回显任何内容。
-            if !value.as_str().is_empty() {
-                app.backend
-                    .send(Command::System(SystemCommand::SetSetting { key, value }));
-            }
-        }
-        Edit::Local(setting) => match setting {
-            LocalSetting::Locale => input::set_locale(app, value.as_str()),
-            LocalSetting::Theme => {
-                app.theme = match value.as_str() {
-                    "light" => Theme::light(),
-                    _ => Theme::dark(),
-                };
-            }
-            LocalSetting::Thinking => {
-                app.thinking_placement = match value.as_str() {
-                    "docked" => ThinkingPlacement::Docked,
-                    _ => ThinkingPlacement::Float,
-                };
-            }
-            LocalSetting::Sidebar => {
-                let mode = if value.as_bool() {
-                    SidebarMode::Expanded
-                } else {
-                    SidebarMode::Rail
-                };
-                perform(app, UiAction::SidebarMode(mode));
-            }
-            LocalSetting::Panel => app.panel_visible = value.as_bool(),
-            LocalSetting::Library => app.library = Some(value.as_str().to_string()),
+        Edit::Call(setter) => match setter.apply(&value) {
+            Some(call) => perform(app, UiAction::Send(Command::Call(call))),
+            None => app.toast(Severity::Error, tr!("tui.form.invalid")),
         },
+        Edit::Local(setting) => {
+            match setting {
+                LocalSetting::Locale => input::set_locale(app, value.as_str()),
+                LocalSetting::Theme => {
+                    app.theme = match value.as_str() {
+                        "light" => Theme::light(),
+                        _ => Theme::dark(),
+                    }
+                }
+                LocalSetting::Thinking => {
+                    app.thinking_placement = match value.as_str() {
+                        "docked" => ThinkingPlacement::Docked,
+                        _ => ThinkingPlacement::Float,
+                    }
+                }
+                LocalSetting::Sidebar => perform(
+                    app,
+                    UiAction::SidebarMode(if value.as_bool() {
+                        SidebarMode::Expanded
+                    } else {
+                        SidebarMode::Rail
+                    }),
+                ),
+                LocalSetting::Panel => app.panel_visible = value.as_bool(),
+                LocalSetting::Library => app.select_library(Some(value.as_str().to_string())),
+                LocalSetting::KnowledgeView => {
+                    if let Some(page) = super::pages::knowledge_view(value.as_str()) {
+                        app.knowledge_page = page;
+                    }
+                }
+                LocalSetting::KnowledgeFolder => {
+                    // JSON option values distinguish all folders (null) from the root folder (empty string).
+                    // JSON 选项值区分全部目录（null）与根目录（空字符串）。
+                    let Ok(folder) = serde_json::from_str::<Option<String>>(value.as_str()) else {
+                        app.toast(Severity::Error, tr!("tui.form.invalid"));
+                        return;
+                    };
+                    app.knowledge_folder = folder;
+                    app.knowledge_offset = 0;
+                    app.slots
+                        .clear(crate::service_api::Slot::KnowledgeDocuments);
+                    app.pages.remove(&PageId::KnowledgeDocuments);
+                }
+                LocalSetting::KnowledgeCorpus => {
+                    app.knowledge_corpus = value.as_str().to_string();
+                    app.slots.clear(crate::service_api::Slot::KnowledgeDocument);
+                    app.pages.remove(&PageId::KnowledgeDocument);
+                }
+                LocalSetting::AgentStatus => {
+                    app.agent_status = value.as_str().to_string();
+                    app.pages.remove(&PageId::AgentList);
+                }
+                LocalSetting::SkillStatus => {
+                    app.skill_status = value.as_str().to_string();
+                    app.pages.remove(&PageId::SkillList);
+                }
+                LocalSetting::SkillSource => {
+                    app.skill_source = value.as_str().to_string();
+                    app.pages.remove(&PageId::SkillList);
+                }
+                LocalSetting::VmmProject => {
+                    app.vmm_project = value.as_str().parse().ok();
+                    app.slots.clear(crate::service_api::Slot::VmmRecords);
+                    app.slots.clear(crate::service_api::Slot::VmmProfile);
+                }
+                LocalSetting::VceProject => {
+                    app.vce_project = Some(value.as_str().to_string());
+                    app.slots.clear(crate::service_api::Slot::VceOverview);
+                    app.slots.clear(crate::service_api::Slot::VceJob);
+                }
+                LocalSetting::ProfileTarget => {
+                    app.profile_target = value.as_str().to_string();
+                    app.slots.clear(crate::service_api::Slot::VmmProfile);
+                }
+            }
+            app.load_page();
+        }
     }
 }
 
@@ -738,7 +855,16 @@ fn accept_prompt(app: &mut App) {
     let Some(Overlay::Prompt(dialog)) = &mut app.overlay else {
         return;
     };
-    let value = dialog.input.trim().to_string();
+    // Prompt values are transient, including credentials; only the matching RPC receives them.
+    // 输入值属于临时数据，包括凭据；仅对应 RPC 接收它们。
+    let value = if matches!(
+        dialog.then,
+        PromptThen::Form(_) | PromptThen::ResourceWrite(_)
+    ) {
+        dialog.input.clone()
+    } else {
+        dialog.input.trim().to_string()
+    };
     if value.is_empty() && !dialog.then.allows_empty() {
         dialog.error = Some(tr!("tui.prompt.required"));
         return;
@@ -746,86 +872,92 @@ fn accept_prompt(app: &mut App) {
     let Some(Overlay::Prompt(mut dialog)) = app.overlay.take() else {
         return;
     };
-    let system = |command: SystemCommand| Command::System(command);
-    // The continuation is taken out so the dialog stays reusable for re-prompting.
-    // 取出后续动作，使对话框可在重新提示时复用。
     let then = std::mem::replace(&mut dialog.then, PromptThen::KnowledgeCreate);
     match then {
-        PromptThen::RenameProject(project_id) => app.backend.send(Command::RenameProject {
-            project_id,
-            name: value,
-        }),
-        PromptThen::RenameConversation(conversation_id) => {
-            app.backend.send(Command::RenameConversation {
+        PromptThen::ResourceWrite(path) => {
+            let request = crate::service_api::memory_actions::native_resource_write(&path, &value);
+            perform(
+                app,
+                confirm(
+                    tr!("tui.field.editResource"),
+                    format!("{path}\n\n{value}"),
+                    tr!("tui.field.confirm"),
+                    UiAction::Send(Command::Call(request)),
+                ),
+            );
+        }
+        PromptThen::RenameProject(project_id) => perform(
+            app,
+            UiAction::Send(Command::RenameProject {
+                project_id,
+                name: value,
+            }),
+        ),
+        PromptThen::RenameConversation(conversation_id) => perform(
+            app,
+            UiAction::Send(Command::RenameConversation {
                 conversation_id,
                 title: value,
-            })
-        }
-        PromptThen::AddCredential(provider) => {
-            app.backend.send(system(SystemCommand::Credential {
-                provider,
-                op: CredentialOp::Add {
-                    label: String::new(),
-                    secret: value,
-                },
-            }))
-        }
+            }),
+        ),
         PromptThen::Edit(edit) => apply_edit(app, edit, SettingValue::Text(value)),
+        PromptThen::Form(form) => form.accept(app, value),
         PromptThen::Number { edit, min, max } => match value.replace([',', '_'], "").parse::<i64>()
         {
             Ok(number) if (min..=max).contains(&number) => {
                 apply_edit(app, edit, SettingValue::Number(number))
             }
             _ => {
-                // Keep the dialog open with the typed text so the user can correct it.
-                // 保留对话框与已输入内容，便于用户修正。
                 dialog.error = Some(tr!("tui.prompt.range", min = min, max = max));
                 dialog.then = PromptThen::Number { edit, min, max };
                 app.overlay = Some(Overlay::Prompt(dialog));
             }
         },
-        PromptThen::KnowledgeCreate => app
-            .backend
-            .send(system(SystemCommand::KnowledgeCreate(value))),
-        PromptThen::MemoryProjectCreate => app.backend.send(system(SystemCommand::MemoryProject(
-            MemoryProjectOp::Create(value),
-        ))),
-        PromptThen::MemoryMigrate(from) => app.backend.send(system(SystemCommand::MemoryProject(
-            MemoryProjectOp::Migrate { from, to: value },
-        ))),
-        PromptThen::LuaInstall => app
-            .backend
-            .send(system(SystemCommand::LuaSkill(CatalogOp::Install(value)))),
-        PromptThen::MemorySearch => app.backend.send(system(SystemCommand::MemorySearch(value))),
-        PromptThen::MemoryCorrect => app
-            .backend
-            .send(system(SystemCommand::MemoryCorrectProfile(value))),
+        PromptThen::KnowledgeCreate => perform(
+            app,
+            UiAction::Send(Command::Call(
+                crate::service_api::knowledge_base::create_knowledge_library(
+                    &value,
+                    "",
+                    &[],
+                    serde_json::json!({}),
+                ),
+            )),
+        ),
+        PromptThen::MemorySearch => app.memory_query = value,
         PromptThen::KnowledgeSearch => {
-            app.backend
-                .send(system(SystemCommand::KnowledgeSearch(value)));
-            if app.area == Area::Knowledge {
-                perform(app, UiAction::GoPage(PageId::KnowledgeSearch));
-            }
+            app.knowledge_query = value;
+            app.slots.clear(crate::service_api::Slot::KnowledgeSearch);
+            app.slot_errors
+                .remove(&crate::service_api::Slot::KnowledgeSearch);
+            app.pages.remove(&PageId::KnowledgeSearch);
+            perform(app, UiAction::GoPage(PageId::KnowledgeSearch));
         }
-        PromptThen::SetGoal(conversation_id) => app.backend.send(Command::Goal {
-            conversation_id,
-            op: GoalOp::Set {
-                objective: value,
-                budget: None,
-            },
-        }),
-        PromptThen::AgentMessage {
-            conversation_id,
-            agent_id,
-            steering,
-        } => app.backend.send(Command::AgentMessage {
-            conversation_id,
-            agent_id,
-            message: AgentMessage {
-                steering,
-                text: value,
-            },
-        }),
+        PromptThen::AgentSearch => {
+            app.agent_query = value;
+            app.pages.remove(&PageId::AgentList);
+        }
+        PromptThen::SkillSearch => {
+            app.skill_query = value;
+            app.pages.remove(&PageId::SkillList);
+        }
+        PromptThen::SetGoal(conversation_id) => {
+            // Editing the objective retains the service-projected token budget.
+            // 编辑目标内容时保留服务投影的令牌预算。
+            let token_budget = app
+                .sessions
+                .get(&conversation_id)
+                .and_then(|session| session.insight.goal.as_ref())
+                .and_then(|goal| goal.budget);
+            perform(
+                app,
+                UiAction::Send(Command::SaveSessionGoal {
+                    conversation_id,
+                    objective: value,
+                    token_budget,
+                }),
+            );
+        }
     }
 }
 
@@ -848,10 +980,12 @@ fn folder_go(app: &mut App, path: Option<String>) {
     };
     picker.loading = true;
     picker.typing = None;
-    let command = Command::ListDirectory {
-        path,
-        show_hidden: picker.show_hidden,
-        files: !picker.mode.picks_directory(),
+    // Hidden entries are filtered when the listing arrives, so both sources list everything.
+    // 隐藏项在列表到达时过滤，因此两种来源都列出全部条目。
+    let command = if picker.mode.picks_directory() {
+        Command::BrowseProjectDirectories { path }
+    } else {
+        Command::ListLocalFiles { path }
     };
     app.backend.send(command);
 }
@@ -897,21 +1031,24 @@ fn folder_choose(app: &mut App) {
 /// 以选中的目录结束目录模式的选择器。
 fn use_directory(app: &mut App, mode: FolderMode, path: String) {
     app.overlay = None;
+    // Directory selection only constructs requests; the backend owns all service effects.
+    // 目录选择仅构建请求；后端负责全部服务副作用。
     let command = match mode {
-        FolderMode::Project => Command::AddProject { path },
+        FolderMode::Project => Command::AddProjectFromPath { path },
         FolderMode::KnowledgeSource => {
-            let Some(library) = app.library.clone() else {
+            let Some(library) = &app.library else {
                 return;
             };
-            Command::System(SystemCommand::KnowledgeSource {
-                library,
-                op: SourceOp::Add(path),
-            })
+            Command::Call(
+                crate::service_api::knowledge_base::preview_knowledge_import(library, &path, None),
+            )
         }
-        FolderMode::Plugin => Command::System(SystemCommand::Plugin(CatalogOp::Install(path))),
+        FolderMode::Plugin => Command::Call(
+            crate::service_api::skills_actions::inspect_local_plugin(&path),
+        ),
         FolderMode::Attachment => return,
     };
-    app.backend.send(command);
+    perform(app, UiAction::Send(command));
 }
 
 /// Uses the directory currently listed (the "use this folder" button).
@@ -935,6 +1072,10 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
     match action {
         PickerAction::Command(command) => input::execute(app, command, None),
         PickerAction::Model(id) => {
+            app.backend.send(Command::SelectPublicAiModel {
+                conversation_id: app.selected.clone(),
+                model_id: id.clone(),
+            });
             app.model_id = id;
             if let Some(model) = app.model() {
                 let label = model.label.clone();
@@ -947,7 +1088,7 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
         PickerAction::Locale(code) => input::set_locale(app, code),
         PickerAction::Branch(name) => {
             let local = name.strip_prefix("origin/").unwrap_or(&name).to_string();
-            app.backend.send(Command::GitSwitchBranch {
+            app.backend.send(Command::SwitchWorkspaceGitBranch {
                 name: local,
                 create: false,
             });
@@ -957,7 +1098,7 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
             if filter.is_empty() || filter.contains(char::is_whitespace) {
                 app.toast(Severity::Warning, tr!("tui.commit.branchRequired"));
             } else {
-                app.backend.send(Command::GitSwitchBranch {
+                app.backend.send(Command::SwitchWorkspaceGitBranch {
                     name: filter,
                     create: true,
                 });

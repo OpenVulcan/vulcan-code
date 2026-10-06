@@ -12,7 +12,7 @@ use crate::tr;
 
 /// What a picker row does when confirmed.
 /// 选择器条目确认后的动作。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum PickerAction {
     Command(AppCommand),
     Model(String),
@@ -82,7 +82,7 @@ impl Picker {
             .iter()
             .filter(|item| {
                 needle.is_empty()
-                    || item.action == PickerAction::CreateBranch
+                    || matches!(item.action, PickerAction::CreateBranch)
                     || item.label.to_lowercase().contains(&needle)
                     || item.detail.to_lowercase().contains(&needle)
                     || item.hint.to_lowercase().contains(&needle)

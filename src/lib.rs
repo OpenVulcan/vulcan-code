@@ -11,4 +11,5 @@ pub mod backend;
 pub mod i18n;
 pub mod i18n_sync;
 pub mod model;
+pub mod service_api;
 pub mod ui;

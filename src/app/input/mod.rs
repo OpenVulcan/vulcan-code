@@ -45,10 +45,25 @@ pub fn handle_event(app: &mut App, event: Event) {
 /// pastes collapse into a token).
 /// 粘贴的文本进入打开的对话框的文本框，否则进入输入框（长粘贴在其中折叠为标记）。
 fn paste(app: &mut App, text: &str) {
-    let text = composer::normalize(text);
-    let single_line = || text.lines().next().unwrap_or_default().to_string();
+    // Normalize ordinary text line endings; opaque credential bytes retain their original input.
+    // 规范普通文本换行符；不透明凭据字节保留其原始输入。
+    let normalized = composer::normalize(text);
+    // Single-line continuations intentionally retain only their first source line.
+    // 单行后续步骤明确仅保留首条来源行。
+    let single_line = || normalized.lines().next().unwrap_or_default().to_string();
     match &mut app.overlay {
-        Some(Overlay::Prompt(dialog)) => dialog.input.push_str(&single_line()),
+        Some(Overlay::Prompt(dialog)) => {
+            // The continuation declares multiline semantics; preserve full normalized form text.
+            // 后续步骤声明多行语义；保留完整的规范化表单文本。
+            if dialog.secret {
+                dialog.input.push_str(text);
+            } else if dialog.accepts_multiline() {
+                dialog.input.push_str(&normalized);
+            } else {
+                dialog.input.push_str(&single_line());
+            }
+            dialog.error = None;
+        }
         Some(Overlay::Folder(picker)) => {
             picker
                 .typing
@@ -60,13 +75,13 @@ fn paste(app: &mut App, text: &str) {
             picker.clamp();
         }
         Some(Overlay::Commit(dialog)) if dialog.field == CommitField::Message => {
-            dialog.message.insert_str(&text);
+            dialog.message.insert_str(&normalized);
         }
         Some(_) => {}
         None => {
             app.set_area(Area::Chat);
             app.focus = Focus::Composer;
-            app.paste_into_composer(&text);
+            app.paste_into_composer(&normalized);
         }
     }
 }
@@ -180,7 +195,7 @@ fn interrupt(app: &mut App) {
         && app.run_phase().is_active()
         && let Some(id) = app.selected.clone()
     {
-        app.backend.send(Command::Stop {
+        app.backend.send(Command::StopConversationRun {
             conversation_id: id,
         });
         return;
@@ -208,7 +223,7 @@ fn cycle_focus(app: &mut App, back: bool) {
             Focus::Sidebar,
         ]
     } else {
-        &[Focus::AreaNav, Focus::AreaPage, Focus::Sidebar]
+        &[Focus::AreaNav, Focus::AreaPage]
     };
     let available = |focus: &Focus| match focus {
         Focus::Ask => has_ask,
@@ -352,7 +367,7 @@ fn submit(app: &mut App) {
         app.toast(Severity::Warning, tr!("sidebar.waitingWorkspace"));
         return;
     };
-    app.backend.send(Command::Submit {
+    app.backend.send(Command::SubmitConversationPrompt {
         conversation_id,
         prompt: prompt.to_string(),
         mode: app.mode(),
@@ -385,7 +400,7 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
                         ExecutionMode::Build
                     };
                 }
-                app.backend.send(Command::SetPlanMode {
+                app.backend.send(Command::SetSessionPlanMode {
                     conversation_id: id,
                     enabled,
                 });
@@ -411,7 +426,19 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
             )));
         }
         AppCommand::CycleReasoning => {
-            app.effort = app.effort.next();
+            let next = app
+                .efforts
+                .iter()
+                .position(|e| *e == app.effort)
+                .map_or(0, |at| (at + 1) % app.efforts.len());
+            let Some(effort) = app.efforts.get(next).copied() else {
+                return;
+            };
+            app.effort = effort;
+            app.backend.send(Command::SelectWorkbenchReasoningEffort {
+                conversation_id: app.selected.clone(),
+                effort,
+            });
             let label = crate::ui::effort_label(app.effort);
             app.toast(
                 Severity::Info,
@@ -442,6 +469,11 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
                 items,
             )));
         }
+        // Outside the workbench the list is hidden, so the shortcut brings it back.
+        // 工作台之外列表处于隐藏状态，因此该快捷键会将其带回。
+        AppCommand::ToggleSidebar if app.area != Area::Chat => {
+            action::perform(app, UiAction::OpenSidebar);
+        }
         AppCommand::ToggleSidebar => {
             let mode = match app.sidebar {
                 SidebarMode::Expanded => SidebarMode::Rail,
@@ -464,7 +496,7 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
         AppCommand::OpenDiff => open_diff(app, app.git.cursor),
         AppCommand::Commit => open_commit(app),
         AppCommand::SwitchBranch => {
-            app.backend.send(Command::GitLoadBranches);
+            app.backend.send(Command::LoadWorkspaceGitBranches);
             app.overlay = Some(Overlay::Picker(Picker::new(
                 PickerKind::Branch,
                 tr!("gitBranchMenu.label"),
@@ -473,7 +505,14 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
             )));
             refresh_branch_picker(app);
         }
-        AppCommand::Push => app.backend.send(Command::GitPush),
+        // `runPushAction`: pushes the current branch without a commit.
+        // 推送当前分支且不创建提交。
+        AppCommand::Push => app.backend.send(Command::RunGitCommitAction {
+            message: String::new(),
+            new_branch: None,
+            include_unstaged: false,
+            push: true,
+        }),
         AppCommand::OpenWeb => {
             let url = app.base_url.clone();
             if app.backend.is_mock {
@@ -518,9 +557,12 @@ pub fn set_locale(app: &mut App, code: &str) {
             app.locale_explicit = true;
             app.composer
                 .set_placeholder_text(tr!("composer.placeholder", shortcut = "Enter"));
-            app.backend.send(Command::System(SystemCommand::SetUiLocale(
-                code.to_string(),
-            )));
+            action::perform(
+                app,
+                UiAction::Send(Command::Call(
+                    crate::service_api::settings_actions::select_webui_locale(code),
+                )),
+            );
         }
         None => app.toast(Severity::Warning, tr!("tui.command.unknown", name = code)),
     }
@@ -666,10 +708,10 @@ pub fn submit_commit(app: &mut App, push: bool) {
     let message = dialog.message.lines().join("\n").trim().to_string();
     if message.is_empty() {
         dialog.commit_after_generate = Some(push);
-        app.backend.send(Command::GitGenerateCommitMessage);
+        app.backend.send(Command::GenerateGitCommitMessage);
         return;
     }
-    let command = Command::GitCommit {
+    let command = Command::RunGitCommitAction {
         message,
         new_branch: dialog
             .new_branch
@@ -689,13 +731,13 @@ pub fn generate_commit_message(app: &mut App) {
     }
     if let Some(Overlay::Commit(dialog)) = &mut app.overlay {
         dialog.message = TextArea::default();
-        app.backend.send(Command::GitGenerateCommitMessage);
+        app.backend.send(Command::GenerateGitCommitMessage);
     }
 }
 
 pub fn toggle_stage(app: &mut App, index: usize) {
     if let Some(file) = app.git.ordered_files().get(index) {
-        let command = Command::GitStage {
+        let command = Command::RunWorkspaceGitFileAction {
             paths: vec![file.path.clone()],
             stage: !file.staged,
         };
@@ -712,6 +754,7 @@ pub fn stage_all(app: &mut App, stage: bool) {
         .map(|f| f.path.clone())
         .collect();
     if !paths.is_empty() {
-        app.backend.send(Command::GitStage { paths, stage });
+        app.backend
+            .send(Command::RunWorkspaceGitFileAction { paths, stage });
     }
 }

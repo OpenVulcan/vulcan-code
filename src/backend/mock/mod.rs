@@ -11,7 +11,7 @@ mod files;
 mod fixtures;
 mod insight;
 mod script;
-mod system;
+mod service;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -22,6 +22,9 @@ use script::{Action, Script};
 
 use super::{BackendEvent, BackendHandle, Command, ConnectionState, GitBusy, GitNotice, Notice};
 use crate::model::*;
+use crate::service_api::{
+    CallKind, ServiceCall, Slot, workbench_snapshot::load_workbench_snapshot,
+};
 
 /// Starts the mock backend on its own thread.
 /// 在独立线程上启动模拟后端。
@@ -76,7 +79,6 @@ enum Timer {
         push: bool,
     },
     FinishPush,
-    System(system::SystemTimer),
 }
 
 struct World {
@@ -93,11 +95,14 @@ struct World {
     turn_counter: u64,
     max_tokens: u64,
     projects: Vec<Project>,
-    system: SystemSnapshot,
     /// Summaries of archived conversations, restored as they were.
     /// 已归档会话的摘要，恢复时原样还原。
     archived_rows: HashMap<String, ConversationSummary>,
     next_id: u64,
+    service: service::FakeService,
+    /// Last loader per slot, so mutations can reload what they invalidate.
+    /// 每个槽位最近一次的加载器，供变更重新加载其失效的槽位。
+    loaders: HashMap<Slot, ServiceCall>,
 }
 
 impl World {
@@ -116,9 +121,10 @@ impl World {
             turn_counter: 0,
             max_tokens: 400_000,
             projects: fixtures::projects(),
-            system: system::snapshot(),
             archived_rows: HashMap::new(),
             next_id: 1,
+            service: service::FakeService::new(),
+            loaders: HashMap::new(),
         }
     }
 
@@ -783,7 +789,7 @@ impl World {
                 self.emit(BackendEvent::Connection(ConnectionState::Connected));
                 self.emit(BackendEvent::Git(self.git.clone()));
                 self.emit(BackendEvent::CommandSessions(self.sessions.clone()));
-                self.emit_system();
+                self.emit_workbench_slot();
                 if let Some(selected) = self.selected.clone() {
                     self.hydrate(&selected);
                 }
@@ -856,7 +862,6 @@ impl World {
                 self.emit(BackendEvent::GitBusy(None));
                 self.emit(BackendEvent::GitNotice(GitNotice::Pushed));
             }
-            Timer::System(timer) => self.fire_system(timer),
         }
     }
 
@@ -881,7 +886,6 @@ impl World {
                     last_updated_label: "now".into(),
                     unread: false,
                     attention: false,
-                    pinned: false,
                 };
                 self.conversations.insert(0, row.clone());
                 self.ensure_log(&id);
@@ -889,9 +893,9 @@ impl World {
                     log.usage.used_tokens = 12_400;
                 }
                 self.emit(BackendEvent::ConversationSummary(row));
-                self.handle(Command::SelectConversation(id));
+                self.emit(BackendEvent::Selected(id));
             }
-            Command::Submit {
+            Command::SubmitConversationPrompt {
                 conversation_id,
                 prompt,
                 mode,
@@ -925,15 +929,15 @@ impl World {
                     );
                 }
             }
-            Command::Stop { conversation_id } => self.stop(&conversation_id, None),
-            Command::ReplyQuestion {
+            Command::StopConversationRun { conversation_id } => self.stop(&conversation_id, None),
+            Command::ReplyPendingQuestion {
                 request_id,
                 answers,
             } => {
                 self.answer(&request_id, Some(answers));
             }
-            Command::RejectQuestion { request_id } => self.answer(&request_id, None),
-            Command::SetPlanMode {
+            Command::RejectPendingQuestion { request_id } => self.answer(&request_id, None),
+            Command::SetSessionPlanMode {
                 conversation_id,
                 enabled,
             } => {
@@ -950,8 +954,8 @@ impl World {
                     mode,
                 });
             }
-            Command::GitRefresh => self.emit(BackendEvent::Git(self.git.clone())),
-            Command::GitStage { paths, stage } => {
+            Command::LoadWorkspaceDiffSnapshot => self.emit(BackendEvent::Git(self.git.clone())),
+            Command::RunWorkspaceGitFileAction { paths, stage } => {
                 for file in self
                     .git
                     .files
@@ -962,16 +966,15 @@ impl World {
                 }
                 self.emit(BackendEvent::Git(self.git.clone()));
             }
-            Command::GitLoadDiff { path } => {
+            Command::LoadWorkspaceDiffFileDetail { path } => {
                 if let Some(file) = self.git.files.iter().find(|f| f.path == path) {
                     self.emit(BackendEvent::GitDiff(fixtures::fake_diff(file)));
                 }
             }
-            Command::GitLoadBranches => self.emit(BackendEvent::GitBranches(fixtures::branches(
-                &self.git.branch,
-                &self.created_branches,
-            ))),
-            Command::GitSwitchBranch { name, create } => {
+            Command::LoadWorkspaceGitBranches => self.emit(BackendEvent::GitBranches(
+                fixtures::branches(&self.git.branch, &self.created_branches),
+            )),
+            Command::SwitchWorkspaceGitBranch { name, create } => {
                 if create {
                     self.created_branches.push(name.clone());
                     self.git.upstream = None;
@@ -988,7 +991,7 @@ impl World {
                     GitNotice::Switched(name)
                 }));
             }
-            Command::GitGenerateCommitMessage => {
+            Command::GenerateGitCommitMessage => {
                 self.emit(BackendEvent::GitBusy(Some(GitBusy::Generating)));
                 let message = "feat(tui): animate the thinking overlay and group tool calls\n\n\
                                - fade the overlay out after reasoning completes\n\
@@ -1001,7 +1004,14 @@ impl World {
                     Timer::CommitMessage(chunks),
                 ));
             }
-            Command::GitCommit {
+            Command::RunGitCommitAction { message, push, .. } if message.is_empty() && push => {
+                self.emit(BackendEvent::GitBusy(Some(GitBusy::Pushing)));
+                self.timers.push((
+                    Instant::now() + Duration::from_millis(1300),
+                    Timer::FinishPush,
+                ));
+            }
+            Command::RunGitCommitAction {
                 message,
                 new_branch,
                 include_unstaged,
@@ -1018,23 +1028,15 @@ impl World {
                     },
                 ));
             }
-            Command::GitPush => {
-                self.emit(BackendEvent::GitBusy(Some(GitBusy::Pushing)));
-                self.timers.push((
-                    Instant::now() + Duration::from_millis(1300),
-                    Timer::FinishPush,
-                ));
-            }
-            Command::ListDirectory {
-                path,
-                show_hidden,
-                files: include_files,
-            } => self.emit(BackendEvent::Directory(files::list(
+            Command::BrowseProjectDirectories { path } => self.emit(BackendEvent::Directory(
+                files::list(path.as_deref(), true, false),
+            )),
+            Command::ListLocalFiles { path } => self.emit(BackendEvent::Directory(files::list(
                 path.as_deref(),
-                show_hidden,
-                include_files,
+                true,
+                true,
             ))),
-            Command::AddProject { path } => self.add_project(path),
+            Command::AddProjectFromPath { path } => self.add_project(path),
             Command::RenameProject { project_id, name } => {
                 if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
                     project.name = name;
@@ -1042,35 +1044,28 @@ impl World {
                     self.emit(BackendEvent::Notice(Notice::Renamed));
                 }
             }
-            Command::SetProjectPinned { project_id, pinned } => {
+            Command::ToggleProjectPinned { project_id } => {
                 if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
-                    project.pinned = pinned;
+                    project.pinned = !project.pinned;
                     self.emit(BackendEvent::Projects(self.projects.clone()));
                 }
             }
-            Command::ArchiveProjectConversations {
-                project_id,
-                remove_project,
-            } => {
-                let ids: Vec<String> = self
-                    .conversations
-                    .iter()
-                    .filter(|c| c.project_id.as_deref() == Some(project_id.as_str()))
-                    .map(|c| c.id.clone())
-                    .collect();
-                for id in &ids {
-                    self.archive(id);
+            // The demo has no host file manager to open.
+            // demo 没有可打开的宿主文件管理器。
+            Command::OpenProjectDirectory { .. } => {}
+            Command::ArchiveProjectConversations { project_id } => {
+                let count = self.archive_project(&project_id);
+                self.emit(BackendEvent::Notice(Notice::ArchivedCount(count)));
+                self.emit_workbench_slot();
+            }
+            Command::RemoveProject { project_id } => {
+                self.archive_project(&project_id);
+                if let Some(index) = self.projects.iter().position(|p| p.id == project_id) {
+                    let project = self.projects.remove(index);
+                    self.emit(BackendEvent::Projects(self.projects.clone()));
+                    self.emit(BackendEvent::Notice(Notice::ProjectRemoved(project.name)));
                 }
-                if remove_project {
-                    if let Some(index) = self.projects.iter().position(|p| p.id == project_id) {
-                        let project = self.projects.remove(index);
-                        self.emit(BackendEvent::Projects(self.projects.clone()));
-                        self.emit(BackendEvent::Notice(Notice::ProjectRemoved(project.name)));
-                    }
-                } else {
-                    self.emit(BackendEvent::Notice(Notice::ArchivedCount(ids.len())));
-                }
-                self.emit_system();
+                self.emit_workbench_slot();
             }
             Command::RenameConversation {
                 conversation_id,
@@ -1087,89 +1082,183 @@ impl World {
                     self.emit(BackendEvent::Notice(Notice::Renamed));
                 }
             }
-            Command::SetConversationPinned {
-                conversation_id,
-                pinned,
-            } => {
-                if let Some(row) = self
-                    .conversations
-                    .iter_mut()
-                    .find(|c| c.id == conversation_id)
-                {
-                    row.pinned = pinned;
-                    let row = row.clone();
-                    self.emit(BackendEvent::ConversationSummary(row));
-                }
-            }
             Command::ArchiveConversation { conversation_id } => {
                 if let Some(title) = self.archive(&conversation_id) {
                     self.emit(BackendEvent::Notice(Notice::Archived(title)));
-                    self.emit_system();
+                    self.emit_workbench_slot();
                 }
             }
-            Command::MarkUnread { conversation_id } => {
-                if let Some(row) = self
-                    .conversations
-                    .iter_mut()
-                    .find(|c| c.id == conversation_id)
-                {
-                    row.unread = true;
-                    let row = row.clone();
-                    self.emit(BackendEvent::ConversationSummary(row));
-                }
-            }
-            Command::AgentControl {
-                conversation_id,
-                agent_id,
-                op,
-            } => self.agent_control(&conversation_id, &agent_id, op),
-            Command::AgentMessage {
-                conversation_id,
-                agent_id,
-                message,
-            } => {
-                let Some(agent) = self
-                    .logs
-                    .get_mut(&conversation_id)
-                    .and_then(|log| log.agents.iter_mut().find(|a| a.id == agent_id))
-                else {
-                    return;
-                };
-                if agent.state == AgentState::Closed {
-                    return;
-                }
-                agent.pending.push(message);
-                self.emit_agents(&conversation_id);
-            }
-            Command::SuppressMemory {
+            Command::StopSubagentTask {
+                parent_conversation_id,
+                task_id,
+            } => self.agent_control(&parent_conversation_id, &task_id, true),
+            Command::CloseSubagentTask {
+                parent_conversation_id,
+                task_id,
+            } => self.agent_control(&parent_conversation_id, &task_id, false),
+            Command::SuppressContextInjectionItem {
                 conversation_id,
                 memory_id,
             } => self.remove_memory(&conversation_id, &memory_id, false),
-            Command::DeleteMemory {
+            Command::DeleteMemories {
                 conversation_id,
                 memory_id,
             } => self.remove_memory(&conversation_id, &memory_id, true),
-            Command::Goal {
+            Command::SaveSessionGoal {
                 conversation_id,
-                op,
-            } => {
-                let Some(status) = self
-                    .logs
-                    .get_mut(&conversation_id)
-                    .and_then(|log| insight::apply_goal(&mut log.insight, op))
-                else {
-                    return;
-                };
-                self.emit_insight(&conversation_id);
-                self.emit(BackendEvent::Notice(Notice::Goal(status)));
+                objective,
+                token_budget,
             }
-            Command::System(command) => self.handle_system(command),
+            | Command::ResumeSessionGoal {
+                conversation_id,
+                objective,
+                token_budget,
+            } => self.change_goal(
+                &conversation_id,
+                insight::GoalChange::Set {
+                    objective,
+                    budget: token_budget,
+                },
+            ),
+            Command::ClearSessionGoal { conversation_id } => {
+                self.change_goal(&conversation_id, insight::GoalChange::Clear)
+            }
+            Command::UpdateSessionGoalStatus {
+                conversation_id,
+                status,
+            } => self.change_goal(&conversation_id, insight::GoalChange::Status(status)),
+            Command::Call(call) => self.handle_call(call),
+            // The demo keeps model and effort in the UI only.
+            // demo 只在界面中保存模型与推理强度。
+            Command::SelectPublicAiModel { .. }
+            | Command::SelectWorkbenchReasoningEffort { .. } => {}
         }
     }
 
-    /// Stops a running subagent or ends one for good.
-    /// 停止运行中的子代理，或彻底结束它。
-    fn agent_control(&mut self, conversation_id: &str, agent_id: &str, op: AgentOp) {
+    fn change_goal(&mut self, conversation_id: &str, change: insight::GoalChange) {
+        let Some(status) = self
+            .logs
+            .get_mut(conversation_id)
+            .and_then(|log| insight::apply_goal(&mut log.insight, change))
+        else {
+            return;
+        };
+        self.emit_insight(conversation_id);
+        self.emit(BackendEvent::Notice(Notice::Goal(status)));
+    }
+
+    /// Archives every conversation of a project; returns how many there were.
+    /// 归档项目的全部会话；返回会话数量。
+    fn archive_project(&mut self, project_id: &str) -> usize {
+        let ids: Vec<String> = self
+            .conversations
+            .iter()
+            .filter(|c| c.project_id.as_deref() == Some(project_id))
+            .map(|c| c.id.clone())
+            .collect();
+        for id in &ids {
+            self.archive(id);
+        }
+        ids.len()
+    }
+
+    /// Answers one `service_api` call from the fake service, routed like the service worker.
+    /// 由假服务响应一次 `service_api` 调用，分发方式与服务工作线程一致。
+    fn handle_call(&mut self, call: ServiceCall) {
+        let operation = !matches!(call.kind, CallKind::Load(_));
+        let mut value = match self.service.answer(&call) {
+            Ok(value) => value,
+            Err(message) => {
+                if let CallKind::Load(slot) = call.kind {
+                    // Synthetic load errors use the same persistent retry state as real service failures.
+                    // 合成加载错误与真实服务失败使用相同持久重试状态。
+                    self.emit(BackendEvent::SlotFailed {
+                        slot,
+                        call: call.clone(),
+                        message: message.clone(),
+                    });
+                }
+                self.emit(BackendEvent::Toast {
+                    severity: Severity::Error,
+                    message,
+                });
+                if operation {
+                    self.emit(BackendEvent::CallFinished);
+                }
+                return;
+            }
+        };
+        crate::service_api::scrub_secrets(&mut value);
+        match call.kind.clone() {
+            CallKind::Load(slot) => {
+                self.loaders.insert(slot, call.clone());
+                if slot == Slot::Workbench {
+                    self.emit_workbench_slot();
+                } else {
+                    self.emit(BackendEvent::Slot { slot, call, value });
+                }
+            }
+            CallKind::Mutate(slots) => {
+                if matches!(
+                    call.method,
+                    "service_restore_archived_conversations"
+                        | "service_delete_archived_conversations"
+                ) && let Some(ids) = call
+                    .params
+                    .get("conversationIds")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    for id in ids.iter().filter_map(serde_json::Value::as_str) {
+                        if call.method == "service_restore_archived_conversations" {
+                            if let Some(row) = self.archived_rows.remove(id) {
+                                self.emit(BackendEvent::ConversationSummary(row.clone()));
+                                self.conversations.push(row);
+                            }
+                        } else {
+                            self.archived_rows.remove(id);
+                            self.logs.remove(id);
+                            self.runs.remove(id);
+                        }
+                    }
+                }
+                for slot in slots {
+                    match slot {
+                        Slot::Workbench => self.emit_workbench_slot(),
+                        _ => {
+                            if let Some(loader) = self.loaders.get(slot).cloned() {
+                                self.handle_call(loader);
+                            }
+                        }
+                    }
+                }
+                self.emit(BackendEvent::Notice(Notice::Completed(call.function)));
+            }
+            CallKind::Preview(_) => self.emit(BackendEvent::Preview {
+                call,
+                result: value,
+            }),
+        }
+        if operation {
+            self.emit(BackendEvent::CallFinished);
+        }
+    }
+
+    fn emit_workbench_slot(&self) {
+        let mut value = self.service.workbench.clone();
+        value["projects"] = serde_json::Value::Array(self.projects.iter().map(|project|serde_json::json!({
+            "id":project.id,"name":project.name,"path":project.path,"pinned":project.pinned
+        })).collect());
+        crate::service_api::scrub_secrets(&mut value);
+        self.emit(BackendEvent::Slot {
+            slot: Slot::Workbench,
+            call: load_workbench_snapshot(),
+            value,
+        });
+    }
+
+    /// Stops a running subagent (`stop`) or ends one for good.
+    /// 停止运行中的子代理（`stop`），或彻底结束它。
+    fn agent_control(&mut self, conversation_id: &str, agent_id: &str, stop: bool) {
         let Some(agent) = self
             .logs
             .get_mut(conversation_id)
@@ -1177,13 +1266,13 @@ impl World {
         else {
             return;
         };
-        let notice = match op {
-            AgentOp::Stop if agent.state == AgentState::Running => {
+        let notice = match stop {
+            true if agent.state == AgentState::Running => {
                 agent.state = AgentState::Stopped;
                 agent.activity.push("interrupted by user".into());
                 Notice::AgentStopped(agent.name.clone())
             }
-            AgentOp::Close if agent.state != AgentState::Closed => {
+            false if agent.state != AgentState::Closed => {
                 agent.state = AgentState::Closed;
                 agent.pending.clear();
                 Notice::AgentClosed(agent.name.clone())
@@ -1237,6 +1326,7 @@ impl World {
             .unwrap_or(&listing.path)
             .to_string();
         let id = self.fresh_id("p");
+        self.service.register_project(&id);
         self.projects.push(Project {
             id,
             name: name.clone(),
@@ -1263,15 +1353,7 @@ impl World {
             .as_ref()
             .and_then(|id| self.projects.iter().find(|p| &p.id == id))
             .map_or_else(String::new, |p| p.name.clone());
-        self.system.archived.insert(
-            0,
-            ArchivedConversation {
-                id: row.id.clone(),
-                title: row.title.clone(),
-                project,
-                archived_label: "now".into(),
-            },
-        );
+        self.service.archive(&row.id, &row.title, &project);
         if self.selected.as_deref() == Some(conversation_id) {
             self.selected = None;
         }

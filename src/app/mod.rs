@@ -9,8 +9,11 @@
 
 pub mod action;
 pub mod ask;
+#[cfg(test)]
+mod catalog_tests;
 pub mod commands;
 pub mod composer;
+pub mod form;
 pub mod history;
 pub mod hit;
 pub mod input;
@@ -18,8 +21,11 @@ pub mod insight;
 pub mod menus;
 pub mod overlay;
 pub mod pages;
+mod preview;
+#[cfg(test)]
+mod service_tests;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use ratatui_textarea::{TextArea, WrapMode};
@@ -35,6 +41,10 @@ use ask::AskState;
 use hit::HitMap;
 use overlay::Overlay;
 use pages::{Area, PageId, PageState};
+
+/// Poll active knowledge jobs only after their preceding observation has returned.
+/// 仅在前一次观察已返回后轮询活动知识库任务。
+const KNOWLEDGE_JOB_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -106,7 +116,6 @@ impl PanelView {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarRow {
-    PinnedHeader,
     Project(String),
     Unlinked,
     Conversation(ConversationId),
@@ -116,7 +125,7 @@ impl SidebarRow {
     /// Headers of fixed sections cannot hold the cursor.
     /// 固定分区的标题不能持有光标。
     pub fn selectable(&self) -> bool {
-        !matches!(self, SidebarRow::PinnedHeader | SidebarRow::Unlinked)
+        !matches!(self, SidebarRow::Unlinked)
     }
 }
 
@@ -391,6 +400,9 @@ pub struct App {
     pub models: Vec<ModelInfo>,
     pub model_id: String,
     pub effort: ReasoningEffort,
+    /// Efforts the current model accepts; `CycleReasoning` stays within them.
+    /// 当前模型接受的推理强度；`CycleReasoning` 只在其中循环。
+    pub efforts: Vec<ReasoningEffort>,
     pub base_url: String,
     pub selected: Option<ConversationId>,
     pub sessions: HashMap<ConversationId, SessionState>,
@@ -405,6 +417,8 @@ pub struct App {
     /// 滚轮使侧栏脱离光标；键盘移动会重新跟随。
     pub sidebar_free_scroll: bool,
     pub collapsed_projects: HashSet<String>,
+    /// Locally pinned conversations; the service has no conversation pin yet.
+    /// 本地置顶的会话；服务尚无会话置顶。
     pub terminal_cursor: usize,
     pub composer: TextArea<'static>,
     /// Long pastes collapsed into tokens of the composer; see `composer.rs`.
@@ -430,13 +444,68 @@ pub struct App {
     /// 每个区域选中的页面序号。
     pub nav: HashMap<Area, usize>,
     pub pages: HashMap<PageId, PageState>,
-    pub system: Option<SystemSnapshot>,
-    /// Unsaved values of draft pages, keyed by setting key.
-    /// 草稿页面的未保存值，以设置键为键。
-    pub drafts: BTreeMap<String, SettingValue>,
-    /// Knowledge library shown on the library details page; `None` means the first one.
-    /// 知识库详情页显示的知识库；`None` 表示第一个。
+    /// Sanitized WebUI DTOs and the loader that owns each result.
+    /// 已清理机密的 WebUI DTO，以及每个结果所属的加载器。
+    pub slots: crate::service_api::Slots,
+    /// Blocks another whole-document write until its predecessor's reloads settle.
+    /// 前一次刷新结束前阻止再次写入完整文档。
+    pub call_pending: bool,
+    /// Persistent scoped read errors stay visible until a matching retry or result.
+    /// 持久限定范围读取错误保留显示，直到匹配重试或结果到达。
+    pub slot_errors: HashMap<crate::service_api::Slot, String>,
+    /// Native project and profile selectors shared by the VMM DTO pages.
+    /// VMM DTO 页面共用的原生项目与画像选择。
+    pub vmm_project: Option<i64>,
+    pub profile_target: String,
+    /// Host project whose VCE overview is currently loaded.
+    /// 当前已加载 VCE 概览所属的宿主项目。
+    pub vce_project: Option<String>,
+    /// Local record filter and service-backed knowledge query.
+    /// 本地记录筛选与服务端知识库检索条件。
+    pub memory_query: String,
+    pub knowledge_query: String,
+    /// Exact selected knowledge library; None denotes an empty or not-yet-loaded catalog.
+    /// 准确所选知识库；None 表示目录为空或尚未加载。
     pub library: Option<String>,
+    /// Active library view, independent from the dynamic left-hand library identities.
+    /// 当前知识库视图，独立于左侧动态知识库身份。
+    pub knowledge_page: PageId,
+    /// Exact document folder filter; None requests all folders.
+    /// 准确文档目录筛选；None 请求全部目录。
+    pub knowledge_folder: Option<String>,
+    /// Offset into the selected folder's authoritative document listing.
+    /// 所选目录权威文档列表中的偏移量。
+    pub knowledge_offset: usize,
+    /// Immutable document identity selected for the reader.
+    /// 为阅读器选中的不可变文档身份。
+    pub knowledge_document: Option<String>,
+    /// Declared raw/display corpus of the selected document reader.
+    /// 所选文档阅读器声明的 raw/display 语料。
+    pub knowledge_corpus: String,
+    /// Next read-only observation of an active job; None also prevents overlapping polls.
+    /// 活动任务的下一次只读观察时间；None 同时防止轮询重叠。
+    knowledge_poll_due: Option<Instant>,
+    /// Backend-defined category currently filtering agent definitions.
+    /// 当前筛选智能体定义的后端分类。
+    pub agent_category: String,
+    /// Backend-defined category currently filtering effective prompt skills.
+    /// 当前筛选生效提示词技能的后端分类。
+    pub skill_category: String,
+    /// Local cross-locale agent search text and enabled-state filter.
+    /// 本地跨语言智能体搜索文本及启用状态筛选。
+    pub agent_query: String,
+    /// Declared all/enabled/disabled agent-state filter.
+    /// 已声明的 all/enabled/disabled 智能体状态筛选。
+    pub agent_status: String,
+    /// Local cross-locale prompt-skill search text.
+    /// 本地跨语言提示词技能搜索文本。
+    pub skill_query: String,
+    /// Declared all/enabled/disabled/issues skill-state filter.
+    /// 已声明的 all/enabled/disabled/issues 技能状态筛选。
+    pub skill_status: String,
+    /// WebUI source filter; all shows runtime-effective records only.
+    /// WebUI 来源筛选；all 仅展示运行时生效记录。
+    pub skill_source: String,
     /// Files attached to the next prompt.
     /// 附加到下一条提示的文件。
     pub attachments: Vec<String>,
@@ -459,6 +528,7 @@ impl App {
             models: Vec::new(),
             model_id: String::new(),
             effort: ReasoningEffort::High,
+            efforts: ReasoningEffort::ALL.to_vec(),
             base_url: String::new(),
             selected: None,
             sessions: HashMap::new(),
@@ -488,9 +558,28 @@ impl App {
             area: Area::Chat,
             nav: HashMap::new(),
             pages: HashMap::new(),
-            system: None,
-            drafts: BTreeMap::new(),
+            slots: crate::service_api::Slots::default(),
+            call_pending: false,
+            slot_errors: HashMap::new(),
+            vmm_project: None,
+            profile_target: "user".into(),
+            vce_project: None,
+            memory_query: String::new(),
+            knowledge_query: String::new(),
             library: None,
+            knowledge_page: PageId::KnowledgeLibrary,
+            knowledge_folder: None,
+            knowledge_offset: 0,
+            knowledge_document: None,
+            knowledge_corpus: "raw".into(),
+            knowledge_poll_due: None,
+            agent_category: String::new(),
+            skill_category: String::new(),
+            agent_query: String::new(),
+            agent_status: "all".into(),
+            skill_query: String::new(),
+            skill_status: "all".into(),
+            skill_source: "all".into(),
             attachments: Vec::new(),
             last_click: None,
         }
@@ -500,16 +589,174 @@ impl App {
     /// 切换顶层区域并将焦点移入。
     pub fn set_area(&mut self, area: Area) {
         self.area = area;
+        self.load_page();
         self.focus = match area {
             Area::Chat => Focus::Composer,
             _ => Focus::AreaNav,
         };
     }
 
+    /// Loads the visible page through its WebUI service functions; chat needs no system loaders.
+    /// 经对应 WebUI 服务函数加载可见页面；会话区域不需要系统加载器。
+    pub fn load_page(&mut self) {
+        if let Some(page) = self.current_page() {
+            // Route page effects through the same dispatcher used by mouse and keyboard.
+            // 页面副作用经过鼠标与键盘共用的分发入口。
+            for call in page.loaders(self) {
+                action::perform(self, action::UiAction::Send(Command::Call(call)));
+            }
+        }
+    }
+
+    /// Selects the first available catalog entry when selection is absent or was removed.
+    /// 当前没有选择或所选条目已删除时，选中目录中第一个可用条目。
+    /// Selects an optional catalog library and invalidates all state owned by the previous library.
+    /// 选择可选目录知识库，并使旧知识库持有的全部状态失效。
+    /// `library` is the catalog identity; unchanged selection preserves paging and queries.
+    /// `library` 为目录身份；选择未变化时保留分页及查询。
+    pub fn select_library(&mut self, library: Option<String>) {
+        if self.library == library {
+            return;
+        }
+        self.library = library;
+        self.knowledge_folder = None;
+        self.knowledge_offset = 0;
+        self.knowledge_document = None;
+        self.knowledge_query.clear();
+        self.knowledge_corpus = "raw".into();
+        self.knowledge_poll_due = None;
+        for slot in [
+            crate::service_api::Slot::KnowledgeSources,
+            crate::service_api::Slot::KnowledgeBindings,
+            crate::service_api::Slot::KnowledgeIntegrity,
+            crate::service_api::Slot::KnowledgeJob,
+            crate::service_api::Slot::KnowledgeSearch,
+            crate::service_api::Slot::KnowledgeFolders,
+            crate::service_api::Slot::KnowledgeDocuments,
+            crate::service_api::Slot::KnowledgeDocument,
+        ] {
+            self.slots.clear(slot);
+            self.slot_errors.remove(&slot);
+        }
+        for page in Area::Knowledge.pages() {
+            self.pages.remove(&page);
+        }
+        if self.knowledge_page == PageId::KnowledgeDocument {
+            self.knowledge_page = PageId::KnowledgeDocuments;
+        }
+    }
+
+    /// Returns the selected row in the current server-projected navigation, or its first row.
+    /// 返回当前服务投影导航中已选行，未选择时返回首行。
+    pub fn navigation_index(&self) -> usize {
+        pages::navigation(self)
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+            .position(|entry| entry.selected)
+            .unwrap_or(0)
+    }
+
+    fn accept_catalog(&mut self, slot: crate::service_api::Slot) {
+        use crate::service_api::Slot;
+        let mut changed = false;
+        match slot {
+            Slot::KnowledgeLibraries => {
+                if let Some(catalog) = self.slots.value(slot).as_array()
+                    && !catalog
+                        .iter()
+                        .any(|entry| entry["id"].as_str() == self.library.as_deref())
+                {
+                    let next = catalog
+                        .first()
+                        .and_then(|entry| entry["id"].as_str())
+                        .map(str::to_string);
+                    changed = next != self.library;
+                    self.select_library(next);
+                }
+            }
+            Slot::VmmProjects => {
+                if let Some(catalog) = self.slots.at(slot, "/data/value/projects").as_array()
+                    && !catalog
+                        .iter()
+                        .any(|entry| entry["projectId"].as_i64() == self.vmm_project)
+                {
+                    let next = catalog
+                        .first()
+                        .and_then(|entry| entry["projectId"].as_i64());
+                    changed = next != self.vmm_project;
+                    self.vmm_project = next;
+                    for slot in [Slot::VmmRecords, Slot::VmmProfile] {
+                        self.slots.clear(slot);
+                    }
+                }
+            }
+            Slot::Workbench => {
+                // Both category catalogs may change independently from the host project catalog.
+                // 两种分类目录可能独立于宿主项目目录变化。
+                let workbench = self.slots.value(slot);
+                if !self.agent_category.is_empty()
+                    && !workbench
+                        .pointer("/subagentCatalog/categories")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|categories| {
+                            categories.iter().any(|category| {
+                                category["categoryId"].as_str()
+                                    == Some(self.agent_category.as_str())
+                            })
+                        })
+                {
+                    self.agent_category.clear();
+                    self.pages.remove(&PageId::AgentList);
+                }
+                if !self.skill_category.is_empty()
+                    && !workbench
+                        .pointer("/agentSkills/categories")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|categories| {
+                            categories.iter().any(|category| {
+                                category["categoryId"].as_str()
+                                    == Some(self.skill_category.as_str())
+                            })
+                        })
+                {
+                    self.skill_category.clear();
+                    self.pages.remove(&PageId::SkillList);
+                }
+                if !self
+                    .projects
+                    .iter()
+                    .any(|project| Some(&project.id) == self.vce_project.as_ref())
+                {
+                    // Preserve the existing project-owner reconciliation.
+                    // 保留原有项目归属校正。
+                    let next = self.projects.first().map(|project| project.id.clone());
+                    changed = next != self.vce_project;
+                    self.vce_project = next;
+                    for slot in [Slot::VceOverview, Slot::VceJob] {
+                        self.slots.clear(slot);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if changed {
+            self.load_page();
+        }
+    }
+
     /// The page shown in the current system area.
     /// 当前系统区域显示的页面。
+    /// Returns the exact active content page independently from dynamic sidebar identities.
+    /// 返回准确活动内容页面，与动态侧栏身份独立。
     pub fn current_page(&self) -> Option<PageId> {
+        if self.area == Area::Knowledge {
+            return Some(self.knowledge_page);
+        }
+        // Static areas retain their page index; category catalogs select within a single page.
+        // 静态区域保留页面下标；分类目录在单页内选择。
         let pages = self.area.pages();
+        // Clamp only view state, never entity identities.
+        // 只限制视图状态，不处理实体身份。
         let index = self.nav.get(&self.area).copied().unwrap_or(0);
         pages.get(index.min(pages.len().saturating_sub(1))).copied()
     }
@@ -583,7 +830,6 @@ impl App {
             || self.conversations.iter().any(|c| c.run_phase.is_active())
             || !self.toasts.is_empty()
             || self.git.busy.is_some()
-            || self.system_busy()
             || matches!(&self.overlay, Some(Overlay::Folder(picker)) if picker.loading)
             || self
                 .session()
@@ -593,29 +839,8 @@ impl App {
                 })
     }
 
-    /// A system job, service transition or MCP start is in progress.
-    /// 系统任务、服务状态切换或 MCP 启动正在进行。
-    fn system_busy(&self) -> bool {
-        let Some(system) = &self.system else {
-            return false;
-        };
-        let running = |job: &Job| !job.done;
-        system.memory.status.is_transition()
-            || system.memory.searching
-            || system.memory.jobs.iter().any(running)
-            || system
-                .knowledge
-                .iter()
-                .filter_map(|k| k.job.as_ref())
-                .any(running)
-            || system
-                .index
-                .iter()
-                .filter_map(|i| i.job.as_ref())
-                .any(running)
-            || system.mcp_servers.iter().any(|s| s.status.is_transition())
-    }
-
+    /// Displays one localized notice until its expiration.
+    /// 在到期前显示一条本地化通知。
     pub fn toast(&mut self, severity: Severity, message: impl Into<String>) {
         self.toasts.push(Toast {
             severity,
@@ -633,19 +858,44 @@ impl App {
         if self.quit_armed_until.is_some_and(|until| until <= now) {
             self.quit_armed_until = None;
         }
+        if self.area == Area::Knowledge
+            && self.knowledge_poll_due.is_some_and(|due| due <= now)
+            && let Some(library) = self.library.clone()
+        {
+            // The next deadline is armed by a successful job result, preventing request accumulation.
+            // 下一次时限由成功任务结果设置，避免请求堆积。
+            self.knowledge_poll_due = None;
+            action::perform(
+                self,
+                action::UiAction::Send(Command::Call(
+                    crate::service_api::knowledge_base::get_knowledge_import_job(&library),
+                )),
+            );
+        }
     }
 
     /// Folds one backend fact into the state.
     /// 将一条后端事实折叠进状态。
     pub fn apply(&mut self, event: BackendEvent) {
         match event {
-            BackendEvent::Connection(state) => self.connection = state,
+            BackendEvent::Connection(state) => {
+                self.connection = state;
+                if state != ConnectionState::Connected {
+                    self.call_pending = false;
+                }
+                if state == ConnectionState::Connected {
+                    self.load_page();
+                }
+            }
             BackendEvent::Workbench(snapshot) => {
                 self.projects = snapshot.projects;
                 self.conversations = snapshot.conversations;
                 self.models = snapshot.models;
                 self.model_id = snapshot.selected_model_id;
                 self.base_url = snapshot.base_url;
+                if !self.backend.is_mock && !self.base_url.is_empty() {
+                    self.backend.label = self.base_url.clone();
+                }
                 if let Some(locale) = snapshot.ui_locale.as_deref()
                     && !self.locale_explicit
                 {
@@ -656,6 +906,22 @@ impl App {
                 }
                 self.selected = snapshot.selected_conversation_id;
                 self.sidebar_cursor = self.selected.clone().map(SidebarRow::Conversation);
+            }
+            BackendEvent::Selected(id) => self.select_conversation(id),
+            BackendEvent::ModelSelection {
+                model_id,
+                effort,
+                efforts,
+            } => {
+                if !model_id.is_empty() {
+                    self.model_id = model_id;
+                }
+                if !efforts.is_empty() {
+                    self.efforts = efforts;
+                }
+                if let Some(effort) = effort {
+                    self.effort = effort;
+                }
             }
             BackendEvent::ConversationSummary(summary) => {
                 let was_active = self
@@ -798,6 +1064,7 @@ impl App {
             BackendEvent::Toast { severity, message } => self.toast(severity, message),
             BackendEvent::Projects(projects) => {
                 self.projects = projects;
+                self.accept_catalog(crate::service_api::Slot::Workbench);
                 self.fix_sidebar_cursor();
             }
             BackendEvent::ConversationRemoved(id) => {
@@ -812,21 +1079,114 @@ impl App {
                 }
                 self.fix_sidebar_cursor();
             }
-            BackendEvent::Directory(listing) => {
+            BackendEvent::Directory(mut listing) => {
                 if let Some(Overlay::Folder(picker)) = &mut self.overlay {
+                    if !picker.show_hidden {
+                        listing.entries.retain(|e| !e.hidden);
+                    }
                     picker.cursor = 0;
                     picker.scroll = 0;
                     picker.loading = false;
                     picker.listing = Some(listing);
                 }
             }
-            BackendEvent::System(snapshot) => self.system = Some(*snapshot),
+            BackendEvent::Slot { slot, call, value } => {
+                if !self.slot_is_current(slot, &call) {
+                    return;
+                }
+                // Terminal job transitions refresh the currently visible library content exactly once.
+                // 任务进入终态时，只刷新一次当前可见知识库内容。
+                let was_active_job = slot == crate::service_api::Slot::KnowledgeJob
+                    && matches!(
+                        self.slots.at(slot, "/state").as_str(),
+                        Some("queued" | "running")
+                    );
+                self.slot_errors.remove(&slot);
+                self.slots.set(slot, call, value);
+                if slot == crate::service_api::Slot::KnowledgeJob {
+                    // Only queued/running states need polling; a successful result arms the next read.
+                    // 只有排队、运行状态需要轮询；成功结果设置下一次读取。
+                    let active = matches!(
+                        self.slots.at(slot, "/state").as_str(),
+                        Some("queued" | "running")
+                    );
+                    self.knowledge_poll_due =
+                        active.then_some(self.now + KNOWLEDGE_JOB_POLL_INTERVAL);
+                    if was_active_job && !active && self.area == Area::Knowledge {
+                        self.load_page();
+                    }
+                }
+                self.accept_catalog(slot);
+            }
+            BackendEvent::SlotFailed {
+                slot,
+                call,
+                message,
+            } => {
+                if !self.slot_is_current(slot, &call) {
+                    return;
+                }
+                self.slots.clear(slot);
+                self.slot_errors.insert(slot, message);
+                if slot == crate::service_api::Slot::KnowledgeJob {
+                    self.knowledge_poll_due = None;
+                }
+            }
+            BackendEvent::Preview { call, result } => preview::open(self, call, result),
+            BackendEvent::CallFinished => self.call_pending = false,
             BackendEvent::Notice(notice) => self.notice(notice),
+        }
+    }
+
+    /// Rejects results for a library, project or profile target that is no longer selected.
+    /// 拒绝已不再选中的知识库、项目或画像目标的结果。
+    fn slot_is_current(
+        &self,
+        slot: crate::service_api::Slot,
+        call: &crate::service_api::ServiceCall,
+    ) -> bool {
+        use crate::service_api::Slot;
+        match slot {
+            Slot::KnowledgeSources
+            | Slot::KnowledgeBindings
+            | Slot::KnowledgeIntegrity
+            | Slot::KnowledgeJob
+            | Slot::KnowledgeFolders => {
+                call.param("/libraryId").as_str() == self.library.as_deref()
+            }
+            Slot::KnowledgeDocuments => {
+                call.param("/request/libraryId").as_str() == self.library.as_deref()
+                    && call.param("/request/folderPath")
+                        == &serde_json::json!(self.knowledge_folder)
+                    && call.param("/request/offset").as_u64() == Some(self.knowledge_offset as u64)
+            }
+            Slot::KnowledgeDocument => {
+                call.param("/libraryId").as_str() == self.library.as_deref()
+                    && call.param("/documentId").as_str() == self.knowledge_document.as_deref()
+                    && call.param("/corpus").as_str() == Some(self.knowledge_corpus.as_str())
+            }
+            Slot::KnowledgeSearch => {
+                call.param("/request/libraryId").as_str() == self.library.as_deref()
+                    && call.param("/request/query").as_str() == Some(self.knowledge_query.as_str())
+            }
+            Slot::VceOverview | Slot::VceJob => {
+                call.param("/request/projectId").as_str() == self.vce_project.as_deref()
+            }
+            Slot::VmmRecords => {
+                call.param("/request/payload/vmmProjectId").as_i64() == self.vmm_project
+            }
+            Slot::VmmProfile => {
+                call.param("/request/payload/vmmProjectId").as_i64() == self.vmm_project
+                    && call.param("/request/payload/target").as_str()
+                        == Some(self.profile_target.as_str())
+            }
+            _ => true,
         }
     }
 
     fn notice(&mut self, notice: Notice) {
         let (severity, message) = match notice {
+            Notice::Completed(function) => (Severity::Info, completed_notice(function)),
             Notice::ProjectAdded(name) => {
                 (Severity::Info, tr!("tui.notice.projectAdded", name = name))
             }
@@ -839,24 +1199,7 @@ impl App {
                 Severity::Info,
                 tr!("tui.notice.archivedCount", count = count),
             ),
-            Notice::Restored(title) => (Severity::Info, tr!("tui.notice.restored", title = title)),
-            Notice::Deleted => (Severity::Info, tr!("tui.notice.deleted")),
             Notice::Renamed => (Severity::Info, tr!("tui.notice.renamed")),
-            Notice::SettingsSaved => (Severity::Info, tr!("tui.notice.settingsSaved")),
-            Notice::CredentialAdded => (Severity::Info, tr!("tui.notice.credentialAdded")),
-            Notice::CredentialTested { ok: true } => {
-                (Severity::Info, tr!("tui.notice.credentialOk"))
-            }
-            Notice::CredentialTested { ok: false } => {
-                (Severity::Error, tr!("tui.notice.credentialFailed"))
-            }
-            Notice::NotificationSent => (Severity::Info, tr!("tui.notice.notificationSent")),
-            Notice::LogsCleaned => (Severity::Info, tr!("tui.notice.logsCleaned")),
-            Notice::MemoryUpdated => (Severity::Info, tr!("tui.notice.memoryUpdated")),
-            Notice::JobStarted(name) => (Severity::Info, tr!("tui.notice.jobStarted", name = name)),
-            Notice::JobFinished(name) => {
-                (Severity::Info, tr!("tui.notice.jobFinished", name = name))
-            }
             Notice::MemorySuppressed => (Severity::Info, tr!("workspaceMemory.suppressedNotice")),
             Notice::MemoryDeleted => (Severity::Info, tr!("workspaceMemory.deletedNotice")),
             Notice::Goal(status) => (
@@ -879,7 +1222,11 @@ impl App {
             Notice::AgentClosed(name) => {
                 (Severity::Info, tr!("tui.notice.agentClosed", name = name))
             }
-            Notice::Done(name) => (Severity::Info, tr!("tui.notice.done", name = name)),
+            Notice::ServiceUnavailable(detail) => (
+                Severity::Warning,
+                tr!("tui.notice.serviceUnavailable", detail = detail),
+            ),
+            Notice::NotConnected => (Severity::Warning, tr!("tui.notice.notConnected")),
         };
         self.toast(severity, message);
     }
@@ -937,25 +1284,15 @@ impl App {
         if let Some(path) = path
             && !self.git.diffs.contains_key(&path)
         {
-            self.backend.send(Command::GitLoadDiff { path });
+            self.backend
+                .send(Command::LoadWorkspaceDiffFileDetail { path });
         }
     }
 
-    /// Sidebar rows: pinned conversations, then projects (pinned first) each followed by its
-    /// conversations unless collapsed, then conversations without a project.
-    /// 侧栏行：置顶会话；然后是项目（置顶优先），未折叠时后接其会话；最后是无项目的会话。
+    /// Lists pinned-first projects with their conversations, then unlinked conversations.
+    /// 先列出置顶项目及其会话，再列出未绑定项目的会话。
     pub fn sidebar_rows(&self) -> Vec<SidebarRow> {
         let mut rows = Vec::new();
-        let pinned: Vec<SidebarRow> = self
-            .conversations
-            .iter()
-            .filter(|c| c.pinned)
-            .map(|c| SidebarRow::Conversation(c.id.clone()))
-            .collect();
-        if !pinned.is_empty() {
-            rows.push(SidebarRow::PinnedHeader);
-            rows.extend(pinned);
-        }
         let mut projects: Vec<&Project> = self.projects.iter().collect();
         projects.sort_by_key(|p| !p.pinned);
         for project in projects {
@@ -966,7 +1303,7 @@ impl App {
             rows.extend(
                 self.conversations
                     .iter()
-                    .filter(|c| !c.pinned && c.project_id.as_ref() == Some(&project.id))
+                    .filter(|c| c.project_id.as_ref() == Some(&project.id))
                     .map(|c| SidebarRow::Conversation(c.id.clone())),
             );
         }
@@ -974,10 +1311,9 @@ impl App {
             .conversations
             .iter()
             .filter(|c| {
-                !c.pinned
-                    && c.project_id
-                        .as_ref()
-                        .is_none_or(|id| !self.projects.iter().any(|p| &p.id == id))
+                c.project_id
+                    .as_ref()
+                    .is_none_or(|id| !self.projects.iter().any(|p| &p.id == id))
             })
             .map(|c| SidebarRow::Conversation(c.id.clone()))
             .collect();
@@ -999,6 +1335,33 @@ impl App {
     }
 }
 
+/// Maps successful service functions to user-facing copy, without exposing RPC parameters.
+/// 将成功的服务函数映射到面向用户的文案，不暴露 RPC 参数。
+fn completed_notice(function: &str) -> String {
+    match function {
+        "add_public_ai_connection" => tr!("tui.notice.credentialAdded"),
+        "rename_knowledge_library" => tr!("tui.notice.renamed"),
+        "delete_knowledge_library"
+        | "remove_public_ai_connection"
+        | "uninstall_luaskill"
+        | "uninstall_user_plugin"
+        | "delete_agent_skill"
+        | "delete_subagent_definition"
+        | "delete_archived_conversations" => tr!("tui.notice.deleted"),
+        "restore_archived_conversations" => tr!("tui.notice.completed"),
+        "import_knowledge_directory" | "submit_vce_job" | "execute_vce_maintenance" => {
+            tr!("tui.notice.submitted")
+        }
+        "test_public_ai_inference_route" => tr!("tui.notice.testPassed"),
+        function if function.starts_with("save_") || function.starts_with("select_") => {
+            tr!("tui.notice.settingsSaved")
+        }
+        _ => tr!("tui.notice.completed"),
+    }
+}
+
+/// Creates an empty composer with the shared key bindings and user-facing placeholder.
+/// 创建空白输入框，使用共用按键绑定与面向用户的占位文案。
 pub fn new_composer() -> TextArea<'static> {
     let mut composer = TextArea::default();
     composer.set_wrap_mode(WrapMode::WordOrGlyph);

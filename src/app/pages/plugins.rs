@@ -1,711 +1,526 @@
-// Plugins area: LuaSkills packages and settings, the semantic code engine, and Vulcan plugins.
-// 插件区域：LuaSkills 技能包与设置、语义代码引擎，以及 Vulcan 插件。
-//
-// Plugin UI mounts are listed but never rendered here; the TUI only drives their core capabilities.
-// 插件 UI 挂载点仅列出、不在此渲染；TUI 只驱动其核心能力。
+// LuaSkills, declarative plugin management and semantic index pages.
+// LuaSkills、声明式插件管理与语义索引页面。
 
 use super::*;
-use crate::ui::text::compact_count;
+use crate::service_api::{skills_actions as skills, vce};
 
-fn tool_mode_label(mode: ToolMode) -> (String, Tone) {
-    match mode {
-        ToolMode::Explicit => (tr!("skills.lua.toolExplicit"), Tone::Accent),
-        ToolMode::Implicit => (tr!("skills.lua.toolImplicit"), Tone::Normal),
-        ToolMode::Disabled => (tr!("skills.lua.toolDisabled"), Tone::Muted),
-    }
+/// Builds the GitHub install request accepted by LuaSkillsPanel; no unsupported URL mode.
+/// 构建 LuaSkillsPanel 接受的 GitHub 安装请求，不提供不支持的 URL 模式。
+fn install_lua(request: Value) -> ServiceCall {
+    skills::install_luaskill(&s(&request, "/skillId"), &s(&request, "/source"), "github")
 }
 
-pub(super) fn lua_skills(system: &SystemSnapshot) -> Vec<Row> {
-    let skills = &system.lua_skills;
-    let updates = skills.iter().filter(|s| s.update.is_some()).count();
-    let mut rows = vec![stats(vec![
-        (
-            tr!("tui.lua.packages"),
-            skills.len().to_string(),
+/// Lists real package ownership, lifecycle actions and per-tool registration modes.
+/// 显示真实包归属、生命周期动作与逐工具注册模式。
+pub(super) fn lua_skills(app: &App) -> Vec<Row> {
+    // Catalog.
+    // 服务发布的目录。
+    let catalog = v(app.slots.value(Slot::Workbench), "/luaSkills");
+    // Current operation rows.
+    // 当前操作的行集合。
+    let mut rows = vec![
+        button(
+            tr!("tui.field.refresh"),
+            call(skills::refresh_luaskills_catalog()),
             Tone::Normal,
         ),
-        (
-            tr!("agentSkills.enabled"),
-            skills.iter().filter(|s| s.enabled).count().to_string(),
-            Tone::Good,
+        button(
+            tr!("tui.field.install"),
+            form(
+                json!({"skillId":"","source":""}),
+                vec![
+                    field(tr!("tui.field.skillId"), "/skillId", false, true),
+                    field(tr!("tui.field.githubSource"), "/source", false, false),
+                ],
+                install_lua,
+            ),
+            Tone::Accent,
         ),
-        (
-            tr!("skills.plugins.tools"),
-            skills
-                .iter()
-                .map(|s| s.tools.len())
-                .sum::<usize>()
-                .to_string(),
-            Tone::Normal,
-        ),
-        (
-            tr!("tui.lua.updates"),
-            updates.to_string(),
-            if updates > 0 {
-                Tone::Warn
-            } else {
-                Tone::Normal
-            },
-        ),
-    ])];
-    if skills.is_empty() {
-        rows.push(note(tr!("skills.lua.emptyTitle"), Tone::Muted));
-        rows.push(note(tr!("skills.lua.emptyDetail"), Tone::Muted));
-    }
-    for layer in ["system", "user"] {
-        let list: Vec<&LuaSkill> = skills.iter().filter(|s| s.layer == layer).collect();
-        if list.is_empty() {
-            continue;
+    ];
+    for progress in ["/operationProgress", "/managedRuntimeProgress"] {
+        if v(catalog, progress).is_object() {
+            rows.push(
+                item(progress, tr!("tui.field.progress"), "").lines(details(v(catalog, progress))),
+            );
         }
-        let title = if layer == "system" {
-            tr!("agentSkills.system")
-        } else {
-            tr!("agentSkills.user")
-        };
-        rows.push(section(format!("{title} · {}", list.len())));
-        rows.extend(list.into_iter().map(lua_row));
     }
-    rows.push(button(
-        format!("+ {}", tr!("skills.lua.installTitle")),
-        prompt(
-            tr!("skills.lua.installTitle"),
-            format!(
-                "{}\n{} · {}",
-                tr!("skills.lua.installDescription"),
-                tr!("skills.lua.placeholderGithub"),
-                tr!("skills.lua.placeholderUrl")
-            ),
-            PromptThen::LuaInstall,
-            false,
-        ),
-        Tone::Accent,
-    ));
-    rows
-}
-
-fn lua_row(skill: &LuaSkill) -> Row {
-    let catalog = |op: CatalogOp| sys_action(SystemCommand::LuaSkill(op));
-    let mut actions = vec![switch(
-        tr!("agentSkills.enabled"),
-        skill.enabled,
-        Edit::Enabled(EntityKind::LuaSkill, skill.id.clone()),
-    )];
-    // One chip per tool; activating it cycles explicit → implicit → disabled.
-    // 每个工具一个按钮；激活后按 显式 → 隐式 → 禁用 循环。
-    for (tool, mode) in &skill.tools {
-        let (label, tone) = tool_mode_label(*mode);
-        actions.push(action(
-            format!("{tool}: {label}"),
-            UiAction::Edit(
-                Edit::Field(
-                    EntityKind::LuaSkill,
-                    skill.id.clone(),
-                    format!("tool:{tool}"),
-                ),
-                SettingValue::Choice(mode.next().id().to_string()),
-            ),
-            tone,
+    for skill in a(catalog, "/skills") {
+        // Exact entity identity.
+        // 准确实体身份。
+        let id = s(skill, "/skillId");
+        rows.push(toggle(
+            s(skill, "/displayName"),
+            b(skill, "/enabled"),
+            dto(skill.clone(), "/enabled", |request| {
+                skills::set_luaskill_enabled(&s(&request, "/skillId"), b(&request, "/enabled"))
+            }),
         ));
-    }
-    if skill.job.is_none() {
-        if let Some(version) = &skill.update {
+        // Actions.
+        // 声明的操作集合。
+        let mut actions = Vec::new();
+        if !b(skill, "/systemOwned") {
             actions.push(action(
-                tr!("tui.lua.updateTo", version = version),
-                catalog(CatalogOp::Update(skill.id.clone())),
-                Tone::Accent,
+                tr!("tui.field.update"),
+                call(skills::update_luaskill(&id)),
+                Tone::Normal,
+            ));
+            actions.push(action(
+                tr!("tui.field.remove"),
+                confirm(
+                    tr!("tui.field.remove"),
+                    s(skill, "/displayName"),
+                    tr!("tui.field.remove"),
+                    call(skills::uninstall_luaskill(&id)),
+                ),
+                Tone::Bad,
             ));
         }
-        actions.push(action(
-            tr!("skills.lua.uninstallSkill"),
-            confirm(
-                tr!("skills.lua.uninstallSkill"),
-                tr!("skills.lua.removeSkillPackage", displayName = skill.name),
-                tr!("skills.plugins.uninstall"),
-                catalog(CatalogOp::Delete(skill.id.clone())),
-            ),
-            Tone::Bad,
-        ));
+        rows.push(
+            item(&id, s(skill, "/displayName"), s(skill, "/version"))
+                .lines(details(skill))
+                .actions(actions),
+        );
+        for tool in a(skill, "/tools") {
+            rows.push(choice(
+                s(tool, "/localName"),
+                vec![
+                    ("explicit".into(), tr!("tui.field.explicitTool")),
+                    ("implicit".into(), tr!("tui.field.implicitTool")),
+                    ("disabled".into(), tr!("tui.field.disabledTool")),
+                ],
+                s(tool, "/registrationState"),
+                Edit::Call(Setter::Build {
+                    ctx: json!({"skillId":id,"localName":v(tool,"/localName")}),
+                    build: |context, value| {
+                        Some(skills::set_luaskill_tool_registration_state(
+                            &s(context, "/skillId"),
+                            &s(context, "/localName"),
+                            value.as_str(),
+                        ))
+                    },
+                }),
+            ));
+        }
     }
-    let mut lines = Vec::new();
-    if !skill.description.is_empty() {
-        lines.push(skill.description.clone());
-    }
-    lines.push(format!(
-        "{}  {}",
-        tr!("skills.lua.installSource"),
-        skill.source
-    ));
-    if skill.tools.is_empty() {
-        lines.push(tr!("skills.lua.toolsEmpty"));
-    }
-    let (badge, tone) = if skill.job.is_some() {
-        (tr!("skills.lua.working"), Tone::Warn)
-    } else if let Some(version) = &skill.update {
-        (
-            tr!("tui.lua.updateAvailable", version = version),
-            Tone::Warn,
-        )
-    } else if skill.enabled {
-        (tr!("agentSkills.enabled"), Tone::Good)
-    } else {
-        (tr!("agentSkills.disabled"), Tone::Muted)
-    };
-    item(
-        &skill.id,
-        skill.name.clone(),
-        format!("v{} · {}", skill.version, skill.source),
-    )
-    .badge(badge, tone)
-    .lines(lines)
-    .actions(actions)
-    .job(skill.job.clone())
-}
-
-pub(super) fn lua_settings(app: &App, system: &SystemSnapshot) -> Vec<Row> {
-    let number_draft = |label: String, key: &str, range: (i64, i64, i64)| {
-        number(label, count(app, key), range, draft(key))
-    };
-    let toggle_draft = |label: String, key: &str| toggle(label, flag(app, key), draft(key));
-    let pool = |rows: &mut Vec<Row>, title: String, prefix: &str| {
-        rows.push(section(title));
-        rows.push(number_draft(
-            tr!("skills.luaSettings.minSize"),
-            &format!("{prefix}.min"),
-            (0, 64, 1),
-        ));
-        rows.push(number_draft(
-            tr!("skills.luaSettings.maxSize"),
-            &format!("{prefix}.max"),
-            (1, 64, 1),
-        ));
-        rows.push(number_draft(
-            tr!("skills.luaSettings.idleTtl"),
-            &format!("{prefix}.idleTtl"),
-            (10, 86_400, 30),
-        ));
-    };
-    let mut rows = vec![
-        note(tr!("skills.luaSettings.description"), Tone::Muted),
-        section(tr!("skills.luaSettings.aiTools")),
-        toggle(
-            tr!("skills.luaSettings.enableRunLua"),
-            flag(app, "lua.runlua"),
-            immediate("lua.runlua"),
-        )
-        .detail(tr!("skills.luaSettings.runLuaTooltip")),
-        toggle(
-            tr!("skills.luaSettings.enableRunLuaSession"),
-            flag(app, "lua.runluaSession"),
-            immediate("lua.runluaSession"),
-        )
-        .detail(tr!("skills.luaSettings.runLuaSessionTooltip")),
-        note(tr!("skills.luaSettings.aiToolsHint"), Tone::Muted),
-    ];
-    pool(
-        &mut rows,
-        tr!("skills.luaSettings.mainPool"),
-        "lua.mainPool",
-    );
-    pool(
-        &mut rows,
-        tr!("skills.luaSettings.runLuaPool"),
-        "lua.runluaPool",
-    );
-    rows.push(note(tr!("skills.luaSettings.poolHint"), Tone::Muted));
-
-    rows.push(section(tr!("skills.luaSettings.toolCache")));
-    rows.push(number_draft(
-        tr!("skills.luaSettings.maxEntries"),
-        "lua.cache.maxEntries",
-        (0, 100_000, 64),
-    ));
-    rows.push(number_draft(
-        tr!("skills.luaSettings.defaultTtl"),
-        "lua.cache.defaultTtl",
-        (1, 86_400, 30),
-    ));
-    rows.push(number_draft(
-        tr!("skills.luaSettings.maxTtl"),
-        "lua.cache.maxTtl",
-        (1, 604_800, 60),
-    ));
-
-    rows.push(section(tr!("skills.luaSettings.network")));
-    rows.push(toggle_draft(
-        tr!("skills.luaSettings.allowDownloads"),
-        "lua.allowDownloads",
-    ));
-    for (label, key) in [
-        (tr!("skills.luaSettings.githubBaseUrl"), "lua.githubBaseUrl"),
-        (
-            tr!("skills.luaSettings.githubApiBaseUrl"),
-            "lua.githubApiBaseUrl",
-        ),
-        (
-            tr!("skills.luaSettings.skillHubBaseUrl"),
-            "lua.skillHubBaseUrl",
-        ),
-    ] {
-        rows.push(text(label, string(app, key), draft(key)));
-    }
-    rows.push(toggle_draft(
-        tr!("skills.luaSettings.privateUrlInstall"),
-        "lua.privateUrlInstall",
-    ));
-
-    rows.push(section(tr!("skills.luaSettings.capabilities")));
-    rows.push(choice(
-        tr!("skills.luaSettings.defaultEncoding"),
-        vec![
-            (String::new(), tr!("skills.luaSettings.autoEncoding")),
-            ("utf-8".into(), "UTF-8".into()),
-            ("gbk".into(), "GBK".into()),
-            ("big5".into(), "Big5".into()),
-            ("shift_jis".into(), "Shift_JIS".into()),
-        ],
-        string(app, "lua.defaultEncoding"),
-        draft("lua.defaultEncoding"),
-    ));
-    rows.push(toggle_draft(
-        tr!("skills.luaSettings.skillManagementBridge"),
-        "lua.skillManagementBridge",
-    ));
-    rows.push(toggle_draft(
-        tr!("skills.luaSettings.managedIoCompat"),
-        "lua.managedIoCompat",
-    ));
-
-    rows.push(section(tr!("skills.luaSettings.managedRuntime")));
-    for runtime in &system.managed_runtimes {
-        rows.push(info(
-            runtime.label.clone(),
-            runtime.detail.clone(),
-            Tone::of(runtime.severity),
-        ));
-    }
-    rows.push(number_draft(
-        tr!("skills.luaSettings.managedWorkerPoolMax"),
-        "lua.managed.workerPoolMax",
-        (1, 32, 1),
-    ));
-    rows.push(number_draft(
-        tr!("skills.luaSettings.managedInvokeTimeout"),
-        "lua.managed.invokeTimeout",
-        (1_000, 600_000, 1_000),
-    ));
-    rows.push(note(tr!("skills.luaSettings.restartHint"), Tone::Muted));
-
-    // Cross-field rules are checked before saving, as the WebUI does.
-    // 与 WebUI 一致，保存前校验跨字段规则。
-    let below = |min: &str, max: &str| count(app, max) < count(app, min);
-    let problem = if below("lua.mainPool.min", "lua.mainPool.max")
-        || below("lua.runluaPool.min", "lua.runluaPool.max")
-    {
-        Some(tr!("skills.luaSettings.validationPoolOrder"))
-    } else if below("lua.cache.defaultTtl", "lua.cache.maxTtl") {
-        Some(tr!("skills.luaSettings.validationCacheOrder"))
-    } else {
-        None
-    };
-    draft_footer(app, PageId::LuaSettings, &mut rows, problem);
     rows
 }
 
-fn index_status(entry: &IndexedProject) -> (String, Tone) {
-    match entry.status.as_str() {
-        _ if entry.job.is_some() => (tr!("codeContext.project.jobInProgress"), Tone::Warn),
-        "ready" if entry.pending > 0 => {
-            (tr!("codeContext.project.changesAwaitingSync"), Tone::Warn)
-        }
-        "ready" => (tr!("codeContext.project.gate.ready"), Tone::Good),
-        "indexing" => (tr!("codeContext.project.jobInProgress"), Tone::Warn),
-        "rebuildRequired" => (tr!("codeContext.project.gate.rebuildRequired"), Tone::Bad),
-        "modelsRequired" => (tr!("codeContext.project.gate.engineOff"), Tone::Warn),
-        "disabled" => (tr!("codeContext.project.gate.projectOff"), Tone::Muted),
-        other => (other.to_string(), Tone::Muted),
+/// Saves one verified runtime field within the full authoritative settings document.
+/// 在完整权威设置文档内保存一个已确认的运行时字段。
+pub(super) fn lua_settings(app: &App) -> Vec<Row> {
+    // Catalog.
+    // 服务发布的目录。
+    let catalog = v(app.slots.value(Slot::Workbench), "/luaSkills");
+    // Settings.
+    // 权威设置文档。
+    let settings = v(catalog, "/runtimeSettings");
+    // Current operation rows.
+    // 当前操作的行集合。
+    let mut rows = vec![info(
+        tr!("tui.field.runtimeRoot"),
+        s(catalog, "/runtimeRoot"),
+        Tone::Muted,
+    )];
+    if !settings.is_object() {
+        return rows;
     }
+    for (pointer, label) in [
+        ("/vmPool/minSize", tr!("tui.field.vmMin")),
+        ("/vmPool/maxSize", tr!("tui.field.vmMax")),
+        ("/vmPool/idleTtlSecs", tr!("tui.field.vmIdle")),
+        ("/runLuaPool/minSize", tr!("tui.field.runMin")),
+        ("/runLuaPool/maxSize", tr!("tui.field.runMax")),
+        ("/runLuaPool/idleTtlSecs", tr!("tui.field.runIdle")),
+        ("/toolCache/maxEntries", tr!("tui.field.cacheEntries")),
+        (
+            "/toolCache/defaultTtlSecs",
+            tr!("tui.field.cacheDefaultTtl"),
+        ),
+        ("/toolCache/maxTtlSecs", tr!("tui.field.cacheMaxTtl")),
+        (
+            "/managedRuntime/workerPoolMaxSizePerEnvironment",
+            tr!("tui.field.workerLimit"),
+        ),
+        (
+            "/managedRuntime/workerIdleTtlSecs",
+            tr!("tui.field.workerIdle"),
+        ),
+        (
+            "/managedRuntime/persistentSessionLimitPerEngine",
+            tr!("tui.field.sessionLimit"),
+        ),
+        (
+            "/managedRuntime/persistentSessionDefaultBufferLimitBytesPerStream",
+            tr!("tui.field.bufferLimit"),
+        ),
+    ] {
+        if v(settings, pointer).is_number() {
+            rows.push(number(
+                label,
+                n(settings, pointer),
+                (0, i32::MAX.into(), 1),
+                dto(
+                    settings.clone(),
+                    pointer,
+                    skills::save_luaskills_runtime_settings,
+                ),
+            ));
+        }
+    }
+    for (pointer, label) in [
+        ("/network/allowDownloads", tr!("tui.field.downloads")),
+        (
+            "/network/enablePrivateUrlSkillInstall",
+            tr!("tui.field.privateSources"),
+        ),
+        (
+            "/capabilities/enableSkillManagementBridge",
+            tr!("tui.field.managementBridge"),
+        ),
+        (
+            "/capabilities/enableManagedIoCompat",
+            tr!("tui.field.ioCompat"),
+        ),
+        ("/aiTools/enableRunLua", tr!("tui.field.runLua")),
+        (
+            "/aiTools/enableRunLuaSession",
+            tr!("tui.field.runLuaSession"),
+        ),
+    ] {
+        rows.push(toggle(
+            label,
+            b(settings, pointer),
+            dto(
+                settings.clone(),
+                pointer,
+                skills::save_luaskills_runtime_settings,
+            ),
+        ));
+    }
+    for (pointer, label) in [
+        ("/network/githubBaseUrl", tr!("tui.field.githubEndpoint")),
+        ("/network/githubApiBaseUrl", tr!("tui.field.githubApi")),
+        (
+            "/network/officialSkillHubBaseUrl",
+            tr!("tui.field.skillHub"),
+        ),
+        (
+            "/capabilities/defaultTextEncoding",
+            tr!("tui.field.encoding"),
+        ),
+    ] {
+        if v(settings, pointer).is_string() {
+            rows.push(text(
+                label,
+                s(settings, pointer),
+                dto(
+                    settings.clone(),
+                    pointer,
+                    skills::save_luaskills_runtime_settings,
+                ),
+            ));
+        }
+    }
+    for target in ["python", "node", "all"] {
+        rows.push(button(
+            format!("{} · {target}", tr!("tui.field.retryRuntime")),
+            call(skills::retry_luaskills_managed_runtimes(target)),
+            Tone::Normal,
+        ));
+    }
+    rows.push(string_list(
+        tr!("tui.field.privateAllowlist"),
+        settings,
+        "/network/privateSkillSourceAllowlist",
+        skills::save_luaskills_runtime_settings,
+    ));
+    rows.push(item("runtime-settings", tr!("tui.field.details"), "").lines(details(settings)));
+    rows
 }
 
-pub(super) fn index(app: &App, system: &SystemSnapshot) -> Vec<Row> {
-    let index = &system.index;
-    let mut rows = vec![
-        note(tr!("area.contextEngine.description"), Tone::Muted),
-        stats(vec![
-            (
-                tr!("tui.index.projects"),
-                index.len().to_string(),
-                Tone::Normal,
-            ),
-            (
-                tr!("codeContext.job.files"),
-                compact_count(index.iter().map(|p| p.files as u64).sum()),
-                Tone::Normal,
-            ),
-            (
-                tr!("tui.knowledge.chunks"),
-                compact_count(index.iter().map(|p| p.chunks as u64).sum()),
-                Tone::Normal,
-            ),
-            (
-                tr!("tui.index.attention"),
-                index
-                    .iter()
-                    .filter(|p| p.status != "ready" || p.pending > 0)
-                    .count()
-                    .to_string(),
-                Tone::Warn,
-            ),
-        ]),
-    ];
-    for entry in index {
-        let id = entry.project_id.clone();
-        let mut actions = vec![action(
-            format!(
-                "{}: {}",
-                tr!("codeContext.project.indexUpdateMode"),
-                if entry.watching {
-                    tr!("codeContext.project.automatic")
-                } else {
-                    tr!("codeContext.project.manual")
-                }
-            ),
-            UiAction::Edit(
-                Edit::Enabled(EntityKind::IndexWatch, id.clone()),
-                SettingValue::Bool(!entry.watching),
-            ),
-            if entry.watching {
-                Tone::Good
-            } else {
-                Tone::Muted
-            },
-        )];
-        if entry.job.is_none() {
-            if entry.status == "rebuildRequired" {
-                actions.push(action(
-                    tr!("tui.index.rebuild"),
-                    sys_action(SystemCommand::IndexRebuild(id.clone())),
-                    Tone::Accent,
-                ));
-            } else {
-                actions.push(action(
-                    tr!("codeContext.job.synchronizeIndexNow"),
-                    sys_action(SystemCommand::IndexRebuild(id.clone())),
-                    Tone::Accent,
-                ));
-                actions.push(action(
-                    tr!("tui.index.rebuild"),
-                    confirm(
-                        tr!("codeContext.job.rebuildingSemanticIndex"),
-                        tr!("tui.index.rebuildBody", name = entry.name),
-                        tr!("tui.index.rebuild"),
-                        sys_action(SystemCommand::IndexRebuild(id.clone())),
-                    ),
-                    Tone::Normal,
-                ));
-            }
-            if entry.fragments >= COMPACTION_FRAGMENTS {
-                actions.push(action(
-                    tr!("tui.index.compact"),
-                    sys_action(SystemCommand::IndexCompact(id.clone())),
-                    Tone::Warn,
-                ));
-            }
-        }
-        let path = app
-            .projects
+/// Builds a complete VceProjectSettingsInput while keeping overview-only metadata out.
+/// 构建完整 VceProjectSettingsInput，同时排除仅属于概览的元数据。
+fn save_index_field(context: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    // Settings.
+    // 权威设置文档。
+    let mut settings = context.get("settings")?.clone();
+    // Pointer.
+    // 已确认 JSON 指针。
+    let pointer = context.get("pointer")?.as_str()?;
+    *settings.pointer_mut(pointer)? = match value {
+        SettingValue::Bool(value) => json!(value),
+        SettingValue::Number(value) => json!(value),
+        SettingValue::Text(value) | SettingValue::Choice(value) => json!(value),
+    };
+    Some(vce::update_vce_project_settings(
+        context.get("projectId")?.as_str()?,
+        context.get("revision")?.as_i64()?,
+        settings,
+    ))
+}
+
+/// Selects only input fields defined in the WebUI VCE type; metadata cannot reach save RPC.
+/// 仅选择 WebUI VCE 类型定义的输入字段，元数据无法进入保存 RPC。
+fn index_editor(app: &App, overview: &Value, pointer: &str) -> Option<Edit> {
+    // Source.
+    // 当前来源。
+    let source = overview.get("settings")?.as_object()?;
+    // Settings.
+    // 权威设置文档。
+    let mut settings = serde_json::Map::new();
+    for key in [
+        "enabled",
+        "updateMode",
+        "autoUpdateMinIntervalSeconds",
+        "maxFileBytes",
+        "extraIgnorePatterns",
+        "allowQueryRewrite",
+        "allowRerank",
+        "embeddingMaxConcurrency",
+        "queryMaxConcurrency",
+        "maxResults",
+        "maxContextChars",
+    ] {
+        settings.insert(key.into(), source.get(key)?.clone());
+    }
+    Some(Edit::Call(Setter::Build {
+        ctx: json!({
+        "projectId":app.vce_project.as_ref()?,"revision":source.get("revision")?,
+        "settings":settings,"pointer":pointer}),
+        build: save_index_field,
+    }))
+}
+
+/// Displays project status, version-guarded settings, jobs and two-step maintenance plans.
+/// 显示项目状态、版本保护的设置、任务与两步维护计划。
+pub(super) fn index(app: &App) -> Vec<Row> {
+    // Current operation rows.
+    // 当前操作的行集合。
+    let mut rows = vec![choice(
+        tr!("tui.field.project"),
+        app.projects
             .iter()
-            .find(|p| p.id == entry.project_id)
-            .map(|p| p.path.clone())
-            .unwrap_or_default();
-        let mut lines = Vec::new();
-        if !path.is_empty() {
-            lines.push(path);
+            .map(|project| (project.id.clone(), project.name.clone()))
+            .collect(),
+        app.vce_project.clone().unwrap_or_default(),
+        Edit::Local(LocalSetting::VceProject),
+    )];
+    // Status.
+    // 已声明生命周期状态。
+    let status = app.slots.value(Slot::VceStatus);
+    rows.push(item("vce-status", tr!("tui.field.status"), "").lines(details(status)));
+    // Project id.
+    // 准确宿主项目身份。
+    let Some(project_id) = app.vce_project.as_deref() else {
+        return rows;
+    };
+    // Overview.
+    // 所选项目权威概览。
+    let overview = app.slots.value(Slot::VceOverview);
+    if !overview.is_object() {
+        return rows;
+    }
+    rows.push(
+        item(
+            "vce-overview",
+            tr!("tui.field.overview"),
+            s(overview, "/status/lifecycle"),
+        )
+        .lines(details(overview)),
+    );
+    for (pointer, label) in [
+        ("/enabled", tr!("tui.field.enabled")),
+        ("/allowQueryRewrite", tr!("tui.field.queryRewrite")),
+        ("/allowRerank", tr!("tui.field.rerank")),
+    ] {
+        if let Some(edit) = index_editor(app, overview, pointer) {
+            rows.push(toggle(label, b(v(overview, "/settings"), pointer), edit));
         }
-        lines.push(tr!(
-            "tui.index.detail",
-            chunks = compact_count(entry.chunks as u64),
-            vectors = compact_count(entry.vectors as u64),
-            checkpoint = entry.checkpoint
+    }
+    if let Some(edit) = index_editor(app, overview, "/updateMode") {
+        rows.push(choice(
+            tr!("tui.field.updateMode"),
+            vec![
+                ("manual".into(), tr!("tui.field.manual")),
+                ("automatic".into(), tr!("tui.field.automatic")),
+            ],
+            s(overview, "/settings/updateMode"),
+            edit,
         ));
-        lines.push(format!(
-            "{}{}",
-            tr!("codeContext.project.lastSuccessfulUpdate"),
-            if entry.last_update.is_empty() {
-                tr!("codeContext.project.noVerifiedRecord")
-            } else {
-                entry.last_update.clone()
+    }
+    for (pointer, label, min) in [
+        (
+            "/autoUpdateMinIntervalSeconds",
+            tr!("tui.field.autoInterval"),
+            1,
+        ),
+        ("/maxFileBytes", tr!("tui.field.maxFileBytes"), 1),
+        (
+            "/embeddingMaxConcurrency",
+            tr!("tui.field.embeddingConcurrency"),
+            1,
+        ),
+        ("/queryMaxConcurrency", tr!("tui.field.queryConcurrency"), 1),
+        ("/maxResults", tr!("tui.field.maxResults"), 1),
+        ("/maxContextChars", tr!("tui.field.maxContextChars"), 1),
+    ] {
+        if let Some(edit) = index_editor(app, overview, pointer) {
+            rows.push(number(
+                label,
+                n(v(overview, "/settings"), pointer),
+                (min, i32::MAX.into(), 1),
+                edit,
+            ));
+        }
+    }
+    if let Some(revision) = v(overview, "/settings/revision").as_i64() {
+        // The upstream status type permits an absent checkpoint before initialization.
+        // 上游状态类型允许初始化前缺少检查点。
+        {
+            // Checkpoint.
+            // 已观察检查点版本。
+            let checkpoint = v(overview, "/status/checkpointVersion");
+            for (name, label) in [
+                ("initialize", tr!("tui.field.initialize")),
+                ("synchronize", tr!("tui.field.synchronize")),
+            ] {
+                rows.push(button(
+                    label,
+                    call(vce::submit_vce_job(
+                        json!({"projectId":project_id,"action":name,
+                    "idempotencyKey":api::fresh_command_id(),"expectedSettingsRevision":revision,
+                    "expectedCheckpointVersion":checkpoint}),
+                    )),
+                    Tone::Accent,
+                ));
             }
-        ));
-        if entry.pending > 0 {
-            lines.push(tr!("tui.index.pending", count = entry.pending));
         }
-        lines.push(tr!(
-            "tui.index.fragments",
-            count = entry.fragments,
-            limit = COMPACTION_FRAGMENTS
+        for (mode, label) in [
+            ("repair", tr!("tui.field.repair")),
+            ("rebuild", tr!("tui.field.rebuild")),
+            ("cleanup_staging", tr!("tui.field.cleanupStaging")),
+            ("compact", tr!("tui.field.compact")),
+        ] {
+            rows.push(button(
+                label,
+                call(vce::plan_vce_maintenance(project_id, mode, revision)),
+                Tone::Warn,
+            ));
+        }
+    }
+    if let Some(Edit::Call(Setter::Build { ctx, .. })) =
+        index_editor(app, overview, "/extraIgnorePatterns")
+    {
+        rows.push(text(
+            tr!("tui.field.extraIgnores"),
+            a(overview, "/settings/extraIgnorePatterns")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Edit::Call(Setter::Build {
+                ctx,
+                build: |ctx, value| {
+                    // Settings.
+                    // 权威设置文档。
+                    let mut settings = ctx.get("settings")?.clone();
+                    settings["extraIgnorePatterns"] = parse_lines(value.as_str())?;
+                    Some(vce::update_vce_project_settings(
+                        ctx.get("projectId")?.as_str()?,
+                        ctx.get("revision")?.as_i64()?,
+                        settings,
+                    ))
+                },
+            }),
         ));
-        let (badge, tone) = index_status(entry);
+    }
+    // Job.
+    // 持久任务回执。
+    let job = app.slots.value(Slot::VceJob);
+    if let Some(id) = v(job, "/jobId").as_str() {
+        // Actions.
+        // 声明的操作集合。
+        let mut actions = vec![action(
+            tr!("tui.field.refresh"),
+            call(vce::load_vce_job(project_id, None)),
+            Tone::Normal,
+        )];
+        if matches!(
+            v(job, "/state").as_str(),
+            Some("queued" | "running" | "cancelling")
+        ) {
+            actions.push(action(
+                tr!("tui.field.cancel"),
+                call(vce::cancel_vce_job(project_id, id)),
+                Tone::Warn,
+            ));
+        }
         rows.push(
-            item(
-                &entry.project_id,
-                entry.name.clone(),
-                tr!(
-                    "tui.index.stats",
-                    files = entry.files,
-                    symbols = compact_count(entry.symbols as u64)
-                ),
-            )
-            .badge(badge, tone)
-            .actions(actions)
-            .lines(lines)
-            .job(entry.job.clone()),
+            item(id, tr!("tui.field.job"), s(job, "/state"))
+                .lines(details(job))
+                .actions(actions),
         );
     }
     rows
 }
 
-pub(super) fn engine(app: &App, system: &SystemSnapshot) -> Vec<Row> {
-    let number_draft = |label: String, key: &str, range: (i64, i64, i64)| {
-        number(label, count(app, key), range, draft(key))
-    };
-    let model = string(app, "engine.embeddingModel");
-    let dimensions: Vec<(String, String)> = system
-        .embedding_models
-        .iter()
-        .find(|(id, ..)| *id == model)
-        .map(|(_, _, sizes)| {
-            sizes
-                .iter()
-                .map(|d| (d.to_string(), d.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let current_dimensions = string(app, "engine.dimensions");
+/// Presents the service's global VCE configuration and compatible inference routes.
+/// 显示服务的全局 VCE 配置与兼容推理路由。
+pub(super) fn engine(app: &App) -> Vec<Row> {
+    // Current operation rows.
+    // 当前操作的行集合。
     let mut rows = vec![
-        note(tr!("tui.index.engineNote"), Tone::Muted),
-        section(tr!("settings.inference.embedding")),
-        choice(
-            tr!("settings.inference.embedding"),
-            system
-                .embedding_models
-                .iter()
-                .map(|(id, label, _)| (id.clone(), label.clone()))
-                .collect(),
-            model,
-            draft("engine.embeddingModel"),
-        ),
-        choice(
-            tr!("knowledge.experience.dimensions"),
-            dimensions.clone(),
-            current_dimensions.clone(),
-            draft("engine.dimensions"),
-        ),
+        item("configuration", tr!("tui.field.status"), "")
+            .lines(details(app.slots.value(Slot::VceStatus))),
     ];
-    let dimensions_valid = dimensions.iter().any(|(d, _)| *d == current_dimensions);
-    if !dimensions_valid {
-        rows.push(note(
-            tr!("knowledge.experience.dimensionsInvalid"),
-            Tone::Bad,
-        ));
-    }
-    let mut test = button(
-        tr!("settings.inference.testConnection"),
-        sys_action(SystemCommand::TestRoute("engine.embedding".into())),
-        Tone::Normal,
-    );
-    if let Some((severity, message)) = system.route_tests.get("engine.embedding") {
-        test = test.detail(format!(
-            "{} {message}",
-            if *severity == Severity::Info {
-                "✓"
-            } else {
-                "✗"
-            }
-        ));
-    }
-    rows.push(test);
-    let pending =
-        super::super::action::draft_keys(app, &["engine.embeddingModel", "engine.dimensions"]);
-    if !pending.is_empty() {
-        rows.push(note(tr!("tui.index.rebuildNote"), Tone::Warn));
-    }
-
-    rows.push(section(tr!("codeContext.project.indexUpdateMode")));
-    rows.push(choice(
-        tr!("codeContext.project.indexUpdateMode"),
-        vec![
-            ("automatic".into(), tr!("codeContext.project.automatic")),
-            ("manual".into(), tr!("codeContext.project.manual")),
-        ],
-        string(app, "engine.updateMode"),
-        draft("engine.updateMode"),
-    ));
-    rows.push(number_draft(
-        tr!("tui.index.minInterval"),
-        "engine.minInterval",
-        (5, 3_600, 5),
-    ));
-    rows.push(number_draft(
-        tr!("tui.index.maxFileBytes"),
-        "engine.maxFileBytes",
-        (65_536, 16_777_216, 65_536),
-    ));
-    rows.push(text(
-        tr!("tui.index.ignore"),
-        string(app, "engine.ignore"),
-        draft("engine.ignore"),
-    ));
-
-    rows.push(section(tr!("tui.index.query")));
-    rows.push(number_draft(
-        tr!("tui.index.maxResults"),
-        "engine.maxResults",
-        (1, 100, 1),
-    ));
-    rows.push(number_draft(
-        tr!("tui.index.contextBudget"),
-        "engine.contextBudget",
-        (1_000, 200_000, 1_000),
-    ));
-    rows.push(number_draft(
-        tr!("tui.index.embeddingConcurrency"),
-        "engine.embeddingConcurrency",
-        (1, 32, 1),
-    ));
-    rows.push(number_draft(
-        tr!("tui.index.queryConcurrency"),
-        "engine.queryConcurrency",
-        (1, 16, 1),
-    ));
-    rows.push(toggle(
-        tr!("tui.index.queryRewrite"),
-        flag(app, "engine.queryRewrite"),
-        draft("engine.queryRewrite"),
-    ));
-    rows.push(toggle(
-        tr!("settings.inference.rerankEnabled"),
-        flag(app, "engine.rerank"),
-        draft("engine.rerank"),
-    ));
-    let problem = (!dimensions_valid).then(|| tr!("knowledge.experience.dimensionsInvalid"));
-    draft_footer(app, PageId::EngineSettings, &mut rows, problem);
+    rows.extend(super::inference::rows(app, "vce"));
     rows
 }
 
-pub(super) fn plugins(system: &SystemSnapshot) -> Vec<Row> {
-    let plugins = &system.plugins;
-    let mut rows = vec![
-        note(tr!("tui.plugins.note"), Tone::Muted),
-        stats(vec![
-            (
-                tr!("tui.plugins.installed"),
-                plugins.len().to_string(),
-                Tone::Normal,
-            ),
-            (
-                tr!("agentSkills.enabled"),
-                plugins.iter().filter(|p| p.enabled).count().to_string(),
-                Tone::Good,
-            ),
-            (
-                tr!("skills.plugins.tools"),
-                plugins.iter().map(|p| p.tools).sum::<u32>().to_string(),
-                Tone::Normal,
-            ),
-            (
-                tr!("skills.plugins.sessions"),
-                plugins.iter().map(|p| p.sessions).sum::<u32>().to_string(),
-                Tone::Normal,
-            ),
-        ]),
-    ];
-    if plugins.is_empty() {
-        rows.push(note(tr!("skills.plugins.emptyTitle"), Tone::Muted));
-    }
-    let kinds = [
-        ("builtin", tr!("skills.navigation.builtins")),
-        ("system", tr!("skills.plugins.systemKind")),
-        ("user", tr!("skills.plugins.userPlugin")),
-    ];
-    for (kind, title) in kinds {
-        let list: Vec<&Plugin> = plugins.iter().filter(|p| p.kind == kind).collect();
-        if list.is_empty() {
-            continue;
-        }
-        rows.push(section(format!("{title} · {}", list.len())));
-        rows.extend(list.into_iter().map(plugin_row));
-    }
-    rows.push(button(
-        format!("+ {}", tr!("skills.plugins.installLocalPlugin")),
+/// Lists host-managed plugins and mount metadata without rendering Lua plugin interfaces.
+/// 列出宿主管理的插件与挂载元数据，不渲染 Lua 插件界面。
+pub(super) fn plugins(app: &App) -> Vec<Row> {
+    // Current operation rows.
+    // 当前操作的行集合。
+    let mut rows = vec![button(
+        tr!("tui.field.installPlugin"),
         UiAction::InstallPlugin,
         Tone::Accent,
-    ));
-    rows
-}
-
-fn plugin_row(plugin: &Plugin) -> Row {
-    let (status, tone) = service_status(plugin.status);
-    let figures = [
-        (tr!("skills.plugins.tools"), plugin.tools),
-        (tr!("skills.plugins.hooks"), plugin.hooks),
-        (tr!("skills.plugins.sessions"), plugin.sessions),
-        (tr!("skills.plugins.skills"), plugin.skills),
-        (tr!("skills.plugins.agents"), plugin.agents),
-    ];
-    let mut lines = vec![
-        figures
-            .iter()
-            .filter(|(_, n)| *n > 0)
-            .map(|(label, n)| format!("{label} {n}"))
-            .collect::<Vec<_>>()
-            .join(" · "),
-    ];
-    let list = |items: &[String]| {
-        if items.is_empty() {
-            "—".to_string()
-        } else {
-            items.join(", ")
-        }
-    };
-    lines.push(format!(
-        "{}  {}",
-        tr!("skills.plugins.permissions"),
-        list(&plugin.permissions)
-    ));
-    if !plugin.mounts.is_empty() {
-        lines.push(format!(
-            "{}  {}  ({})",
-            tr!("skills.plugins.uiMounts"),
-            list(&plugin.mounts),
-            tr!("tui.plugins.mountSkipped")
-        ));
-    }
-    for line in &plugin.diagnostics {
-        lines.push(format!("{}  {line}", tr!("skills.plugins.diagnostics")));
-    }
-    lines.retain(|l| !l.is_empty());
-    let mut actions = vec![switch(
-        tr!("agentSkills.enabled"),
-        plugin.enabled,
-        Edit::Enabled(EntityKind::Plugin, plugin.id.clone()),
     )];
-    if plugin.kind == "user" {
-        actions.push(action(
-            tr!("skills.plugins.uninstall"),
-            confirm(
-                tr!("skills.plugins.uninstallPlugin"),
-                tr!(
-                    "skills.plugins.uninstallingRemovesItsPackage",
-                    name = plugin.name
-                ),
-                tr!("skills.plugins.uninstall"),
-                sys_action(SystemCommand::Plugin(CatalogOp::Delete(plugin.id.clone()))),
-            ),
-            Tone::Bad,
+    for plugin in a(app.slots.value(Slot::Workbench), "/plugins") {
+        // Exact entity identity.
+        // 准确实体身份。
+        let id = s(plugin, "/id");
+        rows.push(toggle(
+            s(plugin, "/name"),
+            b(plugin, "/desiredEnabled"),
+            dto(plugin.clone(), "/desiredEnabled", |request| {
+                skills::set_vulcan_plugin_enabled(
+                    &s(&request, "/id"),
+                    b(&request, "/desiredEnabled"),
+                )
+            }),
         ));
+        // Actions.
+        // 声明的操作集合。
+        let mut actions = Vec::new();
+        if s(plugin, "/extension/origin") == "userInstalled" {
+            actions.push(action(
+                tr!("tui.field.remove"),
+                confirm(
+                    tr!("tui.field.remove"),
+                    s(plugin, "/name"),
+                    tr!("tui.field.remove"),
+                    call(skills::uninstall_user_plugin(&id)),
+                ),
+                Tone::Bad,
+            ));
+        }
+        rows.push(
+            item(&id, s(plugin, "/name"), s(plugin, "/runtimeState"))
+                .lines(details(plugin))
+                .actions(actions),
+        );
     }
-    item(&plugin.id, plugin.name.clone(), plugin.description.clone())
-        .badge(status, tone)
-        .lines(lines)
-        .actions(actions)
+    rows
 }

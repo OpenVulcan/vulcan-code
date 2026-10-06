@@ -229,19 +229,6 @@ pub struct Goal {
     pub budget: Option<u64>,
 }
 
-/// Goal operations (`service_*_goal`).
-/// 目标操作。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GoalOp {
-    Pause,
-    Resume,
-    Clear,
-    Set {
-        objective: String,
-        budget: Option<u64>,
-    },
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct SessionInsight {
     pub memory: ContextInjection,

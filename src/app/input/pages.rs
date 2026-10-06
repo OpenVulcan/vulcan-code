@@ -21,31 +21,43 @@ pub enum Activate {
 }
 
 pub(super) fn on_nav_key(app: &mut App, key: KeyEvent) {
-    let count = app.area.pages().len();
-    let index = app.nav.get(&app.area).copied().unwrap_or(0);
-    match key.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.nav.insert(app.area, index.saturating_sub(1));
+    // Navigation identities are rebuilt from the current catalogs, including empty-library management.
+    // 导航身份从当前目录重建，包括空知识库的管理入口。
+    let count = crate::app::pages::navigation(app)
+        .into_iter()
+        .map(|(_, entries)| entries.len())
+        .sum::<usize>();
+    // Selected catalog row rather than the independent content-page index.
+    // 已选目录行，而非独立内容页面下标。
+    let index = app.navigation_index();
+    // Resolve keyboard movement through the same action used by mouse and wheel.
+    // 经鼠标及滚轮共用的动作解析键盘移动。
+    let destination = match key.code {
+        KeyCode::Up | KeyCode::Char('k') => Some(index.saturating_sub(1)),
+        KeyCode::Down | KeyCode::Char('j') => Some((index + 1).min(count.saturating_sub(1))),
+        KeyCode::Home => Some(0),
+        KeyCode::End => Some(count.saturating_sub(1)),
+        KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
+            app.focus = Focus::AreaPage;
+            None
         }
-        KeyCode::Down | KeyCode::Char('j') => {
-            app.nav
-                .insert(app.area, (index + 1).min(count.saturating_sub(1)));
+        KeyCode::Esc | KeyCode::Left => {
+            action::perform(app, UiAction::Area(Area::Chat));
+            None
         }
-        KeyCode::Home => {
-            app.nav.insert(app.area, 0);
+        KeyCode::Char('/') => {
+            search(app);
+            None
         }
-        KeyCode::End => {
-            app.nav.insert(app.area, count.saturating_sub(1));
-        }
-        KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => app.focus = Focus::AreaPage,
-        KeyCode::Esc | KeyCode::Left => app.set_area(Area::Chat),
-        KeyCode::Char('/') => search(app),
-        _ => {}
+        _ => None,
+    };
+    if let Some(destination) = destination {
+        action::perform(app, UiAction::Navigate(destination));
     }
 }
 
 fn search(app: &mut App) {
-    if let Some(action) = app.current_page().and_then(PageId::search) {
+    if let Some(action) = app.current_page().and_then(|page| page.search(app)) {
         action::perform(app, action);
     }
 }
@@ -248,9 +260,10 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
         RowKind::Section
         | RowKind::Info { .. }
         | RowKind::Note { .. }
+        | RowKind::Document { .. }
         | RowKind::Stats(_)
         | RowKind::Meter { .. }
-        | RowKind::Logo
+        | RowKind::Brand
         | RowKind::Spacer => {}
     }
 }

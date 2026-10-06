@@ -254,7 +254,7 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
                 .fg(theme.primary_fg)
                 .bg(theme.warning)
                 .add_modifier(Modifier::BOLD),
-            UiAction::Send(Command::Stop {
+            UiAction::Send(Command::StopConversationRun {
                 conversation_id: id,
             }),
         ));

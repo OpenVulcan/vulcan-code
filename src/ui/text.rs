@@ -10,6 +10,53 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme::mix;
 
+/// Wraps source text by display columns without trimming indentation or internal spaces.
+/// 按显示列对来源文本换行，不裁剪缩进或内部空格。
+/// `source` is normalized document text; `width` bounds each line; `style` colors literal content.
+/// `source` 为规范化文档文本；`width` 限定每行宽度；`style` 设置字面正文颜色。
+/// Returns owned lines; tabs expand to four spaces and unprintable controls are omitted.
+/// 返回持有的行；制表符展开为四个空格，不可打印控制字符省略。
+pub fn wrap_verbatim(source: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    // Keep empty source lines independently from word wrapping.
+    // 保留空来源行，不依赖单词换行。
+    let mut lines = Vec::new();
+    for raw in source.lines() {
+        // One physical display line and its occupied column count.
+        // 单个物理显示行及其占用列数。
+        let mut text = String::new();
+        // Width of printable characters already in this physical line.
+        // 此物理行内已有可打印字符的宽度。
+        let mut used = 0;
+        for character in raw
+            .replace('\t', "    ")
+            .chars()
+            .filter(|character| !character.is_control())
+        {
+            // Wide characters are indivisible in terminal cells.
+            // 宽字符在终端单元格中不可拆分。
+            let character_width = character.width().unwrap_or(0);
+            if used + character_width > width && !text.is_empty() {
+                lines.push(Line::from(Span::styled(std::mem::take(&mut text), style)));
+                used = 0;
+            }
+            if character_width > width {
+                // A one-column viewport cannot represent a two-column character.
+                // 单列视口无法表示双列字符。
+                text.push('�');
+                used += 1;
+            } else {
+                text.push(character);
+                used += character_width;
+            }
+        }
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+    lines
+}
+
 pub fn width_of(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
@@ -271,6 +318,26 @@ mod tests {
 
     fn text_of(line: &Line) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Literal documents retain indentation, blank lines and consecutive spaces under wrapping.
+    /// 字面文档换行后保留缩进、空行及连续空格。
+    #[test]
+    fn document_wrapping_preserves_whitespace_and_display_width() {
+        // Printable source text includes a wide character and a tab-indented code row.
+        // 可打印来源文本包含宽字符及制表符缩进代码行。
+        let source = "  ab  中文\n\n\tcode";
+        for width in [40, 7] {
+            // Rendered physical rows preserve the original sequence apart from explicit wrapping.
+            // 渲染物理行除明确换行外保留原始序列。
+            let lines = wrap_verbatim(source, width, Style::default());
+            assert!(lines.iter().all(|line| width_of(&text_of(line)) <= width));
+            assert_eq!(
+                lines.iter().map(text_of).collect::<String>(),
+                "  ab  中文    code"
+            );
+            assert!(lines.iter().any(|line| text_of(line).is_empty()));
+        }
     }
 
     #[test]

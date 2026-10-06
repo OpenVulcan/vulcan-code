@@ -348,26 +348,33 @@ pub fn remove_memory(insight: &mut SessionInsight, memory_id: &str, include_expi
     memory.dynamic_count() != before
 }
 
-/// Applies a goal operation; returns the new status for the notice, or `None` when unchanged.
-/// 执行目标操作；返回用于提示的新状态，未变化时返回 `None`。
-pub fn apply_goal(insight: &mut SessionInsight, op: GoalOp) -> Option<Option<GoalStatus>> {
-    match op {
-        GoalOp::Pause => {
+/// A goal change of the demo, one per goal command.
+/// demo 的目标变更，每个目标命令对应一种。
+pub enum GoalChange {
+    /// `updateSessionGoalStatus`
+    Status(GoalStatus),
+    /// `clearSessionGoal`
+    Clear,
+    /// `saveSessionGoal` / `resumeSessionGoal`
+    Set {
+        objective: String,
+        budget: Option<u64>,
+    },
+}
+
+/// Applies a goal change; returns the new status for the notice, or `None` when unchanged.
+/// 执行目标变更；返回用于提示的新状态，未变化时返回 `None`。
+pub fn apply_goal(insight: &mut SessionInsight, change: GoalChange) -> Option<Option<GoalStatus>> {
+    match change {
+        GoalChange::Status(status) => {
             let goal = insight.goal.as_mut()?;
-            (goal.status == GoalStatus::Active).then(|| {
-                goal.status = GoalStatus::Paused;
-                Some(GoalStatus::Paused)
+            (goal.status != status).then(|| {
+                goal.status = status;
+                Some(status)
             })
         }
-        GoalOp::Resume => {
-            let goal = insight.goal.as_mut()?;
-            goal.status.resumable().then(|| {
-                goal.status = GoalStatus::Active;
-                Some(GoalStatus::Active)
-            })
-        }
-        GoalOp::Clear => insight.goal.take().map(|_| None),
-        GoalOp::Set { objective, budget } => {
+        GoalChange::Clear => insight.goal.take().map(|_| None),
+        GoalChange::Set { objective, budget } => {
             let objective = objective.trim().to_string();
             if objective.is_empty() {
                 return None;

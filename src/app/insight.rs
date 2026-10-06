@@ -112,33 +112,52 @@ pub fn ttl_label(item: &InjectedMemory) -> String {
 /// Actions of the goal bar in the order the WebUI shows them.
 /// 目标栏的操作，顺序与 WebUI 一致。
 pub fn goal_actions(conversation_id: &str, goal: &Goal) -> Vec<(String, bool, UiAction)> {
-    let send = |op: GoalOp| {
-        UiAction::Send(Command::Goal {
-            conversation_id: conversation_id.to_string(),
-            op,
-        })
-    };
     let mut actions = Vec::new();
-    if goal.status == GoalStatus::Active {
-        actions.push((
-            tr!("composer.goal.action.pause"),
-            false,
-            send(GoalOp::Pause),
-        ));
-    } else if goal.status.resumable() {
-        actions.push((
-            tr!("composer.goal.action.resume"),
-            false,
-            send(GoalOp::Resume),
-        ));
+    if let Some(command) = toggle_goal(conversation_id, goal) {
+        let label = if goal.status == GoalStatus::Active {
+            tr!("composer.goal.action.pause")
+        } else {
+            tr!("composer.goal.action.resume")
+        };
+        actions.push((label, false, UiAction::Send(command)));
     }
     actions.push((
         tr!("composer.goal.action.edit"),
         false,
         edit_goal(conversation_id, Some(goal)),
     ));
-    actions.push((tr!("composer.goal.action.clear"), true, send(GoalOp::Clear)));
+    actions.push((
+        tr!("composer.goal.action.clear"),
+        true,
+        UiAction::Send(Command::ClearSessionGoal {
+            conversation_id: conversation_id.to_string(),
+        }),
+    ));
     actions
+}
+
+/// The goal strip's pause/resume toggle: an active goal pauses, a paused goal becomes active
+/// again, and any other stopped goal resumes as a fresh budget stage.
+/// 目标条的暂停/恢复切换：进行中的目标暂停，已暂停的目标重新激活，其他已停止的目标作为新的
+/// 预算阶段恢复。
+pub fn toggle_goal(conversation_id: &str, goal: &Goal) -> Option<Command> {
+    let conversation_id = conversation_id.to_string();
+    match goal.status {
+        GoalStatus::Active => Some(Command::UpdateSessionGoalStatus {
+            conversation_id,
+            status: GoalStatus::Paused,
+        }),
+        GoalStatus::Paused => Some(Command::UpdateSessionGoalStatus {
+            conversation_id,
+            status: GoalStatus::Active,
+        }),
+        status if status.resumable() => Some(Command::ResumeSessionGoal {
+            conversation_id,
+            objective: goal.objective.clone(),
+            token_budget: goal.budget,
+        }),
+        _ => None,
+    }
 }
 
 /// Prompt that sets or replaces the conversation goal.
@@ -168,10 +187,9 @@ pub fn stop_agent(conversation_id: &str, agent: &AgentInfo) -> UiAction {
             task = agent.task.clone()
         ),
         tr!("conversation.subagent.stopConfirm"),
-        UiAction::Send(Command::AgentControl {
-            conversation_id: conversation_id.to_string(),
-            agent_id: agent.id.clone(),
-            op: AgentOp::Stop,
+        UiAction::Send(Command::StopSubagentTask {
+            parent_conversation_id: conversation_id.to_string(),
+            task_id: agent.id.clone(),
         }),
     )
 }
@@ -186,47 +204,17 @@ pub fn close_agent(conversation_id: &str, agent: &AgentInfo) -> UiAction {
             task = agent.task.clone()
         ),
         tr!("conversation.subagent.closeConfirm"),
-        UiAction::Send(Command::AgentControl {
-            conversation_id: conversation_id.to_string(),
-            agent_id: agent.id.clone(),
-            op: AgentOp::Close,
+        UiAction::Send(Command::CloseSubagentTask {
+            parent_conversation_id: conversation_id.to_string(),
+            task_id: agent.id.clone(),
         }),
     )
 }
 
-/// Prompt for a message to a subagent.
-/// 向子代理发送消息的输入框。
-pub fn message_agent(conversation_id: &str, agent: &AgentInfo, steering: bool) -> UiAction {
-    let title = if steering {
-        tr!("conversation.subagent.queue.steering")
-    } else {
-        tr!("conversation.subagent.queue.followup")
-    };
-    UiAction::Prompt(Box::new(PromptDialog::new(
-        title,
-        tr!("conversation.subagent.detail.message"),
-        String::new(),
-        PromptThen::AgentMessage {
-            conversation_id: conversation_id.to_string(),
-            agent_id: agent.id.clone(),
-            steering,
-        },
-        false,
-    )))
-}
-
-/// Buttons shown under an agent: messages while it can receive them, stop while running, end
-/// until closed.
-/// 代理下方的按钮：可接收消息时可发送消息，运行中可停止，未关闭前可结束。
+/// Buttons shown under an agent: stop while running, end until closed.
+/// 代理下方的按钮：运行中可停止，未关闭前可结束。
 pub fn agent_actions(conversation_id: &str, agent: &AgentInfo) -> Vec<(String, bool, UiAction)> {
     let mut actions = Vec::new();
-    if agent.state != AgentState::Closed {
-        actions.push((
-            tr!("conversation.subagent.detail.message"),
-            false,
-            message_agent(conversation_id, agent, agent.state == AgentState::Running),
-        ));
-    }
     if agent.state == AgentState::Running {
         actions.push((
             tr!("conversation.subagent.stopTask"),
@@ -265,7 +253,7 @@ fn memory_sheet(conversation_id: &str, entry: &MemoryEntry) -> DetailSheet {
             .action(
                 tr!("workspaceMemory.suppressForSession"),
                 false,
-                UiAction::Send(Command::SuppressMemory {
+                UiAction::Send(Command::SuppressContextInjectionItem {
                     conversation_id: conversation_id.to_string(),
                     memory_id: item.memory_id.clone(),
                 }),
@@ -292,18 +280,7 @@ fn memory_sheet(conversation_id: &str, entry: &MemoryEntry) -> DetailSheet {
                 profile_source_label(node.source),
             )
             .field(tr!("memory.profile.updatedAt"), node.date.clone())
-            .section(tr!("tui.memory.content"), node.content.clone())
-            .action(
-                tr!("memory.profile.instruction"),
-                false,
-                UiAction::Prompt(Box::new(PromptDialog::new(
-                    tr!("memory.profile.instruction"),
-                    tr!("memory.profile.instructionPlaceholder"),
-                    String::new(),
-                    PromptThen::MemoryCorrect,
-                    false,
-                ))),
-            ),
+            .section(tr!("tui.memory.content"), node.content.clone()),
     }
 }
 
@@ -314,7 +291,7 @@ fn delete_memory(conversation_id: &str, item: &InjectedMemory) -> UiAction {
         tr!("workspaceMemory.permanentDeleteInvalid"),
         item.content.clone(),
         tr!("agentSkills.delete"),
-        UiAction::Send(Command::DeleteMemory {
+        UiAction::Send(Command::DeleteMemories {
             conversation_id: conversation_id.to_string(),
             memory_id: item.memory_id.clone(),
         }),
