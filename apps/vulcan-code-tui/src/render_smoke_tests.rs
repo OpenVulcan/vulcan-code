@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::app::action::UiAction;
 use crate::app::hit::Target;
-use crate::app::overlay::Overlay;
+use crate::app::overlay::{Menu, Overlay};
 use crate::app::pages::Area;
 use crate::app::{App, PanelTab, SidebarMode, input};
 use crate::backend::mock;
@@ -462,25 +462,40 @@ fn session_panel_memory_stats_and_agents() {
     };
     settle(&mut app, &mut wide, &mut narrow, 2000);
 
-    // Every panel tab renders when reached by mouse.
-    // 通过鼠标进入的每个面板标签页都能正常渲染。
+    // The tab strip stays on one line and some tabs fold into its overflow menu at this width.
+    // 此宽度下标签条保持单行，部分标签收进溢出菜单。
+    let tab_rows = |app: &App| {
+        PanelTab::ALL
+            .into_iter()
+            .filter_map(|tab| {
+                app.hits
+                    .find(|t| matches!(t, Target::PanelTab(p) if *p == tab))
+            })
+            .map(|rect| rect.y)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(tab_rows(&app).len(), 1, "panel tabs must share one line");
+    assert!(
+        app.hits
+            .find(|t| matches!(t, Target::Do(UiAction::OpenMenu(_))))
+            .is_some(),
+        "a 160-column layout should fold some panel tabs; update the width if the labels shrank"
+    );
+
+    // Every panel tab renders when reached by mouse, directly or through the overflow menu.
+    // 每个面板标签页无论直接点击还是经溢出菜单进入，都能正常渲染。
     for tab in PanelTab::ALL {
-        click(
-            &mut app,
-            "panel tab",
-            |t| matches!(t, Target::PanelTab(p) if *p == tab),
-        );
+        open_panel_tab(&mut app, tab, &mut wide);
         assert_eq!(app.panel_tab, tab);
         settle(&mut app, &mut wide, &mut narrow, 120);
+        assert_eq!(tab_rows(&app).len(), 1, "panel tabs must share one line");
         snapshot(&mut app, &format!("panel-{tab:?}"));
     }
 
     // Memory: open a dynamic item and suppress it for this session.
     // 记忆：打开一条动态记忆并在本会话中停止注入。
     let dynamic = |app: &App| app.session().unwrap().insight.memory.dynamic_count();
-    click(&mut app, "memory tab", |t| {
-        matches!(t, Target::PanelTab(PanelTab::Memory))
-    });
+    open_panel_tab(&mut app, PanelTab::Memory, &mut wide);
     settle(&mut app, &mut wide, &mut narrow, 100);
     let before = dynamic(&app);
     assert!(
@@ -709,6 +724,43 @@ fn session_bar_composer_pastes_and_sidebar_rail() {
     assert_eq!(app.sidebar, SidebarMode::Expanded);
     settle(&mut app, &mut wide, &mut narrow, 100);
     assert!(!app.should_quit);
+}
+
+/// Reaches a panel tab by mouse: its tab when shown, else the strip's overflow menu entry.
+/// 用鼠标进入面板标签页：标签可见时直接点击，否则经标签条的溢出菜单进入。
+fn open_panel_tab(app: &mut App, tab: PanelTab, terminal: &mut Terminal<TestBackend>) {
+    if app
+        .hits
+        .find(|t| matches!(t, Target::PanelTab(p) if *p == tab))
+        .is_some()
+    {
+        click(
+            app,
+            "panel tab",
+            |t| matches!(t, Target::PanelTab(p) if *p == tab),
+        );
+        return;
+    }
+    let lists = |menu: &Menu| {
+        menu.items
+            .iter()
+            .position(|item| matches!(item.action, UiAction::ShowPanel(p) if p == tab))
+    };
+    click(
+        app,
+        "panel overflow",
+        |t| matches!(t, Target::Do(UiAction::OpenMenu(menu)) if lists(menu).is_some()),
+    );
+    let Some(Overlay::Menu(menu)) = &app.overlay else {
+        panic!("the overflow chip should open a menu");
+    };
+    let index = lists(menu).expect("menu lists the folded tab");
+    terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+    click(
+        app,
+        "folded tab",
+        |t| matches!(t, Target::MenuItem(i) if *i == index),
+    );
 }
 
 /// Left-clicks the centre of the first registered target matching `pred`.

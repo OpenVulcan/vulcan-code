@@ -10,7 +10,7 @@
 use super::commands::AppCommand;
 use super::input;
 use super::overlay::{
-    DetailSheet, FolderMode, FolderPicker, History, Inspector, Overlay, Picker, PickerAction,
+    DetailSheet, FolderMode, FolderPicker, History, Inspector, Menu, Overlay, Picker, PickerAction,
     PickerItem, PickerKind,
 };
 use super::pages::{Area, PageId};
@@ -274,6 +274,9 @@ pub enum UiAction {
     ToggleProject(String),
     ProjectMenu(String),
     ConversationMenu(ConversationId),
+    /// Opens a prepared menu at the click, e.g. the items a one-line button strip had to fold.
+    /// 在点击处打开预先构造的菜单，例如单行按钮条收起的项目。
+    OpenMenu(Box<Menu>),
     AddProject,
     Attach,
     /// Opens the file browser at a directory (attaching whatever is picked).
@@ -486,6 +489,10 @@ pub fn perform(app: &mut App, action: UiAction) {
                 menu.anchor = anchor;
                 Overlay::Menu(menu)
             });
+        }
+        UiAction::OpenMenu(mut menu) => {
+            menu.anchor = app.menu_anchor();
+            app.overlay = Some(Overlay::Menu(*menu));
         }
         UiAction::AddProject => open_folder(app, FolderMode::Project, None),
         UiAction::Attach => {

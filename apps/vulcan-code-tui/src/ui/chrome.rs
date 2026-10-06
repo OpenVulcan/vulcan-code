@@ -8,12 +8,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use super::brand;
-use super::text::{compact_count, shimmer, spinner, truncate, width_of};
+use super::text::{OVERFLOW_CHIP, compact_count, shimmer, spinner, truncate, width_of};
 use super::theme::{Theme, mix};
 use super::transcript::severity_icon;
 use crate::app::action::{self, UiAction};
 use crate::app::commands::AppCommand;
 use crate::app::hit::Target;
+use crate::app::overlay::{Menu, MenuItem};
 use crate::app::pages::Area;
 use crate::app::{App, Focus};
 use crate::backend::ConnectionState;
@@ -405,6 +406,46 @@ pub fn button(
             height: 1,
         },
         Target::Do(action),
+    );
+    w
+}
+
+/// Menu listing the items a one-line strip folded away.
+/// 列出单行按钮条收起项目的菜单。
+pub fn overflow_menu(items: Vec<MenuItem>) -> Menu {
+    Menu {
+        title: tr!("activityRail.more"),
+        items,
+        cursor: 0,
+        anchor: None,
+    }
+}
+
+/// Draws the overflow chip at `(x, y)` when `items` is not empty; a click opens them as a menu.
+/// `items` 非空时在 `(x, y)` 绘制溢出按钮；点击后以菜单打开这些项目。
+/// Returns the drawn width, zero when nothing was folded.
+/// 返回绘制宽度；没有收起项目时为零。
+pub fn overflow_chip(
+    app: &App,
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    style: Style,
+    items: Vec<MenuItem>,
+) -> u16 {
+    if items.is_empty() {
+        return 0;
+    }
+    let w = width_of(OVERFLOW_CHIP) as u16;
+    buf.set_string(x, y, OVERFLOW_CHIP, style);
+    app.hits.add(
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
+        Target::Do(UiAction::OpenMenu(Box::new(overflow_menu(items)))),
     );
     w
 }

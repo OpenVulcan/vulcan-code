@@ -14,10 +14,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
 use super::brand;
-use super::chrome::{ButtonKind, button, button_style};
-use super::text::{spinner, truncate, width_of, wrap};
+use super::chrome::{ButtonKind, button, button_style, overflow_menu};
+use super::text::{OVERFLOW_CHIP, fit_strip, spinner, truncate, width_of, wrap};
 use super::theme::{Theme, mix};
+use crate::app::action::UiAction;
 use crate::app::hit::{ScrollTarget, Target};
+use crate::app::overlay::MenuItem;
 use crate::app::pages::{self, Row, RowKind, Tone};
 use crate::app::{App, Focus};
 use crate::tr;
@@ -200,11 +202,11 @@ fn render_nav(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// One laid-out row: its lines and clickable chips `(line, x offset, width, chip)`.
-/// 一个已排版的行：其各行文本与可点击按钮 `(行, x 偏移, 宽度, 按钮序号)`。
+/// One laid-out row: its lines and clickable chips `(line, x offset, width, target)`.
+/// 一个已排版的行：其各行文本与可点击按钮 `(行, x 偏移, 宽度, 目标)`。
 struct Laid {
     lines: Vec<Line<'static>>,
-    chips: Vec<(usize, u16, u16, usize)>,
+    chips: Vec<(usize, u16, u16, Target)>,
 }
 
 fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
@@ -369,7 +371,7 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
                 buf,
             );
         }
-        for &(line_index, x, w, chip) in &block.chips {
+        for (line_index, x, w, target) in &block.chips {
             let at = top + line_index;
             if at < scroll || at >= scroll + height {
                 continue;
@@ -379,10 +381,10 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
                 Rect {
                     x: list.x + x,
                     y,
-                    width: w,
+                    width: *w,
                     height: 1,
                 },
-                Target::PageRowAction(index, chip),
+                target.clone(),
             );
         }
     }
@@ -590,8 +592,8 @@ fn lay_out(
                 ],
             ));
             let x = label_width as u16;
-            chips.push((0, x, 3, 0));
-            chips.push((0, x + 3 + w, 3, 1));
+            chips.push((0, x, 3, Target::PageRowAction(index, 0)));
+            chips.push((0, x + 3 + w, 3, Target::PageRowAction(index, 1)));
             detail_lines(&mut lines);
         }
         RowKind::Number {
@@ -618,8 +620,8 @@ fn lay_out(
                 ],
             ));
             let x = label_width as u16;
-            chips.push((0, x, 3, 0));
-            chips.push((0, x + 3 + w, 3, 1));
+            chips.push((0, x, 3, Target::PageRowAction(index, 0)));
+            chips.push((0, x + 3 + w, 3, Target::PageRowAction(index, 1)));
             detail_lines(&mut lines);
         }
         RowKind::Text { value, secret, .. } => {
@@ -767,26 +769,42 @@ fn lay_out(
                 }
             }
             if !actions.is_empty() {
-                // Chips flow onto further lines rather than being cut off.
-                // 按钮排不下时换到下一行，而不是被截断。
-                let mut line_index = lines.len();
+                // Chips stay on one line; those without room fold into an overflow menu. The
+                // keyboard-chosen chip stays visible so Left / Right never move onto a hidden one.
+                // 按钮保持单行；放不下的收进溢出菜单。键盘选中的按钮始终可见，左右键不会移到隐藏按钮。
+                let line_index = lines.len();
+                let chosen = state.action.min(actions.len() - 1);
+                let texts: Vec<String> = actions
+                    .iter()
+                    .map(|action| format!(" {} ", truncate(&action.label, width.saturating_sub(6))))
+                    .collect();
+                let widths: Vec<usize> = texts.iter().map(|text| width_of(text)).collect();
+                let shown = fit_strip(
+                    &widths,
+                    1,
+                    width.saturating_sub(2),
+                    width_of(OVERFLOW_CHIP),
+                    (state.cursor == index).then_some(chosen),
+                );
                 let mut spans = vec![Span::raw("  ")];
                 let mut x = 2u16;
-                for (chip, action) in actions.iter().enumerate() {
-                    let text = format!(" {} ", truncate(&action.label, width.saturating_sub(6)));
-                    let w = width_of(&text) as u16;
-                    if (x + w) as usize > width && x > 2 {
-                        let full = std::mem::replace(&mut spans, vec![Span::raw("  ")]);
-                        lines.push(Line::from(full));
-                        line_index += 1;
-                        x = 2;
+                let mut folded = Vec::new();
+                for (chip, (action, text)) in actions.iter().zip(texts).enumerate() {
+                    if !shown.contains(&chip) {
+                        folded.push(MenuItem {
+                            label: action.label.clone(),
+                            hint: String::new(),
+                            action: action.action.clone(),
+                            danger: action.tone == Tone::Bad,
+                        });
+                        continue;
                     }
+                    let w = width_of(&text) as u16;
                     let color = match action.tone {
                         Tone::Normal | Tone::Muted => theme.fg,
                         tone => tone_color(theme, tone),
                     };
-                    let active =
-                        chip == state.action.min(actions.len() - 1) && state.cursor == index;
+                    let active = chip == chosen && state.cursor == index;
                     let style = if active {
                         Style::new()
                             .fg(theme.primary_fg)
@@ -801,8 +819,20 @@ fn lay_out(
                     };
                     spans.push(Span::styled(text, style));
                     spans.push(Span::raw(" "));
-                    chips.push((line_index, x, w, chip));
+                    chips.push((line_index, x, w, Target::PageRowAction(index, chip)));
                     x += w + 1;
+                }
+                if !folded.is_empty() {
+                    spans.push(Span::styled(
+                        OVERFLOW_CHIP,
+                        Style::new().fg(theme.fg).bg(theme.control_bg()),
+                    ));
+                    chips.push((
+                        line_index,
+                        x,
+                        width_of(OVERFLOW_CHIP) as u16,
+                        Target::Do(UiAction::OpenMenu(Box::new(overflow_menu(folded)))),
+                    ));
                 }
                 lines.push(Line::from(spans));
             }

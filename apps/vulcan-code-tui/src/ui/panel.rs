@@ -16,13 +16,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
-use super::chrome::{ButtonKind, button, button_style};
-use super::text::{compact_count, compact_duration, fit, spinner, truncate, width_of, wrap};
+use super::chrome::{ButtonKind, button, button_style, overflow_chip, overflow_menu};
+use super::text::{
+    OVERFLOW_CHIP, compact_count, compact_duration, fit, fit_strip, spinner, truncate, width_of,
+    wrap,
+};
 use super::theme::{Theme, mix};
 use crate::app::action::UiAction;
 use crate::app::commands::AppCommand;
 use crate::app::hit::{ScrollTarget, Target};
 use crate::app::insight::{self, MemoryEntry};
+use crate::app::overlay::MenuItem;
 use crate::app::{App, Focus, PanelTab};
 use crate::backend::GitBusy;
 use crate::model::*;
@@ -108,18 +112,28 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         return;
     }
 
-    // Tab strip: wraps onto as many rows as the labels need, then a rule.
-    // 标签条：按标签所需换成多行，然后是一条分隔线。
+    // Tab strip: one line; tabs without room fold into an overflow menu, the active tab stays.
+    // 标签条：单行；放不下的标签收进溢出菜单，当前标签始终可见。
     let left = inner.x + 1;
     let right = inner.right().saturating_sub(1);
-    let (mut x, mut y) = (left, inner.y);
-    for tab in PanelTab::ALL {
-        let text = tab_text(app, tab);
-        let w = width_of(&text) as u16;
-        if x > left && x + w > right {
-            x = left;
-            y += 1;
-        }
+    let y = inner.y;
+    let texts: Vec<(PanelTab, String)> = PanelTab::ALL
+        .into_iter()
+        .map(|tab| (tab, tab_text(app, tab)))
+        .collect();
+    let widths: Vec<usize> = texts.iter().map(|(_, text)| width_of(text)).collect();
+    let active_index = PanelTab::ALL.iter().position(|tab| *tab == app.panel_tab);
+    let shown = fit_strip(
+        &widths,
+        1,
+        right.saturating_sub(left) as usize,
+        width_of(OVERFLOW_CHIP),
+        active_index,
+    );
+    let mut x = left;
+    for &index in &shown {
+        let (tab, text) = (texts[index].0, &texts[index].1);
+        let w = widths[index] as u16;
         let active = app.panel_tab == tab;
         let style = if active {
             Style::new()
@@ -135,10 +149,22 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
             width: w.min(right.saturating_sub(x)),
             height: 1,
         };
-        buf.set_string(x, y, truncate(&text, rect.width as usize), style);
+        buf.set_string(x, y, truncate(text, rect.width as usize), style);
         app.hits.add(rect, Target::PanelTab(tab));
         x += w + 1;
     }
+    let folded: Vec<MenuItem> = texts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !shown.contains(index))
+        .map(|(_, (tab, text))| MenuItem {
+            label: text.trim().to_string(),
+            hint: String::new(),
+            action: UiAction::ShowPanel(*tab),
+            danger: false,
+        })
+        .collect();
+    overflow_chip(app, buf, x, y, Style::new().fg(theme.muted_fg), folded);
     let rule_y = y + 1;
     buf.set_string(
         inner.x,
@@ -307,15 +333,44 @@ fn scrollbar(theme: &Theme, track: Rect, offset: usize, total: usize, buf: &mut 
     }
 }
 
-/// A row of small buttons starting at `indent` columns.
-/// 从 `indent` 列开始的一行小按钮。
-fn chip_row(app: &App, indent: u16, items: Vec<(String, bool, bool, UiAction)>) -> Row {
+/// A one-line row of small buttons starting at `indent` columns within `width`; buttons without
+/// room fold into an overflow chip, while the active one always stays visible.
+/// 从 `indent` 列开始、宽度不超过 `width` 的单行小按钮；放不下的按钮收进溢出按钮，当前按钮始终可见。
+fn chip_row(
+    app: &App,
+    indent: u16,
+    width: usize,
+    items: Vec<(String, bool, bool, UiAction)>,
+) -> Row {
     let theme = &app.theme;
+    let texts: Vec<String> = items
+        .iter()
+        .map(|(label, ..)| format!(" {label} "))
+        .collect();
+    let widths: Vec<usize> = texts.iter().map(|text| width_of(text)).collect();
+    let shown = fit_strip(
+        &widths,
+        1,
+        width.saturating_sub(indent as usize),
+        width_of(OVERFLOW_CHIP),
+        items.iter().position(|(_, active, ..)| *active),
+    );
+    let normal = button_style(app, ButtonKind::Normal, theme.sidebar);
     let mut spans = vec![Span::raw(" ".repeat(indent as usize))];
     let mut chips = Vec::new();
+    let mut folded = Vec::new();
     let mut x = indent;
-    for (label, active, danger, action) in items {
-        let text = format!(" {label} ");
+    for (index, ((label, active, danger, action), text)) in items.into_iter().zip(texts).enumerate()
+    {
+        if !shown.contains(&index) {
+            folded.push(MenuItem {
+                label,
+                hint: String::new(),
+                action,
+                danger,
+            });
+            continue;
+        }
         let w = width_of(&text) as u16;
         let style = if active {
             button_style(app, ButtonKind::Focused, theme.sidebar)
@@ -324,12 +379,20 @@ fn chip_row(app: &App, indent: u16, items: Vec<(String, bool, bool, UiAction)>) 
                 .fg(theme.danger)
                 .bg(mix(theme.accent, theme.sidebar, 0.9))
         } else {
-            button_style(app, ButtonKind::Normal, theme.sidebar)
+            normal
         };
         spans.push(Span::styled(text, style));
         spans.push(Span::raw(" "));
         chips.push((x, w, action));
         x += w + 1;
+    }
+    if !folded.is_empty() {
+        spans.push(Span::styled(OVERFLOW_CHIP, normal));
+        chips.push((
+            x,
+            width_of(OVERFLOW_CHIP) as u16,
+            UiAction::OpenMenu(Box::new(overflow_menu(folded))),
+        ));
     }
     Row {
         line: Line::from(spans),
@@ -394,16 +457,36 @@ fn git_buttons(app: &App, area: Rect, buf: &mut Buffer) {
             UiAction::App(AppCommand::Push),
         ),
     ];
+    // Each row stays on one line; buttons without room fold into its overflow menu.
+    // 每行保持单行；放不下的按钮收进该行的溢出菜单。
     for (row, items) in [first, second].into_iter().enumerate() {
         let y = area.y + row as u16;
+        let widths: Vec<usize> = items
+            .iter()
+            .map(|(label, _, _)| width_of(label) + 2)
+            .collect();
+        let shown = fit_strip(
+            &widths,
+            1,
+            area.width as usize,
+            width_of(OVERFLOW_CHIP),
+            None,
+        );
         let mut x = area.x;
-        for (label, style, action) in items {
-            let w = width_of(&label) as u16 + 2;
-            if x + w > area.right() {
-                break;
+        let mut folded = Vec::new();
+        for (index, (label, style, action)) in items.into_iter().enumerate() {
+            if shown.contains(&index) {
+                x += button(app, buf, x, y, &label, style, action) + 1;
+            } else {
+                folded.push(MenuItem {
+                    label,
+                    hint: String::new(),
+                    action,
+                    danger: false,
+                });
             }
-            x += button(app, buf, x, y, &label, style, action) + 1;
         }
+        overflow_chip(app, buf, x, y, normal, folded);
     }
 }
 
@@ -752,6 +835,7 @@ fn memory(app: &App, width: usize, focused: bool) -> Vec<Row> {
     let mut out = vec![chip_row(
         app,
         0,
+        width,
         vec![
             (
                 format!(
@@ -1130,6 +1214,7 @@ fn stats(app: &App, width: usize) -> Vec<Row> {
             out.push(chip_row(
                 app,
                 2,
+                width,
                 vec![(
                     format!("＋ {}", tr!("composer.goal")),
                     false,
@@ -1201,6 +1286,7 @@ fn stats(app: &App, width: usize) -> Vec<Row> {
             out.push(chip_row(
                 app,
                 2,
+                width,
                 insight::goal_actions(conversation_id, goal)
                     .into_iter()
                     .map(|(label, danger, action)| (label, false, danger, action))
@@ -1452,20 +1538,5 @@ fn agent_detail(
             .into_iter()
             .map(|(label, danger, action)| (label, false, danger, action)),
     );
-    // Wrap the controls onto a second row when the panel is narrow.
-    // 面板较窄时将控制按钮换到第二行。
-    let mut row: Vec<(String, bool, bool, UiAction)> = Vec::new();
-    let mut used = 3;
-    for chip in chips {
-        let w = width_of(&chip.0) + 3;
-        if used + w > width && !row.is_empty() {
-            out.push(chip_row(app, 3, std::mem::take(&mut row)));
-            used = 3;
-        }
-        used += w;
-        row.push(chip);
-    }
-    if !row.is_empty() {
-        out.push(chip_row(app, 3, row));
-    }
+    out.push(chip_row(app, 3, width, chips));
 }

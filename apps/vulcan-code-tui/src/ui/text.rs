@@ -109,6 +109,45 @@ pub fn fit(text: &str, width: usize) -> String {
     format!("{cut}{}", " ".repeat(pad))
 }
 
+/// Label of the chip that collects the items a one-line strip has no room for.
+/// 收纳单行按钮条放不下的项目的按钮标签。
+pub const OVERFLOW_CHIP: &str = " ⋯ ";
+
+/// Chooses which items of a one-line strip are shown; the rest fold into an overflow chip.
+/// 选择单行按钮条中显示哪些项目；其余项目收进溢出按钮。
+/// `widths` are item widths in order, `gap` the space between items, `room` the line width,
+/// `more` the overflow chip width and `keep` an item that must stay visible (the active one).
+/// Returns the shown indices in their original order; all of them when everything fits.
+/// `widths` 为按顺序排列的项目宽度，`gap` 为项目间距，`room` 为行宽，`more` 为溢出按钮宽度，
+/// `keep` 为必须保持可见的项目（当前项）。返回按原顺序排列的显示序号；全部放得下时返回全部。
+pub fn fit_strip(
+    widths: &[usize],
+    gap: usize,
+    room: usize,
+    more: usize,
+    keep: Option<usize>,
+) -> Vec<usize> {
+    let total = widths.iter().sum::<usize>() + gap * widths.len().saturating_sub(1);
+    if total <= room {
+        return (0..widths.len()).collect();
+    }
+    let keep = keep.filter(|k| *k < widths.len());
+    let mut used = more + keep.map_or(0, |k| widths[k] + gap);
+    let mut shown: Vec<usize> = keep.into_iter().collect();
+    for (index, width) in widths.iter().enumerate() {
+        if Some(index) == keep {
+            continue;
+        }
+        if used + width + gap > room {
+            break;
+        }
+        used += width + gap;
+        shown.push(index);
+    }
+    shown.sort_unstable();
+    shown
+}
+
 struct Token {
     text: String,
     style: Style,
@@ -357,6 +396,21 @@ mod tests {
         let lines = wrap(&spans, 6, &[Span::raw("> ")], &[Span::raw("  ")]);
         let texts: Vec<String> = lines.iter().map(text_of).collect();
         assert_eq!(texts, vec!["> aaa", "  bbb", "  ccc"]);
+    }
+
+    /// A strip shows everything when it fits; otherwise it keeps a prefix plus the kept item and
+    /// leaves room for the overflow chip, never exceeding the line.
+    /// 放得下时按钮条全部显示；否则保留前缀与必须可见项，并为溢出按钮留出空间，不超出行宽。
+    #[test]
+    fn strip_folds_what_does_not_fit_and_keeps_the_active_item() {
+        let widths = [6, 6, 6, 6];
+        assert_eq!(fit_strip(&widths, 1, 27, 3, None), vec![0, 1, 2, 3]);
+        let shown = fit_strip(&widths, 1, 20, 3, None);
+        assert_eq!(shown, vec![0, 1]);
+        let shown = fit_strip(&widths, 1, 20, 3, Some(3));
+        assert_eq!(shown, vec![0, 3]);
+        let used: usize = shown.iter().map(|i| widths[*i] + 1).sum::<usize>() + 3;
+        assert!(used <= 20);
     }
 
     #[test]
