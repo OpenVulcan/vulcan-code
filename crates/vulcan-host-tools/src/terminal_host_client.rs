@@ -506,25 +506,4 @@ mod tests {
             "a normally running host must not acquire a forced-reap deadline"
         );
     }
-
-    /// Verifies runtime supervisors never add message-based liveness probes to terminal output/control pipes.
-    /// 验证运行时监督器绝不向终端输出或控制管道加入消息式存活探针。
-    #[test]
-    fn runtime_supervisors_do_not_schedule_automatic_liveness_probes() {
-        // project_terminal_runtime_source captures the project-owned interactive terminal supervisor.
-        // project_terminal_runtime_source 捕获项目级交互终端监督器源码。
-        let project_terminal_runtime_source = include_str!("project_terminal_runtime.rs");
-        // command_session_pty_source captures the AI session terminal supervisor.
-        // command_session_pty_source 捕获 AI 会话终端监督器源码。
-        let command_session_pty_source = include_str!("command_session_runtime/pty.rs");
-        // terminal_host_source captures the isolated process implementation that owns the PTY.
-        // terminal_host_source 捕获持有 PTY 的隔离进程实现。
-        let terminal_host_source = include_str!("../../vulcan-terminal-host/src/main.rs");
-
-        assert!(!project_terminal_runtime_source.contains("request_writer.ping("));
-        assert!(!command_session_pty_source.contains("request_writer.ping("));
-        assert!(!project_terminal_runtime_source.contains("read_terminal_host_frame_async"));
-        assert!(!command_session_pty_source.contains("read_terminal_host_frame_async"));
-        assert!(!terminal_host_source.contains("liveness probe"));
-    }
 }

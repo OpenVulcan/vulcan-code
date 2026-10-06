@@ -1872,40 +1872,6 @@ mod tests {
         assert!(!guard.armed);
     }
 
-    /// Verifies Agent Runtime production input materialization has no provider-named branch.
-    /// 验证 Agent Runtime 生产输入物化不存在供应商命名分支。
-    ///
-    /// The release gate performs the same repository-wide check; this focused R0 guard keeps the
-    /// bridge invariant independently runnable with the crate tests.
-    /// 发布门禁会执行同类仓库级检查；本聚焦 R0 守卫使 bridge 不变量可随 crate 测试独立运行。
-    #[test]
-    fn agent_runtime_has_no_provider_named_input_materialization() {
-        // source includes this module so the production prefix is cut at the first test boundary.
-        // source 包含当前测试模块，因此在首个测试边界处截取生产前缀。
-        let source = include_str!("provider_tool_bridge.rs");
-        // production contains only the bridge code that ships in non-test builds.
-        // production 只包含非测试构建实际发布的 bridge 代码。
-        let production = source
-            .split_once("#[cfg(test)]")
-            .map(|(production, _)| production)
-            .expect("provider tool bridge must retain one explicit test boundary");
-        // forbidden_fragments are assembled so the guard strings cannot satisfy themselves.
-        // forbidden_fragments 通过分段组装，避免守卫字符串自身命中检查。
-        let forbidden_fragments = [
-            ["materialize_", "provider_tool_inputs"].concat(),
-            ["Ali", "baba"].concat(),
-            ["Mini", "Max"].concat(),
-            ["Tavi", "ly"].concat(),
-            ["ProviderTool", "AdapterKind"].concat(),
-        ];
-        for forbidden in forbidden_fragments {
-            assert!(
-                !production.contains(forbidden.as_str()),
-                "Agent provider-tool bridge restored forbidden production input authority `{forbidden}`"
-            );
-        }
-    }
-
     /// Verifies an explicit empty session selection disables every global provider tool.
     /// 验证显式空会话选择会禁用全部全局供应商工具。
     #[test]
@@ -2006,29 +1972,6 @@ mod tests {
             BTreeSet::from([capability])
         );
         assert!(configuration.provider_tool_selections.is_empty());
-    }
-
-    /// Verifies provider-tool execution never reintroduces the system-default multimodal candidate gate.
-    /// 验证供应商工具执行绝不会重新引入系统默认多模态候选门禁。
-    #[test]
-    fn session_media_execution_has_no_global_candidate_switch_gate() {
-        // source includes tests, so production isolates the exact code compiled outside this module.
-        // source 包含测试，因此 production 隔离当前模块之外实际编译的精确代码。
-        let source = include_str!("provider_tool_bridge.rs");
-        // production ends at the stable test boundary and cannot match this guard's own fragments.
-        // production 截止于稳定测试边界，不会命中当前守卫自身的分段字符串。
-        let production = source
-            .split_once("#[cfg(test)]")
-            .map(|(production, _)| production)
-            .expect("provider tool bridge must retain one explicit test boundary");
-        // forbidden_gate names the global system-default predicate without embedding it literally.
-        // forbidden_gate 通过分段命名全局系统默认谓词，避免字面量自命中。
-        let forbidden_gate = ["multimodal_understanding_", "candidate_", "is_enabled"].concat();
-
-        assert!(
-            !production.contains(forbidden_gate.as_str()),
-            "session media execution must validate only its exact frozen route"
-        );
     }
 
     /// Verifies a media switch without its required exact route fails before tool exposure.

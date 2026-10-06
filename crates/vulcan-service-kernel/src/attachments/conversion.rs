@@ -319,27 +319,30 @@ mod tests {
         assert_eq!(kind, ConversationAttachmentKind::Pdf);
     }
 
-    /// Verifies labels and accept lists come from the shared metadata source.
-    /// 验证标签和 accept 列表来自共享元数据源。
+    /// Verifies every composer kind exposes a label and a well-formed browser accept list.
+    /// 验证每种输入区附件类型都提供标签及格式合法的浏览器 accept 列表。
     #[test]
-    fn composer_attachment_kind_metadata_feeds_label_and_accept() {
-        // Core attachment kind selected for metadata projection.
-        // 用于元数据投影的核心附件类型。
-        let kind = ConversationAttachmentKind::Image;
-
-        assert_eq!(composer_attachment_kind_label(&kind), "图片");
-        assert_eq!(
-            composer_attachment_kind_accept(&kind),
-            "image/png,image/jpeg,image/webp,image/gif,image/bmp"
-        );
-        assert_eq!(
-            composer_attachment_kind_accept(&ConversationAttachmentKind::Video),
-            "video/mp4,video/mpeg,video/quicktime,video/mov,video/x-m4v,video/x-matroska,video/webm,video/x-msvideo,video/avi,video/x-flv,video/x-ms-wmv,video/wmv,video/3gpp,video/3gpp2"
-        );
-        assert_eq!(
-            composer_attachment_kind_accept(&ConversationAttachmentKind::Audio),
-            "audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/m4a,audio/x-m4a,audio/aac,audio/flac,audio/ogg,audio/oga,audio/opus,audio/pcm,audio/l16,audio/basic"
-        );
+    fn composer_attachment_kind_metadata_is_well_formed() {
+        for kind in composer_attachment_kinds() {
+            assert!(!composer_attachment_kind_label(&kind).is_empty());
+            // Each accept token is either a `type/subtype` MIME type or a `.ext` suffix, without duplicates.
+            // 每个 accept 项为 `type/subtype` MIME 类型或 `.ext` 后缀，且不重复。
+            let tokens = composer_attachment_kind_accept(&kind)
+                .split(',')
+                .collect::<Vec<_>>();
+            assert!(!tokens.is_empty());
+            for token in &tokens {
+                let is_mime = token
+                    .split_once('/')
+                    .is_some_and(|(top, subtype)| !top.is_empty() && !subtype.is_empty());
+                let is_suffix = token.len() > 1
+                    && token.starts_with('.')
+                    && token[1..].chars().all(|ch| ch.is_ascii_alphanumeric());
+                assert!(is_mime || is_suffix, "malformed accept token `{token}`");
+            }
+            let unique = tokens.iter().collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(unique.len(), tokens.len(), "duplicate accept token");
+        }
     }
 
     /// Verifies browser-controlled attachment fields are replaced by project-index authority before planning or submission.

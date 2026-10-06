@@ -28,6 +28,10 @@ where
 {
     // command receives the process-visibility contract at construction so callers cannot omit it.
     // command 在构造时即获得进程可见性契约，调用方无法遗漏该策略。
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the shared factory is the single sanctioned process constructor"
+    )]
     let mut command = StdCommand::new(program);
     #[cfg(windows)]
     {
@@ -156,45 +160,6 @@ pub fn apply_child_path_prefixes(
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_CREATE_NO_WINDOW;
-
-    /// Verifies every shell-tool process entrypoint constructs children through the shared factory.
-    /// 验证每个 Shell 工具进程入口都通过共享工厂构造子进程。
-    #[test]
-    fn shell_tool_process_entrypoints_use_shared_background_factories() {
-        // shellCommandSource owns the one-shot shell process entrypoint.
-        // shellCommandSource 持有一次性 Shell 进程入口。
-        let shell_command_source =
-            include_str!("../../vulcan-agent-runtime/src/tooling/native/shell_command.rs");
-        // commandSessionSource owns the pipe-backed long-lived process entrypoint.
-        // commandSessionSource 持有管道后端长生命周期进程入口。
-        let command_session_source = include_str!("command_session_runtime/runtime.rs");
-        // processTreeSource owns the Windows process-tree stop helper entrypoints.
-        // processTreeSource 持有 Windows 进程树停止辅助入口。
-        let process_tree_source = include_str!("process_tree.rs");
-        // terminalHostSource owns the isolated PTY host process entrypoint.
-        // terminalHostSource 持有隔离 PTY 宿主进程入口。
-        let terminal_host_source = include_str!("terminal_host_client.rs");
-
-        assert!(shell_command_source.contains("new_background_tokio_command(&program)"));
-        assert!(
-            command_session_source
-                .contains("new_background_tokio_command(&request.launcher_program)")
-        );
-        assert!(process_tree_source.contains("new_background_tokio_command(\"taskkill\")"));
-        assert!(process_tree_source.contains("new_background_std_command(\"taskkill\")"));
-        assert!(
-            terminal_host_source
-                .contains("new_background_tokio_command(crate::runtime_assets::native_host_path(")
-        );
-
-        assert!(!shell_command_source.contains("TokioCommand::new(&program)"));
-        assert!(!command_session_source.contains("TokioCommand::new(&request.launcher_program)"));
-        assert!(!process_tree_source.contains("TokioCommand::new(\"taskkill\")"));
-        assert!(!process_tree_source.contains("StdCommand::new(\"taskkill\")"));
-        assert!(
-            !terminal_host_source.contains("Command::new(crate::runtime_assets::native_host_path(")
-        );
-    }
 
     /// Verifies the shared Windows background policy uses the operating-system no-window flag.
     /// 验证共享 Windows 后台策略使用操作系统无窗口标志。

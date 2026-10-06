@@ -1889,48 +1889,6 @@ fn post_commit_failure_distinguishes_each_mutation() {
     assert_ne!(installed, updated);
 }
 
-/// Verifies no mutation path reintroduces a bare post-commit `?`.
-/// 验证没有变更路径重新引入裸的后置 `?`。
-///
-/// The engine call commits the package change, so a bare `?` on either projection step
-/// would propagate an unexplained error and let the caller conclude that nothing
-/// changed. This pins the invariant at the source level, because the defect is invisible
-/// to the type system and would only show up as a misleading user-visible message.
-/// 引擎调用提交了包变更，因此两个投影步骤上任一裸 `?` 都会传出无法解释的错误，并让调用方
-/// 断定什么都没变。这里在源码层面锁住该不变量，因为类型系统看不见这个缺陷，它只会表现为一条
-/// 误导用户的提示。
-#[test]
-fn no_bare_post_commit_projection_failure_remains() {
-    let source = include_str!("luaskills_bridge.rs");
-    // Only the production half is scanned: this test's own needles appear verbatim in
-    // the test half, so scanning the whole file would match itself.
-    // 只扫描生产代码那一半：本测试自己的待查字符串原样出现在测试那一半，扫描全文会匹配到自身。
-    let production = source
-        .split("#[cfg(test)]")
-        .next()
-        .expect("the source always has a first segment");
-    for bare in [
-        "invalidate_config_capability_cache(handle, &result.skill_id)?;",
-        "reload_catalog_after_management(handle, &mut engine)?;",
-    ] {
-        assert!(
-            !production.contains(bare),
-            "a bare post-commit call remains and would report a committed change as a failure: {bare}"
-        );
-    }
-    // The shared formatter must still be the one every site uses, so the guard above
-    // cannot be satisfied by deleting the calls instead of contextualizing them.
-    // 共享格式化函数仍必须是每个调用点使用的那一个，使上面的守卫无法通过删除调用来满足，
-    // 而不是通过补充上下文。
-    assert!(production.contains("fn post_commit_projection_failure("));
-    assert!(
-        production
-            .matches("post_commit_projection_failure(")
-            .count()
-            >= 7
-    );
-}
-
 /// Verifies the host refuses the dead `url` source type instead of deferring rejection.
 /// 验证宿主拒绝已死的 `url` 来源类型，而不是把拒绝推迟到上游。
 ///

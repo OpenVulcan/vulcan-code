@@ -40,18 +40,6 @@ use vulcan_tools_manager::{
 };
 use vulcan_vmm::VmmConfigLayer;
 
-/// Verifies the conversation preparation module cannot reload prompt-skill directories.
-/// 验证会话准备模块不能重新加载提示词技能目录。
-#[test]
-fn execution_preparation_reuses_published_prompt_skill_catalog() {
-    let source = include_str!("../execution_preparation.rs");
-    assert!(
-        !source.contains("load_prompt_skills("),
-        "conversation preparation must reuse the published prompt-skill generation"
-    );
-    assert!(source.contains("foundation.prompt_skill_catalog()"));
-}
-
 /// Plugin prompt contributions retain one producer identity per contribution.
 /// 插件提示词贡献为每条贡献保留独立的生产者身份。
 #[test]

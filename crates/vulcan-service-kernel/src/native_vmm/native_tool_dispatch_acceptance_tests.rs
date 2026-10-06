@@ -15,6 +15,14 @@ use vulcan_tools_manager::{
 };
 use vulcan_vmm::{VmmBackendMode, VmmConfigLayer};
 
+/// Returns the Markdown receipt a native VMM tool delivers to the model, naming `tool` on mismatch.
+/// 返回原生 VMM 工具交付给模型的 Markdown 回执，不匹配时在错误中注明 `tool`。
+fn markdown_output<'a>(output: &'a serde_json::Value, tool: &str) -> &'a str {
+    output
+        .as_str()
+        .unwrap_or_else(|| panic!("{tool} output should be a Markdown string: {output}"))
+}
+
 /// Returns the exact registered memory-tool family used by production exposure filtering.
 /// 返回生产暴露过滤所用的准确已注册记忆工具族。
 fn memory_tool_ids() -> Vec<String> {
@@ -194,17 +202,13 @@ pub(super) async fn verify(
         .await
         .expect("real native search dispatch")
         .model_output;
-    assert_eq!(search["query_count"], 1);
-    let hit = search["results"][0]["hits"]
-        .as_array()
-        .expect("projected search hits")
-        .iter()
-        .find(|hit| hit["memory_id"] == extracted.memory_id)
-        .expect("same physically extracted memory");
-    assert_eq!(hit["abstract"], extracted.abstract_text);
-    assert_eq!(hit["source_turn_id"], extracted.source_turn_id);
-    assert_eq!(hit["retrieval"]["source_kind"], "turn");
-    assert_eq!(hit["retrieval"]["origin"], "hybrid_rrf");
+    // Model-visible results are Markdown receipts whose layout may evolve; assert only that the
+    // physically extracted memory's identity and facts reach the model.
+    // 模型可见结果是版式可能演进的 Markdown 回执；仅断言物理提取记忆的身份与事实送达模型。
+    let search = markdown_output(&search, "search");
+    assert!(search.contains(&extracted.memory_id.to_string()));
+    assert!(search.contains(&extracted.abstract_text));
+    assert!(search.contains(&extracted.source_turn_id.to_string()));
     // details follow the exact source turn returned by actual search, preserving the original conversation.
     // details 跟随实际搜索返回的准确来源回合，保留原始对话。
     let details = active
@@ -217,14 +221,9 @@ pub(super) async fn verify(
         .await
         .expect("real native details dispatch")
         .model_output;
-    assert_eq!(details["turn_count"], 1);
-    assert_eq!(details["turns"][0]["turn_id"], extracted.source_turn_id);
-    assert!(
-        details["turns"][0]["user_question"]
-            .as_str()
-            .expect("source question")
-            .contains("PostgreSQL")
-    );
+    let details = markdown_output(&details, "turn details");
+    assert!(details.contains(&extracted.source_turn_id.to_string()));
+    assert!(details.contains("PostgreSQL"), "original user question");
     // write_args use only the advertised schema, with an explicit durable project scope and synthetic content.
     // write_args 仅使用已声明 Schema，并带有明确持久项目作用域及合成内容。
     let write_args = serde_json::json!({"items": [{"abstract": "Native tool dispatch acceptance", "details": "Synthetic project decision for isolated native tool dispatch.", "category": 1, "scopeLevel": 2, "priority": 2, "memoryLevel": 2}]});
@@ -233,7 +232,9 @@ pub(super) async fn verify(
         .memory_records(project_id, None)
         .await
         .expect("physical before Plan guard");
-    let refused = active
+    // The Plan guard is proven by unchanged storage, not by its refusal wording.
+    // Plan 闸门由存储未变证明，而非其拒绝文案。
+    active
         .invoke_tool(
             &write_tool,
             write_args.clone(),
@@ -242,13 +243,6 @@ pub(super) async fn verify(
         )
         .await
         .expect("Plan execution guard");
-    assert!(
-        refused
-            .model_output
-            .as_str()
-            .expect("Plan refusal")
-            .contains("Plan Mode is active")
-    );
     assert_eq!(
         maintenance
             .memory_records(project_id, None)
@@ -263,19 +257,30 @@ pub(super) async fn verify(
         .await
         .expect("real native write dispatch")
         .model_output;
-    assert_eq!(written["item_count"], 1);
-    let memory_id = written["items"][0]["memory_id"]
-        .as_u64()
-        .expect("committed native identity");
+    let written = markdown_output(&written, "write");
+    // Storage, not receipt parsing, identifies the one committed memory.
+    // 由存储而非回执解析识别唯一已提交记忆。
     let committed = maintenance
         .memory_records(project_id, None)
         .await
         .expect("physical committed direct memory");
-    let direct = committed
+    let new_memories = committed
         .memories
         .iter()
-        .find(|memory| memory.memory_id == memory_id)
-        .expect("written memory physically exists");
+        .filter(|memory| {
+            before
+                .memories
+                .iter()
+                .all(|existing| existing.memory_id != memory.memory_id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(new_memories.len(), 1, "exactly one committed memory");
+    let direct = new_memories[0];
+    let memory_id = direct.memory_id;
+    assert!(
+        written.contains(&memory_id.to_string()),
+        "receipt names {memory_id}"
+    );
     assert_eq!(direct.summary, "Native tool dispatch acceptance");
     assert_eq!(
         direct.session_source_id.as_deref(),
@@ -284,10 +289,10 @@ pub(super) async fn verify(
     // deletion consumes only the identity returned by the actual write, then verifies physical removal.
     // deletion 仅消费实际写入返回的身份，然后验证物理删除。
     let deleted = active.invoke_tool(&definition(&active, "vmm_memory_delete"), serde_json::json!({"memoryIds": [memory_id], "reason": "Remove isolated acceptance fixture."}), invocation(session_id, 5), "Build").await.expect("real native delete dispatch").model_output;
-    assert_eq!(deleted["deleted_count"], 1);
-    assert_eq!(
-        deleted["deleted_memory_ids"],
-        serde_json::json!([memory_id])
+    let deleted = markdown_output(&deleted, "deletion");
+    assert!(
+        deleted.contains(&memory_id.to_string()),
+        "receipt names {memory_id}"
     );
     assert!(
         maintenance

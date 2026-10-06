@@ -1,6 +1,10 @@
 //! Shared agent runtime for provider execution, tools, and streaming turns.
 //! 共享代理运行时，负责 Provider 执行、工具调用与流式轮次。
 
+// Test fixtures may spawn helper processes directly; production code goes through the shared factories.
+// 测试夹具可直接启动辅助进程；生产代码一律经由共享工厂。
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 #![expect(
     clippy::too_many_arguments,
     reason = "agent-runtime provider and tool boundary adapters currently mirror protocol and runtime context fields; objectifying every adapter is a dedicated architecture refactor."

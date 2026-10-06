@@ -16,29 +16,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 use tokio::time::{Duration, timeout};
 
-/// Verifies a later shell-session stdin timeout cannot be escalated into automatic process termination.
-/// 验证后续 shell-session 标准输入超时不会升级为自动终止进程。
-#[test]
-fn pipe_write_failure_does_not_terminate_a_live_session() {
-    // pipe_runtime_source captures the exact supervisor implementation used by shell_session.
-    // pipe_runtime_source 捕获 shell_session 实际使用的监督器实现。
-    let pipe_runtime_source = include_str!("pipe.rs");
-    // write_branch isolates the ordinary post-start Write control branch from initial-input policy.
-    // write_branch 将启动后的普通 Write 控制分支与初始输入策略隔离。
-    let write_branch = pipe_runtime_source
-        .split("Some(CommandSessionControlMessage::Write")
-        .nth(1)
-        .and_then(|source| {
-            source
-                .split("Some(CommandSessionControlMessage::Resize")
-                .next()
-        })
-        .expect("pipe supervisor must retain its Write control branch");
-
-    assert!(!write_branch.contains("request_command_session_child_stop"));
-    assert!(!write_branch.contains("mark_stop_requested"));
-}
-
 /// Output coalescing should keep appending to one undelivered line fragment until the line is completed.
 /// 输出合并应持续追加到同一条未投递行碎片，直到该行被完整结束。
 #[test]

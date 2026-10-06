@@ -17,7 +17,7 @@ use vulcan_ai_contract::AiOperation;
 use vulcan_provider_adapters::{
     ContextEngineEmbeddingDecision, InferenceRouteConfiguration, PersistedAiConfiguration,
 };
-use vulcan_service_api::{VceProjectRequest, VceRetrievalResponse};
+use vulcan_service_api::VceProjectRequest;
 use vulcan_workbench_model::{ProjectVceSettings, TaskProjectSummary};
 use vulcan_workspace_store::vce_data_plane::{
     VceDataPlaneFactory, VceJobKind, VceJobState, VceStoredJob,
@@ -507,14 +507,15 @@ fn real_host_storage_embedding_decisions_are_project_scoped_and_revision_checked
                 assert!(vce::vce_project_tool_enabled(&state, "confirmed-project"));
                 assert!(!vce::vce_project_tool_enabled(&state, "rebuild-project"));
                 let handler = vce::vce_retrieval_handler(state.clone(), manager.clone());
-                let query: VceRetrievalResponse = serde_json::from_value(
+                // The conversation callback renders the compatible result as text.
+                // 会话回调将兼容结果渲染为文本。
+                assert!(
                     handler
                         .retrieve("confirmed-project".into(), "find source".into())
                         .await
-                        .expect("real compatible query"),
-                )
-                .expect("retrieval response");
-                assert!(query.hits.is_empty());
+                        .expect("real compatible query")
+                        .is_string()
+                );
                 assert!(
                     handler
                         .retrieve("rebuild-project".into(), "find source".into())

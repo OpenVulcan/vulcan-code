@@ -624,18 +624,7 @@ APIKEY.FAN 曾因为 Manifest 已修改而 Index 仍保存旧 SHA-256 和旧字�
 rtk cargo run -p vulcan-provider-manifest-cli -- build-index crates/vulcan-runtime-assets/resources/provider-manifests/manifests --revision <index-revision> --key-id bundled-package-integrity-v1 --issued-ms <unix-ms> --expires-ms 253402300799999 --relative-prefix manifests --out crates/vulcan-runtime-assets/resources/provider-manifests/bundled-index.json
 ```
 
-### 8.2 Registry Golden
-
-系统供应商可观察形态发生有意变化后，需要更新 Registry Golden：
-
-```powershell
-rtk proxy powershell -NoProfile -Command '$env:VULCAN_GENERATE_GOLDEN = "1"; cargo test -p vulcan-provider-adapters --test golden_snapshot'
-rtk cargo test -p vulcan-provider-adapters --test golden_snapshot
-```
-
-必须先生成，再用普通模式比较；不能只保留生成模式的一次通过。
-
-### 8.3 同步到运行资源
+### 8.2 同步到运行资源
 
 所有源码资源和测试完成后执行：
 

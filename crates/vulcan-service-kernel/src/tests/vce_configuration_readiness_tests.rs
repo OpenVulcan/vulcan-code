@@ -510,11 +510,16 @@ fn real_host_storage_registered_configuration_revokes_existing_index_access() {
             }).await.expect("empty initialization deadline");
             assert_eq!(completed.state, VceJobState::Succeeded, "initial diagnostic: {completed:?}");
             assert!(vce::vce_project_tool_enabled(&state, "project-a"));
-            let baseline: vulcan_service_api::VceRetrievalResponse = serde_json::from_value(
+            // The conversation callback renders text; typed checkpoint facts come from the manager.
+            // 会话回调渲染文本；强类型检查点事实来自管理器。
+            assert!(
                 handler.retrieve("project-a".into(), "find cache code".into()).await
-                    .expect("retrieve initialized empty scope through real callback"))
-                    .expect("typed retrieval response");
-            assert!(baseline.hits.is_empty());
+                    .expect("retrieve initialized empty scope through real callback")
+                    .is_string()
+            );
+            let baseline = manager.retrieve("project-a", "find cache code").await
+                .expect("typed initialized retrieval");
+            assert!(baseline.result.hits.is_empty());
             for case in 0..5 {
                 // Only the registered runtime is replaced; the callback, manager and published index remain unchanged.
                 // 仅替换已注册运行时配置；回调、管理器及已发布索引保持不变。
@@ -552,10 +557,10 @@ fn real_host_storage_registered_configuration_revokes_existing_index_access() {
                 assert_eq!(compact_plan.checkpoint_version, Some(baseline.checkpoint_version));
                 runtime.replace_configuration(valid.clone()).expect("restore exact model routes");
                 assert!(vce::vce_project_tool_enabled(&state, "project-a"), "case {case} recovery");
-                let recovered: vulcan_service_api::VceRetrievalResponse = serde_json::from_value(
-                    handler.retrieve("project-a".into(), "find cache code".into()).await
-                        .expect("existing index recovers without rebuilding"))
-                        .expect("typed recovered response");
+                handler.retrieve("project-a".into(), "find cache code".into()).await
+                    .expect("existing index recovers without rebuilding");
+                let recovered = manager.retrieve("project-a", "find cache code").await
+                    .expect("typed recovered retrieval");
                 assert_eq!(recovered.checkpoint_version, baseline.checkpoint_version);
             }
             for case in 0..3 {
@@ -634,14 +639,14 @@ fn real_host_storage_registered_configuration_revokes_existing_index_access() {
                     .expect("read successful-recovery admission")
             );
             assert!(vce::vce_project_tool_enabled(&state, "project-a"));
-            let recovered_after_close: vulcan_service_api::VceRetrievalResponse =
-                serde_json::from_value(
-                    handler
-                        .retrieve("project-a".into(), "find cache code".into())
-                        .await
-                        .expect("retrieve after failed window-close recovery"),
-                )
-                .expect("typed recovered response after failed window close");
+            handler
+                .retrieve("project-a".into(), "find cache code".into())
+                .await
+                .expect("retrieve after failed window-close recovery");
+            let recovered_after_close = manager
+                .retrieve("project-a", "find cache code")
+                .await
+                .expect("typed recovered retrieval after failed window close");
             assert_eq!(
                 recovered_after_close.checkpoint_version,
                 baseline.checkpoint_version

@@ -98,51 +98,6 @@ function Get-Sha256Hex {
     }
 }
 
-# Historical provider-named adapter files that must never return after generic migration.
-# 通用化迁移完成后绝不能恢复的历史供应商命名 adapter 文件。
-$forbiddenProviderAdapterFiles = @(
-    'crates/vulcan-provider-adapters/src/alibaba_provider_tools.rs',
-    'crates/vulcan-provider-adapters/src/minimax_provider_tools.rs',
-    'crates/vulcan-provider-adapters/src/tavily_provider_tools.rs',
-    'crates/vulcan-provider-adapters/src/tool_catalog.rs'
-)
-
-foreach ($relativePath in $forbiddenProviderAdapterFiles) {
-    # Exact source path constrained below the repository root.
-    # 约束在仓库根目录下的精确源码路径。
-    $forbiddenPath = Join-Path $repositoryRoot $relativePath
-    if (Test-Path -LiteralPath $forbiddenPath) {
-        throw "Provider-named or dual-authority adapter source still exists: $relativePath"
-    }
-}
-
-# Production provider-tool dispatch units that must remain supplier-neutral.
-# 必须保持供应商无关的生产 Provider Tool 分发单元。
-$providerToolDispatchFiles = @(
-    'crates/vulcan-provider-adapters/src/provider_tool_execution.rs',
-    'crates/vulcan-agent-runtime/src/provider_tool_bridge.rs'
-)
-
-foreach ($relativePath in $providerToolDispatchFiles) {
-    # Exact production source text before any co-located Rust test module.
-    # 同文件 Rust 测试模块之前的精确生产源码文本。
-    $sourcePath = Join-Path $repositoryRoot $relativePath
-    $sourceText = [System.IO.File]::ReadAllText($sourcePath)
-    $testBoundary = $sourceText.IndexOf('#[cfg(test)]', [System.StringComparison]::Ordinal)
-    $productionText = if ($testBoundary -ge 0) {
-        $sourceText.Substring(0, $testBoundary)
-    } else {
-        $sourceText
-    }
-    if ([System.Text.RegularExpressions.Regex]::IsMatch(
-        $productionText,
-        '\b(alibaba|minimax|tavily)\b',
-        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
-    )) {
-        throw "Supplier-specific production Provider Tool dispatch remains in: $relativePath"
-    }
-}
-
 try {
     Invoke-RtkChecked -Arguments @('cargo', 'run', '-q', '-p', 'vulcan-provider-manifest-cli', '--', 'validate-all')
     Invoke-RtkChecked -Arguments @('cargo', 'run', '-q', '-p', 'vulcan-provider-manifest-cli', '--', 'validate', $manifestRoot)

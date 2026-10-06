@@ -276,7 +276,6 @@ mod conversation_submission_queue_tests;
 mod detached_subagent_tests;
 mod goal_recovery_tests;
 mod goal_todolist_tests;
-mod hot_path_scan_guard_tests;
 mod mcp_settings_tests;
 mod pending_question_projection_tests;
 mod prompt_runtime_state_tests;

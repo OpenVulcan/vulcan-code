@@ -115,7 +115,7 @@ cargo hakari verify
 
 正式服务日志的归属、轮转和过滤规则见 [服务诊断日志](service-diagnostics.md)。被忽略测试的分类、离线串行门禁及外部验收前置条件见 [显式测试入口](explicit-test-gates.md)。
 
-服务内核的开发模式采用根 `Cargo.toml` 中的包级 `debug = "limited"`：保留源码位置和回溯信息，减少完整类型及局部变量调试信息。原因是 Windows 实测完整调试内核归档达到 4,247,716,754 字节，符号索引已变为 `/SYM64/`，MSVC 报无效库格式并在服务链接时产生 49 个未解析符号；这些符号实际仍存在于归档中。该设置只影响内核包，测试模式继承开发模式，发布模式及其他依赖的设置保持原定义。需要完整局部变量调试信息时，应先解决内核归档体积问题，再覆盖此设置。
+服务内核的开发模式采用根 `Cargo.toml` 中的包级 `debug = "limited"`：保留源码位置和回溯信息，减少完整类型及局部变量调试信息。原因是 Windows 实测完整调试内核归档达到 4,247,716,754 字节，符号索引已变为 `/SYM64/`，MSVC 报无效库格式并在服务链接时产生 49 个未解析符号；这些符号实际仍存在于归档中。该设置只影响内核包，测试模式继承开发模式，发布模式及其他依赖的设置保持原定义。需要完整局部变量调试信息时，应先解决内核归档体积问题，再覆盖此设置。第三方依赖另以 `[profile.dev.package."*"] debug = "line-tables-only"` 只保留行表：回溯仍含源码位置，链接时间与 PDB 体积随之下降；工作区 crate 不受此设置影响。需要单步进入第三方源码时，临时为该依赖单独覆盖为 `debug = true`。
 
 根目录 `.cargo/config.toml` 设置 `build.jobs = 4`，限制 Cargo 编译进程并发；同时以 `RUST_TEST_THREADS = 4` 约束常规测试 harness。`.config/nextest.toml` 将 nextest 默认测试线程限制为 4。
 
@@ -133,6 +133,34 @@ cargo test --doc
 ```
 
 如果确实需要临时提高并发度，应在任务记录中说明原因，并确认不会影响开发机响应性或共享资源测试的稳定性。
+
+### 本地测试入口
+
+仓库尚未启用 CI，整套 Rust 测试只能由本地入口定期执行：
+
+| 命令 | 内容 |
+| --- | --- |
+| `make test` | 以 nextest `fast` 配置运行全工作区测试，跳过依赖真实流逝时间或完整插件生命周期的测试（实测每项 13–200 秒）。 |
+| `make test full` | 运行全部 nextest 测试、`scripts/test-isolated-callbacks.mjs` 中的进程隔离回调测试，以及 `cargo test --doc`。 |
+
+两者都由 `scripts/test-rust.mjs` 执行，并继承 `.config/nextest.toml` 的线程上限与串行组。`fast` 的排除名单只在 `.config/nextest.toml` 的 `[profile.fast]` 中维护；新增长耗时测试时更新该过滤器，并用 `cargo nextest list --profile fast` 核对实际排除结果。合并或发布前执行 `make test full`。
+
+### 手动验证夹具
+
+下列脚本不属于 `make test`，只在修改对应模块时手动执行；它们都只使用合成数据或可丢弃进程，不触碰用户配置、数据库或正在运行的发行实例。修改对应生产代码后若夹具不再成立，必须同一任务中修正或删除，不能留下无法通过的脚本。
+
+| 脚本 | 何时执行 | 执行方式 |
+| --- | --- | --- |
+| `scripts/test_core_debug_cycle.ps1` | 修改 Debug Core 强制重启归属逻辑 | `pwsh -File`，无参数 |
+| `scripts/test_distribution_processes.ps1` | 修改发行目录发布与进程占用处理 | `pwsh -File`，无参数 |
+| `scripts/test_cargo_artifact_cleanup.ps1` | 修改 Cargo 产物清理；会执行真实隔离 Cargo 构建，耗时较长 | `pwsh -File`，无参数 |
+| `scripts/test_rust_third_party_notices_index.ps1` | 修改第三方声明索引器或 `THIRD_PARTY_NOTICES.md` | `pwsh -File`，无参数 |
+| `scripts/test_context7_plugin.lua` | 修改 Context7 插件 Bundle | 在 Vulcan Lua 运行时中执行，传入 `plugin_path`；`online` 可选开启在线冒烟 |
+| `scripts/test_statistics_cost_pagination.lua`、`scripts/test_statistics_page_projections.lua` | 修改用量统计插件的费用累加或分页视图 | 在 Vulcan Lua 运行时中执行，传入 `plugin_path`，`change_revision` 可选 |
+| `scripts/test_vulcan_plugin_lua_modules.lua` | 修改 Vulcan Plugin 白名单 Lua 模块桥 | 在 Vulcan Lua 运行时中执行，传入 `bridge_path` 与 `workspace_root` |
+| `scripts/sync_common_model_capabilities.ps1` | 同步公共模型能力目录与 Provider Manifest | `pwsh -File`；会改写 `common_model_capabilities.json`，执行后审阅差异 |
+| `scripts/audit_cliproxy_protocol_changes.ps1` | 审计 CLIProxyAPI 协议兼容差异 | `pwsh -File`；参数默认指向本机 CLIProxyAPI 检出与最近审核基线，可用 `-RepositoryPath`、`-BaselineCommit` 覆盖；只读上游仓库，改写 `docs/protocol-compatibility/cliproxy-audit-latest.md` |
+| `scripts/plugin-runtime-validation/` | 历史证据：LuaSkills 0.5.9 → 0.6 迁移的性能对照，迁移已完成，不作为当前验证入口 | 见目录内 `README.md` |
 
 
 ## 锁定命令行构建输入

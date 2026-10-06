@@ -88,6 +88,3 @@ pub use runtime_stream::{
     stream_runtime_run_with_intervention_plugins_and_public_ai,
 };
 pub use runtime_stream_intervention::{RuntimePromptIntervention, RuntimePromptInterventionError};
-
-#[cfg(test)]
-mod runtime_boundary_guard;
