@@ -363,29 +363,14 @@ fn deactivation_lifecycle_absent_declaration_retains_guard_until_explicit_confir
     );
 }
 
-/// Managed removal never borrows flat Install authority or grants ordinary published execution while its original File is held.
-/// 受管移除绝不借用平铺安装权威，也不在原文件持有时授予普通已发布执行。
+/// Managed removal never grants another manager, the Install scope or ordinary published execution while its original File is held.
+/// 受管移除在原文件持有时绝不授予另一管理器、安装作用域或普通已发布执行。
 #[test]
-fn deactivation_lifecycle_refuses_flat_entry_wrong_root_and_scope_before_native_effects() {
+fn deactivation_lifecycle_refuses_wrong_root_and_scope_before_native_effects() {
     let (fixture, store, selected) = fixture(true, false);
     // Hold exact original managed removal ownership throughout every rejected authority attempt.
     // 在每个被拒绝权威尝试期间持有精确原受管移除所有权。
     let removal = reserve(&store, &selected);
-    for event in [
-        VulcanPluginLegacyLifecycleEvent::Install,
-        VulcanPluginLegacyLifecycleEvent::Uninstall,
-    ] {
-        assert!(
-            fixture
-                .manager
-                .prepare_legacy_lifecycle_call(
-                    "hook-plugin",
-                    event,
-                    removal.lifecycle_guard().expect("same actual guard")
-                )
-                .is_err()
-        );
-    }
     // Another actual manager has an unrelated root and no right to consume this original.
     // 另一个实际管理器具有无关根，无权消费此原实例。
     let other = Fixture::new();

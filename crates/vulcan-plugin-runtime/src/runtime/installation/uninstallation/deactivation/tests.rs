@@ -2,110 +2,35 @@
 //! 实际受管本地移除测试覆盖真实选择生产者、回调、物理租约及不确定清理。
 
 use super::*;
-use crate::{
-    VulcanPluginCredentialBackend, VulcanPluginCredentialKey, VulcanPluginCredentialRevision,
-    VulcanPluginCredentialValues, VulcanPluginGenerationStore,
-};
+use crate::VulcanPluginGenerationStore;
+use crate::runtime::tests::{test_manager, write_user_plugin_package};
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-mod flat_predecessor;
-
-/// The real source declares no credential slots; every unexpected secure call fails rather than fabricating absence.
-/// 真实来源未声明凭据槽位；每个意外安全调用失败，而非虚构缺失。
-struct NoCredentialSlots;
-impl VulcanPluginCredentialBackend for NoCredentialSlots {
-    /// plugin_id/revision/key are unexpected for this actual empty inventory; returns an explicit fixture failure.
-    /// plugin_id／revision／key 对实际空清单为意外；返回明确夹具失败。
-    fn read(
-        &self,
-        _plugin_id: &str,
-        _revision: &VulcanPluginCredentialRevision,
-        _key: &VulcanPluginCredentialKey,
-    ) -> Result<Option<String>, String> {
-        Err("No credential slots were declared by the actual fixture.".into())
-    }
-    /// plugin_id/revision/key/value must never be sent for the empty declaration; returns explicit failure.
-    /// 空声明绝不能发送 plugin_id／revision／key／value；返回明确失败。
-    fn write(
-        &self,
-        _plugin_id: &str,
-        _revision: &VulcanPluginCredentialRevision,
-        _key: &VulcanPluginCredentialKey,
-        _value: &str,
-    ) -> Result<(), String> {
-        Err("No credential slots were declared by the actual fixture.".into())
-    }
-    /// plugin_id/revision/key cannot imply an invented secure deletion; returns explicit failure.
-    /// plugin_id／revision／key 不能暗示虚构安全删除；返回明确失败。
-    fn delete(
-        &self,
-        _plugin_id: &str,
-        _revision: &VulcanPluginCredentialRevision,
-        _key: &VulcanPluginCredentialKey,
-    ) -> Result<(), String> {
-        Err("No credential slots were declared by the actual fixture.".into())
-    }
-}
-
-/// Publish a real managed successor of the actual flat fixture without retaining a package pin in the returned tuple.
-/// 发布实际平铺夹具真实受管后继，不在返回元组内保留包固定。
-/// root owns all bytes and versioned chooses the actual credential-staging producer; returns actual manager/store/complete selection.
-/// root 拥有全部字节，versioned 选择实际凭据暂存生产者；返回实际管理器／存储／完整选择。
+/// Publish a real managed selection through the production store writers and project its disabled descriptor.
+/// 通过生产存储写入器发布真实受管选择，并投影其停用描述符。
+/// root owns all bytes; returns actual manager/store/complete selection without retaining a package pin.
+/// root 拥有全部字节；返回实际管理器／存储／完整选择，不保留包固定。
 fn fixture(
     root: &Path,
-    versioned: bool,
 ) -> (
     VulcanPluginRuntimeManager,
     VulcanPluginGenerationStore,
     VulcanPluginActivation,
 ) {
-    // Reuse the same real installation and raw state producers as flat removal acceptance.
-    // 复用与平铺移除验收相同真实安装及原始状态生产者。
-    let manager = super::super::tests::fixture(root);
-    // Prepare distributable bytes from the actual independent source created by that fixture.
-    // 从该夹具创建的实际独立来源准备可分发字节。
+    // No bundled identity can shadow this actual user-installed package.
+    // 没有内置身份可以覆盖此实际用户安装包。
+    let runtime_root = root.join("runtime");
+    let bundled = runtime_root.join("plugins");
+    fs::create_dir_all(&bundled).expect("create managed removal bundled root");
+    let manager = test_manager(&runtime_root, bundled);
+    // Source bytes remain independent from the immutable generation copy.
+    // 来源字节保持独立于不可变代次副本。
     let source = root.join("source/local-plugin");
-    // Actual inspection supplies the fingerprint rather than constructing an immutable identity.
-    // 实际检查提供指纹，而非构造不可变身份。
-    let inspected =
-        crate::inspect_user_plugin_package(&source).expect("actual managed local source");
-    // This store is rooted at the actual manager's user directory.
-    // 此存储以实际管理器用户目录为根。
+    write_user_plugin_package(&source, "local-plugin");
+    let selected = crate::install_user_package_for_test(manager.user_plugin_root(), &source);
     let store = VulcanPluginGenerationStore::open(manager.user_plugin_root())
         .expect("actual managed local store");
-    // The actual temporary package pin drops at function return.
-    // 实际临时包固定在函数返回时释放。
-    let package = store
-        .prepare(&source, &inspected.content_fingerprint)
-        .expect("actual immutable preparation");
-    // Complete permission authority is produced from the inspected source.
-    // 完整权限权威从已检查来源产生。
-    let permissions =
-        crate::runtime::plugin_required_permissions(&inspected).expect("actual source permissions");
-    // Both legacy and versioned selections come from production writers, never hand-built records.
-    // 旧式及版本化选择均来自生产写入器，绝非手工构造记录。
-    let selected = if versioned {
-        // Empty revision still has a real verified journal and actual package retention.
-        // 空修订仍具有真实已验证日志及实际包保留。
-        let revision = VulcanPluginCredentialRevision::allocate();
-        store
-            .begin_credential_staging(
-                &package,
-                revision.clone(),
-                &VulcanPluginCredentialValues::new(),
-            )
-            .expect("actual empty staging")
-            .write_and_finish(&NoCredentialSlots, &VulcanPluginCredentialValues::new())
-            .expect("actual verified empty journal");
-        store
-            .activate_with_credentials_for_test(&package, 0, permissions, revision)
-            .expect("actual versioned selection")
-    } else {
-        store
-            .activate_for_test(&package, 0, permissions)
-            .expect("actual legacy selection")
-    };
     manager
         .refresh_catalog(
             &BTreeSet::from([selected.plugin_id.clone()]),
@@ -115,8 +40,8 @@ fn fixture(
     (manager, store, selected)
 }
 
-/// Reserve the real selection File and all actual local preimages before any removal effects.
-/// 在任何移除效果之前预留真实选择文件及全部实际本地前像。
+/// Reserve the real selection File and its local cleanup owner before any removal effects.
+/// 在任何移除效果之前预留真实选择文件及其本地清理所有者。
 /// manager/store/selected are actual fixture producers; returns the non-cloneable retained pair.
 /// manager／store／selected 为实际夹具生产者；返回不可克隆保留配对。
 fn reserve(
@@ -159,117 +84,88 @@ fn assert_busy(manager: &VulcanPluginRuntimeManager) {
     );
 }
 
-/// Managed preimages precede the actual callback, while weak binding permits publication and does not block physical package GC.
-/// 受管前像先于实际回调，而弱绑定允许发布且不阻挡物理包回收。
+/// The local owner precedes the actual callback, while weak binding permits publication and does not block physical package GC.
+/// 本地所有者先于实际回调，而弱绑定允许发布且不阻挡物理包回收。
 #[test]
-fn deactivation_state_original_captures_callback_preimages_without_blocking_selection_or_package_gc()
- {
-    // Each protocol version is exercised through its actual source and credential producer.
-    // 每个协议版本通过实际来源及凭据生产者被覆盖。
-    for versioned in [false, true] {
-        // The temporary root outlives every real original and physical lease.
-        // 临时根比每个真实原实例及物理租约存活更久。
-        let temp = tempfile::tempdir().expect("actual managed preimage fixture");
-        // The tuple carries no retained immutable package pin.
-        // 元组不携带保留不可变包固定。
-        let (manager, store, selected) = fixture(temp.path(), versioned);
-        // Actual raw compatibility state is captured separately from versioned selection configuration.
-        // 实际原始兼容状态独立于版本化选择配置被捕获。
-        let config = plugin_config_state_path(manager.plugin_state_root(), "local-plugin");
-        fs::write(&config, b"before original callback").expect("actual pre-callback bytes");
-        // Both objects remain strongly retained throughout all failures and acknowledgements.
-        // 两个对象跨全部失败及确认继续强保留。
-        let (mut original, mut state) = reserve(&manager, &store, &selected);
-        assert_eq!(state.request_id(), original.request_id());
-        assert_eq!(
-            manager
-                .observe_deactivation_state(&state, &original)
-                .expect("inert local observation"),
-            VulcanPluginDeactivationStateObservation::Reserved
-        );
-        assert_eq!(
-            state
-                .original_state_preimages()
-                .find(|(path, _)| *path == config)
-                .expect("actual config slot")
-                .1,
-            Some(&b"before original callback"[..])
-        );
-        // Even an absent callback declaration retains the actual original namespace until explicit retirement.
-        // 即使回调声明缺失，也在明确退役之前保留实际原命名空间。
-        let mut call = manager
-            .prepare_deactivation_lifecycle_call(&original)
-            .expect("actual original callback");
-        call.start().expect("actual absent callback start");
-        assert!(
-            manager
-                .freeze_deactivation_state(&mut state, &mut original)
-                .is_err()
-        );
-        assert!(!state.cleanup_frozen && state.states.iter().all(|file| file.cleanup.is_none()));
-        assert!(store.publish_deactivation_retained(&mut original).is_err());
-        call.confirm_retired()
-            .expect("actual callback retirement")
-            .expect("actual callback result");
-        fs::write(&config, b"after original callback").expect("actual post-callback bytes");
-        assert_eq!(
-            manager
-                .freeze_deactivation_state(&mut state, &mut original)
-                .expect("exact post-callback freeze"),
-            VulcanPluginDeactivationStateObservation::Frozen
-        );
-        assert!(
-            manager
-                .freeze_deactivation_state(&mut state, &mut original)
-                .is_err()
-        );
-        assert!(
-            manager
-                .collect_deactivation_state(&mut state, &original)
-                .is_err()
-        );
-        assert!(config.exists() && !state.cleanup_started);
-        assert_eq!(
-            store
-                .publish_deactivation_retained(&mut original)
-                .expect("weak state identity cannot block actual publication"),
-            VulcanPluginDeactivationObservation::Published
-        );
-        // Only the actual manager catalog is removed here; this test does not claim a service Full pointer commit.
-        // 此处仅移除实际管理器目录；此测试不宣称服务完整指针提交。
+fn deactivation_state_original_freezes_after_callbacks_without_blocking_selection_or_package_gc() {
+    // The temporary root outlives every real original and physical lease.
+    // 临时根比每个真实原实例及物理租约存活更久。
+    let temp = tempfile::tempdir().expect("actual managed removal fixture");
+    // The tuple carries no retained immutable package pin.
+    // 元组不携带保留不可变包固定。
+    let (manager, store, selected) = fixture(temp.path());
+    // Both objects remain strongly retained throughout all failures and acknowledgements.
+    // 两个对象跨全部失败及确认继续强保留。
+    let (mut original, mut state) = reserve(&manager, &store, &selected);
+    assert_eq!(state.request_id(), original.request_id());
+    assert_eq!(
         manager
-            .refresh_catalog_with_deactivation(&BTreeSet::new(), &BTreeSet::new(), &original)
-            .expect("actual same-file tombstone catalog");
-        assert!(
-            store
-                .collect_deactivation_package_retained(&original)
-                .expect("no local-state package pin blocks real GC")
-        );
-        assert_eq!(
-            manager
-                .collect_deactivation_state(&mut state, &original)
-                .expect("actual local physical cleanup"),
-            VulcanPluginDeactivationStateObservation::Collected
-        );
-        assert_eq!(
-            state
-                .original_state_preimages()
-                .find(|(path, _)| *path == config)
-                .expect("same config preimage")
-                .1,
-            Some(&b"before original callback"[..])
-        );
-        assert_eq!(
-            manager
-                .collect_deactivation_state(&mut state, &original)
-                .expect("terminal absence confirmation only"),
-            VulcanPluginDeactivationStateObservation::Collected
-        );
-        assert_busy(&manager);
-        // Dormant flat predecessor bytes are outside this local API and cannot be counted as whole-uninstall completion.
-        // 休眠平铺前驱字节位于此本地接口之外，不能被计为整个卸载完成。
-        assert!(manager.user_plugin_root().join("local-plugin").is_dir());
-    }
+            .observe_deactivation_state(&state, &original)
+            .expect("inert local observation"),
+        VulcanPluginDeactivationStateObservation::Reserved
+    );
+    // Even an absent callback declaration retains the actual original namespace until explicit retirement.
+    // 即使回调声明缺失，也在明确退役之前保留实际原命名空间。
+    let mut call = manager
+        .prepare_deactivation_lifecycle_call(&original)
+        .expect("actual original callback");
+    call.start().expect("actual absent callback start");
+    assert!(
+        manager
+            .freeze_deactivation_state(&mut state, &mut original)
+            .is_err()
+    );
+    assert!(!state.cleanup_frozen);
+    assert!(store.publish_deactivation_retained(&mut original).is_err());
+    call.confirm_retired()
+        .expect("actual callback retirement")
+        .expect("actual callback result");
+    assert_eq!(
+        manager
+            .freeze_deactivation_state(&mut state, &mut original)
+            .expect("post-callback freeze"),
+        VulcanPluginDeactivationStateObservation::Frozen
+    );
+    assert!(
+        manager
+            .freeze_deactivation_state(&mut state, &mut original)
+            .is_err()
+    );
+    assert!(
+        manager
+            .collect_deactivation_state(&mut state, &original)
+            .is_err()
+    );
+    assert!(!state.cleanup_started);
+    assert_eq!(
+        store
+            .publish_deactivation_retained(&mut original)
+            .expect("weak state identity cannot block actual publication"),
+        VulcanPluginDeactivationObservation::Published
+    );
+    // Only the actual manager catalog is removed here; this test does not claim a service Full pointer commit.
+    // 此处仅移除实际管理器目录；此测试不宣称服务完整指针提交。
+    manager
+        .refresh_catalog_with_deactivation(&BTreeSet::new(), &BTreeSet::new(), &original)
+        .expect("actual same-file tombstone catalog");
+    assert!(
+        store
+            .collect_deactivation_package_retained(&original)
+            .expect("no local-state package pin blocks real GC")
+    );
+    assert_eq!(
+        manager
+            .collect_deactivation_state(&mut state, &original)
+            .expect("actual local physical cleanup"),
+        VulcanPluginDeactivationStateObservation::Collected
+    );
+    assert_eq!(
+        manager
+            .collect_deactivation_state(&mut state, &original)
+            .expect("terminal absence confirmation only"),
+        VulcanPluginDeactivationStateObservation::Collected
+    );
+    assert_busy(&manager);
 }
 
 /// A replacement real File with the same UUID and full record cannot adopt the old local original after its real owner is dropped.
@@ -281,7 +177,7 @@ fn deactivation_state_original_refuses_same_uuid_record_replacement_owner() {
     let temp = tempfile::tempdir().expect("actual same UUID replacement fixture");
     // All replacement evidence comes from the same actual selected producer record.
     // 全部替代证据来自相同实际已选生产者记录。
-    let (manager, store, selected) = fixture(temp.path(), false);
+    let (manager, store, selected) = fixture(temp.path());
     // The old local object cannot reacquire ownership on its own.
     // 旧本地对象不能自行重新获取所有权。
     let (original, mut state) = reserve(&manager, &store, &selected);
@@ -320,13 +216,6 @@ fn deactivation_state_original_refuses_same_uuid_record_replacement_owner() {
     manager
         .freeze_deactivation_state(&mut fresh, &mut replacement)
         .expect("fresh exact pair freeze");
-    assert!(
-        state
-            .states
-            .iter()
-            .filter(|file| file.original.is_some())
-            .all(|file| file.path.exists())
-    );
 }
 
 /// Another manager, even sharing literal roots, cannot operate the original local resources or repair its sequencing gate.
@@ -338,7 +227,7 @@ fn deactivation_state_original_refuses_other_actual_manager() {
     let temp = tempfile::tempdir().expect("actual other manager fixture");
     // This actual instance alone owns the pair.
     // 仅此实际实例拥有配对。
-    let (manager, store, selected) = fixture(temp.path(), true);
+    let (manager, store, selected) = fixture(temp.path());
     // Namespace allocation and actual manager allocation are independent exact binding requirements.
     // 命名空间分配及实际管理器分配为独立精确绑定要求。
     let (mut original, mut state) = reserve(&manager, &store, &selected);
@@ -364,16 +253,14 @@ fn deactivation_state_original_refuses_other_actual_manager() {
     assert_busy(&manager);
 }
 
-/// An actual environment reader prevents all state deletion; frozen foreign state and terminal resurrection are preserved.
-/// 实际环境读者阻止全部状态删除；固定后外来状态及终态复活保持保留。
+/// An actual environment reader prevents cleanup; a resurrected environment child after collection is preserved and reported.
+/// 实际环境读者阻止清理；回收之后复活的环境子级被保留并报告。
 #[test]
-fn deactivation_state_original_requires_real_environment_release_and_preserves_foreign_state() {
-    // This fixture uses a real versioned selected journal and independent filesystem environment File.
-    // 此夹具使用真实版本化已选日志及独立文件系统环境文件。
+fn deactivation_state_original_requires_real_environment_release_and_preserves_resurrection() {
+    // This fixture uses an independent filesystem environment File.
+    // 此夹具使用独立文件系统环境文件。
     let temp = tempfile::tempdir().expect("actual local environment refusal fixture");
-    // Actual raw flat-compatibility preimages remain owned beside the versioned source.
-    // 实际原始平铺兼容前像与版本化来源共同保持拥有。
-    let (manager, store, selected) = fixture(temp.path(), true);
+    let (manager, store, selected) = fixture(temp.path());
     // Shared lease blocks the same actual exclusive cleanup file.
     // 共享租约阻挡相同实际排他清理文件。
     let reader = crate::runtime::environment::retain_plugin_execution_environment(
@@ -381,12 +268,12 @@ fn deactivation_state_original_requires_real_environment_release_and_preserves_f
         "local-plugin",
     )
     .expect("actual shared environment File");
-    // This strongly retained pair survives both independent actual refusal causes.
-    // 此强保留配对跨两个独立实际拒绝原因存续。
+    // This strongly retained pair survives the actual refusal.
+    // 此强保留配对跨实际拒绝存续。
     let (mut original, mut state) = reserve(&manager, &store, &selected);
     manager
         .freeze_deactivation_state(&mut state, &mut original)
-        .expect("freeze actual cleanup files");
+        .expect("freeze actual cleanup");
     store
         .publish_deactivation_retained(&mut original)
         .expect("actual tombstone publication");
@@ -396,40 +283,14 @@ fn deactivation_state_original_requires_real_environment_release_and_preserves_f
             .is_err()
     );
     assert!(!state.cleanup_started && state.environment_cleanup.is_none());
-    assert!(
-        state
-            .states
-            .iter()
-            .filter(|file| file.original.is_some())
-            .all(|file| file.path.exists())
-    );
     drop(reader);
-    // Actual configuration was explicitly absent at freeze, so later bytes are foreign and must not be adopted.
-    // 固定时实际配置明确缺失，因此随后字节为外来且不得被接纳。
-    let config = plugin_config_state_path(manager.plugin_state_root(), "local-plugin");
-    fs::write(&config, b"foreign frozen-state replacement").expect("actual foreign bytes");
-    assert!(
-        manager
-            .collect_deactivation_state(&mut state, &original)
-            .is_err()
-    );
-    assert!(!state.cleanup_started);
-    assert_eq!(
-        fs::read(&config).expect("preserved foreign state"),
-        b"foreign frozen-state replacement"
-    );
-    assert!(
-        state
-            .states
-            .iter()
-            .filter(|file| file.original.is_some())
-            .all(|file| file.path.exists())
-    );
-    fs::remove_file(&config).expect("fixture explicitly resolves foreign conflict");
     manager
         .collect_deactivation_state(&mut state, &original)
         .expect("same original local cleanup");
-    fs::write(&config, b"terminal foreign resurrection").expect("actual later foreign bytes");
+    // A later foreign environment child is never deleted by a terminal observation or retry.
+    // 随后外来环境子级绝不被终态观测或重试删除。
+    let environment = manager.state.plugin_runtime_root.join("local-plugin");
+    fs::create_dir_all(&environment).expect("actual foreign environment child");
     assert!(
         manager
             .observe_deactivation_state(&state, &original)
@@ -440,10 +301,7 @@ fn deactivation_state_original_requires_real_environment_release_and_preserves_f
             .collect_deactivation_state(&mut state, &original)
             .is_err()
     );
-    assert_eq!(
-        fs::read(&config).expect("terminal foreign bytes preserved"),
-        b"terminal foreign resurrection"
-    );
+    assert!(environment.is_dir());
     assert_busy(&manager);
     assert!(
         crate::runtime::environment::retain_plugin_execution_environment(
@@ -465,7 +323,7 @@ fn deactivation_state_original_resumes_real_windows_partial_environment_cleanup(
     let temp = tempfile::tempdir().expect("actual partial environment fixture");
     // Actual producer selections supply every original identifier.
     // 实际生产者选择提供每个原标识。
-    let (manager, store, selected) = fixture(temp.path(), false);
+    let (manager, store, selected) = fixture(temp.path());
     // The physical child is under the exact host environment root used by its real lease.
     // 物理子级位于真实租约使用的精确宿主环境根内。
     let environment = manager.state.plugin_runtime_root.join("local-plugin");
@@ -494,12 +352,6 @@ fn deactivation_state_original_resumes_real_windows_partial_environment_cleanup(
             .is_err()
     );
     assert!(state.cleanup_started && !state.collected && state.environment_cleanup.is_some());
-    assert!(state.states.iter().all(|file| !file.path.exists()));
-    assert!(
-        state
-            .original_state_preimages()
-            .any(|(_, bytes)| bytes.is_some())
-    );
     assert_eq!(
         manager
             .observe_deactivation_state(&state, &original)
@@ -536,7 +388,7 @@ fn deactivation_state_original_recovers_true_terminal_error_and_panic_without_re
         let temp = tempfile::tempdir().expect("actual terminal uncertainty fixture");
         // The actual managed source establishes all state and physical ownership.
         // 实际受管来源建立全部状态及物理所有权。
-        let (manager, store, selected) = fixture(temp.path(), true);
+        let (manager, store, selected) = fixture(temp.path());
         // Strong originals outlive the cancelled acknowledgement wrapper.
         // 强原实例比被取消确认包装对象存活更久。
         let (mut original, mut state) = reserve(&manager, &store, &selected);
@@ -552,7 +404,6 @@ fn deactivation_state_original_recovers_true_terminal_error_and_panic_without_re
             &state.package_root,
             state.plugin_id(),
             state.request_id(),
-            observation::Checkpoint::Collected,
             panic,
         );
         // Only the synchronous actual cleanup invocation unwinds; originals remain allocated in this outer scope.
@@ -572,7 +423,7 @@ fn deactivation_state_original_recovers_true_terminal_error_and_panic_without_re
         assert!(state.collected && state.cleanup_started);
         assert_eq!(
             observation::counts_exact(&state.package_root, state.plugin_id(), state.request_id()),
-            (0, 1)
+            1
         );
         assert_eq!(
             manager
@@ -589,7 +440,7 @@ fn deactivation_state_original_recovers_true_terminal_error_and_panic_without_re
         assert!(!manager.state.session_registration_gate.is_poisoned());
         assert_eq!(
             observation::counts_exact(&state.package_root, state.plugin_id(), state.request_id()),
-            (0, 1)
+            1
         );
         assert_busy(&manager);
         assert!(
@@ -602,16 +453,14 @@ fn deactivation_state_original_recovers_true_terminal_error_and_panic_without_re
     }
 }
 
-/// Same-file ownership permits one local preimage owner only, including after that local object is accidentally dropped.
-/// 同文件所有权仅允许单个本地前像所有者，包括该本地对象意外释放之后。
+/// Same-file ownership permits one local owner only, including after that local object is accidentally dropped.
+/// 同文件所有权仅允许单个本地所有者，包括该本地对象意外释放之后。
 #[test]
-fn deactivation_state_original_rejects_duplicate_preimage_owner_and_unfrozen_publication() {
-    // Real selection admission is checked separately from opaque preimage ownership.
-    // 真实选择准入独立于不透明前像所有权被检查。
-    let temp = tempfile::tempdir().expect("actual single preimage owner fixture");
-    // The actual producer selects a versioned package with real empty credential journal.
-    // 实际生产者选择具有真实空凭据日志的版本化包。
-    let (manager, store, selected) = fixture(temp.path(), true);
+fn deactivation_state_original_rejects_duplicate_local_owner_and_unfrozen_publication() {
+    // Real selection admission is checked separately from local cleanup ownership.
+    // 真实选择准入独立于本地清理所有权被检查。
+    let temp = tempfile::tempdir().expect("actual single local owner fixture");
+    let (manager, store, selected) = fixture(temp.path());
     // This actual selection File remains strongly retained even after the local object is dropped.
     // 即使本地对象释放，此实际选择文件仍继续强保留。
     let (mut original, state) = reserve(&manager, &store, &selected);
@@ -623,61 +472,8 @@ fn deactivation_state_original_rejects_duplicate_preimage_owner_and_unfrozen_pub
             .expect("no publication was admitted"),
         VulcanPluginDeactivationObservation::Original
     );
-    assert!(
-        state
-            .states
-            .iter()
-            .filter(|file| file.original.is_some())
-            .all(|file| file.path.exists())
-    );
     drop(state);
     assert!(manager.reserve_deactivation_state(&mut original).is_err());
     assert!(store.publish_deactivation_retained(&mut original).is_err());
-    assert_busy(&manager);
-}
-
-/// An oversized actual cleanup file leaves every freeze slot unchanged and publication blocked until explicit original recovery.
-/// 实际超限清理文件保持每个固定槽未变，并在明确原恢复之前阻挡发布。
-#[test]
-fn deactivation_state_original_failed_bounded_freeze_does_not_adopt_partial_snapshots() {
-    // Actual opaque reads share the same sole resource budget as flat original removal.
-    // 实际不透明读取与平铺原移除共用相同唯一资源额度。
-    let temp = tempfile::tempdir().expect("actual bounded managed freeze fixture");
-    // Actual package and state producers establish a valid original before later state growth.
-    // 实际包及状态生产者在随后状态增长之前建立有效原实例。
-    let (manager, store, selected) = fixture(temp.path(), false);
-    // Both originals remain retained while all cleanup reads are staged before assignment.
-    // 全部清理读取先于赋值暂存期间，两个原实例继续保持保留。
-    let (mut original, mut state) = reserve(&manager, &store, &selected);
-    // This exact actual path was absent at original capture, rather than a guessed configuration default.
-    // 此精确实际路径在原捕获时缺失，而非猜测配置默认值。
-    let config = plugin_config_state_path(manager.plugin_state_root(), "local-plugin");
-    // Actual sparse growth exceeds the sole snapshot budget without allocating a comparable in-memory fixture.
-    // 实际稀疏增长超出唯一快照额度，不分配相近大小内存夹具。
-    let oversized = File::create(&config).expect("actual oversized cleanup file");
-    oversized
-        .set_len(super::super::super::MAX_PLUGIN_STATE_SNAPSHOT_BYTES + 1)
-        .expect("actual bounded overflow");
-    drop(oversized);
-    assert!(
-        manager
-            .freeze_deactivation_state(&mut state, &mut original)
-            .is_err()
-    );
-    assert!(!state.cleanup_frozen && state.states.iter().all(|file| file.cleanup.is_none()));
-    assert!(store.publish_deactivation_retained(&mut original).is_err());
-    assert_eq!(
-        store
-            .reconcile_deactivation_retained(&original)
-            .expect("same original remained selected"),
-        VulcanPluginDeactivationObservation::Original
-    );
-    fs::remove_file(&config).expect("fixture explicitly removes oversized foreign introduction");
-    manager
-        .freeze_deactivation_state(&mut state, &mut original)
-        .expect("same owner retries complete bounded freeze");
-    store
-        .publish_deactivation_retained(&mut original)
-        .expect("only true full freeze permits publication");
     assert_busy(&manager);
 }

@@ -1,12 +1,12 @@
-//! Selected managed approvals replace legacy sidecar authority without rewriting user state.
-//! 选定受管批准替代旧附属文件权威，不重写用户状态。
+//! Selected managed approvals are the sole user-plugin authorization authority.
+//! 选定受管批准是用户插件唯一授权权威。
 
 use super::*;
 
-/// The actual manager consumes one selected package/approval pair and never falls back after corruption.
-/// 实际管理器消费单个选定包与批准组合，损坏后绝不回退。
+/// The actual manager consumes one selected package/approval pair and blocks the plugin after corruption.
+/// 实际管理器消费单个选定包与批准组合，损坏后阻止该插件。
 #[test]
-fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
+fn managed_approval_runtime_uses_selected_grants_and_blocks_corrupt_selection() {
     // The real manager, immutable store and authorization files all belong to this isolated fixture.
     // 实际管理器、不可变存储及授权文件均属于此隔离夹具。
     let temp = tempfile::tempdir().expect("create runtime approval fixture");
@@ -50,18 +50,11 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
     let generation = store
         .prepare(&source, &preview.content_fingerprint)
         .expect("prepare approval package");
-    // Corrupt legacy state becomes a tripwire: the selection must neither read it nor repair it.
-    // 损坏旧状态成为检测点：选择不得读取或修补它。
-    let sidecar = runtime_root.join("plugin_state/local-plugin/authorization.json");
-    fs::create_dir_all(sidecar.parent().expect("sidecar parent"))
-        .expect("create sidecar tripwire directory");
-    fs::write(&sidecar, b"legacy approval deliberately unavailable")
-        .expect("write sidecar tripwire");
     store
         .activate_for_test(&generation, 0, preview.permissions.clone())
         .expect("publish package and approval");
-    // Runtime projection must accept the selection despite an unreadable legacy authorization document.
-    // 即使旧授权文档不可解码，运行时投影也必须接受该选择。
+    // Runtime projection accepts the selection from its approved permissions alone.
+    // 运行时投影仅依据已批准权限接受该选择。
     let selected = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("project selected approval");
@@ -75,17 +68,6 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
             .expect("managed descriptor")
             .approved_permissions(),
         preview.permissions.as_slice()
-    );
-    assert!(
-        manager
-            .authorize_user_plugin("local-plugin", preview.permissions.clone())
-            .expect_err("reject competing sidecar writer")
-            .message
-            .contains("activation transaction")
-    );
-    assert_eq!(
-        fs::read(&sidecar).expect("unchanged sidecar"),
-        b"legacy approval deliberately unavailable"
     );
     // Restarting the actual manager recovers approval from the same on-disk selection.
     // 重启实际管理器从相同磁盘选择恢复批准权限。
@@ -102,8 +84,8 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
     // 保留先前克隆不可变描述符时，仅损坏当前批准权限。
     let activation_path =
         runtime_root.join("user_plugins/.vulcan-generations/active/local-plugin.json");
-    // The malformed approval must not be silently filled from the old authorization path.
-    // 不得从旧授权路径静默补齐损坏批准。
+    // The malformed approval is never silently filled from another source.
+    // 损坏批准绝不从其他来源静默补齐。
     let mut record: serde_json::Value =
         serde_json::from_slice(&fs::read(&activation_path).expect("read selected file"))
             .expect("decode selected file");
@@ -130,9 +112,5 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
             .expect("old snapshot lease")
             .approved_permissions(),
         preview.permissions.as_slice()
-    );
-    assert_eq!(
-        fs::read(&sidecar).expect("retained legacy bytes"),
-        b"legacy approval deliberately unavailable"
     );
 }

@@ -2,14 +2,11 @@
 //! 旧格式可变配置及秘密写入者保留实际激活命名空间屏障。
 
 use super::{
-    VulcanPluginActivation, VulcanPluginActiveGeneration, VulcanPluginGenerationStore,
-    VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
-    VulcanPluginStoreResult as Result,
+    VulcanPluginActivation, VulcanPluginGenerationStore, VulcanPluginStoreError as Error,
+    VulcanPluginStoreErrorCode as Code, VulcanPluginStoreResult as Result,
 };
 use std::fs::File;
 use std::path::Path;
-
-mod initial_configuration;
 
 /// Exclusive original-selection authority retained across a legacy mutation's read, publication and rollback.
 /// 旧格式变更的读取、发布及回滚期间保留的排他原选择权威。
@@ -25,9 +22,6 @@ pub struct VulcanPluginLegacyMutationGuard {
     /// Complete originally selected activation, with explicit absence only for an unpublished namespace.
     /// 完整原已选激活，仅未发布命名空间使用显式缺失。
     original: Option<VulcanPluginActivation>,
-    /// Optional initial-install configuration intent survives all original lifecycle writes and uncertain returns.
-    /// 可选初始安装配置意图跨全部原生命周期写入及不确定返回存续。
-    configuration: std::sync::Mutex<Option<initial_configuration::InitialConfigurationOwnership>>,
     /// The real exclusive namespace file remains private and locked until this actual owner is dropped.
     /// 真实排他命名空间文件保持私有及加锁，直到此实际所有者释放。
     _namespace: File,
@@ -87,32 +81,6 @@ impl VulcanPluginLegacyMutationGuard {
         // 从唯一布局常量正向派生；绝不从猜测父目录推断用户根，也不初始化缺失子项。
         self.store.validate_layout()?;
         self.validate_owner(&self.store, plugin_id)
-    }
-
-    /// Pin `plugin_id` for catalog inspection using this guard's actual namespace and the supplied canonical `store`.
-    /// 使用此 guard 实际命名空间及传入规范 `store`，为目录检查固定 `plugin_id`。
-    /// Return the exact full selected activation and physical pins; actual original absence remains explicit None.
-    /// 返回精确完整已选激活及物理固定；实际原缺失保持为显式 None。
-    /// Validate complete original selection and pending authority first, so catalog reads cannot reopen a self-busy namespace or follow replacement state.
-    /// 首先校验完整原选择及待处理权威，使目录读取不能重开自身繁忙命名空间或跟随替代状态。
-    pub(crate) fn pin_active_for_catalog(
-        &self,
-        store: &VulcanPluginGenerationStore,
-        plugin_id: &str,
-    ) -> Result<VulcanPluginActiveGeneration> {
-        self.validate_owner(store, plugin_id)?;
-        #[cfg(test)]
-        self.observe_catalog_selection_after_validation_for_test()?;
-        // The actual pin helper rereads durable selection; reject a non-cooperating replacement between the two real reads.
-        // 实际固定辅助方法重新读取持久选择；拒绝两次真实读取之间的非协作替换。
-        let active = store.pin_active_locked(plugin_id)?;
-        if active.activation.as_ref() != self.original.as_ref() {
-            return Err(Error::new(
-                Code::Conflict,
-                "Catalog pins differ from the legacy guard's complete original activation.",
-            ));
-        }
-        Ok(active)
     }
 
     /// Arm one exact guard's test-only replacement after successful validation; return same-thread scoped cleanup.
@@ -311,7 +279,6 @@ impl VulcanPluginGenerationStore {
             store: self.clone(),
             plugin_id: plugin_id.to_owned(),
             original,
-            configuration: std::sync::Mutex::new(None),
             _namespace: namespace,
         })
     }
@@ -333,7 +300,6 @@ mod tests {
     use std::path::{Path, PathBuf};
     use uuid::Uuid;
 
-    mod catalog;
     mod user_root;
 
     /// Write plugin_id's valid remote configuration package beneath root and return its exact source path.

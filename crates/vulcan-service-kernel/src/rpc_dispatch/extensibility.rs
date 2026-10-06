@@ -26,8 +26,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_vulcan_plugin_credentials",
     "service_set_plugin_mcp_secret",
     "service_delete_plugin_mcp_secret",
-    "service_plugin_mcp_secret_mutation_requests",
-    "service_recover_plugin_mcp_secret_mutation",
     "service_load_plugin_ui_module",
     "service_read_plugin_text_asset",
     "service_invoke_plugin_action",
@@ -226,21 +224,6 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "pluginId")?,
                 rpc_required_param(params, "serverId")?,
                 rpc_required_param(params, "secretKey")?,
-            )
-            .await,
-        ),
-        "service_plugin_mcp_secret_mutation_requests" => {
-            rpc_json_result(service_plugin_mcp_secret_mutation_requests(
-                state,
-                rpc_required_param(params, "pluginId")?,
-            ))
-        }
-        "service_recover_plugin_mcp_secret_mutation" => rpc_json_result(
-            service_recover_plugin_mcp_secret_mutation(
-                app.clone(),
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "requestId")?,
             )
             .await,
         ),

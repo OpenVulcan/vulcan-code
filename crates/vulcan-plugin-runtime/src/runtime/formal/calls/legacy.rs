@@ -2,7 +2,7 @@
 //! 显式确认物理退役的受保护生命周期保留调用。
 
 use super::*;
-use crate::{VulcanPluginDeactivationReservation, VulcanPluginLegacyMutationGuard};
+use crate::VulcanPluginDeactivationReservation;
 
 /// Original ownership is either a declared real call or a verified absent declaration.
 /// 原所有权为已声明真实调用或已核验缺失声明。
@@ -22,8 +22,8 @@ enum LegacyCallOwnership {
     NoDeclaration(Arc<LegacyLifecycleExecution>),
 }
 
-/// Original flat lifecycle or explicitly reserved managed-Uninstall handle; waiting never acknowledges ownership.
-/// 原平铺生命周期或明确预留受管卸载句柄；等待绝不确认所有权。
+/// Explicitly reserved managed-Uninstall handle; waiting never acknowledges ownership.
+/// 明确预留受管卸载句柄；等待绝不确认所有权。
 pub struct VulcanPluginLegacyLifecycleCall {
     /// The actual original manager remains available for same-call cleanup.
     /// 实际原管理器持续可用于同调用清理。
@@ -183,43 +183,6 @@ fn consumed_error() -> VulcanPluginRuntimeError {
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Register an inert Install/Uninstall call using the same actual namespace guard.
-    /// 使用同一实际命名空间护栏登记未启动安装或卸载调用。
-    /// plugin_id selects the current disabled flat user package; no callback means no formal parent.
-    /// plugin_id 选择当前停用平铺用户包；无回调时不需要正式父级。
-    pub fn prepare_legacy_lifecycle_call(
-        &self,
-        plugin_id: &str,
-        event: VulcanPluginLegacyLifecycleEvent,
-        guard: Arc<VulcanPluginLegacyMutationGuard>,
-    ) -> Result<VulcanPluginLegacyLifecycleCall, VulcanPluginRuntimeError> {
-        // Retain the same original checked execution authority.
-        // 保留同一原已校验执行权威。
-        let authority = {
-            // Registration precedes namespace validation; the caller retains its existing namespace owner.
-            // 注册先于命名空间校验；调用方保留其既有命名空间所有者。
-            let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-            self.require_routing_publication_locked(
-                &_registration,
-                Some(crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(&guard)),
-            )?;
-            // Freeze the actual selected user descriptor for this original call.
-            // 为此原调用冻结实际选定用户描述符。
-            let plugin = self
-                .snapshot()
-                .plugins
-                .get(plugin_id)
-                .cloned()
-                .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new("Legacy lifecycle package is not installed.")
-                })?;
-            LegacyLifecycleExecution::new(&self.state, plugin, event, guard)?
-        };
-        self.register_guarded_lifecycle(authority)
-    }
-
     /// Register an inert managed Uninstall using this retained reservation's same actual namespace File.
     /// 使用此保留预留的同一实际命名空间文件，登记未启动受管卸载。
     /// original must precede publication and select the complete disabled managed package; returns one original call handle.
@@ -267,9 +230,6 @@ impl VulcanPluginRuntimeManager {
         &self,
         authority: Arc<LegacyLifecycleExecution>,
     ) -> Result<VulcanPluginLegacyLifecycleCall, VulcanPluginRuntimeError> {
-        // Use only the trusted event already frozen in the actual execution authority.
-        // 仅使用已在实际执行权威内固定的可信事件。
-        let event = authority.event();
         // The same actual descriptor owns the one plugin identity used by all admission effects.
         // 同一实际描述符拥有全部准入效果使用的单个插件身份。
         let plugin_id = &authority.plugin().id;
@@ -293,7 +253,7 @@ impl VulcanPluginRuntimeManager {
                         ),
                     ),
                 )?;
-                authority.validate(&self.state, authority.plugin(), event.scope())?;
+                authority.validate(&self.state, authority.plugin(), authority.scope())?;
                 if owner.has_retiring_capacities(plugin_id)? {
                     owner.prepare_plugin_capacities(plugin_id, &publication)?;
                 }
@@ -309,14 +269,14 @@ impl VulcanPluginRuntimeManager {
             // 登记任何执行副作用前构造原有界输入。
             let input = Preparation {
                 workspace: CallWorkspace::LifecycleEnvironment,
-                arguments: json!({"event": event.key(), "plugin_id": plugin_id}),
+                arguments: json!({"event": "uninstall", "plugin_id": plugin_id}),
                 finalizer: None,
                 admission: CallAdmission::LegacyLifecycle {
                     authority: Arc::clone(&authority),
                     export: export.to_owned(),
                 },
-                scope: event.scope(),
-                security_partition: format!("legacy-lifecycle:{}:{}", event.key(), Uuid::new_v4()),
+                scope: authority.scope(),
+                security_partition: format!("legacy-lifecycle:uninstall:{}", Uuid::new_v4()),
                 deadline,
             };
             // Retain the same registered call and its sole execution source.

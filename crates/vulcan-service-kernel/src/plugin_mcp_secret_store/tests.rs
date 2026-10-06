@@ -19,10 +19,6 @@ fn credential_binding_account_has_stable_framing_and_rejects_invalid_components(
         "sha256:cc775a89e39e013d09f43c71c32c31815528fc219a1bba789ed30dc3410b1788"
     );
     assert_ne!(
-        VERSIONED_PLUGIN_MCP_SECRET_SERVICE,
-        VULCAN_PLUGIN_MCP_SECRET_SERVICE
-    );
-    assert_ne!(
         versioned_plugin_secret_account("plugin-a", "ab", "c", &revision).unwrap(),
         versioned_plugin_secret_account("plugin-a", "a", "bc", &revision).unwrap()
     );
@@ -68,7 +64,7 @@ impl Drop for SecureFixtureEntries {
 /// 夹具使用随机插件命名空间，并在返回前移除每个已创建安全条目。
 #[cfg(windows)]
 #[test]
-fn credential_binding_windows_secure_store_keeps_legacy_and_revisions_separate() {
+fn credential_binding_windows_secure_store_keeps_revisions_separate() {
     // A unique namespace prevents test setup and cleanup from addressing any installed plugin.
     // 唯一命名空间防止测试准备及清理寻址任何已安装插件。
     let plugin = format!("credential-binding-test-{}", uuid::Uuid::new_v4());
@@ -78,39 +74,28 @@ fn credential_binding_windows_secure_store_keeps_legacy_and_revisions_separate()
     // A distinct revision occupies a different secure entry for the exact same declared key.
     // 不同修订为精确同一声明键占用不同安全条目。
     let second = VulcanPluginCredentialRevision::allocate();
-    // The legacy and versioned bindings all remain live to expose any unintended fallback.
-    // 旧绑定及版本绑定均保持有效，以暴露任何非预期回退。
-    let bindings = [
-        VulcanPluginCredentialBinding::Legacy,
-        VulcanPluginCredentialBinding::Revision(first.clone()),
-        VulcanPluginCredentialBinding::Revision(second.clone()),
-    ];
+    // Both revisions remain live to expose any unintended fallback.
+    // 两个修订均保持有效，以暴露任何非预期回退。
+    let revisions = [first.clone(), second.clone()];
+    let bindings = revisions
+        .clone()
+        .map(VulcanPluginCredentialBinding::Revision);
     // Cleanup owns every entry before any value is written.
     // 任何值写入前，清理所有者持有每个条目。
     let mut cleanup = SecureFixtureEntries {
         entries: Vec::new(),
     };
-    for binding in &bindings {
-        // Open exactly the production namespace selected by this declared binding.
-        // 打开此声明绑定选定的精确生产命名空间。
-        let entry = match binding {
-            VulcanPluginCredentialBinding::Legacy => {
-                plugin_secret_entry(&plugin, "server", "token")
-            }
-            VulcanPluginCredentialBinding::Revision(revision) => {
-                versioned_plugin_secret_entry(&plugin, "server", "token", revision)
-            }
-            VulcanPluginCredentialBinding::Unconfigured => {
-                unreachable!("the fixture declares only stored bindings")
-            }
-        }
-        .expect("open isolated secure fixture");
+    for revision in &revisions {
+        // Open exactly the production namespace selected by this revision.
+        // 打开此修订选定的精确生产命名空间。
+        let entry = versioned_plugin_secret_entry(&plugin, "server", "token", revision)
+            .expect("open isolated secure fixture");
         assert!(matches!(entry.get_password(), Err(KeyringError::NoEntry)));
         cleanup.entries.push(entry);
     }
     // Each entry receives a distinct, deliberately non-sensitive test value.
     // 每个条目接收不同且明确不敏感的测试值。
-    let values = ["fixture-legacy", "fixture-first", "fixture-second"];
+    let values = ["fixture-first", "fixture-second"];
     for (entry, value) in cleanup.entries.iter().zip(values) {
         entry
             .set_password(value)
@@ -159,16 +144,17 @@ fn credential_binding_windows_secure_store_keeps_legacy_and_revisions_separate()
             .expect("actual selected absence"),
         None
     );
-    assert_eq!(
+    // An unconfigured binding never reads any stored revision.
+    // 未配置绑定绝不读取任何已存储修订。
+    assert!(
         backend
             .read_secret(
                 &plugin,
                 "server",
                 "token",
-                &VulcanPluginCredentialBinding::Legacy
+                &VulcanPluginCredentialBinding::Unconfigured
             )
-            .unwrap(),
-        "fixture-legacy"
+            .is_err()
     );
     assert_eq!(
         backend

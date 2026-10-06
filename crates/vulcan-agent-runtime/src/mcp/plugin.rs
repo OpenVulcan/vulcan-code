@@ -623,9 +623,9 @@ pub(in crate::mcp) mod tests {
             key: &str,
             binding: &VulcanPluginCredentialBinding,
         ) -> Result<String, String> {
-            if *binding != VulcanPluginCredentialBinding::Legacy {
+            if !matches!(binding, VulcanPluginCredentialBinding::Revision(_)) {
                 return Err(String::from(
-                    "This fixture declares only legacy credentials.",
+                    "This fixture declares only revisioned credentials.",
                 ));
             }
             self.values
@@ -637,6 +637,14 @@ pub(in crate::mcp) mod tests {
                 .cloned()
                 .ok_or_else(|| format!("missing secret `{plugin_id}:{server_id}:{key}`"))
         }
+    }
+
+    /// Return one freshly allocated revision binding for fixtures that do not compare revisions.
+    /// 为不比较修订的夹具返回单个新分配修订绑定。
+    fn fixture_binding() -> VulcanPluginCredentialBinding {
+        VulcanPluginCredentialBinding::Revision(
+            vulcan_plugin_runtime::VulcanPluginCredentialRevision::allocate(),
+        )
     }
 
     /// Verifies literal, configuration, and Secret Store sources resolve through only their declared variant.
@@ -654,11 +662,12 @@ pub(in crate::mcp) mod tests {
             )]),
         };
         let config = json!({"endpoint": "https://example.test/mcp", "number": 7});
-        // These existing source tests explicitly select the legacy fixture namespace.
-        // 这些既有来源测试明确选择旧夹具命名空间。
+        // These source tests select one revisioned fixture namespace.
+        // 这些来源测试选择单个修订化夹具命名空间。
+        let binding = fixture_binding();
         let secrets = BoundPluginMcpSecrets {
             store: &secrets,
-            binding: &VulcanPluginCredentialBinding::Legacy,
+            binding: &binding,
         };
         assert_eq!(
             resolve_plugin_value(
@@ -721,9 +730,10 @@ pub(in crate::mcp) mod tests {
         };
         // Literal endpoint validation has no credential revision to infer.
         // 字面端点校验没有可推断的凭据修订。
+        let binding = fixture_binding();
         let secrets = BoundPluginMcpSecrets {
             store: &secrets,
-            binding: &VulcanPluginCredentialBinding::Legacy,
+            binding: &binding,
         };
         let valid = VulcanPluginValueSourceManifest::Literal {
             value: String::from("https://example.test/mcp"),

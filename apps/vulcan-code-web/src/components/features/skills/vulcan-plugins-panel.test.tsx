@@ -195,63 +195,6 @@ it("resumes a Core-owned install task after the panel mounts", async () => {
   expect(host.textContent).toContain("Install runtime");
 });
 
-// Actual page recovery shares synchronous lifecycle admission without requiring a replay of ordinary actions.
-// 实际页面恢复共享同步生命周期入场，无需重放普通动作。
-it("holds the ordinary plugin controls closed during original credential recovery", async () => {
-  // request is a retained original for this exact namespace, without credential values.
-  // request 是此精确命名空间的保留原实例，不含凭据值。
-  const request: import("@/service/plugin-secret-recovery-service").PluginSecretMutationStatus = {
-    requestId: "12345678-1234-4234-8234-123456789abc", pluginId: plugin.id, phase: "nativeRefresh", serverId: "server", secretKey: "token",
-  };
-  // finish resolves the same dispatched service-owned recovery after the page gate is inspected.
-  // finish 在检查页面门之后结束相同已派发服务自有恢复。
-  let finish!: () => void;
-  // recover retains the exact explicit recovery call; it never dispatches enable.
-  // recover 保留精确明确恢复调用；绝不派发启用。
-  const recover = vi.fn<(pluginId: string, requestId: string) => Promise<void>>()
-    .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-  // read observes the original until the service reports successful retirement.
-  // read 观测原实例，直至服务报告成功退役。
-  const read = vi.fn().mockResolvedValue([request]);
-  // toggle proves the actual lifecycle control never dispatches while recovery owns admission.
-  // toggle 证明恢复拥有入场期间实际生命周期控件绝不派发。
-  const toggle = vi.fn().mockResolvedValue(undefined);
-  await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
-    onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null,
-    onReadPluginUninstallRequests: async () => [], onReadLocalPluginUpdates: async () => [],
-    onReadPluginSecretMutations: read, onRecoverPluginSecretMutation: recover, onSetVulcanPluginEnabled: toggle,
-  } as unknown as SkillActionProps} />));
-  // find locates one actual visible English button or reports current fixture drift.
-  // find 定位单个实际可见英文按钮，或报告当前夹具漂移。
-  const find = (text: string): HTMLButtonElement => {
-    // matched is selected semantically across the actual confirmation portal.
-    // matched 跨实际确认门户按语义选择。
-    const matched = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === text);
-    if (!matched) throw new Error(`Expected ${text}; the control label or availability may have changed`);
-    return matched;
-  };
-  // The card's maintenance menu opens this plugin's recovery, which reads its retained originals on its own.
-  // 卡片维护菜单打开此插件的恢复检查，它会自行读取保留原实例。
-  const menu = host.querySelector<HTMLButtonElement>(`button[aria-label="${en("pluginMaintenance.menu")}"]`);
-  if (!menu) throw new Error("Expected the plugin card's maintenance menu; its label may have changed");
-  await act(async () => menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((candidate) => candidate.textContent === en("pluginMaintenance.action.recovery"));
-  if (!item) throw new Error("Expected the recovery menu item; its label may have changed");
-  await act(async () => item.click());
-  expect(read).toHaveBeenCalledWith(plugin.id); expect(recover).not.toHaveBeenCalled();
-  await act(async () => find(en("pluginRecovery.action.rollbackSecret")).click());
-  await act(async () => find("Confirm").click());
-  // control is the actual ordinary plugin toggle, not a test-only admission observer.
-  // control 是实际普通插件开关，而非测试专用入场观察者。
-  const control = host.querySelector<HTMLButtonElement>('[role="switch"]');
-  if (!control) throw new Error("Expected ordinary plugin toggle; its contract may have changed");
-  expect(control.disabled).toBe(true);
-  await act(async () => control.click()); expect(toggle).not.toHaveBeenCalled();
-  read.mockResolvedValue([]); await act(async () => finish());
-  expect(control.disabled).toBe(false);
-  expect(recover).toHaveBeenCalledExactlyOnceWith(plugin.id, request.requestId);
-});
-
 // The real page gate also excludes lifecycle and ordinary uninstall while an original deletion continues.
 // 真实页面门在原删除继续期间也排除生命周期及普通卸载。
 it("holds ordinary controls closed during exact uninstall continuation without repeat dispatch", async () => {

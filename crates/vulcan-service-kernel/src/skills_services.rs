@@ -5,22 +5,15 @@ use super::*;
 use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
 use vulcan_service_api::{LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsDomain};
 
-mod legacy_secret_owner;
 mod local_plugin_uninstall;
 mod local_plugin_update;
 mod plugin_credentials;
-pub(crate) use legacy_secret_owner::LegacySecretMutationRegistry;
-use legacy_secret_owner::{LegacySecretMutationPhase, LegacySecretMutationStatus};
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallDrainDiagnostics;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
 pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
 pub(crate) use local_plugin_update::LocalPluginUpdateStatus;
 pub(crate) use local_plugin_update::pending_owner::PendingLocalPluginUpdateRegistry;
 pub(crate) use plugin_credentials::service_set_vulcan_plugin_credentials;
-#[cfg(test)]
-mod legacy_native_observation;
-#[cfg(test)]
-mod legacy_secret_mutation_tests;
 mod vulcan_plugin_lifecycle;
 
 /// Serializes user-agent catalog file mutations across concurrent service requests.
@@ -950,12 +943,10 @@ pub(crate) async fn service_delete_plugin_mcp_secret(
     mutate_plugin_mcp_secret(app, state, plugin_id, server_id, secret_key, None).await
 }
 
-/// Applies one exact Secret Store mutation with allowlist validation, candidate readiness, atomic publication, and value rollback.
-/// 通过白名单校验、候选就绪、原子发布与值回滚应用单个精确 Secret Store 变更。
-/// Identifiers select one declared Legacy account; the optional value chooses set or delete.
-/// 标识选择单个已声明旧格式账户；可选值选择设置或删除。
-/// Returns the refreshed catalog only after publication, while the original namespace fence covers rollback.
-/// 仅在发布后返回已刷新目录，原命名空间屏障覆盖回滚阶段。
+/// Applies one secret change as a single-slot credential revision edit of the plugin.
+/// 将单个秘密变更作为插件的单槽凭据修订编辑应用。
+/// Identifiers select one declared slot; the optional value chooses set or delete.
+/// 标识选择单个已声明槽位；可选值选择设置或删除。
 async fn mutate_plugin_mcp_secret(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -964,323 +955,17 @@ async fn mutate_plugin_mcp_secret(
     secret_key: String,
     next_value: Option<String>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
-    let plugin_id = plugin_id.trim().to_string();
-    let server_id = server_id.trim().to_string();
-    let secret_key = secret_key.trim().to_string();
-    if plugin_id.is_empty() || server_id.is_empty() || secret_key.is_empty() {
-        return Err(String::from("插件、MCP Server 与 Secret 键均不能为空。"));
-    }
-    // Managed and bundled plugins select secrets through credential revisions; this is a one-slot edit of them.
-    // 受管及内建插件经凭据修订选定秘密；此处为对其单个槽位的编辑。
-    if plugin_credentials::uses_credential_revisions(&state, &plugin_id)? {
-        return service_set_vulcan_plugin_credentials(
-            app,
-            state,
-            plugin_id,
-            vec![vulcan_service_api::VulcanPluginCredentialChange {
-                server_id,
-                secret_key,
-                value: next_value,
-            }],
-        )
-        .await;
-    }
-    run_luaskills_management_owned("mutate plugin MCP secret", move || async move {
-        let runtime = service_vulcan_plugin_runtime(&state)?;
-        let catalog = runtime.snapshot();
-        let plugin = catalog
-            .plugins
-            .get(&plugin_id)
-            .ok_or_else(|| format!("插件 `{plugin_id}` 未安装。"))?;
-        let server = plugin
-            .mcp_servers
-            .iter()
-            .find(|server| server.id == server_id)
-            .ok_or_else(|| format!("插件 `{plugin_id}` 未声明 MCP Server `{server_id}`。"))?;
-        if !server.manifest.declared_secret_keys().contains(&secret_key) {
-            return Err(format!(
-                "插件 MCP Server `{plugin_id}:{server_id}` 未声明 Secret 键 `{secret_key}`。"
-            ));
-        }
-        // A selection that changed to revisions after the delegation check must not write a legacy credential.
-        // 委派检查之后转为修订的选择不得写入旧凭据。
-        if server.credential_binding != vulcan_plugin_runtime::VulcanPluginCredentialBinding::Legacy {
-            return Err(String::from(
-                "Plugin credentials changed to revisions; retry the edit.",
-            ));
-        }
-        // Explicit mutation follows host initialization so a bundled-only installation can create its user store.
-        // 显式变更遵循宿主初始化方式，使仅有内建插件的安装可创建其用户存储。
-        std::fs::create_dir_all(runtime.user_plugin_root())
-            .map_err(|error| format!("Failed to create user plugin root: {error}"))?;
-        // This actual Store retains the sole canonical root authority across the entire Legacy mutation.
-        // 此实际存储在整个旧格式变更期间保留唯一规范根权威。
-        let store =
-            vulcan_plugin_runtime::VulcanPluginGenerationStore::open(runtime.user_plugin_root())
-                .map_err(|error| error.to_string())?;
-        // Freeze the complete selection before acquiring the cross-process fence; acquisition compares it again.
-        // 获取跨进程屏障前固定完整选择；获取屏障时再次比较它。
-        let selected = store
-            .activation(&plugin_id)
-            .map_err(|error| error.to_string())?;
-        match (plugin.managed_package(), selected.as_ref()) {
-            (Some(managed), Some(activation)) if managed.matches_activation(activation) => {}
-            (None, None) => {}
-            _ => {
-                return Err(String::from(
-                    "Legacy plugin credential activation changed before mutation.",
-                ));
-            }
-        }
-        // Acquire before the first OS credential read and keep this same File through Ready, publication and rollback.
-        // 在首次操作系统凭据读取前获取屏障，并将相同文件保留至就绪、发布及回滚。
-        let mutation = store
-            .acquire_legacy_mutation_guard(&plugin_id, selected.as_ref())
-            .map_err(|error| error.to_string())?;
-        mutation
-            .validate_plugin(&plugin_id)
-            .map_err(|error| error.to_string())?;
-        // The OS adapter remains stateless; only the retained typed guard grants this service mutation authority.
-        // 操作系统适配器保持无状态；仅保留的类型化屏障授予本次服务变更权威。
-        let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-        // The exact original value is read once under the same namespace fence used for its restoration.
-        // 在用于恢复的相同命名空间屏障下，精确原值仅被读取一次。
-        let previous_value =
-            secret_store.read_optional_secret(&plugin_id, &server_id, &secret_key)?;
-        // Insert the actual guard and preimage under the same service admission used by shutdown.
-        // 在关闭使用的相同服务准入下，插入实际屏障及前像。
-        let (registry, owner) = {
-            // Publication shutdown cannot interleave between admission validation and original ownership registration.
-            // 发布关闭不能在准入校验与原所有权登记之间交错。
-            let guard = state.lock().map_err(|error| error.to_string())?;
-            crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
-            // The registry remains service-owned even when the management task unwinds.
-            // 即使管理任务展开栈，注册表仍由服务拥有。
-            let registry = Arc::clone(&guard.pending_legacy_secret_mutations);
-            // This exact slot owns all rollback authority before the first uncertain OS effect.
-            // 此精确槽在首次不确定操作系统副作用前拥有全部回滚权威。
-            let owner = registry.retain(plugin_id.clone(), server_id.clone(), secret_key.clone(), mutation, previous_value)?;
-            (registry, owner)
-        };
-        // Executors borrow the service owner rather than moving its physical resources into their futures.
-        // 执行器借用服务所有者，而非将其物理资源移入自身 Future。
-        let mut resources = owner.resources.lock().await;
-        resources.mutation
-            .validate_plugin(&plugin_id)
-            .map_err(|error| error.to_string())?;
-        // A failed OS write may be uncertain, so its original preimage follows the same guarded rollback path.
-        // 失败的操作系统写入可能结果不确定，因此其原前像走相同受保护回滚路径。
-        let write_result = match next_value.as_deref() {
-            Some(value) => secret_store.write_secret(&plugin_id, &server_id, &secret_key, value),
-            None => secret_store.delete_secret(&plugin_id, &server_id, &secret_key),
-        };
-        // The live fence spans every awaited candidate effect instead of being reacquired against a newer selection.
-        // 活动屏障跨越全部等待中的候选副作用，而非相对更新选择重新获取。
-        let refresh_result = match write_result {
-            Err(error) => Err(error),
-            Ok(())
-                if plugin.runtime_state
-                    == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled =>
-            {
-                refresh_enabled_plugin_mcp_after_secret_change(
-                    &state,
-                    &runtime,
-                    Arc::clone(&catalog),
-                    plugin,
-                    &mut resources,
-                )
-                .await
-            }
-            Ok(()) => resources.mutation
-                .validate_plugin(&plugin_id)
-                .map_err(|error| error.to_string()),
-        };
-        if let Err(error) = refresh_result {
-            // Restoration validates the retained original owner without releasing or taking a latest-selection guard.
-            // 恢复校验保留的原所有者，不释放或获取最新选择屏障。
-            let rollback_result = owner.rollback(&mut resources).await;
-            // Retirement requires both actual native cleanup, when admitted, and exact credential readback.
-            // 退役要求实际原生清理（若已准入）及精确凭据回读均完成。
-            if rollback_result.is_ok() && resources.phase == LegacySecretMutationPhase::Restored {
-                registry.retire(&owner, &resources)?;
-            }
-            return Err(match rollback_result {
-                Ok(()) => format!("插件 MCP Secret 变更失败：{error}；原请求：{}", owner.request_id),
-                Err(rollback_error) => {
-                    format!("插件 MCP Secret 变更失败：{error}；恢复未完成：{rollback_error}；原请求：{}", owner.request_id)
-                }
-            });
-        }
-        resources.phase = LegacySecretMutationPhase::Committed;
-        // A committed original remains queryable if projection or event delivery loses its return.
-        // 投影或事件投递返回丢失时，已提交原请求仍保持可查询。
-        let update = refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
-        registry.retire(&owner, &resources)?;
-        Ok(update)
-    })
-    .await
-}
-
-/// Rebuilds only the enabled target plugin MCP partition and publishes it with the unchanged exact catalog.
-/// 仅重建已启用目标插件 MCP 分区，并与未变化的精确目录一起发布。
-/// The catalog and descriptor identify one captured plugin; resources retain original cross-process ownership.
-/// 目录及描述符标识单个已捕获插件；resources 保留原跨进程所有权。
-/// Returns success after actual Ready and full publication; errors leave the guard available to its caller's rollback.
-/// 实际就绪及完整发布后返回成功；错误将屏障保留给调用者回滚。
-async fn refresh_enabled_plugin_mcp_after_secret_change(
-    state: &SharedServiceBridgeState,
-    runtime: &vulcan_plugin_runtime::VulcanPluginRuntimeManager,
-    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
-    plugin: &vulcan_plugin_runtime::VulcanPluginDescriptor,
-    resources: &mut legacy_secret_owner::LegacySecretMutationResources,
-) -> Result<(), String> {
-    // Validate the retained original owner before materialization can read Legacy OS credentials.
-    // 在物化可读取旧格式操作系统凭据之前，校验保留的原所有者。
-    resources
-        .mutation
-        .validate_plugin(&plugin.id)
-        .map_err(|error| error.to_string())?;
-    let current_mcp_runtime = state
-        .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
-        .agent_runtime
-        .as_ref()
-        .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-    let server_configs =
-        plugin_mcp_server_configs_for_descriptors(runtime, &plugin.mcp_servers, &secret_store)?;
-    if !server_configs.is_empty() {
-        // Retain exact work and the unique native lease in the service owner before dispatch.
-        // 派发前，在服务所有者中保留精确工作及唯一原生租约。
-        resources.native = Some(
-            vulcan_agent_runtime::mcp::LegacyPluginMcpReplacement::prepare(
-                &current_mcp_runtime,
-                &plugin.id,
-                plugin.generation,
-                server_configs,
-            )?,
-        );
-        resources.phase = LegacySecretMutationPhase::NativeRefresh;
-        // Readiness borrows its actual owner instead of moving ownership into the future.
-        // 就绪借用其实际所有者，而非将所有权移入 Future。
-        let native = resources
-            .native
-            .as_ref()
-            .expect("retained original Legacy preparation");
-        native.dispatch()?;
-        native.wait_until_ready().await?;
-        #[cfg(test)]
-        legacy_native_observation::observe(&plugin.id, legacy_native_observation::Milestone::Ready);
-    }
-    // Readiness cannot replace the original authority; publication still validates the same guarded selection.
-    // 就绪不能替换原权威；发布仍校验相同受保护选择。
-    resources
-        .mutation
-        .validate_plugin(&plugin.id)
-        .map_err(|error| error.to_string())?;
-    vulcan_plugin_lifecycle::publish_legacy_secret_extension_generation(
-        state, &plugin.id, catalog, resources,
-    )?;
-    #[cfg(test)]
-    legacy_native_observation::observe(&plugin.id, legacy_native_observation::Milestone::Published);
-    Ok(())
-}
-
-/// List service-owned original secret mutations for the exact plugin without exposing secret values.
-/// 列出精确插件的服务自有原秘密变更，不暴露秘密值。
-/// Returns non-secret original UUIDs and current phases, including executor failures.
-/// 返回无秘密原 UUID 及当前阶段，包括执行器故障。
-pub(crate) fn service_plugin_mcp_secret_mutation_requests(
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-) -> Result<Vec<LegacySecretMutationStatus>, String> {
-    // Obtain the existing owner registry; public catalog absence cannot erase an unfinished request.
-    // 获取现有所有者注册表；公共目录缺失不能抹除未完成请求。
-    let registry = Arc::clone(
-        &state
-            .lock()
-            .map_err(|error| error.to_string())?
-            .pending_legacy_secret_mutations,
-    );
-    registry.list(&plugin_id)
-}
-
-/// Recover one exact retained request, retiring its unpublished native original or acknowledging its actual full commit.
-/// 恢复单个精确保留请求，退役其未发布原生原实例或确认其实际完整提交。
-/// Plugin and UUID must match the original strong owner; errors preserve its actual resources.
-/// 插件及 UUID 必须匹配原强所有者；错误保留其实际资源。
-/// app delivers the committed projection; returns after exact rollback or committed projection and retirement.
-/// app 投递已提交投影；精确回滚或已提交投影及退役后返回。
-pub(crate) async fn service_recover_plugin_mcp_secret_mutation(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-    request_id: uuid::Uuid,
-) -> Result<(), String> {
-    run_luaskills_management_owned("recover plugin MCP secret", move || async move {
-        // Recovery borrows the original registry, never latest activation or credential values.
-        // 恢复借用原注册表，绝不借用最新激活或凭据值。
-        let registry = Arc::clone(&state.lock().map_err(|error| error.to_string())?.pending_legacy_secret_mutations);
-        // Exact lookup occurs before any OS adapter access.
-        // 精确查询发生在任何操作系统适配器访问之前。
-        let owner = registry.get(&plugin_id, request_id)?;
-        // Exclude every active executor using the same actual asynchronous resource lock.
-        // 使用相同实际异步资源锁，排除每个活动执行器。
-        let mut resources = owner.resources.lock().await;
-        match resources.phase {
-            LegacySecretMutationPhase::CredentialMutation | LegacySecretMutationPhase::NativeRefresh => owner.rollback(&mut resources).await?,
-            LegacySecretMutationPhase::Restored => {},
-            LegacySecretMutationPhase::Committed => {
-                // Reproject the actual current successor without credential writes or native initialization replay.
-                // 重新投影实际当前后继，不写入凭据或重放原生初始化。
-                refresh_plugin_catalog_local_state_and_emit(&app, &state).await?;
-            },
-            _ => return Err(format!("Original credential request `{request_id}` requires actual native partition recovery before retirement.")),
-        }
-        registry.retire(&owner, &resources)
-    }).await
-}
-
-/// Restore one exact OS preimage while the original Legacy mutation guard remains alive.
-/// 在原旧格式变更屏障保持活动时，恢复单个精确操作系统前像。
-/// The retained guard, plugin/server/key tuple and optional previous value select this mutation's only rollback account.
-/// 保留屏障、插件／服务器／密钥元组及可选先前值选择本次变更唯一回滚账户。
-/// Returns validation or OS restoration failure without reacquiring a different selected generation.
-/// 返回校验或操作系统恢复失败，不重新获取不同已选代次。
-fn restore_guarded_plugin_mcp_secret(
-    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-    mutation: &vulcan_plugin_runtime::VulcanPluginLegacyMutationGuard,
-    plugin_id: &str,
-    server_id: &str,
-    secret_key: &str,
-    previous_value: Option<&str>,
-) -> Result<(), String> {
-    mutation
-        .validate_plugin(plugin_id)
-        .map_err(|error| error.to_string())?;
-    restore_plugin_mcp_secret(
-        secret_store,
+    service_set_vulcan_plugin_credentials(
+        app,
+        state,
         plugin_id,
-        server_id,
-        secret_key,
-        previous_value,
+        vec![vulcan_service_api::VulcanPluginCredentialChange {
+            server_id,
+            secret_key,
+            value: next_value,
+        }],
     )
-}
-
-/// Restores the prior Secret Store value after a failed candidate refresh.
-/// 在候选刷新失败后恢复先前的 Secret Store 值。
-fn restore_plugin_mcp_secret(
-    secret_store: &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-    plugin_id: &str,
-    server_id: &str,
-    secret_key: &str,
-    previous_value: Option<&str>,
-) -> Result<(), String> {
-    match previous_value {
-        Some(value) => secret_store.write_secret(plugin_id, server_id, secret_key, value),
-        None => secret_store.delete_secret(plugin_id, server_id, secret_key),
-    }
+    .await
 }
 
 /// Validates installation Secret inputs against the exact inspected local-MCP requirement set.

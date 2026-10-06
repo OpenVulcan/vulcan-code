@@ -2,7 +2,7 @@
 //! 原生命周期观测不是物理退役或整个插件排空。
 
 use super::*;
-use owner::{OriginalRemoval, UninstallResources};
+use owner::UninstallResources;
 
 /// Prepare once, retain before start, and consume only after real retirement succeeds.
 /// 仅准备一次，在启动之前保留，仅在真实退役成功后消费。
@@ -13,23 +13,16 @@ pub(super) async fn retire_callback(resources: &mut UninstallResources) -> Resul
         return Ok(());
     }
     if resources.callback.is_none() {
-        // Actual typed original selects the sole existing guarded callback factory.
-        // 实际类型明确原实例选择唯一既有受保护回调工厂。
-        let call = match resources
+        // The original removal reservation authorizes the sole guarded callback factory.
+        // 原移除预留授权唯一受保护回调工厂。
+        let original = resources
             .original
             .as_ref()
-            .ok_or("原卸载物理所有者已释放。")?
-        {
-            OriginalRemoval::Managed { selection, .. } => resources
-                .runtime
-                .prepare_deactivation_lifecycle_call(selection),
-            OriginalRemoval::Flat(flat) => resources.runtime.prepare_legacy_lifecycle_call(
-                flat.plugin_id(),
-                vulcan_plugin_runtime::VulcanPluginLegacyLifecycleEvent::Uninstall,
-                Arc::clone(flat.mutation_guard()),
-            ),
-        }
-        .map_err(|error| error.to_string())?;
+            .ok_or("原卸载物理所有者已释放。")?;
+        let call = resources
+            .runtime
+            .prepare_deactivation_lifecycle_call(&original.selection)
+            .map_err(|error| error.to_string())?;
         resources.callback = Some(call);
     }
     // Calling start again is the original protocol's idempotent once-only entry, never another preparation.

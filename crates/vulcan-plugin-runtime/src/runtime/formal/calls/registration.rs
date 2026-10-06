@@ -294,7 +294,7 @@ impl VulcanPluginRuntimeManager {
                         ),
                     ),
                 )?;
-                authority.validate(&self.state, &call.plugin, authority.event().scope())?;
+                authority.validate(&self.state, &call.plugin, authority.scope())?;
                 Some(registration)
             } else if matches!(&call.ownership, CallOwner::Lifecycle)
                 && matches!(&call.source, CallExecutionSource::Published)

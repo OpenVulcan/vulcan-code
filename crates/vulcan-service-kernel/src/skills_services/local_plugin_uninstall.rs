@@ -8,8 +8,7 @@ use vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGenerati
 use vulcan_agent_runtime::mcp::McpRuntimeAccess;
 use vulcan_plugin_runtime::{
     VulcanPluginDeactivationReservation, VulcanPluginDeactivationStateReservation,
-    VulcanPluginGenerationStore, VulcanPluginLegacyLifecycleCall,
-    VulcanPluginLegacyUninstallationReservation, VulcanPluginResourceDiagnostics,
+    VulcanPluginGenerationStore, VulcanPluginLegacyLifecycleCall, VulcanPluginResourceDiagnostics,
     VulcanPluginRoutingReservation, VulcanPluginRuntimeManager,
 };
 
@@ -222,8 +221,8 @@ pub(super) async fn resume(
 /// 完成实际保留工作；取消绝不删除映射或移出其原资源。
 /// app/state/original identify real participants; acknowledge is effective only after known callback retirement.
 /// app／state／original 标识真实参与者；acknowledge 仅在已知回调退役后生效。
-/// Returns the legacy response after projection and physically releasing this original registry slot.
-/// 投影并实际释放此原注册表槽后返回兼容响应。
+/// Returns the catalog response after projection and physically releasing this original registry slot.
+/// 投影并实际释放此原注册表槽后返回目录响应。
 async fn execute(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -265,7 +264,7 @@ async fn execute(
         let mut resources = blocking_owner.resources.blocking_lock();
         owner::require_current(&blocking_state, &blocking_owner)?;
         publication::hide_and_publish(&blocking_state, &blocking_owner, &mut resources)?;
-        collection::collect(&blocking_owner.plugin_id, &mut resources)
+        collection::collect(&mut resources)
     })
     .await?;
     // Confirmation and physical take occur under service exclusion while the executor Arc may remain alive.

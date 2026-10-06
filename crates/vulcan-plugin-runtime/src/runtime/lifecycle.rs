@@ -265,54 +265,6 @@ impl VulcanPluginRuntimeManager {
         self.publish_runtime_catalog(snapshot, &registration, None)
     }
 
-    /// Refresh the declared catalog through one retained original Legacy namespace owner.
-    /// 通过单个保留原旧格式命名空间所有者刷新声明目录。
-    /// Policy sets select the projection; plugin_id and mutation must identify this manager's same original guard.
-    /// 策略集合选择投影；plugin_id 及 mutation 必须标识此管理器同一原屏障。
-    /// Returns the actual published manager snapshot without reacquiring the guarded plugin namespace.
-    /// 返回实际已发布管理器快照，不重新获取已屏障插件命名空间。
-    pub fn refresh_catalog_with_legacy_mutation(
-        &self,
-        disabled_plugin_ids: &BTreeSet<String>,
-        enabled_plugin_ids: &BTreeSet<String>,
-        plugin_id: &str,
-        mutation: &crate::VulcanPluginLegacyMutationGuard,
-    ) -> Result<Arc<VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
-        // Reuse the existing publication gate and projection, with only the exact guarded scan changed.
-        // 复用既有发布门及投影，仅改变精确已屏障扫描。
-        let registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog gate is poisoned.")
-        })?;
-        self.require_routing_namespace_retired_locked(&registration, mutation)?;
-        // Validate literal root ownership before asking the catalog reader to borrow its original pin.
-        // 要求目录读取器借用原固定之前，校验字面根所有权。
-        mutation
-            .validate_user_root(&self.state.user_plugin_root, plugin_id)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // The revision is issued by the same sole publisher after runtime projection.
-        // 修订在运行时投影之后由相同唯一发布器签发。
-        let revision = self.state.next_revision.load(Ordering::Relaxed);
-        // Guarded catalog loading remains the existing authoritative package-selection implementation.
-        // 已屏障目录加载保持使用既有权威插件包选择实现。
-        let snapshot = crate::catalog::load_vulcan_plugin_catalog_with_legacy_mutation(
-            &self.state.vulcan_plugin_root,
-            &self.state.user_plugin_root,
-            disabled_plugin_ids,
-            enabled_plugin_ids,
-            revision,
-            plugin_id,
-            mutation,
-        )
-        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        self.publish_runtime_catalog(
-            snapshot,
-            &registration,
-            Some(super::routing::ActivationRoutingOriginal::LegacyMutation(
-                mutation,
-            )),
-        )
-    }
-
     /// Refresh this manager's catalog through the same original removal File after exact tombstone publication.
     /// 在精确停用记录发布之后，通过同一原移除文件刷新此管理器目录。
     /// Policy sets select the projection; original must belong to the actual user root and remain retained.
@@ -1035,7 +987,7 @@ impl VulcanPluginRuntimeManager {
                 plugin.runtime_state = runtime_state;
             }
             if plugin.origin == VulcanPluginPackageOrigin::UserInstalled {
-                match plugin_is_authorized(&self.state.plugin_state_root, plugin) {
+                match plugin_is_authorized(plugin) {
                     Ok(true) => {}
                     Ok(false) => {
                         plugin.runtime_state = VulcanPluginRuntimeState::Unavailable;

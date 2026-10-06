@@ -42,8 +42,10 @@ pub use transactions::{
     VulcanPluginTargetMcpInitializationPhase, VulcanPluginTargetMcpInitializationReceipt,
     VulcanPluginUpdatePolicy,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub use test_support::install_user_package_for_test;
 #[cfg(test)]
 mod tests;
 

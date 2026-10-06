@@ -4,25 +4,25 @@
 use super::*;
 use crate::VulcanPluginStoreErrorCode;
 
-/// Only the effective selection may reserve global tool names; hidden legacy bytes have no surface.
-/// 只有生效选择可以保留全局工具名；隐藏的旧包字节没有暴露表面。
+/// Only selected packages reserve global tool names; stray directories and removed selections have no surface.
+/// 只有选定插件包保留全局工具名；游离目录及已移除选择没有暴露表面。
 #[test]
 fn managed_catalog_resolves_selection_before_tool_conflicts() {
-    // Own legacy collisions and a managed replacement with a different tool namespace.
-    // 持有旧包冲突及具有不同工具命名空间的受管替换包。
+    // Own a stray colliding directory plus two selected packages with distinct tool namespaces.
+    // 持有一个冲突游离目录及两个具有不同工具命名空间的选定插件包。
     let temp = tempfile::tempdir().expect("create selection conflict fixture");
     // The empty system root lets both user identities appear in the final public catalog.
     // 空系统根使两个用户身份都出现在最终公开目录。
     let bundled = temp.path().join("bundled");
     fs::create_dir(&bundled).expect("create conflict bundled root");
-    // Deterministic ordering makes the stale legacy owner reserve the conflicting name first.
-    // 确定性排序使陈旧的旧包所有者先保留冲突名称。
+    // An unselected directory in the user root declares the conflicting name but is never discovered.
+    // 用户根中未选择的目录声明冲突名称，但绝不会被发现。
     let user = temp.path().join("user");
     crate::catalog::tests::write_named_stateless_package(&user, "alpha-plugin", &["shared-tool"]);
-    crate::catalog::tests::write_named_stateless_package(&user, "beta-plugin", &["shared-tool"]);
-    // Selected replacement no longer declares the conflicting name.
-    // 选定替换包不再声明冲突名称。
+    // Selected sources declare disjoint tool names.
+    // 选定来源声明互不相交的工具名。
     let source = temp.path().join("source");
+    crate::catalog::tests::write_named_stateless_package(&source, "beta-plugin", &["shared-tool"]);
     crate::catalog::tests::write_named_stateless_package(
         &source,
         "alpha-plugin",
@@ -31,15 +31,19 @@ fn managed_catalog_resolves_selection_before_tool_conflicts() {
     // Prepare and select through the same immutable storage API as the host transaction.
     // 通过与宿主事务相同的不可变存储接口准备并选择。
     let store = VulcanPluginGenerationStore::open(&user).expect("open conflict store");
-    // Retain the selected source while loading the public catalog.
-    // 加载公开目录期间保留选定来源。
-    let generation = prepare(&store, &source.join("alpha-plugin"));
-    store
-        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
-        .expect("select non-conflicting replacement");
-    // Conflict validation must run after managed precedence has removed hidden legacy declarations.
-    // 冲突校验必须在受管优先级移除隐藏旧声明之后运行。
+    for plugin_id in ["beta-plugin", "alpha-plugin"] {
+        let generation = prepare(&store, &source.join(plugin_id));
+        store
+            .activate_for_test(&generation, 0, generation.required_permissions_for_test())
+            .expect("select non-conflicting package");
+    }
+    // Conflict validation sees only the selected declarations.
+    // 冲突校验只看到选定声明。
     let selected = catalog(&bundled, &user);
+    assert_eq!(
+        selected.plugins["alpha-plugin"].availability,
+        VulcanPluginAvailability::Enabled
+    );
     assert_eq!(
         selected.plugins["beta-plugin"].availability,
         VulcanPluginAvailability::Enabled
@@ -48,11 +52,12 @@ fn managed_catalog_resolves_selection_before_tool_conflicts() {
     assert!(selected.enabled_tools.contains_key("replacement-tool"));
     store
         .deactivate("alpha-plugin", 1)
-        .expect("hide legacy collision with tombstone");
-    // Tombstones likewise remove the old package before any global reservation takes place.
-    // 停用记录同样在任何全局保留发生之前移除旧包。
+        .expect("remove selection with tombstone");
+    // Tombstones remove the package before any global reservation takes place.
+    // 停用记录在任何全局保留发生之前移除插件包。
     let removed = catalog(&bundled, &user);
     assert!(!removed.plugins.contains_key("alpha-plugin"));
+    assert!(!removed.enabled_tools.contains_key("replacement-tool"));
     assert_eq!(
         removed.plugins["beta-plugin"].availability,
         VulcanPluginAvailability::Enabled
@@ -98,29 +103,28 @@ fn catalog(bundled: &Path, user: &Path) -> VulcanPluginCatalogSnapshot {
     load_vulcan_plugin_catalog(bundled, Some(user), &BTreeSet::new(), &BTreeSet::new(), 1)
 }
 
-/// Refreshing legacy roots neither creates managed storage nor discovers unselected preparations.
-/// 刷新旧根目录既不创建受管存储，也不发现未选择的准备包。
+/// Refreshing never creates managed storage and discovers neither stray directories nor unselected preparations.
+/// 刷新绝不创建受管存储，也不发现游离目录或未选择的准备包。
 #[test]
-fn managed_catalog_preserves_explicit_legacy_and_prepared_boundaries() {
-    // Own independent roots for legacy, bundled, and managed preparation.
-    // 持有旧包、内置包及受管准备的独立根。
+fn managed_catalog_ignores_stray_directories_and_unselected_preparations() {
+    // Own independent roots for bundled content, user storage, and managed preparation sources.
+    // 持有内置内容、用户存储及受管准备来源的独立根。
     let temp = tempfile::tempdir().expect("create discovery fixture");
     // An empty bundled root keeps user provenance observable.
     // 空内置根使用户来源可观察。
     let bundled = temp.path().join("bundled");
     fs::create_dir(&bundled).expect("create bundled root");
-    // The user root contains an ordinary legacy package before managed storage exists.
-    // 受管存储出现之前，用户根包含普通旧包。
+    // A valid package directory placed directly in the user root is not a selection.
+    // 直接放在用户根中的有效插件包目录不是选择。
     let user = temp.path().join("user");
-    package(&user, "sample-plugin", "legacy contents");
-    // Discovery alone must not create the new private layout.
-    // 单纯发现绝不能创建新私有布局。
-    let legacy = catalog(&bundled, &user);
-    assert_eq!(
-        legacy.plugins["sample-plugin"].origin,
-        VulcanPluginPackageOrigin::UserInstalled
+    package(&user, "sample-plugin", "stray contents");
+    // Discovery alone must neither surface the stray directory nor create the private layout.
+    // 单纯发现既不得暴露游离目录，也不得创建私有布局。
+    assert!(
+        !catalog(&bundled, &user)
+            .plugins
+            .contains_key("sample-plugin")
     );
-    assert!(legacy.plugins["sample-plugin"].managed_package().is_none());
     assert!(!user.join(".vulcan-generations").exists());
     assert!(
         VulcanPluginGenerationStore::open_existing(&user)
@@ -140,13 +144,25 @@ fn managed_catalog_preserves_explicit_legacy_and_prepared_boundaries() {
     // Retain the prepared package while checking live selection.
     // 检查活动选择时保留已准备插件包。
     let generation = prepare(&store, &source);
-    assert_eq!(
-        catalog(&bundled, &user).plugins["sample-plugin"].content_fingerprint,
-        legacy.plugins["sample-plugin"].content_fingerprint
+    assert!(
+        !catalog(&bundled, &user)
+            .plugins
+            .contains_key("sample-plugin")
     );
     store
         .activate_for_test(&generation, 0, generation.required_permissions_for_test())
         .expect("publish managed package");
+    // The selection exposes the immutable managed bytes rather than the stray directory.
+    // 选择暴露不可变受管字节，而非游离目录。
+    let selected = catalog(&bundled, &user);
+    assert_eq!(
+        selected.plugins["sample-plugin"].origin,
+        VulcanPluginPackageOrigin::UserInstalled
+    );
+    assert_eq!(
+        selected.plugins["sample-plugin"].content_fingerprint,
+        generation.identity().content_fingerprint
+    );
     // User disablement continues to apply to the selected immutable package.
     // 用户停用继续应用于选中的不可变插件包。
     let disabled = load_vulcan_plugin_catalog(
@@ -176,6 +192,8 @@ fn managed_catalog_preserves_explicit_legacy_and_prepared_boundaries() {
             .plugins
             .contains_key("sample-plugin")
     );
+    // Catalog refresh never deletes user-owned directories it does not manage.
+    // 目录刷新绝不删除其不管理的用户目录。
     assert!(user.join("sample-plugin/plugin.yaml").is_file());
 }
 
@@ -271,8 +289,8 @@ fn managed_catalog_snapshots_protect_original_bytes_until_last_owner_drops() {
     );
 }
 
-/// Corrupt or busy managed records never revive same-id legacy bytes and do not block unrelated plugins.
-/// 损坏或忙碌的受管记录绝不重新启用同名旧包，也不阻止无关插件。
+/// Corrupt or busy managed records never revive same-id stray bytes and do not block unrelated plugins.
+/// 损坏或忙碌的受管记录绝不启用同名游离字节，也不阻止无关插件。
 #[test]
 fn managed_catalog_record_failures_are_explicit_and_namespace_local() {
     // Every failure is produced by actual filesystem state rather than a mocked store response.
@@ -282,23 +300,24 @@ fn managed_catalog_record_failures_are_explicit_and_namespace_local() {
     // 独立内置内容在任何用户存储失败时保持可用。
     let bundled = temp.path().join("bundled");
     package(&bundled, "system-plugin", "system");
-    // A legacy same-id package must never become the recovery candidate implicitly.
-    // 同名旧包绝不能隐式成为恢复候选。
+    // A stray same-id directory must never become the recovery candidate implicitly.
+    // 同名游离目录绝不能隐式成为恢复候选。
     let user = temp.path().join("user");
-    package(&user, "sample-plugin", "legacy");
-    package(&user, "other-plugin", "unrelated");
+    package(&user, "sample-plugin", "stray");
     // Real activation initializes the namespace and package records.
     // 实际激活初始化命名空间及插件包记录。
     let store = VulcanPluginGenerationStore::open(&user).expect("open failure store");
-    // Pin exact managed bytes before injecting a metadata failure.
-    // 注入元数据失败前固定精确受管字节。
-    let generation = prepare(
-        &store,
-        &package(&temp.path().join("source"), "sample-plugin", "managed"),
-    );
-    store
-        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
-        .expect("activate fixture");
+    // Pin exact managed bytes for the target and an unrelated peer before injecting a metadata failure.
+    // 注入元数据失败前为目标及无关插件固定精确受管字节。
+    let source = temp.path().join("source");
+    let generations =
+        [("sample-plugin", "managed"), ("other-plugin", "unrelated")].map(|(plugin_id, body)| {
+            let generation = prepare(&store, &package(&source, plugin_id, body));
+            store
+                .activate_for_test(&generation, 0, generation.required_permissions_for_test())
+                .expect("activate fixture");
+            generation
+        });
     // The committed filename, not a diagnostic path, identifies the record under test.
     // 被测记录由已提交文件名标识，而非诊断路径。
     let record = user.join(".vulcan-generations/active/sample-plugin.json");
@@ -368,27 +387,23 @@ fn managed_catalog_record_failures_are_explicit_and_namespace_local() {
         catalog(&bundled, &user).plugins["sample-plugin"].availability,
         VulcanPluginAvailability::Enabled
     );
-    // A missing structural directory makes the affected namespace set unknowable; block all user packages.
-    // 结构目录缺失使受影响命名空间集合无法确定；阻止全部用户包。
+    // A missing structural directory makes the selection inventory unknowable; no user package is exposed.
+    // 结构目录缺失使选择清单无法确定；不暴露任何用户包。
     fs::rename(
         user.join(".vulcan-generations/active"),
         user.join("saved-active"),
     )
     .expect("remove required layout component");
-    // Refresh must neither reconstruct metadata nor fall back to legacy packages.
-    // 刷新既不得重建元数据，也不得回退到旧包。
+    // Refresh must neither reconstruct metadata nor fall back to stray directories.
+    // 刷新既不得重建元数据，也不得回退到游离目录。
     let incomplete = catalog(&bundled, &user);
-    assert_eq!(
-        incomplete.plugins["sample-plugin"].availability,
-        VulcanPluginAvailability::Unavailable
-    );
-    assert_eq!(
-        incomplete.plugins["other-plugin"].availability,
-        VulcanPluginAvailability::Unavailable
-    );
+    assert!(!incomplete.plugins.contains_key("sample-plugin"));
+    assert!(!incomplete.plugins.contains_key("other-plugin"));
+    assert!(!incomplete.diagnostics.is_empty());
     assert_eq!(
         incomplete.plugins["system-plugin"].availability,
         VulcanPluginAvailability::Enabled
     );
     assert!(!user.join(".vulcan-generations/active").exists());
+    drop(generations);
 }

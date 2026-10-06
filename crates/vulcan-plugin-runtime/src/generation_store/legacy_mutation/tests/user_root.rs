@@ -343,23 +343,15 @@ fn legacy_mutation_user_root_arc_preserves_actual_namespace_across_threads() {
     // The last worker must retain its Arc until explicitly released after the competing Busy observations.
     // 最后工作线程须保留其 Arc，直到竞争 Busy 观察之后明确释放。
     let (release_tx, release_rx) = mpsc::channel();
-    // Worker state contains only immutable original authority and real independent observer paths.
-    // 工作线程状态仅包含不可变原权威及真实独立观察者路径。
-    let worker_store = observer.clone();
     // Both root inputs identify the same real canonical directory.
     // 两个根输入标识相同真实规范目录。
     let worker_user = user.clone();
-    // Worker-side typed validation and pins must succeed without reacquiring the self-busy namespace.
-    // 工作线程类型化验证及固定须成功，不能重新取得自身繁忙命名空间。
+    // Worker-side typed validation must succeed without reacquiring the self-busy namespace.
+    // 工作线程类型化验证须成功，不能重新取得自身繁忙命名空间。
     let worker = std::thread::spawn(move || {
         worker_guard
             .validate_user_root(&worker_user, "legacy-plugin")
             .expect("cross-thread original validation");
-        drop(
-            worker_guard
-                .pin_active_for_catalog(&worker_store, "legacy-plugin")
-                .expect("cross-thread original pins"),
-        );
         ready_tx.send(()).expect("actual worker ownership ready");
         release_rx
             .recv_timeout(std::time::Duration::from_secs(10))

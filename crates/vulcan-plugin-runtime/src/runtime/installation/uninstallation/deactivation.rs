@@ -1,5 +1,5 @@
-//! Managed removal retains local preimages without adding a namespace borrower or an immutable package pin.
-//! 受管移除保留本地前像，不添加命名空间借用者或不可变包固定。
+//! Managed removal retains its local environment cleanup without adding a namespace borrower or an immutable package pin.
+//! 受管移除保留其本地环境清理，不添加命名空间借用者或不可变包固定。
 
 use super::*;
 use crate::{
@@ -14,17 +14,17 @@ mod tests;
 /// 本地状态观测独立于选择发布、包／凭据回收及宿主完整回执。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VulcanPluginDeactivationStateObservation {
-    /// Actual pre-callback bytes are retained and no cleanup snapshot was admitted.
-    /// 实际回调前字节保持保留，未准入清理快照。
+    /// The local owner is registered before callbacks and no cleanup was admitted.
+    /// 本地所有者在回调之前登记，未准入清理。
     Reserved,
-    /// Exact post-callback cleanup bytes are frozen; no state or environment deletion has started.
-    /// 精确回调后清理字节已固定，状态或环境删除尚未启动。
+    /// Callbacks have retired and cleanup is admitted for selection publication; no environment deletion has started.
+    /// 回调已退役，清理已为选择发布准入；环境删除尚未启动。
     Frozen,
     /// Local irreversible cleanup was admitted and the same original may retain partial physical deletion.
     /// 本地不可逆清理已准入，相同原实例可能保留部分物理删除。
     CleanupPending,
-    /// All three local state files and the original environment child are actually absent under retained ownership.
-    /// 保留所有权内，全部三个本地状态文件及原环境子级实际缺失。
+    /// The original environment child is actually absent under retained ownership.
+    /// 保留所有权内，原环境子级实际缺失。
     Collected,
 }
 
@@ -51,17 +51,11 @@ pub struct VulcanPluginDeactivationStateReservation {
     /// Original immutable package path is evidence for exact current-source comparison, never independent deletion authority.
     /// 原不可变包路径为精确当前来源比较证据，绝非独立删除权威。
     package_root: PathBuf,
-    /// Actual pre-callback bytes remain distinct from exact post-callback cleanup snapshots.
-    /// 实际回调前字节保持独立于精确回调后清理快照。
-    states: Vec<UninstallationStateFile>,
-    /// The actual dormant flat descriptor or original absence shares this same local owner without another physical reader.
-    /// 实际休眠平铺描述符或原缺失共享此相同本地所有者，不增加物理读者。
-    flat_predecessor: flat_predecessor::FlatPredecessor,
-    /// Freeze admission is retained only after every actual cleanup read succeeds.
-    /// 仅在每个实际清理读取成功之后保留固定准入。
+    /// Freeze admission is retained once every callback borrower has retired.
+    /// 每个回调借用者退役之后保留固定准入。
     cleanup_frozen: bool,
-    /// Irreversible cleanup intent precedes the first state or environment deletion.
-    /// 不可逆清理意图先于首次状态或环境删除。
+    /// Irreversible cleanup intent precedes the first environment deletion.
+    /// 不可逆清理意图先于首次环境删除。
     cleanup_started: bool,
     /// The same actual exclusive environment File and canonical root survive errors and panic.
     /// 相同实际排他环境文件及规范根跨错误及 panic 存续。
@@ -96,22 +90,6 @@ impl VulcanPluginDeactivationStateReservation {
         &self.selection.plugin_id
     }
 
-    /// Borrow exact pre-callback paths and bytes/absence for explicit host decisions; no parameters and no automatic restoration occurs.
-    /// 为明确宿主决策借用精确回调前路径及字节／缺失；无参数，不自动恢复。
-    pub fn original_state_preimages(&self) -> impl Iterator<Item = (&Path, Option<&[u8]>)> {
-        self.states
-            .iter()
-            .map(|state| (state.path.as_path(), state.original.as_deref()))
-    }
-
-    /// Borrow the actual pre-callback dormant flat descriptor or explicit original absence; no parameters and no cleanup authority is returned.
-    /// 借用实际回调前休眠平铺描述符或明确原缺失；无参数，不返回清理权威。
-    /// Declared legacy credential slots come only from this real inspector result, never a current managed descriptor's inferred history.
-    /// 声明旧凭据槽位仅来自此真实检查结果，绝非当前受管描述符的推定历史。
-    pub fn original_flat_predecessor(&self) -> Option<&crate::VulcanPluginDescriptor> {
-        self.flat_predecessor.source()
-    }
-
     /// Validate the actual manager and same original allocation before reading its actual existing store selection.
     /// 在读取实际既有存储选择之前，校验实际管理器及相同原分配。
     /// manager/original must be the reserving instances; returns the existing store without reacquiring a namespace or creating directories.
@@ -130,9 +108,6 @@ impl VulcanPluginDeactivationStateReservation {
                 "Original removal state belongs to another actual manager or selection owner.",
             ));
         }
-        validate_state_directories(manager, self.plugin_id())?;
-        self.flat_predecessor
-            .validate(&manager.state.user_plugin_root)?;
         if self.environment_cleanup.is_some() {
             validate_environment_cleanup(manager, &self.environment_cleanup)?;
         }
@@ -208,18 +183,12 @@ impl VulcanPluginDeactivationStateReservation {
             }
             validate_environment_cleanup(manager, &self.environment_cleanup)?;
             if self.collected {
-                confirm_local_absence(&self.states, self.plugin_id(), &self.environment_cleanup)?;
+                confirm_environment_absence(self.plugin_id(), &self.environment_cleanup)?;
                 return Ok(VulcanPluginDeactivationStateObservation::Collected);
-            }
-            for state in &self.states {
-                validate_cleanup_state(state)?;
             }
             return Ok(VulcanPluginDeactivationStateObservation::CleanupPending);
         }
         if self.cleanup_frozen {
-            for state in &self.states {
-                validate_cleanup_state(state)?;
-            }
             Ok(VulcanPluginDeactivationStateObservation::Frozen)
         } else {
             if selection != VulcanPluginDeactivationObservation::Original {
@@ -233,8 +202,8 @@ impl VulcanPluginDeactivationStateReservation {
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Capture actual managed local preimages before callbacks while borrowing the same selection original without adding a strong owner.
-    /// 回调之前捕获实际受管本地前像，借用相同选择原实例，不添加强所有者。
+    /// Register the managed local cleanup owner before callbacks while borrowing the same selection original without adding a strong owner.
+    /// 回调之前登记受管本地清理所有者，借用相同选择原实例，不添加强所有者。
     /// original must remain strongly retained beside the returned non-cloneable state owner; no policy, publication or cleanup occurs.
     /// original 必须与返回不可克隆状态所有者共同强保留；不发生策略、发布或清理。
     pub fn reserve_deactivation_state(
@@ -264,8 +233,8 @@ impl VulcanPluginRuntimeManager {
             .ok_or_else(|| {
                 VulcanPluginRuntimeError::new("Original managed removal source is absent.")
             })?;
-        // Every preimage enters this inert object before it can be handed to a host registry.
-        // 每个前像在此未启动对象能够交给宿主注册表之前进入其中。
+        // The inert owner is complete before it can be handed to a host registry.
+        // 未启动所有者在能够交给宿主注册表之前已完整。
         let state = VulcanPluginDeactivationStateReservation {
             manager: Arc::downgrade(&self.state),
             namespace: original.namespace_identity(),
@@ -273,12 +242,6 @@ impl VulcanPluginRuntimeManager {
             selection: original.original().clone(),
             generation: current.generation,
             package_root: current.package_root.clone(),
-            states: capture_original_states(self, &original.original().plugin_id)?,
-            flat_predecessor: flat_predecessor::FlatPredecessor::capture(
-                &self.state.user_plugin_root,
-                &original.original().plugin_id,
-                original.request_id(),
-            )?,
             cleanup_frozen: false,
             cleanup_started: false,
             environment_cleanup: None,
@@ -306,8 +269,8 @@ impl VulcanPluginRuntimeManager {
         Ok(state)
     }
 
-    /// Freeze all exact post-callback state bytes once before selection publication, retaining separate original preimages.
-    /// 选择发布之前一次性固定全部精确回调后状态字节，保留独立原前像。
+    /// Admit cleanup once before selection publication, after every callback borrower has retired.
+    /// 每个回调借用者退役之后，于选择发布之前一次性准入清理。
     /// state/original must be the same retained pair and actual callback borrowers must retire; returns a local Frozen observation.
     /// state／original 必须为相同保留配对，实际回调借用者必须退役；返回本地已固定观测。
     pub fn freeze_deactivation_state(
@@ -348,7 +311,6 @@ impl VulcanPluginRuntimeManager {
         original
             .validate_local_state_freeze()
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        freeze_cleanup_states(&mut state.states)?;
         state.cleanup_frozen = true;
         original.record_local_state_freeze();
         state.observe(self, original, &store)
@@ -369,8 +331,8 @@ impl VulcanPluginRuntimeManager {
         state.observe(self, original, &store)
     }
 
-    /// Collect only local state/environment after the caller independently proves Full removal and actual native/MCP union retirement.
-    /// 仅在调用方独立证明完整移除及实际原生／MCP 集合退役之后回收本地状态／环境。
+    /// Collect only the local environment after the caller independently proves Full removal and actual native/MCP union retirement.
+    /// 仅在调用方独立证明完整移除及实际原生／MCP 集合退役之后回收本地环境。
     /// state/original remain borrowed across errors and panic; returns local physical confirmation without package/credential GC or a host receipt.
     /// state／original 跨错误及 panic 保持借用；返回本地物理确认，不执行包／凭据回收或提供宿主回执。
     pub fn collect_deactivation_state(
@@ -412,15 +374,7 @@ impl VulcanPluginRuntimeManager {
             &state.selection.plugin_id,
             &mut state.environment_cleanup,
         )?;
-        for file in &state.states {
-            validate_cleanup_state(file)?;
-        }
         state.cleanup_started = true;
-        remove_frozen_states(&mut state.states, || {
-            original
-                .validate_published_for_catalog(&store)
-                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))
-        })?;
         collect_original_environment(self, state.plugin_id(), &state.environment_cleanup, || {
             original
                 .validate_published_for_catalog(&store)
@@ -429,127 +383,12 @@ impl VulcanPluginRuntimeManager {
         original
             .validate_published_for_catalog(&store)
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        confirm_local_absence(&state.states, state.plugin_id(), &state.environment_cleanup)?;
+        confirm_environment_absence(state.plugin_id(), &state.environment_cleanup)?;
         state.collected = true;
         // Store the true local terminal confirmation before a test-only acknowledgement can fail or panic.
         // 在仅测试确认能够失败或 panic 之前，存储真实本地终态确认。
         #[cfg(test)]
-        observation::checkpoint_exact(
-            &state.package_root,
-            state.plugin_id(),
-            state.request_id(),
-            observation::Checkpoint::Collected,
-        )?;
+        observation::checkpoint_exact(&state.package_root, state.plugin_id(), state.request_id())?;
         Ok(VulcanPluginDeactivationStateObservation::Collected)
-    }
-
-    /// Collect the captured dormant flat child only after exact managed publication and this same original's local/environment collection.
-    /// 仅在精确受管发布及此相同原实例本地／环境回收之后，回收捕获休眠平铺子级。
-    /// state/original remain strongly retained; caller separately proves Full removal and the actual complete native union retirement.
-    /// state／original 保持强保留；调用方独立证明完整移除及实际完整原生集合退役。
-    /// Returns actual flat absence without another environment lease, callback replay, managed-package deletion or secret cleanup.
-    /// 返回实际平铺缺失，不取得另一环境租约、重放回调、删除受管包或清理秘密。
-    pub fn collect_deactivation_flat_predecessor(
-        &self,
-        state: &mut VulcanPluginDeactivationStateReservation,
-        original: &VulcanPluginDeactivationReservation,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        // The same actual paired allocation is required before even a terminal absence check.
-        // 即使终态缺失检查之前，仍要求相同实际配对分配。
-        let store = state.validate_binding(self, original)?;
-        original
-            .require_no_lifecycle_borrowers()
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // Explicit recovery may repair only the existing sequencing unit after strict same-original readback.
-        // 严格同原实例回读之后，明确恢复仅可修复既有排序空元组。
-        let _registration = lock_uninstallation_gate(self, || {
-            state.validate_binding(self, original)?;
-            original
-                .require_no_lifecycle_borrowers()
-                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))
-        })?;
-        original
-            .validate_published_for_catalog(&store)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        if !state.collected {
-            return Err(VulcanPluginRuntimeError::new(
-                "Dormant flat collection requires the same original's confirmed local/environment collection.",
-            ));
-        }
-        // Reuse the actual retained exclusive environment File; reacquiring it would conflict with this original's own physical owner.
-        // 复用实际保留排他环境文件；重新取得它会与此原实例自身物理所有者冲突。
-        validate_environment_cleanup(self, &state.environment_cleanup)?;
-        confirm_local_absence(&state.states, state.plugin_id(), &state.environment_cleanup)?;
-        // Actual terminal confirmation remains adjacent to its retained flag before any test-only acknowledgement fault.
-        // 实际终态确认与保留标志保持相邻，先于任何仅测试确认故障。
-        #[cfg(test)]
-        // The bound observer borrows actual metadata fields only and cannot become a replacement physical owner.
-        // 绑定观察者仅借用实际元数据字段，不能成为替代物理所有者。
-        let observation_root = &state.package_root;
-        #[cfg(test)]
-        // The same original selection supplies the real identity for its single successful hide checkpoint.
-        // 相同原选择提供单次成功隐藏检查点的真实身份。
-        let observation_plugin_id = &state.selection.plugin_id;
-        #[cfg(test)]
-        // The original request remains observation metadata, never file authority.
-        // 原请求保持为观测元数据，绝非文件权威。
-        let observation_request_id = state.request_id;
-        // Only a newly completed actual producer may emit the test checkpoint; a retained terminal retry remains read-only.
-        // 仅新完成实际生产者可以发出测试检查点；保留终态重试保持只读。
-        let newly_collected = state.flat_predecessor.collect(
-            &self.state.user_plugin_root,
-            || {
-                original
-                    .validate_published_for_catalog(&store)
-                    .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))
-            },
-            #[cfg(test)]
-            || {
-                observation::checkpoint_exact(
-                    observation_root,
-                    observation_plugin_id,
-                    observation_request_id,
-                    observation::Checkpoint::Hidden,
-                )
-            },
-        )?;
-        if newly_collected {
-            #[cfg(test)]
-            observation::checkpoint_exact(
-                &state.package_root,
-                state.plugin_id(),
-                state.request_id(),
-                observation::Checkpoint::Collected,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Confirm this exact original's already collected dormant flat child using actual absence only; no effect or checkpoint is replayed.
-    /// 仅使用实际缺失确认此精确原实例已回收休眠平铺子级；不重放效果或检查点。
-    /// state/original must be the same actual pair with retained environment exclusion; returns only flat/local storage proof.
-    /// state／original 必须为保留环境互斥的相同实际配对；仅返回平铺／本地存储证明。
-    pub fn confirm_deactivation_flat_predecessor_collected(
-        &self,
-        state: &VulcanPluginDeactivationStateReservation,
-        original: &VulcanPluginDeactivationReservation,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        // Full/native completion remains a separate caller obligation, never inferred from a disk tombstone.
-        // 完整／原生完成仍为独立调用方义务，绝不从磁盘停用记录推断。
-        let store = state.validate_binding(self, original)?;
-        original
-            .validate_published_for_catalog(&store)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        original
-            .require_no_lifecycle_borrowers()
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        if !state.collected {
-            return Err(VulcanPluginRuntimeError::new(
-                "Original local/environment collection is not terminal.",
-            ));
-        }
-        validate_environment_cleanup(self, &state.environment_cleanup)?;
-        confirm_local_absence(&state.states, state.plugin_id(), &state.environment_cleanup)?;
-        state.flat_predecessor.confirm(&self.state.user_plugin_root)
     }
 }

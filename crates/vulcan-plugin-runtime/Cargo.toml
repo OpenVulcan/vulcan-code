@@ -35,6 +35,7 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 tempfile.workspace = true
 
 [features]
+test-support = []
 manifest-schema = ["dep:schemars", "dep:tempfile", "luaskills/contract-generation", "vulcan-hooks/manifest-schema"]
 
 [[bin]]

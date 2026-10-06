@@ -6,6 +6,28 @@ use super::{
     VulcanPluginCredentialBackend, VulcanPluginCredentialKey, VulcanPluginCredentialRevision,
     VulcanPluginCredentialValues, VulcanPluginGenerationStore, VulcanPluginStoreResult,
 };
+use std::path::Path;
+
+/// Publish `source` as the managed user selection under `user_root`, approving its required permissions with
+/// unconfigured credentials and package defaults; returns the committed selection.
+/// 将 `source` 发布为 `user_root` 下的受管用户选择，批准其所需权限，凭据未配置且使用插件包默认值；返回已提交选择。
+/// Any existing selection of the same plugin is replaced; the caller refreshes its catalog to observe the package.
+/// 同一插件的既有选择会被替换；调用方刷新目录以观察该插件包。
+pub fn install_user_package_for_test(user_root: &Path, source: &Path) -> VulcanPluginActivation {
+    std::fs::create_dir_all(user_root).expect("create fixture user plugin root");
+    let inspected = crate::inspect_user_plugin_package(source).expect("inspect fixture package");
+    let store = VulcanPluginGenerationStore::open(user_root).expect("open fixture store");
+    let package = store
+        .prepare(source, &inspected.content_fingerprint)
+        .expect("prepare fixture generation");
+    let current = store
+        .activation(&inspected.id)
+        .expect("read fixture selection")
+        .map_or(0, |activation| activation.revision);
+    store
+        .activate_for_test(&package, current, package.required_permissions_for_test())
+        .expect("select fixture generation")
+}
 
 /// Backend for inventories whose every declared slot is explicitly unconfigured.
 /// 用于每个声明槽位均明确未配置之清单的后端。

@@ -10,14 +10,13 @@ import type { PluginSummary } from "@/types";
 import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
 import type { PluginMaintenanceGate } from "./plugin-maintenance-workspace";
 import type { RecoveryReport } from "./plugin-maintenance-section";
-import { PluginRequestRecoveryControls } from "./plugin-request-recovery-controls";
 import { PluginUninstallRecoveryControls, type PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
 import { PluginUpdateControls } from "./plugin-update-controls";
 import type { SkillActionProps } from "./skill-area-types";
 
 // RecoveryKind names one family of interruptible plugin management operations.
 // RecoveryKind 命名一类可被中断的插件管理操作。
-export type RecoveryKind = "update" | "credential" | "uninstall";
+export type RecoveryKind = "update" | "uninstall";
 
 // PluginRecoveryCenterProps binds the catalog, the shared gate and the scan trigger to every reader.
 // PluginRecoveryCenterProps 将目录、共享门与扫描触发绑定到所有读取器。
@@ -65,29 +64,23 @@ export function PluginRecoveryCenter(props: PluginRecoveryCenterProps) {
   const [reports, setReports] = React.useState<ReadonlyMap<string, RecoveryReport>>(() => new Map());
   const scoped = props.scopePluginId;
   const scanUpdates = props.kinds.includes("update");
-  const scanRequests = props.kinds.includes("credential");
-  // owners lists, per plugin, which readers apply: updates (including first installs) for user-installed packages,
-  // credential requests for Vulcan Plugins.
-  // owners 按插件列出适用的读取器：用户安装包读取更新（含首次安装），Vulcan 插件读取凭据请求。
+  // owners lists the user-installed packages whose updates (including first installs) are read.
+  // owners 列出需要读取更新（含首次安装）的用户安装包。
   const owners = React.useMemo(() => {
-    const result = new Map<string, { update: boolean; requests: boolean }>();
+    const result: string[] = [];
     const add = (pluginId: string, plugin: PluginSummary | undefined) => {
-      const update = scanUpdates && (plugin === undefined || plugin.extension?.origin === "userInstalled");
-      const requests = scanRequests && (plugin === undefined || plugin.managementKind === "vulcanPlugin");
-      if (update || requests) result.set(pluginId, { update, requests });
+      if (scanUpdates && (plugin === undefined || plugin.extension?.origin === "userInstalled") && !result.includes(pluginId)) {
+        result.push(pluginId);
+      }
     };
     if (scoped !== undefined) add(scoped, props.plugins.find((plugin) => plugin.id === scoped));
     else for (const plugin of props.plugins) add(plugin.id, plugin);
-    for (const pluginId of extraOwners) if (!result.has(pluginId)) add(pluginId, undefined);
+    for (const pluginId of extraOwners) add(pluginId, undefined);
     return result;
-  }, [extraOwners, props.plugins, scanRequests, scanUpdates, scoped]);
+  }, [extraOwners, props.plugins, scanUpdates, scoped]);
   // expected is the set of reader keys currently mounted; stale reports from removed readers are ignored.
   // expected 是当前挂载的读取器键集合；已移除读取器的陈旧报告被忽略。
-  const expected: string[] = [];
-  for (const [pluginId, owner] of owners) {
-    if (owner.update) expected.push(`update:${pluginId}`);
-    if (owner.requests) expected.push(`credential:${pluginId}`);
-  }
+  const expected = owners.map((pluginId) => `update:${pluginId}`);
   if (props.kinds.includes("uninstall")) expected.push("uninstall");
   const loading = expected.some((key) => reports.get(key)?.loading !== false);
   const visible = expected.reduce((sum, key) => sum + (reports.get(key)?.visible ?? 0), 0);
@@ -112,14 +105,10 @@ export function PluginRecoveryCenter(props: PluginRecoveryCenterProps) {
   return (
     <>
       <PageItemList>
-        {[...owners].map(([pluginId, owner]) => <React.Fragment key={pluginId}>
-          {owner.update && <PluginUpdateControls actions={props.actions} onReport={(next) => report(`update:${pluginId}`, next)}
-            onLocateDiagnostics={props.onLocate ? (plugin, request) => props.onLocate?.("update", plugin, request) : undefined}
-            pluginId={pluginId} pluginName={props.pluginName(pluginId)} scanToken={props.scanToken} />}
-          {owner.requests && <PluginRequestRecoveryControls acquireMutation={gate.acquireMutation} actions={props.actions}
-            mutationBusy={gate.mutationBusy} onReport={(next) => report(`credential:${pluginId}`, next)} pluginId={pluginId}
-            pluginName={props.pluginName(pluginId)} releaseMutation={gate.releaseMutation} scanToken={props.scanToken} />}
-        </React.Fragment>)}
+        {owners.map((pluginId) => <PluginUpdateControls actions={props.actions} key={pluginId}
+          onLocateDiagnostics={props.onLocate ? (plugin, request) => props.onLocate?.("update", plugin, request) : undefined}
+          onReport={(next) => report(`update:${pluginId}`, next)} pluginId={pluginId} pluginName={props.pluginName(pluginId)}
+          scanToken={props.scanToken} />)}
         {props.kinds.includes("uninstall") && <PluginUninstallRecoveryControls acquireMutation={gate.acquireMutation} actions={props.actions}
           initialUncertainty={props.uninstallUncertainty} mutationBusy={gate.mutationBusy} onConfirmed={props.onUninstallConfirmed}
           onLocateDiagnostics={props.onLocate ? (plugin, request) => props.onLocate?.("uninstall", plugin, request) : undefined}
@@ -129,7 +118,7 @@ export function PluginRecoveryCenter(props: PluginRecoveryCenterProps) {
       {loading && visible === 0 && <StreamPlaceholder count={2} label={t("pluginRecovery.scanning")} shape="rows" />}
       {!loading && visible === 0 && <PageEmptyState description={t(scoped === undefined ? "pluginRecovery.allClearHint" : "pluginRecovery.allClearScopedHint")}
         icon={<CircleCheck />} title={t("pluginRecovery.allClear")} />}
-      {scoped === undefined && (scanUpdates || scanRequests) && <InlineDisclosure label={t("pluginRecovery.extraToggle")}>
+      {scoped === undefined && scanUpdates && <InlineDisclosure label={t("pluginRecovery.extraToggle")}>
         <PageHint>{t("pluginRecovery.extraHint")}</PageHint>
         <form className="plugin-recovery-extra-form" onSubmit={(event) => { event.preventDefault(); addExtra(); }}>
           <label className="sr-only" htmlFor={inputId}>{t("pluginRecovery.extraField")}</label>

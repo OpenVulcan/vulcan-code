@@ -1,5 +1,5 @@
-//! Original namespace ownership for flat lifecycle and explicitly reserved managed-removal execution.
-//! 平铺生命周期及明确预留受管移除执行的原命名空间所有权。
+//! Original namespace ownership for explicitly reserved managed-removal execution.
+//! 明确预留受管移除执行的原命名空间所有权。
 
 use super::*;
 use crate::{
@@ -7,42 +7,6 @@ use crate::{
     VulcanPluginLegacyMutationGuard, VulcanPluginPackageOrigin,
 };
 use std::sync::Weak;
-
-/// Select only installation or removal of an existing disabled user package.
-/// 仅选择现有停用用户包的安装或卸载。
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum VulcanPluginLegacyLifecycleEvent {
-    /// Invoke the manifest installation declaration.
-    /// 调用清单安装声明。
-    Install,
-    /// Invoke the manifest removal declaration.
-    /// 调用清单卸载声明。
-    Uninstall,
-}
-
-impl VulcanPluginLegacyLifecycleEvent {
-    /// Return the sole native lease scope for this trusted event.
-    /// 返回此可信事件唯一的原生租约作用域。
-    /// self is the host-selected event; returns its single permitted native scope.
-    /// self 为宿主选择事件；返回其唯一许可原生作用域。
-    pub(in crate::runtime) fn scope(self) -> VulcanPluginBridgeLeaseScope {
-        match self {
-            Self::Install => VulcanPluginBridgeLeaseScope::LifecycleInstall,
-            Self::Uninstall => VulcanPluginBridgeLeaseScope::LifecycleUninstall,
-        }
-    }
-
-    /// Return the fixed Lua envelope spelling, independently of plugin input.
-    /// 返回固定 Lua 信封拼写，独立于插件输入。
-    /// self is the trusted event; returns a static Lua event name.
-    /// self 为可信事件；返回静态 Lua 事件名称。
-    pub(in crate::runtime) fn key(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Uninstall => "uninstall",
-        }
-    }
-}
 
 /// One explicit authority supplies both formal admission and actual pool admission.
 /// 单个显式权威同时提供正式入场及实际池入场。
@@ -54,20 +18,9 @@ pub(in crate::runtime) enum CallExecutionSource {
     /// Activation execution retains the original prepared request.
     /// 激活执行保留原准备请求。
     Activation(Arc<super::candidates::ActivationExecution>),
-    /// Guarded lifecycle execution retains its original flat or explicitly reserved managed-removal namespace.
-    /// 受保护生命周期执行保留其原平铺或明确预留受管移除命名空间。
+    /// Guarded lifecycle execution retains its explicitly reserved managed-removal namespace.
+    /// 受保护生命周期执行保留其明确预留受管移除命名空间。
     LegacyLifecycle(Arc<LegacyLifecycleExecution>),
-}
-
-/// Package selection is fixed by the typed host entry, independently of plugin input or UUID reconstruction.
-/// 包选择由类型化宿主入口固定，独立于插件输入或 UUID 重建。
-enum LegacyLifecycleSelection {
-    /// Existing flat Install/Uninstall semantics require an actually unmanaged descriptor.
-    /// 既有平铺安装／卸载语义要求实际非受管描述符。
-    Flat,
-    /// Managed Uninstall carries complete original evidence while the actual guard retains authority.
-    /// 受管卸载携带完整原证据，实际守卫保留权威。
-    Deactivation(Box<VulcanPluginActivation>),
 }
 
 impl CallExecutionSource {
@@ -105,12 +58,9 @@ pub(in crate::runtime) struct LegacyLifecycleExecution {
     /// The actual user descriptor fixes package bytes and the original manifest.
     /// 实际用户描述符固定包字节及原清单。
     plugin: VulcanPluginDescriptor,
-    /// Host event alone selects native privileges and the declaration.
-    /// 仅宿主事件选择原生权限及声明。
-    event: VulcanPluginLegacyLifecycleEvent,
-    /// Only the explicit removal entry may admit an immutable managed package.
-    /// 仅明确移除入口可以接纳不可变受管包。
-    selection: LegacyLifecycleSelection,
+    /// Complete original selection evidence accompanies the actual guard; evidence alone grants no authority.
+    /// 完整原选择证据伴随实际守卫；仅证据不授予权威。
+    original: Box<VulcanPluginActivation>,
     /// Optional declaration is resolved once from the actual manifest.
     /// 可选声明从实际清单一次性解析。
     export: Option<String>,
@@ -120,19 +70,6 @@ pub(in crate::runtime) struct LegacyLifecycleExecution {
 }
 
 impl LegacyLifecycleExecution {
-    /// Bind guard to this manager and disabled user descriptor; return checked authority.
-    /// 将护栏绑定至此管理器及停用用户描述符；返回已校验权威。
-    /// state owns plugin; event selects its declaration and guard supplies the original namespace; returns sealed ownership or an error.
-    /// state 拥有 plugin；event 选择声明，guard 提供原命名空间；返回封闭所有权或错误。
-    pub(in crate::runtime) fn new(
-        state: &Arc<VulcanPluginManagerState>,
-        plugin: VulcanPluginDescriptor,
-        event: VulcanPluginLegacyLifecycleEvent,
-        guard: Arc<VulcanPluginLegacyMutationGuard>,
-    ) -> Result<Arc<Self>, VulcanPluginRuntimeError> {
-        Self::bind(state, plugin, event, guard, LegacyLifecycleSelection::Flat)
-    }
-
     /// Bind the same original removal reservation to its exact disabled managed package and Uninstall scope.
     /// 将同一原移除预留绑定至其精确停用受管包及卸载作用域。
     /// state/plugin are the actual manager/catalog; original lends its real File; returns inert checked ownership.
@@ -147,61 +84,41 @@ impl LegacyLifecycleExecution {
         let guard = original
             .lifecycle_guard()
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        Self::bind(
-            state,
-            plugin,
-            VulcanPluginLegacyLifecycleEvent::Uninstall,
-            guard,
-            LegacyLifecycleSelection::Deactivation(Box::new(original.original().clone())),
-        )
-    }
-
-    /// Freeze the manifest declaration and explicit selection under the same actual guard.
-    /// 在同一实际守卫内固定清单声明及明确选择。
-    /// state/plugin/event/guard/selection are already typed host inputs; returns checked authority or an inert rejection.
-    /// state／plugin／event／guard／selection 均为已类型化宿主输入；返回已校验权威或无执行拒绝。
-    fn bind(
-        state: &Arc<VulcanPluginManagerState>,
-        plugin: VulcanPluginDescriptor,
-        event: VulcanPluginLegacyLifecycleEvent,
-        guard: Arc<VulcanPluginLegacyMutationGuard>,
-        selection: LegacyLifecycleSelection,
-    ) -> Result<Arc<Self>, VulcanPluginRuntimeError> {
-        // Read the actual manifest before selecting declarations.
-        // 选择声明前读取实际清单。
+        // Read the actual manifest before selecting the removal declaration.
+        // 选择卸载声明前读取实际清单。
         let manifest = plugin.manifest.as_ref().ok_or_else(|| {
             VulcanPluginRuntimeError::new("Legacy lifecycle package has no valid manifest.")
         })?;
-        // Freeze the declaration selected exclusively by the trusted event.
-        // 冻结仅由可信事件选择的声明。
         let export = manifest
             .lua_runtime
             .as_ref()
-            .and_then(|runtime| match event {
-                VulcanPluginLegacyLifecycleEvent::Install => runtime.lifecycle.install.clone(),
-                VulcanPluginLegacyLifecycleEvent::Uninstall => runtime.lifecycle.uninstall.clone(),
-            });
+            .and_then(|runtime| runtime.lifecycle.uninstall.clone());
         // Retain the same original checked execution authority.
         // 保留同一原已校验执行权威。
         let authority = Arc::new(Self {
             manager: Arc::downgrade(state),
             guard,
             plugin,
-            event,
-            selection,
+            original: Box::new(original.original().clone()),
             export,
             environment: Mutex::new(None),
         });
-        authority.validate(state, &authority.plugin, event.scope())?;
+        authority.validate(state, &authority.plugin, authority.scope())?;
         Ok(authority)
     }
 
-    /// Validate original manager/root, full frozen identity and exact event before effects.
-    /// 副作用前校验原管理器及根、完整冻结身份以及精确事件。
+    /// Return the sole native lease scope of a managed removal callback.
+    /// 返回受管卸载回调唯一的原生租约作用域。
+    pub(in crate::runtime) fn scope(&self) -> VulcanPluginBridgeLeaseScope {
+        VulcanPluginBridgeLeaseScope::LifecycleUninstall
+    }
+
+    /// Validate original manager/root, full frozen identity and the removal scope before effects.
+    /// 副作用前校验原管理器及根、完整冻结身份以及卸载作用域。
     /// No namespace is reopened; mismatched current selection returns an explicit error.
     /// 不重新打开命名空间；当前选择不匹配时返回明确错误。
-    /// state and plugin must match original ownership and scope must match the event; returns unit or exact authority rejection.
-    /// state 及 plugin 必须匹配原所有权，scope 必须匹配事件；返回空值或精确权威拒绝。
+    /// state and plugin must match original ownership and scope must be the removal scope; returns unit or exact authority rejection.
+    /// state 及 plugin 必须匹配原所有权，scope 必须为卸载作用域；返回空值或精确权威拒绝。
     pub(in crate::runtime) fn validate(
         &self,
         state: &Arc<VulcanPluginManagerState>,
@@ -225,7 +142,7 @@ impl LegacyLifecycleExecution {
         let current = snapshot.plugins.get(&self.plugin.id).ok_or_else(|| {
             VulcanPluginRuntimeError::new("Legacy lifecycle package is no longer selected.")
         })?;
-        if scope != self.event.scope()
+        if scope != self.scope()
             || !Self::same_descriptor(&self.plugin, plugin)
             || !Self::same_descriptor(&self.plugin, current)
             || current.origin != VulcanPluginPackageOrigin::UserInstalled
@@ -242,20 +159,14 @@ impl LegacyLifecycleExecution {
         Ok(())
     }
 
-    /// Match descriptor against the one explicit selection kind; no managed record is inferred from a package ID.
-    /// 将 descriptor 与单个明确选择种类匹配；不从包标识推断受管记录。
-    /// descriptor is supplied or current routing; returns true only for flat absence or the complete managed original.
-    /// descriptor 为传入或当前路由；仅平铺缺失或完整受管原记录返回真。
+    /// Match descriptor against the complete managed original; no managed record is inferred from a package ID.
+    /// 将 descriptor 与完整受管原记录匹配；不从包标识推断受管记录。
+    /// descriptor is supplied or current routing; returns true only for the complete managed original.
+    /// descriptor 为传入或当前路由；仅完整受管原记录返回真。
     fn matches_selection(&self, descriptor: &VulcanPluginDescriptor) -> bool {
-        match &self.selection {
-            LegacyLifecycleSelection::Flat => descriptor.managed_package().is_none(),
-            LegacyLifecycleSelection::Deactivation(original) => {
-                self.event == VulcanPluginLegacyLifecycleEvent::Uninstall
-                    && descriptor
-                        .managed_package()
-                        .is_some_and(|managed| managed.matches_activation(original))
-            }
-        }
+        descriptor
+            .managed_package()
+            .is_some_and(|managed| managed.matches_activation(&self.original))
     }
 
     /// Verify only retained owner identity for cleanup, without requiring still-published routing.
@@ -309,14 +220,6 @@ impl LegacyLifecycleExecution {
     /// self 保留原插件包；返回其不可变描述符引用。
     pub(in crate::runtime) fn plugin(&self) -> &VulcanPluginDescriptor {
         &self.plugin
-    }
-
-    /// Borrow the trusted event frozen by the explicit typed entry.
-    /// 借用明确类型化入口固定的可信事件。
-    /// No parameters; returns the only admitted event without consulting plugin input.
-    /// 无参数；返回唯一准入事件，不查询插件输入。
-    pub(in crate::runtime) fn event(&self) -> VulcanPluginLegacyLifecycleEvent {
-        self.event
     }
 
     /// Borrow the same typed mutation authority for actual configuration effects.
@@ -385,7 +288,7 @@ impl LegacyLifecycleExecution {
         &self,
         state: &Arc<VulcanPluginManagerState>,
     ) -> Result<(), VulcanPluginRuntimeError> {
-        self.validate(state, &self.plugin, self.event.scope())?;
+        self.validate(state, &self.plugin, self.scope())?;
         // Serialize ownership of the actual prepared environment lease.
         // 串行化实际准备环境租约所有权。
         let mut environment = self.environment.lock().map_err(|_| {

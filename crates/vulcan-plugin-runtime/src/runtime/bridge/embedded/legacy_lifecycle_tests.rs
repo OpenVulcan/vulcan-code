@@ -1,10 +1,12 @@
-//! Actual legacy lifecycle pools retain the original guard through native effects and retirement.
-//! 实际旧生命周期池在原生副作用及退役全程保留原守卫。
+//! Actual managed-removal lifecycle pools retain the original guard through native calls and retirement.
+//! 实际受管移除生命周期池在原生调用及退役全程保留原守卫。
 
 use super::*;
-use crate::runtime::legacy_lifecycle::VulcanPluginLegacyLifecycleEvent;
 use crate::runtime::tests::{test_manager, write_hook_package};
-use crate::{VulcanPluginGenerationStore, VulcanPluginLegacyMutationGuard};
+use crate::{
+    VulcanPluginActivation, VulcanPluginDeactivationReservation, VulcanPluginGenerationStore,
+    VulcanPluginLegacyMutationGuard,
+};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
     EmbeddedCall, EmbeddedCapacityConfig, EmbeddedPluginConfig, ExecutionBackend, InstanceReuse,
@@ -16,8 +18,8 @@ use std::fs;
 /// 此夹具初始化、原生调用及物理清理共用一个有限预算。
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Actual manager, package, core pool and original namespace owner for one disabled-user event.
-/// 单个已停用用户事件的实际管理器、插件包、核心池及原命名空间所有者。
+/// Actual manager, package, core pool and original removal reservation for one disabled managed package.
+/// 单个已停用受管插件包的实际管理器、插件包、核心池及原移除预留。
 struct LegacyFixture {
     /// The actual core is closed before its physical package directory disappears.
     /// 实际核心在物理插件包目录消失前关闭。
@@ -31,34 +33,29 @@ struct LegacyFixture {
     /// One pool and capacity retain the exact original authority independently of caller handles.
     /// 单个池及容量独立于调用方句柄保留精确原权威。
     pool: String,
-    /// Weak observation proves only the actual core resource owner keeps the guard alive.
-    /// 弱观测证明仅实际核心资源所有者使守卫存活。
+    /// Weak observation proves the guard outlives the pool only through the retained reservation.
+    /// 弱观测证明守卫仅经由保留预留在池之后存活。
     guard: Weak<VulcanPluginLegacyMutationGuard>,
+    /// The removal reservation owns the namespace File until the test releases it.
+    /// 移除预留拥有命名空间文件，直至测试释放它。
+    original: Option<VulcanPluginDeactivationReservation>,
+    /// The unchanged selection proves the namespace is free once the reservation is released.
+    /// 预留释放后，未变选择用于证明命名空间空闲。
+    selected: VulcanPluginActivation,
     /// Real temporary files outlive all actual core cleanup.
     /// 真实临时文件存活至全部实际核心清理之后。
     _root: tempfile::TempDir,
 }
 
 impl LegacyFixture {
-    /// Build a real disabled user bundle for event and admit it with the same original mutation guard.
-    /// 为 event 构建真实已停用用户 bundle，并以同一原变更守卫接纳它。
+    /// Build a real disabled managed bundle and admit its Uninstall callback through the original removal reservation.
+    /// 构建真实已停用受管 bundle，并通过原移除预留接纳其卸载回调。
     /// Return the actual pool fixture after caller-owned authority handles have been released.
     /// 调用方所有权句柄释放后返回实际池夹具。
-    fn new(event: VulcanPluginLegacyLifecycleEvent) -> Self {
-        Self::build(event, false).0
-    }
-
-    /// Build the actual native pool with either retained first-install ownership or ordinary installed-package ownership.
-    /// 使用保留首次安装所有权或普通已安装插件包所有权构建实际原生池。
-    /// first_install keeps the actual package reservation through callback writes; returns fixture and its optional same transaction.
-    /// first_install 使实际插件包预留跨回调写入保持；返回夹具及其可选同事务。
-    fn build(
-        event: VulcanPluginLegacyLifecycleEvent,
-        first_install: bool,
-    ) -> (Self, Option<crate::VulcanPluginInstallationTransaction>) {
+    fn new() -> Self {
         // Each fixture uses independent real roots and the production manager constructor.
         // 每个夹具使用独立真实根及生产管理器构造入口。
-        let root = tempfile::tempdir().expect("legacy native fixture");
+        let root = tempfile::tempdir().expect("managed lifecycle native fixture");
         // The bundled root is deliberately empty; this package is selected from the actual user root.
         // 内建根有意保持空；此插件包从实际用户根选择。
         let manager = test_manager(root.path(), root.path().join("bundled"));
@@ -118,49 +115,12 @@ return M
 "#,
         )
         .expect("actual native lifecycle bundle");
-        // Authorize the complete final fingerprint and permission set through the actual flat-package installer.
-        // 通过实际平铺包安装器授权完整最终指纹及权限集合。
-        let preview = manager
-            .inspect_local_user_plugin(&package)
-            .expect("actual final source permission inspection");
-        // This original reservation binds callback configuration before any package write.
-        // 此原预留在任何插件包写入之前绑定回调配置。
-        let mut original = manager
-            .reserve_local_user_plugin_installation(
-                &package,
-                &preview.content_fingerprint,
-                preview.permissions,
-                false,
-            )
-            .expect("actual authorized original user reservation");
+        // Select the complete final fingerprint and permission set through the production store writers.
+        // 通过生产存储写入器选择完整最终指纹及权限集合。
+        let selected = crate::install_user_package_for_test(manager.user_plugin_root(), &package);
         manager
-            .publish_local_user_plugin_installation(&mut original)
-            .expect("actual original user package publication");
-        // Only first-install coverage retains this same non-serialized package owner.
-        // 仅首次安装覆盖保留此相同不可序列化插件包所有者。
-        let original = if first_install {
-            Some(original)
-        } else {
-            drop(original);
-            None
-        };
-        match original.as_ref() {
-            Some(original) => {
-                manager
-                    .refresh_catalog_with_legacy_mutation(
-                        &BTreeSet::new(),
-                        &BTreeSet::new(),
-                        "hook-plugin",
-                        original.mutation_guard(),
-                    )
-                    .expect("actual guarded first-install descriptor");
-            }
-            None => {
-                manager
-                    .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-                    .expect("publish disabled user descriptor");
-            }
-        }
+            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+            .expect("publish disabled managed descriptor");
         // Keep the actual descriptor rather than reconstructing fields from a guessed package path.
         // 保留实际描述符，不从猜测包路径重建字段。
         let plugin = manager.snapshot().plugins["hook-plugin"].clone();
@@ -174,27 +134,22 @@ return M
             plugin.origin,
             crate::VulcanPluginPackageOrigin::UserInstalled
         );
-        // The original physical namespace is acquired exactly once before the source is created.
-        // 原物理命名空间在来源创建前仅获取一次。
+        // The original removal reservation acquires the physical namespace exactly once.
+        // 原移除预留仅获取一次物理命名空间。
         let store = VulcanPluginGenerationStore::open(manager.user_plugin_root())
-            .expect("actual legacy store");
-        // Only the actual core domain may retain this guard after the constructor returns.
-        // 构造函数返回后，仅实际核心域可保留此守卫。
-        let guard = match original.as_ref() {
-            Some(original) => Arc::clone(original.mutation_guard()),
-            None => Arc::new(
-                store
-                    .acquire_legacy_mutation_guard(&plugin.id, None)
-                    .expect("original namespace owner"),
-            ),
-        };
-        // Weak observation never becomes an independent owner registry.
-        // 弱观测绝不成为独立所有者注册表。
-        let weak_guard = Arc::downgrade(&guard);
+            .expect("actual managed store");
+        let original = store
+            .reserve_deactivation(uuid::Uuid::new_v4(), &selected)
+            .expect("actual removal reservation");
         // Bind the actual manager and original full selection, using the production authority constructor.
         // 使用生产权威构造入口绑定实际管理器及原完整选择。
-        let authority = LegacyLifecycleExecution::new(&manager.state, plugin.clone(), event, guard)
-            .expect("original lifecycle authority");
+        let authority =
+            LegacyLifecycleExecution::for_deactivation(&manager.state, plugin.clone(), &original)
+                .expect("original lifecycle authority");
+        // Weak observation never becomes an independent owner registry.
+        // 弱观测绝不成为独立所有者注册表。
+        let weak_guard =
+            Arc::downgrade(&original.lifecycle_guard().expect("actual namespace guard"));
         authority
             .retain_execution_environment(&manager.state)
             .expect("original prepared environment lease");
@@ -209,7 +164,7 @@ return M
                 &foreign.state,
                 &plugin.id,
                 &PoolAdmission {
-                    scope: event.scope(),
+                    scope: authority.scope(),
                     source: ExecutionSource::LegacyLifecycle(Arc::clone(&authority)),
                 },
             )
@@ -292,7 +247,7 @@ return M
                     plugin_generation: plugin.generation,
                     workspace_root: root.path().to_path_buf(),
                     security_partition: "original-legacy-lifecycle".to_string(),
-                    scope: event.scope(),
+                    scope: authority.scope(),
                     policy: PluginPoolConfig {
                         kind: PoolKind::Shared,
                         min_resident_vms: 0,
@@ -339,17 +294,16 @@ return M
             "environment ownership must transfer exactly once"
         );
         drop(authority);
-        (
-            Self {
-                host,
-                manager,
-                store,
-                pool,
-                guard: weak_guard,
-                _root: root,
-            },
-            original,
-        )
+        Self {
+            host,
+            manager,
+            store,
+            pool,
+            guard: weak_guard,
+            original: Some(original),
+            selected,
+            _root: root,
+        }
     }
 
     /// Submit document through the real bundle and return terminal core evidence after bounded waiting.
@@ -417,172 +371,45 @@ return M
     }
 }
 
-/// Both lifecycle events use the original guard for actual native writes while core permission revocation still blocks effects.
-/// 两种生命周期事件均使用原守卫执行实际原生写入，同时核心权限撤回仍阻止副作用。
+/// A managed Uninstall callback keeps the original guard yet cannot edit the settings it is retiring.
+/// 受管卸载回调保留原守卫，但不能编辑其正在退役的设置。
 #[test]
-fn legacy_lifecycle_native_config_uses_original_guard_and_core_permissions() {
-    for event in [
-        VulcanPluginLegacyLifecycleEvent::Install,
-        VulcanPluginLegacyLifecycleEvent::Uninstall,
-    ] {
-        // No caller-owned authority survives this constructor; the actual pool must retain it.
-        // 此构造函数后无调用方所有权权威存续；实际池必须保留它。
-        let fixture = LegacyFixture::new(event);
-        assert!(
-            fixture.guard.upgrade().is_some(),
-            "actual domain lost original guard"
-        );
-        assert!(
-            fixture
-                .store
-                .acquire_legacy_mutation_guard("hook-plugin", None)
-                .is_err(),
-            "actual pool must retain namespace exclusivity"
-        );
-        // A legal native write must commit instead of reopening its own locked namespace.
-        // 合法原生写入必须提交，而不是重开自身已锁命名空间。
-        let completed = fixture.call(json!({"owner":"committed"}));
-        assert_eq!(
-            completed.phase,
-            OperationPhase::Succeeded,
-            "actual native write: {completed:?}"
-        );
-        assert_eq!(
-            fixture
-                .manager
-                .plugin_config("hook-plugin")
-                .expect("actual committed document"),
-            json!({"owner":"committed"})
-        );
-        // Schema rejection keeps the original guard and leaves the complete persisted document unchanged.
-        // 模式拒绝保留原守卫，并保持完整持久化文档不变。
-        let invalid = fixture.call(json!({"owner":42}));
-        assert_eq!(
-            invalid.phase,
-            OperationPhase::Failed,
-            "invalid document must not commit"
-        );
-        assert_eq!(
-            fixture
-                .manager
-                .plugin_config("hook-plugin")
-                .expect("document after schema rejection"),
-            json!({"owner":"committed"})
-        );
-        fixture
-            .host
-            .runtime()
-            .revoke_pool_permission(&fixture.pool, VULCAN_PLUGIN_CONFIG_UPDATE_TOOL)
-            .expect("revoke actual core grant");
-        // Original authority is not a bypass for core grants or invocation authorization.
-        // 原权威不是核心授权或调用授权的绕过入口。
-        let revoked = fixture.call(json!({"owner":"forbidden"}));
-        assert_eq!(
-            revoked.phase,
-            OperationPhase::Failed,
-            "revoked core permission must reject native effect"
-        );
-        assert_eq!(
-            fixture
-                .manager
-                .plugin_config("hook-plugin")
-                .expect("document after revocation"),
-            json!({"owner":"committed"})
-        );
-        fixture.close();
-        assert!(
-            fixture.guard.upgrade().is_none(),
-            "physically retired domain still owns guard"
-        );
-        fixture
-            .store
-            .acquire_legacy_mutation_guard("hook-plugin", None)
-            .expect("namespace released only after physical retirement");
-    }
-}
-
-/// Real Lua callback writes remain bound to the first-install transaction and conflict-aware original absence restoration.
-/// 真实 Lua 回调写入保持绑定至首次安装事务，并以识别冲突的方式恢复原缺失。
-#[test]
-fn initial_install_original_actual_lua_configuration_restores_only_retained_images() {
-    // The actual pool and package transaction share the same original namespace File.
-    // 实际池及插件包事务共享同一原命名空间文件。
-    let (fixture, original) = LegacyFixture::build(VulcanPluginLegacyLifecycleEvent::Install, true);
-    // This is the actual retained first-install transaction, not a guard rebuilt after callback effects.
-    // 此为实际保留首次安装事务，不是回调副作用后重建的屏障。
-    let mut original = original.expect("actual first-install reservation");
-    assert_eq!(
-        fixture.call(json!({"owner":"first-actual-callback"})).phase,
-        OperationPhase::Succeeded
-    );
-    assert_eq!(
-        fixture
-            .call(json!({"owner":"second-actual-callback"}))
-            .phase,
-        OperationPhase::Succeeded
-    );
-    // The exact manager-selected state path comes from the same production configuration helper.
-    // 精确管理器所选状态路径来自同一生产配置辅助方法。
-    let path = crate::runtime::configuration::plugin_config_state_path(
-        &fixture.manager.state.plugin_state_root,
-        "hook-plugin",
-    );
-    // Actual latest bytes certify only this admitted callback image, without carrying authority.
-    // 实际最新字节仅证明此已准入回调像，不携带权威。
-    let expected = fs::read(&path).expect("actual latest callback configuration");
-    fixture.close();
+fn managed_uninstall_callback_rejects_configuration_update_and_retains_original_guard() {
+    // No caller-owned authority survives this constructor; the actual pool must retain it.
+    // 此构造函数后无调用方所有权权威存续；实际池必须保留它。
+    let mut fixture = LegacyFixture::new();
     assert!(
         fixture.guard.upgrade().is_some(),
-        "actual package owner survives physical Lua pool retirement"
-    );
-    fs::write(&path, b"foreign changed configuration")
-        .expect("actual foreign configuration conflict");
-    assert!(
-        fixture
-            .manager
-            .abort_local_user_plugin_installation(&mut original)
-            .expect_err("never remove unowned changed configuration")
-            .to_string()
-            .contains("unowned current image")
-    );
-    assert_eq!(
-        fs::read(&path).expect("preserved foreign configuration"),
-        b"foreign changed configuration"
-    );
-    fs::write(&path, &expected).expect("resolve actual original configuration image conflict");
-    fixture
-        .manager
-        .abort_local_user_plugin_installation(&mut original)
-        .expect("same original configuration and package compensation");
-    assert!(!path.exists());
-    assert!(
-        !fixture
-            .manager
-            .user_plugin_root()
-            .join("hook-plugin")
-            .exists()
+        "actual domain lost original guard"
     );
     assert!(
-        original
-            .mutation_guard()
-            .write_legacy_configuration_atomically(&path, &expected)
-            .is_err(),
-        "retired original configuration cannot admit another callback write"
-    );
-    assert_eq!(
         fixture
             .store
             .acquire_legacy_mutation_guard("hook-plugin", None)
-            // Discard unexpected successful ownership before asserting the error, without requiring the guard to implement Debug.
-            // 断言错误前释放意外成功的所有权，不要求守卫实现 Debug。
-            .map(|_| ())
-            .expect_err("same original file still retained")
-            .code,
-        crate::VulcanPluginStoreErrorCode::Busy
+            .is_err(),
+        "actual pool must retain namespace exclusivity"
     );
-    drop(original);
+    let rejected = fixture.call(json!({"owner":"committed"}));
+    assert_eq!(
+        rejected.phase,
+        OperationPhase::Failed,
+        "removal callback must not commit configuration: {rejected:?}"
+    );
+    assert_eq!(
+        fixture
+            .manager
+            .plugin_config("hook-plugin")
+            .expect("package default document"),
+        json!({"owner":"initial"})
+    );
+    fixture.close();
+    drop(fixture.original.take());
+    assert!(
+        fixture.guard.upgrade().is_none(),
+        "physically retired domain and released reservation still own guard"
+    );
     fixture
         .store
-        .acquire_legacy_mutation_guard("hook-plugin", None)
-        .expect("actual final owner release after original compensation");
+        .acquire_legacy_mutation_guard("hook-plugin", Some(&fixture.selected))
+        .expect("namespace released only after physical retirement");
 }

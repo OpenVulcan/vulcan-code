@@ -619,14 +619,14 @@ async fn seed_managed(fixture: &Fixture) {
     );
 }
 
-/// True flat removal releases its namespace even while a query/executor Arc remains alive.
-/// 真实平铺移除即使查询／执行器引用仍存活，也释放命名空间。
-/// No inputs or return value; checks actual package absence, registry removal and independent File acquisition.
-/// 无输入或返回值；检查实际包缺失、注册表移除及独立文件取得。
+/// True managed removal releases its namespace even while a query/executor Arc remains alive.
+/// 真实受管移除即使查询／执行器引用仍存活，也释放命名空间。
+/// No inputs or return value; checks catalog absence, registry removal and independent File acquisition.
+/// 无输入或返回值；检查目录缺失、注册表移除及独立文件取得。
 #[tokio::test]
-async fn retained_service_uninstall_flat_terminal_releases_actual_original() {
-    // Reuse the real installed disabled flat predecessor and production service bridge.
-    // 复用真实已安装停用平铺前驱及生产服务桥。
+async fn retained_service_uninstall_terminal_releases_actual_original() {
+    // Reuse the real installed disabled managed predecessor and production service bridge.
+    // 复用真实已安装停用受管前驱及生产服务桥。
     let fixture = Fixture::new(false);
     // Every provider write belongs to one test-local destination.
     // 每个供应商写入属于单个测试局部目标。
@@ -635,7 +635,7 @@ async fn retained_service_uninstall_flat_terminal_releases_actual_original() {
         .scope(destination.path().join("policy.json"), async {
             // Capture creates and retains the real physical original before effects.
             // 捕获在副作用之前创建并保留真实物理原实例。
-            let owner = owner::reserve(&fixture.state, PLUGIN).expect("actual flat original");
+            let owner = owner::reserve(&fixture.state, PLUGIN).expect("actual managed original");
             // Ordinary replacement must fail before changing the actual routing Arc.
             // 普通替换必须在改变实际路由引用之前失败。
             let previous = fixture.runtime.snapshot();
@@ -654,8 +654,8 @@ async fn retained_service_uninstall_flat_terminal_releases_actual_original() {
                 false,
             )
             .await
-            .expect("actual flat terminal removal");
-            assert!(!fixture.runtime.user_plugin_root().join(PLUGIN).exists());
+            .expect("actual managed terminal removal");
+            assert!(!fixture.runtime.snapshot().plugins.contains_key(PLUGIN));
             assert!(
                 service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
                     .expect("readonly query")
@@ -668,8 +668,9 @@ async fn retained_service_uninstall_flat_terminal_releases_actual_original() {
                 VulcanPluginGenerationStore::open_existing(fixture.runtime.user_plugin_root())
                     .expect("observer store")
                     .expect("existing store");
+            let tombstone = store.activation(PLUGIN).expect("committed tombstone");
             store
-                .acquire_legacy_mutation_guard(PLUGIN, None)
+                .acquire_legacy_mutation_guard(PLUGIN, tombstone.as_ref())
                 .expect("actual original File released");
         })
         .await;

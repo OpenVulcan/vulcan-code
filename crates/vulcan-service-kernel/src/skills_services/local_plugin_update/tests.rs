@@ -109,7 +109,17 @@ async fn immutable_service_update_validation_failure_retains_original_owner() {
         assert_eq!(prepared.transaction.record().request_id(), request_id);
         assert_eq!(prepared.transaction.record().phase(), Phase::Prepared);
         assert!(Arc::ptr_eq(&original_catalog, &fixture.runtime.snapshot()));
-        assert_eq!(observer.activation(PLUGIN).expect("selection"), None);
+        assert!(
+            original_catalog.plugins[PLUGIN]
+                .managed_package()
+                .expect("original managed selection")
+                .matches_activation(
+                    &observer
+                        .activation(PLUGIN)
+                        .expect("selection")
+                        .expect("original selection remains")
+                )
+        );
         assert!(
             observer
                 .installation_receipt(PLUGIN, request_id)
@@ -686,7 +696,7 @@ pub(in crate::skills_services) struct Fixture {
 
 /// Write one valid package under root using version and explicit defaults; return its exact directory.
 /// 在 root 下使用 version 及明确默认值写入有效插件包；返回其精确目录。
-fn write_package(
+pub(in crate::skills_services) fn write_package(
     root: &Path,
     version: &str,
     enabled: bool,
@@ -725,8 +735,8 @@ fn write_package(
 }
 
 impl Fixture {
-    /// Build a real legacy predecessor and a distinct candidate; configuration selects declared document coverage.
-    /// 构建真实旧格式前驱及不同候选；configuration 选择声明文档覆盖。
+    /// Build a real managed predecessor and a distinct candidate; configuration selects declared document coverage.
+    /// 构建真实受管前驱及不同候选；configuration 选择声明文档覆盖。
     /// Returns isolated service state with an explicitly disabled plugin and no external network connections.
     /// 返回隔离服务状态，含明确停用插件且无外部网络连接。
     pub(in crate::skills_services) fn new(configuration: bool) -> Self {
@@ -764,19 +774,10 @@ impl Fixture {
                 false,
                 configuration.then(|| json!({"mode":"old-default"})),
             );
-            // Preview is authoritative for both fingerprint and complete permission approval.
-            // 预览对指纹及完整权限批准均具有权威。
-            let preview = runtime
-                .inspect_local_user_plugin(&previous)
-                .expect("old preview");
-            runtime
-                .install_local_user_plugin(
-                    &previous,
-                    &preview.content_fingerprint,
-                    preview.permissions,
-                    false,
-                )
-                .expect("old installation");
+            vulcan_plugin_runtime::install_user_package_for_test(
+                runtime.user_plugin_root(),
+                &previous,
+            );
         }
         runtime
             .refresh_catalog(&BTreeSet::from([PLUGIN.to_owned()]), &BTreeSet::new())
@@ -840,204 +841,6 @@ impl Fixture {
             request_id,
         )
     }
-}
-
-/// Reject an enabled legacy predecessor before changing existing installation storage or ordinary business routes.
-/// 改变既有安装存储或普通业务路由前，拒绝启用的旧格式前驱。
-/// No inputs or return value; exact catalog Arc, full stored bytes, absent selection and empty journals prove no effects.
-/// 无输入或返回值；精确目录 Arc、完整存储字节、缺失选择及空日志证明无副作用。
-#[tokio::test]
-async fn immutable_service_update_enabled_legacy_rejects_before_reservation() {
-    // Retained production installation opens the store for its physical namespace guard without selecting a managed generation.
-    // 保留式生产安装为其物理命名空间屏障打开存储，但不选择托管代次。
-    let fixture = Fixture::new(false);
-    /// Read every actual file and directory below path, returning exact paths and optional file bytes.
-    /// 读取 path 下每个实际文件及目录，返回精确路径及可选文件字节。
-    /// This read-only fixture snapshot detects new journals, receipts, locks and empty directories without guessed layout names.
-    /// 此只读夹具快照不猜测布局名称，即可检测新日志、回执、锁及空目录。
-    fn actual_user_tree_bytes(path: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
-        // Stable path ordering keeps filesystem enumeration independent of insertion order.
-        // 稳定路径顺序使文件系统枚举不依赖插入顺序。
-        let mut snapshot = std::collections::BTreeMap::new();
-        // Every entry belongs to this actual configured temporary user root.
-        // 每个条目均属于此实际已配置临时用户根。
-        for entry in std::fs::read_dir(path).expect("actual user tree") {
-            // Enumeration errors cannot masquerade as unchanged storage.
-            // 枚举错误不能伪装为未变存储。
-            let entry = entry.expect("actual user tree entry");
-            // Actual entry type selects the sole file or directory reading branch.
-            // 实际条目类型选择唯一文件或目录读取分支。
-            let file_type = entry.file_type().expect("actual entry type");
-            // The exact absolute path avoids guessed generation or receipt subdirectories.
-            // 精确绝对路径避免猜测代次或回执子目录。
-            let entry_path = entry.path();
-            if file_type.is_dir() {
-                snapshot.insert(entry_path.clone(), None);
-                snapshot.extend(actual_user_tree_bytes(&entry_path));
-            } else {
-                assert!(
-                    file_type.is_file(),
-                    "fixture must contain only real files and directories"
-                );
-                snapshot.insert(
-                    entry_path.clone(),
-                    Some(std::fs::read(&entry_path).expect("actual stored bytes")),
-                );
-            }
-        }
-        snapshot
-    }
-    {
-        // Synchronize explicit service policy before projecting the real enabled catalog.
-        // 投影真实启用目录前，同步显式服务策略。
-        let mut state = fixture.state.lock().expect("actual service state");
-        // The actual bridge owns the sole runtime and policy used by update preparation.
-        // 实际桥拥有更新准备使用的唯一运行时及策略。
-        let bridge = state.agent_runtime.as_mut().expect("actual bridge");
-        bridge
-            .provider_configuration
-            .luaskills
-            .disabled_vulcan_plugins
-            .remove(PLUGIN);
-        bridge
-            .provider_configuration
-            .luaskills
-            .enabled_vulcan_plugins
-            .insert(PLUGIN.to_owned());
-    }
-    // Use current authoritative policy to produce the actual enabled old descriptor.
-    // 使用当前权威策略产出实际启用旧描述符。
-    let configuration =
-        provider_configuration_from_state(&fixture.state).expect("actual enabled policy");
-    // This exact Arc must survive every rejected preparation without transient closed staging.
-    // 此精确 Arc 必须在每次拒绝准备中存续，不产生短暂关闭暂存。
-    let original = fixture
-        .runtime
-        .refresh_catalog(
-            &configuration.luaskills.disabled_vulcan_plugins,
-            &configuration.luaskills.enabled_vulcan_plugins,
-        )
-        .expect("actual enabled legacy");
-    assert_eq!(
-        original.plugins[PLUGIN].runtime_state,
-        VulcanPluginRuntimeState::Enabled
-    );
-    assert!(original.plugins[PLUGIN].desired_enabled);
-    assert!(original.plugins[PLUGIN].managed_package().is_none());
-    // Observe the same real store created by installation rather than assuming storage absence.
-    // 观测安装所创建的相同真实存储，而非假定存储缺失。
-    let store = VulcanPluginGenerationStore::open_existing(fixture.runtime.user_plugin_root())
-        .expect("read existing installation store")
-        .expect("retained installation opened this store");
-    assert!(
-        store
-            .activation(PLUGIN)
-            .expect("legacy has no managed selection")
-            .is_none()
-    );
-    assert!(
-        store
-            .activation_transaction_ids(PLUGIN)
-            .expect("original empty update requests")
-            .is_empty()
-    );
-    assert!(
-        list(&fixture.runtime, PLUGIN)
-            .expect("original absent journals")
-            .is_empty()
-    );
-    // Freeze actual installed package bytes independently of the descriptor's version.
-    // 独立于描述符版本固定实际已安装插件包字节。
-    let old_manifest = std::fs::read(original.plugins[PLUGIN].package_root.join("plugin.yaml"))
-        .expect("actual old manifest");
-    // Content remains usable under the original enabled skill namespace after the preflight rejection.
-    // 前置校验拒绝后，内容在原启用技能命名空间下保持可用。
-    let skill_name = format!("{PLUGIN}:review-helper");
-    assert!(
-        original
-            .enabled_skills
-            .get(&skill_name)
-            .expect("actual old skill")
-            .body
-            .contains("Version 1.0.0")
-    );
-    // Capture all actual user-root bytes and directories after baseline observation, before update preflight.
-    // 在基线观测之后、更新前置校验之前，捕获全部实际用户根字节及目录。
-    let original_storage = actual_user_tree_bytes(fixture.runtime.user_plugin_root());
-    // The single proposed UUID must remain absent from the actual existing request authority.
-    // 单个拟议 UUID 必须在实际既有请求权威中保持缺失。
-    let request_id = uuid::Uuid::new_v4();
-    // The actual preparation entry must reject before allocating an original update journal or changing existing storage.
-    // 实际准备入口必须在分配原更新日志或改变既有存储之前拒绝。
-    let failure = fixture
-        .prepare(request_id)
-        .err()
-        .expect("enabled legacy is unsupported before effects");
-    assert_eq!(
-        failure,
-        "启用前驱缺少完整的不可变配置或凭据选择，请先停用插件再更新。"
-    );
-    assert!(Arc::ptr_eq(&original, &fixture.runtime.snapshot()));
-    assert_eq!(
-        std::fs::read(original.plugins[PLUGIN].package_root.join("plugin.yaml"))
-            .expect("unchanged physical old bytes"),
-        old_manifest
-    );
-    assert!(
-        store
-            .activation(PLUGIN)
-            .expect("legacy selection remains absent")
-            .is_none()
-    );
-    assert!(
-        store
-            .activation_transaction_ids(PLUGIN)
-            .expect("no new request IDs")
-            .is_empty()
-    );
-    assert!(
-        store
-            .activation_request(PLUGIN, request_id)
-            .expect("proposed original was never created")
-            .is_none()
-    );
-    assert!(
-        list(&fixture.runtime, PLUGIN)
-            .expect("no new durable journals")
-            .is_empty()
-    );
-    assert!(
-        service_local_plugin_update_requests(Arc::clone(&fixture.state), PLUGIN.to_owned())
-            .await
-            .expect("no durable or live original owner")
-            .is_empty()
-    );
-    assert_eq!(
-        fixture.runtime.snapshot().plugins[PLUGIN].runtime_state,
-        VulcanPluginRuntimeState::Enabled
-    );
-    assert!(
-        fixture
-            .runtime
-            .snapshot()
-            .enabled_skills
-            .get(&skill_name)
-            .expect("ordinary old business remains")
-            .body
-            .contains("Version 1.0.0")
-    );
-    assert_eq!(
-        provider_configuration_from_state(&fixture.state)
-            .expect("unchanged policy")
-            .luaskills
-            .enabled_vulcan_plugins,
-        configuration.luaskills.enabled_vulcan_plugins
-    );
-    assert_eq!(
-        actual_user_tree_bytes(fixture.runtime.user_plugin_root()),
-        original_storage,
-        "preflight rejection must leave all actual installation bytes, journals and receipt directories unchanged"
-    );
 }
 
 /// Publish a real content-only target through the complete service extension publisher under original ownership.
@@ -1421,11 +1224,16 @@ async fn immutable_service_update_preparation_is_private_and_explicitly_abandona
     let prepared = fixture.prepare(request_id).expect("immutable preparation");
     assert!(Arc::ptr_eq(&original, &fixture.runtime.snapshot()));
     assert!(
-        prepared
-            .store
-            .activation(PLUGIN)
-            .expect("unchanged legacy selection")
-            .is_none()
+        original.plugins[PLUGIN]
+            .managed_package()
+            .expect("original managed selection")
+            .matches_activation(
+                &prepared
+                    .store
+                    .activation(PLUGIN)
+                    .expect("selection")
+                    .expect("original selection remains")
+            )
     );
     assert!(
         fixture

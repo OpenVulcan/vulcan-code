@@ -1,10 +1,9 @@
 //! Exact plugin authorization records and sanitized permission previews.
 //! 精确插件授权记录与脱敏权限预览。
 
-use super::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager, read_plugin_json_state};
+use super::{VulcanPluginRuntimeError, VulcanPluginRuntimeManager};
 use crate::{VulcanPluginMcpTransportManifest, VulcanPluginPackageOrigin, VulcanPluginPermission};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 /// User-facing authorization preview derived from one validated catalog descriptor.
 /// 从一个已校验目录描述符派生的面向用户授权预览。
@@ -88,76 +87,6 @@ pub struct VulcanPluginInstallSecretRequirement {
     /// Exact manifest-declared Secret key.
     /// 清单声明的精确 Secret 键。
     pub secret_key: String,
-}
-
-/// Durable authorization record bound to an exact plugin version and content fingerprint.
-/// 绑定到精确插件版本与内容指纹的持久授权记录。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct VulcanPluginAuthorizationRecord {
-    /// Record schema version.
-    /// 记录 Schema 版本。
-    schema_version: u32,
-    /// Stable plugin identity.
-    /// 稳定插件身份。
-    plugin_id: String,
-    /// Exact authorized package version.
-    /// 精确授权插件包版本。
-    version: String,
-    /// Exact authorized content fingerprint.
-    /// 精确授权内容指纹。
-    content_fingerprint: String,
-    /// Complete sorted permission set approved by the user.
-    /// 用户批准的完整有序权限集合。
-    permissions: Vec<String>,
-}
-
-/// Returns the deterministic authorization document path for one validated plugin identity.
-/// 返回一个已校验插件身份的确定性授权文档路径。
-///
-/// # Parameters
-/// 参数
-/// `state_root` is the fixed per-user plugin state root.
-/// `state_root` 是固定的用户插件状态根。
-/// `plugin_id` is the validated plugin identity selecting its state directory.
-/// `plugin_id` 是选择所属状态目录的已校验插件身份。
-///
-/// # Returns
-/// 返回值
-/// Returns the deterministic authorization.json path without filesystem mutation.
-/// 返回不修改文件系统的确定性authorization.json路径。
-pub(super) fn plugin_authorization_state_path(state_root: &Path, plugin_id: &str) -> PathBuf {
-    state_root.join(plugin_id).join("authorization.json")
-}
-
-/// Builds an authorization record bound to one exact validated descriptor.
-/// 构建绑定到一个精确已校验描述符的授权记录。
-///
-/// # Parameters
-/// 参数
-/// `plugin` supplies immutable identity and `permissions` is the exact approved set.
-/// `plugin` 提供不可变身份，`permissions` 是精确批准集合。
-///
-/// # Returns
-/// 返回值
-/// Returns one durable record ready for atomic persistence.
-/// 返回一条可供原子持久化的记录。
-pub(super) fn authorization_record_for_descriptor(
-    plugin: &crate::VulcanPluginDescriptor,
-    permissions: Vec<String>,
-) -> Result<VulcanPluginAuthorizationRecord, VulcanPluginRuntimeError> {
-    Ok(VulcanPluginAuthorizationRecord {
-        schema_version: 1,
-        plugin_id: plugin.id.clone(),
-        version: plugin.version.clone().ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{}` has no validated version.",
-                plugin.id
-            ))
-        })?,
-        content_fingerprint: plugin.content_fingerprint.clone(),
-        permissions,
-    })
 }
 
 /// Builds one permission preview from a validated catalog descriptor.
@@ -353,50 +282,32 @@ fn plugin_ui_mount_point_key(point: crate::VulcanPluginUiMountPoint) -> &'static
     }
 }
 
-/// Checks whether one effective plugin descriptor has a current complete authorization record.
-/// 检查一个生效插件描述符是否拥有当前且完整的授权记录。
+/// Checks whether one effective plugin descriptor carries a current complete approval.
+/// 检查一个生效插件描述符是否带有当前完整批准。
 ///
 /// # Parameters
 /// 参数
-/// `state_root` owns authorization state and `plugin` is the exact effective package generation.
-/// `state_root` 持有授权状态，`plugin` 是精确的生效插件代次。
+/// `plugin` is the exact effective package generation.
+/// `plugin` 是精确的生效插件代次。
 ///
 /// # Returns
 /// 返回值
-/// Returns true for bundled plugins or an exact matching user authorization record.
-/// 对内建插件或精确匹配的用户授权记录返回 true。
-pub(super) fn plugin_is_authorized(
-    state_root: &Path,
-    plugin: &crate::VulcanPluginDescriptor,
-) -> Result<bool, String> {
+/// Returns true for bundled plugins or a managed selection approving exactly the required permissions; an unavailable
+/// user row without a managed selection is never authorized.
+/// 对内建插件或批准集合恰为所需权限的受管选择返回 true；没有受管选择的不可用用户条目永不授权。
+pub(super) fn plugin_is_authorized(plugin: &crate::VulcanPluginDescriptor) -> Result<bool, String> {
     if plugin.origin == VulcanPluginPackageOrigin::Bundled {
         return Ok(true);
     }
-    // Invalid catalog placeholders cannot authorize a package or cause a secondary authority lookup.
-    // 无效目录占位条目不能授权插件包，也不能导致查询第二权威。
-    let required = plugin_required_permissions(plugin).map_err(|error| error.message)?;
-    // A managed selection is the sole approval authority; never consult or repair a legacy sidecar.
-    // 受管选择是唯一批准权威；绝不查询或修补旧附属文件。
-    if let Some(managed) = plugin.managed_package() {
-        return Ok(managed.approved_permissions() == required);
-    }
-    let path = plugin_authorization_state_path(state_root, &plugin.id);
-    if !path.exists() {
+    // The managed selection is the sole approval authority.
+    // 受管选择是唯一批准权威。
+    let Some(managed) = plugin.managed_package() else {
         return Ok(false);
-    }
-    let value = read_plugin_json_state(&path, "authorization").map_err(|error| error.message)?;
-    let record: VulcanPluginAuthorizationRecord =
-        serde_json::from_value(value).map_err(|error| {
-            format!(
-                "Failed to decode Vulcan plugin authorization `{}`: {error}",
-                path.display()
-            )
-        })?;
-    Ok(record.schema_version == 1
-        && record.plugin_id == plugin.id
-        && Some(record.version.as_str()) == plugin.version.as_deref()
-        && record.content_fingerprint == plugin.content_fingerprint
-        && record.permissions == required)
+    };
+    // Invalid catalog placeholders cannot authorize a package.
+    // 无效目录占位条目不能授权插件包。
+    let required = plugin_required_permissions(plugin).map_err(|error| error.message)?;
+    Ok(managed.approved_permissions() == required)
 }
 
 impl VulcanPluginRuntimeManager {
@@ -421,83 +332,6 @@ impl VulcanPluginRuntimeManager {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
         })?;
         build_permission_preview(plugin)
-    }
-
-    /// Persists an exact authorization grant for one user-installed plugin generation.
-    /// 为一个用户安装插件代次持久化精确授权许可。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` selects the package and `approved_permissions` must equal its full declaration.
-    /// `plugin_id` 选择插件包，`approved_permissions` 必须等于其完整声明。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the effective permission preview after durable authorization.
-    /// 持久授权后返回生效权限预览。
-    pub fn authorize_user_plugin(
-        &self,
-        plugin_id: &str,
-        mut approved_permissions: Vec<String>,
-    ) -> Result<VulcanPluginPermissionPreview, VulcanPluginRuntimeError> {
-        // Retain the real publication gate through ordinary authorization persistence and original selection.
-        // 跨普通授权持久化及原选择保留真实发布门。
-        let registration =
-            self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-        self.require_routing_publication_locked(&registration, None)?;
-        let snapshot = self.snapshot();
-        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
-        })?;
-        if plugin.origin != VulcanPluginPackageOrigin::UserInstalled {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{plugin_id}` is bundled and does not accept user authorization records."
-            )));
-        }
-        if plugin.managed_package().is_some() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Managed plugin approval belongs to its activation transaction; legacy authorization writes are not allowed.",
-            ));
-        }
-        let preview = build_permission_preview(plugin)?;
-        approved_permissions.sort();
-        if approved_permissions
-            .windows(2)
-            .any(|pair| pair[0] == pair[1])
-        {
-            return Err(VulcanPluginRuntimeError::new(
-                "Approved Vulcan plugin capabilities contain duplicates.",
-            ));
-        }
-        if approved_permissions != preview.permissions {
-            return Err(VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{plugin_id}` authorization must approve the complete current capability set."
-            )));
-        }
-        let record = VulcanPluginAuthorizationRecord {
-            schema_version: 1,
-            plugin_id: plugin.id.clone(),
-            version: plugin.version.clone().ok_or_else(|| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Vulcan plugin `{plugin_id}` has no validated version."
-                ))
-            })?,
-            content_fingerprint: plugin.content_fingerprint.clone(),
-            permissions: approved_permissions,
-        };
-        let encoded = serde_json::to_vec_pretty(&record).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to encode Vulcan plugin `{plugin_id}` authorization: {error}"
-            ))
-        })?;
-        crate::atomic_file::write_file_atomically(
-            &plugin_authorization_state_path(&self.state.plugin_state_root, plugin_id),
-            &encoded,
-        )
-        .map_err(VulcanPluginRuntimeError::new)?;
-        Ok(preview)
     }
 }
 

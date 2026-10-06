@@ -98,26 +98,22 @@ pub(super) fn execute(
                     invocation,
                     deadline,
                     || {
-                        // Every source keeps the existing atomic writer while legacy calls lend their original guard.
-                        // 每个来源保留既有原子写入者，同时旧生命周期调用借出原守卫。
+                        // A deactivation callback runs while its settings are being retired, so it cannot edit them.
+                        // 停用回调运行时其设置正在退役，因此不能编辑设置。
                         let manager = VulcanPluginRuntimeManager {
                             state: Arc::clone(state),
                         };
                         match source {
-                            ExecutionSource::LegacyLifecycle(authority) => manager
-                                .update_legacy_lifecycle_plugin_config_for_snapshot(
-                                    &domain.plugin,
-                                    value,
-                                    authority,
-                                    domain.scope,
-                                ),
+                            ExecutionSource::LegacyLifecycle(_) => Err(
+                                "Managed plugin configuration updates require a configured activation transaction."
+                                    .to_owned(),
+                            ),
                             ExecutionSource::Published
                             | ExecutionSource::ActivationOperation(_)
-                            | ExecutionSource::PrivateHook(_) => {
-                                manager.update_plugin_config_for_snapshot(&domain.plugin, value)
-                            }
+                            | ExecutionSource::PrivateHook(_) => manager
+                                .update_plugin_config_for_snapshot(&domain.plugin, value)
+                                .map_err(|failure| failure.message),
                         }
-                        .map_err(|failure| failure.message)
                     },
                 ))
             }

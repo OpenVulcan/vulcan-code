@@ -121,62 +121,43 @@ pub(super) fn hide_and_publish(
     let configuration = provider_configuration_from_state(state)?;
     // Existing typed protocols own write intents; no service phase guesses initial versus recovery.
     // 既有类型明确协议拥有写入意图；服务阶段不猜测首次或恢复。
-    let catalog = match resources
+    let OriginalRemoval {
+        store,
+        selection,
+        state: local,
+    } = resources
         .original
         .as_mut()
-        .ok_or("原卸载物理所有者缺失。")?
+        .ok_or("原卸载物理所有者缺失。")?;
+    match resources
+        .runtime
+        .observe_deactivation_state(local, selection)
+        .map_err(|error| error.to_string())?
     {
-        OriginalRemoval::Managed {
-            store,
+        vulcan_plugin_runtime::VulcanPluginDeactivationStateObservation::Reserved => {
+            resources
+                .runtime
+                .freeze_deactivation_state(local, selection)
+                .map_err(|error| error.to_string())?;
+        }
+        vulcan_plugin_runtime::VulcanPluginDeactivationStateObservation::Frozen => {}
+        _ => {
+            return Err(String::from(
+                "完整发布之前原本地卸载状态已进入回收，保留原实例。",
+            ));
+        }
+    }
+    store
+        .continue_deactivation_retained(selection)
+        .map_err(|error| error.to_string())?;
+    let catalog = resources
+        .runtime
+        .refresh_catalog_with_deactivation(
+            &configuration.luaskills.disabled_vulcan_plugins,
+            &configuration.luaskills.enabled_vulcan_plugins,
             selection,
-            state: local,
-        } => {
-            match resources
-                .runtime
-                .observe_deactivation_state(local, selection)
-                .map_err(|error| error.to_string())?
-            {
-                vulcan_plugin_runtime::VulcanPluginDeactivationStateObservation::Reserved => {
-                    resources
-                        .runtime
-                        .freeze_deactivation_state(local, selection)
-                        .map_err(|error| error.to_string())?;
-                }
-                vulcan_plugin_runtime::VulcanPluginDeactivationStateObservation::Frozen => {}
-                _ => {
-                    return Err(String::from(
-                        "完整发布之前原本地卸载状态已进入回收，保留原实例。",
-                    ));
-                }
-            }
-            store
-                .continue_deactivation_retained(selection)
-                .map_err(|error| error.to_string())?;
-            resources
-                .runtime
-                .refresh_catalog_with_deactivation(
-                    &configuration.luaskills.disabled_vulcan_plugins,
-                    &configuration.luaskills.enabled_vulcan_plugins,
-                    selection,
-                )
-                .map_err(|error| error.to_string())?
-        }
-        OriginalRemoval::Flat(flat) => {
-            resources
-                .runtime
-                .continue_legacy_user_plugin_uninstallation(flat)
-                .map_err(|error| error.to_string())?;
-            resources
-                .runtime
-                .refresh_catalog_with_legacy_mutation(
-                    &configuration.luaskills.disabled_vulcan_plugins,
-                    &configuration.luaskills.enabled_vulcan_plugins,
-                    &owner.plugin_id,
-                    flat.mutation_guard(),
-                )
-                .map_err(|error| error.to_string())?
-        }
-    };
+        )
+        .map_err(|error| error.to_string())?;
     if catalog.plugins.contains_key(&owner.plugin_id) {
         return Err(String::from("原卸载选择已隐藏，但实际核心目录仍暴露插件。"));
     }

@@ -22,8 +22,8 @@ const ENABLED_PREDECESSOR_RESTORATION_REQUIRED: &str =
 
 /// Validate predecessor against its authoritative old selection before any enabled drain or callback effect.
 /// 在任何启用排空或回调副作用前，按权威旧选择校验 predecessor。
-/// Disabled legacy remains supported; selection comes from the actual store or retained original transaction.
-/// 停用旧格式继续受支持；selection 来自实际存储或保留原事务。
+/// A disabled predecessor needs no restoration; selection comes from the actual store or retained original transaction.
+/// 停用前驱无需恢复；selection 来自实际存储或保留原事务。
 /// Return an explicit unsupported-state error rather than guessing historical configuration or credentials.
 /// 返回明确不支持状态错误，而非猜测历史配置或凭据。
 fn validate_enabled_predecessor_restoration_selection(
@@ -1091,13 +1091,6 @@ fn validate_update_predecessor(
         return Err(String::from(
             "插件用户策略与当前运行时快照不一致，请先刷新后再更新。",
         ));
-    }
-    // Enabled packages without an immutable old selection cannot be restored; reject before any store or intent.
-    // 缺少不可变旧选择的启用包无法恢复；在创建任何存储或意图前拒绝。
-    if predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
-        && predecessor.managed_package().is_none()
-    {
-        return Err(String::from(ENABLED_PREDECESSOR_RESTORATION_REQUIRED));
     }
     Ok(update_policy)
 }

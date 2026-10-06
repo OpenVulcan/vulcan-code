@@ -144,14 +144,14 @@ pub struct VulcanPluginMcpServerDescriptor {
     /// Owning plugin generation captured with this server declaration.
     /// 随当前服务器声明捕获的所属插件代次。
     pub plugin_generation: u64,
-    /// Exact credential namespace captured with this declaration; old selections explicitly use legacy storage.
-    /// 随此声明捕获的精确凭据命名空间；旧选择明确使用旧存储。
+    /// Exact credential selection captured with this declaration.
+    /// 随此声明捕获的精确凭据选择。
     pub credential_binding: crate::VulcanPluginCredentialBinding,
     /// Real retention follows standalone descriptor clones, preventing collection during later secret reads.
     /// 实际保留随独立描述符克隆传递，防止后续秘密读取期间被回收。
     pub(crate) credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
-    /// Version-four configuration follows this exact descriptor; absence denotes the legacy live-file authority.
-    /// 第四版配置随此精确描述符保留；缺失表示旧实时文件权威。
+    /// The managed configuration selection follows this exact descriptor; bundled packages read their settings live.
+    /// 受管配置选择随此精确描述符保留；内建插件包实时读取其设置。
     pub(crate) configuration: Option<std::sync::Arc<crate::VulcanPluginConfigurationSelection>>,
     /// Stable server identifier within the owning plugin.
     /// 所属插件内部稳定的服务器标识。
@@ -195,8 +195,8 @@ pub struct VulcanPluginDescriptor {
     /// Canonical package root.
     /// 规范化插件包根目录。
     pub package_root: PathBuf,
-    /// Exact managed activation and its live package lease; absent for bundled and legacy packages.
-    /// 精确受管激活及其活动包租约；内置包及旧平铺包没有此字段。
+    /// Exact managed activation and its live package lease; absent for bundled packages and unavailable rows.
+    /// 精确受管激活及其活动包租约；内置包及不可用条目没有此字段。
     pub(crate) managed_package: Option<VulcanPluginManagedPackage>,
     /// Effective package origin selected by deterministic root precedence.
     /// 通过确定性根目录优先级选定的生效插件包来源。
@@ -261,8 +261,8 @@ pub struct VulcanPluginDescriptor {
 }
 
 impl VulcanPluginDescriptor {
-    /// Returns the managed selection retained by this descriptor, or `None` for legacy/bundled packages.
-    /// 返回此描述符保留的受管选择；旧平铺包及内置包返回 `None`。
+    /// Returns the managed selection retained by this descriptor, or `None` for bundled packages and unavailable rows.
+    /// 返回此描述符保留的受管选择；内置包及不可用条目返回 `None`。
     /// Borrow or clone its generation handle while consuming files beyond this descriptor's lifetime.
     /// 在此描述符寿命之外使用包文件时，必须借用或克隆其中的代次句柄。
     pub fn managed_package(&self) -> Option<&VulcanPluginManagedPackage> {
@@ -506,42 +506,6 @@ pub fn load_vulcan_plugin_catalog(
         },
     );
     merge_catalog_roots(bundled, user, user_root)
-}
-
-/// Load both real roots while one explicit user plugin retains its actual legacy namespace owner.
-/// 一个显式用户插件保留实际旧格式命名空间所有者期间，加载两个真实根。
-/// Root/policy/revision parameters preserve ordinary ordering; plugin_id and guard identify the sole held namespace.
-/// 根／策略／修订参数保留普通顺序；plugin_id 和 guard 标识唯一被持有命名空间。
-/// Return the shared merged snapshot or the original classified guard/target failure, without ordinary-read fallback.
-/// 返回共享合并快照或原带类别守卫／目标失败，不使用普通读取备用路径。
-pub(crate) fn load_vulcan_plugin_catalog_with_legacy_mutation(
-    bundled_root: &Path,
-    user_root: &Path,
-    disabled_plugin_ids: &BTreeSet<String>,
-    enabled_plugin_ids: &BTreeSet<String>,
-    revision: u64,
-    plugin_id: &str,
-    guard: &crate::VulcanPluginLegacyMutationGuard,
-) -> crate::VulcanPluginStoreResult<VulcanPluginCatalogSnapshot> {
-    // Target validation completes before any successful snapshot can conceal the guarded selection error.
-    // 任何成功快照可能隐藏守卫选择错误之前，目标校验完成。
-    let user = generations::load_user_catalog_with_legacy_mutation(
-        user_root,
-        disabled_plugin_ids,
-        enabled_plugin_ids,
-        revision,
-        plugin_id,
-        guard,
-    )?;
-    // Bundled discovery retains its existing precedence, diagnostics and ordinary physical source.
-    // 内置发现保留既有优先级、诊断及普通物理来源。
-    let bundled = discover_plugin_root_catalog(
-        bundled_root,
-        disabled_plugin_ids,
-        enabled_plugin_ids,
-        revision,
-    );
-    Ok(merge_catalog_roots(bundled, user, Some(user_root)))
 }
 
 /// Load both actual roots through the original managed-removal owner without reopening its namespace.
@@ -1084,7 +1048,7 @@ fn load_vulcan_plugin_package(
         .map(|server| VulcanPluginMcpServerDescriptor {
             plugin_id: manifest.id.clone(),
             plugin_generation: 0,
-            credential_binding: crate::VulcanPluginCredentialBinding::Legacy,
+            credential_binding: crate::VulcanPluginCredentialBinding::Unconfigured,
             credential_lease: None,
             configuration: None,
             id: server.id.clone(),
@@ -4457,7 +4421,11 @@ display:
         fs::create_dir_all(&bundled_root).expect("create bundled root");
         fs::create_dir_all(&user_root).expect("create user root");
         write_valid_package(&bundled_root);
-        write_valid_package(&user_root);
+        // The same identity is also selected as a managed user package.
+        // 同一身份也被选为受管用户插件包。
+        let source_root = temp.path().join("source");
+        write_valid_package(&source_root);
+        crate::install_user_package_for_test(&user_root, &source_root.join("test-plugin"));
         let snapshot = load_vulcan_plugin_catalog(
             &bundled_root,
             Some(&user_root),

@@ -469,7 +469,6 @@ pub fn create_service_bridge_state(
         session_runtime_registry: Arc::new(Default::default()),
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         pending_local_plugin_updates: Arc::new(Default::default()),
-        pending_legacy_secret_mutations: Arc::new(Default::default()),
         // Actual original removal resources survive executor failures.
         // 实际原移除资源跨执行器失败存续。
         pending_local_plugin_uninstalls: Arc::new(Default::default()),
@@ -564,19 +563,6 @@ pub fn service_prepare_for_app_shutdown(
         service_runtime.block_on(pending_local_plugin_uninstalls.drain_for_shutdown())?;
     } else {
         pending_local_plugin_uninstalls.require_empty_without_runtime()?;
-    }
-    // Original secret ownership must drain before any irreversible task or native runtime teardown.
-    // 在任何不可逆任务或原生运行时拆卸之前，必须排空原秘密所有权。
-    let pending_legacy_secret_mutations = Arc::clone(
-        &state
-            .lock()
-            .map_err(|error| error.to_string())?
-            .pending_legacy_secret_mutations,
-    );
-    if let Some(service_runtime) = service_runtime.as_ref() {
-        service_runtime.block_on(pending_legacy_secret_mutations.drain_for_shutdown())?;
-    } else {
-        pending_legacy_secret_mutations.require_empty_without_runtime()?;
     }
     if let Some(vce_runtime) = vce_runtime.as_ref() {
         // VCE rejects new semantic operations now, while active tool Futures remain cancellable by

@@ -3,9 +3,7 @@
 
 use super::*;
 use crate::runtime::candidates::{ActivationExecution, CandidateOperation};
-use crate::runtime::legacy_lifecycle::{
-    CallExecutionSource, LegacyLifecycleExecution, VulcanPluginLegacyLifecycleEvent,
-};
+use crate::runtime::legacy_lifecycle::{CallExecutionSource, LegacyLifecycleExecution};
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{

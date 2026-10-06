@@ -34,16 +34,13 @@ enum CredentialOwner<'a> {
 }
 
 impl<'a> CredentialOwner<'a> {
-    /// Classify `plugin`; a flat user package still uses the legacy secret namespace and is rejected here.
-    /// 对 `plugin` 分类；平铺用户插件包仍使用旧秘密命名空间，在此被拒绝。
+    /// Classify `plugin` by the authority that owns its settings; unavailable rows are rejected.
+    /// 按拥有其设置的权威对 `plugin` 分类；不可用条目被拒绝。
     fn of(plugin: &'a VulcanPluginDescriptor) -> Result<Self, VulcanPluginRuntimeError> {
-        match configuration_owner(plugin) {
-            ConfigurationOwner::Managed(managed) => Ok(Self::Managed(managed)),
-            ConfigurationOwner::Bundled => Ok(Self::Bundled),
-            ConfigurationOwner::Flat => Err(VulcanPluginRuntimeError::new(
-                "Flat plugin packages keep their secrets in the legacy namespace.",
-            )),
-        }
+        Ok(match configuration_owner(plugin)? {
+            ConfigurationOwner::Managed(managed) => Self::Managed(managed),
+            ConfigurationOwner::Bundled => Self::Bundled,
+        })
     }
 
     /// Return the binding the plugin's servers currently read through.
@@ -400,11 +397,6 @@ fn merged_values(
                         "Failed to read the current plugin credentials securely.",
                     )
                 })?
-            }
-            (None, VulcanPluginCredentialBinding::Legacy) => {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Plugin credentials are bound to the legacy namespace.",
-                ));
             }
         };
         values.insert(key.clone(), value);

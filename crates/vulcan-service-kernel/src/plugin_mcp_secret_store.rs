@@ -6,17 +6,12 @@ use sha2::{Digest, Sha256};
 use vulcan_agent_runtime::mcp::PluginMcpSecretStore;
 use vulcan_plugin_runtime::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
 
-#[cfg(all(test, windows))]
-pub(crate) mod legacy_write_observation;
 mod staging;
 #[cfg(test)]
 mod tests;
 
-/// Stable OS credential service name owned by Vulcan Code.
-/// Vulcan Code 持有的稳定操作系统凭据服务名。
-const VULCAN_PLUGIN_MCP_SECRET_SERVICE: &str = "vulcan-code.plugin-mcp";
-/// Separate secure-store namespace for explicitly versioned credentials; legacy accounts are never probed.
-/// 显式版本凭据的独立安全存储命名空间；绝不探测旧账户。
+/// Secure-store namespace owned by Vulcan Code for revisioned plugin credentials.
+/// Vulcan Code 持有的修订化插件凭据安全存储命名空间。
 const VERSIONED_PLUGIN_MCP_SECRET_SERVICE: &str = "vulcan-code.plugin-mcp.versioned-v1";
 
 /// Stateless adapter over the current platform's secure credential store.
@@ -36,14 +31,9 @@ impl OsPluginMcpSecretStore {
         secret_key: &str,
         binding: &VulcanPluginCredentialBinding,
     ) -> Result<Option<String>, String> {
-        #[cfg(all(test, windows))]
-        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         // Namespace selection is explicit and identical to ordinary descriptor-bound execution.
         // 命名空间选择显式且与普通描述符绑定执行一致。
         let entry = match binding {
-            VulcanPluginCredentialBinding::Legacy => {
-                plugin_secret_entry(plugin_id, server_id, secret_key)?
-            }
             VulcanPluginCredentialBinding::Revision(revision) => {
                 versioned_plugin_secret_entry(plugin_id, server_id, secret_key, revision)?
             }
@@ -59,85 +49,6 @@ impl OsPluginMcpSecretStore {
             )),
         }
     }
-
-    /// Reads one exact secret for transactional rollback without treating absence as an error.
-    /// 为事务回滚读取单个精确 Secret，且不把不存在视为错误。
-    pub(crate) fn read_optional_secret(
-        &self,
-        plugin_id: &str,
-        server_id: &str,
-        secret_key: &str,
-    ) -> Result<Option<String>, String> {
-        #[cfg(all(test, windows))]
-        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
-        match plugin_secret_entry(plugin_id, server_id, secret_key)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(KeyringError::NoEntry) => Ok(None),
-            Err(_) => Err(String::from(
-                "Failed to read the plugin MCP secret securely.",
-            )),
-        }
-    }
-
-    /// Stores or replaces one exact plugin-scoped MCP secret.
-    /// 存储或替换单个精确插件作用域 MCP Secret。
-    ///
-    /// # Parameters
-    /// 参数
-    /// Plugin, server, and secret identifiers select the namespace; `value` is never persisted elsewhere.
-    /// 插件、服务器与 Secret 标识选择命名空间；`value` 绝不会持久化到其他位置。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success after the operating-system credential store accepts the value.
-    /// 操作系统凭据库接受该值后返回成功。
-    pub(crate) fn write_secret(
-        &self,
-        plugin_id: &str,
-        server_id: &str,
-        secret_key: &str,
-        value: &str,
-    ) -> Result<(), String> {
-        #[cfg(all(test, windows))]
-        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
-        if value.is_empty() {
-            return Err(String::from("Plugin MCP secret value must not be empty."));
-        }
-        plugin_secret_entry(plugin_id, server_id, secret_key)?
-            .set_password(value)
-            .map_err(|_| String::from("Failed to store the plugin MCP secret securely."))?;
-        #[cfg(all(test, windows))]
-        legacy_write_observation::after_successful_write(plugin_id, server_id, secret_key, value)?;
-        Ok(())
-    }
-
-    /// Deletes one exact plugin-scoped MCP secret.
-    /// 删除单个精确插件作用域 MCP Secret。
-    ///
-    /// # Parameters
-    /// 参数
-    /// Plugin, server, and secret identifiers select the complete credential namespace.
-    /// 插件、服务器与 Secret 标识选择完整凭据命名空间。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns success when the credential is absent or has been deleted.
-    /// 凭据不存在或已经删除时返回成功。
-    pub(crate) fn delete_secret(
-        &self,
-        plugin_id: &str,
-        server_id: &str,
-        secret_key: &str,
-    ) -> Result<(), String> {
-        #[cfg(all(test, windows))]
-        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
-        match plugin_secret_entry(plugin_id, server_id, secret_key)?.delete_credential() {
-            Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-            Err(_) => Err(String::from(
-                "Failed to delete the plugin MCP secret securely.",
-            )),
-        }
-    }
 }
 
 impl PluginMcpSecretStore for OsPluginMcpSecretStore {
@@ -150,14 +61,9 @@ impl PluginMcpSecretStore for OsPluginMcpSecretStore {
         secret_key: &str,
         binding: &VulcanPluginCredentialBinding,
     ) -> Result<String, String> {
-        #[cfg(all(test, windows))]
-        legacy_write_observation::record_access(plugin_id, server_id, secret_key);
         // Select exactly once from the descriptor's declared namespace; missing values never fall back.
         // 从描述符声明命名空间精确选择一次；缺失值绝不回退。
         let entry = match binding {
-            VulcanPluginCredentialBinding::Legacy => {
-                plugin_secret_entry(plugin_id, server_id, secret_key)?
-            }
             VulcanPluginCredentialBinding::Revision(revision) => {
                 versioned_plugin_secret_entry(plugin_id, server_id, secret_key, revision)?
             }
@@ -189,8 +95,8 @@ fn versioned_plugin_secret_entry(
     secret_key: &str,
     revision: &VulcanPluginCredentialRevision,
 ) -> Result<Entry, String> {
-    // Revision accounts use one architecture-independent length encoding; legacy account bytes remain untouched.
-    // 修订账户使用单个与架构无关的长度编码；旧账户字节保持不变。
+    // Revision accounts use one architecture-independent length encoding.
+    // 修订账户使用单个与架构无关的长度编码。
     let account = versioned_plugin_secret_account(plugin_id, server_id, secret_key, revision)?;
     Entry::new(VERSIONED_PLUGIN_MCP_SECRET_SERVICE, &account)
         .map_err(|_| String::from("Failed to open the operating-system credential store."))
@@ -219,26 +125,4 @@ fn versioned_plugin_secret_account(
         digest.update(component.as_bytes());
     }
     Ok(format!("sha256:{}", hex::encode(digest.finalize())))
-}
-
-/// Builds one OS credential entry from a collision-resistant length-delimited namespace digest.
-/// 根据抗碰撞的长度分隔命名空间摘要构建单个操作系统凭据条目。
-fn plugin_secret_entry(
-    plugin_id: &str,
-    server_id: &str,
-    secret_key: &str,
-) -> Result<Entry, String> {
-    if plugin_id.is_empty() || server_id.is_empty() || secret_key.is_empty() {
-        return Err(String::from(
-            "Plugin MCP secret namespace fields must not be empty.",
-        ));
-    }
-    let mut digest = Sha256::new();
-    for component in [plugin_id, server_id, secret_key] {
-        digest.update(component.len().to_be_bytes());
-        digest.update(component.as_bytes());
-    }
-    let account = format!("sha256:{}", hex::encode(digest.finalize()));
-    Entry::new(VULCAN_PLUGIN_MCP_SECRET_SERVICE, &account)
-        .map_err(|_| String::from("Failed to open the operating-system credential store."))
 }

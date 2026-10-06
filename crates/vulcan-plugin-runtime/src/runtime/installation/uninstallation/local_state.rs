@@ -1,101 +1,86 @@
-//! Flat and managed removal share one original-state and actual environment cleanup implementation.
-//! 平铺及受管移除共用单个原状态及实际环境清理实现。
+//! Managed removal owns one actual environment cleanup lease and its fixed canonical root.
+//! 受管移除拥有单个实际环境清理租约及其固定规范根。
 
 use super::*;
 
-/// Capture all three actual ordinary state preimages under the caller's actual namespace before callbacks.
-/// 在调用方实际命名空间内，于回调之前捕获全部三个实际普通状态前像。
-/// manager fixes roots and plugin_id is the checked original identity; returns exact bytes/absence without effects.
-/// manager 固定根，plugin_id 为已检查原身份；返回精确字节／缺失，不产生效果。
-pub(super) fn capture_original_states(
-    manager: &VulcanPluginRuntimeManager,
-    plugin_id: &str,
-) -> Result<Vec<UninstallationStateFile>, VulcanPluginRuntimeError> {
-    validate_state_directories(manager, plugin_id)?;
-    [
-        plugin_authorization_state_path(&manager.state.plugin_state_root, plugin_id),
-        plugin_installation_state_path(&manager.state.plugin_state_root, plugin_id),
-        plugin_config_state_path(&manager.state.plugin_state_root, plugin_id),
-    ]
-    .into_iter()
-    .map(|path| {
-        read_optional_plugin_state_file(&path).map(|original| UninstallationStateFile {
-            path,
-            original,
-            cleanup: None,
-            deletion_started: false,
-        })
-    })
-    .collect()
+/// Confirm literal absence using metadata, treating dangling links and access errors as conflicts.
+/// 使用元数据确认字面缺失，将悬空链接及访问错误视为冲突。
+/// path is the original fixed destination; returns unit only for actual NotFound.
+/// path 为原固定目标；仅实际不存在时返回空值。
+fn require_absent(path: &Path) -> Result<(), VulcanPluginRuntimeError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(VulcanPluginRuntimeError::new(format!(
+            "Failed to inspect original environment path: {error}"
+        ))),
+        Ok(_) => Err(VulcanPluginRuntimeError::new(format!(
+            "Original environment path still exists: `{}`.",
+            path.display()
+        ))),
+    }
 }
 
-/// Freeze every post-callback cleanup file once while retaining separate pre-callback bytes.
-/// 保留独立回调前字节期间，一次性固定每个回调后清理文件。
-/// states belong to the same actual original; returns unit only after all reads succeed, without partially adopting new snapshots.
-/// states 属于相同实际原实例；仅全部读取成功后返回空值，不部分接纳新快照。
-pub(super) fn freeze_cleanup_states(
-    states: &mut [UninstallationStateFile],
-) -> Result<(), VulcanPluginRuntimeError> {
-    if states.iter().any(|state| state.cleanup.is_some()) {
+/// Validate every owned descendant before recursive removal.
+/// 递归删除前校验每个自有下级。
+/// root is an original child of boundary; returns unit after removal or explicit rejection preserving evidence.
+/// root 为 boundary 的原子级；删除后返回空值，否则明确拒绝并保留证据。
+fn remove_plain_owned_tree(root: &Path, boundary: &Path) -> Result<(), VulcanPluginRuntimeError> {
+    match fs::symlink_metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(VulcanPluginRuntimeError::new(format!(
+                "Failed to inspect original environment tree: {error}"
+            )));
+        }
+        Ok(metadata)
+            if crate::metadata_is_link_or_reparse_point(&metadata) || !metadata.is_dir() =>
+        {
+            return Err(VulcanPluginRuntimeError::new(
+                "Original environment tree is not a plain directory.",
+            ));
+        }
+        Ok(_) => {}
+    }
+    // Canonical containment and a full link scan precede the recursive delete.
+    // 规范包含关系及完整链接扫描先于递归删除。
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+    if canonical == boundary || !canonical.starts_with(boundary) {
         return Err(VulcanPluginRuntimeError::new(
-            "Original uninstall cleanup state was already frozen.",
+            "Original environment tree escaped its fixed runtime root.",
         ));
     }
-    // Allocation and every actual read precede assignment, so an error leaves all original freeze slots unchanged.
-    // 分配及每个实际读取先于赋值，使错误保持全部原固定槽未变。
-    let cleanup = states
-        .iter()
-        .map(|state| read_optional_plugin_state_file(&state.path))
-        .collect::<Result<Vec<_>, _>>()?;
-    // Every assignment uses only the fully read snapshot set, keeping pre-callback preimages separate.
-    // 每次赋值仅使用完整已读快照集合，保持回调前前像独立。
-    for (state, bytes) in states.iter_mut().zip(cleanup) {
-        state.cleanup = Some(bytes);
-    }
-    Ok(())
-}
-
-/// Validate one exact cleanup file against its explicit frozen bytes or this same original's admitted absence.
-/// 对照明确固定字节或此相同原实例已准入缺失，验证单个精确清理文件。
-/// state retains both preimage and cleanup intent; returns actual presence or a conflict preserving foreign bytes.
-/// state 保留前像及清理意图；返回实际存在性或保留外来字节的冲突。
-pub(super) fn validate_cleanup_state(
-    state: &UninstallationStateFile,
-) -> Result<bool, VulcanPluginRuntimeError> {
-    // Outer absence means no freeze authority, while inner absence is an explicitly recorded missing file.
-    // 外层缺失表示没有固定权威，而内层缺失为明确已记录缺失文件。
-    let expected = state.cleanup.as_ref().ok_or_else(|| {
-        VulcanPluginRuntimeError::new("Original uninstall cleanup state was not frozen.")
-    })?;
-    // Only actual bytes or actual absence can match the declared original cleanup protocol.
-    // 仅实际字节或实际缺失能够匹配声明原清理协议。
-    let current = read_optional_plugin_state_file(&state.path)?;
-    if &current == expected || (state.deletion_started && current.is_none()) {
-        return Ok(current.is_some());
-    }
-    Err(VulcanPluginRuntimeError::new(
-        "Original uninstall state changed outside its exact cleanup intent.",
-    ))
-}
-
-/// Remove only exact frozen files, retaining each intent before its first possibly uncertain effect.
-/// 仅移除精确固定文件，在首次可能不确定效果之前保留每个意图。
-/// states are the actual original and validate rechecks its retained authority before effects/readback; returns unit or a retained error.
-/// states 为实际原实例，validate 在效果／回读之前重新检查保留权威；返回空值或保留错误。
-pub(super) fn remove_frozen_states(
-    states: &mut [UninstallationStateFile],
-    validate: impl Fn() -> Result<(), VulcanPluginRuntimeError>,
-) -> Result<(), VulcanPluginRuntimeError> {
-    for state in states {
-        validate()?;
-        if validate_cleanup_state(state)? {
-            state.deletion_started = true;
-            remove_plugin_state_file(&state.path)?;
+    // The explicit worklist visits the exact original tree only; it never polls candidate paths.
+    // 明确工作列表仅访问精确原目录树；绝不轮询候选路径。
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(directory)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+        {
+            // The exact original path selects one owned file without candidate lookup.
+            // 精确原路径选择单个自有文件，不查询候选。
+            let path = entry
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+                .path();
+            // Literal metadata rejects redirected original paths.
+            // 字面元数据拒绝重定向原路径。
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+            if crate::metadata_is_link_or_reparse_point(&metadata)
+                || !(metadata.is_file() || metadata.is_dir())
+            {
+                return Err(VulcanPluginRuntimeError::new(
+                    "Original environment descendant is not a plain file or directory.",
+                ));
+            }
+            if metadata.is_dir() {
+                directories.push(path);
+            }
         }
-        validate()?;
-        require_absent(&state.path)?;
     }
-    Ok(())
+    fs::remove_dir_all(root).map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+    require_absent(root)
 }
 
 /// Retain the original actual exclusive environment File and canonical root before any irreversible deletion.
@@ -175,18 +160,14 @@ pub(super) fn collect_original_environment(
     remove_plain_owned_tree(&root.join(plugin_id), root)
 }
 
-/// Confirm exact state and environment absence while preserving the actual environment File for terminal recovery.
-/// 保留实际环境文件以供终态恢复期间，确认精确状态及环境缺失。
-/// states/plugin_id/owner belong to the same original; returns unit without deleting or publishing another completion.
-/// states／plugin_id／owner 属于相同原实例；返回空值，不删除或发布另一完成。
-pub(super) fn confirm_local_absence(
-    states: &[UninstallationStateFile],
+/// Confirm the original environment child is absent while preserving the actual environment File for terminal recovery.
+/// 保留实际环境文件以供终态恢复期间，确认原环境子级缺失。
+/// plugin_id/owner belong to the same original; returns unit without deleting or publishing another completion.
+/// plugin_id／owner 属于相同原实例；返回空值，不删除或发布另一完成。
+pub(super) fn confirm_environment_absence(
     plugin_id: &str,
     owner: &Option<(File, PathBuf)>,
 ) -> Result<(), VulcanPluginRuntimeError> {
-    for state in states {
-        require_absent(&state.path)?;
-    }
     // A missing resource wrapper is never accepted as physical environment retirement.
     // 缺失资源包装对象绝不被接受为物理环境退役。
     let (_, root) = owner.as_ref().ok_or_else(|| {

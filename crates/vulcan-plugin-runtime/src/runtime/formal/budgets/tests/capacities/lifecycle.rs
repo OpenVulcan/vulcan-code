@@ -509,8 +509,8 @@ async fn formal_capacity_lifecycle_disable_retry_runs_callback_after_member_drai
     fixture.close().await;
 }
 
-/// Real uninstallation releases the callback purpose before deleting the disabled package and its environment.
-/// 真实卸载在删除停用包及环境之前释放回调用途。
+/// Managed removal collection releases the callback purpose only after host preparation completes.
+/// 受管移除回收仅在宿主准备完成之后释放回调用途。
 #[tokio::test(flavor = "current_thread")]
 async fn formal_capacity_lifecycle_uninstall_releases_callback_owner() {
     // Future package policy is reserved by startup using the same configured native guarantee.
@@ -544,27 +544,55 @@ async fn formal_capacity_lifecycle_uninstall_releases_callback_owner() {
         serde_yaml::to_string(&manifest).expect("manifest bytes"),
     )
     .expect("write uninstall declaration");
-    // Actual inspection freezes the source digest and declared permissions consumed by installation.
-    // 实际检查冻结安装消费的来源摘要和声明权限。
-    let inspected = fixture
-        .manager
-        .inspect_local_user_plugin(&source)
-        .expect("inspect source");
-    fixture
-        .manager
-        .install_local_user_plugin(
-            &source,
-            &inspected.content_fingerprint,
-            inspected.permissions,
-            false,
-        )
-        .expect("install exact source");
+    let selected =
+        crate::install_user_package_for_test(fixture.manager.user_plugin_root(), &source);
     fixture
         .manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("discover disabled installed package");
-    // Real host preparation ownership must prevent deletion even before any native member pool exists.
-    // 即使尚无原生成员池，真实宿主准备归属也必须阻止删除。
+    // The removal reservation owns the namespace across the callback, publication and local collection.
+    // 移除预留跨回调、发布及本地回收拥有命名空间。
+    let store = crate::VulcanPluginGenerationStore::open(fixture.manager.user_plugin_root())
+        .expect("actual store");
+    let mut original = store
+        .reserve_deactivation(uuid::Uuid::new_v4(), &selected)
+        .expect("original removal reservation");
+    let mut state = fixture
+        .manager
+        .reserve_deactivation_state(&mut original)
+        .expect("original local cleanup owner");
+    let mut call = fixture
+        .manager
+        .prepare_deactivation_lifecycle_call(&original)
+        .expect("original uninstall callback");
+    call.start().expect("real uninstall start");
+    call.observe().await.expect("real uninstall callback");
+    call.confirm_retired()
+        .expect("physical callback retirement")
+        .expect("callback business result");
+    drop(call);
+    // The callback has physically retired, while the configured empty purpose still holds its guarantee.
+    // 回调已物理退役，但配置的空用途仍持有保证。
+    let completed = fixture
+        .manager
+        .formal_capacity_status("local-plugin", VulcanPluginCapacityPurpose::Lifecycle)
+        .expect("callback status")
+        .expect("callback capacity");
+    assert_eq!(completed.snapshot.retained_pools, 0);
+    assert_eq!(completed.snapshot.committed_resident_vms, 1);
+    fixture
+        .manager
+        .freeze_deactivation_state(&mut state, &mut original)
+        .expect("post-callback freeze");
+    store
+        .publish_deactivation_retained(&mut original)
+        .expect("actual tombstone publication");
+    fixture
+        .manager
+        .refresh_catalog_with_deactivation(&BTreeSet::new(), &BTreeSet::new(), &original)
+        .expect("actual tombstone catalog");
+    // Real host preparation ownership must prevent collection even before any native member pool exists.
+    // 即使尚无原生成员池，真实宿主准备归属也必须阻止回收。
     let owner = fixture
         .manager
         .formal_runtime_owner()
@@ -589,84 +617,18 @@ async fn formal_capacity_lifecycle_uninstall_releases_callback_owner() {
             )
             .expect("actual preparation claim")
     };
-    // The authoritative installed path must survive the refused destructive transition.
-    // 权威已安装路径必须在破坏性转换被拒绝后保留。
-    let retained_package = fixture.manager.snapshot().plugins["local-plugin"]
-        .package_root
-        .clone();
     assert!(
         fixture
             .manager
-            .uninstall_user_plugin("local-plugin")
-            .expect_err("preparation blocks uninstall")
-            .to_string()
-            .contains("unfinished member preparation")
-    );
-    assert!(retained_package.is_dir());
-    assert_eq!(
-        fixture
-            .manager
-            .observe_catalog(&fixture.manager.snapshot())
-            .expect("actual refused uninstall cleanup observation")
-            .plugins["local-plugin"]
-            .runtime_state,
-        VulcanPluginRuntimeState::DisabledWithCleanupWarning
-    );
-    fixture
-        .manager
-        .clear_cleanup_diagnostics_if_fully_drained("local-plugin")
-        .expect("preserve pending retirement warning");
-    assert_eq!(
-        fixture
-            .manager
-            .observe_catalog(&fixture.manager.snapshot())
-            .expect("actual retained uninstall cleanup observation")
-            .plugins["local-plugin"]
-            .runtime_state,
-        VulcanPluginRuntimeState::DisabledWithCleanupWarning
+            .collect_deactivation_state(&mut state, &original)
+            .is_err(),
+        "preparation blocks local collection"
     );
     drop(preparing);
     fixture
         .manager
-        .begin_draining("local-plugin")
-        .expect("explicit failed-uninstall cleanup retry");
-    fixture
-        .manager
-        .finish_lifecycle_transition(
-            "local-plugin",
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            Vec::new(),
-        )
-        .expect("acknowledge actual preparation completion");
-    assert_eq!(
-        fixture.manager.snapshot().plugins["local-plugin"].runtime_state,
-        VulcanPluginRuntimeState::Disabled
-    );
-    fixture
-        .manager
-        .invoke_lifecycle("local-plugin", VulcanPluginLifecycleEvent::Uninstall)
-        .await
-        .expect("real uninstall callback");
-    // The callback has physically retired, while the configured empty purpose still holds its guarantee.
-    // 回调已物理退役，但配置的空用途仍持有保证。
-    let completed = fixture
-        .manager
-        .formal_capacity_status("local-plugin", VulcanPluginCapacityPurpose::Lifecycle)
-        .expect("callback status")
-        .expect("callback capacity");
-    assert_eq!(completed.snapshot.retained_pools, 0);
-    assert_eq!(completed.snapshot.committed_resident_vms, 1);
-    // The published package root is the authority for physical deletion, not a reconstructed installation path.
-    // 已发布包根是物理删除的权威，不重新构造安装路径。
-    let package = fixture.manager.snapshot().plugins["local-plugin"]
-        .package_root
-        .clone();
-    fixture
-        .manager
-        .uninstall_user_plugin("local-plugin")
-        .expect("uninstall after callback");
-    assert!(!package.exists());
+        .collect_deactivation_state(&mut state, &original)
+        .expect("collect after preparation completes");
     assert!(
         fixture
             .manager
@@ -681,5 +643,7 @@ async fn formal_capacity_lifecycle_uninstall_releases_callback_owner() {
             .committed_resident_vms,
         0
     );
+    drop(state);
+    drop(original);
     fixture.close().await;
 }

@@ -1,12 +1,88 @@
 //! Original removal catalogs use the same actual File and sole existing projection without ordinary target fallback.
 //! 原移除目录使用同一实际文件及唯一既有投影，不使用普通目标备用读取。
 
-use super::legacy_mutation_tests::{assert_equivalent, package, prepare};
 use super::*;
 use crate::{
     VulcanPluginActivation, VulcanPluginDeactivationReservation, VulcanPluginStoreErrorCode,
 };
 use uuid::Uuid;
+
+/// Write one real stateless package whose explicit tool is validated by the production catalog fixture.
+/// 写入一个真实无状态插件包，其显式工具由生产目录夹具校验。
+/// Root and plugin/tool IDs identify physical bytes; return the package path consumed by real preparation.
+/// 根及插件／工具标识定位物理字节；返回真实准备消费的插件包路径。
+fn package(root: &Path, plugin_id: &str, tool_id: &str) -> PathBuf {
+    crate::catalog::tests::write_named_stateless_package(root, plugin_id, &[tool_id]);
+    root.join(plugin_id)
+}
+
+/// Prepare inspected source bytes through the actual store, returning its real immutable package pin.
+/// 通过实际存储准备已检查来源字节，返回真实不可变插件包固定句柄。
+fn prepare(store: &VulcanPluginGenerationStore, source: &Path) -> PinnedVulcanPluginGeneration {
+    // The sole inspector provides the actual complete byte fingerprint.
+    // 唯一检查器提供实际完整字节指纹。
+    let descriptor = inspect_user_plugin_package(source).expect("actual source");
+    store
+        .prepare(source, &descriptor.content_fingerprint)
+        .expect("actual prepare")
+}
+
+/// Compare all catalog projections and managed authority, excluding only native File debug handles after explicit authority checks.
+/// 比较全部目录投影及受管权威，仅在显式权威检查之后排除原生 File 调试句柄。
+fn assert_equivalent(actual: &VulcanPluginCatalogSnapshot, ordinary: &VulcanPluginCatalogSnapshot) {
+    assert_eq!(
+        actual.plugins.keys().collect::<Vec<_>>(),
+        ordinary.plugins.keys().collect::<Vec<_>>()
+    );
+    for (plugin_id, package) in &actual.plugins {
+        match (
+            &package.managed_package,
+            &ordinary.plugins[plugin_id].managed_package,
+        ) {
+            (Some(left), Some(right)) => {
+                assert_eq!(left.generation.identity(), right.generation.identity());
+                assert_eq!(
+                    left.generation.package_root(),
+                    right.generation.package_root()
+                );
+                assert_eq!(left.activation_revision, right.activation_revision);
+                assert_eq!(left.approved_permissions, right.approved_permissions);
+                assert_eq!(
+                    format!("{:?}", left.credential_binding),
+                    format!("{:?}", right.credential_binding)
+                );
+                assert_eq!(left.configuration, right.configuration);
+                assert_eq!(
+                    left._credential_lease.record(),
+                    right._credential_lease.record(),
+                );
+            }
+            (None, None) => {}
+            _ => panic!("same real selection must retain the same managed authority"),
+        }
+    }
+    // These clones are comparison-only projections; production catalogs continue retaining their original real pins.
+    // 此些克隆仅用于比较投影；生产目录继续保留原真实固定句柄。
+    let mut actual_projection = actual.clone();
+    // The independently loaded ordinary snapshot has the same semantic authority but different native file handles.
+    // 独立加载普通快照具有相同语义权威，但原生文件句柄不同。
+    let mut ordinary_projection = ordinary.clone();
+    for snapshot in [&mut actual_projection, &mut ordinary_projection] {
+        for package in snapshot.plugins.values_mut() {
+            package.managed_package = None;
+            for server in &mut package.mcp_servers {
+                server.credential_lease = None;
+            }
+        }
+        for server in snapshot.enabled_mcp_servers.values_mut() {
+            server.credential_lease = None;
+        }
+    }
+    assert_eq!(
+        format!("{actual_projection:?}"),
+        format!("{ordinary_projection:?}")
+    );
+}
 
 /// Own the actual roots, prepared target and peer selections across namespace-preserving catalog reads.
 /// 跨保留命名空间目录读取持有实际根、已准备目标及其他插件选择。
@@ -17,8 +93,8 @@ struct Fixture {
     /// Actual bundled discovery remains part of the complete merged projection.
     /// 实际内置发现仍为完整合并投影的一部分。
     bundled: PathBuf,
-    /// Actual user discovery contains a shadowed flat target and distinct managed peer.
-    /// 实际用户发现包含被遮蔽平铺目标及独立受管其他插件。
+    /// The actual user root holds stray unmanaged directories beside the managed target and peer.
+    /// 实际用户根在受管目标及其他插件旁包含零散非受管目录。
     user: PathBuf,
     /// The actual store supplies all record identities through production producers.
     /// 实际存储通过生产生产者提供全部记录身份。
@@ -34,8 +110,8 @@ struct Fixture {
     peer: VulcanPluginActivation,
 }
 impl Fixture {
-    /// Publish complete approved target/peer records and unrelated real bundled/flat packages; returns actual roots and owners.
-    /// 发布完整已批准目标／其他记录及无关真实内置／平铺包；返回实际根及所有者。
+    /// Publish complete approved target/peer records, a bundled peer and stray user directories; returns actual roots and owners.
+    /// 发布完整已批准目标／其他记录、内置其他插件及零散用户目录；返回实际根及所有者。
     fn new() -> Self {
         // Isolate only this test's real package and namespace files.
         // 仅隔离此测试真实包及命名空间文件。
@@ -52,8 +128,8 @@ impl Fixture {
         // Managed bytes are prepared from source outside public discovery.
         // 受管字节从公开发现之外的来源准备。
         let source_root = root.path().join("source");
-        // Real target source has a distinct tool, proving tombstones cannot revive the flat candidate.
-        // 真实目标来源具有独立工具，证明停用记录不能复活平铺候选。
+        // Real target source has a distinct tool, proving tombstones cannot revive the stray directory.
+        // 真实目标来源具有独立工具，证明停用记录不能复活零散目录。
         let target_source = package(&source_root, "target-plugin", "managed_target_tool");
         // A separate real managed peer remains subject to ordinary namespace pinning.
         // 独立真实受管其他插件仍受普通命名空间固定约束。
@@ -179,7 +255,7 @@ fn deactivation_catalog_same_original_tombstone_matches_actual_ordinary_projecti
             .expect("real peer pin")
             .matches_activation(&fixture.peer)
     );
-    assert!(actual.plugins.contains_key("flat-peer"));
+    assert!(!actual.plugins.contains_key("flat-peer"));
     assert!(actual.plugins.contains_key("bundled-peer"));
     assert!(fixture.target.package_root().is_dir());
     assert_eq!(
@@ -222,7 +298,7 @@ fn deactivation_catalog_peer_namespace_remains_ordinary_and_busy_without_target_
         actual.plugins["managed-peer"].availability,
         VulcanPluginAvailability::Unavailable
     );
-    assert!(actual.plugins.contains_key("flat-peer"));
+    assert!(!actual.plugins.contains_key("flat-peer"));
     drop(original);
     assert_equivalent(&actual, &fixture.ordinary());
     drop(peer);

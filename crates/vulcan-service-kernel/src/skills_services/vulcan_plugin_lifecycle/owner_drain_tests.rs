@@ -2,7 +2,7 @@
 //! 排空观察失败不能在持久停用目标之上恢复启用投影。
 
 use super::*;
-use crate::skills_services::local_plugin_update::tests::{Fixture, PLUGIN};
+use crate::skills_services::local_plugin_update::tests::{Fixture, PLUGIN, write_package};
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use vulcan_plugin_runtime::VulcanPluginRuntimeState;
 
@@ -86,8 +86,8 @@ impl vulcan_plugin_runtime::VulcanPluginUiEventPublisher for PendingCapacityEven
 async fn immutable_service_disable_capacity_pending_reconciles_after_original_retirement() {
     use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
     use std::sync::atomic::Ordering;
-    // Reuse the original real service bridge and its isolated flat predecessor.
-    // 复用原真实服务桥及其隔离 flat 前驱。
+    // Reuse the original real service bridge and its isolated managed predecessor.
+    // 复用原真实服务桥及其隔离受管前驱。
     let fixture = Fixture::new(false);
     // Resolve the one root from the manager's authoritative user namespace.
     // 从管理器权威用户命名空间解析唯一根。
@@ -121,9 +121,9 @@ async fn immutable_service_disable_capacity_pending_reconciles_after_original_re
     )
     .expect("same bridge");
     std::fs::create_dir_all(root.join("distributions")).expect("distribution root");
-    // Only this fixture's installed predecessor is declared before its first native execution.
-    // 仅在首次原生执行之前声明此夹具已安装前驱。
-    let package = fixture.runtime.user_plugin_root().join(PLUGIN);
+    // A native successor of the installed predecessor is selected before its first native execution.
+    // 已安装前驱的原生后继在首次原生执行之前被选定。
+    let package = write_package(&root.join("native-source"), "1.0.0", false, None);
     std::fs::create_dir_all(package.join("runtime")).expect("actual runtime");
     std::fs::write(package.join("dependencies.yaml"), "{}\n").expect("dependencies");
     // Preserve the exact initial manifest and append strict native declarations.
@@ -159,20 +159,12 @@ return M
 "#,
     )
     .expect("actual module");
-    fixture
-        .runtime
-        .refresh_catalog(&BTreeSet::from([PLUGIN.to_owned()]), &BTreeSet::new())
-        .expect("publish actual native declarations");
-    // Approval binds the full new declaration and actual fingerprint through the original public authority.
-    // 批准通过原公开权威绑定完整新声明及实际指纹。
-    let approval = fixture
-        .runtime
-        .permission_preview(PLUGIN)
-        .expect("actual permission preview");
-    fixture
-        .runtime
-        .authorize_user_plugin(PLUGIN, approval.permissions)
-        .expect("authorize actual declaration");
+    // Selection approves the full new declaration and binds its actual fingerprint.
+    // 选择批准完整新声明并绑定其实际指纹。
+    vulcan_plugin_runtime::install_user_package_for_test(
+        fixture.runtime.user_plugin_root(),
+        &package,
+    );
     fixture
         .runtime
         .refresh_catalog(&BTreeSet::from([PLUGIN.to_owned()]), &BTreeSet::new())

@@ -11,12 +11,12 @@ use vulcan_plugin_runtime::{
 pub(in crate::mcp) mod candidates;
 mod published;
 
-/// Verify managed configuration never mixes a retained remote declaration with a newer selection or legacy file.
-/// 验证受管配置绝不将保留的远端声明与更新选择或旧文件混用。
+/// Verify managed configuration never mixes a retained remote declaration with a newer selection.
+/// 验证受管配置绝不将保留的远端声明与更新选择混用。
 #[test]
 fn configuration_selection_mcp_retains_exact_document_after_same_package_update() {
-    // The real manager, immutable store and legacy state are isolated in this temporary root.
-    // 实际管理器、不可变存储及旧状态隔离在此临时根目录中。
+    // The real manager and immutable store are isolated in this temporary root.
+    // 实际管理器及不可变存储隔离在此临时根目录中。
     let temp = tempfile::tempdir().expect("create MCP configuration selection fixture");
     // Production discovery needs separate bundled and user roots.
     // 生产发现需要独立的内置及用户根目录。
@@ -26,16 +26,6 @@ fn configuration_selection_mcp_retains_exact_document_after_same_package_update(
     // 实际用户根目录持有激活记录。
     let user = temp.path().join("user");
     fs::create_dir(&user).expect("create configuration user root");
-    // Configuration files belonging to the previous format remain unchanged throughout this test.
-    // 属于旧格式的配置文件在整个测试期间保持不变。
-    let state = temp.path().join("state");
-    fs::create_dir_all(state.join("configured-mcp"))
-        .expect("create legacy configuration directory");
-    fs::write(
-        state.join("configured-mcp/config.json"),
-        r#"{"endpoint":"https://legacy.test/mcp","label":"legacy"}"#,
-    )
-    .expect("write unrelated legacy configuration");
     // A Lua-free production manager still performs normal configuration and MCP materialization.
     // 无 Lua 的生产管理器仍执行正常配置及 MCP 物化。
     let plugins = VulcanPluginRuntimeManager::without_runtime(
@@ -43,7 +33,7 @@ fn configuration_selection_mcp_retains_exact_document_after_same_package_update(
         user.clone(),
         temp.path().join("bridge"),
         temp.path().join("managed"),
-        state.clone(),
+        temp.path().join("state"),
         temp.path().join("runtime"),
     );
     // This actual package declares configuration-backed HTTP and SSE fields without secrets.
@@ -112,8 +102,8 @@ mcp:
         reads: Mutex::new(Vec::new()),
     };
     stage_fixture_credentials(&store, &generation, &preview, &revision, &secrets);
-    // The original document is independent of package defaults and the mutable legacy state file.
-    // 原文档独立于包默认值及可变旧状态文件。
+    // The original document is independent of package defaults.
+    // 原文档独立于包默认值。
     let first = serde_json::json!({"endpoint":"https://first.test/mcp","label":"first"});
     store
         .activate_configured(
@@ -189,11 +179,6 @@ mcp:
             }
         }
     }
-    assert_eq!(
-        fs::read_to_string(state.join("configured-mcp/config.json"))
-            .expect("read retained legacy bytes"),
-        r#"{"endpoint":"https://legacy.test/mcp","label":"legacy"}"#
-    );
     assert!(
         secrets
             .reads
@@ -297,8 +282,8 @@ struct RevisionSecrets {
 impl PluginMcpSecretStore for RevisionSecrets {
     /// Resolve the exact plugin/server/key and captured binding; return a revision-specific fixture value.
     /// 解析精确插件、服务器、键及捕获绑定；返回对应修订的夹具值。
-    /// Unknown revisions fail even while other revisions and the legacy namespace remain readable.
-    /// 即使其他修订及旧命名空间可读，未知修订仍失败。
+    /// Unknown revisions fail even while other revisions remain readable.
+    /// 即使其他修订可读，未知修订仍失败。
     fn read_secret(
         &self,
         plugin_id: &str,
@@ -313,10 +298,7 @@ impl PluginMcpSecretStore for RevisionSecrets {
             key.into(),
             binding.clone(),
         ));
-        // Legacy remains available as a tripwire for any accidental fallback.
-        // 旧命名空间保持可用，以检测任何意外回退。
         let label = match binding {
-            VulcanPluginCredentialBinding::Legacy => "legacy",
             VulcanPluginCredentialBinding::Revision(revision) => self
                 .labels
                 .get(revision)
@@ -599,8 +581,8 @@ fn credential_binding_mcp_materialization_uses_frozen_selection_without_fallback
             .expect_err("missing selected revision")
             .contains("Selected credential revision is missing")
     );
-    // A missing selected value causes one failing lookup, despite readable old and legacy values.
-    // 即使旧值及旧命名空间可读，缺失选中值也仅产生一次失败查找。
+    // A missing selected value causes one failing lookup, despite readable old values.
+    // 即使旧值可读，缺失选中值也仅产生一次失败查找。
     let reads = secrets.reads.lock().expect("read failure lookup");
     assert_eq!(reads.len(), 1);
     assert!(

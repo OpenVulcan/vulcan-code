@@ -237,16 +237,6 @@ fn private_target_native_process_and_settings_edits_preserve_package_selection()
         selected.configuration(),
         crate::VulcanPluginConfigurationSelection::Document { .. }
     ));
-    // This actual legacy state path must remain absent through every denied mutable write.
-    // 此实际旧格式状态路径须在每次被拒绝可变写入期间保持缺失。
-    let state_path = crate::runtime::configuration::plugin_config_state_path(
-        &fixture.manager.state.plugin_state_root,
-        "hook-plugin",
-    );
-    assert!(
-        !state_path.exists(),
-        "configured selections must not create a mutable legacy document"
-    );
     // Stage the exact closed Arc before real private target initialization.
     // 真实私有目标初始化前暂存精确关闭 Arc。
     let staged = fixture
@@ -363,10 +353,6 @@ fn private_target_native_process_and_settings_edits_preserve_package_selection()
         assert_eq!(
             edited.configuration().value(),
             Some(&json!({"label": "ordinary-edited"}))
-        );
-        assert!(
-            !state_path.exists(),
-            "settings edits created mutable legacy state"
         );
         fixture
             .manager

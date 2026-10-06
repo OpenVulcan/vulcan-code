@@ -163,17 +163,9 @@ mcp:
             );
         }
     }
-    // The legacy account remains populated to prove candidate cleanup cannot address it.
-    // 旧账户保持有值，以证明候选清理无法寻址它。
-    let legacy = plugin_secret_entry(&plugin, "remote", "first")
-        .expect("open isolated legacy cleanup handle");
-    cleanup.entries.push(legacy);
     for entry in &cleanup.entries {
         assert!(matches!(entry.get_password(), Err(KeyringError::NoEntry)));
     }
-    OsPluginMcpSecretStore
-        .write_secret(&plugin, "remote", "first", "fixture-legacy-retained")
-        .expect("write retained legacy fixture");
     // Actual OS writes are counted separately from journal checkpoint attempts.
     // 实际 OS 写入与日志检查点尝试分别计数。
     let backend = InterruptedOs {
@@ -240,8 +232,8 @@ mcp:
     );
     assert_eq!(backend.writes.get(), 2);
     drop(resumed);
-    // Abandoned B must be reclaimed through its own persisted key inventory, leaving A and legacy untouched.
-    // 放弃的 B 必须经自身持久键清单回收，保持 A 及旧账户不变。
+    // Abandoned B must be reclaimed through its own persisted key inventory, leaving A untouched.
+    // 放弃的 B 必须经自身持久键清单回收，保持 A 不变。
     let mut abandoned_owner = reopened
         .begin_credential_staging(&generation, abandoned.clone(), &values)
         .expect("prepare independently abandoned revision");
@@ -307,13 +299,6 @@ mcp:
                 .is_none()
         );
     }
-    assert_eq!(
-        OsPluginMcpSecretStore
-            .read_optional_secret(&plugin, "remote", "first")
-            .expect("read unchanged legacy fixture")
-            .as_deref(),
-        Some("fixture-legacy-retained")
-    );
     assert!(
         !fs::read_to_string(record_path)
             .expect("read final non-secret OS journal")

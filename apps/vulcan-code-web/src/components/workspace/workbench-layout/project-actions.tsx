@@ -1,6 +1,5 @@
 import React from "react";
 import { readLocalPluginUpdates, resumeLocalPluginUpdate, abortLocalPluginUpdate } from "@/service/plugin-update-service";
-import { readPluginSecretMutations, recoverPluginSecretMutation } from "@/service/plugin-secret-recovery-service";
 import { readPluginUninstallRequests, resumePluginUninstallRequest } from "@/service/plugin-uninstall-recovery-service";
 import type { AgentActionProps } from "@/components/features/agents/agents-area";
 import type { SkillCatalogActionProps } from "@/components/features/skills/skill-area-types";
@@ -345,8 +344,6 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onReadLocalPluginUpdates: readLocalPluginUpdates,
     onResumeLocalPluginUpdate: (pluginId, requestId) => runLuaSkillsCatalogAction(() => resumeLocalPluginUpdate(pluginId, requestId)),
     onAbortLocalPluginUpdate: abortLocalPluginUpdate,
-    onReadPluginSecretMutations: readPluginSecretMutations,
-    onRecoverPluginSecretMutation: recoverPluginSecretMutation,
     onReadPluginUninstallRequests: readPluginUninstallRequests,
     onResumePluginUninstallRequest: (pluginId, requestId, acknowledgeExternalEffects) => runLuaSkillsCatalogAction(() => resumePluginUninstallRequest(pluginId, requestId, acknowledgeExternalEffects)),
     onUninstallUserPlugin: (pluginId) => runLuaSkillsCatalogAction(() => uninstallUserPlugin(pluginId)),

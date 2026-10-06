@@ -31,24 +31,6 @@ pub(super) struct CompiledConfigurationSchema {
     validator: Arc<jsonschema::Validator>,
 }
 
-/// Returns the deterministic configuration document path for one validated plugin identity.
-/// 返回一个已校验插件身份的确定性配置文档路径。
-///
-/// # Parameters
-/// 参数
-/// `state_root` is the fixed per-user plugin state root.
-/// `state_root` 是固定的用户插件状态根。
-/// `plugin_id` is the validated plugin identity selecting its state directory.
-/// `plugin_id` 是选择所属状态目录的已校验插件身份。
-///
-/// # Returns
-/// 返回值
-/// Returns the deterministic config.json path without filesystem mutation.
-/// 返回不修改文件系统的确定性config.json路径。
-pub(super) fn plugin_config_state_path(state_root: &Path, plugin_id: &str) -> PathBuf {
-    state_root.join(plugin_id).join("config.json")
-}
-
 /// Validates one complete plugin configuration against its package-owned schema.
 /// 根据插件包持有的 Schema 校验一份完整插件配置。
 ///
@@ -151,9 +133,9 @@ impl VulcanPluginRuntimeManager {
     /// Read configuration using the caller's exact retained package descriptor.
     /// 使用调用方保留的精确包描述符读取配置。
     /// Managed packages read the settings their descriptor mirrors; bundled packages read the current settings
-    /// section of their record, or the package defaults; flat packages read their state file. Every value is
-    /// validated against the descriptor's package schema without looking up a newer package generation.
-    /// 受管插件包读取其描述符镜像的设置；内建插件包读取其记录的当前设置段或插件包默认值；平铺插件包读取其状态文件。
+    /// section of their record, or the package defaults. Every value is validated against the descriptor's
+    /// package schema without looking up a newer package generation.
+    /// 受管插件包读取其描述符镜像的设置；内建插件包读取其记录的当前设置段或插件包默认值。
     /// 每个值都按描述符的插件包 Schema 校验，不查找更新的包代次。
     pub(super) fn plugin_config_for_snapshot(
         &self,
@@ -161,7 +143,7 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<Value, VulcanPluginRuntimeError> {
         let config = declared_configuration(plugin)?;
         let package_root = self.configuration_package_root(plugin)?;
-        let value = match configuration_owner(plugin) {
+        let value = match configuration_owner(plugin)? {
             // The descriptor mirrors its record's settings, including a candidate's not yet published target;
             // settings edits republish the descriptor, so later calls observe them.
             // 描述符镜像其记录的设置，包括尚未发布的候选目标；设置编辑会重新发布描述符，后续调用即可观察到。
@@ -199,15 +181,6 @@ impl VulcanPluginRuntimeManager {
                     ));
                 }
             },
-            ConfigurationOwner::Flat => {
-                let state_path =
-                    plugin_config_state_path(&self.state.plugin_state_root, &plugin.id);
-                if state_path.exists() {
-                    read_plugin_json_state(&state_path, "configuration")?
-                } else {
-                    read_configuration_defaults(&package_root, config)?
-                }
-            }
         };
         // Only compilation is reused; every freshly read configuration remains subject to validation.
         // 仅复用编译；每份刚读取配置仍必须接受校验。
@@ -331,8 +304,8 @@ impl VulcanPluginRuntimeManager {
         // Resolve current authority once while publication cannot change it.
         // 发布不能改变权威期间，一次性解析当前权威。
         let snapshot = self.snapshot();
-        // Retain the original plugin ID, including the state-file namespace.
-        // 保留原插件 ID，包括状态文件命名空间。
+        // Retain the original plugin ID.
+        // 保留原插件 ID。
         let plugin_id = &plugin.id;
         // A matching name cannot substitute for the exact generation and package bytes.
         // 相同名称不能替代精确代次及包字节。
@@ -355,7 +328,7 @@ impl VulcanPluginRuntimeManager {
                 declared_configuration(current)?,
             )?,
         };
-        match configuration_owner(current) {
+        match configuration_owner(current)? {
             ConfigurationOwner::Managed(managed) => {
                 self.validate_settings_value(current, &value)?;
                 let committed = self.reconfigure_managed(current, managed, value.clone())?;
@@ -377,9 +350,6 @@ impl VulcanPluginRuntimeManager {
                 self.configure_bundled(plugin_id, configuration)?;
                 self.publish_settings_edit(plugin_id, None)?;
                 Ok(value)
-            }
-            ConfigurationOwner::Flat => {
-                self.update_flat_plugin_config(plugin, value, &registration)
             }
         }
     }
@@ -500,149 +470,6 @@ impl VulcanPluginRuntimeManager {
         self.close_reusable_domains(Some(plugin_id), None, false)?;
         Ok(next_snapshot)
     }
-
-    /// Write value into a flat package's state file under its legacy mutation guard.
-    /// 在旧变更守卫下将 value 写入平铺插件包的状态文件。
-    fn update_flat_plugin_config(
-        &self,
-        plugin: &crate::VulcanPluginDescriptor,
-        value: Value,
-        registration: &std::sync::MutexGuard<'_, ()>,
-    ) -> Result<Value, VulcanPluginRuntimeError> {
-        let plugin_id = &plugin.id;
-        // Explicit legacy configuration writes initialize the same host-selected user root as plugin installation.
-        // 显式旧格式配置写入初始化与插件安装相同的宿主选定用户根目录。
-        std::fs::create_dir_all(&self.state.user_plugin_root).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!("Failed to create user plugin root: {error}"))
-        })?;
-        // Opening the sole store validates the literal root and creates only its controlled private layout.
-        // 打开唯一存储校验字面根目录，并仅创建其受控私有布局。
-        let store = crate::VulcanPluginGenerationStore::open(&self.state.user_plugin_root)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // Freeze the complete actual selection before requesting the exclusive typed mutation fence.
-        // 请求排他类型化变更屏障之前，固定完整实际选择。
-        let selected = store
-            .activation(plugin_id)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // Flat packages require absence of any record in their namespace.
-        // 平铺插件包要求其命名空间中不存在任何记录。
-        if selected.is_some() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Legacy plugin configuration activation changed before write.",
-            ));
-        }
-        // Registration precedes the same cross-process namespace fence used by update reservations and activation writers.
-        // 注册门先于更新预留及激活写入者使用的相同跨进程命名空间屏障。
-        let mutation = store
-            .acquire_legacy_mutation_guard(plugin_id, selected.as_ref())
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        self.write_plugin_config_with_mutation_guard(plugin, value, &mutation, registration, None)
-    }
-
-    /// Write value for the exact lifecycle plugin under its original authority and publication gate.
-    /// 在原生命周期权威及发布门内，为精确 plugin 写入 value。
-    /// Scope must match the admitted event; authority lends its actual guard without reopening a namespace.
-    /// scope 必须匹配已接纳事件；authority 借出实际守卫，不重开命名空间。
-    /// Return the committed value, rejecting managed configuration selections before any mutation.
-    /// 返回已提交值；在任何修改前拒绝受管配置选择。
-    pub(super) fn update_legacy_lifecycle_plugin_config_for_snapshot(
-        &self,
-        plugin: &crate::VulcanPluginDescriptor,
-        value: Value,
-        authority: &super::legacy_lifecycle::LegacyLifecycleExecution,
-        scope: super::VulcanPluginBridgeLeaseScope,
-    ) -> Result<Value, VulcanPluginRuntimeError> {
-        // The same gate excludes publication throughout validation and the durable write.
-        // 同一门在校验及持久写入全程排除发布。
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
-        })?;
-        self.require_routing_publication_locked(
-            &_registration,
-            Some(super::routing::ActivationRoutingOriginal::LegacyMutation(
-                authority.mutation_guard(),
-            )),
-        )?;
-        authority.validate(&self.state, plugin, scope)?;
-        if plugin.managed_package().is_some() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Managed plugin configuration updates require a configured activation transaction.",
-            ));
-        }
-        self.write_plugin_config_with_mutation_guard(
-            plugin,
-            value,
-            authority.mutation_guard(),
-            &_registration,
-            Some(super::routing::ActivationRoutingOriginal::LegacyMutation(
-                authority.mutation_guard(),
-            )),
-        )
-    }
-
-    /// Validate and persist value for plugin while the caller retains its publication gate and original mutation guard.
-    /// 调用方保留发布门及原 mutation 守卫期间，为 plugin 校验并持久化 value。
-    /// Both ordinary and lifecycle writers share this sole path; registration proves the caller-held routing exclusion.
-    /// 普通及生命周期写入者共用此唯一路径；registration 证明调用方持有的路由互斥。
-    /// `original` borrows actual callback ownership or is absent for ordinary writes; returns the committed value.
-    /// `original` 借用实际回调所有权，普通写入则缺失；返回已提交值。
-    fn write_plugin_config_with_mutation_guard(
-        &self,
-        plugin: &crate::VulcanPluginDescriptor,
-        value: Value,
-        mutation: &crate::VulcanPluginLegacyMutationGuard,
-        registration: &std::sync::MutexGuard<'_, ()>,
-        original: Option<super::routing::ActivationRoutingOriginal<'_>>,
-    ) -> Result<Value, VulcanPluginRuntimeError> {
-        self.require_routing_publication_locked(registration, original)?;
-        // The state namespace remains bound to the same immutable descriptor as its schema.
-        // 状态命名空间仍绑定至与模式相同的不可变描述符。
-        let plugin_id = &plugin.id;
-        let manifest = plugin.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{plugin_id}` has no valid manifest."
-            ))
-        })?;
-        let config = manifest.config.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{plugin_id}` does not declare configuration."
-            ))
-        })?;
-        // executionRoot pins configuration validation to the authorized package generation.
-        // executionRoot 把配置校验固定到已授权插件包代次。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        validate_plugin_config_value(&execution_root, config, &value)?;
-        let encoded = serde_json::to_vec_pretty(&value).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!(
-                "Failed to encode Vulcan plugin `{plugin_id}` configuration: {error}"
-            ))
-        })?;
-        let mut published = self.state.snapshot.write().map_err(|_| {
-            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
-        })?;
-        // Keep the original physical fence and revalidate its exact authority immediately before the mutable file write.
-        // 保持原物理屏障，并在可变文件写入前立即重新校验其精确权威。
-        mutation
-            .validate_user_root(&self.state.user_plugin_root, plugin_id)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        mutation
-            .write_legacy_configuration_atomically(
-                &plugin_config_state_path(&self.state.plugin_state_root, plugin_id),
-                &encoded,
-            )
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // Registration hooks may read this configuration while shaping model-visible tools.
-        // 注册 Hook 可读取此配置来塑造模型可见工具，因此写盘成功后必须失效旧目录缓存。
-        let mut next_snapshot = (**published).clone();
-        next_snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        *published = Arc::new(next_snapshot);
-        drop(published);
-        // Already-running calls drain on their original VM; no later call reuses pre-update state.
-        // 已运行调用在原 VM 中排空；后续调用不复用更新前状态。
-        self.close_reusable_domains(Some(plugin_id), None, false)?;
-        Ok(value)
-    }
 }
 
 impl VulcanPluginRuntimeManager {
@@ -720,20 +547,24 @@ pub(super) enum ConfigurationOwner<'a> {
     /// The settings section of a bundled record, or the package defaults while no record exists.
     /// 内建记录的设置段；尚无记录时为插件包默认值。
     Bundled,
-    /// The state file of a flat user package.
-    /// 平铺用户插件包的状态文件。
-    Flat,
 }
 
 /// Classify plugin by the authority that owns its configuration.
 /// 按拥有其配置的权威对 plugin 分类。
+/// A user row without a managed selection is an unavailable diagnostic row and owns no settings.
+/// 没有受管选择的用户条目是不可用诊断条目，不拥有设置。
 pub(super) fn configuration_owner(
     plugin: &crate::VulcanPluginDescriptor,
-) -> ConfigurationOwner<'_> {
+) -> Result<ConfigurationOwner<'_>, VulcanPluginRuntimeError> {
     match (plugin.managed_package(), plugin.origin) {
-        (Some(managed), _) => ConfigurationOwner::Managed(managed),
-        (None, crate::VulcanPluginPackageOrigin::Bundled) => ConfigurationOwner::Bundled,
-        (None, crate::VulcanPluginPackageOrigin::UserInstalled) => ConfigurationOwner::Flat,
+        (Some(managed), _) => Ok(ConfigurationOwner::Managed(managed)),
+        (None, crate::VulcanPluginPackageOrigin::Bundled) => Ok(ConfigurationOwner::Bundled),
+        (None, crate::VulcanPluginPackageOrigin::UserInstalled) => {
+            Err(VulcanPluginRuntimeError::new(format!(
+                "Vulcan plugin `{}` has no managed package selection.",
+                plugin.id
+            )))
+        }
     }
 }
 

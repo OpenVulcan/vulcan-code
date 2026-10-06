@@ -3,29 +3,18 @@
 
 use super::*;
 
-/// Managed and flat removals borrow their existing concrete protocols, without a parallel ledger.
-/// 受管及平铺移除借用既有具体协议，不建立并行账本。
-#[allow(
-    clippy::large_enum_variant,
-    reason = "exactly one value exists per in-flight uninstall and is never stored in a collection"
-)]
-pub(super) enum OriginalRemoval {
-    /// Same physical selection and pre-callback local state originals.
-    /// 相同物理选择及回调前本地状态原实例。
-    Managed {
-        /// Existing canonical store performs all history collection.
-        /// 既有规范存储执行全部历史回收。
-        store: VulcanPluginGenerationStore,
-        /// Sole namespace File and original complete selected authority.
-        /// 唯一命名空间文件及原完整已选权威。
-        selection: VulcanPluginDeactivationReservation,
-        /// Local preimages share the selection through a weak allocation binding.
-        /// 本地前像通过弱分配绑定共享选择。
-        state: VulcanPluginDeactivationStateReservation,
-    },
-    /// Actual flat descriptor, local preimages and same retained mutation guard.
-    /// 实际平铺描述符、本地前像及相同保留变更守卫。
-    Flat(VulcanPluginLegacyUninstallationReservation),
+/// A managed removal borrows the existing store protocol, without a parallel ledger.
+/// 受管移除借用既有存储协议，不建立并行账本。
+pub(super) struct OriginalRemoval {
+    /// Existing canonical store performs all history collection.
+    /// 既有规范存储执行全部历史回收。
+    pub(super) store: VulcanPluginGenerationStore,
+    /// Sole namespace File and original complete selected authority.
+    /// 唯一命名空间文件及原完整已选权威。
+    pub(super) selection: VulcanPluginDeactivationReservation,
+    /// Local environment cleanup shares the selection through a weak allocation binding.
+    /// 本地环境清理通过弱分配绑定共享选择。
+    pub(super) state: VulcanPluginDeactivationStateReservation,
 }
 
 /// Actual resource borrowing is separate from short registry and service publication locks.
@@ -61,9 +50,6 @@ pub(super) struct UninstallResources {
     /// Adjacent configuration commit confirms the exact intended membership.
     /// 相邻配置提交确认精确期望成员关系。
     pub(super) policy_committed: bool,
-    /// Legacy ownership comes only from the actual current legacy or captured dormant flat descriptor.
-    /// 旧账户归属仅来自实际当前旧格式或捕获休眠平铺描述符。
-    pub(super) legacy_keys: Vec<(String, String)>,
     /// The original Full must not be substituted before removal publication.
     /// 移除发布之前不得替代原完整代次。
     pub(super) expected_full: Option<Arc<ExtensionGeneration>>,
@@ -425,74 +411,45 @@ pub(super) fn reserve(
     // Allocate only lookup metadata; concrete originals independently establish physical ownership.
     // 仅分配查询元数据；具体原实例独立建立物理所有权。
     let request_id = uuid::Uuid::new_v4();
-    // Existing stores are opened without creation; declared managed/flat type determines the branch.
-    // 打开既有存储而不创建；声明受管／平铺类型决定分支。
-    let (original, routing, mut legacy_keys) = if descriptor.managed_package().is_some() {
-        // Managed selection must exist in its actual configured store.
-        // 受管选择必须存在于其实际配置存储。
-        let store = VulcanPluginGenerationStore::open_existing(
-            bridge.vulcan_plugin_runtime.user_plugin_root(),
-        )
-        .map_err(|error| error.to_string())?
-        .ok_or("受管插件存储缺失。")?;
-        // Read the complete authoritative selection before reserving its same File.
-        // 在预留相同文件之前读取完整权威选择。
-        let selected = store
-            .activation(plugin)
+    // Every user plugin is a managed selection that must exist in its actual configured store.
+    // 每个用户插件都是受管选择，必须存在于其实际配置存储。
+    if descriptor.managed_package().is_none() {
+        return Err(String::from("用户插件缺少受管选择。"));
+    }
+    // Existing stores are opened without creation.
+    // 打开既有存储而不创建。
+    let store =
+        VulcanPluginGenerationStore::open_existing(bridge.vulcan_plugin_runtime.user_plugin_root())
             .map_err(|error| error.to_string())?
-            .ok_or("受管插件完整选择缺失。")?;
-        // Sole physical reservation captures actual inventories before all effects.
-        // 唯一物理预留在全部副作用之前捕获实际清单。
-        let mut selection = store
-            .reserve_deactivation(request_id, &selected)
-            .map_err(|error| error.to_string())?;
-        // Local state is an actual separate original sharing only weak namespace identity.
-        // 本地状态为实际独立原实例，仅共享弱命名空间身份。
-        let local = bridge
-            .vulcan_plugin_runtime
-            .reserve_deactivation_state(&mut selection)
-            .map_err(|error| error.to_string())?;
-        // Real dormant flat declarations are the only legacy credential ownership source of a managed removal.
-        // 真实休眠平铺声明是受管移除唯一的旧凭据归属来源。
-        let keys = local
-            .original_flat_predecessor()
-            .map(declared_keys)
-            .unwrap_or_default();
-        // Coordination holds no second strong namespace borrower.
-        // 协调不持有第二强命名空间借用者。
-        let routing = bridge
-            .vulcan_plugin_runtime
-            .reserve_deactivation_routing(&selection)
-            .map_err(|error| error.to_string())?;
-        (
-            OriginalRemoval::Managed {
-                store,
-                selection,
-                state: local,
-            },
-            routing,
-            keys,
-        )
-    } else {
-        // The existing flat protocol validates direct source, complete descriptor and physical namespace.
-        // 既有平铺协议校验直接来源、完整描述符及物理命名空间。
-        let flat = bridge
-            .vulcan_plugin_runtime
-            .reserve_legacy_user_plugin_uninstallation(request_id, plugin)
-            .map_err(|error| error.to_string())?;
-        // Credentials derive from this actual original inspector result.
-        // 凭据从此实际原检查结果派生。
-        let keys = declared_keys(flat.original_plugin());
-        // Same weak routing slot covers this exact flat File allocation.
-        // 相同弱路由槽覆盖此精确平铺文件分配。
-        let routing = bridge
-            .vulcan_plugin_runtime
-            .reserve_legacy_uninstallation_routing(&flat)
-            .map_err(|error| error.to_string())?;
-        (OriginalRemoval::Flat(flat), routing, keys)
+            .ok_or("受管插件存储缺失。")?;
+    // Read the complete authoritative selection before reserving its same File.
+    // 在预留相同文件之前读取完整权威选择。
+    let selected = store
+        .activation(plugin)
+        .map_err(|error| error.to_string())?
+        .ok_or("受管插件完整选择缺失。")?;
+    // Sole physical reservation captures actual inventories before all effects.
+    // 唯一物理预留在全部副作用之前捕获实际清单。
+    let mut selection = store
+        .reserve_deactivation(request_id, &selected)
+        .map_err(|error| error.to_string())?;
+    // Local state is an actual separate original sharing only weak namespace identity.
+    // 本地状态为实际独立原实例，仅共享弱命名空间身份。
+    let local = bridge
+        .vulcan_plugin_runtime
+        .reserve_deactivation_state(&mut selection)
+        .map_err(|error| error.to_string())?;
+    // Coordination holds no second strong namespace borrower.
+    // 协调不持有第二强命名空间借用者。
+    let routing = bridge
+        .vulcan_plugin_runtime
+        .reserve_deactivation_routing(&selection)
+        .map_err(|error| error.to_string())?;
+    let original = OriginalRemoval {
+        store,
+        selection,
+        state: local,
     };
-    legacy_keys.sort();
-    legacy_keys.dedup();
     // This exact slot captures policy before callback effects and is retained before leaving service exclusion.
     // 此精确槽在回调副作用之前捕获策略，并在离开服务互斥之前保留。
     let owner = Arc::new(PendingLocalPluginUninstall {
@@ -524,7 +481,6 @@ pub(super) fn reserve(
             ),
             policy_started: false,
             policy_committed: false,
-            legacy_keys,
             expected_full: Some(Arc::clone(&bridge.extension_generation)),
             committed_full: None,
             collection_confirmed: false,
@@ -543,24 +499,4 @@ pub(super) fn reserve(
     }
     owners.insert(request_id, Arc::clone(&owner));
     Ok(owner)
-}
-
-/// Capture only actual descriptor declarations; descriptor is already physically verified by its reserving protocol.
-/// 仅捕获实际描述符声明；descriptor 已被其预留协议物理验证。
-/// Returns exact local server/key tuples, without credential values or inferred historical ownership.
-/// 返回精确本地服务器／键元组，不含凭据值或推断历史归属。
-fn declared_keys(
-    descriptor: &vulcan_plugin_runtime::VulcanPluginDescriptor,
-) -> Vec<(String, String)> {
-    descriptor
-        .mcp_servers
-        .iter()
-        .flat_map(|server| {
-            server
-                .manifest
-                .declared_secret_keys()
-                .into_iter()
-                .map(|key| (server.id.clone(), key))
-        })
-        .collect()
 }

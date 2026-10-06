@@ -6,8 +6,8 @@ use crate::{
     VulcanPluginActivation, VulcanPluginActivationCandidate, VulcanPluginActivationTransaction,
     VulcanPluginActivationTransactionRecord, VulcanPluginDeactivationObservation,
     VulcanPluginDeactivationReservation, VulcanPluginGenerationStore,
-    VulcanPluginLegacyMutationGuard, VulcanPluginLegacyUninstallationReservation,
-    VulcanPluginRegisteredNativeMcpHostAuthority, VulcanPluginRuntimeState,
+    VulcanPluginLegacyMutationGuard, VulcanPluginRegisteredNativeMcpHostAuthority,
+    VulcanPluginRuntimeState,
 };
 use std::fs::File;
 use std::sync::{Arc, MutexGuard, Weak};
@@ -66,22 +66,6 @@ enum RoutingReservationOriginal {
         /// 既有 Arc 包含相同私有排他命名空间文件。
         namespace: Weak<VulcanPluginLegacyMutationGuard>,
     },
-    /// Flat uninstall captures actual request and complete original selection without package leases.
-    /// 平铺卸载捕获实际请求及完整原选择，不携带插件包租约。
-    LegacyUninstallation {
-        /// Original retained uninstall fixes the request identity.
-        /// 原保留卸载固定请求身份。
-        request_id: Uuid,
-        /// Exact plugin spelling comes from the actual owner.
-        /// 精确插件拼写来自实际所有者。
-        plugin_id: String,
-        /// Actual absent selection remains explicit rather than a guessed managed record.
-        /// 实际缺失选择保持明确，而非猜测的受管记录。
-        original: Option<VulcanPluginActivation>,
-        /// Weak namespace identity adds no callback or collection borrower.
-        /// 弱命名空间身份不添加回调或回收借用者。
-        namespace: Weak<VulcanPluginLegacyMutationGuard>,
-    },
 }
 
 impl RoutingReservationOriginal {
@@ -90,8 +74,7 @@ impl RoutingReservationOriginal {
     fn request_id(&self) -> Uuid {
         match self {
             Self::Activation { record, .. } => record.request_id(),
-            Self::Deactivation { request_id, .. }
-            | Self::LegacyUninstallation { request_id, .. } => *request_id,
+            Self::Deactivation { request_id, .. } => *request_id,
         }
     }
 
@@ -108,14 +91,6 @@ impl RoutingReservationOriginal {
             } => {
                 mutation.matches_routing_namespace(namespace)
                     && mutation.routing_original() == Some(original)
-            }
-            Self::LegacyUninstallation {
-                original,
-                namespace,
-                ..
-            } => {
-                mutation.matches_routing_namespace(namespace)
-                    && mutation.routing_original() == original.as_ref()
             }
             Self::Activation { .. } => false,
         }
@@ -134,9 +109,6 @@ pub(super) enum ActivationRoutingOriginal<'a> {
     /// Actual removal supplies full original, intended successor and namespace.
     /// 实际移除提供完整原记录、期望后继及命名空间。
     Deactivation(&'a VulcanPluginDeactivationReservation),
-    /// Actual flat uninstall supplies its fixed request and real namespace.
-    /// 实际平铺卸载提供固定请求及真实命名空间。
-    LegacyUninstallation(&'a VulcanPluginLegacyUninstallationReservation),
     /// Original callback or guarded publication borrows the existing physical mutation owner.
     /// 原回调或已屏障发布借用既有物理变更所有者。
     LegacyMutation(&'a VulcanPluginLegacyMutationGuard),
@@ -247,39 +219,6 @@ impl VulcanPluginRuntimeManager {
         )
     }
 
-    /// Reserve routing for actual retained flat `original`, never an arbitrary Install guard.
-    /// 为实际保留平铺 `original` 预留路由，绝不为任意安装守卫预留。
-    /// Returns inert coordination after actual manager, source and namespace checks without another borrower.
-    /// 实际管理器、来源及命名空间检查后返回未启动协调器，不添加另一借用者。
-    pub fn reserve_legacy_uninstallation_routing(
-        &self,
-        original: &VulcanPluginLegacyUninstallationReservation,
-    ) -> Result<VulcanPluginRoutingReservation, VulcanPluginRuntimeError> {
-        // The existing gate serializes this real owner's initial reservation.
-        // 既有门串行化此真实所有者的初始预留。
-        let registration =
-            self.state.session_registration_gate.lock().map_err(|_| {
-                VulcanPluginRuntimeError::new("Plugin publication gate is poisoned.")
-            })?;
-        self.require_routing_publication_locked(&registration, None)?;
-        original.validate(self)?;
-        original.validate_current_disabled(self)?;
-        if Arc::strong_count(original.mutation_guard()) != 1 {
-            return Err(VulcanPluginRuntimeError::new(
-                "Flat routing must be reserved before callback borrowing.",
-            ));
-        }
-        self.register_routing_original(
-            &registration,
-            RoutingReservationOriginal::LegacyUninstallation {
-                request_id: original.request_id(),
-                plugin_id: original.plugin_id().to_owned(),
-                original: original.mutation_guard().routing_original().cloned(),
-                namespace: Arc::downgrade(original.mutation_guard()),
-            },
-        )
-    }
-
     /// Open only this manager's existing store; no parameters or physical namespace acquisition.
     /// 仅打开此管理器既有存储；无参数，也不取得物理命名空间。
     /// Returns existing canonical storage or an explicit missing-store error.
@@ -380,20 +319,6 @@ impl VulcanPluginRuntimeManager {
                     && removal.intended() == intended
                     && removal.matches_namespace_identity(namespace)
             }
-            (
-                RoutingReservationOriginal::LegacyUninstallation {
-                    request_id,
-                    plugin_id,
-                    original,
-                    namespace,
-                },
-                Some(ActivationRoutingOriginal::LegacyUninstallation(removal)),
-            ) => {
-                removal.request_id() == *request_id
-                    && removal.plugin_id() == plugin_id
-                    && removal.mutation_guard().routing_original() == original.as_ref()
-                    && Weak::ptr_eq(&Arc::downgrade(removal.mutation_guard()), namespace)
-            }
             (_, Some(ActivationRoutingOriginal::LegacyMutation(mutation))) => {
                 retained.original.matches_mutation(mutation)
             }
@@ -405,8 +330,7 @@ impl VulcanPluginRuntimeManager {
             RoutingReservationOriginal::Activation { authority, .. } => {
                 authority.matches_manager(self)
             }
-            RoutingReservationOriginal::Deactivation { .. }
-            | RoutingReservationOriginal::LegacyUninstallation { .. } => true,
+            RoutingReservationOriginal::Deactivation { .. } => true,
         };
         if !matches
             || !Weak::ptr_eq(&retained.manager, &Arc::downgrade(&self.state))
@@ -416,45 +340,6 @@ impl VulcanPluginRuntimeManager {
                 "Plugin routing is retained by original request `{}`.",
                 retained.original.request_id()
             )));
-        }
-        Ok(())
-    }
-
-    /// Require unique namespace ownership before rebuilding guarded `mutation` routing.
-    /// 重建已屏障 `mutation` 路由之前，要求唯一命名空间所有权。
-    /// `registration` remains held; returns a conflict while callback owners retain the original manifest.
-    /// `registration` 保持持有；回调所有者保留原清单时返回冲突。
-    pub(super) fn require_routing_namespace_retired_locked(
-        &self,
-        registration: &MutexGuard<'_, ()>,
-        mutation: &VulcanPluginLegacyMutationGuard,
-    ) -> Result<(), VulcanPluginRuntimeError> {
-        self.require_routing_publication_locked(
-            registration,
-            Some(ActivationRoutingOriginal::LegacyMutation(mutation)),
-        )?;
-        // Observe actual physical counts in place without upgrading a namespace Weak.
-        // 原地观测实际物理计数，不升级命名空间 Weak。
-        let slot = self.state.routing_reservation.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Plugin routing reservation lock is poisoned.")
-        })?;
-        if let Some(retained) = slot.upgrade() {
-            // Only original namespace-based removals can coordinate this guarded refresh.
-            // 仅原命名空间移除能够协调此已屏障刷新。
-            let namespace = match &retained.original {
-                RoutingReservationOriginal::Deactivation { namespace, .. }
-                | RoutingReservationOriginal::LegacyUninstallation { namespace, .. } => namespace,
-                RoutingReservationOriginal::Activation { .. } => {
-                    return Err(VulcanPluginRuntimeError::new(
-                        "Configured activation has no legacy namespace admission.",
-                    ));
-                }
-            };
-            if namespace.strong_count() != 1 {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Original lifecycle ownership remains retained; guarded catalog refresh is blocked.",
-                ));
-            }
         }
         Ok(())
     }

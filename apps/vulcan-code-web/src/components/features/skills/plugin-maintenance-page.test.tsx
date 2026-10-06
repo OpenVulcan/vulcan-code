@@ -20,7 +20,6 @@ vi.mock("./plugin-runtime-controls", () => ({ PluginRuntimeControls: () => { mou
 vi.mock("./plugin-resource-diagnostics", () => ({ PluginResourceDiagnostics: () => { mounted.push("usage"); return <p>usage-probe</p>; } }));
 vi.mock("./plugin-prewarm-policy-controls", () => ({ PluginPrewarmPolicyControls: () => { mounted.push("prewarm"); return <p>prewarm-probe</p>; } }));
 vi.mock("./plugin-update-controls", () => ({ PluginUpdateControls: () => { mounted.push("recovery"); return <p>recovery-probe</p>; } }));
-vi.mock("./plugin-request-recovery-controls", () => ({ PluginRequestRecoveryControls: () => null }));
 vi.mock("./plugin-uninstall-recovery-controls", () => ({ PluginUninstallRecoveryControls: () => null }));
 
 // plugin is a content-only package, so it owns no Lua runtime capacity.

@@ -61,17 +61,7 @@ fn user_plugin_environment_rejects_post_authorization_mutation() {
     manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load initial plugin catalog");
-    manager
-        .install_local_user_plugin(
-            &source_package,
-            &manager
-                .inspect_local_user_plugin(&source_package)
-                .expect("inspect local user plugin")
-                .content_fingerprint,
-            Vec::new(),
-            false,
-        )
-        .expect("install local user plugin");
+    crate::install_user_package_for_test(manager.user_plugin_root(), &source_package);
     // disabled keeps the installed package valid without starting its runtime.
     // disabled 让已安装包保持有效，同时不启动其运行时。
     let disabled = BTreeSet::from([String::from("local-plugin")]);
@@ -85,7 +75,9 @@ fn user_plugin_environment_rejects_post_authorization_mutation() {
         .clone();
     // installedBundle is deliberately changed after the catalog captured its SHA-256 identity.
     // installedBundle 在目录捕获 SHA-256 身份后被刻意修改。
-    let installed_bundle = runtime_root.join("user_plugins/local-plugin/runtime/plugin.bundle.lua");
+    let installed_bundle = manager.snapshot().plugins["local-plugin"]
+        .package_root
+        .join("runtime/plugin.bundle.lua");
     fs::write(&installed_bundle, "return { mutated = true }\n")
         .expect("mutate installed plugin bundle");
 
@@ -131,19 +123,7 @@ fn user_plugin_environment_requires_explicit_preparation() {
     manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load initial catalog");
-    // preview binds installation to the package content fingerprint.
-    // preview 将安装绑定到插件包内容指纹。
-    let preview = manager
-        .inspect_local_user_plugin(&source_package)
-        .expect("inspect package");
-    manager
-        .install_local_user_plugin(
-            &source_package,
-            &preview.content_fingerprint,
-            Vec::new(),
-            false,
-        )
-        .expect("install package without enabling");
+    crate::install_user_package_for_test(manager.user_plugin_root(), &source_package);
     // disabled is the persisted policy projected into the test catalog.
     // disabled 是投影到测试目录的持久化策略。
     let disabled = BTreeSet::from([String::from("local-plugin")]);
@@ -199,19 +179,7 @@ fn user_plugin_environment_preparation_requires_declared_mcp_bin() {
     manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load initial catalog");
-    // preview provides the complete declared permission set for explicit installation.
-    // preview 提供显式安装所需的完整声明权限集合。
-    let preview = manager
-        .inspect_local_user_plugin(&source_package)
-        .expect("inspect missing-bin package");
-    manager
-        .install_local_user_plugin(
-            &source_package,
-            &preview.content_fingerprint,
-            preview.permissions,
-            true,
-        )
-        .expect("install disabled missing-bin package");
+    crate::install_user_package_for_test(manager.user_plugin_root(), &source_package);
     // disabled projects the installed package without starting its MCP process.
     // disabled 投影已安装插件包，但不启动其 MCP 进程。
     let disabled = BTreeSet::from([String::from("local-plugin")]);

@@ -34,7 +34,6 @@ mod formal;
 mod installation;
 mod lease;
 mod legacy_lifecycle;
-pub use legacy_lifecycle::VulcanPluginLegacyLifecycleEvent;
 mod lifecycle;
 mod local_files;
 mod persistent;
@@ -85,8 +84,6 @@ pub use formal::{
 };
 pub use installation::{
     VulcanPluginDeactivationStateObservation, VulcanPluginDeactivationStateReservation,
-    VulcanPluginInstallationResult, VulcanPluginInstallationTransaction,
-    VulcanPluginLegacyUninstallationObservation, VulcanPluginLegacyUninstallationReservation,
 };
 pub use lifecycle::{
     VulcanPluginActivationPredecessorPublication, VulcanPluginActivationTargetPublication,

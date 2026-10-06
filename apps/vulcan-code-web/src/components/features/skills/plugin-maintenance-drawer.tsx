@@ -96,7 +96,7 @@ function MaintenanceScope(props: PluginMaintenanceContext & { scope: string; vie
   }
   const plugin = shared.plugins.find((candidate) => candidate.id === scope);
   return <div className="plugin-maintenance-scope" ref={container}>
-    <RecoveryMaintenanceSection {...shared} compact kinds={["update", "credential", "uninstall"]} onLocate={locate} scopePluginId={scope}
+    <RecoveryMaintenanceSection {...shared} compact kinds={["update", "uninstall"]} onLocate={locate} scopePluginId={scope}
       uninstallUncertainty={shared.uninstallUncertainty?.pluginId === scope ? shared.uninstallUncertainty : null} />
     <UsageMaintenanceSection compact conversations={shared.conversations} onSelect={(selection) => drawer.update(scope, { selection })}
       onSelectPluginResourceOwner={shared.onSelectPluginResourceOwner} pluginName={shared.pluginName}

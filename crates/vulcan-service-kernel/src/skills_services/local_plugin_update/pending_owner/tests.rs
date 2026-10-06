@@ -25,8 +25,8 @@ pub(super) struct Harness {
 impl Harness {
     /// Install an unrelated declared-config peer and persist its original value before any route reservation.
     /// 在任何路由预约之前安装无关且声明配置的同级插件，并持久化其原值。
-    /// Uses this harness's isolated source and manager; returns unit after the actual legacy writer succeeds.
-    /// 使用此夹具的隔离来源及管理器；实际旧格式写入器成功后返回空值。
+    /// Uses this harness's isolated source and manager; returns unit after the actual configuration writer succeeds.
+    /// 使用此夹具的隔离来源及管理器；实际配置写入器成功后返回空值。
     fn install_configuration_peer(&self) {
         // The exact directory identity is owned by this temporary source, never a host-wide catalog.
         // 精确目录身份由此临时来源拥有，绝不使用宿主全局目录。
@@ -48,22 +48,12 @@ impl Harness {
         ).expect("peer schema");
         std::fs::write(package.join("defaults.json"), r#"{"mode":"default"}"#)
             .expect("peer defaults");
-        // Preview and installation use the genuine complete approval path before the original A request exists.
-        // 预览及安装在原 A 请求存在之前，使用真实完整批准路径。
-        let preview = self
-            .fixture
-            .runtime
-            .inspect_local_user_plugin(&package)
-            .expect("peer approval preview");
-        self.fixture
-            .runtime
-            .install_local_user_plugin(
-                &package,
-                &preview.content_fingerprint,
-                preview.permissions,
-                false,
-            )
-            .expect("actual peer installation");
+        // The peer is selected with its complete approval before the original A request exists.
+        // 在原 A 请求存在之前，以完整批准选定该其他插件。
+        vulcan_plugin_runtime::install_user_package_for_test(
+            self.fixture.runtime.user_plugin_root(),
+            &package,
+        );
         self.fixture
             .runtime
             .refresh_catalog(

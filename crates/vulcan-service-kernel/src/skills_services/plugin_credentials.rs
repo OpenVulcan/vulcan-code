@@ -6,8 +6,8 @@ use super::*;
 use crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
 use vulcan_agent_runtime::mcp::LegacyPluginMcpReplacement;
 use vulcan_plugin_runtime::{
-    VulcanPluginCredentialBinding, VulcanPluginCredentialEdit, VulcanPluginCredentialKey,
-    VulcanPluginCredentialValues, VulcanPluginRuntimeManager,
+    VulcanPluginCredentialEdit, VulcanPluginCredentialKey, VulcanPluginCredentialValues,
+    VulcanPluginRuntimeManager,
 };
 use vulcan_service_api::VulcanPluginCredentialChange;
 
@@ -31,22 +31,6 @@ pub(crate) async fn service_set_vulcan_plugin_credentials(
         set_plugin_credentials_owned(&app, &state, &plugin_id, &values).await
     })
     .await
-}
-
-/// Report whether `plugin_id` reads its secrets through a credential revision rather than the legacy namespace.
-/// 报告 `plugin_id` 是否经凭据修订而非旧命名空间读取其秘密。
-pub(super) fn uses_credential_revisions(
-    state: &SharedServiceBridgeState,
-    plugin_id: &str,
-) -> Result<bool, String> {
-    let runtime = service_vulcan_plugin_runtime(state)?;
-    let snapshot = runtime.snapshot();
-    Ok(snapshot.plugins.get(plugin_id).is_some_and(|plugin| {
-        plugin
-            .mcp_servers
-            .iter()
-            .any(|server| server.credential_binding != VulcanPluginCredentialBinding::Legacy)
-    }))
 }
 
 /// Convert wire changes into slot values; each slot may be named once.
