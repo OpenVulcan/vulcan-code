@@ -88,14 +88,14 @@ pub fn context_part_label(part: ContextPart) -> String {
     }
 }
 
-pub fn goal_status_label(status: GoalStatus) -> String {
+pub fn goal_status_label(status: SessionGoalStatus) -> String {
     match status {
-        GoalStatus::Active => tr!("composer.goal.status.active"),
-        GoalStatus::Paused => tr!("composer.goal.status.paused"),
-        GoalStatus::Blocked => tr!("composer.goal.status.blocked"),
-        GoalStatus::UsageLimited => tr!("composer.goal.status.usageLimited"),
-        GoalStatus::BudgetLimited => tr!("composer.goal.status.budgetLimited"),
-        GoalStatus::Completed => tr!("composer.goal.status.completed"),
+        SessionGoalStatus::Active => tr!("composer.goal.status.active"),
+        SessionGoalStatus::Paused => tr!("composer.goal.status.paused"),
+        SessionGoalStatus::Blocked => tr!("composer.goal.status.blocked"),
+        SessionGoalStatus::UsageLimited => tr!("composer.goal.status.usageLimited"),
+        SessionGoalStatus::BudgetLimited => tr!("composer.goal.status.budgetLimited"),
+        SessionGoalStatus::Complete => tr!("composer.goal.status.completed"),
     }
 }
 
@@ -114,7 +114,7 @@ pub fn ttl_label(item: &InjectedMemory) -> String {
 pub fn goal_actions(conversation_id: &str, goal: &Goal) -> Vec<(String, bool, UiAction)> {
     let mut actions = Vec::new();
     if let Some(command) = toggle_goal(conversation_id, goal) {
-        let label = if goal.status == GoalStatus::Active {
+        let label = if goal.status == SessionGoalStatus::Active {
             tr!("composer.goal.action.pause")
         } else {
             tr!("composer.goal.action.resume")
@@ -143,13 +143,13 @@ pub fn goal_actions(conversation_id: &str, goal: &Goal) -> Vec<(String, bool, Ui
 pub fn toggle_goal(conversation_id: &str, goal: &Goal) -> Option<Command> {
     let conversation_id = conversation_id.to_string();
     match goal.status {
-        GoalStatus::Active => Some(Command::UpdateSessionGoalStatus {
+        SessionGoalStatus::Active => Some(Command::UpdateSessionGoalStatus {
             conversation_id,
-            status: GoalStatus::Paused,
+            status: SessionGoalStatus::Paused,
         }),
-        GoalStatus::Paused => Some(Command::UpdateSessionGoalStatus {
+        SessionGoalStatus::Paused => Some(Command::UpdateSessionGoalStatus {
             conversation_id,
-            status: GoalStatus::Active,
+            status: SessionGoalStatus::Active,
         }),
         status if status.resumable() => Some(Command::ResumeSessionGoal {
             conversation_id,

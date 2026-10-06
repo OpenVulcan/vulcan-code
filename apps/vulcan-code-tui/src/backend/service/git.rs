@@ -108,13 +108,13 @@ impl Worker {
         let Some(project) = self.selected_project() else {
             return;
         };
-        // Workspace.
-        // 所选 Git 工作区。
-        let workspace = str_at(&project, "path");
+        // Workspace; Project id.
+        // 所选 Git 工作区；准确宿主项目身份。
+        let (workspace, project_id) = (project.path.clone(), project.id.clone());
         if self.git.workspace.as_deref() != Some(workspace.as_str()) {
             self.git = GitState {
                 workspace: Some(workspace),
-                project_id: opt_str(&project, "id"),
+                project_id: Some(project_id),
                 ..GitState::default()
             };
         }
@@ -169,7 +169,6 @@ impl Worker {
         // 未推送提交数量。
         let ahead = u64_at(&unstaged, "currentBranchUnpushedCommits") as usize;
         self.emit(BackendEvent::Git(GitSnapshot {
-            repository: str_at(&unstaged, "repositoryRoot"),
             branch: str_at(&unstaged, "currentBranch"),
             upstream: opt_str(&unstaged, "defaultBranch"),
             ahead: ahead as u32,

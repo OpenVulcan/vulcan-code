@@ -400,6 +400,7 @@
   "tui.notice.settingsSaved": "Settings saved",
   "tui.notice.submitted": "Job submitted.",
   "tui.notice.testPassed": "Connection test passed.",
+  "tui.notice.unreadable": "Cannot read service data from {source}: {detail}",
   "tui.notice.waitForOperation": "Wait for the current operation and refresh to finish.",
   "tui.page.loading": "Loading…",
   "tui.page.notSet": "Not set",

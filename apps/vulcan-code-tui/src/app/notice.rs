@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use super::App;
 use super::pages::Tone;
-use crate::model::{RunPhase, Severity};
+use crate::model::{NoticeSeverity, RunPhase};
 use crate::tr;
 
 /// How long a pushed notice stays when it names no duration.
@@ -129,12 +129,12 @@ fn default_tone() -> Tone {
 impl NoticeSpec {
     /// The toast for a severity: info, warning or error.
     /// 某严重度的提示：信息、警告或错误。
-    pub fn toast(severity: Severity, message: impl Into<String>) -> NoticeSpec {
+    pub fn toast(severity: NoticeSeverity, message: impl Into<String>) -> NoticeSpec {
         preset(
             match severity {
-                Severity::Info => "toast_info",
-                Severity::Warning => "toast_warning",
-                Severity::Error => "toast_error",
+                NoticeSeverity::Info => "toast_info",
+                NoticeSeverity::Warning => "toast_warning",
+                NoticeSeverity::Error => "toast_error",
             },
             message,
         )
@@ -200,7 +200,7 @@ pub struct Notice {
 impl App {
     /// Shows one localized toast for a severity.
     /// 显示某严重度的一条本地化提示。
-    pub fn toast(&mut self, severity: Severity, message: impl Into<String>) {
+    pub fn toast(&mut self, severity: NoticeSeverity, message: impl Into<String>) {
         self.notify(NoticeSpec::toast(severity, message));
     }
 
@@ -297,6 +297,9 @@ mod tests {
                 "notice preset `{name}` is used in code but missing from notice-presets.json"
             );
         }
-        assert_eq!(NoticeSpec::toast(Severity::Error, "x").tone, Tone::Bad);
+        assert_eq!(
+            NoticeSpec::toast(NoticeSeverity::Error, "x").tone,
+            Tone::Bad
+        );
     }
 }

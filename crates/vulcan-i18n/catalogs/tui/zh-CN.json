@@ -400,6 +400,7 @@
   "tui.notice.settingsSaved": "设置已保存",
   "tui.notice.submitted": "任务已提交。",
   "tui.notice.testPassed": "连接测试通过。",
+  "tui.notice.unreadable": "无法读取来自 {source} 的服务数据：{detail}",
   "tui.notice.waitForOperation": "请等待当前操作与刷新结束。",
   "tui.page.loading": "加载中…",
   "tui.page.notSet": "未设置",

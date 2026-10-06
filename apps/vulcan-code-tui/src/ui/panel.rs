@@ -1225,12 +1225,12 @@ fn stats(app: &App, width: usize) -> Vec<Row> {
         }
         Some(goal) => {
             let color = match goal.status {
-                GoalStatus::Active => theme.primary,
-                GoalStatus::Completed => theme.success,
-                GoalStatus::Paused => theme.muted_fg,
+                SessionGoalStatus::Active => theme.primary,
+                SessionGoalStatus::Complete => theme.success,
+                SessionGoalStatus::Paused => theme.muted_fg,
                 _ => theme.warning,
             };
-            let icon = if goal.status == GoalStatus::Active {
+            let icon = if goal.status == SessionGoalStatus::Active {
                 spinner(app.phase())
             } else {
                 "◎"

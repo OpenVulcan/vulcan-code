@@ -89,7 +89,6 @@ pub fn git_snapshot() -> GitSnapshot {
         deletions,
     };
     GitSnapshot {
-        repository: "vulcan-code-tui".into(),
         branch: "feat/tui-shell".into(),
         upstream: Some("origin/feat/tui-shell".into()),
         ahead: 2,

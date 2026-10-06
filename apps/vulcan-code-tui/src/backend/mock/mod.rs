@@ -181,7 +181,7 @@ impl World {
         self.start_turn(
             "c-tui",
             "幫我建立 TUI 的顯示框架，先用 mock 資料模擬思考、輸出與工具呼叫",
-            InputSource::Root,
+            UserInputSource::Root,
             ExecutionMode::Build,
             true,
         );
@@ -229,7 +229,7 @@ impl World {
         &mut self,
         conversation_id: &str,
         prompt: &str,
-        source: InputSource,
+        source: UserInputSource,
         mode: ExecutionMode,
         instant: bool,
     ) {
@@ -240,7 +240,7 @@ impl World {
         &mut self,
         conversation_id: &str,
         prompt: &str,
-        source: InputSource,
+        source: UserInputSource,
         mode: ExecutionMode,
         instant: bool,
         attachments: &[String],
@@ -350,7 +350,6 @@ impl World {
             None => {
                 let event = ConversationEvent {
                     seq,
-                    turn_id: None,
                     created_at_ms: now,
                     updated_at_ms: now,
                     body,
@@ -407,7 +406,7 @@ impl World {
                     match &mut body {
                         EventBody::AssistantReasoning { status, text, .. }
                         | EventBody::AssistantText { status, text, .. } => {
-                            *status = StreamStatus::Completed;
+                            *status = AssistantSemanticStatus::Completed;
                             output = Some(text.len() as u64 / 3);
                         }
                         _ => {}
@@ -446,7 +445,7 @@ impl World {
             Action::AwaitAnswer { tool_seq, question } => {
                 if let Some(mut body) = self.body_of(conversation_id, tool_seq) {
                     if let EventBody::ToolCall { status, .. } = &mut body {
-                        *status = ToolStatus::WaitingUser;
+                        *status = ToolCallStatus::WaitingUser;
                     }
                     self.upsert(conversation_id, tool_seq, body);
                 }
@@ -677,7 +676,7 @@ impl World {
             self.start_turn(
                 conversation_id,
                 &prompt.preview,
-                InputSource::QueuedScheduled,
+                UserInputSource::QueuedScheduled,
                 mode,
                 false,
             );
@@ -914,16 +913,13 @@ impl World {
                 }
                 if self.runs.contains_key(&conversation_id) {
                     let log = self.logs.entry(conversation_id.clone()).or_default();
-                    log.pending_prompts.push(PendingPrompt {
-                        id: format!("pp-{}", log.pending_prompts.len() + log.events.len()),
-                        preview: prompt,
-                    });
+                    log.pending_prompts.push(PendingPrompt { preview: prompt });
                     self.emit_prompts(&conversation_id);
                 } else {
                     self.start_turn_with(
                         &conversation_id,
                         &prompt,
-                        InputSource::Root,
+                        UserInputSource::Root,
                         mode,
                         false,
                         &attachments,
@@ -1179,7 +1175,7 @@ impl World {
                     });
                 }
                 self.emit(BackendEvent::Toast {
-                    severity: Severity::Error,
+                    severity: NoticeSeverity::Error,
                     message,
                 });
                 if operation {
@@ -1302,7 +1298,7 @@ impl World {
     fn add_project(&mut self, path: String) {
         if !files::is_dir(&path) {
             self.emit(BackendEvent::Toast {
-                severity: Severity::Error,
+                severity: NoticeSeverity::Error,
                 message: format!("Directory not found: {path}"),
             });
             return;
@@ -1401,7 +1397,7 @@ impl World {
                     &conversation_id,
                     Action::ToolDone {
                         seq: tool_seq,
-                        status: ToolStatus::Completed,
+                        status: ToolCallStatus::Completed,
                         output,
                         changeset: Vec::new(),
                     },
@@ -1436,17 +1432,17 @@ impl World {
                         let changed = match &mut body {
                             EventBody::AssistantReasoning { status, .. }
                             | EventBody::AssistantText { status, .. }
-                                if *status == StreamStatus::Streaming =>
+                                if *status == AssistantSemanticStatus::Streaming =>
                             {
-                                *status = StreamStatus::Interrupted;
+                                *status = AssistantSemanticStatus::Interrupted;
                                 true
                             }
                             EventBody::ToolCall { status, output, .. } if status.is_open() => {
                                 if Some(e.seq) == rejected_tool {
-                                    *status = ToolStatus::Failed;
+                                    *status = ToolCallStatus::Failed;
                                     *output = Some("The user rejected the question.".into());
                                 } else {
-                                    *status = ToolStatus::Stopped;
+                                    *status = ToolCallStatus::Stopped;
                                 }
                                 true
                             }

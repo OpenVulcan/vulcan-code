@@ -1,11 +1,11 @@
-// Tolerant readers over `serde_json::Value`.
-// 基于 `serde_json::Value` 的宽容读取器。
+// Field readers over `serde_json::Value` for the workspace Git payloads.
+// 面向工作区 Git 载荷的 `serde_json::Value` 字段读取器。
 //
-// The TUI does not link the service crates, so wire DTOs are read field by field. A missing or
-// mistyped field reads as empty instead of failing the whole payload, which keeps older and newer
-// services usable; the fields that identify an entity are still checked by the mappers.
-// TUI 不链接服务端 crate，因此按字段读取传输 DTO。缺失或类型不符的字段读为空值而不是让整个载荷
-// 失败，使新旧服务都可用；标识实体的字段仍由映射函数检查。
+// Everything else is read through the shared `vulcan-service-api` types. The Git DTOs live in the
+// service kernel and are not shared, so these payloads are read field by field; a missing field
+// reads as empty.
+// 其余数据都通过共享的 `vulcan-service-api` 类型读取。Git DTO 位于服务内核且未共享，因此这些载荷
+// 按字段读取；缺失字段读为空值。
 
 use serde_json::Value;
 
@@ -98,37 +98,6 @@ pub fn num(value: &Value) -> u64 {
             .unwrap_or(0),
         Value::String(s) => s.trim().parse().unwrap_or(0),
         _ => 0,
-    }
-}
-
-/// Reads an optional numeric field, distinguishing absence from zero.
-/// 读取可选数值字段，区分缺失与零。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// `path` is the exact requested path.
-/// `path` 为准确请求路径。
-/// Returns `Option<u64>`.
-/// 返回 `Option<u64>`。
-pub fn opt_u64(value: &Value, path: &str) -> Option<u64> {
-    // Protocol field value.
-    // 当前协议字段值。
-    let v = at(value, path);
-    (!v.is_null()).then(|| num(v))
-}
-
-/// Reads the declared fractional value at the exact dotted path.
-/// 在准确点分路径读取已声明的小数值。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// `path` is the exact requested path.
-/// `path` 为准确请求路径。
-/// Returns `f32`.
-/// 返回 `f32`。
-pub fn f32_at(value: &Value, path: &str) -> f32 {
-    match at(value, path) {
-        Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
-        Value::String(s) => s.trim().parse().unwrap_or(0.0),
-        _ => 0.0,
     }
 }
 

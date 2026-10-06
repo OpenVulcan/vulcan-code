@@ -389,7 +389,7 @@ pub fn perform(app: &mut App, action: UiAction) {
                 && !matches!(call.kind, crate::service_api::CallKind::Load(_))
             {
                 if app.call_pending {
-                    app.toast(Severity::Info, tr!("tui.notice.waitForOperation"));
+                    app.toast(NoticeSeverity::Info, tr!("tui.notice.waitForOperation"));
                     return;
                 }
                 app.call_pending = true;
@@ -758,7 +758,7 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
     match edit {
         Edit::Call(setter) => match setter.apply(&value) {
             Some(call) => perform(app, UiAction::Send(Command::Call(call))),
-            None => app.toast(Severity::Error, tr!("tui.form.invalid")),
+            None => app.toast(NoticeSeverity::Error, tr!("tui.form.invalid")),
         },
         Edit::Local(setting) => {
             match setting {
@@ -793,7 +793,7 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     // JSON option values distinguish all folders (null) from the root folder (empty string).
                     // JSON 选项值区分全部目录（null）与根目录（空字符串）。
                     let Ok(folder) = serde_json::from_str::<Option<String>>(value.as_str()) else {
-                        app.toast(Severity::Error, tr!("tui.form.invalid"));
+                        app.toast(NoticeSeverity::Error, tr!("tui.form.invalid"));
                         return;
                     };
                     app.knowledge_folder = folder;
@@ -903,7 +903,7 @@ pub fn open_area_picker(app: &mut App) {
 
 pub fn open_history(app: &mut App) {
     if app.session().is_none() {
-        app.toast(Severity::Info, tr!("sidebar.waitingWorkspace"));
+        app.toast(NoticeSeverity::Info, tr!("sidebar.waitingWorkspace"));
         return;
     }
     app.overlay = Some(Overlay::History(History::default()));
@@ -1138,7 +1138,7 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
             if let Some(model) = app.model() {
                 let label = model.label.clone();
                 app.toast(
-                    Severity::Info,
+                    NoticeSeverity::Info,
                     tr!("composer.modelPicker.currentModel", model = label),
                 );
             }
@@ -1154,7 +1154,7 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
         PickerAction::CreateBranch => {
             debug_assert_eq!(kind, PickerKind::Branch);
             if filter.is_empty() || filter.contains(char::is_whitespace) {
-                app.toast(Severity::Warning, tr!("tui.commit.branchRequired"));
+                app.toast(NoticeSeverity::Warning, tr!("tui.commit.branchRequired"));
             } else {
                 app.backend.send(Command::SwitchWorkspaceGitBranch {
                     name: filter,

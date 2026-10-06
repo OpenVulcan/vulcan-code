@@ -1,53 +1,45 @@
-// Wire DTO → client model mapping for the conversation surface.
-// 会话界面的传输 DTO → 客户端模型映射。
+// Service DTO → client model projection for the conversation surface.
+// 会话界面的服务 DTO → 客户端模型投影。
 //
-// Sources: `vulcan-service-api` (workbench, conversation, planning, git DTOs, camelCase) and
-// `vulcan-session-core` v1 conversation events (snake_case). Only what the TUI renders is read.
-// 来源：`vulcan-service-api`（工作台、会话、规划、Git DTO，camelCase）与 `vulcan-session-core` v1
-// 会话事件（snake_case）。只读取 TUI 渲染所需的字段。
+// Inputs are the shared `vulcan-service-api` DTOs and `vulcan-session-core` v1 conversation
+// events, already parsed strictly at the transport boundary; only Git snapshots, whose DTO lives
+// in the service kernel, are still read from JSON. Only what the TUI renders is projected.
+// 输入是已在传输边界严格解析的共享 `vulcan-service-api` DTO 与 `vulcan-session-core` v1 会话事件；
+// 只有 DTO 位于服务内核的 Git 快照仍从 JSON 读取。只投影 TUI 渲染所需的内容。
 
 use serde_json::{Value, json};
+use vulcan_service_api as api;
+use vulcan_session_core::v1::lifetime_usage::SessionUsageBucket;
+use vulcan_session_core::v1::service_dto::ConversationEventSummary;
+use vulcan_session_core::v1::{self as core, EventBody as CoreEvent};
 
 use super::wire::*;
 use crate::model::*;
 
 // ---- Workbench ----
 
-/// Projects one service project into the sidebar model using its exact identity.
-/// 使用准确身份将一个服务项目投影为侧栏模型。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Option<Project>`.
-/// 返回 `Option<Project>`。
-pub fn project(value: &Value) -> Option<Project> {
-    // Exact entity identity.
-    // 准确实体身份。
-    let id = opt_str(value, "id")?;
-    Some(Project {
-        name: opt_str(value, "name").unwrap_or_else(|| id.clone()),
-        path: str_at(value, "path"),
-        pinned: bool_at(value, "pinned"),
-        id,
-    })
+/// Projects one service project into the sidebar model.
+/// 将一个服务项目投影为侧栏模型。
+pub fn project(project: &api::ProjectSummary) -> Project {
+    Project {
+        id: project.id.clone(),
+        name: project.name.clone(),
+        path: project.path.clone(),
+        pinned: project.pinned,
+    }
 }
 
-/// Maps service project rows and rejects rows lacking required identities.
-/// 映射服务项目行，并拒绝缺少必需身份的行。
-/// `list` is the protocol row collection.
-/// `list` 为协议行集合。
-/// Returns `Vec<Project>`.
-/// 返回 `Vec<Project>`。
-pub fn projects(list: &[Value]) -> Vec<Project> {
-    list.iter().filter_map(project).collect()
+/// Projects service project rows.
+/// 投影服务项目行。
+pub fn projects(list: &[api::ProjectSummary]) -> Vec<Project> {
+    list.iter().map(project).collect()
 }
 
 /// Run phase from `runPhase`, falling back to `status` (`conversationIsRunning` in the WebUI).
 /// 由 `runPhase` 推导运行阶段，缺省时回退到 `status`（对应 WebUI 的 `conversationIsRunning`）。
-/// Returns `RunPhase`.
-/// 返回 `RunPhase`。
 pub fn run_phase(phase: &str, status: &str) -> RunPhase {
-    // Status.
-    // 已声明生命周期状态。
+    // Lifecycle status, normalized like the WebUI.
+    // 按 WebUI 方式规范化的生命周期状态。
     let status = normalized(status);
     match normalized(phase).as_str() {
         "" => match status.as_str() {
@@ -76,33 +68,16 @@ pub fn run_phase(phase: &str, status: &str) -> RunPhase {
 
 /// Projects one service conversation into the sidebar summary.
 /// 将一个服务会话投影为侧栏摘要。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Option<ConversationSummary>`.
-/// 返回 `Option<ConversationSummary>`。
-pub fn conversation(value: &Value) -> Option<ConversationSummary> {
-    // Exact entity identity.
-    // 准确实体身份。
-    let id = opt_str(value, "id")?;
-    Some(ConversationSummary {
-        title: str_at(value, "title"),
-        project_id: opt_str(value, "projectId"),
-        run_phase: run_phase(&str_at(value, "runPhase"), &str_at(value, "status")),
-        last_updated_label: str_at(value, "lastUpdatedLabel"),
-        unread: bool_at(value, "unread"),
-        attention: !at(value, "attention").is_null(),
-        id,
-    })
-}
-
-/// Maps conversation rows into the displayed sidebar catalog.
-/// 将会话行映射为显示的侧栏目录。
-/// `list` is the protocol row collection.
-/// `list` 为协议行集合。
-/// Returns `Vec<ConversationSummary>`.
-/// 返回 `Vec<ConversationSummary>`。
-pub fn conversations(list: &[Value]) -> Vec<ConversationSummary> {
-    list.iter().filter_map(conversation).collect()
+pub fn conversation(conversation: &api::ConversationSummary) -> ConversationSummary {
+    ConversationSummary {
+        id: conversation.id.clone(),
+        title: conversation.title.clone(),
+        project_id: conversation.project_id.clone(),
+        run_phase: run_phase(&conversation.run_phase, &conversation.status),
+        last_updated_label: conversation.last_updated_label.clone(),
+        unread: conversation.unread,
+        attention: conversation.attention.is_some(),
+    }
 }
 
 /// One selectable model route: the provider, the model and the credential connection.
@@ -123,22 +98,14 @@ pub struct ModelRoute {
 impl ModelRoute {
     /// Stable key, the same tuple the WebUI model picker serializes.
     /// 稳定键，与 WebUI 模型选择器序列化的元组相同。
-    /// Returns `String`.
-    /// 返回 `String`。
     pub fn key(&self) -> String {
         json!([self.provider_id, self.model_id, self.connection_id]).to_string()
     }
 
     /// Parses the exact provider/model/connection tuple serialized by the model picker.
     /// 解析模型选择器序列化的准确提供方、模型及连接元组。
-    /// Returns `Option<ModelRoute>`.
-    /// 返回 `Option<ModelRoute>`。
     pub fn from_key(key: &str) -> Option<ModelRoute> {
-        // Parts.
-        // 通过解析的路线元组。
         let parts: Vec<String> = serde_json::from_str(key).ok()?;
-        // Provider id; Model id; Connection id.
-        // 准确提供方身份；准确模型身份；准确连接身份。
         let [provider_id, model_id, connection_id] = <[String; 3]>::try_from(parts).ok()?;
         Some(ModelRoute {
             provider_id,
@@ -150,56 +117,43 @@ impl ModelRoute {
 
 /// Picker rows from `providers` (`modelPickerChoicesFromProviders`), plus the active route.
 /// 由 `providers` 得到的选择器行（对应 `modelPickerChoicesFromProviders`），以及当前激活路线。
-/// Returns `(Vec<ModelInfo>, Option<String>)`.
-/// 返回 `(Vec<ModelInfo>, Option<String>)`。
-pub fn models(providers: &[Value]) -> (Vec<ModelInfo>, Option<String>) {
-    // Current operation rows.
-    // 当前操作的行集合。
+pub fn models(providers: &[api::ProviderSummary]) -> (Vec<ModelInfo>, Option<String>) {
     let mut rows = Vec::new();
-    // Active.
-    // 是否处于活动状态。
+    // Route key of the active model; a preferred connection wins over the first active one.
+    // 激活模型的路线键；首选连接优先于第一个激活项。
     let mut active = None;
     for provider in providers {
-        // Provider id.
-        // 准确提供方身份。
-        let provider_id =
-            opt_str(provider, "sourceProviderId").unwrap_or_else(|| str_at(provider, "id"));
-        // Connection id.
-        // 准确连接身份。
-        let connection_id = str_at(provider, "connectionId");
-        // Provider name.
-        // 提供方显示名称。
-        let provider_name =
-            opt_str(provider, "providerDisplayName").unwrap_or_else(|| str_at(provider, "name"));
-        // Account.
-        // 公开账号显示信息。
-        let account = opt_str(provider, "accountName");
-        for model in arr(provider, "models") {
-            if at(model, "enabled").as_bool() == Some(false) {
-                continue;
-            }
-            // Route.
-            // 目录中的推理路由。
+        let provider_id = provider
+            .source_provider_id
+            .clone()
+            .unwrap_or_else(|| provider.id.clone());
+        let connection_id = provider.connection_id.clone().unwrap_or_default();
+        let provider_name = provider
+            .provider_display_name
+            .clone()
+            .unwrap_or_else(|| provider.name.clone());
+        let label = match &provider.account_name {
+            Some(account) => format!("{provider_name} · {account}"),
+            None => provider_name,
+        };
+        for model in provider.models.iter().filter(|model| model.enabled) {
             let route = ModelRoute {
                 provider_id: provider_id.clone(),
-                model_id: str_at(model, "id"),
+                model_id: model.id.clone(),
                 connection_id: connection_id.clone(),
             };
-            // Key.
-            // 当前结构持有的键。
             let key = route.key();
-            if bool_at(model, "active")
-                && (active.is_none() || bool_at(model, "preferredConnection"))
-            {
+            if model.active && (active.is_none() || model.preferred_connection) {
                 active = Some(key.clone());
             }
             rows.push(ModelInfo {
-                label: opt_str(model, "name").unwrap_or_else(|| route.model_id.clone()),
-                provider: match &account {
-                    Some(account) => format!("{provider_name} · {account}"),
-                    None => provider_name.clone(),
+                label: if model.name.is_empty() {
+                    model.id.clone()
+                } else {
+                    model.name.clone()
                 },
-                context_window: u64_at(model, "contextLimit"),
+                provider: label.clone(),
+                context_window: model.context_limit.unwrap_or(0) as u64,
                 id: key,
             });
         }
@@ -208,19 +162,14 @@ pub fn models(providers: &[Value]) -> (Vec<ModelInfo>, Option<String>) {
     (rows, active)
 }
 
-/// Route key of a session's current request (`session_config.current_request`).
-/// 会话当前请求（`session_config.current_request`）的路线键。
-/// Returns `Option<String>`.
-/// 返回 `Option<String>`。
-pub fn session_route(config: &Value) -> Option<String> {
-    // Exact protocol request.
-    // 协议请求文档。
-    let request = at(config, "current_request");
+/// Route key of one session request configuration.
+/// 一份会话请求配置的路线键。
+pub fn session_route(request: &api::ConversationRequestConfigV1) -> Option<String> {
     Some(
         ModelRoute {
-            provider_id: opt_str(request, "provider")?,
-            model_id: opt_str(request, "model")?,
-            connection_id: str_at(request, "connection_id"),
+            provider_id: request.provider.clone()?,
+            model_id: request.model.clone()?,
+            connection_id: request.connection_id.clone().unwrap_or_default(),
         }
         .key(),
     )
@@ -228,10 +177,6 @@ pub fn session_route(config: &Value) -> Option<String> {
 
 /// Maps a declared service reasoning-effort value to the local selector enum.
 /// 将声明的服务推理强度值映射为本地选择器枚举。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Option<ReasoningEffort>`.
-/// 返回 `Option<ReasoningEffort>`。
 pub fn effort(value: &str) -> Option<ReasoningEffort> {
     Some(match normalized(value).as_str() {
         "off" | "none" => ReasoningEffort::Off,
@@ -245,62 +190,53 @@ pub fn effort(value: &str) -> Option<ReasoningEffort> {
 
 // ---- Planning state ----
 
-/// Maps the pending-question fields and their exact request identity.
-/// 映射待回复提问字段及其准确请求身份。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Option<PendingQuestion>`.
-/// 返回 `Option<PendingQuestion>`。
-pub fn pending_question(value: &Value) -> Option<PendingQuestion> {
-    Some(PendingQuestion {
-        id: opt_str(value, "id")?,
-        questions: arr(value, "questions")
+/// Maps one pending question and its exact request identity.
+/// 映射一个待回复提问及其准确请求身份。
+pub fn pending_question(question: &api::PendingQuestionSnapshot) -> PendingQuestion {
+    PendingQuestion {
+        id: question.id.clone(),
+        questions: question
+            .questions
             .iter()
             .map(|q| Question {
-                header: str_at(q, "header"),
-                question: str_at(q, "question"),
-                options: arr(q, "options")
+                header: q.header.clone(),
+                question: q.question.clone(),
+                options: q
+                    .options
                     .iter()
                     .map(|o| QuestionOption {
-                        label: str_at(o, "label"),
-                        description: str_at(o, "description"),
+                        label: o.label.clone(),
+                        description: o.description.clone(),
                     })
                     .collect(),
-                multiple: bool_at(q, "multiple"),
+                multiple: q.multiple,
             })
             .collect(),
-    })
+    }
 }
 
-/// Maps queued service prompts for the current conversation.
-/// 映射当前会话排队中的服务提示。
-/// `list` is the protocol row collection.
-/// `list` 为协议行集合。
-/// Returns `Vec<PendingPrompt>`.
-/// 返回 `Vec<PendingPrompt>`。
-pub fn pending_prompts(list: &[Value]) -> Vec<PendingPrompt> {
+/// Maps queued service prompts; a prompt without a preview shows its text.
+/// 映射排队中的服务提示；没有预览的提示显示其正文。
+pub fn pending_prompts(list: &[api::PendingPromptSummary]) -> Vec<PendingPrompt> {
     list.iter()
-        .filter_map(|p| {
-            Some(PendingPrompt {
-                id: opt_str(p, "id")?,
-                preview: opt_str(p, "preview").unwrap_or_else(|| str_at(p, "prompt")),
-            })
+        .map(|prompt| PendingPrompt {
+            preview: if prompt.preview.is_empty() {
+                prompt.prompt.clone()
+            } else {
+                prompt.preview.clone()
+            },
         })
         .collect()
 }
 
 /// Maps published planning entries into the session progress panel.
 /// 将发布的规划条目映射到会话进度面板。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Vec<TodoItem>`.
-/// 返回 `Vec<TodoItem>`。
-pub fn todo(value: &Value) -> Vec<TodoItem> {
-    arr(value, "items")
+pub fn todo(list: &api::SessionTodolistSummary) -> Vec<TodoItem> {
+    list.items
         .iter()
         .map(|item| TodoItem {
-            content: str_at(item, "step"),
-            status: match normalized(&str_at(item, "status")).as_str() {
+            content: item.step.clone(),
+            status: match normalized(&item.status).as_str() {
                 "completed" | "done" => TodoStatus::Completed,
                 "inprogress" | "running" => TodoStatus::InProgress,
                 _ => TodoStatus::Pending,
@@ -311,12 +247,8 @@ pub fn todo(value: &Value) -> Vec<TodoItem> {
 
 /// Maps the published plan state into the local execution mode.
 /// 将发布的计划状态映射为本地执行模式。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `ExecutionMode`.
-/// 返回 `ExecutionMode`。
-pub fn plan_mode(value: &Value) -> ExecutionMode {
-    if normalized(&str_at(value, "executionMode")) == "plan" {
+pub fn plan_mode(plan: &api::SessionPlanModeSummary) -> ExecutionMode {
+    if normalized(&plan.execution_mode) == "plan" {
         ExecutionMode::Plan
     } else {
         ExecutionMode::Build
@@ -325,87 +257,69 @@ pub fn plan_mode(value: &Value) -> ExecutionMode {
 
 /// Projects service token usage and its budget into the context meter.
 /// 将服务令牌用量及预算投影为上下文计量表。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `ContextUsage`.
-/// 返回 `ContextUsage`。
-pub fn context_usage(value: &Value) -> ContextUsage {
+pub fn context_usage(usage: &api::ContextUsageSnapshot) -> ContextUsage {
     ContextUsage {
-        used_tokens: u64_at(value, "usedTokens"),
-        max_tokens: u64_at(value, "maxTokens"),
+        used_tokens: usage.used_tokens as u64,
+        max_tokens: usage.max_tokens.unwrap_or(0) as u64,
     }
 }
 
-/// Maps service command-session output into terminal panel rows.
-/// 将服务命令会话输出映射为终端面板行。
-/// `list` is the protocol row collection.
-/// `list` 为协议行集合。
-/// Returns `Vec<CommandSession>`.
-/// 返回 `Vec<CommandSession>`。
-pub fn command_sessions(list: &[Value]) -> Vec<CommandSession> {
+/// Maps service command sessions into terminal panel rows.
+/// 将服务命令会话映射为终端面板行。
+pub fn command_sessions(list: &[api::CommandSessionSummary]) -> Vec<CommandSession> {
     list.iter()
-        .filter_map(|s| {
-            // Exact entity identity.
-            // 准确实体身份。
-            let id = opt_str(s, "id")?;
-            // Status.
-            // 已声明生命周期状态。
-            let status = normalized(&str_at(s, "status"));
-            // Screen.
-            // 显示来源窗口。
-            let screen = opt_str(s, "screenText")
-                .or_else(|| opt_str(s, "preview"))
-                .unwrap_or_default();
-            Some(CommandSession {
-                title: opt_str(s, "name").unwrap_or_else(|| str_at(s, "command")),
-                command: str_at(s, "command"),
+        .map(|session| {
+            let status = normalized(&session.status);
+            let screen = session.screen_text.as_deref().unwrap_or(&session.preview);
+            CommandSession {
+                id: session.id.clone(),
+                title: session
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| session.command.clone()),
+                command: session.command.clone(),
                 running: matches!(status.as_str(), "running" | "starting"),
-                exit_code: at(s, "exitCode").as_i64().map(|c| c as i32),
+                exit_code: session.exit_code,
                 screen: screen.lines().map(str::to_string).collect(),
-                id,
-            })
+            }
         })
         .collect()
 }
 
-/// `SubagentNavigationSnapshot.tasks` → subagent rows.
-/// `SubagentNavigationSnapshot.tasks` → 子代理行。
-/// Returns `Vec<AgentInfo>`.
-/// 返回 `Vec<AgentInfo>`。
-pub fn agents(navigation: &Value) -> Vec<AgentInfo> {
-    arr(navigation, "tasks")
+/// Subagent navigation tasks → subagent rows.
+/// 子代理导航任务 → 子代理行。
+pub fn agents(navigation: &api::SubagentNavigationSnapshot) -> Vec<AgentInfo> {
+    navigation
+        .tasks
         .iter()
-        .filter_map(|task| {
-            // Exact entity identity.
-            // 准确实体身份。
-            let id = opt_str(task, "taskId")?;
-            // State.
-            // 当前生命周期状态。
-            let state = match normalized(&str_at(task, "runState")).as_str() {
+        .map(|task| AgentInfo {
+            id: task.task_id.clone(),
+            name: if task.label.is_empty() {
+                task.public_task_id.clone()
+            } else {
+                task.label.clone()
+            },
+            profile: task.agent_profile_id.clone().unwrap_or_default(),
+            task: task.description.clone().unwrap_or_default(),
+            state: match normalized(&task.run_state).as_str() {
                 "completed" => AgentState::Standby,
                 "stopped" => AgentState::Stopped,
                 "failed" => AgentState::Failed,
                 "closed" => AgentState::Closed,
                 _ => AgentState::Running,
-            };
-            Some(AgentInfo {
-                name: opt_str(task, "label").unwrap_or_else(|| str_at(task, "publicTaskId")),
-                profile: str_at(task, "agentProfileId"),
-                task: str_at(task, "description"),
-                state,
-                prompt: String::new(),
-                pending: arr(task, "pendingMessages")
-                    .iter()
-                    .map(|m| AgentMessage {
-                        steering: bool_at(m, "steering"),
-                        text: str_at(m, "message"),
-                    })
-                    .collect(),
-                activity: Vec::new(),
-                result: None,
-                usage: UsageBucket::default(),
-                id,
-            })
+            },
+            prompt: String::new(),
+            pending: task
+                .pending_messages
+                .iter()
+                .map(|message| AgentMessage {
+                    steering: message.steering,
+                    text: message.message.clone(),
+                })
+                .collect(),
+            activity: Vec::new(),
+            result: None,
+            usage: UsageBucket::default(),
         })
         .collect()
 }
@@ -414,78 +328,58 @@ pub fn agents(navigation: &Value) -> Vec<AgentInfo> {
 
 /// Maps one published usage bucket without starting any model request.
 /// 映射一份已发布用量，不发起任何模型请求。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `UsageBucket`.
-/// 返回 `UsageBucket`。
-fn usage_bucket(value: &Value) -> UsageBucket {
+fn usage_bucket(bucket: &SessionUsageBucket) -> UsageBucket {
     UsageBucket {
-        requests: u64_at(value, "requestCount"),
-        unknown_usage: u64_at(value, "unknownUsageCount"),
-        tool_calls: u64_at(value, "toolCallCount"),
-        input: u64_at(value, "inputTokens.sum"),
-        uncached_input: u64_at(value, "uncachedInputTokens.sum"),
-        cache_read: u64_at(value, "cacheReadTokens.sum"),
-        cache_write: u64_at(value, "cacheWriteTokens.sum"),
-        output: u64_at(value, "outputTokens.sum"),
-        reasoning: u64_at(value, "reasoningTokens.sum"),
-        first_token_ms: u64_at(value, "firstTokenMs.sum"),
-        first_token_samples: u64_at(value, "firstTokenMs.samples"),
-        duration_ms: u64_at(value, "requestDurationMs.sum"),
-        duration_samples: u64_at(value, "requestDurationMs.samples"),
-        measured_output: u64_at(value, "measuredOutputTokens"),
-        measured_output_ms: u64_at(value, "outputDurationMs.sum"),
+        requests: bucket.request_count,
+        unknown_usage: bucket.unknown_usage_count,
+        tool_calls: bucket.tool_call_count,
+        input: bucket.input_tokens.sum,
+        uncached_input: bucket.uncached_input_tokens.sum,
+        cache_read: bucket.cache_read_tokens.sum,
+        cache_write: bucket.cache_write_tokens.sum,
+        output: bucket.output_tokens.sum,
+        reasoning: bucket.reasoning_tokens.sum,
+        first_token_ms: bucket.first_token_ms.sum,
+        first_token_samples: bucket.first_token_ms.samples,
+        duration_ms: bucket.request_duration_ms.sum,
+        duration_samples: bucket.request_duration_ms.samples,
+        measured_output: bucket.measured_output_tokens,
+        measured_output_ms: bucket.output_duration_ms.sum,
     }
 }
 
-/// `sessionProviderUsage.lifetime` → lifetime usage; children are keyed by child session id until
-/// the worker relabels them with subagent names.
-/// `sessionProviderUsage.lifetime` → 生命周期用量；子项以子会话 ID 为键，之后由工作线程替换为子代理名。
-/// Returns `LifetimeUsage`.
-/// 返回 `LifetimeUsage`。
-pub fn lifetime(usage: &Value) -> LifetimeUsage {
-    // Lifetime.
-    // 会话累计用量。
-    let lifetime = at(usage, "lifetime");
-    // Children.
-    // 子代理条目。
-    let children = at(lifetime, "childrenBySessionId")
-        .as_object()
-        .map(|map| {
-            map.iter()
-                .map(|(id, child)| (id.clone(), usage_bucket(at(child, "usage"))))
-                .collect()
-        })
-        .unwrap_or_default();
+/// Session lifetime usage; children are keyed by child session id until the worker relabels them
+/// with subagent names.
+/// 会话生命周期用量；子项以子会话 ID 为键，之后由工作线程替换为子代理名。
+pub fn lifetime(usage: &api::SessionProviderUsageSummary) -> LifetimeUsage {
+    let Some(lifetime) = &usage.lifetime else {
+        return LifetimeUsage::default();
+    };
     LifetimeUsage {
-        main: usage_bucket(at(lifetime, "main")),
-        children,
-        history_incomplete: bool_at(lifetime, "legacyIncomplete"),
+        main: usage_bucket(&lifetime.main),
+        children: lifetime
+            .children_by_session_id
+            .iter()
+            .map(|(id, child)| (id.clone(), usage_bucket(&child.usage)))
+            .collect(),
+        history_incomplete: lifetime.legacy_incomplete,
     }
 }
 
 /// Maps context usage sections into the panel composition breakdown.
 /// 将上下文用量分区映射为面板组成明细。
-/// Returns `Vec<ContextSlice>`.
-/// 返回 `Vec<ContextSlice>`。
-pub fn breakdown(context_usage: &Value) -> Vec<ContextSlice> {
-    // Slices.
-    // 上下文组成分区。
+pub fn breakdown(usage: &api::ContextUsageSnapshot) -> Vec<ContextSlice> {
     let mut slices: Vec<ContextSlice> = Vec::new();
-    for item in arr(context_usage, "breakdown") {
-        // Part.
-        // 当前组成项。
-        let part = match normalized(&str_at(item, "kind")).as_str() {
+    for item in &usage.breakdown {
+        let part = match normalized(&item.kind).as_str() {
             "systemprompt" => ContextPart::SystemPrompt,
             "systemtools" | "mcptools" | "skills" | "tools" => ContextPart::Tools,
             "memory" | "vmm" => ContextPart::Memory,
             "attachments" | "media" => ContextPart::Attachments,
             _ => ContextPart::Conversation,
         };
-        // Tokens.
-        // 当前令牌数量。
-        let tokens = u64_at(item, "tokens");
-        match slices.iter_mut().find(|s| s.part == part) {
+        let tokens = item.tokens as u64;
+        match slices.iter_mut().find(|slice| slice.part == part) {
             Some(slice) => slice.tokens += tokens,
             None => slices.push(ContextSlice { part, tokens }),
         }
@@ -495,94 +389,88 @@ pub fn breakdown(context_usage: &Value) -> Vec<ContextSlice> {
 
 /// Projects the published goal status, budget and usage into the session panel.
 /// 将发布的目标状态、预算及用量投影为会话面板。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Option<Goal>`.
-/// 返回 `Option<Goal>`。
-pub fn goal(value: &Value) -> Option<Goal> {
-    // Objective.
-    // 目标描述。
-    let objective = opt_str(value, "objective")?;
-    Some(Goal {
-        objective,
-        status: match normalized(&str_at(value, "status")).as_str() {
-            "paused" => GoalStatus::Paused,
-            "blocked" => GoalStatus::Blocked,
-            "usagelimited" => GoalStatus::UsageLimited,
-            "budgetlimited" => GoalStatus::BudgetLimited,
-            "complete" | "completed" => GoalStatus::Completed,
-            _ => GoalStatus::Active,
-        },
-        elapsed_ms: u64_at(value, "timeUsedSeconds") * 1000,
+pub fn goal(goal: &api::SessionGoalSummary) -> Goal {
+    let count = |value: i64| value.max(0) as u64;
+    Goal {
+        objective: goal.objective.clone(),
+        status: goal.status,
+        elapsed_ms: count(goal.time_used_seconds) * 1000,
         usage: UsageBucket {
-            requests: u64_at(value, "apiCallCount"),
-            tool_calls: u64_at(value, "toolCallCount"),
-            input: u64_at(value, "inputTokens"),
-            cache_read: u64_at(value, "cachedInputTokens"),
-            output: u64_at(value, "outputTokens"),
-            reasoning: u64_at(value, "reasoningTokens"),
+            requests: goal.api_call_count as u64,
+            tool_calls: goal.tool_call_count as u64,
+            input: count(goal.input_tokens),
+            cache_read: count(goal.cached_input_tokens),
+            output: count(goal.output_tokens),
+            reasoning: count(goal.reasoning_tokens),
             ..UsageBucket::default()
         },
-        budget: opt_u64(value, "tokenBudget").filter(|b| *b > 0),
-    })
+        budget: goal.token_budget.map(count).filter(|budget| *budget > 0),
+    }
 }
 
-/// `ContextInjectionSnapshot` → dynamic memory cards and the static profile.
-/// `ContextInjectionSnapshot` → 动态记忆卡片与静态画像。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `ContextInjection`.
-/// 返回 `ContextInjection`。
-pub fn context_injection(value: &Value) -> ContextInjection {
-    // Memory.
-    // 会话记忆状态。
-    let memory = |item: &Value| InjectedMemory {
+/// Leading number of a display label such as a score or a profile priority; 0 when absent.
+/// 分数或画像优先级等显示标签开头的数字；缺失时为 0。
+fn label_number<T: std::str::FromStr + Default>(label: &str) -> T {
+    label.trim().parse().unwrap_or_default()
+}
+
+/// Context injection → dynamic memory cards and the static profile.
+/// 上下文注入 → 动态记忆卡片与静态画像。
+pub fn context_injection(snapshot: &api::ContextInjectionSnapshot) -> ContextInjection {
+    let memory = |item: &api::ContextInjectionItemSummary| InjectedMemory {
         // Injections that are not stored memories have no `memoryId`; their dedupe key names them.
         // 非存储记忆的注入没有 `memoryId`；以其去重键标识。
-        memory_id: opt_str(item, "memoryId").unwrap_or_else(|| str_at(item, "dedupeKey")),
-        content: str_at(item, "content"),
-        turn_id: opt_str(item, "turnLabel").unwrap_or_else(|| str_at(item, "turnId")),
-        turns_left: str_at(item, "ttlLabel")
+        memory_id: item
+            .memory_id
+            .map(|id| id.to_string())
+            .or_else(|| item.dedupe_key.clone())
+            .unwrap_or_default(),
+        content: item.content.clone(),
+        turn_id: item
+            .turn_label
+            .clone()
+            .or_else(|| item.turn_id.map(|id| id.to_string()))
+            .unwrap_or_default(),
+        turns_left: item
+            .ttl_label
             .chars()
             .filter(char::is_ascii_digit)
             .collect::<String>()
             .parse()
             .unwrap_or(0),
-        score: f32_at(item, "scoreLabel"),
-        source: str_at(item, "sourceDisplay"),
+        score: item.score_label.as_deref().map_or(0.0, label_number),
+        source: item.source_display.clone().unwrap_or_default(),
         dialogue: None,
     };
-    // Dynamic.
-    // 动态记忆条目。
-    let dynamic = arr(value, "dynamicCards")
+    let dynamic = snapshot
+        .dynamic_cards
         .iter()
         .map(|card| MemoryCard {
-            tag: str_at(card, "tag"),
-            description: str_at(card, "description"),
-            items: arr(card, "items").iter().map(memory).collect(),
+            tag: card.tag.clone(),
+            description: card.description.clone(),
+            items: card.items.iter().map(memory).collect(),
         })
         .collect();
-    // Profile.
-    // 声明的消费者或凭据配置。
-    let profile = arr(value, "staticProfile.sections")
+    let profile = snapshot
+        .static_profile
         .iter()
+        .flat_map(|profile| &profile.sections)
         .map(|section| ProfileSection {
-            user: normalized(&str_at(section, "target")) == "user",
-            name: str_at(section, "label"),
-            nodes: arr(section, "dates")
+            user: normalized(&section.target) == "user",
+            name: section.label.clone(),
+            nodes: section
+                .dates
                 .iter()
                 .flat_map(|date| {
-                    // Day.
-                    // 日期显示文本。
-                    let day = str_at(date, "date");
-                    arr(date, "nodes").iter().map(move |node| ProfileNode {
-                        id: str_at(node, "id"),
-                        date: day.get(..10).unwrap_or(&day).to_string(),
-                        priority: u64_at(node, "priority").min(u8::MAX as u64) as u8,
-                        level: u64_at(node, "level").min(u8::MAX as u64) as u8,
-                        weight: f32_at(node, "refreshWeight"),
-                        content: str_at(node, "content"),
-                        source: match normalized(&str_at(node, "sourceKind")).as_str() {
+                    let day = date.date.get(..10).unwrap_or(&date.date).to_string();
+                    date.nodes.iter().map(move |node| ProfileNode {
+                        id: node.id.to_string(),
+                        date: day.clone(),
+                        priority: label_number(&node.priority),
+                        level: label_number(&node.level),
+                        weight: label_number(&node.refresh_weight),
+                        content: node.content.clone(),
+                        source: match normalized(&node.source_kind).as_str() {
                             "systemseed" | "seed" => ProfileSource::SystemSeed,
                             "manualinstruction" | "manual" => ProfileSource::ManualInstruction,
                             _ => ProfileSource::TurnExtract,
@@ -603,156 +491,87 @@ pub fn context_injection(value: &Value) -> ContextInjection {
 
 // ---- Conversation events (vulcan-session-core v1) ----
 
-/// Maps the declared event stream status to local rendering state.
-/// 将声明的事件流状态映射为本地渲染状态。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `StreamStatus`.
-/// 返回 `StreamStatus`。
-fn stream_status(value: &Value) -> StreamStatus {
-    match normalized(&str_at(value, "status")).as_str() {
-        "streaming" => StreamStatus::Streaming,
-        "interrupted" => StreamStatus::Interrupted,
-        _ => StreamStatus::Completed,
-    }
-}
-
-/// Maps the declared tool execution status to the display enum.
-/// 将声明的工具执行状态映射为显示枚举。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `ToolStatus`.
-/// 返回 `ToolStatus`。
-fn tool_status(value: &str) -> ToolStatus {
-    match normalized(value).as_str() {
-        "prepared" => ToolStatus::Prepared,
-        "running" => ToolStatus::Running,
-        "waitinguser" => ToolStatus::WaitingUser,
-        "failed" => ToolStatus::Failed,
-        "cancelled" => ToolStatus::Cancelled,
-        "stopped" => ToolStatus::Stopped,
-        "interrupted" => ToolStatus::Interrupted,
-        _ => ToolStatus::Completed,
-    }
-}
-
 /// Tool output as the model saw it; structured payloads fall back to compact JSON.
 /// 模型所见的工具输出；结构化载荷回退为紧凑 JSON。
-/// Returns `Option<String>`.
-/// 返回 `Option<String>`。
-fn tool_output(output: &Value) -> Option<String> {
-    if output.is_null() {
-        return None;
-    }
-    if let Some(text) = opt_str(output, "model_output") {
-        return Some(text);
-    }
-    match output {
-        Value::String(s) => Some(s.clone()),
-        other => Some(other.to_string()),
+fn tool_output(output: &core::ToolPayload) -> String {
+    let value = serde_json::to_value(output).unwrap_or(Value::Null);
+    match value.get("model_output") {
+        Some(Value::String(text)) => text.clone(),
+        _ => value.to_string(),
     }
 }
 
-/// Maps a service changeset into file-operation detail rows.
-/// 将服务变更集映射为文件操作详情行。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `Vec<ChangesetFile>`.
-/// 返回 `Vec<ChangesetFile>`。
-fn changeset(value: &Value) -> Vec<ChangesetFile> {
-    arr(value, "files")
+/// File-level summaries of a tool call's changeset.
+/// 工具调用变更集的文件级摘要。
+fn changeset(call: &core::ToolCallEvent) -> Vec<ChangesetFile> {
+    call.changeset
         .iter()
-        .map(|file| {
-            // Additions; Deletions.
-            // 新增行数量；删除行数量。
-            let (mut additions, mut deletions) = (0, 0);
-            for hunk in arr(file, "hunks") {
-                additions += arr(hunk, "inserted").len() as u32;
-                deletions += arr(hunk, "deleted").len() as u32;
-            }
-            ChangesetFile {
-                path: opt_str(file, "new_path")
-                    .or_else(|| opt_str(file, "path"))
-                    .or_else(|| opt_str(file, "old_path"))
-                    .unwrap_or_default(),
-                additions,
-                deletions,
-            }
+        .flat_map(|changeset| &changeset.files)
+        .map(|file| ChangesetFile {
+            path: file
+                .new_path
+                .clone()
+                .or_else(|| file.path.clone())
+                .or_else(|| file.old_path.clone())
+                .unwrap_or_default(),
+            additions: file.hunks.iter().map(|h| h.inserted.len() as u32).sum(),
+            deletions: file.hunks.iter().map(|h| h.deleted.len() as u32).sum(),
         })
         .collect()
 }
 
-/// One `ConversationEventSummary`; events the transcript does not show map to `None`.
-/// 一条 `ConversationEventSummary`；记录区不显示的事件映射为 `None`。
-/// Returns `Option<ConversationEvent>`.
-/// 返回 `Option<ConversationEvent>`。
-pub fn event(summary: &Value) -> Option<ConversationEvent> {
-    // Seq.
-    // 事件序号。
-    let seq = opt_u64(summary, "seq")?;
-    // Body.
-    // 准确消息正文。
-    let body = at(summary, "event");
-    // Body.
-    // 准确消息正文。
-    let body = match str_at(body, "kind").as_str() {
-        "user_input" => EventBody::UserInput {
-            text: str_at(body, "text"),
-            input_source: match normalized(&str_at(body, "input_source")).as_str() {
-                "pendinginturn" => InputSource::PendingInTurn,
-                "queuedscheduled" => InputSource::QueuedScheduled,
-                "agentmessage" => InputSource::AgentMessage,
-                _ => InputSource::Root,
-            },
+/// Milliseconds since the epoch as a display count; pre-epoch values clamp to zero.
+/// 以显示计数表示的纪元毫秒；纪元前的值截为零。
+fn millis(value: i64) -> u64 {
+    value.max(0) as u64
+}
+
+/// One conversation event; events the transcript does not show map to `None`.
+/// 一条会话事件；记录区不显示的事件映射为 `None`。
+pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
+    let body = match &summary.event {
+        CoreEvent::UserInput(input) => EventBody::UserInput {
+            text: input.text.clone(),
+            input_source: input.input_source,
             attachments: Vec::new(),
         },
-        "assistant_reasoning" => EventBody::AssistantReasoning {
-            api_call_id: str_at(body, "api_call_id"),
-            text: str_at(body, "text"),
-            status: stream_status(body),
+        CoreEvent::AssistantReasoning(reasoning) => EventBody::AssistantReasoning {
+            text: reasoning.text.clone(),
+            status: reasoning.status,
         },
-        "assistant_text" => EventBody::AssistantText {
-            api_call_id: str_at(body, "api_call_id"),
-            text: str_at(body, "text"),
-            status: stream_status(body),
+        CoreEvent::AssistantText(text) => EventBody::AssistantText {
+            text: text.text.clone(),
+            status: text.status,
         },
-        "tool_call" => EventBody::ToolCall {
-            tool_call_id: str_at(body, "tool_call_id"),
-            tool_name: str_at(body, "tool_name"),
-            input: at(body, "input").clone(),
-            output: tool_output(at(body, "output")),
-            changeset: changeset(at(body, "changeset")),
-            status: tool_status(&str_at(body, "status")),
-            started_at_ms: opt_u64(body, "started_at_ms"),
-            finished_at_ms: opt_u64(body, "finished_at_ms"),
+        CoreEvent::ToolCall(call) => EventBody::ToolCall {
+            tool_name: call.tool_name.clone(),
+            input: serde_json::to_value(&call.input).unwrap_or(Value::Null),
+            output: call.output.as_ref().map(tool_output),
+            changeset: changeset(call),
+            status: call.status,
+            started_at_ms: call.started_at_ms.map(millis),
+            finished_at_ms: call.finished_at_ms.map(millis),
         },
-        "display_note" => EventBody::DisplayNote {
-            severity: match normalized(&str_at(body, "severity")).as_str() {
-                "error" => Severity::Error,
-                "warning" => Severity::Warning,
-                _ => Severity::Info,
-            },
-            message: opt_str(body, "redacted_detail")
-                .unwrap_or_else(|| str_at(body, "reason_code")),
+        CoreEvent::DisplayNote(note) => EventBody::DisplayNote {
+            severity: note.severity,
+            message: note
+                .redacted_detail
+                .clone()
+                .unwrap_or_else(|| note.reason_code.clone()),
         },
-        "turn_stats" => EventBody::TurnStats {
-            outcome: match normalized(&str_at(body, "outcome")).as_str() {
-                "abandoned" => TurnOutcome::Abandoned,
-                "stopped" | "interrupted" | "cancelled" => TurnOutcome::Stopped,
-                _ => TurnOutcome::Completed,
-            },
-            duration_ms: u64_at(body, "duration_ms"),
-            total_tokens: u64_at(body, "buckets.total.usage.total_tokens"),
-            requests: u64_at(body, "buckets.total.api_call_count") as u32,
-            tool_calls: u64_at(body, "buckets.total.tool_call_count") as u32,
+        CoreEvent::TurnStats(stats) => EventBody::TurnStats {
+            outcome: stats.outcome,
+            duration_ms: stats.duration_ms.map_or(0, millis),
+            total_tokens: stats.buckets.total.usage.total_tokens.unwrap_or(0),
+            requests: stats.buckets.total.api_call_count as u32,
+            tool_calls: stats.buckets.total.tool_call_count as u32,
         },
         _ => return None,
     };
     Some(ConversationEvent {
-        seq,
-        turn_id: text(at(summary, "turn_id")),
-        created_at_ms: u64_at(summary, "created_at_ms"),
-        updated_at_ms: u64_at(summary, "updated_at_ms"),
+        seq: summary.seq.value(),
+        created_at_ms: millis(summary.created_at_ms),
+        updated_at_ms: millis(summary.updated_at_ms),
         body,
     })
 }
@@ -929,32 +748,30 @@ pub fn unified_diff(path: &str, text: &str) -> FileDiff {
 
 // ---- Directories ----
 
-/// `ProjectDirectoryListing` → directory listing (directories only).
-/// `ProjectDirectoryListing` → 目录列表（仅目录）。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `DirectoryListing`.
-/// 返回 `DirectoryListing`。
-pub fn directory(value: &Value) -> DirectoryListing {
+/// Project directory listing → directory picker rows (directories only).
+/// 项目目录列表 → 目录选择器行（仅目录）。
+pub fn directory(listing: &api::ProjectDirectoryListing) -> DirectoryListing {
     DirectoryListing {
-        path: str_at(value, "path"),
-        parent: opt_str(value, "parentPath"),
-        roots: arr(value, "roots")
+        path: listing.path.clone(),
+        parent: listing.parent_path.clone(),
+        roots: listing
+            .roots
             .iter()
-            .map(|r| str_at(r, "path"))
-            .filter(|p| !p.is_empty())
+            .map(|root| root.path.clone())
+            .filter(|path| !path.is_empty())
             .collect(),
-        entries: arr(value, "entries")
+        entries: listing
+            .entries
             .iter()
-            .map(|e| DirEntry {
-                name: str_at(e, "name"),
+            .map(|entry| DirEntry {
+                name: entry.name.clone(),
                 is_dir: true,
                 is_repo: false,
-                hidden: bool_at(e, "hidden"),
+                hidden: entry.hidden,
                 size: None,
             })
             .collect(),
-        error: opt_str(value, "notice"),
+        error: listing.notice.clone(),
     }
 }
 
@@ -962,9 +779,9 @@ pub fn directory(value: &Value) -> DirectoryListing {
 mod tests {
     use super::*;
 
+    /// Run phases follow the WebUI normalization, including the PreCheck memory recall phase.
+    /// 运行阶段遵循 WebUI 的规范化规则，包括 PreCheck 记忆召回阶段。
     #[test]
-    /// Verifies maps run phases with synthetic data and assertions.
-    /// 使用合成数据及断言验证 maps_run_phases。
     fn maps_run_phases() {
         assert_eq!(run_phase("Ready", "Completed"), RunPhase::Completed);
         assert_eq!(run_phase("Ready", ""), RunPhase::Idle);
@@ -974,12 +791,10 @@ mod tests {
         assert_eq!(run_phase("failed", ""), RunPhase::Failed);
     }
 
+    /// Model route keys survive a round trip through the picker key.
+    /// 模型路线键可经选择器键往返还原。
     #[test]
-    /// Verifies model route key round trips with synthetic data and assertions.
-    /// 使用合成数据及断言验证 model_route_key_round_trips。
     fn model_route_key_round_trips() {
-        // Route.
-        // 目录中的推理路由。
         let route = ModelRoute {
             provider_id: "p".into(),
             model_id: "a/b".into(),
@@ -988,23 +803,25 @@ mod tests {
         assert_eq!(ModelRoute::from_key(&route.key()), Some(route));
     }
 
+    /// A strictly parsed tool call projects its model output and changeset size; event kinds the
+    /// transcript does not show are skipped.
+    /// 严格解析的工具调用投影其模型输出与变更规模；记录区不显示的事件种类被跳过。
     #[test]
-    /// Verifies maps wire events with synthetic data and assertions.
-    /// 使用合成数据及断言验证 maps_wire_events。
-    fn maps_wire_events() {
-        // Tool.
-        // 工具数据。
-        let tool = json!({"seq": 4, "turn_id": 2, "created_at_ms": 1, "updated_at_ms": 2,
+    fn maps_conversation_events() {
+        let tool: ConversationEventSummary = serde_json::from_value(json!({
+            "seq": 4, "turn_id": 2, "created_at_ms": 1, "updated_at_ms": 2, "event_revision": 1,
+            "visibility": "provider",
             "event": {"kind": "tool_call", "api_call_id": 3, "tool_call_id": 4,
-                "tool_name": "read", "input": {"path": "a"}, "status": "completed",
-                "output": {"model_output": "ok", "is_error": false},
-                "changeset": {"mode": "x", "files": [{"change": "modify", "path": "a.rs",
-                    "hunks": [{"before": "", "after": "", "deleted": [{"line": 1, "content": "x"}],
-                        "inserted": [{"line": 1, "content": "y"}, {"line": 2, "content": "z"}]}]}]}}});
-        // Event.
-        // 后端或会话事件。
-        let event = event(&tool).expect("tool call");
-        assert_eq!(event.turn_id.as_deref(), Some("2"));
+                "request_stream_id": "stream-1", "tool_name": "read", "input": {"path": "a"},
+                "status": "completed", "output": {"model_output": "ok", "is_error": false},
+                "changeset": {"mode": "applied", "files": [{"change": "modify", "path": "a.rs",
+                    "hunks": [{"before": "", "after": "",
+                        "deleted": [{"line": 1, "content": "x"}],
+                        "inserted": [{"line": 1, "content": "y"}, {"line": 2, "content": "z"}]}]}]}}
+        }))
+        .expect("tool call summary matches the shared DTO");
+        let event = event(&tool).expect("tool calls are shown");
+        assert_eq!(event.seq, 4);
         let EventBody::ToolCall {
             output, changeset, ..
         } = event.body
@@ -1013,25 +830,26 @@ mod tests {
         };
         assert_eq!(output.as_deref(), Some("ok"));
         assert_eq!((changeset[0].additions, changeset[0].deletions), (2, 1));
-        // Hidden.
-        // 是否为隐藏项。
-        let hidden = json!({"seq": 5, "event": {"kind": "api_started"}});
-        assert!(super::event(&hidden).is_none());
+
+        let boundary: ConversationEventSummary = serde_json::from_value(json!({
+            "seq": 5, "turn_id": 2, "created_at_ms": 1, "updated_at_ms": 1, "event_revision": 1,
+            "visibility": "host_only",
+            "event": {"kind": "turn_boundary", "reason": "completed", "outcome": "completed",
+                "purpose": "business"}
+        }))
+        .expect("turn boundary summary matches the shared DTO");
+        assert!(super::event(&boundary).is_none());
     }
 
+    /// Unified diffs parse into numbered hunks without their file headers.
+    /// 统一 diff 解析为带行号的块，不含文件头。
     #[test]
-    /// Verifies parses unified diff with synthetic data and assertions.
-    /// 使用合成数据及断言验证 parses_unified_diff。
     fn parses_unified_diff() {
-        // Diff.
-        // 差异结果。
         let diff = unified_diff(
             "a.rs",
             "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -3,2 +3,3 @@ fn x\n a\n-b\n+c\n+d\n",
         );
         assert_eq!(diff.hunks.len(), 1);
-        // Lines.
-        // 当前文本行。
         let lines = &diff.hunks[0].lines;
         assert_eq!(lines.len(), 4);
         assert_eq!((lines[0].old_no, lines[0].new_no), (Some(3), Some(3)));

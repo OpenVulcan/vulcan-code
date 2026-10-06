@@ -206,7 +206,7 @@ fn streaming_text(session: &SessionState) -> bool {
         matches!(
             e.body,
             EventBody::AssistantText {
-                status: StreamStatus::Streaming,
+                status: AssistantSemanticStatus::Streaming,
                 ..
             }
         )
@@ -272,10 +272,10 @@ fn user(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     let theme = ctx.theme;
     let bg = theme.card;
     let tag = match input_source {
-        InputSource::Root => None,
-        InputSource::PendingInTurn => Some(tr!("pendingPrompt.insertedShort")),
-        InputSource::QueuedScheduled => Some(tr!("pendingPrompt.queue")),
-        InputSource::AgentMessage => Some(tr!("conversation.subagent.detail.feedback")),
+        UserInputSource::Root => None,
+        UserInputSource::PendingInTurn => Some(tr!("pendingPrompt.insertedShort")),
+        UserInputSource::QueuedScheduled => Some(tr!("pendingPrompt.queue")),
+        UserInputSource::AgentMessage => Some(tr!("conversation.subagent.detail.feedback")),
     };
     let mut lines = Vec::new();
     if let Some(tag) = tag {
@@ -338,7 +338,7 @@ fn reasoning(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
         return Vec::new();
     };
     let theme = ctx.theme;
-    if *status == StreamStatus::Streaming {
+    if *status == AssistantSemanticStatus::Streaming {
         let mut spans = vec![Span::styled(
             format!("{} ", spinner(ctx.phase)),
             theme.primary_text(),
@@ -393,7 +393,7 @@ fn text(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     };
     let mut lines = markdown::render(text, ctx.width, ctx.theme);
     match status {
-        StreamStatus::Streaming => {
+        AssistantSemanticStatus::Streaming => {
             let caret = Span::styled(
                 "▍",
                 Style::new().fg(mix(ctx.theme.primary, ctx.theme.bg, pulse(ctx.phase))),
@@ -403,11 +403,11 @@ fn text(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
                 _ => lines.push(Line::from(caret)),
             }
         }
-        StreamStatus::Interrupted => lines.push(Line::from(Span::styled(
+        AssistantSemanticStatus::Interrupted => lines.push(Line::from(Span::styled(
             tr!("conversation.process.stopped"),
             Style::new().fg(ctx.theme.warning),
         ))),
-        StreamStatus::Completed => {}
+        AssistantSemanticStatus::Completed => {}
     }
     lines
 }
@@ -427,7 +427,7 @@ type ToolParts<'a> = (
     &'a Value,
     Option<&'a str>,
     &'a [ChangesetFile],
-    ToolStatus,
+    ToolCallStatus,
     Option<u64>,
 );
 
@@ -479,18 +479,18 @@ fn tool_subject(input: &Value) -> String {
     String::new()
 }
 
-fn status_icon(theme: &Theme, status: ToolStatus, phase: f32) -> Span<'static> {
+fn status_icon(theme: &Theme, status: ToolCallStatus, phase: f32) -> Span<'static> {
     match status {
-        ToolStatus::Prepared | ToolStatus::Running => {
+        ToolCallStatus::Prepared | ToolCallStatus::Running => {
             Span::styled(spinner(phase).to_string(), theme.primary_text())
         }
-        ToolStatus::WaitingUser => Span::styled(
+        ToolCallStatus::WaitingUser => Span::styled(
             "?".to_string(),
             Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
         ),
-        ToolStatus::Completed => Span::styled("✓".to_string(), Style::new().fg(theme.success)),
-        ToolStatus::Failed => Span::styled("✗".to_string(), Style::new().fg(theme.danger)),
-        ToolStatus::Cancelled | ToolStatus::Stopped | ToolStatus::Interrupted => {
+        ToolCallStatus::Completed => Span::styled("✓".to_string(), Style::new().fg(theme.success)),
+        ToolCallStatus::Failed => Span::styled("✗".to_string(), Style::new().fg(theme.danger)),
+        ToolCallStatus::Cancelled | ToolCallStatus::Stopped | ToolCallStatus::Interrupted => {
             Span::styled("■".to_string(), Style::new().fg(theme.warning))
         }
     }
@@ -502,7 +502,10 @@ fn tools(ctx: &Ctx, group: &[&ConversationEvent]) -> Vec<Line<'static>> {
     let running = parts.iter().filter(|p| p.4.is_open()).count();
     let completed = parts.len() - running;
     let open = expanded(ctx, group[0].seq, running > 0);
-    let failed = parts.iter().filter(|p| p.4 == ToolStatus::Failed).count();
+    let failed = parts
+        .iter()
+        .filter(|p| p.4 == ToolCallStatus::Failed)
+        .count();
     let total_ms: u64 = parts.iter().filter_map(|p| p.5).sum();
 
     let mut header = vec![Span::styled(fold_marker(open), theme.muted_text())];
@@ -586,11 +589,11 @@ fn tools(ctx: &Ctx, group: &[&ConversationEvent]) -> Vec<Line<'static>> {
             ]));
         }
         let show_output = ctx.session.reveal
-            || matches!(status, ToolStatus::Failed | ToolStatus::WaitingUser)
+            || matches!(status, ToolCallStatus::Failed | ToolCallStatus::WaitingUser)
             || name == "shell_command";
         if show_output && let Some(output) = output {
             let bar = Span::styled("      │ ".to_string(), Style::new().fg(theme.border));
-            let color = if status == ToolStatus::Failed {
+            let color = if status == ToolCallStatus::Failed {
                 theme.danger
             } else {
                 theme.muted_fg
@@ -633,11 +636,14 @@ fn note(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     )
 }
 
-pub fn severity_icon(theme: &Theme, severity: Severity) -> (&'static str, ratatui::style::Color) {
+pub fn severity_icon(
+    theme: &Theme,
+    severity: NoticeSeverity,
+) -> (&'static str, ratatui::style::Color) {
     match severity {
-        Severity::Info => ("ℹ", theme.info),
-        Severity::Warning => ("⚠", theme.warning),
-        Severity::Error => ("✗", theme.danger),
+        NoticeSeverity::Info => ("ℹ", theme.info),
+        NoticeSeverity::Warning => ("⚠", theme.warning),
+        NoticeSeverity::Error => ("✗", theme.danger),
     }
 }
 

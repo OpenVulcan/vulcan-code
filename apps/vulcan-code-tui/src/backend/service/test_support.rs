@@ -167,3 +167,24 @@ impl RpcServer {
         }
     }
 }
+
+/// A synthetic VCE job receipt at `sequence`, for event-ordering tests.
+/// 序号为 `sequence` 的合成 VCE 任务回执，用于事件顺序测试。
+pub(super) fn vce_job(project_id: &str, sequence: u64) -> vulcan_service_api::VceJobSummary {
+    vulcan_service_api::VceJobSummary {
+        retry_of_job_id: None,
+        project_id: project_id.to_string(),
+        job_id: "demo-job".to_string(),
+        kind: vulcan_service_api::VceJobKindSummary::Synchronize,
+        state: vulcan_service_api::VceJobStateSummary::Running,
+        sequence,
+        created_at_unix_ms: 0,
+        updated_at_unix_ms: 0,
+        source_checkpoint_version: None,
+        result_checkpoint_version: None,
+        progress: None,
+        compaction: None,
+        followup_requested: false,
+        error: None,
+    }
+}

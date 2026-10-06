@@ -35,7 +35,7 @@ impl SettingValue {
 pub struct Job {
     #[expect(
         dead_code,
-        reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
+        reason = "stable job identity kept for live re-query by id; rows only render progress so far"
     )]
     pub id: String,
     pub label: String,

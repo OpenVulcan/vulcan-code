@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::App;
 use super::action::{PromptDialog, PromptThen, UiAction, perform};
 use crate::backend::Command;
-use crate::model::Severity;
+use crate::model::NoticeSeverity;
 use crate::service_api::ServiceCall;
 use crate::tr;
 
@@ -156,7 +156,7 @@ impl Form {
         match self.request.pointer_mut(&field.pointer) {
             Some(value) => *value = parsed,
             None => {
-                app.toast(Severity::Error, tr!("tui.form.invalid"));
+                app.toast(NoticeSeverity::Error, tr!("tui.form.invalid"));
                 return;
             }
         }

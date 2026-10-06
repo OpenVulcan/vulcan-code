@@ -31,7 +31,7 @@ pub enum Action {
     },
     ToolDone {
         seq: u64,
-        status: ToolStatus,
+        status: ToolCallStatus,
         output: String,
         changeset: Vec<ChangesetFile>,
     },
@@ -50,7 +50,7 @@ pub enum Action {
     },
     Agents(Vec<AgentInfo>),
     Note {
-        severity: Severity,
+        severity: NoticeSeverity,
         message: String,
     },
     /// Moves the conversation to another run phase.
@@ -65,7 +65,6 @@ pub struct Script {
     pub steps: VecDeque<(Duration, Action)>,
     pub next_seq: u64,
     pub turn_id: String,
-    api_calls: u32,
     pub tool_calls: u32,
 }
 
@@ -77,7 +76,6 @@ impl Script {
             steps: VecDeque::new(),
             next_seq,
             turn_id,
-            api_calls: 0,
             tool_calls: 0,
         }
     }
@@ -93,11 +91,11 @@ impl Script {
             .push_back((Duration::from_millis(delay_ms), action));
     }
 
-    pub fn user(&mut self, text: &str, source: InputSource) {
+    pub fn user(&mut self, text: &str, source: UserInputSource) {
         self.user_with(text, source, &[]);
     }
 
-    pub fn user_with(&mut self, text: &str, source: InputSource, attachments: &[String]) {
+    pub fn user_with(&mut self, text: &str, source: UserInputSource, attachments: &[String]) {
         let seq = self.seq();
         self.push(
             0,
@@ -112,24 +110,17 @@ impl Script {
         );
     }
 
-    fn api_call_id(&mut self) -> String {
-        self.api_calls += 1;
-        format!("{}-api-{}", self.turn_id, self.api_calls)
-    }
-
     /// Streams reasoning text into a new block, then settles it.
     /// 将思考文本流入新块并在结束时固定。
     pub fn reasoning(&mut self, delay_ms: u64, text: &str) {
         let seq = self.seq();
-        let api_call_id = self.api_call_id();
         self.push(
             delay_ms,
             Action::Upsert {
                 seq,
                 body: EventBody::AssistantReasoning {
-                    api_call_id,
                     text: String::new(),
-                    status: StreamStatus::Streaming,
+                    status: AssistantSemanticStatus::Streaming,
                 },
             },
         );
@@ -139,15 +130,13 @@ impl Script {
 
     pub fn text(&mut self, delay_ms: u64, text: &str) {
         let seq = self.seq();
-        let api_call_id = format!("{}-api-{}", self.turn_id, self.api_calls.max(1));
         self.push(
             delay_ms,
             Action::Upsert {
                 seq,
                 body: EventBody::AssistantText {
-                    api_call_id,
                     text: String::new(),
-                    status: StreamStatus::Streaming,
+                    status: AssistantSemanticStatus::Streaming,
                 },
             },
         );
@@ -188,12 +177,11 @@ impl Script {
             Action::Upsert {
                 seq,
                 body: EventBody::ToolCall {
-                    tool_call_id: format!("{}-tool-{seq}", self.turn_id),
                     tool_name: name.into(),
                     input,
                     output: None,
                     changeset: Vec::new(),
-                    status: ToolStatus::Running,
+                    status: ToolCallStatus::Running,
                     started_at_ms: None,
                     finished_at_ms: None,
                 },
@@ -202,7 +190,7 @@ impl Script {
         seq
     }
 
-    pub fn tool_done(&mut self, delay_ms: u64, seq: u64, status: ToolStatus, output: &str) {
+    pub fn tool_done(&mut self, delay_ms: u64, seq: u64, status: ToolCallStatus, output: &str) {
         self.push(
             delay_ms,
             Action::ToolDone {
@@ -216,7 +204,7 @@ impl Script {
 
     pub fn tool(&mut self, delay_ms: u64, name: &str, input: Value, run_ms: u64, output: &str) {
         let seq = self.tool_start(delay_ms, name, input);
-        self.tool_done(run_ms, seq, ToolStatus::Completed, output);
+        self.tool_done(run_ms, seq, ToolCallStatus::Completed, output);
     }
 }
 
@@ -225,7 +213,7 @@ impl Script {
 pub fn build_turn(
     script: &mut Script,
     prompt: &str,
-    source: InputSource,
+    source: UserInputSource,
     mode: ExecutionMode,
     attachments: &[String],
 ) {
@@ -368,9 +356,9 @@ pub fn build_turn(
         50,
         seq,
         if failing {
-            ToolStatus::Failed
+            ToolCallStatus::Failed
         } else {
-            ToolStatus::Completed
+            ToolCallStatus::Completed
         },
         &lines.join("\n"),
     );
@@ -378,7 +366,7 @@ pub fn build_turn(
         script.push(
             150,
             Action::Note {
-                severity: Severity::Warning,
+                severity: NoticeSeverity::Warning,
                 message: "shell_command exited with code 101; the model will retry with a fix."
                     .into(),
             },
@@ -398,7 +386,7 @@ pub fn build_turn(
         700,
         Action::ToolDone {
             seq: patch,
-            status: ToolStatus::Completed,
+            status: ToolCallStatus::Completed,
             output: "Updated src/ui/thinking.rs".into(),
             changeset: vec![ChangesetFile {
                 path: "src/ui/thinking.rs".into(),
@@ -587,13 +575,18 @@ fn agent_steps(script: &mut Script) {
             Action::Agents(vec![agent_at(&EXPLORER, step), agent_at(&REVIEWER, step)]),
         );
     }
-    script.tool_done(100, seq, ToolStatus::Completed, "2 agents returned results");
+    script.tool_done(
+        100,
+        seq,
+        ToolCallStatus::Completed,
+        "2 agents returned results",
+    );
 }
 
 /// Background script for a conversation the user is not looking at.
 /// 用户未查看的会话的后台脚本。
 pub fn background_turn(script: &mut Script) {
-    script.user("整理 Git 側欄在窄終端下的呈現方式", InputSource::Root);
+    script.user("整理 Git 側欄在窄終端下的呈現方式", UserInputSource::Root);
     script.reasoning(
         400,
         "Narrow terminals cannot fit the right panel. Fold it into a drawer toggled by Ctrl+\\.",
@@ -619,7 +612,7 @@ pub fn background_turn(script: &mut Script) {
 /// A turn that stops at an `ask`, used to seed the conversation that needs attention.
 /// 停在 `ask` 的轮次，用于预置需要处理的会话。
 pub fn ask_seed_turn(script: &mut Script) {
-    script.user("Ask 面板在 TUI 中要不要搶焦點？", InputSource::Root);
+    script.user("Ask 面板在 TUI 中要不要搶焦點？", UserInputSource::Root);
     script.reasoning(
         0,
         "The contract says Ask is non-modal. Confirm the focus rule with the user.",

@@ -286,7 +286,7 @@ pub fn seeded(used: u64) -> SessionInsight {
     };
     insight.goal = Some(Goal {
         objective: "完成 TUI 展示 demo：記憶、統計、代理面板與系統頁全部可操作".into(),
-        status: GoalStatus::Active,
+        status: SessionGoalStatus::Active,
         elapsed_ms: 38 * 60_000,
         usage: usage(9, 24, 402_000, 11_800),
         budget: Some(1_500_000),
@@ -299,12 +299,12 @@ pub fn seeded(used: u64) -> SessionInsight {
 /// 结束一轮：目标进度、TTL 倒数与新的上下文构成。该轮用量已由调用方按请求记入生命周期。
 pub fn finish_turn(insight: &mut SessionInsight, turn: &UsageBucket, duration_ms: u64, used: u64) {
     if let Some(goal) = &mut insight.goal
-        && goal.status == GoalStatus::Active
+        && goal.status == SessionGoalStatus::Active
     {
         goal.usage.add(turn);
         goal.elapsed_ms += duration_ms;
         if goal.budget.is_some_and(|b| goal.usage.total() >= b) {
-            goal.status = GoalStatus::BudgetLimited;
+            goal.status = SessionGoalStatus::BudgetLimited;
         }
     }
     let mut expired = Vec::new();
@@ -352,7 +352,7 @@ pub fn remove_memory(insight: &mut SessionInsight, memory_id: &str, include_expi
 /// demo 的目标变更，每个目标命令对应一种。
 pub enum GoalChange {
     /// `updateSessionGoalStatus`
-    Status(GoalStatus),
+    Status(SessionGoalStatus),
     /// `clearSessionGoal`
     Clear,
     /// `saveSessionGoal` / `resumeSessionGoal`
@@ -364,7 +364,10 @@ pub enum GoalChange {
 
 /// Applies a goal change; returns the new status for the notice, or `None` when unchanged.
 /// 执行目标变更；返回用于提示的新状态，未变化时返回 `None`。
-pub fn apply_goal(insight: &mut SessionInsight, change: GoalChange) -> Option<Option<GoalStatus>> {
+pub fn apply_goal(
+    insight: &mut SessionInsight,
+    change: GoalChange,
+) -> Option<Option<SessionGoalStatus>> {
     match change {
         GoalChange::Status(status) => {
             let goal = insight.goal.as_mut()?;
@@ -383,19 +386,19 @@ pub fn apply_goal(insight: &mut SessionInsight, change: GoalChange) -> Option<Op
                 Some(goal) => {
                     goal.objective = objective;
                     goal.budget = budget.or(goal.budget);
-                    goal.status = GoalStatus::Active;
+                    goal.status = SessionGoalStatus::Active;
                 }
                 None => {
                     insight.goal = Some(Goal {
                         objective,
-                        status: GoalStatus::Active,
+                        status: SessionGoalStatus::Active,
                         elapsed_ms: 0,
                         usage: UsageBucket::default(),
                         budget,
                     })
                 }
             }
-            Some(Some(GoalStatus::Active))
+            Some(Some(SessionGoalStatus::Active))
         }
     }
 }

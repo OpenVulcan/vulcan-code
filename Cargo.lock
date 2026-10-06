@@ -9687,6 +9687,8 @@ dependencies = [
  "unicode-width",
  "ureq",
  "vulcan-i18n",
+ "vulcan-service-api",
+ "vulcan-session-core",
  "workspace-hack",
 ]
 

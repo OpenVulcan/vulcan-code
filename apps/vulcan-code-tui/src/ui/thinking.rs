@@ -20,7 +20,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Widget};
 use super::text::{shimmer, spinner, wrap};
 use super::theme::mix;
 use crate::app::{App, ThinkingPlacement};
-use crate::model::{EventBody, StreamStatus};
+use crate::model::{AssistantSemanticStatus, EventBody};
 use crate::tr;
 
 pub const FADE_MS: u64 = 900;
@@ -53,7 +53,7 @@ pub fn view(app: &App) -> Option<ThinkingView> {
     let EventBody::AssistantReasoning { text, status, .. } = &event.body else {
         return None;
     };
-    if *status == StreamStatus::Streaming {
+    if *status == AssistantSemanticStatus::Streaming {
         return None;
     }
     Some(ThinkingView {

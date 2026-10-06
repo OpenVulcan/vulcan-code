@@ -400,6 +400,7 @@
   "tui.notice.settingsSaved": "設定已儲存",
   "tui.notice.submitted": "任務已提交。",
   "tui.notice.testPassed": "連線測試透過。",
+  "tui.notice.unreadable": "無法讀取來自 {source} 的服務資料：{detail}",
   "tui.notice.waitForOperation": "請等待當前操作與重新整理結束。",
   "tui.page.loading": "載入中…",
   "tui.page.notSet": "未設定",

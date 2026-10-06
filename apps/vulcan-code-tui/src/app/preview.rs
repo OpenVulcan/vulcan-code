@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::App;
 use super::action::{UiAction, confirm};
 use crate::backend::Command;
-use crate::model::Severity;
+use crate::model::NoticeSeverity;
 use crate::service_api::{CallKind, Preview, ServiceCall, Slot, confirm_preview};
 use crate::tr;
 
@@ -180,7 +180,7 @@ pub fn open(app: &mut App, call: ServiceCall, result: Value) {
     // The next call freezes server-issued identities before any input is collected.
     // 在收集输入前，下一步调用先冻结服务端签发的身份。
     let Some(mut next) = confirm_preview(&call, &result, workbench) else {
-        app.toast(Severity::Warning, tr!("tui.preview.unconfirmable"));
+        app.toast(NoticeSeverity::Warning, tr!("tui.preview.unconfirmable"));
         return;
     };
     // Localized copy describes the exact operation being approved.
@@ -251,7 +251,7 @@ pub fn open(app: &mut App, call: ServiceCall, result: Value) {
     // Field definitions enforce the same choices allowed by the WebUI preflight dialog.
     // 字段定义约束为 WebUI 预检对话框允许的相同选择。
     let Some(fields) = input_fields(preview, &result, &next) else {
-        app.toast(Severity::Warning, tr!("tui.preview.unconfirmable"));
+        app.toast(NoticeSeverity::Warning, tr!("tui.preview.unconfirmable"));
         return;
     };
     // A prepared call owns no secret copy while the transient form collects values.

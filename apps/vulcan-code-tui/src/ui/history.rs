@@ -370,7 +370,7 @@ fn event_lines(
         }
         EventBody::AssistantReasoning { text, status, .. } => {
             let mut title = tr!("tui.inspector.thinking");
-            if *status == StreamStatus::Streaming {
+            if *status == AssistantSemanticStatus::Streaming {
                 title.push_str(" …");
             }
             out.push(header("✦", Style::new().fg(theme.violet), title));
@@ -407,13 +407,13 @@ fn event_lines(
             ..
         } => {
             let (mark, color) = match status {
-                ToolStatus::Completed => ("✓", theme.success),
-                ToolStatus::Failed => ("✗", theme.danger),
-                ToolStatus::Cancelled | ToolStatus::Stopped | ToolStatus::Interrupted => {
-                    ("■", theme.muted_fg)
-                }
-                ToolStatus::WaitingUser => ("?", theme.warning),
-                ToolStatus::Prepared | ToolStatus::Running => ("…", theme.primary),
+                ToolCallStatus::Completed => ("✓", theme.success),
+                ToolCallStatus::Failed => ("✗", theme.danger),
+                ToolCallStatus::Cancelled
+                | ToolCallStatus::Stopped
+                | ToolCallStatus::Interrupted => ("■", theme.muted_fg),
+                ToolCallStatus::WaitingUser => ("?", theme.warning),
+                ToolCallStatus::Prepared | ToolCallStatus::Running => ("…", theme.primary),
             };
             let duration = match (started_at_ms, finished_at_ms) {
                 (Some(start), Some(end)) => {

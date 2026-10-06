@@ -150,54 +150,27 @@ pub struct WorkbenchSnapshot {
 
 // ---- Conversation events (vulcan-session-core v1) ----
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamStatus {
-    Streaming,
-    Completed,
-    Interrupted,
+// Event states are the shared v1 types themselves, so the TUI cannot drift from the service.
+// 事件状态直接使用共享 v1 类型，使 TUI 不会与服务产生偏差。
+pub use vulcan_session_core::v1::{
+    AssistantSemanticStatus, NoticeSeverity, ToolCallStatus, TurnOutcome, UserInputSource,
+};
+
+/// Lifecycle questions the TUI asks of a shared tool status.
+/// TUI 对共享工具状态提出的生命周期判断。
+pub trait ToolCallStatusExt {
+    /// Whether the call has not reached a terminal state yet.
+    /// 调用是否尚未到达终态。
+    fn is_open(&self) -> bool;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolStatus {
-    Prepared,
-    Running,
-    WaitingUser,
-    Completed,
-    Failed,
-    Cancelled,
-    Stopped,
-    Interrupted,
-}
-
-impl ToolStatus {
-    pub fn is_open(self) -> bool {
+impl ToolCallStatusExt for ToolCallStatus {
+    fn is_open(&self) -> bool {
         matches!(
-            self,
-            ToolStatus::Prepared | ToolStatus::Running | ToolStatus::WaitingUser
+            *self,
+            ToolCallStatus::Prepared | ToolCallStatus::Running | ToolCallStatus::WaitingUser
         )
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputSource {
-    Root,
-    PendingInTurn,
-    QueuedScheduled,
-    AgentMessage,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnOutcome {
-    Completed,
-    Abandoned,
-    Stopped,
 }
 
 /// File-level summary of a tool changeset.
@@ -213,46 +186,34 @@ pub struct ChangesetFile {
 pub enum EventBody {
     UserInput {
         text: String,
-        input_source: InputSource,
+        input_source: UserInputSource,
         /// File names attached to the prompt.
         /// 随提示附带的文件名。
         attachments: Vec<String>,
     },
     AssistantReasoning {
-        #[expect(
-            dead_code,
-            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
-        )]
-        api_call_id: String,
         text: String,
-        status: StreamStatus,
+        status: AssistantSemanticStatus,
     },
     AssistantText {
-        #[expect(
-            dead_code,
-            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
-        )]
-        api_call_id: String,
         text: String,
-        status: StreamStatus,
+        status: AssistantSemanticStatus,
     },
     ToolCall {
-        #[expect(
-            dead_code,
-            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
-        )]
-        tool_call_id: String,
         tool_name: String,
         input: Value,
         output: Option<String>,
         changeset: Vec<ChangesetFile>,
-        status: ToolStatus,
+        status: ToolCallStatus,
         started_at_ms: Option<u64>,
         finished_at_ms: Option<u64>,
     },
     /// Rendered from `display_note`; the service sends a reason code that the client localizes.
     /// 来自 `display_note`；服务发送原因代码，由客户端本地化。
-    DisplayNote { severity: Severity, message: String },
+    DisplayNote {
+        severity: NoticeSeverity,
+        message: String,
+    },
     TurnStats {
         outcome: TurnOutcome,
         duration_ms: u64,
@@ -267,14 +228,6 @@ pub enum EventBody {
 #[derive(Debug, Clone)]
 pub struct ConversationEvent {
     pub seq: u64,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
-        )
-    )]
-    pub turn_id: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub body: EventBody,
@@ -306,11 +259,6 @@ pub struct PendingQuestion {
 
 #[derive(Debug, Clone)]
 pub struct PendingPrompt {
-    #[expect(
-        dead_code,
-        reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
-    )]
-    pub id: String,
     pub preview: String,
 }
 
@@ -445,11 +393,6 @@ pub struct GitCommit {
 
 #[derive(Debug, Clone)]
 pub struct GitSnapshot {
-    #[expect(
-        dead_code,
-        reason = "protocol identity mirrored from the service; read once the TUI shares service DTOs"
-    )]
-    pub repository: String,
     pub branch: String,
     pub upstream: Option<String>,
     pub ahead: u32,

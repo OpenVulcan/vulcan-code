@@ -157,7 +157,7 @@ pub enum Command {
     /// 只有 `Active` 与 `Paused` 属于用户可设置的状态。
     UpdateSessionGoalStatus {
         conversation_id: ConversationId,
-        status: GoalStatus,
+        status: SessionGoalStatus,
     },
     /// Any other WebUI service function, built by the same-named function in
     /// `crate::service_api`.
@@ -312,7 +312,7 @@ pub enum BackendEvent {
     /// Free-form message from the backend (service errors arrive already worded).
     /// 后端的自由文本消息（服务错误到达时已带文案）。
     Toast {
-        severity: Severity,
+        severity: NoticeSeverity,
         message: String,
     },
 }
@@ -336,7 +336,7 @@ pub enum Notice {
     MemoryDeleted,
     /// The goal changed; `None` means it was removed.
     /// 目标已变化；`None` 表示已移除。
-    Goal(Option<GoalStatus>),
+    Goal(Option<SessionGoalStatus>),
     AgentStopped(String),
     AgentClosed(String),
     /// A `service_api` mutation succeeded; carries its WebUI function name.
@@ -348,6 +348,16 @@ pub enum Notice {
     /// An action needs the service but the connection is not up yet.
     /// 操作需要服务，但连接尚未建立。
     NotConnected,
+    /// Service data did not match its shared type.
+    /// 服务数据不符合其共享类型。
+    Unreadable {
+        /// Method or event kind that produced the data.
+        /// 产生该数据的方法或事件类别。
+        source: String,
+        /// Value-free description of the mismatch.
+        /// 不含取值的不匹配描述。
+        detail: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -200,21 +200,22 @@ impl ContextInjection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GoalStatus {
-    Active,
-    Paused,
-    Blocked,
-    UsageLimited,
-    BudgetLimited,
-    Completed,
-}
+pub use vulcan_service_api::SessionGoalStatus;
 
-impl GoalStatus {
+/// Lifecycle questions the TUI asks of a shared goal status.
+/// TUI 对共享目标状态提出的生命周期判断。
+pub trait SessionGoalStatusExt {
     /// A goal that is not pursuing and not finished can be resumed.
     /// 未在推进且未完成的目标可以恢复。
-    pub fn resumable(self) -> bool {
-        !matches!(self, GoalStatus::Active | GoalStatus::Completed)
+    fn resumable(self) -> bool;
+}
+
+impl SessionGoalStatusExt for SessionGoalStatus {
+    fn resumable(self) -> bool {
+        !matches!(
+            self,
+            SessionGoalStatus::Active | SessionGoalStatus::Complete
+        )
     }
 }
 
@@ -223,7 +224,7 @@ impl GoalStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Goal {
     pub objective: String,
-    pub status: GoalStatus,
+    pub status: SessionGoalStatus,
     pub elapsed_ms: u64,
     pub usage: UsageBucket,
     pub budget: Option<u64>,

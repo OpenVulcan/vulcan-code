@@ -152,7 +152,6 @@ mod tests {
     fn event(seq: u64, body: EventBody) -> ConversationEvent {
         ConversationEvent {
             seq,
-            turn_id: None,
             created_at_ms: seq,
             updated_at_ms: seq,
             body,
@@ -163,12 +162,11 @@ mod tests {
         event(
             seq,
             EventBody::ToolCall {
-                tool_call_id: format!("t{seq}"),
                 tool_name: name.into(),
                 input: serde_json::Value::Null,
                 output: None,
                 changeset: Vec::new(),
-                status: ToolStatus::Completed,
+                status: ToolCallStatus::Completed,
                 started_at_ms: None,
                 finished_at_ms: None,
             },
@@ -182,7 +180,7 @@ mod tests {
                 1,
                 EventBody::UserInput {
                     text: "\n  fix the bug\nplease".into(),
-                    input_source: InputSource::Root,
+                    input_source: UserInputSource::Root,
                     attachments: Vec::new(),
                 },
             ),
@@ -191,9 +189,8 @@ mod tests {
             event(
                 4,
                 EventBody::AssistantText {
-                    api_call_id: "a".into(),
                     text: "done".into(),
-                    status: StreamStatus::Completed,
+                    status: AssistantSemanticStatus::Completed,
                 },
             ),
         ];

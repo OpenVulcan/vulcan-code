@@ -17,8 +17,10 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tungstenite::Message;
+use vulcan_service_api::ServiceEvent;
 
 use super::discovery::Endpoint;
+use super::rpc::parse_failure;
 use super::worker::Input;
 
 /// Connect and handshake limit; the service is on the loopback interface.
@@ -105,29 +107,7 @@ pub fn open(
                 }
                 match socket.read() {
                     Ok(Message::Text(text)) => {
-                        // Frame.
-                        // 当前事件帧。
-                        let Ok(frame) = serde_json::from_str::<Value>(text.as_str()) else {
-                            continue;
-                        };
-                        // Kind.
-                        // 已声明的操作类别。
-                        let kind = frame
-                            .get("kind")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        // Payload.
-                        // 已声明载荷。
-                        let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
-                        // Current input.
-                        // 当前输入。
-                        let input = Input::Service {
-                            generation,
-                            kind,
-                            payload,
-                        };
-                        if sink.send(input).is_err() {
+                        if sink.send(frame_input(generation, text.as_str())).is_err() {
                             break;
                         }
                     }
@@ -144,6 +124,33 @@ pub fn open(
             let _ = sink.send(Input::EventsClosed { generation });
         })?;
     Ok(EventStream { stop })
+}
+
+/// Parses one text frame as the shared service event; a mismatch is forwarded as a rejection.
+/// 将一帧文本按共享服务事件解析；不匹配时作为拒绝转发。
+/// `generation` is the connection generation that received the frame.
+/// `generation` 为接收该帧的连接代际。
+/// `text` is the raw frame text.
+/// `text` 为原始帧文本。
+/// Returns `Input`.
+/// 返回 `Input`。
+fn frame_input(generation: u64, text: &str) -> Input {
+    match serde_json::from_str::<ServiceEvent>(text) {
+        Ok(event) => Input::Service {
+            generation,
+            event: Box::new(event),
+        },
+        Err(error) => Input::Rejected {
+            generation,
+            // The kind is a protocol name, so it is safe to show.
+            // 类别是协议名称，可以安全显示。
+            kind: serde_json::from_str::<Value>(text)
+                .ok()
+                .and_then(|frame| frame.get("kind")?.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            detail: parse_failure(&error),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -197,9 +204,19 @@ mod tests {
                 },
             )
             .unwrap();
-            socket.send(Message::text("invalid JSON")).unwrap();
-            socket.send(Message::text(serde_json::json!({"kind":"vceJobChanged",
-                "payload":{"projectId":"demo-project","jobId":"demo-job","sequence":2,"state":"running"}}).to_string())).unwrap();
+            socket
+                .send(Message::text(
+                    serde_json::json!({"kind":"vceJobChanged","payload":{"projectId":"demo-project"}})
+                        .to_string(),
+                ))
+                .unwrap();
+            let event = ServiceEvent::VceJobChanged(Box::new(super::super::test_support::vce_job(
+                "demo-project",
+                2,
+            )));
+            socket
+                .send(Message::text(serde_json::to_string(&event).unwrap()))
+                .unwrap();
             socket.close(None).unwrap();
         });
         // Sink; Current input.
@@ -208,11 +225,17 @@ mod tests {
         // Stream.
         // 当前传输流。
         let stream = open(&endpoint, "demo-client", 7, sink).unwrap();
+        // A frame that does not match the shared type is rejected with its kind, not dropped.
+        // 不符合共享类型的帧携带类别被拒绝，而不是被丢弃。
+        let frame = input.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            matches!(frame,Input::Rejected{generation:7,kind,detail} if kind == "vceJobChanged" && detail.contains("missing field"))
+        );
         // Frame.
         // 当前事件帧。
         let frame = input.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(
-            matches!(frame,Input::Service{generation:7,kind,payload} if kind == "vceJobChanged" && payload["sequence"] == 2)
+            matches!(frame,Input::Service{generation:7,event} if matches!(&*event, ServiceEvent::VceJobChanged(job) if job.sequence == 2))
         );
         assert!(matches!(
             input.recv_timeout(Duration::from_secs(2)).unwrap(),

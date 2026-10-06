@@ -20,7 +20,7 @@ use super::text::{compact_count, compact_duration, spinner, width_of};
 use crate::app::action::UiAction;
 use crate::app::hit::Target;
 use crate::app::{App, PanelTab, SessionState, insight};
-use crate::model::{AgentState, GoalStatus};
+use crate::model::{AgentState, SessionGoalStatus};
 use crate::tr;
 
 /// The conversation column must be at least this tall for the bar; shorter terminals keep the
@@ -298,9 +298,9 @@ fn segments(app: &App, session: &SessionState) -> Vec<Segment> {
     // 目标：token 预算的使用比例，否则为其状态。
     if let Some(goal) = &session.insight.goal {
         let color = match goal.status {
-            GoalStatus::Active => theme.primary,
-            GoalStatus::Completed => theme.success,
-            GoalStatus::Paused => theme.muted_fg,
+            SessionGoalStatus::Active => theme.primary,
+            SessionGoalStatus::Complete => theme.success,
+            SessionGoalStatus::Paused => theme.muted_fg,
             _ => theme.warning,
         };
         let style = Style::new().fg(color);

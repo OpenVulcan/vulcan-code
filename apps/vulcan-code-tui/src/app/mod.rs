@@ -241,14 +241,15 @@ impl SessionState {
                 let was_streaming = matches!(
                     self.events[index].body,
                     EventBody::AssistantReasoning {
-                        status: StreamStatus::Streaming,
+                        status: AssistantSemanticStatus::Streaming,
                         ..
                     }
                 );
                 let now_settled = matches!(
                     event.body,
                     EventBody::AssistantReasoning {
-                        status: StreamStatus::Completed | StreamStatus::Interrupted,
+                        status: AssistantSemanticStatus::Completed
+                            | AssistantSemanticStatus::Interrupted,
                         ..
                     }
                 );
@@ -300,12 +301,12 @@ impl SessionState {
             .map(|e| match &e.body {
                 EventBody::AssistantReasoning {
                     text,
-                    status: StreamStatus::Streaming,
+                    status: AssistantSemanticStatus::Streaming,
                     ..
                 }
                 | EventBody::AssistantText {
                     text,
-                    status: StreamStatus::Streaming,
+                    status: AssistantSemanticStatus::Streaming,
                     ..
                 } => estimate_tokens(text),
                 _ => 0,
@@ -353,7 +354,7 @@ impl SessionState {
             matches!(
                 e.body,
                 EventBody::AssistantReasoning {
-                    status: StreamStatus::Streaming,
+                    status: AssistantSemanticStatus::Streaming,
                     ..
                 }
             )
@@ -1060,7 +1061,7 @@ impl App {
                 if matches!(self.overlay, Some(Overlay::Commit(_))) {
                     self.overlay = None;
                 }
-                self.toast(Severity::Info, message);
+                self.toast(NoticeSeverity::Info, message);
             }
             BackendEvent::Toast { severity, message } => self.toast(severity, message),
             BackendEvent::Projects(projects) => {
@@ -1217,47 +1218,62 @@ impl App {
 
     fn notice(&mut self, notice: Notice) {
         let (severity, message) = match notice {
-            Notice::Completed(function) => (Severity::Info, completed_notice(function)),
-            Notice::ProjectAdded(name) => {
-                (Severity::Info, tr!("tui.notice.projectAdded", name = name))
-            }
+            Notice::Completed(function) => (NoticeSeverity::Info, completed_notice(function)),
+            Notice::ProjectAdded(name) => (
+                NoticeSeverity::Info,
+                tr!("tui.notice.projectAdded", name = name),
+            ),
             Notice::ProjectRemoved(name) => (
-                Severity::Info,
+                NoticeSeverity::Info,
                 tr!("tui.notice.projectRemoved", name = name),
             ),
-            Notice::Archived(title) => (Severity::Info, tr!("tui.notice.archived", title = title)),
+            Notice::Archived(title) => (
+                NoticeSeverity::Info,
+                tr!("tui.notice.archived", title = title),
+            ),
             Notice::ArchivedCount(count) => (
-                Severity::Info,
+                NoticeSeverity::Info,
                 tr!("tui.notice.archivedCount", count = count),
             ),
-            Notice::Renamed => (Severity::Info, tr!("tui.notice.renamed")),
-            Notice::MemorySuppressed => (Severity::Info, tr!("workspaceMemory.suppressedNotice")),
-            Notice::MemoryDeleted => (Severity::Info, tr!("workspaceMemory.deletedNotice")),
+            Notice::Renamed => (NoticeSeverity::Info, tr!("tui.notice.renamed")),
+            Notice::MemorySuppressed => (
+                NoticeSeverity::Info,
+                tr!("workspaceMemory.suppressedNotice"),
+            ),
+            Notice::MemoryDeleted => (NoticeSeverity::Info, tr!("workspaceMemory.deletedNotice")),
             Notice::Goal(status) => (
-                Severity::Info,
+                NoticeSeverity::Info,
                 match status {
                     None => tr!("conversation.goalNotice.cleared"),
-                    Some(GoalStatus::Active) => tr!("conversation.goalNotice.resumed"),
-                    Some(GoalStatus::Paused) => tr!("conversation.goalNotice.paused"),
-                    Some(GoalStatus::Blocked) => tr!("conversation.goalNotice.blocked"),
-                    Some(GoalStatus::Completed) => tr!("conversation.goalNotice.completed"),
-                    Some(GoalStatus::BudgetLimited) => {
+                    Some(SessionGoalStatus::Active) => tr!("conversation.goalNotice.resumed"),
+                    Some(SessionGoalStatus::Paused) => tr!("conversation.goalNotice.paused"),
+                    Some(SessionGoalStatus::Blocked) => tr!("conversation.goalNotice.blocked"),
+                    Some(SessionGoalStatus::Complete) => tr!("conversation.goalNotice.completed"),
+                    Some(SessionGoalStatus::BudgetLimited) => {
                         tr!("conversation.goalNotice.budgetExhausted")
                     }
-                    Some(GoalStatus::UsageLimited) => tr!("conversation.goalNotice.usageLimited"),
+                    Some(SessionGoalStatus::UsageLimited) => {
+                        tr!("conversation.goalNotice.usageLimited")
+                    }
                 },
             ),
-            Notice::AgentStopped(name) => {
-                (Severity::Info, tr!("tui.notice.agentStopped", name = name))
-            }
-            Notice::AgentClosed(name) => {
-                (Severity::Info, tr!("tui.notice.agentClosed", name = name))
-            }
+            Notice::AgentStopped(name) => (
+                NoticeSeverity::Info,
+                tr!("tui.notice.agentStopped", name = name),
+            ),
+            Notice::AgentClosed(name) => (
+                NoticeSeverity::Info,
+                tr!("tui.notice.agentClosed", name = name),
+            ),
             Notice::ServiceUnavailable(detail) => (
-                Severity::Warning,
+                NoticeSeverity::Warning,
                 tr!("tui.notice.serviceUnavailable", detail = detail),
             ),
-            Notice::NotConnected => (Severity::Warning, tr!("tui.notice.notConnected")),
+            Notice::NotConnected => (NoticeSeverity::Warning, tr!("tui.notice.notConnected")),
+            Notice::Unreadable { source, detail } => (
+                NoticeSeverity::Error,
+                tr!("tui.notice.unreadable", source = source, detail = detail),
+            ),
         };
         self.toast(severity, message);
     }

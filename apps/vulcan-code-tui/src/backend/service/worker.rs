@@ -14,14 +14,17 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
+use vulcan_service_api as api;
+use vulcan_session_core::v1::EventBody as CoreEvent;
+use vulcan_session_core::v1::service_dto::ConversationEventSummary;
 
 use super::discovery;
 use super::events::{self, EventStream};
 use super::git::GitState;
 use super::map::{self, ModelRoute};
-use super::rpc::{RpcClient, RpcError};
-use super::wire::*;
+use super::rpc::{RpcClient, RpcError, parse_failure};
 use crate::backend::{BackendEvent, Command, ConnectionState, Notice};
 use crate::model::*;
 use crate::service_api::fresh_command_id as fresh_id;
@@ -77,18 +80,28 @@ pub enum Input {
     /// One typed UI command forwarded onto the serial worker channel.
     /// 转发到串行工作线程通道的单个类型化界面命令。
     Command(Command),
-    /// One `/events` frame of connection `generation`.
-    /// 连接代际 `generation` 的一帧 `/events`。
+    /// One `/events` frame of connection `generation`, parsed as the shared service event.
+    /// 连接代际 `generation` 的一帧 `/events`，按共享服务事件解析。
     Service {
         /// Connection generation that received this frame.
         /// 接收该帧的连接代际。
         generation: u64,
-        /// Exact WebUI event name from the socket frame.
-        /// 套接字帧中的准确 WebUI 事件名称。
+        /// Strictly parsed service event.
+        /// 严格解析的服务事件。
+        event: Box<api::ServiceEvent>,
+    },
+    /// One `/events` frame that does not match the shared service event type.
+    /// 一帧不符合共享服务事件类型的 `/events`。
+    Rejected {
+        /// Connection generation that received this frame.
+        /// 接收该帧的连接代际。
+        generation: u64,
+        /// Declared event kind when the frame names one.
+        /// 帧中声明的事件类别（若有）。
         kind: String,
-        /// Original event document sanitized before projection.
-        /// 投影前执行脱敏的原始事件文档。
-        payload: Value,
+        /// Value-free description of the parse failure.
+        /// 不含取值的解析失败描述。
+        detail: String,
     },
     /// The reader closed; only its own connection generation may trigger recovery.
     /// 读取器关闭；仅其所属连接代际可触发恢复。
@@ -121,9 +134,9 @@ struct Window {
     /// Last authoritative memory revision observed for this conversation.
     /// 该会话最后观察到的权威记忆修订号。
     memory_revision: u64,
-    /// Raw `ConversationEventSummary` values by `seq`; text appends patch them in place.
-    /// 以 `seq` 为键的原始 `ConversationEventSummary`；文本追加就地修补。
-    events: BTreeMap<u64, Value>,
+    /// Event summaries by `seq`; text appends patch them in place.
+    /// 以 `seq` 为键的事件摘要；文本追加就地修补。
+    events: BTreeMap<u64, ConversationEventSummary>,
 }
 
 /// A conversation that exists only in the TUI until its first prompt is accepted.
@@ -170,9 +183,12 @@ pub struct Worker {
     /// Last connect failure shown, so retries do not repeat the same toast.
     /// 最近一次已显示的连接失败，避免重试时重复提示。
     connect_error: Option<String>,
-    /// Latest workbench snapshot with deltas folded in.
-    /// 折叠了增量的最新工作台快照。
-    pub(super) wb: Value,
+    /// Latest workbench snapshot with deltas folded in; absent until the first snapshot.
+    /// 折叠了增量的最新工作台快照；首份快照到达前为空。
+    pub(super) wb: Option<api::WorkbenchSnapshot>,
+    /// Subagent navigation per parent conversation, from navigation deltas and route responses.
+    /// 每个父会话的子代理导航，来自导航增量与路由响应。
+    navigations: HashMap<String, api::SubagentNavigationSnapshot>,
     /// Last applied server workbench revision.
     /// 最后应用的服务端工作台修订号。
     revision: u64,
@@ -269,7 +285,8 @@ impl Worker {
             retry_at: Some(Instant::now()),
             backoff: RETRY_MIN,
             connect_error: None,
-            wb: Value::Null,
+            wb: None,
+            navigations: HashMap::new(),
             revision: 0,
             selected: None,
             windows: HashMap::new(),
@@ -290,12 +307,21 @@ impl Worker {
         match input {
             Input::Shutdown => return false,
             Input::Command(command) => self.handle(command),
-            Input::Service {
+            Input::Service { generation, event } if generation == self.generation => {
+                self.service_event(*event)
+            }
+            Input::Service { .. } => {}
+            Input::Rejected {
                 generation,
                 kind,
-                payload,
-            } if generation == self.generation => self.service_event(&kind, payload),
-            Input::Service { .. } => {}
+                detail,
+            } if generation == self.generation => {
+                self.emit(BackendEvent::Notice(Notice::Unreadable {
+                    source: kind,
+                    detail,
+                }))
+            }
+            Input::Rejected { .. } => {}
             Input::EventsClosed { generation } if generation == self.generation => {
                 self.disconnected();
             }
@@ -324,7 +350,7 @@ impl Worker {
     /// `severity` 为提示严重程度。
     /// `message` is the displayed or sanitized error text.
     /// `message` 为显示文案或脱敏错误文本。
-    pub(super) fn toast(&self, severity: Severity, message: impl Into<String>) {
+    pub(super) fn toast(&self, severity: NoticeSeverity, message: impl Into<String>) {
         self.emit(BackendEvent::Toast {
             severity,
             message: message.into(),
@@ -398,11 +424,14 @@ impl Worker {
         let snapshot = client
             .call("workbench.snapshot", Value::Null)
             .map_err(|e| e.message)?;
+        let snapshot: api::WorkbenchSnapshot = serde_json::from_value(snapshot)
+            .map_err(|error| format!("workbench.snapshot: {}", parse_failure(&error)))?;
         self.client = Some(client);
         // A new service instance may have reset revisions and event documents.
         // 新的服务实例可能已重置版本号与事件文档。
         self.revision = 0;
         self.windows.clear();
+        self.navigations.clear();
         self.vce_job_sequences.clear();
         self.apply_snapshot(snapshot);
         if let Some(id) = self.selected.clone()
@@ -457,12 +486,44 @@ impl Worker {
         }
     }
 
+    /// Calls one method inline and reads its result as the declared response type.
+    /// 内联调用一个方法，并按声明的响应类型读取结果。
+    /// `method` is the static WebUI RPC method name.
+    /// `method` 为静态 WebUI RPC 方法名。
+    /// `params` is the exact RPC parameter document.
+    /// `params` 为准确 RPC 参数文档。
+    pub(super) fn call_as<T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Option<T> {
+        let value = self.call(method, params)?;
+        self.read(method, value)
+    }
+
+    /// Reads a response as its declared type; a mismatch is reported without echoing values.
+    /// 按声明类型读取响应；不匹配时报告且不回显取值。
+    /// `source` names the method or event that produced `value`.
+    /// `source` 为产生 `value` 的方法或事件名。
+    pub(super) fn read<T: DeserializeOwned>(&self, source: &str, value: Value) -> Option<T> {
+        match serde_json::from_value(value) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.emit(BackendEvent::Notice(Notice::Unreadable {
+                    source: source.to_string(),
+                    detail: parse_failure(&error),
+                }));
+                None
+            }
+        }
+    }
+
     /// Reports a sanitized RPC failure and reconnects on transport loss.
     /// 报告脱敏 RPC 失败，在传输丢失时重连。
     /// `error` is the already-sanitized transport/service error.
     /// `error` 为已经脱敏的传输或服务错误。
     pub(super) fn failed(&mut self, error: RpcError) {
-        self.toast(Severity::Error, error.message.clone());
+        self.toast(NoticeSeverity::Error, error.message.clone());
         if error.transport {
             self.disconnected();
         }
@@ -568,38 +629,28 @@ impl Worker {
         match call.kind.clone() {
             CallKind::Load(slot) => {
                 if slot == Slot::VceJob && !value.is_null() {
-                    if let (Some(project), Some(job), Some(sequence)) = (
-                        value.get("projectId").and_then(Value::as_str),
-                        value.get("jobId").and_then(Value::as_str),
-                        value.get("sequence").and_then(Value::as_u64),
-                    ) {
-                        // Identity.
-                        // 准确协议身份。
-                        let identity = (project.to_string(), job.to_string());
-                        if self
-                            .vce_job_sequences
-                            .get(&identity)
-                            .is_some_and(|last| *last > sequence)
-                        {
-                            return;
-                        }
-                        self.vce_job_sequences.insert(identity, sequence);
-                    } else {
-                        self.toast(Severity::Error, "Invalid VCE job response");
+                    let Some(job) = self.read::<api::VceJobSummary>(call.method, value.clone())
+                    else {
+                        return;
+                    };
+                    let identity = (job.project_id, job.job_id);
+                    if self
+                        .vce_job_sequences
+                        .get(&identity)
+                        .is_some_and(|last| *last > job.sequence)
+                    {
                         return;
                     }
+                    self.vce_job_sequences.insert(identity, job.sequence);
                 }
                 self.emit(BackendEvent::Slot { slot, call, value });
             }
             CallKind::Mutate(slots) => {
-                // Snapshot.
-                // 权威快照。
-                let snapshot = is_snapshot(&value);
-                self.absorb(&value);
                 for slot in slots.iter() {
                     match slot {
-                        Slot::Workbench if !snapshot => self.reload_workbench(),
-                        Slot::Workbench => {}
+                        // Mutation results are not workbench snapshots; read the revisioned one.
+                        // 变更结果不是工作台快照；读取带修订号的快照。
+                        Slot::Workbench => self.reload_workbench(),
                         _ => {
                             if let Some(loader) = self.loaders.get(slot).map(ServiceCall::renewed) {
                                 // Publish authoritative refreshes before unlocking another full-document edit.
@@ -633,7 +684,7 @@ impl Worker {
         // Exact service call.
         // 准确服务调用。
         let call = load_workbench_snapshot();
-        if let Some(snapshot) = self.call(call.method, call.params) {
+        if let Some(snapshot) = self.call_as(call.method, call.params) {
             self.apply_snapshot(snapshot);
         }
     }
@@ -641,12 +692,17 @@ impl Worker {
     /// Emits the workbench slot when the fields system areas read have changed.
     /// 系统区域读取的字段变化时发出工作台槽位。
     pub(super) fn emit_workbench_slot(&mut self) {
+        // The typed snapshot serializes to the wire shape the system pages read.
+        // 类型化快照序列化为系统页面读取的传输形状。
+        let Some(Ok(Value::Object(mut whole))) = self.wb.as_ref().map(serde_json::to_value) else {
+            return;
+        };
         // Subset.
         // 页面所需工作台字段子集。
         let mut subset = Map::new();
         for key in WORKBENCH_SLOT_KEYS {
-            if let Some(value) = self.wb.get(key) {
-                subset.insert(key.to_string(), value.clone());
+            if let Some(value) = whole.remove(key) {
+                subset.insert(key.to_string(), value);
             }
         }
         // Value.
@@ -666,46 +722,23 @@ impl Worker {
 
     // ---- Workbench projection ----
 
-    /// Folds an RPC result in when it is a workbench snapshot or a session addon response.
-    /// RPC 结果为工作台快照或会话附属状态响应时将其折叠进来。
-    /// `value` is the protocol value being read or projected.
-    /// `value` 为正在读取或投影的协议值。
-    pub(super) fn absorb(&mut self, value: &Value) {
-        if is_snapshot(value) {
-            self.apply_snapshot(value.clone());
-        } else if value.get("conversationId").is_some() && value.get("revision").is_some() {
-            // Revision.
-            // 权威修订号。
-            let revision = u64_at(value, "revision");
-            if revision >= self.revision {
-                self.revision = revision;
-                self.upsert_addons(value.clone());
-            }
-        }
-    }
-
-    /// Accepts a sanitized authoritative workbench snapshot and updates typed projections.
-    /// 接受脱敏权威工作台快照并更新类型化投影。
+    /// Accepts an authoritative workbench snapshot and updates typed projections.
+    /// 接受权威工作台快照并更新类型化投影。
     /// `snapshot` is the authoritative service snapshot.
     /// `snapshot` 为权威服务快照。
-    fn apply_snapshot(&mut self, mut snapshot: Value) {
-        // Revision.
-        // 权威修订号。
-        let revision = u64_at(&snapshot, "revision");
-        if revision < self.revision {
+    fn apply_snapshot(&mut self, snapshot: api::WorkbenchSnapshot) {
+        if snapshot.revision < self.revision {
             return;
         }
-        self.revision = revision;
-        scrub_secrets(&mut snapshot);
-        self.wb = snapshot;
+        self.revision = snapshot.revision;
         if self.selected.is_none() {
-            self.selected = opt_str(&self.wb, "selectedConversationId");
+            self.selected = snapshot.selected_conversation_id.clone();
         }
-        // Models; Active.
-        // 可选模型目录；是否处于活动状态。
-        let (models, active) = map::models(arr(&self.wb, "providers"));
-        // Selected model id.
-        // 所选模型路线身份。
+        self.wb = Some(snapshot);
+        let Some(wb) = self.wb.as_ref() else {
+            return;
+        };
+        let (models, active) = map::models(&wb.providers);
         let selected_model_id = self
             .selected
             .as_ref()
@@ -713,29 +746,28 @@ impl Worker {
             .or(active)
             .unwrap_or_default();
         self.emit(BackendEvent::Workbench(WorkbenchSnapshot {
-            projects: map::projects(arr(&self.wb, "projects")),
+            projects: map::projects(&wb.projects),
             conversations: self.conversation_rows(),
             selected_conversation_id: self.selected.clone(),
             models,
             selected_model_id,
-            ui_locale: opt_str(&self.wb, "uiLocale"),
+            ui_locale: wb.ui_locale.clone(),
             base_url: self
                 .client
                 .as_ref()
                 .map(|c| c.base_url().to_string())
                 .unwrap_or_default(),
         }));
-        self.emit(BackendEvent::CommandSessions(map::command_sessions(arr(
-            &self.wb,
-            "commandSessions",
-        ))));
-        // Ids.
-        // 准确身份集合。
-        let mut ids: Vec<String> = arr(&self.wb, "pendingQuestions")
+        self.emit(BackendEvent::CommandSessions(map::command_sessions(
+            &wb.command_sessions,
+        )));
+        let mut ids: Vec<String> = wb
+            .pending_questions
             .iter()
-            .filter_map(|q| opt_str(q, "sessionId"))
+            .map(|question| question.session_id.clone())
             .collect();
         ids.extend(self.selected.clone());
+        ids.sort();
         ids.dedup();
         for id in ids {
             self.emit_question(&id);
@@ -749,12 +781,13 @@ impl Worker {
 
     /// Sidebar rows: service conversations with pending-question attention, then local drafts.
     /// 侧栏行：带等待提问标记的服务会话，以及本地草稿。
-    /// Returns `Vec<ConversationSummary>`.
-    /// 返回 `Vec<ConversationSummary>`。
     fn conversation_rows(&self) -> Vec<ConversationSummary> {
-        // Current operation rows.
-        // 当前操作的行集合。
-        let mut rows = map::conversations(arr(&self.wb, "conversations"));
+        let mut rows: Vec<ConversationSummary> = self
+            .wb
+            .iter()
+            .flat_map(|wb| &wb.conversations)
+            .map(map::conversation)
+            .collect();
         for row in &mut rows {
             row.attention |= self.question_of(&row.id).is_some();
         }
@@ -768,15 +801,14 @@ impl Worker {
     /// 查找准确会话身份的类型化摘要。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
-    /// Returns `Option<ConversationSummary>`.
-    /// 返回 `Option<ConversationSummary>`。
     fn summary(&self, id: &str) -> Option<ConversationSummary> {
-        // Current row.
-        // 当前条目。
-        let mut row = arr(&self.wb, "conversations")
+        let mut row = self
+            .wb
+            .as_ref()?
+            .conversations
             .iter()
-            .find(|c| str_at(c, "id") == id)
-            .and_then(map::conversation)?;
+            .find(|conversation| conversation.id == id)
+            .map(map::conversation)?;
         row.attention |= self.question_of(id).is_some();
         Some(row)
     }
@@ -785,36 +817,44 @@ impl Worker {
     /// 查找准确会话中由服务持有的待回复提问。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
-    /// Returns `Option<&Value>`.
-    /// 返回 `Option<&Value>`。
-    fn question_of(&self, id: &str) -> Option<&Value> {
-        arr(&self.wb, "pendingQuestions")
+    fn question_of(&self, id: &str) -> Option<&api::PendingQuestionSnapshot> {
+        self.wb
+            .as_ref()?
+            .pending_questions
             .iter()
-            .find(|q| str_at(q, "sessionId") == id)
+            .find(|question| question.session_id == id)
     }
 
-    /// Entry of a `[{conversationId, ...}]` list in the workbench.
-    /// 工作台中 `[{conversationId, ...}]` 列表的条目。
-    /// `list` is the protocol row collection.
-    /// `list` 为协议行集合。
-    /// `id` is the exact entity identity.
-    /// `id` 为准确实体身份。
-    /// Returns `Option<&Value>`.
-    /// 返回 `Option<&Value>`。
-    fn entry(&self, list: &str, id: &str) -> Option<&Value> {
-        arr(&self.wb, list)
+    /// Session add-ons of the exact conversation.
+    /// 准确会话的会话附加状态。
+    fn addons(&self, id: &str) -> Option<&api::SessionAddonsChangedDelta> {
+        self.wb
+            .as_ref()?
+            .session_addons_by_conversation
             .iter()
-            .find(|e| str_at(e, "conversationId") == id)
+            .find(|entry| entry.conversation_id == id)
     }
 
-    /// Publishes the exact current pending question for a selected conversation.
-    /// 发布所选会话当前准确的待回复提问。
+    /// Context injection of the exact conversation.
+    /// 准确会话的上下文注入。
+    fn injection(&self, id: &str) -> Option<&api::ContextInjectionSnapshot> {
+        self.wb
+            .as_ref()?
+            .context_injection_by_conversation
+            .iter()
+            .find(|entry| entry.conversation_id == id)?
+            .context_injection
+            .as_ref()
+    }
+
+    /// Publishes the exact current pending question for a conversation.
+    /// 发布会话当前准确的待回复提问。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     fn emit_question(&self, id: &str) {
         self.emit(BackendEvent::PendingQuestion {
             conversation_id: id.to_string(),
-            question: self.question_of(id).and_then(map::pending_question),
+            question: self.question_of(id).map(map::pending_question),
         });
     }
 
@@ -823,58 +863,59 @@ impl Worker {
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     fn emit_conversation_state(&self, id: &str) {
-        // Conversation id.
-        // 准确会话身份。
         let conversation_id = id.to_string();
+        let prompts = self
+            .wb
+            .iter()
+            .flat_map(|wb| &wb.pending_prompts_by_conversation)
+            .find(|entry| entry.conversation_id == id)
+            .map(|entry| map::pending_prompts(&entry.pending_prompts))
+            .unwrap_or_default();
         self.emit(BackendEvent::PendingPrompts {
             conversation_id: conversation_id.clone(),
-            prompts: self
-                .entry("pendingPromptsByConversation", id)
-                .map(|e| map::pending_prompts(arr(e, "pendingPrompts")))
-                .unwrap_or_default(),
+            prompts,
         });
         self.emit_addons(id);
         self.emit_agents(id);
-        if self.service_selected(id) {
+        if let Some(usage) = self.selected_usage(id) {
             self.emit(BackendEvent::ContextUsage {
                 conversation_id,
-                usage: map::context_usage(at(&self.wb, "contextUsage")),
+                usage: map::context_usage(usage),
             });
         }
     }
 
-    /// Top-level selected-conversation fields only describe the service's own selection.
-    /// 顶层的选中会话字段只描述服务自身的选中项。
+    /// Context usage, which the workbench only publishes for the service's own selection.
+    /// 上下文用量；工作台只为服务自身的选中会话发布它。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
-    /// Returns `bool`.
-    /// 返回 `bool`。
-    fn service_selected(&self, id: &str) -> bool {
-        str_at(&self.wb, "selectedConversationId") == id
+    fn selected_usage(&self, id: &str) -> Option<&api::ContextUsageSnapshot> {
+        let wb = self.wb.as_ref()?;
+        if wb.selected_conversation_id.as_deref() != Some(id) {
+            return None;
+        }
+        wb.context_usage.as_ref()
     }
 
-    /// Publishes the current conversation planning and command-session add-ons.
-    /// 发布当前会话的规划及命令会话附加信息。
+    /// Publishes the current conversation planning add-ons and panel insight.
+    /// 发布当前会话的规划附加信息与面板洞察。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     fn emit_addons(&self, id: &str) {
-        // Addons.
-        // 会话附加状态。
-        let addons = self.entry("sessionAddonsByConversation", id);
-        // Conversation id.
-        // 准确会话身份。
+        let addons = self.addons(id);
         let conversation_id = id.to_string();
         self.emit(BackendEvent::Todo {
             conversation_id: conversation_id.clone(),
             items: addons
-                .map(|a| map::todo(at(a, "sessionTodolist")))
+                .and_then(|a| a.session_todolist.as_ref())
+                .map(map::todo)
                 .unwrap_or_default(),
         });
         self.emit(BackendEvent::PlanMode {
             conversation_id,
             mode: addons
-                .map(|a| map::plan_mode(at(a, "sessionPlanMode")))
-                .unwrap_or(ExecutionMode::Build),
+                .and_then(|a| a.session_plan_mode.as_ref())
+                .map_or(ExecutionMode::Build, map::plan_mode),
         });
         self.emit_insight(id);
     }
@@ -884,45 +925,31 @@ impl Worker {
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     fn emit_insight(&self, id: &str) {
-        // Addons.
-        // 会话附加状态。
-        let addons = self.entry("sessionAddonsByConversation", id);
-        // Usage.
-        // 已发布用量。
-        let usage = addons.map(|a| at(a, "sessionProviderUsage"));
-        // Lifetime.
-        // 会话累计用量。
-        let mut lifetime = usage.map(map::lifetime).unwrap_or_default();
+        let addons = self.addons(id);
+        let mut lifetime = addons
+            .and_then(|a| a.session_provider_usage.as_deref())
+            .map(map::lifetime)
+            .unwrap_or_default();
         // Child usage is keyed by child session id; show the subagent label where known.
         // 子项用量以子会话 ID 为键；已知时显示子代理标签。
-        let navigation = self.navigation(id);
-        for (key, _) in &mut lifetime.children {
-            if let Some(task) = navigation
-                .map(|n| arr(n, "tasks"))
-                .unwrap_or_default()
-                .iter()
-                .find(|t| str_at(t, "taskId") == *key)
-            {
-                *key = str_at(task, "label");
+        if let Some(navigation) = self.navigation(id) {
+            for (key, _) in &mut lifetime.children {
+                if let Some(task) = navigation.tasks.iter().find(|t| t.task_id == *key) {
+                    *key = task.label.clone();
+                }
             }
         }
-        // Breakdown.
-        // 上下文组成明细。
-        let breakdown = if self.service_selected(id) {
-            map::breakdown(at(&self.wb, "contextUsage"))
-        } else {
-            Vec::new()
-        };
-        // Insight.
-        // 会话面板状态。
         let insight = SessionInsight {
             memory: self
-                .entry("contextInjectionByConversation", id)
-                .map(|e| map::context_injection(at(e, "contextInjection")))
+                .injection(id)
+                .map(map::context_injection)
                 .unwrap_or_default(),
             lifetime,
-            breakdown,
-            goal: addons.and_then(|a| map::goal(at(a, "sessionGoal"))),
+            breakdown: self
+                .selected_usage(id)
+                .map(map::breakdown)
+                .unwrap_or_default(),
+            goal: addons.and_then(|a| a.session_goal.as_ref()).map(map::goal),
         };
         self.emit(BackendEvent::SessionInsight {
             conversation_id: id.to_string(),
@@ -930,22 +957,19 @@ impl Worker {
         });
     }
 
-    /// Finds the service subagent navigation for the exact parent conversation.
-    /// 查找准确父会话的服务子代理导航。
+    /// Subagent navigation of the exact parent conversation: the latest navigation delta for it,
+    /// else the workbench navigation when it belongs to that parent.
+    /// 准确父会话的子代理导航：该会话最近一次的导航增量，否则为属于该父会话的工作台导航。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
-    /// Returns `Option<&Value>`.
-    /// 返回 `Option<&Value>`。
-    fn navigation(&self, id: &str) -> Option<&Value> {
-        arr(&self.wb, "subagentNavigationByConversation")
-            .iter()
-            .find(|n| str_at(n, "parentConversationId") == id)
-            .or_else(|| {
-                // Nav.
-                // 当前导航状态。
-                let nav = at(&self.wb, "subagentNavigation");
-                (str_at(nav, "parentConversationId") == id).then_some(nav)
-            })
+    fn navigation(&self, id: &str) -> Option<&api::SubagentNavigationSnapshot> {
+        self.navigations.get(id).or_else(|| {
+            self.wb
+                .as_ref()?
+                .subagent_navigation
+                .as_ref()
+                .filter(|navigation| navigation.parent_conversation_id == id)
+        })
     }
 
     /// Publishes the selected parent conversation subagent list.
@@ -959,30 +983,53 @@ impl Worker {
         });
     }
 
+    /// Records the navigation of one parent conversation; `None` clears it.
+    /// 记录一个父会话的导航；`None` 表示清除。
+    fn set_navigation(
+        &mut self,
+        parent: &str,
+        navigation: Option<api::SubagentNavigationSnapshot>,
+    ) {
+        match navigation {
+            Some(navigation) => {
+                self.navigations.insert(parent.to_string(), navigation);
+            }
+            None => {
+                self.navigations.remove(parent);
+            }
+        }
+        // The workbench copy is older than the delta for this parent.
+        // 对该父会话而言，工作台副本早于增量。
+        if let Some(wb) = self.wb.as_mut()
+            && wb
+                .subagent_navigation
+                .as_ref()
+                .is_some_and(|navigation| navigation.parent_conversation_id == parent)
+        {
+            wb.subagent_navigation = None;
+        }
+        self.emit_agents(parent);
+        self.emit_insight(parent);
+    }
+
     /// Reasoning effort choices of the service-selected conversation's model.
     /// 服务选中会话所用模型的推理强度选项。
     fn emit_effort(&self) {
-        // Exact entity identity.
-        // 准确实体身份。
         let Some(id) = self.selected.clone() else {
             return;
         };
-        // Model id.
-        // 准确模型身份。
         let model_id = self.model_keys.get(&id).cloned().unwrap_or_default();
-        // Selection.
-        // 已批准选择。
-        let selection = at(&self.wb, "reasoningSelection");
-        // Efforts.
-        // 模型准入的推理强度列表。
-        let mut efforts: Vec<ReasoningEffort> = arr(selection, "options")
+        let selection = self
+            .wb
+            .as_ref()
+            .and_then(|wb| wb.reasoning_selection.as_ref());
+        let mut efforts: Vec<ReasoningEffort> = selection
             .iter()
-            .filter_map(|o| map::effort(&str_at(o, "value")))
+            .flat_map(|selection| &selection.options)
+            .filter_map(|option| map::effort(&option.value))
             .collect();
         efforts.dedup();
-        // Effort.
-        // 当前推理强度。
-        let effort = map::effort(&str_at(selection, "selectedEffort"));
+        let effort = selection.and_then(|selection| map::effort(&selection.selected_effort));
         self.emit(BackendEvent::ModelSelection {
             model_id,
             effort,
@@ -992,88 +1039,88 @@ impl Worker {
 
     /// Workbench value for an effort, picked from the current model's own options.
     /// 推理强度对应的工作台取值，从当前模型自身的选项中挑选。
-    /// Returns `Option<String>`.
-    /// 返回 `Option<String>`。
     fn effort_value(&self, effort: ReasoningEffort) -> Option<String> {
-        arr(&self.wb, "reasoningSelection.options")
+        self.wb
+            .as_ref()?
+            .reasoning_selection
+            .as_ref()?
+            .options
             .iter()
-            .map(|o| str_at(o, "value"))
-            .find(|v| map::effort(v) == Some(effort))
+            .map(|option| option.value.clone())
+            .find(|value| map::effort(value) == Some(effort))
     }
 
-    /// Updates one exact workbench field and emits its changed page projection.
-    /// 更新一个准确工作台字段并发布变化的页面投影。
-    /// `value` is the protocol value being read or projected.
-    /// `value` 为正在读取或投影的协议值。
-    fn set_wb(&mut self, key: &str, value: Value) {
-        if let Some(object) = self.wb.as_object_mut() {
-            object.insert(key.to_string(), value);
+    /// Replaces the add-on row of one conversation; a row without add-ons is removed.
+    /// 替换一个会话的附加状态行；没有附加状态的行被移除。
+    fn upsert_addons(&mut self, entry: api::SessionAddonsChangedDelta) {
+        let id = entry.conversation_id.clone();
+        let present = entry.session_goal.is_some()
+            || entry.session_todolist.is_some()
+            || entry.session_plan_mode.is_some()
+            || entry.session_output_style.is_some()
+            || entry.session_context_compaction_window_node_id.is_some()
+            || entry.session_provider_usage.is_some();
+        if let Some(wb) = self.wb.as_mut() {
+            wb.session_addons_by_conversation
+                .retain(|row| row.conversation_id != id);
+            if present {
+                wb.session_addons_by_conversation.push(entry);
+            }
         }
-    }
-
-    /// Replaces one `[{conversationId, ...}]` entry; `None` removes it.
-    /// 替换一个 `[{conversationId, ...}]` 条目；`None` 表示移除。
-    /// `list` is the protocol row collection.
-    /// `list` 为协议行集合。
-    /// `id` is the exact entity identity.
-    /// `id` 为准确实体身份。
-    fn upsert_entry(&mut self, list: &str, id: &str, entry: Option<Value>) {
-        // Items.
-        // 当前条目集合。
-        let mut items: Vec<Value> = arr(&self.wb, list)
-            .iter()
-            .filter(|e| str_at(e, "conversationId") != id)
-            .cloned()
-            .collect();
-        items.extend(entry);
-        self.set_wb(list, Value::Array(items));
-    }
-
-    /// Replaces the exact conversation add-on row in the workbench authority.
-    /// 替换工作台权威数据中的准确会话附加信息行。
-    fn upsert_addons(&mut self, entry: Value) {
-        // Exact entity identity.
-        // 准确实体身份。
-        let id = str_at(&entry, "conversationId");
-        // Present.
-        // 是否存在已观察状态。
-        let present = [
-            "sessionGoal",
-            "sessionTodolist",
-            "sessionPlanMode",
-            "sessionOutputStyle",
-            "sessionContextCompactionWindowNodeId",
-            "sessionProviderUsage",
-        ]
-        .iter()
-        .any(|k| !at(&entry, k).is_null());
-        self.upsert_entry("sessionAddonsByConversation", &id, present.then_some(entry));
         self.emit_addons(&id);
     }
 
-    /// Applies one verified field update to an existing conversation row.
-    /// 对已有会话行应用一次已确认字段更新。
+    /// Folds an add-on RPC response in when it is not older than the workbench.
+    /// 附加状态 RPC 响应不早于工作台时将其折叠进来。
+    fn absorb_addons(&mut self, response: api::SessionAddonsChangedResponse) {
+        if response.revision < self.revision {
+            return;
+        }
+        self.revision = response.revision;
+        self.upsert_addons(api::SessionAddonsChangedDelta {
+            conversation_id: response.conversation_id,
+            session_goal: response.session_goal,
+            session_todolist: response.session_todolist,
+            session_plan_mode: response.session_plan_mode,
+            session_vmm_policy: response.session_vmm_policy,
+            session_output_style: response.session_output_style,
+            session_context_compaction_window_node_id: response
+                .session_context_compaction_window_node_id,
+            session_provider_usage: response.session_provider_usage.map(Box::new),
+        });
+    }
+
+    /// Folds a subagent route response in when it is not older than the workbench.
+    /// 子代理路由响应不早于工作台时将其折叠进来。
+    fn absorb_route(&mut self, response: api::SubagentPanelRouteResponse) {
+        if response.revision < self.revision {
+            return;
+        }
+        self.revision = response.revision;
+        let parent = response.parent_conversation_id.or_else(|| {
+            response
+                .subagent_navigation
+                .as_ref()
+                .map(|navigation| navigation.parent_conversation_id.clone())
+        });
+        if let Some(parent) = parent {
+            self.set_navigation(&parent, response.subagent_navigation);
+        }
+    }
+
+    /// Applies one field update to an existing conversation row and publishes the row.
+    /// 对已有会话行应用一次字段更新并发布该行。
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
-    /// `patch` is the exact delta or field update to fold.
-    /// `patch` 为需要折叠的准确增量或字段更新。
-    fn patch_conversation(&mut self, id: &str, patch: impl FnOnce(&mut Map<String, Value>)) {
-        // List.
-        // 当前列表。
-        let Some(list) = self
+    fn patch_conversation(&mut self, id: &str, patch: impl FnOnce(&mut api::ConversationSummary)) {
+        let Some(row) = self
             .wb
-            .get_mut("conversations")
-            .and_then(Value::as_array_mut)
+            .as_mut()
+            .and_then(|wb| wb.conversations.iter_mut().find(|c| c.id == id))
         else {
             return;
         };
-        if let Some(object) = list
-            .iter_mut()
-            .find(|c| str_at(c, "id") == id)
-            .and_then(Value::as_object_mut)
-        {
-            patch(object);
-        }
+        patch(row);
         if let Some(row) = self.summary(id) {
             self.emit(BackendEvent::ConversationSummary(row));
         }
@@ -1084,15 +1131,21 @@ impl Worker {
     /// `ids` is the exact selected identity set.
     /// `ids` 为准确的所选身份集合。
     fn remove_conversations(&mut self, ids: &[String]) {
-        if let Some(list) = self
-            .wb
-            .get_mut("conversations")
-            .and_then(Value::as_array_mut)
-        {
-            list.retain(|c| !ids.contains(&str_at(c, "id")));
+        // Only rows still listed are announced, so overlapping deltas remove each row once.
+        // 只公告仍在列表中的行，使重叠的增量对每行只移除一次。
+        let mut removed = Vec::new();
+        if let Some(wb) = self.wb.as_mut() {
+            wb.conversations.retain(|c| {
+                let keep = !ids.contains(&c.id);
+                if !keep {
+                    removed.push(c.id.clone());
+                }
+                keep
+            });
         }
-        for id in ids {
+        for id in &removed {
             self.windows.remove(id);
+            self.navigations.remove(id);
             if self.selected.as_ref() == Some(id) {
                 self.selected = None;
             }
@@ -1100,242 +1153,197 @@ impl Worker {
         }
     }
 
+    /// Moves archived conversations from the live list into the archived list.
+    /// 将已归档会话从活动列表移入归档列表。
+    /// `archived` is the exact archive delta list.
+    /// `archived` 为准确的归档增量列表。
+    fn archive(&mut self, archived: Vec<api::ConversationArchivedDelta>) {
+        let ids: Vec<String> = archived
+            .iter()
+            .map(|entry| entry.conversation_id.clone())
+            .collect();
+        self.remove_conversations(&ids);
+        if let Some(wb) = self.wb.as_mut() {
+            for summary in archived
+                .into_iter()
+                .filter_map(|entry| entry.archived_conversation)
+            {
+                wb.archived_conversations.retain(|row| row.id != summary.id);
+                wb.archived_conversations.insert(0, summary);
+            }
+        }
+        self.emit_workbench_slot();
+    }
+
     // ---- Service events ----
 
-    /// Dispatches a sanitized service event to its protocol-defined state handler.
-    /// 将脱敏服务事件分发到其协议规定的状态处理器。
-    /// `kind` is the declared event or operation family.
-    /// `kind` 为已声明的事件或操作类别。
-    /// `payload` is the declared request or event payload.
-    /// `payload` 为已声明的请求或事件载荷。
-    fn service_event(&mut self, kind: &str, mut payload: Value) {
-        scrub_secrets(&mut payload);
-        match kind {
-            "workbench" => self.apply_snapshot(payload),
-            "workbenchDelta" => self.workbench_delta(payload),
-            "conversationEventDeltaV1" => self.event_delta(payload),
-            "workspaceGitChanged" => {
-                if self.git.matches(&str_at(&payload, "workspacePath")) {
+    /// Dispatches one service event to its protocol-defined state handler.
+    /// 将一个服务事件分发到其协议规定的状态处理器。
+    /// `event` is the strictly parsed service event.
+    /// `event` 为严格解析的服务事件。
+    fn service_event(&mut self, event: api::ServiceEvent) {
+        match event {
+            api::ServiceEvent::Workbench(snapshot) => self.apply_snapshot(*snapshot),
+            api::ServiceEvent::WorkbenchDelta(envelope) => self.workbench_delta(*envelope),
+            api::ServiceEvent::ConversationEventDeltaV1(delta) => self.event_delta(*delta),
+            api::ServiceEvent::WorkspaceGitChanged(change) => {
+                if self.git.matches(&change.workspace_path) {
                     self.git_refresh();
                 }
             }
-            "sessionAddonChanged" => {
-                if !at(&payload, "conversationId").is_null() {
-                    self.upsert_addons(payload);
-                }
-            }
-            "vceProjectChanged" => {
+            api::ServiceEvent::VceProjectChanged(change) => {
                 for slot in [Slot::VceOverview, Slot::VceStatus] {
                     if let Some(loader) = self.loaders.get(&slot).cloned()
                         && (slot == Slot::VceStatus
-                            || loader.param("/request/projectId") == &payload["projectId"])
+                            || loader.param("/request/projectId") == change.project_id.as_str())
                     {
                         self.service_call(loader);
                     }
                 }
             }
-            "vceJobChanged" => {
-                if let Some(loader) = self.loaders.get(&Slot::VceJob).cloned()
-                    && loader.param("/request/projectId") == &payload["projectId"]
-                {
-                    // Project.
-                    // 所选项目数据。
-                    let Some(project) = payload.get("projectId").and_then(Value::as_str) else {
-                        return;
-                    };
-                    // Job.
-                    // 持久任务回执。
-                    let Some(job) = payload.get("jobId").and_then(Value::as_str) else {
-                        return;
-                    };
-                    // Sequence.
-                    // 单调序号。
-                    let Some(sequence) = payload.get("sequence").and_then(Value::as_u64) else {
-                        return;
-                    };
-                    // Identity.
-                    // 准确协议身份。
-                    let identity = (project.to_string(), job.to_string());
-                    if self
-                        .vce_job_sequences
-                        .get(&identity)
-                        .is_some_and(|last| *last >= sequence)
-                    {
-                        return;
-                    }
-                    self.vce_job_sequences.insert(identity, sequence);
-                    // An event is newer authority than any previously dispatched job read.
-                    // 事件的权威状态新于此前发送的任务读取。
-                    *self.load_sequences.entry(Slot::VceJob).or_default() += 1;
-                    self.emit(BackendEvent::Slot {
-                        slot: Slot::VceJob,
-                        call: loader,
-                        value: payload.clone(),
-                    });
-                    if matches!(
-                        payload.get("state").and_then(Value::as_str),
-                        Some("succeeded" | "failed" | "cancelled" | "interrupted")
-                    ) && let Some(overview) = self.loaders.get(&Slot::VceOverview).cloned()
-                    {
-                        self.service_call(overview);
-                    }
-                }
-            }
+            api::ServiceEvent::VceJobChanged(job) => self.vce_job(*job),
             _ => {}
         }
     }
 
-    /// Folds revision-checked workbench deltas without inventing replacement fields.
-    /// 折叠检查修订后的工作台增量，不虚构替代字段。
-    /// `envelope` is the service revision/delta envelope.
-    /// `envelope` 为服务修订或增量信封。
-    fn workbench_delta(&mut self, envelope: Value) {
-        // Generation.
-        // 当前连接或文档代际。
-        let generation = u64_at(&envelope, "generation");
-        // Kind.
-        // 已声明的操作类别。
-        let kind = str_at(&envelope, "delta.kind");
-        // Independent.
-        // 是否为独立生命周期事件。
-        let independent = matches!(
-            kind.as_str(),
-            "conversationArchived"
-                | "conversationsArchived"
-                | "projectRemoved"
-                | "agentSkillsCatalogChanged"
-                | "luaSkillsCatalogChanged"
-                | "subagentCatalogChanged"
-                | "pluginCatalogChanged"
-                | "projectSettingsChanged"
-                | "luaSkillsManagedRuntimeProgressChanged"
-                | "luaSkillsOperationProgressChanged"
-        );
-        if !independent && generation <= self.revision {
+    /// Publishes a VCE job update for the loaded project unless an equal or newer one was seen.
+    /// 为已加载项目发布 VCE 任务更新，除非已见过相同或更新的序号。
+    fn vce_job(&mut self, job: api::VceJobSummary) {
+        let Some(loader) = self.loaders.get(&Slot::VceJob).cloned() else {
+            return;
+        };
+        if loader.param("/request/projectId") != job.project_id.as_str() {
             return;
         }
-        self.revision = self.revision.max(generation);
-        // Payload.
-        // 已声明载荷。
-        let payload = at(&envelope, "delta.payload").clone();
-        match kind.as_str() {
-            "updateConversationRunPhase" => {
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = str_at(&payload, "conversationId");
-                self.patch_conversation(&id, |c| {
-                    for key in ["runPhase", "status", "lastUpdatedLabel"] {
-                        if let Some(value) = payload.get(key).filter(|v| !v.is_null()) {
-                            c.insert(key.into(), value.clone());
-                        }
+        let identity = (job.project_id.clone(), job.job_id.clone());
+        if self
+            .vce_job_sequences
+            .get(&identity)
+            .is_some_and(|last| *last >= job.sequence)
+        {
+            return;
+        }
+        self.vce_job_sequences.insert(identity, job.sequence);
+        // An event is newer authority than any previously dispatched job read.
+        // 事件的权威状态新于此前发送的任务读取。
+        *self.load_sequences.entry(Slot::VceJob).or_default() += 1;
+        let finished = matches!(
+            job.state,
+            api::VceJobStateSummary::Succeeded
+                | api::VceJobStateSummary::Failed
+                | api::VceJobStateSummary::Cancelled
+                | api::VceJobStateSummary::Interrupted
+        );
+        let mut value = serde_json::to_value(&job).unwrap_or(Value::Null);
+        scrub_secrets(&mut value);
+        self.emit(BackendEvent::Slot {
+            slot: Slot::VceJob,
+            call: loader,
+            value,
+        });
+        if finished && let Some(overview) = self.loaders.get(&Slot::VceOverview).cloned() {
+            self.service_call(overview);
+        }
+    }
+
+    /// Folds revision-checked workbench deltas.
+    /// 折叠检查修订后的工作台增量。
+    /// `envelope` is the service revision/delta envelope.
+    /// `envelope` 为服务修订或增量信封。
+    fn workbench_delta(&mut self, envelope: api::WorkbenchDeltaEnvelope) {
+        use api::WorkbenchDelta as Delta;
+        // Lifecycle and catalog deltas are not ordered against conversation revisions.
+        // 生命周期与目录增量不按会话修订号排序。
+        let independent = matches!(
+            envelope.delta,
+            Delta::ConversationArchived(_)
+                | Delta::ConversationsArchived(_)
+                | Delta::ProjectRemoved(_)
+                | Delta::AgentSkillsCatalogChanged(_)
+                | Delta::LuaSkillsCatalogChanged(_)
+                | Delta::SubagentCatalogChanged(_)
+                | Delta::PluginCatalogChanged(_)
+                | Delta::ProjectSettingsChanged(_)
+                | Delta::LuaSkillsManagedRuntimeProgressChanged(_)
+                | Delta::LuaSkillsOperationProgressChanged(_)
+        );
+        if !independent && envelope.generation <= self.revision {
+            return;
+        }
+        self.revision = self.revision.max(envelope.generation);
+        if self.wb.is_none() {
+            return;
+        }
+        match envelope.delta {
+            Delta::UpdateConversationRunPhase(delta) => {
+                self.patch_conversation(&delta.conversation_id, |row| {
+                    row.run_phase = delta.run_phase;
+                    if let Some(status) = delta.status {
+                        row.status = status;
+                    }
+                    if let Some(label) = delta.last_updated_label {
+                        row.last_updated_label = label;
                     }
                 });
             }
-            "pendingPromptsChanged" => {
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = str_at(&payload, "conversationId");
-                self.upsert_entry("pendingPromptsByConversation", &id, Some(payload.clone()));
+            Delta::PendingPromptsChanged(delta) => {
+                let prompts = map::pending_prompts(&delta.pending_prompts);
+                let conversation_id = delta.conversation_id.clone();
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.pending_prompts_by_conversation
+                        .retain(|entry| entry.conversation_id != conversation_id);
+                    wb.pending_prompts_by_conversation.push(delta);
+                }
                 self.emit(BackendEvent::PendingPrompts {
-                    conversation_id: id,
-                    prompts: map::pending_prompts(arr(&payload, "pendingPrompts")),
+                    conversation_id,
+                    prompts,
                 });
             }
-            "conversationSummaryChanged" => {
-                // Conversation.
-                // 当前会话数据。
-                let conversation = at(&payload, "conversation").clone();
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = str_at(&conversation, "id");
-                if let Some(list) = self
-                    .wb
-                    .get_mut("conversations")
-                    .and_then(Value::as_array_mut)
-                {
-                    match list.iter_mut().find(|c| str_at(c, "id") == id) {
-                        Some(row) => *row = conversation,
-                        None => list.insert(0, conversation),
+            Delta::ConversationSummaryChanged(delta) => {
+                let id = delta.conversation.id.clone();
+                if let Some(wb) = self.wb.as_mut() {
+                    match wb.conversations.iter_mut().find(|c| c.id == id) {
+                        Some(row) => *row = delta.conversation,
+                        None => wb.conversations.insert(0, delta.conversation),
                     }
                 }
                 if let Some(row) = self.summary(&id) {
                     self.emit(BackendEvent::ConversationSummary(row));
                 }
             }
-            "conversationArchived" => {
-                self.remove_conversations(&[str_at(&payload, "conversationId")]);
-                self.emit_workbench_slot();
-            }
-            "conversationsArchived" => {
-                // Ids.
-                // 准确身份集合。
-                let ids: Vec<String> = arr(&payload, "archivedConversations")
+            Delta::ConversationArchived(delta) => self.archive(vec![delta]),
+            Delta::ConversationsArchived(delta) => self.archive(delta.archived_conversations),
+            Delta::ProjectRemoved(delta) => {
+                let ids: Vec<String> = self
+                    .wb
                     .iter()
-                    .map(|c| str_at(c, "id"))
+                    .flat_map(|wb| &wb.conversations)
+                    .filter(|c| c.project_id.as_deref() == Some(delta.project_id.as_str()))
+                    .map(|c| c.id.clone())
                     .collect();
                 self.remove_conversations(&ids);
-                self.emit_workbench_slot();
+                self.emit(BackendEvent::Projects(map::projects(&delta.projects)));
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.projects = delta.projects;
+                    wb.expanded_project_ids = delta.expanded_project_ids;
+                }
+                self.archive(delta.archived_conversations);
             }
-            "projectRemoved" => {
-                // Project id.
-                // 准确宿主项目身份。
-                let project_id = str_at(&payload, "projectId");
-                // Ids.
-                // 准确身份集合。
-                let ids: Vec<String> = arr(&self.wb, "conversations")
-                    .iter()
-                    .filter(|c| str_at(c, "projectId") == project_id)
-                    .map(|c| str_at(c, "id"))
-                    .collect();
-                self.remove_conversations(&ids);
-                self.set_wb("projects", at(&payload, "projects").clone());
-                self.emit(BackendEvent::Projects(map::projects(arr(
-                    &payload, "projects",
-                ))));
-                self.emit_workbench_slot();
-            }
-            "pendingQuestionChanged" => {
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = opt_str(&payload, "conversationId");
-                // Questions.
-                // 已发布待回复提问。
-                let questions = match payload.get("pendingQuestions").filter(|v| v.is_array()) {
-                    Some(list) => list.clone(),
-                    None => {
-                        // List.
-                        // 当前列表。
-                        let mut list: Vec<Value> = arr(&self.wb, "pendingQuestions")
-                            .iter()
-                            .filter(|q| {
-                                id.as_deref().is_some_and(|id| str_at(q, "sessionId") != id)
-                            })
-                            .cloned()
-                            .collect();
-                        list.extend(
-                            payload
-                                .get("pendingQuestion")
-                                .filter(|v| !v.is_null())
-                                .cloned(),
-                        );
-                        Value::Array(list)
-                    }
+            Delta::PendingQuestionChanged(delta) => {
+                // The delta always carries the full pending list (`pendingQuestions`), which the
+                // WebUI also takes as authoritative.
+                // 增量始终携带完整的待回复列表（`pendingQuestions`），WebUI 同样以其为准。
+                let Some(wb) = self.wb.as_mut() else {
+                    return;
                 };
-                // Before.
-                // 修改前观察值。
-                let before: Vec<String> = arr(&self.wb, "pendingQuestions")
+                let mut touched: Vec<String> = wb
+                    .pending_questions
                     .iter()
-                    .map(|q| str_at(q, "sessionId"))
+                    .chain(&delta.pending_questions)
+                    .map(|question| question.session_id.clone())
+                    .chain(delta.conversation_id)
                     .collect();
-                self.set_wb("pendingQuestions", questions);
-                // Touched.
-                // 受增量影响的身份集合。
-                let mut touched: Vec<String> = arr(&self.wb, "pendingQuestions")
-                    .iter()
-                    .map(|q| str_at(q, "sessionId"))
-                    .chain(before)
-                    .chain(id)
-                    .collect();
+                wb.pending_questions = delta.pending_questions;
                 touched.sort();
                 touched.dedup();
                 for id in touched {
@@ -1345,81 +1353,77 @@ impl Worker {
                     }
                 }
             }
-            "commandSessionsChanged" => {
-                self.set_wb("commandSessions", at(&payload, "commandSessions").clone());
-                self.emit(BackendEvent::CommandSessions(map::command_sessions(arr(
-                    &payload,
-                    "commandSessions",
-                ))));
-            }
-            "subagentNavigationChanged" => {
-                // Navigation.
-                // 子代理导航状态。
-                let navigation = at(&payload, "subagentNavigation").clone();
-                // Parent.
-                // 准确父会话身份。
-                let Some(parent) = opt_str(&payload, "parentConversationId")
-                    .or_else(|| opt_str(&navigation, "parentConversationId"))
-                else {
-                    return;
-                };
-                // List.
-                // 当前列表。
-                let mut list: Vec<Value> = arr(&self.wb, "subagentNavigationByConversation")
-                    .iter()
-                    .filter(|n| str_at(n, "parentConversationId") != parent)
-                    .cloned()
-                    .collect();
-                if !navigation.is_null() {
-                    list.push(navigation);
+            Delta::CommandSessionsChanged(delta) => {
+                self.emit(BackendEvent::CommandSessions(map::command_sessions(
+                    &delta.command_sessions,
+                )));
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.command_sessions = delta.command_sessions;
                 }
-                self.set_wb("subagentNavigationByConversation", Value::Array(list));
-                if str_at(&self.wb, "subagentNavigation.parentConversationId") == parent {
-                    self.set_wb("subagentNavigation", Value::Null);
-                }
-                self.emit_agents(&parent);
-                self.emit_insight(&parent);
             }
-            "contextUsageChanged" => {
-                self.set_wb("contextUsage", at(&payload, "contextUsage").clone());
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = str_at(&self.wb, "selectedConversationId");
-                if !id.is_empty() {
-                    self.emit(BackendEvent::ContextUsage {
-                        conversation_id: id.clone(),
-                        usage: map::context_usage(at(&self.wb, "contextUsage")),
-                    });
+            Delta::SubagentNavigationChanged(delta) => {
+                let parent = delta.parent_conversation_id.clone().or_else(|| {
+                    delta
+                        .subagent_navigation
+                        .as_ref()
+                        .map(|navigation| navigation.parent_conversation_id.clone())
+                });
+                if let Some(parent) = parent {
+                    self.set_navigation(&parent, delta.subagent_navigation);
+                }
+            }
+            Delta::ContextUsageChanged(delta) => {
+                let selected = self.wb.as_mut().and_then(|wb| {
+                    wb.context_usage = delta.context_usage;
+                    wb.selected_conversation_id.clone()
+                });
+                if let Some(id) = selected {
+                    if let Some(usage) = self.selected_usage(&id) {
+                        self.emit(BackendEvent::ContextUsage {
+                            conversation_id: id.clone(),
+                            usage: map::context_usage(usage),
+                        });
+                    }
                     self.emit_insight(&id);
                 }
             }
-            "contextInjectionChanged" => {
-                // Exact entity identity.
-                // 准确实体身份。
-                let id = str_at(&payload, "conversationId");
-                // Entry.
-                // 当前目录条目。
-                let entry = (!at(&payload, "contextInjection").is_null()).then(|| payload.clone());
-                self.upsert_entry("contextInjectionByConversation", &id, entry);
+            Delta::ContextInjectionChanged(delta) => {
+                let id = delta.conversation_id.clone();
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.context_injection_by_conversation
+                        .retain(|entry| entry.conversation_id != id);
+                    if delta.context_injection.is_some() {
+                        wb.context_injection_by_conversation.push(delta);
+                    }
+                }
                 self.emit_insight(&id);
             }
-            "sessionAddonsChanged" => self.upsert_addons(payload),
-            "agentSkillsCatalogChanged" => {
-                self.set_wb("agentSkills", at(&payload, "agentSkills").clone());
+            Delta::SessionAddonsChanged(delta) => self.upsert_addons(*delta),
+            Delta::AgentSkillsCatalogChanged(delta) => {
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.agent_skills = delta.agent_skills;
+                }
                 self.emit_workbench_slot();
             }
-            "luaSkillsCatalogChanged" => {
-                self.set_wb("luaSkills", at(&payload, "luaSkills").clone());
-                self.set_wb("plugins", at(&payload, "plugins").clone());
+            Delta::LuaSkillsCatalogChanged(delta) => {
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.lua_skills = delta.lua_skills;
+                    wb.plugins = delta.plugins;
+                }
                 self.emit_workbench_slot();
             }
-            "subagentCatalogChanged" => {
-                self.set_wb("subagentCatalog", at(&payload, "subagentCatalog").clone());
+            Delta::SubagentCatalogChanged(delta) => {
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.subagent_catalog = delta.subagent_catalog;
+                }
                 self.emit_workbench_slot();
             }
-            "pluginCatalogChanged" => {
-                for key in ["luaSkills", "plugins", "agentSkills", "subagentCatalog"] {
-                    self.set_wb(key, at(&payload, key).clone());
+            Delta::PluginCatalogChanged(delta) => {
+                if let Some(wb) = self.wb.as_mut() {
+                    wb.lua_skills = delta.lua_skills;
+                    wb.plugins = delta.plugins;
+                    wb.agent_skills = delta.agent_skills;
+                    wb.subagent_catalog = delta.subagent_catalog;
                 }
                 self.emit_workbench_slot();
             }
@@ -1434,43 +1438,41 @@ impl Worker {
     /// `id` is the exact entity identity.
     /// `id` 为准确实体身份。
     pub(super) fn hydrate(&mut self, id: &str) {
-        // Result.
-        // 服务结果。
-        let Some(result) = self.call(
+        let Some(window) = self.call_as::<api::ConversationEventWindowV1Response>(
             "service_session_event_hydration_v1",
             json!({ "sessionId": id }),
         ) else {
             return;
         };
-        // Events.
-        // 事件集合或事件接收通道。
-        let events: BTreeMap<u64, Value> = arr(&result, "events")
-            .iter()
-            .filter_map(|e| Some((opt_u64(e, "seq")?, e.clone())))
+        let (epoch, memory_revision) = window
+            .revision_frontier
+            .as_ref()
+            .map_or((String::new(), 0), |frontier| {
+                (frontier.service_epoch.clone(), frontier.memory_revision)
+            });
+        let events: BTreeMap<u64, ConversationEventSummary> = window
+            .batch
+            .events
+            .into_iter()
+            .map(|event| (event.seq.value(), event))
             .collect();
-        self.windows.insert(
-            id.to_string(),
-            Window {
-                generation: u64_at(&result, "window_generation"),
-                epoch: str_at(&result, "service_epoch"),
-                memory_revision: u64_at(&result, "memory_revision"),
-                events: events.clone(),
-            },
-        );
         self.emit(BackendEvent::ConversationHydrated {
             conversation_id: id.to_string(),
             events: events.values().filter_map(map::event).collect(),
         });
-        // Config.
-        // 权威配置。
-        let config = at(&result, "session_config");
-        // Exact protocol request.
-        // 协议请求文档。
-        let request = if at(config, "next_request").is_null() {
-            config.clone()
-        } else {
-            json!({ "current_request": at(config, "next_request") })
-        };
+        self.windows.insert(
+            id.to_string(),
+            Window {
+                generation: window.batch.window_generation,
+                epoch,
+                memory_revision,
+                events,
+            },
+        );
+        // The next request's route wins over the current one once the user changed it.
+        // 用户改过之后，下一次请求的路线优先于当前请求。
+        let config = window.session_config;
+        let request = config.next_request.unwrap_or(config.current_request);
         if let Some(key) = map::session_route(&request) {
             self.model_keys.insert(id.to_string(), key);
         }
@@ -1479,108 +1481,73 @@ impl Worker {
         }
     }
 
-    /// Applies one `conversationEventDeltaV1` patch; any inconsistency reloads the window.
-    /// 应用一份 `conversationEventDeltaV1` 补丁；任何不一致都会重新加载窗口。
-    /// `patch` is the exact delta or field update to fold.
-    /// `patch` 为需要折叠的准确增量或字段更新。
-    fn event_delta(&mut self, patch: Value) {
-        // Exact entity identity.
-        // 准确实体身份。
-        let id = str_at(&patch, "session_id");
-        // Window.
-        // 会话事件窗口。
+    /// Applies one live event delta; any inconsistency reloads the window.
+    /// 应用一份实时事件增量；任何不一致都会重新加载窗口。
+    /// `patch` is the exact delta to fold.
+    /// `patch` 为需要折叠的准确增量。
+    fn event_delta(&mut self, patch: api::ConversationEventLiveDeltaV1) {
+        let id = patch.batch.session_id.clone();
         let Some(window) = self.windows.get_mut(&id) else {
             return;
         };
-        if normalized(&str_at(&patch, "durability")) == "durable" {
+        if patch.durability == api::ConversationEventPatchDurabilityV1::Durable {
             return;
         }
-        // Revision.
-        // 权威修订号。
-        let revision = u64_at(&patch, "revision");
-        // Stale owner.
-        // 是否来自旧归属。
-        let stale_owner = u64_at(&patch, "window_generation") != window.generation
-            || str_at(&patch, "service_epoch") != window.epoch;
-        // Gap.
-        // 是否存在事件修订缺口。
-        let gap = revision > window.memory_revision
-            && u64_at(&patch, "base_memory_revision") > window.memory_revision;
+        let stale_owner = patch.batch.window_generation != window.generation
+            || patch.service_epoch != window.epoch;
+        let gap = patch.revision > window.memory_revision
+            && patch.base_memory_revision.unwrap_or(0) > window.memory_revision;
         if stale_owner || gap {
             self.hydrate(&id);
             return;
         }
-        if revision < window.memory_revision {
+        if patch.revision < window.memory_revision {
             return;
         }
-        window.memory_revision = revision;
-        // Earliest.
-        // 最早需要加载的事件序号。
+        window.memory_revision = patch.revision;
         let earliest = window.events.keys().next().copied();
-        // Changed.
-        // 是否有权威状态变更。
         let mut changed: Vec<u64> = Vec::new();
-        // Broken.
-        // 是否存在损坏的窗口状态。
         let mut broken = false;
-        for summary in arr(&patch, "events") {
-            // Seq.
-            // 事件序号。
-            let Some(seq) = opt_u64(summary, "seq") else {
-                continue;
-            };
+        for summary in patch.batch.events {
+            let seq = summary.seq.value();
             if earliest.is_some_and(|first| seq < first) && !window.events.contains_key(&seq) {
                 continue;
             }
-            // Newer.
-            // 是否为更高事件代际。
             let newer = window
                 .events
                 .get(&seq)
-                .is_none_or(|e| u64_at(summary, "event_revision") >= u64_at(e, "event_revision"));
+                .is_none_or(|existing| summary.event_revision >= existing.event_revision);
             if newer {
-                window.events.insert(seq, summary.clone());
+                window.events.insert(seq, summary);
                 changed.push(seq);
             }
         }
-        for append in arr(&patch, "text_appends") {
-            // Seq.
-            // 事件序号。
-            let seq = u64_at(append, "seq");
-            // Existing.
-            // 已有权威条目。
+        for append in patch.text_appends {
+            let seq = append.seq.value();
             let Some(existing) = window.events.get_mut(&seq) else {
                 if earliest.is_none_or(|first| seq >= first) {
                     broken = true;
                 }
                 continue;
             };
-            if u64_at(append, "event_revision") <= u64_at(existing, "event_revision") {
+            if append.event_revision <= existing.event_revision {
                 continue;
             }
-            // Base.
-            // 编辑前的权威文档。
-            let base = u64_at(append, "base_text_utf16_len") as usize;
-            // Text.
-            // 当前正文。
-            let text = format!(
-                "{}{}",
-                utf16_prefix(
-                    at(existing, "event.text").as_str().unwrap_or_default(),
-                    base
-                ),
-                str_at(append, "appended_text")
-            );
-            if let Some(object) = existing.as_object_mut() {
-                object.insert(
-                    "event_revision".into(),
-                    at(append, "event_revision").clone(),
-                );
-                object.insert("updated_at_ms".into(), at(append, "updated_at_ms").clone());
-            }
-            if let Some(event) = existing.get_mut("event").and_then(Value::as_object_mut) {
-                event.insert("text".into(), Value::String(text));
-            }
+            // Only streamed reasoning and answer text receive appends.
+            // 只有流式思考与回答文本会收到追加。
+            let text = match &mut existing.event {
+                CoreEvent::AssistantText(event) => &mut event.text,
+                CoreEvent::AssistantReasoning(event) => &mut event.text,
+                _ => {
+                    broken = true;
+                    continue;
+                }
+            };
+            let base = utf16_prefix(text, append.base_text_utf16_len as usize).len();
+            text.truncate(base);
+            text.push_str(&append.appended_text);
+            existing.event_revision = append.event_revision;
+            existing.updated_at_ms = append.updated_at_ms;
             changed.push(seq);
         }
         if broken {
@@ -1589,8 +1556,6 @@ impl Worker {
         }
         changed.sort_unstable();
         changed.dedup();
-        // Events.
-        // 事件集合或事件接收通道。
         let events: Vec<ConversationEvent> = changed
             .iter()
             .filter_map(|seq| window.events.get(seq))
@@ -1644,31 +1609,29 @@ impl Worker {
                 attachments,
             } => self.submit(conversation_id, prompt, mode, effort, model_id, attachments),
             Command::StopConversationRun { conversation_id } => {
-                if let Some(result) = self.call(
+                // The run state arrives through workbench deltas.
+                // 运行状态经由工作台增量到达。
+                let _ = self.call(
                     "service_stop_conversation_run",
                     json!({ "conversationId": conversation_id, "mode": "main_and_subagents" }),
-                ) {
-                    self.absorb(&result);
-                }
+                );
             }
             Command::ReplyPendingQuestion {
                 request_id,
                 answers,
             } => {
-                if let Some(result) = self.call(
+                // The pending list arrives through `pendingQuestionChanged`.
+                // 待回复列表经由 `pendingQuestionChanged` 到达。
+                let _ = self.call_as::<bool>(
                     "service_reply_pending_question",
                     json!({ "requestId": request_id, "answers": answers }),
-                ) {
-                    self.absorb(&result);
-                }
+                );
             }
             Command::RejectPendingQuestion { request_id } => {
-                if let Some(result) = self.call(
+                let _ = self.call_as::<bool>(
                     "service_reject_pending_question",
                     json!({ "requestId": request_id }),
-                ) {
-                    self.absorb(&result);
-                }
+                );
             }
             Command::SetSessionPlanMode {
                 conversation_id,
@@ -1677,11 +1640,11 @@ impl Worker {
                 if is_draft(&conversation_id) {
                     return;
                 }
-                if let Some(result) = self.call(
+                if let Some(response) = self.call_as(
                     "service_set_session_plan_mode",
                     json!({ "request": { "conversationId": conversation_id, "enabled": enabled } }),
                 ) {
-                    self.absorb(&result);
+                    self.absorb_addons(response);
                 }
             }
             Command::SelectPublicAiModel {
@@ -1702,11 +1665,11 @@ impl Worker {
                 let Some(id) = conversation_id.filter(|id| !is_draft(id)) else {
                     return;
                 };
-                if let Some(result) = self.call(
+                if let Some(snapshot) = self.call_as(
                     "service_select_workbench_reasoning_effort",
                     json!({ "conversationId": id, "effort": value }),
                 ) {
-                    self.absorb(&result);
+                    self.apply_snapshot(snapshot);
                 }
             }
             Command::LoadWorkspaceDiffSnapshot => self.git_refresh(),
@@ -1728,72 +1691,87 @@ impl Worker {
                 super::files::list(path.as_deref(), true, true),
             )),
             Command::BrowseProjectDirectories { path } => {
-                if let Some(result) = self.call(
+                if let Some(listing) = self.call_as(
                     "service_browse_project_directories",
                     json!({ "path": path }),
                 ) {
-                    self.emit(BackendEvent::Directory(map::directory(&result)));
+                    self.emit(BackendEvent::Directory(map::directory(&listing)));
                 }
             }
             Command::AddProjectFromPath { path } => {
-                if let Some(result) =
-                    self.call("service_add_project_from_path", json!({ "path": path }))
-                {
-                    self.absorb(&result);
+                if let Some(snapshot) = self.call_as::<Option<api::WorkbenchSnapshot>>(
+                    "service_add_project_from_path",
+                    json!({ "path": path }),
+                ) {
+                    if let Some(snapshot) = snapshot {
+                        self.apply_snapshot(snapshot);
+                    }
                     // Name.
                     // 当前名称。
-                    let name = arr(&self.wb, "projects")
+                    let name = self
+                        .wb
                         .iter()
-                        .find(|p| same_path(&str_at(p, "path"), &path))
-                        .map(|p| str_at(p, "name"))
+                        .flat_map(|wb| &wb.projects)
+                        .find(|p| same_path(&p.path, &path))
+                        .map(|p| p.name.clone())
                         .unwrap_or(path);
                     self.emit(BackendEvent::Notice(Notice::ProjectAdded(name)));
                 }
             }
             Command::RenameProject { project_id, name } => {
-                if let Some(result) = self.call(
+                if let Some(snapshot) = self.call_as(
                     "service_rename_project",
                     json!({ "projectId": project_id, "name": name }),
                 ) {
-                    self.absorb(&result);
+                    self.apply_snapshot(snapshot);
                     self.emit(BackendEvent::Notice(Notice::Renamed));
                 }
             }
             Command::ToggleProjectPinned { project_id } => {
-                if let Some(result) = self.call(
-                    "service_toggle_project_pinned",
-                    json!({ "projectId": project_id }),
-                ) {
-                    self.absorb(&result);
+                // The toggle acknowledges no target value; as in the WebUI, only a revisioned
+                // read establishes its outcome.
+                // 切换不返回目标值；与 WebUI 一致，仅带修订号的读取能确定其结果。
+                if self
+                    .call_as::<()>(
+                        "service_toggle_project_pinned",
+                        json!({ "projectId": project_id }),
+                    )
+                    .is_some()
+                {
+                    self.reload_workbench();
                 }
             }
             Command::ArchiveProjectConversations { project_id } => {
                 // Count.
                 // 当前计数。
-                let count = arr(&self.wb, "conversations")
+                let count = self
+                    .wb
                     .iter()
-                    .filter(|c| str_at(c, "projectId") == project_id)
+                    .flat_map(|wb| &wb.conversations)
+                    .filter(|c| c.project_id.as_deref() == Some(project_id.as_str()))
                     .count();
-                if let Some(result) = self.call(
+                if let Some(snapshot) = self.call_as(
                     "service_archive_project_conversations",
                     json!({ "projectId": project_id }),
                 ) {
-                    self.absorb(&result);
+                    self.apply_snapshot(snapshot);
                     self.emit(BackendEvent::Notice(Notice::ArchivedCount(count)));
                 }
             }
             Command::RemoveProject { project_id } => {
                 // Name.
                 // 当前名称。
-                let name = arr(&self.wb, "projects")
+                let name = self
+                    .wb
                     .iter()
-                    .find(|p| str_at(p, "id") == project_id)
-                    .map(|p| str_at(p, "name"))
+                    .flat_map(|wb| &wb.projects)
+                    .find(|p| p.id == project_id)
+                    .map(|p| p.name.clone())
                     .unwrap_or_default();
-                if let Some(result) =
-                    self.call("service_remove_project", json!({ "projectId": project_id }))
+                if let Some(snapshot) =
+                    self.call_as("service_remove_project", json!({ "projectId": project_id }))
                 {
-                    self.absorb(&result);
+                    self.apply_snapshot(snapshot);
                     self.emit(BackendEvent::Notice(Notice::ProjectRemoved(name)));
                 }
             }
@@ -1804,11 +1782,11 @@ impl Worker {
                 if is_draft(&conversation_id) {
                     return;
                 }
-                if let Some(result) = self.call(
+                if let Some(snapshot) = self.call_as(
                     "service_rename_conversation",
                     json!({ "conversationId": conversation_id, "name": title }),
                 ) {
-                    self.absorb(&result);
+                    self.apply_snapshot(snapshot);
                     self.emit(BackendEvent::Notice(Notice::Renamed));
                 }
             }
@@ -1823,11 +1801,11 @@ impl Worker {
                     .summary(&conversation_id)
                     .map(|c| c.title)
                     .unwrap_or_default();
-                if let Some(result) = self.call(
+                if let Some(snapshot) = self.call_as(
                     "service_archive_conversation",
                     json!({ "conversationId": conversation_id }),
                 ) {
-                    self.absorb(&result);
+                    self.apply_snapshot(snapshot);
                     self.emit(BackendEvent::Notice(Notice::Archived(title)));
                 }
             }
@@ -1858,7 +1836,7 @@ impl Worker {
                     "objective": objective,
                     "tokenBudget": token_budget,
                 }),
-                Some(GoalStatus::Active),
+                Some(SessionGoalStatus::Active),
             ),
             Command::ResumeSessionGoal {
                 conversation_id,
@@ -1871,7 +1849,7 @@ impl Worker {
                     "objective": objective,
                     "tokenBudget": token_budget,
                 }),
-                Some(GoalStatus::Active),
+                Some(SessionGoalStatus::Active),
             ),
             Command::ClearSessionGoal { conversation_id } => self.goal(
                 "service_clear_session_goal",
@@ -1881,19 +1859,11 @@ impl Worker {
             Command::UpdateSessionGoalStatus {
                 conversation_id,
                 status,
-            } => {
-                // Value.
-                // 当前协议值。
-                let value = match status {
-                    GoalStatus::Paused => "paused",
-                    _ => "active",
-                };
-                self.goal(
-                    "service_update_session_goal_status",
-                    json!({ "conversationId": conversation_id, "status": value }),
-                    Some(status),
-                )
-            }
+            } => self.goal(
+                "service_update_session_goal_status",
+                json!({ "conversationId": conversation_id, "status": status.as_str() }),
+                Some(status),
+            ),
             Command::Call(call) => self.service_call(call),
         }
     }
@@ -1915,11 +1885,11 @@ impl Worker {
             self.emit_effort();
             return;
         }
-        if let Some(result) = self.call(
+        if let Some(snapshot) = self.call_as(
             "service_select_conversation",
             json!({ "conversationId": id }),
         ) {
-            self.absorb(&result);
+            self.apply_snapshot(snapshot);
             // `markConversationRead` is ancillary, as in the WebUI: a failure never surfaces.
             // 与 WebUI 一致，已读标记属于附属操作：失败不会提示。
             if let Some(client) = self.client.clone()
@@ -1927,8 +1897,9 @@ impl Worker {
                     "service_mark_conversation_read",
                     json!({ "conversationId": id }),
                 )
+                && let Ok(snapshot) = serde_json::from_value(result)
             {
-                self.absorb(&result);
+                self.apply_snapshot(snapshot);
             }
         }
         self.emit_conversation_state(&id);
@@ -1966,11 +1937,17 @@ impl Worker {
         if let Some(id) = conversation_id {
             request["conversationId"] = Value::String(id);
         }
-        if let Some(result) = self.call(
-            "service_select_public_ai_model",
-            json!({ "request": request }),
-        ) {
-            self.absorb(&result);
+        // The response is the kernel's settings snapshot; as in the WebUI, the workbench is read
+        // afterwards for the conversation's new route and reasoning options.
+        // 响应为内核的设置快照；与 WebUI 一致，之后读取工作台以获得会话的新路线与推理选项。
+        if self
+            .call(
+                "service_select_public_ai_model",
+                json!({ "request": request }),
+            )
+            .is_some()
+        {
+            self.reload_workbench();
             self.emit_effort();
         }
     }
@@ -2001,7 +1978,7 @@ impl Worker {
         };
         // Staged.
         // 已暂存差异。
-        let staged: Vec<Value> = attachments
+        let staged: Vec<api::ComposerAttachmentSummary> = attachments
             .iter()
             .filter_map(|path| self.stage_attachment(path, project_id.as_deref(), &conversation_id))
             .collect();
@@ -2067,11 +2044,15 @@ impl Worker {
                     Ok(result) => result,
                     Err(error) => return worker.failed(error),
                 };
-                // Real id.
-                // 服务返回的持久会话身份。
-                let Some(real_id) = opt_str(&result, "conversationId") else {
+                let Some(ack) = worker.read::<api::SubmitConversationPromptAck>(
+                    "service_submit_conversation_prompt",
+                    result,
+                ) else {
                     return;
                 };
+                // Real id.
+                // 服务返回的持久会话身份。
+                let real_id = ack.conversation_id;
                 if let Some(draft) = worker.drafts.remove(&local_id) {
                     if let Some(key) = draft.model_key {
                         worker.model_keys.insert(real_id.clone(), key);
@@ -2101,13 +2082,13 @@ impl Worker {
         path: &str,
         project_id: Option<&str>,
         conversation_id: &str,
-    ) -> Option<Value> {
+    ) -> Option<api::ComposerAttachmentSummary> {
         // Bytes.
         // 完整字节缓冲。
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                self.toast(Severity::Error, format!("{path}: {error}"));
+                self.toast(NoticeSeverity::Error, format!("{path}: {error}"));
                 return None;
             }
         };
@@ -2117,7 +2098,7 @@ impl Worker {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string());
-        self.call(
+        self.call_as(
             "service_stage_composer_attachment_bytes",
             json!({
                 "projectId": project_id,
@@ -2135,9 +2116,9 @@ impl Worker {
     /// `method` 为静态 WebUI RPC 方法名。
     /// `status` is the declared service lifecycle status.
     /// `status` 为已声明的服务生命周期状态。
-    fn goal(&mut self, method: &str, request: Value, status: Option<GoalStatus>) {
-        if let Some(result) = self.call(method, json!({ "request": request })) {
-            self.absorb(&result);
+    fn goal(&mut self, method: &str, request: Value, status: Option<SessionGoalStatus>) {
+        if let Some(response) = self.call_as(method, json!({ "request": request })) {
+            self.absorb_addons(response);
             self.emit(BackendEvent::Notice(Notice::Goal(status)));
         }
     }
@@ -2155,11 +2136,8 @@ impl Worker {
         // 当前名称。
         let name = self
             .navigation(&parent)
-            .map(|n| arr(n, "tasks"))
-            .unwrap_or_default()
-            .iter()
-            .find(|t| str_at(t, "taskId") == task_id)
-            .map(|t| str_at(t, "label"))
+            .and_then(|n| n.tasks.iter().find(|t| t.task_id == task_id))
+            .map(|t| t.label.clone())
             .unwrap_or_default();
         // Method.
         // 准确 RPC 方法名。
@@ -2168,11 +2146,11 @@ impl Worker {
         } else {
             "service_close_subagent_task"
         };
-        if let Some(result) = self.call(
+        if let Some(route) = self.call_as(
             method,
             json!({ "parentConversationId": parent, "taskId": task_id }),
         ) {
-            self.absorb(&result);
+            self.absorb_route(route);
             self.emit(BackendEvent::Notice(if stop {
                 Notice::AgentStopped(name)
             } else {
@@ -2195,17 +2173,16 @@ impl Worker {
         let project_id = self.summary(conversation_id).and_then(|c| c.project_id);
         // Item.
         // 当前条目。
-        let item = self
-            .entry("contextInjectionByConversation", conversation_id)
-            .map(|e| arr(e, "contextInjection.dynamicCards"))
-            .unwrap_or_default()
+        let dedupe_key = self
+            .injection(conversation_id)
             .iter()
-            .flat_map(|card| arr(card, "items"))
+            .flat_map(|injection| &injection.dynamic_cards)
+            .flat_map(|card| &card.items)
             .find(|item| {
-                str_at(item, "memoryId") == memory_id || str_at(item, "dedupeKey") == memory_id
+                item.memory_id.is_some_and(|id| id.to_string() == memory_id)
+                    || item.dedupe_key.as_deref() == Some(memory_id)
             })
-            .cloned()
-            .unwrap_or_default();
+            .and_then(|item| item.dedupe_key.clone());
         // The WebUI only offers these for positive memory ids (`target.memoryId > 0`).
         // WebUI 只为正的记忆 ID 提供这些操作（`target.memoryId > 0`）。
         let numeric_id = memory_id.parse::<u64>().ok().filter(|id| *id > 0);
@@ -2242,7 +2219,7 @@ impl Worker {
                 "projectId": project_id,
                 "conversationId": conversation_id,
                 "payload": {
-                    "dedupeKey": at(&item, "dedupeKey"),
+                    "dedupeKey": dedupe_key,
                     "memoryId": numeric_id,
                     "reason": "manual context injection suppression from memory panel",
                 },
@@ -2265,9 +2242,7 @@ impl Worker {
 
     /// Project of the selected conversation (or draft), for project-scoped calls.
     /// 选中会话（或草稿）所属的项目，用于项目范围的调用。
-    /// Returns `Option<Value>`.
-    /// 返回 `Option<Value>`。
-    pub(super) fn selected_project(&self) -> Option<Value> {
+    pub(super) fn selected_project(&self) -> Option<&api::ProjectSummary> {
         // Exact entity identity.
         // 准确实体身份。
         let id = self.selected.as_deref()?;
@@ -2279,11 +2254,10 @@ impl Worker {
         };
         // Projects.
         // 项目目录。
-        let projects = arr(&self.wb, "projects");
+        let projects = &self.wb.as_ref()?.projects;
         project_id
-            .and_then(|pid| projects.iter().find(|p| str_at(p, "id") == pid))
+            .and_then(|pid| projects.iter().find(|p| p.id == pid))
             .or_else(|| projects.first())
-            .cloned()
     }
 
     /// Returns the selected durable conversation, excluding local draft identities.
@@ -2293,16 +2267,6 @@ impl Worker {
     pub(super) fn selected_real(&self) -> Option<String> {
         self.selected.clone().filter(|id| !is_draft(id))
     }
-}
-
-/// Recognizes a workbench response by its declared project and conversation arrays.
-/// 按已声明的项目及会话数组识别工作台响应。
-/// `value` is the protocol value being read or projected.
-/// `value` 为正在读取或投影的协议值。
-/// Returns `bool`.
-/// 返回 `bool`。
-fn is_snapshot(value: &Value) -> bool {
-    value.get("conversations").is_some_and(Value::is_array) && value.get("projects").is_some()
 }
 
 /// Checks the single shared local conversation draft prefix.
@@ -2421,7 +2385,7 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::RpcServer;
+    use super::super::test_support::{RpcServer, vce_job};
     use super::*;
     use crate::service_api::{knowledge_base, settings_actions, vce};
     /// Real asynchronous document failures publish the exact reader scope and a sanitized cause.
@@ -2590,9 +2554,9 @@ mod tests {
         });
         worker.handle_input(Input::Done {
             generation: 3,
-            apply: Box::new(|worker| worker.wb = json!({"accepted":true})),
+            apply: Box::new(|worker| worker.revision = 42),
         });
-        assert_eq!(worker.wb["accepted"], true);
+        assert_eq!(worker.revision, 42);
         assert!(events.try_recv().is_err());
         assert!(!worker.handle_input(Input::Shutdown));
         server.thread.join().unwrap();
@@ -2612,17 +2576,16 @@ mod tests {
         // 准确槽位加载器。
         let loader = vce::load_vce_job("demo-project", None);
         worker.loaders.insert(Slot::VceJob, loader.clone());
-        // Job.
-        // 持久任务回执。
-        let mut job =
-            json!({"projectId":"demo-project","jobId":"demo-job","state":"running","sequence":4});
-        worker.service_event("vceJobChanged", job.clone());
-        job["sequence"] = json!(3);
-        worker.service_event("vceJobChanged", job.clone());
-        worker.call_done(loader, job.clone());
-        job["projectId"] = json!("other-project");
-        job["sequence"] = json!(5);
-        worker.service_event("vceJobChanged", job);
+        let changed = |project: &str, sequence| {
+            api::ServiceEvent::VceJobChanged(Box::new(vce_job(project, sequence)))
+        };
+        worker.service_event(changed("demo-project", 4));
+        worker.service_event(changed("demo-project", 3));
+        worker.call_done(
+            loader,
+            serde_json::to_value(vce_job("demo-project", 3)).unwrap(),
+        );
+        worker.service_event(changed("other-project", 5));
         // Received.
         // 接收到的消息。
         let received: Vec<_> = events.try_iter().collect();
@@ -2630,6 +2593,46 @@ mod tests {
         assert!(
             matches!(&received[0],BackendEvent::Slot{slot:Slot::VceJob,value,..} if value["sequence"] == 4)
         );
+        server.thread.join().unwrap();
+    }
+
+    /// Archive deltas remove sidebar rows by `conversationId` and keep the archived summary.
+    /// 归档增量按 `conversationId` 移除侧栏行，并保留归档摘要。
+    #[test]
+    fn archive_deltas_move_rows_to_the_archived_list() {
+        let server = RpcServer::start(0, |_| Value::Null);
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        let row = |id: &str| {
+            json!({"id": id, "title": id, "status": "idle", "runPhase": "idle",
+                "lastUpdatedLabel": "", "lastUpdatedAt": "", "unread": false})
+        };
+        let snapshot = serde_json::from_value(json!({
+            "revision": 1, "appVersion": "", "modules": [], "projects": [],
+            "projectSettingsRevisions": api::ProjectSettingsRevisionSnapshot::default(),
+            "conversations": [row("a"), row("b")],
+            "toolCalls": [], "plugins": [], "settings": [], "providers": [], "memories": [],
+            "commandSessions": [], "logs": []
+        }))
+        .expect("synthetic snapshot matches the shared DTO");
+        worker.apply_snapshot(snapshot);
+        let delta = serde_json::from_value(json!({"generation": 2, "delta": {
+            "kind": "conversationsArchived",
+            "payload": {"archivedConversations": [
+                {"conversationId": "a", "archivedConversation": row("a")}]}}}))
+        .expect("synthetic delta matches the shared DTO");
+        events.try_iter().for_each(drop);
+        worker.service_event(api::ServiceEvent::WorkbenchDelta(Box::new(delta)));
+        let removed: Vec<String> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                BackendEvent::ConversationRemoved(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed, ["a"]);
+        let wb = worker.wb.as_ref().unwrap();
+        assert!(wb.conversations.iter().all(|row| row.id != "a"));
+        assert!(wb.archived_conversations.iter().any(|row| row.id == "a"));
         server.thread.join().unwrap();
     }
 

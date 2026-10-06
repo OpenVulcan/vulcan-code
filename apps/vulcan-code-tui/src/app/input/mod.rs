@@ -208,7 +208,7 @@ fn interrupt(app: &mut App) {
         app.should_quit = true;
     } else {
         app.quit_armed_until = Some(Instant::now() + Duration::from_secs(2));
-        app.toast(Severity::Info, tr!("tui.quit.confirm"));
+        app.toast(NoticeSeverity::Info, tr!("tui.quit.confirm"));
     }
 }
 
@@ -347,7 +347,7 @@ fn submit(app: &mut App) {
     let text = app.composer_prompt();
     let prompt = text.trim();
     if prompt.is_empty() {
-        app.toast(Severity::Warning, tr!("composer.error.promptEmpty"));
+        app.toast(NoticeSeverity::Warning, tr!("composer.error.promptEmpty"));
         return;
     }
     if let Some(rest) = prompt.strip_prefix('/') {
@@ -359,12 +359,15 @@ fn submit(app: &mut App) {
                 app.reset_composer();
                 execute(app, command, arg.as_deref());
             }
-            None => app.toast(Severity::Warning, tr!("tui.command.unknown", name = name)),
+            None => app.toast(
+                NoticeSeverity::Warning,
+                tr!("tui.command.unknown", name = name),
+            ),
         }
         return;
     }
     let Some(conversation_id) = app.selected.clone() else {
-        app.toast(Severity::Warning, tr!("sidebar.waitingWorkspace"));
+        app.toast(NoticeSeverity::Warning, tr!("sidebar.waitingWorkspace"));
         return;
     };
     app.backend.send(Command::SubmitConversationPrompt {
@@ -441,7 +444,7 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
             });
             let label = crate::ui::effort_label(app.effort);
             app.toast(
-                Severity::Info,
+                NoticeSeverity::Info,
                 format!("{}: {label}", tr!("composer.reasoning.subtitle")),
             );
         }
@@ -516,9 +519,9 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
         AppCommand::OpenWeb => {
             let url = app.base_url.clone();
             if app.backend.is_mock {
-                app.toast(Severity::Info, tr!("tui.web.mock", url = url));
+                app.toast(NoticeSeverity::Info, tr!("tui.web.mock", url = url));
             } else {
-                app.toast(Severity::Info, url);
+                app.toast(NoticeSeverity::Info, url);
             }
         }
         AppCommand::Help => app.overlay = Some(Overlay::Help { scroll: 0 }),
@@ -564,7 +567,10 @@ pub fn set_locale(app: &mut App, code: &str) {
                 )),
             );
         }
-        None => app.toast(Severity::Warning, tr!("tui.command.unknown", name = code)),
+        None => app.toast(
+            NoticeSeverity::Warning,
+            tr!("tui.command.unknown", name = code),
+        ),
     }
 }
 
@@ -636,7 +642,7 @@ pub fn refresh_branch_picker(app: &mut App) {
 
 pub fn open_diff(app: &mut App, index: usize) {
     if app.git.ordered_files().is_empty() {
-        app.toast(Severity::Info, tr!("diff.emptyBody"));
+        app.toast(NoticeSeverity::Info, tr!("diff.emptyBody"));
         return;
     }
     app.overlay = Some(Overlay::Diff(DiffView {
@@ -669,7 +675,7 @@ pub fn open_commit(app: &mut App) {
         .as_ref()
         .is_some_and(|s| !s.files.is_empty());
     if !has_changes {
-        app.toast(Severity::Info, tr!("gitCommitDialog.noChanges"));
+        app.toast(NoticeSeverity::Info, tr!("gitCommitDialog.noChanges"));
         return;
     }
     let mut message = TextArea::default();

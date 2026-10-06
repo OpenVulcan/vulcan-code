@@ -12,7 +12,7 @@ use crate::app::pages::Area;
 use crate::app::{App, PanelTab, SidebarMode, input};
 use crate::backend::mock;
 use crate::i18n;
-use crate::model::{AgentState, GoalStatus};
+use crate::model::{AgentState, SessionGoalStatus};
 use crate::ui::{self, theme::Theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -548,10 +548,10 @@ fn session_panel_memory_stats_and_agents() {
     input::handle_event(&mut app, key(KeyCode::Char('5'), KeyModifiers::ALT));
     settle(&mut app, &mut wide, &mut narrow, 100);
     assert_eq!(app.panel_tab, PanelTab::Stats);
-    assert_eq!(goal(&app), Some(GoalStatus::Active));
+    assert_eq!(goal(&app), Some(SessionGoalStatus::Active));
     input::handle_event(&mut app, key(KeyCode::Char('p'), KeyModifiers::NONE));
     settle(&mut app, &mut wide, &mut narrow, 200);
-    assert_eq!(goal(&app), Some(GoalStatus::Paused));
+    assert_eq!(goal(&app), Some(SessionGoalStatus::Paused));
 
     // Agents: select the running reviewer and stop it through the confirmation.
     // 代理：选中运行中的 reviewer 并经确认后停止。

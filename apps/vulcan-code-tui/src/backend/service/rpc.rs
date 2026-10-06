@@ -44,6 +44,34 @@ mod tests {
     use super::super::test_support::RpcServer;
     use super::*;
 
+    /// Parse failures keep the expectation and position but never the offending value.
+    /// 解析失败保留期望与位置，但绝不包含出错的取值。
+    #[test]
+    fn parse_failures_never_echo_values() {
+        #[derive(Debug, serde::Deserialize)]
+        #[expect(dead_code, reason = "the fields only shape the expected input")]
+        struct Probe {
+            count: u64,
+            name: String,
+        }
+        let secret = "synthetic-secret-value";
+        for (input, kept) in [
+            (
+                format!(r#"{{"count":"{secret}","name":"a"}}"#),
+                "expected u64",
+            ),
+            (r#"{"count":1}"#.to_string(), "missing field `name`"),
+        ] {
+            let error = serde_json::from_str::<Probe>(&input).unwrap_err();
+            let described = parse_failure(&error);
+            assert!(!described.contains(secret), "value echoed: {described}");
+            assert!(described.contains(kept), "expectation lost: {described}");
+        }
+        let error =
+            serde_json::from_value::<Probe>(serde_json::json!({ "count": secret })).unwrap_err();
+        assert!(!parse_failure(&error).contains(secret));
+    }
+
     /// Checks the production POST envelope and removes credentials echoed by a service error.
     /// 检查实际 POST 信封，并移除服务错误回显的凭据。
     #[test]
@@ -121,6 +149,45 @@ fn redacted_message(message: String, secrets: &[String]) -> String {
         message = message.replace(&escaped[1..escaped.len() - 1], "[redacted]");
     }
     message
+}
+
+/// Describes why service data did not match its declared type, without echoing any value.
+/// 描述服务数据为何不符合声明类型，不回显任何取值。
+///
+/// Serde messages can quote the offending value ("invalid type: string \"…\""), which may be a
+/// credential; only the expectation, missing field names and the position are kept.
+/// Serde 消息可能引用出错的取值（"invalid type: string \"…\""），而该值可能是凭据；因此只保留
+/// 期望类型、缺失字段名与位置。
+/// `error` is the parse failure.
+/// `error` 为解析失败。
+/// Returns `String`.
+/// 返回 `String`。
+pub fn parse_failure(error: &serde_json::Error) -> String {
+    let message = error.to_string();
+    let reason = if let Some((_, expected)) = message.split_once(", expected ") {
+        // The expectation comes from the type, never from the data.
+        // 期望来自类型，而非数据。
+        let expected = expected.split(" at line ").next().unwrap_or(expected);
+        format!("expected {expected}")
+    } else if message.starts_with("missing field ") {
+        message
+            .split(" at line ")
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        match error.classify() {
+            serde_json::error::Category::Io => "unreadable input",
+            serde_json::error::Category::Syntax => "malformed JSON",
+            serde_json::error::Category::Data => "unexpected data",
+            serde_json::error::Category::Eof => "truncated JSON",
+        }
+        .to_string()
+    };
+    match error.line() {
+        0 => reason,
+        line => format!("{reason} (line {line}, column {})", error.column()),
+    }
 }
 
 /// Header carrying the service token.

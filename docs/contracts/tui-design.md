@@ -111,6 +111,12 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
   `/events?token=&clientId=`（`clientId` 为本进程 UUID，重连期间不变）并拉取 `workbench.snapshot`。传输失败
   或事件流关闭时以 0.5 s 起、翻倍至 5 s 的退避重新发现并重连。令牌只存在于请求头与 WebSocket URL 中，
   不写入日志、提示、错误或 `Debug` 输出。
+- **共享 DTO**：TUI 链接 `vulcan-service-api` 与 `vulcan-session-core`，事件帧、工作台快照、增量、会话事件窗口
+  及各 RPC 响应都按共享类型严格解析，事件状态枚举直接复用共享类型；不符合类型的数据以“无法读取”提示报告来源
+  与期望类型，不回显取值（serde 错误可能引用凭据）。只有 Git 载荷（DTO 位于服务内核、未共享）仍由
+  `service/wire.rs` 按字段读取。系统区域槽位仍保存原始 DTO，工作台槽位由类型化快照序列化后取允许字段。
+  每个会话命令按其声明的响应类型折叠：工作台快照直接应用；会话附加状态响应与子代理路由响应按 `revision`
+  合并；置顶切换与模型选择不返回快照，与 WebUI 一致随后重读工作台。
 - **单线程状态**：界面命令、事件帧、套接字关闭、后台调用结果都进入同一收件箱；工作台快照按 `revision` 折叠
   `workbenchDelta`（独立生命周期类增量不受代际过滤），会话事件按 v1 窗口规则（`service_epoch`、窗口代际、
   `memory_revision` 缺口即重新加载）合并，文本追加按 UTF-16 基准长度截断后拼接，并以完整事件 `EventUpsert`
