@@ -1,8 +1,6 @@
 //! Atomic storage, idempotency, and scope isolation tests.
 //! 原子存储、幂等与作用域隔离测试。
 
-#![allow(clippy::expect_used)]
-
 use vulcan_memorymesh_core_contracts::{
     AnalysisAttemptIdentity, CandidateQueryBoundary, ChatCompactBoundary, ConfigSnapshotId,
     ContextEvidenceRelation, DirectWriteDedupeLookup, EntityKind, EntityRef, ErrorCode,

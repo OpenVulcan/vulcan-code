@@ -1,8 +1,6 @@
 ﻿//! Exercises malformed post-commit acknowledgements through synchronous, asynchronous, and recovery paths.
 //! 通过同步、异步及恢复路径验证提交后畸形确认的处理。
 
-#![allow(clippy::expect_used, clippy::panic)]
-
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};

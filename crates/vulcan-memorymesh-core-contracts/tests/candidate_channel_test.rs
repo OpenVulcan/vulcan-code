@@ -1,8 +1,6 @@
 ﻿//! Contract-bound candidate channel validation tests.
 //! 契约绑定的候选通道校验测试。
 
-#![allow(clippy::expect_used)]
-
 use vulcan_memorymesh_core_contracts::{
     ErrorCode, ErrorStage, PhysicalCandidate, PhysicalCandidateScore, RawScoreKind,
     ScoreContractDescriptor, ScoreContractRef, ScoreDirection, validate_candidate_channel,

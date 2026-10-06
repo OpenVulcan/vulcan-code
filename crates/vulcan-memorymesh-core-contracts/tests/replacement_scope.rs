@@ -1,6 +1,5 @@
 ﻿//! Replacement authority and candidate scopes are explicit subsets, never derived from read access.
 //! 替代权限和候选作用域必须是显式子集，绝不由读取权限推导。
-#![allow(clippy::expect_used)]
 
 use vulcan_memorymesh_core_contracts::{
     MemoryCandidateScope, MemoryReplacementScope, ScopeAccess, ScopeId, SessionSourceId,

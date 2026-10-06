@@ -1,8 +1,6 @@
 //! Full public Rust facade call-chain tests with a deterministic typed host.
 //! 使用确定性强类型宿主的完整公共 Rust 门面调用链测试。
 
-#![allow(clippy::expect_used)]
-#![allow(clippy::panic)]
 #![allow(clippy::assertions_on_constants)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::redundant_clone)]

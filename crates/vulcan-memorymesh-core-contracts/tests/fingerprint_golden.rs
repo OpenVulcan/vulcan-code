@@ -1,8 +1,6 @@
 //! Cross-language fingerprint golden tests fixing exact material bytes.
 //! 固定精确材料字节的跨语言指纹黄金测试。
 
-#![allow(clippy::expect_used)]
-
 use vulcan_memorymesh_core_contracts::{
     ChatCompactCommand, CoreCommand, MaintenanceAction, MaintenanceCommand, MemoryCategory,
     MemoryDeleteBatchCommand, MemoryDeleteBatchItem, MemoryDeleteCommand,

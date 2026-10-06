@@ -8,8 +8,6 @@
 //! Legacy `SQLite` raw-score ownership is internal/platform/ffi/sqliteffi/sqliteffi.go; scoped projection belongs to the adapter below.
 //! 历史 `SQLite` 原分归属 internal/platform/ffi/sqliteffi/sqliteffi.go；范围投影属于下列适配器。
 
-#![allow(clippy::expect_used)]
-
 use vulcan_memorymesh_core_contracts::{
     PhysicalCandidate, PhysicalCandidateScore, RawScoreKind, ScoreContractDescriptor,
     ScoreContractRef, ScoreDirection, validate_candidate_channel,

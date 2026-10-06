@@ -3525,7 +3525,6 @@ fn validate_turn_analysis_state(turn: &Turn) -> Result<(), String> {
 /// Builds one minimal turn used to verify terminal-state metadata combinations.
 /// 构建一条用于验证终态元数据组合的最小轮次。
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 fn turn_state_test_fixture(status: TurnStatus) -> Turn {
     Turn {
         id: TurnId::new("turn-state-test").expect("valid turn id"),

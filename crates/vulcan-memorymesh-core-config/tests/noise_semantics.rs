@@ -1,8 +1,6 @@
 ﻿//! Checks source-derived VMM Noise semantics through immutable Core snapshots.
 //! 通过不可变 Core 快照检查从 VMM 源码提取的 Noise 语义。
 
-#![allow(clippy::expect_used)]
-
 use std::sync::Arc;
 use vulcan_memorymesh_core_config::{
     ConfigBundle, ConfigRegistry, ConfigSnapshot, NoisePrototypeRow, ResourceLayer,

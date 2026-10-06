@@ -1,9 +1,6 @@
 //! Source-derived algorithm fixtures and separately labelled packaged-resource regressions.
 //! 源码推导算法 Fixture 与单独标注的内置资源回归测试。
 
-#![allow(clippy::expect_used)]
-#![allow(clippy::panic)]
-
 use serde::Deserialize;
 use vulcan_memorymesh_core::{
     CandidateChannelResult, CommandResult, CommandStep, ConfigBundle, ContextEvidenceGroup,

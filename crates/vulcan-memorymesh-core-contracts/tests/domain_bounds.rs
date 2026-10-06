@@ -1,8 +1,6 @@
 ﻿//! Public domain resource-bound contract tests.
 //! 公共领域资源边界契约测试。
 
-#![allow(clippy::expect_used)]
-
 use vulcan_memorymesh_core_contracts::{MAX_VISIBLE_SCOPES, ScopeAccess, ScopeId};
 
 /// Verifies one command cannot carry an unbounded visible-scope precedence list.

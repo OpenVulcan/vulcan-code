@@ -1,8 +1,6 @@
 //! Verifies VMM rule execution semantics through immutable resource snapshots.
 //! 通过不可变资源快照验证 VMM 规则执行语义。
 
-#![allow(clippy::expect_used)]
-
 use serde::Deserialize;
 use std::sync::Arc;
 use vulcan_memorymesh_core_config::{ConfigBundle, ConfigRegistry, ConfigSnapshot, ResourceLayer};

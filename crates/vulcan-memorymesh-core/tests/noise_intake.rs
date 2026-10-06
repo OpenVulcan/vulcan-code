@@ -1,8 +1,6 @@
 //! Verifies single-turn Noise, timeline bypass, and persisted continuations through the public Core.
 //! 通过公共 Core 验证单轮 Noise、时间线跳过及持久续体。
 
-#![allow(clippy::expect_used, clippy::panic)]
-
 use vulcan_memorymesh_core::{
     CommandResult, CommandStep, ConfigBundle, CoreCommand, CoreError, EffectRequest, EffectResult,
     HostDriver, HostEffect, HostEffectResult, IdempotencyKey, InMemoryStorage, MemoryMeshCore,

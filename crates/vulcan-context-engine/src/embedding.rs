@@ -686,9 +686,6 @@ pub fn normalize_l2(vector: &mut [f32]) -> Result<(), EmbeddingError> {
 }
 
 #[cfg(test)]
-// Test fixtures intentionally use panic-style extraction to keep invariant failures local.
-// 测试夹具有意使用恐慌式提取，使不变量失败保持在本地。
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

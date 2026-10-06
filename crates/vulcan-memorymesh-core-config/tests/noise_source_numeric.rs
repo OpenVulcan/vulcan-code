@@ -1,6 +1,5 @@
 //! Compares Noise scoring with bit-exact observations from the original VMM processor.
 //! 对照原始VMM处理器的精确位模式观察验证噪声评分。
-#![allow(clippy::expect_used)]
 
 use vulcan_memorymesh_core_config::{
     ConfigBundle, ConfigRegistry, NoisePrototypeRow, ResourceLayer,

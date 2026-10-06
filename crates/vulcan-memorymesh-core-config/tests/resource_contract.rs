@@ -1,8 +1,6 @@
 //! Resource and immutable configuration conformance tests.
 //! 资源与不可变配置一致性测试。
 
-#![allow(clippy::expect_used)]
-
 use vulcan_memorymesh_core_config::{
     ConfigBundle, ConfigImpact, ConfigRegistry, MAX_CONFIG_IDENTIFIER_BYTES,
     MAX_RESOURCE_FILE_BYTES, MAX_RESOURCE_LAYER_BYTES, MAX_RESOURCE_LAYER_FILES, MemoryPolicy,
