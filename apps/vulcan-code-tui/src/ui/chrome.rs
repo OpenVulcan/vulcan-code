@@ -1,4 +1,4 @@
-// Window chrome: splash screen, header with area tabs, status bar with buttons, and toasts.
+// Window chrome: splash screen, header with area tabs and status bar with buttons.
 // 窗口框架：启动画面、带区域标签的标题栏、带按钮的状态栏与提示。
 
 use ratatui::buffer::Buffer;
@@ -10,7 +10,6 @@ use ratatui::widgets::Widget;
 use super::brand;
 use super::text::{OVERFLOW_CHIP, compact_count, shimmer, spinner, truncate, width_of};
 use super::theme::{Theme, mix};
-use super::transcript::severity_icon;
 use crate::app::action::{self, UiAction};
 use crate::app::commands::AppCommand;
 use crate::app::hit::Target;
@@ -333,36 +332,6 @@ pub fn status_bar(app: &App, area: Rect, buf: &mut Buffer, show_usage: bool) {
         },
         buf,
     );
-}
-
-/// Transient notices stacked at the top-right corner.
-/// 堆叠在右上角的短暂提示。
-pub fn toasts(app: &App, area: Rect, buf: &mut Buffer) {
-    let theme = &app.theme;
-    let max_width = (area.width / 2).clamp(20, 56) as usize;
-    for (i, toast) in app.toasts.iter().rev().enumerate() {
-        let (icon, color) = severity_icon(theme, toast.severity);
-        let text = truncate(&toast.message, max_width.saturating_sub(5));
-        let width = (width_of(&text) + 5) as u16;
-        let y = area.y + 1 + i as u16;
-        if y >= area.bottom() || width > area.width {
-            break;
-        }
-        let rect = Rect {
-            x: area.right() - width - 1,
-            y,
-            width,
-            height: 1,
-        };
-        super::text::clear_area(rect, buf);
-        Line::from(vec![
-            Span::styled("▌", Style::new().fg(color)),
-            Span::styled(format!("{icon} "), Style::new().fg(color)),
-            Span::styled(format!("{text}  "), Style::new().fg(theme.fg)),
-        ])
-        .style(Style::new().bg(theme.popover))
-        .render(rect, buf);
-    }
 }
 
 /// A clickable chip `label` at `(x, y)`; returns its width. Shared by pages, dialogs and panels.

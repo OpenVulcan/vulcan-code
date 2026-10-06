@@ -48,9 +48,10 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     render_page(app, body, buf);
 }
 
-fn tone_color(theme: &Theme, tone: Tone) -> Color {
+pub(super) fn tone_color(theme: &Theme, tone: Tone) -> Color {
     match tone {
         Tone::Normal => theme.fg,
+        Tone::Info => theme.info,
         Tone::Muted => theme.muted_fg,
         Tone::Good => theme.success,
         Tone::Warn => theme.warning,

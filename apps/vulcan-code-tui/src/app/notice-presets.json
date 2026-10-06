@@ -1,0 +1,14 @@
+{
+  "toast_info": { "type": "notice", "tone": "info" },
+  "toast_warning": { "type": "notice", "tone": "warning" },
+  "toast_error": { "type": "notice", "tone": "danger" },
+  "memory_recall": {
+    "type": "notice",
+    "key": "memory-recall",
+    "title": "VMM",
+    "tone": "accent",
+    "frame": "box",
+    "placement": "bottom_right",
+    "progress": true
+  }
+}

@@ -126,7 +126,7 @@ fn plugin_action_calls_carry_identities_and_renew_on_replay() {
 /// 设置挂载从导航打开，经其 Action 保存字段与凭据，按需加载标签数据，并在两种宽度下渲染。
 #[test]
 fn plugin_settings_layout_reads_writes_and_renders() {
-    crate::i18n::set_active_locale(crate::i18n::resolve_locale(Some("en-US"), None));
+    let _locale = crate::i18n::lock_locale("en-US");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     settle(&mut app, "workbench", |app| {
         app.slots.loaded(Slot::Workbench)

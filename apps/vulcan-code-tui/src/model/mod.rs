@@ -24,6 +24,9 @@ pub type ConversationId = String;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunPhase {
     Idle,
+    /// Memory recall (PreCheck) before the model answers.
+    /// 模型回答前的记忆召回（PreCheck）。
+    MemoryRecall,
     Running,
     Queued,
     Completed,
@@ -32,7 +35,10 @@ pub enum RunPhase {
 
 impl RunPhase {
     pub fn is_active(self) -> bool {
-        matches!(self, RunPhase::Running | RunPhase::Queued)
+        matches!(
+            self,
+            RunPhase::MemoryRecall | RunPhase::Running | RunPhase::Queued
+        )
     }
 }
 

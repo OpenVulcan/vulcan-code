@@ -31,6 +31,7 @@ mod composer;
 mod dialogs;
 mod history;
 pub mod markdown;
+mod notice;
 mod overlays;
 mod pages;
 mod panel;
@@ -189,7 +190,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.hits.add(area, Target::Backdrop);
         overlays::render(app, area, buf);
     }
-    chrome::toasts(app, body, buf);
+    notice::render(app, body, buf);
 }
 
 /// Draws the conversation column and returns the composer area.

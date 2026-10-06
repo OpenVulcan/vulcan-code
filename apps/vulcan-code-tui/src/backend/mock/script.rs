@@ -53,6 +53,9 @@ pub enum Action {
         severity: Severity,
         message: String,
     },
+    /// Moves the conversation to another run phase.
+    /// 将会话切换到另一运行阶段。
+    Phase(RunPhase),
     Complete {
         duration_ms: Option<u64>,
     },
@@ -228,6 +231,10 @@ pub fn build_turn(
 ) {
     let lower = prompt.to_lowercase();
     script.user_with(prompt, source, attachments);
+    // Memory recall (PreCheck) runs before every answer, as in the service.
+    // 与服务一致，每次回答前先进行记忆召回（PreCheck）。
+    script.push(0, Action::Phase(RunPhase::MemoryRecall));
+    script.push(900, Action::Phase(RunPhase::Running));
 
     if mode == ExecutionMode::Plan {
         plan_turn(script, prompt);

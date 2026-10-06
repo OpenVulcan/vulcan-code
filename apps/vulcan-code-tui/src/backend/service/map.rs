@@ -69,6 +69,7 @@ pub fn run_phase(phase: &str, status: &str) -> RunPhase {
         "completed" => RunPhase::Completed,
         "failed" => RunPhase::Failed,
         "queued" => RunPhase::Queued,
+        "memoryrecall" => RunPhase::MemoryRecall,
         _ => RunPhase::Running,
     }
 }
@@ -968,6 +969,7 @@ mod tests {
         assert_eq!(run_phase("Ready", "Completed"), RunPhase::Completed);
         assert_eq!(run_phase("Ready", ""), RunPhase::Idle);
         assert_eq!(run_phase("tool_running", "Running"), RunPhase::Running);
+        assert_eq!(run_phase("MemoryRecall", "Running"), RunPhase::MemoryRecall);
         assert_eq!(run_phase("", "running"), RunPhase::Running);
         assert_eq!(run_phase("failed", ""), RunPhase::Failed);
     }

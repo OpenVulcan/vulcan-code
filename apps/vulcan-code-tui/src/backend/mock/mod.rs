@@ -547,6 +547,7 @@ impl World {
                 });
                 self.emit_insight(conversation_id);
             }
+            Action::Phase(phase) => self.set_phase(conversation_id, phase),
             Action::Note { severity, message } => {
                 let seq = self.reserve_seq(conversation_id);
                 self.upsert(

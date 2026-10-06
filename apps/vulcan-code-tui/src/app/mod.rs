@@ -19,6 +19,7 @@ pub mod hit;
 pub mod input;
 pub mod insight;
 pub mod menus;
+pub mod notice;
 pub mod overlay;
 pub mod pages;
 #[cfg(test)]
@@ -360,13 +361,6 @@ impl SessionState {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Toast {
-    pub severity: Severity,
-    pub message: String,
-    pub until: Instant,
-}
-
 /// Git side state mirrored from the backend.
 /// 从后端镜像的 Git 侧状态。
 #[derive(Default)]
@@ -433,7 +427,9 @@ pub struct App {
     pub git: GitView,
     pub command_sessions: Vec<CommandSession>,
     pub overlay: Option<Overlay>,
-    pub toasts: Vec<Toast>,
+    /// Pushed notices, oldest first.
+    /// 推送的通知，最早的在前。
+    pub toasts: Vec<notice::Notice>,
     pub thinking_placement: ThinkingPlacement,
     pub quit_armed_until: Option<Instant>,
     pub should_quit: bool,
@@ -855,19 +851,6 @@ impl App {
                 .is_some_and(|(_, at)| {
                     at.elapsed() < Duration::from_millis(crate::ui::thinking::FADE_MS)
                 })
-    }
-
-    /// Displays one localized notice until its expiration.
-    /// 在到期前显示一条本地化通知。
-    pub fn toast(&mut self, severity: Severity, message: impl Into<String>) {
-        self.toasts.push(Toast {
-            severity,
-            message: message.into(),
-            until: Instant::now() + Duration::from_millis(3200),
-        });
-        if self.toasts.len() > 3 {
-            self.toasts.remove(0);
-        }
     }
 
     pub fn tick(&mut self, now: Instant) {

@@ -27,6 +27,21 @@ pub fn set_active_locale(code: &str) -> bool {
         .set_locale(code)
 }
 
+/// Holds the process-wide locale for one test: tests that read localized text take this guard so a
+/// concurrent test cannot switch the locale under them.
+/// 为一个测试占用进程级语言：读取本地化文案的测试持有此守卫，避免并发测试在其运行期间切换语言。
+#[cfg(test)]
+pub fn lock_locale(code: &str) -> std::sync::MutexGuard<'static, ()> {
+    static LOCALE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A failed test poisons the lock without leaving the locale in a broken state.
+    // 失败的测试会毒化该锁，但不会让语言处于损坏状态。
+    let guard = LOCALE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    set_active_locale(resolve_locale(Some(code), None));
+    guard
+}
+
 /// Returns the active locale code.
 /// 返回当前语言代码。
 pub fn active_locale() -> &'static str {

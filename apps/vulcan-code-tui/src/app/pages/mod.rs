@@ -489,14 +489,23 @@ pub struct PageState {
     pub free_scroll: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Theme tones shared by page rows and notice components; component declarations name them
+/// `normal`, `muted`, `success`, `warning`, `danger`, `accent` and `info`.
+/// 页面行与通知组件共用的主题色调；组件声明中的名称为 `normal`、`muted`、`success`、`warning`、
+/// `danger`、`accent` 与 `info`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Tone {
     Normal,
     Muted,
+    #[serde(rename = "success")]
     Good,
+    #[serde(rename = "warning")]
     Warn,
+    #[serde(rename = "danger")]
     Bad,
     Accent,
+    Info,
 }
 
 #[derive(Debug, Clone)]

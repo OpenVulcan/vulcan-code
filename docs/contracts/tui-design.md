@@ -84,6 +84,14 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
 - **预检审查**：知识导入与展示构建、插件安装、VCE 路由及维护、VMM 删除与维护先显示可滚动的服务预检明细，再明确确认。就绪文件清单可缩减；导入与展示构建使用各自确认结构，不能添加未审查文件；VCE 逐项目选择兼容或重建，强制重建项不能改成兼容。
 - **凭据**：输入遮蔽显示且仅放在临时表单中发送一次；回包进入槽位前清空密钥、任意命名的 MCP 请求头与环境值。修改 MCP 时需要重新输入这些值，界面有明确说明；环境变量名称引用与安装密钥名称保留。
 - **浮层**：命令面板、选择器、菜单、确认、输入提示、文件夹选择器、diff、提交对话框、帮助、历史浏览（Ctrl+F）与详情查看器。
+- **通知组件**：提示（toast）、由实时状态派生的通知与日后插件声明的通知共用 `app/notice.rs` 的声明形状和
+  `ui/notice.rs` 的唯一渲染器。声明为带 `type` 标记的 JSON（当前只有 `notice`），字段为 `key`（同键替换）、
+  `title`、`message`、`tone`、`title_tone`、`frame_tone`、`placement`（`top_right` 默认、`top_left`、`top_center`、
+  `bottom_right`、`bottom_left`、`bottom_center`）、`frame`（`bar` 默认、`box` 标题嵌入边框、`plain`）、`progress`
+  （以旋转指示代替图标）与 `duration_ms`；未知类型或字段被拒绝。色调只用主题名称 `normal`、`muted`、`success`、
+  `warning`、`danger`、`accent`、`info`，不接受颜色值。内置通知在 `app/notice-presets.json` 中以同一形状声明，代码只
+  提供文本；同一锚点的通知自锚点依次排开，实时通知最靠近锚点。会话处于 `MemoryRecall` 运行阶段（回答前 PreCheck
+  召回，对应 WebUI 的 `runtime.memoryRecall`）时显示“正在召回记忆”通知，阶段结束即消失。
 
 ## 交互约定
 

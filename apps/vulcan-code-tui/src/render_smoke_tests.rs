@@ -339,7 +339,7 @@ fn pump(
 
 #[test]
 fn mock_turn_renders_at_wide_and_narrow_sizes() {
-    i18n::set_active_locale(i18n::resolve_locale(Some("zh-TW"), None));
+    let _locale = i18n::lock_locale("zh-TW");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
     let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
@@ -447,7 +447,7 @@ pub(crate) fn snapshot(app: &mut App, name: &str) {
 
 #[test]
 fn session_panel_memory_stats_and_agents() {
-    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let _locale = i18n::lock_locale("en-US");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
     let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
@@ -585,7 +585,7 @@ fn session_panel_memory_stats_and_agents() {
 
 #[test]
 fn session_bar_composer_pastes_and_sidebar_rail() {
-    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let _locale = i18n::lock_locale("en-US");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
     let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
@@ -781,7 +781,7 @@ fn click(app: &mut App, what: &str, pred: impl Fn(&Target) -> bool) {
 
 #[test]
 fn mouse_reaches_areas_overlays_and_dialogs() {
-    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let _locale = i18n::lock_locale("en-US");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
     let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
@@ -956,7 +956,7 @@ fn press(app: &mut App, rect: Rect) {
 /// 单击只选中会话记录块与页面条目；双击才展开。
 #[test]
 fn single_click_selects_and_double_click_expands() {
-    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let _locale = i18n::lock_locale("en-US");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
     let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
@@ -1036,7 +1036,7 @@ fn single_click_selects_and_double_click_expands() {
 /// 条目会切换侧栏。
 #[test]
 fn activity_bar_adapts_and_toggles_the_sidebar() {
-    i18n::set_active_locale(i18n::resolve_locale(Some("en-US"), None));
+    let _locale = i18n::lock_locale("en-US");
     let mut app = App::new(mock::spawn(), Theme::dark(), true);
     let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
     let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
@@ -1099,4 +1099,69 @@ fn activity_bar_adapts_and_toggles_the_sidebar() {
     });
     assert_eq!(app.area, Area::Chat);
     assert_ne!(app.sidebar, before);
+}
+
+/// The memory recall notice shows while the conversation is in its PreCheck phase and leaves once
+/// the answer starts.
+/// 记忆召回通知在会话处于 PreCheck 阶段时显示，开始回答后消失。
+#[test]
+fn memory_recall_notice_follows_the_precheck_phase() {
+    use crate::app::notice::live;
+    use crate::model::RunPhase;
+
+    let mut app = App::new(mock::spawn(), Theme::dark(), true);
+    let mut wide = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    let mut narrow = Terminal::new(TestBackend::new(64, 20)).unwrap();
+    let recalling = |app: &App| {
+        live(app)
+            .iter()
+            .any(|notice| notice.key.as_deref() == Some("memory-recall"))
+    };
+    // Pumps until `done` holds; the deadline only bounds a hung mock.
+    // 持续处理直到 `done` 成立；截止时间只用于限制卡住的模拟后端。
+    let mut wait = |app: &mut App, what: &str, done: &dyn Fn(&App) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done(app) {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            pump(
+                app,
+                &mut wide,
+                &mut narrow,
+                Instant::now() + Duration::from_millis(30),
+            );
+        }
+    };
+
+    wait(&mut app, "the workbench", &|app| {
+        app.conversation().is_some()
+    });
+    type_text(&mut app, "recall prompt");
+    input::handle_event(&mut app, key(KeyCode::Enter, KeyModifiers::NONE));
+    wait(&mut app, "memory recall", &|app| {
+        app.run_phase() == RunPhase::MemoryRecall
+    });
+    assert!(
+        recalling(&app),
+        "the PreCheck phase raises the recall notice"
+    );
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert!(
+        buffer_text(terminal.backend().buffer()).contains("VMM"),
+        "the recall notice is drawn during PreCheck"
+    );
+
+    wait(&mut app, "the answer to start", &|app| {
+        app.run_phase() == RunPhase::Running
+    });
+    assert!(
+        !recalling(&app),
+        "the recall notice leaves once the answer starts"
+    );
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert!(
+        !buffer_text(terminal.backend().buffer()).contains("VMM"),
+        "the recall notice is no longer drawn"
+    );
 }
