@@ -25,6 +25,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_uninstall_user_plugin",
     "service_local_plugin_uninstall_requests",
     "service_resume_local_plugin_uninstall",
+    "service_set_vulcan_plugin_credentials",
     "service_set_plugin_mcp_secret",
     "service_delete_plugin_mcp_secret",
     "service_plugin_mcp_secret_mutation_requests",
@@ -210,6 +211,15 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "pluginId")?,
                 rpc_required_param(params, "requestId")?,
                 rpc_optional_param(params, "acknowledgeExternalEffects")?.unwrap_or(false),
+            )
+            .await,
+        ),
+        "service_set_vulcan_plugin_credentials" => rpc_json_result(
+            service_set_vulcan_plugin_credentials(
+                app.clone(),
+                state,
+                rpc_required_param(params, "pluginId")?,
+                rpc_required_param(params, "changes")?,
             )
             .await,
         ),

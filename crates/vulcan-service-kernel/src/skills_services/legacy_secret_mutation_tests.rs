@@ -758,10 +758,10 @@ async fn legacy_secret_mutation_shutdown_restores_retained_pre_native_write() {
     assert!(fixture.value().is_none());
 }
 
-/// A real staged revision selection rejects Legacy mutation before any exact-account OS adapter entry.
-/// 真实暂存第三版选择在任何精确账户操作系统适配器入口之前拒绝旧格式变更。
+/// A revision-bound selection turns the single-slot setter into a credential edit that never touches the legacy account.
+/// 修订绑定的选择把单槽位设置器转为凭据编辑，绝不触及旧账户。
 #[tokio::test(flavor = "current_thread")]
-async fn legacy_secret_mutation_managed_revision_rejects_before_os_access() {
+async fn legacy_secret_mutation_managed_revision_delegates_to_credential_edit() {
     // Both account namespaces belong exclusively to this fixture and are cleaned by its retained RAII owner.
     // 两种账户命名空间均专属于本夹具，并由其保留 RAII 所有者清理。
     let mut fixture = Fixture::new(false);
@@ -791,47 +791,58 @@ async fn legacy_secret_mutation_managed_revision_rejects_before_os_access() {
         .expect("declared revision server").credential_binding,
         vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(actual) if actual == &revision)
     );
-    // Exact bytes represent the valid preexisting authority before the rejected setter runs.
-    // 精确字节表示被拒设置器执行前的有效既存权威。
-    let selection_before = fixture.selection_bytes();
-    let catalog_before = fixture.catalog_bytes();
-    // Exact-account counting is armed only after real setup, so rejection must have zero native adapter entries.
-    // 精确账户计数仅在真实初始化后布防，因此拒绝必须具有零原生适配器入口。
+    // Exact-account counting is armed only after real setup; delegation must never reach the legacy account.
+    // 精确账户计数仅在真实初始化后布防；委派绝不能触及旧账户。
     let observe = crate::plugin_mcp_secret_store::legacy_write_observation::Scope::count_access(
         &fixture.plugin_id,
         SERVER,
         SECRET,
     );
-    for next in [Some("rejected-fixture-value"), None] {
-        assert!(
-            fixture
-                .mutate(next)
-                .await
-                .expect_err("selected revisions reject Legacy mutations")
-                .contains("Versioned plugin credentials require a credential revision transaction")
-        );
+    let mut selected_revisions = vec![revision];
+    for next in [Some("rotated-fixture-value"), None] {
+        fixture
+            .mutate(next)
+            .await
+            .expect("revision-bound mutation delegates to a credential edit");
+        let current = match &fixture.runtime.snapshot().plugins[&fixture.plugin_id]
+            .mcp_servers
+            .iter()
+            .find(|server| server.id == SERVER)
+            .expect("declared revision server")
+            .credential_binding
+        {
+            vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(current) => {
+                current.clone()
+            }
+            other => panic!("delegated edit must select a revision, found {other:?}"),
+        };
+        // The fixture owner deletes every revision it learns about, including collected ones.
+        // 夹具所有者删除其得知的每个修订，包括已回收的修订。
+        fixture.versioned_revisions.push(current.clone());
+        assert!(!selected_revisions.contains(&current));
+        selected_revisions.push(current);
     }
     assert!(
         observe.access_count() == 0,
-        "immutable rejection must precede the first exact-account OS access"
+        "delegated edits must not access the legacy account"
     );
     drop(observe);
     assert!(fixture.value().as_deref() == Some("untouched-legacy-fixture-value"));
-    assert!(
+    let read = |revision: &vulcan_plugin_runtime::VulcanPluginCredentialRevision| {
         crate::plugin_mcp_secret_store::OsPluginMcpSecretStore
             .read_selected_optional_secret(
                 &fixture.plugin_id,
                 SERVER,
                 SECRET,
-                &vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(revision),
+                &vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(revision.clone()),
             )
-            .expect("read exact unchanged selected revision")
-            .as_deref()
-            == Some("selected-revision-fixture-value")
+            .expect("read selected revision")
+    };
+    assert_eq!(
+        read(&selected_revisions[1]).as_deref(),
+        Some("rotated-fixture-value")
     );
-    assert!(fixture.selection_bytes() == selection_before);
-    assert!(fixture.catalog_bytes() == catalog_before);
-    assert!(Arc::ptr_eq(&snapshot, &fixture.runtime.snapshot()));
+    assert_eq!(read(&selected_revisions[2]), None);
 }
 
 /// Observe a real child handshake marker within the fixture deadline; path names never select production behavior.

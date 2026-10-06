@@ -63,9 +63,12 @@ impl<'de> Deserialize<'de> for VulcanPluginCredentialRevision {
 /// 随单个 MCP 描述符捕获的固定凭据权威，绝不从最新目录推断。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VulcanPluginCredentialBinding {
-    /// Existing flat packages and activation formats one/two use their unchanged legacy namespace.
-    /// 既有平铺包及第一／二版激活格式使用不变的旧命名空间。
+    /// Flat user packages without an activation record use the unchanged legacy namespace.
+    /// 没有激活记录的平铺用户插件包使用不变的旧命名空间。
     Legacy,
+    /// A bundled plugin whose secrets were never set; every declared secret reads as unconfigured.
+    /// 从未设置秘密的内建插件；每个声明秘密均按未配置读取。
+    Unconfigured,
     /// A revision-bound selection explicitly names one isolated credential revision.
     /// 绑定修订的选择明确指定单个隔离凭据修订。
     Revision(VulcanPluginCredentialRevision),

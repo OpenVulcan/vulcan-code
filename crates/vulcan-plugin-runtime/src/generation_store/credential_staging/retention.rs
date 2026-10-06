@@ -43,6 +43,24 @@ impl VulcanPluginGenerationStore {
         self.pin_credentials_locked(&verified, revision)
     }
 
+    /// Pin the staged bundled credentials `revision` of `plugin_id`; return a real shared owner or an error.
+    /// 固定 `plugin_id` 已暂存的内建凭据 `revision`；返回实际共享所有者或错误。
+    /// The inventory may predate a bundled package upgrade; undeclared slots simply read as unconfigured.
+    /// 清单可能早于内建插件包升级；未登记槽位按未配置读取。
+    pub fn pin_bundled_credentials(
+        &self,
+        plugin_id: &str,
+        revision: &VulcanPluginCredentialRevision,
+    ) -> Result<PinnedVulcanPluginCredentials> {
+        let _namespace = self.namespace_lock(plugin_id, true)?;
+        let record = self.validate_staged_bundled_credentials_locked(plugin_id, revision)?;
+        let lease = self.credential_lease(plugin_id, revision, true)?;
+        Ok(PinnedVulcanPluginCredentials {
+            record,
+            _lease: Arc::new(lease),
+        })
+    }
+
     /// Acquire shared ownership while the caller retains the namespace fence and a verified package pin.
     /// 调用方保留命名空间屏障及已验证插件包固定时，取得共享所有权。
     pub(in crate::generation_store) fn pin_credentials_locked(
@@ -97,7 +115,8 @@ impl VulcanPluginGenerationStore {
         // 退役允许停用记录，但未完成候选丢弃仍须拒绝任何被引用身份。
         if let Some(activation) = self.read_activation(plugin_id)?
             && activation.credential_revision() == Some(revision)
-            && (!retired || activation.generation().is_some())
+            && (!retired
+                || activation.package != crate::VulcanPluginPackageSelection::Uninstalled {})
         {
             return Err(Error::invalid(
                 "Referenced credential revision cannot be cleaned in this phase.",
@@ -202,7 +221,7 @@ impl VulcanPluginGenerationStore {
         validate()?;
         // The complete original fixes both namespace and revision before actual backend access.
         // 完整原清单在实际后端访问之前固定命名空间及修订。
-        let plugin_id = &expected.package.plugin_id;
+        let plugin_id = &expected.plugin_id;
         // Retain the actual exclusive credential File independently of mere selected revision text.
         // 独立于仅已选修订文本，保留实际排他凭据文件。
         let _lease = self.credential_lease(plugin_id, &expected.revision, false)?;
@@ -303,7 +322,7 @@ impl VulcanPluginGenerationStore {
     ) -> Result<()> {
         // Every secure tuple derives only from the complete validated original record.
         // 每个安全元组仅来自完整已验证原记录。
-        let plugin_id = &record.package.plugin_id;
+        let plugin_id = &record.plugin_id;
         // The same recorded revision stays fixed across deletion and readback.
         // 相同已记录修订跨删除及回读保持固定。
         let revision = &record.revision;
@@ -330,7 +349,7 @@ impl VulcanPluginGenerationStore {
         backend: &dyn VulcanPluginCredentialBackend,
     ) -> Result<()> {
         if backend
-            .read(&record.package.plugin_id, &record.revision, key)
+            .read(&record.plugin_id, &record.revision, key)
             .map_err(|_| {
                 Error::new(
                     Code::Storage,
@@ -359,7 +378,7 @@ impl VulcanPluginGenerationStore {
         observe_phase: impl Fn(VulcanPluginCredentialPhase),
     ) -> Result<bool> {
         if self
-            .read_credential_record_locked(&record.package.plugin_id, &record.revision)?
+            .read_credential_record_locked(&record.plugin_id, &record.revision)?
             .as_ref()
             != Some(record)
         {

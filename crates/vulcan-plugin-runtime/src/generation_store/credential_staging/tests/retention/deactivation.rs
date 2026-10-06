@@ -418,7 +418,7 @@ fn retained_deactivation_credentials_reject_foreign_actual_journal_before_backen
         .read_credential_record_locked("staging-plugin", &revision)
         .expect("read real foreign journal")
         .expect("actual foreign journal exists");
-    assert_ne!(foreign.package, *package.identity());
+    assert_ne!(foreign.generation(), Some(package.identity()));
     store
         .write_credential_record_locked(&foreign)
         .expect("inject actual foreign inventory");

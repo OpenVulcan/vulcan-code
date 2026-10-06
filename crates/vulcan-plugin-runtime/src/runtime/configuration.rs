@@ -164,12 +164,22 @@ impl VulcanPluginRuntimeManager {
                 // Without a record the package defaults apply in memory; nothing is written.
                 // 没有记录时在内存中使用插件包默认值；不写入任何内容。
                 None => read_configuration_defaults(&package_root, config)?,
-                Some(record) if record.package() == &crate::VulcanPluginPackageSelection::Bundled {} => {
-                    record.configuration().value().cloned().ok_or_else(|| {
-                        VulcanPluginRuntimeError::new(
-                            "Bundled plugin settings hold no configuration document.",
-                        )
-                    })?
+                Some(record)
+                    if record.package() == &crate::VulcanPluginPackageSelection::Bundled {} =>
+                {
+                    match record.configuration() {
+                        crate::VulcanPluginConfigurationSelection::Document { value } => {
+                            value.clone()
+                        }
+                        crate::VulcanPluginConfigurationSelection::PackageDefaults {} => {
+                            read_configuration_defaults(&package_root, config)?
+                        }
+                        crate::VulcanPluginConfigurationSelection::NotDeclared {} => {
+                            return Err(VulcanPluginRuntimeError::new(
+                                "Bundled plugin settings hold no configuration document.",
+                            ));
+                        }
+                    }
                 }
                 Some(_) => {
                     return Err(VulcanPluginRuntimeError::new(
@@ -178,7 +188,8 @@ impl VulcanPluginRuntimeManager {
                 }
             },
             ConfigurationOwner::Flat => {
-                let state_path = plugin_config_state_path(&self.state.plugin_state_root, &plugin.id);
+                let state_path =
+                    plugin_config_state_path(&self.state.plugin_state_root, &plugin.id);
                 if state_path.exists() {
                     read_plugin_json_state(&state_path, "configuration")?
                 } else {
@@ -222,8 +233,9 @@ impl VulcanPluginRuntimeManager {
         &self,
         plugin_id: &str,
     ) -> Result<Option<crate::VulcanPluginActivation>, VulcanPluginRuntimeError> {
-        let Some(store) = crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
-            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+        let Some(store) =
+            crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+                .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
         else {
             return Ok(None);
         };
@@ -286,6 +298,18 @@ impl VulcanPluginRuntimeManager {
         plugin: &crate::VulcanPluginDescriptor,
         value: Value,
     ) -> Result<Value, VulcanPluginRuntimeError> {
+        self.edit_plugin_config_for_snapshot(plugin, Some(value))
+    }
+
+    /// Commit value, or the package defaults when it is None, under the same gates as an ordinary update.
+    /// 在与普通更新相同的门控下提交 value，为 None 时提交插件包默认值。
+    /// A bundled record keeps following the package defaults; other owners store the defaults read now.
+    /// 内建记录持续跟随插件包默认值；其他所有者保存此刻读取的默认值。
+    fn edit_plugin_config_for_snapshot(
+        &self,
+        plugin: &crate::VulcanPluginDescriptor,
+        value: Option<Value>,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
         // Configuration mutation shares the existing publication gate.
         // 配置变更共用既有发布门。
         let registration = self.state.session_registration_gate.lock().map_err(|_| {
@@ -311,23 +335,40 @@ impl VulcanPluginRuntimeManager {
                 "Plugin configuration generation changed before write.",
             ));
         }
+        let follows_defaults = value.is_none();
+        let value = match value {
+            Some(value) => value,
+            None => read_configuration_defaults(
+                &self.configuration_package_root(current)?,
+                declared_configuration(current)?,
+            )?,
+        };
         match configuration_owner(current) {
             ConfigurationOwner::Managed(managed) => {
                 self.validate_settings_value(current, &value)?;
                 let committed = self.reconfigure_managed(current, managed, value.clone())?;
                 let reconfigured = current
-                    .with_reconfigured_settings(&committed)
+                    .with_reconfigured_settings(&committed, None)
                     .map_err(VulcanPluginRuntimeError::new)?;
                 self.publish_settings_edit(plugin_id, Some(reconfigured))?;
                 Ok(value)
             }
             ConfigurationOwner::Bundled => {
                 self.validate_settings_value(current, &value)?;
-                self.configure_bundled(plugin_id, value.clone())?;
+                let configuration = if follows_defaults {
+                    crate::VulcanPluginConfigurationSelection::PackageDefaults {}
+                } else {
+                    crate::VulcanPluginConfigurationSelection::Document {
+                        value: value.clone(),
+                    }
+                };
+                self.configure_bundled(plugin_id, configuration)?;
                 self.publish_settings_edit(plugin_id, None)?;
                 Ok(value)
             }
-            ConfigurationOwner::Flat => self.update_flat_plugin_config(plugin, value, &registration),
+            ConfigurationOwner::Flat => {
+                self.update_flat_plugin_config(plugin, value, &registration)
+            }
         }
     }
 
@@ -379,7 +420,11 @@ impl VulcanPluginRuntimeManager {
 
     /// Commit value as the bundled plugin's settings, creating its record on the first edit.
     /// 将 value 提交为内建插件的设置，首次编辑时创建其记录。
-    fn configure_bundled(&self, plugin_id: &str, value: Value) -> Result<(), VulcanPluginRuntimeError> {
+    fn configure_bundled(
+        &self,
+        plugin_id: &str,
+        configuration: crate::VulcanPluginConfigurationSelection,
+    ) -> Result<(), VulcanPluginRuntimeError> {
         // The first edit initializes the same host-selected user root as plugin installation.
         // 首次编辑初始化与插件安装相同的宿主选定用户根目录。
         std::fs::create_dir_all(&self.state.user_plugin_root).map_err(|error| {
@@ -395,7 +440,10 @@ impl VulcanPluginRuntimeManager {
             .configure_bundled(
                 plugin_id,
                 settings_revision,
-                crate::VulcanPluginConfigurationSelection::Document { value },
+                crate::VulcanPluginSettingsChange {
+                    configuration: Some(configuration),
+                    credential_revision: None,
+                },
             )
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
         Ok(())
@@ -403,26 +451,28 @@ impl VulcanPluginRuntimeManager {
 
     /// Publish a new catalog revision after a committed settings edit and retire reusable domains of plugin_id.
     /// 设置编辑提交后发布新目录修订，并退役 plugin_id 的可复用域。
-    /// `reconfigured` replaces a managed descriptor that mirrors the settings; other descriptors read them live.
-    /// `reconfigured` 替换镜像设置的受管描述符；其他描述符实时读取设置。
-    fn publish_settings_edit(
+    /// Returns the published snapshot.
+    /// 返回已发布快照。
+    /// `reconfigured` replaces a descriptor that mirrors settings or credentials; others read settings live.
+    /// `reconfigured` 替换镜像设置或凭据的描述符；其他描述符实时读取设置。
+    pub(super) fn publish_settings_edit(
         &self,
         plugin_id: &str,
         reconfigured: Option<crate::VulcanPluginDescriptor>,
-    ) -> Result<(), VulcanPluginRuntimeError> {
+    ) -> Result<Arc<crate::VulcanPluginCatalogSnapshot>, VulcanPluginRuntimeError> {
         let mut published = self.state.snapshot.write().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
         })?;
         let mut next_snapshot = (**published).clone();
         if let Some(descriptor) = reconfigured {
-            // Enabled MCP entries are copies of the descriptor's servers and carry the same configuration.
-            // 已启用 MCP 条目是描述符服务器的副本，携带相同配置。
+            // Enabled MCP entries are copies of the descriptor's servers, including configuration and credentials.
+            // 已启用 MCP 条目是描述符服务器的副本，包含配置及凭据。
             for server in &descriptor.mcp_servers {
                 if let Some(entry) = next_snapshot
                     .enabled_mcp_servers
                     .get_mut(&format!("{}:{}", server.plugin_id, server.id))
                 {
-                    entry.configuration = server.configuration.clone();
+                    *entry = server.clone();
                 }
             }
             next_snapshot
@@ -430,11 +480,13 @@ impl VulcanPluginRuntimeManager {
                 .insert(plugin_id.to_owned(), descriptor);
         }
         next_snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
-        *published = Arc::new(next_snapshot);
+        let next_snapshot = Arc::new(next_snapshot);
+        *published = Arc::clone(&next_snapshot);
         drop(published);
         // Already-running calls drain on their original VM; no later call reuses pre-update state.
         // 已运行调用在原 VM 中排空；后续调用不复用更新前状态。
-        self.close_reusable_domains(Some(plugin_id), None, false)
+        self.close_reusable_domains(Some(plugin_id), None, false)?;
+        Ok(next_snapshot)
     }
 
     /// Write value into a flat package's state file under its legacy mutation guard.
@@ -643,17 +695,13 @@ impl VulcanPluginRuntimeManager {
         let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
             VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
         })?;
-        let defaults = read_configuration_defaults(
-            &self.configuration_package_root(plugin)?,
-            declared_configuration(plugin)?,
-        )?;
-        self.update_plugin_config_for_snapshot(plugin, defaults)
+        self.edit_plugin_config_for_snapshot(plugin, None)
     }
 }
 
 /// Which authority stores a plugin's configuration.
 /// 哪个权威保存插件配置。
-enum ConfigurationOwner<'a> {
+pub(super) enum ConfigurationOwner<'a> {
     /// The settings section of the managed package's activation record, mirrored by its descriptor.
     /// 受管插件包激活记录的设置段，由其描述符镜像。
     Managed(&'a crate::VulcanPluginManagedPackage),
@@ -667,7 +715,9 @@ enum ConfigurationOwner<'a> {
 
 /// Classify plugin by the authority that owns its configuration.
 /// 按拥有其配置的权威对 plugin 分类。
-fn configuration_owner(plugin: &crate::VulcanPluginDescriptor) -> ConfigurationOwner<'_> {
+pub(super) fn configuration_owner(
+    plugin: &crate::VulcanPluginDescriptor,
+) -> ConfigurationOwner<'_> {
     match (plugin.managed_package(), plugin.origin) {
         (Some(managed), _) => ConfigurationOwner::Managed(managed),
         (None, crate::VulcanPluginPackageOrigin::Bundled) => ConfigurationOwner::Bundled,
@@ -706,8 +756,12 @@ fn read_configuration_defaults(
 ) -> Result<Value, VulcanPluginRuntimeError> {
     // The package validator remains authoritative for relative paths and reparse-point exclusion.
     // 插件包校验器继续对相对路径及重解析点排除具有权威。
-    let defaults = canonical_plugin_file(package_root, &config.defaults_file, "configuration defaults")
-        .map_err(VulcanPluginRuntimeError::new)?;
+    let defaults = canonical_plugin_file(
+        package_root,
+        &config.defaults_file,
+        "configuration defaults",
+    )
+    .map_err(VulcanPluginRuntimeError::new)?;
     read_plugin_json_state(&defaults, "configuration defaults")
 }
 

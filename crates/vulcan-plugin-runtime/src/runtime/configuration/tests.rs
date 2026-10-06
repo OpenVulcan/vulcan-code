@@ -1,7 +1,9 @@
 //! Bundled configuration lives in a settings record created by the first edit; reset is the explicit recovery.
 //! 内建配置位于首次编辑创建的设置记录中；重置是显式恢复手段。
 
-use crate::{VulcanPluginGenerationStore, VulcanPluginPackageSelection, VulcanPluginRuntimeManager};
+use crate::{
+    VulcanPluginGenerationStore, VulcanPluginPackageSelection, VulcanPluginRuntimeManager,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fs;
@@ -52,7 +54,9 @@ fn bundled_configuration_reads_defaults_until_edited_and_reset_restores_them() {
     let runtime = manager(root.path());
 
     assert_eq!(
-        runtime.plugin_config("bundled-plugin").expect("read defaults"),
+        runtime
+            .plugin_config("bundled-plugin")
+            .expect("read defaults"),
         json!({"label": "default"})
     );
     assert!(
@@ -91,7 +95,12 @@ fn bundled_configuration_reads_defaults_until_edited_and_reset_restores_them() {
         runtime.plugin_config("bundled-plugin").expect("read reset"),
         json!({"label": "default"})
     );
-    assert!(!root.path().join("state/bundled-plugin/config.json").exists());
+    assert!(
+        !root
+            .path()
+            .join("state/bundled-plugin/config.json")
+            .exists()
+    );
 }
 
 /// A stored value the schema no longer accepts fails every read, without being rewritten, until an explicit reset.

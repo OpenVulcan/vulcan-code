@@ -363,7 +363,7 @@ fn validate_full_pins(
         || plugin.package_root != package.package_root()
         || plugin.version.as_deref() != Some(package.identity().version.as_str())
         || plugin.content_fingerprint != package.identity().content_fingerprint
-        || credentials.record().package() != package.identity()
+        || credentials.record().generation() != Some(package.identity())
         || Some(credentials.record().revision()) != selected.credential_revision()
     {
         return Err(VulcanPluginRuntimeError::new(
@@ -378,7 +378,7 @@ fn validate_full_pins(
             || server.configuration() != Some(selected.configuration())
             || server.credential_binding != *managed.credential_binding()
             || !server.credential_lease.as_ref().is_some_and(|lease| {
-                lease.record().package() == package.identity()
+                lease.record().generation() == Some(package.identity())
                     && Some(lease.record().revision()) == selected.credential_revision()
             })
         {

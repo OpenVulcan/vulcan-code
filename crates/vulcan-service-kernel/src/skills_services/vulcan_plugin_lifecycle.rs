@@ -1804,6 +1804,62 @@ pub(super) fn publish_legacy_secret_extension_generation(
     Ok(())
 }
 
+/// Publish the committed credential `catalog` together with the ready `replacement` of the plugin's global servers.
+/// 将已提交凭据 `catalog` 与插件全局服务器的已就绪 `replacement` 一同发布。
+/// The plugin must still be enabled at the same generation in the current full pointer; errors precede replacement.
+/// 插件在当前完整指针中须仍以相同代次启用；错误先于替换发生。
+pub(super) fn publish_credential_extension_generation(
+    state: &SharedServiceBridgeState,
+    plugin_id: &str,
+    catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
+    replacement: &vulcan_agent_runtime::mcp::LegacyPluginMcpReplacement,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|error| error.to_string())?;
+    crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
+    crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
+    let current_catalog = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
+    guard
+        .pending_local_plugin_installs
+        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
+    // The committed edit changes only credentials, so routing must be the one the candidate started against.
+    // 已提交编辑只改变凭据，因此路由必须是候选启动时所针对的路由。
+    let committed = catalog.plugins.get(plugin_id).ok_or_else(|| {
+        String::from("Credential publication plugin is absent from its committed catalog.")
+    })?;
+    if !current_catalog.as_deref().is_some_and(|current| {
+        current.service_epoch == catalog.service_epoch
+            && current.plugins.get(plugin_id).is_some_and(|published| {
+                published.generation == committed.generation
+                    && published.runtime_state
+                        == vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled
+            })
+    }) {
+        return Err(String::from(
+            "Credential publication plugin routing changed during readiness.",
+        ));
+    }
+    let bridge = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+    let expected = Arc::clone(&bridge.extension_generation);
+    let current = expected.mcp_runtime();
+    let access = replacement.publication_access(&current)?;
+    let next = bridge.prepare_plugin_extension_generation(catalog, access)?;
+    replacement.publish_prepared(&mut bridge.extension_generation, &expected, next, || {})?;
+    // Retire displaced native owners only after the native guards are released.
+    // 仅在原生守卫释放后退役被替换原生所有者。
+    drop(guard);
+    current.retire_plugin_partitions_after(
+        plugin_id,
+        AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+    );
+    Ok(())
+}
+
 /// Publish a disabled plugin while preserving every other partition from the actual current service generation.
 /// 发布停用插件，同时保留实际当前服务代次中的全部其他分区。
 /// state owns the sole pointer; plugin_id selects only the removed partition; catalog is the exact disabled snapshot.

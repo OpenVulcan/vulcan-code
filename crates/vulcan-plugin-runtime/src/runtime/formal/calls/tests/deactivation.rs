@@ -444,7 +444,10 @@ fn deactivation_lifecycle_rejects_stale_complete_catalog_selection_without_start
             &package,
             selected.revision,
             selected.approved_permissions().to_vec(),
-            selected.credential_revision().expect("selected revision").clone(),
+            selected
+                .credential_revision()
+                .expect("selected revision")
+                .clone(),
             selected.configuration().clone(),
         )
         .expect("actual next record");

@@ -30,22 +30,20 @@ impl VulcanPluginCredentialStaging {
         }
         super::operations::validate_record(
             &self.record,
-            &self.record.package.plugin_id,
+            &self.record.plugin_id,
             &self.record.revision,
         )
         .map_err(super::reservation::owned_record_error)?;
         // This short observation fence never reopens the already retained exclusive revision or parent request File.
         // 此短观察屏障绝不重新打开已保留排他修订或父请求 File。
-        let _namespace = self
-            .store
-            .namespace_lock(&self.record.package.plugin_id, true)?;
+        let _namespace = self.store.namespace_lock(&self.record.plugin_id, true)?;
         #[cfg(test)]
         super::reservation::observation_before_readback(&self.store.root, &self.record)?;
         // The actual full record is authoritative; malformed replacements are conflicts, while I/O remains Storage.
         // 实际完整记录具有权威性；格式损坏替换属于冲突，而 I/O 保持 Storage。
         let actual = self
             .store
-            .read_credential_record_locked(&self.record.package.plugin_id, &self.record.revision)
+            .read_credential_record_locked(&self.record.plugin_id, &self.record.revision)
             .map_err(super::reservation::owned_record_error)?
             .ok_or_else(|| {
                 Error::new(
@@ -97,7 +95,7 @@ impl VulcanPluginCredentialStaging {
             // Backend error text is deliberately not propagated because a foreign backend may include secret values.
             // 故意不传播后端错误文本，因为外部后端可能包含秘密值。
             let actual = backend
-                .read(&self.record.package.plugin_id, &self.record.revision, key)
+                .read(&self.record.plugin_id, &self.record.revision, key)
                 .map_err(|_| {
                     Error::new(
                         Code::Storage,
@@ -121,13 +119,13 @@ impl VulcanPluginCredentialStaging {
             let value = values[key]
                 .as_deref()
                 .ok_or_else(|| Error::invalid("Configured credential value disappeared."))?;
-            backend.write(&self.record.package.plugin_id, &self.record.revision, key, value).map_err(|_| Error::new(Code::Storage, "Secure credential candidate write failed; the original inventory is retained."))?;
+            backend.write(&self.record.plugin_id, &self.record.revision, key, value).map_err(|_| Error::new(Code::Storage, "Secure credential candidate write failed; the original inventory is retained."))?;
         }
         for (key, expected) in values {
             // Readback verifies both configured and explicitly absent slots, not merely the last write result.
             // 回读同时验证已配置及明确缺失槽位，不仅检查最后写入结果。
             let actual = backend
-                .read(&self.record.package.plugin_id, &self.record.revision, key)
+                .read(&self.record.plugin_id, &self.record.revision, key)
                 .map_err(|_| {
                     Error::new(
                         Code::Storage,
@@ -143,9 +141,7 @@ impl VulcanPluginCredentialStaging {
         }
         // The exclusive revision lease survives this short checkpoint fence and every uncertain write outcome.
         // 排他修订租约在此短检查点屏障及每次不确定写入结果期间持续存在。
-        let _namespace = self
-            .store
-            .namespace_lock(&self.record.package.plugin_id, false)?;
+        let _namespace = self.store.namespace_lock(&self.record.plugin_id, false)?;
         self.check_original_record_locked()?;
         // Publish only non-secret metadata after all actual backend reads succeeded.
         // 全部实际后端读取成功后，仅发布非秘密元数据。
@@ -163,9 +159,7 @@ impl VulcanPluginCredentialStaging {
     fn check_original_record(&self) -> Result<()> {
         // The revision lease is already held; this read fence only coordinates checkpoint publication.
         // 已经持有修订租约；此读取屏障仅协调检查点发布。
-        let _namespace = self
-            .store
-            .namespace_lock(&self.record.package.plugin_id, true)?;
+        let _namespace = self.store.namespace_lock(&self.record.plugin_id, true)?;
         self.check_original_record_locked()
     }
 
@@ -174,7 +168,7 @@ impl VulcanPluginCredentialStaging {
     fn check_original_record_locked(&self) -> Result<()> {
         if self
             .store
-            .read_credential_record_locked(&self.record.package.plugin_id, &self.record.revision)?
+            .read_credential_record_locked(&self.record.plugin_id, &self.record.revision)?
             .as_ref()
             != Some(&self.record)
         {

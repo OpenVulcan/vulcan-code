@@ -301,15 +301,13 @@ fn unreachable_credentials_are_collected_and_reachable_ones_kept() {
         .expect("selected credentials survive every sweep");
 }
 
-/// Bundled settings records are created and edited only through their own revision, carry no credentials, and block package transactions.
-/// 内建设置记录只经其自身修订创建及编辑，不携带凭据，并阻止插件包交易。
+/// Bundled settings records are created and edited only through their own revision and block package transactions.
+/// 内建设置记录只经其自身修订创建及编辑，并阻止插件包交易。
 #[test]
 fn bundled_settings_records_are_revisioned_and_reject_package_transactions() {
     let temp = tempfile::tempdir().expect("create bundled settings fixture");
     let (store, package, credentials) = fixture(temp.path(), true);
-    let document = |label: &str| VulcanPluginConfigurationSelection::Document {
-        value: json!({ "label": label }),
-    };
+    let document = |label: &str| configure(json!({ "label": label }));
 
     let created = store
         .configure_bundled("configured-plugin", 0, document("first"))
@@ -371,10 +369,11 @@ fn bundled_settings_records_are_revisioned_and_reject_package_transactions() {
     );
 }
 
-/// A managed generation record without a credential revision and a bundled record with one are both invalid.
-/// 缺少凭据修订的受管代次记录及携带凭据的内建记录均无效。
+/// A managed generation record needs a credential revision and an explicit configuration; only bundled records
+/// may defer to the package defaults.
+/// 受管代次记录需要凭据修订及显式配置；只有内建记录可沿用插件包默认值。
 #[test]
-fn credential_revision_presence_must_match_package_kind() {
+fn managed_records_require_credentials_and_explicit_configuration() {
     let temp = tempfile::tempdir().expect("create credential presence fixture");
     let (store, package, credentials) = fixture(temp.path(), true);
     store
@@ -404,13 +403,89 @@ fn credential_revision_presence_must_match_package_kind() {
         .activation("configured-plugin")
         .expect_err("managed record without credentials");
 
-    let mut bundled: serde_json::Value =
+    let mut deferred: serde_json::Value =
         serde_json::from_slice(&original).expect("decode managed record");
-    bundled["package"] = json!({"kind": "bundled"});
-    bundled["approved_permissions"] = json!([]);
-    fs::write(&path, serde_json::to_vec(&bundled).expect("encode record"))
-        .expect("write bundled record with credentials");
+    deferred["settings"]["configuration"] = json!({"kind": "package_defaults"});
+    fs::write(&path, serde_json::to_vec(&deferred).expect("encode record"))
+        .expect("write managed record deferring to defaults");
     store
         .activation("configured-plugin")
-        .expect_err("bundled record with credentials");
+        .expect_err("managed record deferring to package defaults");
+}
+
+/// Bundled credentials are staged only for a bundled namespace, selected only once staged for it, and kept by
+/// configuration edits; a first credential-only record defers to the package defaults.
+/// 内建凭据只为内建命名空间暂存，只在已为其暂存后被选定，并由配置编辑保留；仅含凭据的首个记录沿用插件包默认值。
+#[test]
+fn bundled_credentials_are_staged_and_selected_for_the_bundled_namespace() {
+    let temp = tempfile::tempdir().expect("create bundled credential fixture");
+    let (store, _package, generation_credentials) = fixture(temp.path(), true);
+    let keys = Vec::new();
+    let values = VulcanPluginCredentialValues::new();
+
+    // A revision staged for a package generation cannot be selected by bundled settings.
+    // 为插件包代次暂存的修订不能被内建设置选定。
+    store
+        .configure_bundled("configured-plugin", 0, rotate(&generation_credentials))
+        .expect_err("generation credentials in bundled settings");
+
+    let revision = VulcanPluginCredentialRevision::allocate();
+    let mut staging = store
+        .begin_bundled_credential_staging(
+            "configured-plugin",
+            keys.clone(),
+            revision.clone(),
+            &values,
+        )
+        .expect("stage bundled credentials");
+    staging
+        .write_and_finish(&EmptyCredentialBackend, &values)
+        .expect("finish bundled credentials");
+    drop(staging);
+    let created = store
+        .configure_bundled("configured-plugin", 0, rotate(&revision))
+        .expect("select bundled credentials");
+    assert_eq!(
+        created.configuration(),
+        &VulcanPluginConfigurationSelection::PackageDefaults {}
+    );
+    assert_eq!(created.credential_revision(), Some(&revision));
+    store
+        .pin_bundled_credentials("configured-plugin", &revision)
+        .expect("pin selected bundled credentials");
+
+    let edited = store
+        .configure_bundled(
+            "configured-plugin",
+            created.settings().revision,
+            configure(json!({"label": "edited"})),
+        )
+        .expect("edit bundled configuration");
+    assert_eq!(edited.credential_revision(), Some(&revision));
+    store
+        .begin_bundled_credential_staging("configured-plugin", keys.clone(), revision, &values)
+        .expect_err("a selected revision cannot be staged again");
+
+    // Once a package generation owns the namespace, bundled staging is a conflict.
+    // 插件包代次占用命名空间后，内建暂存视为冲突。
+    let managed_temp = tempfile::tempdir().expect("create managed namespace fixture");
+    let (managed_store, managed_package, managed_credentials) = fixture(managed_temp.path(), true);
+    managed_store
+        .activate_configured(
+            &managed_package,
+            0,
+            managed_package.required_permissions.clone(),
+            managed_credentials,
+            managed_package.default_configuration_for_test(),
+        )
+        .expect("select managed package");
+    let conflict = managed_store
+        .begin_bundled_credential_staging(
+            "configured-plugin",
+            keys,
+            VulcanPluginCredentialRevision::allocate(),
+            &values,
+        )
+        .expect_err("bundled staging over a managed selection");
+    assert_eq!(conflict.code, VulcanPluginStoreErrorCode::Conflict);
 }

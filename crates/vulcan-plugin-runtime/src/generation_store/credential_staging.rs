@@ -94,6 +94,23 @@ impl VulcanPluginCredentialPhase {
     ];
 }
 
+/// Package that declared a credential inventory: one managed generation or the bundled package of the plugin.
+/// 声明凭据清单的插件包：单个受管代次或该插件的内建插件包。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VulcanPluginCredentialPackage {
+    /// Exact managed generation, including its inspected byte identity.
+    /// 精确受管代次，包含已检查字节身份。
+    Generation {
+        /// Generation that supplied the declared keys.
+        /// 提供声明键的代次。
+        identity: VulcanPluginGenerationIdentity,
+    },
+    /// The bundled package of the record's plugin; its declared keys are supplied by the host catalog.
+    /// 记录所属插件的内建插件包；其声明键由宿主目录提供。
+    Bundled {},
+}
+
 /// Strict non-secret journal snapshot; returning it does not grant a mutation lease.
 /// 严格非秘密日志快照；返回快照不会授予变更租约。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,9 +127,12 @@ pub struct VulcanPluginCredentialRecord {
         skip_serializing_if = "Option::is_none"
     )]
     activation_request: Option<uuid::Uuid>,
-    /// Exact package that supplied this inventory, including its inspected byte identity.
-    /// 提供此清单的精确插件包，包含已检查字节身份。
-    package: VulcanPluginGenerationIdentity,
+    /// Plugin namespace owning this revision.
+    /// 持有此修订的插件命名空间。
+    plugin_id: String,
+    /// Exact package that supplied this inventory.
+    /// 提供此清单的精确插件包。
+    package: VulcanPluginCredentialPackage,
     /// Stable secure-store namespace that never changes across recovery.
     /// 在恢复期间绝不改变的稳定安全存储命名空间。
     revision: VulcanPluginCredentialRevision,
@@ -133,10 +153,23 @@ impl VulcanPluginCredentialRecord {
     pub fn activation_request(&self) -> Option<uuid::Uuid> {
         self.activation_request
     }
-    /// Borrow the exact package identity that supplied the inventory.
-    /// 借用提供清单的精确插件包身份。
-    pub fn package(&self) -> &VulcanPluginGenerationIdentity {
+    /// Borrow the plugin namespace owning this revision.
+    /// 借用持有此修订的插件命名空间。
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+    /// Borrow the exact package that supplied the inventory.
+    /// 借用提供清单的精确插件包。
+    pub fn package(&self) -> &VulcanPluginCredentialPackage {
         &self.package
+    }
+    /// Borrow the managed generation that supplied the inventory, or None for a bundled inventory.
+    /// 借用提供清单的受管代次；内建清单返回 None。
+    pub fn generation(&self) -> Option<&VulcanPluginGenerationIdentity> {
+        match &self.package {
+            VulcanPluginCredentialPackage::Generation { identity } => Some(identity),
+            VulcanPluginCredentialPackage::Bundled {} => None,
+        }
     }
     /// Borrow the original secure-store revision without searching for a newer selection.
     /// 借用原安全存储修订，不搜索更新选择。
@@ -241,7 +274,7 @@ fn configured_keys(values: &VulcanPluginCredentialValues) -> BTreeSet<VulcanPlug
 
 /// Derive sorted unique declared slots from one verified `descriptor`; never consult mutable configuration or secrets.
 /// 从单个已验证 `descriptor` 派生有序唯一声明槽位；绝不查询可变配置或秘密。
-pub(super) fn declared_keys(
+pub(crate) fn declared_keys(
     descriptor: &crate::VulcanPluginDescriptor,
 ) -> Vec<VulcanPluginCredentialKey> {
     descriptor

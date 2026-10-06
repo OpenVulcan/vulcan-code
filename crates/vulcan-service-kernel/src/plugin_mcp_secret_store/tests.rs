@@ -100,6 +100,9 @@ fn credential_binding_windows_secure_store_keeps_legacy_and_revisions_separate()
             VulcanPluginCredentialBinding::Revision(revision) => {
                 versioned_plugin_secret_entry(&plugin, "server", "token", revision)
             }
+            VulcanPluginCredentialBinding::Unconfigured => {
+                unreachable!("the fixture declares only stored bindings")
+            }
         }
         .expect("open isolated secure fixture");
         assert!(matches!(entry.get_password(), Err(KeyringError::NoEntry)));

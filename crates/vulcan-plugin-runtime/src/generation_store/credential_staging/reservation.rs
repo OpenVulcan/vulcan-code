@@ -44,7 +44,7 @@ impl std::fmt::Debug for VulcanPluginCredentialStagingReservation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("VulcanPluginCredentialStagingReservation")
-            .field("plugin_id", &self.staging.record.package.plugin_id)
+            .field("plugin_id", &self.staging.record.plugin_id)
             .field("revision", &self.staging.record.revision)
             .finish_non_exhaustive()
     }
@@ -165,22 +165,93 @@ impl VulcanPluginGenerationStore {
                 CREDENTIAL_RECORD_VERSION
             },
             activation_request: preparation.map(|original| original.request_id()),
-            package: generation.identity.clone(),
+            plugin_id: generation.identity.plugin_id.clone(),
+            package: VulcanPluginCredentialPackage::Generation {
+                identity: generation.identity.clone(),
+            },
             revision,
             keys,
             configured_keys: configured_keys(values).into_iter().collect(),
             phase: VulcanPluginCredentialPhase::Preparing,
         };
-        validate_record(&record, &record.package.plugin_id, &record.revision)?;
+        self.reserve_credential_record_locked(namespace, record, activation_request_lease)
+    }
+
+    /// Stage a new credential revision for the bundled package of `plugin_id`; return the confirmed writer.
+    /// 为 `plugin_id` 的内建插件包暂存新凭据修订；返回已确认写入者。
+    /// `keys` is the bundled package's declared inventory from the host catalog and `values` must name each exactly.
+    /// `keys` 为宿主目录提供的内建插件包声明清单，`values` 必须逐一精确对应。
+    /// A namespace owned by a managed selection is a conflict; no secure backend is called here.
+    /// 由受管选择占用的命名空间视为冲突；此处不调用安全后端。
+    pub fn begin_bundled_credential_staging(
+        &self,
+        plugin_id: &str,
+        keys: Vec<VulcanPluginCredentialKey>,
+        revision: VulcanPluginCredentialRevision,
+        values: &VulcanPluginCredentialValues,
+    ) -> Result<VulcanPluginCredentialStaging> {
+        let namespace = self.namespace_lock(plugin_id, false)?;
+        let current = self.read_activation(plugin_id)?;
+        if current
+            .as_ref()
+            .is_some_and(|record| record.package != crate::VulcanPluginPackageSelection::Bundled {})
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Credentials of a non-bundled selection are staged for its generation.",
+            ));
+        }
+        if current
+            .as_ref()
+            .and_then(|record| record.credential_revision())
+            == Some(&revision)
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "A referenced credential revision cannot become a new staging candidate.",
+            ));
+        }
+        self.require_unreserved_credential_revision(plugin_id, &revision)?;
+        if values.keys().ne(keys.iter()) || values.values().flatten().any(String::is_empty) {
+            return Err(Error::invalid(
+                "Credential values must name every declared slot exactly; configured values cannot be empty.",
+            ));
+        }
+        let record = VulcanPluginCredentialRecord {
+            schema_version: CREDENTIAL_RECORD_VERSION,
+            activation_request: None,
+            plugin_id: plugin_id.to_owned(),
+            package: VulcanPluginCredentialPackage::Bundled {},
+            revision,
+            keys,
+            configured_keys: configured_keys(values).into_iter().collect(),
+            phase: VulcanPluginCredentialPhase::Preparing,
+        };
+        let mut reservation = self.reserve_credential_record_locked(namespace, record, None)?;
+        self.publish_owned_credential_staging_retained(&mut reservation, None)?;
+        self.confirmed_credential_staging_reservation(reservation)
+    }
+
+    /// Reserve the intended `record` under the caller's exclusive `namespace`; return its owner without writing it.
+    /// 在调用方排他 `namespace` 下预留预定 `record`；返回其所有者而不写入记录。
+    /// `activation_request_lease` is the already retained original parent, if any.
+    /// `activation_request_lease` 为已保留的原父请求（如有）。
+    fn reserve_credential_record_locked(
+        &self,
+        namespace: File,
+        record: VulcanPluginCredentialRecord,
+        activation_request_lease: Option<Arc<File>>,
+    ) -> Result<VulcanPluginCredentialStagingReservation> {
+        validate_record(&record, &record.plugin_id, &record.revision)?;
         // Preserve the original exclusive File rather than duplicating or reopening its revision ownership.
         // 保留原排他 File，而非复制或重新打开其修订所有权。
-        let lease = self.credential_lease(&record.package.plugin_id, &record.revision, false)?;
+        let lease = self.credential_lease(&record.plugin_id, &record.revision, false)?;
         // Explicit reservation initializes only the existing optional inventory layout, without publishing a record.
         // 明确预留仅初始化既有可选清单布局，不发布记录。
         let root = files::ensure_child(&self.root, INVENTORY_DIRECTORY)?;
         // Every immutable revision belongs to its one validated plugin component.
         // 每个不可变修订属于其唯一已校验插件组件。
-        let directory = files::ensure_child(&root, &record.package.plugin_id)?;
+        let directory = files::ensure_child(&root, &record.plugin_id)?;
         if files::exists(
             &directory.join(format!("{}.json", record.revision.as_str())),
             false,
@@ -238,14 +309,14 @@ impl VulcanPluginGenerationStore {
         }
         validate_record(
             &reservation.staging.record,
-            &reservation.staging.record.package.plugin_id,
+            &reservation.staging.record.plugin_id,
             &reservation.staging.record.revision,
         )
         .map_err(owned_record_error)?;
         // A present actual File already owns the namespace; only a retired File requires a short new observation fence.
         // 存在实际 File 时已经持有命名空间；仅 File 已退役时才要求短新观测屏障。
         let _observation_namespace = if reservation.namespace.is_none() {
-            Some(self.namespace_lock(&reservation.staging.record.package.plugin_id, false)?)
+            Some(self.namespace_lock(&reservation.staging.record.plugin_id, false)?)
         } else {
             None
         };
@@ -255,9 +326,12 @@ impl VulcanPluginGenerationStore {
             {
                 // Existing validation checks the complete original intent, predecessor and index before this pointer proof.
                 // 既有校验在此指针证明之前检查完整原意图、前驱及索引。
+                let identity = reservation.staging.record.generation().ok_or_else(|| {
+                    Error::invalid("A parented credential inventory names no generation.")
+                })?;
                 let observed_parent = self.retain_preparation_credentials(
                     original,
-                    &reservation.staging.record.package,
+                    identity,
                     &reservation.staging.record.revision,
                 )?;
                 // A copied UUID alone cannot replace the actual original request File shared by the reserved writer.
@@ -273,7 +347,7 @@ impl VulcanPluginGenerationStore {
             }
             (None, None) if reservation.staging.record.activation_request.is_none() => {
                 self.require_unreserved_credential_revision(
-                    &reservation.staging.record.package.plugin_id,
+                    &reservation.staging.record.plugin_id,
                     &reservation.staging.record.revision,
                 )?;
             }
@@ -290,7 +364,7 @@ impl VulcanPluginGenerationStore {
         // 真实缺失仅允许首次保留命名空间所有者发布；既有精确 Preparing 属于只读确认。
         let observed = self
             .read_credential_record_locked(
-                &reservation.staging.record.package.plugin_id,
+                &reservation.staging.record.plugin_id,
                 &reservation.staging.record.revision,
             )
             .map_err(owned_record_error)?;
@@ -312,7 +386,7 @@ impl VulcanPluginGenerationStore {
         observation_before_readback(&self.root, &reservation.staging.record)?;
         if self
             .read_credential_record_locked(
-                &reservation.staging.record.package.plugin_id,
+                &reservation.staging.record.plugin_id,
                 &reservation.staging.record.revision,
             )
             .map_err(owned_record_error)?
@@ -500,7 +574,7 @@ mod observation {
             let mut armed = armed.borrow_mut();
             if let Some(fault) = armed.as_mut()
                 && fault.key.0 == root
-                && fault.key.1 == record.package.plugin_id
+                && fault.key.1 == record.plugin_id
                 && fault.key.2 == record.revision
             {
                 match record.phase {
@@ -539,7 +613,7 @@ mod observation {
             let mut armed = armed.borrow_mut();
             if let Some(fault) = armed.as_mut()
                 && fault.key.0 == root
-                && fault.key.1 == record.package.plugin_id
+                && fault.key.1 == record.plugin_id
                 && fault.key.2 == record.revision
                 && fault.written
                 && fault.lose_readback

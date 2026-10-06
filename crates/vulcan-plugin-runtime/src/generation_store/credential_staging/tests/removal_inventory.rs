@@ -166,7 +166,9 @@ fn retained_deactivation_inventory_reserves_actual_durable_phase_growth_before_e
     // Explicit older-writer fixture reuses actual producer fields and real manifest inputs to persist the formerly accepted boundary record.
     // 明确旧写入器夹具复用实际生产者字段及真实清单输入，持久保存先前可接受边界记录。
     let mut older_record = baseline.clone();
-    older_record.package = history_package.identity().clone();
+    older_record.package = VulcanPluginCredentialPackage::Generation {
+        identity: history_package.identity().clone(),
+    };
     older_record.revision = boundary_revision.clone();
     older_record.keys = supplied.keys().cloned().collect();
     assert_eq!(
@@ -295,7 +297,7 @@ fn retained_deactivation_inventory_captures_all_actual_credential_phases() {
             &[key("first"), key("optional"), key("second")]
         );
         assert_eq!(record.configured_keys(), &[key("first"), key("second")]);
-        assert_eq!(record.package(), package.identity());
+        assert_eq!(record.generation(), Some(package.identity()));
     }
     assert_eq!(backend.writes.get(), writes_before);
     assert!(

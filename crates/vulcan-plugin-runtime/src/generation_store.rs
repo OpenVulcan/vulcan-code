@@ -5,10 +5,12 @@ mod configuration;
 mod credential_staging;
 pub use configuration::{MAX_PLUGIN_CONFIGURATION_BYTES, VulcanPluginConfigurationSelection};
 mod credentials;
+pub(crate) use credential_staging::declared_keys;
 pub use credential_staging::{
     PinnedVulcanPluginCredentials, VulcanPluginCredentialBackend, VulcanPluginCredentialKey,
-    VulcanPluginCredentialPhase, VulcanPluginCredentialRecord, VulcanPluginCredentialStaging,
-    VulcanPluginCredentialStagingReservation, VulcanPluginCredentialValues,
+    VulcanPluginCredentialPackage, VulcanPluginCredentialPhase, VulcanPluginCredentialRecord,
+    VulcanPluginCredentialStaging, VulcanPluginCredentialStagingReservation,
+    VulcanPluginCredentialValues,
 };
 mod deactivation;
 mod discovery;
@@ -277,14 +279,15 @@ impl VulcanPluginActivation {
         }
     }
 
-    /// Build the first or next bundled settings record carrying `configuration`.
-    /// 构造携带 `configuration` 的首个或下一个内建设置记录。
+    /// Build the first or next bundled settings record carrying `configuration` and optional staged credentials.
+    /// 构造携带 `configuration` 及可选已暂存凭据的首个或下一个内建设置记录。
     /// A bundled package is never selected by a transaction, so its package revision stays one.
     /// 内建插件包从不由交易选择，因此其包修订固定为一。
     pub(in crate::generation_store) fn bundled_settings(
         plugin_id: String,
         settings_revision: u64,
         configuration: VulcanPluginConfigurationSelection,
+        credential_revision: Option<VulcanPluginCredentialRevision>,
     ) -> Self {
         Self {
             schema_version: ACTIVATION_RECORD_VERSION,
@@ -295,7 +298,7 @@ impl VulcanPluginActivation {
             settings: VulcanPluginSettings {
                 revision: settings_revision,
                 configuration,
-                credential_revision: None,
+                credential_revision,
             },
         }
     }

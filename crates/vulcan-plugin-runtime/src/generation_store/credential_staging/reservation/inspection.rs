@@ -23,7 +23,7 @@ impl VulcanPluginGenerationStore {
         // The private original inventory is strictly validated but never exposed as an already durable record.
         // 私有原清单被严格校验，但绝不暴露为已经持久化记录。
         let intended = &reservation.staging.record;
-        validate_record(intended, &intended.package.plugin_id, &intended.revision)
+        validate_record(intended, &intended.plugin_id, &intended.revision)
             .map_err(owned_record_error)?;
         if intended.schema_version != ACTIVATION_CREDENTIAL_RECORD_VERSION
             || intended.phase != VulcanPluginCredentialPhase::Preparing
@@ -36,11 +36,11 @@ impl VulcanPluginGenerationStore {
         }
         // Borrowing the fully validated actual parent's Arc does not alter its strong count even transiently.
         // 借用完整验证实际父 Arc，即使瞬时也不改变其强引用计数。
-        let parent = self.preparation_credential_parent_locked(
-            preparation,
-            &intended.package,
-            &intended.revision,
-        )?;
+        let identity = intended.generation().ok_or_else(|| {
+            Error::invalid("A parented credential inventory names no generation.")
+        })?;
+        let parent =
+            self.preparation_credential_parent_locked(preparation, identity, &intended.revision)?;
         if !reservation
             .staging
             ._activation_request_lease
@@ -55,7 +55,7 @@ impl VulcanPluginGenerationStore {
         // Genuine first-inventory absence and exact written Preparing are distinct permitted observations.
         // 真实首次清单缺失及精确已写 Preparing 是不同允许观察。
         let actual = self
-            .read_credential_record_locked(&intended.package.plugin_id, &intended.revision)
+            .read_credential_record_locked(&intended.plugin_id, &intended.revision)
             .map_err(owned_record_error)?;
         if actual.as_ref().is_some_and(|record| record != intended) {
             return Err(Error::new(

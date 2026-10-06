@@ -322,6 +322,9 @@ impl PluginMcpSecretStore for RevisionSecrets {
                 .get(revision)
                 .copied()
                 .ok_or("Selected credential revision is missing.")?,
+            VulcanPluginCredentialBinding::Unconfigured => {
+                return Err(String::from("Plugin credentials are not configured."));
+            }
         };
         match key {
             "endpoint" => Ok(format!("https://{label}.example.test/mcp")),

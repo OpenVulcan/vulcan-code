@@ -47,6 +47,9 @@ impl OsPluginMcpSecretStore {
             VulcanPluginCredentialBinding::Revision(revision) => {
                 versioned_plugin_secret_entry(plugin_id, server_id, secret_key, revision)?
             }
+            // No revision was ever selected, so no secure entry exists to read.
+            // 从未选定修订，因此不存在可读取的安全条目。
+            VulcanPluginCredentialBinding::Unconfigured => return Ok(None),
         };
         match entry.get_password() {
             Ok(value) => Ok(Some(value)),
@@ -157,6 +160,11 @@ impl PluginMcpSecretStore for OsPluginMcpSecretStore {
             }
             VulcanPluginCredentialBinding::Revision(revision) => {
                 versioned_plugin_secret_entry(plugin_id, server_id, secret_key, revision)?
+            }
+            VulcanPluginCredentialBinding::Unconfigured => {
+                return Err(format!(
+                    "Plugin MCP secret `{secret_key}` is not configured for `{plugin_id}:{server_id}`."
+                ));
             }
         };
         match entry.get_password() {

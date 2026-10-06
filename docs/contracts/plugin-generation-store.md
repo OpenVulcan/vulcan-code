@@ -228,12 +228,16 @@ UUID 重建；宿主必须在启动任何效果前强保留实际对象。
 
 激活记录的包选择、权限及设置段（设置修订、配置）均必需且不得为 JSON 空值；
 设置修订为零按无效拒绝；凭据读取绑定指定修订命名空间。任一缺失、重复字段或未知字段均拒绝。
-设置段的凭据修订是否存在由包选择决定：`generation` 必须携带，`bundled` 不得携带（内建凭据不由本存储暂存），
-`uninstalled` 可保留最后修订供清理；不符按无效记录拒绝。
+设置段的凭据修订是否存在由包选择决定：`generation` 必须携带；`bundled` 在首次设置秘密后携带经
+`begin_bundled_credential_staging` 为内建命名空间暂存的修订，此前不携带；`uninstalled` 可保留最后修订供清理；
+不符按无效记录拒绝。凭据日志以 `package` 区分 `generation`（精确物理包身份）与 `bundled`（无物理包，
+清单取自宿主目录中内建包的声明）。
 停用发布空批准、`uninstalled` 包选择及递增设置修订后的最后设置段；保留修订只提供后续清理身份，不构成执行授权。
 重新激活必须再次明确提交修订。普通读取、目录刷新及旧格式加载不写入迁移。
 
-受管包快照及每个 MCP 服务器描述符携带 `VulcanPluginCredentialBinding`，明确区分 `Legacy` 与 `Revision`。
+受管包快照及每个 MCP 服务器描述符携带 `VulcanPluginCredentialBinding`，明确区分 `Legacy`、`Revision` 与
+`Unconfigured`。内建插件按其 `bundled` 记录绑定 `Revision`，从未设置秘密时绑定 `Unconfigured`（每个秘密按未配置读取），
+存储不可读时显示不可用；`Legacy` 只剩没有激活记录的平铺用户包，随旧格式退役移除。
 HTTP、SSE、标准输入输出、会话 MCP 的 URL、请求头、OAuth、参数及环境变量中的秘密均通过同一描述符绑定解析。
 `PluginMcpSecretStore::read_secret` 必须接收该绑定，不能查询当前全局目录来重选历史调用的修订。
 旧远端描述符可继续解析原修订；旧标准输入输出描述符仍受既有启动器代次检查约束，不能绕过过时代次拒绝。
@@ -245,9 +249,9 @@ HTTP、SSE、标准输入输出、会话 MCP 的 URL、请求头、OAuth、参�
 OS 适配器将新修订放入独立的 `vulcan-code.plugin-mcp.versioned-v1` 服务，账户摘要依次编码插件标识、
 凭据修订、服务器标识和秘密键，每个 UTF-8 组件使用无符号六十四位大端字节长度分帧。
 旧服务及旧账户算法保持原样；选定值缺失或后端失败直接报错，不查询旧修订或原命名空间。
-错误不包含秘密值。当前普通凭据编辑入口观察到版本绑定时明确要求凭据修订事务，防止写入不再被使用的旧账户。
+错误不包含秘密值。秘密编辑见“凭据编辑”一节；旧单键入口观察到非 `Legacy` 绑定时委派该流程，不写旧账户。
 
-暂存、候选恢复及读者回收原语见下节。完整服务提交决定、配置／凭据编辑事务、卸载和回收调度仍待上层接入。
+暂存、候选恢复及读者回收原语见下节。
 本地测试覆盖真实选择文件、全部 MCP 配置分支及 Windows 随机测试命名空间的实际安全存储隔离；
 配置物化没有连接远端服务器或执行假启动器，也不能代替跨平台、掉电或端到端更新验收。
 
@@ -263,6 +267,8 @@ OS 适配器将新修订放入独立的 `vulcan-code.plugin-mcp.versioned-v1` �
 
 `configuration` 必需且不能为 JSON 空值；`kind: not_declared` 仅适用于实际包未声明配置，
 `kind: document` 必须带完整 `value`。文档值本身可以是 JSON 空值，但只有精确包内 Schema 允许时才可选择。
+`kind: package_defaults` 只允许出现在 `bundled` 记录中，表示使用时读取当前内建包默认值，使内建包升级带来新默认值；
+受管记录携带它按无效拒绝。
 不从默认值、旧文件或新版本配置补齐任何字段。选择前及固定时都复用原包配置 Schema 校验，
 版本、字段、声明或 Schema 不符明确拒绝；记录损坏不修复、不降级。
 
@@ -278,7 +284,8 @@ OS 适配器将新修订放入独立的 `vulcan-code.plugin-mcp.versioned-v1` �
 内建包读取其 `bundled` 设置记录，无记录时返回包默认值且读取不创建任何文件，首次编辑经 `configure_bundled`
 创建记录；尚无记录的旧平铺用户包暂时保留 `config.json` 动态读写，随旧格式退役移除。
 三种所有者都在返回前按当前包 Schema 校验；已存值不再满足 Schema 时读取明确失败且不改写，
-`reset_plugin_config`（服务 RPC `service_reset_vulcan_plugin_config`）经同一编辑路径写入包默认值作为显式恢复。
+`reset_plugin_config`（服务 RPC `service_reset_vulcan_plugin_config`）经同一编辑路径恢复包默认值作为显式恢复：
+内建记录写入 `package_defaults`，其他所有者写入此刻读取的默认文档。
 
 ### 设置段编辑与可达性回收
 
@@ -289,9 +296,25 @@ OS 适配器将新修订放入独立的 `vulcan-code.plugin-mcp.versioned-v1` �
 调用方从暂存到 `reconfigure` 返回期间应保持新修订的读者租约，防止并发回收在引用前回收它。
 
 `configure_bundled` 以设置修订作为唯一比较值（零表示尚无记录）创建或编辑 `bundled` 记录：包选择修订固定为一，
-无批准、无凭据，配置只受统一字节上限约束，Schema 由运行时按当前内建包校验。命名空间已有非 `bundled` 记录
+无批准；未提供的配置或凭据保留当前值，没有配置的首个记录使用 `package_defaults`；新凭据修订必须已为内建命名空间
+完整暂存。配置只受统一字节上限约束，Schema 由运行时按当前内建包校验。命名空间已有非 `bundled` 记录
 或存在未完成事务时拒绝。内建命名空间不能被包交易或停用接管：激活、事务开始、更新准备及停用遇到 `bundled`
 前驱均返回 `Conflict`。
+
+### 凭据编辑
+
+受管与内建插件的秘密只通过新凭据修订编辑，从不原地改写已选修订。运行时分两阶段：
+`prepare_plugin_credentials` 校验变更只涉及已声明槽位且值非空，按当前绑定读取未提及槽位的值合并成完整清单，
+暂存并固定新修订，返回绑定至该修订的候选描述符；`commit_plugin_credentials` 在会话登记门内确认绑定未变，
+经 `reconfigure` 或 `configure_bundled` 比较修订后选定新修订，并重新发布插件描述符及已启用 MCP 条目；
+`discard_plugin_credentials` 放弃候选并回收其修订。同一插件同时只允许一个编辑；编辑进行中
+`collect_unreachable_plugin_credentials` 跳过该插件，使已暂存但尚未固定的修订不被清扫。平铺用户包仍拒绝此流程。
+
+服务 RPC `service_set_vulcan_plugin_credentials`（参数 `pluginId`、`changes`：`serverId`、`secretKey`、`value`，
+`value` 为空表示清除）在管理串行化下执行：插件已启用且有全局 MCP 服务器时，先用候选描述符启动替换分区并等待就绪，
+失败则丢弃候选、凭据不变；就绪后提交，再将已提交目录与替换分区一同发布到完整扩展代次并退役旧分区。
+提交后发布失败时明确报告凭据已保存但运行中服务器未切换。成功后尽力回收不可达修订；服务启动时对全部插件回收一次。
+旧 `service_set_plugin_mcp_secret`／`service_delete_plugin_mcp_secret` 对非 `Legacy` 绑定委派为单槽位编辑。
 
 `collect_unreachable_credentials` 回收插件中已不可达的凭据修订：当前记录引用的修订、未完成事务或前驱交接
 保留的修订、存在实际读写租约的修订一律保留（后两者表现为 `Busy` 并跳过）；已暂存或回收中的修订按退役路径回收，

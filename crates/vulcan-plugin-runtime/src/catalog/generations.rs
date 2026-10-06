@@ -264,6 +264,14 @@ fn materialize_selected_package(
             Ok(ManagedSelection::Unmanaged)
         };
     };
+    // A bundled settings record belongs to the bundled root and selects no user package.
+    // 内建设置记录属于内建根，不选择任何用户插件包。
+    if matches!(
+        activation.package(),
+        crate::VulcanPluginPackageSelection::Bundled {}
+    ) {
+        return Ok(ManagedSelection::Unmanaged);
+    }
     // The validated selector distinguishes a real tombstone from unmanaged absence.
     // 已校验选择器区分真实停用记录和非受管缺失。
     let Some(generation) = selected.generation else {
@@ -370,23 +378,32 @@ impl VulcanPluginManagedPackage {
 impl VulcanPluginDescriptor {
     /// Return a copy of this managed descriptor mirroring `activation`, whose settings were edited in place.
     /// 返回镜像 `activation` 的此受管描述符副本，其设置已被就地编辑。
-    /// The package selection, approval and credential binding must be unchanged; only configuration is replaced.
-    /// 插件包选择、批准及凭据绑定必须不变；只替换配置。
+    /// The package selection and approval must be unchanged; `credentials` pins a newly selected credential revision,
+    /// and without it the credential binding must be unchanged.
+    /// 插件包选择及批准必须不变；`credentials` 固定新选定的凭据修订，未提供时凭据绑定必须不变。
     pub(crate) fn with_reconfigured_settings(
         &self,
         activation: &crate::VulcanPluginActivation,
+        credentials: Option<crate::PinnedVulcanPluginCredentials>,
     ) -> Result<Self, String> {
         let managed = self
             .managed_package
             .as_ref()
             .ok_or_else(|| String::from("Only a managed plugin descriptor mirrors settings."))?;
+        let selected_credentials = activation
+            .credential_revision()
+            .ok_or_else(|| String::from("A managed selection has no credential revision."))?;
+        let credentials_match = match &credentials {
+            Some(pinned) => pinned.record().revision() == selected_credentials,
+            None => {
+                managed.credential_binding
+                    == crate::VulcanPluginCredentialBinding::Revision(selected_credentials.clone())
+            }
+        };
         if managed.activation_revision != activation.revision
             || activation.generation() != Some(managed.generation.identity())
             || managed.approved_permissions() != activation.approved_permissions()
-            || !activation.credential_revision().is_some_and(|revision| {
-                managed.credential_binding
-                    == crate::VulcanPluginCredentialBinding::Revision(revision.clone())
-            })
+            || !credentials_match
         {
             return Err(String::from(
                 "Reconfigured settings belong to a different package selection.",
@@ -397,11 +414,58 @@ impl VulcanPluginDescriptor {
         for server in &mut descriptor.mcp_servers {
             server.configuration = Some(Arc::clone(&configuration));
         }
+        if let Some(pinned) = credentials {
+            descriptor.bind_credentials(pinned);
+        }
         if let Some(managed) = descriptor.managed_package.as_mut() {
             managed.settings_revision = activation.settings().revision;
             managed.configuration = configuration;
         }
         Ok(descriptor)
+    }
+
+    /// Return a copy of this bundled descriptor bound to the newly selected `credentials`.
+    /// 返回绑定至新选定 `credentials` 的此内建描述符副本。
+    pub(crate) fn with_bundled_credentials(
+        &self,
+        credentials: crate::PinnedVulcanPluginCredentials,
+    ) -> Result<Self, String> {
+        if self.origin != crate::VulcanPluginPackageOrigin::Bundled
+            || self.managed_package.is_some()
+        {
+            return Err(String::from(
+                "Only a bundled plugin descriptor binds bundled credentials.",
+            ));
+        }
+        Ok(self.with_bound_credentials(credentials))
+    }
+
+    /// Return a copy of this descriptor whose servers read through `credentials`, without any selection check.
+    /// 返回其服务器经 `credentials` 读取的此描述符副本，不做任何选择检查。
+    /// Only a not yet committed candidate uses it; published descriptors come from the checked constructors.
+    /// 仅尚未提交的候选使用它；已发布描述符来自经检查的构造函数。
+    pub(crate) fn with_bound_credentials(
+        &self,
+        credentials: crate::PinnedVulcanPluginCredentials,
+    ) -> Self {
+        let mut descriptor = self.clone();
+        descriptor.bind_credentials(credentials);
+        descriptor
+    }
+
+    /// Bind every MCP server, and the managed package if any, to `credentials`.
+    /// 将每个 MCP 服务器及受管插件包（如有）绑定至 `credentials`。
+    fn bind_credentials(&mut self, credentials: crate::PinnedVulcanPluginCredentials) {
+        let binding =
+            crate::VulcanPluginCredentialBinding::Revision(credentials.record().revision().clone());
+        for server in &mut self.mcp_servers {
+            server.credential_binding = binding.clone();
+            server.credential_lease = Some(credentials.clone());
+        }
+        if let Some(managed) = self.managed_package.as_mut() {
+            managed.credential_binding = binding;
+            managed._credential_lease = credentials;
+        }
     }
 }
 

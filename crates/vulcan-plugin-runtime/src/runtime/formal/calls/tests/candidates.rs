@@ -71,7 +71,10 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             &package,
             predecessor_revision,
             target.approved_permissions().to_vec(),
-            target.credential_revision().expect("selected revision").clone(),
+            target
+                .credential_revision()
+                .expect("selected revision")
+                .clone(),
             target.configuration().clone(),
         )
         .expect("candidate original after ordinary admission");
@@ -328,7 +331,8 @@ pub(super) fn transaction_for(
                     value: json!({"label":"old-published"}),
                 }
             }
-            VulcanPluginConfigurationSelection::NotDeclared {} => configuration.clone(),
+            VulcanPluginConfigurationSelection::NotDeclared {}
+            | VulcanPluginConfigurationSelection::PackageDefaults {} => configuration.clone(),
         };
         // Use production publication to create the full predecessor before beginning the request.
         // 使用生产发布在开始请求之前创建完整前驱。

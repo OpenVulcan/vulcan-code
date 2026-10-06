@@ -58,7 +58,7 @@ fn credential_retention_blocks_collection_until_last_reader_and_recovers_cleanup
         .pin_credentials(&package, &revision)
         .expect("pin staged candidate");
     assert_eq!(reader.record().revision(), &revision);
-    assert_eq!(reader.record().package(), package.identity());
+    assert_eq!(reader.record().generation(), Some(package.identity()));
     // A second independently opened reader also shares the actual filesystem lock.
     // 第二个独立打开的读者也共享实际文件系统锁。
     let independent = store

@@ -592,6 +592,7 @@ fn merge_catalog_roots(
     for plugin in bundled.plugins.values_mut() {
         plugin.origin = VulcanPluginPackageOrigin::Bundled;
     }
+    bind_bundled_credentials(&mut bundled, user_root);
     for plugin in user.plugins.values_mut() {
         plugin.origin = VulcanPluginPackageOrigin::UserInstalled;
     }
@@ -612,6 +613,82 @@ fn merge_catalog_roots(
     }
     rebuild_catalog_surface(&mut bundled);
     bundled
+}
+
+/// Bind every bundled plugin's MCP servers to the credentials of its bundled settings record.
+/// 将每个内建插件的 MCP 服务器绑定至其内建设置记录的凭据。
+/// Without a store or credentials the binding is `Unconfigured`; a store failure makes the plugin unavailable.
+/// 没有存储或凭据时绑定为 `Unconfigured`；存储失败使插件不可用。
+fn bind_bundled_credentials(snapshot: &mut VulcanPluginCatalogSnapshot, user_root: Option<&Path>) {
+    let store = match user_root.map(crate::VulcanPluginGenerationStore::open_existing) {
+        Some(Ok(store)) => store,
+        None => None,
+        Some(Err(error)) => {
+            let diagnostic = format!("Plugin settings store is unavailable: {error}");
+            for plugin in snapshot.plugins.values_mut() {
+                if !plugin.mcp_servers.is_empty() {
+                    mark_credentials_unavailable(plugin, &diagnostic);
+                }
+            }
+            return;
+        }
+    };
+    for plugin in snapshot.plugins.values_mut() {
+        if plugin.mcp_servers.is_empty() {
+            continue;
+        }
+        let credentials = match store.as_ref() {
+            Some(store) => bundled_credentials(store, &plugin.id),
+            None => Ok(None),
+        };
+        match credentials {
+            Ok(credentials) => {
+                let binding = credentials.as_ref().map_or(
+                    crate::VulcanPluginCredentialBinding::Unconfigured,
+                    |pinned| {
+                        crate::VulcanPluginCredentialBinding::Revision(
+                            pinned.record().revision().clone(),
+                        )
+                    },
+                );
+                for server in &mut plugin.mcp_servers {
+                    server.credential_binding = binding.clone();
+                    server.credential_lease = credentials.clone();
+                }
+            }
+            Err(error) => mark_credentials_unavailable(
+                plugin,
+                &format!("Plugin credentials are unavailable: {error}"),
+            ),
+        }
+    }
+}
+
+/// Pin the staged credentials named by `plugin_id`'s bundled settings record; None when it has none.
+/// 固定 `plugin_id` 内建设置记录所指的已暂存凭据；没有凭据时返回 None。
+/// A record of another package kind belongs to a shadowed user plugin and carries no bundled credentials.
+/// 其他插件包种类的记录属于被遮蔽的用户插件，不携带内建凭据。
+fn bundled_credentials(
+    store: &crate::VulcanPluginGenerationStore,
+    plugin_id: &str,
+) -> crate::VulcanPluginStoreResult<Option<crate::PinnedVulcanPluginCredentials>> {
+    let Some(record) = store.activation(plugin_id)? else {
+        return Ok(None);
+    };
+    match (record.package(), record.credential_revision()) {
+        (crate::VulcanPluginPackageSelection::Bundled {}, Some(revision)) => {
+            store.pin_bundled_credentials(plugin_id, revision).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Make `plugin` unavailable because its credential authority cannot be resolved.
+/// 因凭据权威无法解析而使 `plugin` 不可用。
+fn mark_credentials_unavailable(plugin: &mut VulcanPluginDescriptor, diagnostic: &str) {
+    plugin.availability = VulcanPluginAvailability::Unavailable;
+    plugin.runtime_state = VulcanPluginRuntimeState::Unavailable;
+    plugin.diagnostics.push(diagnostic.to_owned());
 }
 
 /// Loads one standalone package for local installation inspection.

@@ -8,8 +8,9 @@ use serde_json::Value;
 /// 新受管配置的紧凑 JSON 字节上限；全部编码记录限制从此值派生。
 pub const MAX_PLUGIN_CONFIGURATION_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Exact configuration authority: no declaration, or one complete value including an explicitly valid JSON null.
-/// 精确配置权威：没有声明，或单个完整值，包含明确合法的 JSON 空值。
+/// Exact configuration authority: no declaration, one complete value including an explicitly valid JSON null,
+/// or the current defaults of a bundled package.
+/// 精确配置权威：没有声明、单个完整值（包含明确合法的 JSON 空值），或内建插件包的当前默认值。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum VulcanPluginConfigurationSelection {
@@ -25,6 +26,10 @@ pub enum VulcanPluginConfigurationSelection {
         /// 固定 JSON 值；不得包含于普通日志或 Debug 输出。
         value: Value,
     },
+    /// The current package defaults, resolved at use; only a bundled settings record may hold it,
+    /// so an upgraded bundled package brings its new defaults.
+    /// 使用时解析的当前插件包默认值；仅内建设置记录可持有，使升级后的内建插件包带来新默认值。
+    PackageDefaults {},
 }
 
 impl std::fmt::Debug for VulcanPluginConfigurationSelection {
@@ -34,16 +39,17 @@ impl std::fmt::Debug for VulcanPluginConfigurationSelection {
         formatter.write_str(match self {
             Self::NotDeclared {} => "NotDeclared",
             Self::Document { .. } => "Document(<redacted>)",
+            Self::PackageDefaults {} => "PackageDefaults",
         })
     }
 }
 
 impl VulcanPluginConfigurationSelection {
-    /// Borrow the frozen document, returning None only for a package which explicitly declares no configuration.
-    /// 借用固定文档，仅对明确不声明配置的插件包返回 None。
+    /// Borrow the frozen document; None when no configuration is declared or the package defaults apply.
+    /// 借用固定文档；未声明配置或适用插件包默认值时返回 None。
     pub fn value(&self) -> Option<&Value> {
         match self {
-            Self::NotDeclared {} => None,
+            Self::NotDeclared {} | Self::PackageDefaults {} => None,
             Self::Document { value } => Some(value),
         }
     }

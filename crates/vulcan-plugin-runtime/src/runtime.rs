@@ -18,7 +18,9 @@ pub use candidates::{
     VulcanPluginTargetMcpProfile,
 };
 mod configuration;
+mod credentials;
 pub(crate) use configuration::validate_plugin_config_value;
+pub use credentials::VulcanPluginCredentialEdit;
 mod drain;
 mod update_drain;
 pub use update_drain::{
@@ -111,7 +113,7 @@ pub use settings::{
 
 use crate::{VulcanPluginCatalogSnapshot, VulcanPluginHostServices, VulcanPluginRuntimeState};
 use luaskills::LuaEngine;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -234,6 +236,10 @@ struct VulcanPluginManagerState {
     /// One manager-local slot reuses compilation only for freshly read nonmanaged configuration schemas.
     /// 单个管理器本地槽仅为刚读取的非受管配置 Schema 复用编译结果。
     configuration_schema_cache: Mutex<Option<configuration::CompiledConfigurationSchema>>,
+    /// Plugins with an unfinished credential edit; collection skips them so a staged revision is never swept
+    /// before it is pinned, and a second edit of the same plugin is refused.
+    /// 存在未完成凭据编辑的插件；回收跳过它们，使已暂存修订在固定之前绝不被清扫，同一插件的第二个编辑被拒绝。
+    credential_edits: Mutex<BTreeSet<String>>,
     /// User-owned root containing isolated plugin dependency environments.
     /// 包含隔离插件依赖环境的用户自有根目录。
     plugin_runtime_root: PathBuf,
@@ -440,6 +446,7 @@ impl VulcanPluginRuntimeManager {
                 managed_runtime_distribution_root,
                 plugin_state_root,
                 configuration_schema_cache: Mutex::default(),
+                credential_edits: Mutex::default(),
                 plugin_runtime_root,
                 host_services: RwLock::new(VulcanPluginHostServices::default()),
                 snapshot: RwLock::new(snapshot),

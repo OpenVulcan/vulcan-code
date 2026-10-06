@@ -1584,3 +1584,32 @@ mod tests {
         assert!(refresh_request.is_err());
     }
 }
+
+/// One change to a declared MCP secret of a Vulcan plugin; a null `value` clears the secret.
+/// 对 Vulcan 插件一个声明 MCP 秘密的变更；`value` 为空时清除该秘密。
+/// Debug output never includes the value.
+/// Debug 输出绝不包含该值。
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VulcanPluginCredentialChange {
+    /// Declaring MCP server within the plugin.
+    /// 插件内声明该秘密的 MCP 服务器。
+    pub server_id: String,
+    /// Declared secret key.
+    /// 声明的秘密键。
+    pub secret_key: String,
+    /// New nonempty value, or null to clear the secret.
+    /// 新的非空值；为空时清除该秘密。
+    pub value: Option<String>,
+}
+
+impl std::fmt::Debug for VulcanPluginCredentialChange {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VulcanPluginCredentialChange")
+            .field("server_id", &self.server_id)
+            .field("secret_key", &self.secret_key)
+            .field("value", &self.value.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}

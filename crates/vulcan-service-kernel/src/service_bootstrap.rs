@@ -993,6 +993,13 @@ fn run_service_bootstrap(
     // Materialize explicit source contracts before any original native task can start.
     // 在任何原原生任务可能启动之前，物化明确来源契约。
     let plugin_secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+    // Credential revisions superseded before the last shutdown are no longer read by anything.
+    // 上次关闭前被取代的凭据修订已不再被任何对象读取。
+    if let Err(error) =
+        vulcan_plugin_runtime.collect_all_unreachable_plugin_credentials(&plugin_secret_store)
+    {
+        tracing::warn!("[webui-service] plugin credential collection failed: {error}");
+    }
     // Full fixed managed selections enter the sealed producer; declared legacy sources keep their original factory.
     // 完整固定受管选择进入密封生产者；已声明旧来源保留原工厂。
     let plugin_mcp_plan = mcp_startup::PluginMcpBootstrapPlan::prepare(

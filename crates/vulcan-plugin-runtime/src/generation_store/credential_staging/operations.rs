@@ -48,12 +48,34 @@ impl VulcanPluginGenerationStore {
             .ok_or_else(|| {
                 Error::invalid("Selected credential revision has no durable staging inventory.")
             })?;
-        if record.package != package.identity
+        if record.generation() != Some(&package.identity)
             || record.keys != package.credential_keys
             || record.phase != VulcanPluginCredentialPhase::Staged
         {
             return Err(Error::invalid(
                 "Selected credentials are not fully staged for this exact package identity.",
+            ));
+        }
+        Ok(record)
+    }
+
+    /// Require a complete staged bundled inventory for `plugin_id`/`revision` while the caller holds the namespace fence.
+    /// 在调用方持有命名空间屏障期间，要求 `plugin_id`／`revision` 具有完整已暂存内建清单。
+    pub(in crate::generation_store) fn validate_staged_bundled_credentials_locked(
+        &self,
+        plugin_id: &str,
+        revision: &VulcanPluginCredentialRevision,
+    ) -> Result<VulcanPluginCredentialRecord> {
+        let record = self
+            .read_credential_record_locked(plugin_id, revision)?
+            .ok_or_else(|| {
+                Error::invalid("Selected credential revision has no durable staging inventory.")
+            })?;
+        if record.package != (VulcanPluginCredentialPackage::Bundled {})
+            || record.phase != VulcanPluginCredentialPhase::Staged
+        {
+            return Err(Error::invalid(
+                "Selected credentials are not fully staged for the bundled package.",
             ));
         }
         Ok(record)
@@ -112,7 +134,10 @@ impl VulcanPluginGenerationStore {
         let activation_request_lease = record
             .activation_request
             .map(|request_id| {
-                self.retain_resumed_preparation_credentials(request_id, &record.package, revision)
+                let identity = record.generation().ok_or_else(|| {
+                    Error::invalid("A parented credential inventory names no generation.")
+                })?;
+                self.retain_resumed_preparation_credentials(request_id, identity, revision)
             })
             .transpose()?;
         // Take the actual revision lease only after establishing the original parent ownership.
@@ -204,7 +229,7 @@ impl VulcanPluginGenerationStore {
         &self,
         record: &VulcanPluginCredentialRecord,
     ) -> Result<()> {
-        validate_record(record, &record.package.plugin_id, &record.revision)?;
+        validate_record(record, &record.plugin_id, &record.revision)?;
         // Every first writer reserves the largest actual cleanup checkpoint before publishing a journal or admitting secure writes.
         // 每个首写入者在发布日志或准入安全写入之前预留最大实际清理检查点。
         files::validate_record_phase_capacity(
@@ -215,7 +240,7 @@ impl VulcanPluginGenerationStore {
         // Mutation cannot silently recreate lost inventory layout.
         // 变更不能静默重建丢失清单布局。
         let directory = self
-            .credential_directory(&record.package.plugin_id)?
+            .credential_directory(&record.plugin_id)?
             .ok_or_else(|| Error::invalid("Credential inventory directory disappeared."))?;
         files::write_record(
             &directory.join(format!("{}.json", record.revision.as_str())),
@@ -231,11 +256,23 @@ pub(super) fn validate_record(
     plugin_id: &str,
     revision: &VulcanPluginCredentialRevision,
 ) -> Result<()> {
-    files::validate_identity(&record.package)?;
-    if !matches!(
-        (record.schema_version, record.activation_request),
-        (CREDENTIAL_RECORD_VERSION, None) | (ACTIVATION_CREDENTIAL_RECORD_VERSION, Some(_))
-    ) || record.package.plugin_id != plugin_id
+    crate::catalog::validate_identifier(&record.plugin_id, "credential plugin id")
+        .map_err(Error::invalid)?;
+    // Only a managed generation can be staged under an activation request.
+    // 只有受管代次可在激活请求下暂存。
+    let package_matches = match &record.package {
+        VulcanPluginCredentialPackage::Generation { identity } => {
+            files::validate_identity(identity)?;
+            identity.plugin_id == record.plugin_id
+        }
+        VulcanPluginCredentialPackage::Bundled {} => record.activation_request.is_none(),
+    };
+    if !package_matches
+        || !matches!(
+            (record.schema_version, record.activation_request),
+            (CREDENTIAL_RECORD_VERSION, None) | (ACTIVATION_CREDENTIAL_RECORD_VERSION, Some(_))
+        )
+        || record.plugin_id != plugin_id
         || &record.revision != revision
     {
         return Err(Error::invalid(

@@ -62,7 +62,8 @@ impl VulcanPluginGenerationStore {
         // 实际原插件包及凭据必须仍绑定至完整保留目标。
         if transaction.generation.store_root != self.root
             || transaction.record.target.generation() != Some(transaction.generation.identity())
-            || transaction.credentials.record().package() != transaction.generation.identity()
+            || transaction.credentials.record().generation()
+                != Some(transaction.generation.identity())
             || transaction.record.target.credential_revision()
                 != Some(transaction.credentials.record().revision())
             || (transaction.record.preparation.is_some()

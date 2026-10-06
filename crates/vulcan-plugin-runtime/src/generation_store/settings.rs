@@ -86,15 +86,18 @@ impl VulcanPluginGenerationStore {
 
     /// Write the settings of a bundled plugin when `expected_settings_revision` still matches; zero means no record yet.
     /// `expected_settings_revision` 仍匹配时写入内建插件的设置；零表示尚无记录。
-    /// The caller validates `configuration` against the bundled package schema; the store only bounds its size.
-    /// 调用方按内建插件包 Schema 校验 `configuration`；存储只限制其大小。
+    /// The caller validates a new configuration against the bundled package schema; the store only bounds its size.
+    /// 调用方按内建插件包 Schema 校验新配置；存储只限制其大小。
+    /// A new credential revision must already be staged for the bundled package; a first record without
+    /// configuration defers to the package defaults.
+    /// 新凭据修订必须已为内建插件包暂存；未带配置的首个记录沿用插件包默认值。
     /// A namespace owned by a managed selection or tombstone is a conflict; returns the committed record.
     /// 由受管选择或停用记录占用的命名空间视为冲突；返回已提交记录。
     pub fn configure_bundled(
         &self,
         plugin_id: &str,
         expected_settings_revision: u64,
-        configuration: VulcanPluginConfigurationSelection,
+        change: VulcanPluginSettingsChange,
     ) -> Result<VulcanPluginActivation> {
         let _namespace = self.namespace_lock(plugin_id, false)?;
         self.ensure_no_pending_activation_locked(plugin_id)?;
@@ -118,11 +121,29 @@ impl VulcanPluginGenerationStore {
                 "Plugin namespace is owned by a non-bundled selection.",
             ));
         }
+        // Edits keep what they do not change; a first record without configuration defers to the package defaults.
+        // 编辑保留未改变的部分；未带配置的首个记录沿用插件包默认值。
+        let configuration = match (change.configuration, current.as_ref()) {
+            (Some(configuration), _) => configuration,
+            (None, Some(current)) => current.settings.configuration.clone(),
+            (None, None) => VulcanPluginConfigurationSelection::PackageDefaults {},
+        };
         configuration.validate_size()?;
+        let current_credentials = current
+            .as_ref()
+            .and_then(|record| record.settings.credential_revision.clone());
+        let credential_revision = match change.credential_revision {
+            Some(revision) if Some(&revision) != current_credentials.as_ref() => {
+                self.validate_staged_bundled_credentials_locked(plugin_id, &revision)?;
+                Some(revision)
+            }
+            _ => current_credentials,
+        };
         let next = VulcanPluginActivation::bundled_settings(
             plugin_id.to_owned(),
             VulcanPluginActivation::next_settings_revision(current.as_ref())?,
             configuration,
+            credential_revision,
         );
         self.write_activation(&next)?;
         Ok(next)

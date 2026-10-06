@@ -630,16 +630,18 @@ impl VulcanPluginGenerationStore {
         if record.settings.revision == 0 {
             return Err(Error::invalid("Activation settings have no revision."));
         }
-        // Managed generations always carry staged credentials; bundled packages have none in this store.
-        // 受管代次始终携带已暂存凭据；内建插件包在此存储中没有凭据。
-        let credentials_match_package = match &record.package {
-            VulcanPluginPackageSelection::Generation { .. } => {
-                record.credential_revision().is_some()
-            }
-            VulcanPluginPackageSelection::Bundled {} => record.credential_revision().is_none(),
-            VulcanPluginPackageSelection::Uninstalled {} => true,
-        };
-        if !credentials_match_package {
+        // Managed generations always carry staged credentials; bundled records carry them once secrets are set.
+        // 受管代次始终携带已暂存凭据；内建记录在设置秘密后才携带凭据。
+        if matches!(
+            record.settings.configuration,
+            VulcanPluginConfigurationSelection::PackageDefaults {}
+        ) && !matches!(record.package, VulcanPluginPackageSelection::Bundled {})
+        {
+            return Err(Error::invalid(
+                "Only bundled settings may defer to package defaults.",
+            ));
+        }
+        if record.generation().is_some() && record.credential_revision().is_none() {
             return Err(Error::invalid(
                 "Activation credential revision does not match its package kind.",
             ));

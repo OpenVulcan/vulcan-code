@@ -9,6 +9,7 @@ mod legacy_secret_owner;
 mod local_plugin_install;
 mod local_plugin_uninstall;
 mod local_plugin_update;
+mod plugin_credentials;
 pub(crate) use legacy_secret_owner::LegacySecretMutationRegistry;
 use legacy_secret_owner::{LegacySecretMutationPhase, LegacySecretMutationStatus};
 use local_plugin_install::LocalPluginInstallStatus;
@@ -18,6 +19,7 @@ pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
 pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
 pub(crate) use local_plugin_update::LocalPluginUpdateStatus;
 pub(crate) use local_plugin_update::pending_owner::PendingLocalPluginUpdateRegistry;
+pub(crate) use plugin_credentials::service_set_vulcan_plugin_credentials;
 #[cfg(test)]
 mod legacy_native_observation;
 #[cfg(test)]
@@ -974,6 +976,21 @@ async fn mutate_plugin_mcp_secret(
     if plugin_id.is_empty() || server_id.is_empty() || secret_key.is_empty() {
         return Err(String::from("插件、MCP Server 与 Secret 键均不能为空。"));
     }
+    // Managed and bundled plugins select secrets through credential revisions; this is a one-slot edit of them.
+    // 受管及内建插件经凭据修订选定秘密；此处为对其单个槽位的编辑。
+    if plugin_credentials::uses_credential_revisions(&state, &plugin_id)? {
+        return service_set_vulcan_plugin_credentials(
+            app,
+            state,
+            plugin_id,
+            vec![vulcan_service_api::VulcanPluginCredentialChange {
+                server_id,
+                secret_key,
+                value: next_value,
+            }],
+        )
+        .await;
+    }
     run_luaskills_management_owned("mutate plugin MCP secret", move || async move {
         let runtime = service_vulcan_plugin_runtime(&state)?;
         let catalog = runtime.snapshot();
@@ -991,14 +1008,11 @@ async fn mutate_plugin_mcp_secret(
                 "插件 MCP Server `{plugin_id}:{server_id}` 未声明 Secret 键 `{secret_key}`。"
             ));
         }
-        // A versioned selection must not report success after writing an unrelated legacy credential.
-        // 版本化选择不得在写入无关旧凭据后报告成功。
-        if matches!(
-            server.credential_binding,
-            vulcan_plugin_runtime::VulcanPluginCredentialBinding::Revision(_)
-        ) {
+        // A selection that changed to revisions after the delegation check must not write a legacy credential.
+        // 委派检查之后转为修订的选择不得写入旧凭据。
+        if server.credential_binding != vulcan_plugin_runtime::VulcanPluginCredentialBinding::Legacy {
             return Err(String::from(
-                "Versioned plugin credentials require a credential revision transaction.",
+                "Plugin credentials changed to revisions; retry the edit.",
             ));
         }
         // Explicit mutation follows host initialization so a bundled-only installation can create its user store.
