@@ -322,7 +322,7 @@ pub use service_bootstrap::{emit_initial_service_events, spawn_service_bootstrap
 use service_bridge_io::*;
 pub use service_bridge_io::{
     WebuiServiceHttpBridgeHandle, remove_owned_webui_service_discovery, service_startup_snapshot,
-    service_status_snapshot_from_state, service_workbench_snapshot,
+    service_status_snapshot_from_state, service_ui_locale_from_state, service_workbench_snapshot,
     spawn_webui_service_http_bridge,
 };
 use service_diagnostics_paths::*;

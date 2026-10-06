@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "打开桌面客户端",
+  "openWebui": "在浏览器中打开 WebUI",
+  "openTerminalClient": "打开终端客户端",
+  "openLogLocation": "打开日志位置",
+  "quitService": "退出服务",
+  "statusReady": "服务：就绪",
+  "statusStarting": "服务：启动中",
+  "statusStopping": "服务：停止中",
+  "statusRecovering": "服务：恢复中",
+  "statusFailed": "服务：失败",
+  "statusRecoveryFailed": "服务：恢复失败，需要重启",
+  "statusBridgeFailed": "服务：桥接失败（{reason}）",
+  "webuiUnpublished": "WebUI 地址尚未发布。",
+  "desktopClientFailed": "无法打开桌面客户端：{reason}",
+  "terminalClientFailed": "无法打开终端客户端：{reason}",
+  "logLocationFailed": "无法打开日志位置：{reason}",
+  "bridgeFailed": "Core HTTP 桥接失败：{reason}",
+  "shutdownFailed": "关闭失败：{reason}",
+  "shutdownStartFailed": "无法启动关闭协调器：{reason}"
+}

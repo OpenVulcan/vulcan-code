@@ -156,6 +156,7 @@ fn prepare_layout(root: &Path) -> PathBuf {
         service_executable: "service-fixture.exe".into(),
         desktop_executable: "desktop-fixture.exe".into(),
         desktop_entry: "desktop-fixture.cjs".into(),
+        tui_executable: "tui-fixture.exe".into(),
         browser_host_entry: "browser-fixture.cjs".into(),
         browser_host_executable: "browser-fixture.exe".into(),
         chromium_executable: None,

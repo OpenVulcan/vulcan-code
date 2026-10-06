@@ -17,6 +17,10 @@ use tray_icon::{
 
 use crate::service_runtime::HeadlessService;
 
+mod menu_text;
+
+use menu_text::{TrayText, keys};
+
 /// Stable tray icon identifier owned by the service process.
 /// 服务进程持有的稳定托盘图标标识。
 const SERVICE_TRAY_ID: &str = "vulcan-code-service";
@@ -36,6 +40,8 @@ enum TrayEvent {
     ShutdownComplete,
     /// Drain failed; keep the tray alive and report the explicit recovery outcome.
     /// 排空失败；保留托盘并报告明确的恢复结果。
+    /// Carries the raw reason; the event loop words it in the active language.
+    /// 携带原始原因；由事件循环以当前语言组织文案。
     ShutdownFailed(String),
 }
 
@@ -46,6 +52,11 @@ const MENU_OPEN_CLIENT: &str = "open-client";
 /// Menu item identifier that opens the WebUI in the system browser.
 /// 在系统浏览器中打开 WebUI 的菜单项标识。
 const MENU_OPEN_WEBUI: &str = "open-webui";
+
+/// Menu item identifier that opens the terminal client in a new console window.
+/// 在新控制台窗口中打开终端客户端的菜单项标识。
+#[cfg(windows)]
+const MENU_OPEN_TERMINAL: &str = "open-terminal";
 
 /// Menu item identifier that reveals the service log location.
 /// 展示服务日志位置的菜单项标识。
@@ -58,6 +69,27 @@ const MENU_SERVICE_STATUS: &str = "service-status";
 /// Menu item identifier that exits the service through the drain coordinator.
 /// 经排空协调器退出服务的菜单项标识。
 const MENU_QUIT_SERVICE: &str = "quit-service";
+
+/// Native menu items retained so their text can follow the interface language.
+/// 保留的原生菜单项，使其文字能跟随界面语言。
+struct TrayMenu {
+    /// Disabled status line refreshed from the protected lifecycle.
+    /// 根据受保护生命周期刷新的禁用状态行。
+    status: MenuItem,
+    /// Action items paired with their catalog keys.
+    /// 与目录键配对的操作菜单项。
+    actions: Vec<(MenuItem, &'static str)>,
+}
+
+impl TrayMenu {
+    /// Rewrites every action label in the active language.
+    /// 以当前语言重写每个操作标签。
+    fn relabel(&self, text: &TrayText) {
+        for (item, key) in &self.actions {
+            item.set_text(text.get(key));
+        }
+    }
+}
 
 /// Shared tray-owned service handles retained for menu actions.
 /// 托盘持有的共享服务句柄，供菜单动作使用。
@@ -116,7 +148,11 @@ pub fn run_with_tray() {
     }));
     // Native menu objects stay exclusively on this OS event-loop thread.
     // 原生菜单对象只保存在当前操作系统事件循环线程。
-    let mut native_tray: Option<(TrayIcon, MenuItem)> = None;
+    let mut native_tray: Option<(TrayIcon, TrayMenu)> = None;
+    // text starts in the saved language so the first menu never flashes another one.
+    // text 以已保存语言启动，使首个菜单不会闪现其他语言。
+    let mut text = TrayText::new();
+    text.follow(vulcan_service_kernel::service_ui_locale_from_state(&handles.state).as_deref());
     let mut last_status = String::new();
     let mut bridge_reported = false;
     let mut ready_reported = false;
@@ -126,7 +162,7 @@ pub fn run_with_tray() {
         // 在完整原生事件循环期间保留服务所有者，不再手动泄漏对象。
         let _service_owner = &service;
         match event {
-            Event::NewEvents(StartCause::Init) => match create_service_tray(&handles) {
+            Event::NewEvents(StartCause::Init) => match create_service_tray(&handles, &text) {
                 Ok(tray) => native_tray = Some(tray),
                 Err(error) => {
                     tracing::error!("[vulcan-code-service] native tray startup failed: {error}");
@@ -134,10 +170,12 @@ pub fn run_with_tray() {
                 }
             },
             Event::UserEvent(TrayEvent::Menu(event)) => match event.id.as_ref() {
-                MENU_OPEN_CLIENT => open_desktop_client(),
-                MENU_OPEN_WEBUI => open_webui_in_browser(&handles),
-                MENU_OPEN_LOGS => open_log_location(),
-                MENU_QUIT_SERVICE => quit_service(&handles, &proxy),
+                MENU_OPEN_CLIENT => open_desktop_client(&text),
+                MENU_OPEN_WEBUI => open_webui_in_browser(&handles, &text),
+                #[cfg(windows)]
+                MENU_OPEN_TERMINAL => open_terminal_client(&text),
+                MENU_OPEN_LOGS => open_log_location(&text),
+                MENU_QUIT_SERVICE => quit_service(&handles, &proxy, &text),
                 _ => {}
             },
             Event::UserEvent(TrayEvent::ShutdownComplete) => {
@@ -146,22 +184,29 @@ pub fn run_with_tray() {
                 native_tray.take();
                 *control_flow = ControlFlow::Exit;
             }
-            Event::UserEvent(TrayEvent::ShutdownFailed(message)) => {
-                report_tray_failure(&message);
+            Event::UserEvent(TrayEvent::ShutdownFailed(reason)) => {
+                report_tray_failure(&text.with_reason(keys::SHUTDOWN_FAILED, &reason));
             }
             Event::MainEventsCleared => {
                 if matches!(*control_flow, ControlFlow::ExitWithCode(_)) {
                     return;
                 }
-                if let Some((tray, status)) = &native_tray
+                if let Some((tray, menu)) = &native_tray
                     && std::time::Instant::now() >= next_status_refresh
                 {
                     if !ready_reported {
                         ready_reported = acknowledge_tray_ready(tray);
                     }
-                    let current_status = tray_service_status_text(&handles);
+                    // A language saved from any client relabels the menu on the next tick.
+                    // 任一客户端保存的语言会在下一次刷新时重写菜单标签。
+                    let saved_locale =
+                        vulcan_service_kernel::service_ui_locale_from_state(&handles.state);
+                    if text.follow(saved_locale.as_deref()) {
+                        menu.relabel(&text);
+                    }
+                    let current_status = tray_service_status_text(&handles, &text);
                     if current_status != last_status {
-                        status.set_text(&current_status);
+                        menu.status.set_text(&current_status);
                         last_status = current_status;
                     }
                     if !bridge_reported {
@@ -169,7 +214,7 @@ pub fn run_with_tray() {
                         // 调用操作系统通知接口之前释放桥接锁。
                         let failure = handles.bridge_failure.lock().ok().and_then(|v| v.clone());
                         if let Some(failure) = failure {
-                            report_tray_failure(&format!("Core HTTP bridge failed: {failure}"));
+                            report_tray_failure(&text.with_reason(keys::BRIDGE_FAILED, &failure));
                             bridge_reported = true;
                         }
                     }
@@ -189,19 +234,38 @@ pub fn run_with_tray() {
 /// 在原生事件循环线程上根据自有服务状态创建菜单和图标。
 /// Returns retained native handles or a concrete OS/icon decoding failure.
 /// 返回需保留的原生句柄，或具体的系统及图标解码错误。
-fn create_service_tray(state: &TrayServiceHandles) -> Result<(TrayIcon, MenuItem), String> {
+/// `text` supplies every label in the active language.
+/// `text` 以当前语言提供全部标签。
+fn create_service_tray(
+    state: &TrayServiceHandles,
+    text: &TrayText,
+) -> Result<(TrayIcon, TrayMenu), String> {
     let status = MenuItem::with_id(
         MENU_SERVICE_STATUS,
-        tray_service_status_text(state),
+        tray_service_status_text(state, text),
         false,
         None,
     );
-    let open_client = MenuItem::with_id(MENU_OPEN_CLIENT, "Open Desktop Client", true, None);
-    let open_webui = MenuItem::with_id(MENU_OPEN_WEBUI, "Open WebUI in Browser", true, None);
-    let open_logs = MenuItem::with_id(MENU_OPEN_LOGS, "Open Log Location", true, None);
-    let quit = MenuItem::with_id(MENU_QUIT_SERVICE, "Quit Service", true, None);
-    let menu = Menu::with_items(&[&status, &open_client, &open_webui, &open_logs, &quit])
-        .map_err(|error| error.to_string())?;
+    // action_ids lists the enabled items in menu order with the catalog key of each label.
+    // action_ids 按菜单顺序列出启用的菜单项及其标签目录键。
+    let mut action_ids = vec![
+        (MENU_OPEN_CLIENT, keys::OPEN_DESKTOP_CLIENT),
+        (MENU_OPEN_WEBUI, keys::OPEN_WEBUI),
+    ];
+    #[cfg(windows)]
+    action_ids.push((MENU_OPEN_TERMINAL, keys::OPEN_TERMINAL_CLIENT));
+    action_ids.extend([
+        (MENU_OPEN_LOGS, keys::OPEN_LOG_LOCATION),
+        (MENU_QUIT_SERVICE, keys::QUIT_SERVICE),
+    ]);
+    let actions: Vec<(MenuItem, &'static str)> = action_ids
+        .into_iter()
+        .map(|(id, key)| (MenuItem::with_id(id, text.get(key), true, None), key))
+        .collect();
+    let menu = Menu::with_items(&[&status]).map_err(|error| error.to_string())?;
+    for (item, _) in &actions {
+        menu.append(item).map_err(|error| error.to_string())?;
+    }
     let tooltip = String::from("Vulcan Code Service");
     #[cfg(feature = "test-support")]
     let tooltip =
@@ -220,7 +284,7 @@ fn create_service_tray(state: &TrayServiceHandles) -> Result<(TrayIcon, MenuItem
         .with_menu_on_left_click(true)
         .build()
         .map_err(|error| error.to_string())?;
-    Ok((tray, status))
+    Ok((tray, TrayMenu { status, actions }))
 }
 
 /// Decodes the bundled PNG into the RGBA pixels required by the platform tray library.
@@ -288,7 +352,9 @@ fn acknowledge_tray_ready(tray: &TrayIcon) -> bool {
 /// Returns nothing; a missing or invalid manifest is reported to the user and never falls back
 /// to launching a different application.
 /// 无返回值；清单缺失或无效时向用户报告，绝不回退去启动另一个应用。
-fn open_desktop_client() {
+/// `text` words any failure in the active language.
+/// `text` 以当前语言组织失败文案。
+fn open_desktop_client(text: &TrayText) {
     match resolve_desktop_client_entry() {
         Ok((executable, entry, manifest_path)) => {
             let mut command = std::process::Command::new(&executable);
@@ -303,7 +369,9 @@ fn open_desktop_client() {
                     ));
                 }
                 Err(error) => {
-                    report_tray_failure(&format!("Cannot resolve the running service: {error}"));
+                    report_tray_failure(
+                        &text.with_reason(keys::DESKTOP_CLIENT_FAILED, &error.to_string()),
+                    );
                     return;
                 }
             }
@@ -320,10 +388,12 @@ fn open_desktop_client() {
                 &mut command,
             );
             if let Err(error) = command.spawn() {
-                report_tray_failure(&format!("Desktop client launch failed: {error}"));
+                report_tray_failure(
+                    &text.with_reason(keys::DESKTOP_CLIENT_FAILED, &error.to_string()),
+                );
             }
         }
-        Err(error) => report_tray_failure(&error),
+        Err(error) => report_tray_failure(&text.with_reason(keys::DESKTOP_CLIENT_FAILED, &error)),
     }
 }
 
@@ -370,18 +440,20 @@ fn resolve_desktop_client_entry()
 
 /// Reveals the service log location with the host file manager.
 /// 使用宿主文件管理器展示服务日志位置。
-fn open_log_location() {
+/// `text` words any failure in the active language.
+/// `text` 以当前语言组织失败文案。
+fn open_log_location(text: &TrayText) {
     let data_root = match crate::service_runtime::authoritative_data_root() {
         Ok(root) => root,
         Err(error) => {
-            report_tray_failure(&error);
+            report_tray_failure(&text.with_reason(keys::LOG_LOCATION_FAILED, &error));
             return;
         }
     };
     if let Err(error) = crate::desktop_integration::open_path_in_system_file_manager(
         &crate::logging::directory(&data_root).to_string_lossy(),
     ) {
-        report_tray_failure(&format!("Opening the log location failed: {error}"));
+        report_tray_failure(&text.with_reason(keys::LOG_LOCATION_FAILED, &error.to_string()));
     }
 }
 
@@ -396,37 +468,101 @@ fn report_tray_failure(message: &str) {
 
 /// Reports the current tray service status without exposing secrets.
 /// 报告当前托盘服务状态，不暴露秘密。
-/// `state` owns the protected Core lifecycle; returns the current native menu label.
-/// `state` 持有受保护的 Core 生命周期；返回当前原生菜单文字。
-fn tray_service_status_text(state: &TrayServiceHandles) -> String {
+/// `state` owns the protected Core lifecycle and `text` the active language; returns the
+/// current native menu label.
+/// `state` 持有受保护的 Core 生命周期，`text` 持有当前语言；返回当前原生菜单文字。
+fn tray_service_status_text(state: &TrayServiceHandles, text: &TrayText) -> String {
     if let Ok(failure) = state.bridge_failure.lock()
         && let Some(failure) = failure.as_ref()
     {
-        return format!("Service: bridge failed ({failure})");
+        return text.with_reason(keys::STATUS_BRIDGE_FAILED, failure);
     }
     // Startup alone remains ready after a failed shutdown; the protected lifecycle projection
     // includes admission and retained recovery failures, so the tray must use that authority.
     // 关闭失败后引导状态仍可能是 ready；受保护生命周期投影包含准入与保留的恢复故障，托盘必须以它为准。
-    match vulcan_service_kernel::service_status_snapshot_from_state(&state.state).lifecycle {
-        vulcan_service_api::ServiceLifecycle::Ready => String::from("Service: ready"),
-        vulcan_service_api::ServiceLifecycle::Starting => String::from("Service: starting"),
-        vulcan_service_api::ServiceLifecycle::Stopping => String::from("Service: stopping"),
-        vulcan_service_api::ServiceLifecycle::Recovering => String::from("Service: recovering"),
-        vulcan_service_api::ServiceLifecycle::Failed => String::from("Service: failed"),
-        vulcan_service_api::ServiceLifecycle::RecoveryFailed => {
-            String::from("Service: recovery failed; restart required")
-        }
-    }
+    use vulcan_service_api::ServiceLifecycle;
+    let lifecycle =
+        vulcan_service_kernel::service_status_snapshot_from_state(&state.state).lifecycle;
+    let key = match lifecycle {
+        ServiceLifecycle::Ready => keys::STATUS_READY,
+        ServiceLifecycle::Starting => keys::STATUS_STARTING,
+        ServiceLifecycle::Stopping => keys::STATUS_STOPPING,
+        ServiceLifecycle::Recovering => keys::STATUS_RECOVERING,
+        ServiceLifecycle::Failed => keys::STATUS_FAILED,
+        ServiceLifecycle::RecoveryFailed => keys::STATUS_RECOVERY_FAILED,
+    };
+    text.get(key).to_owned()
 }
 
 /// Opens the WebUI in the system browser only for this tray's live Core instance.
 /// 仅为当前托盘持有的实时 Core 实例在系统浏览器中打开 WebUI。
-fn open_webui_in_browser(state: &TrayServiceHandles) {
+/// `text` words any failure in the active language.
+/// `text` 以当前语言组织失败文案。
+fn open_webui_in_browser(state: &TrayServiceHandles, text: &TrayText) {
     let Some(base_url) = read_service_base_url(&state.state) else {
-        report_tray_failure("WebUI address is not published yet");
+        report_tray_failure(text.get(keys::WEBUI_UNPUBLISHED));
         return;
     };
     open_url_in_system_browser(&base_url);
+}
+
+/// Returns the discovery record path this Core publishes, honoring an isolated test root.
+/// 返回此 Core 发布的发现记录路径，并遵循隔离测试根。
+fn service_discovery_path() -> std::path::PathBuf {
+    vulcan_service_api::webui_service_discovery_snapshot_path(
+        dirs::home_dir(),
+        std::env::temp_dir(),
+    )
+}
+
+/// Opens the terminal client in a new console window, bound to this Core's discovery root.
+/// 在新控制台窗口中打开终端客户端，并绑定到此 Core 的发现根目录。
+/// `text` words any failure in the active language.
+/// `text` 以当前语言组织失败文案。
+#[cfg(windows)]
+fn open_terminal_client(text: &TrayText) {
+    if let Err(reason) = launch_terminal_client() {
+        report_tray_failure(&text.with_reason(keys::TERMINAL_CLIENT_FAILED, &reason));
+    }
+}
+
+/// Starts the manifest-declared terminal client against the exact discovery root of this Core.
+/// 针对此 Core 的精确发现根目录启动清单声明的终端客户端。
+/// Returns a diagnostic when the manifest, the executable or the process start fails.
+/// 清单、可执行文件或进程启动失败时返回诊断。
+#[cfg(windows)]
+fn launch_terminal_client() -> Result<(), String> {
+    use crate::runtime_layout::{
+        explicit_runtime_layout_path, read_runtime_layout_manifest_from,
+        read_runtime_layout_manifest_with_path, resolve_layout_entry, runtime_layout_root,
+    };
+
+    let (manifest, manifest_path) = match explicit_runtime_layout_path()? {
+        Some(explicit) => (read_runtime_layout_manifest_from(&explicit)?, explicit),
+        None => read_runtime_layout_manifest_with_path()?,
+    };
+    let root = runtime_layout_root(&manifest_path)?;
+    let executable = resolve_layout_entry(&root, &manifest.tui_executable)?;
+    if !executable.is_file() {
+        return Err(format!(
+            "Terminal client {} declared by {} does not exist.",
+            executable.display(),
+            manifest_path.display()
+        ));
+    }
+    // The client reads `<root>/code/webui-service.json`, so it gets the root two levels up.
+    // 客户端读取 `<root>/code/webui-service.json`，因此传入上两级的根目录。
+    let discovery = service_discovery_path();
+    let service_root = discovery
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| format!("Discovery path {} has no root.", discovery.display()))?;
+    vulcan_host_tools::process_creation::new_console_std_command(&executable)
+        .arg("--service-root")
+        .arg(service_root)
+        .spawn()
+        .map(drop)
+        .map_err(|error| error.to_string())
 }
 
 /// Reads the browser-facing base URL after matching the published record to live Core identity.
@@ -435,11 +571,7 @@ fn read_service_base_url(
     state: &vulcan_service_kernel::SharedServiceBridgeState,
 ) -> Option<String> {
     let live = vulcan_service_kernel::service_status_snapshot_from_state(state);
-    let path = vulcan_service_api::webui_service_discovery_snapshot_path(
-        dirs::home_dir(),
-        std::env::temp_dir(),
-    );
-    let body = std::fs::read_to_string(path).ok()?;
+    let body = std::fs::read_to_string(service_discovery_path()).ok()?;
     let snapshot: vulcan_service_api::WebuiServiceDiscoverySnapshot =
         serde_json::from_str(&body).ok()?;
     owned_service_base_url(&snapshot, &live)
@@ -506,7 +638,9 @@ fn open_url_in_system_browser(url: &str) {
 
 /// Enters the unified shutdown coordinator and exits only after a successful drain.
 /// 进入统一关闭协调器，仅在成功排空后退出。
-fn quit_service(state: &TrayServiceHandles, proxy: &EventLoopProxy<TrayEvent>) {
+/// `text` words a coordinator start failure in the active language.
+/// `text` 以当前语言组织协调器启动失败文案。
+fn quit_service(state: &TrayServiceHandles, proxy: &EventLoopProxy<TrayEvent>, text: &TrayText) {
     if state.shutdown_in_progress.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -529,7 +663,7 @@ fn quit_service(state: &TrayServiceHandles, proxy: &EventLoopProxy<TrayEvent>) {
         });
     if let Err(error) = spawned {
         state.shutdown_in_progress.store(false, Ordering::Release);
-        report_tray_failure(&format!("Cannot start shutdown coordinator: {error}"));
+        report_tray_failure(&text.with_reason(keys::SHUTDOWN_START_FAILED, &error.to_string()));
     }
 }
 
@@ -556,7 +690,7 @@ fn run_shutdown_worker(service: &HeadlessService, shutdown_in_progress: &AtomicB
             // HeadlessService owns the admission-recovery decision; never perform a second attempt.
             // HeadlessService 拥有准入恢复决定；绝不执行第二次尝试。
             shutdown_in_progress.store(false, Ordering::Release);
-            TrayEvent::ShutdownFailed(format!("Shutdown failed: {error}"))
+            TrayEvent::ShutdownFailed(error.to_string())
         }
     }
 }

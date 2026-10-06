@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "開啟桌面客戶端",
+  "openWebui": "在瀏覽器中開啟 WebUI",
+  "openTerminalClient": "開啟終端機客戶端",
+  "openLogLocation": "開啟日誌位置",
+  "quitService": "退出服務",
+  "statusReady": "服務：就緒",
+  "statusStarting": "服務：啟動中",
+  "statusStopping": "服務：停止中",
+  "statusRecovering": "服務：恢復中",
+  "statusFailed": "服務：失敗",
+  "statusRecoveryFailed": "服務：恢復失敗，需要重新啟動",
+  "statusBridgeFailed": "服務：橋接失敗（{reason}）",
+  "webuiUnpublished": "WebUI 地址尚未發佈。",
+  "desktopClientFailed": "無法開啟桌面客戶端：{reason}",
+  "terminalClientFailed": "無法開啟終端機客戶端：{reason}",
+  "logLocationFailed": "無法開啟日誌位置：{reason}",
+  "bridgeFailed": "Core HTTP 橋接失敗：{reason}",
+  "shutdownFailed": "關閉失敗：{reason}",
+  "shutdownStartFailed": "無法啟動關閉協調器：{reason}"
+}

@@ -23,6 +23,7 @@ notify-rust = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "signal"] }
 uuid.workspace = true
 vulcan-host-tools.workspace = true
+vulcan-i18n = { workspace = true, optional = true }
 vulcan-provider-adapters.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-service-api.workspace = true
@@ -31,7 +32,7 @@ vulcan-service-kernel.workspace = true
 
 [features]
 default = ["desktop-tray"]
-desktop-tray = ["dep:tao", "dep:tray-icon", "dep:png", "dep:winresource", "dep:notify-rust", "dep:windows"]
+desktop-tray = ["dep:tao", "dep:tray-icon", "dep:png", "dep:vulcan-i18n", "dep:winresource", "dep:notify-rust", "dep:windows"]
 test-support = ["vulcan-runtime-assets/test-support", "vulcan-service-kernel/test-support"]
 
 [target.'cfg(windows)'.dependencies]

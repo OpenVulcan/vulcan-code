@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "데스크톱 클라이언트 열기",
+  "openWebui": "브라우저에서 WebUI 열기",
+  "openTerminalClient": "터미널 클라이언트 열기",
+  "openLogLocation": "로그 위치 열기",
+  "quitService": "서비스 종료",
+  "statusReady": "서비스: 준비됨",
+  "statusStarting": "서비스: 시작 중",
+  "statusStopping": "서비스: 중지 중",
+  "statusRecovering": "서비스: 복구 중",
+  "statusFailed": "서비스: 실패",
+  "statusRecoveryFailed": "서비스: 복구 실패, 다시 시작 필요",
+  "statusBridgeFailed": "서비스: 브리지 실패({reason})",
+  "webuiUnpublished": "WebUI 주소가 아직 게시되지 않았습니다.",
+  "desktopClientFailed": "데스크톱 클라이언트를 열 수 없습니다: {reason}",
+  "terminalClientFailed": "터미널 클라이언트를 열 수 없습니다: {reason}",
+  "logLocationFailed": "로그 위치를 열 수 없습니다: {reason}",
+  "bridgeFailed": "Core HTTP 브리지 실패: {reason}",
+  "shutdownFailed": "종료 실패: {reason}",
+  "shutdownStartFailed": "종료 코디네이터를 시작할 수 없습니다: {reason}"
+}

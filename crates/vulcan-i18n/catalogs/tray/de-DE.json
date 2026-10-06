@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "Desktop-Client öffnen",
+  "openWebui": "WebUI im Browser öffnen",
+  "openTerminalClient": "Terminal-Client öffnen",
+  "openLogLocation": "Protokollordner öffnen",
+  "quitService": "Dienst beenden",
+  "statusReady": "Dienst: bereit",
+  "statusStarting": "Dienst: wird gestartet",
+  "statusStopping": "Dienst: wird beendet",
+  "statusRecovering": "Dienst: wird wiederhergestellt",
+  "statusFailed": "Dienst: fehlgeschlagen",
+  "statusRecoveryFailed": "Dienst: Wiederherstellung fehlgeschlagen; Neustart erforderlich",
+  "statusBridgeFailed": "Dienst: Bridge fehlgeschlagen ({reason})",
+  "webuiUnpublished": "Die WebUI-Adresse ist noch nicht veröffentlicht.",
+  "desktopClientFailed": "Desktop-Client konnte nicht geöffnet werden: {reason}",
+  "terminalClientFailed": "Terminal-Client konnte nicht geöffnet werden: {reason}",
+  "logLocationFailed": "Protokollordner konnte nicht geöffnet werden: {reason}",
+  "bridgeFailed": "Core-HTTP-Bridge fehlgeschlagen: {reason}",
+  "shutdownFailed": "Beenden fehlgeschlagen: {reason}",
+  "shutdownStartFailed": "Beendigungskoordinator konnte nicht gestartet werden: {reason}"
+}

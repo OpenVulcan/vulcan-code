@@ -10,6 +10,39 @@ use tokio::process::Command as TokioCommand;
 /// 防止子进程控制台窗口显示的 Windows 进程创建标志。
 pub const WINDOWS_CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Windows process creation flag that gives the child its own new console window.
+/// 为子进程创建独立新控制台窗口的 Windows 进程创建标志。
+pub const WINDOWS_CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+/// Constructs one interactive command that opens in its own console window.
+/// 构造一个在独立控制台窗口中打开的交互命令。
+///
+/// # Parameters
+/// 参数
+/// `program` is the exact console executable the user asked to open.
+/// `program` 是用户要求打开的准确控制台可执行文件。
+///
+/// # Returns
+/// 返回值
+/// Returns a standard command whose child gets a new console, even from a windowless parent.
+/// 返回一个标准命令；即使父进程没有窗口，子进程也会获得新控制台。
+#[cfg(windows)]
+pub fn new_console_std_command<S>(program: S) -> StdCommand
+where
+    S: AsRef<OsStr>,
+{
+    use std::os::windows::process::CommandExt;
+    // command is interactive by design, so it never takes the background no-window policy.
+    // command 按设计是交互式的，因此绝不采用后台无窗口策略。
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the shared factory is the single sanctioned process constructor"
+    )]
+    let mut command = StdCommand::new(program);
+    command.creation_flags(WINDOWS_CREATE_NEW_CONSOLE);
+    command
+}
+
 /// Constructs one host-owned background command with the shared Windows no-window policy.
 /// 使用共享 Windows 无窗口策略构造一个宿主自有后台命令。
 ///

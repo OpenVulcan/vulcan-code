@@ -7,14 +7,16 @@ import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageRelativePath, validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
+import {
+  packageRelativePath, runtimeLayoutSchemaVersion, validateRuntimeLayoutIdentity, verifyPackagedLayout,
+} from './desktop-runtime.mjs';
 
 // Recovery must reject invalid identity even when all declared files still exist.
 // 即使全部声明文件仍存在，恢复流程也必须拒绝无效身份。
 test('recovery identity validation rejects unknown profiles and foreign schemas or hosts', () => {
   // layout mirrors the current fixture contract; each mutation changes one identity dimension.
   // layout 复现当前夹具契约；每次变更只改变一个身份维度。
-  const layout = { schemaVersion: 2, profile: 'debug', platform: process.platform, architecture: process.arch };
+  const layout = { schemaVersion: runtimeLayoutSchemaVersion, profile: 'debug', platform: process.platform, architecture: process.arch };
   assert.doesNotThrow(() => validateRuntimeLayoutIdentity(layout, layout.profile));
   for (const changed of [{ schemaVersion: 0 }, { profile: 'invalid' }, { platform: 'invalid' }, { architecture: 'invalid' }]) {
     // candidate is evaluated using its own profile, as recovery of an earlier generation requires.
@@ -36,13 +38,13 @@ test('core restart layout reader shares current schema and rejects mismatched id
   await mkdir(target, { recursive: true });
   const root = await mkdtemp(path.join(target, 'core-layout-test-'));
   t.after(() => rm(root, { recursive: true }));
-  // Schema 2 is the current emitted layout; no browser or desktop artifacts are required for this metadata read.
-  // 当前产出的布局为架构 2；该元数据读取无需浏览器或桌面制品。
+  // The current emitted schema needs no browser or desktop artifacts for this metadata read.
+  // 当前产出的布局架构在该元数据读取中无需浏览器或桌面制品。
   const layout = {
-    schemaVersion: 2, profile: 'debug', platform: process.platform, architecture: process.arch,
+    schemaVersion: runtimeLayoutSchemaVersion, profile: 'debug', platform: process.platform, architecture: process.arch,
     serviceExecutable: 'bin/vulcan-code-service.exe',
   };
-  for (const override of [{}, { schemaVersion: 1 }, { profile: 'release' }, { platform: 'invalid' }, { architecture: 'invalid' }]) {
+  for (const override of [{}, { schemaVersion: runtimeLayoutSchemaVersion - 1 }, { profile: 'release' }, { platform: 'invalid' }, { architecture: 'invalid' }]) {
     // Each candidate has exactly one identity mismatch, except the first valid control case.
     // 除首个有效对照场景外，每个候选均只有一个身份字段不匹配。
     const candidate = { ...layout, ...override };
@@ -115,6 +117,7 @@ const fixtureLayout = Object.freeze({
   serviceExecutable: 'bin/vulcan-code-service.exe',
   desktopExecutable: 'desktop/runtime/electron.exe',
   desktopEntry: 'desktop/runtime/resources/app/gui/main.js',
+  tuiExecutable: 'bin/vulcan-tui.exe',
   browserHostEntry: 'browser/runtime/chromium-host/main.js',
   browserHostExecutable: 'dependencies/runtimes/node/node-24.18.0-windows-x64/node.exe',
   chromiumExecutable: 'browser/chromium/chrome-win64/chrome.exe',
@@ -140,6 +143,7 @@ async function createFixture() {
     fixtureLayout.serviceExecutable,
     fixtureLayout.desktopExecutable,
     fixtureLayout.desktopEntry,
+    fixtureLayout.tuiExecutable,
     'desktop/runtime/resources/app/preload.cjs',
     fixtureLayout.browserHostEntry,
     fixtureLayout.browserHostExecutable,
@@ -288,6 +292,7 @@ const requiredEntries = [
   ['serviceExecutable', fixtureLayout.serviceExecutable],
   ['desktopExecutable', fixtureLayout.desktopExecutable],
   ['desktopEntry', fixtureLayout.desktopEntry],
+  ['tuiExecutable', fixtureLayout.tuiExecutable],
   ['browserHostEntry', fixtureLayout.browserHostEntry],
   ['browserHostExecutable', fixtureLayout.browserHostExecutable],
   ['webuiRoot', fixtureLayout.webuiRoot],

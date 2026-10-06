@@ -1,6 +1,6 @@
 # 共享语言目录
 
-所有面向用户的界面（WebUI、TUI、服务、后续的托盘与桌面壳）共用 `crates/vulcan-i18n/catalogs/` 中的同一份
+所有面向用户的界面（WebUI、TUI、服务、托盘与桌面壳）共用 `crates/vulcan-i18n/catalogs/` 中的同一份
 语言清单与文案目录。实现以该 crate 的 `build.rs`、`src/lib.rs` 与测试为准。
 
 ## 文件
@@ -18,6 +18,8 @@
 - `desktop`（完整）：Electron 桌面壳文案。构建（`pnpm run build`）与打包（`scripts/desktop-runtime.mjs`）通过
   `apps/vulcan-code-desktop/tools/copy-i18n-catalogs.mjs` 把 `locales.json` 与该分面复制为 `gui/` 旁的 `i18n/`；
   启动时缺失或默认语言缺字段直接失败。
+- `tray`（完整）：服务托盘菜单、状态行与失败通知。托盘以已保存的 `uiLocale` 为准，未保存时使用启动时的系统语言；
+  每次状态刷新读取一次，任一客户端切换语言后菜单文字随即更新。
 - `tui`（不完整）：TUI 专属 `tui.*` 键；缺少的语言按键回退到默认语言。
 
 ## 规则

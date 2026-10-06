@@ -79,14 +79,14 @@ if ($Release) {
         exit $LASTEXITCODE
     }
 
-    # CargoBuildArguments selects the release shell and terminal host from the locked registry graph.
-    # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '--release')
+    # CargoBuildArguments selects the release shell, terminal host and terminal client from the locked registry graph.
+    # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳、终端宿主与终端客户端。
+    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-code-tui', '--release')
 }
 else {
-    # CargoBuildArguments selects the debug shell and terminal host from the locked registry graph.
-    # CargoBuildArguments 从锁定的注册表依赖图选择 debug 桌面壳与终端宿主。
-    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host')
+    # CargoBuildArguments selects the debug shell, terminal host and terminal client from the locked registry graph.
+    # CargoBuildArguments 从锁定的注册表依赖图选择 debug 桌面壳、终端宿主与终端客户端。
+    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-code-tui')
 }
 
 # BuildProfileName names the selected artifact profile in diagnostics.
@@ -140,6 +140,17 @@ if ($IsWindowsPlatform) {
 # BuiltTerminalHostPath 保存与桌面壳 Cargo profile 一致的终端宿主制品路径。
 $BuiltTerminalHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-terminal-host' -and $_.target.kind -contains 'bin' }).executable
 
+# TuiFileName stores the platform-specific terminal client binary name.
+# TuiFileName 保存平台相关的终端客户端二进制名称。
+$TuiFileName = "vulcan-tui"
+if ($IsWindowsPlatform) {
+    $TuiFileName = "vulcan-tui.exe"
+}
+
+# BuiltTuiPath stores the terminal client built for the shell's Cargo profile.
+# BuiltTuiPath 保存与桌面壳 Cargo profile 一致的终端客户端制品路径。
+$BuiltTuiPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-tui' -and $_.target.kind -contains 'bin' }).executable
+
 # DistributionRoot selects the same validated output boundary as sync and desktop packaging.
 # DistributionRoot 选择与同步和桌面打包相同的已验证输出边界。
 $DistributionRoot = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root | Out-String).Trim()
@@ -158,11 +169,18 @@ $OutputBinaryPath = Join-Path $OutputBinDir $BinaryFileName
 # OutputTerminalHostPath 保存复制到桌面壳旁边的隔离终端宿主路径。
 $OutputTerminalHostPath = Join-Path $OutputBinDir $TerminalHostFileName
 
+# OutputTuiPath stores the terminal client the tray opens, beside the shell binary.
+# OutputTuiPath 保存托盘打开的终端客户端路径，位于桌面壳旁边。
+$OutputTuiPath = Join-Path $OutputBinDir $TuiFileName
+
 if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
     throw "Built Core binary was not found: $BuiltBinaryPath"
 }
 if (-not (Test-Path -LiteralPath $BuiltTerminalHostPath)) {
     throw "Built terminal host was not found: $BuiltTerminalHostPath"
+}
+if (-not (Test-Path -LiteralPath $BuiltTuiPath)) {
+    throw "Built terminal client was not found: $BuiltTuiPath"
 }
 
 # Publish compiled executables into the stable output directory used by make run.
@@ -183,6 +201,7 @@ if (Test-Path -LiteralPath $ObsoleteWindowsConsoleHelperPath) {
 # 复制失败时立即终止发布。
 Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTerminalHostPath -Destination $OutputTerminalHostPath -Force -ErrorAction Stop
+Copy-Item -LiteralPath $BuiltTuiPath -Destination $OutputTuiPath -Force -ErrorAction Stop
 & node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Distribution published: $DistributionRoot"

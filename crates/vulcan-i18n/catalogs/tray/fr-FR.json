@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "Ouvrir le client de bureau",
+  "openWebui": "Ouvrir WebUI dans le navigateur",
+  "openTerminalClient": "Ouvrir le client terminal",
+  "openLogLocation": "Ouvrir l’emplacement des journaux",
+  "quitService": "Quitter le service",
+  "statusReady": "Service : prêt",
+  "statusStarting": "Service : démarrage",
+  "statusStopping": "Service : arrêt en cours",
+  "statusRecovering": "Service : récupération",
+  "statusFailed": "Service : échec",
+  "statusRecoveryFailed": "Service : échec de la récupération ; redémarrage requis",
+  "statusBridgeFailed": "Service : échec du pont ({reason})",
+  "webuiUnpublished": "L’adresse de WebUI n’est pas encore publiée.",
+  "desktopClientFailed": "Impossible d’ouvrir le client de bureau : {reason}",
+  "terminalClientFailed": "Impossible d’ouvrir le client terminal : {reason}",
+  "logLocationFailed": "Impossible d’ouvrir l’emplacement des journaux : {reason}",
+  "bridgeFailed": "Le pont HTTP de Core a échoué : {reason}",
+  "shutdownFailed": "Échec de l’arrêt : {reason}",
+  "shutdownStartFailed": "Impossible de démarrer le coordinateur d’arrêt : {reason}"
+}

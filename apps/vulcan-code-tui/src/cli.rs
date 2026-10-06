@@ -68,7 +68,9 @@ fn parse_args() -> Result<Args> {
             },
             "--service-root" => match args.next() {
                 Some(dir) => parsed.service.root = Some(dir.into()),
-                None => bail!("--service-root needs the directory holding webui-service.json"),
+                None => bail!(
+                    "--service-root needs the service user root that holds code/webui-service.json"
+                ),
             },
             "-h" | "--help" => {
                 println!("{USAGE}");

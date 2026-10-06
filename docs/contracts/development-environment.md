@@ -24,7 +24,7 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 
 先执行 `make init-system` 准备受管 Node `24.18.0` 和 pnpm `11.11.0`，再执行 `make sync`。这两个入口都会通过 `scripts/managed-node.mjs` 补齐缺失的受管 Node/pnpm，使用官方精确版本地址并校验 SHA-256/SHA-512，不依赖已有 `output/browser` 或正在运行的 Core。同步阶段按锁文件准备插件依赖，并把对应 Chromium 下载到仓库 `target/browser-runtime/`；`make build` 仅使用已准备、已同步的输入，生成 `output/browser`，缺失时失败，不在运行期间下载。系统 Node/pnpm 仍属于下文规定的开发机前置工具。
 
-发行物中 `desktop/runtime/` 仅运行 Electron GUI；`browser/runtime/` 保存 Core 浏览器宿主及驱动，`browser/chromium/` 保存独立 Chromium，宿主由 `dependencies/runtimes/node/` 的受管 Node 启动。运行布局架构为 2，`browserHostExecutable` 与 `desktopExecutable` 分别声明两个程序。旧版用户目录下的浏览器下载不会覆盖随包版本，也不会在启动时自动删除。
+发行物中 `desktop/runtime/` 仅运行 Electron GUI；`browser/runtime/` 保存 Core 浏览器宿主及驱动，`browser/chromium/` 保存独立 Chromium，宿主由 `dependencies/runtimes/node/` 的受管 Node 启动。运行布局架构为 3，`browserHostExecutable` 与 `desktopExecutable` 分别声明两个程序；`tuiExecutable` 声明与服务同目录发布的终端客户端 `bin/vulcan-tui`，Windows 托盘的“打开终端客户端”只按该条目启动。旧版用户目录下的浏览器下载不会覆盖随包版本，也不会在启动时自动删除。
 
 首次启用只检查本地依赖，并在使用时发布插件私有执行代次，无须下载。组件缺失或损坏时修复应用安装；开发环境重新执行 `make sync` 和完整构建。Node、Electron 与 Chromium 的上游许可文件随对应目录保留。
 

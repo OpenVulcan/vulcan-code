@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "Open Desktop Client",
+  "openWebui": "Open WebUI in Browser",
+  "openTerminalClient": "Open Terminal Client",
+  "openLogLocation": "Open Log Location",
+  "quitService": "Quit Service",
+  "statusReady": "Service: ready",
+  "statusStarting": "Service: starting",
+  "statusStopping": "Service: stopping",
+  "statusRecovering": "Service: recovering",
+  "statusFailed": "Service: failed",
+  "statusRecoveryFailed": "Service: recovery failed; restart required",
+  "statusBridgeFailed": "Service: bridge failed ({reason})",
+  "webuiUnpublished": "The WebUI address is not published yet.",
+  "desktopClientFailed": "Could not open the desktop client: {reason}",
+  "terminalClientFailed": "Could not open the terminal client: {reason}",
+  "logLocationFailed": "Could not open the log location: {reason}",
+  "bridgeFailed": "The Core HTTP bridge failed: {reason}",
+  "shutdownFailed": "Shutdown failed: {reason}",
+  "shutdownStartFailed": "Could not start the shutdown coordinator: {reason}"
+}

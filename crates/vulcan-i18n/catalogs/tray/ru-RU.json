@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "Открыть настольный клиент",
+  "openWebui": "Открыть WebUI в браузере",
+  "openTerminalClient": "Открыть терминальный клиент",
+  "openLogLocation": "Открыть папку журналов",
+  "quitService": "Завершить службу",
+  "statusReady": "Служба: готова",
+  "statusStarting": "Служба: запускается",
+  "statusStopping": "Служба: останавливается",
+  "statusRecovering": "Служба: восстанавливается",
+  "statusFailed": "Служба: сбой",
+  "statusRecoveryFailed": "Служба: восстановление не удалось, требуется перезапуск",
+  "statusBridgeFailed": "Служба: сбой моста ({reason})",
+  "webuiUnpublished": "Адрес WebUI ещё не опубликован.",
+  "desktopClientFailed": "Не удалось открыть настольный клиент: {reason}",
+  "terminalClientFailed": "Не удалось открыть терминальный клиент: {reason}",
+  "logLocationFailed": "Не удалось открыть папку журналов: {reason}",
+  "bridgeFailed": "Сбой HTTP-моста Core: {reason}",
+  "shutdownFailed": "Не удалось завершить работу: {reason}",
+  "shutdownStartFailed": "Не удалось запустить координатор завершения: {reason}"
+}

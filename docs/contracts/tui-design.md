@@ -11,11 +11,14 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
 参数：
 
 - `--backend service|mock`：默认 `service`，连接本机运行中的 Vulcan Code 服务；`mock` 为脚本化演示。
-- `--service-root <dir>`：存放 `webui-service.json` 的目录；省略时依次搜索用户目录下的常用服务根。
+- `--service-root <dir>`：服务用户根目录（其下为 `code/webui-service.json`）；省略时依次搜索用户目录下的常用服务根。
 - `--locale <tag>`：省略时跟随服务的界面语言，再按系统语言匹配。
 - `--theme dark|light`。
 
 重新编译前须先关闭正在运行的 `vulcan-tui.exe`（Windows 会锁定可执行文件）。
+
+发行物把 `vulcan-tui` 与服务一同发布到 `bin/`，并在运行布局清单中声明为 `tuiExecutable`。Windows 托盘的“打开终端客户端”
+在新控制台中按该条目启动，并以 `--service-root` 绑定到托盘所属 Core 的发现根目录，因此不会连到其他服务实例。
 
 ## 分层
 

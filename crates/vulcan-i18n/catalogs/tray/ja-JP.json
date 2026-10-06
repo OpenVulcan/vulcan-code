@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "デスクトップクライアントを開く",
+  "openWebui": "ブラウザーで WebUI を開く",
+  "openTerminalClient": "ターミナルクライアントを開く",
+  "openLogLocation": "ログの場所を開く",
+  "quitService": "サービスを終了",
+  "statusReady": "サービス: 準備完了",
+  "statusStarting": "サービス: 起動中",
+  "statusStopping": "サービス: 停止中",
+  "statusRecovering": "サービス: 復旧中",
+  "statusFailed": "サービス: 失敗",
+  "statusRecoveryFailed": "サービス: 復旧に失敗しました。再起動が必要です",
+  "statusBridgeFailed": "サービス: ブリッジ障害（{reason}）",
+  "webuiUnpublished": "WebUI のアドレスはまだ公開されていません。",
+  "desktopClientFailed": "デスクトップクライアントを開けませんでした: {reason}",
+  "terminalClientFailed": "ターミナルクライアントを開けませんでした: {reason}",
+  "logLocationFailed": "ログの場所を開けませんでした: {reason}",
+  "bridgeFailed": "Core HTTP ブリッジが失敗しました: {reason}",
+  "shutdownFailed": "シャットダウンに失敗しました: {reason}",
+  "shutdownStartFailed": "シャットダウン処理を開始できませんでした: {reason}"
+}

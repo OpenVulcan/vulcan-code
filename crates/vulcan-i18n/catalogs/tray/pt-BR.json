@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "Abrir cliente desktop",
+  "openWebui": "Abrir WebUI no navegador",
+  "openTerminalClient": "Abrir cliente de terminal",
+  "openLogLocation": "Abrir local dos logs",
+  "quitService": "Encerrar serviço",
+  "statusReady": "Serviço: pronto",
+  "statusStarting": "Serviço: iniciando",
+  "statusStopping": "Serviço: parando",
+  "statusRecovering": "Serviço: recuperando",
+  "statusFailed": "Serviço: falhou",
+  "statusRecoveryFailed": "Serviço: a recuperação falhou; reinício necessário",
+  "statusBridgeFailed": "Serviço: falha na ponte ({reason})",
+  "webuiUnpublished": "O endereço do WebUI ainda não foi publicado.",
+  "desktopClientFailed": "Não foi possível abrir o cliente desktop: {reason}",
+  "terminalClientFailed": "Não foi possível abrir o cliente de terminal: {reason}",
+  "logLocationFailed": "Não foi possível abrir o local dos logs: {reason}",
+  "bridgeFailed": "A ponte HTTP do Core falhou: {reason}",
+  "shutdownFailed": "Falha ao encerrar: {reason}",
+  "shutdownStartFailed": "Não foi possível iniciar o coordenador de encerramento: {reason}"
+}

@@ -1,0 +1,21 @@
+{
+  "openDesktopClient": "Abrir cliente de escritorio",
+  "openWebui": "Abrir WebUI en el navegador",
+  "openTerminalClient": "Abrir cliente de terminal",
+  "openLogLocation": "Abrir ubicación de registros",
+  "quitService": "Salir del servicio",
+  "statusReady": "Servicio: listo",
+  "statusStarting": "Servicio: iniciando",
+  "statusStopping": "Servicio: deteniéndose",
+  "statusRecovering": "Servicio: recuperándose",
+  "statusFailed": "Servicio: error",
+  "statusRecoveryFailed": "Servicio: la recuperación falló; reinicio necesario",
+  "statusBridgeFailed": "Servicio: el puente falló ({reason})",
+  "webuiUnpublished": "La dirección de WebUI aún no se ha publicado.",
+  "desktopClientFailed": "No se pudo abrir el cliente de escritorio: {reason}",
+  "terminalClientFailed": "No se pudo abrir el cliente de terminal: {reason}",
+  "logLocationFailed": "No se pudo abrir la ubicación de registros: {reason}",
+  "bridgeFailed": "El puente HTTP de Core falló: {reason}",
+  "shutdownFailed": "El apagado falló: {reason}",
+  "shutdownStartFailed": "No se pudo iniciar el coordinador de apagado: {reason}"
+}

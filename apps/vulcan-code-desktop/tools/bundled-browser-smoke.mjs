@@ -11,12 +11,13 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
+import { runtimeLayoutSchemaVersion } from '../../../scripts/desktop-runtime.mjs';
 
 // The supplied root must be a fully packaged distribution, independent of source dependencies.
 // 给定根目录必须是完整发行物，与源码依赖独立。
 const distribution = path.resolve(process.argv[2]);
 const layout = JSON.parse(await readFile(path.join(distribution, 'runtime-layout.json'), 'utf8'));
-assert.equal(layout.schemaVersion, 2);
+assert.equal(layout.schemaVersion, runtimeLayoutSchemaVersion);
 assert.notEqual(layout.browserHostExecutable, layout.desktopExecutable);
 const { ControlFrameDecoder, encodeControlFrame, BROWSER_HOST_PROTOCOL_VERSION } = await import(pathToFileURL(path.join(distribution, 'browser/runtime/browser-host/host-protocol.js')));
 const root = await mkdtemp(path.join(tmpdir(), 'vulcan-bundled-browser-'));

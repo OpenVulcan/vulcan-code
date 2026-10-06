@@ -1037,6 +1037,27 @@ pub fn service_status_snapshot_from_state(
     }
 }
 
+/// Reads the interface language the user saved, for native surfaces such as the tray.
+/// 读取用户保存的界面语言，供托盘等原生界面使用。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state that mirrors the persisted `uiLocale`.
+/// `state` 是镜像已持久化 `uiLocale` 的共享服务状态。
+///
+/// # Returns
+/// 返回值
+/// The saved language code, or `None` when the user never chose one.
+/// 返回已保存的语言代码；用户从未选择时返回 `None`。
+pub fn service_ui_locale_from_state(state: &SharedServiceBridgeState) -> Option<String> {
+    let locale_guard = state.lock();
+    let guard = match locale_guard.as_deref() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.get_ref(),
+    };
+    guard.startup.ui_locale.clone()
+}
+
 /// Resolves the protected lifecycle and retained failure from shutdown and recovery facts.
 /// 从关闭与恢复事实解析受保护生命周期及保留失败。
 fn service_lifecycle_with_recovery(

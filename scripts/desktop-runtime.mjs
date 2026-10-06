@@ -34,7 +34,7 @@ if (path.resolve(output) === repository) {
 const [command, profile = 'debug'] = process.argv.slice(2);
 // One schema authority is shared by packaging, launching, and the Core restart layout reader.
 // 打包、启动与核心重启布局读取器共享唯一的架构版本权威。
-const runtimeLayoutSchemaVersion = 2;
+export const runtimeLayoutSchemaVersion = 3;
 // The service describes its compiled profile without starting user services or touching settings.
 // 服务描述自身编译模式，不启动用户服务或修改配置。
 const execFileAsync = promisify(execFile);
@@ -112,6 +112,7 @@ export async function verifyPackagedLayout(layout, distributionRoot = output) {
     { name: 'serviceExecutable', kind: 'file' },
     { name: 'desktopExecutable', kind: 'file' },
     { name: 'desktopEntry', kind: 'file' },
+    { name: 'tuiExecutable', kind: 'file' },
     { name: 'browserHostEntry', kind: 'file' },
     { name: 'browserHostExecutable', kind: 'file' },
     { name: 'chromiumExecutable', kind: 'file' },
@@ -371,8 +372,13 @@ async function main() {
   // Validate source artifacts before removing an existing generated application tree.
   // 在移除现有生成应用目录前验证源产物，避免配置或编译错误破坏已有发行物。
   const desktop = path.join(repository, 'apps', 'vulcan-code-desktop');
-  const serviceExecutable = `bin/vulcan-code-service${process.platform === 'win32' ? '.exe' : ''}`;
+  const executableSuffix = process.platform === 'win32' ? '.exe' : '';
+  const serviceExecutable = `bin/vulcan-code-service${executableSuffix}`;
+  // The terminal client is published beside the service by the same Cargo build.
+  // 终端客户端由同一次 Cargo 构建发布在服务旁边。
+  const tuiExecutable = `bin/vulcan-tui${executableSuffix}`;
   await verifyServiceProfile(entry(serviceExecutable));
+  await access(entry(tuiExecutable));
   await run(process.execPath, [path.join(desktop, 'node_modules/typescript/bin/tsc'), '-b'], { cwd: desktop });
   await access(path.join(desktop, 'node_modules/electron/dist'));
   await access(path.join(repository, 'apps/vulcan-code-web/dist'));
@@ -502,7 +508,7 @@ async function main() {
     schemaVersion: runtimeLayoutSchemaVersion, profile,
     serviceExecutable,
     desktopExecutable: `desktop/runtime/${electronBinary}`,
-    desktopEntry: `${appEntry}/gui/main.js`, browserHostEntry: 'browser/runtime/chromium-host/main.js',
+    desktopEntry: `${appEntry}/gui/main.js`, tuiExecutable, browserHostEntry: 'browser/runtime/chromium-host/main.js',
     browserHostExecutable: packageRelativePath(output, chromiumSource.executable),
     chromiumExecutable,
     webuiRoot: 'webui', runtimeVersion: electronPackage.version,
