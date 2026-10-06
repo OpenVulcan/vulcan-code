@@ -570,10 +570,43 @@ async fn initial_install_original_shutdown_drains_same_preimages_and_package() {
         Arc::clone(&state.pending_local_plugin_installs)
     };
     assert!(registry.require_empty_without_runtime().is_err());
+    // Count first-account adapter entries made by the drain itself on this executor thread.
+    // 计数排空本身在此执行器线程上对第一账户的适配器访问。
+    let drain_access =
+        crate::plugin_mcp_secret_store::legacy_write_observation::Scope::count_access(
+            &fixture.actual.plugin_id,
+            SERVER,
+            SECRET,
+        );
     registry
         .drain_for_shutdown(&fixture.actual.state)
         .await
         .expect("actual retained installation shutdown drain");
+    let drain_accesses = drain_access.access_count();
+    drop(drain_access);
+    // The drain owns this restoration; no earlier path may have consumed the retained preimages.
+    // 此恢复由排空负责；任何更早路径都不得已消费保留前像。
+    assert!(
+        drain_accesses > 0,
+        "shutdown drain never restored the first account"
+    );
+    // A reappearing value after a confirmed drain is reported with enough facts to locate its writer.
+    // 已确认排空后重新出现的值，报告足以定位其写入者的事实。
+    let store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
+    let reappeared = |label: &str| {
+        store
+            .read_optional_secret(&fixture.actual.plugin_id, SERVER, SECRET)
+            .expect(label)
+            .is_some()
+    };
+    if reappeared("first account read after drain") {
+        let still_present = reappeared("first account re-read after drain");
+        panic!(
+            "first account reappeared after a drain that confirmed its absence; \
+             drain accessed it {drain_accesses} time(s) on this thread, nothing on this thread \
+             accessed it afterwards, and an immediate re-read found it present={still_present}"
+        );
+    }
     fixture.assert_restored();
 }
 
