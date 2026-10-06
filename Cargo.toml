@@ -224,8 +224,15 @@ debug = "limited"
 # link time and PDB size shrink. Workspace crates keep the default (or their override above).
 # 第三方 crate 在开发构建中只保留行表：回溯仍可读，同时缩短链接时间与 PDB 体积。工作区 crate 保持默认值
 # （或上方的覆盖）。
+#
+# Third-party crates are also optimized: LanceDB, hashing and schema validation dominate the slow
+# tests when unoptimized. Measured on the kernel suite this cut cumulative test time by 56% at the
+# cost of a cold dependency build about 20 minutes longer; edits to workspace crates rebuild as before.
+# 第三方 crate 同时开启优化：未优化时 LanceDB、哈希与 Schema 校验主导慢测试。内核测试套件实测累计
+# 耗时下降 56%，代价是冷依赖构建约长 20 分钟；工作区 crate 修改后的重建速度不变。
 [profile.dev.package."*"]
 debug = "line-tables-only"
+opt-level = 2
 
 [workspace.lints.rust]
 missing_docs = "warn"
