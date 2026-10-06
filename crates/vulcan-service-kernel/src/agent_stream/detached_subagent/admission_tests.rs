@@ -5,13 +5,7 @@ use super::*;
 use crate::tests::test_support::{
     TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
 };
-use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
-    attach_test_runtime_event_projection_barrier, set_runtime_event_projection_barriers_enabled,
-};
-
-/// Restores the process-wide barrier policy even if an assertion fails.
-/// 即使断言失败也恢复进程级屏障策略。
-struct BarrierPolicyGuard;
+use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::attach_test_runtime_event_projection_barrier;
 
 /// EOF or cancellation releases exact listener ownership while preserving published and replacement results.
 /// 流结束或取消释放精确监听归属，同时保留已发布及替代执行结果。
@@ -129,14 +123,6 @@ async fn detached_listener_exit_releases_only_unpublished_exact_owner() {
     }
 }
 
-impl Drop for BarrierPolicyGuard {
-    /// Releases pending test receipts and restores the disabled test default.
-    /// 释放待处理测试回执并恢复测试默认的禁用状态。
-    fn drop(&mut self) {
-        let _ = set_runtime_event_projection_barriers_enabled(false);
-    }
-}
-
 /// Verifies nested starts cannot bypass parent identity or persistent listener admission.
 /// 验证嵌套启动不能绕过父任务身份或持久监听器准入。
 #[tokio::test]
@@ -167,8 +153,6 @@ async fn nested_delegate_start_failure_rejects_production_barrier() {
     let runtime = test_agent_runtime_bridge();
     let mut sink = ProviderV1StreamSink::new(child_handle.clone(), catalog);
     let mut telemetry = ProviderTelemetryHookGuard::new_with_persistence(state.clone(), None);
-    set_runtime_event_projection_barriers_enabled(true).unwrap();
-    let _guard = BarrierPolicyGuard;
     // Every rejection must reach the real runtime waiter before any success projection.
     // 每一种拒绝都必须在任何成功投影之前传达到真实运行时等待器。
     for (event_session, parent_execution, expected_error) in [

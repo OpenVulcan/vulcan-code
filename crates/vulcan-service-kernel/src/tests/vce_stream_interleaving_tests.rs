@@ -10,30 +10,6 @@ use vulcan_service_api::{ServiceEvent, ServiceEventSink, VceJobAction, VceJobSub
 use vulcan_workspace_store::vce_data_plane::{VceDataPlaneFactory, VceJobState};
 use vulcan_workspace_store::workspace_store::{load_workspace_index_snapshot, persist_new_project};
 
-/// Own production projection acknowledgement for this isolated, serial integration test process.
-/// 为此隔离且串行的集成测试进程持有生产投影确认开关。
-struct StreamProjectionGuard;
-
-impl StreamProjectionGuard {
-    /// Enable the same durability handshake as service bootstrap; no inputs, returns its cleanup owner.
-    /// 启用与服务启动相同的可靠性握手；无输入，返回负责清理的所有者。
-    fn enable() -> Self {
-        vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true)
-            .expect("enable production tool durability handshake");
-        Self
-    }
-}
-
-impl Drop for StreamProjectionGuard {
-    /// Restore the test process default after its conversation has stopped, including assertion unwinding.
-    /// 在测试对话停止后恢复测试进程默认值，包含断言展开清理路径。
-    fn drop(&mut self) {
-        if let Err(error) = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(false) {
-            eprintln!("private stream projection cleanup failed: {error}");
-        }
-    }
-}
-
 /// Capture actual emitted UI events, not a mailbox acknowledgement or injected final transcript.
 /// 捕获实际发出的界面事件，而不是邮箱应答或注入的最终转录。
 #[derive(Default)]
@@ -204,9 +180,6 @@ fn run_stream_interleaving_fixture(exercise_continue: bool) {
         );
         return;
     }
-    // Only this private process owns the production startup switch and its cleanup.
-    // 只有此私有进程持有生产启动开关及其清理责任。
-    let _projection = StreamProjectionGuard::enable();
     // Reuse the real chat entrypoint's runtime configuration, limiting only the fixture worker count.
     // 复用实际聊天入口的运行时配置，仅限制夹具工作线程数量。
     let executor = Arc::new(

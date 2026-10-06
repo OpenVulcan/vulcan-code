@@ -1552,14 +1552,6 @@ fn run_service_bootstrap(
         mcp_catalog.prompt_count,
         mcp_catalog.resource_count,
     ));
-    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true)
-        .map_err(|error| {
-            ServiceBootstrapError::new(
-                "service-process",
-                "Core Service",
-                format!("启用运行时事件投影屏障失败：{error}"),
-            )
-        })?;
     install_webui_question_runtime_event_bridge(
         event_emitter,
         state,

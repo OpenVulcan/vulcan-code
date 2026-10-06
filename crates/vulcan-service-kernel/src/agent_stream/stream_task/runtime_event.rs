@@ -289,18 +289,6 @@ mod tests {
     use super::*;
     use vulcan_session_core::SessionNodeId;
 
-    /// Owns the global production barrier switch for a serial integration test.
-    /// 为串行集成测试持有全局生产屏障开关。
-    struct DelegateBarrierGuard;
-
-    impl Drop for DelegateBarrierGuard {
-        /// Restores the test default on completion or assertion unwinding.
-        /// 完成或断言展开时恢复测试默认值。
-        fn drop(&mut self) {
-            let _ = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(false);
-        }
-    }
-
     /// A real root stream rejects malformed child admission through the actual execution waiter.
     /// 真实根流通过实际执行等待器拒绝畸形子任务准入。
     #[tokio::test]
@@ -308,10 +296,7 @@ mod tests {
         use crate::tests::test_support::{
             TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
         };
-        use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
-            attach_test_runtime_event_projection_barrier,
-            set_runtime_event_projection_barriers_enabled,
-        };
+        use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::attach_test_runtime_event_projection_barrier;
         // The host fixture owns all storage; this test never calls a model or starts a child.
         // 宿主夹具拥有全部存储；此测试不调用模型或启动子代理。
         let session_id = Uuid::new_v4();
@@ -321,8 +306,6 @@ mod tests {
             test_service_state_with_parent_session(session_id),
         ));
         let agent_runtime = test_agent_runtime_bridge();
-        set_runtime_event_projection_barriers_enabled(true).unwrap();
-        let _barrier_guard = DelegateBarrierGuard;
         let (event, waiter) = attach_test_runtime_event_projection_barrier(RuntimeEvent::new(
             RuntimeEventKind::DelegateStarted,
             "invalid child admission",

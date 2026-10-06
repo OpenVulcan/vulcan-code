@@ -20,26 +20,10 @@ use vulcan_session_core::v1::event::{EventBody, ToolPayload, UserInputSource};
 use vulcan_session_core::v1::ids::{ClientActionId, RequestStreamId};
 use vulcan_tools_manager::VulcanToolInvocationContext;
 
-/// Restores the test default after the real service projection barriers have drained.
-/// 真实服务投影屏障排空后恢复测试默认值。
-struct BarrierPolicyGuard;
-
-impl Drop for BarrierPolicyGuard {
-    /// Disables barriers even when the acceptance assertion unwinds.
-    /// 即使验收断言退栈，也关闭屏障。
-    fn drop(&mut self) {
-        let _ = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(false);
-    }
-}
-
 /// Runs the full automatic QA dispatcher using the production service worker stack.
 /// 使用生产服务工作线程栈运行完整自动答疑分发器。
 #[test]
 fn main_only_child_question_wakes_real_model_replies_and_preserves_paused_goal() {
-    // Match service bootstrap: model tools need exact durable identities returned by the stream consumer.
-    // 对齐服务引导：模型工具需要事件流消费者返回精确持久化身份。
-    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true).unwrap();
-    let _barrier_guard = BarrierPolicyGuard;
     // Own the private executor through all asynchronous dispatch and cleanup.
     // 在全部异步分发及清理期间持有私有执行器。
     let executor = Arc::new(

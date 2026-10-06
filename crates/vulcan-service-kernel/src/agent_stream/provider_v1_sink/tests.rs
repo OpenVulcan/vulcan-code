@@ -1434,18 +1434,6 @@ async fn compaction_without_root_display_keeps_durable_boundaries() {
     }
 }
 
-/// Owns the global projection-barrier switch for serial compaction integration verification.
-/// 为串行压缩集成验证持有全局投影屏障开关。
-struct CompactionBarrierTestGuard;
-
-impl Drop for CompactionBarrierTestGuard {
-    /// Restores the default switch on normal completion or assertion unwind; no return value.
-    /// 正常完成或断言展开时恢复默认开关；无返回值。
-    fn drop(&mut self) {
-        let _ = vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(false);
-    }
-}
-
 /// Settles all real policy rejections before refusing a tool-bearing summary through its final barrier.
 /// 通过最后屏障拒绝带工具的摘要之前，结算全部真实策略拒绝结果。
 /// No parameters or return value; asserts partial-batch ownership and durable final closure.
@@ -1461,14 +1449,9 @@ async fn compaction_tool_rejections_settle_before_final_barrier_failure() {
     };
     use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
     use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
-        attach_test_runtime_event_projection_barrier,
-        set_runtime_event_projection_barriers_enabled, test_tool_rejection_invocation_result,
+        attach_test_runtime_event_projection_barrier, test_tool_rejection_invocation_result,
     };
 
-    set_runtime_event_projection_barriers_enabled(true).unwrap();
-    // Serial test ownership restores the production switch even when an assertion fails.
-    // 串行测试归属保证断言失败时也恢复生产开关。
-    let _barrier_guard = CompactionBarrierTestGuard;
     for output in ["", "I will call two tools."] {
         // This exact hidden child ledger owns the physical request and all its tool boundaries.
         // 此精确隐藏子账本持有物理请求及其全部工具边界。

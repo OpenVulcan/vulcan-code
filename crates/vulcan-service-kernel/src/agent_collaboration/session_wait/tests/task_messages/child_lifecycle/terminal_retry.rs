@@ -9,9 +9,7 @@ use crate::session_runtime_registry_v1::{
     SessionHandle, SessionPersistenceBackend, SessionRuntimeRegistry,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
-    attach_test_runtime_event_projection_barrier, set_runtime_event_projection_barriers_enabled,
-};
+use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::attach_test_runtime_event_projection_barrier;
 use vulcan_agent_runtime::agent_runtime::{
     events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind},
     task_runtime::DetachedTaskRuntimeEvent,
@@ -50,17 +48,6 @@ impl SessionPersistenceBackend for RecoveringDiskWriter {
             )));
         }
         flush_session_v1_candidate(&self.locator, candidate)
-    }
-}
-
-/// Restores the global test barrier policy even on assertion failure.
-/// 即使断言失败也恢复全局测试屏障策略。
-struct RestoreBarrier;
-impl Drop for RestoreBarrier {
-    /// Returns no value; removes only the test-only barrier policy.
-    /// 不返回值；仅移除测试屏障策略。
-    fn drop(&mut self) {
-        let _ = set_runtime_event_projection_barriers_enabled(false);
     }
 }
 
@@ -194,10 +181,6 @@ async fn terminal_retry_recovers_disk_failure_after_eof_without_blocking_stream(
                 event,
             }
         };
-        set_runtime_event_projection_barriers_enabled(true).unwrap();
-        // Restore process-global policy before the next parameterized fixture starts.
-        // 在下一个参数化夹具启动前恢复进程全局策略。
-        let _barrier_policy = RestoreBarrier;
         // A foreign nested start must be rejected even while the terminal write remains unavailable.
         // 终态写入仍不可用时，也必须拒绝外来嵌套启动。
         let (nested, rejected) = attach_test_runtime_event_projection_barrier(RuntimeEvent::new(

@@ -5,12 +5,9 @@ use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::model::SessionId;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -56,17 +53,6 @@ pub struct VulcanManagedToolRuntimeBridge {
 /// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
 /// 用于把单条运行时事件投影与工具执行屏障关联起来的元数据键。
 pub const RUNTIME_EVENT_PROJECTION_BARRIER_ID: &str = "webui_projection_barrier_id";
-
-/// Enables projection barriers only when a service consumer can acknowledge them.
-/// 仅在存在可确认投影的服务消费端时启用投影屏障。
-static RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED: AtomicBool = AtomicBool::new(false);
-
-#[cfg(test)]
-thread_local! {
-    /// Optional projection-barrier state isolated to the current test thread.
-    /// 隔离到当前测试线程的可选投影屏障状态。
-    static RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
-}
 
 /// Exact Core receipt returned by the durable V1 tool-batch owner.
 /// 由可靠 V1 工具批次所有者返回的精确 Core 回执。
@@ -424,26 +410,6 @@ fn canonicalize_tool_binding_json(value: &Value) -> Value {
     }
 }
 
-/// Enables or disables runtime-event projection barriers for host-owned streams.
-/// 为宿主拥有的流启用或停用运行时事件投影屏障。
-///
-/// # Parameters
-/// 参数
-/// `enabled` selects whether newly emitted host-owned runtime events require projection acknowledgement.
-/// `enabled` 指定新发出的宿主持有运行时事件是否需要投影确认。
-///
-/// # Returns
-/// 返回值
-/// Success after updating the process-wide setting and required cleanup, or an explicit registry-lock error.
-/// 更新进程级配置并完成必要清理后返回成功，否则返回明确的注册表锁错误。
-pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) -> Result<(), String> {
-    RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.store(enabled, Ordering::SeqCst);
-    if !enabled && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() {
-        clear_runtime_event_projection_barriers(registry, "disable projection barriers")?;
-    }
-    Ok(())
-}
-
 /// Inserts one pending projection barrier into the supplied authoritative registry.
 /// 向给定权威注册表插入一条待确认投影屏障。
 ///
@@ -510,64 +476,13 @@ fn remove_runtime_event_projection_barrier(
         .remove(barrier_id))
 }
 
-/// Clears every pending projection barrier from the supplied authoritative registry.
-/// 清空给定权威注册表中的全部待确认投影屏障。
+/// Attaches a projection barrier id to one runtime event that the host must acknowledge.
+/// 为单条宿主必须确认的运行时事件附加投影屏障标识。
 ///
-/// # Parameters
-/// 参数
-/// `registry` owns the pending acknowledgement senders.
-/// `registry` 持有待确认发送端。
-/// `operation` describes the caller operation for diagnostics.
-/// `operation` 描述调用方操作以生成诊断。
-///
-/// # Returns
-/// 返回值
-/// Success after clearing, or an explicit poisoned-registry error.
-/// 清空完成后返回成功，否则返回明确的注册表中毒错误。
-fn clear_runtime_event_projection_barriers(
-    registry: &Mutex<RuntimeEventProjectionBarrierRegistry>,
-    operation: &str,
-) -> Result<(), String> {
-    registry
-        .lock()
-        .map_err(|_| {
-            format!(
-                "The runtime-event projection barrier registry is locked and cannot {operation}."
-            )
-        })?
-        .clear();
-    Ok(())
-}
-
-/// Returns whether runtime-event projection barriers are enabled for the current execution thread.
-/// 返回当前执行线程是否启用运行时事件投影屏障。
-///
-/// # Returns
-/// 返回值
-/// The thread-local test override when present, otherwise the production process-wide setting.
-/// 测试线程覆盖存在时返回覆盖值，否则返回生产进程级配置。
-fn runtime_event_projection_barriers_enabled() -> bool {
-    #[cfg(test)]
-    if let Some(enabled) = RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE.get() {
-        return enabled;
-    }
-    RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.load(Ordering::SeqCst)
-}
-
-/// Sets or clears the projection-barrier override for the current test thread.
-/// 设置或清除当前测试线程的投影屏障覆盖。
-///
-/// # Parameters
-/// 参数
-/// `enabled` selects an isolated state, while `None` restores the production process-wide setting.
-/// `enabled` 选择隔离状态，`None` 恢复读取生产进程级配置。
-#[cfg(test)]
-pub(super) fn set_runtime_event_projection_barriers_test_override(enabled: Option<bool>) {
-    RUNTIME_EVENT_PROJECTION_BARRIERS_TEST_OVERRIDE.set(enabled);
-}
-
-/// Attaches a projection barrier id to one runtime event when service barriers are enabled.
-/// 当服务屏障启用时，为单条运行时事件附加投影屏障标识。
+/// Barriers are unconditional: tool execution needs the durable identities the host returns
+/// through them, so no mode exists in which a host-owned stream may run without its consumer.
+/// 屏障无条件启用：工具执行需要宿主经由屏障返回的可靠身份，因此不存在宿主持有流可以脱离
+/// 其消费端运行的模式。
 ///
 /// # Parameters
 /// 参数
@@ -576,15 +491,11 @@ pub(super) fn set_runtime_event_projection_barriers_test_override(enabled: Optio
 ///
 /// # Returns
 /// 返回值
-/// The event and its exact wait handle, no handle when barriers are disabled, or a registry-lock error.
-/// 返回事件及其精确等待句柄；屏障停用时不含句柄，注册表锁失败时返回错误。
+/// The event and its exact wait handle, or a registry-lock error.
+/// 返回事件及其精确等待句柄，注册表锁失败时返回错误。
 pub(crate) fn attach_runtime_event_projection_barrier(
     mut event: RuntimeEvent,
-) -> Result<(RuntimeEvent, Option<RuntimeEventProjectionBarrier>), String> {
-    if !runtime_event_projection_barriers_enabled() {
-        return Ok((event, None));
-    }
-
+) -> Result<(RuntimeEvent, RuntimeEventProjectionBarrier), String> {
     // requiredForExecution distinguishes durable recovery gates from display-only ordering barriers.
     // requiredForExecution 将可靠恢复门禁与仅用于显示排序的屏障区分开来。
     let required_for_execution = matches!(
@@ -621,11 +532,11 @@ pub(crate) fn attach_runtime_event_projection_barrier(
 
     Ok((
         event,
-        Some(RuntimeEventProjectionBarrier {
+        RuntimeEventProjectionBarrier {
             id: barrier_id,
             required_for_execution,
             receiver,
-        }),
+        },
     ))
 }
 
@@ -634,15 +545,15 @@ pub(crate) fn attach_runtime_event_projection_barrier(
 ///
 /// # Parameters
 /// 参数
-/// `barrier` is the exact optional acknowledgement receiver returned while attaching the event.
-/// `barrier` 是附加事件时返回的精确可选确认接收端。
+/// `barrier` is the exact acknowledgement receiver returned while attaching the event.
+/// `barrier` 是附加事件时返回的精确确认接收端。
 ///
 /// # Returns
 /// 返回值
-/// Success after acknowledgement or no barrier. Display-only barriers tolerate cancellation and timeout, while a required execution barrier fails closed.
-/// 收到确认或没有屏障时返回成功。仅显示屏障容忍取消和超时，执行必需屏障则失败关闭。
+/// Success after acknowledgement. Display-only barriers tolerate cancellation and timeout, while a required execution barrier fails closed.
+/// 收到确认时返回成功。仅显示屏障容忍取消和超时，执行必需屏障则失败关闭。
 pub(crate) async fn wait_runtime_event_projection_barrier(
-    barrier: Option<RuntimeEventProjectionBarrier>,
+    barrier: RuntimeEventProjectionBarrier,
 ) -> Result<(), RuntimeEventProjectionError> {
     wait_runtime_event_projection_receipt(barrier)
         .await
@@ -651,10 +562,10 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
 
 /// Attaches the production barrier and exposes its wait result to cross-crate host verification.
 /// 附加生产屏障，并向跨 crate 宿主验证公开等待结果。
-/// `event` is the actual host input; callers enable and serially own the production barrier switch.
-/// `event` 是实际宿主输入；调用方启用并串行持有生产屏障开关。
-/// Returns the decorated event and its production waiter, or an explicit disabled/registry error.
-/// 返回装饰后的事件及生产等待器，或明确的禁用、注册表错误。
+/// `event` is the actual host input.
+/// `event` 是实际宿主输入。
+/// Returns the decorated event and its production waiter, or an explicit registry error.
+/// 返回装饰后的事件及生产等待器，或明确的注册表错误。
 #[cfg(feature = "test-support")]
 pub fn attach_test_runtime_event_projection_barrier(
     event: RuntimeEvent,
@@ -668,11 +579,6 @@ pub fn attach_test_runtime_event_projection_barrier(
     // Use the real registration and waiting paths, including the event's execution-safety policy.
     // 使用真实注册和等待路径，包含事件自身的执行安全策略。
     let (event, barrier) = attach_runtime_event_projection_barrier(event)?;
-    if barrier.is_none() {
-        return Err(String::from(
-            "Projection barriers must be enabled for host verification.",
-        ));
-    }
     Ok((event, async move {
         wait_runtime_event_projection_barrier(barrier)
             .await
@@ -694,7 +600,7 @@ pub fn attach_test_runtime_event_projection_barrier(
 /// barrier shape.
 /// 返回精确有序的本地身份；宿主确认了错误屏障形状时失败。
 pub(crate) async fn wait_tool_batch_projection_barrier(
-    barrier: Option<RuntimeEventProjectionBarrier>,
+    barrier: RuntimeEventProjectionBarrier,
 ) -> Result<Vec<PreparedToolInvocationIdentity>, RuntimeEventProjectionError> {
     match wait_runtime_event_projection_receipt(barrier).await? {
         RuntimeEventProjectionReceipt::ToolBatchPrepared(identities) => Ok(identities),
@@ -710,11 +616,8 @@ pub(crate) async fn wait_tool_batch_projection_barrier(
 /// Waits for one internal runtime-event projection receipt.
 /// 等待一个内部运行时事件投影回执。
 async fn wait_runtime_event_projection_receipt(
-    barrier: Option<RuntimeEventProjectionBarrier>,
+    barrier: RuntimeEventProjectionBarrier,
 ) -> Result<RuntimeEventProjectionReceipt, RuntimeEventProjectionError> {
-    let Some(barrier) = barrier else {
-        return Ok(RuntimeEventProjectionReceipt::Projected);
-    };
     let barrier_id = barrier.id.clone();
     let required_for_execution = barrier.required_for_execution;
     match tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver).await {
@@ -750,19 +653,16 @@ async fn wait_runtime_event_projection_receipt(
 ///
 /// # Parameters
 /// 参数
-/// `barrier` is the exact optional wait handle whose registry entry must no longer remain pending.
-/// `barrier` 是其注册表条目不应继续等待的精确可选等待句柄。
+/// `barrier` is the exact wait handle whose registry entry must no longer remain pending.
+/// `barrier` 是其注册表条目不应继续等待的精确等待句柄。
 ///
 /// # Returns
 /// 返回值
-/// Success when no barrier exists or cancellation completes, otherwise an explicit registry-lock error.
-/// 没有屏障或取消完成时返回成功，否则返回明确的注册表锁错误。
+/// Success when cancellation completes, otherwise an explicit registry-lock error.
+/// 取消完成时返回成功，否则返回明确的注册表锁错误。
 pub(crate) fn cancel_runtime_event_projection_barrier(
-    barrier: Option<RuntimeEventProjectionBarrier>,
+    barrier: RuntimeEventProjectionBarrier,
 ) -> Result<(), String> {
-    let Some(barrier) = barrier else {
-        return Ok(());
-    };
     let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
         return Ok(());
     };

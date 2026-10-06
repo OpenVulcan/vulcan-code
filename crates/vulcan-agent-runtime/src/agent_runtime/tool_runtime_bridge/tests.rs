@@ -2,12 +2,10 @@ use super::{
     RuntimeEventProjectionBarrierRegistry, VulcanManagedToolRuntimeBridge,
     acknowledge_runtime_event_projection_barrier_from_event,
     acknowledge_tool_batch_projection_barrier_from_event, attach_runtime_event_projection_barrier,
-    cancel_runtime_event_projection_barrier, clear_runtime_event_projection_barriers,
-    insert_runtime_event_projection_barrier, reject_runtime_event_projection_barrier_from_event,
+    cancel_runtime_event_projection_barrier, insert_runtime_event_projection_barrier,
+    reject_runtime_event_projection_barrier_from_event,
     reject_runtime_event_projection_barrier_from_event_with_reason,
-    remove_runtime_event_projection_barrier, runtime_event_projection_barriers_enabled,
-    runtime_event_requires_tool_execution_safety_barrier,
-    set_runtime_event_projection_barriers_test_override,
+    remove_runtime_event_projection_barrier, runtime_event_requires_tool_execution_safety_barrier,
 };
 use crate::agent_runtime::events::RuntimeEventKind;
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
@@ -322,57 +320,31 @@ fn drain_live_events(
     events
 }
 
-/// Owns one projection-barrier override isolated to the current test thread.
-/// 持有一份隔离到当前测试线程的投影屏障覆盖。
-struct RuntimeProjectionBarrierTestOverrideGuard;
-
-impl RuntimeProjectionBarrierTestOverrideGuard {
-    /// Enables projection barriers only for the current test thread.
-    /// 仅为当前测试线程启用投影屏障。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A scope guard that clears the override during normal return or panic unwinding.
-    /// 返回在正常退出或 panic 展开时清除覆盖的作用域守卫。
-    fn enabled() -> Self {
-        set_runtime_event_projection_barriers_test_override(Some(true));
-        Self
+/// Drives one tool future while acting as the projection host: each live event is collected and
+/// its barrier acknowledged, as the kernel stream consumer does in production.
+/// 以投影宿主身份驱动一个工具 future：收集每条实时事件并确认其屏障，与生产中内核流消费者一致。
+async fn run_with_projection_host<F: std::future::Future>(
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    future: F,
+) -> (F::Output, Vec<ProviderStreamDelta>) {
+    tokio::pin!(future);
+    let mut events = Vec::new();
+    loop {
+        tokio::select! {
+            output = &mut future => {
+                events.extend(drain_live_events(receiver));
+                return (output, events);
+            }
+            Some(item) = receiver.recv() => {
+                let delta = item.expect("live event should not fail");
+                if let ProviderStreamDelta::RuntimeEvent(event) = &delta {
+                    acknowledge_runtime_event_projection_barrier_from_event(event)
+                        .expect("projection barrier registry should remain available");
+                }
+                events.push(delta);
+            }
+        }
     }
-}
-
-impl Drop for RuntimeProjectionBarrierTestOverrideGuard {
-    /// Clears the current-thread override during test cleanup.
-    /// 在测试清理阶段清除当前线程覆盖。
-    fn drop(&mut self) {
-        set_runtime_event_projection_barriers_test_override(None);
-    }
-}
-
-/// Verifies the test override is thread-local and clears during panic unwinding.
-/// 验证测试覆盖仅作用于当前线程，并会在 panic 展开期间清除。
-#[test]
-fn projection_barrier_test_override_is_thread_local_and_unwind_safe() {
-    // panicResult captures deliberate unwinding while the override guard owns current-thread state.
-    // panicResult 捕获覆盖守卫持有当前线程状态期间的刻意展开。
-    let panic_result = std::panic::catch_unwind(|| {
-        // barrierOverride enables only the current test thread for this nested scope.
-        // barrierOverride 仅为当前测试线程的嵌套作用域启用屏障。
-        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
-        assert!(runtime_event_projection_barriers_enabled());
-        // otherThreadEnabled observes the production default from a distinct thread without the override.
-        // otherThreadEnabled 从没有覆盖的独立线程观察生产默认值。
-        let other_thread_enabled = std::thread::spawn(runtime_event_projection_barriers_enabled)
-            .join()
-            .expect("barrier isolation thread should join");
-        assert!(!other_thread_enabled);
-        panic!("trigger projection-barrier override cleanup");
-    });
-
-    assert!(panic_result.is_err());
-    assert!(
-        !runtime_event_projection_barriers_enabled(),
-        "panic unwinding must clear the current-thread test override"
-    );
 }
 
 /// Verifies every registry mutation helper reports a poisoned authoritative lock.
@@ -412,14 +384,9 @@ fn projection_barrier_registry_helpers_report_poisoned_lock() {
         "remove a test barrier",
     )
     .expect_err("poisoned registry must reject removal");
-    // clearError identifies the failed bulk cleanup operation.
-    // clearError 标识失败的批量清理操作。
-    let clear_error = clear_runtime_event_projection_barriers(&registry, "clear test barriers")
-        .expect_err("poisoned registry must reject clearing");
 
     assert!(insert_error.contains("register a test barrier"));
     assert!(remove_error.contains("remove a test barrier"));
-    assert!(clear_error.contains("clear test barriers"));
 }
 
 /// Verifies missing and already-abandoned acknowledgements remain legitimate non-error outcomes.
@@ -440,7 +407,6 @@ fn projection_barrier_acknowledgement_preserves_legitimate_absence() {
 
     // barrierOverride enables a real isolated barrier for the abandoned-waiter case.
     // barrierOverride 为等待方已放弃场景启用真实隔离屏障。
-    let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
     // event and barrier share the exact acknowledgement channel created by the runtime.
     // event 与 barrier 共享运行时创建的精确确认通道。
     let (event, barrier) =
@@ -475,7 +441,6 @@ fn tool_execution_safety_classification_rejects_synthetic_tool_started_events() 
 
     // barrierOverride enables the production ownership marker for an actual executor-owned start event.
     // barrierOverride 为真实执行器持有的开始事件启用生产所有权标记。
-    let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
     let (executor_event, executor_barrier) =
         attach_runtime_event_projection_barrier(crate::agent_runtime::events::RuntimeEvent::new(
             RuntimeEventKind::ToolStarted,
@@ -789,7 +754,6 @@ fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
         .expect("runtime should build");
 
     runtime.block_on(async {
-        let barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         let prepare_executor = executor.clone();
         let prepare_requests = requests.clone();
         let prepare_task =
@@ -816,12 +780,15 @@ fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
             .await
             .expect("prepared batch task should join")
             .expect("prepared batch should accept its durable identities");
-        drop(barrier_override);
 
-        let (first_result, second_result) = tokio::join!(
-            executor.execute_tool(&requests[0]),
-            executor.execute_tool(&requests[1]),
-        );
+        let ((first_result, second_result), _events) =
+            run_with_projection_host(&mut receiver, async {
+                tokio::join!(
+                    executor.execute_tool(&requests[0]),
+                    executor.execute_tool(&requests[1]),
+                )
+            })
+            .await;
         for (result, identity, provider_call_id) in [
             (
                 first_result.expect("first prepared tool should execute"),
@@ -1293,10 +1260,11 @@ fn streaming_tool_executor_converts_tool_panics_into_error_results() {
         .build()
         .expect("runtime should build");
 
-    let result = runtime
-        .block_on(executor.execute_tool(&request))
-        .expect("panicking tool should still return one controller-visible result");
-    let events = drain_live_events(&mut receiver);
+    let (result, events) = runtime.block_on(run_with_projection_host(
+        &mut receiver,
+        executor.execute_tool(&request),
+    ));
+    let result = result.expect("panicking tool should still return one controller-visible result");
 
     assert!(result.is_error);
     assert!(result.model_output.contains("Tool `panic_tool` failed"));
@@ -1363,10 +1331,12 @@ fn streaming_tool_executor_marks_controller_error_results_failed() {
         .build()
         .expect("runtime should build");
 
-    let result = runtime
-        .block_on(executor.execute_tool(&request))
+    let (result, events) = runtime.block_on(run_with_projection_host(
+        &mut receiver,
+        executor.execute_tool(&request),
+    ));
+    let result = result
         .expect("managed tool failure should still return a normal controller-visible result");
-    let events = drain_live_events(&mut receiver);
 
     assert!(result.is_error);
     assert!(events.iter().any(|event| matches!(
@@ -1424,10 +1394,11 @@ fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
         .build()
         .expect("runtime should build");
 
-    let result = runtime
-        .block_on(executor.execute_tool(&request))
-        .expect("policy rejection should be returned as a normal tool result");
-    let events = drain_live_events(&mut receiver);
+    let (result, events) = runtime.block_on(run_with_projection_host(
+        &mut receiver,
+        executor.execute_tool(&request),
+    ));
+    let result = result.expect("policy rejection should be returned as a normal tool result");
 
     assert!(!result.is_error);
     assert!(
@@ -1514,10 +1485,11 @@ fn streaming_tool_executor_does_not_reject_when_scope_is_empty() {
         .build()
         .expect("runtime should build");
 
-    let result = runtime
-        .block_on(executor.execute_tool(&request))
-        .expect("empty rejection scope should allow the host tool call to run");
-    let events = drain_live_events(&mut receiver);
+    let (result, events) = runtime.block_on(run_with_projection_host(
+        &mut receiver,
+        executor.execute_tool(&request),
+    ));
+    let result = result.expect("empty rejection scope should allow the host tool call to run");
 
     assert!(result.is_error);
     assert!(events.iter().any(|event| matches!(
@@ -1597,13 +1569,18 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
         .build()
         .expect("runtime should build");
 
-    let rejected_result = runtime
-        .block_on(executor.execute_tool(&rejected_request))
-        .expect("scoped policy rejection should return a normal tool result");
-    let allowed_result = runtime
-        .block_on(executor.execute_tool(&allowed_request))
-        .expect("unlisted tool should execute normally");
-    let events = drain_live_events(&mut receiver);
+    let (rejected_result, mut events) = runtime.block_on(run_with_projection_host(
+        &mut receiver,
+        executor.execute_tool(&rejected_request),
+    ));
+    let rejected_result =
+        rejected_result.expect("scoped policy rejection should return a normal tool result");
+    let (allowed_result, allowed_events) = runtime.block_on(run_with_projection_host(
+        &mut receiver,
+        executor.execute_tool(&allowed_request),
+    ));
+    let allowed_result = allowed_result.expect("unlisted tool should execute normally");
+    events.extend(allowed_events);
 
     assert!(!rejected_result.is_error);
     assert!(
@@ -1708,7 +1685,6 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
     runtime.block_on(async {
         // barrierOverride enables real acknowledgements without mutating the process-wide production switch.
         // barrierOverride 启用真实确认且不修改进程级生产开关。
-        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         let task = tokio::spawn(async move { executor.execute_tool(&request).await });
         let first_event = receiver
             .recv()
@@ -1812,7 +1788,6 @@ fn streaming_tool_executor_rejects_tool_body_when_safety_barrier_fails() {
     runtime.block_on(async {
         // barrierOverride enables the production-shaped mandatory gate for this current-thread test.
         // barrierOverride 为当前线程测试启用生产形态的强制门禁。
-        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         // task waits on the ToolStarted barrier before it can enter the gated manager.
         // task 在进入受控管理器前等待 ToolStarted 屏障。
         let task = tokio::spawn(async move { executor.execute_tool(&request).await });
@@ -1886,7 +1861,6 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
     runtime.block_on(async {
         // barrierOverride isolates real projection acknowledgements to this current-thread runtime.
         // barrierOverride 将真实投影确认隔离到当前线程运行时。
-        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         let task = tokio::spawn(async move { executor.execute_tool(&request).await });
 
         let started_event = receiver
@@ -1979,9 +1953,6 @@ fn streaming_tool_executor_propagates_tool_finished_rejection_reason() {
         .expect("runtime should build");
 
     runtime.block_on(async {
-        // barrier_override enables mandatory projection barriers only for this test thread.
-        // barrier_override 仅为当前测试线程启用强制投影屏障。
-        let _barrier_override = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         // task runs the tool concurrently so the test can acknowledge each emitted boundary.
         // task 并发运行工具，使测试能够依次确认每个已发出的边界。
         let task = tokio::spawn(async move { executor.execute_tool(&request).await });

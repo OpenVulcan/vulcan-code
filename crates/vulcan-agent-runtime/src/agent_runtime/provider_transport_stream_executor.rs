@@ -177,7 +177,6 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
             .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_started_event)));
         // Wait for the host bridge to project the start card before the real tool body can begin.
         // 在真实工具主体开始前等待宿主桥接层完成开始卡片投影。
-        let has_projection_barrier = projection_barrier.is_some();
         wait_runtime_event_projection_barrier(projection_barrier)
             .await
             .map_err(|error| VulcanCoreError::ToolDurabilityFailure {
@@ -185,9 +184,6 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 message: error.to_string(),
                 details: None,
             })?;
-        if !has_projection_barrier {
-            tokio::task::yield_now().await;
-        }
         let (result, display_state) =
             if let Some(reason) = self.tool_request_rejection_message(request) {
                 (

@@ -139,9 +139,6 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        // RAII restores the thread override even if an assertion fails.
-        // 即使断言失败，RAII 也恢复线程覆盖值。
-        let _barriers = RuntimeProjectionBarrierTestOverrideGuard::enabled();
         // The host accepts pre-execution persistence and rejects only the completed result.
         // 宿主接受执行前持久化，仅拒绝已完成的结果。
         let host = async {
