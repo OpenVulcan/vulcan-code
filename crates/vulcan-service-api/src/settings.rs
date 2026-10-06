@@ -68,6 +68,38 @@ pub struct PluginToolSummary {
     pub description: String,
 }
 
+/// Plugin entry point whose execution failed.
+/// 执行失败的插件入口类型。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum PluginRuntimeErrorKind {
+    /// A manifest-declared host Hook.
+    /// 清单声明的宿主 Hook。
+    Hook,
+    /// A manifest-declared business Action.
+    /// 清单声明的业务 Action。
+    Action,
+}
+
+/// One retained execution failure of a plugin Hook or Action.
+/// 插件 Hook 或 Action 的一次已保留执行失败。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRuntimeErrorSummary {
+    /// Unix epoch milliseconds when the failure was recorded.
+    /// 记录失败时的 Unix 毫秒时间戳。
+    pub at_unix_ms: u64,
+    /// Entry point kind that failed.
+    /// 失败的入口类型。
+    pub kind: PluginRuntimeErrorKind,
+    /// Manifest identifier of the failed Hook or Action.
+    /// 失败 Hook 或 Action 的清单标识。
+    pub name: String,
+    /// Host-reported failure message.
+    /// 宿主报告的失败消息。
+    pub message: String,
+}
+
 /// Summarizes one host hook declared by a manifest-driven plugin.
 /// 汇总清单驱动插件声明的单个宿主 Hook。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -275,6 +307,10 @@ pub struct PluginSummary {
     /// 插件包、依赖、生命周期与清理诊断。
     #[serde(default)]
     pub diagnostics: Vec<String>,
+    /// Recent Hook and Action execution failures, oldest first; history that never blocks lifecycle.
+    /// 最近的 Hook 与 Action 执行失败，按时间先后排列；仅为历史，绝不阻挡生命周期。
+    #[serde(default)]
+    pub runtime_errors: Vec<PluginRuntimeErrorSummary>,
     /// Stable lifecycle manager kind used by the WebUI action router.
     /// WebUI 动作路由使用的稳定生命周期管理类型。
     pub management_kind: String,
@@ -747,6 +783,7 @@ mod plugin_summary_tests {
             hook_count: 1,
             active_session_count: 0,
             diagnostics: Vec::new(),
+            runtime_errors: Vec::new(),
             management_kind: String::from("vulcanPlugin"),
             extension: None,
         };
@@ -755,6 +792,26 @@ mod plugin_summary_tests {
         assert_eq!(value["diagnostics"], serde_json::json!([]));
         assert_eq!(value["nameByLocale"], serde_json::json!({}));
         assert_eq!(value["capabilityByLocale"], serde_json::json!({}));
+    }
+
+    /// Runtime error records use the field names and kind tags the WebUI plugin panel reads.
+    /// 运行错误记录使用 WebUI 插件面板读取的字段名与类型标签。
+    #[test]
+    fn plugin_runtime_errors_use_the_webui_wire_shape() {
+        let record = PluginRuntimeErrorSummary {
+            at_unix_ms: 7,
+            kind: PluginRuntimeErrorKind::Action,
+            name: String::from("refresh"),
+            message: String::from("boom"),
+        };
+        assert_eq!(
+            serde_json::to_value(record).expect("serialize runtime error"),
+            serde_json::json!({"atUnixMs": 7, "kind": "action", "name": "refresh", "message": "boom"})
+        );
+        assert_eq!(
+            serde_json::to_value(PluginRuntimeErrorKind::Hook).expect("serialize hook kind"),
+            serde_json::json!("hook")
+        );
     }
 }
 

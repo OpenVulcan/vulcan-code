@@ -121,6 +121,39 @@ impl VulcanPluginRuntimeManager {
         Ok(())
     }
 
+    /// Mark runtime faulted when the core already closed its session after a failed operation.
+    /// 当核心已在操作失败后关闭会话时，将 runtime 标记为故障。
+    ///
+    /// Checked on the failing call itself so the very next call sees the fault instead of
+    /// racing the monitor's next tick.
+    /// 在失败调用自身上检查，使紧接着的下一次调用看到故障，而不与监控器下一次节拍竞争。
+    pub(super) fn observe_instance_fault(
+        &self,
+        owner: &ManagedFormalRuntime,
+        runtime: &PersistentRuntime,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        let session = {
+            // Keep the exact lifecycle evidence within this synchronous lock scope.
+            // 在当前同步锁作用域内保留精确生命周期证据。
+            let state = runtime.lock()?;
+            if state.session_forgotten {
+                return Ok(());
+            }
+            state.session.clone()
+        };
+        let Some(session) = session else {
+            return Ok(());
+        };
+        let core = owner.host.runtime().session(&session).map_err(core_error)?;
+        if matches!(
+            core.phase,
+            EmbeddedSessionPhase::Closing | EmbeddedSessionPhase::Closed
+        ) {
+            runtime.mark_faulted();
+        }
+        Ok(())
+    }
+
     /// Reclaim original terminal operation evidence acknowledged by its observer under the caller's state lock.
     /// 在调用方的 state 锁下回收已由其观察者确认的原终态操作证据。
     /// owner retains the exact Core parent; state is this persistent instance's exclusive evidence record.
@@ -210,7 +243,7 @@ impl VulcanPluginRuntimeManager {
                 core.phase,
                 EmbeddedSessionPhase::Closing | EmbeddedSessionPhase::Closed
             ) {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.mark_faulted();
             }
             if !runtime.closing.load(Ordering::Acquire) {
                 return Ok(false);

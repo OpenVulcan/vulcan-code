@@ -951,6 +951,27 @@ export interface PluginUiInvalidatedEvent {
   revision: number;
 }
 
+// PluginRuntimeErrorKind names the plugin entry point whose execution failed.
+// PluginRuntimeErrorKind 指明执行失败的插件入口类型。
+export type PluginRuntimeErrorKind = "hook" | "action";
+
+// PluginRuntimeErrorRecord is one retained execution failure of a plugin entry point.
+// PluginRuntimeErrorRecord 是插件入口的一次已保留执行失败。
+export interface PluginRuntimeErrorRecord {
+  // Unix epoch milliseconds when the failure was recorded.
+  // 记录失败时的 Unix 毫秒时间戳。
+  atUnixMs: number;
+  // Entry point kind that failed.
+  // 失败的入口类型。
+  kind: PluginRuntimeErrorKind;
+  // Manifest identifier of the failed Hook or Action.
+  // 失败 Hook 或 Action 的清单标识。
+  name: string;
+  // Host-reported failure message.
+  // 宿主报告的失败消息。
+  message: string;
+}
+
 // PluginSummary describes one Vulcan Plugin or LuaSkills package projected by the service.
 // PluginSummary 描述服务端投影的单个 Vulcan 插件或 LuaSkills 包。
 export interface PluginSummary {
@@ -1021,6 +1042,9 @@ export interface PluginSummary {
   // Package, dependency, lifecycle, and cleanup diagnostics.
   // 插件包、依赖、生命周期与清理诊断。
   diagnostics: string[];
+  // Most recent Hook and Action execution failures, oldest first; absent for LuaSkill rows.
+  // 最近的 Hook 与 Action 执行失败，按时间先后排列；LuaSkill 行不提供此字段。
+  runtimeErrors?: PluginRuntimeErrorRecord[];
   // Stable lifecycle manager kind used by the action router.
   // 动作路由使用的稳定生命周期管理类型。
   managementKind: "luaSkill" | "vulcanPlugin";

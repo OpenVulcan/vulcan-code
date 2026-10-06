@@ -255,6 +255,9 @@ pub struct VulcanPluginDescriptor {
     /// Deterministic validation diagnostics.
     /// 确定性的校验诊断集合。
     pub diagnostics: Vec<String>,
+    /// Recent Hook and Action failures, oldest first; filled only by live catalog observation.
+    /// 最近的 Hook 与 Action 失败，按时间先后排列；仅由实时目录观测填充。
+    pub runtime_errors: Vec<crate::VulcanPluginRuntimeErrorRecord>,
 }
 
 impl VulcanPluginDescriptor {
@@ -739,6 +742,7 @@ fn load_vulcan_plugin_package(
         runtime_execution_available: false,
         generation: 0,
         active_session_count: 0,
+        runtime_errors: Vec::new(),
         name: fallback_id.clone(),
         capability: String::from("Vulcan Plugin package is unavailable."),
         locales: BTreeMap::new(),
@@ -804,6 +808,7 @@ fn load_vulcan_plugin_package(
         runtime_execution_available: true,
         generation: 0,
         active_session_count: 0,
+        runtime_errors: Vec::new(),
         name: manifest.display.name.clone(),
         capability: manifest.display.capability.clone(),
         locales: BTreeMap::new(),

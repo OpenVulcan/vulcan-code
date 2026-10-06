@@ -655,11 +655,19 @@ impl VulcanPluginRuntimeManager {
         let diagnostics = self.state.cleanup_diagnostics.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin cleanup diagnostic lock is poisoned.")
         })?;
+        // Failure history is plain data, so a poisoned ledger still projects consistently.
+        // 失败历史是普通数据，因此中毒的账本仍可一致投影。
+        let runtime_errors = self
+            .state
+            .runtime_errors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // This plain value has no publication identity and retains the supplied routing revision.
         // 此普通值没有发布身份，并保留传入路由修订。
         let mut observed = catalog.clone();
         for plugin in observed.plugins.values_mut() {
             plugin.active_session_count = counts.get(&plugin.id).copied().unwrap_or_default();
+            plugin.runtime_errors = runtime_errors.entries(&plugin.id);
             if let Some(entries) = diagnostics.get(&plugin.id) {
                 plugin.runtime_state =
                     observed_runtime_state(plugin.runtime_state, !entries.is_empty());

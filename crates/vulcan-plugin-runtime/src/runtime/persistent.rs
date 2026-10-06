@@ -5,7 +5,8 @@ use super::environment::plugin_execution_package_root;
 use super::process::current_plugin_target_triple;
 use super::{
     VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS, VulcanPluginPersistentRuntimeKind,
-    VulcanPluginRuntimeError, VulcanPluginRuntimeManager, canonical_plugin_file,
+    VulcanPluginRuntimeError, VulcanPluginRuntimeErrorKind, VulcanPluginRuntimeManager,
+    canonical_plugin_file,
 };
 use crate::{VulcanPluginHookDescriptor, VulcanPluginPermission, VulcanPluginRuntimeState};
 use serde_json::{Value, json};
@@ -200,12 +201,34 @@ impl VulcanPluginRuntimeManager {
         let manager = self.clone();
         // Freeze the exact catalog identity supplied to this public invocation.
         // 冻结本次公开调用提供的精确目录身份。
-        let hook = hook.clone();
+        let owned = hook.clone();
         self.supervisor_handle()?
-            .spawn(async move { manager.invoke_hook_owned(&hook, invocation, expires).await })
+            .spawn(async move {
+                let result = manager.invoke_hook_owned(&owned, invocation, expires).await;
+                // Recorded by the supervisor so failures stay visible after the caller stops waiting.
+                // 由监督任务记录，使调用方停止等待后失败仍然可见。
+                if let Err(error) = &result {
+                    manager.record_runtime_error(
+                        &owned.plugin_id,
+                        VulcanPluginRuntimeErrorKind::Hook,
+                        &owned.manifest.id,
+                        error,
+                    );
+                }
+                result
+            })
             .await
             .map_err(|error| {
-                VulcanPluginRuntimeError::new(format!("Plugin hook supervisor failed: {error}"))
+                let error = VulcanPluginRuntimeError::new(format!(
+                    "Plugin hook supervisor failed: {error}"
+                ));
+                self.record_runtime_error(
+                    &hook.plugin_id,
+                    VulcanPluginRuntimeErrorKind::Hook,
+                    &hook.manifest.id,
+                    &error,
+                );
+                error
             })?
     }
 

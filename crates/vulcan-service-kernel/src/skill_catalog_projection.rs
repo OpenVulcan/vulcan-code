@@ -6,17 +6,18 @@ mod plugin_mcp_status;
 use plugin_mcp_status::{inactive_plugin_mcp_status, select_plugin_mcp_state};
 use vulcan_plugin_runtime::{
     VulcanPluginAvailability, VulcanPluginCatalogSnapshot, VulcanPluginMcpStdioLauncherManifest,
-    VulcanPluginMcpTransportManifest, VulcanPluginPackageOrigin, VulcanPluginRuntimeState,
-    VulcanPluginUiMountIcon, VulcanPluginUiMountPoint, VulcanPluginValueSourceManifest,
-    plugin_permission_key,
+    VulcanPluginMcpTransportManifest, VulcanPluginPackageOrigin, VulcanPluginRuntimeErrorKind,
+    VulcanPluginRuntimeState, VulcanPluginUiMountIcon, VulcanPluginUiMountPoint,
+    VulcanPluginValueSourceManifest, plugin_permission_key,
 };
 use vulcan_service_api::{
     AgentSkillCategoryLocaleSummary, AgentSkillCategorySummary, AgentSkillLocaleSummary,
     AgentSkillOriginSummary, AgentSkillRecordSummary, AgentSkillResourceSummary,
     AgentSkillStandardMetadataSummary, LuaSkillsManagedRuntimeProgressSummary,
-    PluginExtensionSummary, PluginHookSummary, PluginMcpServerSummary, PluginToolSummary,
-    PluginUiMountSummary, SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary,
-    SubagentOriginSummary, SubagentProviderModelSummary,
+    PluginExtensionSummary, PluginHookSummary, PluginMcpServerSummary, PluginRuntimeErrorKind,
+    PluginRuntimeErrorSummary, PluginToolSummary, PluginUiMountSummary,
+    SubagentCategoryLocaleSummary, SubagentDefinitionLocaleSummary, SubagentOriginSummary,
+    SubagentProviderModelSummary,
 };
 
 /// Combines LuaSkills packages and Vulcan Plugins into plugin summaries.
@@ -69,6 +70,7 @@ pub(crate) fn plugins_from_catalogs(
             agent_count: 0,
             active_session_count: 0,
             diagnostics: skill.disabled_reason.iter().cloned().collect(),
+            runtime_errors: Vec::new(),
             management_kind: String::from("luaSkill"),
             extension: None,
         })
@@ -147,6 +149,19 @@ pub(crate) fn plugins_from_catalogs(
             agent_count: plugin.agents.len(),
             active_session_count: plugin.active_session_count,
             diagnostics: plugin.diagnostics.clone(),
+            runtime_errors: plugin
+                .runtime_errors
+                .iter()
+                .map(|record| PluginRuntimeErrorSummary {
+                    at_unix_ms: record.at_unix_ms,
+                    kind: match record.kind {
+                        VulcanPluginRuntimeErrorKind::Hook => PluginRuntimeErrorKind::Hook,
+                        VulcanPluginRuntimeErrorKind::Action => PluginRuntimeErrorKind::Action,
+                    },
+                    name: record.name.clone(),
+                    message: record.message.clone(),
+                })
+                .collect(),
             management_kind: String::from("vulcanPlugin"),
             extension: plugin
                 .manifest

@@ -429,6 +429,135 @@ fn hook_runtime_reuses_state_and_drains_by_plugin_generation() {
     assert!(report.failures.is_empty());
 }
 
+/// A failing Hook or UI Action stops only that call: the next call is served by a fresh instance,
+/// every failure is kept in the plugin's error history, and drain still sees no cleanup failure.
+/// 失败的 Hook 或 UI Action 只终止该次调用：下一次调用由新实例服务，每次失败都保留在插件错误
+/// 历史中，且排空仍看不到清理失败。
+#[test]
+fn faulted_persistent_instance_stops_only_the_failed_call_and_is_recorded() {
+    let temp = tempfile::tempdir().expect("create temp directory");
+    let runtime_root = temp.path().join("runtime");
+    let vulcan_plugin_root = runtime_root.join("plugins");
+    fs::create_dir_all(&vulcan_plugin_root).expect("create Vulcan Plugin root");
+    write_hook_package(&vulcan_plugin_root);
+    // Raise a real Lua error only for calls carrying the fault marker.
+    // 仅对携带故障标记的调用抛出真实 Lua 错误。
+    fs::write(
+        vulcan_plugin_root.join("hook-plugin/runtime/plugin.bundle.lua"),
+        r#"local M = {}
+local count = 0
+function M.dispatch()
+    return '{"ok":true,"result":{}}'
+end
+function M.shutdown()
+    return '{"ok":true,"result":{}}'
+end
+function M.on_precheck(args)
+    if string.find(args.invocation_json, "hook-fault-marker", 1, true) then
+        error("hook-fault-marker raised")
+    end
+    count = count + 1
+    return '{"ok":true,"result":{"payload":{"value":{"count":' .. tostring(count) .. '}}}}'
+end
+function M.ui_action(args)
+    if args.arguments.fail then
+        error("ui-fault-marker raised")
+    end
+    count = count + 100
+    return '{"ok":true,"result":{"count":' .. tostring(count) .. '}}'
+end
+function M.shutdown_hooks(_args)
+    return '{"ok":true,"result":{}}'
+end
+function M.on_disable(_args)
+    return '{"ok":true,"result":{}}'
+end
+return M
+"#,
+    )
+    .expect("write faulting hook runtime module");
+    let manager = test_manager(&runtime_root, vulcan_plugin_root);
+    manager
+        .initialize_formal_runtime(crate::VulcanPluginRuntimeSettings::default())
+        .expect("attach formal Hook parent");
+    let catalog = manager
+        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
+        .expect("load hook catalog");
+    let hook = catalog
+        .enabled_hooks
+        .values()
+        .next()
+        .cloned()
+        .expect("resolve enabled hook");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("create Tokio test runtime");
+    let faulting_hook = || {
+        let mut invocation = hook_invocation(&hook.registration_id);
+        invocation.context.run_id = String::from("hook-fault-marker");
+        invocation
+    };
+    let ui_action = |fail: bool| VulcanPluginActionRequest {
+        plugin_id: String::from("hook-plugin"),
+        action_id: String::from("ui-action"),
+        arguments: json!({ "fail": fail }),
+        caller: crate::VulcanPluginActionCaller::PluginUi,
+        workspace_root: runtime_root.clone(),
+        reuse_enabled_runtime: true,
+    };
+
+    runtime
+        .block_on(manager.invoke_hook(&hook, hook_invocation(&hook.registration_id)))
+        .expect("invoke healthy hook");
+    let hook_error = runtime
+        .block_on(manager.invoke_hook(&hook, faulting_hook()))
+        .expect_err("faulting hook call must fail");
+    assert!(hook_error.message.contains("hook-fault-marker raised"));
+    let recovered = runtime
+        .block_on(manager.invoke_hook(&hook, hook_invocation(&hook.registration_id)))
+        .expect("the next hook call must not be blocked by the earlier failure");
+    // The replacement instance starts from fresh Lua state.
+    // 替换实例从全新的 Lua 状态开始。
+    assert_eq!(
+        recovered.payload.expect("recovered payload").value["count"],
+        1
+    );
+
+    let action_error = runtime
+        .block_on(manager.invoke_action(ui_action(true)))
+        .expect_err("faulting UI action must fail");
+    assert!(action_error.message.contains("ui-fault-marker raised"));
+    let action = runtime
+        .block_on(manager.invoke_action(ui_action(false)))
+        .expect("the next UI action must not be blocked by the earlier failure");
+    assert_eq!(action["count"], 100);
+
+    let errors = manager.runtime_errors("hook-plugin");
+    assert_eq!(errors.len(), 2, "one record per failed call: {errors:?}");
+    assert_eq!(errors[0].kind, crate::VulcanPluginRuntimeErrorKind::Hook);
+    assert_eq!(errors[0].name, "precheck");
+    assert!(errors[0].message.contains("hook-fault-marker raised"));
+    assert_eq!(errors[1].kind, crate::VulcanPluginRuntimeErrorKind::Action);
+    assert_eq!(errors[1].name, "ui-action");
+    assert!(errors[1].message.contains("ui-fault-marker raised"));
+    let observed = manager
+        .observe_catalog(&manager.snapshot())
+        .expect("observe live catalog");
+    assert_eq!(observed.plugins["hook-plugin"].runtime_errors, errors);
+
+    manager
+        .begin_draining("hook-plugin")
+        .expect("begin plugin draining");
+    let report = runtime
+        .block_on(manager.drain_plugin_sessions("hook-plugin"))
+        .expect("drain replacement runtimes");
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    // Failure history is not cleanup evidence; drain keeps it.
+    // 失败历史不是清理证据；排空会保留它。
+    assert_eq!(manager.runtime_errors("hook-plugin"), errors);
+}
+
 /// Same-key lifecycle gates stay stable while unrelated plugins/categories remain independent.
 /// 同键生命周期门保持稳定，同时其他插件及类别相互独立。
 #[test]

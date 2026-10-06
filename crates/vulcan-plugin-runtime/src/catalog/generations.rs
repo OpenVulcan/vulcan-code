@@ -529,6 +529,7 @@ fn unavailable_managed_package(
         runtime_execution_available: false,
         generation: 0,
         active_session_count: 0,
+        runtime_errors: Vec::new(),
         name: plugin_id.to_owned(),
         capability: String::from("Managed plugin selection is unavailable."),
         locales: BTreeMap::new(),

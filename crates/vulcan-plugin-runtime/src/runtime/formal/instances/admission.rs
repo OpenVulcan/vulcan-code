@@ -49,12 +49,26 @@ impl VulcanPluginRuntimeManager {
             .ok_or_else(|| instance_error("Formal plugin runtime is not attached."))?;
         // Reuse only the exact registered plugin identity.
         // 仅复用精确注册的插件身份。
-        let existing = owner
+        let mut existing = owner
             .instances(kind)
             .lock()
             .map_err(|_| instance_error("persistent registry lock is poisoned."))?
             .get(plugin_id)
             .cloned();
+        // A failure stops only the failed call: its ordinary instance retires inside this call's
+        // budget and a fresh one is admitted below. Lifecycle closing is never replaced here.
+        // 失败只终止失败的调用：其普通实例在本次调用预算内退役，并在下方接纳新实例。此处绝不替换
+        // 生命周期关闭。
+        if let Some(faulted) = existing.take_if(|runtime| {
+            runtime.faulted.load(Ordering::Acquire)
+                && runtime.plugin.generation == generation
+                && runtime
+                    .lock()
+                    .is_ok_and(|state| state.private_origin.is_none())
+        }) {
+            self.release_faulted_instance(&owner, kind, &faulted, expires)
+                .await?;
+        }
         // Retain the original persistent instance across preparation and observation.
         // 跨准备及观测保留原持久实例。
         let runtime = if let Some(runtime) = existing {
@@ -118,6 +132,7 @@ impl VulcanPluginRuntimeManager {
                     operation_gate: Arc::new(tokio::sync::Mutex::new(())),
                     plugin,
                     closing: AtomicBool::new(false),
+                    faulted: AtomicBool::new(false),
                     state: Mutex::new(PersistentState {
                         preparing: true,
                         preparation_action: crate::runtime::action_status::ACTION_RECORD
@@ -162,7 +177,7 @@ impl VulcanPluginRuntimeManager {
                 let snapshot = initialization.snapshot().map_err(core_error)?;
                 if snapshot.phase.is_terminal() {
                     if let Some(error) = snapshot.error {
-                        runtime.closing.store(true, Ordering::Release);
+                        runtime.mark_faulted();
                         return Err(core_error(error));
                     }
                     if runtime.closing.load(Ordering::Acquire) {
@@ -178,13 +193,44 @@ impl VulcanPluginRuntimeManager {
                 ));
             }
             if remaining(expires).is_err() {
-                runtime.closing.store(true, Ordering::Release);
+                runtime.mark_faulted();
                 return Err(instance_error(
                     "persistent initialization timed out; ownership remains retained.",
                 ));
             }
             tokio::time::sleep(OBSERVATION_INTERVAL).await;
         }
+    }
+
+    /// Retire faulted runtime of kind within expires, then drop it from the registry.
+    /// 在 expires 内令 kind 的故障 runtime 退役，然后将其移出注册表。
+    ///
+    /// The caller holds the initialization gate, so no other initializer or drain can observe the
+    /// registry between removal and the caller's replacement.
+    /// 调用方持有初始化门，因此在移除与调用方替换之间，其他初始化方或排空都无法观测注册表。
+    async fn release_faulted_instance(
+        &self,
+        owner: &Arc<ManagedFormalRuntime>,
+        kind: VulcanPluginPersistentRuntimeKind,
+        runtime: &Arc<PersistentRuntime>,
+        expires: Instant,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        self.start_instance_monitor(owner, runtime)?;
+        self.wait_instance_retired(runtime, expires).await?;
+        // Order removal against catalog publication so a concurrent disable keeps its evidence.
+        // 使移除与目录发布保持顺序，让并发停用保留其证据。
+        let _publication = self
+            .state
+            .session_registration_gate
+            .lock()
+            .map_err(|_| instance_error("Plugin publication gate is poisoned."))?;
+        self.ensure_current_persistent_generation(&runtime.plugin.id, runtime.plugin.generation)?;
+        owner
+            .instances(kind)
+            .lock()
+            .map_err(|_| instance_error("persistent registry lock is poisoned."))?
+            .retain(|id, current| id != &runtime.plugin.id || !Arc::ptr_eq(current, runtime));
+        Ok(())
     }
 
     /// Prepare runtime on owner within expires; return after recording core identities, without waiting for Lua.
@@ -472,7 +518,11 @@ impl VulcanPluginRuntimeManager {
             let snapshot = observation.handle.snapshot().map_err(core_error)?;
             if snapshot.phase.is_terminal() {
                 observation.delivered = true;
-                return project_business(&snapshot);
+                let business = project_business(&snapshot);
+                if business.is_err() {
+                    self.observe_instance_fault(&owner, &runtime)?;
+                }
+                return business;
             }
             if remaining(expires).is_err() {
                 return Err(instance_error(
@@ -625,7 +675,11 @@ impl VulcanPluginRuntimeManager {
             if snapshot.phase.is_terminal() {
                 observation.delivered = true;
                 owner.host.reap_workspace_requests().map_err(core_error)?;
-                return project_business(&snapshot);
+                let business = project_business(&snapshot);
+                if business.is_err() {
+                    self.observe_instance_fault(&owner, runtime)?;
+                }
+                return business;
             }
             if remaining(execution.deadline.into_std()).is_err() {
                 return Err(instance_error(

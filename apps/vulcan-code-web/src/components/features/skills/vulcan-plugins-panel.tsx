@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Activity, Bot, ChartNoAxesCombined, Copy, Cpu, FileText, FolderOpen, Gauge, Hammer, History, Info, KeyRound, MessageSquareText, MessagesSquare, MoreHorizontal, Plus, Puzzle, Route, ScrollText, Search, Server, ShieldCheck, Trash2, TriangleAlert, Webhook, Wrench, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { InlineDisclosure } from "@/components/ui/disclosure";
 import { Button, IconButton } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,7 +16,7 @@ import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-b
 import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
 import { PageEmptyState, PageNotice } from "@/components/page";
 import type { PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
-import type { PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
+import type { PluginRuntimeErrorRecord, PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
 
@@ -134,6 +135,35 @@ function vulcanPluginMatchesSearch(
     ...(plugin.extension?.agents ?? []),
   ]
     .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
+}
+
+// PluginRuntimeErrors lists one plugin's retained Hook and Action failures, newest first.
+// PluginRuntimeErrors 列出单个插件已保留的 Hook 与 Action 失败，最新的在前。
+// A failure stops only its own call, so the list is history rather than a current plugin fault.
+// 失败只停止其自身调用，因此该列表是历史记录，而非插件当前故障。
+function PluginRuntimeErrors({ errors }: { errors: PluginRuntimeErrorRecord[] }) {
+  const { t } = useI18n();
+  if (errors.length === 0) return null;
+  const newestFirst = [...errors].reverse();
+  return (
+    <InlineDisclosure label={formatMessage(t("skills.plugins.runtimeErrors"), { count: errors.length })}>
+      <ul className="vulcan-plugin-diagnostics vulcan-plugin-runtime-errors">
+        {newestFirst.map((error, index) => (
+          <li key={`${error.atUnixMs}:${index}`}>
+            <TriangleAlert aria-hidden="true" size={13} />
+            <span>
+              <span className="vulcan-plugin-runtime-error-source">
+                {formatMessage(t(error.kind === "hook" ? "skills.plugins.runtimeErrorHook" : "skills.plugins.runtimeErrorAction"), { name: error.name })}
+                {" · "}
+                <time dateTime={new Date(error.atUnixMs).toISOString()}>{new Date(error.atUnixMs).toLocaleString()}</time>
+              </span>
+              <span className="vulcan-plugin-runtime-error-message">{error.message}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </InlineDisclosure>
+  );
 }
 
 // vulcanPluginHasIssue reports whether one plugin is unavailable or outside a normal lifecycle transition.
@@ -835,6 +865,7 @@ export function VulcanPluginsPanel(props: {
                 {plugin.diagnostics.length > 0 ? <ul className="vulcan-plugin-diagnostics" role="alert">
                   {plugin.diagnostics.map((diagnostic, index) => <li key={`${index}:${diagnostic}`}><TriangleAlert aria-hidden="true" size={13} />{diagnostic}</li>)}
                 </ul> : null}
+                <PluginRuntimeErrors errors={plugin.runtimeErrors ?? []} />
                 {plugin.id === "vulcan-browser" ? <div className="vulcan-plugin-runtime-panel">
                   <div role="status">
                   {formatMessage(t("skills.plugins.playwrightStatus"), {

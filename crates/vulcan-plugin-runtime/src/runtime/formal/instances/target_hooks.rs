@@ -315,6 +315,7 @@ impl VulcanPluginRuntimeManager {
                     operation_gate: Arc::new(tokio::sync::Mutex::new(())),
                     plugin: authority.plugin.clone(),
                     closing: AtomicBool::new(false),
+                    faulted: AtomicBool::new(false),
                     state: Mutex::new(PersistentState {
                         preparing: true,
                         private_origin: Some(

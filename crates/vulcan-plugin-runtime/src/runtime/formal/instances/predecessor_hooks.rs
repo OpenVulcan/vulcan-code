@@ -132,6 +132,7 @@ impl VulcanPluginRuntimeManager {
                     operation_gate: Arc::new(tokio::sync::Mutex::new(())),
                     plugin: source.plugin().clone(),
                     closing: AtomicBool::new(false),
+                    faulted: AtomicBool::new(false),
                     state: Mutex::new(PersistentState {
                         preparing: true,
                         private_origin: Some(PrivateHookOrigin::Predecessor(Arc::clone(source))),

@@ -6,8 +6,8 @@ use super::environment::plugin_execution_package_root;
 use super::execution::ActionExecution;
 use super::lease::required_lua_runtime;
 use super::{
-    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeManager,
-    canonical_plugin_file, read_plugin_json_state,
+    VulcanPluginPersistentRuntimeKind, VulcanPluginRuntimeError, VulcanPluginRuntimeErrorKind,
+    VulcanPluginRuntimeManager, canonical_plugin_file, read_plugin_json_state,
 };
 use crate::VulcanPluginRuntimeState;
 use serde_json::{Value, json};
@@ -141,6 +141,9 @@ impl VulcanPluginRuntimeManager {
         // Own completion before spawning so an unpolled task cannot leak active admission.
         // 派发之前拥有完成记录，避免未轮询任务泄漏活动入场。
         let completion = super::action_status::ActionCompletionGuard(record.clone());
+        let plugin_id = plugin.id.clone();
+        let action_id = action.id.clone();
+        let (owned_plugin_id, owned_action_id) = (plugin_id.clone(), action_id.clone());
         let task = self.supervisor_handle()?.spawn(async move {
             let _completion = completion;
             let _mutation_waiter = mutation_waiter;
@@ -158,6 +161,16 @@ impl VulcanPluginRuntimeManager {
                         )
                         .await;
                     record.finish(result.is_ok());
+                    // Recorded by the supervisor so failures stay visible after the caller stops waiting.
+                    // 由监督任务记录，使调用方停止等待后失败仍然可见。
+                    if let Err(error) = &result {
+                        manager.record_runtime_error(
+                            &owned_plugin_id,
+                            VulcanPluginRuntimeErrorKind::Action,
+                            &owned_action_id,
+                            error,
+                        );
+                    }
                     result
                 })
                 .await
@@ -165,7 +178,11 @@ impl VulcanPluginRuntimeManager {
         let result = tokio::time::timeout_at(deadline, task).await;
         drop(waiter);
         result.map_err(|_| VulcanPluginRuntimeError::new("Plugin action wait timed out; started work retains its execution permit until cleanup. Do not automatically replay mutations."))?
-            .map_err(|error| VulcanPluginRuntimeError::new(format!("Plugin action supervisor failed: {error}")))?
+            .map_err(|error| {
+                let error = VulcanPluginRuntimeError::new(format!("Plugin action supervisor failed: {error}"));
+                self.record_runtime_error(&plugin_id, VulcanPluginRuntimeErrorKind::Action, &action_id, &error);
+                error
+            })?
     }
 
     /// Owns the complete action lifecycle through schema validation and lease cleanup.

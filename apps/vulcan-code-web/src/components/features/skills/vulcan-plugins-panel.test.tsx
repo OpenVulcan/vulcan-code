@@ -310,3 +310,24 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   expect(host.querySelector("[data-attention='plugin-maintenance']")).toBeNull();
   expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
 });
+
+it("lists retained runtime errors newest first behind a folded disclosure", async () => {
+  // failingPlugin keeps two failures in service order, oldest first.
+  // failingPlugin 按服务顺序保留两次失败，最早的在前。
+  const failingPlugin: PluginSummary = { ...plugin, runtimeErrors: [
+    { atUnixMs: 1_000, kind: "hook", name: "precheck", message: "older hook failure" },
+    { atUnixMs: 2_000, kind: "action", name: "refresh", message: "newer action failure" },
+  ] };
+  await act(async () => root.render(<VulcanPluginsPanel plugins={[failingPlugin]} actions={{
+    onReadPluginUninstallRequests: async () => [], onPluginEnvironmentReady: async () => true,
+    onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
+  const label = formatMessage(readLocaleMessage("en-US", "skills.plugins.runtimeErrors"), { count: 2 });
+  const trigger = [...host.querySelectorAll("button")].find((button) => button.textContent === label)!;
+  expect(host.textContent).not.toContain("newer action failure");
+  await act(async () => trigger.click());
+  const items = [...host.querySelectorAll(".vulcan-plugin-runtime-errors li")].map((item) => item.textContent ?? "");
+  expect(items).toHaveLength(2);
+  expect(items[0]).toContain(formatMessage(readLocaleMessage("en-US", "skills.plugins.runtimeErrorAction"), { name: "refresh" }));
+  expect(items[0]).toContain("newer action failure");
+  expect(items[1]).toContain(formatMessage(readLocaleMessage("en-US", "skills.plugins.runtimeErrorHook"), { name: "precheck" }));
+});

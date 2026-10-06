@@ -1528,6 +1528,7 @@ mod tests {
             agent_count: 0,
             active_session_count: 0,
             diagnostics: Vec::new(),
+            runtime_errors: Vec::new(),
             management_kind: String::from("luaSkill"),
             extension: None,
         }];
