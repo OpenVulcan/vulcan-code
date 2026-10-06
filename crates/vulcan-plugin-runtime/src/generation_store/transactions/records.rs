@@ -404,10 +404,10 @@ impl VulcanPluginGenerationStore {
         self.check_unindexed_transaction_records(plugin_id)?;
         if let Some(record) = self.indexed_request_locked(plugin_id)?
             && !record.phase().terminal()
-            && (record.credential_revision() == revision
+            && (record.credential_revision() == Some(revision)
                 || record
                     .predecessor()
-                    .is_some_and(|activation| activation.credential_revision() == revision))
+                    .is_some_and(|activation| activation.credential_revision() == Some(revision)))
         {
             return Err(Error::new(
                 Code::Busy,

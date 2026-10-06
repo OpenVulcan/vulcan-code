@@ -137,6 +137,7 @@ impl VulcanPluginGenerationStore {
         // Full selected authority and original index are captured under the same real exclusive fence.
         // 完整已选权威及原索引在同一真实排他屏障下捕获。
         let predecessor = self.read_activation(&generation.plugin_id)?;
+        crate::generation_store::operations::reject_bundled_predecessor(predecessor.as_ref())?;
         if predecessor.as_ref() != expected_predecessor {
             return Err(Error::new(
                 Code::Conflict,

@@ -193,9 +193,11 @@ pub struct VulcanPluginSettings {
     /// Complete configuration selection; a tombstone retains its last value.
     /// 完整配置选择；停用记录保留最后值。
     configuration: VulcanPluginConfigurationSelection,
-    /// Exact credential revision; a tombstone retains its last revision for cleanup.
-    /// 精确凭据修订；停用记录保留最后修订以供清理。
-    credential_revision: VulcanPluginCredentialRevision,
+    /// Exact credential revision, required for managed generations and absent for bundled packages;
+    /// a tombstone retains its last revision for cleanup.
+    /// 精确凭据修订，受管代次必需，内建插件包缺省；停用记录保留最后修订以供清理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credential_revision: Option<VulcanPluginCredentialRevision>,
 }
 
 impl VulcanPluginSettings {
@@ -207,8 +209,8 @@ impl VulcanPluginSettings {
 
     /// Return the selected credential revision without exposing any secret value.
     /// 返回所选凭据修订，不暴露任何秘密值。
-    pub fn credential_revision(&self) -> &VulcanPluginCredentialRevision {
-        &self.credential_revision
+    pub fn credential_revision(&self) -> Option<&VulcanPluginCredentialRevision> {
+        self.credential_revision.as_ref()
     }
 }
 
@@ -270,7 +272,30 @@ impl VulcanPluginActivation {
             settings: VulcanPluginSettings {
                 revision: settings_revision,
                 configuration,
-                credential_revision,
+                credential_revision: Some(credential_revision),
+            },
+        }
+    }
+
+    /// Build the first or next bundled settings record carrying `configuration`.
+    /// 构造携带 `configuration` 的首个或下一个内建设置记录。
+    /// A bundled package is never selected by a transaction, so its package revision stays one.
+    /// 内建插件包从不由交易选择，因此其包修订固定为一。
+    pub(in crate::generation_store) fn bundled_settings(
+        plugin_id: String,
+        settings_revision: u64,
+        configuration: VulcanPluginConfigurationSelection,
+    ) -> Self {
+        Self {
+            schema_version: ACTIVATION_RECORD_VERSION,
+            plugin_id,
+            revision: 1,
+            package: VulcanPluginPackageSelection::Bundled {},
+            approved_permissions: Vec::new(),
+            settings: VulcanPluginSettings {
+                revision: settings_revision,
+                configuration,
+                credential_revision: None,
             },
         }
     }
@@ -316,10 +341,20 @@ impl VulcanPluginActivation {
         &self.settings
     }
 
-    /// Return the selected credential revision without exposing any secret value.
-    /// 返回所选凭据修订，不暴露任何秘密值。
-    pub fn credential_revision(&self) -> &VulcanPluginCredentialRevision {
-        &self.settings.credential_revision
+    /// Return the selected credential revision without exposing any secret value; bundled packages have none.
+    /// 返回所选凭据修订，不暴露任何秘密值；内建插件包没有凭据修订。
+    pub fn credential_revision(&self) -> Option<&VulcanPluginCredentialRevision> {
+        self.settings.credential_revision.as_ref()
+    }
+
+    /// Return the credential revision a managed generation must carry.
+    /// 返回受管代次必须携带的凭据修订。
+    pub(crate) fn generation_credential_revision(
+        &self,
+    ) -> VulcanPluginStoreResult<&VulcanPluginCredentialRevision> {
+        self.credential_revision().ok_or_else(|| {
+            VulcanPluginStoreError::invalid("Managed plugin selection has no credential revision.")
+        })
     }
 
     /// Borrow the selected configuration.

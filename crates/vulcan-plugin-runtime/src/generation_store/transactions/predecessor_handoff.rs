@@ -174,8 +174,8 @@ impl VulcanPluginGenerationStore {
         generation.validate_configuration(predecessor.configuration())?;
         // Exact revision pinning validates its package binding and acquires the real secure-store reader lease.
         // 精确修订固定校验包绑定，并取得真实安全存储读者租约。
-        let credentials =
-            self.pin_credentials_locked(&generation, predecessor.credential_revision())?;
+        let credentials = self
+            .pin_credentials_locked(&generation, predecessor.generation_credential_revision()?)?;
         Ok(PredecessorHandoffReservation {
             store_root: self.root.clone(),
             record: VulcanPluginPredecessorHandoffRecord {
@@ -475,7 +475,7 @@ impl VulcanPluginGenerationStore {
                     .original
                     .predecessor
                     .as_ref()
-                    .is_some_and(|old| old.credential_revision() == revision)
+                    .is_some_and(|old| old.credential_revision() == Some(revision))
             {
                 return Err(Error::new(
                     Code::Busy,
@@ -529,7 +529,7 @@ impl VulcanPluginGenerationStore {
         if reservation.store_root != self.root
             || reservation.generation.store_root != self.root
             || old.generation() != Some(reservation.generation.identity())
-            || old.credential_revision() != reservation.credentials.record().revision()
+            || old.credential_revision() != Some(reservation.credentials.record().revision())
         {
             return Err(Error::new(
                 Code::Conflict,

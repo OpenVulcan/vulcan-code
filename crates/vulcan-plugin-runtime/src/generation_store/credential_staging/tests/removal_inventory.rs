@@ -75,7 +75,13 @@ fn retained_deactivation_inventory_rejects_actual_json_extension_alias_before_ef
         store
             .credential_revisions("staging-plugin")
             .expect("genuine temporary files remain excluded"),
-        BTreeSet::from([selected.credential_revision().clone(), revision])
+        BTreeSet::from([
+            selected
+                .credential_revision()
+                .expect("selected revision")
+                .clone(),
+            revision
+        ])
     );
 }
 

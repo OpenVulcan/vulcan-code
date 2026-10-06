@@ -50,6 +50,22 @@ pub(in crate::generation_store) enum ActivationSuccessor {
     Deactivate,
 }
 
+/// Reject a package transaction over a bundled settings record; a bundled package is never selected by a transaction.
+/// 拒绝针对内建设置记录的插件包交易；内建插件包从不由交易选择。
+/// `original` is the current record of the namespace; returns unit when it may be succeeded.
+/// `original` 为命名空间当前记录；可被后继时返回空值。
+pub(in crate::generation_store) fn reject_bundled_predecessor(
+    original: Option<&VulcanPluginActivation>,
+) -> Result<()> {
+    if original.is_some_and(|record| record.package == VulcanPluginPackageSelection::Bundled {}) {
+        return Err(Error::new(
+            Code::Conflict,
+            "A bundled plugin namespace cannot be selected by a package transaction.",
+        ));
+    }
+    Ok(())
+}
+
 impl VulcanPluginGenerationStore {
     /// Inspect `source` and approved digest, returning a fresh identity without copying or allocating directories.
     /// 检查 `source` 及已批准摘要，返回新身份，不复制或分配目录。
@@ -309,7 +325,7 @@ impl VulcanPluginGenerationStore {
                 // Ownership must be acquired before the same selection fence is released.
                 // 必须在相同选择屏障释放前取得所有权。
                 let credentials =
-                    self.pin_credentials_locked(package, record.credential_revision())?;
+                    self.pin_credentials_locked(package, record.generation_credential_revision()?)?;
                 package.validate_configuration(record.configuration())?;
                 Some(credentials)
             }
@@ -614,6 +630,20 @@ impl VulcanPluginGenerationStore {
         if record.settings.revision == 0 {
             return Err(Error::invalid("Activation settings have no revision."));
         }
+        // Managed generations always carry staged credentials; bundled packages have none in this store.
+        // 受管代次始终携带已暂存凭据；内建插件包在此存储中没有凭据。
+        let credentials_match_package = match &record.package {
+            VulcanPluginPackageSelection::Generation { .. } => {
+                record.credential_revision().is_some()
+            }
+            VulcanPluginPackageSelection::Bundled {} => record.credential_revision().is_none(),
+            VulcanPluginPackageSelection::Uninstalled {} => true,
+        };
+        if !credentials_match_package {
+            return Err(Error::invalid(
+                "Activation credential revision does not match its package kind.",
+            ));
+        }
         record.configuration().validate_size()?;
         if let Some(identity) = record.generation() {
             files::validate_identity(identity)?;
@@ -665,6 +695,7 @@ impl VulcanPluginGenerationStore {
         original: Option<&VulcanPluginActivation>,
         successor: ActivationSuccessor,
     ) -> Result<VulcanPluginActivation> {
+        reject_bundled_predecessor(original)?;
         // The original validated selection is the only source of the next monotonic revision.
         // 原已校验选择是下一单调修订的唯一来源。
         let expected_revision = original.map_or(0, |record| record.revision);

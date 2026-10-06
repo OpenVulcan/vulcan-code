@@ -2023,6 +2023,33 @@ pub(crate) async fn service_set_vulcan_plugin_enabled(
     .await
 }
 
+/// Resets one plugin's stored configuration to its current package defaults.
+/// 将单个插件的已存配置重置为其当前插件包默认值。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the plugin runtime and `plugin_id` selects the plugin whose settings are replaced.
+/// `state` 持有插件运行时，`plugin_id` 选择其设置被替换的插件。
+///
+/// # Returns
+/// 返回值
+/// Returns the defaults now stored; an unfinished package transaction refuses the reset instead of waiting.
+/// 返回现已存储的默认值；未完成的插件包交易会拒绝重置而不等待。
+pub(crate) async fn service_reset_vulcan_plugin_config(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<serde_json::Value, String> {
+    // runtime owns the settings section and republishes the edited plugin itself.
+    // runtime 持有设置段，并自行重新发布被编辑的插件。
+    let runtime = service_vulcan_plugin_runtime(&state)?;
+    run_extension_management_blocking("reset plugin configuration", move || {
+        runtime
+            .reset_plugin_config(&plugin_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
 /// Reads the exact current plugin environment readiness without installing dependencies.
 /// 只读检查当前精确插件环境的就绪状态，不安装依赖。
 ///

@@ -40,6 +40,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_luaskill_operation_progress",
     "service_set_luaskill_enabled",
     "service_set_vulcan_plugin_enabled",
+    "service_reset_vulcan_plugin_config",
     "service_plugin_environment_ready",
     "service_prepare_plugin_environment",
     "service_start_plugin_environment_install",
@@ -330,6 +331,10 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "enabled")?,
             )
             .await,
+        ),
+        "service_reset_vulcan_plugin_config" => rpc_json_result(
+            service_reset_vulcan_plugin_config(state, rpc_required_param(params, "pluginId")?)
+                .await,
         ),
         "service_plugin_environment_ready" => rpc_json_result(
             service_plugin_environment_ready(state, rpc_required_param(params, "pluginId")?).await,

@@ -407,13 +407,22 @@ fn native_host_config_schema_cache_observes_current_values_and_files() {
     let changed = fixture.call(&pool, json!({})).0;
     assert_eq!(changed["ok"], true, "{changed}");
     assert_eq!(changed["value"], json!({"owner":"persisted"}));
-    // This exact state path is the production helper's sole configuration authority.
-    // 此精确状态路径是生产辅助方法的唯一配置权威。
-    let state_path = crate::runtime::configuration::plugin_config_state_path(
-        &fixture.manager.state.plugin_state_root,
-        &original.id,
-    );
-    fs::write(&state_path, r#"{"owner":9}"#).expect("replace current configuration value");
+    // The bundled settings record is the sole configuration authority after the first edit.
+    // 首次编辑后，内建设置记录是唯一配置权威。
+    let record_path = fixture
+        .manager
+        .state
+        .user_plugin_root
+        .join(".vulcan-generations/active/hook-plugin.json");
+    let record = fs::read(&record_path).expect("read bundled settings record");
+    let mut invalid: serde_json::Value =
+        serde_json::from_slice(&record).expect("decode bundled settings record");
+    invalid["settings"]["configuration"]["value"] = json!({"owner": 9});
+    fs::write(
+        &record_path,
+        serde_json::to_vec(&invalid).expect("encode invalid settings"),
+    )
+    .expect("replace current configuration value");
     // A formerly valid schema cannot authorize an invalid current configuration or return a prior result.
     // 先前有效 Schema 不能授权无效当前配置，也不能返回先前结果。
     let invalid_value = fixture.call(&pool, json!({})).0;
@@ -422,10 +431,10 @@ fn native_host_config_schema_cache_observes_current_values_and_files() {
         invalid_value["error"]["message"]
             .as_str()
             .expect("native configuration error message")
-            .contains("Invalid plugin configuration:"),
+            .contains("Invalid plugin configuration"),
         "{invalid_value}"
     );
-    fs::write(&state_path, r#"{"owner":"persisted"}"#).expect("restore current configuration");
+    fs::write(&record_path, &record).expect("restore current configuration");
     // Retain the exact declared schema path while changing its real contents without a catalog refresh.
     // 不刷新目录地变更真实内容期间，保留精确声明的 Schema 路径。
     let schema_path = original.package_root.join("config.schema.json");
@@ -437,7 +446,7 @@ fn native_host_config_schema_cache_observes_current_values_and_files() {
     for (contents, expected_error) in [
         (
             r#"{"type":"object","properties":{"owner":{"const":"initial"}}}"#,
-            Some("Invalid plugin configuration:"),
+            Some("Invalid plugin configuration"),
         ),
         (
             "{not-json",

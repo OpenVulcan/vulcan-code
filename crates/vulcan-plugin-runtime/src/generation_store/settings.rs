@@ -2,10 +2,11 @@
 //! 设置编辑只递增设置修订；被取代的凭据修订按可达性回收。
 
 use super::{
-    VulcanPluginActivation, VulcanPluginCredentialBackend, VulcanPluginCredentialPhase,
-    VulcanPluginCredentialRevision, VulcanPluginGenerationStore, VulcanPluginPackageSelection,
-    VulcanPluginSettings, VulcanPluginSettingsChange, VulcanPluginStoreError as Error,
-    VulcanPluginStoreErrorCode as Code, VulcanPluginStoreResult as Result,
+    VulcanPluginActivation, VulcanPluginConfigurationSelection, VulcanPluginCredentialBackend,
+    VulcanPluginCredentialPhase, VulcanPluginCredentialRevision, VulcanPluginGenerationStore,
+    VulcanPluginPackageSelection, VulcanPluginSettings, VulcanPluginSettingsChange,
+    VulcanPluginStoreError as Error, VulcanPluginStoreErrorCode as Code,
+    VulcanPluginStoreResult as Result,
 };
 
 impl VulcanPluginGenerationStore {
@@ -47,7 +48,7 @@ impl VulcanPluginGenerationStore {
             VulcanPluginPackageSelection::Generation { identity } => identity,
             VulcanPluginPackageSelection::Bundled {} => {
                 return Err(Error::invalid(
-                    "Bundled plugin settings are not stored by this release.",
+                    "Bundled plugin settings are written through configure_bundled.",
                 ));
             }
             VulcanPluginPackageSelection::Uninstalled {} => {
@@ -64,25 +65,65 @@ impl VulcanPluginGenerationStore {
             .configuration
             .unwrap_or_else(|| current.settings.configuration.clone());
         package.validate_configuration(&configuration)?;
-        let credential_revision = change
-            .credential_revision
-            .unwrap_or_else(|| current.settings.credential_revision.clone());
-        if credential_revision != current.settings.credential_revision {
-            self.validate_staged_credentials_locked(&package, &credential_revision)?;
-        }
-        let revision = current
-            .settings
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| Error::invalid("Plugin settings revision is exhausted."))?;
+        let credential_revision = match change.credential_revision {
+            Some(revision) if Some(&revision) != current.credential_revision() => {
+                self.validate_staged_credentials_locked(&package, &revision)?;
+                revision
+            }
+            _ => current.generation_credential_revision()?.clone(),
+        };
         let next = VulcanPluginActivation {
             settings: VulcanPluginSettings {
-                revision,
+                revision: VulcanPluginActivation::next_settings_revision(Some(&current))?,
                 configuration,
-                credential_revision,
+                credential_revision: Some(credential_revision),
             },
             ..current
         };
+        self.write_activation(&next)?;
+        Ok(next)
+    }
+
+    /// Write the settings of a bundled plugin when `expected_settings_revision` still matches; zero means no record yet.
+    /// `expected_settings_revision` 仍匹配时写入内建插件的设置；零表示尚无记录。
+    /// The caller validates `configuration` against the bundled package schema; the store only bounds its size.
+    /// 调用方按内建插件包 Schema 校验 `configuration`；存储只限制其大小。
+    /// A namespace owned by a managed selection or tombstone is a conflict; returns the committed record.
+    /// 由受管选择或停用记录占用的命名空间视为冲突；返回已提交记录。
+    pub fn configure_bundled(
+        &self,
+        plugin_id: &str,
+        expected_settings_revision: u64,
+        configuration: VulcanPluginConfigurationSelection,
+    ) -> Result<VulcanPluginActivation> {
+        let _namespace = self.namespace_lock(plugin_id, false)?;
+        self.ensure_no_pending_activation_locked(plugin_id)?;
+        let current = self.read_activation(plugin_id)?;
+        if current
+            .as_ref()
+            .map_or(0, |record| record.settings.revision)
+            != expected_settings_revision
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Plugin settings revision changed; inspect the current record.",
+            ));
+        }
+        if current
+            .as_ref()
+            .is_some_and(|record| record.package != VulcanPluginPackageSelection::Bundled {})
+        {
+            return Err(Error::new(
+                Code::Conflict,
+                "Plugin namespace is owned by a non-bundled selection.",
+            ));
+        }
+        configuration.validate_size()?;
+        let next = VulcanPluginActivation::bundled_settings(
+            plugin_id.to_owned(),
+            VulcanPluginActivation::next_settings_revision(current.as_ref())?,
+            configuration,
+        );
         self.write_activation(&next)?;
         Ok(next)
     }
@@ -103,7 +144,7 @@ impl VulcanPluginGenerationStore {
             let _namespace = self.namespace_lock(plugin_id, true)?;
             let current = self
                 .read_activation(plugin_id)?
-                .map(|record| record.settings.credential_revision);
+                .and_then(|record| record.settings.credential_revision);
             let mut candidates = Vec::new();
             for revision in self.credential_revisions_locked(plugin_id)? {
                 if current.as_ref() == Some(&revision) {

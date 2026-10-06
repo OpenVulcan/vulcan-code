@@ -605,10 +605,10 @@ mod tests {
             .expect("same original guard revalidates original bytes");
     }
 
-    /// Bundled-only explicit configuration writes initialize an absent host user root while still acquiring the real namespace fence.
-    /// 仅内建插件显式配置写入初始化缺失宿主用户根目录，同时仍取得真实命名空间屏障。
+    /// The first bundled configuration edit initializes an absent host user root and a bundled settings record under the real namespace fence.
+    /// 首次内建配置编辑在真实命名空间屏障下初始化缺失的宿主用户根目录及内建设置记录。
     #[test]
-    fn legacy_mutation_bundled_configuration_initializes_absent_user_root() {
+    fn bundled_configuration_edit_creates_settings_record_in_absent_user_root() {
         // The host has bundled packages but has never installed a user plugin or created its root.
         // 宿主已有内建插件包，但从未安装用户插件或创建其根目录。
         let root = tempfile::tempdir().expect("absent bundled user root fixture");
@@ -634,21 +634,35 @@ mod tests {
             .expect("validate created real store")
             .expect("explicit writer initialized store");
         assert!(store.root.join("locks/legacy-plugin.lock").is_file());
+        let record = store
+            .activation("legacy-plugin")
+            .expect("read bundled settings")
+            .expect("first edit created the settings record");
+        assert_eq!(
+            record.package(),
+            &crate::VulcanPluginPackageSelection::Bundled {}
+        );
+        assert!(record.credential_revision().is_none());
+        assert!(!root.path().join("state/legacy-plugin/config.json").exists());
+        // Any holder of the exclusive namespace fence blocks the settings writer.
+        // 任何排他命名空间屏障的持有者都会阻止设置写入者。
         let guard = store
-            .acquire_legacy_mutation_guard("legacy-plugin", None)
-            .expect("flat bundled namespace has exact absence");
+            .acquire_legacy_mutation_guard("legacy-plugin", Some(&record))
+            .expect("hold the bundled namespace");
         assert!(
             runtime
                 .update_plugin_config("legacy-plugin", json!({"label": "blocked-by-real-guard"}))
                 .is_err()
         );
+        drop(guard);
+        // The refused writer left the original document in place.
+        // 被拒写入者保留原文档。
         assert_eq!(
             runtime
                 .plugin_config("legacy-plugin")
                 .expect("failed contender preserves null"),
             Value::Null
         );
-        drop(guard);
         runtime
             .update_plugin_config("legacy-plugin", json!({"label": "guard-released"}))
             .expect("guard drop permits real config writer");
@@ -694,10 +708,10 @@ mod tests {
         }
     }
 
-    /// Selected managed Document(null) remains immutable and cannot be mistaken for absent legacy configuration.
-    /// 选定受管 Document(null) 保持不可变，不能被误认为缺失旧格式配置。
+    /// A selected managed Document(null) is explicit; edits replace it in the settings section without legacy state.
+    /// 选定受管 Document(null) 是显式文档；编辑在设置段中替换它且不产生旧状态。
     #[test]
-    fn legacy_mutation_configuration_rejects_managed_null_document_replacement() {
+    fn managed_configuration_edits_use_settings_and_never_write_legacy_state() {
         // The package supports null, but version-four selected documents belong to the activation itself.
         // 插件包支持空值，但第四版已选文档属于激活本身。
         let root = tempfile::tempdir().expect("managed null configuration fixture");
@@ -716,7 +730,7 @@ mod tests {
             .expect("begin actual empty staged credentials")
             .write_and_finish(&EmptyBackend, &VulcanPluginCredentialValues::new())
             .expect("confirm exact empty revision");
-        store
+        let selected = store
             .activate_configured(
                 &package,
                 original.revision,
@@ -734,19 +748,30 @@ mod tests {
                 .expect("managed null is explicit document"),
             Value::Null
         );
-        assert!(
+        runtime
+            .update_plugin_config("legacy-plugin", json!({"label": "edited"}))
+            .expect("managed edit commits to the settings section");
+        assert_eq!(
             runtime
-                .update_plugin_config("legacy-plugin", json!({"label": "must-not-be-legacy"}))
-                .is_err()
+                .plugin_config("legacy-plugin")
+                .expect("read edited settings"),
+            json!({"label": "edited"})
+        );
+        // The edit kept the package selection and republished a descriptor mirroring the edited record.
+        // 编辑保留插件包选择，并重新发布镜像已编辑记录的描述符。
+        let edited = store
+            .activation("legacy-plugin")
+            .expect("read edited record")
+            .expect("edited record");
+        assert_eq!(edited.revision, selected.revision);
+        assert_eq!(edited.package(), selected.package());
+        assert_eq!(edited.settings().revision, selected.settings().revision + 1);
+        assert!(
+            runtime.snapshot().plugins["legacy-plugin"]
+                .managed_package()
+                .expect("managed descriptor")
+                .matches_activation(&edited)
         );
         assert!(!root.path().join("state/legacy-plugin/config.json").exists());
-        assert!(
-            !runtime
-                .initialize_plugin_config_if_absent(
-                    "legacy-plugin",
-                    json!({"label": "not-an-absent-document"})
-                )
-                .expect("managed null document is already initialized")
-        );
     }
 }

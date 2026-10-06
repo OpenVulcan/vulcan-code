@@ -292,6 +292,9 @@ pub struct VulcanPluginManagedPackage {
     /// Persistent selection revision, independent from the process-local routing generation.
     /// 持久选择修订，独立于进程内路由代次。
     activation_revision: u64,
+    /// Settings revision of the record this descriptor mirrors; settings edits republish the descriptor.
+    /// 此描述符镜像记录的设置修订；设置编辑会重新发布描述符。
+    settings_revision: u64,
     /// Real package ownership retained by every cloned descriptor or explicit generation handle.
     /// 每个克隆描述符或显式代次句柄保留的真实包所有权。
     generation: PinnedVulcanPluginGeneration,
@@ -316,20 +319,27 @@ impl VulcanPluginManagedPackage {
     /// 任何不匹配均返回假；仅修订相等绝不授权路由交接。
     pub fn matches_activation(&self, activation: &crate::VulcanPluginActivation) -> bool {
         self.activation_revision == activation.revision
+            && self.settings_revision == activation.settings().revision
             && self.generation.identity().plugin_id == activation.plugin_id
             && activation.generation() == Some(self.generation.identity())
             && self.approved_permissions() == activation.approved_permissions()
             && self.configuration() == activation.configuration()
-            && self.credential_binding
-                == crate::VulcanPluginCredentialBinding::Revision(
-                    activation.credential_revision().clone(),
-                )
+            && activation.credential_revision().is_some_and(|revision| {
+                self.credential_binding
+                    == crate::VulcanPluginCredentialBinding::Revision(revision.clone())
+            })
     }
 
     /// Returns the exact persistent activation revision observed during selection.
     /// 返回选择时观察到的精确持久激活修订。
     pub fn activation_revision(&self) -> u64 {
         self.activation_revision
+    }
+
+    /// Returns the settings revision of the mirrored record.
+    /// 返回所镜像记录的设置修订。
+    pub fn settings_revision(&self) -> u64 {
+        self.settings_revision
     }
 
     /// Returns the real generation lease; clone it to retain file ownership outside the catalog.
@@ -354,6 +364,44 @@ impl VulcanPluginManagedPackage {
     /// 借用完整固定配置权威。
     pub fn configuration(&self) -> &crate::VulcanPluginConfigurationSelection {
         &self.configuration
+    }
+}
+
+impl VulcanPluginDescriptor {
+    /// Return a copy of this managed descriptor mirroring `activation`, whose settings were edited in place.
+    /// 返回镜像 `activation` 的此受管描述符副本，其设置已被就地编辑。
+    /// The package selection, approval and credential binding must be unchanged; only configuration is replaced.
+    /// 插件包选择、批准及凭据绑定必须不变；只替换配置。
+    pub(crate) fn with_reconfigured_settings(
+        &self,
+        activation: &crate::VulcanPluginActivation,
+    ) -> Result<Self, String> {
+        let managed = self
+            .managed_package
+            .as_ref()
+            .ok_or_else(|| String::from("Only a managed plugin descriptor mirrors settings."))?;
+        if managed.activation_revision != activation.revision
+            || activation.generation() != Some(managed.generation.identity())
+            || managed.approved_permissions() != activation.approved_permissions()
+            || !activation.credential_revision().is_some_and(|revision| {
+                managed.credential_binding
+                    == crate::VulcanPluginCredentialBinding::Revision(revision.clone())
+            })
+        {
+            return Err(String::from(
+                "Reconfigured settings belong to a different package selection.",
+            ));
+        }
+        let configuration = Arc::new(activation.configuration().clone());
+        let mut descriptor = self.clone();
+        for server in &mut descriptor.mcp_servers {
+            server.configuration = Some(Arc::clone(&configuration));
+        }
+        if let Some(managed) = descriptor.managed_package.as_mut() {
+            managed.settings_revision = activation.settings().revision;
+            managed.configuration = configuration;
+        }
+        Ok(descriptor)
     }
 }
 
@@ -460,8 +508,12 @@ pub(crate) fn load_pinned_package(
     }
     // Frozen credentials come from this exact selection, never from the currently published revision.
     // 固定凭据来自此精确选择，绝不来自当前发布修订。
-    let credential_binding =
-        crate::VulcanPluginCredentialBinding::Revision(activation.credential_revision().clone());
+    let credential_binding = crate::VulcanPluginCredentialBinding::Revision(
+        activation
+            .generation_credential_revision()
+            .map_err(|error| error.to_string())?
+            .clone(),
+    );
     // All contributions share the same complete selected document and actual credential reader.
     // 全部贡献共享同一完整选定文档及实际凭据读者。
     let configuration = Arc::new(activation.configuration().clone());
@@ -472,6 +524,7 @@ pub(crate) fn load_pinned_package(
     }
     package.managed_package = Some(VulcanPluginManagedPackage {
         activation_revision: activation.revision,
+        settings_revision: activation.settings().revision,
         approved_permissions: activation.approved_permissions().to_vec(),
         credential_binding,
         _credential_lease: credentials,

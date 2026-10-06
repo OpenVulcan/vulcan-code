@@ -411,7 +411,10 @@ fn retained_deactivation_keeps_complete_configured_cleanup_bindings() {
         original.intended().schema_version,
         ACTIVATION_RECORD_VERSION
     );
-    assert_eq!(original.intended().credential_revision(), &credentials);
+    assert_eq!(
+        original.intended().credential_revision(),
+        Some(&credentials)
+    );
     assert_eq!(original.intended().configuration(), &configuration);
     assert!(original.intended().approved_permissions().is_empty());
     assert!(!format!("{original:?}").contains("retained-removal-private"));

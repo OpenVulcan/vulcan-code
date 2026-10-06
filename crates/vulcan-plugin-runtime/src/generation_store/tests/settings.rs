@@ -300,3 +300,117 @@ fn unreachable_credentials_are_collected_and_reachable_ones_kept() {
         .pin_active("configured-plugin")
         .expect("selected credentials survive every sweep");
 }
+
+/// Bundled settings records are created and edited only through their own revision, carry no credentials, and block package transactions.
+/// 内建设置记录只经其自身修订创建及编辑，不携带凭据，并阻止插件包交易。
+#[test]
+fn bundled_settings_records_are_revisioned_and_reject_package_transactions() {
+    let temp = tempfile::tempdir().expect("create bundled settings fixture");
+    let (store, package, credentials) = fixture(temp.path(), true);
+    let document = |label: &str| VulcanPluginConfigurationSelection::Document {
+        value: json!({ "label": label }),
+    };
+
+    let created = store
+        .configure_bundled("configured-plugin", 0, document("first"))
+        .expect("create bundled settings");
+    assert_eq!(created.package(), &VulcanPluginPackageSelection::Bundled {});
+    assert!(created.credential_revision().is_none());
+    assert!(created.approved_permissions().is_empty());
+    let edited = store
+        .configure_bundled(
+            "configured-plugin",
+            created.settings().revision,
+            document("second"),
+        )
+        .expect("edit bundled settings");
+    assert_eq!(edited.revision, created.revision);
+    assert_eq!(edited.settings().revision, created.settings().revision + 1);
+    assert_eq!(
+        edited.configuration().value(),
+        Some(&json!({"label": "second"}))
+    );
+
+    // A stale settings revision, a managed edit, a selection and a deactivation all leave the record untouched.
+    // 陈旧设置修订、受管编辑、选择及停用均不改动记录。
+    let stale = store
+        .configure_bundled(
+            "configured-plugin",
+            created.settings().revision,
+            document("stale"),
+        )
+        .expect_err("stale bundled revision");
+    assert_eq!(stale.code, VulcanPluginStoreErrorCode::Conflict);
+    store
+        .reconfigure(
+            "configured-plugin",
+            edited.revision,
+            edited.settings().revision,
+            configure(json!({"label": "managed"})),
+        )
+        .expect_err("bundled records are not managed settings");
+    let selection = store
+        .activate_configured(
+            &package,
+            edited.revision,
+            package.required_permissions.clone(),
+            credentials,
+            package.default_configuration_for_test(),
+        )
+        .expect_err("package selection over bundled settings");
+    assert_eq!(selection.code, VulcanPluginStoreErrorCode::Conflict);
+    let deactivation = store
+        .deactivate("configured-plugin", edited.revision)
+        .expect_err("deactivation over bundled settings");
+    assert_eq!(deactivation.code, VulcanPluginStoreErrorCode::Conflict);
+    assert_eq!(
+        store
+            .activation("configured-plugin")
+            .expect("read after rejections"),
+        Some(edited)
+    );
+}
+
+/// A managed generation record without a credential revision and a bundled record with one are both invalid.
+/// 缺少凭据修订的受管代次记录及携带凭据的内建记录均无效。
+#[test]
+fn credential_revision_presence_must_match_package_kind() {
+    let temp = tempfile::tempdir().expect("create credential presence fixture");
+    let (store, package, credentials) = fixture(temp.path(), true);
+    store
+        .activate_configured(
+            &package,
+            0,
+            package.required_permissions.clone(),
+            credentials.clone(),
+            package.default_configuration_for_test(),
+        )
+        .expect("select configured package");
+    let path = store.root.join("active/configured-plugin.json");
+    let original = fs::read(&path).expect("read managed record");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&original).expect("decode managed record");
+    assert!(
+        record["settings"]
+            .as_object_mut()
+            .expect("settings section")
+            .remove("credential_revision")
+            .is_some(),
+        "managed record format changed; the credential field may have moved"
+    );
+    fs::write(&path, serde_json::to_vec(&record).expect("encode record"))
+        .expect("write managed record without credentials");
+    store
+        .activation("configured-plugin")
+        .expect_err("managed record without credentials");
+
+    let mut bundled: serde_json::Value =
+        serde_json::from_slice(&original).expect("decode managed record");
+    bundled["package"] = json!({"kind": "bundled"});
+    bundled["approved_permissions"] = json!([]);
+    fs::write(&path, serde_json::to_vec(&bundled).expect("encode record"))
+        .expect("write bundled record with credentials");
+    store
+        .activation("configured-plugin")
+        .expect_err("bundled record with credentials");
+}

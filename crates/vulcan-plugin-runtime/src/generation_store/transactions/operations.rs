@@ -150,6 +150,7 @@ impl VulcanPluginGenerationStore {
         // Capture the entire predecessor so recovery cannot equate equal revisions with different authorities.
         // 捕获完整前驱，使恢复不能将相同修订误认为相同权威。
         let predecessor = self.read_activation(plugin_id)?;
+        super::super::operations::reject_bundled_predecessor(predecessor.as_ref())?;
         if predecessor.as_ref().map_or(0, |record| record.revision) != expected_revision {
             return Err(Error::new(
                 Code::Conflict,
@@ -641,7 +642,7 @@ impl VulcanPluginGenerationStore {
         generation.validate_configuration(record.target.configuration())?;
         // The explicit staged credential revision belongs to this target selection.
         // 显式已暂存凭据修订属于此目标选择。
-        let revision = record.target.credential_revision();
+        let revision = record.target.generation_credential_revision()?;
         // Retain real credential ownership for the same verified package.
         // 为相同已验证插件包保留实际凭据所有权。
         let credentials = self.pin_credentials_locked(&generation, revision)?;

@@ -135,7 +135,7 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
         .activate_with_credentials_for_test(&package, 0, Vec::new(), first.clone())
         .expect("select credential revision");
     assert_eq!(selected.schema_version, ACTIVATION_RECORD_VERSION);
-    assert_eq!(selected.credential_revision(), &first);
+    assert_eq!(selected.credential_revision(), Some(&first));
     assert_eq!(
         store
             .activate_with_credentials_for_test(&package, 0, Vec::new(), second.clone())
@@ -149,8 +149,8 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
         .activate_with_credentials_for_test(&package, 1, Vec::new(), second.clone())
         .expect("rotate credentials");
     assert_eq!(rotated.generation(), Some(package.identity()));
-    assert_eq!(selected.credential_revision(), &first);
-    assert_eq!(rotated.credential_revision(), &second);
+    assert_eq!(selected.credential_revision(), Some(&first));
+    assert_eq!(rotated.credential_revision(), Some(&second));
     assert_eq!(
         VulcanPluginGenerationStore::open_existing(temp.path())
             .expect("reopen")
@@ -166,7 +166,7 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
         .deactivate("sample-plugin", 2)
         .expect("remove selection");
     assert!(removed.generation().is_none());
-    assert_eq!(removed.credential_revision(), &second);
+    assert_eq!(removed.credential_revision(), Some(&second));
     assert!(
         store
             .pin_active("sample-plugin")

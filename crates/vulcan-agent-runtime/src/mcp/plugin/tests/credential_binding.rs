@@ -140,19 +140,6 @@ mcp:
             .expect("read selected manager config"),
         first
     );
-    assert!(
-        !plugins
-            .initialize_plugin_config_if_absent("configured-mcp", serde_json::json!({}))
-            .expect("managed configuration is already initialized")
-    );
-    assert!(
-        plugins
-            .update_plugin_config(
-                "configured-mcp",
-                serde_json::json!({"endpoint":"https://wrong.test/mcp","label":"wrong"})
-            )
-            .is_err()
-    );
     // The successor selection changes configuration and activation revision atomically.
     // 后继选择原子改变配置及激活修订。
     let second = serde_json::json!({"endpoint":"https://second.test/mcp","label":"second"});

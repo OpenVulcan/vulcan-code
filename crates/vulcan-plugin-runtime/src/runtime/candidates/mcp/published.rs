@@ -364,7 +364,7 @@ fn validate_full_pins(
         || plugin.version.as_deref() != Some(package.identity().version.as_str())
         || plugin.content_fingerprint != package.identity().content_fingerprint
         || credentials.record().package() != package.identity()
-        || credentials.record().revision() != selected.credential_revision()
+        || Some(credentials.record().revision()) != selected.credential_revision()
     {
         return Err(VulcanPluginRuntimeError::new(
             "Published MCP full retained selection differs from its active source.",
@@ -379,7 +379,7 @@ fn validate_full_pins(
             || server.credential_binding != *managed.credential_binding()
             || !server.credential_lease.as_ref().is_some_and(|lease| {
                 lease.record().package() == package.identity()
-                    && lease.record().revision() == selected.credential_revision()
+                    && Some(lease.record().revision()) == selected.credential_revision()
             })
         {
             return Err(VulcanPluginRuntimeError::new(

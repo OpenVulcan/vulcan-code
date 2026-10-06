@@ -1,10 +1,10 @@
-//! Real private target initialization binds process permissions and rejects mutable v4 configuration writes.
-//! 真实私有目标初始化绑定进程权限，并拒绝可变版本四配置写入。
+//! Real private target initialization binds process permissions and cannot edit settings before publication.
+//! 真实私有目标初始化绑定进程权限，且发布前不能编辑设置。
 
 use super::*;
 
-/// The real target proves process-session grants and immutable configuration through actual native callbacks.
-/// 真实目标通过实际原生回调证明进程会话授权及不可变配置。
+/// The real target proves process-session grants and settings ownership through actual native callbacks.
+/// 真实目标通过实际原生回调证明进程会话授权及设置所有权。
 const NATIVE_TARGET: &str = r#"
 -- Read the full target selection before any business or initialization effect.
 -- 在任何业务或初始化副作用前读取完整目标选择。
@@ -19,25 +19,23 @@ assert(type(spec) == 'table' and spec.encoding == 'utf-8')
 -- 尝试可变写入；候选代次也会被普通当前所有者门拒绝。
 local changed, reason = pcall(vulcan.host.call, 'vulcan.plugin.config.update', {value={label='forbidden'}})
 assert(not changed, tostring(reason))
--- Record the exact immutable-selection error separately so private initialization must prove this native rejection.
--- 单独记录精确不可变选择错误，使私有初始化必须证明此原生拒绝。
-if string.find(tostring(reason), 'configured activation transaction', 1, true) then
-    vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='target-immutable-config-denied',revision=0})
-end
+-- Record the rejection separately so private initialization must prove this native denial.
+-- 单独记录拒绝，使私有初始化必须证明此原生拒绝。
+vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='target-immutable-config-denied',revision=0})
 -- Record actual initialization only after process resolution and immutable-write rejection both complete.
 -- 仅进程解析及不可变写入拒绝均完成后记录实际初始化。
 vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='target-native-init',revision=0})
 -- One actual module supplies every declared export.
 -- 单个实际模块提供每个声明导出。
 local M = {}
--- Recheck mutable-write rejection on a real ordinary callback after private source transfer; return selected state.
--- 私有来源转交后，在真实普通回调内复核可变写入拒绝；返回选定状态。
+-- Attempt a settings edit on a real ordinary callback after private source transfer; report it with the call's own snapshot.
+-- 私有来源转交后，在真实普通回调内尝试编辑设置；连同本次调用自身快照报告结果。
 function M.dispatch()
-    -- The managed document can only change through an explicit configured activation transaction.
-    -- 受管文档只能通过显式配置激活事务改变。
-    local changed, reason = pcall(vulcan.host.call, 'vulcan.plugin.config.update', {value={label='ordinary-forbidden'}})
-    assert(not changed and string.find(tostring(reason), 'configured activation transaction', 1, true), tostring(reason))
-    return vulcan.json.encode({ok=true,result=vulcan.host.call('vulcan.plugin.config.get', {})})
+    -- A published managed plugin edits its settings section in place once no transaction owner remains.
+    -- 已无交易所有者时，已发布受管插件就地编辑其设置段。
+    local changed = pcall(vulcan.host.call, 'vulcan.plugin.config.update', {value={label='ordinary-edited'}})
+    local current = vulcan.host.call('vulcan.plugin.config.get', {})
+    return vulcan.json.encode({ok=true,result={label=current.label,edited=changed}})
 end
 -- Hook and UI declarations use the same tested ordinary callback after publication.
 -- Hook 及界面声明在发布后使用同一受测普通回调。
@@ -220,12 +218,12 @@ fn published_native_target() -> (
     (fixture, store, transaction)
 }
 
-/// Private initialization uses true target process grants, and both private and ordinary native writes preserve the full v4 selection.
-/// 私有初始化使用真实目标进程授权，且私有及普通原生写入均保持完整版本四选择。
+/// Private initialization uses true target process grants and cannot edit settings; an ordinary callback edits only the settings section.
+/// 私有初始化使用真实目标进程授权且不能编辑设置；普通回调只编辑设置段。
 /// No inputs or return value; real callbacks, persistent files and physical retirement are the evidence.
 /// 无输入及返回值；真实回调、持久文件及物理退役构成证据。
 #[test]
-fn private_target_native_process_and_v4_configuration_preserve_original_selection() {
+fn private_target_native_process_and_settings_edits_preserve_package_selection() {
     // The published update carries an approved permission absent from its actual predecessor.
     // 已发布更新携带实际前驱缺少的已批准权限。
     let (fixture, store, mut transaction) = published_native_target();
@@ -269,8 +267,8 @@ fn private_target_native_process_and_v4_configuration_preserve_original_selectio
         .iter()
         .filter(|event| event.topic == "target-native-init")
         .count();
-    // Candidate owner checks cannot substitute for the exact immutable-selection rejection in private initialization.
-    // 候选所有者检查不能替代私有初始化中的精确不可变选择拒绝。
+    // Private initialization must observe its own settings-edit rejection.
+    // 私有初始化必须观察到其自身设置编辑被拒绝。
     let immutable_rejections = fixture
         .events
         .values
@@ -329,30 +327,47 @@ fn private_target_native_process_and_v4_configuration_preserve_original_selectio
             .values()
             .find(|hook| hook.plugin_id == "hook-plugin")
             .expect("actual ordinary target Hook");
-        // Ordinary source now runs in the same actual VM and must still refuse mutable v4 writes.
-        // 普通来源现在在同一实际 VM 中运行，仍须拒绝可变版本四写入。
-        let result = fixture
-            .manager
-            .invoke_formal_hook(
+        // Ordinary source now runs in the same actual VM; the retained transaction owner still fences settings edits.
+        // 普通来源现在在同一实际 VM 中运行；保留的交易所有者仍阻挡设置编辑。
+        let invoke = || {
+            fixture.manager.invoke_formal_hook(
                 hook,
                 json!({"payload_json":"{}","host_timeout_ms":1000}),
                 None,
                 Instant::now() + WAIT,
             )
-            .await
-            .expect("actual ordinary managed configuration rejection");
-        assert_eq!(result["label"], "new-selected");
+        };
+        let fenced = invoke().await.expect("actual ordinary fenced call");
+        assert_eq!(fenced["edited"], false, "{fenced}");
         assert_eq!(
             store
                 .activation("hook-plugin")
-                .expect("actual unchanged full selection"),
-            Some(selected)
+                .expect("read fenced selection"),
+            Some(selected.clone())
+        );
+        // Releasing the transaction owner permits an in-place settings edit.
+        // 释放交易所有者后允许就地编辑设置。
+        drop(transaction);
+        let result = invoke().await.expect("actual ordinary settings edit");
+        assert_eq!(result["edited"], true, "{result}");
+        // The running call keeps the snapshot it started with.
+        // 运行中的调用保留其开始时的快照。
+        assert_eq!(result["label"], "new-selected");
+        let edited = store
+            .activation("hook-plugin")
+            .expect("read edited selection")
+            .expect("edited selection");
+        assert_eq!(edited.revision, selected.revision);
+        assert_eq!(edited.package(), selected.package());
+        assert_eq!(edited.settings().revision, selected.settings().revision + 1);
+        assert_eq!(
+            edited.configuration().value(),
+            Some(&json!({"label": "ordinary-edited"}))
         );
         assert!(
             !state_path.exists(),
-            "denied native writes created mutable legacy state"
+            "settings edits created mutable legacy state"
         );
-        drop(transaction);
         fixture
             .manager
             .begin_draining("hook-plugin")

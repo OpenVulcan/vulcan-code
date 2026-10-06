@@ -138,70 +138,98 @@ impl VulcanPluginRuntimeManager {
 
     /// Read configuration using the caller's exact retained package descriptor.
     /// 使用调用方保留的精确包描述符读取配置。
-    /// Return validated state/defaults without looking up a newer package generation.
-    /// 返回已校验状态或默认值，不查找更新的包代次。
+    /// Managed packages read the settings their descriptor mirrors; bundled packages read the current settings
+    /// section of their record, or the package defaults; flat packages read their state file. Every value is
+    /// validated against the descriptor's package schema without looking up a newer package generation.
+    /// 受管插件包读取其描述符镜像的设置；内建插件包读取其记录的当前设置段或插件包默认值；平铺插件包读取其状态文件。
+    /// 每个值都按描述符的插件包 Schema 校验，不查找更新的包代次。
     pub(super) fn plugin_config_for_snapshot(
         &self,
         plugin: &crate::VulcanPluginDescriptor,
     ) -> Result<Value, VulcanPluginRuntimeError> {
-        // The ID and schema belong to the same immutable descriptor.
-        // ID 与 Schema 属于同一不可变描述符。
-        let plugin_id = &plugin.id;
-        // manifest determines whether this package owns any executable resource requiring isolation.
-        // manifest 决定当前插件包是否持有任何需要隔离的可执行资源。
-        let manifest = plugin.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{plugin_id}` has no valid manifest."
-            ))
-        })?;
-        let config = manifest.config.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new(format!(
-                "Vulcan plugin `{plugin_id}` does not declare configuration."
-            ))
-        })?;
-        // A managed selection is complete; never mix its package schema with a newer mutable legacy document.
-        // 受管选择是完整的；绝不将其插件包模式与更新的可变旧文档混用。
-        if let Some(selection) = plugin
-            .managed_package()
-            .map(|managed| managed.configuration())
-        {
-            return selection.value().cloned().ok_or_else(|| {
-                VulcanPluginRuntimeError::new(
-                    "Managed plugin configuration is explicitly undeclared.",
-                )
-            });
-        }
-        // executionRoot pins configuration defaults and schema to the authorized package generation.
-        // executionRoot 把配置默认值与 Schema 固定到已授权插件包代次。
-        let execution_root = plugin_execution_package_root(&self.state, plugin)
-            .map_err(VulcanPluginRuntimeError::new)?;
-        let state_path = plugin_config_state_path(&self.state.plugin_state_root, plugin_id);
-        let value = if state_path.exists() {
-            read_plugin_json_state(&state_path, "configuration")?
-        } else {
-            let defaults_path = canonical_plugin_file(
-                &execution_root,
-                &config.defaults_file,
-                "configuration defaults",
-            )
-            .map_err(VulcanPluginRuntimeError::new)?;
-            read_plugin_json_state(&defaults_path, "configuration defaults")?
+        let config = declared_configuration(plugin)?;
+        let package_root = self.configuration_package_root(plugin)?;
+        let value = match configuration_owner(plugin) {
+            // The descriptor mirrors its record's settings, including a candidate's not yet published target;
+            // settings edits republish the descriptor, so later calls observe them.
+            // 描述符镜像其记录的设置，包括尚未发布的候选目标；设置编辑会重新发布描述符，后续调用即可观察到。
+            ConfigurationOwner::Managed(managed) => {
+                managed.configuration().value().cloned().ok_or_else(|| {
+                    VulcanPluginRuntimeError::new(
+                        "Managed plugin configuration is explicitly undeclared.",
+                    )
+                })?
+            }
+            ConfigurationOwner::Bundled => match self.read_settings_record(&plugin.id)? {
+                // Without a record the package defaults apply in memory; nothing is written.
+                // 没有记录时在内存中使用插件包默认值；不写入任何内容。
+                None => read_configuration_defaults(&package_root, config)?,
+                Some(record) if record.package() == &crate::VulcanPluginPackageSelection::Bundled {} => {
+                    record.configuration().value().cloned().ok_or_else(|| {
+                        VulcanPluginRuntimeError::new(
+                            "Bundled plugin settings hold no configuration document.",
+                        )
+                    })?
+                }
+                Some(_) => {
+                    return Err(VulcanPluginRuntimeError::new(
+                        "Bundled plugin settings are owned by another package selection.",
+                    ));
+                }
+            },
+            ConfigurationOwner::Flat => {
+                let state_path = plugin_config_state_path(&self.state.plugin_state_root, &plugin.id);
+                if state_path.exists() {
+                    read_plugin_json_state(&state_path, "configuration")?
+                } else {
+                    read_configuration_defaults(&package_root, config)?
+                }
+            }
         };
-        // The managed selection returned above; this read still resolves and decodes the actual schema every time.
-        // 受管选择已在上方返回；此读取仍在每次解析并解码实际 Schema。
-        let schema_path =
-            canonical_plugin_file(&execution_root, &config.schema_file, "configuration schema")
-                .map_err(VulcanPluginRuntimeError::new)?;
-        // Current file evidence must succeed before even an identical cached declaration can be used.
-        // 当前文件证据必须成功，才能使用即使相同的已缓存声明。
-        let schema = read_plugin_json_state(&schema_path, "configuration schema")?;
         // Only compilation is reused; every freshly read configuration remains subject to validation.
         // 仅复用编译；每份刚读取配置仍必须接受校验。
+        let schema_path =
+            canonical_plugin_file(&package_root, &config.schema_file, "configuration schema")
+                .map_err(VulcanPluginRuntimeError::new)?;
+        let schema = read_plugin_json_state(&schema_path, "configuration schema")?;
         let validator = self.configuration_schema_validator(plugin, schema_path, schema)?;
         validator.validate(&value).map_err(|error| {
-            VulcanPluginRuntimeError::new(format!("Invalid plugin configuration: {error}"))
+            VulcanPluginRuntimeError::new(format!(
+                "Invalid plugin configuration; reset it to the package defaults: {error}"
+            ))
         })?;
         Ok(value)
+    }
+
+    /// Return the package root whose schema and defaults govern plugin's configuration.
+    /// 返回其 Schema 及默认值约束 plugin 配置的插件包根目录。
+    fn configuration_package_root(
+        &self,
+        plugin: &crate::VulcanPluginDescriptor,
+    ) -> Result<PathBuf, VulcanPluginRuntimeError> {
+        match plugin.managed_package() {
+            Some(managed) => Ok(managed.generation().package_root().to_path_buf()),
+            // executionRoot pins configuration defaults and schema to the authorized package generation.
+            // executionRoot 把配置默认值与 Schema 固定到已授权插件包代次。
+            None => plugin_execution_package_root(&self.state, plugin)
+                .map_err(VulcanPluginRuntimeError::new),
+        }
+    }
+
+    /// Read the current activation record of plugin_id from the user store, without creating the store.
+    /// 从用户存储读取 plugin_id 的当前激活记录，不创建存储。
+    fn read_settings_record(
+        &self,
+        plugin_id: &str,
+    ) -> Result<Option<crate::VulcanPluginActivation>, VulcanPluginRuntimeError> {
+        let Some(store) = crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        store
+            .activation(plugin_id)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))
     }
 
     /// Reuse compilation for plugin's current path/schema or compile that exact declaration outside the cache lock.
@@ -260,10 +288,10 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<Value, VulcanPluginRuntimeError> {
         // Configuration mutation shares the existing publication gate.
         // 配置变更共用既有发布门。
-        let _registration = self.state.session_registration_gate.lock().map_err(|_| {
+        let registration = self.state.session_registration_gate.lock().map_err(|_| {
             VulcanPluginRuntimeError::new("Vulcan Plugin session registration gate is poisoned.")
         })?;
-        self.require_routing_publication_locked(&_registration, None)?;
+        self.require_routing_publication_locked(&registration, None)?;
         // Resolve current authority once while publication cannot change it.
         // 发布不能改变权威期间，一次性解析当前权威。
         let snapshot = self.snapshot();
@@ -283,11 +311,141 @@ impl VulcanPluginRuntimeManager {
                 "Plugin configuration generation changed before write.",
             ));
         }
-        if current.managed_package().is_some() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Managed plugin configuration updates require a configured activation transaction.",
-            ));
+        match configuration_owner(current) {
+            ConfigurationOwner::Managed(managed) => {
+                self.validate_settings_value(current, &value)?;
+                let committed = self.reconfigure_managed(current, managed, value.clone())?;
+                let reconfigured = current
+                    .with_reconfigured_settings(&committed)
+                    .map_err(VulcanPluginRuntimeError::new)?;
+                self.publish_settings_edit(plugin_id, Some(reconfigured))?;
+                Ok(value)
+            }
+            ConfigurationOwner::Bundled => {
+                self.validate_settings_value(current, &value)?;
+                self.configure_bundled(plugin_id, value.clone())?;
+                self.publish_settings_edit(plugin_id, None)?;
+                Ok(value)
+            }
+            ConfigurationOwner::Flat => self.update_flat_plugin_config(plugin, value, &registration),
         }
+    }
+
+    /// Validate value against the schema of plugin's package before it becomes settings.
+    /// 在 value 成为设置之前，按 plugin 插件包的 Schema 校验它。
+    fn validate_settings_value(
+        &self,
+        plugin: &crate::VulcanPluginDescriptor,
+        value: &Value,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        validate_plugin_config_value(
+            &self.configuration_package_root(plugin)?,
+            declared_configuration(plugin)?,
+            value,
+        )
+    }
+
+    /// Commit value as the managed plugin's configuration while its record still selects managed's package.
+    /// 受管插件记录仍选择 managed 的插件包时，将 value 提交为其配置。
+    /// Returns the committed record; a concurrent edit or transaction surfaces as an error.
+    /// 返回已提交记录；并发编辑或交易以错误形式暴露。
+    fn reconfigure_managed(
+        &self,
+        plugin: &crate::VulcanPluginDescriptor,
+        managed: &crate::VulcanPluginManagedPackage,
+        value: Value,
+    ) -> Result<crate::VulcanPluginActivation, VulcanPluginRuntimeError> {
+        let store = crate::VulcanPluginGenerationStore::open_existing(&self.state.user_plugin_root)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            .ok_or_else(|| VulcanPluginRuntimeError::new("Managed plugin store is missing."))?;
+        let settings_revision = store
+            .activation(&plugin.id)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            .map_or(0, |record| record.settings().revision);
+        store
+            .reconfigure(
+                &plugin.id,
+                managed.activation_revision(),
+                settings_revision,
+                crate::VulcanPluginSettingsChange {
+                    configuration: Some(crate::VulcanPluginConfigurationSelection::Document {
+                        value,
+                    }),
+                    credential_revision: None,
+                },
+            )
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))
+    }
+
+    /// Commit value as the bundled plugin's settings, creating its record on the first edit.
+    /// 将 value 提交为内建插件的设置，首次编辑时创建其记录。
+    fn configure_bundled(&self, plugin_id: &str, value: Value) -> Result<(), VulcanPluginRuntimeError> {
+        // The first edit initializes the same host-selected user root as plugin installation.
+        // 首次编辑初始化与插件安装相同的宿主选定用户根目录。
+        std::fs::create_dir_all(&self.state.user_plugin_root).map_err(|error| {
+            VulcanPluginRuntimeError::new(format!("Failed to create user plugin root: {error}"))
+        })?;
+        let store = crate::VulcanPluginGenerationStore::open(&self.state.user_plugin_root)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        let settings_revision = store
+            .activation(plugin_id)
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?
+            .map_or(0, |record| record.settings().revision);
+        store
+            .configure_bundled(
+                plugin_id,
+                settings_revision,
+                crate::VulcanPluginConfigurationSelection::Document { value },
+            )
+            .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Publish a new catalog revision after a committed settings edit and retire reusable domains of plugin_id.
+    /// 设置编辑提交后发布新目录修订，并退役 plugin_id 的可复用域。
+    /// `reconfigured` replaces a managed descriptor that mirrors the settings; other descriptors read them live.
+    /// `reconfigured` 替换镜像设置的受管描述符；其他描述符实时读取设置。
+    fn publish_settings_edit(
+        &self,
+        plugin_id: &str,
+        reconfigured: Option<crate::VulcanPluginDescriptor>,
+    ) -> Result<(), VulcanPluginRuntimeError> {
+        let mut published = self.state.snapshot.write().map_err(|_| {
+            VulcanPluginRuntimeError::new("Vulcan Plugin catalog lock is poisoned.")
+        })?;
+        let mut next_snapshot = (**published).clone();
+        if let Some(descriptor) = reconfigured {
+            // Enabled MCP entries are copies of the descriptor's servers and carry the same configuration.
+            // 已启用 MCP 条目是描述符服务器的副本，携带相同配置。
+            for server in &descriptor.mcp_servers {
+                if let Some(entry) = next_snapshot
+                    .enabled_mcp_servers
+                    .get_mut(&format!("{}:{}", server.plugin_id, server.id))
+                {
+                    entry.configuration = server.configuration.clone();
+                }
+            }
+            next_snapshot
+                .plugins
+                .insert(plugin_id.to_owned(), descriptor);
+        }
+        next_snapshot.revision = self.state.next_revision.fetch_add(1, Ordering::Relaxed);
+        *published = Arc::new(next_snapshot);
+        drop(published);
+        // Already-running calls drain on their original VM; no later call reuses pre-update state.
+        // 已运行调用在原 VM 中排空；后续调用不复用更新前状态。
+        self.close_reusable_domains(Some(plugin_id), None, false)
+    }
+
+    /// Write value into a flat package's state file under its legacy mutation guard.
+    /// 在旧变更守卫下将 value 写入平铺插件包的状态文件。
+    fn update_flat_plugin_config(
+        &self,
+        plugin: &crate::VulcanPluginDescriptor,
+        value: Value,
+        registration: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<Value, VulcanPluginRuntimeError> {
+        let plugin_id = &plugin.id;
         // Explicit legacy configuration writes initialize the same host-selected user root as plugin installation.
         // 显式旧格式配置写入初始化与插件安装相同的宿主选定用户根目录。
         std::fs::create_dir_all(&self.state.user_plugin_root).map_err(|error| {
@@ -302,8 +460,8 @@ impl VulcanPluginRuntimeManager {
         let selected = store
             .activation(plugin_id)
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // Flat or bundled packages require absence of any managed selection.
-        // 平铺或内建插件包要求不存在任何受管选择。
+        // Flat packages require absence of any record in their namespace.
+        // 平铺插件包要求其命名空间中不存在任何记录。
         if selected.is_some() {
             return Err(VulcanPluginRuntimeError::new(
                 "Legacy plugin configuration activation changed before write.",
@@ -314,7 +472,7 @@ impl VulcanPluginRuntimeManager {
         let mutation = store
             .acquire_legacy_mutation_guard(plugin_id, selected.as_ref())
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        self.write_plugin_config_with_mutation_guard(plugin, value, &mutation, &_registration, None)
+        self.write_plugin_config_with_mutation_guard(plugin, value, &mutation, registration, None)
     }
 
     /// Write value for the exact lifecycle plugin under its original authority and publication gate.
@@ -476,45 +634,82 @@ impl VulcanPluginRuntimeManager {
         self.update_plugin_config_for_snapshot(plugin, value)
     }
 
-    /// Checks for existing state before writing one initial complete configuration document.
-    /// 写入一份初始完整配置文档前检查既有状态。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` selects the package and `value` is the initial complete document.
-    /// `plugin_id` 选择插件包，`value` 是初始完整文档。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns `true` after writing or `false` when the initial existence check finds user state; this is not a concurrent create-if-absent transaction.
-    /// 写入后返回true，初始存在性检查发现用户状态时返回false；这不是并发原子缺失创建事务。
-    pub fn initialize_plugin_config_if_absent(
-        &self,
-        plugin_id: &str,
-        value: Value,
-    ) -> Result<bool, VulcanPluginRuntimeError> {
-        // A selected managed document is already initialized regardless of any unrelated legacy state file.
-        // 已选定受管文档已经初始化，与任何无关旧状态文件无关。
+    /// Replace the plugin's configuration with its package defaults through the ordinary edit path.
+    /// 通过普通编辑路径将插件配置替换为其插件包默认值。
+    /// This is the explicit recovery when stored settings no longer satisfy an upgraded schema; returns the defaults.
+    /// 这是已存设置不再满足升级后 Schema 时的显式恢复；返回默认值。
+    pub fn reset_plugin_config(&self, plugin_id: &str) -> Result<Value, VulcanPluginRuntimeError> {
         let snapshot = self.snapshot();
-        if let Some(selection) = snapshot
-            .plugins
-            .get(plugin_id)
-            .and_then(|plugin| plugin.managed_package())
-            .map(|managed| managed.configuration())
-        {
-            return if selection.value().is_some() {
-                Ok(false)
-            } else {
-                Err(VulcanPluginRuntimeError::new(
-                    "Managed plugin does not declare configuration.",
-                ))
-            };
-        }
-        let state_path = plugin_config_state_path(&self.state.plugin_state_root, plugin_id);
-        if state_path.exists() {
-            return Ok(false);
-        }
-        self.update_plugin_config(plugin_id, value)?;
-        Ok(true)
+        let plugin = snapshot.plugins.get(plugin_id).ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!("Vulcan plugin `{plugin_id}` is not installed."))
+        })?;
+        let defaults = read_configuration_defaults(
+            &self.configuration_package_root(plugin)?,
+            declared_configuration(plugin)?,
+        )?;
+        self.update_plugin_config_for_snapshot(plugin, defaults)
     }
 }
+
+/// Which authority stores a plugin's configuration.
+/// 哪个权威保存插件配置。
+enum ConfigurationOwner<'a> {
+    /// The settings section of the managed package's activation record, mirrored by its descriptor.
+    /// 受管插件包激活记录的设置段，由其描述符镜像。
+    Managed(&'a crate::VulcanPluginManagedPackage),
+    /// The settings section of a bundled record, or the package defaults while no record exists.
+    /// 内建记录的设置段；尚无记录时为插件包默认值。
+    Bundled,
+    /// The state file of a flat user package.
+    /// 平铺用户插件包的状态文件。
+    Flat,
+}
+
+/// Classify plugin by the authority that owns its configuration.
+/// 按拥有其配置的权威对 plugin 分类。
+fn configuration_owner(plugin: &crate::VulcanPluginDescriptor) -> ConfigurationOwner<'_> {
+    match (plugin.managed_package(), plugin.origin) {
+        (Some(managed), _) => ConfigurationOwner::Managed(managed),
+        (None, crate::VulcanPluginPackageOrigin::Bundled) => ConfigurationOwner::Bundled,
+        (None, crate::VulcanPluginPackageOrigin::UserInstalled) => ConfigurationOwner::Flat,
+    }
+}
+
+/// Return plugin's configuration declaration, rejecting packages that declare none.
+/// 返回 plugin 的配置声明，拒绝未声明配置的插件包。
+fn declared_configuration(
+    plugin: &crate::VulcanPluginDescriptor,
+) -> Result<&crate::VulcanPluginConfigManifest, VulcanPluginRuntimeError> {
+    let plugin_id = &plugin.id;
+    plugin
+        .manifest
+        .as_ref()
+        .ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!(
+                "Vulcan plugin `{plugin_id}` has no valid manifest."
+            ))
+        })?
+        .config
+        .as_ref()
+        .ok_or_else(|| {
+            VulcanPluginRuntimeError::new(format!(
+                "Vulcan plugin `{plugin_id}` does not declare configuration."
+            ))
+        })
+}
+
+/// Read the package defaults document declared by config beneath package_root.
+/// 读取 package_root 下 config 声明的插件包默认值文档。
+fn read_configuration_defaults(
+    package_root: &Path,
+    config: &crate::VulcanPluginConfigManifest,
+) -> Result<Value, VulcanPluginRuntimeError> {
+    // The package validator remains authoritative for relative paths and reparse-point exclusion.
+    // 插件包校验器继续对相对路径及重解析点排除具有权威。
+    let defaults = canonical_plugin_file(package_root, &config.defaults_file, "configuration defaults")
+        .map_err(VulcanPluginRuntimeError::new)?;
+    read_plugin_json_state(&defaults, "configuration defaults")
+}
+
+#[cfg(test)]
+mod tests;

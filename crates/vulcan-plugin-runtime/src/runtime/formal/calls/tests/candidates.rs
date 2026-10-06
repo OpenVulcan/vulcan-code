@@ -71,7 +71,7 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             &package,
             predecessor_revision,
             target.approved_permissions().to_vec(),
-            target.credential_revision().clone(),
+            target.credential_revision().expect("selected revision").clone(),
             target.configuration().clone(),
         )
         .expect("candidate original after ordinary admission");

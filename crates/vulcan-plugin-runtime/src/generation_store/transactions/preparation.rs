@@ -81,7 +81,7 @@ impl VulcanPluginActivationPreparationIntent {
     /// 比较 `target` 与准备前固定的全部身份；配置必须按其固定副本校验。
     pub(super) fn matches_target(&self, target: &VulcanPluginActivation) -> bool {
         target.generation() == Some(&self.generation)
-            && target.credential_revision() == &self.credential_revision
+            && target.credential_revision() == Some(&self.credential_revision)
             && target.approved_permissions() == self.approved_permissions.as_slice()
             && target.revision == self.activation_revision
             && target.plugin_id == self.generation.plugin_id
@@ -179,9 +179,9 @@ impl VulcanPluginActivationRequestRecord {
     }
     /// Borrow the planned or selected credential revision without claiming that staging is complete.
     /// 借用计划中或已选凭据修订，不声称暂存已经完成。
-    pub fn credential_revision(&self) -> &VulcanPluginCredentialRevision {
+    pub fn credential_revision(&self) -> Option<&VulcanPluginCredentialRevision> {
         match self {
-            Self::Preparation(record) => &record.preparation.credential_revision,
+            Self::Preparation(record) => Some(&record.preparation.credential_revision),
             Self::Activation(record) => record.target.credential_revision(),
         }
     }
