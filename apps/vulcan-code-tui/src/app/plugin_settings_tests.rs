@@ -1,8 +1,6 @@
 // Plugin settings layouts driven end to end through the synthetic mock service.
 // 通过合成模拟服务端到端驱动插件设置版面。
 
-use std::time::{Duration, Instant};
-
 use super::action::{Edit, LocalSetting, UiAction, perform};
 use super::pages::{PageId, Row, RowKind, navigation, rows};
 use super::*;
@@ -17,13 +15,12 @@ use serde_json::{Value, json};
 /// 持续应用后端事件直到 `done` 成立；模拟后端始终未到达时失败。
 /// Writes count as done only once the service finished them, since one write runs at a time.
 /// 写入只有在服务完成后才算完成，因为同一时间只运行一个写入。
-fn settle(app: &mut App, what: &str, done: impl Fn(&App) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+fn settle(app: &mut App, driver: &mut mock::Inline, what: &str, done: impl Fn(&App) -> bool) {
     while !done(app) || app.call_pending {
-        assert!(Instant::now() < deadline, "mock never reached: {what}");
-        if let Ok(event) = app.backend.events.recv_timeout(Duration::from_millis(50)) {
-            app.apply(event);
-        }
+        let event = driver
+            .next_event(&app.backend.events)
+            .unwrap_or_else(|| panic!("mock never reached: {what}"));
+        app.apply(event);
     }
 }
 
@@ -127,8 +124,9 @@ fn plugin_action_calls_carry_identities_and_renew_on_replay() {
 #[test]
 fn plugin_settings_layout_reads_writes_and_renders() {
     let _locale = crate::i18n::lock_locale("en-US");
-    let mut app = App::new(mock::spawn(), Theme::dark(), true);
-    settle(&mut app, "workbench", |app| {
+    let (backend, mut driver) = mock::inline();
+    let mut app = App::new(backend, Theme::dark(), true);
+    settle(&mut app, &mut driver, "workbench", |app| {
         app.slots.loaded(Slot::Workbench)
     });
 
@@ -142,9 +140,12 @@ fn plugin_settings_layout_reads_writes_and_renders() {
         .expect("settings mount listed in navigation");
     perform(&mut app, UiAction::Navigate(index));
     assert_eq!(app.current_page(), Some(PageId::PluginMount));
-    settle(&mut app, "configuration and credential", |app| {
-        app.slots.loaded(Slot::PluginConfig) && app.slots.loaded(Slot::PluginCredential(0))
-    });
+    settle(
+        &mut app,
+        &mut driver,
+        "configuration and credential",
+        |app| app.slots.loaded(Slot::PluginConfig) && app.slots.loaded(Slot::PluginCredential(0)),
+    );
     assert!(
         page(&app)
             .iter()
@@ -155,7 +156,7 @@ fn plugin_settings_layout_reads_writes_and_renders() {
     // A switch writes the whole configuration; the reload proves replays renew their identity.
     // 开关写入整份配置；重新加载证明重放会更新调用身份。
     set(&mut app, "Fast mode", SettingValue::Bool(true));
-    settle(&mut app, "fast mode saved", |app| {
+    settle(&mut app, &mut driver, "fast mode saved", |app| {
         config(app, "/fast") == json!(true)
     });
     assert_eq!(config(&app, "/label"), "demo", "sibling fields are kept");
@@ -169,11 +170,11 @@ fn plugin_settings_layout_reads_writes_and_renders() {
         "Route mode",
         SettingValue::Choice("\"selected\"".into()),
     );
-    settle(&mut app, "mode saved", |app| {
+    settle(&mut app, &mut driver, "mode saved", |app| {
         config(app, "/mode") == json!("selected")
     });
     set(&mut app, "git status", SettingValue::Bool(true));
-    settle(&mut app, "route checked", |app| {
+    settle(&mut app, &mut driver, "route checked", |app| {
         config(app, "/routes") == json!(["git status"])
     });
 
@@ -199,11 +200,11 @@ fn plugin_settings_layout_reads_writes_and_renders() {
         ratatui::crossterm::event::Event::Paste("synthetic-key".into()),
     );
     perform(&mut app, UiAction::PromptAccept);
-    settle(&mut app, "credential stored", |app| {
+    settle(&mut app, &mut driver, "credential stored", |app| {
         app.slots.at(Slot::PluginCredential(0), "/configured") == &json!(true)
     });
     press(&mut app, "Test connection");
-    settle(&mut app, "credential verified", |app| {
+    settle(&mut app, &mut driver, "credential verified", |app| {
         app.slots.at(Slot::PluginCredential(0), "/validationStatus") == "valid"
     });
 
@@ -213,7 +214,7 @@ fn plugin_settings_layout_reads_writes_and_renders() {
     // Package documents read in place and close again.
     // 包内文档就地阅读并可再次关闭。
     press(&mut app, "License");
-    settle(&mut app, "license", |app| {
+    settle(&mut app, &mut driver, "license", |app| {
         app.slots.loaded(Slot::PluginAsset)
     });
     assert!(page(&app).iter().any(|row| matches!(&row.kind,
@@ -231,7 +232,7 @@ fn plugin_settings_layout_reads_writes_and_renders() {
             SettingValue::Choice("stats".into()),
         ),
     );
-    settle(&mut app, "statistics", |app| {
+    settle(&mut app, &mut driver, "statistics", |app| {
         app.slots.loaded(Slot::PluginData(0))
     });
     let shown = page(&app);
@@ -247,7 +248,7 @@ fn plugin_settings_layout_reads_writes_and_renders() {
     );
     assert!(shown.iter().any(|row| row.label == "1. git status"));
     set(&mut app, "Range", SettingValue::Choice("30".into()));
-    settle(&mut app, "thirty days", |app| {
+    settle(&mut app, &mut driver, "thirty days", |app| {
         app.slots
             .at(Slot::PluginData(0), "/daily")
             .as_array()

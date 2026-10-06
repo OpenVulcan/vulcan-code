@@ -33,13 +33,110 @@ pub fn spawn() -> BackendHandle {
     let (event_tx, event_rx) = mpsc::channel();
     thread::Builder::new()
         .name("vulcan-mock-backend".into())
-        .spawn(move || World::new(event_tx).run(command_rx))
+        .spawn(move || World::new(event_tx, Pacing::Live).run(command_rx))
         .expect("spawn mock backend thread");
     BackendHandle {
         commands: command_tx,
         events: event_rx,
         label: "mock".into(),
         is_mock: true,
+    }
+}
+
+/// Starts a mock that the caller steps on its own thread, with every scripted delay already due.
+/// 启动由调用方在自身线程上逐步驱动的模拟，所有脚本延迟均已到期。
+/// Headless tests use it so each awaited state follows from events, never from wall-clock waits.
+/// 无头测试使用它，使每个等待的状态都由事件推进，而非墙钟等待。
+#[cfg(test)]
+pub fn inline() -> (BackendHandle, Inline) {
+    let (command_tx, command_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut world = World::new(event_tx, Pacing::Immediate);
+    world.start();
+    let handle = BackendHandle {
+        commands: command_tx,
+        events: event_rx,
+        label: "mock".into(),
+        is_mock: true,
+    };
+    (
+        handle,
+        Inline {
+            world,
+            commands: command_rx,
+        },
+    )
+}
+
+/// Caller-driven mock world; nothing happens between `next_event` calls.
+/// 由调用方驱动的模拟世界；两次 `next_event` 之间不会发生任何事。
+#[cfg(test)]
+pub struct Inline {
+    world: World,
+    commands: Receiver<Command>,
+}
+
+#[cfg(test)]
+impl Inline {
+    /// Handles every queued command and all scripted work that has come due.
+    /// 处理全部排队命令及所有已到期的脚本工作。
+    /// Returns whether anything ran; `false` means the mock is quiet until the next command.
+    /// 返回是否执行了任何工作；`false` 表示在下一条命令之前模拟保持静止。
+    fn step(&mut self) -> bool {
+        let mut progressed = false;
+        while let Ok(command) = self.commands.try_recv() {
+            self.world.handle(command);
+            progressed = true;
+        }
+        while self
+            .world
+            .next_deadline()
+            .is_some_and(|due| due <= Instant::now())
+        {
+            self.world.advance(Instant::now());
+            progressed = true;
+        }
+        progressed
+    }
+
+    /// Returns the next event for `events`, stepping the mock whenever its outbox is empty.
+    /// 返回 `events` 的下一条事件，发件箱为空时推进模拟。
+    /// `None` means the mock has nothing more to say until the app sends another command.
+    /// `None` 表示在应用发送下一条命令之前模拟不会再产生事件。
+    pub fn next_event(&mut self, events: &Receiver<BackendEvent>) -> Option<BackendEvent> {
+        loop {
+            if let Ok(event) = events.try_recv() {
+                return Some(event);
+            }
+            if !self.step() {
+                return None;
+            }
+        }
+    }
+}
+
+/// How scripted work is spaced in time.
+/// 脚本化工作在时间上的间隔方式。
+#[derive(Clone, Copy)]
+enum Pacing {
+    /// Demo cadence that reads like a live service.
+    /// 读起来像真实服务的演示节奏。
+    Live,
+    /// Every scripted delay elapses at once.
+    /// 所有脚本延迟立即到期。
+    #[cfg(test)]
+    Immediate,
+}
+
+impl Pacing {
+    /// Returns the wait this pacing applies to one scripted `delay`.
+    /// 返回此节奏对一个脚本 `delay` 实际施加的等待。
+    fn delay(self, delay: Duration) -> Duration {
+        match self {
+            Pacing::Live => delay,
+            #[cfg(test)]
+            Pacing::Immediate => Duration::ZERO,
+        }
     }
 }
 
@@ -83,6 +180,7 @@ enum Timer {
 
 struct World {
     out: Sender<BackendEvent>,
+    pacing: Pacing,
     silent: bool,
     conversations: Vec<ConversationSummary>,
     logs: HashMap<String, ConversationLog>,
@@ -106,9 +204,10 @@ struct World {
 }
 
 impl World {
-    fn new(out: Sender<BackendEvent>) -> Self {
+    fn new(out: Sender<BackendEvent>, pacing: Pacing) -> Self {
         World {
             out,
+            pacing,
             silent: false,
             conversations: fixtures::conversations(),
             logs: HashMap::new(),
@@ -128,11 +227,23 @@ impl World {
         }
     }
 
-    fn run(mut self, commands: Receiver<Command>) {
+    /// Announces the connection attempt, seeds history and schedules the simulated connect.
+    /// 宣告连接尝试、预填历史并安排模拟连接。
+    fn start(&mut self) {
         self.emit(BackendEvent::Connection(ConnectionState::Connecting));
         self.seed();
         self.timers
-            .push((Instant::now() + Duration::from_millis(1400), Timer::Connect));
+            .push((self.after(Duration::from_millis(1400)), Timer::Connect));
+    }
+
+    /// Returns when a timer scheduled `delay` from now falls due under this world's pacing.
+    /// 返回在本世界节奏下，从现在起 `delay` 后安排的计时器何时到期。
+    fn after(&self, delay: Duration) -> Instant {
+        Instant::now() + self.pacing.delay(delay)
+    }
+
+    fn run(mut self, commands: Receiver<Command>) {
+        self.start();
         loop {
             let now = Instant::now();
             let next = self
@@ -261,7 +372,9 @@ impl World {
         let turn_start_seq = log.next_seq;
         log.next_seq = turn.next_seq;
         let now = Instant::now();
-        let first_delay = turn.steps.front().map_or(Duration::ZERO, |(d, _)| *d);
+        let first_delay = self
+            .pacing
+            .delay(turn.steps.front().map_or(Duration::ZERO, |(d, _)| *d));
         self.runs.insert(
             conversation_id.into(),
             Run {
@@ -297,6 +410,7 @@ impl World {
     }
 
     fn advance(&mut self, now: Instant) {
+        let pacing = self.pacing;
         let due: Vec<String> = self
             .runs
             .iter()
@@ -313,7 +427,8 @@ impl World {
                 let Some((_, action)) = run.steps.pop_front() else {
                     break;
                 };
-                let next_delay = run.steps.front().map_or(Duration::ZERO, |(d, _)| *d);
+                let next_delay =
+                    pacing.delay(run.steps.front().map_or(Duration::ZERO, |(d, _)| *d));
                 run.next_at += next_delay;
                 if now.saturating_duration_since(run.next_at) > Duration::from_millis(200) {
                     run.next_at = now;
@@ -804,7 +919,7 @@ impl World {
                         done: false,
                     });
                     self.timers.push((
-                        Instant::now() + Duration::from_millis(35),
+                        self.after(Duration::from_millis(35)),
                         Timer::CommitMessage(chunks),
                     ));
                 }
@@ -844,10 +959,8 @@ impl World {
                 self.emit(BackendEvent::GitNotice(GitNotice::Committed));
                 if push {
                     self.emit(BackendEvent::GitBusy(Some(GitBusy::Pushing)));
-                    self.timers.push((
-                        Instant::now() + Duration::from_millis(1300),
-                        Timer::FinishPush,
-                    ));
+                    self.timers
+                        .push((self.after(Duration::from_millis(1300)), Timer::FinishPush));
                 } else {
                     self.emit(BackendEvent::GitBusy(None));
                 }
@@ -997,16 +1110,14 @@ impl World {
                 let chunks: VecDeque<String> =
                     message.split_inclusive(' ').map(str::to_string).collect();
                 self.timers.push((
-                    Instant::now() + Duration::from_millis(500),
+                    self.after(Duration::from_millis(500)),
                     Timer::CommitMessage(chunks),
                 ));
             }
             Command::RunGitCommitAction { message, push, .. } if message.is_empty() && push => {
                 self.emit(BackendEvent::GitBusy(Some(GitBusy::Pushing)));
-                self.timers.push((
-                    Instant::now() + Duration::from_millis(1300),
-                    Timer::FinishPush,
-                ));
+                self.timers
+                    .push((self.after(Duration::from_millis(1300)), Timer::FinishPush));
             }
             Command::RunGitCommitAction {
                 message,
@@ -1016,7 +1127,7 @@ impl World {
             } => {
                 self.emit(BackendEvent::GitBusy(Some(GitBusy::Committing)));
                 self.timers.push((
-                    Instant::now() + Duration::from_millis(900),
+                    self.after(Duration::from_millis(900)),
                     Timer::FinishCommit {
                         message,
                         new_branch,
