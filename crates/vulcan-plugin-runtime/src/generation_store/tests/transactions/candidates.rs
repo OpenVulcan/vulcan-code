@@ -106,8 +106,8 @@ fn configured_candidate_fixture(
     PinnedVulcanPluginGeneration,
     VulcanPluginCredentialRevision,
 ) {
-    // The source path is separate from immutable generations and public flat package discovery.
-    // 来源路径独立于不可变代次及公开平铺插件包发现。
+    // The source path is separate from immutable generations and the managed user catalog.
+    // 来源路径独立于不可变代次及受管用户目录。
     let source = root.join("source/configured-plugin");
     fs::create_dir_all(&source).expect("create configured candidate source");
     fs::write(
@@ -137,8 +137,8 @@ fn configured_candidate_fixture(
 /// 首次安装在提交前不暴露公开插件包，而候选与未来描述符共享精确权威。
 #[test]
 fn candidate_inspection_freezes_configuration_and_credentials_before_first_publication() {
-    // This fixture has no predecessor selection or mutable legacy configuration.
-    // 此夹具没有前驱选择或可变旧配置。
+    // This fixture has no predecessor selection.
+    // 此夹具没有前驱选择。
     let temp = tempfile::tempdir().expect("create configured candidate fixture");
     // The manifest contributes an actual remote MCP descriptor without contacting a network.
     // 清单提供实际远端 MCP 描述符，不访问网络。

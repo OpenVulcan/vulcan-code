@@ -56,8 +56,8 @@ pub(super) fn execute(
                                     authority,
                                 )
                             }
-                            ExecutionSource::LegacyLifecycle(authority) => {
-                                super::super::super::process::ProcessPermissionSource::LegacyLifecycle {
+                            ExecutionSource::RemovalLifecycle(authority) => {
+                                super::super::super::process::ProcessPermissionSource::RemovalLifecycle {
                                     authority,
                                     scope: domain.scope,
                                 }
@@ -104,7 +104,7 @@ pub(super) fn execute(
                             state: Arc::clone(state),
                         };
                         match source {
-                            ExecutionSource::LegacyLifecycle(_) => Err(
+                            ExecutionSource::RemovalLifecycle(_) => Err(
                                 "Managed plugin configuration updates require a configured activation transaction."
                                     .to_owned(),
                             ),

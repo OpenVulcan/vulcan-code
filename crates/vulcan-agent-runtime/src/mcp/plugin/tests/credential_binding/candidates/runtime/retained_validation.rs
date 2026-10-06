@@ -188,8 +188,8 @@ async fn consuming_validation_cancellation_still_shuts_down_original_process() {
     // An actual stalled child prevents the consuming future from completing before cancellation.
     // 真实停滞子进程阻止消费式 Future 在取消前完成。
     let mut fixture = fixture("stall");
-    // This controller is consumed by the legacy API rather than retained by the caller.
-    // 此控制对象由旧接口消费，不由调用者保留。
+    // This controller is consumed by the validating API rather than retained by the caller.
+    // 此控制对象由校验接口消费，不由调用者保留。
     let control = CandidatePluginMcpRuntime::start(fixture.prepared).expect("original admission");
     // Observe the same original release after the consumed controller disappears.
     // 消费的控制对象消失后观测同一原释放。
@@ -218,5 +218,5 @@ async fn consuming_validation_cancellation_still_shuts_down_original_process() {
     fixture
         .store
         .abort_activation_transaction(&mut fixture.transaction)
-        .expect("legacy cancellation releases the exact original transaction");
+        .expect("consuming cancellation releases the exact original transaction");
 }

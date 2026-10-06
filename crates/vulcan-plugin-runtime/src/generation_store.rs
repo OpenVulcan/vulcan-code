@@ -17,8 +17,8 @@ mod discovery;
 pub use credentials::{VulcanPluginCredentialBinding, VulcanPluginCredentialRevision};
 pub use deactivation::{VulcanPluginDeactivationObservation, VulcanPluginDeactivationReservation};
 mod files;
-mod legacy_mutation;
-pub use legacy_mutation::VulcanPluginLegacyMutationGuard;
+mod namespace_guard;
+pub use namespace_guard::VulcanPluginNamespaceGuard;
 mod operations;
 mod published_dispatch;
 mod settings;
@@ -497,7 +497,7 @@ pub struct VulcanPluginActiveGeneration {
     /// Real lease for the selected generation, absent only for no selection or a tombstone.
     /// 选定代次的实际租约，仅未选择或停用记录时缺失。
     pub generation: Option<PinnedVulcanPluginGeneration>,
-    /// Actual credential ownership for an active revision-bound choice; legacy and tombstones have none.
-    /// 绑定修订的有效选择的实际凭据所有权；旧格式和停用记录没有此所有权。
+    /// Actual credential ownership for an active revision-bound choice; unbound choices and tombstones have none.
+    /// 绑定修订的有效选择的实际凭据所有权；未绑定选择和停用记录没有此所有权。
     pub credentials: Option<PinnedVulcanPluginCredentials>,
 }

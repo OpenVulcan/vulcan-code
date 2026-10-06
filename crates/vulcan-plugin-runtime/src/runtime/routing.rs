@@ -5,9 +5,8 @@ use super::{VulcanPluginManagerState, VulcanPluginRuntimeError, VulcanPluginRunt
 use crate::{
     VulcanPluginActivation, VulcanPluginActivationCandidate, VulcanPluginActivationTransaction,
     VulcanPluginActivationTransactionRecord, VulcanPluginDeactivationObservation,
-    VulcanPluginDeactivationReservation, VulcanPluginGenerationStore,
-    VulcanPluginLegacyMutationGuard, VulcanPluginRegisteredNativeMcpHostAuthority,
-    VulcanPluginRuntimeState,
+    VulcanPluginDeactivationReservation, VulcanPluginGenerationStore, VulcanPluginNamespaceGuard,
+    VulcanPluginRegisteredNativeMcpHostAuthority, VulcanPluginRuntimeState,
 };
 use std::fs::File;
 use std::sync::{Arc, MutexGuard, Weak};
@@ -64,7 +63,7 @@ enum RoutingReservationOriginal {
         intended: VulcanPluginActivation,
         /// Existing Arc contains the same private exclusive namespace File.
         /// 既有 Arc 包含相同私有排他命名空间文件。
-        namespace: Weak<VulcanPluginLegacyMutationGuard>,
+        namespace: Weak<VulcanPluginNamespaceGuard>,
     },
 }
 
@@ -82,7 +81,7 @@ impl RoutingReservationOriginal {
     /// 将 `mutation` 与完整原选择及实际命名空间匹配，不升级 Weak。
     /// Returns physical coordination identity only; existing execution-source checks remain required.
     /// 仅返回物理协调身份；仍要求既有执行来源检查。
-    fn matches_mutation(&self, mutation: &VulcanPluginLegacyMutationGuard) -> bool {
+    fn matches_mutation(&self, mutation: &VulcanPluginNamespaceGuard) -> bool {
         match self {
             Self::Deactivation {
                 original,
@@ -111,7 +110,7 @@ pub(super) enum ActivationRoutingOriginal<'a> {
     Deactivation(&'a VulcanPluginDeactivationReservation),
     /// Original callback or guarded publication borrows the existing physical mutation owner.
     /// 原回调或已屏障发布借用既有物理变更所有者。
-    LegacyMutation(&'a VulcanPluginLegacyMutationGuard),
+    NamespaceGuard(&'a VulcanPluginNamespaceGuard),
 }
 
 impl VulcanPluginRuntimeManager {
@@ -319,7 +318,7 @@ impl VulcanPluginRuntimeManager {
                     && removal.intended() == intended
                     && removal.matches_namespace_identity(namespace)
             }
-            (_, Some(ActivationRoutingOriginal::LegacyMutation(mutation))) => {
+            (_, Some(ActivationRoutingOriginal::NamespaceGuard(mutation))) => {
                 retained.original.matches_mutation(mutation)
             }
             _ => false,

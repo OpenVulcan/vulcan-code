@@ -141,8 +141,8 @@ impl VulcanPluginEmbeddedHost {
             CallExecutionSource::Activation(authority) => {
                 ExecutionSource::ActivationOperation(authority)
             }
-            CallExecutionSource::LegacyLifecycle(authority) => {
-                ExecutionSource::LegacyLifecycle(authority)
+            CallExecutionSource::RemovalLifecycle(authority) => {
+                ExecutionSource::RemovalLifecycle(authority)
             }
         };
         self.register_bundle_pool_with_capacity(Some(capacity_id), request, None, None, source)

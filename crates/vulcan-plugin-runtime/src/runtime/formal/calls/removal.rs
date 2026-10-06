@@ -6,7 +6,7 @@ use crate::VulcanPluginDeactivationReservation;
 
 /// Original ownership is either a declared real call or a verified absent declaration.
 /// 原所有权为已声明真实调用或已核验缺失声明。
-enum LegacyCallOwnership {
+enum RemovalCallOwnership {
     /// Actual parent and record remain unchanged through cleanup recovery.
     /// 实际父级及记录在清理恢复期间保持不变。
     Declared {
@@ -19,23 +19,23 @@ enum LegacyCallOwnership {
     },
     /// Absent callbacks retain the guard without requiring a formal executor.
     /// 缺失回调保留护栏，不要求正式执行器。
-    NoDeclaration(Arc<LegacyLifecycleExecution>),
+    NoDeclaration(Arc<RemovalLifecycleExecution>),
 }
 
 /// Explicitly reserved managed-Uninstall handle; waiting never acknowledges ownership.
 /// 明确预留受管卸载句柄；等待绝不确认所有权。
-pub struct VulcanPluginLegacyLifecycleCall {
+pub struct VulcanPluginRemovalLifecycleCall {
     /// The actual original manager remains available for same-call cleanup.
     /// 实际原管理器持续可用于同调用清理。
     manager: VulcanPluginRuntimeManager,
     /// Successful explicit acknowledgement consumes only this original ownership.
     /// 成功显式确认仅消费此原所有权。
-    ownership: Option<LegacyCallOwnership>,
+    ownership: Option<RemovalCallOwnership>,
 }
 
 /// Cancellation of an observer retains every original resource and evidence record.
 /// 观测者取消时保留每个原资源及证据记录。
-struct LegacyObservation {
+struct RemovalObservation {
     /// The actual call is never acknowledged by this observer.
     /// 此观测者绝不确认实际调用。
     call: Arc<FormalCall>,
@@ -44,7 +44,7 @@ struct LegacyObservation {
     completed: bool,
 }
 
-impl Drop for LegacyObservation {
+impl Drop for RemovalObservation {
     /// Request cancellation on interrupted waiting without releasing the original guard.
     /// 等待中断时请求取消，不释放原护栏。
     fn drop(&mut self) {
@@ -54,17 +54,17 @@ impl Drop for LegacyObservation {
     }
 }
 
-impl VulcanPluginLegacyLifecycleCall {
+impl VulcanPluginRemovalLifecycleCall {
     /// Start the registered original input once; repeated starts never replay callbacks.
     /// 仅启动已登记原输入一次；重复启动绝不重放回调。
     /// Returns executor or ownership errors while retaining unstarted input.
     /// 返回执行器或所有权错误，同时保留未启动输入。
     pub fn start(&self) -> Result<(), VulcanPluginRuntimeError> {
         match self.ownership.as_ref().ok_or_else(consumed_error)? {
-            LegacyCallOwnership::Declared { owner, call } => {
+            RemovalCallOwnership::Declared { owner, call } => {
                 self.manager.start_registered_formal_call(owner, call)
             }
-            LegacyCallOwnership::NoDeclaration(authority) => {
+            RemovalCallOwnership::NoDeclaration(authority) => {
                 // Preserve pending ownership until the same physical original passes coordination admission.
                 // 相同物理原实例通过协调准入之前保留待处理所有权。
                 let registration = self
@@ -78,8 +78,8 @@ impl VulcanPluginLegacyLifecycleCall {
                 self.manager.require_routing_publication_locked(
                     &registration,
                     Some(
-                        crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(
-                            authority.mutation_guard(),
+                        crate::runtime::routing::ActivationRoutingOriginal::NamespaceGuard(
+                            authority.namespace_guard(),
                         ),
                     ),
                 )?;
@@ -94,18 +94,18 @@ impl VulcanPluginLegacyLifecycleCall {
     /// 返回错误后仍可能需要物理退役及显式清理恢复。
     pub async fn observe(&self) -> Result<(), VulcanPluginRuntimeError> {
         match self.ownership.as_ref().ok_or_else(consumed_error)? {
-            LegacyCallOwnership::NoDeclaration(authority) => {
+            RemovalCallOwnership::NoDeclaration(authority) => {
                 authority.validate_owner(&self.manager.state)
             }
-            LegacyCallOwnership::Declared { call, .. } => {
+            RemovalCallOwnership::Declared { call, .. } => {
                 tokio::runtime::Handle::try_current().map_err(|_| {
                     VulcanPluginRuntimeError::new(
-                        "Legacy lifecycle observation requires a Tokio runtime.",
+                        "Removal lifecycle observation requires a Tokio runtime.",
                     )
                 })?;
                 // Retain original call ownership during this observation interval.
                 // 在此观测区间保留原调用所有权。
-                let mut observer = LegacyObservation {
+                let mut observer = RemovalObservation {
                     call: Arc::clone(call),
                     completed: false,
                 };
@@ -126,14 +126,14 @@ impl VulcanPluginLegacyLifecycleCall {
     /// 返回实际清理证据；未完成资源仍由此句柄及注册表持有。
     pub async fn drain_cleanup(&self) -> Result<VulcanPluginDrainReport, VulcanPluginRuntimeError> {
         match self.ownership.as_ref().ok_or_else(consumed_error)? {
-            LegacyCallOwnership::NoDeclaration(authority) => {
+            RemovalCallOwnership::NoDeclaration(authority) => {
                 authority.validate_owner(&self.manager.state)?;
                 Ok(VulcanPluginDrainReport::default())
             }
-            LegacyCallOwnership::Declared { owner, call } => {
+            RemovalCallOwnership::Declared { owner, call } => {
                 tokio::runtime::Handle::try_current().map_err(|_| {
                     VulcanPluginRuntimeError::new(
-                        "Legacy lifecycle cleanup requires a Tokio runtime.",
+                        "Removal lifecycle cleanup requires a Tokio runtime.",
                     )
                 })?;
                 self.manager
@@ -153,14 +153,14 @@ impl VulcanPluginLegacyLifecycleCall {
         // Preserve the original business result independently of retirement acknowledgement.
         // 独立于退役确认保留原业务结果。
         let result = match self.ownership.as_ref().ok_or_else(consumed_error)? {
-            LegacyCallOwnership::NoDeclaration(authority) => {
+            RemovalCallOwnership::NoDeclaration(authority) => {
                 authority.validate_owner(&self.manager.state)?;
                 Ok(())
             }
-            LegacyCallOwnership::Declared { owner, call } => {
-                let CallExecutionSource::LegacyLifecycle(authority) = &call.source else {
+            RemovalCallOwnership::Declared { owner, call } => {
+                let CallExecutionSource::RemovalLifecycle(authority) = &call.source else {
                     return Err(VulcanPluginRuntimeError::new(
-                        "Original call lacks legacy lifecycle authority.",
+                        "Original call lacks removal lifecycle authority.",
                     ));
                 };
                 authority.validate_owner(&self.manager.state)?;
@@ -179,7 +179,7 @@ impl VulcanPluginLegacyLifecycleCall {
 /// Return an explicit error for a handle whose original retirement was acknowledged.
 /// 为原退役已被确认的句柄返回明确错误。
 fn consumed_error() -> VulcanPluginRuntimeError {
-    VulcanPluginRuntimeError::new("Original legacy lifecycle was already acknowledged.")
+    VulcanPluginRuntimeError::new("Original removal lifecycle was already acknowledged.")
 }
 
 impl VulcanPluginRuntimeManager {
@@ -192,7 +192,7 @@ impl VulcanPluginRuntimeManager {
     pub fn prepare_deactivation_lifecycle_call(
         &self,
         original: &VulcanPluginDeactivationReservation,
-    ) -> Result<VulcanPluginLegacyLifecycleCall, VulcanPluginRuntimeError> {
+    ) -> Result<VulcanPluginRemovalLifecycleCall, VulcanPluginRuntimeError> {
         // Serialize literal manager/catalog identity before borrowing the same original namespace.
         // 借用同一原命名空间之前，串行化字面管理器／目录身份。
         let authority = {
@@ -217,7 +217,7 @@ impl VulcanPluginRuntimeManager {
                         "Original managed removal package is not installed.",
                     )
                 })?;
-            LegacyLifecycleExecution::for_deactivation(&self.state, plugin, original)?
+            RemovalLifecycleExecution::for_deactivation(&self.state, plugin, original)?
         };
         self.register_guarded_lifecycle(authority)
     }
@@ -228,8 +228,8 @@ impl VulcanPluginRuntimeManager {
     /// authority 已绑定实际命名空间及声明；返回保留原所有权，不启动回调。
     fn register_guarded_lifecycle(
         &self,
-        authority: Arc<LegacyLifecycleExecution>,
-    ) -> Result<VulcanPluginLegacyLifecycleCall, VulcanPluginRuntimeError> {
+        authority: Arc<RemovalLifecycleExecution>,
+    ) -> Result<VulcanPluginRemovalLifecycleCall, VulcanPluginRuntimeError> {
         // The same actual descriptor owns the one plugin identity used by all admission effects.
         // 同一实际描述符拥有全部准入效果使用的单个插件身份。
         let plugin_id = &authority.plugin().id;
@@ -248,8 +248,8 @@ impl VulcanPluginRuntimeManager {
                 self.require_routing_publication_locked(
                     &publication,
                     Some(
-                        crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(
-                            authority.mutation_guard(),
+                        crate::runtime::routing::ActivationRoutingOriginal::NamespaceGuard(
+                            authority.namespace_guard(),
                         ),
                     ),
                 )?;
@@ -263,7 +263,7 @@ impl VulcanPluginRuntimeManager {
             let deadline = Instant::now()
                 .checked_add(Duration::from_millis(VULCAN_PLUGIN_DEFAULT_HOOK_TIMEOUT_MS))
                 .ok_or_else(|| {
-                    VulcanPluginRuntimeError::new("Legacy lifecycle deadline is out of range.")
+                    VulcanPluginRuntimeError::new("Removal lifecycle deadline is out of range.")
                 })?;
             // Construct the original bounded input before registering any execution effects.
             // 登记任何执行副作用前构造原有界输入。
@@ -271,23 +271,23 @@ impl VulcanPluginRuntimeManager {
                 workspace: CallWorkspace::LifecycleEnvironment,
                 arguments: json!({"event": "uninstall", "plugin_id": plugin_id}),
                 finalizer: None,
-                admission: CallAdmission::LegacyLifecycle {
+                admission: CallAdmission::RemovalLifecycle {
                     authority: Arc::clone(&authority),
                     export: export.to_owned(),
                 },
                 scope: authority.scope(),
-                security_partition: format!("legacy-lifecycle:uninstall:{}", Uuid::new_v4()),
+                security_partition: format!("removal-lifecycle:uninstall:{}", Uuid::new_v4()),
                 deadline,
             };
             // Retain the same registered call and its sole execution source.
             // 保留同一已注册调用及其唯一执行来源。
             let call =
                 self.register_owned_formal_call(&owner, authority.plugin().clone(), input)?;
-            LegacyCallOwnership::Declared { owner, call }
+            RemovalCallOwnership::Declared { owner, call }
         } else {
-            LegacyCallOwnership::NoDeclaration(authority)
+            RemovalCallOwnership::NoDeclaration(authority)
         };
-        Ok(VulcanPluginLegacyLifecycleCall {
+        Ok(VulcanPluginRemovalLifecycleCall {
             manager: self.clone(),
             ownership: Some(ownership),
         })

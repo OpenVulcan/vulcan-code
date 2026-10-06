@@ -188,8 +188,8 @@ fn configured_fixture(
     // The child marker is outside immutable bytes and is written before real initialize completion.
     // 子进程标记位于不可变字节之外，在真实初始化完成之前写入。
     let marker = temp.path().join("actual-starts.jsonl");
-    // This exact configuration is selected by the real version-four writer, not read from mutable legacy state.
-    // 此精确配置由真实第四版写入者选定，不从可变旧状态读取。
+    // This exact configuration is selected by the real activation writer.
+    // 此精确配置由真实激活写入者选定。
     let configuration = serde_json::json!({"marker":marker,"mode":"ready_with_tool"});
     std::fs::write(
         source.join("defaults.json"),

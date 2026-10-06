@@ -8,7 +8,7 @@ use vulcan_agent_runtime::agent_runtime::extension_generation::ExtensionGenerati
 use vulcan_agent_runtime::mcp::McpRuntimeAccess;
 use vulcan_plugin_runtime::{
     VulcanPluginDeactivationReservation, VulcanPluginDeactivationStateReservation,
-    VulcanPluginGenerationStore, VulcanPluginLegacyLifecycleCall, VulcanPluginResourceDiagnostics,
+    VulcanPluginGenerationStore, VulcanPluginRemovalLifecycleCall, VulcanPluginResourceDiagnostics,
     VulcanPluginRoutingReservation, VulcanPluginRuntimeManager,
 };
 

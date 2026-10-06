@@ -118,12 +118,12 @@ impl VulcanPluginRuntimeManager {
                 CallAdmission::Lifecycle { .. } => {
                     self.require_routing_publication_locked(&publication, None)?
                 }
-                CallAdmission::LegacyLifecycle { authority, .. } => self
+                CallAdmission::RemovalLifecycle { authority, .. } => self
                     .require_routing_publication_locked(
                         &publication,
                         Some(
-                            crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(
-                                authority.mutation_guard(),
+                            crate::runtime::routing::ActivationRoutingOriginal::NamespaceGuard(
+                                authority.namespace_guard(),
                             ),
                         ),
                     )?,
@@ -167,16 +167,16 @@ impl VulcanPluginRuntimeManager {
             }
             // The same original guard cannot own overlapping lifecycle effects.
             // 同一原护栏不能拥有重叠生命周期副作用。
-            if let CallExecutionSource::LegacyLifecycle(authority) = &source
+            if let CallExecutionSource::RemovalLifecycle(authority) = &source
                 && calls.values().any(|call| match &call.source {
-                    CallExecutionSource::LegacyLifecycle(original) => {
+                    CallExecutionSource::RemovalLifecycle(original) => {
                         original.same_guard(authority)
                     }
                     CallExecutionSource::Published | CallExecutionSource::Activation(_) => false,
                 })
             {
                 return Err(VulcanPluginRuntimeError::new(
-                    "Legacy lifecycle conflicts with retained work for the original guard.",
+                    "Removal lifecycle conflicts with retained work for the original guard.",
                 ));
             }
             // Automatic retries observe the same original intent before any new quota or deadline is retained.
@@ -275,12 +275,12 @@ impl VulcanPluginRuntimeManager {
         // 消费待处理输入前启动监督，使执行器缺失时不丢失任何内容。
         let supervisor = self.supervisor_handle()?;
         self.ensure_reuse_observer(owner);
-        // A retained legacy callback may start only under its same actual routing original.
-        // 保留旧格式回调仅可在相同实际路由原实例内启动。
+        // A retained removal callback may start only under its same actual routing original.
+        // 保留移除回调仅可在相同实际路由原实例内启动。
         // Reject before consuming the original pending input, so recovery cannot lose or replay it.
         // 消费原待处理输入之前拒绝，使恢复不能丢失或重放原输入。
         let lifecycle_registration =
-            if let CallExecutionSource::LegacyLifecycle(authority) = &call.source {
+            if let CallExecutionSource::RemovalLifecycle(authority) = &call.source {
                 // Keep the gate through pending transfer without adding another physical namespace borrower.
                 // 跨待处理转移保持持门，不添加另一物理命名空间借用者。
                 let registration = self.state.session_registration_gate.lock().map_err(|_| {
@@ -289,8 +289,8 @@ impl VulcanPluginRuntimeManager {
                 self.require_routing_publication_locked(
                     &registration,
                     Some(
-                        crate::runtime::routing::ActivationRoutingOriginal::LegacyMutation(
-                            authority.mutation_guard(),
+                        crate::runtime::routing::ActivationRoutingOriginal::NamespaceGuard(
+                            authority.namespace_guard(),
                         ),
                     ),
                 )?;

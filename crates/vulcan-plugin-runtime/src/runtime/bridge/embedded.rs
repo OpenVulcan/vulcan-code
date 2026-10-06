@@ -4,8 +4,8 @@
 use super::*;
 use crate::VulcanPluginDescriptor;
 use crate::runtime::candidates::ActivationExecution;
-use crate::runtime::legacy_lifecycle::{CallExecutionSource, LegacyLifecycleExecution};
 use crate::runtime::private_hooks::PrivateHookOrigin;
+use crate::runtime::removal_lifecycle::{CallExecutionSource, RemovalLifecycleExecution};
 use luaskills::runtime::embedded::capabilities::{
     CapabilityDescriptor, CapabilityEffects, CapabilityExecution, CapabilityIdempotency,
     CapabilityInvocation, CapabilityOutcome, CapabilityPermissions, CapabilityRegistrationRequest,
@@ -132,7 +132,7 @@ enum ExecutionSource {
     ActivationOperation(Arc<ActivationExecution>),
     /// The original disabled-user mutation guard owns this install or uninstall execution.
     /// 原已停用用户插件变更守卫拥有此次安装或卸载执行。
-    LegacyLifecycle(Arc<LegacyLifecycleExecution>),
+    RemovalLifecycle(Arc<RemovalLifecycleExecution>),
     /// Only original target initialization and its declared Hook finalizer may invoke native services.
     /// 仅原目标初始化及其声明 Hook 关闭器可以调用原生服务。
     PrivateHook(PrivateHookOrigin),
@@ -275,11 +275,11 @@ fn admitted_plugin(
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
         return Ok(activation.plugin.clone());
     }
-    if let ExecutionSource::LegacyLifecycle(authority) = &admission.source {
+    if let ExecutionSource::RemovalLifecycle(authority) = &admission.source {
         if authority.plugin().id != plugin_id {
             return Err(error(
                 EmbeddedErrorCode::StaleGeneration,
-                "Legacy lifecycle plugin identity differs from pool admission.",
+                "Removal lifecycle plugin identity differs from pool admission.",
             ));
         }
         // Validate the original manager, guard and disabled descriptor before reading any source.
@@ -343,7 +343,7 @@ impl VulcanPluginEmbeddedHost {
                     authority.request_id == request_id
                 }
                 ExecutionSource::PrivateHook(authority) => authority.request_id() == request_id,
-                ExecutionSource::Published | ExecutionSource::LegacyLifecycle(_) => false,
+                ExecutionSource::Published | ExecutionSource::RemovalLifecycle(_) => false,
             } {
                 return Ok(true);
             }
@@ -725,7 +725,7 @@ impl VulcanPluginEmbeddedHost {
         // Actual core pool ownership pins the descriptor, not historical host handles.
         // 真实核心池所有权固定描述符，历史宿主句柄不固定它。
         let environment = match &admission.source {
-            ExecutionSource::LegacyLifecycle(authority) => Some(
+            ExecutionSource::RemovalLifecycle(authority) => Some(
                 authority
                     .take_environment()
                     .map_err(|failure| internal(&failure.message))?,
@@ -977,7 +977,7 @@ fn validate_current_source(
         }
         return Ok(());
     }
-    if let ExecutionSource::LegacyLifecycle(authority) = source {
+    if let ExecutionSource::RemovalLifecycle(authority) = source {
         authority
             .validate(state, &domain.plugin, domain.scope)
             .map_err(|failure| error(EmbeddedErrorCode::StaleGeneration, failure.message))?;
@@ -986,13 +986,13 @@ fn validate_current_source(
         let manifest = domain.plugin.manifest.as_ref().ok_or_else(|| {
             error(
                 EmbeddedErrorCode::PermissionDenied,
-                "Legacy lifecycle manifest is unavailable.",
+                "Removal lifecycle manifest is unavailable.",
             )
         })?;
         if capability.is_some_and(|name| !permitted(name, &manifest.permissions)) {
             return Err(error(
                 EmbeddedErrorCode::PermissionDenied,
-                "Legacy lifecycle manifest does not authorize this native capability.",
+                "Removal lifecycle manifest does not authorize this native capability.",
             ));
         }
         return Ok(());
@@ -1171,5 +1171,5 @@ fn internal(message: &str) -> EmbeddedError {
 mod tests;
 
 #[cfg(test)]
-#[path = "embedded/legacy_lifecycle_tests.rs"]
-mod legacy_lifecycle_tests;
+#[path = "embedded/removal_lifecycle_tests.rs"]
+mod removal_lifecycle_tests;

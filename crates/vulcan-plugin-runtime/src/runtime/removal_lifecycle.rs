@@ -4,7 +4,7 @@
 use super::*;
 use crate::{
     VulcanPluginActivation, VulcanPluginDeactivationReservation, VulcanPluginDescriptor,
-    VulcanPluginLegacyMutationGuard, VulcanPluginPackageOrigin,
+    VulcanPluginNamespaceGuard, VulcanPluginPackageOrigin,
 };
 use std::sync::Weak;
 
@@ -20,7 +20,7 @@ pub(in crate::runtime) enum CallExecutionSource {
     Activation(Arc<super::candidates::ActivationExecution>),
     /// Guarded lifecycle execution retains its explicitly reserved managed-removal namespace.
     /// 受保护生命周期执行保留其明确预留受管移除命名空间。
-    LegacyLifecycle(Arc<LegacyLifecycleExecution>),
+    RemovalLifecycle(Arc<RemovalLifecycleExecution>),
 }
 
 impl CallExecutionSource {
@@ -33,7 +33,7 @@ impl CallExecutionSource {
     ) -> Option<&Arc<super::candidates::ActivationExecution>> {
         match self {
             Self::Activation(authority) => Some(authority),
-            Self::Published | Self::LegacyLifecycle(_) => None,
+            Self::Published | Self::RemovalLifecycle(_) => None,
         }
     }
 
@@ -48,13 +48,13 @@ impl CallExecutionSource {
 
 /// Sealed original authority; actual calls and pools keep the same guard alive.
 /// 封闭原权威；实际调用及池使同一护栏持续存活。
-pub(in crate::runtime) struct LegacyLifecycleExecution {
+pub(in crate::runtime) struct RemovalLifecycleExecution {
     /// Weak identity prevents a registry-authority-manager ownership cycle.
     /// 弱身份避免注册表、权威及管理器形成所有权环。
     manager: Weak<VulcanPluginManagerState>,
     /// The exact namespace owner is never reacquired during callback admission.
     /// 回调入场期间绝不重新获取精确命名空间所有者。
-    guard: Arc<VulcanPluginLegacyMutationGuard>,
+    guard: Arc<VulcanPluginNamespaceGuard>,
     /// The actual user descriptor fixes package bytes and the original manifest.
     /// 实际用户描述符固定包字节及原清单。
     plugin: VulcanPluginDescriptor,
@@ -69,7 +69,7 @@ pub(in crate::runtime) struct LegacyLifecycleExecution {
     environment: Mutex<Option<std::fs::File>>,
 }
 
-impl LegacyLifecycleExecution {
+impl RemovalLifecycleExecution {
     /// Bind the same original removal reservation to its exact disabled managed package and Uninstall scope.
     /// 将同一原移除预留绑定至其精确停用受管包及卸载作用域。
     /// state/plugin are the actual manager/catalog; original lends its real File; returns inert checked ownership.
@@ -87,7 +87,7 @@ impl LegacyLifecycleExecution {
         // Read the actual manifest before selecting the removal declaration.
         // 选择卸载声明前读取实际清单。
         let manifest = plugin.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Legacy lifecycle package has no valid manifest.")
+            VulcanPluginRuntimeError::new("Removal lifecycle package has no valid manifest.")
         })?;
         let export = manifest
             .lua_runtime
@@ -127,7 +127,7 @@ impl LegacyLifecycleExecution {
     ) -> Result<(), VulcanPluginRuntimeError> {
         if !Weak::ptr_eq(&self.manager, &Arc::downgrade(state)) {
             return Err(VulcanPluginRuntimeError::new(
-                "Legacy lifecycle belongs to another manager.",
+                "Removal lifecycle belongs to another manager.",
             ));
         }
         self.validate_owner(state)?;
@@ -140,7 +140,7 @@ impl LegacyLifecycleExecution {
         // Select the actual current descriptor by the original plugin identity.
         // 按原插件身份选择实际当前描述符。
         let current = snapshot.plugins.get(&self.plugin.id).ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Legacy lifecycle package is no longer selected.")
+            VulcanPluginRuntimeError::new("Removal lifecycle package is no longer selected.")
         })?;
         if scope != self.scope()
             || !Self::same_descriptor(&self.plugin, plugin)
@@ -153,7 +153,7 @@ impl LegacyLifecycleExecution {
             || state.has_cleanup_diagnostics(&self.plugin.id)?
         {
             return Err(VulcanPluginRuntimeError::new(
-                "Legacy lifecycle authority does not match the exact disabled user package.",
+                "Removal lifecycle authority does not match the exact disabled user package.",
             ));
         }
         Ok(())
@@ -184,7 +184,7 @@ impl LegacyLifecycleExecution {
                 .is_some_and(|original| Arc::ptr_eq(&original, state))
         {
             return Err(VulcanPluginRuntimeError::new(
-                "Legacy lifecycle belongs to another manager.",
+                "Removal lifecycle belongs to another manager.",
             ));
         }
         self.guard
@@ -226,7 +226,7 @@ impl LegacyLifecycleExecution {
     /// 借用同一类型化变更权威用于实际配置副作用。
     /// self owns the guard Arc; returns its typed borrow without revealing an OS file.
     /// self 持有护栏 Arc；返回类型化借用，不暴露系统文件。
-    pub(in crate::runtime) fn mutation_guard(&self) -> &VulcanPluginLegacyMutationGuard {
+    pub(in crate::runtime) fn namespace_guard(&self) -> &VulcanPluginNamespaceGuard {
         &self.guard
     }
 
@@ -256,11 +256,11 @@ impl LegacyLifecycleExecution {
         self.environment
             .lock()
             .map_err(|_| {
-                VulcanPluginRuntimeError::new("Legacy environment ownership lock is poisoned.")
+                VulcanPluginRuntimeError::new("Removal environment ownership lock is poisoned.")
             })?
             .take()
             .ok_or_else(|| {
-                VulcanPluginRuntimeError::new("Legacy lifecycle environment was not prepared.")
+                VulcanPluginRuntimeError::new("Removal lifecycle environment was not prepared.")
             })
     }
 
@@ -274,7 +274,7 @@ impl LegacyLifecycleExecution {
         self.environment
             .lock()
             .map_err(|_| {
-                VulcanPluginRuntimeError::new("Legacy environment ownership lock is poisoned.")
+                VulcanPluginRuntimeError::new("Removal environment ownership lock is poisoned.")
             })?
             .take();
         Ok(())
@@ -292,7 +292,7 @@ impl LegacyLifecycleExecution {
         // Serialize ownership of the actual prepared environment lease.
         // 串行化实际准备环境租约所有权。
         let mut environment = self.environment.lock().map_err(|_| {
-            VulcanPluginRuntimeError::new("Legacy environment ownership lock is poisoned.")
+            VulcanPluginRuntimeError::new("Removal environment ownership lock is poisoned.")
         })?;
         if environment.is_none() {
             *environment = Some(

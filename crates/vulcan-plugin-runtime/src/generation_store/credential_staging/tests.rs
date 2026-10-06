@@ -544,8 +544,8 @@ fn credential_staging_is_required_before_selection_and_catalog_pinning() {
             )
             .is_err()
     );
-    // A selected inventory that later becomes corrupt is unavailable, never interpreted as legacy storage.
-    // 选定清单随后损坏时不可用，绝不解释为旧存储。
+    // A selected inventory that later becomes corrupt is unavailable, never interpreted as absent.
+    // 选定清单随后损坏时不可用，绝不解释为缺失。
     let path = store
         .root
         .join("credentials/staging-plugin")

@@ -281,8 +281,8 @@ impl VulcanPluginPreparedPublishedMcp {
 
 /// Validate expected's actual manager, current Arc and plugin_id's enabled full descriptor.
 /// 校验 expected 的实际管理器、当前 Arc 及 plugin_id 的已启用完整描述符。
-/// Return the original descriptor clone; copied, foreign, legacy and non-enabled snapshots are rejected.
-/// 返回原描述符克隆；拒绝复制、外来、旧格式及未启用快照。
+/// Return the original descriptor clone; copied, foreign, unmanaged and non-enabled snapshots are rejected.
+/// 返回原描述符克隆；拒绝复制、外来、非受管及未启用快照。
 fn validate_current_snapshot(
     manager: &VulcanPluginRuntimeManager,
     expected: &Arc<VulcanPluginCatalogSnapshot>,
@@ -335,8 +335,8 @@ fn validate_dispatch_admission(
 
 /// Compare plugin's real full selection and physical pins with active under the same retained Store fence.
 /// 在同一保留存储屏障内，比较 plugin 的真实完整选择及物理固定与 active。
-/// Return success only for explicit complete immutable authorities; legacy values never become source proof.
-/// 仅显式完整不可变权威返回成功；旧格式值绝不变为来源证明。
+/// Return success only for explicit complete immutable authorities; unpinned values never become source proof.
+/// 仅显式完整不可变权威返回成功；未固定值绝不变为来源证明。
 fn validate_full_pins(
     plugin: &VulcanPluginDescriptor,
     selected: &VulcanPluginActivation,

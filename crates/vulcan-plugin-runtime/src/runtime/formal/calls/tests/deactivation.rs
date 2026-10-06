@@ -37,8 +37,8 @@ impl VulcanPluginUiEventPublisher for RemovalEvents {
     }
 }
 
-/// Publish a real configured immutable package before reserving removal, independently of the flat installer.
-/// 在预留移除之前发布真实已配置不可变包，独立于平铺安装器。
+/// Publish a real configured immutable package before reserving removal.
+/// 在预留移除之前发布真实已配置不可变包。
 /// declared/configured choose actual source declarations; returns the manager, store and complete selected record.
 /// declared／configured 选择实际来源声明；返回管理器、存储及完整已选记录。
 fn fixture(
@@ -385,7 +385,7 @@ fn deactivation_lifecycle_refuses_wrong_root_and_scope_before_native_effects() {
     let plugin = fixture.manager.snapshot().plugins["hook-plugin"].clone();
     // This is the actual factory's checked authority, not a fabricated record or raw File.
     // 此为实际工厂的已校验权威，而非伪造记录或原始文件。
-    let authority = LegacyLifecycleExecution::for_deactivation(
+    let authority = RemovalLifecycleExecution::for_deactivation(
         &fixture.manager.state,
         plugin.clone(),
         &removal,

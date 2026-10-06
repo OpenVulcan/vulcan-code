@@ -39,7 +39,7 @@ fn server(marker: &std::path::Path) -> McpServerConfig {
 /// Cancelling actual undispatched work releases its original resources without ever creating a native process.
 /// 取消实际未派发工作释放其原资源，且绝不创建原生进程。
 #[tokio::test]
-async fn legacy_replacement_abort_before_dispatch_never_starts_native_work() {
+async fn retained_replacement_abort_before_dispatch_never_starts_native_work() {
     // All native observations belong to one isolated temporary root.
     // 全部原生观测属于单个隔离临时根。
     let root = tempfile::tempdir().expect("raw deferred fixture");
@@ -55,7 +55,7 @@ async fn legacy_replacement_abort_before_dispatch_never_starts_native_work() {
     // Pure preparation constructs the retained owner without spawning a lifecycle task.
     // 纯准备构造保留所有者，不启动生命周期任务。
     let native =
-        LegacyPluginMcpReplacement::prepare(&current, "raw-retained", 5, vec![server(&marker)])
+        RetainedPluginMcpReplacement::prepare(&current, "raw-retained", 5, vec![server(&marker)])
             .expect("actual undispatched work");
     assert!(!marker.exists());
     native
@@ -74,7 +74,7 @@ async fn legacy_replacement_abort_before_dispatch_never_starts_native_work() {
 /// Actual Ready remains business-closed and a second dispatch cannot replay the same original initialization.
 /// 实际就绪保持业务关闭，第二次派发不能重放相同原初始化。
 #[tokio::test]
-async fn legacy_replacement_ready_is_closed_until_actual_full_publication() {
+async fn retained_replacement_ready_is_closed_until_actual_full_publication() {
     // Real startup marker exposes process identity without retaining native resources.
     // 真实启动标记暴露进程身份，不保留原生资源。
     let root = tempfile::tempdir().expect("raw Ready fixture");
@@ -90,7 +90,7 @@ async fn legacy_replacement_ready_is_closed_until_actual_full_publication() {
     // The same actual controller owns preparation, dispatch and its original execution lease.
     // 相同实际控制器拥有准备、派发及其原执行租约。
     let native =
-        LegacyPluginMcpReplacement::prepare(&current, "raw-retained", 5, vec![server(&marker)])
+        RetainedPluginMcpReplacement::prepare(&current, "raw-retained", 5, vec![server(&marker)])
             .expect("exact raw preparation");
     native.dispatch().expect("register before actual dispatch");
     native

@@ -630,8 +630,8 @@ fn credential_reservation_standalone_api_preserves_original_partial_recovery() {
         (1, 0)
     );
     drop(_fault);
-    // Reopening the legacy standalone writer is valid after the consuming caller's owner was dropped.
-    // 消费调用方所有者被丢弃后，可以重新打开历史独立写入者。
+    // Reopening the standalone writer is valid after the consuming caller's owner was dropped.
+    // 消费调用方所有者被丢弃后，可以重新打开独立写入者。
     let mut owner = store
         .resume_credential_staging("staging-plugin", &revision)
         .expect("resume same original standalone inventory");

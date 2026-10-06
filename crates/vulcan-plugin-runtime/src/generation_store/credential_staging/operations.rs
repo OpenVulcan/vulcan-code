@@ -8,15 +8,15 @@ use crate::generation_store::{
 };
 use std::path::PathBuf;
 
-/// Optional private inventory directory; legacy stores need not contain it until explicit preparation.
-/// 可选私有清单目录；旧存储在显式准备前无需包含它。
+/// Optional private inventory directory; a store need not contain it until explicit preparation.
+/// 可选私有清单目录；存储在显式准备前无需包含它。
 pub(super) const INVENTORY_DIRECTORY: &str = "credentials";
 
 impl VulcanPluginGenerationStore {
     /// Begin exact `generation`/`revision` values with optional actual `preparation` ownership; return the retained writer.
     /// 按精确 `generation`／`revision` 值及可选实际 `preparation` 所有权开始暂存；返回保留写入者。
-    /// Legacy public staging passes no parent; reserved revisions require their actual original owner.
-    /// 旧公开暂存不传父级；预留修订要求其实际原所有者。
+    /// Standalone settings staging passes no parent; reserved revisions require their actual original owner.
+    /// 独立设置暂存不传父级；预留修订要求其实际原所有者。
     pub(in crate::generation_store) fn begin_owned_credential_staging(
         &self,
         generation: &PinnedVulcanPluginGeneration,

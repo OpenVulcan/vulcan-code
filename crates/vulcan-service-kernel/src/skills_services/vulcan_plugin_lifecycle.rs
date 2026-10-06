@@ -1714,7 +1714,7 @@ pub(super) fn publish_credential_extension_generation(
     state: &SharedServiceBridgeState,
     plugin_id: &str,
     catalog: Arc<vulcan_plugin_runtime::VulcanPluginCatalogSnapshot>,
-    replacement: &vulcan_agent_runtime::mcp::LegacyPluginMcpReplacement,
+    replacement: &vulcan_agent_runtime::mcp::RetainedPluginMcpReplacement,
 ) -> Result<(), String> {
     let mut guard = state.lock().map_err(|error| error.to_string())?;
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;

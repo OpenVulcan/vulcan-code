@@ -5,7 +5,7 @@ use super::*;
 use crate::runtime::tests::{test_manager, write_hook_package};
 use crate::{
     VulcanPluginActivation, VulcanPluginDeactivationReservation, VulcanPluginGenerationStore,
-    VulcanPluginLegacyMutationGuard,
+    VulcanPluginNamespaceGuard,
 };
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
@@ -20,7 +20,7 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// Actual manager, package, core pool and original removal reservation for one disabled managed package.
 /// 单个已停用受管插件包的实际管理器、插件包、核心池及原移除预留。
-struct LegacyFixture {
+struct RemovalFixture {
     /// The actual core is closed before its physical package directory disappears.
     /// 实际核心在物理插件包目录消失前关闭。
     host: VulcanPluginEmbeddedHost,
@@ -35,7 +35,7 @@ struct LegacyFixture {
     pool: String,
     /// Weak observation proves the guard outlives the pool only through the retained reservation.
     /// 弱观测证明守卫仅经由保留预留在池之后存活。
-    guard: Weak<VulcanPluginLegacyMutationGuard>,
+    guard: Weak<VulcanPluginNamespaceGuard>,
     /// The removal reservation owns the namespace File until the test releases it.
     /// 移除预留拥有命名空间文件，直至测试释放它。
     original: Option<VulcanPluginDeactivationReservation>,
@@ -47,7 +47,7 @@ struct LegacyFixture {
     _root: tempfile::TempDir,
 }
 
-impl LegacyFixture {
+impl RemovalFixture {
     /// Build a real disabled managed bundle and admit its Uninstall callback through the original removal reservation.
     /// 构建真实已停用受管 bundle，并通过原移除预留接纳其卸载回调。
     /// Return the actual pool fixture after caller-owned authority handles have been released.
@@ -69,7 +69,7 @@ impl LegacyFixture {
         // Keep schema/defaults and declared lifecycle exports in the same actual package manifest.
         // 模式、默认值及声明生命周期导出保留在同一实际包清单内。
         let manifest = fs::read_to_string(package.join("plugin.yaml"))
-            .expect("actual legacy manifest")
+            .expect("actual removal manifest")
             .replace("default_enabled: true", "default_enabled: false")
             .replace(
                 "    disable: on_disable",
@@ -79,7 +79,7 @@ impl LegacyFixture {
             package.join("plugin.yaml"),
             format!("{manifest}permissions: [config]\nconfig:\n  schema_file: config.schema.json\n  defaults_file: config.defaults.json\n"),
         )
-        .expect("actual legacy config declaration");
+        .expect("actual removal config declaration");
         fs::write(
             package.join("config.schema.json"),
             r#"{"type":"object","required":["owner"],"properties":{"owner":{"type":"string"}},"additionalProperties":false}"#,
@@ -144,7 +144,7 @@ return M
         // Bind the actual manager and original full selection, using the production authority constructor.
         // 使用生产权威构造入口绑定实际管理器及原完整选择。
         let authority =
-            LegacyLifecycleExecution::for_deactivation(&manager.state, plugin.clone(), &original)
+            RemovalLifecycleExecution::for_deactivation(&manager.state, plugin.clone(), &original)
                 .expect("original lifecycle authority");
         // Weak observation never becomes an independent owner registry.
         // 弱观测绝不成为独立所有者注册表。
@@ -165,11 +165,11 @@ return M
                 &plugin.id,
                 &PoolAdmission {
                     scope: authority.scope(),
-                    source: ExecutionSource::LegacyLifecycle(Arc::clone(&authority)),
+                    source: ExecutionSource::RemovalLifecycle(Arc::clone(&authority)),
                 },
             )
             .is_err(),
-            "foreign manager cannot admit an original legacy owner"
+            "foreign manager cannot admit an original removal owner"
         );
         assert!(
             admitted_plugin(
@@ -177,11 +177,11 @@ return M
                 &plugin.id,
                 &PoolAdmission {
                     scope: VulcanPluginBridgeLeaseScope::Enabled,
-                    source: ExecutionSource::LegacyLifecycle(Arc::clone(&authority)),
+                    source: ExecutionSource::RemovalLifecycle(Arc::clone(&authority)),
                 },
             )
             .is_err(),
-            "legacy owner cannot authorize an enabled callback"
+            "removal owner cannot authorize an enabled callback"
         );
         // The parent budget is defined once; every child maximum derives from it.
         // 父级预算仅定义一次；每个子级上限从它派生。
@@ -201,8 +201,8 @@ return M
             max_host_request_bytes: 16384,
             max_value_bytes: 4096,
         };
-        // One aggregate owns all actual resources, without a separate legacy engine.
-        // 单个聚合拥有全部实际资源，不建立独立旧格式引擎。
+        // One aggregate owns all actual resources, without a separate removal engine.
+        // 单个聚合拥有全部实际资源，不建立独立移除引擎。
         let aggregate = EmbeddedPluginConfig {
             max_registered_pools: config.max_registered_pools,
             max_sessions: config.max_sessions,
@@ -219,8 +219,8 @@ return M
         host.runtime()
             .register_plugin(plugin.id.clone(), aggregate.clone())
             .expect("actual plugin aggregate");
-        // The capacity is explicitly chosen before registering the legacy pool.
-        // 旧格式池注册前显式选择容量。
+        // The capacity is explicitly chosen before registering the removal pool.
+        // 移除池注册前显式选择容量。
         let capacity = host
             .runtime()
             .register_capacity(
@@ -246,7 +246,7 @@ return M
                     plugin_id: plugin.id.clone(),
                     plugin_generation: plugin.generation,
                     workspace_root: root.path().to_path_buf(),
-                    security_partition: "original-legacy-lifecycle".to_string(),
+                    security_partition: "original-removal-lifecycle".to_string(),
                     scope: authority.scope(),
                     policy: PluginPoolConfig {
                         kind: PoolKind::Shared,
@@ -262,7 +262,7 @@ return M
                     },
                     finalizer: None,
                 },
-                CallExecutionSource::LegacyLifecycle(Arc::clone(&authority)),
+                CallExecutionSource::RemovalLifecycle(Arc::clone(&authority)),
             )
             .expect("actual original lifecycle pool");
         {
@@ -282,7 +282,7 @@ return M
                 .expect("actual pool domain");
             assert!(matches!(
                 &*domain.source.lock().expect("actual captured source"),
-                ExecutionSource::LegacyLifecycle(retained) if Arc::ptr_eq(retained, &authority)
+                ExecutionSource::RemovalLifecycle(retained) if Arc::ptr_eq(retained, &authority)
             ));
             assert!(
                 domain._environment.is_some(),
@@ -360,7 +360,7 @@ return M
         {
             assert!(
                 Instant::now() < deadline,
-                "actual legacy pool cleanup timed out"
+                "actual removal pool cleanup timed out"
             );
             std::thread::yield_now();
         }
@@ -377,7 +377,7 @@ return M
 fn managed_uninstall_callback_rejects_configuration_update_and_retains_original_guard() {
     // No caller-owned authority survives this constructor; the actual pool must retain it.
     // 此构造函数后无调用方所有权权威存续；实际池必须保留它。
-    let mut fixture = LegacyFixture::new();
+    let mut fixture = RemovalFixture::new();
     assert!(
         fixture.guard.upgrade().is_some(),
         "actual domain lost original guard"
@@ -385,7 +385,7 @@ fn managed_uninstall_callback_rejects_configuration_update_and_retains_original_
     assert!(
         fixture
             .store
-            .acquire_legacy_mutation_guard("hook-plugin", None)
+            .acquire_namespace_guard("hook-plugin", None)
             .is_err(),
         "actual pool must retain namespace exclusivity"
     );
@@ -410,6 +410,6 @@ fn managed_uninstall_callback_rejects_configuration_update_and_retains_original_
     );
     fixture
         .store
-        .acquire_legacy_mutation_guard("hook-plugin", Some(&fixture.selected))
+        .acquire_namespace_guard("hook-plugin", Some(&fixture.selected))
         .expect("namespace released only after physical retirement");
 }

@@ -33,13 +33,13 @@ mod execution;
 mod formal;
 mod installation;
 mod lease;
-mod legacy_lifecycle;
 mod lifecycle;
 mod local_files;
 mod persistent;
 mod private_hooks;
 mod process;
 mod recovery;
+mod removal_lifecycle;
 mod routing;
 mod runtime_errors;
 pub use routing::VulcanPluginRoutingReservation;
@@ -75,10 +75,10 @@ pub use formal::{
     VulcanPluginFormalCallStatus, VulcanPluginFormalCapacityCatalog,
     VulcanPluginFormalCapacityStatus, VulcanPluginFormalPluginStatus,
     VulcanPluginFormalRuntimeStatus, VulcanPluginFormalSessionStatus,
-    VulcanPluginLegacyLifecycleCall, VulcanPluginMcpPredecessorHandoffEvidence,
-    VulcanPluginMcpTargetHandoffEvidence, VulcanPluginNativeMcpHandoffAdapter,
-    VulcanPluginNativeMcpPredecessorHandoffAdapter, VulcanPluginPrewarmTargetRequest,
-    VulcanPluginPrewarmTargetStatus, VulcanPluginResourceDiagnostic,
+    VulcanPluginMcpPredecessorHandoffEvidence, VulcanPluginMcpTargetHandoffEvidence,
+    VulcanPluginNativeMcpHandoffAdapter, VulcanPluginNativeMcpPredecessorHandoffAdapter,
+    VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
+    VulcanPluginRemovalLifecycleCall, VulcanPluginResourceDiagnostic,
     VulcanPluginResourceDiagnostics, VulcanPluginResourceErrorDiagnostic, VulcanPluginResourceKind,
     VulcanPluginResourceOperationDiagnostic, VulcanPluginReusableDomainStatus,
 };

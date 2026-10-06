@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
-use vulcan_agent_runtime::mcp::LegacyPluginMcpReplacement;
+use vulcan_agent_runtime::mcp::RetainedPluginMcpReplacement;
 use vulcan_plugin_runtime::{
     VulcanPluginCredentialEdit, VulcanPluginCredentialKey, VulcanPluginCredentialValues,
     VulcanPluginRuntimeManager,
@@ -114,7 +114,7 @@ async fn ready_candidate_mcp(
     runtime: &VulcanPluginRuntimeManager,
     edit: &VulcanPluginCredentialEdit,
     backend: &OsPluginMcpSecretStore,
-) -> Result<Option<LegacyPluginMcpReplacement>, String> {
+) -> Result<Option<RetainedPluginMcpReplacement>, String> {
     let candidate = edit.candidate();
     if candidate.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabled {
         return Ok(None);
@@ -131,7 +131,7 @@ async fn ready_candidate_mcp(
         .as_ref()
         .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
         .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
-    let replacement = LegacyPluginMcpReplacement::prepare(
+    let replacement = RetainedPluginMcpReplacement::prepare(
         &current_mcp_runtime,
         &candidate.id,
         candidate.generation,

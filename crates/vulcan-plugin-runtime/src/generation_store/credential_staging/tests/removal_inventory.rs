@@ -512,11 +512,11 @@ fn retained_deactivation_inventory_rejects_foreign_actual_credential_history_bef
         directory.join(format!("{}.json", first.as_str())),
     )
     .expect("actual foreign journal bytes replacement");
-    // The actual selected source is deliberately legacy so only history validation encounters the mismatch.
-    // 实际已选来源刻意为旧式，因此仅历史校验遇到不匹配。
+    // The actual selected source binds no revision so only history validation encounters the mismatch.
+    // 实际已选来源不绑定修订，因此仅历史校验遇到不匹配。
     let selected = store
         .activate_for_test(&package, 0, package.required_permissions.clone())
-        .expect("actual legacy selection");
+        .expect("actual unbound selection");
     assert!(
         store
             .reserve_deactivation(Uuid::new_v4(), &selected)

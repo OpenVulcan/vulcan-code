@@ -140,8 +140,8 @@ fn fixture(local: bool) -> Fixture {
     let package = store
         .prepare(&source, &inspected.content_fingerprint)
         .expect("package");
-    // A genuine completed empty revision is distinct from legacy storage.
-    // 真实完成的空修订独立于旧存储。
+    // A genuine completed empty revision is distinct from an unbound selection.
+    // 真实完成的空修订独立于未绑定选择。
     let credentials = VulcanPluginCredentialRevision::allocate();
     store
         .begin_credential_staging(

@@ -26,9 +26,6 @@ struct Fixture {
     /// Reads record the exact descriptor-owned revision rather than inferring current state.
     /// 读取记录精确描述符自有修订，不推断当前状态。
     secrets: RevisionSecrets,
-    /// The unrelated mutable document must remain byte-for-byte unchanged.
-    /// 无关可变文档必须保持字节完全不变。
-    legacy: std::path::PathBuf,
     /// Temporary paths outlive every real resource owner above.
     /// 临时路径跨上方每个真实资源所有者存续。
     _temp: tempfile::TempDir,
@@ -50,11 +47,6 @@ fn fixture(global: bool) -> Fixture {
     let user = temp.path().join("user");
     fs::create_dir(&bundled).expect("bundled root");
     fs::create_dir(&user).expect("user root");
-    // This exact old-format file is a tripwire for an accidental mutable configuration read.
-    // 此精确旧格式文件用于检测意外可变配置读取。
-    let legacy = temp.path().join("state/bound-plugin/config.json");
-    fs::create_dir_all(legacy.parent().expect("literal state parent")).expect("state root");
-    fs::write(&legacy, br#"{"label":"legacy-document"}"#).expect("unrelated legacy file");
     // Production discovery works without a Lua engine for these native declarations.
     // 对这些原生声明，生产发现在无 Lua 引擎时工作。
     let manager = VulcanPluginRuntimeManager::without_runtime(
@@ -171,15 +163,14 @@ fn fixture(global: bool) -> Fixture {
         permissions: preview.permissions,
         successor_credentials,
         secrets,
-        legacy,
         _temp: temp,
     }
 }
 
 /// Frozen materialization survives a real successor publication and rejects another issuer before secret reads.
 /// 固定物化跨真实后继发布存续，并在秘密读取之前拒绝另一签发者。
-/// No inputs or return value; actual selections, backend reads and unchanged legacy bytes are the evidence.
-/// 无输入及返回值；实际选择、后端读取及未变旧字节构成证据。
+/// No inputs or return value; actual selections and backend reads are the evidence.
+/// 无输入及返回值；实际选择及后端读取构成证据。
 #[test]
 fn published_materialization_keeps_original_config_credentials_and_route() {
     // Retain the exact original actual catalog independently of the later current selection.
@@ -261,10 +252,6 @@ fn published_materialization_keeps_original_config_credentials_and_route() {
             ),
         }
     }
-    assert_eq!(
-        fs::read(&fixture.legacy).expect("retained legacy bytes"),
-        br#"{"label":"legacy-document"}"#
-    );
 }
 
 /// Empty global declarations still retain exact original route metadata without inventing a first server.

@@ -119,7 +119,7 @@ fn managed_approval_publication_is_exact() {
 /// Strict original-byte decoding rejects malformed approvals, and package pinning rejects mismatched declarations.
 /// 严格原字节解码拒绝损坏批准，插件固定拒绝不匹配声明。
 #[test]
-fn managed_approval_corrupt_records_never_use_legacy_authority() {
+fn managed_approval_corrupt_records_never_fall_back_to_manifest_authority() {
     // Real selected contents distinguish protocol corruption from absent package data.
     // 真实选中内容区分协议损坏与包数据缺失。
     let temp = tempfile::tempdir().expect("create approval corruption fixture");

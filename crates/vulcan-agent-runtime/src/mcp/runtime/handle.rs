@@ -8,9 +8,9 @@ mod catalog_refresh;
 mod cleanup_receipts;
 #[cfg(test)]
 mod launch_input_tests;
-mod legacy_replacement;
 mod lifecycle_guard;
-pub use legacy_replacement::LegacyPluginMcpReplacement;
+mod retained_replacement;
+pub use retained_replacement::RetainedPluginMcpReplacement;
 mod published;
 pub use candidate::{CandidatePluginMcpObservation, CandidatePluginMcpRuntime};
 pub use candidate::{PredecessorPluginMcpHandoffGuard, PredecessorPluginMcpRuntime};
@@ -40,9 +40,9 @@ enum McpRuntimePurpose {
     /// Proven ordinary preparation runs once with business access closed until full publication.
     /// 已证明普通准备仅运行一次，业务访问在完整发布前保持关闭。
     PublishedPreparation,
-    /// Raw Legacy replacement remains single-shot and closed until full service publication.
-    /// 原始旧格式替换保持单次尝试及关闭，直至完整服务发布。
-    LegacyPluginPreparation,
+    /// Raw retained replacement remains single-shot and closed until full service publication.
+    /// 原始保留替换保持单次尝试及关闭，直至完整服务发布。
+    RetainedPluginReplacement,
 }
 
 /// Business admission for one actual target instance; a closed instance can never reopen.
@@ -72,7 +72,7 @@ impl McpRuntimePurpose {
             | Self::TargetPreparation
             | Self::PredecessorPreparation
             | Self::PublishedPreparation
-            | Self::LegacyPluginPreparation => 1,
+            | Self::RetainedPluginReplacement => 1,
         }
     }
 }
@@ -182,7 +182,7 @@ fn prepare_mcp_runtime(
             McpRuntimePurpose::TargetPreparation
             | McpRuntimePurpose::PredecessorPreparation
             | McpRuntimePurpose::PublishedPreparation
-            | McpRuntimePurpose::LegacyPluginPreparation => McpBusinessGate::Preparing,
+            | McpRuntimePurpose::RetainedPluginReplacement => McpBusinessGate::Preparing,
             McpRuntimePurpose::Managed | McpRuntimePurpose::CandidateReadiness => {
                 McpBusinessGate::Open
             }
@@ -1157,8 +1157,8 @@ pub async fn bootstrap_mcp_runtime_access(
         .map(|(access, _)| access)
 }
 
-/// Bootstrap raw user/legacy declarations and sealed published inputs as one concurrently observed batch.
-/// 将原始用户／旧声明及密封已发布输入作为单个并发观察批次引导。
+/// Bootstrap raw unproven declarations and sealed published inputs as one concurrently observed batch.
+/// 将原始未证明声明及密封已发布输入作为单个并发观察批次引导。
 /// servers contains no sealed owner; manager and authority are the original host pair; published is consumed once.
 /// servers 不包含密封所有者；manager 及 authority 为原宿主配对；published 仅消费一次。
 /// Return original access and ready closed controls; errors or cancellation close every original without replay.

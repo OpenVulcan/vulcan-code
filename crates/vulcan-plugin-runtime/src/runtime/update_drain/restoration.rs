@@ -179,10 +179,10 @@ pub(in crate::runtime) fn validate_restoration_receipts(
         .as_ref()
         .ok_or_else(|| error("Original predecessor manifest is missing."))?;
     if manifest.config.is_some() {
-        // configuration.rs reads mutable legacy state when selected configuration is absent; exact restoration must reject that path.
-        // configuration.rs 在选定配置缺失时读取可变旧状态；精确恢复必须拒绝该路径。
+        // Exact restoration requires the predecessor's frozen managed configuration and never falls back to package defaults.
+        // 精确恢复要求前驱的固定受管配置，绝不回退至包默认值。
         let selection = predecessor.managed_package().map(|managed| managed.configuration())
-            .ok_or_else(|| error("Exact predecessor restoration requires immutable old configuration; mutable legacy configuration is unsupported."))?;
+            .ok_or_else(|| error("Exact predecessor restoration requires the immutable old managed configuration."))?;
         if selection.value().is_none() {
             return Err(error(
                 "Declared predecessor configuration has no immutable document.",

@@ -62,7 +62,7 @@ pub struct VulcanPluginDeactivationReservation {
     local_state_frozen: bool,
     /// The same actual File may be lent to guarded callbacks; no callback opens a replacement namespace.
     /// 同一实际文件可以借给受保护回调；任何回调都不打开替代命名空间。
-    namespace: Arc<VulcanPluginLegacyMutationGuard>,
+    namespace: Arc<VulcanPluginNamespaceGuard>,
 }
 
 impl std::fmt::Debug for VulcanPluginDeactivationReservation {
@@ -114,7 +114,7 @@ impl VulcanPluginDeactivationReservation {
     /// 借出此实际命名空间分配的弱身份，不保留另一物理所有者或授予变更。
     /// No parameters; only a caller also retaining this original may use the weak identity for exact state-preimage binding.
     /// 无参数；仅同时保留此原实例的调用方可用弱身份绑定精确状态前像。
-    pub(crate) fn namespace_identity(&self) -> Weak<VulcanPluginLegacyMutationGuard> {
+    pub(crate) fn namespace_identity(&self) -> Weak<VulcanPluginNamespaceGuard> {
         Arc::downgrade(&self.namespace)
     }
 
@@ -124,7 +124,7 @@ impl VulcanPluginDeactivationReservation {
     /// identity 为不具权威绑定元数据；仅相同原文件引用计数分配返回真。
     pub(crate) fn matches_namespace_identity(
         &self,
-        identity: &Weak<VulcanPluginLegacyMutationGuard>,
+        identity: &Weak<VulcanPluginNamespaceGuard>,
     ) -> bool {
         Weak::ptr_eq(&Arc::downgrade(&self.namespace), identity)
     }
@@ -194,7 +194,7 @@ impl VulcanPluginDeactivationReservation {
     /// 仅在发布准入之前，将实际原命名空间借给未启动受管移除回调。
     /// No parameters; returns the same guard Arc after exact original validation, never a reconstructed file owner.
     /// 无参数；精确原校验后返回同一守卫 Arc，绝不返回重建文件所有者。
-    pub(crate) fn lifecycle_guard(&self) -> Result<Arc<VulcanPluginLegacyMutationGuard>> {
+    pub(crate) fn lifecycle_guard(&self) -> Result<Arc<VulcanPluginNamespaceGuard>> {
         self.validate(&self.store)?;
         if self.publication_started {
             return Err(Error::new(
@@ -338,7 +338,7 @@ impl VulcanPluginGenerationStore {
         // Capture the complete selection under the one retained exclusive File, before allocating a successor intent.
         // 在单个保留排他文件内捕获完整选择，先于分配后继意图。
         let namespace =
-            Arc::new(self.acquire_legacy_mutation_guard(&expected.plugin_id, Some(expected))?);
+            Arc::new(self.acquire_namespace_guard(&expected.plugin_id, Some(expected))?);
         // Validate actual package bytes, complete approval and versioned journal under the same File before retaining cleanup evidence.
         // 在保留清理证据之前，于相同文件内验证实际包字节、完整批准及版本化日志。
         let source = self.pin_active_locked(&expected.plugin_id)?;

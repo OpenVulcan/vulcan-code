@@ -1000,8 +1000,8 @@ fn run_service_bootstrap(
     {
         tracing::warn!("[webui-service] plugin credential collection failed: {error}");
     }
-    // Full fixed managed selections enter the sealed producer; declared legacy sources keep their original factory.
-    // 完整固定受管选择进入密封生产者；已声明旧来源保留原工厂。
+    // Full fixed managed selections enter the sealed producer; bundled sources keep their original factory.
+    // 完整固定受管选择进入密封生产者；内建来源保留原工厂。
     let plugin_mcp_plan = mcp_startup::PluginMcpBootstrapPlan::prepare(
         &vulcan_plugin_runtime,
         &vulcan_plugin_catalog,

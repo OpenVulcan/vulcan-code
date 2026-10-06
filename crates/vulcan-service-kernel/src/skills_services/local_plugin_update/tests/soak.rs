@@ -16,8 +16,8 @@ const PACKAGE_PUBLICATIONS: usize = 100;
 #[tokio::test]
 #[ignore = "Explicit release acceptance: one hundred actual service package updates and rollbacks."]
 async fn release_acceptance_service_one_hundred_actual_updates_and_rollbacks() {
-    // The existing fixture retains actual old-source bytes separately from its installed flat predecessor.
-    // 既有夹具在已安装平铺前驱之外保留实际旧来源字节。
+    // The existing fixture retains actual old-source bytes separately from its installed managed predecessor.
+    // 既有夹具在已安装受管前驱之外保留实际旧来源字节。
     let fixture = Fixture::new(false);
     // This exact path is the old-source directory created by Fixture::new, not a searched recovery candidate.
     // 此精确路径为 Fixture::new 创建的旧来源目录，不是搜索的恢复候选。
@@ -47,9 +47,16 @@ async fn release_acceptance_service_one_hundred_actual_updates_and_rollbacks() {
     let started = std::time::Instant::now();
     PROVIDER_CONFIGURATION_PATH
         .scope(destination.clone(), async {
-            // A flat initial predecessor has no selected revision; all following revisions come from the actual writer.
-            // 初始平铺前驱没有选定修订；此后全部修订来自实际写入器。
-            let mut previous_revision = 0_u64;
+            // The managed initial predecessor anchors the revision sequence; all following revisions come from the actual writer.
+            // 初始受管前驱锚定修订序列；此后全部修订来自实际写入器。
+            let mut previous_revision =
+                VulcanPluginGenerationStore::open_existing(fixture.runtime.user_plugin_root())
+                    .expect("initial store")
+                    .expect("initial store exists")
+                    .activation(PLUGIN)
+                    .expect("initial selection")
+                    .expect("initial managed selection")
+                    .revision;
             // Each ordinal counts one actual production package publication, not a close request or a simulated generation.
             // 每个序号计数一次实际生产插件包发布，不是关闭请求或模拟代次。
             for publication in 0..PACKAGE_PUBLICATIONS {

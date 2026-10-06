@@ -1250,8 +1250,8 @@ Action 与探测分别在 `ui_action`、`activation_probe` 用途容量下使用
 
 ## 受管移除的核心原调用与目录准备
 
-权威入口为 `generation_store/deactivation.rs`、`runtime/legacy_lifecycle.rs`、
-`runtime/formal/calls/legacy.rs` 与 `runtime/lifecycle.rs`；选择写入及目录语义见
+权威入口为 `generation_store/deactivation.rs`、`runtime/removal_lifecycle.rs`、
+`runtime/formal/calls/removal.rs` 与 `runtime/lifecycle.rs`；选择写入及目录语义见
 [代次存储契约](plugin-generation-store.md#受管卸载的原选择预留与同文件读取)。
 当前 `skills_services/local_plugin_uninstall/` 服务为受管移除保留实际原请求所有权，
 分别调用原选择、本地环境、回调、目录发布及回收接口。

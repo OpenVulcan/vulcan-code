@@ -226,8 +226,8 @@ async fn published_native_failed_and_cancelled_observation_drain_original_once()
     }
 }
 
-/// A real legacy connected transport stays unproven even when passed the exact full current source values.
-/// 即使传入精确完整当前来源值，真实旧已连接传输也保持未证明。
+/// A real raw connected transport stays unproven even when passed the exact full current source values.
+/// 即使传入精确完整当前来源值，真实原始已连接传输也保持未证明。
 /// No inputs or return value; actual child readiness and strict source rejection prevent retrospective certification.
 /// 无输入及返回值；实际子进程就绪及严格来源拒绝阻止追认认证。
 #[tokio::test]

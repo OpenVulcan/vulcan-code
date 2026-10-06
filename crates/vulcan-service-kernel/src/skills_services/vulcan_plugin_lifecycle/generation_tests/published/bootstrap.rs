@@ -89,8 +89,8 @@ async fn service_formal_bootstrap_commits_same_original_and_preserves_user_decla
     user.source = McpServerSource::UserConfigured;
     user.enabled = false;
     drop(configs);
-    // An equal-value copy cannot choose a new source or trigger a legacy attempt after rejection.
-    // 等值副本不能选择新来源，拒绝后也不能触发旧入口尝试。
+    // An equal-value copy cannot choose a new source or trigger a raw-declaration attempt after rejection.
+    // 等值副本不能选择新来源，拒绝后也不能触发原始声明入口尝试。
     let copied = Arc::new((*catalog).clone());
     assert!(
         PluginMcpBootstrapPlan::prepare(&manager, &copied, &authority, &EmptyCredentials).is_err()

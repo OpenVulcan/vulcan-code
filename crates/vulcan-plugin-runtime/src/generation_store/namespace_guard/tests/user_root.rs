@@ -69,7 +69,7 @@ fn snapshot(
 /// Existing root spelling is accepted while foreign, missing, wrong-type and redirected roots cannot create or adopt authority.
 /// 接受既有根拼写，同时外来、缺失、错误类型及重定向根不能创建或接管权威。
 #[test]
-fn legacy_mutation_user_root_validation_is_exact_and_read_only() {
+fn namespace_guard_user_root_validation_is_exact_and_read_only() {
     // The original package and namespace retain real Files throughout every validation.
     // 原插件包及命名空间在每次验证期间保留真实 File。
     let root = tempfile::tempdir().expect("read-only root fixture");
@@ -85,12 +85,12 @@ fn legacy_mutation_user_root_validation_is_exact_and_read_only() {
     // This exact guard owns the original namespace while root checks must remain lock-free reads.
     // 此精确守卫持有原命名空间，同时根检查必须保持不取得锁的读取。
     let guard = store
-        .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+        .acquire_namespace_guard("guarded-plugin", Some(&original))
         .expect("original root guard");
     // Only these source-defined actual namespace/package lease paths may be unreadable on Windows.
     // Windows 上仅这些源码定义实际命名空间及插件包租约路径可能无法读取。
     let leases = BTreeSet::from([
-        store.root.join("locks/legacy-plugin.lock"),
+        store.root.join("locks/guarded-plugin.lock"),
         store.root.join("locks").join(format!(
             "{}-{}.lease",
             package.identity().plugin_id,
@@ -116,34 +116,34 @@ fn legacy_mutation_user_root_validation_is_exact_and_read_only() {
     // 验证后比较每个条目及字节，检测伪造私有布局或锁文件。
     let before = snapshot(&canonical, &leases);
     guard
-        .validate_user_root(&root.path().join("user"), "legacy-plugin")
+        .validate_user_root(&root.path().join("user"), "guarded-plugin")
         .expect("literal host spelling");
     guard
         .validate_user_root(
             &user.canonicalize().expect("actual canonical user root"),
-            "legacy-plugin",
+            "guarded-plugin",
         )
         .expect("canonical host spelling");
     guard
-        .validate_user_root(&user.join("."), "legacy-plugin")
+        .validate_user_root(&user.join("."), "guarded-plugin")
         .expect("same existing lexical root");
     assert_eq!(
         guard
-            .validate_user_root(&foreign, "legacy-plugin")
+            .validate_user_root(&foreign, "guarded-plugin")
             .expect_err("foreign root")
             .code,
         Code::Conflict
     );
     assert_eq!(
         guard
-            .validate_user_root(&canonical.join("missing-user"), "legacy-plugin")
+            .validate_user_root(&canonical.join("missing-user"), "guarded-plugin")
             .expect_err("missing cannot initialize")
             .code,
         Code::Conflict
     );
     assert_eq!(
         guard
-            .validate_user_root(&ordinary, "legacy-plugin")
+            .validate_user_root(&ordinary, "guarded-plugin")
             .expect_err("ordinary file is not root")
             .code,
         Code::Invalid
@@ -183,7 +183,7 @@ fn legacy_mutation_user_root_validation_is_exact_and_read_only() {
         std::os::unix::fs::symlink(&user, &redirected).expect("actual root symlink");
         assert_eq!(
             guard
-                .validate_user_root(&redirected, "legacy-plugin")
+                .validate_user_root(&redirected, "guarded-plugin")
                 .expect_err("literal redirect cannot authorize original root")
                 .code,
             Code::Invalid
@@ -203,7 +203,7 @@ fn legacy_mutation_user_root_validation_is_exact_and_read_only() {
         );
         assert!(!canonical.join("missing-user").exists());
         guard
-            .validate_user_root(&user, "legacy-plugin")
+            .validate_user_root(&user, "guarded-plugin")
             .expect("same original after redirect rejection");
     }
 }
@@ -211,7 +211,7 @@ fn legacy_mutation_user_root_validation_is_exact_and_read_only() {
 /// Root equality must still enforce the complete original and actual no-pending authority, including originally absent selection.
 /// 根相等仍须执行完整原请求及实际无待处理权威，包括原缺失选择。
 #[test]
-fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
+fn namespace_guard_user_root_validation_rejects_changed_original_and_pending() {
     // A real first preparation writer supplies Preparing bytes before its original terminal transition.
     // 真实首准备写入器在原终态转换之前提供 Preparing 字节。
     let root = tempfile::tempdir().expect("root original authority fixture");
@@ -224,8 +224,8 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
     // This UUID identifies the real producer request and is never used to reconstruct its owner.
     // 此 UUID 标识真实生产者请求，绝不用于重建其所有者。
     let request = Uuid::new_v4();
-    // Actual preparation creates journal/index authority before the legacy guard can be acquired.
-    // 实际准备在旧格式守卫可取得之前创建日志及索引权威。
+    // Actual preparation creates journal/index authority before the namespace guard can be acquired.
+    // 实际准备在命名空间守卫可取得之前创建日志及索引权威。
     let preparation = store
         .begin_activation_preparation(
             request,
@@ -239,14 +239,14 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
     // 唯一请求日志路径遵循实际写入器插件及请求参数。
     let journal = store
         .root
-        .join("transactions/legacy-plugin")
+        .join("transactions/guarded-plugin")
         .join(format!("{request}.json"));
     // Preserve producer-written bytes rather than synthesize a Preparing phase.
     // 保留生产者写入字节，而非合成 Preparing 阶段。
     let preparing = fs::read(&journal).expect("true Preparing bytes");
     drop(preparation);
     store
-        .abort_activation_preparation_request("legacy-plugin", request)
+        .abort_activation_preparation_request("guarded-plugin", request)
         .expect("true original abort");
     // Restore only these actual terminal bytes after the external-corruption fixture.
     // 外部损坏夹具之后仅恢复这些实际终态字节。
@@ -257,11 +257,11 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
     // The complete original no-pending state is frozen before any controlled external replacement.
     // 任何受控外部替换之前，固定完整原无待处理状态。
     let guard = store
-        .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+        .acquire_namespace_guard("guarded-plugin", Some(&original))
         .expect("actual original guard");
     // Same revision with a changed full approved set must not be accepted by a root-only match.
     // 相同修订及已变完整批准集合不得通过仅根匹配被接受。
-    let active_path = store.root.join("active/legacy-plugin.json");
+    let active_path = store.root.join("active/guarded-plugin.json");
     // Exact original selection bytes provide explicit fixture restoration with no fallback.
     // 精确原选择字节提供明确夹具恢复，不使用回退。
     let original_bytes = fs::read(&active_path).expect("actual selected bytes");
@@ -276,7 +276,7 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
     .expect("external full selection replacement");
     assert_eq!(
         guard
-            .validate_user_root(&user, "legacy-plugin")
+            .validate_user_root(&user, "guarded-plugin")
             .expect_err("full original required")
             .code,
         Code::Conflict
@@ -285,19 +285,19 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
     fs::write(&journal, preparing).expect("external actual prior Preparing replacement");
     assert_eq!(
         guard
-            .validate_user_root(&user, "legacy-plugin")
+            .validate_user_root(&user, "guarded-plugin")
             .expect_err("actual Pending required to reject")
             .code,
         Code::Busy
     );
     fs::write(&journal, aborted).expect("restore actual original terminal body");
     guard
-        .validate_user_root(&user, "legacy-plugin")
+        .validate_user_root(&user, "guarded-plugin")
         .expect("same original restored");
     // Actual absent selection must also traverse full original and pending validation rather than shortcutting on None.
     // 实际缺失选择也须经过完整原请求及待处理验证，不能遇 None 即跳过。
     let absent = store
-        .acquire_legacy_mutation_guard("absent-plugin", None)
+        .acquire_namespace_guard("absent-plugin", None)
         .expect("actual absent original namespace");
     absent
         .validate_user_root(&user, "absent-plugin")
@@ -307,12 +307,12 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
 /// The same Arc-held guard is Send + Sync and retains its original exclusive File until the last actual thread owner retires.
 /// 同一 Arc 持有守卫为 Send + Sync，并保留原排他 File 直到最后实际线程所有者退役。
 #[test]
-fn legacy_mutation_user_root_arc_preserves_actual_namespace_across_threads() {
+fn namespace_guard_user_root_arc_preserves_actual_namespace_across_threads() {
     /// Require the real generic type to satisfy both auto traits at compile time; no unsafe implementation is added.
     /// 编译时要求真实泛型类型满足两个自动特征；不增加任何 unsafe 实现。
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<VulcanPluginLegacyMutationGuard>();
-    assert_send_sync::<Arc<VulcanPluginLegacyMutationGuard>>();
+    assert_send_sync::<VulcanPluginNamespaceGuard>();
+    assert_send_sync::<Arc<VulcanPluginNamespaceGuard>>();
     // Distinct store objects use the same actual canonical OS lock files.
     // 不同存储对象使用相同实际规范操作系统锁文件。
     let root = tempfile::tempdir().expect("cross-thread original namespace fixture");
@@ -331,7 +331,7 @@ fn legacy_mutation_user_root_arc_preserves_actual_namespace_across_threads() {
     // Arc 共享一个真实守卫分配，不能复制底层命名空间 File。
     let guard = Arc::new(
         store
-            .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+            .acquire_namespace_guard("guarded-plugin", Some(&original))
             .expect("original File owner"),
     );
     // The worker receives a reference-counted owner of the same actual guard.
@@ -350,7 +350,7 @@ fn legacy_mutation_user_root_arc_preserves_actual_namespace_across_threads() {
     // 工作线程类型化验证须成功，不能重新取得自身繁忙命名空间。
     let worker = std::thread::spawn(move || {
         worker_guard
-            .validate_user_root(&worker_user, "legacy-plugin")
+            .validate_user_root(&worker_user, "guarded-plugin")
             .expect("cross-thread original validation");
         ready_tx.send(()).expect("actual worker ownership ready");
         release_rx
@@ -364,14 +364,14 @@ fn legacy_mutation_user_root_arc_preserves_actual_namespace_across_threads() {
     drop(guard);
     assert_eq!(
         observer
-            .pin_active("legacy-plugin")
+            .pin_active("guarded-plugin")
             .expect_err("remaining thread owns original File")
             .code,
         Code::Busy
     );
     assert_eq!(
         observer
-            .deactivate("legacy-plugin", original.revision)
+            .deactivate("guarded-plugin", original.revision)
             .expect_err("main Arc retirement is not final File retirement")
             .code,
         Code::Busy
@@ -379,6 +379,6 @@ fn legacy_mutation_user_root_arc_preserves_actual_namespace_across_threads() {
     release_tx.send(()).expect("release last actual Arc owner");
     worker.join().expect("actual worker guard retired");
     observer
-        .deactivate("legacy-plugin", original.revision)
+        .deactivate("guarded-plugin", original.revision)
         .expect("writer after last real guard owner retired");
 }

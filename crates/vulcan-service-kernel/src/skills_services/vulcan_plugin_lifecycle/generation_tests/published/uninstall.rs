@@ -304,7 +304,7 @@ async fn retained_service_uninstall_published_node_disable_drains_originals_befo
                 .activation("published-service")
                 .expect("actual terminal selection");
             store
-                .acquire_legacy_mutation_guard("published-service", selection.as_ref())
+                .acquire_namespace_guard("published-service", selection.as_ref())
                 .expect("actual original namespace File released");
             assert_eq!(predecessor::starts(&marker), starts);
         })

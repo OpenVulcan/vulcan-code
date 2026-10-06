@@ -9,8 +9,8 @@ impl VulcanPluginRuntimeManager {
     /// 在 `registration` 内预留路由之前，排除既有普通生命周期原实例。
     /// Returns a conflict for every retained Published Lifecycle until actual acknowledgement removes its map entry.
     /// 直至实际确认移除映射条目之前，为每个保留已发布生命周期返回冲突。
-    /// Controllers and original Activation/Legacy executions keep their independent existing admission contracts.
-    /// 控制器及原激活／旧格式执行保持各自独立既有准入契约。
+    /// Controllers and original Activation/Removal executions keep their independent existing admission contracts.
+    /// 控制器及原激活／移除执行保持各自独立既有准入契约。
     pub(in crate::runtime) fn require_no_published_lifecycle_for_routing(
         &self,
         _registration: &std::sync::MutexGuard<'_, ()>,
@@ -90,7 +90,7 @@ impl VulcanPluginRuntimeManager {
                 authority.validate(&self.state, plugin, scope)?;
                 self.validate_plugin_requirements_in_scope(plugin, scope)
             }
-            CallExecutionSource::LegacyLifecycle(authority) => {
+            CallExecutionSource::RemovalLifecycle(authority) => {
                 authority.validate(&self.state, plugin, scope)?;
                 self.validate_plugin_requirements_in_scope(plugin, scope)
             }
@@ -290,7 +290,7 @@ impl VulcanPluginRuntimeManager {
             CallExecutionSource::Activation(authority) => {
                 authority.retain_execution_environment(&self.state)?
             }
-            CallExecutionSource::LegacyLifecycle(authority) => {
+            CallExecutionSource::RemovalLifecycle(authority) => {
                 authority.retain_execution_environment(&self.state)?
             }
             CallExecutionSource::Published => {}

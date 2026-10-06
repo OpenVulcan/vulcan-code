@@ -220,8 +220,8 @@ fn validate_core_browser_endpoint(endpoint: &str) -> Result<(), String> {
 
 /// Materializes one validated plugin MCP descriptor without admitting alternate field sources.
 /// 物化单个已校验插件 MCP 描述符，且不接纳替代字段来源。
-/// The source fixes launcher and legacy-read authority, while the descriptor owns configuration and credentials.
-/// 来源固定启动器及旧配置读取权威，描述符持有配置与凭据。
+/// The source fixes launcher and published-configuration authority, while the descriptor owns configuration and credentials.
+/// 来源固定启动器及已发布配置读取权威，描述符持有配置与凭据。
 /// Returns one exact runtime definition; the optional endpoint is only an explicit conversation owner grant.
 /// 返回单个精确运行时定义；可选端点仅用于显式会话所有者授权。
 fn plugin_mcp_server_config(
@@ -241,7 +241,7 @@ fn plugin_mcp_server_config(
     let config = if transport_uses_plugin_config(&server.manifest.transport) {
         match server.configuration() {
             Some(selection) => selection.value().cloned(),
-            None => source.legacy_configuration(&server.plugin_id)?,
+            None => source.published_configuration(&server.plugin_id)?,
         }
     } else {
         None

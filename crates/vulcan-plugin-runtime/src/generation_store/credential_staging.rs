@@ -119,8 +119,8 @@ pub struct VulcanPluginCredentialRecord {
     /// Store validation rejects every unknown schema version before consuming the record.
     /// 存储校验在消费记录前拒绝所有未知模式版本。
     schema_version: u32,
-    /// Version two retains the original parent request; legacy inventories explicitly have no parent.
-    /// 第二版保留原父请求；旧清单明确没有父请求。
+    /// Transaction staging retains the original parent request; standalone settings inventories have none.
+    /// 交易暂存保留原父请求；独立设置清单没有父请求。
     #[serde(
         default,
         deserialize_with = "deserialize_activation_request",
@@ -148,8 +148,8 @@ pub struct VulcanPluginCredentialRecord {
 }
 
 impl VulcanPluginCredentialRecord {
-    /// Return the durable original activation parent, or none for legacy standalone inventories.
-    /// 返回持久原激活父请求，旧独立清单返回空值。
+    /// Return the durable original activation parent, or none for standalone settings inventories.
+    /// 返回持久原激活父请求，独立设置清单返回空值。
     pub fn activation_request(&self) -> Option<uuid::Uuid> {
         self.activation_request
     }
@@ -211,8 +211,8 @@ pub struct VulcanPluginCredentialStaging {
     _activation_request_lease: Option<Arc<File>>,
 }
 
-/// Decode a present canonical request UUID from `deserializer`; missing legacy fields alone map to no parent.
-/// 从 `deserializer` 解码存在的规范请求 UUID；仅缺失旧字段映射为无父请求。
+/// Decode a present canonical request UUID from `deserializer`; only an omitted field maps to no parent.
+/// 从 `deserializer` 解码存在的规范请求 UUID；仅省略字段映射为无父请求。
 fn deserialize_activation_request<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<uuid::Uuid>, D::Error> {
@@ -230,8 +230,8 @@ fn deserialize_activation_request<'de, D: serde::Deserializer<'de>>(
     Ok(Some(request_id))
 }
 
-/// Secure backend operations address one explicit revision, never legacy or latest-selection storage.
-/// 安全后端操作寻址单个显式修订，绝不寻址旧命名空间或最新选择存储。
+/// Secure backend operations address one explicit revision, never latest-selection storage.
+/// 安全后端操作寻址单个显式修订，绝不寻址最新选择存储。
 /// Implementations must not reenter generation-store operations while called under a revision lease.
 /// 实现在修订租约下被调用时，不得重入代次存储操作。
 pub trait VulcanPluginCredentialBackend {

@@ -53,8 +53,8 @@ fn candidate_mcp_configs_keep_frozen_values_and_original_request() {
     let generation = store
         .prepare(&source, &preview.content_fingerprint)
         .expect("immutable package");
-    // Separate staged revisions make accidental latest-state or legacy lookups observable.
-    // 独立暂存修订使意外读取最新状态或旧命名空间可被观察。
+    // Separate staged revisions make accidental latest-state lookups observable.
+    // 独立暂存修订使意外读取最新状态可被观察。
     let first = VulcanPluginCredentialRevision::allocate();
     let second = VulcanPluginCredentialRevision::allocate();
     let mut secrets = RevisionSecrets {

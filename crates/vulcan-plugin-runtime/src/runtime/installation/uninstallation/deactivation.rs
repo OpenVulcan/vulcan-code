@@ -38,7 +38,7 @@ pub struct VulcanPluginDeactivationStateReservation {
     manager: Weak<super::super::super::VulcanPluginManagerState>,
     /// Weak allocation identity binds the same File without keeping an extra callback borrower alive.
     /// 弱分配身份绑定相同文件，不额外保持回调借用者存活。
-    namespace: Weak<crate::VulcanPluginLegacyMutationGuard>,
+    namespace: Weak<crate::VulcanPluginNamespaceGuard>,
     /// Original request identity is metadata checked together with actual allocation identity.
     /// 原请求身份为与实际分配身份共同检查的元数据。
     request_id: Uuid,

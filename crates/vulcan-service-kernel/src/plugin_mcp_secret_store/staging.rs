@@ -5,8 +5,8 @@ use super::*;
 use vulcan_plugin_runtime::{VulcanPluginCredentialBackend, VulcanPluginCredentialKey};
 
 impl VulcanPluginCredentialBackend for OsPluginMcpSecretStore {
-    /// Read only `plugin_id`/`revision`/`key`; actual OS absence returns None without consulting legacy accounts.
-    /// 仅读取 `plugin_id`／`revision`／`key`；实际 OS 缺失返回 None，不查询旧账户。
+    /// Read only `plugin_id`/`revision`/`key`; actual OS absence returns None without consulting other accounts.
+    /// 仅读取 `plugin_id`／`revision`／`key`；实际 OS 缺失返回 None，不查询其他账户。
     fn read(
         &self,
         plugin_id: &str,

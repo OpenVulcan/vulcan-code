@@ -74,7 +74,7 @@ fn assert_busy(manager: &VulcanPluginRuntimeManager) {
         .expect("actual contender store");
     assert_eq!(
         contender
-            .acquire_legacy_mutation_guard("local-plugin", None)
+            .acquire_namespace_guard("local-plugin", None)
             // Discard unexpected successful ownership before asserting the error, without requiring the guard to implement Debug.
             // 断言错误前释放意外成功的所有权，不要求守卫实现 Debug。
             .map(|_| ())

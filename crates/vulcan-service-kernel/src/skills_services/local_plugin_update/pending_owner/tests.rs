@@ -7,15 +7,15 @@ use vulcan_plugin_runtime::{
     VulcanPluginActivationTransactionPhase as Phase, VulcanPluginStoreErrorCode as Code,
 };
 
-/// The independent legacy peer exercises actual configuration persistence outside the updated namespace.
-/// 独立旧格式同级插件在更新命名空间之外使用实际配置持久化。
+/// The independent managed peer exercises actual configuration persistence outside the updated namespace.
+/// 独立受管同级插件在更新命名空间之外使用实际配置持久化。
 const CONFIGURATION_PEER: &str = "configuration-peer";
 
 /// Retains an independent candidate source alongside the existing complete production service fixture.
 /// 保留独立候选来源及既有完整生产服务夹具。
 pub(super) struct Harness {
-    /// Actual service state and installed legacy predecessor come from the existing integration fixture.
-    /// 实际服务状态及已安装旧格式前驱来自既有集成夹具。
+    /// Actual service state and installed managed predecessor come from the existing integration fixture.
+    /// 实际服务状态及已安装受管前驱来自既有集成夹具。
     pub(super) fixture: Fixture,
     /// Source bytes outlive preparation and contain no external dependencies or callback effects.
     /// 来源字节比准备存活更久，且不包含外部依赖或回调副作用。
@@ -357,8 +357,8 @@ async fn pending_update_full_publication_excludes_settings_until_retirement() {
             .to_string()
             .contains(&owner.request_id.to_string())
     );
-    // A genuine other-namespace legacy writer must fail before replacing its existing persisted configuration.
-    // 真实其他命名空间旧格式写入器必须在替换其既有持久配置之前失败。
+    // A genuine other-namespace configuration writer must fail before replacing its existing persisted configuration.
+    // 真实其他命名空间配置写入器必须在替换其既有持久配置之前失败。
     let config_error = harness
         .fixture
         .runtime

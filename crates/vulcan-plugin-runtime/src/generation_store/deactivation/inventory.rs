@@ -202,8 +202,8 @@ impl VulcanPluginDeactivationReservation {
 
     /// Borrow every complete original credential journal without secure values or replacement cleanup authority.
     /// 借用每个完整原凭据日志，不携带安全值或替代清理权威。
-    /// No parameters; includes historical revisions even when the current source explicitly uses legacy credentials.
-    /// 无参数；即使当前来源明确使用旧凭据，也包含历史修订。
+    /// No parameters; includes historical revisions even when the current selection binds no credentials.
+    /// 无参数；即使当前选择未绑定凭据，也包含历史修订。
     pub fn credential_inventory(&self) -> &[VulcanPluginCredentialRecord] {
         &self.inventory.credentials
     }

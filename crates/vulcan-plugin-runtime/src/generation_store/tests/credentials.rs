@@ -222,8 +222,8 @@ fn credential_binding_record_rejects_null_malformed_and_duplicate_fields() {
         serde_json::json!("00000000-0000-0000-0000-000000000000"),
         serde_json::json!(1),
     ] {
-        // Invalid credential authority must not be reinterpreted as legacy storage.
-        // 无效凭据权威不得重新解释为旧存储。
+        // Invalid credential authority must not be reinterpreted as an unbound selection.
+        // 无效凭据权威不得重新解释为未绑定选择。
         let mut changed = document.clone();
         changed["settings"]["credential_revision"] = invalid;
         fs::write(

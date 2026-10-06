@@ -54,7 +54,7 @@ async fn published_bootstrap_rejects_foreign_issuer_and_double_producer_before_d
     }
 }
 
-/// The shared batch initializer dispatches a sealed child before waiting for a slow legacy partition and cancellation closes both originals.
+/// The shared batch initializer dispatches a sealed child before waiting for a slow raw partition and cancellation closes both originals.
 /// 共享批次初始化器在等待慢旧分区之前派发密封子进程，取消关闭两个原实例。
 /// No inputs or return; exact registered access, independent source observation and true physical retirement are evidence.
 /// 无输入或返回；精确已登记访问、独立来源观察及真实物理退役为证据。
@@ -71,31 +71,28 @@ async fn published_bootstrap_mixed_originals_start_before_readiness_and_cancel_w
         _temp,
         ..
     } = published_fixture("ready");
-    // This distinct raw declaration deliberately uses the documented unproven legacy producer.
+    // This distinct raw declaration deliberately uses the documented unproven raw producer.
     // 此不同原始声明刻意使用文档规定的未证明旧生产者。
-    let mut legacy = configs
+    let mut raw = configs
         .servers()
         .iter()
         .find(|server| server.id == "bound-plugin:local")
         .expect("expected actual local source may have changed")
         .clone();
-    legacy.id = String::from("explicit-legacy:local");
-    legacy.source = McpServerSource::Plugin {
-        plugin_id: String::from("explicit-legacy"),
+    raw.id = String::from("explicit-raw:local");
+    raw.source = McpServerSource::Plugin {
+        plugin_id: String::from("explicit-raw"),
         generation: 1,
     };
     // The exact raw child has its own real producer record rather than sharing the sealed marker.
     // 精确原始子进程具有自身真实生产者记录，不共享密封标记。
-    let legacy_marker = _temp.path().join("legacy-starts.jsonl");
-    match &mut legacy.transport {
+    let raw_marker = _temp.path().join("raw-starts.jsonl");
+    match &mut raw.transport {
         McpServerTransportConfig::Stdio { env, .. } => {
             env.insert(String::from("CANDIDATE_MODE"), String::from("stall"));
             env.insert(
                 String::from("CANDIDATE_MARKER"),
-                legacy_marker
-                    .to_str()
-                    .expect("UTF-8 fixture path")
-                    .to_owned(),
+                raw_marker.to_str().expect("UTF-8 fixture path").to_owned(),
             );
         }
         _ => panic!("the expected actual stdio fixture declaration may have changed"),
@@ -109,7 +106,7 @@ async fn published_bootstrap_mixed_originals_start_before_readiness_and_cancel_w
     // The actual single batch helper is shared by both formal sealed and explicit raw public factories.
     // 实际单批次辅助方法由正式密封及明确原始公开工厂共同使用。
     let pending = tokio::spawn(async move {
-        bootstrap_mcp_runtime_access_with_originals(vec![legacy], |access| {
+        bootstrap_mcp_runtime_access_with_originals(vec![raw], |access| {
             // This is the same actual sealed factory consumed by the formal public wrapper.
             // 此为正式公开包装消费的同一实际密封工厂。
             let native =
@@ -121,22 +118,22 @@ async fn published_bootstrap_mixed_originals_start_before_readiness_and_cancel_w
         })
         .await
     });
-    // The existing shorter observation budget must see registration before the stalled legacy deadline completes.
+    // The existing shorter observation budget must see registration before the stalled raw deadline completes.
     // 既有较短观察预算必须在停滞旧期限完成前看见登记。
     let (access, observation) = tokio::time::timeout(OBSERVE, registered_rx)
         .await
-        .expect("sealed original must register before legacy readiness wait")
+        .expect("sealed original must register before raw readiness wait")
         .expect("actual original registration");
     observation
         .wait_until_ready(OBSERVE)
         .await
-        .expect("sealed original ready alongside stalled legacy");
+        .expect("sealed original ready alongside stalled raw");
     observation
         .verify_source("bound-plugin:local", &observation.profile())
         .expect("same actual sealed input source");
     assert!(
         !pending.is_finished(),
-        "actual stalled legacy wait must still be pending"
+        "actual stalled raw wait must still be pending"
     );
     assert_eq!(
         recorded_starts(&marker).await.len(),
@@ -144,7 +141,7 @@ async fn published_bootstrap_mixed_originals_start_before_readiness_and_cancel_w
         "expected sealed original count may have changed"
     );
     assert_eq!(
-        recorded_starts(&legacy_marker).await.len(),
+        recorded_starts(&raw_marker).await.len(),
         1,
         "expected raw original count may have changed"
     );
@@ -157,10 +154,10 @@ async fn published_bootstrap_mixed_originals_start_before_readiness_and_cancel_w
     // The retained actual access prevents natural last-lease drop, proving explicit startup cancellation owns cleanup.
     // 保留实际访问阻止自然最后租约销毁，证明明确启动取消拥有清理责任。
     access
-        .begin_plugin_mcp_drain("explicit-legacy")
+        .begin_plugin_mcp_drain("explicit-raw")
         .expect("actual raw original inventory");
     access
-        .wait_plugin_mcp_drain("explicit-legacy", OBSERVE)
+        .wait_plugin_mcp_drain("explicit-raw", OBSERVE)
         .await
         .expect("same actual raw original retired");
     assert_eq!(
@@ -169,7 +166,7 @@ async fn published_bootstrap_mixed_originals_start_before_readiness_and_cancel_w
         "cancelled bootstrap cannot replay sealed initialization"
     );
     assert_eq!(
-        recorded_starts(&legacy_marker).await.len(),
+        recorded_starts(&raw_marker).await.len(),
         1,
         "cancelled bootstrap cannot replay raw initialization"
     );

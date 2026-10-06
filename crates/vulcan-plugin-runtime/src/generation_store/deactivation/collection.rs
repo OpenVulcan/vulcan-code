@@ -139,8 +139,8 @@ impl VulcanPluginGenerationStore {
 
     /// Confirm every captured package/credential history and reject added or replaced entries without deleting or publishing checkpoints.
     /// 确认每个捕获包／凭据历史，并拒绝新增或替代条目，不删除或发布检查点。
-    /// original is the same actual owner and backend supplies readback only; returns storage absence proof, never host Full/native or legacy-account proof.
-    /// original 为相同实际所有者，backend 仅提供回读；返回存储缺失证明，绝非宿主完整／原生或旧账户证明。
+    /// original is the same actual owner and backend supplies readback only; returns storage absence proof, never host Full/native proof.
+    /// original 为相同实际所有者，backend 仅提供回读；返回存储缺失证明，绝非宿主完整／原生证明。
     pub fn confirm_deactivation_inventory_collected_retained(
         &self,
         original: &VulcanPluginDeactivationReservation,

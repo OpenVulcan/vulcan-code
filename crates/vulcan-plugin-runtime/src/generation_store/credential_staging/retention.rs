@@ -338,8 +338,8 @@ impl VulcanPluginGenerationStore {
         Ok(())
     }
 
-    /// Verify actual backend absence for one record/key without deleting, probing legacy accounts or inferring from return status.
-    /// 对单个 record／key 验证实际后端缺失，不删除、探测旧账户或从返回状态推断。
+    /// Verify actual backend absence for one record/key without deleting, probing other accounts or inferring from return status.
+    /// 对单个 record／key 验证实际后端缺失，不删除、探测其他账户或从返回状态推断。
     /// backend addresses only the fixed original tuple; returns storage failure for unreadable or still-present values.
     /// backend 仅寻址固定原元组；值不可读或仍存在时返回存储失败。
     fn verify_credential_entry_absence(

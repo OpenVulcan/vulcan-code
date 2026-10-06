@@ -88,8 +88,8 @@ fn fixture() -> Fixture {
     let package = store
         .prepare(&source, &inspected.content_fingerprint)
         .expect("package");
-    // Empty is an explicit fully completed revision, never legacy credential fallback.
-    // 空值是显式完整完成的修订，绝不是旧凭据回退。
+    // Empty is an explicit fully completed revision, never an unconfigured fallback.
+    // 空值是显式完整完成的修订，绝不是未配置回退。
     let credentials = VulcanPluginCredentialRevision::allocate();
     store
         .begin_credential_staging(

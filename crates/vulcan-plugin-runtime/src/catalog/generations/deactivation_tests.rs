@@ -261,7 +261,7 @@ fn deactivation_catalog_same_original_tombstone_matches_actual_ordinary_projecti
     assert_eq!(
         VulcanPluginGenerationStore::open(&fixture.user)
             .expect("independent actual store")
-            .acquire_legacy_mutation_guard("target-plugin", Some(original.intended()))
+            .acquire_namespace_guard("target-plugin", Some(original.intended()))
             .expect_err("same original File remains held")
             .code,
         VulcanPluginStoreErrorCode::Busy
@@ -279,7 +279,7 @@ fn deactivation_catalog_peer_namespace_remains_ordinary_and_busy_without_target_
     // 此独立其他插件守卫跨两个相同根目录读取保持存活。
     let peer = fixture
         .store
-        .acquire_legacy_mutation_guard("managed-peer", Some(&fixture.peer))
+        .acquire_namespace_guard("managed-peer", Some(&fixture.peer))
         .expect("actual peer namespace owner");
     // Actual target removal retains a distinct exclusive File.
     // 实际目标移除保留独立排他文件。

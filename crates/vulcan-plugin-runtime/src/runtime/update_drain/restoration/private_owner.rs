@@ -224,14 +224,14 @@ impl VulcanPluginRuntimeManager {
         // Complete managed selection matching includes the immutable old configuration and credential revision.
         // 完整托管选择匹配包含不可变旧配置及凭据修订。
         let old = restoration.original().predecessor().ok_or_else(|| {
-            error("Private predecessor restoration requires an immutable managed predecessor; legacy is unsupported.")
+            error("Private predecessor restoration requires an immutable managed predecessor.")
         })?;
         let managed = restoration.predecessor().managed_package().ok_or_else(|| {
-            error("Private predecessor restoration requires an immutable managed predecessor; legacy is unsupported.")
+            error("Private predecessor restoration requires an immutable managed predecessor.")
         })?;
         if !managed.matches_activation(old) {
             return Err(error(
-                "Private predecessor restoration requires the complete immutable old managed selection; legacy is unsupported.",
+                "Private predecessor restoration requires the complete immutable old managed selection.",
             ));
         }
         // Exact configured storage is opened read-only; missing storage cannot be recreated as authority.

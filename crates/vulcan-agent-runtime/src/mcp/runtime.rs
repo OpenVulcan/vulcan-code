@@ -32,14 +32,13 @@ pub use diagnostics::{
     McpRuntimeServerStatus, McpRuntimeToolAllowlist, McpRuntimeToolInspection,
 };
 pub use handle::{
-    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, LegacyPluginMcpReplacement,
-    PredecessorPluginMcpHandoffGuard, PredecessorPluginMcpRuntime,
-    PreparedPublishedPluginMcpPublication, PublishedPluginMcpObservation,
-    PublishedPluginMcpPublicationGuard, PublishedPluginMcpRuntime, TargetPluginMcpHandoffGuard,
-    TargetPluginMcpRuntime, bootstrap_mcp_runtime_access,
-    bootstrap_mcp_runtime_access_with_published, remove_plugin_mcp_runtime_partition,
-    replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
-    validate_plugin_mcp_runtime_partition,
+    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, PredecessorPluginMcpHandoffGuard,
+    PredecessorPluginMcpRuntime, PreparedPublishedPluginMcpPublication,
+    PublishedPluginMcpObservation, PublishedPluginMcpPublicationGuard, PublishedPluginMcpRuntime,
+    RetainedPluginMcpReplacement, TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime,
+    bootstrap_mcp_runtime_access, bootstrap_mcp_runtime_access_with_published,
+    remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
+    replace_user_mcp_runtime_partition, validate_plugin_mcp_runtime_partition,
 };
 pub use tools::{
     McpRuntimeAccess, McpRuntimeOwnedPartitionKey, McpRuntimeOwnedStdioPartition,

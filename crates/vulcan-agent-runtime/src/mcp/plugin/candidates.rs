@@ -8,8 +8,8 @@ use vulcan_plugin_runtime::{
     VulcanPluginPreparedPublishedMcp, VulcanPluginRegisteredNativeMcpHostAuthority,
 };
 
-/// A declared source controls launcher resolution and legacy configuration eligibility.
-/// 声明来源控制启动器解析及旧配置读取资格。
+/// A declared source controls launcher resolution and published configuration eligibility.
+/// 声明来源控制启动器解析及已发布配置读取资格。
 pub(super) enum PluginMcpMaterializationSource<'a> {
     /// Ordinary declarations remain subject to the manager's current generation checks.
     /// 普通声明继续受管理器当前代次检查约束。
@@ -70,11 +70,11 @@ impl PluginMcpMaterializationSource<'_> {
         }
     }
 
-    /// Reads legacy configuration only for a declaration explicitly sourced from public discovery.
-    /// 仅对明确来自公开发现的声明读取旧配置。
+    /// Reads the manager's published configuration only for a declaration explicitly sourced from public discovery.
+    /// 仅对明确来自公开发现的声明读取管理器已发布配置。
     /// The plugin identity is exact; a candidate missing frozen selection fails without fallback.
     /// 插件身份精确；候选缺少固定选择时直接失败，不回退。
-    pub(super) fn legacy_configuration(&self, plugin_id: &str) -> Result<Option<Value>, String> {
+    pub(super) fn published_configuration(&self, plugin_id: &str) -> Result<Option<Value>, String> {
         match self {
             Self::Published(plugins) => plugin_server_configuration(plugins, plugin_id),
             Self::Candidate(_) | Self::Target(_) | Self::Predecessor(_) => Err(String::from(

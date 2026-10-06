@@ -19,14 +19,15 @@ pub use plugin::{
     published_global_mcp_server_configs, target_global_mcp_server_configs,
 };
 pub use runtime::{
-    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, LegacyPluginMcpReplacement,
-    McpRuntimeAccess, McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
+    CandidatePluginMcpObservation, CandidatePluginMcpRuntime, McpRuntimeAccess,
+    McpRuntimeDiscoveryReport, McpRuntimeOverview, McpRuntimeOwnedPartitionKey,
     McpRuntimeOwnedStdioPartition, McpRuntimeServerState, McpRuntimeServerStatus,
     McpRuntimeToolAllowlist, McpRuntimeToolBinding, PredecessorPluginMcpHandoffGuard,
     PredecessorPluginMcpRuntime, PreparedPublishedPluginMcpPublication,
     PublishedPluginMcpObservation, PublishedPluginMcpPublicationGuard, PublishedPluginMcpRuntime,
-    TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime, bootstrap_mcp_runtime_access,
-    bootstrap_mcp_runtime_access_with_published, configured_mcp_runtime_access,
-    remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
-    replace_user_mcp_runtime_partition, validate_plugin_mcp_runtime_partition,
+    RetainedPluginMcpReplacement, TargetPluginMcpHandoffGuard, TargetPluginMcpRuntime,
+    bootstrap_mcp_runtime_access, bootstrap_mcp_runtime_access_with_published,
+    configured_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
+    replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
+    validate_plugin_mcp_runtime_partition,
 };

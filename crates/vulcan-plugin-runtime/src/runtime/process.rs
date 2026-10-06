@@ -37,10 +37,10 @@ pub(super) enum ProcessPermissionSource<'a> {
     PrivateHook(&'a super::private_hooks::PrivateHookOrigin),
     /// The original disabled-user guard fixes this lifecycle declaration and scope.
     /// 原已停用用户守卫固定此生命周期声明及作用域。
-    LegacyLifecycle {
+    RemovalLifecycle {
         /// Actual retained authority validates the same manager and complete descriptor.
         /// 实际保留权威校验同一管理器及完整描述符。
-        authority: &'a super::legacy_lifecycle::LegacyLifecycleExecution,
+        authority: &'a super::removal_lifecycle::RemovalLifecycleExecution,
         /// The admitted lifecycle event is never inferred from business input.
         /// 已接纳生命周期事件绝不从业务输入推断。
         scope: VulcanPluginBridgeLeaseScope,
@@ -91,7 +91,7 @@ pub(super) fn resolve_plugin_process_for_snapshot(
                 .map_err(|failure| failure.message)?;
             manifest.permissions.clone()
         }
-        ProcessPermissionSource::LegacyLifecycle { authority, scope } => {
+        ProcessPermissionSource::RemovalLifecycle { authority, scope } => {
             // Validate the actual original guard before consulting the frozen process permissions.
             // 查询冻结进程权限之前校验实际原守卫。
             authority

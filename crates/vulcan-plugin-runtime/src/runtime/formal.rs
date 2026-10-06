@@ -25,8 +25,8 @@ pub use calls::reuse::VulcanPluginReusableDomainStatus;
 pub use calls::{
     VulcanPluginAutomaticPrewarmOrigin, VulcanPluginAutomaticPrewarmPermit,
     VulcanPluginAutomaticPrewarmTrigger, VulcanPluginFormalCallStatus,
-    VulcanPluginLegacyLifecycleCall, VulcanPluginPrewarmTargetRequest,
-    VulcanPluginPrewarmTargetStatus,
+    VulcanPluginPrewarmTargetRequest, VulcanPluginPrewarmTargetStatus,
+    VulcanPluginRemovalLifecycleCall,
 };
 mod pinned;
 pub use pinned::VulcanPluginFormalSessionStatus;

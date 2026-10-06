@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::runtime::candidates::{ActivationExecution, CandidateOperation};
-use crate::runtime::legacy_lifecycle::{CallExecutionSource, LegacyLifecycleExecution};
+use crate::runtime::removal_lifecycle::{CallExecutionSource, RemovalLifecycleExecution};
 use crate::{VulcanPluginDescriptor, VulcanPluginToolDescriptor};
 use luaskills::LuaInvocationContext;
 use luaskills::runtime::embedded::{
@@ -18,8 +18,8 @@ mod admission;
 mod candidates;
 pub(in crate::runtime::formal) mod diagnostics;
 mod initialized;
-mod legacy;
-pub use legacy::VulcanPluginLegacyLifecycleCall;
+mod removal;
+pub use removal::VulcanPluginRemovalLifecycleCall;
 mod predecessor;
 mod prewarm;
 mod registration;
@@ -249,12 +249,12 @@ enum CallAdmission {
         /// 宿主从已检查且仍处于准备阶段的事务构造此权威。
         authority: Arc<ActivationExecution>,
     },
-    /// Original namespace authority selects one flat user lifecycle callback.
-    /// 原命名空间权威选择单个平铺用户生命周期回调。
-    LegacyLifecycle {
+    /// Original namespace authority selects one managed removal lifecycle callback.
+    /// 原命名空间权威选择单个受管移除生命周期回调。
+    RemovalLifecycle {
         /// Original guard is retained by this exact execution authority.
         /// 原护栏由此精确执行权威保留。
-        authority: Arc<LegacyLifecycleExecution>,
+        authority: Arc<RemovalLifecycleExecution>,
         /// Export comes exclusively from the original manifest.
         /// 导出仅来自原清单。
         export: String,
@@ -281,7 +281,7 @@ impl CallAdmission {
             }
             Self::Lifecycle { .. }
             | Self::ActivationLifecycle { .. }
-            | Self::LegacyLifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
+            | Self::RemovalLifecycle { .. } => VulcanPluginCapacityPurpose::Lifecycle,
             Self::Action { .. } => VulcanPluginCapacityPurpose::UiAction,
             Self::Probe | Self::CandidateProbe { .. } => {
                 VulcanPluginCapacityPurpose::ActivationProbe
@@ -304,7 +304,7 @@ impl CallAdmission {
             }
             Self::Lifecycle { .. }
             | Self::ActivationLifecycle { .. }
-            | Self::LegacyLifecycle { .. } => CallOwner::Lifecycle,
+            | Self::RemovalLifecycle { .. } => CallOwner::Lifecycle,
             Self::Action { .. } => CallOwner::Action,
             Self::Probe | Self::CandidateProbe { .. } => CallOwner::Probe,
         }
@@ -317,7 +317,7 @@ impl CallAdmission {
             Self::Controller { export, .. }
             | Self::Lifecycle { export }
             | Self::ActivationLifecycle { export, .. }
-            | Self::LegacyLifecycle { export, .. }
+            | Self::RemovalLifecycle { export, .. }
             | Self::Action { export, .. } => Some(export),
             Self::Probe
             | Self::CandidateProbe { .. }
@@ -342,8 +342,8 @@ impl CallAdmission {
             Self::CandidateProbe { authority } | Self::ActivationLifecycle { authority, .. } => {
                 CallExecutionSource::Activation(Arc::clone(authority))
             }
-            Self::LegacyLifecycle { authority, .. } => {
-                CallExecutionSource::LegacyLifecycle(Arc::clone(authority))
+            Self::RemovalLifecycle { authority, .. } => {
+                CallExecutionSource::RemovalLifecycle(Arc::clone(authority))
             }
             _ => CallExecutionSource::Published,
         }
@@ -1359,7 +1359,7 @@ impl VulcanPluginRuntimeManager {
         }
         // Failed preparation can retain a lease that never reached an actual pool.
         // 准备失败可能保留从未进入实际池的租约。
-        if let CallExecutionSource::LegacyLifecycle(authority) = &call.source {
+        if let CallExecutionSource::RemovalLifecycle(authority) = &call.source {
             authority.retire_prepared_environment()?;
         }
         // Physical Action capacity outlives every core session, request scope and pool checkpoint.

@@ -15,8 +15,8 @@ use vulcan_plugin_runtime::{
 /// 来源由实际生产者在工作开始前固定，绝不在连接存在后登记。
 #[derive(Clone)]
 pub(crate) enum McpPluginLaunchSource {
-    /// Ordinary legacy inputs carry no proof of a full published plugin selection.
-    /// 普通旧输入不携带完整已发布插件选择的证明。
+    /// Ordinary raw inputs carry no proof of a full published plugin selection.
+    /// 普通原始输入不携带完整已发布插件选择的证明。
     Unproven,
     /// Pure original source values share identity with the actual prepared ordinary owner.
     /// 纯原来源值与实际已准备普通所有者共享身份。

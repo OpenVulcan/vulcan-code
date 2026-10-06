@@ -25,7 +25,7 @@ Service 的已停用用户插件更新与首次安装入口共用同一不可变
 当前权威实现为 `generation_store/deactivation.rs`、`generation_store/deactivation/collection.rs`、
 `generation_store/deactivation/inventory.rs`、`generation_store/deactivation/progress.rs`、
 `generation_store/credential_staging/retention.rs`、`generation_store/operations.rs`、
-`runtime/legacy_lifecycle.rs`、`runtime/formal/calls/legacy.rs`、`catalog/generations.rs` 及
+`runtime/removal_lifecycle.rs`、`runtime/formal/calls/removal.rs`、`catalog/generations.rs` 及
 `runtime/lifecycle.rs`。服务协调实现为 `skills_services/local_plugin_uninstall.rs` 及子模块，
 已借用这些核心原语处理受管及平铺移除；核心选择停用仍不单独代表完整卸载完成。
 

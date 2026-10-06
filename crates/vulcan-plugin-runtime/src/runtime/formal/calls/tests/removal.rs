@@ -9,9 +9,9 @@ use crate::{
 
 /// Control real removal callbacks using the existing native synchronization fixture.
 /// 使用既有原生同步夹具控制真实卸载回调。
-struct LegacyEvents(Arc<Events>);
+struct RemovalEvents(Arc<Events>);
 
-impl VulcanPluginUiEventPublisher for LegacyEvents {
+impl VulcanPluginUiEventPublisher for RemovalEvents {
     /// Block the actual native worker, then record its original event without fabrication.
     /// 阻塞实际原生工作者，随后记录其原事件，不伪造结果。
     fn publish(&self, event: VulcanPluginUiInvalidation) -> Result<(), String> {
@@ -72,7 +72,7 @@ fn user_fixture() -> (Fixture, VulcanPluginActivation) {
         .install_host_services(VulcanPluginHostServices {
             storage: None,
             vldb: None,
-            ui_events: Some(Arc::new(LegacyEvents(Arc::clone(&fixture.events)))),
+            ui_events: Some(Arc::new(RemovalEvents(Arc::clone(&fixture.events)))),
         })
         .expect("actual native observer");
     (fixture, selected)
@@ -95,11 +95,11 @@ fn removal(
 fn guard(
     fixture: &Fixture,
     selected: &VulcanPluginActivation,
-) -> Arc<crate::VulcanPluginLegacyMutationGuard> {
+) -> Arc<crate::VulcanPluginNamespaceGuard> {
     Arc::new(
         VulcanPluginGenerationStore::open(&fixture.manager.state.user_plugin_root)
             .expect("original store")
-            .acquire_legacy_mutation_guard("hook-plugin", Some(selected))
+            .acquire_namespace_guard("hook-plugin", Some(selected))
             .expect("original namespace guard"),
     )
 }
@@ -114,7 +114,7 @@ fn assert_busy(fixture: &Fixture) {
     // Preserve the actual contention error without fabricating Busy evidence.
     // 保留实际争用错误，不伪造占用证据。
     let error = contender
-        .acquire_legacy_mutation_guard("hook-plugin", None)
+        .acquire_namespace_guard("hook-plugin", None)
         // Discard unexpected successful ownership before asserting the error, without requiring the guard to implement Debug.
         // 断言错误前释放意外成功的所有权，不要求守卫实现 Debug。
         .map(|_| ())
@@ -265,17 +265,17 @@ async fn retained_published_call(fixture: &Fixture) -> Arc<FormalCall> {
 
 /// Find the actual private lifecycle record registered beside ordinary retained calls.
 /// 查找与普通保留调用共同登记的实际私有生命周期记录。
-/// owner is the exact shared parent; returns its sole Legacy source record or fails the test.
-/// owner 为精确共享父级；返回其唯一旧式来源记录，否则测试失败。
-fn original_legacy_call(owner: &ManagedFormalRuntime) -> Arc<FormalCall> {
+/// owner is the exact shared parent; returns its sole removal source record or fails the test.
+/// owner 为精确共享父级；返回其唯一移除来源记录，否则测试失败。
+fn original_removal_call(owner: &ManagedFormalRuntime) -> Arc<FormalCall> {
     owner
         .calls
         .lock()
         .expect("actual registry")
         .values()
-        .find(|call| matches!(&call.source, CallExecutionSource::LegacyLifecycle(_)))
+        .find(|call| matches!(&call.source, CallExecutionSource::RemovalLifecycle(_)))
         .cloned()
-        .expect("actual legacy record")
+        .expect("actual removal record")
 }
 
 /// Original confirmation ignores unrelated acknowledged records even when their actual core forget fails.
@@ -310,7 +310,7 @@ fn managed_uninstall_exact_confirmation_ignores_foreign_forget_failure() {
         let owner = fixture.owner();
         // Preserve exact Arc identity for the actual own record.
         // 为实际自身记录保留精确 Arc 身份。
-        let original = original_legacy_call(&owner);
+        let original = original_removal_call(&owner);
         handle.start().expect("original start");
         handle.observe().await.expect("real own callback");
         retired(&original).await;
@@ -404,7 +404,7 @@ fn managed_uninstall_failed_own_confirmation_retains_exact_record_and_guard() {
         let owner = fixture.owner();
         // Capture the exact registered original Arc before starting it.
         // 启动前捕获精确已注册原 Arc。
-        let original = original_legacy_call(&owner);
+        let original = original_removal_call(&owner);
         handle.start().expect("real start");
         handle.observe().await.expect("real result");
         retired(&original).await;

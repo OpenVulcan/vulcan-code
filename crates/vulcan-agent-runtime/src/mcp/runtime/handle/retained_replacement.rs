@@ -1,5 +1,5 @@
-//! Service-retained Legacy replacement owns undispatched work and its sole actual execution lease.
-//! 服务保留旧格式替换持有未派发工作及其唯一实际执行租约。
+//! Service-retained plugin MCP replacement owns undispatched work and its sole actual execution lease.
+//! 服务保留的插件 MCP 替换持有未派发工作及其唯一实际执行租约。
 
 use super::*;
 use crate::agent_runtime::extension_generation::ExtensionGeneration;
@@ -10,7 +10,7 @@ mod tests;
 
 /// Actual ownership progresses once; public observations never reconstruct an execution lease.
 /// 实际所有权仅推进一次；公共观测绝不重建执行租约。
-enum LegacyReplacementOwnership {
+enum RetainedReplacementOwnership {
     /// Both original work and its allocated lease exist before the service registers this controller.
     /// 原工作及其已分配租约均在服务登记此控制器之前存在。
     Prepared {
@@ -44,7 +44,7 @@ enum LegacyReplacementOwnership {
 
 /// Single-shot raw replacement grants no sealed source, target-completion or predecessor-restoration authority.
 /// 单次原始替换不授予密封来源、目标完成或前驱恢复权威。
-pub struct LegacyPluginMcpReplacement {
+pub struct RetainedPluginMcpReplacement {
     /// Exact declared plugin identity fixes routing and original observation registration.
     /// 精确已声明插件身份固定路由及原观察登记。
     plugin_id: String,
@@ -59,10 +59,10 @@ pub struct LegacyPluginMcpReplacement {
     access: McpRuntimeObservationAccess,
     /// The service borrows this typed owner; cancellation does not move its actual lease out.
     /// 服务借用此类型化所有者；取消不将其实际租约移出。
-    ownership: Mutex<LegacyReplacementOwnership>,
+    ownership: Mutex<RetainedReplacementOwnership>,
 }
 
-impl LegacyPluginMcpReplacement {
+impl RetainedPluginMcpReplacement {
     /// Purely prepare exact nonempty raw definitions against current's original lineage before service registration.
     /// 在服务登记前，针对 current 原谱系纯准备精确非空原始定义。
     /// Returns undispatched ownership; plugin and generation must match every server's declared source.
@@ -83,7 +83,7 @@ impl LegacyPluginMcpReplacement {
             })
         {
             return Err(String::from(
-                "Legacy replacement requires nonempty exact plugin definitions.",
+                "Retained replacement requires nonempty exact plugin definitions.",
             ));
         }
         // No caller-visible resource handle or parallel source receipt is created.
@@ -94,7 +94,7 @@ impl LegacyPluginMcpReplacement {
         let work = prepare_mcp_runtime(
             servers,
             resources,
-            McpRuntimePurpose::LegacyPluginPreparation,
+            McpRuntimePurpose::RetainedPluginReplacement,
             crate::mcp::registry::McpPluginLaunchSource::Unproven,
         )?;
         // This original allocation is used for registration, tasks and full publication.
@@ -108,7 +108,7 @@ impl LegacyPluginMcpReplacement {
             generation,
             runtime,
             access: current.observation_access(),
-            ownership: Mutex::new(LegacyReplacementOwnership::Prepared { work, lease }),
+            ownership: Mutex::new(RetainedReplacementOwnership::Prepared { work, lease }),
         })
     }
 
@@ -118,7 +118,7 @@ impl LegacyPluginMcpReplacement {
     /// 准入或原所有权变化时，在派发前返回明确拒绝。
     pub fn dispatch(&self) -> Result<(), String> {
         tokio::runtime::Handle::try_current().map_err(|_| {
-            String::from("Legacy replacement dispatch requires an active Tokio runtime.")
+            String::from("Retained replacement dispatch requires an active Tokio runtime.")
         })?;
         // Keep the same ordering as full publication: admission, pending originals, then ownership.
         // 保持与完整发布相同顺序：准入、待处理原实例、所有权。
@@ -126,9 +126,9 @@ impl LegacyPluginMcpReplacement {
             .access
             .blocked_owner_plugins
             .lock()
-            .map_err(|_| String::from("Legacy replacement admission is poisoned."))?;
+            .map_err(|_| String::from("Retained replacement admission is poisoned."))?;
         if admission.contains(&self.plugin_id) {
-            return Err(String::from("Legacy replacement admission is closed."));
+            return Err(String::from("Retained replacement admission is closed."));
         }
         // Register actual controls before their first task can execute.
         // 首个任务可执行之前登记实际控制。
@@ -136,20 +136,20 @@ impl LegacyPluginMcpReplacement {
             .access
             .retired_plugin_partitions
             .lock()
-            .map_err(|_| String::from("Legacy replacement observations are poisoned."))?;
+            .map_err(|_| String::from("Retained replacement observations are poisoned."))?;
         // The same exclusive state borrow prevents duplicate dispatch or cancellation during transfer.
         // 相同排他状态借用防止移交期间重复派发或取消。
         let mut ownership = self
             .ownership
             .lock()
-            .map_err(|_| String::from("Legacy replacement ownership is poisoned."))?;
+            .map_err(|_| String::from("Retained replacement ownership is poisoned."))?;
         // Clone only this already allocated lease; no replacement lease is constructed.
         // 仅克隆此已分配租约；不构造替代租约。
         let lease = match &*ownership {
-            LegacyReplacementOwnership::Prepared { lease, .. } => Arc::clone(lease),
+            RetainedReplacementOwnership::Prepared { lease, .. } => Arc::clone(lease),
             _ => {
                 return Err(String::from(
-                    "Legacy replacement has already left preparation.",
+                    "Retained replacement has already left preparation.",
                 ));
             }
         };
@@ -165,13 +165,15 @@ impl LegacyPluginMcpReplacement {
             .push(self.runtime.clone());
         // Running ownership is established before work moves into actual tasks, without an empty lease interval.
         // 工作移入实际任务之前建立运行中所有权，不存在空租约区间。
-        let prepared =
-            std::mem::replace(&mut *ownership, LegacyReplacementOwnership::Running(lease));
+        let prepared = std::mem::replace(
+            &mut *ownership,
+            RetainedReplacementOwnership::Running(lease),
+        );
         match prepared {
-            LegacyReplacementOwnership::Prepared { work, .. } => {
+            RetainedReplacementOwnership::Prepared { work, .. } => {
                 work.dispatch();
             }
-            _ => unreachable!("exclusive validated Legacy preparation"),
+            _ => unreachable!("exclusive validated retained preparation"),
         }
         Ok(())
     }
@@ -196,7 +198,7 @@ impl LegacyPluginMcpReplacement {
     ) -> Result<McpRuntimeAccess, String> {
         if !self.access.same_lineage(current) {
             return Err(String::from(
-                "Legacy replacement publication lineage changed.",
+                "Retained replacement publication lineage changed.",
             ));
         }
         // Release ownership before the access factory obtains original observation locks.
@@ -204,12 +206,12 @@ impl LegacyPluginMcpReplacement {
         let lease = match &*self
             .ownership
             .lock()
-            .map_err(|_| String::from("Legacy replacement ownership is poisoned."))?
+            .map_err(|_| String::from("Retained replacement ownership is poisoned."))?
         {
-            LegacyReplacementOwnership::Running(lease) => Arc::clone(lease),
+            RetainedReplacementOwnership::Running(lease) => Arc::clone(lease),
             _ => {
                 return Err(String::from(
-                    "Legacy replacement is not an unpublished running original.",
+                    "Retained replacement is not an unpublished running original.",
                 ));
             }
         };
@@ -235,7 +237,7 @@ impl LegacyPluginMcpReplacement {
             .access
             .blocked_owner_plugins
             .lock()
-            .map_err(|_| String::from("Legacy replacement admission is poisoned."))?;
+            .map_err(|_| String::from("Retained replacement admission is poisoned."))?;
         if admission.contains(&self.plugin_id)
             || !admission
                 .managed_globals
@@ -247,7 +249,7 @@ impl LegacyPluginMcpReplacement {
                 })
         {
             return Err(String::from(
-                "Legacy replacement original admission changed.",
+                "Retained replacement original admission changed.",
             ));
         }
         // This same pending control cannot be substituted before confirmation.
@@ -256,14 +258,14 @@ impl LegacyPluginMcpReplacement {
             .access
             .retired_plugin_partitions
             .lock()
-            .map_err(|_| String::from("Legacy replacement observations are poisoned."))?;
+            .map_err(|_| String::from("Retained replacement observations are poisoned."))?;
         if !pending.get(&self.plugin_id).is_some_and(|originals| {
             originals
                 .iter()
                 .any(|original| original.same_instance(&self.runtime))
         }) {
             return Err(String::from(
-                "Legacy replacement original registration is missing.",
+                "Retained replacement original registration is missing.",
             ));
         }
         // Exclude cancellation and another publication while transferring the original actual lease.
@@ -271,14 +273,14 @@ impl LegacyPluginMcpReplacement {
         let mut ownership = self
             .ownership
             .lock()
-            .map_err(|_| String::from("Legacy replacement ownership is poisoned."))?;
+            .map_err(|_| String::from("Retained replacement ownership is poisoned."))?;
         // Declare the temporary strong lease before native guards so it drops only after their release.
         // 在原生守卫之前声明临时强租约，使其仅在这些守卫释放后销毁。
         let lease = match &*ownership {
-            LegacyReplacementOwnership::Running(lease) => Arc::clone(lease),
+            RetainedReplacementOwnership::Running(lease) => Arc::clone(lease),
             _ => {
                 return Err(String::from(
-                    "Legacy replacement ownership has already transferred.",
+                    "Retained replacement ownership has already transferred.",
                 ));
             }
         };
@@ -299,7 +301,7 @@ impl LegacyPluginMcpReplacement {
             || next.plugin_conversation_hooks().is_none()
         {
             return Err(String::from(
-                "Legacy replacement full successor lacks original lease, lineage or handlers.",
+                "Retained replacement full successor lacks original lease, lineage or handlers.",
             ));
         }
         // Hold actual business, transport and readiness guards in the existing removal order.
@@ -309,7 +311,7 @@ impl LegacyPluginMcpReplacement {
             .inner
             .business_gate
             .write()
-            .map_err(|_| String::from("Legacy replacement business gate is poisoned."))?;
+            .map_err(|_| String::from("Retained replacement business gate is poisoned."))?;
         // Original transport ownership cannot disappear during full-pointer confirmation.
         // 完整指针确认期间原传输所有权不能消失。
         let transports = self
@@ -317,7 +319,7 @@ impl LegacyPluginMcpReplacement {
             .inner
             .transports
             .read()
-            .map_err(|_| String::from("Legacy replacement transports are poisoned."))?;
+            .map_err(|_| String::from("Retained replacement transports are poisoned."))?;
         // Original readiness remains locked across the adjacent confirmation tail.
         // 跨相邻确认尾段锁定原就绪。
         let snapshot = self
@@ -325,7 +327,7 @@ impl LegacyPluginMcpReplacement {
             .inner
             .snapshot
             .read()
-            .map_err(|_| String::from("Legacy replacement readiness is poisoned."))?;
+            .map_err(|_| String::from("Retained replacement readiness is poisoned."))?;
         if *business != McpBusinessGate::Preparing
             || self.runtime.shutdown_requested()
             || lease.is_revoked()
@@ -344,19 +346,19 @@ impl LegacyPluginMcpReplacement {
                 })
         {
             return Err(String::from(
-                "Legacy replacement original is not ready for full publication.",
+                "Retained replacement original is not ready for full publication.",
             ));
         }
         ExtensionGeneration::publish_prepared(slot, expected, next, |committed| {
             // The same actual full pointer records weak ownership before business opens.
             // 业务开放之前，相同实际完整指针记录弱所有权。
-            *ownership = LegacyReplacementOwnership::Published {
+            *ownership = RetainedReplacementOwnership::Published {
                 _lease: Arc::downgrade(&lease),
                 _extension: Arc::downgrade(committed),
             };
             pending
                 .get_mut(&self.plugin_id)
-                .expect("validated original Legacy pending registration")
+                .expect("validated original retained pending registration")
                 .retain(|original| !original.same_instance(&self.runtime));
             *business = McpBusinessGate::Open;
             confirm();
@@ -377,21 +379,21 @@ impl LegacyPluginMcpReplacement {
             let mut ownership = self
                 .ownership
                 .lock()
-                .map_err(|_| String::from("Legacy replacement ownership is poisoned."))?;
+                .map_err(|_| String::from("Retained replacement ownership is poisoned."))?;
             match &*ownership {
-                LegacyReplacementOwnership::Published { .. } => {
+                RetainedReplacementOwnership::Published { .. } => {
                     return Err(String::from(
-                        "Published Legacy replacement cannot be aborted.",
+                        "Published retained replacement cannot be aborted.",
                     ));
                 }
-                LegacyReplacementOwnership::Retired => return Ok(()),
-                LegacyReplacementOwnership::Prepared { .. } => {
+                RetainedReplacementOwnership::Retired => return Ok(()),
+                RetainedReplacementOwnership::Prepared { .. } => {
                     self.runtime.shutdown();
-                    *ownership = LegacyReplacementOwnership::CancelledBeforeDispatch;
+                    *ownership = RetainedReplacementOwnership::CancelledBeforeDispatch;
                     true
                 }
-                LegacyReplacementOwnership::CancelledBeforeDispatch => true,
-                LegacyReplacementOwnership::Running(_) => {
+                RetainedReplacementOwnership::CancelledBeforeDispatch => true,
+                RetainedReplacementOwnership::Running(_) => {
                     self.runtime.shutdown();
                     false
                 }
@@ -400,7 +402,7 @@ impl LegacyPluginMcpReplacement {
         if never_dispatched {
             if !self.runtime.inner.partition_release.is_released() {
                 return Err(String::from(
-                    "Undispatched Legacy replacement resources remain owned.",
+                    "Undispatched retained replacement resources remain owned.",
                 ));
             }
         } else {
@@ -413,20 +415,21 @@ impl LegacyPluginMcpReplacement {
         *self
             .ownership
             .lock()
-            .map_err(|_| String::from("Legacy replacement ownership is poisoned."))? =
-            LegacyReplacementOwnership::Retired;
+            .map_err(|_| String::from("Retained replacement ownership is poisoned."))? =
+            RetainedReplacementOwnership::Retired;
         Ok(())
     }
 }
 
-impl Drop for LegacyPluginMcpReplacement {
+impl Drop for RetainedPluginMcpReplacement {
     /// Unpublished abandonment closes only its original; historical published control never stops the service owner.
     /// 未发布放弃仅关闭其原实例；历史已发布控制绝不停止服务所有者。
     fn drop(&mut self) {
         if let Ok(ownership) = self.ownership.get_mut()
             && !matches!(
                 ownership,
-                LegacyReplacementOwnership::Published { .. } | LegacyReplacementOwnership::Retired
+                RetainedReplacementOwnership::Published { .. }
+                    | RetainedReplacementOwnership::Retired
             )
         {
             self.runtime.shutdown();

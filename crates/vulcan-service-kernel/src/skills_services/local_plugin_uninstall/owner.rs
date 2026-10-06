@@ -31,7 +31,7 @@ pub(super) struct UninstallResources {
     pub(super) original: Option<OriginalRemoval>,
     /// Retain before start; observer loss leaves the same callback available for cleanup.
     /// 在启动之前保留；观测者丢失后仍可清理相同回调。
-    pub(super) callback: Option<VulcanPluginLegacyLifecycleCall>,
+    pub(super) callback: Option<VulcanPluginRemovalLifecycleCall>,
     /// None means not physically retired, independently from observable business completion.
     /// None 表示尚未物理退役，独立于可观测业务完成。
     pub(super) callback_result: Option<Result<(), String>>,
@@ -391,8 +391,8 @@ pub(super) fn reserve(
     // The snapshot is temporary and is dropped before any physical collection.
     // 快照为临时对象，在任何物理回收之前释放。
     let catalog = bridge.vulcan_plugin_runtime.snapshot();
-    // Absence is an explicit error, never a guessed flat package.
-    // 缺失为明确错误，绝不猜测为平铺插件包。
+    // Absence is an explicit error, never guessed from the user plugin root.
+    // 缺失为明确错误，绝不从用户插件根目录猜测。
     let descriptor = catalog.plugins.get(plugin).ok_or("用户插件尚未安装。")?;
     if descriptor.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled
         || descriptor.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled

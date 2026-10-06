@@ -93,8 +93,8 @@ impl VulcanPluginCredentialBackend for OldCredentials {
 impl PluginMcpSecretStore for OldCredentials {
     /// Record plugin_id/server_id/secret_key/binding before failing or reading that exact staged revision.
     /// 在失败或读取精确暂存修订之前，记录 plugin_id／server_id／secret_key／binding。
-    /// Return the actual stored value after recovery; Legacy and missing values are explicit errors.
-    /// 恢复后返回实际存储值；Legacy 及缺失值为明确错误。
+    /// Return the actual stored value after recovery; unconfigured and missing values are explicit errors.
+    /// 恢复后返回实际存储值；未配置及缺失值为明确错误。
     fn read_secret(
         &self,
         plugin_id: &str,

@@ -890,7 +890,7 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
                 Vec::new(),
             )
             .await
-            .expect("actual disabled legacy to managed seed");
+            .expect("actual disabled managed seed update");
         })
         .await;
     // Observe the actual writer's full selected authorities rather than constructing a replacement descriptor.
@@ -1268,7 +1268,7 @@ async fn immutable_service_update_preserves_configuration_without_schema_fallbac
     fixture
         .runtime
         .update_plugin_config(PLUGIN, json!({"mode":"user-value"}))
-        .expect("legacy user configuration");
+        .expect("managed user configuration");
     // The actual candidate selection must preserve the exact old user document.
     // 实际候选选择必须保留精确旧用户文档。
     let prepared = fixture

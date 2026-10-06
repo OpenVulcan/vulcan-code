@@ -1,5 +1,5 @@
-//! Legacy mutable configuration and secret writers retain the actual activation namespace fence.
-//! 旧格式可变配置及秘密写入者保留实际激活命名空间屏障。
+//! Namespace guards retain the actual activation namespace fence for removal and settings writers.
+//! 命名空间守卫为移除及设置写入者保留实际激活命名空间屏障。
 
 use super::{
     VulcanPluginActivation, VulcanPluginGenerationStore, VulcanPluginStoreError as Error,
@@ -8,16 +8,16 @@ use super::{
 use std::fs::File;
 use std::path::Path;
 
-/// Exclusive original-selection authority retained across a legacy mutation's read, publication and rollback.
-/// 旧格式变更的读取、发布及回滚期间保留的排他原选择权威。
+/// Exclusive original-selection authority retained across a guarded operation's read, publication and rollback.
+/// 受保护操作的读取、发布及回滚期间保留的排他原选择权威。
 /// This owner cannot be cloned, deserialized or reconstructed from a file, UUID or revision number.
 /// 此所有者不能被克隆、反序列化，或从文件、UUID 或修订编号重建。
-pub struct VulcanPluginLegacyMutationGuard {
+pub struct VulcanPluginNamespaceGuard {
     /// The original canonical store authority stays retained without reopening or reconstructing a backend root.
     /// 原规范存储权威保持保留，不重开或重建后端根目录。
     store: VulcanPluginGenerationStore,
-    /// Exact validated plugin namespace owns both legacy configuration and OS secret accounts.
-    /// 精确已校验插件命名空间同时持有旧格式配置及操作系统秘密账户。
+    /// Exact validated plugin namespace owns the selection record, its settings section and OS secret accounts.
+    /// 精确已校验插件命名空间持有选择记录、其设置段及操作系统秘密账户。
     plugin_id: String,
     /// Complete originally selected activation, with explicit absence only for an unpublished namespace.
     /// 完整原已选激活，仅未发布命名空间使用显式缺失。
@@ -27,22 +27,22 @@ pub struct VulcanPluginLegacyMutationGuard {
     _namespace: File,
 }
 
-impl std::fmt::Debug for VulcanPluginLegacyMutationGuard {
+impl std::fmt::Debug for VulcanPluginNamespaceGuard {
     /// Format the non-secret plugin identity only; formatter receives no configuration, activation or native file details.
     /// 仅格式化无秘密插件身份；formatter 不接收配置、激活或原生文件细节。
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("VulcanPluginLegacyMutationGuard")
+            .debug_struct("VulcanPluginNamespaceGuard")
             .field("plugin_id", &self.plugin_id)
             .finish_non_exhaustive()
     }
 }
 
-impl VulcanPluginLegacyMutationGuard {
+impl VulcanPluginNamespaceGuard {
     /// Borrow the complete original selection as inert routing identity; no parameters or execution permission.
     /// 借用完整原选择作为未启动路由身份；无参数，也不授予执行权限。
     /// Returns exact selected metadata, preserving actual absence for an unpublished flat namespace.
-    /// 返回精确已选元数据，为未发布平铺命名空间保留实际缺失。
+    /// 返回精确已选元数据，为未发布命名空间保留实际缺失。
     pub(crate) fn routing_original(&self) -> Option<&VulcanPluginActivation> {
         self.original.as_ref()
     }
@@ -63,7 +63,7 @@ impl VulcanPluginLegacyMutationGuard {
         if !super::files::exists(user_root, true)? {
             return Err(Error::new(
                 Code::Conflict,
-                "Legacy owner requires its actual existing user plugin root.",
+                "Namespace guard requires its actual existing user plugin root.",
             ));
         }
         // Reject literal redirects before canonicalization, matching both original store entry contracts.
@@ -74,7 +74,7 @@ impl VulcanPluginLegacyMutationGuard {
         if canonical_user_root.join(super::STORE_DIRECTORY) != self.store.root {
             return Err(Error::new(
                 Code::Conflict,
-                "Legacy owner belongs to another canonical user plugin root.",
+                "Namespace guard belongs to another canonical user plugin root.",
             ));
         }
         // Derive forward from the sole layout constant; never infer a user root from a guessed parent or initialize missing children.
@@ -118,8 +118,8 @@ impl VulcanPluginLegacyMutationGuard {
     /// 校验此保留原权威属于 store／plugin_id，不重开或替换其命名空间锁。
     /// Return success only for the unchanged complete selection without any unfinished activation or restoration request.
     /// 仅完整选择未变且没有未完成激活或恢复请求时返回成功。
-    /// Call before each legacy backend mutation and its rollback; errors leave the same physical fence retained.
-    /// 每次旧格式后端变更及其回滚前调用；错误保持相同物理屏障持续持有。
+    /// Call before each guarded backend mutation and its rollback; errors leave the same physical fence retained.
+    /// 每次受保护后端变更及其回滚前调用；错误保持相同物理屏障持续持有。
     pub fn validate_owner(
         &self,
         store: &VulcanPluginGenerationStore,
@@ -128,7 +128,7 @@ impl VulcanPluginLegacyMutationGuard {
         if self.store.root != store.root || self.plugin_id != plugin_id {
             return Err(Error::new(
                 Code::Conflict,
-                "Legacy mutation owner belongs to another store or plugin namespace.",
+                "Namespace guard belongs to another store or plugin namespace.",
             ));
         }
         // The sole pending-request contract also includes the host's original restoration handoff fence.
@@ -137,7 +137,7 @@ impl VulcanPluginLegacyMutationGuard {
         if store.read_activation(plugin_id)? != self.original {
             return Err(Error::new(
                 Code::Conflict,
-                "Legacy mutation's complete original activation changed.",
+                "Namespace guard's complete original activation changed.",
             ));
         }
         Ok(())
@@ -251,15 +251,15 @@ impl VulcanPluginGenerationStore {
     /// 对照完整 expected 激活取得 plugin_id 实际排他命名空间，并返回其类型化所有者。
     /// Expected absence means no published activation, not a guessed revision or a fallback to a newer selection.
     /// 预期缺失表示没有已发布激活，不是猜测修订或回退至较新选择。
-    /// Retain this guard through legacy read-before-write, readiness, full publication and any failure rollback.
-    /// 在旧格式写前读取、就绪、完整发布及任何失败回滚期间保留此 guard。
+    /// Retain this guard through read-before-write, readiness, full publication and any failure rollback.
+    /// 在写前读取、就绪、完整发布及任何失败回滚期间保留此 guard。
     /// This fence never changes secret values, configuration documents, selection records or request journals.
     /// 此屏障绝不变更秘密值、配置文档、选择记录或请求日志。
-    pub fn acquire_legacy_mutation_guard(
+    pub fn acquire_namespace_guard(
         &self,
         plugin_id: &str,
         expected: Option<&VulcanPluginActivation>,
-    ) -> Result<VulcanPluginLegacyMutationGuard> {
+    ) -> Result<VulcanPluginNamespaceGuard> {
         // Namespace construction validates the literal plugin identity and complete canonical store layout.
         // 命名空间构造校验字面插件身份及完整规范存储布局。
         let namespace = self.namespace_lock(plugin_id, false)?;
@@ -272,10 +272,10 @@ impl VulcanPluginGenerationStore {
         if original.as_ref() != expected {
             return Err(Error::new(
                 Code::Conflict,
-                "Legacy mutation requires its complete exact original activation.",
+                "Namespace guard requires its complete exact original activation.",
             ));
         }
-        Ok(VulcanPluginLegacyMutationGuard {
+        Ok(VulcanPluginNamespaceGuard {
             store: self.clone(),
             plugin_id: plugin_id.to_owned(),
             original,
@@ -308,8 +308,8 @@ mod tests {
         // The package owns a real object-or-null schema and declares every required capability explicitly.
         // 插件包持有真实对象或空值模式，并明确声明每项所需能力。
         let source = root.join(plugin_id);
-        fs::create_dir_all(&source).expect("create isolated legacy configuration package");
-        fs::write(source.join("plugin.yaml"), format!("schema_version: 1\nid: {plugin_id}\nversion: 1.0.0\ndefault_enabled: true\ndisplay:\n  name: Legacy configuration fixture\n  capability: Original mutable configuration\npermissions: [config, network_https]\nconfig:\n  schema_file: schema.json\n  defaults_file: defaults.json\nmcp:\n  servers:\n    - id: remote\n      name: Remote\n      transport:\n        type: http\n        url: {{source: literal, value: 'https://example.test/mcp'}}\n")).expect("write valid legacy manifest");
+        fs::create_dir_all(&source).expect("create isolated configuration package");
+        fs::write(source.join("plugin.yaml"), format!("schema_version: 1\nid: {plugin_id}\nversion: 1.0.0\ndefault_enabled: true\ndisplay:\n  name: Configuration fixture\n  capability: Original configuration\npermissions: [config, network_https]\nconfig:\n  schema_file: schema.json\n  defaults_file: defaults.json\nmcp:\n  servers:\n    - id: remote\n      name: Remote\n      transport:\n        type: http\n        url: {{source: literal, value: 'https://example.test/mcp'}}\n")).expect("write valid manifest");
         fs::write(source.join("schema.json"), r#"{"type":["object","null"],"properties":{"label":{"type":"string"}},"required":["label"],"additionalProperties":false}"#).expect("write actual configuration schema");
         fs::write(source.join("defaults.json"), r#"{"label":"default"}"#)
             .expect("write original package defaults");
@@ -327,8 +327,8 @@ mod tests {
             .expect("prepare actual immutable package")
     }
 
-    /// Create root's real version-two legacy-config selection and return store, package, source and full activation.
-    /// 创建 root 真实第二版旧配置选择，并返回存储、插件包、来源及完整激活。
+    /// Create root's real configured selection and return store, package, source and full activation.
+    /// 创建 root 真实已配置选择，并返回存储、插件包、来源及完整激活。
     fn fixture(
         root: &Path,
     ) -> (
@@ -341,20 +341,20 @@ mod tests {
         // 打开唯一存储前，此根由宿主创建。
         let user = root.join("user");
         fs::create_dir_all(&user).expect("create host user plugin root");
-        // Source bytes stay outside the managed user catalog to avoid a duplicate flat package.
-        // 来源字节保持在受管用户目录之外，避免重复平铺插件包。
-        let source = write_package(&root.join("source"), "legacy-plugin");
+        // Source bytes stay outside the managed user catalog, which ignores stray directories.
+        // 来源字节保持在受管用户目录之外，该目录忽略游离目录。
+        let source = write_package(&root.join("source"), "guarded-plugin");
         // The store, generation and selection are produced by the same real production APIs.
         // 存储、代次及选择由相同真实生产接口产生。
         let store = VulcanPluginGenerationStore::open(&user).expect("open original store");
         // Retain actual package ownership through every independent observer's attempt.
         // 在每个独立观察者尝试期间保留实际插件包所有权。
         let package = prepare(&store, &source);
-        // Version two has complete approval but deliberately retains the old mutable configuration contract.
-        // 第二版具有完整批准，但特意保留旧可变配置契约。
+        // The selection carries complete approval and the package-declared configuration.
+        // 该选择携带完整批准及插件包声明的配置。
         let original = store
             .activate_for_test(&package, 0, package.required_permissions.clone())
-            .expect("publish exact legacy-config activation");
+            .expect("publish exact configured activation");
         (store, package, source, original)
     }
 
@@ -373,14 +373,14 @@ mod tests {
         );
         manager
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-            .expect("refresh actual legacy configuration catalog");
+            .expect("refresh actual configuration catalog");
         manager
     }
 
     /// A real retained namespace excludes another store's update until the exact guard drops, while peers remain independent.
     /// 真实保留命名空间在精确 guard 释放前排除另一存储更新，同时同伴保持独立。
     #[test]
-    fn legacy_mutation_guard_excludes_second_store_until_actual_drop() {
+    fn namespace_guard_excludes_second_store_until_actual_drop() {
         // Both store objects observe the same canonical files without sharing a Rust mutex.
         // 两个存储对象观察相同规范文件，不共享 Rust 互斥锁。
         let root = tempfile::tempdir().expect("independent store lock fixture");
@@ -395,17 +395,17 @@ mod tests {
         // Retain the actual exclusive namespace owner through the simulated publication and rollback window.
         // 在模拟发布及回滚窗口期间保留实际排他命名空间所有者。
         let guard = store
-            .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+            .acquire_namespace_guard("guarded-plugin", Some(&original))
             .expect("acquire original typed namespace owner");
         guard
-            .validate_plugin("legacy-plugin")
+            .validate_plugin("guarded-plugin")
             .expect("same original authority");
         guard
-            .validate_owner(&observer, "legacy-plugin")
+            .validate_owner(&observer, "guarded-plugin")
             .expect("same canonical independent store authority");
         assert_eq!(
             observer
-                .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+                .acquire_namespace_guard("guarded-plugin", Some(&original))
                 .expect_err("independent namespace lock must be Busy")
                 .code,
             Code::Busy
@@ -426,11 +426,11 @@ mod tests {
                     Some(&original),
                     vec!["config".into(), "network_https".into()]
                 )
-                .expect_err("real original update must be Busy during legacy mutation")
+                .expect_err("real original update must be Busy while the namespace is guarded")
                 .code,
             Code::Busy
         );
-        assert!(!store.root.join("transactions/legacy-plugin").exists());
+        assert!(!store.root.join("transactions/guarded-plugin").exists());
         // An unrelated plugin can still prepare and publish under its own namespace.
         // 无关插件仍可在自身命名空间下准备及发布。
         let peer = prepare(
@@ -441,7 +441,7 @@ mod tests {
             .activate_for_test(&peer, 0, peer.required_permissions.clone())
             .expect("independent namespace remains available");
         guard
-            .validate_plugin("legacy-plugin")
+            .validate_plugin("guarded-plugin")
             .expect("peer publication cannot replace original authority");
         drop(guard);
         // Only dropping this actual namespace File permits the original request to begin.
@@ -458,8 +458,8 @@ mod tests {
         assert_eq!(preparation.request_id(), request);
         assert_eq!(
             store
-                .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
-                .expect_err("durable pending request now fences legacy mutation")
+                .acquire_namespace_guard("guarded-plugin", Some(&original))
+                .expect_err("durable pending request now fences the namespace guard")
                 .code,
             Code::Busy
         );
@@ -468,7 +468,7 @@ mod tests {
     /// Complete original selection equality rejects changed approvals, revisions and declared namespaces before granting ownership.
     /// 完整原选择相等在授予所有权之前拒绝已变批准、修订及声明命名空间。
     #[test]
-    fn legacy_mutation_guard_rejects_changed_complete_expected_activation() {
+    fn namespace_guard_rejects_changed_complete_expected_activation() {
         // A genuine selected activation supplies all immutable comparison fields.
         // 真实已选激活提供全部不可变比较字段。
         let root = tempfile::tempdir().expect("complete expected activation fixture");
@@ -487,7 +487,7 @@ mod tests {
             }
             assert_eq!(
                 store
-                    .acquire_legacy_mutation_guard("legacy-plugin", Some(&wrong))
+                    .acquire_namespace_guard("guarded-plugin", Some(&wrong))
                     .expect_err("complete original expected activation must match")
                     .code,
                 Code::Conflict
@@ -495,7 +495,7 @@ mod tests {
         }
         assert_eq!(
             store
-                .acquire_legacy_mutation_guard("legacy-plugin", None)
+                .acquire_namespace_guard("guarded-plugin", None)
                 .expect_err("published selection cannot become expected absence")
                 .code,
             Code::Conflict
@@ -503,7 +503,7 @@ mod tests {
         // Rejected acquisitions release their temporary OS fence rather than preventing a correct caller.
         // 被拒绝取得释放其临时操作系统屏障，不阻止正确调用方。
         let guard = store
-            .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+            .acquire_namespace_guard("guarded-plugin", Some(&original))
             .expect("correct original remains available");
         assert!(guard.validate_plugin("other-plugin").is_err());
         // A different canonical store cannot adopt this actual namespace guard.
@@ -514,7 +514,7 @@ mod tests {
         let foreign = VulcanPluginGenerationStore::open(other.path()).expect("open foreign store");
         assert_eq!(
             guard
-                .validate_owner(&foreign, "legacy-plugin")
+                .validate_owner(&foreign, "guarded-plugin")
                 .expect_err("foreign namespace cannot reuse retained authority")
                 .code,
             Code::Conflict
@@ -524,7 +524,7 @@ mod tests {
     /// Non-cooperating changed bytes invalidate the retained original guard without replacing it for rollback.
     /// 非协作变更字节使保留原 guard 无效，不为回滚替换它。
     #[test]
-    fn legacy_mutation_guard_detects_changed_selection_while_retaining_original_fence() {
+    fn namespace_guard_detects_changed_selection_while_retaining_original_fence() {
         // Explicit external corruption does not stand in for a cooperating writer, which the real lock excludes.
         // 明确外部损坏不代替协作写入者，真实锁已排除此类写入者。
         let root = tempfile::tempdir().expect("retained original validation fixture");
@@ -534,11 +534,11 @@ mod tests {
         // This guard must remain the sole rollback authority even after detecting bad disk bytes.
         // 即使检测到错误磁盘字节，此 guard 仍必须保持唯一回滚权威。
         let guard = store
-            .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
+            .acquire_namespace_guard("guarded-plugin", Some(&original))
             .expect("hold original mutation fence");
         // Preserve real original bytes for an explicit test-only repair, never an API fallback.
         // 保留真实原字节，用于明确仅测试修复，绝不是接口回退。
-        let path = store.root.join("active/legacy-plugin.json");
+        let path = store.root.join("active/guarded-plugin.json");
         // Changed approval remains a well-formed activation at the same revision.
         // 已变批准保持为相同修订的格式合法激活。
         let bytes = fs::read(&path).expect("original actual selection bytes");
@@ -553,21 +553,21 @@ mod tests {
         .expect("write explicit external change");
         assert_eq!(
             guard
-                .validate_plugin("legacy-plugin")
+                .validate_plugin("guarded-plugin")
                 .expect_err("same revision cannot conceal changed approval")
                 .code,
             Code::Conflict
         );
         assert_eq!(
             store
-                .acquire_legacy_mutation_guard("legacy-plugin", Some(&changed))
+                .acquire_namespace_guard("guarded-plugin", Some(&changed))
                 .expect_err("rollback cannot acquire a substitute latest guard")
                 .code,
             Code::Busy
         );
         fs::write(path, bytes).expect("restore explicit test original bytes");
         guard
-            .validate_plugin("legacy-plugin")
+            .validate_plugin("guarded-plugin")
             .expect("same original guard revalidates original bytes");
     }
 
@@ -578,19 +578,19 @@ mod tests {
         // The host has bundled packages but has never installed a user plugin or created its root.
         // 宿主已有内建插件包，但从未安装用户插件或创建其根目录。
         let root = tempfile::tempdir().expect("absent bundled user root fixture");
-        write_package(&root.path().join("bundled"), "legacy-plugin");
+        write_package(&root.path().join("bundled"), "guarded-plugin");
         assert!(!root.path().join("user").exists());
         // The ordinary no-engine manager constructor intentionally does not initialize filesystem paths.
         // 普通无引擎管理器构造器有意不初始化文件系统路径。
         let runtime = manager(root.path());
         assert!(!root.path().join("user").exists());
         runtime
-            .update_plugin_config("legacy-plugin", Value::Null)
+            .update_plugin_config("guarded-plugin", Value::Null)
             .expect("explicit bundled mutation preserves established behavior");
         assert!(root.path().join("user").is_dir());
         assert_eq!(
             runtime
-                .plugin_config("legacy-plugin")
+                .plugin_config("guarded-plugin")
                 .expect("read actual bundled null document"),
             Value::Null
         );
@@ -599,9 +599,9 @@ mod tests {
         let store = VulcanPluginGenerationStore::open_existing(&root.path().join("user"))
             .expect("validate created real store")
             .expect("explicit writer initialized store");
-        assert!(store.root.join("locks/legacy-plugin.lock").is_file());
+        assert!(store.root.join("locks/guarded-plugin.lock").is_file());
         let record = store
-            .activation("legacy-plugin")
+            .activation("guarded-plugin")
             .expect("read bundled settings")
             .expect("first edit created the settings record");
         assert_eq!(
@@ -609,15 +609,20 @@ mod tests {
             &crate::VulcanPluginPackageSelection::Bundled {}
         );
         assert!(record.credential_revision().is_none());
-        assert!(!root.path().join("state/legacy-plugin/config.json").exists());
+        assert!(
+            !root
+                .path()
+                .join("state/guarded-plugin/config.json")
+                .exists()
+        );
         // Any holder of the exclusive namespace fence blocks the settings writer.
         // 任何排他命名空间屏障的持有者都会阻止设置写入者。
         let guard = store
-            .acquire_legacy_mutation_guard("legacy-plugin", Some(&record))
+            .acquire_namespace_guard("guarded-plugin", Some(&record))
             .expect("hold the bundled namespace");
         assert!(
             runtime
-                .update_plugin_config("legacy-plugin", json!({"label": "blocked-by-real-guard"}))
+                .update_plugin_config("guarded-plugin", json!({"label": "blocked-by-real-guard"}))
                 .is_err()
         );
         drop(guard);
@@ -625,12 +630,12 @@ mod tests {
         // 被拒写入者保留原文档。
         assert_eq!(
             runtime
-                .plugin_config("legacy-plugin")
+                .plugin_config("guarded-plugin")
                 .expect("failed contender preserves null"),
             Value::Null
         );
         runtime
-            .update_plugin_config("legacy-plugin", json!({"label": "guard-released"}))
+            .update_plugin_config("guarded-plugin", json!({"label": "guard-released"}))
             .expect("guard drop permits real config writer");
     }
 
@@ -674,10 +679,10 @@ mod tests {
         }
     }
 
-    /// A selected managed Document(null) is explicit; edits replace it in the settings section without legacy state.
-    /// 选定受管 Document(null) 是显式文档；编辑在设置段中替换它且不产生旧状态。
+    /// A selected managed Document(null) is explicit; edits replace it in the settings section without sidecar state.
+    /// 选定受管 Document(null) 是显式文档；编辑在设置段中替换它且不产生附属状态文件。
     #[test]
-    fn managed_configuration_edits_use_settings_and_never_write_legacy_state() {
+    fn managed_configuration_edits_use_settings_and_never_write_sidecar_state() {
         // The package supports null, but version-four selected documents belong to the activation itself.
         // 插件包支持空值，但第四版已选文档属于激活本身。
         let root = tempfile::tempdir().expect("managed null configuration fixture");
@@ -710,34 +715,39 @@ mod tests {
         let runtime = manager(root.path());
         assert_eq!(
             runtime
-                .plugin_config("legacy-plugin")
+                .plugin_config("guarded-plugin")
                 .expect("managed null is explicit document"),
             Value::Null
         );
         runtime
-            .update_plugin_config("legacy-plugin", json!({"label": "edited"}))
+            .update_plugin_config("guarded-plugin", json!({"label": "edited"}))
             .expect("managed edit commits to the settings section");
         assert_eq!(
             runtime
-                .plugin_config("legacy-plugin")
+                .plugin_config("guarded-plugin")
                 .expect("read edited settings"),
             json!({"label": "edited"})
         );
         // The edit kept the package selection and republished a descriptor mirroring the edited record.
         // 编辑保留插件包选择，并重新发布镜像已编辑记录的描述符。
         let edited = store
-            .activation("legacy-plugin")
+            .activation("guarded-plugin")
             .expect("read edited record")
             .expect("edited record");
         assert_eq!(edited.revision, selected.revision);
         assert_eq!(edited.package(), selected.package());
         assert_eq!(edited.settings().revision, selected.settings().revision + 1);
         assert!(
-            runtime.snapshot().plugins["legacy-plugin"]
+            runtime.snapshot().plugins["guarded-plugin"]
                 .managed_package()
                 .expect("managed descriptor")
                 .matches_activation(&edited)
         );
-        assert!(!root.path().join("state/legacy-plugin/config.json").exists());
+        assert!(
+            !root
+                .path()
+                .join("state/guarded-plugin/config.json")
+                .exists()
+        );
     }
 }

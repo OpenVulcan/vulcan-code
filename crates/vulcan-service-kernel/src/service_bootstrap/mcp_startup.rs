@@ -1,5 +1,5 @@
-//! Bootstrap consumes explicit legacy definitions or sealed full published sources before actual dispatch.
-//! 引导在实际派发之前消费明确旧定义或密封完整已发布来源。
+//! Bootstrap consumes bundled live definitions or sealed full published sources before actual dispatch.
+//! 引导在实际派发之前消费内建实时定义或密封完整已发布来源。
 
 use super::AgentRuntimeBridge;
 use std::{collections::BTreeSet, sync::Arc};
@@ -14,12 +14,12 @@ use vulcan_plugin_runtime::{
     VulcanPluginRuntimeManager, VulcanPluginRuntimeState,
 };
 
-/// Prepared original inputs distinguish full fixed selections from the documented legacy live-file contract.
-/// 原已准备输入区分完整固定选择与文档规定的旧实时文件契约。
+/// Prepared original inputs distinguish full fixed selections from bundled packages read from the live catalog.
+/// 原已准备输入区分完整固定选择与从实时目录读取的内建插件包。
 pub(crate) struct PluginMcpBootstrapPlan {
-    /// Only explicitly legacy declarations may enter the source-neutral factory.
-    /// 仅明确旧声明可进入中立来源工厂。
-    legacy: Vec<McpServerConfig>,
+    /// Only bundled declarations without a managed selection may enter the source-neutral factory.
+    /// 仅没有受管选择的内建声明可进入中立来源工厂。
+    bundled: Vec<McpServerConfig>,
     /// Each sealed bundle owns its original physical source until native dispatch consumes it once.
     /// 每个密封包拥有原物理来源，直至原生派发仅消费一次。
     published: Vec<PreparedPublishedPluginMcpConfigs>,
@@ -66,8 +66,8 @@ impl PluginMcpBootstrapPlan {
                     "Plugin MCP bootstrap requires enabled ordinary owners.",
                 ));
             }
-            // A managed selection carries its complete configuration; flat or bundled packages use the live file.
-            // 受管选择携带完整配置；平铺或内建插件包使用实时文件。
+            // A managed selection carries its complete configuration; bundled packages use the live catalog.
+            // 受管选择携带完整配置；内建插件包使用实时目录。
             if plugin.managed_package().is_some() {
                 // The core validates complete pins, original catalog identity and current selection before materialization.
                 // 核心在物化前校验完整固定、原目录身份及当前选择。
@@ -80,23 +80,23 @@ impl PluginMcpBootstrapPlan {
                 full_owners.insert(plugin_id);
             }
         }
-        // Legacy values never become full-source evidence and full selections are never materialized twice.
-        // 旧值绝不成为完整来源证据，完整选择绝不被物化两次。
-        let legacy_declarations = catalog
+        // Bundled values never become full-source evidence and full selections are never materialized twice.
+        // 内建值绝不成为完整来源证据，完整选择绝不被物化两次。
+        let bundled_declarations = catalog
             .enabled_mcp_servers
             .values()
             .filter(|server| !full_owners.contains(&server.plugin_id))
             .cloned()
             .collect::<Vec<_>>();
-        // This existing producer preserves the explicit bundled, flat and older managed contracts.
-        // 此既有生产者保留明确内置、平铺及旧受管契约。
-        let legacy =
-            plugin_mcp_server_configs_for_descriptors(manager, &legacy_declarations, secrets)?;
-        Ok(Self { legacy, published })
+        // This existing producer preserves the explicit bundled contract.
+        // 此既有生产者保留明确内建契约。
+        let bundled =
+            plugin_mcp_server_configs_for_descriptors(manager, &bundled_declarations, secrets)?;
+        Ok(Self { bundled, published })
     }
 
-    /// Start user and explicit legacy definitions, then register every sealed original before concurrent readiness.
-    /// 启动用户及明确旧定义，随后在并发就绪之前登记每个密封原实例。
+    /// Start user and bundled definitions, then register every sealed original before concurrent readiness.
+    /// 启动用户及内建定义，随后在并发就绪之前登记每个密封原实例。
     /// manager and authority are the original pair; user contains only user declarations.
     /// manager 及 authority 为原配对；user 仅包含用户声明。
     /// Return an armed original owner; cancellation or error requests cleanup of all actual same-lineage work.
@@ -115,7 +115,7 @@ impl PluginMcpBootstrapPlan {
                 "MCP bootstrap user definitions contain a plugin owner.",
             ));
         }
-        user.extend(self.legacy);
+        user.extend(self.bundled);
         // One factory starts all explicit producers before any readiness wait, preserving concurrent startup deadlines.
         // 单个工厂在任何就绪等待之前启动全部明确生产者，保留并发启动截止时间。
         let (access, originals) =

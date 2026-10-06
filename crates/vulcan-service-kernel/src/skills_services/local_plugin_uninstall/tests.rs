@@ -670,7 +670,7 @@ async fn retained_service_uninstall_terminal_releases_actual_original() {
                     .expect("existing store");
             let tombstone = store.activation(PLUGIN).expect("committed tombstone");
             store
-                .acquire_legacy_mutation_guard(PLUGIN, tombstone.as_ref())
+                .acquire_namespace_guard(PLUGIN, tombstone.as_ref())
                 .expect("actual original File released");
         })
         .await;
@@ -682,8 +682,8 @@ async fn retained_service_uninstall_terminal_releases_actual_original() {
 /// 无输入或返回值；两次尝试期间原引用／文件及已提交完整代次保持精确。
 #[tokio::test]
 async fn retained_service_uninstall_managed_external_pin_reuses_original() {
-    // Original flat source is upgraded through production into a complete managed source.
-    // 原平铺来源经生产升级为完整受管来源。
+    // The original managed source is updated through production into a new complete managed source.
+    // 原受管来源经生产更新为新的完整受管来源。
     let fixture = Fixture::new(false);
     // Policy persistence is test-local, including the real managed seed update.
     // 策略持久化为测试局部，包含真实受管建立更新。
@@ -780,8 +780,8 @@ async fn retained_service_uninstall_managed_external_pin_reuses_original() {
 /// 无输入或返回值；失败不退役所有者，也不允许普通写入器。
 #[tokio::test]
 async fn retained_service_uninstall_full_preparation_failure_preserves_original() {
-    // The real disabled flat fixture needs no synthetic callback or managed source.
-    // 真实停用平铺夹具无需合成回调或受管来源。
+    // The real disabled managed fixture needs no synthetic callback.
+    // 真实停用受管夹具无需合成回调。
     let fixture = Fixture::new(false);
     // All provider writes remain isolated during failure and continuation.
     // 失败及继续期间全部供应商写入保持隔离。
@@ -914,8 +914,8 @@ async fn retained_service_uninstall_policy_admission_failure_has_no_write_intent
 /// 无输入或返回值；真实门、原资源借用及待处理 Future 证明顺序。
 #[tokio::test]
 async fn retained_service_uninstall_policy_gate_cancellation_has_no_write_intent() {
-    // Reserve the actual installed flat source and retain its same physical original.
-    // 预留实际已安装平铺来源，并保留相同物理原实例。
+    // Reserve the actual installed managed source and retain its same physical original.
+    // 预留实际已安装受管来源，并保留相同物理原实例。
     let fixture = Fixture::new(false);
     // All eventual policy persistence remains test-local after cancellation.
     // 取消之后所有最终策略持久化保持测试局部。

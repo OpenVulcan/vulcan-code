@@ -17,11 +17,11 @@ pub struct VulcanPluginPredecessorDrainIdentity {
     /// Exact newer draining generation issued by the same manager.
     /// 相同管理器签发的精确较新排空代次。
     pub draining_generation: u64,
-    /// Frozen predecessor manifest version, including legacy flat installations.
-    /// 固定前驱清单版本，包含旧平铺安装。
+    /// Frozen predecessor manifest version.
+    /// 固定前驱清单版本。
     pub version: String,
-    /// Frozen complete predecessor package digest, including legacy flat installations.
-    /// 固定完整前驱插件包摘要，包含旧平铺安装。
+    /// Frozen complete predecessor package digest.
+    /// 固定完整前驱插件包摘要。
     pub content_fingerprint: String,
 }
 
@@ -160,16 +160,13 @@ impl VulcanPluginActivationCandidate<'_> {
                 "Predecessor drain does not own the unchanged enabled original.",
             ));
         }
-        // Exact managed and explicitly legacy predecessors remain separate authorities.
-        // 精确受管前驱及明确旧格式前驱保持不同权威。
-        if !match (
-            predecessor.managed_package(),
-            self.transaction.record.predecessor(),
-        ) {
-            (Some(package), Some(selected)) => package.matches_activation(selected),
-            (None, None) => true,
-            _ => false,
-        } {
+        // An enabled user predecessor is always a managed selection matching the frozen record.
+        // 已启用用户前驱始终是与固定记录匹配的受管选择。
+        if !predecessor
+            .managed_package()
+            .zip(self.transaction.record.predecessor())
+            .is_some_and(|(package, selected)| package.matches_activation(selected))
+        {
             return Err(Error::new(
                 Code::Conflict,
                 "Predecessor package selection changed.",

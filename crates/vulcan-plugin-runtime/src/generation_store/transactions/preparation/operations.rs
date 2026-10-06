@@ -119,8 +119,8 @@ impl VulcanPluginGenerationStore {
 
     /// Reject standalone staging of an unfinished namespace or any original reserved `revision`.
     /// 拒绝未完成命名空间或任何原预留 `revision` 的独立暂存。
-    /// The caller supplies the namespace fence; success grants only the legacy standalone staging path.
-    /// 调用方提供命名空间屏障；成功仅授予旧独立暂存路径。
+    /// The caller supplies the namespace fence; success grants only the standalone settings staging path.
+    /// 调用方提供命名空间屏障；成功仅授予独立设置暂存路径。
     pub(in crate::generation_store) fn require_unreserved_credential_revision(
         &self,
         plugin_id: &str,
