@@ -23,6 +23,16 @@ LanceDB 的 `creates_upserts_and_searches_through_the_host_channel` 已改为正
 
 `parent_question_to_owned_embedded_child_binds_the_question_to_the_child` 原本就是正常测试；其注释中提到的 `#[ignore]` 不是属性，不应被扫描结果误报为禁用。
 
+## 并发代码的压力复现
+
+修改锁、原子状态、生命周期状态机、取消或关闭排空路径后，提交前对受影响的测试做重复执行，保留 `.config/nextest.toml` 的默认并发：
+
+```powershell
+cargo nextest run -p <crate> --stress-count 10 --no-fail-fast -E 'test(/<受影响模块>::/)'
+```
+
+只在并行负载下出现的失败按缺陷处理：先用 `--stress-count` 或叠加负载复现，再定位根因。`shared-runtime-resources` 串行组只收纳确实共享进程外资源（供应商清单、端口、注册表等）的测试；资源已按测试隔离时，不得以加入串行组代替修复，否则会掩盖真实竞态。
+
 ## 其余显式测试分类
 
 本清单记录审查时的名称和前置条件；真实属性和代码仍是执行权威。新增或改名时同步更新清单。配置好对应前置条件后按**单个测试名**执行：
