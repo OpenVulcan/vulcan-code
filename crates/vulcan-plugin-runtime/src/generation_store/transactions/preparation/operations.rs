@@ -133,7 +133,7 @@ impl VulcanPluginGenerationStore {
             let original = self
                 .read_request_locked(plugin_id, request_id)?
                 .ok_or_else(|| Error::invalid("Reserved credential original disappeared."))?;
-            if original.credential_revision() == Some(revision) {
+            if original.credential_revision() == revision {
                 return Err(Error::new(
                     Code::Conflict,
                     "Credential revision belongs to an original activation request.",

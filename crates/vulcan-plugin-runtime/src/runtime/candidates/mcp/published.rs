@@ -358,16 +358,13 @@ fn validate_full_pins(
     let credentials = active.credentials.as_ref().ok_or_else(|| {
         VulcanPluginRuntimeError::new("Published MCP credential retention is missing.")
     })?;
-    if selected.approved_permissions().is_none()
-        || selected.credential_revision().is_none()
-        || selected.configuration().is_none()
-        || !managed.matches_activation(selected)
+    if !managed.matches_activation(selected)
         || managed.generation().identity() != package.identity()
         || plugin.package_root != package.package_root()
         || plugin.version.as_deref() != Some(package.identity().version.as_str())
         || plugin.content_fingerprint != package.identity().content_fingerprint
         || credentials.record().package() != package.identity()
-        || Some(credentials.record().revision()) != selected.credential_revision()
+        || credentials.record().revision() != selected.credential_revision()
     {
         return Err(VulcanPluginRuntimeError::new(
             "Published MCP full retained selection differs from its active source.",
@@ -378,11 +375,11 @@ fn validate_full_pins(
     for server in &plugin.mcp_servers {
         if server.plugin_id != plugin.id
             || server.plugin_generation != plugin.generation
-            || server.configuration() != selected.configuration()
+            || server.configuration() != Some(selected.configuration())
             || server.credential_binding != *managed.credential_binding()
             || !server.credential_lease.as_ref().is_some_and(|lease| {
                 lease.record().package() == package.identity()
-                    && Some(lease.record().revision()) == selected.credential_revision()
+                    && lease.record().revision() == selected.credential_revision()
             })
         {
             return Err(VulcanPluginRuntimeError::new(

@@ -478,7 +478,7 @@ fn credential_staging_is_required_before_selection_and_catalog_pinning() {
     let revision = VulcanPluginCredentialRevision::allocate();
     assert!(
         store
-            .activate_with_credentials(
+            .activate_with_credentials_for_test(
                 &generation,
                 0,
                 generation.required_permissions.clone(),
@@ -499,7 +499,7 @@ fn credential_staging_is_required_before_selection_and_catalog_pinning() {
         .expect("persist candidate selection inventory");
     assert!(
         store
-            .activate_with_credentials(
+            .activate_with_credentials_for_test(
                 &generation,
                 0,
                 generation.required_permissions.clone(),
@@ -512,7 +512,7 @@ fn credential_staging_is_required_before_selection_and_catalog_pinning() {
         .expect("complete candidate backend verification");
     drop(owner);
     store
-        .activate_with_credentials(
+        .activate_with_credentials_for_test(
             &generation,
             0,
             generation.required_permissions.clone(),
@@ -536,7 +536,7 @@ fn credential_staging_is_required_before_selection_and_catalog_pinning() {
         .expect("prepare distinct physical package");
     assert!(
         store
-            .activate_with_credentials(
+            .activate_with_credentials_for_test(
                 &other,
                 1,
                 other.required_permissions.clone(),

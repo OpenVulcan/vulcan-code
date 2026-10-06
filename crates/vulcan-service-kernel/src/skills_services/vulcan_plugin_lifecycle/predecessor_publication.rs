@@ -129,8 +129,6 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
         .ok_or("原前驱不在关闭目录中。")?;
     if transaction.record().phase() != VulcanPluginActivationTransactionPhase::Aborted
         || source.request_id() != transaction.record().request_id()
-        || old.configuration().is_none()
-        || old.credential_revision().is_none()
         || !plugin
             .managed_package()
             .is_some_and(|managed| managed.matches_activation(old))

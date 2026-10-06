@@ -70,18 +70,9 @@ fn formal_candidate_probe_shares_retention_and_drains_only_original_request() {
             Uuid::new_v4(),
             &package,
             predecessor_revision,
-            target
-                .approved_permissions()
-                .expect("target permissions")
-                .to_vec(),
-            target
-                .credential_revision()
-                .expect("target credentials")
-                .clone(),
-            target
-                .configuration()
-                .expect("target configuration")
-                .clone(),
+            target.approved_permissions().to_vec(),
+            target.credential_revision().clone(),
+            target.configuration().clone(),
         )
         .expect("candidate original after ordinary admission");
     assert!(

@@ -78,7 +78,7 @@ fn credential_retention_blocks_collection_until_last_reader_and_recovers_cleanup
     );
     drop(retained);
     store
-        .activate_with_credentials(
+        .activate_with_credentials_for_test(
             &package,
             0,
             package.required_permissions.clone(),
@@ -126,7 +126,7 @@ fn credential_retention_blocks_collection_until_last_reader_and_recovers_cleanup
     assert!(store.pin_credentials(&package, &revision).is_err());
     assert!(
         store
-            .activate_with_credentials(
+            .activate_with_credentials_for_test(
                 &package,
                 2,
                 package.required_permissions.clone(),
@@ -204,7 +204,7 @@ fn credential_retention_follows_catalog_and_detached_mcp_descriptor_clones() {
     // 第二个修订仅替换选定凭据。
     let second = stage(&store, &package, &backend);
     store
-        .activate_with_credentials(
+        .activate_with_credentials_for_test(
             &package,
             0,
             package.required_permissions.clone(),
@@ -232,7 +232,7 @@ fn credential_retention_follows_catalog_and_detached_mcp_descriptor_clones() {
     // 进一步独立描述符克隆必须在父对象释放后保持锁。
     let last_server = server.clone();
     store
-        .activate_with_credentials(
+        .activate_with_credentials_for_test(
             &package,
             1,
             package.required_permissions.clone(),
@@ -325,7 +325,7 @@ fn credential_retention_survives_selection_change_until_real_process_exit() {
     // 两个进程通过实际选择记录获知选定修订。
     let revision = stage(&store, &package, &backend);
     store
-        .activate_with_credentials(
+        .activate_with_credentials_for_test(
             &package,
             0,
             package.required_permissions.clone(),

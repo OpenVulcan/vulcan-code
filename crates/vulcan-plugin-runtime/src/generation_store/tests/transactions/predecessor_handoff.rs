@@ -480,56 +480,6 @@ fn predecessor_handoff_unknown_transfer_requires_same_guard_and_strict_full_reco
     );
 }
 
-/// Legacy managed selection without an immutable configuration/credential capture cannot reserve old private execution.
-/// 未捕获不可变配置及凭据的旧托管选择不能预留旧私有执行。
-#[test]
-fn predecessor_handoff_rejects_uncaptured_legacy_selection() {
-    // Build actual legacy selection through the supported public writer, without tampering with its schema.
-    // 通过受支持公开写入者构建实际旧选择，不篡改模式。
-    let temp = tempfile::tempdir().expect("create legacy capture boundary fixture");
-    // One configured target may be inspected, but does not retroactively freeze the predecessor's mutable inputs.
-    // 可以检查单个已配置目标，但不能追溯固定前驱可变输入。
-    let store = VulcanPluginGenerationStore::open(temp.path()).expect("open legacy store");
-    // Real immutable package bytes do not imply a captured old secure-store revision or configuration.
-    // 真实不可变包字节不表示已捕获旧安全存储修订或配置。
-    let first = prepare(
-        &store,
-        &write_package(&temp.path().join("old"), "sample-plugin", "legacy"),
-    );
-    // Separate target package provides actual configured candidate ownership.
-    // 独立目标包提供实际已配置候选所有权。
-    let second = prepare(
-        &store,
-        &write_package(&temp.path().join("new"), "sample-plugin", "target"),
-    );
-    store
-        .activate(&first, 0)
-        .expect("publish actual legacy selection");
-    // Target values use a real staged revision, while the predecessor intentionally has no frozen binding.
-    // 目标值使用实际暂存修订，前驱有意不具备固定绑定。
-    let target_credentials = VulcanPluginCredentialRevision::allocate();
-    stage_empty_credentials(&store, &second, &target_credentials);
-    // Actual complete transaction preserves the declared legacy predecessor format.
-    // 实际完整事务保留声明的旧前驱格式。
-    let mut transaction = begin(&store, &second, &target_credentials, Uuid::new_v4());
-    // Store reservation must reject before allocating a fake old physical owner.
-    // 存储保留权必须在分配伪旧物理所有者之前拒绝。
-    let original = transaction.record().clone();
-    assert_eq!(
-        store
-            .prepare_predecessor_handoff_reservation(&mut transaction, &original)
-            .expect_err("uncaptured legacy inputs require explicit migration/capture")
-            .code,
-        Code::Invalid
-    );
-    assert!(
-        store
-            .predecessor_handoff_record("sample-plugin", original.request_id())
-            .expect("no fabricated legacy reservation")
-            .is_none()
-    );
-}
-
 /// Unknown schema or fields fail closed rather than allowing a future writer to overlook a Pending original.
 /// 未知模式或字段保持关闭，避免未来写入者忽略 Pending 原请求。
 #[test]

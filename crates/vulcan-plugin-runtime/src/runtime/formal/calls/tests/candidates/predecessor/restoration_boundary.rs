@@ -84,7 +84,6 @@ fn restoration_boundary_failed_disable_restores_once_and_stages_closed_old() {
             .managed_package()
             .expect("actual old pin")
             .configuration()
-            .expect("immutable old config")
             .value(),
         Some(&json!({"label":"old-published"}))
     );

@@ -33,12 +33,12 @@ fn permission_package(
     (prepare(store, &source), approved)
 }
 
-/// Exact approval promotes a legacy namespace once; malformed approval and legacy downgrade preserve its bytes.
-/// 精确批准仅提升旧命名空间一次；损坏批准及旧格式降级保留其原字节。
+/// Exact approval is required for every selection; rejected approval leaves no record behind.
+/// 每次选择都要求精确批准；被拒绝的批准不留下任何记录。
 #[test]
-fn managed_approval_publication_is_exact_and_cannot_downgrade() {
-    // Both record formats use the real store and filesystem in an isolated root.
-    // 两种记录格式在隔离根中使用真实存储及文件系统。
+fn managed_approval_publication_is_exact() {
+    // The record uses the real store and filesystem in an isolated root.
+    // 记录在隔离根中使用真实存储及文件系统。
     let temp = tempfile::tempdir().expect("create approval publication fixture");
     // Namespace locks and CAS are production implementations.
     // 命名空间锁与比较替换均为生产实现。
@@ -50,18 +50,9 @@ fn managed_approval_publication_is_exact_and_cannot_downgrade() {
         &temp.path().join("source"),
         &["network_https", "config"],
     );
-    // Legacy selection remains explicit until the authorized API publishes the new version.
-    // 已授权接口发布新版前，旧选择保持显式。
-    let legacy = store
-        .activate(&generation, 0)
-        .expect("select legacy generation");
-    assert!(legacy.approved_permissions().is_none());
-    // Exact original bytes prove rejections do not create partial approval state.
-    // 精确原始字节证明拒绝不会创建部分批准状态。
+    // Rejections must not create a partial selection record.
+    // 拒绝不得创建部分选择记录。
     let path = store.root.join("active/sample-plugin.json");
-    // Capture the actual disk image, not a reserialized expected object.
-    // 捕获实际磁盘映像，不使用重新序列化的预期对象。
-    let before = fs::read(&path).expect("read legacy selection");
     for rejected in [
         Vec::new(),
         vec!["config".into()],
@@ -74,26 +65,26 @@ fn managed_approval_publication_is_exact_and_cannot_downgrade() {
     ] {
         assert_eq!(
             store
-                .activate_authorized(&generation, 1, rejected)
+                .activate_for_test(&generation, 0, rejected)
                 .expect_err("inexact approval must fail")
                 .code,
             VulcanPluginStoreErrorCode::Invalid
         );
-        assert_eq!(fs::read(&path).expect("read retained selection"), before);
+        assert!(!path.exists());
     }
     // Caller order may differ; the sole canonical declaration order becomes the stored approval.
     // 调用方顺序可以不同；唯一规范声明顺序成为存储批准顺序。
     let mut reversed = approved.clone();
     reversed.reverse();
-    // Package and approval become visible in one successor record.
-    // 插件包与批准在单个后继记录中共同可见。
+    // Package and approval become visible in one record.
+    // 插件包与批准在单个记录中共同可见。
     let published = store
-        .activate_authorized(&generation, 1, reversed)
-        .expect("promote approval");
-    assert_eq!(published.schema_version, AUTHORIZED_ACTIVATION_VERSION);
-    assert_eq!(published.approved_permissions(), Some(approved.as_slice()));
+        .activate_for_test(&generation, 0, reversed)
+        .expect("publish approval");
+    assert_eq!(published.schema_version, ACTIVATION_RECORD_VERSION);
+    assert_eq!(published.approved_permissions(), approved.as_slice());
     assert_eq!(published.generation.as_ref(), Some(generation.identity()));
-    assert_eq!(published.revision, 2);
+    assert_eq!(published.revision, 1);
     // Reopening must recover exactly the selected approval without another file or write.
     // 重新打开必须恢复精确选定批准，不依赖其他文件或写入。
     let reopened = VulcanPluginGenerationStore::open_existing(temp.path())
@@ -106,30 +97,22 @@ fn managed_approval_publication_is_exact_and_cannot_downgrade() {
             .activation,
         Some(published)
     );
-    assert!(
-        store
-            .activate(&generation, 2)
-            .expect_err("reject downgrade")
-            .message
-            .contains("downgrade")
-    );
-    // Tombstones retain both revision history and the upgraded authority mode.
-    // 停用记录同时保留修订历史与已升级权威模式。
+    // Tombstones retain revision history and carry no approval.
+    // 停用记录保留修订历史且不携带批准。
     let removed = store
-        .deactivate("sample-plugin", 2)
+        .deactivate("sample-plugin", 1)
         .expect("remove approved selection");
     assert!(removed.generation.is_none());
-    assert_eq!(removed.approved_permissions(), Some([].as_slice()));
-    assert!(store.activate(&generation, 3).is_err());
+    assert!(removed.approved_permissions().is_empty());
     assert_eq!(
         store
-            .activate_authorized(&generation, 2, approved.clone())
+            .activate_for_test(&generation, 1, approved.clone())
             .expect_err("stale approval revision")
             .code,
         VulcanPluginStoreErrorCode::Conflict
     );
     store
-        .activate_authorized(&generation, 3, approved)
+        .activate_for_test(&generation, 2, approved)
         .expect("explicit approved reactivation");
 }
 
@@ -151,7 +134,7 @@ fn managed_approval_corrupt_records_never_use_legacy_authority() {
         &["config", "network_https"],
     );
     store
-        .activate_authorized(&generation, 0, approved)
+        .activate_for_test(&generation, 0, approved)
         .expect("select approved package");
     // Preserve the one actual published document for independent corruption cases.
     // 为独立损坏场景保留唯一实际发布文档。
@@ -185,24 +168,32 @@ fn managed_approval_corrupt_records_never_use_legacy_authority() {
             changed
         );
     }
-    // Missing approval, a legacy version with approval, and an unknown version all fail closed.
-    // 缺失批准、携带批准的旧版及未知版本全部拒绝。
-    for version in [RECORD_VERSION, AUTHORIZED_ACTIVATION_VERSION, 99] {
-        // The v2 branch deliberately removes the otherwise mandatory field.
-        // 第二版分支明确移除原本必需字段。
+    // Every version other than the sole current format fails closed.
+    // 唯一当前格式以外的每个版本都拒绝。
+    for version in [1, 2, 3, 99] {
         let mut changed = document.clone();
         changed["schema_version"] = version.into();
-        if version == AUTHORIZED_ACTIVATION_VERSION {
-            changed
-                .as_object_mut()
-                .expect("record")
-                .remove("approved_permissions");
-        }
         fs::write(
             &path,
             serde_json::to_vec(&changed).expect("encode version fixture"),
         )
         .expect("write version");
+        assert!(store.activation("sample-plugin").is_err());
+    }
+    // Every selection authority is a required field.
+    // 每个选择权威都是必需字段。
+    for field in [
+        "approved_permissions",
+        "credential_revision",
+        "configuration",
+    ] {
+        let mut changed = document.clone();
+        changed.as_object_mut().expect("record").remove(field);
+        fs::write(
+            &path,
+            serde_json::to_vec(&changed).expect("encode missing-field fixture"),
+        )
+        .expect("write missing field");
         assert!(store.activation("sample-plugin").is_err());
     }
     for injected in [
@@ -261,13 +252,16 @@ fn managed_approval_failed_publication_keeps_candidate_unselected() {
             "zero permissions",
         ),
     );
+    // Credentials are staged first so only the selection write meets the obstruction.
+    // 先暂存凭据，使只有选择写入遇到阻碍。
+    let credentials = store.stage_unconfigured_credentials_for_test(&generation);
     // An exact directory at the final metadata file path prevents atomic replacement.
     // 最终元数据文件路径上的精确目录阻止原子替换。
     let path = store.root.join("active/sample-plugin.json");
     fs::create_dir(&path).expect("obstruct selection file");
     assert!(
         store
-            .activate_authorized(&generation, 0, Vec::new())
+            .activate_with_credentials_for_test(&generation, 0, Vec::new(), credentials.clone())
             .is_err()
     );
     assert!(generation.package_root().join("plugin.yaml").is_file());
@@ -280,7 +274,7 @@ fn managed_approval_failed_publication_keeps_candidate_unselected() {
             .is_none()
     );
     store
-        .activate_authorized(&generation, 0, Vec::new())
+        .activate_with_credentials_for_test(&generation, 0, Vec::new(), credentials)
         .expect("explicit retry");
     assert!(
         store
@@ -315,7 +309,7 @@ fn managed_approval_locked_record_retains_the_complete_previous_selection() {
     // This exact predecessor is the only selection the failed write may leave visible.
     // 此精确前驱是失败写入可以保持可见的唯一选择。
     let original = store
-        .activate_authorized(&first, 0, first_permissions)
+        .activate_for_test(&first, 0, first_permissions)
         .expect("publish original approval");
     // The final record is opened without deletion sharing to obstruct the actual rename boundary.
     // 打开最终记录时不共享删除权限，以阻塞实际重命名边界。
@@ -332,7 +326,7 @@ fn managed_approval_locked_record_retains_the_complete_previous_selection() {
         .expect("retain real file lease");
     assert_eq!(
         store
-            .activate_authorized(&second, 1, second_permissions.clone())
+            .activate_for_test(&second, 1, second_permissions.clone())
             .expect_err("reject locked replacement")
             .code,
         VulcanPluginStoreErrorCode::Storage
@@ -350,7 +344,7 @@ fn managed_approval_locked_record_retains_the_complete_previous_selection() {
     // Explicit retry uses the same original predecessor and candidate, with no implicit side-effect replay.
     // 明确重试使用相同原前驱及候选，不隐式重放副作用。
     let committed = store
-        .activate_authorized(&second, 1, second_permissions)
+        .activate_for_test(&second, 1, second_permissions)
         .expect("retry original replacement");
     assert_eq!(committed.generation.as_ref(), Some(second.identity()));
     assert_eq!(
@@ -374,10 +368,16 @@ fn managed_approval_competing_writers_cannot_mix_generation_and_grants() {
     let store = VulcanPluginGenerationStore::open(temp.path()).expect("open race store");
     // Both packages are already prepared before either writer can publish.
     // 任一写入者发布前，两个插件包均已准备。
+    // Credential inventories are staged up front so the race covers only selection publication.
+    // 凭据清单预先暂存，使竞争只覆盖选择发布。
     let candidates = [
         permission_package(&store, &temp.path().join("first"), &["config"]),
         permission_package(&store, &temp.path().join("second"), &["network_https"]),
-    ];
+    ]
+    .map(|(package, permissions)| {
+        let credentials = store.stage_unconfigured_credentials_for_test(&package);
+        (package, permissions, credentials)
+    });
     // Each writer gets one simultaneous attempt, with no hidden retry.
     // 每个写入者得到一次同时尝试，不隐藏重试。
     let barrier = Arc::new(Barrier::new(candidates.len()));
@@ -388,7 +388,7 @@ fn managed_approval_competing_writers_cannot_mix_generation_and_grants() {
         // 作用域句柄保留每个插件包租约，直至两次提交结束。
         let workers = candidates
             .iter()
-            .map(|(package, permissions)| {
+            .map(|(package, permissions, credentials)| {
                 // Shared references remain valid for the complete scoped writer lifetime.
                 // 共享引用在完整作用域写入者寿命内有效。
                 let store = &store;
@@ -397,7 +397,12 @@ fn managed_approval_competing_writers_cannot_mix_generation_and_grants() {
                 let barrier = Arc::clone(&barrier);
                 scope.spawn(move || {
                     barrier.wait();
-                    store.activate_authorized(package, 0, permissions.clone())
+                    store.activate_with_credentials_for_test(
+                        package,
+                        0,
+                        permissions.clone(),
+                        credentials.clone(),
+                    )
                 })
             })
             .collect::<Vec<_>>();

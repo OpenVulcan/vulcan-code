@@ -515,7 +515,13 @@ fn credential_binding_mcp_materialization_uses_frozen_selection_without_fallback
     stage_fixture_credentials(&store, &generation, &preview, &first, &secrets);
     stage_fixture_credentials(&store, &generation, &preview, &second, &secrets);
     store
-        .activate_with_credentials(&generation, 0, preview.permissions.clone(), first.clone())
+        .activate_configured(
+            &generation,
+            0,
+            preview.permissions.clone(),
+            first.clone(),
+            vulcan_plugin_runtime::VulcanPluginConfigurationSelection::NotDeclared {},
+        )
         .expect("publish first credentials");
     // The first immutable descriptor set retains its binding after subsequent manager refreshes.
     // 第一次不可变描述符集合在后续管理器刷新后仍保留绑定。
@@ -529,7 +535,13 @@ fn credential_binding_mcp_materialization_uses_frozen_selection_without_fallback
     assert_eq!(original_configs.len(), 3);
     assert_values(&original_configs, "first");
     store
-        .activate_with_credentials(&generation, 1, preview.permissions, second.clone())
+        .activate_configured(
+            &generation,
+            1,
+            preview.permissions,
+            second.clone(),
+            vulcan_plugin_runtime::VulcanPluginConfigurationSelection::NotDeclared {},
+        )
         .expect("rotate selected credentials");
     // Routing generation changes even though the package identity is unchanged.
     // 即使插件包身份未变，路由代次仍变化。

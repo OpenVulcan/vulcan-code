@@ -258,6 +258,56 @@ impl Fixture {
         (store, package, preview.permissions)
     }
 
+    /// Stage `value` under a fresh registered revision, then select `package` with its own default configuration.
+    /// 在新登记修订下暂存 `value`，再以插件包自身默认配置选择 `package`。
+    /// Returns the published selection and its revision; cleanup ownership is registered before the first OS write.
+    /// 返回已发布选择及其修订；清理所有权在首次操作系统写入前登记。
+    fn select_managed(
+        &mut self,
+        store: &VulcanPluginGenerationStore,
+        package: &vulcan_plugin_runtime::PinnedVulcanPluginGeneration,
+        permissions: Vec<String>,
+        value: Option<&str>,
+    ) -> (
+        vulcan_plugin_runtime::VulcanPluginActivation,
+        vulcan_plugin_runtime::VulcanPluginCredentialRevision,
+    ) {
+        let revision = vulcan_plugin_runtime::VulcanPluginCredentialRevision::allocate();
+        self.versioned_revisions.push(revision.clone());
+        // The complete declared slot inventory is supplied only to the existing real staging API.
+        // 完整已声明槽位清单仅提供给既有真实暂存接口。
+        let values: vulcan_plugin_runtime::VulcanPluginCredentialValues = BTreeMap::from([(
+            vulcan_plugin_runtime::VulcanPluginCredentialKey {
+                server_id: SERVER.into(),
+                secret_key: SECRET.into(),
+            },
+            value.map(str::to_owned),
+        )]);
+        store
+            .begin_credential_staging(package, revision.clone(), &values)
+            .expect("real versioned staging owner")
+            .write_and_finish(
+                &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
+                &values,
+            )
+            .expect("actual OS staged credentials");
+        // Only the enabled variant declares configuration; its own defaults are the only document selected.
+        // 仅启用变体声明配置；其自身默认值是唯一选择的文档。
+        let defaults = self.source.join("defaults.json");
+        let configuration = if defaults.exists() {
+            vulcan_plugin_runtime::VulcanPluginConfigurationSelection::Document {
+                value: serde_json::from_slice(&std::fs::read(defaults).expect("fixture defaults"))
+                    .expect("decode fixture defaults"),
+            }
+        } else {
+            vulcan_plugin_runtime::VulcanPluginConfigurationSelection::NotDeclared {}
+        };
+        let selected = store
+            .activate_configured(package, 0, permissions, revision.clone(), configuration)
+            .expect("real managed selection publication");
+        (selected, revision)
+    }
+
     /// Refresh actual manager and bridge catalogs after a legal selection while preserving explicit disabled policy.
     /// 在合法选择后刷新实际管理器及桥目录，同时保留显式停用策略。
     fn refresh_selection(&self) {
@@ -708,58 +758,7 @@ async fn legacy_secret_mutation_shutdown_restores_retained_pre_native_write() {
     assert!(fixture.value().is_none());
 }
 
-/// A legal version-two managed selection keeps Legacy credentials mutable without replacing any selected authority.
-/// 合法第二版受管选择保持旧凭据可变，不替换任何已选权威。
-#[tokio::test]
-async fn legacy_secret_mutation_managed_legacy_selection_updates_actual_account() {
-    // Production authorization creates a complete valid selection without a credential revision.
-    // 生产授权创建不含凭据修订的完整有效选择。
-    let fixture = Fixture::new(false);
-    fixture.initial(Some("original-fixture-value"));
-    let (store, package, permissions) = fixture.prepare_managed();
-    let selected = store
-        .activate_authorized(&package, 0, permissions)
-        .expect("legal version-two managed selection");
-    fixture.refresh_selection();
-    // Real catalog decoding binds every server to the declared Legacy namespace.
-    // 真实目录解码将每个服务器绑定到已声明旧格式命名空间。
-    let snapshot = fixture.runtime.snapshot();
-    let plugin = &snapshot.plugins[&fixture.plugin_id];
-    assert!(
-        plugin
-            .managed_package()
-            .expect("actual managed descriptor")
-            .matches_activation(&selected)
-    );
-    assert!(selected.credential_revision().is_none());
-    assert!(matches!(
-        plugin
-            .mcp_servers
-            .iter()
-            .find(|server| server.id == SERVER)
-            .expect("declared managed server")
-            .credential_binding,
-        vulcan_plugin_runtime::VulcanPluginCredentialBinding::Legacy
-    ));
-    // Immutable selected bytes are independent of the explicitly mutable OS account.
-    // 不可变已选字节与显式可变操作系统账户相互独立。
-    let selection_before = fixture.selection_bytes();
-    fixture
-        .mutate(Some("next-fixture-value"))
-        .await
-        .expect("managed Legacy setter succeeds");
-    assert!(fixture.value().as_deref() == Some("next-fixture-value"));
-    assert!(fixture.selection_bytes() == selection_before);
-    assert!(
-        store
-            .activation(&fixture.plugin_id)
-            .expect("unchanged managed selection")
-            .as_ref()
-            == Some(&selected)
-    );
-}
-
-/// A real staged version-three selection rejects Legacy mutation before any exact-account OS adapter entry.
+/// A real staged revision selection rejects Legacy mutation before any exact-account OS adapter entry.
 /// 真实暂存第三版选择在任何精确账户操作系统适配器入口之前拒绝旧格式变更。
 #[tokio::test(flavor = "current_thread")]
 async fn legacy_secret_mutation_managed_revision_rejects_before_os_access() {
@@ -770,34 +769,12 @@ async fn legacy_secret_mutation_managed_revision_rejects_before_os_access() {
     // Actual immutable preparation and complete approval precede secure-store staging.
     // 实际不可变准备及完整批准先于安全存储暂存。
     let (store, package, permissions) = fixture.prepare_managed();
-    // Register exact secure cleanup ownership before the first versioned backend write.
-    // 在首次版本化后端写入前登记精确安全清理所有权。
-    let revision = vulcan_plugin_runtime::VulcanPluginCredentialRevision::allocate();
-    fixture.versioned_revisions.push(revision.clone());
-    // The complete declared slot inventory is supplied only to the existing real staging API.
-    // 完整已声明槽位清单仅提供给既有真实暂存接口。
-    let values: vulcan_plugin_runtime::VulcanPluginCredentialValues = BTreeMap::from([(
-        vulcan_plugin_runtime::VulcanPluginCredentialKey {
-            server_id: SERVER.into(),
-            secret_key: SECRET.into(),
-        },
-        Some("selected-revision-fixture-value".into()),
-    )]);
-    // Native writes and durable Staged confirmation use the existing OS backend, not a synthetic journal.
-    // 原生写入及持久暂存确认使用既有操作系统后端，而非合成日志。
-    let mut staging = store
-        .begin_credential_staging(&package, revision.clone(), &values)
-        .expect("real versioned staging owner");
-    staging
-        .write_and_finish(
-            &crate::plugin_mcp_secret_store::OsPluginMcpSecretStore,
-            &values,
-        )
-        .expect("actual OS staged credentials");
-    drop(staging);
-    let selected = store
-        .activate_with_credentials(&package, 0, permissions, revision.clone())
-        .expect("legal version-three selected revision");
+    let (selected, revision) = fixture.select_managed(
+        &store,
+        &package,
+        permissions,
+        Some("selected-revision-fixture-value"),
+    );
     fixture.refresh_selection();
     // Actual catalog capture retains the complete selected inventory and revision namespace.
     // 实际目录捕获保留完整已选清单及修订命名空间。
@@ -1016,7 +993,7 @@ async fn legacy_secret_mutation_delete_ready_failure_restores_original() {
 async fn legacy_secret_mutation_stale_exact_selection_preserves_os_value() {
     // The retained service catalog intentionally stays at its original flat Legacy package.
     // 保留服务目录故意停留在其原平铺旧格式插件包。
-    let fixture = Fixture::new(false);
+    let mut fixture = Fixture::new(false);
     fixture.initial(Some("original-fixture-value"));
     assert!(
         fixture.runtime.snapshot().plugins[&fixture.plugin_id]
@@ -1038,9 +1015,7 @@ async fn legacy_secret_mutation_stale_exact_selection_preserves_os_value() {
     let package = store
         .prepare(&fixture.source, &preview.content_fingerprint)
         .expect("real managed package preparation");
-    store
-        .activate_authorized(&package, 0, preview.permissions)
-        .expect("real managed selection publication");
+    fixture.select_managed(&store, &package, preview.permissions, None);
     assert!(
         fixture.runtime.snapshot().plugins[&fixture.plugin_id]
             .managed_package()

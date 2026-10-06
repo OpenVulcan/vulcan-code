@@ -4,8 +4,8 @@
 use super::*;
 use crate::VulcanPluginStoreErrorCode as Code;
 
-/// Reject every secure backend call when the actual fixture contains no credential journal.
-/// 实际夹具未包含凭据日志时，拒绝每个安全后端调用。
+/// Reject every secure backend call when the actual fixture's credential journals declare no slot.
+/// 实际夹具凭据日志未声明任何槽位时，拒绝每个安全后端调用。
 struct NoCredentialHistory;
 
 impl crate::VulcanPluginCredentialBackend for NoCredentialHistory {
@@ -173,6 +173,12 @@ fn retained_deactivation_inventory_freezes_all_actual_package_histories_without_
             .collect_deactivation_inventory_package_retained(&original, &collected_id)
             .expect("already collected history only confirms absence")
     );
+    // The selected slot-free revision reaches its terminal phase without any secure backend call.
+    // 已选无槽位修订在不调用任何安全后端的情况下到达终态。
+    fixture
+        .store
+        .collect_deactivation_credentials_retained(&original, &NoCredentialHistory)
+        .expect("collect selected slot-free revision");
     fixture
         .store
         .confirm_deactivation_inventory_collected_retained(&original, &NoCredentialHistory)

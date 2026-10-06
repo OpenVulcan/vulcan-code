@@ -97,7 +97,6 @@ fn predecessor_physical_source_retries_same_arc_without_rewriting_pending() {
             .managed_package()
             .expect("old immutable pins")
             .configuration()
-            .expect("old selected configuration")
             .value(),
         Some(&json!({"label":"old-published"}))
     );

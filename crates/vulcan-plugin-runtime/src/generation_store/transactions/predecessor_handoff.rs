@@ -170,24 +170,16 @@ impl VulcanPluginGenerationStore {
                 .as_ref()
                 .expect("validated generation"),
         )?;
-        if predecessor.approved_permissions() != Some(generation.required_permissions.as_slice()) {
+        if predecessor.approved_permissions() != generation.required_permissions.as_slice() {
             return Err(Error::invalid(
                 "Predecessor reservation permissions differ from its package.",
             ));
         }
-        generation.validate_configuration(
-            predecessor
-                .configuration()
-                .expect("validated configuration"),
-        )?;
+        generation.validate_configuration(predecessor.configuration())?;
         // Exact revision pinning validates its package binding and acquires the real secure-store reader lease.
         // 精确修订固定校验包绑定，并取得真实安全存储读者租约。
-        let credentials = self.pin_credentials_locked(
-            &generation,
-            predecessor
-                .credential_revision()
-                .expect("validated credential revision"),
-        )?;
+        let credentials =
+            self.pin_credentials_locked(&generation, predecessor.credential_revision())?;
         Ok(PredecessorHandoffReservation {
             store_root: self.root.clone(),
             record: VulcanPluginPredecessorHandoffRecord {
@@ -487,8 +479,7 @@ impl VulcanPluginGenerationStore {
                     .original
                     .predecessor
                     .as_ref()
-                    .and_then(|old| old.credential_revision())
-                    == Some(revision)
+                    .is_some_and(|old| old.credential_revision() == revision)
             {
                 return Err(Error::new(
                     Code::Busy,
@@ -512,12 +503,11 @@ impl VulcanPluginGenerationStore {
         if !matches!(
             original.phase,
             ActivationPhase::Prepared | ActivationPhase::Committing
-        ) || !original.predecessor.as_ref().is_some_and(|old| {
-            old.schema_version == CONFIGURED_ACTIVATION_VERSION
-                && old.generation.is_some()
-                && old.credential_revision().is_some()
-                && old.configuration().is_some()
-        }) {
+        ) || !original
+            .predecessor
+            .as_ref()
+            .is_some_and(|old| old.generation.is_some())
+        {
             return Err(Error::invalid(
                 "Predecessor handoff requires the complete immutable old managed selection.",
             ));
@@ -543,7 +533,7 @@ impl VulcanPluginGenerationStore {
         if reservation.store_root != self.root
             || reservation.generation.store_root != self.root
             || old.generation.as_ref() != Some(reservation.generation.identity())
-            || old.credential_revision() != Some(reservation.credentials.record().revision())
+            || old.credential_revision() != reservation.credentials.record().revision()
         {
             return Err(Error::new(
                 Code::Conflict,

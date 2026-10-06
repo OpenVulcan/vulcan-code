@@ -81,8 +81,8 @@ pub(super) fn assert_equivalent(
                 );
                 assert_eq!(left.configuration, right.configuration);
                 assert_eq!(
-                    left._credential_lease.as_ref().map(|lease| lease.record()),
-                    right._credential_lease.as_ref().map(|lease| lease.record()),
+                    left._credential_lease.record(),
+                    right._credential_lease.record(),
                 );
             }
             (None, None) => {}
@@ -328,7 +328,9 @@ fn legacy_guard_catalog_preserves_actual_tombstone() {
             "selected-tool",
         ),
     );
-    store.activate(&generation, 0).expect("actual selection");
+    store
+        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
+        .expect("actual selection");
     store
         .deactivate("target-plugin", 1)
         .expect("actual tombstone");
@@ -556,7 +558,7 @@ fn legacy_guard_catalog_rejects_changed_actual_managed_package() {
         ),
     );
     store
-        .activate(&generation, 0)
+        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
         .expect("actual selected package");
     // The actual complete published original is the only guard authority.
     // 实际完整已发布原选择是唯一守卫权威。

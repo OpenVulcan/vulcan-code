@@ -229,10 +229,7 @@ impl VulcanPluginRuntimeManager {
         let managed = restoration.predecessor().managed_package().ok_or_else(|| {
             error("Private predecessor restoration requires an immutable managed predecessor; legacy is unsupported.")
         })?;
-        if !managed.matches_activation(old)
-            || old.configuration().is_none()
-            || old.credential_revision().is_none()
-        {
+        if !managed.matches_activation(old) {
             return Err(error(
                 "Private predecessor restoration requires the complete immutable old managed selection; legacy is unsupported.",
             ));

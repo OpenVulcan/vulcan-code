@@ -269,11 +269,16 @@ fn materialize_selected_package(
     let Some(generation) = selected.generation else {
         return Ok(ManagedSelection::Tombstone);
     };
+    // The store pins credentials together with every selected package.
+    // 存储随每个已选插件包一起固定凭据。
+    let credentials = selected
+        .credentials
+        .ok_or_else(|| String::from("Selected package credentials are not pinned."))?;
     load_pinned_package(
         catalog_root,
         &activation,
         generation,
-        selected.credentials,
+        credentials,
         disabled_plugin_ids,
         enabled_plugin_ids,
     )
@@ -290,18 +295,18 @@ pub struct VulcanPluginManagedPackage {
     /// Real package ownership retained by every cloned descriptor or explicit generation handle.
     /// 每个克隆描述符或显式代次句柄保留的真实包所有权。
     generation: PinnedVulcanPluginGeneration,
-    /// Approval captured from the same atomic selection, absent only for the legacy format.
-    /// 从同一原子选择捕获的批准权限，仅旧格式缺失。
-    approved_permissions: Option<Vec<String>>,
+    /// Approval captured from the same atomic selection.
+    /// 从同一原子选择捕获的批准权限。
+    approved_permissions: Vec<String>,
     /// Credential selection captured by the same persistent activation revision.
     /// 由相同持久激活修订捕获的凭据选择。
     credential_binding: crate::VulcanPluginCredentialBinding,
     /// Real credential retention remains live even for a managed package without MCP contributions.
     /// 即使受管插件包没有 MCP 贡献，实际凭据保留仍保持有效。
-    _credential_lease: Option<crate::PinnedVulcanPluginCredentials>,
+    _credential_lease: crate::PinnedVulcanPluginCredentials,
     /// Complete selected configuration shares the same activation revision as every other authority.
     /// 完整选定配置与其他全部权威共用相同激活修订。
-    configuration: Option<std::sync::Arc<crate::VulcanPluginConfigurationSelection>>,
+    configuration: std::sync::Arc<crate::VulcanPluginConfigurationSelection>,
 }
 
 impl VulcanPluginManagedPackage {
@@ -315,13 +320,10 @@ impl VulcanPluginManagedPackage {
             && activation.generation.as_ref() == Some(self.generation.identity())
             && self.approved_permissions() == activation.approved_permissions()
             && self.configuration() == activation.configuration()
-            && match (&self.credential_binding, activation.credential_revision()) {
-                (crate::VulcanPluginCredentialBinding::Legacy, None) => true,
-                (crate::VulcanPluginCredentialBinding::Revision(selected), Some(recorded)) => {
-                    selected == recorded
-                }
-                _ => false,
-            }
+            && self.credential_binding
+                == crate::VulcanPluginCredentialBinding::Revision(
+                    activation.credential_revision().clone(),
+                )
     }
 
     /// Returns the exact persistent activation revision observed during selection.
@@ -336,10 +338,10 @@ impl VulcanPluginManagedPackage {
         &self.generation
     }
 
-    /// Return the exact selected approval; absence explicitly retains the version-one sidecar authority.
-    /// 返回精确选定批准权限；缺失明确保留第一版附属文件权威。
-    pub fn approved_permissions(&self) -> Option<&[String]> {
-        self.approved_permissions.as_deref()
+    /// Return the exact selected approval.
+    /// 返回精确选定批准权限。
+    pub fn approved_permissions(&self) -> &[String] {
+        &self.approved_permissions
     }
 
     /// Borrow the selected credential authority without consulting another snapshot or file.
@@ -348,10 +350,10 @@ impl VulcanPluginManagedPackage {
         &self.credential_binding
     }
 
-    /// Borrow the complete frozen configuration authority; None explicitly retains the old file contract.
-    /// 借用完整固定配置权威；None 明确保留旧文件契约。
-    pub fn configuration(&self) -> Option<&crate::VulcanPluginConfigurationSelection> {
-        self.configuration.as_deref()
+    /// Borrow the complete frozen configuration authority.
+    /// 借用完整固定配置权威。
+    pub fn configuration(&self) -> &crate::VulcanPluginConfigurationSelection {
+        &self.configuration
     }
 }
 
@@ -431,7 +433,7 @@ pub(crate) fn load_pinned_package(
     catalog_root: &Path,
     activation: &crate::VulcanPluginActivation,
     generation: PinnedVulcanPluginGeneration,
-    credentials: Option<crate::PinnedVulcanPluginCredentials>,
+    credentials: crate::PinnedVulcanPluginCredentials,
     disabled_plugin_ids: &BTreeSet<String>,
     enabled_plugin_ids: &BTreeSet<String>,
 ) -> Result<VulcanPluginDescriptor, String> {
@@ -458,21 +460,19 @@ pub(crate) fn load_pinned_package(
     }
     // Frozen credentials come from this exact selection, never from the currently published revision.
     // 固定凭据来自此精确选择，绝不来自当前发布修订。
-    let credential_binding = match activation.credential_revision() {
-        Some(revision) => crate::VulcanPluginCredentialBinding::Revision(revision.clone()),
-        None => crate::VulcanPluginCredentialBinding::Legacy,
-    };
+    let credential_binding =
+        crate::VulcanPluginCredentialBinding::Revision(activation.credential_revision().clone());
     // All contributions share the same complete selected document and actual credential reader.
     // 全部贡献共享同一完整选定文档及实际凭据读者。
-    let configuration = activation.configuration().cloned().map(Arc::new);
+    let configuration = Arc::new(activation.configuration().clone());
     for server in &mut package.mcp_servers {
         server.credential_binding = credential_binding.clone();
-        server.credential_lease = credentials.clone();
-        server.configuration = configuration.clone();
+        server.credential_lease = Some(credentials.clone());
+        server.configuration = Some(Arc::clone(&configuration));
     }
     package.managed_package = Some(VulcanPluginManagedPackage {
         activation_revision: activation.revision,
-        approved_permissions: activation.approved_permissions().map(<[String]>::to_vec),
+        approved_permissions: activation.approved_permissions().to_vec(),
         credential_binding,
         _credential_lease: credentials,
         configuration,

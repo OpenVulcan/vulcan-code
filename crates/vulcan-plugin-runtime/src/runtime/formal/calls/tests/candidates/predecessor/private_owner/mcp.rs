@@ -253,7 +253,6 @@ fn predecessor_mcp_source_retry_preserves_actual_old_inputs_and_pending() {
             .managed_package()
             .expect("actual old package")
             .configuration()
-            .expect("actual old document")
             .value(),
         Some(&json!({"label":"old-published"}))
     );

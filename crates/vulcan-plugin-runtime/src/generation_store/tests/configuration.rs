@@ -77,7 +77,7 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
             first.clone(),
         )
         .expect("publish configured selection");
-    assert_eq!(original.schema_version, CONFIGURED_ACTIVATION_VERSION);
+    assert_eq!(original.schema_version, ACTIVATION_RECORD_VERSION);
     assert!(!format!("{original:?}").contains("fixture-private-first"));
     // Pinning must verify the configuration against the same exact physical package.
     // 固定必须按相同精确物理插件包校验配置。
@@ -102,7 +102,7 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
             .as_ref()
             .expect("retain original observation")
             .configuration(),
-        Some(&first)
+        &first
     );
     assert_eq!(
         store
@@ -110,7 +110,7 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
             .expect("read current selection")
             .expect("current activation")
             .configuration(),
-        Some(&second)
+        &second
     );
     assert_eq!(
         store
@@ -124,16 +124,6 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
             .expect_err("stale predecessor must reject")
             .code,
         VulcanPluginStoreErrorCode::Conflict
-    );
-    assert!(
-        store
-            .activate_with_credentials(
-                &package,
-                2,
-                package.required_permissions.clone(),
-                credentials.clone()
-            )
-            .is_err()
     );
     // Invalid values cannot replace the already selected valid document.
     // 非法值不能替换已经选定的合法文档。
@@ -164,7 +154,7 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
     let removed = store
         .deactivate("configured-plugin", 2)
         .expect("remove configured selection");
-    assert_eq!(removed.configuration(), Some(&second));
+    assert_eq!(removed.configuration(), &second);
     assert!(
         store
             .pin_active("configured-plugin")
@@ -172,7 +162,6 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
             .generation
             .is_none()
     );
-    assert!(store.activate(&package, 3).is_err());
     drop(store);
     assert_eq!(
         VulcanPluginGenerationStore::open(temp.path())
@@ -181,7 +170,7 @@ fn configuration_selection_publishes_complete_values_and_preserves_old_observati
             .expect("read durable tombstone")
             .expect("tombstone remains")
             .configuration(),
-        Some(&second)
+        &second
     );
 }
 
@@ -309,7 +298,6 @@ fn configuration_selection_enforces_exact_limits_and_explicit_null_semantics() {
             .activation
             .expect("null selection exists")
             .configuration()
-            .expect("document authority exists")
             .value(),
         Some(&Value::Null)
     );
@@ -367,42 +355,22 @@ fn configuration_selection_enforces_exact_limits_and_explicit_null_semantics() {
     // Physical package identity prevents importing the preceding configured selection.
     // 物理插件包身份防止引入此前已配置选择。
     let (plain_store, plain, plain_credentials) = fixture(other.path(), false);
-    plain_store
-        .activate_with_credentials(
-            &plain,
-            0,
-            plain.required_permissions.clone(),
-            plain_credentials.clone(),
-        )
-        .expect("publish original smaller-envelope version");
-    // New activation readers must retain the old format's smaller byte limit even for legal trailing whitespace.
-    // 新激活读取器必须为旧格式保留较小字节限制，即使额外内容是合法尾部空白。
-    let plain_path = plain_store.root.join("active/configured-plugin.json");
-    // The valid original bytes allow exact restoration before promotion.
-    // 合法原字节允许提升前精确恢复。
-    let plain_bytes = fs::read(&plain_path).expect("read old format budget fixture");
-    // Extend only JSON whitespace so rejection proves the byte budget instead of a syntax failure.
-    // 仅扩展 JSON 空白，使拒绝证明字节预算，而非语法失败。
-    let mut oversized = plain_bytes.clone();
-    oversized.resize(MAX_RECORD_BYTES as usize + 1, b' ');
-    fs::write(&plain_path, oversized).expect("write oversized valid old-format JSON");
-    assert!(plain_store.activation("configured-plugin").is_err());
-    fs::write(&plain_path, plain_bytes).expect("restore old-format activation");
     assert!(
         plain_store
             .activate_configured(
                 &plain,
-                1,
+                0,
                 plain.required_permissions.clone(),
                 plain_credentials.clone(),
                 document(Value::Null)
             )
             .is_err()
     );
+    let plain_path = plain_store.root.join("active/configured-plugin.json");
     plain_store
         .activate_configured(
             &plain,
-            1,
+            0,
             plain.required_permissions.clone(),
             plain_credentials,
             VulcanPluginConfigurationSelection::NotDeclared {},

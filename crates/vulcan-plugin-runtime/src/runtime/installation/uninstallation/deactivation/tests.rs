@@ -99,11 +99,11 @@ fn fixture(
             .write_and_finish(&NoCredentialSlots, &VulcanPluginCredentialValues::new())
             .expect("actual verified empty journal");
         store
-            .activate_with_credentials(&package, 0, permissions, revision)
+            .activate_with_credentials_for_test(&package, 0, permissions, revision)
             .expect("actual versioned selection")
     } else {
         store
-            .activate_authorized(&package, 0, permissions)
+            .activate_for_test(&package, 0, permissions)
             .expect("actual legacy selection")
     };
     manager

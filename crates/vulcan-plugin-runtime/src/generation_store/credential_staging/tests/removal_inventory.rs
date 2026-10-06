@@ -14,8 +14,13 @@ fn retained_deactivation_inventory_rejects_actual_json_extension_alias_before_ef
     // The actual inspected package and producer provide a complete legitimate journal.
     // 实际已检查包及生产者提供完整合法日志。
     let (store, package) = fixture(temp.path());
-    // The revision is produced before the legacy selection, with no secure writes.
-    // 修订在旧式选择之前产生，不发生安全写入。
+    // The ordinary selection owns its own journal, so the aliased history is never the selected one.
+    // 普通选择拥有自身日志，因此被改名历史绝不是已选日志。
+    let selected = store
+        .activate_for_test(&package, 0, package.required_permissions.clone())
+        .expect("actual ordinary casing source");
+    // The historical revision is produced after the selection, with no secure writes.
+    // 历史修订在选择之后产生，不发生安全写入。
     let revision = VulcanPluginCredentialRevision::allocate();
     drop(
         store
@@ -47,11 +52,8 @@ fn retained_deactivation_inventory_rejects_actual_json_extension_alias_before_ef
     // 真实原子临时文件保持明确排除，同时 JSON 别名封闭失败。
     fs::write(directory.join("unacknowledged.tmp"), b"unfinished bytes")
         .expect("actual atomic temporary fixture");
-    // The legacy source cannot rely on selected-journal membership to catch the historical alias.
-    // 旧式来源不能依赖已选日志成员关系捕获历史别名。
-    let selected = store
-        .activate_authorized(&package, 0, package.required_permissions.clone())
-        .expect("actual legacy casing source");
+    // Selected-journal membership cannot catch the historical alias; the full census must.
+    // 已选日志成员关系不能捕获历史别名；必须由完整清点捕获。
     assert!(
         store
             .reserve_deactivation(Uuid::new_v4(), &selected)
@@ -61,7 +63,7 @@ fn retained_deactivation_inventory_rejects_actual_json_extension_alias_before_ef
         store
             .activation("staging-plugin")
             .expect("inert casing failure releases namespace"),
-        Some(selected)
+        Some(selected.clone())
     );
     assert_eq!(
         fs::read(&alias).expect("actual aliased journal remains intact"),
@@ -73,7 +75,7 @@ fn retained_deactivation_inventory_rejects_actual_json_extension_alias_before_ef
         store
             .credential_revisions("staging-plugin")
             .expect("genuine temporary files remain excluded"),
-        BTreeSet::from([revision])
+        BTreeSet::from([selected.credential_revision().clone(), revision])
     );
 }
 
@@ -185,7 +187,7 @@ fn retained_deactivation_inventory_reserves_actual_durable_phase_growth_before_e
     // Current selection stays ordinary and valid, so failure proves historical cleanup capacity rather than active-source corruption.
     // 当前选择保持普通且有效，因此失败证明历史清理容量，而非有效来源损坏。
     let selected = store
-        .activate_authorized(
+        .activate_for_test(
             &original_package,
             0,
             original_package.required_permissions.clone(),
@@ -210,11 +212,10 @@ fn retained_deactivation_inventory_reserves_actual_durable_phase_growth_before_e
     );
 }
 
-/// A legacy current selection still retains all actual prepared, staged and discarded versioned journals and complete optional slots.
-/// 旧式当前选择仍保留全部实际准备中、已暂存及已丢弃版本化日志及完整可选槽位。
+/// Removal retains the selected and all actual prepared, staged and discarded versioned journals and complete optional slots.
+/// 移除保留已选及全部实际准备中、已暂存及已丢弃版本化日志及完整可选槽位。
 #[test]
-fn retained_deactivation_inventory_captures_all_actual_credential_phases_with_legacy_current_selection()
- {
+fn retained_deactivation_inventory_captures_all_actual_credential_phases() {
     // Every physical revision is produced by the actual staging state machine.
     // 每个物理修订均由实际暂存状态机产生。
     let temp = tempfile::tempdir().expect("actual historical credential fixture");
@@ -224,8 +225,8 @@ fn retained_deactivation_inventory_captures_all_actual_credential_phases_with_le
     // Only values use the memory fixture; journals and all Files are actual production owners.
     // 仅值使用内存夹具；日志及全部文件均为实际生产所有者。
     let backend = Backend::default();
-    // A fully staged revision remains distinct from the legacy current selection.
-    // 完全暂存修订保持独立于旧式当前选择。
+    // The fully staged revision becomes the current selection's credential authority.
+    // 完全暂存修订成为当前选择的凭据权威。
     let staged = VulcanPluginCredentialRevision::allocate();
     store
         .begin_credential_staging(&package, staged.clone(), &values())
@@ -251,11 +252,16 @@ fn retained_deactivation_inventory_captures_all_actual_credential_phases_with_le
     store
         .collect_credentials("staging-plugin", &discarded, &backend)
         .expect("actual terminal credential collection");
-    // Current legacy credentials explicitly do not select any of these real historical revisions.
-    // 当前旧凭据明确未选定这些真实历史修订中的任一个。
+    // Only the staged revision is selected; the other journals are pure history.
+    // 仅已暂存修订被选定；其他日志均为纯历史。
     let selected = store
-        .activate_authorized(&package, 0, package.required_permissions.clone())
-        .expect("actual legacy current selection");
+        .activate_with_credentials_for_test(
+            &package,
+            0,
+            package.required_permissions.clone(),
+            staged.clone(),
+        )
+        .expect("actual current selection");
     // Actual backend write counts remain unchanged; removal census receives no backend parameter or secure-operation authority.
     // 实际后端写入计数保持未变；移除清单不接收后端参数或安全操作权威。
     let writes_before = backend.writes.get();
@@ -359,6 +365,15 @@ fn retained_deactivation_inventory_rejects_actual_oversized_history_before_effec
     // The ordinary source and original pin remain intact while a distinct historical package is prepared.
     // 普通来源及原固定在独立历史包准备期间保持完整。
     let (store, original_package) = fixture(temp.path());
+    // Only the ordinary original is selected, so the failure proves aggregate historical capture rather than current-source corruption.
+    // 仅普通原实例被选定，因此失败证明合并历史捕获，而非当前来源损坏。
+    let selected = store
+        .activate_for_test(
+            &original_package,
+            0,
+            original_package.required_permissions.clone(),
+        )
+        .expect("actual ordinary selection");
     // Actual producer input expands one optional key while preserving the same known manifest structure.
     // 实际生产者输入扩展单个可选键，同时保留相同已知清单结构。
     let source = temp.path().join("source/staging-plugin");
@@ -423,15 +438,6 @@ fn retained_deactivation_inventory_rejects_actual_oversized_history_before_effec
                 .expect("actual bounded historical journal"),
         );
     }
-    // Only the ordinary original is selected, so the failure proves aggregate historical capture rather than current-source corruption.
-    // 仅普通原实例被选定，因此失败证明合并历史捕获，而非当前来源损坏。
-    let selected = store
-        .activate_authorized(
-            &original_package,
-            0,
-            original_package.required_permissions.clone(),
-        )
-        .expect("actual ordinary legacy selection");
     // No callback, selection successor or collection is admitted after bounded original construction fails.
     // 有界原构造失败之后，不准入回调、选择后继或回收。
     let error = store
@@ -449,7 +455,8 @@ fn retained_deactivation_inventory_rejects_actual_oversized_history_before_effec
             .credential_revisions("staging-plugin")
             .expect("every actual journal remains preserved")
             .len(),
-        count
+        count + 1,
+        "the selected journal joins every historical journal"
     );
     assert_eq!(
         store
@@ -500,7 +507,7 @@ fn retained_deactivation_inventory_rejects_foreign_actual_credential_history_bef
     // The actual selected source is deliberately legacy so only history validation encounters the mismatch.
     // 实际已选来源刻意为旧式，因此仅历史校验遇到不匹配。
     let selected = store
-        .activate_authorized(&package, 0, package.required_permissions.clone())
+        .activate_for_test(&package, 0, package.required_permissions.clone())
         .expect("actual legacy selection");
     assert!(
         store

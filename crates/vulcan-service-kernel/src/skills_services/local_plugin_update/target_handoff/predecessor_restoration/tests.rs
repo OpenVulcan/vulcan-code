@@ -166,11 +166,10 @@ async fn failed_old_secret_read_retains_same_physical_preparation_for_retry() {
         .predecessor()
         .expect("actual managed predecessor")
         .credential_revision()
-        .expect("actual staged old revision")
         .clone();
     assert_ne!(
         fixture.prepared.target().credential_revision(),
-        Some(&old_revision)
+        &old_revision
     );
     // Exact tuple equality checks every binding component rather than relying on a copied UUID alone.
     // 精确元组相等检查每个绑定组件，不仅依赖复制 UUID。

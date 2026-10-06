@@ -1023,124 +1023,6 @@ async fn immutable_service_update_enabled_legacy_rejects_before_reservation() {
     );
 }
 
-/// Reject a real version-two managed predecessor whose immutable configuration and credential selection are incomplete.
-/// 拒绝不可变配置及凭据选择不完整的真实第二版托管前驱。
-/// No inputs or return value; actual selection, snapshot and empty durable requests remain unchanged.
-/// 无输入或返回值；实际选择、快照及空持久请求保持不变。
-#[tokio::test]
-async fn immutable_service_update_enabled_incomplete_managed_rejects_before_reservation() {
-    // The isolated content-only package declares neither configuration nor secrets.
-    // 隔离纯内容插件包既不声明配置，也不声明秘密。
-    let fixture = Fixture::new(false);
-    // Obtain the actual installed bytes from the current legacy descriptor before managed selection.
-    // 托管选择之前，从当前旧格式描述符取得实际已安装字节。
-    let old_root = fixture.runtime.snapshot().plugins[PLUGIN]
-        .package_root
-        .clone();
-    // Actual inspection supplies the package fingerprint and the complete declared approval.
-    // 实际检查提供插件包指纹及完整声明批准。
-    let preview = fixture
-        .runtime
-        .inspect_local_user_plugin(&old_root)
-        .expect("actual content-only old preview");
-    // Create the real store only as explicit test setup, before the update preflight under test.
-    // 仅在受测更新前置校验之前，将创建真实存储作为显式测试准备。
-    let store = VulcanPluginGenerationStore::open(fixture.runtime.user_plugin_root())
-        .expect("actual old selection store");
-    // Production preparation returns a real pinned generation rather than a fabricated managed descriptor.
-    // 生产准备返回真实固定代次，而非伪造托管描述符。
-    let package = store
-        .prepare(&old_root, &preview.content_fingerprint)
-        .expect("actual immutable old package");
-    // The existing public version-two writer intentionally carries approval without version-four config or credentials.
-    // 既有公开第二版写入器有意携带批准，不携带第四版配置或凭据。
-    let selected = store
-        .activate_authorized(&package, 0, preview.permissions)
-        .expect("actual version-two old selection");
-    assert!(selected.configuration().is_none());
-    assert!(selected.credential_revision().is_none());
-    {
-        // Synchronize the user's actual enabled policy before refreshing the managed old route.
-        // 刷新托管旧路由前，同步用户实际启用策略。
-        let mut state = fixture.state.lock().expect("actual service state");
-        // The same real bridge supplies update preflight's policy authority.
-        // 相同真实桥提供更新前置校验的策略权威。
-        let bridge = state.agent_runtime.as_mut().expect("actual bridge");
-        bridge
-            .provider_configuration
-            .luaskills
-            .disabled_vulcan_plugins
-            .remove(PLUGIN);
-        bridge
-            .provider_configuration
-            .luaskills
-            .enabled_vulcan_plugins
-            .insert(PLUGIN.to_owned());
-    }
-    // Capture exact policy and catalog identity before the rejected update preparation.
-    // 被拒绝更新准备之前，捕获精确策略及目录身份。
-    let configuration =
-        provider_configuration_from_state(&fixture.state).expect("actual enabled policy");
-    // Refresh obtains real pins from the version-two selection under production catalog rules.
-    // 刷新按生产目录规则，从第二版选择取得真实固定句柄。
-    let original = fixture
-        .runtime
-        .refresh_catalog(
-            &configuration.luaskills.disabled_vulcan_plugins,
-            &configuration.luaskills.enabled_vulcan_plugins,
-        )
-        .expect("actual enabled version-two predecessor");
-    assert_eq!(
-        original.plugins[PLUGIN].runtime_state,
-        VulcanPluginRuntimeState::Enabled
-    );
-    assert!(
-        original.plugins[PLUGIN]
-            .managed_package()
-            .expect("actual managed old")
-            .matches_activation(&selected)
-    );
-    assert!(
-        store
-            .activation_transaction_ids(PLUGIN)
-            .expect("no fixture update requests")
-            .is_empty()
-    );
-    // Complete immutable authorities are required even when this particular package declares no secret slots.
-    // 即使此特定插件包不声明秘密槽位，也要求完整不可变权威。
-    let failure = fixture
-        .prepare(uuid::Uuid::new_v4())
-        .err()
-        .expect("incomplete managed old rejected");
-    assert_eq!(
-        failure,
-        "启用前驱缺少完整的不可变配置或凭据选择，请先停用插件再更新。"
-    );
-    assert!(Arc::ptr_eq(&original, &fixture.runtime.snapshot()));
-    assert_eq!(
-        store
-            .activation(PLUGIN)
-            .expect("unchanged actual selected old"),
-        Some(selected)
-    );
-    assert!(
-        store
-            .activation_transaction_ids(PLUGIN)
-            .expect("no new durable update requests")
-            .is_empty()
-    );
-    assert!(
-        service_local_plugin_update_requests(Arc::clone(&fixture.state), PLUGIN.to_owned())
-            .await
-            .expect("no new live update owner")
-            .is_empty()
-    );
-    assert_eq!(
-        fixture.runtime.snapshot().plugins[PLUGIN].runtime_state,
-        VulcanPluginRuntimeState::Enabled
-    );
-}
-
 /// Publish a real content-only target through the complete service extension publisher under original ownership.
 /// 在原所有权下，通过完整服务扩展发布器发布真实纯内容目标。
 /// No inputs or return value; verifies catalog identity, frozen handlers, durable phases and preserved enabled policy.
@@ -1202,8 +1084,6 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
         .activation(PLUGIN)
         .expect("actual selected managed old")
         .expect("old selection");
-    assert!(seed_selected.configuration().is_some());
-    assert!(seed_selected.credential_revision().is_some());
     assert!(
         fixture.runtime.snapshot().plugins[PLUGIN]
             .managed_package()
@@ -1575,7 +1455,6 @@ async fn immutable_service_update_preserves_configuration_without_schema_fallbac
             .record()
             .target()
             .configuration()
-            .expect("target config")
             .value(),
         Some(&json!({"mode":"user-value"}))
     );
@@ -1763,7 +1642,6 @@ async fn immutable_service_update_handles_explicit_configuration_declaration_cha
                 .record()
                 .target()
                 .configuration()
-                .expect("explicit selection")
                 .value(),
             expected.as_ref()
         );

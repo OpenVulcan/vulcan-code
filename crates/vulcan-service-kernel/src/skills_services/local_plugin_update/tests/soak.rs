@@ -111,8 +111,6 @@ async fn release_acceptance_service_one_hundred_actual_updates_and_rollbacks() {
                         .content_fingerprint,
                     preview.content_fingerprint
                 );
-                assert!(selected.configuration().is_some());
-                assert!(selected.credential_revision().is_some());
                 // This short actual catalog borrow is dropped at the end of each iteration before the next update.
                 // 此短实际目录借用在每轮结束时释放，先于下一次更新。
                 let catalog = fixture.runtime.snapshot();

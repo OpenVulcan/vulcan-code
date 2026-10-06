@@ -163,7 +163,6 @@ fn published_native_target() -> (
             .record()
             .target()
             .approved_permissions()
-            .expect("actual target grants")
             .iter()
             .any(|permission| permission
                 == crate::runtime::plugin_permission_key(
@@ -236,7 +235,10 @@ fn private_target_native_process_and_v4_configuration_preserve_original_selectio
         .activation("hook-plugin")
         .expect("actual full target selection")
         .expect("actual selected target");
-    assert!(selected.configuration().is_some());
+    assert!(matches!(
+        selected.configuration(),
+        crate::VulcanPluginConfigurationSelection::Document { .. }
+    ));
     // This actual legacy state path must remain absent through every denied mutable write.
     // 此实际旧格式状态路径须在每次被拒绝可变写入期间保持缺失。
     let state_path = crate::runtime::configuration::plugin_config_state_path(

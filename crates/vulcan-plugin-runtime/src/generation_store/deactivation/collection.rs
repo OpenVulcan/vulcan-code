@@ -81,24 +81,17 @@ impl VulcanPluginGenerationStore {
     /// 在相同实际命名空间及固定已验证清单内，仅回收此原实例版本化凭据。
     /// original fixes the exact retired revision and backend addresses only that namespace; returns verified completion or retained error.
     /// original 固定精确退役修订，backend 仅寻址该命名空间；返回已验证完成或保留错误。
-    /// The host must first confirm full removal and real owner drain; legacy accounts require their separate explicit host cleanup.
-    /// 宿主必须先确认完整移除及真实所有者排空；旧账户要求其独立明确宿主清理。
+    /// The host must first confirm full removal and real owner drain.
+    /// 宿主必须先确认完整移除及真实所有者排空。
     pub fn collect_deactivation_credentials_retained(
         &self,
         original: &VulcanPluginDeactivationReservation,
         backend: &dyn VulcanPluginCredentialBackend,
     ) -> Result<()> {
         original.validate_published_for_catalog(self)?;
-        // Legacy selection has no revision journal and cannot masquerade as a successful empty versioned cleanup.
-        // 旧选择没有修订日志，不能伪装为成功空版本化清理。
-        let expected = original.credential_record.as_ref().ok_or_else(|| {
-            Error::invalid(
-                "Original removal uses legacy credentials, not a versioned cleanup journal.",
-            )
-        })?;
         self.collect_deactivation_inventory_credentials_retained(
             original,
-            expected.revision(),
+            original.credential_record.revision(),
             backend,
         )
     }
@@ -116,8 +109,8 @@ impl VulcanPluginGenerationStore {
         backend: &dyn VulcanPluginCredentialBackend,
     ) -> Result<()> {
         original.validate_published_for_catalog(self)?;
-        // Historical revision membership is fixed before callbacks, even when the current selection uses legacy accounts.
-        // 历史修订成员关系在回调之前固定，即使当前选择使用旧账户。
+        // Historical revision membership is fixed before callbacks.
+        // 历史修订成员关系在回调之前固定。
         let expected = original
             .inventory
             .credentials

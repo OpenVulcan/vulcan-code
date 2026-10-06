@@ -100,8 +100,8 @@ fn credential_binding_revision_requires_canonical_non_nil_identity() {
     );
 }
 
-/// Credential-only rotation retains the physical package, while tombstones preserve identity and reject downgrade.
-/// 仅轮换凭据保留物理插件包，停用记录保留身份并拒绝降级。
+/// Credential-only rotation retains the physical package, while tombstones preserve the last credential identity.
+/// 仅轮换凭据保留物理插件包，停用记录保留最后凭据身份。
 #[test]
 fn credential_binding_selection_rotates_independently_and_preserves_tombstone_authority() {
     // A content-only package proves that credential selection does not imply Lua execution or package copying.
@@ -121,9 +121,6 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
             "credential selection",
         ),
     );
-    store
-        .activate_authorized(&package, 0, Vec::new())
-        .expect("select version two");
     // The first declared revision is separate from both the activation counter and the package UUID.
     // 第一次声明修订独立于激活计数及插件包 UUID。
     let first = VulcanPluginCredentialRevision::allocate();
@@ -132,24 +129,16 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
     let second = VulcanPluginCredentialRevision::allocate();
     stage_empty_credentials(&store, &package, &first);
     stage_empty_credentials(&store, &package, &second);
-    // Approval, package and credential reference are captured in one version-three record.
-    // 批准、插件包及凭据引用在单个第三版记录中捕获。
+    // Approval, package and credential reference are captured in one record.
+    // 批准、插件包及凭据引用在单个记录中捕获。
     let selected = store
-        .activate_with_credentials(&package, 1, Vec::new(), first.clone())
+        .activate_with_credentials_for_test(&package, 0, Vec::new(), first.clone())
         .expect("select credential revision");
-    assert_eq!(selected.schema_version, CREDENTIAL_ACTIVATION_VERSION);
-    assert_eq!(selected.credential_revision(), Some(&first));
-    assert!(
-        store
-            .activate_authorized(&package, 2, Vec::new())
-            .expect_err("reject v2 downgrade")
-            .message
-            .contains("downgrade")
-    );
-    assert!(store.activate(&package, 2).is_err());
+    assert_eq!(selected.schema_version, ACTIVATION_RECORD_VERSION);
+    assert_eq!(selected.credential_revision(), &first);
     assert_eq!(
         store
-            .activate_with_credentials(&package, 1, Vec::new(), second.clone())
+            .activate_with_credentials_for_test(&package, 0, Vec::new(), second.clone())
             .expect_err("reject stale credential publication")
             .code,
         VulcanPluginStoreErrorCode::Conflict
@@ -157,11 +146,11 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
     // Only the credential reference and activation revision change here.
     // 此处仅改变凭据引用及激活修订。
     let rotated = store
-        .activate_with_credentials(&package, 2, Vec::new(), second.clone())
+        .activate_with_credentials_for_test(&package, 1, Vec::new(), second.clone())
         .expect("rotate credentials");
     assert_eq!(rotated.generation.as_ref(), Some(package.identity()));
-    assert_eq!(selected.credential_revision(), Some(&first));
-    assert_eq!(rotated.credential_revision(), Some(&second));
+    assert_eq!(selected.credential_revision(), &first);
+    assert_eq!(rotated.credential_revision(), &second);
     assert_eq!(
         VulcanPluginGenerationStore::open_existing(temp.path())
             .expect("reopen")
@@ -174,11 +163,10 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
     // The inactive record retains its last credential identity for later explicit cleanup.
     // 非活动记录保留最后凭据身份，供后续明确清理。
     let removed = store
-        .deactivate("sample-plugin", 3)
+        .deactivate("sample-plugin", 2)
         .expect("remove selection");
     assert!(removed.generation.is_none());
-    assert_eq!(removed.credential_revision(), Some(&second));
-    assert!(store.activate_authorized(&package, 4, Vec::new()).is_err());
+    assert_eq!(removed.credential_revision(), &second);
     assert!(
         store
             .pin_active("sample-plugin")
@@ -187,14 +175,14 @@ fn credential_binding_selection_rotates_independently_and_preserves_tombstone_au
             .is_none()
     );
     store
-        .activate_with_credentials(&package, 4, Vec::new(), first)
+        .activate_with_credentials_for_test(&package, 3, Vec::new(), first)
         .expect("explicit retained credential reactivation");
 }
 
-/// Every persisted format enforces its own exact credential-field shape and rejects ambiguous identities.
-/// 每种持久格式强制自身精确凭据字段形状，并拒绝歧义身份。
+/// The persisted credential field rejects null, malformed and duplicated identities.
+/// 持久凭据字段拒绝空值、损坏及重复身份。
 #[test]
-fn credential_binding_record_rejects_missing_null_and_cross_version_fields() {
+fn credential_binding_record_rejects_null_malformed_and_duplicate_fields() {
     // Corruption is injected into actual metadata bytes consumed by the production reader.
     // 损坏被注入生产读取器消费的实际元数据字节。
     let temp = tempfile::tempdir().expect("create credential corruption fixture");
@@ -217,7 +205,7 @@ fn credential_binding_record_rejects_missing_null_and_cross_version_fields() {
     let revision = VulcanPluginCredentialRevision::allocate();
     stage_empty_credentials(&store, &package, &revision);
     store
-        .activate_with_credentials(&package, 0, Vec::new(), revision)
+        .activate_with_credentials_for_test(&package, 0, Vec::new(), revision)
         .expect("publish credential selection");
     // This single file is the package, approval and credential selection authority.
     // 此单一文件是插件包、批准及凭据选择权威。
@@ -244,30 +232,6 @@ fn credential_binding_record_rejects_missing_null_and_cross_version_fields() {
         )
         .expect("write credential corruption");
         assert!(store.pin_active("sample-plugin").is_err());
-    }
-    for field in ["credential_revision", "approved_permissions"] {
-        // Both companion authorities are mandatory in the version-three format.
-        // 第三版格式中，两种伴随权威均必需。
-        let mut changed = document.clone();
-        changed.as_object_mut().expect("record").remove(field);
-        fs::write(
-            &path,
-            serde_json::to_vec(&changed).expect("encode missing field"),
-        )
-        .expect("write missing field");
-        assert!(store.activation("sample-plugin").is_err());
-    }
-    for version in [RECORD_VERSION, AUTHORIZED_ACTIVATION_VERSION, 99] {
-        // Older versions cannot smuggle a newer credential binding into an otherwise valid record.
-        // 较早版本不能向其他部分有效的记录夹带新凭据绑定。
-        let mut changed = document.clone();
-        changed["schema_version"] = version.into();
-        fs::write(
-            &path,
-            serde_json::to_vec(&changed).expect("encode wrong version"),
-        )
-        .expect("write wrong version");
-        assert!(store.activation("sample-plugin").is_err());
     }
     fs::write(
         &path,

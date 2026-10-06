@@ -32,8 +32,8 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
     let manifest = fs::read_to_string(&manifest_path).expect("read approval runtime manifest");
     fs::write(&manifest_path, format!("{manifest}permissions: [config]\n"))
         .expect("declare runtime approval capability");
-    // Freeze exact permissions and content for both legacy and new authority checks.
-    // 为旧权威及新权威检查固定精确权限与内容。
+    // Freeze exact permissions and content for the selected authority checks.
+    // 为已选权威检查固定精确权限与内容。
     let preview = manager
         .inspect_local_user_plugin(&source)
         .expect("inspect approval package");
@@ -45,30 +45,23 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
     // 实际目录根与不可变代次存储共用。
     let store = crate::VulcanPluginGenerationStore::open(&runtime_root.join("user_plugins"))
         .expect("open runtime approval store");
-    // Retain physical ownership while exercising both authorization formats.
-    // 验证两种授权格式期间保留物理所有权。
+    // Retain physical ownership while exercising the selected approval.
+    // 验证已选批准期间保留物理所有权。
     let generation = store
         .prepare(&source, &preview.content_fingerprint)
         .expect("prepare approval package");
-    store
-        .activate(&generation, 0)
-        .expect("select legacy format");
-    manager
-        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-        .expect("load legacy package");
-    manager
-        .authorize_user_plugin("local-plugin", preview.permissions.clone())
-        .expect("write legacy approval");
-    // Corrupt legacy state becomes a tripwire: v2 must neither read it nor repair it.
-    // 损坏旧状态成为检测点：第二版不得读取或修补它。
+    // Corrupt legacy state becomes a tripwire: the selection must neither read it nor repair it.
+    // 损坏旧状态成为检测点：选择不得读取或修补它。
     let sidecar = runtime_root.join("plugin_state/local-plugin/authorization.json");
+    fs::create_dir_all(sidecar.parent().expect("sidecar parent"))
+        .expect("create sidecar tripwire directory");
     fs::write(&sidecar, b"legacy approval deliberately unavailable")
         .expect("write sidecar tripwire");
     store
-        .activate_authorized(&generation, 1, preview.permissions.clone())
+        .activate_for_test(&generation, 0, preview.permissions.clone())
         .expect("publish package and approval");
-    // Runtime projection must accept v2 despite an unreadable legacy authorization document.
-    // 即使旧授权文档不可解码，运行时投影也必须接受第二版。
+    // Runtime projection must accept the selection despite an unreadable legacy authorization document.
+    // 即使旧授权文档不可解码，运行时投影也必须接受该选择。
     let selected = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("project selected approval");
@@ -81,7 +74,7 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
             .managed_package()
             .expect("managed descriptor")
             .approved_permissions(),
-        Some(preview.permissions.as_slice())
+        preview.permissions.as_slice()
     );
     assert!(
         manager
@@ -136,7 +129,7 @@ fn managed_approval_runtime_uses_selected_grants_without_sidecar_fallback() {
             .managed_package()
             .expect("old snapshot lease")
             .approved_permissions(),
-        Some(preview.permissions.as_slice())
+        preview.permissions.as_slice()
     );
     assert_eq!(
         fs::read(&sidecar).expect("retained legacy bytes"),

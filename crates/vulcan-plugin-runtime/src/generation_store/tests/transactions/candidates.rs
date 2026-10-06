@@ -72,14 +72,14 @@ fn candidate_inspection_preserves_published_predecessor_and_exact_target() {
         .expect("managed candidate");
     assert_eq!(managed.activation_revision(), 2);
     assert_eq!(managed.generation().identity(), second.identity());
-    assert_eq!(managed.approved_permissions(), Some([].as_slice()));
+    assert!(managed.approved_permissions().is_empty());
     assert_eq!(
         managed.credential_binding(),
         &VulcanPluginCredentialBinding::Revision(credentials)
     );
     assert_eq!(
         managed.configuration(),
-        Some(&VulcanPluginConfigurationSelection::NotDeclared {})
+        &VulcanPluginConfigurationSelection::NotDeclared {}
     );
     // A fresh production scan must still resolve the predecessor's exact physical package.
     // 新生产扫描仍须解析前驱的精确物理插件包。
@@ -176,7 +176,7 @@ fn candidate_inspection_freezes_configuration_and_credentials_before_first_publi
                 .managed_package()
                 .expect("managed configuration")
                 .configuration(),
-            Some(&configuration)
+            &configuration
         );
         // Resolve the server by its stable identity rather than a manifest array position.
         // 按稳定身份解析服务器，而非清单数组位置。
@@ -216,10 +216,12 @@ fn candidate_inspection_freezes_configuration_and_credentials_before_first_publi
         .expect("published configured package");
     assert_eq!(plugin.availability, VulcanPluginAvailability::Enabled);
     assert_eq!(
-        plugin
-            .managed_package()
-            .expect("published managed metadata")
-            .configuration(),
+        Some(
+            plugin
+                .managed_package()
+                .expect("published managed metadata")
+                .configuration()
+        ),
         server.configuration()
     );
     assert_eq!(

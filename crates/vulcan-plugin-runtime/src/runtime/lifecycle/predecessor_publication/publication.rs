@@ -132,8 +132,6 @@ impl VulcanPluginActivationPredecessorPublication {
             || !plugin.runtime_execution_available
             || plugin.generation != self.generation
             || self.generation == 0
-            || old.configuration().is_none()
-            || old.credential_revision().is_none()
             || !plugin
                 .managed_package()
                 .is_some_and(|managed| managed.matches_activation(old))

@@ -86,7 +86,7 @@ impl VulcanPluginGenerationStore {
             catalog_root,
             &transaction.record.target,
             generation,
-            Some(credentials),
+            credentials,
             &disabled,
             &enabled,
         )
@@ -181,13 +181,13 @@ impl VulcanPluginGenerationStore {
             request_id,
             predecessor,
             target: VulcanPluginActivation {
-                schema_version: CONFIGURED_ACTIVATION_VERSION,
+                schema_version: ACTIVATION_RECORD_VERSION,
                 plugin_id: plugin_id.clone(),
                 revision,
                 generation: Some(generation.identity.clone()),
-                approved_permissions: Some(permissions),
-                credential_revision: Some(credentials),
-                configuration: Some(configuration),
+                approved_permissions: permissions,
+                credential_revision: credentials,
+                configuration,
             },
             phase: Phase::Prepared,
             preparation: None,
@@ -629,25 +629,17 @@ impl VulcanPluginGenerationStore {
         // Retain actual package ownership after verifying its immutable contents.
         // 校验不可变内容后保留实际插件包所有权。
         let generation = self.pin_locked(identity)?;
-        if record.target.approved_permissions() != Some(generation.required_permissions.as_slice())
-        {
+        if record.target.approved_permissions() != generation.required_permissions.as_slice() {
             return Err(Error::invalid(
                 "Activation transaction permissions differ from the exact package.",
             ));
         }
         // The target's explicit configuration is the only document validated for this request.
         // 目标的显式配置是此请求校验的唯一文档。
-        let configuration = record
-            .target
-            .configuration()
-            .ok_or_else(|| Error::invalid("Activation transaction configuration is missing."))?;
-        generation.validate_configuration(configuration)?;
+        generation.validate_configuration(record.target.configuration())?;
         // The explicit staged credential revision belongs to this target selection.
         // 显式已暂存凭据修订属于此目标选择。
-        let revision = record
-            .target
-            .credential_revision()
-            .ok_or_else(|| Error::invalid("Activation transaction credentials are missing."))?;
+        let revision = record.target.credential_revision();
         // Retain real credential ownership for the same verified package.
         // 为相同已验证插件包保留实际凭据所有权。
         let credentials = self.pin_credentials_locked(&generation, revision)?;

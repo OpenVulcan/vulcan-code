@@ -443,18 +443,9 @@ fn deactivation_lifecycle_rejects_stale_complete_catalog_selection_without_start
         .activate_configured(
             &package,
             selected.revision,
-            selected
-                .approved_permissions()
-                .expect("actual original complete approval")
-                .to_vec(),
-            selected
-                .credential_revision()
-                .expect("bound original credentials")
-                .clone(),
-            selected
-                .configuration()
-                .expect("complete original configuration")
-                .clone(),
+            selected.approved_permissions().to_vec(),
+            selected.credential_revision().clone(),
+            selected.configuration().clone(),
         )
         .expect("actual next record");
     // This real reservation owns the fresh full selection, while the stale descriptor remains unauthorized.

@@ -181,7 +181,7 @@ pub(in crate::runtime) fn validate_restoration_receipts(
     if manifest.config.is_some() {
         // configuration.rs reads mutable legacy state when selected configuration is absent; exact restoration must reject that path.
         // configuration.rs 在选定配置缺失时读取可变旧状态；精确恢复必须拒绝该路径。
-        let selection = predecessor.managed_package().and_then(|managed| managed.configuration())
+        let selection = predecessor.managed_package().map(|managed| managed.configuration())
             .ok_or_else(|| error("Exact predecessor restoration requires immutable old configuration; mutable legacy configuration is unsupported."))?;
         if selection.value().is_none() {
             return Err(error(

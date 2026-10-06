@@ -163,7 +163,7 @@ impl VulcanPluginRuntimeManager {
         // 受管选择是完整的；绝不将其插件包模式与更新的可变旧文档混用。
         if let Some(selection) = plugin
             .managed_package()
-            .and_then(|managed| managed.configuration())
+            .map(|managed| managed.configuration())
         {
             return selection.value().cloned().ok_or_else(|| {
                 VulcanPluginRuntimeError::new(
@@ -283,10 +283,7 @@ impl VulcanPluginRuntimeManager {
                 "Plugin configuration generation changed before write.",
             ));
         }
-        if current
-            .managed_package()
-            .is_some_and(|managed| managed.configuration().is_some())
-        {
+        if current.managed_package().is_some() {
             return Err(VulcanPluginRuntimeError::new(
                 "Managed plugin configuration updates require a configured activation transaction.",
             ));
@@ -305,16 +302,12 @@ impl VulcanPluginRuntimeManager {
         let selected = store
             .activation(plugin_id)
             .map_err(|error| VulcanPluginRuntimeError::new(error.to_string()))?;
-        // A retained managed descriptor must match all selected authorities; flat or bundled packages require absence.
-        // 保留受管描述符必须匹配全部已选权威；平铺或内建插件包要求选择缺失。
-        match (current.managed_package(), selected.as_ref()) {
-            (Some(managed), Some(activation)) if managed.matches_activation(activation) => {}
-            (None, None) => {}
-            _ => {
-                return Err(VulcanPluginRuntimeError::new(
-                    "Legacy plugin configuration activation changed before write.",
-                ));
-            }
+        // Flat or bundled packages require absence of any managed selection.
+        // 平铺或内建插件包要求不存在任何受管选择。
+        if selected.is_some() {
+            return Err(VulcanPluginRuntimeError::new(
+                "Legacy plugin configuration activation changed before write.",
+            ));
         }
         // Registration precedes the same cross-process namespace fence used by update reservations and activation writers.
         // 注册门先于更新预留及激活写入者使用的相同跨进程命名空间屏障。
@@ -349,10 +342,7 @@ impl VulcanPluginRuntimeManager {
             )),
         )?;
         authority.validate(&self.state, plugin, scope)?;
-        if plugin
-            .managed_package()
-            .is_some_and(|managed| managed.configuration().is_some())
-        {
+        if plugin.managed_package().is_some() {
             return Err(VulcanPluginRuntimeError::new(
                 "Managed plugin configuration updates require a configured activation transaction.",
             ));
@@ -510,7 +500,7 @@ impl VulcanPluginRuntimeManager {
             .plugins
             .get(plugin_id)
             .and_then(|plugin| plugin.managed_package())
-            .and_then(|managed| managed.configuration())
+            .map(|managed| managed.configuration())
         {
             return if selection.value().is_some() {
                 Ok(false)

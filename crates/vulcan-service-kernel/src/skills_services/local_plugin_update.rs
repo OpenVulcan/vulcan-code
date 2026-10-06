@@ -37,9 +37,7 @@ fn validate_enabled_predecessor_restoration_selection(
     ) {
         (VulcanPluginRuntimeState::Disabled, _, _) => Ok(()),
         (VulcanPluginRuntimeState::Enabled, Some(package), Some(old))
-            if old.configuration().is_some()
-                && old.credential_revision().is_some()
-                && package.matches_activation(old) =>
+            if package.matches_activation(old) =>
         {
             Ok(())
         }

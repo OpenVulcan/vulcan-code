@@ -378,8 +378,6 @@ impl AgentRuntimeBridge {
             != vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase::Aborted
             || source.request_id() != transaction.record().request_id()
             || plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Enabling
-            || old.configuration().is_none()
-            || old.credential_revision().is_none()
             || !plugin
                 .managed_package()
                 .is_some_and(|managed| managed.matches_activation(old))

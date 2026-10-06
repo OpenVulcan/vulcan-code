@@ -78,7 +78,7 @@ impl Fixture {
         // Actual complete approval is produced from the target manifest, not hand-built record fields.
         // 实际完整批准从目标清单产生，不手工构造记录字段。
         let selected = store
-            .activate_authorized(
+            .activate_for_test(
                 &target,
                 0,
                 crate::runtime::plugin_required_permissions(&target_descriptor)
@@ -88,7 +88,7 @@ impl Fixture {
         // Preserve a separately produced actual peer record for strict equivalence assertions.
         // 保留单独产生实际其他插件记录，用于严格等价断言。
         let peer = store
-            .activate_authorized(
+            .activate_for_test(
                 &peer_package,
                 0,
                 crate::runtime::plugin_required_permissions(&peer_descriptor)

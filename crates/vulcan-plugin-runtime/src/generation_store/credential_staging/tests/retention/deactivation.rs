@@ -447,63 +447,6 @@ fn retained_deactivation_credentials_reject_foreign_actual_journal_before_backen
     );
 }
 
-/// Explicit legacy selection cannot authorize versioned cleanup, even when an unrelated real staged revision exists.
-/// 明确旧选择不能授权版本化清理，即使无关实际已暂存修订存在。
-#[test]
-fn retained_deactivation_credentials_refuse_legacy_without_backend_effects() {
-    // Actual package and inventory files remain separate from secure backend values.
-    // 实际包及清单文件独立于安全后端值。
-    let temp = tempfile::tempdir().expect("legacy removal credential fixture");
-    // The actual manifest still declares every original key, independently of its storage format.
-    // 实际清单仍声明每个原键，独立于其存储格式。
-    let (store, package) = fixture(temp.path());
-    // An actual unselected versioned revision must not be guessed as the legacy cleanup target.
-    // 实际未选版本化修订不得被猜测为旧清理目标。
-    let backend = Backend::default();
-    // Persist a real journal to prove cleanup never selects a plausible alternate revision.
-    // 持久保存真实日志，以证明清理绝不选择看似可行的替代修订。
-    let revision = stage(&store, &package, &backend);
-    // The actual authorized legacy producer explicitly omits a credential revision.
-    // 实际已授权旧生产者明确省略凭据修订。
-    let selected = store
-        .activate_authorized(&package, 0, package.required_permissions.clone())
-        .expect("select actual legacy credential binding");
-    // One actual original freezes all keys but has no versioned journal authority.
-    // 单个实际原实例固定全部键，但没有版本化日志权威。
-    let mut original = store
-        .reserve_deactivation(Uuid::new_v4(), &selected)
-        .expect("reserve actual legacy removal");
-    assert_eq!(original.credential_keys().len(), values().len());
-    store
-        .publish_deactivation_retained(&mut original)
-        .expect("publish actual legacy removal tombstone");
-    // Observe every deletion attempt to prove explicit legacy refusal precedes secure effects.
-    // 观察每个删除尝试，以证明明确旧拒绝先于安全效果。
-    let observed = CleanupBackend {
-        inner: &backend,
-        deletes: Cell::new(0),
-        fault: Cell::new(None),
-        skip_delete: false,
-    };
-    assert_eq!(
-        store
-            .collect_deactivation_credentials_retained(&original, &observed)
-            .expect_err("legacy cleanup has no versioned journal authority")
-            .code,
-        VulcanPluginStoreErrorCode::Invalid
-    );
-    assert_eq!(observed.deletes.get(), 0);
-    assert_eq!(backend.values.borrow().len(), 2);
-    assert_eq!(
-        store
-            .read_credential_record_locked("staging-plugin", &revision)
-            .expect("read unrelated original staged journal")
-            .expect("unrelated journal remains intact")
-            .phase,
-        VulcanPluginCredentialPhase::Staged
-    );
-}
-
 /// Historical unfinished cleanup retains its exact original across actual post-delete errors/panics and never repeats terminal effects.
 /// 历史未完成清理跨实际删除后错误／panic 保留精确原实例，并绝不重复终态效果。
 #[test]
@@ -532,11 +475,11 @@ fn retained_deactivation_inventory_credentials_resume_actual_partial_preparing_h
             .expect_err("actual partial staging write");
         drop(writer);
         assert_eq!(backend.values.borrow().len(), 1);
-        // The actual legacy selection independently retires this historical versioned namespace.
-        // 实际旧式选择独立于此历史版本化命名空间退役。
+        // The ordinary selection owns a separate revision, leaving the failed one as pure history.
+        // 普通选择拥有独立修订，使失败修订成为纯历史。
         let selected = store
-            .activate_authorized(&package, 0, package.required_permissions.clone())
-            .expect("actual legacy source selection");
+            .activate_for_test(&package, 0, package.required_permissions.clone())
+            .expect("actual ordinary source selection");
         // One concrete original retains the entire historical inventory outside backend unwinding.
         // 单个具体原实例在后端展开之外保留整个历史清单。
         let mut original = store
@@ -624,6 +567,11 @@ fn retained_deactivation_inventory_credentials_resume_actual_partial_preparing_h
             .collect_deactivation_inventory_credentials_retained(&original, &revision, &observed)
             .expect("resume exact historical Discarding journal");
         assert_eq!(observed.deletes.get(), 4);
+        // The selected revision retires through its own entry point, outside the observed fault backend.
+        // 已选修订经自身入口退役，位于被观察故障后端之外。
+        store
+            .collect_deactivation_credentials_retained(&original, &backend)
+            .expect("collect selected revision");
         drop(package);
         store
             .collect_deactivation_package_retained(&original)
@@ -671,14 +619,19 @@ fn retained_deactivation_inventory_credentials_refuse_changed_keys_and_added_act
     // Only secure values use memory while all journals and leases are real.
     // 仅安全值使用内存，全部日志及租约均为真实。
     let backend = Backend::default();
-    // This actual staged history is deliberately unselected by the current legacy source.
-    // 此实际已暂存历史刻意未被当前旧式来源选定。
+    // This actual staged revision is the sole journal and the current selection's credential authority.
+    // 此实际已暂存修订是唯一日志，也是当前选择的凭据权威。
     let revision = stage(&store, &package, &backend);
     // The actual selection producer supplies all original removal fields.
     // 实际选择生产者提供全部原移除字段。
     let selected = store
-        .activate_authorized(&package, 0, package.required_permissions.clone())
-        .expect("actual legacy current source");
+        .activate_with_credentials_for_test(
+            &package,
+            0,
+            package.required_permissions.clone(),
+            revision.clone(),
+        )
+        .expect("actual current source");
     // One actual original captures the journal before any mutation.
     // 单个实际原实例在任何变更之前捕获日志。
     let mut original = store

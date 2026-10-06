@@ -235,13 +235,9 @@ fn published_mcp_same_profile_and_store_fence_survive_synchronous_dispatch() {
         .activate_configured(
             &fixture.package,
             fixture.selected.revision,
-            fixture
-                .selected
-                .approved_permissions()
-                .expect("permissions")
-                .to_vec(),
+            fixture.selected.approved_permissions().to_vec(),
             fixture.credentials.clone(),
-            fixture.selected.configuration().expect("config").clone(),
+            fixture.selected.configuration().clone(),
         )
         .expect_err("shared fence excludes writer");
     assert_eq!(blocked.code, crate::VulcanPluginStoreErrorCode::Busy);
@@ -250,11 +246,7 @@ fn published_mcp_same_profile_and_store_fence_survive_synchronous_dispatch() {
         .activate_configured(
             &fixture.package,
             fixture.selected.revision,
-            fixture
-                .selected
-                .approved_permissions()
-                .expect("permissions")
-                .to_vec(),
+            fixture.selected.approved_permissions().to_vec(),
             fixture.credentials.clone(),
             VulcanPluginConfigurationSelection::Document {
                 value: serde_json::json!({"label":"changed"}),
@@ -360,11 +352,7 @@ fn published_mcp_real_prepared_old_admission_and_selected_target_rejection() {
             uuid::Uuid::new_v4(),
             &fixture.package,
             fixture.selected.revision,
-            fixture
-                .selected
-                .approved_permissions()
-                .expect("approval")
-                .to_vec(),
+            fixture.selected.approved_permissions().to_vec(),
             fixture.credentials.clone(),
             VulcanPluginConfigurationSelection::Document {
                 value: serde_json::json!({"label":"successor"}),
@@ -532,17 +520,9 @@ fn published_mcp_profile_publication_fences_original_without_pinning_environment
             .activate_configured(
                 &fixture.package,
                 fixture.selected.revision,
-                fixture
-                    .selected
-                    .approved_permissions()
-                    .expect("original approval")
-                    .to_vec(),
+                fixture.selected.approved_permissions().to_vec(),
                 fixture.credentials.clone(),
-                fixture
-                    .selected
-                    .configuration()
-                    .expect("original configuration")
-                    .clone(),
+                fixture.selected.configuration().clone(),
             )
             .expect_err("actual source fence excludes independent writer")
             .code,
@@ -553,11 +533,7 @@ fn published_mcp_profile_publication_fences_original_without_pinning_environment
         .activate_configured(
             &fixture.package,
             fixture.selected.revision,
-            fixture
-                .selected
-                .approved_permissions()
-                .expect("original approval")
-                .to_vec(),
+            fixture.selected.approved_permissions().to_vec(),
             fixture.credentials.clone(),
             VulcanPluginConfigurationSelection::Document {
                 value: serde_json::json!({"label":"replacement"}),
@@ -624,12 +600,12 @@ fn published_mcp_profile_publication_rejects_actual_replacement_catalog() {
     );
 }
 
-/// Reject old-format selected configuration and a real replacement catalog after preparation.
-/// 拒绝旧格式已选配置，以及准备后的真实替代目录。
+/// Reject a real replacement catalog after preparation.
+/// 拒绝准备后的真实替代目录。
 /// No inputs or return value; no existing runtime receives retrospective provenance.
 /// 无输入或返回值；不向任何既有运行时追授来源证明。
 #[test]
-fn published_mcp_rejects_legacy_selection_and_replaced_catalog() {
+fn published_mcp_rejects_replaced_catalog() {
     // Begin with complete actual managed ownership.
     // 从完整实际受管所有权开始。
     let original = fixture(false);
@@ -649,72 +625,6 @@ fn published_mcp_rejects_legacy_selection_and_replaced_catalog() {
     assert!(
         prepared
             .begin_dispatch(&original.manager, &authority)
-            .is_err()
-    );
-    // A separate fixture's real legacy writer cannot be upgraded by the Published factory.
-    // 独立夹具的真实旧格式写入者不能由 Published 工厂升级。
-    let legacy = fixture(false);
-    // The manager's package snapshot stays actual even after publishing an older-format initial choice elsewhere.
-    // 在其他位置发布旧格式初始选择后，管理器插件包快照仍保持实际。
-    let legacy_root = tempfile::tempdir().expect("legacy root");
-    // The legacy manager owns separate canonical stores rather than copied provenance fields.
-    // 旧格式管理器持有独立规范存储，而非复制来源字段。
-    let legacy_manager = manager(legacy_root.path());
-    // Prepare the real retained source bytes into that manager's own store.
-    // 将真实保留来源字节准备到该管理器自身存储。
-    let legacy_store = VulcanPluginGenerationStore::open(&legacy_manager.state.user_plugin_root)
-        .expect("legacy store");
-    // A new physical package pin proves the old-format selection is genuinely written.
-    // 新物理插件包固定证明旧格式选择确实被写入。
-    let legacy_package = legacy_store
-        .prepare(
-            legacy.package.package_root(),
-            &legacy.package.identity().content_fingerprint,
-        )
-        .expect("legacy package");
-    // Real version-three authority owns approval and credentials but lacks immutable configuration.
-    // 真实第三版权威持有批准及凭据，但缺少不可变配置。
-    let legacy_credentials = VulcanPluginCredentialRevision::allocate();
-    legacy_store
-        .begin_credential_staging(
-            &legacy_package,
-            legacy_credentials.clone(),
-            &VulcanPluginCredentialValues::new(),
-        )
-        .expect("legacy stage")
-        .write_and_finish(&EmptyBackend, &VulcanPluginCredentialValues::new())
-        .expect("legacy credentials");
-    legacy_store
-        .activate_with_credentials(
-            &legacy_package,
-            0,
-            legacy
-                .selected
-                .approved_permissions()
-                .expect("legacy approval")
-                .to_vec(),
-            legacy_credentials,
-        )
-        .expect("legacy actual writer");
-    // This is the actual legacy manager catalog, not a hand-written test snapshot.
-    // 此为实际旧格式管理器目录，不是手写测试快照。
-    let snapshot = legacy_manager
-        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-        .expect("legacy snapshot");
-    assert_eq!(
-        snapshot
-            .plugins
-            .get("published-mcp")
-            .expect("real legacy plugin")
-            .runtime_state,
-        VulcanPluginRuntimeState::Enabled
-    );
-    // The legacy manager supplies its own actual issuer.
-    // 旧格式管理器提供自身实际签发者。
-    let legacy_authority = legacy_manager.register_native_mcp_host_adapter();
-    assert!(
-        legacy_manager
-            .prepare_published_mcp_resources(&snapshot, "published-mcp", &legacy_authority)
             .is_err()
     );
 }

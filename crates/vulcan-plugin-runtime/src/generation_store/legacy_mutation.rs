@@ -387,7 +387,7 @@ mod tests {
         // Version two has complete approval but deliberately retains the old mutable configuration contract.
         // 第二版具有完整批准，但特意保留旧可变配置契约。
         let original = store
-            .activate_authorized(&package, 0, package.required_permissions.clone())
+            .activate_for_test(&package, 0, package.required_permissions.clone())
             .expect("publish exact legacy-config activation");
         (store, package, source, original)
     }
@@ -472,7 +472,7 @@ mod tests {
             &write_package(&root.path().join("peer"), "peer-plugin"),
         );
         observer
-            .activate_authorized(&peer, 0, peer.required_permissions.clone())
+            .activate_for_test(&peer, 0, peer.required_permissions.clone())
             .expect("independent namespace remains available");
         guard
             .validate_plugin("legacy-plugin")
@@ -515,7 +515,7 @@ mod tests {
             let mut wrong = original.clone();
             match field {
                 "revision" => wrong.revision += 1,
-                "approved_permissions" => wrong.approved_permissions = Some(vec!["config".into()]),
+                "approved_permissions" => wrong.approved_permissions = vec!["config".into()],
                 "plugin_id" => wrong.plugin_id = "other-plugin".into(),
                 _ => unreachable!(),
             }
@@ -579,7 +579,7 @@ mod tests {
         // Preserve exact schema and identity while altering one complete authority field.
         // 保留精确模式及身份，同时改变一个完整权威字段。
         let mut changed = original.clone();
-        changed.approved_permissions = Some(vec!["config".into()]);
+        changed.approved_permissions = vec!["config".into()];
         fs::write(
             &path,
             serde_json::to_vec(&changed).expect("changed selection bytes"),
@@ -603,125 +603,6 @@ mod tests {
         guard
             .validate_plugin("legacy-plugin")
             .expect("same original guard revalidates original bytes");
-    }
-
-    /// The actual legacy setter preserves null documents and blocks another store's pending update without touching the file.
-    /// 实际旧格式设置器保留空值文档，并阻挡另一存储待处理更新，不触碰文件。
-    #[test]
-    fn legacy_mutation_configuration_writer_preserves_null_and_pending_request_bytes() {
-        // Version-two managed configuration still belongs to the actual legacy mutable state file.
-        // 第二版受管配置仍属于实际旧格式可变状态文件。
-        let root = tempfile::tempdir().expect("guarded legacy config writer fixture");
-        // Actual package schemas and permissions drive the manager projection.
-        // 实际插件包模式及权限驱动管理器投影。
-        let (store, _package, source, original) = fixture(root.path());
-        // Refresh the original production descriptor before mutating legacy state.
-        // 变更旧状态前刷新原生产描述符。
-        let runtime = manager(root.path());
-        assert_eq!(
-            runtime
-                .update_plugin_config("legacy-plugin", Value::Null)
-                .expect("schema permits a real null document"),
-            Value::Null
-        );
-        assert_eq!(
-            runtime
-                .plugin_config("legacy-plugin")
-                .expect("null is a stored document"),
-            Value::Null
-        );
-        // Preserve exact null bytes to prove rejected writes do not substitute defaults or erase state.
-        // 保留精确空值字节，证明被拒绝写入不替换默认值或删除状态。
-        let state = root.path().join("state/legacy-plugin/config.json");
-        // The unrelated independent store opens the same canonical namespace without sharing manager state.
-        // 无关独立存储打开相同规范命名空间，不共享管理器状态。
-        let before = fs::read(&state).expect("actual null document bytes");
-        // Begin a genuine durable original update, then drop only its live observer.
-        // 开始真实持久原更新，随后仅释放其存活观察者。
-        let observer = VulcanPluginGenerationStore::open_existing(&root.path().join("user"))
-            .expect("independent update observer")
-            .expect("same store exists");
-        // Exact source authority comes from the production package inspector.
-        // 精确来源权威来自生产插件包检查器。
-        let inspected =
-            crate::inspect_user_plugin_package(&source).expect("real source inspection");
-        // Pending identity remains the originally supplied UUID after its live owner exits.
-        // 存活所有者退出后，待处理身份仍为原提供 UUID。
-        let request = Uuid::new_v4();
-        // This reservation creates no package or credential allocation but durably fences mutable state.
-        // 此预留不创建插件包或凭据分配，但持久阻挡可变状态。
-        let pending = observer
-            .begin_activation_preparation(
-                request,
-                &source,
-                &inspected.content_fingerprint,
-                Some(&original),
-                vec!["config".into(), "network_https".into()],
-            )
-            .expect("begin actual pending update");
-        drop(pending);
-        assert!(
-            runtime
-                .update_plugin_config("legacy-plugin", json!({"label": "blocked"}))
-                .is_err()
-        );
-        assert_eq!(
-            fs::read(&state).expect("retain original null bytes"),
-            before
-        );
-        assert_eq!(
-            store
-                .acquire_legacy_mutation_guard("legacy-plugin", Some(&original))
-                .expect_err("pending persists after observer exit")
-                .code,
-            Code::Busy
-        );
-        observer
-            .abort_activation_preparation_request("legacy-plugin", request)
-            .expect("explicitly abort original pending reservation");
-        runtime
-            .update_plugin_config("legacy-plugin", json!({"label": "after-abort"}))
-            .expect("real original abort permits mutable writer again");
-    }
-
-    /// A stale manager cannot write its old schema after another actual store changes the selected activation.
-    /// 另一实际存储变更已选激活后，过期管理器不能写入其旧模式。
-    #[test]
-    fn legacy_mutation_configuration_writer_rejects_stale_selected_activation() {
-        // This manager deliberately retains the original descriptor while another store changes durable selection.
-        // 另一存储变更持久选择时，此管理器特意保留原描述符。
-        let root = tempfile::tempdir().expect("stale legacy manager fixture");
-        // Every activation change uses a real pinned package and the complete approved permission set.
-        // 每个激活变更使用真实固定插件包及完整已批准权限集合。
-        let (store, package, _, original) = fixture(root.path());
-        // Actual configuration bytes exist before the changed activation makes this manager stale.
-        // 已变激活使此管理器过期之前，实际配置字节已经存在。
-        let runtime = manager(root.path());
-        runtime
-            .update_plugin_config("legacy-plugin", json!({"label": "original"}))
-            .expect("write original state");
-        // Preserve exact original state independently of manager snapshots.
-        // 独立于管理器快照保留精确原状态。
-        let path = root.path().join("state/legacy-plugin/config.json");
-        // No rejected write may alter this retained document.
-        // 任何被拒绝写入均不得改变此保留文档。
-        let before = fs::read(&path).expect("original configuration bytes");
-        store
-            .activate_authorized(
-                &package,
-                original.revision,
-                package.required_permissions.clone(),
-            )
-            .expect("another real store selection advances revision");
-        assert!(
-            runtime
-                .update_plugin_config("legacy-plugin", json!({"label": "must-not-write"}))
-                .is_err()
-        );
-        assert_eq!(
-            fs::read(path).expect("stale writer left state intact"),
-            before
-        );
     }
 
     /// Bundled-only explicit configuration writes initialize an absent host user root while still acquiring the real namespace fence.

@@ -67,14 +67,6 @@ impl VulcanPluginConfigurationSelection {
     }
 }
 
-/// Decode a required present selection from `deserializer`; JSON null is not an older missing field.
-/// 从 `deserializer` 解码必需存在的选择；JSON 空值不是旧格式缺失字段。
-pub(super) fn deserialize_present_selection<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Option<VulcanPluginConfigurationSelection>, D::Error> {
-    VulcanPluginConfigurationSelection::deserialize(deserializer).map(Some)
-}
-
 impl PinnedVulcanPluginGeneration {
     /// Validate `selection` against this exact package's declaration and schema, returning no document contents in errors.
     /// 按此精确插件包的声明及模式校验 `selection`，错误不返回任何文档内容。
@@ -97,28 +89,5 @@ impl PinnedVulcanPluginGeneration {
                 "Selected configuration does not match the exact package declaration.",
             )),
         }
-    }
-}
-
-impl VulcanPluginGenerationStore {
-    /// Atomically select `generation`, exact permissions, staged credentials and `configuration` after `expected_revision`.
-    /// 在 `expected_revision` 之后原子选择 `generation`、精确权限、已暂存凭据及 `configuration`。
-    /// Return the committed selection; errors require original-record inspection and never imply application readiness.
-    /// 返回已提交选择；错误要求检查原记录，且绝不表示应用就绪。
-    pub fn activate_configured(
-        &self,
-        generation: &PinnedVulcanPluginGeneration,
-        expected_revision: u64,
-        approved_permissions: Vec<String>,
-        credential_revision: VulcanPluginCredentialRevision,
-        configuration: VulcanPluginConfigurationSelection,
-    ) -> VulcanPluginStoreResult<VulcanPluginActivation> {
-        self.activate_approved_selection(
-            generation,
-            expected_revision,
-            approved_permissions,
-            Some(credential_revision),
-            Some(configuration),
-        )
     }
 }

@@ -40,6 +40,8 @@ pub use transactions::{
     VulcanPluginUpdatePolicy,
 };
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 
 use VulcanPluginGenerationPhase as GenerationState;
@@ -48,20 +50,16 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Private generation format and legacy selection format; their existing bytes remain readable.
-/// 私有代次格式及旧选择格式；其既有字节保持可读。
+/// Private generation marker format.
+/// 私有代次标记格式。
 const RECORD_VERSION: u32 = 1;
-/// Selection format that atomically binds complete approved permissions to its chosen package.
-/// 将完整已批准权限与所选插件包原子绑定的选择格式。
-const AUTHORIZED_ACTIVATION_VERSION: u32 = 2;
-/// Selection format binding the package, approval and secure-store credential revision together.
-/// 共同绑定插件包、批准及安全存储凭据修订的选择格式。
-const CREDENTIAL_ACTIVATION_VERSION: u32 = 3;
-/// Selection format binds a complete explicit configuration to the same package, permission and credential choice.
-/// 选择格式将完整显式配置绑定至相同的插件包、权限及凭据选择。
-const CONFIGURED_ACTIVATION_VERSION: u32 = 4;
-/// Configuration-bearing records retain the existing metadata allowance plus the sole configuration value budget.
-/// 携带配置的记录保留既有元数据额度，并加上唯一配置值预算。
+/// Sole activation format: package, complete approval, credential revision and configuration form one selection.
+/// 唯一激活格式：插件包、完整批准、凭据修订及配置构成单个选择。
+/// Other versions are rejected as invalid; earlier unreleased formats are intentionally not recognized.
+/// 其他版本按无效拒绝；较早未发布格式有意不再识别。
+const ACTIVATION_RECORD_VERSION: u32 = 4;
+/// Activation records retain the common metadata allowance plus the sole configuration value budget.
+/// 激活记录保留通用元数据额度，并加上唯一配置值预算。
 const MAX_ACTIVATION_BYTES: u64 = MAX_RECORD_BYTES + MAX_PLUGIN_CONFIGURATION_BYTES;
 /// Maximum encoded metadata size, checked before writes and before allocating reads.
 /// 编码元数据大小上限，在写入及读取分配前检查。
@@ -179,72 +177,35 @@ pub struct VulcanPluginActivation {
     /// 选定不可变代次，或显式停用记录。
     #[serde(deserialize_with = "deserialize_required_generation")]
     pub generation: Option<VulcanPluginGenerationIdentity>,
-    /// Versions two onward own exact sorted permissions; version one alone reads legacy authorization files.
-    /// 第二版及后续版本持有精确有序权限；仅第一版读取旧授权文件。
-    #[serde(
-        default,
-        deserialize_with = "deserialize_present_permissions",
-        skip_serializing_if = "Option::is_none"
-    )]
-    approved_permissions: Option<Vec<String>>,
-    /// Versions three onward name an exact credential revision; earlier versions require this field to be absent.
-    /// 第三版及后续版本指定精确凭据修订；较早版本要求此字段缺失。
-    #[serde(
-        default,
-        deserialize_with = "deserialize_present_credential_revision",
-        skip_serializing_if = "Option::is_none"
-    )]
-    credential_revision: Option<VulcanPluginCredentialRevision>,
-    /// Version four owns one explicit configuration selection; absence belongs only to older formats.
-    /// 第四版持有单个显式配置选择；仅旧格式允许缺失。
-    #[serde(
-        default,
-        deserialize_with = "configuration::deserialize_present_selection",
-        skip_serializing_if = "Option::is_none"
-    )]
-    configuration: Option<VulcanPluginConfigurationSelection>,
+    /// Exact sorted permissions approved for the selected package; a tombstone retains an empty list.
+    /// 为所选插件包批准的精确有序权限；停用记录保留空列表。
+    approved_permissions: Vec<String>,
+    /// Exact credential revision; a tombstone retains its last revision for cleanup.
+    /// 精确凭据修订；停用记录保留最后修订以供清理。
+    credential_revision: VulcanPluginCredentialRevision,
+    /// Complete configuration selection; a tombstone retains its last value.
+    /// 完整配置选择；停用记录保留最后值。
+    configuration: VulcanPluginConfigurationSelection,
 }
 
 impl VulcanPluginActivation {
-    /// Return approval frozen in this selection; absence explicitly denotes the legacy file authority.
-    /// 返回此选择中固定的批准权限；缺失明确表示旧文件权威。
-    /// An empty slice approves a zero-permission package, or belongs to an authorized deactivation tombstone.
-    /// 空切片批准零权限插件包，或属于已授权停用记录。
-    pub fn approved_permissions(&self) -> Option<&[String]> {
-        self.approved_permissions.as_deref()
+    /// Return approval frozen in this selection; an empty slice approves a zero-permission package or belongs to a tombstone.
+    /// 返回此选择中固定的批准权限；空切片批准零权限插件包，或属于停用记录。
+    pub fn approved_permissions(&self) -> &[String] {
+        &self.approved_permissions
     }
 
-    /// Return the declared credential revision; the store validates its presence against the record version before use.
-    /// 返回声明的凭据修订；存储在使用前按记录版本校验其存在性。
-    pub fn credential_revision(&self) -> Option<&VulcanPluginCredentialRevision> {
-        self.credential_revision.as_ref()
+    /// Return the selected credential revision without exposing any secret value.
+    /// 返回所选凭据修订，不暴露任何秘密值。
+    pub fn credential_revision(&self) -> &VulcanPluginCredentialRevision {
+        &self.credential_revision
     }
 
-    /// Borrow the configuration frozen in this activation; absence explicitly denotes the legacy file authority.
-    /// 借用此激活中固定的配置；缺失明确表示旧文件权威。
-    pub fn configuration(&self) -> Option<&VulcanPluginConfigurationSelection> {
-        self.configuration.as_ref()
+    /// Borrow the configuration frozen in this activation.
+    /// 借用此激活中固定的配置。
+    pub fn configuration(&self) -> &VulcanPluginConfigurationSelection {
+        &self.configuration
     }
-}
-
-/// Decode a present credential revision without accepting JSON null as an older format.
-/// 解码存在的凭据修订，不将 JSON 空值接受为旧格式。
-/// `deserializer` supplies one canonical string; returns an explicitly present validated identity.
-/// `deserializer` 提供单个规范字符串；返回明确存在的已校验身份。
-fn deserialize_present_credential_revision<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Option<VulcanPluginCredentialRevision>, D::Error> {
-    VulcanPluginCredentialRevision::deserialize(deserializer).map(Some)
-}
-
-/// Decode an explicitly present permission list; JSON null is never equivalent to a legacy missing field.
-/// 解码明确存在的权限列表；JSON 空值绝不等价于旧格式缺失字段。
-/// The deserializer supplies the field value; return only a complete non-null vector.
-/// 反序列化器提供字段值；仅返回完整非空值向量。
-fn deserialize_present_permissions<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Option<Vec<String>>, D::Error> {
-    Vec::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Decode a required nullable generation field; missing data must not become a deactivation tombstone.

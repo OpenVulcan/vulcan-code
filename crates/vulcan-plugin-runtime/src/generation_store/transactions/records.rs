@@ -164,7 +164,7 @@ impl VulcanPluginGenerationStore {
             TRANSACTION_RECORD_VERSION | PREPARATION_RECORD_VERSION | UPDATE_RECORD_VERSION
         ) || record.phase == VulcanPluginActivationTransactionPhase::Preparing
             || record.request_id != request_id
-            || record.target.schema_version != CONFIGURED_ACTIVATION_VERSION
+            || record.target.schema_version != ACTIVATION_RECORD_VERSION
             || record.target.generation.is_none()
         {
             return Err(Error::invalid(
@@ -404,10 +404,10 @@ impl VulcanPluginGenerationStore {
         self.check_unindexed_transaction_records(plugin_id)?;
         if let Some(record) = self.indexed_request_locked(plugin_id)?
             && !record.phase().terminal()
-            && (record.credential_revision() == Some(revision)
+            && (record.credential_revision() == revision
                 || record
                     .predecessor()
-                    .is_some_and(|activation| activation.credential_revision() == Some(revision)))
+                    .is_some_and(|activation| activation.credential_revision() == revision))
         {
             return Err(Error::new(
                 Code::Busy,

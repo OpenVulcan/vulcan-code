@@ -220,7 +220,7 @@ fn legacy_mutation_catalog_pins_exact_selection_without_reopening_namespace() {
         &write_package(&root.path().join("peer"), "peer-plugin"),
     );
     observer
-        .activate_authorized(&peer, 0, peer.required_permissions.clone())
+        .activate_for_test(&peer, 0, peer.required_permissions.clone())
         .expect("peer publication");
     assert!(
         observer
@@ -315,7 +315,7 @@ fn legacy_mutation_catalog_rejects_foreign_and_changed_complete_selection() {
     // Changed full approval remains valid wire metadata and preserves the original revision.
     // 已变完整批准保持有效线格式元数据，并保留原修订。
     let mut changed = original.clone();
-    changed.approved_permissions = Some(vec!["config".into()]);
+    changed.approved_permissions = vec!["config".into()];
     fs::write(
         &path,
         serde_json::to_vec(&changed).expect("changed selection encoding"),

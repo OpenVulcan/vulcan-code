@@ -54,7 +54,7 @@ impl Fixture {
         // The sole approval producer freezes complete authorization before removal.
         // 唯一批准生产者在移除之前固定完整授权。
         let selected = store
-            .activate_authorized(&package, 0, package.required_permissions.clone())
+            .activate_for_test(&package, 0, package.required_permissions.clone())
             .expect("actual approved selection");
         // An independent actual instance has no access to the original owner's File.
         // 独立实际实例不能访问原所有者的文件。
@@ -107,7 +107,7 @@ fn retained_deactivation_reserves_before_effects_and_keeps_the_original_file() {
     assert_eq!(original.original(), &fixture.selected);
     assert_eq!(original.intended().revision, fixture.selected.revision + 1);
     assert!(original.intended().generation.is_none());
-    assert_eq!(original.intended().approved_permissions(), Some(&[][..]));
+    assert!(original.intended().approved_permissions().is_empty());
     assert_eq!(
         fs::read(fixture.store.root.join("active/sample-plugin.json"))
             .expect("unchanged selected bytes"),
@@ -409,14 +409,11 @@ fn retained_deactivation_keeps_complete_configured_cleanup_bindings() {
         .expect("configured original reservation");
     assert_eq!(
         original.intended().schema_version,
-        CONFIGURED_ACTIVATION_VERSION
+        ACTIVATION_RECORD_VERSION
     );
-    assert_eq!(
-        original.intended().credential_revision(),
-        Some(&credentials)
-    );
-    assert_eq!(original.intended().configuration(), Some(&configuration));
-    assert_eq!(original.intended().approved_permissions(), Some(&[][..]));
+    assert_eq!(original.intended().credential_revision(), &credentials);
+    assert_eq!(original.intended().configuration(), &configuration);
+    assert!(original.intended().approved_permissions().is_empty());
     assert!(!format!("{original:?}").contains("retained-removal-private"));
     assert_eq!(
         store

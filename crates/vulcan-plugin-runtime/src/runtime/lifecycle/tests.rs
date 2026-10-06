@@ -44,26 +44,17 @@ fn managed_catalog_changes_invalidate_old_routing_generations() {
         .prepare(&source, &inspected.content_fingerprint)
         .expect("prepare original routing package");
     store
-        .activate(&first, 0)
+        .activate_for_test(&first, 0, first.required_permissions_for_test())
         .expect("activate original routing package");
     // Route ids are read from the real manager projection, not constructed by the fixture.
     // 路由标识取自实际管理器投影，而非夹具构造。
     let original = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("project original routing");
+    // The selection carries its own exact approval, so no separate authorization step exists.
+    // 选择携带自身精确批准，因此不存在独立授权步骤。
     assert_eq!(
         original.plugins["local-plugin"].runtime_state,
-        VulcanPluginRuntimeState::Unavailable
-    );
-    manager
-        .authorize_user_plugin("local-plugin", inspected.permissions.clone())
-        .expect("authorize exact selected content");
-    assert_eq!(
-        manager
-            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-            .expect("project authorized selection")
-            .plugins["local-plugin"]
-            .runtime_state,
         VulcanPluginRuntimeState::Disabled
     );
     // A new UUID must advance routing even though all file bytes remain identical.
@@ -72,7 +63,7 @@ fn managed_catalog_changes_invalidate_old_routing_generations() {
         .prepare(&source, &inspected.content_fingerprint)
         .expect("prepare identical replacement");
     store
-        .activate(&second, 1)
+        .activate_for_test(&second, 1, second.required_permissions_for_test())
         .expect("activate identical replacement");
     // Physical identity is distinct from content authorization identity.
     // 物理身份不同于内容授权身份。
@@ -87,7 +78,7 @@ fn managed_catalog_changes_invalidate_old_routing_generations() {
         VulcanPluginRuntimeState::Disabled
     );
     store
-        .activate(&second, 2)
+        .activate_for_test(&second, 2, second.required_permissions_for_test())
         .expect("publish a new activation of identical physical generation");
     // Reusing a physical generation still creates a new routing incarnation.
     // 复用物理代次仍会创建新路由实例。
@@ -109,7 +100,7 @@ fn managed_catalog_changes_invalidate_old_routing_generations() {
             .contains_key("local-plugin")
     );
     store
-        .activate(&second, 4)
+        .activate_for_test(&second, 4, second.required_permissions_for_test())
         .expect("reactivate after catalog absence");
     // An absent intermediate snapshot must not reset the process-local routing identity.
     // 中间快照缺失该插件也不能重置进程内路由身份。
@@ -120,37 +111,6 @@ fn managed_catalog_changes_invalidate_old_routing_generations() {
         returned.plugins["local-plugin"].generation
             > reactivated.plugins["local-plugin"].generation
     );
-    // Changed bytes cannot inherit authorization merely because the semantic version is unchanged.
-    // 即使语义版本未改变，字节改变后也不能继承授权。
-    let authorization_path = runtime_root.join("plugin_state/local-plugin/authorization.json");
-    // Preserve evidence that refresh never rewrites the user's prior authorization.
-    // 保存刷新绝不改写用户先前授权的证据。
-    let authorization = fs::read(&authorization_path).expect("read original authorization");
-    fs::write(source.join("changed.txt"), b"new code identity")
-        .expect("change same-version content");
-    // Re-inspect actual new bytes before preparing their immutable generation.
-    // 准备不可变代次之前重新检查实际新字节。
-    let changed_preview = manager
-        .inspect_local_user_plugin(&source)
-        .expect("inspect changed source");
-    // The new generation has the same version but requires new content authorization.
-    // 新代次版本相同，但需要新的内容授权。
-    let changed = store
-        .prepare(&source, &changed_preview.content_fingerprint)
-        .expect("prepare changed package");
-    store.activate(&changed, 5).expect("select changed package");
-    assert_eq!(
-        manager
-            .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-            .expect("project unauthorized changed package")
-            .plugins["local-plugin"]
-            .runtime_state,
-        VulcanPluginRuntimeState::Unavailable
-    );
-    assert_eq!(
-        fs::read(&authorization_path).expect("read preserved authorization"),
-        authorization
-    );
     // Exhaustion is a hard error instead of reusing the last routing id for a new activation.
     // 耗尽是明确错误，不能把最后一个路由标识复用于新激活。
     manager
@@ -160,7 +120,7 @@ fn managed_catalog_changes_invalidate_old_routing_generations() {
         .expect("lock routing fixture counter")
         .insert("local-plugin".into(), u64::MAX);
     store
-        .activate(&changed, 6)
+        .activate_for_test(&second, 5, second.required_permissions_for_test())
         .expect("publish selection at routing exhaustion");
     assert!(
         manager

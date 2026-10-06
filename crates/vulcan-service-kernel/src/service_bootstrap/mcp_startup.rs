@@ -66,13 +66,9 @@ impl PluginMcpBootstrapPlan {
                     "Plugin MCP bootstrap requires enabled ordinary owners.",
                 ));
             }
-            // Configuration absence explicitly denotes old live-file authority in the catalog contract.
-            // 在目录契约中，配置缺失明确表示旧实时文件权威。
-            let full_selection = match plugin.managed_package() {
-                Some(managed) => managed.configuration().is_some(),
-                None => false,
-            };
-            if full_selection {
+            // A managed selection carries its complete configuration; flat or bundled packages use the live file.
+            // 受管选择携带完整配置；平铺或内建插件包使用实时文件。
+            if plugin.managed_package().is_some() {
                 // The core validates complete pins, original catalog identity and current selection before materialization.
                 // 核心在物化前校验完整固定、原目录身份及当前选择。
                 let prepared = manager

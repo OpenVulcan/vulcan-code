@@ -65,7 +65,7 @@ impl VulcanPluginGenerationStore {
                 != Some(transaction.generation.identity())
             || transaction.credentials.record().package() != transaction.generation.identity()
             || transaction.record.target.credential_revision()
-                != Some(transaction.credentials.record().revision())
+                != transaction.credentials.record().revision()
             || (transaction.record.preparation.is_some()
                 && transaction.credentials.record().activation_request()
                     != Some(transaction.record.request_id))

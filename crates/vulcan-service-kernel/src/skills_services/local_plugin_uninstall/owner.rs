@@ -455,16 +455,12 @@ pub(super) fn reserve(
             .vulcan_plugin_runtime
             .reserve_deactivation_state(&mut selection)
             .map_err(|error| error.to_string())?;
-        // Current legacy credentials and real dormant flat declarations are independently confirmed ownership sources.
-        // 当前旧凭据及真实休眠平铺声明为独立已确认归属来源。
-        let mut keys = if selected.credential_revision().is_none() {
-            declared_keys(descriptor)
-        } else {
-            Vec::new()
-        };
-        if let Some(flat) = local.original_flat_predecessor() {
-            keys.extend(declared_keys(flat));
-        }
+        // Real dormant flat declarations are the only legacy credential ownership source of a managed removal.
+        // 真实休眠平铺声明是受管移除唯一的旧凭据归属来源。
+        let keys = local
+            .original_flat_predecessor()
+            .map(declared_keys)
+            .unwrap_or_default();
         // Coordination holds no second strong namespace borrower.
         // 协调不持有第二强命名空间借用者。
         let routing = bridge

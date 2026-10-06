@@ -42,7 +42,7 @@ fn managed_catalog_installation_rejects_legacy_publication_behind_managed_record
         .prepare(&source, &preview.content_fingerprint)
         .expect("prepare legacy guard generation");
     store
-        .activate(&generation, 0)
+        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
         .expect("select managed generation");
     for removed in [false, true] {
         if removed {

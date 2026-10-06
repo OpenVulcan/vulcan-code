@@ -45,9 +45,9 @@ pub struct VulcanPluginDeactivationReservation {
     /// The actual verified source fixes every declared credential slot before callbacks or cleanup can start.
     /// 实际已验证来源在回调或清理能够启动之前固定每个已声明凭据槽位。
     credential_keys: Vec<VulcanPluginCredentialKey>,
-    /// A versioned original retains its exact verified journal; legacy selection explicitly has no revision journal.
-    /// 版本化原选择保留精确已验证日志；旧选择明确没有修订日志。
-    credential_record: Option<VulcanPluginCredentialRecord>,
+    /// The original retains its exact verified selected credential journal.
+    /// 原选择保留其精确已验证已选凭据日志。
+    credential_record: VulcanPluginCredentialRecord,
     /// Every actual historical package and credential journal is frozen before callbacks without retaining additional physical readers.
     /// 每个实际历史包及凭据日志在回调之前固定，不保留额外物理读者。
     inventory: inventory::RemovalInventory,
@@ -362,15 +362,17 @@ impl VulcanPluginGenerationStore {
         let credential_record = source
             .credentials
             .as_ref()
-            .map(|credentials| credentials.record().clone());
+            .ok_or_else(|| {
+                Error::invalid("Original removal has no verified credential selection.")
+            })?
+            .record()
+            .clone();
         // Freeze all real namespace histories while the same original File excludes cooperating writers, before any effect admission.
         // 相同原文件排除协作写入者期间固定全部真实命名空间历史，先于任何效果准入。
         let inventory = self.capture_removal_inventory_locked(&expected.plugin_id)?;
         if !inventory.packages.iter().any(|record| {
             record.identity == package.identity && record.state == GenerationState::Prepared
-        }) || credential_record
-            .as_ref()
-            .is_some_and(|selected| !inventory.credentials.contains(selected))
+        }) || !inventory.credentials.contains(&credential_record)
         {
             return Err(Error::new(
                 Code::Conflict,
@@ -382,10 +384,7 @@ impl VulcanPluginGenerationStore {
         let intended = self.plan_activation_successor(
             &expected.plugin_id,
             Some(expected),
-            None,
-            None,
-            None,
-            None,
+            super::operations::ActivationSuccessor::Deactivate,
         )?;
         Ok(VulcanPluginDeactivationReservation {
             store: self.clone(),

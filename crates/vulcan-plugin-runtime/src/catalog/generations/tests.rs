@@ -35,7 +35,7 @@ fn managed_catalog_resolves_selection_before_tool_conflicts() {
     // 加载公开目录期间保留选定来源。
     let generation = prepare(&store, &source.join("alpha-plugin"));
     store
-        .activate(&generation, 0)
+        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
         .expect("select non-conflicting replacement");
     // Conflict validation must run after managed precedence has removed hidden legacy declarations.
     // 冲突校验必须在受管优先级移除隐藏旧声明之后运行。
@@ -145,7 +145,7 @@ fn managed_catalog_preserves_explicit_legacy_and_prepared_boundaries() {
         legacy.plugins["sample-plugin"].content_fingerprint
     );
     store
-        .activate(&generation, 0)
+        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
         .expect("publish managed package");
     // User disablement continues to apply to the selected immutable package.
     // 用户停用继续应用于选中的不可变插件包。
@@ -206,7 +206,9 @@ fn managed_catalog_snapshots_protect_original_bytes_until_last_owner_drops() {
     // Identity copies themselves must not prevent collection.
     // 身份副本本身不得阻止回收。
     let first_identity = first.identity().clone();
-    store.activate(&first, 0).expect("activate original");
+    store
+        .activate_for_test(&first, 0, first.required_permissions_for_test())
+        .expect("activate original");
     // The live catalog obtains its own generation lease from the actual selection record.
     // 活动目录从实际选择记录取得自己的代次租约。
     let old_catalog = catalog(&bundled, &user);
@@ -221,7 +223,9 @@ fn managed_catalog_snapshots_protect_original_bytes_until_last_owner_drops() {
         &store,
         &package(&temp.path().join("next"), "sample-plugin", "next"),
     );
-    store.activate(&next, 1).expect("activate successor");
+    store
+        .activate_for_test(&next, 1, next.required_permissions_for_test())
+        .expect("activate successor");
     assert_eq!(
         catalog(&bundled, &user).plugins["sample-plugin"].content_fingerprint,
         next.identity().content_fingerprint
@@ -292,7 +296,9 @@ fn managed_catalog_record_failures_are_explicit_and_namespace_local() {
         &store,
         &package(&temp.path().join("source"), "sample-plugin", "managed"),
     );
-    store.activate(&generation, 0).expect("activate fixture");
+    store
+        .activate_for_test(&generation, 0, generation.required_permissions_for_test())
+        .expect("activate fixture");
     // The committed filename, not a diagnostic path, identifies the record under test.
     // 被测记录由已提交文件名标识，而非诊断路径。
     let record = user.join(".vulcan-generations/active/sample-plugin.json");

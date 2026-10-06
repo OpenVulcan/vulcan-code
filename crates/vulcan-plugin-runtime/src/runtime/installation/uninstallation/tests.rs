@@ -346,7 +346,7 @@ fn legacy_uninstallation_original_refuses_actual_managed_selection() {
         .prepare(&source.package_root, &source.content_fingerprint)
         .expect("actual immutable source");
     store
-        .activate_authorized(&package, 0, Vec::new())
+        .activate_for_test(&package, 0, Vec::new())
         .expect("actual managed selection");
     manager
         .refresh_catalog(&BTreeSet::from(["local-plugin".into()]), &BTreeSet::new())

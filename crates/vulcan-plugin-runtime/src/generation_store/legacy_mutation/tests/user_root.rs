@@ -268,7 +268,7 @@ fn legacy_mutation_user_root_validation_rejects_changed_original_and_pending() {
     // This controlled changed field remains well-formed selection metadata.
     // 此受控已变字段保持格式合法选择元数据。
     let mut changed = original.clone();
-    changed.approved_permissions = Some(vec!["config".into()]);
+    changed.approved_permissions = vec!["config".into()];
     fs::write(
         &active_path,
         serde_json::to_vec(&changed).expect("changed complete approval"),

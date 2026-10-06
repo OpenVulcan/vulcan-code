@@ -74,13 +74,7 @@ pub(in crate::mcp) fn published_fixture_with_scope(
     // This backend reads only the genuinely staged original credential namespace.
     // 此后端仅读取真实暂存的原凭据命名空间。
     let secrets = RevisionSecrets {
-        labels: BTreeMap::from([(
-            selected
-                .credential_revision()
-                .expect("configured original revision")
-                .clone(),
-            "first",
-        )]),
+        labels: BTreeMap::from([(selected.credential_revision().clone(), "first")]),
         reads: Mutex::new(Vec::new()),
     };
     // Production returns the exact environment root for later real deletion-exclusion checks.

@@ -121,7 +121,7 @@ impl VulcanPluginGenerationStore {
         if self
             .read_activation(&generation.identity.plugin_id)?
             .as_ref()
-            .and_then(|record| record.credential_revision())
+            .map(|record| record.credential_revision())
             == Some(&revision)
         {
             return Err(Error::new(

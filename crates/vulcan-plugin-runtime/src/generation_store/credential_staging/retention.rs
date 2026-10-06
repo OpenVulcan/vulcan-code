@@ -96,7 +96,7 @@ impl VulcanPluginGenerationStore {
         // Retirement allows a tombstone, but unfinished-candidate discard must still reject any referenced identity.
         // 退役允许停用记录，但未完成候选丢弃仍须拒绝任何被引用身份。
         if let Some(activation) = self.read_activation(plugin_id)?
-            && activation.credential_revision() == Some(revision)
+            && activation.credential_revision() == revision
             && (!retired || activation.generation.is_some())
         {
             return Err(Error::invalid(

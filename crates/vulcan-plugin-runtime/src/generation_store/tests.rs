@@ -86,7 +86,7 @@ fn immutable_generations_keep_original_paths_and_real_clone_ownership() {
     );
     assert_eq!(
         store
-            .activate(&first, 0)
+            .activate_for_test(&first, 0, first.required_permissions.clone())
             .expect("activate first generation")
             .revision,
         1
@@ -112,7 +112,7 @@ fn immutable_generations_keep_original_paths_and_real_clone_ownership() {
     );
     assert_eq!(
         store
-            .activate(&second, 1)
+            .activate_for_test(&second, 1, second.required_permissions.clone())
             .expect("activate second generation")
             .revision,
         2
@@ -181,7 +181,7 @@ fn immutable_generations_keep_original_paths_and_real_clone_ownership() {
     );
     assert_eq!(
         reopened
-            .activate(&second, 0)
+            .activate_for_test(&second, 0, second.required_permissions.clone())
             .expect_err("revision zero cannot be reused")
             .code,
         VulcanPluginStoreErrorCode::Conflict
@@ -237,6 +237,10 @@ fn competing_store_managers_use_real_namespace_locks_and_revision_cas() {
         &second_store,
         &write_package(&temp.path().join("second"), "sample-plugin", "second"),
     );
+    // Credential inventories are staged up front so the race covers only selection publication.
+    // 凭据清单预先暂存，使竞争只覆盖选择发布。
+    let first_credentials = first_store.stage_unconfigured_credentials_for_test(&first);
+    let second_credentials = second_store.stage_unconfigured_credentials_for_test(&second);
     // Start both explicit CAS operations from one barrier.
     // 从同一屏障启动两个显式 CAS 操作。
     let barrier = Arc::new(Barrier::new(2));
@@ -247,13 +251,23 @@ fn competing_store_managers_use_real_namespace_locks_and_revision_cas() {
         // 此实际首个发布者不持有运行时全局注册锁。
         let first_thread = scope.spawn(|| {
             barrier.wait();
-            first_store.activate(&first, 0)
+            first_store.activate_with_credentials_for_test(
+                &first,
+                0,
+                first.required_permissions.clone(),
+                first_credentials,
+            )
         });
         // This second publisher competes through the filesystem namespace lock.
         // 此第二发布者经文件系统命名空间锁竞争。
         let second_thread = scope.spawn(|| {
             barrier.wait();
-            second_store.activate(&second, 0)
+            second_store.activate_with_credentials_for_test(
+                &second,
+                0,
+                second.required_permissions.clone(),
+                second_credentials,
+            )
         });
         [
             first_thread.join().expect("join first publisher"),
@@ -280,7 +294,7 @@ fn competing_store_managers_use_real_namespace_locks_and_revision_cas() {
     );
     assert_eq!(
         second_store
-            .activate(&second, 0)
+            .activate_for_test(&second, 0, second.required_permissions.clone())
             .expect_err("stale predecessor stays rejected")
             .code,
         VulcanPluginStoreErrorCode::Conflict
@@ -306,7 +320,7 @@ fn competing_store_managers_use_real_namespace_locks_and_revision_cas() {
     );
     assert_eq!(
         second_store
-            .activate(&unrelated, 0)
+            .activate_for_test(&unrelated, 0, unrelated.required_permissions.clone())
             .expect("publish unrelated namespace")
             .revision,
         1
@@ -336,11 +350,19 @@ fn generation_validation_rejects_tampering_and_retains_exact_failure_bytes() {
     // The valid handle keeps its original identity even when the files are later corrupted.
     // 文件稍后被损坏时，有效句柄仍保持原身份。
     let generation = prepare(&store, &source);
+    // Credentials are staged before tampering so only package verification meets the change.
+    // 篡改前暂存凭据，使只有插件包校验遇到变化。
+    let credentials = store.stage_unconfigured_credentials_for_test(&generation);
     fs::write(generation.package_root().join("foreign.txt"), b"changed")
         .expect("change prepared content");
     assert_eq!(
         store
-            .activate(&generation, 0)
+            .activate_with_credentials_for_test(
+                &generation,
+                0,
+                generation.required_permissions.clone(),
+                credentials.clone(),
+            )
             .expect_err("reject changed package")
             .code,
         VulcanPluginStoreErrorCode::Invalid
@@ -354,7 +376,12 @@ fn generation_validation_rejects_tampering_and_retains_exact_failure_bytes() {
     fs::remove_file(generation.package_root().join("foreign.txt"))
         .expect("restore exact fixture bytes");
     store
-        .activate(&generation, 0)
+        .activate_with_credentials_for_test(
+            &generation,
+            0,
+            generation.required_permissions.clone(),
+            credentials,
+        )
         .expect("activate verified generation");
     // Caller-supplied identities cannot select an unchecked traversal path.
     // 调用方提供的身份不能选择未经检查的遍历路径。
@@ -376,7 +403,12 @@ fn generation_validation_rejects_tampering_and_retains_exact_failure_bytes() {
         VulcanPluginGenerationStore::open(other_root.path()).expect("open unrelated store");
     assert_eq!(
         other_store
-            .activate(&generation, 0)
+            .activate_with_credentials_for_test(
+                &generation,
+                0,
+                generation.required_permissions.clone(),
+                VulcanPluginCredentialRevision::allocate(),
+            )
             .expect_err("reject cross-store handle")
             .code,
         VulcanPluginStoreErrorCode::Invalid
@@ -566,7 +598,7 @@ fn generation_pins_survive_selection_changes_across_real_processes() {
     // 父进程丢弃句柄后，身份副本自身不保留所有权。
     let identity = generation.identity().clone();
     store
-        .activate(&generation, 0)
+        .activate_for_test(&generation, 0, generation.required_permissions.clone())
         .expect("activate process fixture");
     // The test helper acquires an actual public pin before writing its readiness marker.
     // 测试辅助入口在写入就绪标记前取得实际公开固定句柄。

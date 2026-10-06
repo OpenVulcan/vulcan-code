@@ -375,13 +375,10 @@ pub(super) fn plugin_is_authorized(
     // Invalid catalog placeholders cannot authorize a package or cause a secondary authority lookup.
     // 无效目录占位条目不能授权插件包，也不能导致查询第二权威。
     let required = plugin_required_permissions(plugin).map_err(|error| error.message)?;
-    // Version-two selection is the sole approval authority; never consult or repair a legacy sidecar.
-    // 第二版选择是唯一批准权威；绝不查询或修补旧附属文件。
-    if let Some(permissions) = plugin
-        .managed_package()
-        .and_then(crate::VulcanPluginManagedPackage::approved_permissions)
-    {
-        return Ok(permissions == required);
+    // A managed selection is the sole approval authority; never consult or repair a legacy sidecar.
+    // 受管选择是唯一批准权威；绝不查询或修补旧附属文件。
+    if let Some(managed) = plugin.managed_package() {
+        return Ok(managed.approved_permissions() == required);
     }
     let path = plugin_authorization_state_path(state_root, &plugin.id);
     if !path.exists() {
@@ -459,10 +456,7 @@ impl VulcanPluginRuntimeManager {
                 "Vulcan plugin `{plugin_id}` is bundled and does not accept user authorization records."
             )));
         }
-        if plugin
-            .managed_package()
-            .is_some_and(|managed| managed.approved_permissions().is_some())
-        {
+        if plugin.managed_package().is_some() {
             return Err(VulcanPluginRuntimeError::new(
                 "Managed plugin approval belongs to its activation transaction; legacy authorization writes are not allowed.",
             ));

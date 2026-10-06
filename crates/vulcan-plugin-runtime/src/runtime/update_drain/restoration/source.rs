@@ -133,8 +133,6 @@ impl VulcanPluginPredecessorRestorationSource {
             || !self.plugin().desired_enabled
             || !self.plugin().runtime_execution_available
             || self.plugin().generation == 0
-            || old.configuration().is_none()
-            || old.credential_revision().is_none()
             || !self
                 .plugin()
                 .managed_package()
