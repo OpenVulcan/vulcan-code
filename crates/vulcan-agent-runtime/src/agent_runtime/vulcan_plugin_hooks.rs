@@ -2281,9 +2281,9 @@ lua_runtime:
         .await;
         assert!(stale.is_err(), "old hook generation must be revoked");
 
-        // A Lua failure closes the persistent Hook instance, so it runs last: the completed upstream
-        // result survives, and later registrations fail closed until an explicit drain replaces it.
-        // Lua 失败会关闭持久 Hook 实例，因此放在最后：已完成的上游结果保留，后续注册在显式排空替换前失败关闭。
+        // A Lua failure stops only the failed call: the completed upstream result survives, and the
+        // next registration is admitted by a fresh instance without an explicit drain.
+        // Lua 失败只终止失败的调用：已完成的上游结果保留，下一次注册无需显式排空即由新实例接纳。
         let completed = (updated.invoke)(json!({"url": "https://post-fail.test"}), first_context)
             .await
             .expect("post-processing failure must preserve completed target result");
@@ -2294,8 +2294,9 @@ lua_runtime:
         assert!(body.contains("already completed"));
         assert!(body.contains("\"owner_session_id\": \"conversation-one\""));
         assert_eq!(observed.lock().expect("upstream arguments").len(), 3);
-        // The cached public definition stays valid, while a fresh registration fails closed.
-        // 已缓存的公开定义仍然有效，而新的注册则失败关闭。
+        // The cached public definition stays valid, and a fresh registration runs on a new instance
+        // that still hides the host-only argument.
+        // 已缓存的公开定义仍然有效，新的注册在新实例上运行且仍隐藏宿主参数。
         let cached_after_failure = prepare(original_candidate.clone());
         assert!(
             cached_after_failure.parameters_schema["properties"]
@@ -2304,23 +2305,15 @@ lua_runtime:
         );
         let mut fresh_candidate = original_candidate;
         fresh_candidate.parameters_schema["properties"]["page"] = json!({"type": "integer"});
-        assert!(
-            prepare_vulcan_plugin_tool_candidates(
-                Some(manager.clone()),
-                vec![fresh_candidate.clone()],
-                None
-            )
-            .is_empty(),
-            "a closed Hook instance must hide the target instead of exposing the host-only argument"
-        );
-        manager
-            .drain_plugin_sessions("session-owner-hook")
-            .await
-            .expect("drain failed Hook instance");
         let recovered = prepare(fresh_candidate);
         assert_eq!(
             recovered.descriptor.description,
             "Updated registration run 1"
+        );
+        assert!(
+            recovered.parameters_schema["properties"]
+                .get("owner_session_id")
+                .is_none()
         );
     }
 
