@@ -23,7 +23,8 @@
 ## 规则
 
 1. **只有一份语言清单。** 服务（保存 `uiLocale` 时的校验）、TUI、WebUI、桌面壳都从 `locales.json` 读取；不得在消费方
-   另建语言列表或匹配规则。WebUI 的 `catalogLoaders` 因打包器需要字面路径而重复代码，由测试保证与注册表一致。
+   另建语言列表。匹配规则在 Rust、WebUI 与桌面壳各有一份实现，行为以 `locale-matching.json` 为准，三者测试都运行这组
+   共享向量。WebUI 的 `catalogLoaders` 因打包器需要字面路径而重复代码，由测试保证与注册表一致。
 2. **默认语言补全一切。** 每个分面必须有默认语言文件；完整分面要求每种语言都覆盖默认语言的全部键（WebUI 在编译期
    通过 `satisfies` 检查，crate 测试再统一检查）；非默认语言不得出现默认语言之外的键，占位符集合必须一致。
 3. **新增分面**：在 `locales.json` 的 `surfaces` 中声明，创建 `catalogs/<surface>/<default>.json`，并在 crate 测试的
