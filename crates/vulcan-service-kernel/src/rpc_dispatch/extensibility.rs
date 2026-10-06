@@ -16,8 +16,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_poll_luaskill_config_events",
     "service_inspect_local_plugin",
     "service_install_local_plugin",
-    "service_local_plugin_install_requests",
-    "service_recover_local_plugin_install",
     "service_update_local_plugin",
     "service_local_plugin_update_requests",
     "service_resume_local_plugin_update",
@@ -143,19 +141,6 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "approvedPermissions")?,
                 rpc_required_param(params, "allowRegistryDependencies")?,
                 rpc_required_param(params, "initialSecrets")?,
-            )
-            .await,
-        ),
-        "service_local_plugin_install_requests" => rpc_json_result(
-            service_local_plugin_install_requests(state, rpc_required_param(params, "pluginId")?),
-        ),
-        "service_recover_local_plugin_install" => rpc_json_result(
-            service_recover_local_plugin_install(
-                app.clone(),
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "requestId")?,
-                rpc_required_param(params, "acknowledgeExternalEffects")?,
             )
             .await,
         ),

@@ -974,17 +974,6 @@ async fn refresh_plugin_catalog_local_state_with_original(
         &guard,
         original_request,
     )?;
-    // An in-progress installation's manager snapshot is private until its own adjacent full commit.
-    // 进行中安装的管理器快照在其自身相邻完整提交之前保持私有。
-    // Observe the actual published catalog under this same slot lock before task or workbench mutations.
-    // 在任务或工作台变更前，于此相同槽锁内观测实际已发布目录。
-    let published_plugin_catalog = guard
-        .agent_runtime
-        .as_ref()
-        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
-    guard
-        .pending_local_plugin_installs
-        .require_catalog_publication(published_plugin_catalog.as_deref(), &plugin_catalog)?;
     // lua_catalog is the committed ordinary LuaSkills snapshot paired with plugin rows.
     // lua_catalog 是与插件行配对的已提交普通 LuaSkills 快照。
     let lua_catalog = cached_luaskills_catalog_from_state(&guard);

@@ -401,7 +401,6 @@ pub(crate) fn test_service_state_with_parent_session(
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         pending_local_plugin_updates: Arc::new(Default::default()),
         pending_legacy_secret_mutations: Arc::new(Default::default()),
-        pending_local_plugin_installs: Arc::new(Default::default()),
         // Actual original removal resources survive executor failures.
         // 实际原移除资源跨执行器失败存续。
         pending_local_plugin_uninstalls: Arc::new(Default::default()),

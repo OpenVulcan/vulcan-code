@@ -77,16 +77,17 @@ pub(crate) fn validate_plugin_config_value(
 impl VulcanPluginRuntimeManager {
     /// Select a complete configuration for candidate using the exact predecessor's declared authority.
     /// 使用精确 predecessor 的声明权威，为 candidate 选择完整配置。
-    /// Existing declarations preserve their document; first declarations use candidate defaults; removed declarations stay absent.
-    /// 既有声明保留其文档；首次声明使用候选默认值；移除声明保持缺失。
+    /// Existing declarations preserve their document; first declarations and first installs (no predecessor) use
+    /// candidate defaults; removed declarations stay absent.
+    /// 既有声明保留其文档；首次声明及首次安装（无前驱）使用候选默认值；移除声明保持缺失。
     /// Returns a value validated against the new package without writing state or merging documents.
     /// 返回按新插件包校验的值，不写入状态或合并文档。
     pub fn configuration_for_update(
         &self,
         candidate: &crate::PinnedVulcanPluginGeneration,
-        predecessor: &crate::VulcanPluginDescriptor,
+        predecessor: Option<&crate::VulcanPluginDescriptor>,
     ) -> Result<crate::VulcanPluginConfigurationSelection, VulcanPluginRuntimeError> {
-        if candidate.identity().plugin_id != predecessor.id {
+        if predecessor.is_some_and(|predecessor| candidate.identity().plugin_id != predecessor.id) {
             return Err(VulcanPluginRuntimeError::new(
                 "Configuration update requires the same plugin identity.",
             ));
@@ -110,12 +111,23 @@ impl VulcanPluginRuntimeManager {
         };
         // The predecessor declaration determines whether preserving a document is meaningful.
         // 前驱声明决定保留文档是否有意义。
-        let predecessor_manifest = predecessor.manifest.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Configuration predecessor has no valid manifest.")
-        })?;
-        // Newly declared configuration uses this candidate's defaults exactly once, without touching legacy state.
-        // 新声明配置仅使用此候选默认值一次，不触碰旧状态。
-        let value = if predecessor_manifest.config.is_some() {
+        let declared_predecessor = match predecessor {
+            Some(predecessor) => predecessor
+                .manifest
+                .as_ref()
+                .ok_or_else(|| {
+                    VulcanPluginRuntimeError::new(
+                        "Configuration predecessor has no valid manifest.",
+                    )
+                })?
+                .config
+                .is_some()
+                .then_some(predecessor),
+            None => None,
+        };
+        // Newly declared configuration uses this candidate's defaults exactly once.
+        // 新声明配置仅使用此候选默认值一次。
+        let value = if let Some(predecessor) = declared_predecessor {
             self.plugin_config_for_snapshot(predecessor)?
         } else {
             // The package validator remains authoritative for relative paths and reparse-point exclusion.

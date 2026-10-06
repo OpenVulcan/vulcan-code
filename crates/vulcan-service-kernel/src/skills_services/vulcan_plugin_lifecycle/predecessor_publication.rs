@@ -94,15 +94,6 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
         &guard,
         Some(transaction.record().request_id()),
     )?;
-    // Competing first-install ownership is rejected before entering the core manager gate.
-    // 进入核心管理器门前拒绝竞争首次安装所有权。
-    let current_catalog = guard
-        .agent_runtime
-        .as_ref()
-        .and_then(|bridge| bridge.extension_generation.plugin_catalog());
-    guard
-        .pending_local_plugin_installs
-        .require_catalog_publication(current_catalog.as_deref(), staged)?;
     // This is the actual bridge and single Full slot consumed by new executions.
     // 此为新执行消费的实际桥及单个 Full 槽。
     let bridge = guard

@@ -5,6 +5,7 @@ use super::*;
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
 
+mod install;
 mod soak;
 
 /// Normal failures before, inside and after the blocking worker return the actual original request lock.
@@ -729,6 +730,18 @@ impl Fixture {
     /// Returns isolated service state with an explicitly disabled plugin and no external network connections.
     /// 返回隔离服务状态，含明确停用插件且无外部网络连接。
     pub(in crate::skills_services) fn new(configuration: bool) -> Self {
+        Self::build(configuration, true)
+    }
+
+    /// Build the same service with the candidate source but no installed predecessor, for first installs.
+    /// 构建相同服务及候选来源，但不安装前驱，用于首次安装。
+    pub(in crate::skills_services) fn uninstalled() -> Self {
+        Self::build(false, false)
+    }
+
+    /// Build the service; `install_predecessor` decides whether version one is installed and explicitly disabled.
+    /// 构建服务；`install_predecessor` 决定是否安装第一版并明确停用。
+    fn build(configuration: bool, install_predecessor: bool) -> Self {
         // All mutable files belong exclusively to this temporary workspace.
         // 全部可变文件仅属于此临时工作区。
         let root = tempfile::tempdir().expect("update workspace");
@@ -742,27 +755,29 @@ impl Fixture {
             root.path().join("state"),
             root.path().join("runtime"),
         );
-        // Existing source is installed through production authorization and package copying.
-        // 既有来源经生产授权及插件包复制安装。
-        let previous = write_package(
-            &root.path().join("old-source"),
-            "1.0.0",
-            false,
-            configuration.then(|| json!({"mode":"old-default"})),
-        );
-        // Preview is authoritative for both fingerprint and complete permission approval.
-        // 预览对指纹及完整权限批准均具有权威。
-        let preview = runtime
-            .inspect_local_user_plugin(&previous)
-            .expect("old preview");
-        runtime
-            .install_local_user_plugin(
-                &previous,
-                &preview.content_fingerprint,
-                preview.permissions,
+        if install_predecessor {
+            // Existing source is installed through production authorization and package copying.
+            // 既有来源经生产授权及插件包复制安装。
+            let previous = write_package(
+                &root.path().join("old-source"),
+                "1.0.0",
                 false,
-            )
-            .expect("old installation");
+                configuration.then(|| json!({"mode":"old-default"})),
+            );
+            // Preview is authoritative for both fingerprint and complete permission approval.
+            // 预览对指纹及完整权限批准均具有权威。
+            let preview = runtime
+                .inspect_local_user_plugin(&previous)
+                .expect("old preview");
+            runtime
+                .install_local_user_plugin(
+                    &previous,
+                    &preview.content_fingerprint,
+                    preview.permissions,
+                    false,
+                )
+                .expect("old installation");
+        }
         runtime
             .refresh_catalog(&BTreeSet::from([PLUGIN.to_owned()]), &BTreeSet::new())
             .expect("old catalog");
@@ -779,11 +794,13 @@ impl Fixture {
         let mut bridge = crate::tests::test_support::test_agent_runtime_bridge();
         bridge.vulcan_plugin_runtime = runtime.clone();
         bridge.vulcan_plugin_native_mcp_host = runtime.register_native_mcp_host_adapter();
-        bridge
-            .provider_configuration
-            .luaskills
-            .disabled_vulcan_plugins
-            .insert(PLUGIN.to_owned());
+        if install_predecessor {
+            bridge
+                .provider_configuration
+                .luaskills
+                .disabled_vulcan_plugins
+                .insert(PLUGIN.to_owned());
+        }
         bridge.extension_generation = bridge
             .prepare_plugin_extension_generation(
                 runtime.snapshot(),

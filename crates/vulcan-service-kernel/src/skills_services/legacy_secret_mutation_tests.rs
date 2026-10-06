@@ -8,8 +8,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use vulcan_plugin_runtime::{VulcanPluginGenerationStore, VulcanPluginRuntimeManager};
 
-mod initial_install;
-
 /// One declared server and secret select only this fixture's unique OS account.
 /// 单个已声明服务器及密钥仅选择本夹具的唯一操作系统账户。
 const SERVER: &str = "actual";

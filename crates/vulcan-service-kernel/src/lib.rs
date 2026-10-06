@@ -470,7 +470,6 @@ pub fn create_service_bridge_state(
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         pending_local_plugin_updates: Arc::new(Default::default()),
         pending_legacy_secret_mutations: Arc::new(Default::default()),
-        pending_local_plugin_installs: Arc::new(Default::default()),
         // Actual original removal resources survive executor failures.
         // 实际原移除资源跨执行器失败存续。
         pending_local_plugin_uninstalls: Arc::new(Default::default()),
@@ -552,19 +551,6 @@ pub fn service_prepare_for_app_shutdown(
         service_runtime.block_on(pending_local_plugin_updates.drain_for_shutdown())?;
     } else {
         pending_local_plugin_updates.require_empty_without_runtime()?;
-    }
-    // Original installation ownership drains before irreversible task or native teardown.
-    // 原安装所有权在不可逆任务或原生拆卸之前排空。
-    let pending_local_plugin_installs = Arc::clone(
-        &state
-            .lock()
-            .map_err(|error| error.to_string())?
-            .pending_local_plugin_installs,
-    );
-    if let Some(service_runtime) = service_runtime.as_ref() {
-        service_runtime.block_on(pending_local_plugin_installs.drain_for_shutdown(state))?;
-    } else {
-        pending_local_plugin_installs.require_empty_without_runtime()?;
     }
     // Original removal ownership drains without publishing or acknowledging failed external effects during shutdown.
     // 关闭期间排空原移除所有权，不发布或确认失败外部副作用。

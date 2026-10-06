@@ -196,15 +196,6 @@ pub(super) fn hide_and_publish(
         &service,
         Some(owner.request_id),
     )?;
-    // Competing first-install originals retain their real catalog visibility.
-    // 竞争首次安装原实例保留真实目录可见性。
-    let current_catalog = service
-        .agent_runtime
-        .as_ref()
-        .and_then(|bridge| bridge.extension_generation.plugin_catalog());
-    service
-        .pending_local_plugin_installs
-        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
     // The actual bridge is the unique production publisher.
     // 实际桥为唯一生产发布器。
     let bridge = service
@@ -236,7 +227,6 @@ pub(super) fn hide_and_publish(
             resources.committed_full = Some(Arc::clone(committed));
         },
     )?;
-    drop(current_catalog);
     drop(service);
     // Successful complete removal releases this owner's predecessor pins before any physical GC.
     // 成功完整移除在任何物理回收之前释放此所有者前驱固定。

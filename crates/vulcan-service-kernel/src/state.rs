@@ -939,10 +939,6 @@ pub struct ServiceBridgeState {
     /// 原旧凭据屏障及前像跨执行器故障存续，直至确认恢复。
     pub(crate) pending_legacy_secret_mutations:
         Arc<crate::skills_services::LegacySecretMutationRegistry>,
-    /// Original first-install package, preimages and actual calls outlive executor failures.
-    /// 原首次安装插件包、前像及实际调用跨执行器故障存续。
-    pub(crate) pending_local_plugin_installs:
-        Arc<crate::skills_services::PendingLocalPluginInstallRegistry>,
     /// Same physical removal originals outlive callbacks, failed publication and executor cancellation.
     /// 相同物理移除原实例跨回调、发布失败及执行器取消存续。
     pub(crate) pending_local_plugin_uninstalls:

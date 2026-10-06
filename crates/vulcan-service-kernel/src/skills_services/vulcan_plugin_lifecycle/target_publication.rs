@@ -82,15 +82,6 @@ pub(in crate::skills_services) fn publish_activation_target_plugin_extension_gen
         &guard,
         Some(transaction.record().request_id()),
     )?;
-    // Installation exclusion is checked before manager registration, without acquiring another owner's resource slot.
-    // 安装互斥在管理器注册之前检查，不取得另一所有者的资源槽。
-    let current_catalog = guard
-        .agent_runtime
-        .as_ref()
-        .and_then(|bridge| bridge.extension_generation.plugin_catalog());
-    guard
-        .pending_local_plugin_installs
-        .require_catalog_publication(current_catalog.as_deref(), staged)?;
     // This original bridge holds the sole pointer consumed by new executions.
     // 此原桥持有新执行消费的唯一指针。
     let bridge = guard

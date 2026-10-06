@@ -624,10 +624,14 @@ pub(super) async fn abort_owned(
     // 仅准备候选不能授权在放弃时排空已启用旧插件。
     let preserve_enabled_predecessor = match &resources.stage {
         pending_owner::PendingLocalPluginUpdateStage::Reserved(reserved) => {
-            reserved.predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
+            reserved.predecessor.as_ref().is_some_and(|predecessor| {
+                predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
+            })
         }
         pending_owner::PendingLocalPluginUpdateStage::Preparing(preparing) => {
-            preparing.predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
+            preparing.predecessor.as_ref().is_some_and(|predecessor| {
+                predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
+            })
         }
         pending_owner::PendingLocalPluginUpdateStage::Prepared(prepared) => prepared
             .transaction
@@ -837,9 +841,33 @@ struct PreparedLocalPluginUpdate {
     /// Non-cloneable request retains actual package and credential resources.
     /// 不可克隆请求保留实际插件包及凭据资源。
     transaction: VulcanPluginActivationTransaction,
-    /// Frozen predecessor is retained through preparation and final route handoff.
-    /// 固定前驱在准备及最终路由交接期间保持保留。
-    predecessor: VulcanPluginDescriptor,
+    /// Frozen predecessor is retained through preparation and final route handoff; None is a first install.
+    /// 固定前驱在准备及最终路由交接期间保持保留；空值表示首次安装。
+    predecessor: Option<VulcanPluginDescriptor>,
+}
+
+impl PreparedLocalPluginUpdate {
+    /// Borrow the frozen predecessor that an enabled update hands its routes over from.
+    /// 借用启用更新交接路由所来自的固定前驱。
+    /// A first install has none and is always published disabled, so reaching the enabled path without one is an error.
+    /// 首次安装没有前驱且总是发布为停用，因此无前驱到达启用路径即为错误。
+    fn enabled_predecessor(&self) -> Result<&VulcanPluginDescriptor, String> {
+        self.predecessor
+            .as_ref()
+            .ok_or_else(|| String::from("首次安装没有可交接的启用前驱。"))
+    }
+}
+
+/// Whether an approved local package installs a new user plugin or replaces an installed one.
+/// 已批准本地插件包是安装新用户插件还是替换已安装插件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LocalPluginPackageRequest {
+    /// The namespace has no plugin; the committed generation is published disabled.
+    /// 命名空间尚无插件；已提交代次发布为停用。
+    Install,
+    /// An installed user plugin is replaced through route handoff or a disabled publication.
+    /// 已安装用户插件通过路由交接或停用发布被替换。
+    Update,
 }
 
 /// Prepare source under exact approval and request_id without publishing a catalog or overwriting predecessor bytes.
@@ -848,10 +876,13 @@ struct PreparedLocalPluginUpdate {
 /// runtime 拥有目录，提交秘密满足其已检查要求；返回持久请求所有者。
 /// Configuration supplies the original retained user policy and must agree with the predecessor catalog.
 /// configuration 提供原保留用户策略，必须与前驱目录一致。
+/// `request` decides whether the namespace must be empty (first install) or hold an installed user plugin.
+/// `request` 决定命名空间必须为空（首次安装）还是持有已安装用户插件。
 #[allow(clippy::too_many_arguments)]
 fn reserve_update(
     runtime: &VulcanPluginRuntimeManager,
     configuration: &vulcan_provider_config::config::PersistedLuaSkillsConfiguration,
+    request: LocalPluginPackageRequest,
     source: &Path,
     fingerprint: &str,
     mut permissions: Vec<String>,
@@ -865,71 +896,60 @@ fn reserve_update(
         .inspect_local_user_plugin(source)
         .map_err(|error| error.to_string())?;
     if preview.content_fingerprint != fingerprint {
-        return Err(String::from("本地插件包在更新授权检查后发生了变化。"));
+        return Err(String::from("本地插件包在授权检查后发生了变化。"));
     }
     permissions.sort();
     if permissions.windows(2).any(|pair| pair[0] == pair[1]) || permissions != preview.permissions {
-        return Err(String::from("更新必须精确批准候选声明的完整权限集合。"));
+        return Err(String::from("必须精确批准候选声明的完整权限集合。"));
     }
+    let plugin_id = preview.plugin_id.clone();
+    // Freeze only this plugin's exact original override membership.
+    // 仅固定此插件的精确原覆盖成员关系。
+    let explicitly_enabled = configuration.enabled_vulcan_plugins.contains(&plugin_id);
+    let explicitly_disabled = configuration.disabled_vulcan_plugins.contains(&plugin_id);
     // Snapshot ownership keeps the predecessor independent from later directory observations.
     // 快照所有权使前驱独立于后续目录观测。
-    let predecessor = runtime
-        .snapshot()
-        .plugins
-        .get(&preview.plugin_id)
-        .cloned()
-        .ok_or_else(|| format!("用户插件 `{}` 尚未安装。", preview.plugin_id))?;
-    if predecessor.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled {
-        return Err(String::from("内置插件不能通过本地用户更新入口替换。"));
+    let existing = runtime.snapshot().plugins.get(&plugin_id).cloned();
+    if existing.as_ref().is_some_and(|plugin| {
+        plugin.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled
+    }) {
+        return Err(String::from("内置插件不能通过本地用户插件包安装或替换。"));
     }
-    if !matches!(
-        predecessor.runtime_state,
-        VulcanPluginRuntimeState::Enabled | VulcanPluginRuntimeState::Disabled
-    ) || (predecessor.runtime_state == VulcanPluginRuntimeState::Disabled
-        && (runtime
-            .active_session_count(&predecessor.id)
-            .map_err(|error| error.to_string())?
-            != 0
-            || runtime
-                .has_cleanup_diagnostics(&predecessor.id)
-                .map_err(|error| error.to_string())?))
-        || (predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
-            && !predecessor.desired_enabled)
-    {
-        return Err(String::from(
-            "更新前驱必须为稳定启用状态，或已完全排空的停用状态。",
-        ));
-    }
-    // Freeze only this plugin's exact original override membership and manifest baseline.
-    // 仅固定此插件的精确原覆盖成员关系及清单基线。
-    let update_policy = VulcanPluginUpdatePolicy {
-        explicitly_enabled: configuration
-            .enabled_vulcan_plugins
-            .contains(&predecessor.id),
-        explicitly_disabled: configuration
-            .disabled_vulcan_plugins
-            .contains(&predecessor.id),
-        predecessor_default_enabled: predecessor
-            .manifest
-            .as_ref()
-            .ok_or("原插件缺少有效清单。")?
-            .default_enabled,
+    let (predecessor, update_policy) = match (request, existing) {
+        (LocalPluginPackageRequest::Install, Some(_)) => {
+            return Err(format!("用户插件 `{plugin_id}` 已安装，请改用更新。"));
+        }
+        (LocalPluginPackageRequest::Update, None) => {
+            return Err(format!("用户插件 `{plugin_id}` 尚未安装。"));
+        }
+        (LocalPluginPackageRequest::Install, None) => {
+            // A first install is always published disabled for review; a leftover explicit enable cannot be honoured.
+            // 首次安装总是发布为停用以供复核；残留的显式启用无法兑现。
+            if explicitly_enabled {
+                return Err(format!(
+                    "用户配置仍将插件 `{plugin_id}` 列为启用；首次安装只能发布为停用，请先从启用列表中移除该插件。"
+                ));
+            }
+            let policy = VulcanPluginUpdatePolicy {
+                explicitly_enabled,
+                explicitly_disabled,
+                predecessor_default_enabled: false,
+            };
+            (None, policy)
+        }
+        (LocalPluginPackageRequest::Update, Some(predecessor)) => {
+            let policy = validate_update_predecessor(
+                runtime,
+                &predecessor,
+                explicitly_enabled,
+                explicitly_disabled,
+            )?;
+            if predecessor.content_fingerprint == fingerprint {
+                return Err(String::from("更新候选与已安装插件内容相同。"));
+            }
+            (Some(predecessor), policy)
+        }
     };
-    if update_policy.desired_enabled() != predecessor.desired_enabled {
-        return Err(String::from(
-            "插件用户策略与当前运行时快照不一致，请先刷新后再更新。",
-        ));
-    }
-    // Legacy enabled packages lack immutable old selection authority; reject before creating any store or intent.
-    // 旧格式启用包缺少不可变旧选择权威；在创建任何存储或意图前拒绝。
-    if predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
-        && predecessor.managed_package().is_none()
-    {
-        return Err(String::from(ENABLED_PREDECESSOR_RESTORATION_REQUIRED));
-    }
-    if predecessor.content_fingerprint == fingerprint {
-        return Err(String::from("更新候选与已安装插件内容相同。"));
-    }
     // Explicit local installation inputs are checked before secure-store mutation.
     // 在安全存储变更之前检查明确的本地安装输入。
     let supplied = validate_initial_plugin_mcp_secrets(&preview, initial_secrets)?;
@@ -939,15 +959,21 @@ fn reserve_update(
     let manifest = source_package
         .manifest
         .as_ref()
-        .ok_or("更新候选缺少有效清单。")?;
+        .ok_or("候选插件包缺少有效清单。")?;
     if source_package.content_fingerprint != fingerprint {
-        return Err(String::from("更新候选在权限校验期间发生了变化。"));
+        return Err(String::from("候选插件包在权限校验期间发生了变化。"));
     }
     if manifest.execution.dependencies.install_mode
         == vulcan_plugin_runtime::VulcanPluginDependencyInstallMode::Registry
         && !allow_registry_dependencies
     {
-        return Err(String::from("更新候选需要明确批准网络依赖安装。"));
+        return Err(String::from("候选插件包需要明确批准网络依赖安装。"));
+    }
+    // The host-selected user root is created by the first install, never by read-only queries.
+    // 宿主选定的用户根目录由首次安装创建，绝不由只读查询创建。
+    if request == LocalPluginPackageRequest::Install {
+        std::fs::create_dir_all(runtime.user_plugin_root())
+            .map_err(|error| format!("创建用户插件目录失败：{error}"))?;
     }
     // Store preparation uses immutable unique paths and cannot replace the currently selected package.
     // 存储准备使用不可变唯一路径，不能替换当前所选插件包。
@@ -956,13 +982,13 @@ fn reserve_update(
     // Refuse a second preparation before allocating more candidate packages or secure entries.
     // 在分配更多候选插件包或安全条目之前，拒绝第二次准备。
     for pending_id in store
-        .activation_transaction_ids(&predecessor.id)
+        .activation_transaction_ids(&plugin_id)
         .map_err(|error| error.to_string())?
     {
         // Inspection never selects a replacement authority or starts recovery.
         // 检查绝不选择替代权威或启动恢复。
         let record = store
-            .activation_request(&predecessor.id, pending_id)
+            .activation_request(&plugin_id, pending_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| String::from("原更新记录在检查期间消失。"))?;
         if !matches!(
@@ -978,20 +1004,27 @@ fn reserve_update(
     // Compare the full original selection before allocating or copying any new credential authority.
     // 分配或复制任何新凭据权威之前，比较完整原选择。
     let selected = store
-        .activation(&predecessor.id)
+        .activation(&plugin_id)
         .map_err(|error| error.to_string())?;
-    if !match (predecessor.managed_package(), selected.as_ref()) {
-        (None, None) => true,
-        (Some(package), Some(activation)) => package.matches_activation(activation),
+    if !match (
+        predecessor
+            .as_ref()
+            .map(VulcanPluginDescriptor::managed_package),
+        selected.as_ref(),
+    ) {
+        (None | Some(None), None) => true,
+        (Some(Some(package)), Some(activation)) => package.matches_activation(activation),
         _ => false,
     } {
         return Err(String::from(
-            "插件持久选择与当前目录不一致，请先刷新并核对原更新请求。",
+            "插件持久选择与当前目录不一致，请先刷新并核对原请求。",
         ));
     }
     // Historical managed selections may predate full configuration or credential revisions.
     // 历史受管选择可能早于完整配置或凭据修订。
-    validate_enabled_predecessor_restoration_selection(&predecessor, selected.as_ref())?;
+    if let Some(predecessor) = predecessor.as_ref() {
+        validate_enabled_predecessor_restoration_selection(predecessor, selected.as_ref())?;
+    }
     // Persist the original request and both physical resource identities before copying or secure-store writes.
     // 复制或安全存储写入之前，持久保存原请求及两个物理资源身份。
     let reservation = store
@@ -1015,6 +1048,60 @@ fn reserve_update(
     })
 }
 
+/// Check that an installed `predecessor` is in a stable state an update may replace, and freeze its user policy.
+/// 检查已安装 `predecessor` 处于更新可替换的稳定状态，并固定其用户策略。
+/// The two flags are this plugin's current override membership; returns the frozen policy or a pre-effect conflict.
+/// 两个标志为此插件当前覆盖成员关系；返回固定策略或副作用前冲突。
+fn validate_update_predecessor(
+    runtime: &VulcanPluginRuntimeManager,
+    predecessor: &VulcanPluginDescriptor,
+    explicitly_enabled: bool,
+    explicitly_disabled: bool,
+) -> Result<VulcanPluginUpdatePolicy, String> {
+    if !matches!(
+        predecessor.runtime_state,
+        VulcanPluginRuntimeState::Enabled | VulcanPluginRuntimeState::Disabled
+    ) || (predecessor.runtime_state == VulcanPluginRuntimeState::Disabled
+        && (runtime
+            .active_session_count(&predecessor.id)
+            .map_err(|error| error.to_string())?
+            != 0
+            || runtime
+                .has_cleanup_diagnostics(&predecessor.id)
+                .map_err(|error| error.to_string())?))
+        || (predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
+            && !predecessor.desired_enabled)
+    {
+        return Err(String::from(
+            "更新前驱必须为稳定启用状态，或已完全排空的停用状态。",
+        ));
+    }
+    // The predecessor manifest fixes the default baseline across later candidate default changes.
+    // 前驱清单固定默认基线，跨后续候选默认值变化保持不变。
+    let update_policy = VulcanPluginUpdatePolicy {
+        explicitly_enabled,
+        explicitly_disabled,
+        predecessor_default_enabled: predecessor
+            .manifest
+            .as_ref()
+            .ok_or("原插件缺少有效清单。")?
+            .default_enabled,
+    };
+    if update_policy.desired_enabled() != predecessor.desired_enabled {
+        return Err(String::from(
+            "插件用户策略与当前运行时快照不一致，请先刷新后再更新。",
+        ));
+    }
+    // Enabled packages without an immutable old selection cannot be restored; reject before any store or intent.
+    // 缺少不可变旧选择的启用包无法恢复；在创建任何存储或意图前拒绝。
+    if predecessor.runtime_state == VulcanPluginRuntimeState::Enabled
+        && predecessor.managed_package().is_none()
+    {
+        return Err(String::from(ENABLED_PREDECESSOR_RESTORATION_REQUIRED));
+    }
+    Ok(update_policy)
+}
+
 /// Materialize the same borrowed early pipeline for existing internal fixtures.
 /// 为既有内部夹具物化相同借用式早期流水线。
 /// Production registers before publication; this helper supplies no production owner.
@@ -1036,6 +1123,7 @@ fn prepare_update(
     let reserved = reserve_update(
         runtime,
         configuration,
+        LocalPluginPackageRequest::Update,
         source,
         fingerprint,
         permissions,
@@ -1305,6 +1393,59 @@ pub(super) async fn update(
     allow_registry_dependencies: bool,
     initial_secrets: Vec<VulcanPluginInitialSecretInput>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
+    apply_local_package(
+        app,
+        state,
+        LocalPluginPackageRequest::Update,
+        source_path,
+        fingerprint,
+        permissions,
+        allow_registry_dependencies,
+        initial_secrets,
+    )
+    .await
+}
+
+/// Install one approved local plugin through the same generation transaction with no predecessor.
+/// 经相同代次交易安装单个已批准本地插件，前驱为空。
+/// The committed generation is published disabled; an interrupted install is inspected, resumed or aborted through
+/// the update request RPCs under its original request ID.
+/// 已提交代次发布为停用；中断的安装按原请求 ID 经更新请求 RPC 检查、继续或中止。
+pub(super) async fn install(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    source_path: String,
+    fingerprint: String,
+    permissions: Vec<String>,
+    allow_registry_dependencies: bool,
+    initial_secrets: Vec<VulcanPluginInitialSecretInput>,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    apply_local_package(
+        app,
+        state,
+        LocalPluginPackageRequest::Install,
+        source_path,
+        fingerprint,
+        permissions,
+        allow_registry_dependencies,
+        initial_secrets,
+    )
+    .await
+}
+
+/// Reserve, prepare and continue one approved local package `request` under a freshly allocated request ID.
+/// 在新分配的请求 ID 下预留、准备并继续单个已批准本地插件包 `request`。
+#[allow(clippy::too_many_arguments)]
+async fn apply_local_package(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    request: LocalPluginPackageRequest,
+    source_path: String,
+    fingerprint: String,
+    permissions: Vec<String>,
+    allow_registry_dependencies: bool,
+    initial_secrets: Vec<VulcanPluginInitialSecretInput>,
+) -> Result<LuaSkillsCatalogUpdate, String> {
     {
         // A new update is an ordinary writer until it owns its explicit request, so reject pinned Full before effects.
         // 新更新在拥有其明确请求前属于普通写入器，因此副作用前拒绝固定 Full。
@@ -1347,6 +1488,7 @@ pub(super) async fn update(
                 let reserved = reserve_update(
                     &preparing_runtime,
                     &original_configuration.luaskills,
+                    request,
                     Path::new(&source_path),
                     &fingerprint,
                     permissions,
@@ -1365,7 +1507,11 @@ pub(super) async fn update(
         continue_prepared_update(app, state, &registry, &owner).await
     }
     .await;
-    result.map_err(|error| format!("插件更新请求 `{request_id}` 返回错误：{error}。请检查原请求；不会自动重放安装或回滚已提交选择。"))
+    let operation = match request {
+        LocalPluginPackageRequest::Install => "安装",
+        LocalPluginPackageRequest::Update => "更新",
+    };
+    result.map_err(|error| format!("插件{operation}请求 `{request_id}` 返回错误：{error}。请检查原请求；不会自动重放安装或回滚已提交选择。"))
 }
 
 /// Continue the original configured request once, using the first retained runtime and actual candidate gates.
@@ -1407,26 +1553,30 @@ async fn continue_prepared_update(
         return target_handoff::continue_enabled_update(app, state, registry, owner, current_mcp)
             .await;
     }
-    // Close starts before observing originals, including unpublished or removed owner instances.
-    // 观察原实例前关闭启动，包括尚未发布或已经移除的所有者实例。
-    current_mcp.begin_plugin_mcp_drain(&plugin_id)?;
-    current_mcp
-        .wait_plugin_mcp_drain(
-            &plugin_id,
-            AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
-        )
-        .await?;
-    // Prove original Lua calls and sessions retired before admitting candidate installation effects.
-    // 在接纳候选安装副作用之前，证明原 Lua 调用及会话已经退役。
-    let drained = runtime
-        .drain_plugin_sessions(&plugin_id)
-        .await
-        .map_err(|error| error.to_string())?;
-    if !drained.failures.is_empty() {
-        return Err(format!(
-            "原插件仍有未退役资源：{}",
-            drained.failures.join("；")
-        ));
+    // A first install has no original routes, MCP servers or Lua sessions to retire.
+    // 首次安装没有需要退役的原路由、MCP 服务器或 Lua 会话。
+    if resources.prepared()?.predecessor.is_some() {
+        // Close starts before observing originals, including unpublished or removed owner instances.
+        // 观察原实例前关闭启动，包括尚未发布或已经移除的所有者实例。
+        current_mcp.begin_plugin_mcp_drain(&plugin_id)?;
+        current_mcp
+            .wait_plugin_mcp_drain(
+                &plugin_id,
+                AgentRuntimeBridge::RETIRED_MCP_PARTITION_DRAIN_TIMEOUT,
+            )
+            .await?;
+        // Prove original Lua calls and sessions retired before admitting candidate installation effects.
+        // 在接纳候选安装副作用之前，证明原 Lua 调用及会话已经退役。
+        let drained = runtime
+            .drain_plugin_sessions(&plugin_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !drained.failures.is_empty() {
+            return Err(format!(
+                "原插件仍有未退役资源：{}",
+                drained.failures.join("；")
+            ));
+        }
     }
     persist_update_policy(state, resources.prepared()?).await?;
     // The retained blocking worker needs the same slot, so release only this borrow before waiting.

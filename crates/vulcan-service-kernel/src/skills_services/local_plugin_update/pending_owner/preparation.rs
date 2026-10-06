@@ -27,9 +27,9 @@ pub(in crate::skills_services::local_plugin_update) struct ReservedLocalPluginUp
     /// The original canonical store remains the sole durable authority.
     /// 原规范存储保持为唯一持久权威。
     pub(in crate::skills_services::local_plugin_update) store: VulcanPluginGenerationStore,
-    /// Frozen original descriptor supplies exact configuration and credential declarations.
-    /// 固定原描述符提供精确配置及凭据声明。
-    pub(in crate::skills_services::local_plugin_update) predecessor: VulcanPluginDescriptor,
+    /// Frozen original descriptor supplies exact configuration and credential declarations; None is a first install.
+    /// 固定原描述符提供精确配置及凭据声明；空值表示首次安装。
+    pub(in crate::skills_services::local_plugin_update) predecessor: Option<VulcanPluginDescriptor>,
     /// Non-cloneable actual files remain retained before and after uncertain first writes.
     /// 不可克隆实际文件在不确定首次写入之前及之后均保持保留。
     pub(in crate::skills_services::local_plugin_update) reservation:
@@ -45,9 +45,9 @@ pub(in crate::skills_services::local_plugin_update) struct PreparingLocalPluginU
     /// Store binding is copied as access only; physical file authority stays in preparation.
     /// 存储绑定仅复制访问；物理文件权威保持于 preparation。
     pub(in crate::skills_services::local_plugin_update) store: VulcanPluginGenerationStore,
-    /// The first descriptor remains the unique old authority.
-    /// 首个描述符保持为唯一旧权威。
-    pub(in crate::skills_services::local_plugin_update) predecessor: VulcanPluginDescriptor,
+    /// The first descriptor remains the unique old authority; None is a first install.
+    /// 首个描述符保持为唯一旧权威；空值表示首次安装。
+    pub(in crate::skills_services::local_plugin_update) predecessor: Option<VulcanPluginDescriptor>,
     /// This original request File is never moved into a worker or replaced through disk resumption.
     /// 此原请求 File 绝不移入工作者或通过磁盘恢复替换。
     pub(in crate::skills_services::local_plugin_update) preparation:
@@ -240,7 +240,7 @@ pub(in crate::skills_services::local_plugin_update) fn recover_preparation_with_
     let record = preparing
         .store
         .activation_request(
-            &preparing.predecessor.id,
+            &preparing.preparation.intent().generation().plugin_id,
             preparing.preparation.request_id(),
         )
         .map_err(|error| error.to_string())?
@@ -285,7 +285,7 @@ fn freeze_inputs(resources: &mut PendingLocalPluginUpdateResources) -> Result<()
         resources.configuration = Some(
             resources
                 .runtime
-                .configuration_for_update(generation, &preparing.predecessor)
+                .configuration_for_update(generation, preparing.predecessor.as_ref())
                 .map_err(|error| error.to_string())?,
         );
     }
@@ -308,8 +308,11 @@ fn freeze_inputs(resources: &mut PendingLocalPluginUpdateResources) -> Result<()
                     .get(&(key.server_id.clone(), key.secret_key.clone()))
                 {
                     Some(value.clone())
-                } else if let Some(previous_server) =
-                    preparing.predecessor.mcp_servers.iter().find(|previous| {
+                } else if let Some(previous_server) = preparing
+                    .predecessor
+                    .iter()
+                    .flat_map(|predecessor| &predecessor.mcp_servers)
+                    .find(|previous| {
                         previous.id == server.id
                             && previous
                                 .manifest
@@ -318,7 +321,7 @@ fn freeze_inputs(resources: &mut PendingLocalPluginUpdateResources) -> Result<()
                     })
                 {
                     secrets.read_selected_optional_secret(
-                        &preparing.predecessor.id,
+                        &preparing.preparation.intent().generation().plugin_id,
                         &key.server_id,
                         &key.secret_key,
                         &previous_server.credential_binding,
@@ -526,7 +529,7 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
             let record = preparing
                 .store
                 .activation_request(
-                    &preparing.predecessor.id,
+                    &preparing.preparation.intent().generation().plugin_id,
                     preparing.preparation.request_id(),
                 )
                 .map_err(|error| error.to_string())?
@@ -582,7 +585,12 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
     }
     // Parent terminal history, original request File and the real revision lock jointly fence cleanup retry.
     // 父终态历史、原请求 File 及真实修订锁共同约束清理重试。
-    let plugin_id = &preparing.predecessor.id;
+    let plugin_id = preparing
+        .preparation
+        .intent()
+        .generation()
+        .plugin_id
+        .clone();
     // Reconfirm the complete actual terminal owner before any subsequent destructive backend or package operation.
     // 任何随后破坏性后端或插件包操作之前，重新确认完整实际终态所有者。
     let original = preparing
@@ -595,7 +603,7 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
     let revision = preparing.preparation.intent().credential_revision();
     let actual = preparing
         .store
-        .credential_record(plugin_id, revision)
+        .credential_record(&plugin_id, revision)
         .map_err(|error| error.to_string())?;
     match (&resources.inventory, actual) {
         (None, None) => {
@@ -611,20 +619,20 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
                 | VulcanPluginCredentialPhase::Discarding => {
                     preparing
                         .store
-                        .discard_credential_staging(plugin_id, revision, backend)
+                        .discard_credential_staging(&plugin_id, revision, backend)
                         .map_err(|error| error.to_string())?;
                 }
                 VulcanPluginCredentialPhase::Staged => {
                     preparing
                         .store
-                        .collect_credentials(plugin_id, revision, backend)
+                        .collect_credentials(&plugin_id, revision, backend)
                         .map_err(|error| error.to_string())?;
                 }
                 VulcanPluginCredentialPhase::Discarded => {}
             }
             let discarded = preparing
                 .store
-                .credential_record(plugin_id, revision)
+                .credential_record(&plugin_id, revision)
                 .map_err(|error| error.to_string())?
                 .ok_or("原清理清单消失。")?;
             if !same_inventory(original, &discarded)
@@ -675,7 +683,7 @@ pub(super) fn confirm_abandoned_retirement(
         || preparing
             .store
             .activation_request(
-                &preparing.predecessor.id,
+                &preparing.preparation.intent().generation().plugin_id,
                 preparing.preparation.request_id(),
             )
             .map_err(|error| error.to_string())?
@@ -687,7 +695,7 @@ pub(super) fn confirm_abandoned_retirement(
     let actual = preparing
         .store
         .credential_record(
-            &preparing.predecessor.id,
+            &preparing.preparation.intent().generation().plugin_id,
             preparing.preparation.intent().credential_revision(),
         )
         .map_err(|error| error.to_string())?;

@@ -263,7 +263,7 @@ pub(super) async fn continue_enabled_update(
         // 实际原请求将固定描述符与完整不可变旧选择配对。
         let prepared = resources.prepared()?;
         validate_enabled_predecessor_restoration_selection(
-            &prepared.predecessor,
+            prepared.enabled_predecessor()?,
             prepared.transaction.record().predecessor(),
         )?;
     }
@@ -287,7 +287,7 @@ pub(super) async fn continue_enabled_update(
     let expected = runtime.snapshot();
     // The first preparation's descriptor must still identify this exact old route.
     // 首次准备描述符必须仍标识此精确旧路由。
-    let predecessor = &resources.prepared()?.predecessor;
+    let predecessor = resources.prepared()?.enabled_predecessor()?;
     if !expected
         .plugins
         .get(&owner.plugin_id)

@@ -267,8 +267,6 @@ mod tests {
         assert!(methods.contains("service_delete_plugin_mcp_secret"));
         assert!(methods.contains("service_plugin_mcp_secret_mutation_requests"));
         assert!(methods.contains("service_recover_plugin_mcp_secret_mutation"));
-        assert!(methods.contains("service_local_plugin_install_requests"));
-        assert!(methods.contains("service_recover_local_plugin_install"));
         assert!(methods.contains("workspace.diff.snapshot"));
         assert!(methods.contains("workspace.git.catalog"));
         assert!(methods.contains("workspace.git.setMonitoring"));

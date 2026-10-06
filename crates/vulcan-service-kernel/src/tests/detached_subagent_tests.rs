@@ -179,7 +179,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         service_lifecycle_state: crate::state::ServiceLifecycleState::default(),
         pending_local_plugin_updates: Arc::new(Default::default()),
         pending_legacy_secret_mutations: Arc::new(Default::default()),
-        pending_local_plugin_installs: Arc::new(Default::default()),
         // Actual original removal resources survive executor failures.
         // 实际原移除资源跨执行器失败存续。
         pending_local_plugin_uninstalls: Arc::new(Default::default()),

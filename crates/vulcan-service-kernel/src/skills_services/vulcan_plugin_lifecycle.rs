@@ -153,15 +153,6 @@ pub(super) fn publish_native_published_plugin_extension_generation(
         .map_err(|error| format!("锁定服务状态失败：{error}"))?;
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
     crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
-    // Ordinary native publication cannot admit another installation's private manager descriptor.
-    // 普通原生发布不能准入另一安装的私有管理器描述符。
-    let current_catalog = guard
-        .agent_runtime
-        .as_ref()
-        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
-    guard
-        .pending_local_plugin_installs
-        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
     // This actual bridge contains the sole full slot consumed by new executions.
     // 此实际桥包含新执行消费的唯一完整槽。
     let bridge = guard
@@ -1821,9 +1812,6 @@ pub(super) fn publish_credential_extension_generation(
         .agent_runtime
         .as_ref()
         .and_then(|runtime| runtime.extension_generation.plugin_catalog());
-    guard
-        .pending_local_plugin_installs
-        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
     // The committed edit changes only credentials, so routing must be the one the candidate started against.
     // 已提交编辑只改变凭据，因此路由必须是候选启动时所针对的路由。
     let committed = catalog.plugins.get(plugin_id).ok_or_else(|| {
@@ -1899,15 +1887,6 @@ pub(super) fn publish_extension_generation_with_current_mcp(
     // 在替换扩展指针的同一锁内检查关闭准入。
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
     crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
-    // Generic lifecycle publication preserves every retained original's actual full visibility and generation.
-    // 通用生命周期发布保留每个保留原实例的实际完整可见性及代次。
-    let current_catalog = guard
-        .agent_runtime
-        .as_ref()
-        .and_then(|runtime| runtime.extension_generation.plugin_catalog());
-    guard
-        .pending_local_plugin_installs
-        .require_catalog_publication(current_catalog.as_deref(), &catalog)?;
     // This bridge owns the single extension pointer consumed by new executions.
     // 本桥持有新执行消费的唯一扩展指针。
     let agent_runtime = guard

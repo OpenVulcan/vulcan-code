@@ -62,7 +62,7 @@ export function PluginMaintenancePage(props: PluginMaintenancePageProps) {
       {/* 已访问面板隐藏时保持挂载，使未确认状态在切换后保留。 */}
       <PageTabPanel active={tab === "recovery"}>
         <RecoveryMaintenanceSection actions={props.actions} conversations={props.conversations} gate={gate}
-          kinds={["update", "installation", "credential", "uninstall"]}
+          kinds={["update", "credential", "uninstall"]}
           onLocate={(kind, pluginId, requestId) => setSelection({ kind, pluginId, requestId })}
           onSelectPluginResourceOwner={props.onSelectPluginResourceOwner} onUninstallConfirmed={() => undefined}
           pluginName={pluginName} plugins={props.plugins} uninstallUncertainty={null} />

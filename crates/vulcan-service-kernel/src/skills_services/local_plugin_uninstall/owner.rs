@@ -396,9 +396,6 @@ pub(super) fn reserve(
     let service = state.lock().map_err(|error| error.to_string())?;
     crate::service_state_access::require_plugin_publication_shutdown_admission(&service)?;
     crate::service_state_access::require_plugin_update_full_publication_admission(&service, None)?;
-    service
-        .pending_local_plugin_installs
-        .require_no_original(plugin)?;
     // The actual bridge supplies manager, original policy and original Full together.
     // 实际桥共同提供管理器、原策略及原完整代次。
     let bridge = service

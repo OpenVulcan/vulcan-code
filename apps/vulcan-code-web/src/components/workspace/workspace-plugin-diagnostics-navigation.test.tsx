@@ -31,7 +31,7 @@ const actions = { onPluginEnvironmentReady: async () => true, onPluginEnvironmen
   // 更新按插件读取，因此只有未列出的所有者报告其保留原实例。
   onReadLocalPluginUpdates: vi.fn(async (pluginId: string) => pluginId !== "hidden-plugin" ? [] : [{ pluginId, requestId: "original-update", phase: "published",
     candidate: { version: "3.0.0" }, installation: "succeeded", effects: [], hasServiceOwner: false }]),
-  onReadPluginInstallRequests: vi.fn().mockResolvedValue([]), onReadPluginSecretMutations: vi.fn().mockResolvedValue([]),
+  onReadPluginSecretMutations: vi.fn().mockResolvedValue([]),
   onResumeLocalPluginUpdate: vi.fn(), onAbortLocalPluginUpdate: vi.fn(), onResumePluginUninstallRequest: vi.fn(),
 } as unknown as SkillActionProps;
 // host owns the actual lazy workspace management DOM.

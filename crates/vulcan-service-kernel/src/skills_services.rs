@@ -6,14 +6,11 @@ use vulcan_luaskills_config::LuaSkillsRuntimeSettings;
 use vulcan_service_api::{LuaSkillsManagedRuntimeProgressSummary, ProjectSettingsDomain};
 
 mod legacy_secret_owner;
-mod local_plugin_install;
 mod local_plugin_uninstall;
 mod local_plugin_update;
 mod plugin_credentials;
 pub(crate) use legacy_secret_owner::LegacySecretMutationRegistry;
 use legacy_secret_owner::{LegacySecretMutationPhase, LegacySecretMutationStatus};
-use local_plugin_install::LocalPluginInstallStatus;
-pub(crate) use local_plugin_install::PendingLocalPluginInstallRegistry;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallDrainDiagnostics;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
 pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
@@ -322,9 +319,6 @@ pub(crate) async fn service_refresh_luaskills_catalog(
             crate::service_state_access::require_plugin_update_full_publication_admission(
                 &guard, None,
             )?;
-            guard
-                .pending_local_plugin_installs
-                .require_catalog_refresh()?;
         }
         let handle = service_luaskills_handle(&state)?;
         let provider_configuration = provider_configuration_from_state(&state)?;
@@ -1382,7 +1376,7 @@ pub(crate) async fn service_install_local_plugin(
     initial_secrets: Vec<VulcanPluginInitialSecretInput>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     run_luaskills_management_owned("install local plugin", move || async move {
-        local_plugin_install::install(
+        local_plugin_update::install(
             &app,
             &state,
             source_path,
@@ -1390,51 +1384,6 @@ pub(crate) async fn service_install_local_plugin(
             approved_permissions,
             allow_registry_dependencies,
             initial_secrets,
-        )
-        .await
-    })
-    .await
-}
-
-/// Read sanitized original first-install requests even when package discovery is absent.
-/// 即使插件包发现结果缺失，亦读取脱敏原首次安装请求。
-/// state supplies the actual strong registry and plugin_id selects exact immutable originals; returns identities and phases.
-/// state 提供实际强注册表，plugin_id 选择精确不可变原实例；返回身份及阶段。
-pub(crate) fn service_local_plugin_install_requests(
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-) -> Result<Vec<LocalPluginInstallStatus>, String> {
-    // Clone the actual registry without awaiting or borrowing secret resources under service ownership.
-    // 克隆实际注册表，不在服务所有权下等待或借用秘密资源。
-    let registry = Arc::clone(
-        &state
-            .lock()
-            .map_err(|error| error.to_string())?
-            .pending_local_plugin_installs,
-    );
-    registry.list(&plugin_id)
-}
-
-/// Recover one retained initial installation by UUID, without replaying package, native or Install work.
-/// 按 UUID 恢复单个保留初始安装，不重放插件包、原生或安装工作。
-/// app/state supply publication projection; acknowledgement applies only to retired failed external compensation.
-/// app 及 state 提供发布投影；确认仅适用于已退役失败外部补偿。
-/// Returns after exact original rollback or committed reprojection and original registry retirement.
-/// 精确原回滚或已提交重新投影及原注册表退役后返回。
-pub(crate) async fn service_recover_local_plugin_install(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    plugin_id: String,
-    request_id: uuid::Uuid,
-    acknowledge_external_effects: bool,
-) -> Result<(), String> {
-    run_luaskills_management_owned("recover original local installation", move || async move {
-        local_plugin_install::recover(
-            &app,
-            &state,
-            &plugin_id,
-            request_id,
-            acknowledge_external_effects,
         )
         .await
     })
@@ -2023,9 +1972,6 @@ pub(crate) async fn service_set_vulcan_plugin_enabled(
             crate::service_state_access::require_plugin_update_full_publication_admission(
                 &guard, None,
             )?;
-            guard
-                .pending_local_plugin_installs
-                .require_no_original(plugin_id.trim())?;
         }
         // update is emitted here so the lifecycle module remains a pure transaction without a second publisher.
         // update 在此发送，使生命周期模块保持为不包含第二发布出口的纯事务。

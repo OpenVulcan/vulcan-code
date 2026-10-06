@@ -43,6 +43,7 @@ fn reserve(
         &provider_configuration_from_state(&harness.fixture.state)
             .expect("original configuration")
             .luaskills,
+        LocalPluginPackageRequest::Update,
         &source,
         &preview.content_fingerprint,
         preview.permissions,

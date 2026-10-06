@@ -59,12 +59,6 @@ export interface SkillActionProps extends McpSettingsActionProps {
   // Abandons the original unpublished request after explicit external-effect acknowledgement.
   // 明确确认外部副作用后，放弃原尚未发布请求。
   onAbortLocalPluginUpdate: typeof import("@/service/plugin-update-service").abortLocalPluginUpdate
-  // Reads actual retained installation originals, including unpublished plugin identities.
-  // 读取实际保留安装原实例，包括尚未发布插件身份。
-  onReadPluginInstallRequests: typeof import("@/service/plugin-install-recovery-service").readPluginInstallRequests
-  // Recovers the exact installation UUID; acknowledgement never bypasses physical retirement.
-  // 恢复精确安装 UUID；确认绝不绕过物理退役。
-  onRecoverPluginInstallRequest: typeof import("@/service/plugin-install-recovery-service").recoverPluginInstallRequest
   // Reads non-secret original credential mutation identities and phases.
   // 读取无秘密原凭据变更身份及阶段。
   onReadPluginSecretMutations: typeof import("@/service/plugin-secret-recovery-service").readPluginSecretMutations
