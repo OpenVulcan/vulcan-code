@@ -3,6 +3,7 @@ import {
   classifyConversationObservedScrollMovement,
   conversationResizeCorrectionMode,
   conversationResizeOwnershipDecision,
+  conversationTailReserveHeight,
   reconcileConversationNativeScrollClamp,
 } from "./conversation-scroll-controller";
 
@@ -95,5 +96,26 @@ describe("conversation scroll ownership ledger", () => {
       adoptedTail: false,
       correctionMode: "none",
     });
+  });
+});
+
+describe("followed tail reserve", () => {
+  // A collapse keeps the previous total height, so the followed tail stays put instead of jumping back.
+  // 折叠保留之前的总高度，使跟随中的尾部保持不动而不是回跳。
+  it("absorbs shrinkage below the highest height reached", () => {
+    expect(conversationTailReserveHeight(2000, 1800, 400)).toBe(200);
+  });
+
+  // Regrowth consumes the reserve first, so expanding again does not push the tail either.
+  // 重新增长先消耗预留，因此再次展开也不会推动尾部。
+  it("releases the reserve as content grows back", () => {
+    expect(conversationTailReserveHeight(2000, 1950, 400)).toBe(50);
+    expect(conversationTailReserveHeight(2000, 2400, 400)).toBe(0);
+  });
+
+  // A collapse of dozens of tool calls must not leave the viewport mostly blank.
+  // 一次折叠数十个工具调用不得让视口大部分变成空白。
+  it("never exceeds the cap", () => {
+    expect(conversationTailReserveHeight(9000, 1000, 400)).toBe(400);
   });
 });

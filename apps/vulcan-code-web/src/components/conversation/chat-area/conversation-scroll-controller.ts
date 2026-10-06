@@ -66,6 +66,25 @@ export interface ConversationScrollController {
 // CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX 让被定位锚点略低于滚动视口顶部边缘。
 export const CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX = 16;
 
+// CONVERSATION_TAIL_RESERVE_MAX_SHARE caps the blank tail reserve at two fifths of the visible transcript
+// area, so at least three fifths keep showing content after a large collapse.
+// CONVERSATION_TAIL_RESERVE_MAX_SHARE 将空白尾部预留限制为可见转录区域的五分之二，使大幅折叠后至少五分之三
+// 仍显示内容。
+export const CONVERSATION_TAIL_RESERVE_MAX_SHARE = 0.4;
+
+// conversationTailReserveHeight lets a followed transcript only extend downward: shrinkage below the
+// highest content height reached is absorbed by blank reserve, up to the cap.
+// conversationTailReserveHeight 让跟随中的转录只向下延伸：低于已达到最高内容高度的收缩由空白预留吸收，
+// 但不超过上限。
+// Parameters: floor is the highest total (content plus reserve) kept so far, contentHeight is the
+// current transcript height, and cap is the largest allowed reserve.
+// 参数：floor 是目前保留的最高总高度（内容加预留），contentHeight 是当前转录高度，cap 是允许的最大预留。
+// Returns: the reserve height in CSS pixels.
+// 返回值：以 CSS 像素表示的预留高度。
+export function conversationTailReserveHeight(floor: number, contentHeight: number, cap: number): number {
+  return Math.max(0, Math.min(cap, floor - contentHeight));
+}
+
 // ProgrammaticScrollTarget describes one in-flight native scroll operation owned by the controller.
 // ProgrammaticScrollTarget 描述一个由控制器拥有的进行中原生滚动操作。
 interface ProgrammaticScrollTarget {
@@ -235,6 +254,48 @@ export function useConversationScrollController(
   // latestOptionsRef 向稳定原生与观察器处理器暴露当前回调。
   const latestOptionsRef = React.useRef(options);
   latestOptionsRef.current = options;
+  // tailFloorRef is the highest transcript-plus-reserve height kept while the tail is followed.
+  // tailFloorRef 是跟随尾部期间保留的最高“转录加预留”高度。
+  const tailFloorRef = React.useRef(0);
+
+  // reconcileTailReserve keeps a followed tail from jumping back when the transcript shrinks.
+  // reconcileTailReserve 防止跟随中的尾部在转录收缩时回跳。
+  // While following, shrinkage is absorbed by blank reserve up to the cap; once the reader owns the
+  // viewport, the reserve only shrinks to the part still on screen, so nothing visible moves and it
+  // disappears as the reader scrolls up.
+  // 跟随期间，收缩由空白预留吸收且不超过上限；阅读者接管视口后，预留只缩小到仍在屏幕上的部分，
+  // 因此可见内容不会移动，并随阅读者向上滚动而消失。
+  // Parameters: element is the scrollport of the active surface.
+  // 参数：element 是活动界面的滚动视口。
+  // Returns: nothing.
+  // 返回值：无。
+  const reconcileTailReserve = React.useCallback((element: HTMLElement): void => {
+    const reserve = element.querySelector<HTMLElement>(".conversation-tail-reserve");
+    const timeline = element.querySelector<HTMLElement>(".conversation-scroll-content > .timeline");
+    if (!reserve || !timeline) {
+      return;
+    }
+    const current = reserve.offsetHeight;
+    let next: number;
+    if (followTailRef.current) {
+      // visibleArea excludes the sticky footer that covers the bottom of the scrollport.
+      // visibleArea 不含覆盖滚动视口底部的粘性页脚。
+      const footer = element.querySelector<HTMLElement>("[data-conversation-scroll-footer]");
+      const visibleArea = Math.max(0, element.clientHeight - (footer?.offsetHeight ?? 0));
+      next = conversationTailReserveHeight(
+        tailFloorRef.current,
+        timeline.offsetHeight,
+        Math.floor(visibleArea * CONVERSATION_TAIL_RESERVE_MAX_SHARE),
+      );
+    } else {
+      const onScreen = element.getBoundingClientRect().bottom - reserve.getBoundingClientRect().top;
+      next = Math.max(0, Math.min(current, Math.ceil(onScreen)));
+    }
+    if (next !== current) {
+      reserve.style.height = `${next}px`;
+    }
+    tailFloorRef.current = timeline.offsetHeight + next;
+  }, []);
 
   // publishFollowTail updates the ownership ledger and visible affordance together.
   // publishFollowTail 同时更新所有权账本与可见操作入口。
@@ -456,8 +517,11 @@ export function useConversationScrollController(
       cancelPendingFrame();
       publishFollowTail(conversationViewportAllowsTailFollow(element));
     }
+    if (!followTailRef.current) {
+      reconcileTailReserve(element);
+    }
     writeCurrentSnapshot(element, surfaceId);
-  }, [cancelPendingFrame, publishFollowTail, writeCurrentSnapshot]);
+  }, [cancelPendingFrame, publishFollowTail, reconcileTailReserve, writeCurrentSnapshot]);
 
   // captureAndScheduleLayoutRestore preserves the current semantic viewport across one known geometry change.
   // captureAndScheduleLayoutRestore 在一次已知几何变化中保留当前语义视口。
@@ -621,6 +685,10 @@ export function useConversationScrollController(
     cancelPendingFrame();
     layoutTransactionRef.current = null;
     renderedSurfaceIdRef.current = surfaceId;
+    // A newly rendered surface starts without the previous surface's tail reserve.
+    // 新渲染的界面不继承上一界面的尾部预留。
+    element.querySelector<HTMLElement>(".conversation-tail-reserve")?.style.setProperty("height", "0px");
+    tailFloorRef.current = 0;
     observedScrollTopRef.current = element.scrollTop;
     programmaticTargetRef.current = null;
     // savedSnapshot restores a previously read position; unseen surfaces start with explicit tail ownership.
@@ -662,6 +730,9 @@ export function useConversationScrollController(
     // observer corrects only explicit tail ownership or one active manual layout transaction.
     // observer 仅校正显式尾部所有权或单个活动手动布局事务。
     const observer = new ResizeObserver(() => {
+      // The reserve absorbs shrinkage before any tail correction reads the new bottom.
+      // 在任何尾部校正读取新底部之前，先由预留吸收收缩。
+      reconcileTailReserve(element);
       // transaction keeps one immutable pre-mutation anchor instead of chasing snapshots rewritten every frame.
       // transaction 保持单个不可变修改前锚点，避免追逐每帧重写的快照。
       const transaction = layoutTransactionRef.current;
@@ -704,6 +775,7 @@ export function useConversationScrollController(
     options.scrollRef,
     options.surfaceId,
     publishFollowTail,
+    reconcileTailReserve,
     scheduleSnapshotRestore,
     scheduleStoredRestore,
     writeCurrentSnapshot,
@@ -732,8 +804,13 @@ export function useConversationScrollController(
     const observer = new MutationObserver(() => {
       if (latestOptionsRef.current.surfaceId !== surfaceId
         || element.dataset.conversationSurfaceId !== surfaceId
-        || !followTailRef.current
-        || Math.abs(element.scrollTop - observedScrollTopRef.current) <= 0.5) {
+        || !followTailRef.current) {
+        return;
+      }
+      // A collapse lands here before the resize notification; absorb it so the tail does not move.
+      // 折叠先于尺寸通知到达此处；先吸收收缩，使尾部不移动。
+      reconcileTailReserve(element);
+      if (Math.abs(element.scrollTop - observedScrollTopRef.current) <= 0.5) {
         return;
       }
       scheduleStoredRestore();
@@ -746,7 +823,7 @@ export function useConversationScrollController(
       attributeFilter: ["class", "style", "hidden"],
     });
     return () => observer.disconnect();
-  }, [options.active, options.scrollRef, options.surfaceId, scheduleStoredRestore]);
+  }, [options.active, options.scrollRef, options.surfaceId, reconcileTailReserve, scheduleStoredRestore]);
 
   React.useEffect(() => {
     // element owns the native smooth-scroll lifecycle for this exact transcript.

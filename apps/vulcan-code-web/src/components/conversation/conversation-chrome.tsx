@@ -3,6 +3,27 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { DraftConversationPendingSubmission } from "@/components/workspace/workspace-resizable-body";
 
+// ConversationScrollTail renders the end of the transcript scroll content: the tail reserve and the sticky footer.
+// ConversationScrollTail 渲染转录滚动内容的末尾：尾部预留与粘性页脚。
+// The scroll controller sizes the reserve so a followed tail never jumps back when the transcript shrinks.
+// 滚动控制器调整预留高度，使跟随中的尾部在转录收缩时不会回跳。
+export function ConversationScrollTail(props: {
+  // Optional footer pinned to the bottom of the scrollport.
+  // 固定在滚动视口底部的可选页脚。
+  footer?: React.ReactNode;
+}) {
+  return (
+    <>
+      <div className="conversation-tail-reserve" aria-hidden="true" />
+      {props.footer ? (
+        <div className="conversation-footer" data-conversation-scroll-footer="true">
+          {props.footer}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 // ConversationSubmissionStatus renders one bounded, non-blocking first-submit preparation stage.
 // ConversationSubmissionStatus 渲染首条提交的有界非阻塞准备阶段。
 export function ConversationSubmissionStatus(props: {

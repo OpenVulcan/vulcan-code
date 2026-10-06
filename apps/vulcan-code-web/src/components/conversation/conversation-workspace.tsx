@@ -53,6 +53,7 @@ import { ConversationTextContextMenu } from "@/components/conversation/conversat
 import { isElectronRuntime } from "@/host-shell";
 import { ConversationTurnSeatList } from "@/components/conversation/conversation-turn-seat";
 import { ConversationPromptNavigator } from "@/components/conversation/conversation-prompt-navigator";
+import { ConversationScrollTail } from "@/components/conversation/conversation-chrome";
 import {
   CONVERSATION_PROMPT_NAVIGATOR_MIN_ENTRIES,
   createConversationPromptNavigatorProjector,
@@ -652,11 +653,7 @@ export function ConversationWorkspace(props: {
               ) : null}
               {props.transientReasoningStatus ?? null}
             </div>
-            {props.footer ? (
-              <div className="conversation-footer" data-conversation-scroll-footer="true">
-                {props.footer}
-              </div>
-            ) : null}
+            <ConversationScrollTail footer={props.footer} />
           </div>
           {detail ? (
             <ConversationDetailModal

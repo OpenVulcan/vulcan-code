@@ -59,6 +59,13 @@
   will-change: transform;
 }
 
+/* Blank tail kept while the transcript follows its end; the scroll controller owns its height. */
+/* 转录跟随末尾时保留的空白尾部；其高度由滚动控制器持有。 */
+.conversation-tail-reserve {
+  flex: none;
+  height: 0;
+}
+
 .conversation-footer {
   position: sticky;
   bottom: 0;
