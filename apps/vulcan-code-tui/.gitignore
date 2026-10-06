@@ -1,0 +1,35 @@
+# Cargo build output, including the per-session verification target directories below it.
+# Cargo 构建产物，包括其下各会话的验证用 target 目录。
+/target
+
+# Backup files written by rustfmt.
+# rustfmt 生成的备份文件。
+**/*.rs.bk
+
+# Debug symbols written by MSVC builds on Windows.
+# Windows 上 MSVC 构建生成的调试符号。
+*.pdb
+
+# Mutation testing output of cargo-mutants.
+# cargo-mutants 的变异测试输出。
+**/mutants.out*/
+
+# Local logs stay on the developer machine.
+# 本地日志只保留在开发机上。
+*.log
+
+# Workspace state written by Vulcan Code and other local agents working in this repository.
+# Vulcan Code 与其他本地代理在本仓库工作时写入的工作区状态。
+/.vulcan/
+/.claude/settings.local.json
+.codex_tmp*
+
+# Editor and operating system files.
+# 编辑器与操作系统文件。
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
