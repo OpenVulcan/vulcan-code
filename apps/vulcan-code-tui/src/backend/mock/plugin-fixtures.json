@@ -1,0 +1,199 @@
+{
+  "summary": {
+    "id": "demo-settings-plugin",
+    "name": "Demo Settings Plugin",
+    "kind": "lua",
+    "runtimeState": "enabled",
+    "status": "available",
+    "desiredEnabled": true,
+    "enabled": true,
+    "available": true,
+    "extension": {
+      "origin": "bundled",
+      "uiMounts": [
+        {
+          "id": "settings",
+          "point": "skillsPluginDetail",
+          "label": "Demo settings",
+          "labelByLocale": { "zh-CN": "演示设置", "zh-TW": "示範設定" },
+          "icon": "plugin",
+          "kind": "settings"
+        }
+      ]
+    }
+  },
+  "module": {
+    "runtimeIdentity": "demo-settings-runtime-1",
+    "actionPolicies": {},
+    "pluginId": "demo-settings-plugin",
+    "mountId": "settings",
+    "kind": "settings",
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "fast": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["all", "selected"] },
+        "routes": { "type": "array", "items": { "type": "string" } },
+        "timeout": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "label": { "type": "string", "maxLength": 32 }
+      }
+    },
+    "messagesByLocale": {
+      "en": {
+        "ready": "Configuration loaded",
+        "unavailable": "Configuration unavailable",
+        "repo": "Repository",
+        "license": "License",
+        "licenseTitle": "Demo license",
+        "tabGeneral": "General",
+        "tabStats": "Statistics",
+        "behavior": "Behavior",
+        "fast": "Fast mode",
+        "fastHelp": "Skips the slow path.",
+        "mode": "Route mode",
+        "modeAll": "All routes",
+        "modeSelected": "Selected routes",
+        "routes": "Routes",
+        "groupGit": "Git",
+        "timeout": "Timeout (seconds)",
+        "labelField": "Label",
+        "access": "Access",
+        "apiKeyLabel": "API key",
+        "apiKeyHint": "Paste the key",
+        "test": "Test connection",
+        "usage": "Usage",
+        "range": "Range",
+        "commands": "Commands",
+        "saved": "Tokens saved",
+        "rate": "Savings",
+        "savedDaily": "Saved per period",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "top": "Top commands",
+        "topCount": "{{count}} commands",
+        "command": "Command",
+        "share": "Share",
+        "empty": "No data yet"
+      },
+      "zh-CN": {
+        "fast": "快速模式",
+        "tabGeneral": "常规"
+      }
+    }
+  },
+  "layout": {
+    "schema_version": 1,
+    "config": { "read_action": "settings-get", "write_action": "settings-set" },
+    "header": {
+      "status": { "ready_message_key": "ready", "unavailable_message_key": "unavailable" },
+      "links": [{ "url": "https://example.invalid/demo-settings", "label_message_key": "repo" }],
+      "documents": [
+        { "id": "license", "asset": "LICENSE", "label_message_key": "license", "title_message_key": "licenseTitle" }
+      ]
+    },
+    "tabs": [
+      { "id": "general", "title_message_key": "tabGeneral", "sections": ["behavior", "access"] },
+      { "id": "stats", "title_message_key": "tabStats", "sections": ["usage"] }
+    ],
+    "sections": [
+      {
+        "id": "behavior",
+        "title_message_key": "behavior",
+        "items": [
+          { "type": "field", "key": "fast", "control": "switch", "label_message_key": "fast", "description_message_key": "fastHelp" },
+          {
+            "type": "field",
+            "key": "mode",
+            "control": "select",
+            "label_message_key": "mode",
+            "options": [
+              { "value": "all", "label_message_key": "modeAll" },
+              { "value": "selected", "label_message_key": "modeSelected" }
+            ]
+          },
+          {
+            "type": "field",
+            "key": "routes",
+            "control": "checklist",
+            "label_message_key": "routes",
+            "visible_when": { "key": "mode", "values": ["selected"] },
+            "option_groups": [{ "id": "git", "title_message_key": "groupGit", "values": ["git diff", "git status"] }]
+          },
+          { "type": "field", "key": "timeout", "control": "number", "label_message_key": "timeout" },
+          { "type": "field", "key": "label", "control": "text", "label_message_key": "labelField" }
+        ]
+      },
+      {
+        "id": "access",
+        "title_message_key": "access",
+        "items": [
+          {
+            "type": "credential",
+            "id": "api-key",
+            "label_message_key": "apiKeyLabel",
+            "placeholder_message_key": "apiKeyHint",
+            "status_action": "credential-status",
+            "set_action": "credential-set",
+            "set_argument": "apiKey",
+            "delete_action": "credential-delete"
+          },
+          { "type": "action", "id": "test", "action": "credential-test", "label_message_key": "test" }
+        ]
+      },
+      {
+        "id": "usage",
+        "title_message_key": "usage",
+        "data": {
+          "action": "stats",
+          "arguments": [
+            {
+              "name": "days",
+              "label_message_key": "range",
+              "options": [{ "value": 7 }, { "value": 30 }],
+              "value_format": "days",
+              "default": 7
+            }
+          ],
+          "refreshable": true,
+          "show_loaded_at": true
+        },
+        "blocks": [
+          {
+            "type": "metrics",
+            "items": [
+              { "label_message_key": "commands", "path": "totals.commands", "format": "number" },
+              { "label_message_key": "saved", "path": "totals.saved", "format": "compact" },
+              { "label_message_key": "rate", "path": "totals.rate", "format": "percent" }
+            ]
+          },
+          {
+            "type": "chart",
+            "value_label_message_key": "savedDaily",
+            "periods": [
+              { "id": "daily", "label_message_key": "daily", "path": "daily", "label_paths": ["date"], "label_format": "date" },
+              { "id": "weekly", "label_message_key": "weekly", "path": "weekly", "label_paths": ["week"] }
+            ],
+            "value_path": "saved",
+            "value_format": "compact",
+            "empty_message_key": "empty"
+          },
+          {
+            "type": "table",
+            "path": "top",
+            "title_message_key": "top",
+            "count_message_key": "topCount",
+            "rank": true,
+            "columns": [
+              { "path": "command", "label_message_key": "command", "format": "code" },
+              { "path": "saved", "label_message_key": "saved", "format": "compact" },
+              { "path": "saved", "label_message_key": "share", "format": "bar" }
+            ],
+            "empty_message_key": "empty"
+          }
+        ]
+      }
+    ]
+  },
+  "config": { "fast": false, "mode": "all", "routes": [], "timeout": 30, "label": "demo" },
+  "license": "Demo License\n\n  Synthetic text for the terminal reader.\n"
+}

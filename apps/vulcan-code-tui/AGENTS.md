@@ -11,9 +11,10 @@
 2. **两个后端，同一边界。** `src/backend/service/` 连接真实服务（默认），`src/backend/mock/` 按脚本模拟；
    UI 与 `app/` 只通过 `backend::Command` / `BackendEvent` 交互，不直接访问后端内部。系统页面使用
    `service_api::ServiceCall` 一对一镜像 WebUI 函数、方法与参数，未有服务契约的动作不创建入口。
-3. **不做 Lua 插件 UI。** 系统插件（记忆、知识库、代理、技能、代码语义索引）以声明式页面实现；
-   LuaSkills 与 Vulcan 插件只做管理（启用、工具模式、安装、卸载），插件 UI 挂载点只列出不渲染，
-   面板留待后续双向适配。
+3. **插件 UI 只渲染声明式设置版面。** 系统插件（记忆、知识库、代理、技能、代码语义索引）以声明式页面
+   实现；LuaSkills 与 Vulcan 插件做管理（启用、工具模式、安装、卸载）。插件详情挂载中 `kind: settings`
+   的版面由 `app/pages/plugin_settings.rs` 按 `plugin-ui-authoring.md` 渲染，所有读写都经插件声明的
+   Action（`invoke_plugin_action`），只读取 `tui` 提示；`kind: module` 的 ESM 模块只列出、不执行。
 4. **不保存机密。** 凭据只在临时表单中遮蔽输入并单次发送；界面展示公开连接元数据，原值不回显。服务发现文件
    （`~/.vulcan*/code/webui-service.json`）只由 `service/discovery.rs` 以程序读取；令牌不得出现在日志、提示、
    错误、`Debug` 输出或终端命令输出中，调试时也不得打印该文件或 `/health` 响应。

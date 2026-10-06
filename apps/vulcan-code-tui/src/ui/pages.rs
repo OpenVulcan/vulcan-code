@@ -228,7 +228,7 @@ fn render_page(app: &mut App, area: Rect, buf: &mut Buffer) {
 
     // Title with the page's search button.
     // 标题及页面搜索按钮。
-    let title = page.label();
+    let title = page.title(app);
     buf.set_string(
         content.x,
         content.y,
@@ -484,6 +484,7 @@ fn label_width(rows: &[Row], width: usize) -> usize {
                     | RowKind::Number { .. }
                     | RowKind::Text { .. }
                     | RowKind::Meter { .. }
+                    | RowKind::Spark { .. }
             )
         })
         .map(|row| width_of(&row.label) + 3)
@@ -872,6 +873,32 @@ fn lay_out(
             let bar = value_width.saturating_sub(width_of(&text) + 2).clamp(4, 40);
             let mut right = gauge(theme, *ratio, bar, color);
             right.push(Span::styled(format!("  {text}"), Style::new().fg(color)));
+            lines.push(leadered(theme, &row.label, label_width, right));
+            detail_lines(&mut lines);
+        }
+        RowKind::Spark { points, text } => {
+            // The latest points that fit, each scaled between zero and the shown maximum.
+            // 能放下的最近数据点，各自按零到所显示最大值缩放。
+            const LEVELS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+            let text = truncate(text, value_width / 2);
+            let room = value_width.saturating_sub(width_of(&text) + 2).max(1);
+            let shown = &points[points.len().saturating_sub(room)..];
+            let max = shown.iter().copied().fold(0.0, f64::max);
+            let bars: String = shown
+                .iter()
+                .map(|point| {
+                    let level = if max > 0.0 {
+                        (point.max(0.0) / max * (LEVELS.len() - 1) as f64).round() as usize
+                    } else {
+                        0
+                    };
+                    LEVELS[level.min(LEVELS.len() - 1)]
+                })
+                .collect();
+            let right = vec![
+                Span::styled(bars, Style::new().fg(theme.primary)),
+                Span::styled(format!("  {text}"), theme.base()),
+            ];
             lines.push(leadered(theme, &row.label, label_width, right));
             detail_lines(&mut lines);
         }

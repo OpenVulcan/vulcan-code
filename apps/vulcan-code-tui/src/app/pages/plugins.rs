@@ -503,7 +503,7 @@ pub(super) fn plugins(app: &App) -> Vec<Row> {
         ));
         // Actions.
         // 声明的操作集合。
-        let mut actions = Vec::new();
+        let mut actions = super::plugin_settings::open_actions(app, &id);
         if s(plugin, "/extension/origin") == "userInstalled" {
             actions.push(action(
                 tr!("tui.field.remove"),

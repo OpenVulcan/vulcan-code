@@ -3,7 +3,10 @@
 
 use crate::service_api::{CallKind, ServiceCall, scrub_secrets};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[path = "service_plugins.rs"]
+mod plugins;
 
 #[cfg(test)]
 #[path = "service_tests.rs"]
@@ -42,6 +45,12 @@ pub struct FakeService {
     /// Native storage version, increased only by committed mutations.
     /// 原生存储版本，仅在已提交变更时增加。
     version: i64,
+    /// Synthetic plugin with a settings mount: layout, configuration and credential state.
+    /// 带设置挂载的合成插件：版面、配置与凭据状态。
+    plugin: Value,
+    /// Plugin invocation identities already accepted; each is accepted once.
+    /// 已接受的插件调用身份；每个只接受一次。
+    invocations: BTreeSet<String>,
 }
 
 /// Exact synthetic import key exposed by the demo preflight.
@@ -405,8 +414,14 @@ impl FakeService {
                 json!({"overview":overview,"job":null,"plan":null,"jobs":{},"commands":{}}),
             );
         }
+        let plugin = plugins::fixture();
+        let mut workbench = fixture["workbench"].clone();
+        workbench["plugins"]
+            .as_array_mut()
+            .expect("plugins fixture")
+            .push(plugin["summary"].clone());
         Self {
-            workbench: fixture["workbench"].clone(),
+            workbench,
             library_defaults: loads["service_list_knowledge_libraries"][0].clone(),
             loads,
             memory: fixture["memory"].clone(),
@@ -416,6 +431,8 @@ impl FakeService {
             previews: BTreeMap::new(),
             serial: 1,
             version: 1,
+            plugin,
+            invocations: BTreeSet::new(),
         }
     }
 
@@ -469,6 +486,9 @@ impl FakeService {
         }
         if call.method == "workbench.snapshot" {
             return Ok(self.workbench.clone());
+        }
+        if Self::is_plugin_method(call.method) {
+            return self.plugin(call.method, &call.params);
         }
         if let CallKind::Load(_) = call.kind {
             match call.method {

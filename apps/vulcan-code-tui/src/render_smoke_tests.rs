@@ -414,7 +414,7 @@ fn mock_turn_renders_at_wide_and_narrow_sizes() {
 /// characters keep stale symbols that make a reused buffer unreadable.
 /// 可选文本快照，便于目视检查布局：`VULCAN_TUI_SNAPSHOT_DIR=<目录> cargo test`。
 /// 渲染到全新后端：TestBackend 只应用差量，被宽字符遮住的单元格会残留旧符号，使复用的缓冲区难以阅读。
-fn snapshot(app: &mut App, name: &str) {
+pub(crate) fn snapshot(app: &mut App, name: &str) {
     let Ok(dir) = std::env::var("VULCAN_TUI_SNAPSHOT_DIR") else {
         return;
     };

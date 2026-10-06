@@ -21,6 +21,8 @@ pub mod insight;
 pub mod menus;
 pub mod overlay;
 pub mod pages;
+#[cfg(test)]
+mod plugin_settings_tests;
 mod preview;
 #[cfg(test)]
 mod service_tests;
@@ -470,6 +472,18 @@ pub struct App {
     /// Active library view, independent from the dynamic left-hand library identities.
     /// 当前知识库视图，独立于左侧动态知识库身份。
     pub knowledge_page: PageId,
+    /// Open plugin detail mount as `(plugin id, mount id)`.
+    /// 当前打开的插件详情挂载，形式为 `(插件标识, 挂载标识)`。
+    pub plugin_mount: Option<(String, String)>,
+    /// Chosen tab of the open plugin settings layout.
+    /// 当前插件设置版面所选的标签。
+    pub plugin_tab: Option<String>,
+    /// Chosen period per plugin chart, keyed by section id and block position.
+    /// 每个插件图表所选的周期，以区块标识与数据块位置为键。
+    pub plugin_periods: HashMap<String, String>,
+    /// When each plugin data section last received a result, by data slot index.
+    /// 每个插件数据区块最近收到结果的时间，以数据槽位下标为键。
+    pub plugin_loaded_at: HashMap<u8, std::time::SystemTime>,
     /// Exact document folder filter; None requests all folders.
     /// 准确文档目录筛选；None 请求全部目录。
     pub knowledge_folder: Option<String>,
@@ -568,6 +582,10 @@ impl App {
             knowledge_query: String::new(),
             library: None,
             knowledge_page: PageId::KnowledgeLibrary,
+            plugin_mount: None,
+            plugin_tab: None,
+            plugin_periods: HashMap::new(),
+            plugin_loaded_at: HashMap::new(),
             knowledge_folder: None,
             knowledge_offset: 0,
             knowledge_document: None,
@@ -1103,6 +1121,20 @@ impl App {
                     );
                 self.slot_errors.remove(&slot);
                 self.slots.set(slot, call, value);
+                match slot {
+                    crate::service_api::Slot::PluginData(index) => {
+                        self.plugin_loaded_at
+                            .insert(index, std::time::SystemTime::now());
+                    }
+                    // A layout's reads depend on its content, so they follow its arrival.
+                    // 版面的读取取决于其内容，因此在其到达后发出。
+                    crate::service_api::Slot::PluginUi => {
+                        for call in pages::plugin_reads(self) {
+                            action::perform(self, action::UiAction::Send(Command::Call(call)));
+                        }
+                    }
+                    _ => {}
+                }
                 if slot == crate::service_api::Slot::KnowledgeJob {
                     // Only queued/running states need polling; a successful result arms the next read.
                     // 只有排队、运行状态需要轮询；成功结果设置下一次读取。
@@ -1179,6 +1211,22 @@ impl App {
                 call.param("/request/payload/vmmProjectId").as_i64() == self.vmm_project
                     && call.param("/request/payload/target").as_str()
                         == Some(self.profile_target.as_str())
+            }
+            // Plugin results belong to the open mount; action results also to its current
+            // runtime generation, so a reload never mixes generations.
+            // 插件结果属于当前挂载；Action 结果还须属于其当前运行时代际，重新加载时不混用代际。
+            Slot::PluginUi => self.plugin_mount.as_ref().is_some_and(|(plugin, mount)| {
+                call.param("/pluginId").as_str() == Some(plugin.as_str())
+                    && call.param("/mountId").as_str() == Some(mount.as_str())
+            }),
+            Slot::PluginAsset => self.plugin_mount.as_ref().is_some_and(|(plugin, _)| {
+                call.param("/pluginId").as_str() == Some(plugin.as_str())
+            }),
+            Slot::PluginConfig | Slot::PluginCredential(_) | Slot::PluginData(_) => {
+                self.plugin_mount.as_ref().is_some_and(|(plugin, _)| {
+                    call.param("/pluginId").as_str() == Some(plugin.as_str())
+                }) && call.param("/runtimeIdentity")
+                    == self.slots.at(Slot::PluginUi, "/runtimeIdentity")
             }
             _ => true,
         }
@@ -1353,6 +1401,7 @@ fn completed_notice(function: &str) -> String {
             tr!("tui.notice.submitted")
         }
         "test_public_ai_inference_route" => tr!("tui.notice.testPassed"),
+        "invoke_plugin_action" => tr!("plugins.settings.actionDone"),
         function if function.starts_with("save_") || function.starts_with("select_") => {
             tr!("tui.notice.settingsSaved")
         }

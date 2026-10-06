@@ -272,6 +272,7 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
         | RowKind::Document { .. }
         | RowKind::Stats(_)
         | RowKind::Meter { .. }
+        | RowKind::Spark { .. }
         | RowKind::Brand
         | RowKind::Spacer => {}
     }

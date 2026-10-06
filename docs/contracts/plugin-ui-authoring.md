@@ -129,7 +129,8 @@
 | `web.columns` | `metrics` | 1–6 列（窄屏折为两列） | 自适应 |
 | `tui.variant` | `chart` | `sparkline`、`table` | — |
 
-TUI 渲染器尚未实现时，`tui` 提示由校验保留并原样传递，WebUI 不读取它们。
+WebUI 只读取 `web` 提示，TUI 只读取 `tui` 提示。TUI 中 `chart` 默认显示为迷你走势图，`tui.variant: table`
+改为每个数据点一行；`metrics` 显示为数值卡片条，`table` 显示为每行一个条目（第一列为名称，其余列为说明）。
 
 ### 条目 `type: field`
 

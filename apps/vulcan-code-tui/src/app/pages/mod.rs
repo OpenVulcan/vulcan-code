@@ -14,6 +14,7 @@ mod inference;
 mod knowledge;
 mod memory;
 mod navigation;
+mod plugin_settings;
 mod plugins;
 mod settings;
 
@@ -30,6 +31,7 @@ use serde_json::{Value, json};
 
 pub use knowledge::knowledge_view;
 pub use navigation::navigation;
+pub use plugin_settings::{PERIOD_SEPARATOR, reads as plugin_reads, tab_reads as plugin_tab_reads};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Area {
@@ -104,7 +106,10 @@ impl Area {
                     Some(tr!("area.contextEngine")),
                     vec![IndexProjects, EngineSettings],
                 ),
-                (Some(tr!("skills.navigation.plugins")), vec![VulcanPlugins]),
+                (
+                    Some(tr!("skills.navigation.plugins")),
+                    vec![VulcanPlugins, PluginMount],
+                ),
             ],
             Area::Agents => vec![(None, vec![AgentList])],
             Area::Memory => vec![
@@ -217,6 +222,9 @@ pub enum PageId {
     IndexProjects,
     EngineSettings,
     VulcanPlugins,
+    /// The open plugin detail mount; navigation lists one row per runtime-ready mount.
+    /// 当前打开的插件详情挂载；导航为每个运行就绪的挂载列出一行。
+    PluginMount,
 }
 
 impl PageId {
@@ -258,6 +266,16 @@ impl PageId {
             PageId::IndexProjects => tr!("codeContext.project.projectSemanticIndex"),
             PageId::EngineSettings => tr!("tui.index.engineSettings"),
             PageId::VulcanPlugins => tr!("skills.navigation.externalPlugins"),
+            PageId::PluginMount => tr!("tui.plugin.page"),
+        }
+    }
+
+    /// Title shown above the page: the open mount's own label for plugin pages.
+    /// 页面上方显示的标题：插件页面使用当前挂载自身的名称。
+    pub fn title(self, app: &App) -> String {
+        match self {
+            PageId::PluginMount => plugin_settings::title(app).unwrap_or_else(|| self.label()),
+            _ => self.label(),
         }
     }
 
@@ -318,6 +336,13 @@ impl PageId {
             | Self::GitCommit => calls.push(settings::load_public_ai_settings()),
             Self::Mcp => calls.push(api::mcp_settings::load_mcp_runtime_snapshot()),
             Self::About => calls.push(api::licenses::load_license_catalog()),
+            // The layout's own reads follow its arrival, since they depend on its content.
+            // 版面自身的读取在其到达后发出，因为它们取决于版面内容。
+            Self::PluginMount => {
+                if let Some((plugin, mount)) = &app.plugin_mount {
+                    calls.push(api::skills_actions::load_plugin_ui_module(plugin, mount));
+                }
+            }
             Self::MemoryOverview | Self::MemoryProjects => {
                 calls.push(memory::native_project_catalog())
             }
@@ -535,6 +560,12 @@ pub enum RowKind {
     /// Labelled figures laid out as tiles.
     /// 以卡片排列的带标签数值。
     Stats(Vec<(String, String, Tone)>),
+    /// A sparkline after the label: the latest points that fit, then `text`.
+    /// 标签后的迷你走势图：能放下的最近数据点，其后为 `text`。
+    Spark {
+        points: Vec<f64>,
+        text: String,
+    },
     /// A gauge after the label.
     /// 标签后的进度条。
     Meter {
@@ -949,6 +980,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::IndexProjects => plugins::index(app),
         PageId::EngineSettings => plugins::engine(app),
         PageId::VulcanPlugins => plugins::plugins(app),
+        PageId::PluginMount => plugin_settings::rows(app),
     };
     if rows.is_empty() {
         rows.push(note(tr!("tui.page.loading"), Tone::Muted));

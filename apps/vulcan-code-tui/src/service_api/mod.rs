@@ -23,6 +23,7 @@ pub mod skills_actions;
 pub mod vce;
 pub mod workbench_snapshot;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -153,6 +154,36 @@ pub enum Slot {
     /// `loadLicenseBody` of the open section.
     /// 当前打开章节的许可证正文。
     LicenseBody,
+    /// `loadPluginUiModule` of the open plugin mount: its layout, schema and messages.
+    /// 当前打开插件挂载的 `loadPluginUiModule`：其版面、Schema 与文案。
+    PluginUi,
+    /// The open settings layout's configuration read action.
+    /// 当前设置版面的配置读取 Action。
+    PluginConfig,
+    /// Status read of the layout's n-th credential item, in document order.
+    /// 版面中第 n 个凭据条目（按文档顺序）的状态读取。
+    PluginCredential(u8),
+    /// Read action of the layout's n-th data section, in document order.
+    /// 版面中第 n 个数据区块（按文档顺序）的读取 Action。
+    PluginData(u8),
+    /// `readPluginTextAsset` of the open header document.
+    /// 当前打开的标题区文档的 `readPluginTextAsset`。
+    PluginAsset,
+}
+
+impl Slot {
+    /// Slots owned by the open plugin mount; they are dropped together when the mount changes.
+    /// 当前插件挂载持有的槽位；挂载改变时一并丢弃。
+    pub fn is_plugin_mount(self) -> bool {
+        matches!(
+            self,
+            Slot::PluginUi
+                | Slot::PluginConfig
+                | Slot::PluginCredential(_)
+                | Slot::PluginData(_)
+                | Slot::PluginAsset
+        )
+    }
 }
 
 /// What a call does with its result.
@@ -162,9 +193,11 @@ pub enum CallKind {
     /// A loader: the result replaces the slot.
     /// 加载器：结果替换该槽位。
     Load(Slot),
-    /// A mutation: on success the listed slots reload with their last loader.
-    /// 变更：成功后所列槽位用其最近一次的加载器重新加载。
-    Mutate(&'static [Slot]),
+    /// A mutation: on success the listed slots reload with their last loader. Most lists are
+    /// fixed; plugin settings name the positional slots of the open layout at run time.
+    /// 变更：成功后所列槽位用其最近一次的加载器重新加载。多数列表固定；插件设置在运行时列出当前
+    /// 版面的按位置槽位。
+    Mutate(Cow<'static, [Slot]>),
     /// The read-only first step of a two-step action; its result opens a confirmation whose
     /// accept sends the second step, built from this call and its result.
     /// 两步操作中只读的第一步；其结果打开确认框，接受后发送由本调用及其结果构建的第二步。
@@ -289,8 +322,21 @@ impl ServiceCall {
             function,
             method,
             params,
-            kind: CallKind::Mutate(reload),
+            kind: CallKind::Mutate(Cow::Borrowed(reload)),
         }
+    }
+
+    /// The same request ready to be sent again: a one-shot invocation identity is replaced,
+    /// since the service never accepts one twice; every other call is returned unchanged.
+    /// 可再次发送的同一请求：一次性调用身份会被替换，因为服务绝不接受重复身份；其他调用原样返回。
+    /// Returns the call to send for a reload or a refresh.
+    /// 返回重新加载或刷新时要发送的调用。
+    pub fn renewed(&self) -> ServiceCall {
+        let mut call = self.clone();
+        if let Some(invocation) = call.params.pointer_mut("/identity/invocationId") {
+            *invocation = Value::String(fresh_command_id());
+        }
+        call
     }
 
     /// Reads one parameter by JSON pointer, e.g. `/request/enabled`.
@@ -380,6 +426,12 @@ impl Slots {
     pub fn clear(&mut self, slot: Slot) {
         self.0.remove(&slot);
     }
+
+    /// Drops every slot `drop` selects, e.g. all slots of a plugin mount that closed.
+    /// 丢弃 `drop` 选中的全部槽位，例如已关闭插件挂载的所有槽位。
+    pub fn clear_where(&mut self, drop: impl Fn(Slot) -> bool) {
+        self.0.retain(|slot, _| !drop(*slot));
+    }
 }
 
 /// Whether a field name holds a credential. Matching is on the normalized name (lowercase, no
@@ -438,6 +490,11 @@ pub fn scrub_secrets(value: &mut Value) {
                 // MCP headersFromEnv values are environment-variable names, not credential values.
                 // MCP headersFromEnv 的值为环境变量名，不是凭据值。
                 if key == "headersFromEnv" {
+                    continue;
+                }
+                // Plugin message catalogs map message ids such as `apiKeyLabel` to display text.
+                // 插件文案目录将 `apiKeyLabel` 等消息标识映射为显示文本。
+                if key == "messagesByLocale" {
                     continue;
                 }
                 // Arbitrarily named headers, environment values and installation inputs may be secret.

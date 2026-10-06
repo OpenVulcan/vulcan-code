@@ -46,6 +46,7 @@
 | LuaSkills | GitHub 安装、更新、卸载、启用、显式/隐式/禁用工具 | Workbench.luaSkills |
 | LuaSkills 设置 | 完整运行时配置、私有地址允许列表、运行时重试 | Workbench.luaSkills.runtimeSettings |
 | Vulcan 插件 | 检查包、审查权限及指纹、输入安装密钥、安装/更新、启用、卸载 | Workbench.plugins、插件预检 |
+| 插件设置页 | 设置版面标签、字段整份配置写入、凭据状态/设置/删除、操作、数据区块参数与刷新、包内文档阅读 | PluginUi、PluginConfig、PluginCredential(n)、PluginData(n)、PluginAsset |
 | VCE 项目索引 | 项目选择、概览、十一项设置、忽略模式、初始化/同步、任务读取/取消、维护计划及执行 | VceStatus、VceOverview、VceJob |
 | VCE 引擎设置 | 背景推理路由、模型能力过滤、明确向量维度、路由预检及逐项目兼容/重建 | PublicAiSettings、VceStatus |
 | 知识库列表 | 创建、重命名、描述修改、删除 | KnowledgeLibraries |
@@ -67,7 +68,11 @@
 | VMM 原生资源 | 组合设置、目录、正文读取、用途与修改两次确认、正文覆盖及重置 | VmmResources、VmmResourceFile |
 | VMM 高级设置 | 排序、保留、文本清洗、用户/项目画像有效期，保留配置同级字段 | VmmRuntimePolicy |
 
-插件的 UI 挂载点作为元数据展示；TUI 不执行 Lua 插件 UI。
+插件详情挂载中 `kind: settings` 版面由 TUI 渲染：`load_plugin_ui_module` 到达后才按版面内容发出配置、凭据
+状态与当前标签的数据读取，其余标签的数据在切换时按需读取；凭据与数据区块按文档顺序占用位置槽位。每次
+`invoke_plugin_action` 携带进程级 `clientId` 与一次性 `invocationId`，重新加载或刷新时以 `ServiceCall::renewed`
+更新调用标识；Action 结果只在插件与运行时代际（`runtimeIdentity`）都匹配当前挂载时采用。`kind: module` 的
+ESM 模块只作元数据展示，TUI 不执行。
 凭据页可以导入服务声明的令牌或已取得的授权凭据，尚未提供浏览器 OAuth 授权流程。
 系统原生记忆按会话/轮次回收，不增加逐条原生记忆删除入口。
 浏览器本地通知设置、会话置顶、手动标记未读、子代理消息、MCP 重启及 VMM 服务启停没有 TUI 虚构入口。
@@ -180,6 +185,9 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `skills_actions::inspect_local_plugin` | inspectLocalPlugin | `service_inspect_local_plugin` |
 | `skills_actions::install_local_plugin` | installLocalPlugin、updateLocalPlugin | `service_install_local_plugin`、`service_update_local_plugin` |
 | `skills_actions::uninstall_user_plugin` | uninstallUserPlugin | `service_uninstall_user_plugin` |
+| `skills_actions::load_plugin_ui_module` | loadPluginUiModule | `service_load_plugin_ui_module` |
+| `skills_actions::read_plugin_text_asset` | readPluginTextAsset | `service_read_plugin_text_asset` |
+| `skills_actions::invoke_plugin_action` | invokePluginAction | `service_invoke_plugin_action` |
 | `skills_actions::refresh_agent_skills_catalog` | refreshAgentSkillsCatalog | `service_refresh_agent_skills_catalog` |
 | `skills_actions::open_agent_skills_user_directory` | openAgentSkillsUserDirectory | `service_open_agent_skills_user_directory` |
 | `skills_actions::set_agent_skill_enabled` | setAgentSkillEnabled | `service_set_agent_skill_enabled` |

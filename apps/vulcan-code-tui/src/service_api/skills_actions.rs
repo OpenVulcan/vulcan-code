@@ -158,6 +158,81 @@ pub fn set_luaskill_tool_registration_state(
 
 // ---- Vulcan plugins ----
 
+/// Renderer nonce sent with every plugin action, one per process like the WebUI's per-window
+/// `pluginActionClientId`; it ties status queries and cancellation to this client.
+/// 每次插件 Action 携带的渲染器随机标识，与 WebUI 每窗口一个的 `pluginActionClientId` 一致，按进程
+/// 生成一次；它把状态查询与取消绑定到本客户端。
+fn plugin_action_client_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(super::fresh_command_id)
+}
+
+/// Builds the request for `service_load_plugin_ui_module`: the layout or module source of one
+/// mount, with the configuration schema and plugin messages.
+/// 构建 `service_load_plugin_ui_module` 的请求：单个挂载的版面或模块源码，以及配置 Schema 与插件文案。
+/// `plugin_id` and `mount_id` are the exact identities the workbench publishes.
+/// `plugin_id` 与 `mount_id` 为工作台发布的准确身份。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_plugin_ui_module(plugin_id: &str, mount_id: &str) -> ServiceCall {
+    ServiceCall::load(
+        "load_plugin_ui_module",
+        "service_load_plugin_ui_module",
+        json!({ "pluginId": plugin_id, "mountId": mount_id }),
+        Slot::PluginUi,
+    )
+}
+
+/// Builds the request for `service_read_plugin_text_asset`.
+/// 构建 `service_read_plugin_text_asset` 的请求。
+/// `plugin_id` owns the package and `path` is one exact `required_files` entry.
+/// `plugin_id` 为所属插件，`path` 为一个准确的 `required_files` 条目。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn read_plugin_text_asset(plugin_id: &str, path: &str) -> ServiceCall {
+    ServiceCall::load(
+        "read_plugin_text_asset",
+        "service_read_plugin_text_asset",
+        json!({ "pluginId": plugin_id, "path": path }),
+        Slot::PluginAsset,
+    )
+}
+
+/// Builds the request for `service_invoke_plugin_action` from a global plugin page, which sends
+/// no workspace path. Each call carries a fresh invocation identity; replays renew it.
+/// 构建全局插件页面的 `service_invoke_plugin_action` 请求，不发送工作区路径。每次调用携带新的调用
+/// 身份；重放时会更新它。
+/// `plugin_id`, `action_id` and `runtime_identity` come from the loaded mount; `arguments` is
+/// the action input; `kind` routes the result (a read loads a slot, a write reloads slots).
+/// `plugin_id`、`action_id` 与 `runtime_identity` 来自已加载挂载；`arguments` 为 Action 输入；
+/// `kind` 决定结果去向（读取写入槽位，写入重新加载槽位）。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn invoke_plugin_action(
+    plugin_id: &str,
+    action_id: &str,
+    arguments: Value,
+    runtime_identity: &str,
+    kind: CallKind,
+) -> ServiceCall {
+    ServiceCall {
+        function: "invoke_plugin_action",
+        method: "service_invoke_plugin_action",
+        params: json!({
+            "identity": {
+                "clientId": plugin_action_client_id(),
+                "invocationId": super::fresh_command_id(),
+            },
+            "runtimeIdentity": runtime_identity,
+            "pluginId": plugin_id,
+            "actionId": action_id,
+            "arguments": arguments,
+            "workspacePath": null,
+        }),
+        kind,
+    }
+}
+
 /// Builds the request for `service_set_vulcan_plugin_enabled`.
 /// 构建 `service_set_vulcan_plugin_enabled` 的请求。
 /// `plugin_id` is the plugin ID published by the workbench.

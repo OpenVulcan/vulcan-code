@@ -184,11 +184,18 @@ pub fn navigation(app: &App) -> Vec<(Option<String>, Vec<NavigationEntry>)> {
                 group,
                 pages
                     .into_iter()
-                    .map(|page| NavigationEntry {
-                        label: page.label(),
-                        badge: page.badge(app),
-                        action: UiAction::GoPage(page),
-                        selected: app.current_page() == Some(page),
+                    .flat_map(|page| {
+                        // Plugin pages expand to one row per runtime-ready mount.
+                        // 插件页面展开为每个运行就绪挂载一行。
+                        if page == PageId::PluginMount {
+                            return super::plugin_settings::navigation(app);
+                        }
+                        vec![NavigationEntry {
+                            label: page.label(),
+                            badge: page.badge(app),
+                            action: UiAction::GoPage(page),
+                            selected: app.current_page() == Some(page),
+                        }]
                     })
                     .collect(),
             )

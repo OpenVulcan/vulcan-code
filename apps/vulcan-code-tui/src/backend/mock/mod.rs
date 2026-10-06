@@ -1220,11 +1220,11 @@ impl World {
                         }
                     }
                 }
-                for slot in slots {
+                for slot in slots.iter() {
                     match slot {
                         Slot::Workbench => self.emit_workbench_slot(),
                         _ => {
-                            if let Some(loader) = self.loaders.get(slot).cloned() {
+                            if let Some(loader) = self.loaders.get(slot).map(ServiceCall::renewed) {
                                 self.handle_call(loader);
                             }
                         }

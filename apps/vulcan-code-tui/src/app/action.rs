@@ -61,6 +61,13 @@ pub enum LocalSetting {
     /// Native profile target, as defined by `native_profile_records`.
     /// 原生画像目标，由 `native_profile_records` 定义。
     ProfileTarget,
+    /// Shown tab of the open plugin settings layout; switching loads its unread data.
+    /// 当前插件设置版面显示的标签；切换时加载其尚未读取的数据。
+    PluginTab,
+    /// Shown period of one plugin chart; the value is the chart key and the period id joined
+    /// by `pages::PERIOD_SEPARATOR`.
+    /// 单个插件图表显示的周期；值为以 `pages::PERIOD_SEPARATOR` 连接的图表键与周期标识。
+    PluginChartPeriod,
 }
 
 /// Where an edited value goes.
@@ -266,6 +273,15 @@ pub enum UiAction {
     /// Opens the folder picker to install a local plugin directory.
     /// 打开文件夹选择器以安装本地插件目录。
     InstallPlugin,
+    /// Opens one plugin detail mount, dropping the state of the previously open one.
+    /// 打开一个插件详情挂载，并丢弃之前打开挂载的状态。
+    OpenPluginMount {
+        plugin: String,
+        mount: String,
+    },
+    /// Drops one slot's result, e.g. closing a document read in place.
+    /// 丢弃一个槽位的结果，例如关闭就地阅读的文档。
+    ClearSlot(crate::service_api::Slot),
     Area(Area),
     /// An activity bar entry: opens its area; the workbench entry clicked inside the workbench
     /// toggles the conversation sidebar instead, as in the WebUI.
@@ -446,6 +462,24 @@ pub fn perform(app: &mut App, action: UiAction) {
             open_folder(app, FolderMode::KnowledgeSource, None);
         }
         UiAction::InstallPlugin => open_folder(app, FolderMode::Plugin, None),
+        UiAction::OpenPluginMount { plugin, mount } => {
+            let target = Some((plugin, mount));
+            if app.plugin_mount != target {
+                use crate::service_api::Slot;
+                app.plugin_mount = target;
+                app.plugin_tab = None;
+                app.plugin_periods.clear();
+                app.plugin_loaded_at.clear();
+                app.slots.clear_where(Slot::is_plugin_mount);
+                app.slot_errors.retain(|slot, _| !slot.is_plugin_mount());
+                app.pages.remove(&PageId::PluginMount);
+            }
+            perform(app, UiAction::GoPage(PageId::PluginMount));
+        }
+        UiAction::ClearSlot(slot) => {
+            app.slots.clear(slot);
+            app.slot_errors.remove(&slot);
+        }
         UiAction::Area(area) => app.set_area(area),
         UiAction::Activity(Area::Chat) if app.area == Area::Chat => {
             input::execute(app, AppCommand::ToggleSidebar, None);
@@ -798,6 +832,24 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                 LocalSetting::ProfileTarget => {
                     app.profile_target = value.as_str().to_string();
                     app.slots.clear(crate::service_api::Slot::VmmProfile);
+                }
+                // Tabs and chart periods change the view only; a tab loads just its unread data.
+                // 标签与图表周期只改变视图；切换标签只加载其尚未读取的数据。
+                LocalSetting::PluginTab => {
+                    app.plugin_tab = Some(value.as_str().to_string());
+                    for call in super::pages::plugin_tab_reads(app) {
+                        perform(app, UiAction::Send(Command::Call(call)));
+                    }
+                    return;
+                }
+                LocalSetting::PluginChartPeriod => {
+                    if let Some((chart, period)) =
+                        value.as_str().split_once(super::pages::PERIOD_SEPARATOR)
+                    {
+                        app.plugin_periods
+                            .insert(chart.to_string(), period.to_string());
+                    }
+                    return;
                 }
             }
             app.load_page();

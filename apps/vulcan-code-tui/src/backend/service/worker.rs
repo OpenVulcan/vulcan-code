@@ -596,15 +596,16 @@ impl Worker {
                 // 权威快照。
                 let snapshot = is_snapshot(&value);
                 self.absorb(&value);
-                for slot in slots {
+                for slot in slots.iter() {
                     match slot {
                         Slot::Workbench if !snapshot => self.reload_workbench(),
                         Slot::Workbench => {}
                         _ => {
-                            if let Some(loader) = self.loaders.get(slot).cloned() {
+                            if let Some(loader) = self.loaders.get(slot).map(ServiceCall::renewed) {
                                 // Publish authoritative refreshes before unlocking another full-document edit.
                                 // 解锁另一份完整文档编辑前发布权威刷新。
                                 *self.load_sequences.entry(*slot).or_default() += 1;
+                                self.loaders.insert(*slot, loader.clone());
                                 match self.call(loader.method, loader.params.clone()) {
                                     Some(value) => self.call_done(loader, value),
                                     None => self.emit(BackendEvent::Slot {
