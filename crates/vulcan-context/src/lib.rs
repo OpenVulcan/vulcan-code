@@ -161,24 +161,6 @@ impl ContextWindowPolicyOverrides {
         Ok(())
     }
 
-    /// Merges a stronger sparse layer over this layer without inventing absent values.
-    /// 将更强的稀疏层覆盖到当前层，且不为缺失字段臆造值。
-    pub fn merged_with(self, stronger: Self) -> Self {
-        Self {
-            effective_context_window_percent: stronger
-                .effective_context_window_percent
-                .or(self.effective_context_window_percent),
-            auto_compact_percent: stronger.auto_compact_percent.or(self.auto_compact_percent),
-            auto_compact_token_limit: stronger
-                .auto_compact_token_limit
-                .or(self.auto_compact_token_limit),
-            auto_compact_scope: stronger.auto_compact_scope.or(self.auto_compact_scope),
-            fallback_buffer_tokens: stronger
-                .fallback_buffer_tokens
-                .or(self.fallback_buffer_tokens),
-        }
-    }
-
     /// Resolves one sparse layer against the official Codex-compatible defaults.
     /// 将一层稀疏策略解析为官方 Codex 兼容的完整默认值。
     pub fn resolve(self) -> ContextWindowPolicy {

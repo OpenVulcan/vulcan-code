@@ -523,21 +523,6 @@ fn context_tokens_for_scope(
     active_context_tokens
 }
 
-/// Resolves severity from the active context and the Codex hard/automatic thresholds.
-/// 根据活动上下文以及 Codex 硬窗口和自动压缩阈值解析严重级别。
-pub fn context_budget_severity_for_limits(
-    active_context_tokens: usize,
-    effective_context_window: Option<usize>,
-    auto_compact_limit: Option<usize>,
-) -> ContextBudgetSeverity {
-    context_budget_severity_for_limits_with_compaction_context(
-        active_context_tokens,
-        effective_context_window,
-        auto_compact_limit,
-        active_context_tokens,
-    )
-}
-
 /// Resolves severity with a separate automatic-compaction usage scope.
 /// 使用独立的自动压缩计量范围解析严重级别。
 pub fn context_budget_severity_for_limits_with_compaction_context(

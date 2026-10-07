@@ -164,25 +164,6 @@ impl ContextRequestMode {
         }
     }
 
-    /// Returns a short diagnostics sentence for compact UI surfaces.
-    /// 返回供紧凑界面区域使用的短诊断语句。
-    pub fn compact_note(&self) -> String {
-        match self {
-            Self::Full { reason } => format!("{} · {}", self.label(), reason.label()),
-            Self::IncrementalCandidate {
-                history_message_count,
-                ..
-            } => format!(
-                "{} · 当前仍全量发送 {} 条历史",
-                self.label(),
-                history_message_count
-            ),
-            Self::IncrementalDisabled { reason } => {
-                format!("{} · {}", self.label(), reason.label())
-            }
-        }
-    }
-
     /// Returns whether this request is a candidate for future incremental provider payloads.
     /// 返回该请求是否可作为未来 Provider 增量载荷候选。
     pub const fn is_incremental_candidate(&self) -> bool {

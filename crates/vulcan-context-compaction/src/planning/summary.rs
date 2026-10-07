@@ -29,28 +29,6 @@ impl CompactionResult {
         build_compaction_result_from_summary_text(plan, summary_text)
     }
 
-    /// Builds a route-bound compaction result from the standalone Responses compact endpoint.
-    /// 根据独立 Responses compact 端点构建绑定路由的压缩结果。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plan` supplies the local checkpoint identity and retained-tail policy; `route` freezes
-    /// the provider identity; `output_items`
-    /// contains the provider-returned opaque items that must be replayed verbatim.
-    /// `plan` 提供本地检查点身份与尾部保留策略；`output_items` 包含必须原样重放的供应商不透明项。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A compaction result with a safe diagnostic summary and validated opaque item list.
-    /// 返回带安全诊断摘要且已验证不透明项列表的压缩结果。
-    pub fn from_remote_responses(
-        plan: &CompactionPlan,
-        route: super::ProviderContextRoute,
-        output_items: Vec<Value>,
-    ) -> Result<Self, String> {
-        Self::from_remote_responses_with_metadata(plan, route, output_items, None, None)
-    }
-
     /// Builds a route-bound remote compaction result while retaining optional upstream metadata.
     /// 构建绑定路由的远端压缩结果，并保留可选上游元数据。
     ///
