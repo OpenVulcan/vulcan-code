@@ -71,7 +71,7 @@ impl HtmlAnswerOrigins {
     /// A response-header sandbox also protects direct loads; iframe sandbox must additionally remain set.
     /// 响应头沙箱也保护直接加载；iframe 沙箱仍必须同时保留。
     pub fn content_headers(&self) -> HeaderMap {
-        let mut headers = common_headers();
+        let mut headers = common_headers(false);
         let csp = format!(
             "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; \
              style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; \
@@ -120,7 +120,7 @@ fn validate_origin(origin: &str) -> Result<(), &'static str> {
 /// Build viewer policy before or after lazy startup; an absent renderer permits no frames.
 /// 在按需启动前后构建查看器策略；缺少渲染来源时不允许任何框架。
 fn viewer_headers(renderer: Option<&str>) -> HeaderMap {
-    let mut headers = common_headers();
+    let mut headers = common_headers(true);
     let csp = format!(
         "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
          img-src data:; connect-src 'self'; frame-src {}; worker-src 'none'; \
@@ -147,9 +147,9 @@ fn trusted_ancestors(primary: &str) -> String {
     }
 }
 
-/// Return no-store, no-referrer and restricted-device defaults for either HTML surface.
-/// 返回两个 HTML 界面共用的禁止缓存、禁止来源外传和设备限制默认响应头。
-fn common_headers() -> HeaderMap {
+/// Return restricted defaults; only the trusted viewer may write source to its own clipboard.
+/// 返回受限默认策略；仅可信查看器可向自己的剪贴板写入源码。
+fn common_headers(trusted_viewer: bool) -> HeaderMap {
     HeaderMap::from_iter([
         (
             header::CONTENT_TYPE,
@@ -166,10 +166,12 @@ fn common_headers() -> HeaderMap {
         ),
         (
             header::HeaderName::from_static("permissions-policy"),
-            HeaderValue::from_static(
+            HeaderValue::from_str(&format!(
                 "camera=(), microphone=(), geolocation=(), display-capture=(), usb=(), serial=(), \
-             bluetooth=(), hid=(), payment=(), clipboard-read=(), clipboard-write=()",
-            ),
+                 bluetooth=(), hid=(), payment=(), clipboard-read=(), clipboard-write=({})",
+                if trusted_viewer { "self" } else { "" }
+            ))
+            .expect("fixed permissions policy is a valid header"),
         ),
     ])
 }

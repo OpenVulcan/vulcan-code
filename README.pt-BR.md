@@ -222,6 +222,7 @@ O Vulcan Code é construído sobre muitos projetos de código aberto excelentes.
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): referência para o protocolo Gemini e a conversão de compatibilidade
 - [OpenCode](https://github.com/anomalyco/opencode): referência para catálogos de provedores e prompts de sistema
 - [agency-agents](https://github.com/msitarzewski/agency-agents): origem dos modelos de papéis de subagentes
+- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html): inspiração para respostas HTML interativas quando úteis; o protocolo e o visualizador isolado são próprios e não dependem de sua CLI
 
 **Comunidade**
 

@@ -1557,14 +1557,8 @@ impl Worker {
                 self.hydrate(&id);
                 return;
             }
-            if let Some(mode) = patch.html_answers
-                && window
-                    .html_answers
-                    .mode
-                    .as_ref()
-                    .is_none_or(|current| mode.revision >= current.revision)
-            {
-                window.html_answers.mode = Some(*mode);
+            if let Some(mode) = patch.html_answers {
+                window.html_answers.accept_mode(*mode);
             }
             self.accept_html_projections(
                 &id,

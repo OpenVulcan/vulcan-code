@@ -33,6 +33,11 @@ function Acceptance(props: { initial: ConversationEventWindowControllerSnapshot 
 /** Fetch only the fixture-local canonical window and mount it; surface a generic setup failure.
  * 仅获取夹具本地的权威窗口并挂载；显示不含敏感信息的建立失败。 */
 async function mount(): Promise<void> {
+  if (new URLSearchParams(location.search).has("performance")) {
+    const { measureHtmlAnswerRendering } = await import("./html-answer-performance");
+    await measureHtmlAnswerRendering();
+    return;
+  }
   const response = await fetch("/fixture/window");
   if (!response.ok) throw new Error("Synthetic window unavailable");
   createRoot(document.getElementById("root")!).render(<React.StrictMode><Acceptance initial={await response.json()} /></React.StrictMode>);

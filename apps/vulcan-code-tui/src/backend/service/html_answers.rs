@@ -6,6 +6,44 @@ use crate::service_api::html_answers as requests;
 use vulcan_session_core::v1::{AssistantSemanticStatus, EventVisibility};
 
 impl Worker {
+    /// Call an HTML RPC with shared localized errors; transport loss still uses normal reconnection.
+    /// 使用共享本地化错误调用 HTML RPC；传输丢失仍使用正常重连。
+    /// `fallback` describes this operation; a successful response is decoded as the exact DTO.
+    /// `fallback` 描述当前操作；成功响应按精确 DTO 解码。
+    fn call_html_as<T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Value,
+        fallback: String,
+    ) -> Option<T> {
+        let Some(client) = self.client.clone() else {
+            self.emit(BackendEvent::Notice(Notice::NotConnected));
+            return None;
+        };
+        match client.call(method, params) {
+            Ok(value) => match serde_json::from_value(value) {
+                Ok(result) => Some(result),
+                Err(_) => {
+                    self.toast(NoticeSeverity::Error, fallback);
+                    None
+                }
+            },
+            Err(error) => {
+                let label = match error.message.as_str() {
+                    "expired" => crate::tr!("htmlAnswers.expired"),
+                    "stale_source" => crate::tr!("htmlAnswers.stale"),
+                    "invalid_request" => crate::tr!("htmlAnswers.invalid"),
+                    "capacity" | "rate_limited" => crate::tr!("htmlAnswers.busy"),
+                    _ => fallback,
+                };
+                self.toast(NoticeSeverity::Error, label);
+                if error.transport {
+                    self.disconnected();
+                }
+                None
+            }
+        }
+    }
     /// Publish one exact window or draft; unknown sessions have no authority to publish.
     /// 发布一个精确窗口或草稿；未知会话没有可发布权威。
     pub(super) fn emit_html_answers(&self, id: &str) {
@@ -62,6 +100,7 @@ impl Worker {
         request: api::SessionHtmlAnswerModeUpdateRequest,
     ) {
         if let Some(draft) = self.drafts.get_mut(&request.session_id) {
+            let conflict = draft.html_answers.revision != request.expected_revision;
             if draft.html_answers.revision == request.expected_revision
                 && draft.html_answers.enabled != request.enabled
             {
@@ -69,12 +108,17 @@ impl Worker {
                 draft.html_answers.revision += 1;
             }
             self.emit_html_answers(&request.session_id);
+            if conflict {
+                self.toast(NoticeSeverity::Warning, crate::tr!("htmlAnswers.conflict"));
+            }
             return;
         }
         let (method, params) = requests::set_session_html_answer_mode(&request);
-        let Some(response) =
-            self.call_as::<api::SessionHtmlAnswerModeUpdateResponse>(method, params)
-        else {
+        let Some(response) = self.call_html_as::<api::SessionHtmlAnswerModeUpdateResponse>(
+            method,
+            params,
+            crate::tr!("htmlAnswers.saveFailed"),
+        ) else {
             return;
         };
         let Some(window) = self.windows.get_mut(&request.session_id) else {
@@ -86,17 +130,13 @@ impl Worker {
             self.hydrate(&request.session_id);
             return;
         }
-        if window
-            .html_answers
-            .mode
-            .as_ref()
-            .is_none_or(|mode| response.html_answers.revision >= mode.revision)
-        {
-            window.html_answers.mode = Some(response.html_answers);
-        }
+        window.html_answers.accept_mode(response.html_answers);
+        let pending = window.html_answers.awaiting_request();
         self.emit_html_answers(&request.session_id);
         if response.conflict {
             self.toast(NoticeSeverity::Warning, crate::tr!("htmlAnswers.conflict"));
+        } else if pending {
+            self.toast(NoticeSeverity::Info, crate::tr!("htmlAnswers.pending"));
         }
     }
 
@@ -134,7 +174,11 @@ impl Worker {
             locale,
         };
         let (method, params) = requests::create_html_answer_view_link(&request);
-        if let Some(link) = self.call_as::<api::HtmlAnswerViewLinkResponse>(method, params) {
+        if let Some(link) = self.call_html_as::<api::HtmlAnswerViewLinkResponse>(
+            method,
+            params,
+            crate::tr!("htmlAnswers.cannotOpen"),
+        ) {
             self.emit(BackendEvent::HtmlAnswerLink {
                 source,
                 link: HtmlAnswerLink(link),
@@ -151,7 +195,7 @@ impl Worker {
             grant_id,
         };
         let (method, params) = requests::revoke_html_answer_view_link(&request);
-        let _ = self.call(method, params);
+        let _ = self.call_html_as::<()>(method, params, crate::tr!("htmlAnswers.unavailable"));
     }
 }
 

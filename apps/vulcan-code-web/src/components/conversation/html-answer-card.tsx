@@ -162,7 +162,7 @@ export function HtmlAnswerCard(props: {
               {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
             </Button>
           </div>
-          {open && link ? <iframe ref={viewer} title={title} src={link.viewerUrl} referrerPolicy="no-referrer" className="html-answer-viewer-frame" />
+          {open && link ? <iframe ref={viewer} title={title} src={link.viewerUrl} allow="clipboard-write" referrerPolicy="no-referrer" className="html-answer-viewer-frame" />
             : <p role="status">{t("ui.loading")}</p>}
         </DialogContent>
       </Dialog>

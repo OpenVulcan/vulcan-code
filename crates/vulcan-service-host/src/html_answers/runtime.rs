@@ -271,8 +271,24 @@ impl HtmlAnswerRuntime {
             .set(origins)
             .map_err(|_| HtmlAnswerViewError::Unavailable)?;
         let router = routes::render_router(self.shared.clone());
+        let shared = self.shared.clone();
         *owner = Some(tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
+            // Idle capabilities are reclaimed on the shortest policy lifetime, with no second task owner.
+            // 按最短策略有效期回收空闲能力，不创建第二个任务所有者。
+            let mut cleanup = tokio::time::interval(Duration::from_secs(
+                HTML_ANSWER_TICKET_SECONDS.min(HTML_ANSWER_LEASE_SECONDS),
+            ));
+            cleanup.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let server = axum::serve(listener, router).into_future();
+            tokio::pin!(server);
+            loop {
+                tokio::select! {
+                    _ = &mut server => break,
+                    _ = cleanup.tick() => {
+                        if let Ok(mut grants) = shared.grants.lock() { grants.prune(Instant::now()); }
+                    }
+                }
+            }
         }));
         Ok(())
     }

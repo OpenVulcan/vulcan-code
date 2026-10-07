@@ -180,8 +180,8 @@ pub struct HtmlAnswerEventProjection {
     /// Exact source revision used to derive all descriptors.
     /// 派生全部描述时使用的精确源码修订。
     pub event_revision: u64,
-    /// Nonempty descriptors; no source copies or executable browser state.
-    /// 非空描述集合，不包含源码副本或浏览器执行状态。
+    /// Descriptors, possibly empty after examining an inert example; no source copies or browser state.
+    /// 描述集合，检查不可执行示例后可以为空；不包含源码副本或浏览器状态。
     pub answers: Vec<HtmlAnswerDescriptor>,
 }
 
@@ -245,7 +245,16 @@ impl SourceCursor {
     /// Convert an ordered boundary in `text`, returning its UTF-16 code-unit position.
     /// 转换 `text` 中有序的边界，返回其 UTF-16 码元位置。
     fn advance(&mut self, text: &str, byte: usize) -> usize {
-        self.utf16 += text[self.byte..byte].encode_utf16().count();
+        // HTML syntax is usually ASCII: its byte and UTF-16 lengths are identical.
+        // HTML 语法通常为 ASCII：其字节长度与 UTF-16 长度相同。
+        // Scan non-ASCII spans with the exact encoder so astral characters retain two code units.
+        // 非 ASCII 区间使用精确编码器，确保补充平面字符仍占两个码元。
+        let span = &text[self.byte..byte];
+        self.utf16 += if span.is_ascii() {
+            span.len()
+        } else {
+            span.encode_utf16().count()
+        };
         self.byte = byte;
         self.utf16
     }

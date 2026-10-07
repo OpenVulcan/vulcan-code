@@ -44,6 +44,9 @@ struct Fixture {
     /// Canonical synthetic window, including the real Core parser's descriptors.
     /// 权威合成窗口，包含真实 Core 解析器的描述。
     window: serde_json::Value,
+    /// One hundred independently identified inert answers for the unopened-card budget.
+    /// 一百条独立身份的静默回答，用于未打开卡片预算。
+    performance_window: serde_json::Value,
 }
 
 /// Start a temporary listener with the supplied built WebUI root; print only its public origin.
@@ -131,6 +134,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_revision: event.event_revision,
             answers: vec![descriptor.clone()],
         });
+    let events: Vec<_> = (1..=100)
+        .map(|seq| ConversationEvent {
+            seq: Seq::try_new(seq).expect("positive fixture seq"),
+            ..event.clone()
+        })
+        .collect();
+    let projections: Vec<_> = events
+        .iter()
+        .filter_map(|event| {
+            HtmlAnswerEventProjection::from_event(&session.to_string(), event, true)
+        })
+        .collect();
+    let performance_window = serde_json::json!({
+        "owner": { "session_id": session, "window_generation": 1 }, "service_epoch": "synthetic",
+        "memory_revision": 1, "durable_revision": 1, "events": events, "older_before_seq": null,
+        "has_more": false, "open_turn_id": null, "open_turn_start_seq": null, "session_config": null,
+        "html_answer_projections": projections
+    });
     let fixture = Fixture {
         runtime: runtime.clone(),
         source: identity,
@@ -140,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "has_more": false, "open_turn_id": null, "open_turn_start_seq": null, "session_config": null,
             "html_answer_projections": [{ "seq": event.seq, "event_revision": event.event_revision, "answers": [descriptor] }]
         }),
+        performance_window,
     };
     let rpc_runtime = runtime.clone();
     // The real transport exposes only this synthetic window and its viewing operations.
@@ -218,6 +240,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .merge(
         Router::new()
             .route("/fixture/issue", post(issue))
+            .route(
+                "/fixture/performance-window",
+                get(|State(fixture): State<Fixture>| async { Json(fixture.performance_window) }),
+            )
             .route(
                 "/fixture/window",
                 get(|State(fixture): State<Fixture>| async { Json(fixture.window) }),

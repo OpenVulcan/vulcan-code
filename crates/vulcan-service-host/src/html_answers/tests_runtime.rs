@@ -284,6 +284,20 @@ async fn html_answers_routes_revalidate_authority_and_stop_the_listener() {
     let rendered = renderer.clone().oneshot(iframe_request()).await.unwrap();
     assert_eq!(rendered.status(), StatusCode::OK);
     assert!(
+        rendered.headers()["permissions-policy"]
+            .to_str()
+            .unwrap()
+            .split(", ")
+            .any(|directive| directive == "clipboard-write=()")
+    );
+    assert!(
+        super::viewer_headers(None)["permissions-policy"]
+            .to_str()
+            .unwrap()
+            .split(", ")
+            .any(|directive| directive == "clipboard-write=(self)")
+    );
+    assert!(
         rendered.headers()["content-security-policy"]
             .to_str()
             .unwrap()

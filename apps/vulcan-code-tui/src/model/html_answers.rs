@@ -23,6 +23,34 @@ pub struct HtmlAnswerSession {
 }
 
 impl HtmlAnswerSession {
+    /// Apply only forward desired/prepared revisions inside this exact generation.
+    /// 仅在当前精确代次内应用向前的期望及准备修订。
+    pub fn accept_mode(&mut self, next: HtmlAnswerMode) {
+        let newer = self.mode.as_ref().is_none_or(|current| {
+            if next.revision != current.revision {
+                return next.revision > current.revision;
+            }
+            next.prepared.as_ref().is_some_and(|prepared| {
+                current
+                    .prepared
+                    .as_ref()
+                    .is_none_or(|old| prepared.revision > old.revision)
+            })
+        });
+        if newer {
+            self.mode = Some(next);
+        }
+    }
+
+    /// Return whether the saved preference has not reached the next prepared business request.
+    /// 返回已保存偏好是否尚未到达下一次业务请求准备阶段。
+    pub fn awaiting_request(&self) -> bool {
+        self.mode.as_ref().is_some_and(|mode| {
+            mode.prepared
+                .as_ref()
+                .map_or(mode.enabled, |prepared| prepared.revision != mode.revision)
+        })
+    }
     /// Return the ready immutable source selected by `seq` and `ordinal` for this root session.
     /// 返回此根会话内由 `seq` 与 `ordinal` 选中的就绪不可变源码。
     /// Missing authority or noncanonical session IDs have no executable identity.
@@ -49,6 +77,28 @@ impl HtmlAnswerSession {
             event_revision: projection.event_revision,
             artifact_id: artifact_id.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// A late save acknowledgement cannot erase the request's already-confirmed preparation.
+    /// 迟到的保存确认不能抹除请求已确认的准备状态。
+    #[test]
+    fn html_mode_preparation_never_regresses() {
+        let mut state = HtmlAnswerSession::default();
+        let desired: HtmlAnswerMode = serde_json::from_value(
+            serde_json::json!({"enabled":true,"revision":2,"prepared":null}),
+        )
+        .unwrap();
+        state.accept_mode(desired.clone());
+        assert!(state.awaiting_request());
+        let prepared: HtmlAnswerMode = serde_json::from_value(serde_json::json!({"enabled":true,"revision":2,"prepared":{"enabled":true,"revision":2}})).unwrap();
+        state.accept_mode(prepared.clone());
+        state.accept_mode(desired);
+        assert_eq!(state.mode, Some(prepared));
+        assert!(!state.awaiting_request());
     }
 }
 

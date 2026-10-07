@@ -218,9 +218,17 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
         .and_then(|session| session.html_answers.mode.as_ref())
         .is_some_and(|mode| mode.enabled);
     let html = format!(
-        "{} {}",
+        "{} {}{}",
         if html_enabled { "●" } else { "○" },
-        tr!("htmlAnswers.label")
+        tr!("htmlAnswers.label"),
+        if app
+            .session()
+            .is_some_and(|session| session.html_answers.awaiting_request())
+        {
+            " ◷"
+        } else {
+            ""
+        }
     );
     if x + width_of(&html) as u16 + 2 <= area.right() {
         x += button(
