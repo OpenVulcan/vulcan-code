@@ -1097,36 +1097,6 @@ pub(super) fn current_plugin_target_triple() -> Result<&'static str, String> {
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Resolves the exact process launcher for one enabled plugin-owned stdio MCP server.
-    /// 解析一个已启用插件自有 stdio MCP 服务器的精确进程启动器。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `plugin_id` and `server_id` select the immutable catalog declaration to materialize.
-    /// `plugin_id` 与 `server_id` 选择需要物化的不可变目录声明。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns a contained Shell-free specification using the declared native binary or managed runtime.
-    /// 返回使用已声明原生二进制或受管运行时、受目录约束且不使用Shell的启动规格。
-    pub fn resolve_mcp_stdio_launcher(
-        &self,
-        plugin_id: &str,
-        server_id: &str,
-    ) -> Result<VulcanPluginMcpStdioLaunchSpec, VulcanPluginRuntimeError> {
-        let snapshot = self.snapshot();
-        let server_key = format!("{plugin_id}:{server_id}");
-        let server = snapshot
-            .enabled_mcp_servers
-            .get(&server_key)
-            .ok_or_else(|| {
-                VulcanPluginRuntimeError::new(format!(
-                    "Vulcan plugin MCP server `{server_key}` is not enabled."
-                ))
-            })?;
-        self.resolve_mcp_stdio_launcher_descriptor(server)
-    }
-
     /// Resolves the exact process launcher for one validated activation stdio MCP descriptor before publication.
     /// 在发布前为一个已校验的候选 stdio MCP 描述符解析精确进程启动器。
     ///

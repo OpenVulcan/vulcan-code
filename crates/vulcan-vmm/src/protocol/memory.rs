@@ -48,18 +48,6 @@ impl SessionMemoryStatus {
     }
 }
 
-impl PreCheckRecallMode {
-    /// Returns the current proto enum label.
-    /// 返回当前 proto 枚举标签。
-    pub const fn proto_label(self) -> &'static str {
-        match self {
-            Self::PreCheckRecallModeUnspecified => "PRE_CHECK_RECALL_MODE_UNSPECIFIED",
-            Self::PreCheckRecallModeSessionCompact => "PRE_CHECK_RECALL_MODE_SESSION_COMPACT",
-            Self::PreCheckRecallModeFull => "PRE_CHECK_RECALL_MODE_FULL",
-        }
-    }
-}
-
 /// Request body for VMM PreCheck.
 /// VMM PreCheck 请求体。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

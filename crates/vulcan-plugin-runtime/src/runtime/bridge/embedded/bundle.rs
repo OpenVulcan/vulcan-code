@@ -77,26 +77,6 @@ impl VulcanPluginEmbeddedHost {
         .map(|pool| pool.id)
     }
 
-    /// Register the exact reusable tool in capacity_id; request must match its declared policy and shutdown.
-    /// 在 capacity_id 中注册精确可复用工具；request 必须匹配其声明策略及关闭器。
-    /// Returns the core pool identity after capturing private hygiene callbacks on every original VM.
-    /// 在每个原始 VM 中捕获私有清理回调后返回核心池身份。
-    pub fn register_reusable_bundle_pool_in_capacity(
-        &self,
-        capacity_id: &str,
-        request: VulcanPluginBundlePoolRequest,
-        tool_id: &str,
-    ) -> EmbeddedResult<String> {
-        self.register_bundle_pool_with_capacity(
-            Some(capacity_id),
-            request,
-            Some(tool_id),
-            None,
-            ExecutionSource::Published,
-        )
-        .map(|pool| pool.id)
-    }
-
     /// Register tool_id in capacity_id with the exact snapshot already used to choose its reusable domain.
     /// 使用已用于选择可复用域的精确 snapshot，在 capacity_id 中注册 tool_id。
     /// request supplies unchanged package and policy authority; returns the pool without replacing the snapshot.

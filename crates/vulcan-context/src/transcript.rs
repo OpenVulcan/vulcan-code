@@ -126,27 +126,6 @@ impl SessionMessageRecordKind {
             Self::ToolCallOutput | Self::ToolResultOutput | Self::ToolDetailOutput
         )
     }
-
-    /// Parses one persisted text key back into the durable record kind enum.
-    /// 将一条持久化文本键解析回持久化记录类型枚举。
-    pub fn from_persisted_key(value: &str) -> Self {
-        match value {
-            "thinking-output" => Self::ThinkingOutput,
-            "assistant-output" => Self::AssistantOutput,
-            "tool-call-output" => Self::ToolCallOutput,
-            "tool-result-output" => Self::ToolResultOutput,
-            "title-output" => Self::TitleOutput,
-            "summary-output" => Self::SummaryOutput,
-            "explore-output" => Self::ExploreOutput,
-            "tool-detail-output" => Self::ToolDetailOutput,
-            "compaction-summary" => Self::CompactionSummary,
-            "compaction-status" => Self::CompactionStatus,
-            "display-note" => Self::DisplayNote,
-            "turn-terminated" => Self::TurnTerminated,
-            "turn-stats" => Self::TurnStats,
-            _ => Self::Transcript,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -272,12 +251,6 @@ impl SessionMessageEntry {
         self.id = id.into();
         self.created_at = created_at.into();
         self
-    }
-
-    /// Returns whether the entry should be shown to the user inside the transcript stream.
-    /// 返回该消息项是否应展示给用户的转录流中。
-    pub const fn is_visible_to_user(&self) -> bool {
-        self.visible
     }
 
     /// Returns whether the entry should participate in future model-context reconstruction.

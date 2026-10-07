@@ -218,16 +218,6 @@ impl SessionTitleSource {
             Self::Manual => "manual",
         }
     }
-
-    /// Parses one persisted text key back into the session-title source enum.
-    /// 将一条持久化文本键解析回会话标题来源枚举。
-    pub fn from_persisted_key(value: &str) -> Self {
-        match value {
-            "seeded" => Self::Seeded,
-            "manual" => Self::Manual,
-            _ => Self::Generated,
-        }
-    }
 }
 
 /// Execution phases used by the main workbench transcript header.

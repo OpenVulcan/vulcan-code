@@ -95,16 +95,6 @@ pub enum PromptSkillScope {
 }
 
 impl PromptSkillScope {
-    /// Returns a compact Chinese label for WebUI display.
-    /// 返回用于界面展示的紧凑中文标签。
-    pub const fn zh_label(self) -> &'static str {
-        match self {
-            Self::System => "系统",
-            Self::User => "用户",
-            Self::Plugin => "插件",
-        }
-    }
-
     /// Returns a compact English label for diagnostics.
     /// 返回用于诊断信息的紧凑英文标签。
     pub const fn en_label(self) -> &'static str {

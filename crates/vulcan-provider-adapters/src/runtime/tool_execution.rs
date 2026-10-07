@@ -23,46 +23,6 @@ use std::time::{Duration, Instant};
 const LEGACY_PROVIDER_TOOL_OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl PublicAiRuntime {
-    /// Executes one selected provider tool with an explicit host workspace base.
-    /// 使用显式宿主工作区基准执行一个已选供应商工具。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `configuration`, `capability`, and `arguments` freeze the target invocation;
-    /// `owner_session_id` owns recoverable work and `workspace_root` resolves relative resources.
-    /// `configuration`、`capability` 与 `arguments` 冻结目标调用；`owner_session_id` 持有
-    /// 可恢复任务，`workspace_root` 解析相对资源。
-    ///
-    /// # Returns
-    /// 返回值
-    /// One normalized terminal result after local resource upload materialization.
-    /// 在本地资源上传物化后返回一个归一化终态结果。
-    pub async fn execute_selected_provider_tool_for_owner_in_workspace(
-        &self,
-        configuration: &PersistedAiConfiguration,
-        capability: ProviderToolCapabilityKind,
-        arguments: serde_json::Value,
-        owner_session_id: Option<String>,
-        workspace_root: Option<&Path>,
-    ) -> Result<ProviderToolExecutionResult, String> {
-        let selection = configuration
-            .provider_tool_selections
-            .get(&capability)
-            .cloned()
-            .ok_or_else(|| {
-                format!("No provider tool target is selected for capability `{capability:?}`.")
-            })?;
-        self.execute_provider_tool_target_for_owner_in_workspace(
-            configuration,
-            capability,
-            &selection,
-            arguments,
-            owner_session_id,
-            workspace_root,
-        )
-        .await
-    }
-
     /// Executes one exact provider-tool target without changing the persisted default selection.
     /// 在不修改持久化默认选择的情况下执行一个精确供应商工具目标。
     ///

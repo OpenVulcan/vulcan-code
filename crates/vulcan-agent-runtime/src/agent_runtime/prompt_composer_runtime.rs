@@ -240,14 +240,6 @@ pub fn invalidate_runtime_prompt_composer_cache_for_reason(reason: PromptInvalid
         .apply_invalidation(&event);
 }
 
-/// Invalidates cached prompt-composer tool help after AI tool visibility changes.
-/// 在 AI 工具可见性变化后使提示词组合器的工具帮助缓存失效。
-pub fn invalidate_runtime_prompt_tool_visibility_cache() {
-    invalidate_runtime_prompt_composer_cache_for_reason(
-        PromptInvalidationReason::ToolVisibilityChanged,
-    );
-}
-
 /// Invalidates cached prompt-composer tool help after the LuaSkills tool catalog changes.
 /// 在 LuaSkills 工具目录变化后使提示词组合器的工具帮助缓存失效。
 pub fn invalidate_runtime_prompt_luaskill_catalog_cache() {

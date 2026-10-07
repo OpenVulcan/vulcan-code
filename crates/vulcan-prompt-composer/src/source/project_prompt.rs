@@ -75,12 +75,6 @@ impl ProjectPromptFileCache {
         Ok(snapshot)
     }
 
-    /// Invalidate one concrete prompt file path.
-    /// 使单个具体提示词文件路径失效。
-    pub fn invalidate_file(&mut self, path: impl AsRef<Path>) {
-        self.entries.remove(path.as_ref());
-    }
-
     /// Return the current number of cached entries.
     /// 返回当前缓存条目数量。
     pub fn entry_count(&self) -> usize {

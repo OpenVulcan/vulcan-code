@@ -4612,17 +4612,6 @@ pub fn service_browser_manager(state: &SharedServiceBridgeState) -> Result<Brows
     browser_manager_from_state(state)
 }
 
-/// Closes every owned Core browser host channel during service shutdown.
-/// 在服务关闭期间关闭所有已拥有的 Core 浏览器宿主通道。
-///
-/// # Returns
-/// 返回值
-/// The number of host channels closed, and each host exits on its own because its channel ended.
-/// 返回已关闭的宿主通道数量；每个宿主因通道结束而自行退出。
-pub fn service_browser_shutdown_hosts(state: &SharedServiceBridgeState) -> Result<usize, String> {
-    service_browser_manager(state)?.shutdown_hosts()
-}
-
 /// Lists Core browser sessions from shared service state.
 /// 从共享服务状态列出 Core 浏览器会话。
 pub async fn service_browser_session_list(

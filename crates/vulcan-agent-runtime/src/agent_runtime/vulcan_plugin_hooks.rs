@@ -1071,36 +1071,6 @@ pub async fn dispatch_vulcan_plugin_hook(
         .await
 }
 
-/// Dispatches one generic tool hook after exact immutable-origin matching.
-/// 在按不可变来源身份精确匹配后调度一个通用工具 Hook。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns plugin leases, `origin` is captured before public-name normalization,
-/// `context` carries the trusted invocation session, and `payload` is the point-specific frame.
-/// `runtime` 持有插件租约，`origin` 是公开名称归一化前捕获的来源身份，`context` 携带可信调用会话，`payload` 是点位专用帧。
-///
-/// # Returns
-/// 返回值
-/// Returns the transformed report from hooks whose declared target exactly equals `origin`.
-/// 返回声明目标与 `origin` 完全相等的 Hook 产生的变换报告。
-pub async fn dispatch_vulcan_plugin_tool_hook(
-    runtime: VulcanPluginRuntimeManager,
-    origin: &VulcanToolOrigin,
-    context: HookContext,
-    payload: Value,
-) -> Result<HookDispatchReport, HookError> {
-    if !is_generic_tool_hook_point(&context.point) {
-        return Err(HookError::invalid_registration(format!(
-            "Point `{}` is not a generic tool hook point.",
-            context.point
-        )));
-    }
-    let snapshot = runtime.snapshot();
-    let hooks = matching_tool_hooks(&snapshot, origin, &context.point);
-    dispatch_tool_hook_descriptors(runtime, hooks, context, payload).await
-}
-
 /// Atomically synchronizes enabled manifest hooks into the existing host dispatcher.
 /// 将已启用的清单 hook 原子同步到现有宿主调度器。
 ///

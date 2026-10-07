@@ -19,17 +19,6 @@ pub struct ConversationPrecheckRequest {
 }
 
 impl ConversationPrecheckRequest {
-    /// Returns an exact clone of the prepared Hook payload for durable retry capture.
-    /// 返回已准备 Hook 载荷的精确克隆，用于持久化重试捕获。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The immutable JSON payload bound to this request.
-    /// 绑定到该请求的不可变 JSON 载荷。
-    pub fn payload_snapshot(&self) -> Value {
-        self.payload.clone()
-    }
-
     /// Builds one prepared asynchronous precheck request.
     /// 构建一条已准备的异步 precheck 请求。
     pub(super) fn new(

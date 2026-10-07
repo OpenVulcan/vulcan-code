@@ -17,7 +17,7 @@ use crate::provider_config::{
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Mutex, OnceLock},
 };
 use vulcan_ai_contract::{HOST_MESSAGE_GUIDANCE, HostMessageEnvelope, HostMessageKind};
@@ -1171,39 +1171,6 @@ fn load_workspace_project_rules_snapshot(
     })
 }
 
-/// Invalidate the cached workspace-local project prompt snapshot.
-/// 使缓存中的工作区本地项目提示词快照失效。
-///
-/// # Parameters
-/// # 参数
-/// - `workspace_path`: Persisted workspace directory that owns the cached prompt.
-/// - `workspace_path`：拥有缓存提示词的持久化工作区目录。
-/// - `project_prompt_path`: Configured project-prompt path relative to the workspace.
-/// - `project_prompt_path`：相对于工作区的已配置项目提示词路径。
-///
-/// # Returns
-/// # 返回值
-/// Returns success after invalidation or intentional absence, and preserves workspace metadata failures.
-/// 完成失效处理或来源有意缺失时返回成功，并保留工作区元数据失败。
-pub fn invalidate_workspace_project_user_prompt_cache(
-    workspace_path: &str,
-    project_prompt_path: &str,
-) -> Result<(), String> {
-    let Some(prompt_path) = workspace_project_prompt_path(
-        workspace_path,
-        project_prompt_path.trim().trim_start_matches(['/', '\\']),
-    )?
-    else {
-        return Ok(());
-    };
-    let cache = PROJECT_PROMPT_FILE_CACHE.get_or_init(|| Mutex::new(ProjectPromptFileCache::new()));
-    let mut cache = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    cache.invalidate_file(prompt_path);
-    Ok(())
-}
-
 /// Invalidate the cached workspace-level project rules snapshot.
 /// 使缓存中的工作区级项目规则快照失效。
 ///
@@ -1263,33 +1230,6 @@ fn resolve_workspace_directory(workspace_path: &str) -> Result<Option<&Path>, St
         return Ok(None);
     }
     Ok(Some(workspace))
-}
-
-/// Resolves one workspace-local project prompt path.
-/// 解析单个工作区本地项目提示词路径。
-///
-/// # Parameters
-/// # 参数
-/// - `workspace_path`: Persisted workspace path that owns the configured prompt.
-/// - `workspace_path`：拥有已配置提示词的持久化工作区路径。
-/// - `project_prompt_path`: Normalized nonabsolute prompt path below the workspace.
-/// - `project_prompt_path`：工作区下经过规范化的非绝对提示词路径。
-///
-/// # Returns
-/// # 返回值
-/// Returns the joined path when both inputs are valid, `None` for intentional absence, or a workspace metadata failure.
-/// 两项输入有效时返回拼接路径；有意缺失时返回 `None`；工作区元数据失败时返回错误。
-fn workspace_project_prompt_path(
-    workspace_path: &str,
-    project_prompt_path: &str,
-) -> Result<Option<PathBuf>, String> {
-    if project_prompt_path.trim().is_empty() {
-        return Ok(None);
-    }
-    let Some(workspace) = resolve_workspace_directory(workspace_path)? else {
-        return Ok(None);
-    };
-    Ok(Some(workspace.join(project_prompt_path)))
 }
 
 /// Loads the workspace-local user prompt configured for prompt composition.

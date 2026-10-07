@@ -57,12 +57,6 @@ impl ReasoningEffortLevel {
         Self::Ultra,
     ];
 
-    /// Returns whether this value requests explicit reasoning.
-    /// 返回当前值是否请求显式推理。
-    pub const fn requests_explicit_reasoning(self) -> bool {
-        !matches!(self, Self::Off)
-    }
-
     /// Returns the stable preference rank.
     /// 返回稳定的偏好排序值。
     pub const fn rank(self) -> u8 {
