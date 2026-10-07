@@ -135,8 +135,8 @@ impl ReasoningEffort {
     ];
 }
 
-/// Initial state delivered once the backend is connected (`service_workbench_snapshot`).
-/// 后端连接后下发的初始状态（`service_workbench_snapshot`）。
+/// Initial state delivered once the backend is connected (`workbench.snapshot`).
+/// 后端连接后下发的初始状态（`workbench.snapshot`）。
 #[derive(Debug, Clone)]
 pub struct WorkbenchSnapshot {
     pub projects: Vec<Project>,

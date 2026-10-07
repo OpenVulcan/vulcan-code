@@ -8,26 +8,18 @@ use super::*;
 #[cfg(test)]
 pub(super) const RPC_METHODS: &[&str] = &[
     "startup.snapshot",
-    "service_startup_snapshot",
     "workbench.snapshot",
-    "service_workbench_snapshot",
     "workspace.diff.snapshot",
-    "service_workspace_diff_snapshot",
     "workspace.git.catalog",
     "workspace.git.setMonitoring",
     "workspace.diff.fileDetail",
-    "service_workspace_diff_file_detail",
     "workspace.diff.search",
-    "service_workspace_diff_search",
     "workspace.git.fileAction",
-    "service_workspace_git_file_action",
     "workspace.git.branches",
     "workspace.git.switchBranch",
     "workspace.git.history",
     "workspace.files.list",
-    "service_workspace_files_list",
     "workspace.files.read",
-    "service_workspace_files_read",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -53,13 +45,9 @@ pub(super) async fn dispatch(
     // result preserves service failures inside Handled so the top-level return trace still runs.
     // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
     let result = match method {
-        "startup.snapshot" | "service_startup_snapshot" => {
-            rpc_json_result(service_startup_snapshot(state))
-        }
-        "workbench.snapshot" | "service_workbench_snapshot" => {
-            rpc_json_result(service_workbench_snapshot(state))
-        }
-        "workspace.diff.snapshot" | "service_workspace_diff_snapshot" => rpc_json_result(
+        "startup.snapshot" => rpc_json_result(service_startup_snapshot(state)),
+        "workbench.snapshot" => rpc_json_result(service_workbench_snapshot(state)),
+        "workspace.diff.snapshot" => rpc_json_result(
             service_workspace_diff_snapshot(
                 state,
                 rpc_optional_param(params, "workspacePath")?,
@@ -90,7 +78,7 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "workspace.diff.fileDetail" | "service_workspace_diff_file_detail" => rpc_json_result(
+        "workspace.diff.fileDetail" => rpc_json_result(
             service_workspace_diff_file_detail(
                 state,
                 rpc_optional_param(params, "workspacePath")?,
@@ -101,7 +89,7 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "workspace.diff.search" | "service_workspace_diff_search" => rpc_json_result(
+        "workspace.diff.search" => rpc_json_result(
             service_workspace_diff_search(
                 state,
                 rpc_optional_param(params, "workspacePath")?,
@@ -112,7 +100,7 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "workspace.git.fileAction" | "service_workspace_git_file_action" => rpc_json_result(
+        "workspace.git.fileAction" => rpc_json_result(
             service_workspace_git_file_action(
                 state,
                 rpc_optional_param(params, "workspacePath")?,
@@ -152,7 +140,7 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "workspace.files.list" | "service_workspace_files_list" => rpc_json_result(
+        "workspace.files.list" => rpc_json_result(
             service_workspace_files_list(
                 rpc_required_param(params, "workspacePath")?,
                 rpc_optional_param(params, "projectId")?,
@@ -162,7 +150,7 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "workspace.files.read" | "service_workspace_files_read" => rpc_json_result(
+        "workspace.files.read" => rpc_json_result(
             service_workspace_files_read(
                 rpc_required_param(params, "workspacePath")?,
                 rpc_optional_param(params, "projectId")?,

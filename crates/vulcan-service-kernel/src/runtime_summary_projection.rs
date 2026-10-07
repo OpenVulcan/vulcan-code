@@ -9,13 +9,13 @@ pub(crate) fn tool_calls() -> Vec<ToolCallSummary> {
     vec![
         ToolCallSummary {
             id: String::from("service-startup"),
-            name: String::from("service_startup_snapshot"),
+            name: String::from("startup.snapshot"),
             status: String::from("ready"),
             detail: String::from("WebUI 可读取真实启动阶段快照。"),
         },
         ToolCallSummary {
             id: String::from("service-workbench"),
-            name: String::from("service_workbench_snapshot"),
+            name: String::from("workbench.snapshot"),
             status: String::from("ready"),
             detail: String::from("WebUI 可读取真实项目、会话索引与插件信息。"),
         },

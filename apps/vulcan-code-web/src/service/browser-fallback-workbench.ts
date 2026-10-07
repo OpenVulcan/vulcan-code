@@ -98,7 +98,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   archivedProjects: [],
   archivedConversations: [],
   selectedConversationId: "preview",
-  toolCalls: [{ id: "preview-tool", name: "service_startup_snapshot", status: "preview", detail: "Browser mode is using fallback data." }],
+  toolCalls: [{ id: "preview-tool", name: "startup.snapshot", status: "preview", detail: "Browser mode is using fallback data." }],
   composerSlashCommands: browserFallbackSlashCommands,
   outputStyleCatalog: {
     defaultId: "balanced",
