@@ -6,8 +6,8 @@
 `vulcan-service-host::html_answers`。修改协议、身份、容量、HTTP 隔离或浏览器支持边界时，
 必须同步本文及相应行为测试。
 
-当前已交付协议与隔离基座、会话偏好及迁移、请求指引，以及 GUI/WebUI 输入区开关。
-Core 查看授权、结果卡与 TUI 完整功能尚未交付。
+当前已交付协议与隔离基座、会话偏好及迁移、请求指引、GUI/WebUI 输入区开关、可靠结果投影，
+以及 Core 查看授权和可独立打开的已构建查看器。会话结果卡、应用内弹窗与 TUI 完整功能尚未交付。
 下述隔离回归使用真实浏览器和合成监听器，不等同于完整产品集成验收。
 
 ## 会话偏好与请求边界
@@ -83,8 +83,42 @@ HTTP 响应使用 `sandbox allow-scripts`，同时 iframe 保留 `sandbox="allow
 base 和表单提交被禁止。HTTP 禁止缓存与来源外传，并限制设备权限。不得为此放宽现有普通
 附件的响应策略。CSP 限制不能替代授权，也不能提供硬 CPU/内存配额。
 
-完整接入仍须实现单次票据、只读租约、每次读取的最新会话归属校验，以及拒绝将生成内容作为
-独立顶层页面直接打开。`content_response` 仅包装已授权内容，不能单独作为未鉴权路由使用。
+`content_response` 仅包装已授权内容，不能单独作为未鉴权路由使用。
+
+## 临时查看授权与生命周期
+
+已鉴权 RPC `service_create_html_answer_view_link` 接收 `request`：客户端生命周期 `clientId`、
+共享目录 `locale` 与 `source`。后者包含规范会话 UUID、显式可空嵌入父会话、历史代次、事件
+序号、语义修订和完整结果摘要。`service_revoke_html_answer_view_link` 按 `clientId` 与非秘密
+`grantId` 撤销自身授权，包含尚在兑换中的记录。
+
+返回地址为配置的 Core 来源下 `/html-answers/{session_id}/{artifact_id}#ticket=...`。
+票据与租约使用操作系统安全随机源，熵不足或随机源失败直接拒绝，不回退到时间戳或 UUID。
+秘密仅存于有容量与速率上限的内存表，相关 DTO 和记录不派生 `Debug`，不进入会话持久化。
+
+查看器立即移除 URL 片段，以不带 Cookie 或 Core 实例令牌的 POST 调用
+`/v1/html-answers/exchange`。接口要求唯一且精确匹配的可信查看器 `Origin`，不继承通用 RPC
+的 CORS 层。单次消费与租约容量预留原子完成；源码校验失败、任务取消或撤销时不会留下可读
+租约。租约只能访问单个结果，`/v1/html-answers/release` 可重复释放自己的有限能力。
+
+Core 通过索引定位持久源码，不使用内存正文或 HTML 缓存代替读取。在与编辑、删除相同的全局
+锁序下取得生命周期守卫，重新检查代次、事件修订、原始围栏和完整摘要。嵌入子会话必须提供
+精确父归属，不扫描候选路径。历史开关关闭不影响读取。每次渲染请求重新验证；已删除或更改
+结果不可通过旧链接重新读取，已经交付到浏览器的字节不会被远程抹除。
+
+渲染监听器仅在合法查看时绑定回环地址，只提供 `/content/{lease}`；没有通用 RPC、附件、
+发现或 WebSocket 路由。顶层文档读取被拒绝，实际内容要求 iframe 导航且仍附 HTTP 沙箱。
+主 HTTP future 取消、停止或所属运行时释放时，撤销所有授权并中止独立监听器。
+
+默认来源取实际绑定的 Core 与临时渲染端口。反向代理部署必须同时显式提供
+`VULCAN_HTML_VIEWER_ORIGIN`、`VULCAN_HTML_RENDERER_ORIGIN` 和非零回环
+`VULCAN_HTML_RENDERER_PORT`；来源必须是不同的规范 HTTP(S) origin。只配置其中一项会报错，
+不从 Host 或转发头猜来源，也不创建公网监听和隧道。代理仍负责两个来源的可达性与原 Core
+连接配置；查看功能不替代代理本身的鉴权。
+
+查看器入口为 Vite 多入口构建产物 `html-answer-viewer.html`，仅导入专用展示代码及共享语言
+目录，不导入服务发现或通用 RPC。有效租约才创建 iframe；源码模式以文本显示并移除执行
+框架。pagehide 释放租约，过期移除框架，历史缓存恢复要求重新打开，不重用已消费的秘密。
 
 规范依据：
 [CSP sandbox](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/sandbox)、
@@ -98,9 +132,17 @@ rtk cargo test -p vulcan-session-core html_answers --lib
 rtk cargo test -p vulcan-service-host html_answers --lib -- --test-threads=1
 rtk cargo clippy -p vulcan-session-core -p vulcan-service-host --all-targets -- -D warnings
 rtk cargo build -p vulcan-service-host --example html_answers_security_fixture
+rtk cargo build -p vulcan-service-host --example html_answers_viewer_fixture
 rtk proxy pnpm.cmd --dir apps/vulcan-code-desktop run build
 rtk proxy node apps/vulcan-code-desktop/tools/html-answers-security.mjs --fixture=target/debug/examples/html_answers_security_fixture.exe
 ```
+
+独立查看器实际构建验收：先运行 WebUI 构建，再执行
+`apps/vulcan-code-desktop/tools/html-answers-viewer-acceptance.mjs`，提供 `--fixture`、
+`--bundle` 以及本机已有 Chromium 的 `--chromium` 路径；可用 `--report` 保存非敏感观测。
+2026-10-07 Chromium 154.0.8037.0 已验证真实鼠标脚本交互、片段移除、父 DOM/桌面桥接隔离、
+20 次预览/源码切换销毁、链接重放拒绝及页面关闭后租约返回 410。此测试使用合成源码回调；
+内核另以真实隔离分段存储验证精确读取、修订/代次拒绝及会话删除后失效，尚不是三端完整验收。
 
 真实回归要求本机 Playwright 管理的 Chromium、Firefox 和当前 Electron。
 可通过 `--chromium=<实际浏览器路径>` 指定 Chromium，通过 `--report=<本地文件>` 保存证据。

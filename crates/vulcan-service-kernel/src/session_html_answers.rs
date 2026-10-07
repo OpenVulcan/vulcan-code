@@ -7,6 +7,8 @@ use crate::session_runtime_registry_v1::{
 use crate::{SharedServiceBridgeState, current_v1_unix_millis, parse_session_id};
 use vulcan_service_api::{SessionHtmlAnswerModeUpdateRequest, SessionHtmlAnswerModeUpdateResponse};
 
+pub(crate) mod viewing;
+
 /// Save `request` through the unique session writer and return the exact durable state or conflict.
 /// 通过唯一会话写入器保存 `request`，返回精确可靠状态或冲突。
 /// `state` supplies indexed session ownership; no provider invocation or user event is created.

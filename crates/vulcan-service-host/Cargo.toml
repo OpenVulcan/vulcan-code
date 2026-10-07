@@ -13,15 +13,19 @@ workspace = true
 [dependencies]
 fs2.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 tempfile.workspace = true
 axum = { workspace = true, features = ["ws"] }
 serde_json.workspace = true
+serde.workspace = true
 base64.workspace = true
 tokio = { workspace = true, features = ["net", "sync", "time"] }
 tower-http = { workspace = true, features = ["cors"] }
 uuid.workspace = true
 url.workspace = true
 vulcan-service-api.workspace = true
+vulcan-i18n.workspace = true
+vulcan-session-core.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]

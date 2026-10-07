@@ -223,6 +223,7 @@ fn registry_terminal_status_remains_visible_after_stale_listener_is_suppressed()
         workspace_watcher: None,
         service_runtime: None,
         webui_service_discovery: None,
+        html_answer_runtime: None,
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,

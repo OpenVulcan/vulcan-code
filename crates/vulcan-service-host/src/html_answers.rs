@@ -7,6 +7,15 @@ use axum::{
 };
 use url::Url;
 
+mod grants;
+mod routes;
+mod runtime;
+#[cfg(test)]
+mod tests_runtime;
+pub use runtime::{
+    HtmlAnswerContent, HtmlAnswerRuntime, HtmlAnswerRuntimeConfig, HtmlAnswerSourceResolver,
+};
+
 /// Validated origins for the trusted viewer and the separate read-only render listener.
 /// 可信查看器与独立只读渲染监听器的已校验来源。
 #[derive(Clone, Debug)]
@@ -26,12 +35,7 @@ impl HtmlAnswerOrigins {
     /// 返回不可变策略输入，或者不含敏感信息的配置错误。
     pub fn new(viewer: &str, renderer: &str) -> Result<Self, &'static str> {
         for origin in [viewer, renderer] {
-            let parsed = Url::parse(origin).map_err(|_| "Invalid HTML answer origin")?;
-            if !matches!(parsed.scheme(), "http" | "https")
-                || parsed.origin().ascii_serialization() != origin
-            {
-                return Err("HTML answers require canonical HTTP(S) origins without paths");
-            }
+            validate_origin(origin)?;
         }
         if viewer == renderer {
             return Err("HTML answers require a separate render origin");
@@ -59,18 +63,7 @@ impl HtmlAnswerOrigins {
     /// External executable bundles must be same-origin; `script-src` never allows inline shell code.
     /// 外部可执行包必须同源；`script-src` 绝不允许内联外壳脚本。
     pub fn viewer_headers(&self) -> HeaderMap {
-        let mut headers = common_headers();
-        let csp = format!(
-            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-             img-src data:; connect-src 'self'; frame-src {}; worker-src 'none'; \
-             object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
-            self.renderer
-        );
-        headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_str(&csp).expect("validated origins form a header"),
-        );
-        headers
+        viewer_headers(Some(self.renderer()))
     }
 
     /// Build generated-document headers: page-local scripts only, an opaque origin and no host APIs.
@@ -100,6 +93,35 @@ impl HtmlAnswerOrigins {
     pub fn content_response(&self, source: String) -> Response {
         (self.content_headers(), source).into_response()
     }
+}
+
+/// Validate a configured canonical HTTP origin, returning a non-sensitive error on rejection.
+/// 校验已配置的规范 HTTP 来源；拒绝时返回不含敏感信息的错误。
+fn validate_origin(origin: &str) -> Result<(), &'static str> {
+    let parsed = Url::parse(origin).map_err(|_| "Invalid HTML answer origin")?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.origin().ascii_serialization() != origin
+    {
+        return Err("HTML answers require canonical HTTP(S) origins without paths");
+    }
+    Ok(())
+}
+
+/// Build viewer policy before or after lazy startup; an absent renderer permits no frames.
+/// 在按需启动前后构建查看器策略；缺少渲染来源时不允许任何框架。
+fn viewer_headers(renderer: Option<&str>) -> HeaderMap {
+    let mut headers = common_headers();
+    let csp = format!(
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+         img-src data:; connect-src 'self'; frame-src {}; worker-src 'none'; \
+         object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
+        renderer.unwrap_or("'none'")
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_str(&csp).expect("validated origins form a header"),
+    );
+    headers
 }
 
 /// Return no-store, no-referrer and restricted-device defaults for either HTML surface.

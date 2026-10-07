@@ -251,6 +251,7 @@ pub(in crate::native_vmm) async fn verify(
         status_provider: None,
         browser_stream: None,
         browser_download_resolver: None,
+        html_answers: None,
     };
     // The owned task is aborted on both success and assertion failure.
     // 持有任务在成功及断言失败时均被终止。

@@ -54,6 +54,21 @@ pub const HTML_ANSWER_TICKET_BURST: u32 = 5;
 /// OS-generated secret entropy in bytes, before URL-safe encoding.
 /// 操作系统生成的秘密熵字节数，编码为 URL 安全格式之前计算。
 pub const HTML_ANSWER_SECRET_BYTES: usize = 32;
+/// Maximum JSON body for ticket exchange or lease release, independent of generated page size.
+/// 票据兑换或租约释放 JSON 正文上限，独立于生成页面大小。
+pub const HTML_ANSWER_VIEW_REQUEST_MAX_BYTES: usize = 4096;
+/// Hexadecimal width of the complete SHA-256 result identity.
+/// 完整 SHA-256 结果身份的十六进制宽度。
+pub const HTML_ANSWER_ID_HEX_LENGTH: usize = 64;
+
+/// Accept only the canonical lowercase full digest; return false for prefixes, paths or uppercase forms.
+/// 仅接受规范小写完整摘要；前缀、路径或大写形式均返回假。
+pub fn html_answer_identity_is_valid(value: &str) -> bool {
+    value.len() == HTML_ANSWER_ID_HEX_LENGTH
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 /// Exact source interval in UTF-8 bytes and JavaScript UTF-16 code units.
 /// 按 UTF-8 字节和 JavaScript UTF-16 码元表示的精确源码区间。

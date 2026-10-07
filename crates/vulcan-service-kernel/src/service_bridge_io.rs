@@ -382,11 +382,22 @@ pub(crate) async fn run_webui_service_http_bridge(
     let session_resource_state = state.clone();
     let status_state = state.clone();
     let browser_download_state = state.clone();
+    let static_root = webui_static_root(manifest_static_root);
+    let html_answers = crate::session_html_answers::viewing::create_html_answer_runtime(
+        &state,
+        &discovery.base_url,
+        static_root.clone(),
+    )?;
+    state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .html_answer_runtime = Some(Arc::downgrade(&html_answers));
     let service_config = WebuiServiceHttpConfig {
+        html_answers: Some(html_answers),
         discovery: shared_discovery,
         service_token,
         event_bus,
-        static_root: webui_static_root(manifest_static_root),
+        static_root,
         rpc_dispatcher,
         session_resource_resolver: Arc::new(move |request| {
             let state = session_resource_state.clone();

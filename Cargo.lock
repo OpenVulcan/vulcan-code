@@ -10104,6 +10104,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "uuid",
  "vulcan-ai-contract",
  "vulcan-luaskills-config",
  "vulcan-runtime-assets",
@@ -10120,6 +10121,8 @@ dependencies = [
  "base64 0.23.1",
  "fs2",
  "futures-util",
+ "getrandom 0.4.3",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -10127,7 +10130,9 @@ dependencies = [
  "tower-http 0.6.11",
  "url",
  "uuid",
+ "vulcan-i18n",
  "vulcan-service-api",
+ "vulcan-session-core",
  "workspace-hack",
 ]
 

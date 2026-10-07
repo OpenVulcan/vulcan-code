@@ -442,6 +442,7 @@ pub fn create_service_bridge_state(
         vmm_controller_registry: Default::default(),
         service_runtime: None,
         webui_service_discovery: None,
+        html_answer_runtime: None,
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,

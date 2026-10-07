@@ -108,12 +108,64 @@ async fn html_answers_window_requires_exact_physically_persisted_source() {
         event_revision
     );
     assert_eq!(
-        service_session_event_reconnect_v1(state, reconnect)
+        service_session_event_reconnect_v1(state.clone(), reconnect)
             .await
             .unwrap()
             .html_answer_projections,
         saved.html_answer_projections
     );
+    // The viewer reads exact stored bytes and rejects altered ownership facts without consulting a cache.
+    // 查看器读取精确持久字节，拒绝被改动的归属事实，不查询缓存。
+    use crate::session_html_answers::viewing::resolve_html_answer_source;
+    use vulcan_service_api::{HtmlAnswerSourceIdentity, HtmlAnswerViewError};
+    use vulcan_session_core::v1::html_answers::HtmlAnswerAvailability;
+    let projection = &saved.html_answer_projections[0];
+    let HtmlAnswerAvailability::Ready { artifact_id, .. } = &projection.answers[0].availability
+    else {
+        panic!("expected saved source")
+    };
+    let identity = HtmlAnswerSourceIdentity {
+        session_id,
+        parent_session_id: None,
+        window_generation: saved.batch.window_generation,
+        event_seq: projection.seq.value(),
+        event_revision: projection.event_revision,
+        artifact_id: artifact_id.clone(),
+    };
+    let content = resolve_html_answer_source(state.clone(), identity.clone())
+        .await
+        .unwrap();
+    assert_eq!(content.source, "<p>content</p>\n");
+    for field in ["generation", "revision", "artifact"] {
+        let mut invalid = identity.clone();
+        match field {
+            "generation" => invalid.window_generation += 1,
+            "revision" => invalid.event_revision += 1,
+            "artifact" => {
+                invalid.artifact_id =
+                    "0".repeat(vulcan_session_core::v1::html_answers::HTML_ANSWER_ID_HEX_LENGTH)
+            }
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            resolve_html_answer_source(state.clone(), invalid).await,
+            Err(HtmlAnswerViewError::StaleSource)
+        ));
+    }
+    let (controller, registry) = {
+        let service = state.lock().unwrap();
+        (
+            service.controller_runtime.clone().unwrap(),
+            service.session_runtime_registry.clone(),
+        )
+    };
+    crate::session_v1_lifecycle::delete_session_lifecycle_v1(&controller, &registry, session_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        resolve_html_answer_source(state, identity).await,
+        Err(HtmlAnswerViewError::Unavailable)
+    ));
 }
 
 /// Failed storage emits no confirmed preference; a successful retry publishes the exact candidate.

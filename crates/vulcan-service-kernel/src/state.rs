@@ -830,6 +830,9 @@ pub struct ServiceBridgeState {
     /// Browser service discovery snapshot shared by `/health` and the dev discovery file.
     /// `/health` 与开发发现文件共享的浏览器服务发现快照。
     pub(crate) webui_service_discovery: Option<SharedWebuiServiceDiscoverySnapshot>,
+    /// Weak access to the current HTTP bridge's HTML viewer; never prolongs its listener lifetime.
+    /// 当前 HTTP 桥接 HTML 查看器的弱访问引用；绝不延长监听器生命周期。
+    pub(crate) html_answer_runtime: Option<std::sync::Weak<vulcan_service_host::html_answers::HtmlAnswerRuntime>>,
     /// Long-lived controller runtime handle.
     /// 长生命周期控制器运行时句柄。
     pub(crate) controller_runtime: Option<HostRuntimeHandle>,
