@@ -89,7 +89,7 @@ impl TerminalSessionToolAction {
 /// One ordered terminal input item accepted by `terminal_session`.
 /// `terminal_session` 接受的一条保序终端输入项。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum TerminalSessionInput {
     /// Raw text typed into the terminal.
     /// 输入到终端的原始文本。
@@ -172,6 +172,7 @@ impl TerminalSessionWaitMode {
 /// One wait-policy payload accepted by `terminal_session`.
 /// `terminal_session` 接受的一份等待策略载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TerminalSessionWaitPolicy {
     /// Requested wait mode.
     /// 请求的等待模式。
@@ -190,6 +191,7 @@ pub(crate) struct TerminalSessionWaitPolicy {
 /// One typed argument payload accepted by the host-owned `terminal_session` native tool.
 /// 宿主自有 `terminal_session` 原生工具接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TerminalSessionToolArgs {
     /// Requested terminal-session action.
     /// 请求的终端会话动作。

@@ -26,6 +26,7 @@ pub(crate) fn build_prompt_skill_detail_tool() -> Arc<NativeToolDefinition> {
 /// One typed argument payload accepted by the host-owned `skill` native tool.
 /// 宿主自有 `skill` 原生工具接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PromptSkillDetailToolArgs {
     /// Prompt skill name listed in the runtime prompt-skill catalog.
     /// 运行时技能目录中列出的技能名称。

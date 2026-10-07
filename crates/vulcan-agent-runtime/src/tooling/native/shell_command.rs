@@ -42,6 +42,7 @@ pub(crate) fn build_shell_command_tool(
 /// One typed argument payload accepted by the host-owned `shell_command` native tool.
 /// 宿主自有 `shell_command` 原生工具接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ShellCommandToolArgs {
     /// Raw command string that should be executed by the selected shell.
     /// 应由所选 shell 执行的原始命令字符串。
@@ -1298,6 +1299,17 @@ mod process_option_tests {
             parse_shell_command_tool_arguments(serde_json::json!({ "command": "echo hi" }))
                 .expect("omitted timeout stays valid");
         assert_eq!(parsed.timeout_ms, None);
+    }
+
+    /// A misspelled field is rejected instead of silently running without the intended option.
+    /// 拼错的字段会被拒绝，而不是在缺少预期选项的情况下静默执行。
+    #[test]
+    fn unknown_argument_is_rejected() {
+        parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "timeout": 1000,
+        }))
+        .expect_err("an undeclared field must be rejected");
     }
 
     /// Large stdin must be written while output is drained so echoing commands cannot deadlock on full pipes.

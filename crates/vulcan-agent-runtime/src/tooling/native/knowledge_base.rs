@@ -20,6 +20,7 @@ const MAX_KNOWLEDGE_READ_LINES: usize = 400;
 /// Typed arguments for federated knowledge search.
 /// 联合资料检索的强类型参数。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KnowledgeSearchToolArgs {
     /// Natural-language queries searched independently.
     /// 独立检索的自然语言查询。
@@ -41,6 +42,7 @@ struct KnowledgeSearchToolArgs {
 /// Typed arguments for browsing one logical library folder.
 /// 浏览单个知识库逻辑目录的强类型参数。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KnowledgeBrowseToolArgs {
     /// Exact enabled library identifier.
     /// 精确的已启用知识库标识符。
@@ -63,6 +65,7 @@ struct KnowledgeBrowseToolArgs {
 /// Typed arguments for reading one authoritative document or chunk.
 /// 读取一份权威文档或切片的强类型参数。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KnowledgeReadToolArgs {
     /// Exact enabled library identifier.
     /// 精确的已启用知识库标识符。
@@ -422,4 +425,23 @@ pub(super) fn knowledge_document_lines(content: &str) -> Vec<&str> {
     } else {
         content.lines().collect()
     }
+}
+
+/// Verifies a snake_case spelling of a camelCase field is rejected instead of widening the search.
+/// 验证 camelCase 字段的 snake_case 拼写会被拒绝，而不是静默扩大检索范围。
+#[cfg(test)]
+#[test]
+fn knowledge_tool_arguments_reject_unknown_fields() {
+    assert!(
+        serde_json::from_value::<KnowledgeSearchToolArgs>(serde_json::json!({
+            "queries": ["q"],
+            "library_ids": ["library"]
+        }))
+        .is_err()
+    );
+    serde_json::from_value::<KnowledgeSearchToolArgs>(serde_json::json!({
+        "queries": ["q"],
+        "libraryIds": ["library"]
+    }))
+    .expect("declared fields stay accepted");
 }

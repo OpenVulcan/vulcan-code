@@ -110,6 +110,7 @@ pub(crate) fn build_vmm_memory_delete_tool(
 /// One typed argument payload accepted by `vmm_memory_search`.
 /// `vmm_memory_search` 接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VmmMemorySearchToolArgs {
     /// Natural-language memory lookup queries.
     /// 自然语言记忆检索查询集合。
@@ -122,6 +123,7 @@ struct VmmMemorySearchToolArgs {
 /// One typed argument payload accepted by `vmm_turn_details`.
 /// `vmm_turn_details` 接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VmmTurnDetailsToolArgs {
     /// Turn identifiers returned by VMM memory search.
     /// VMM 记忆检索返回的 turn 标识集合。
@@ -132,6 +134,7 @@ struct VmmTurnDetailsToolArgs {
 /// One typed direct-memory item accepted by `vmm_memory_write`.
 /// `vmm_memory_write` 接收的一条强类型主动记忆项。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VmmMemoryWriteToolItemArgs {
     /// Compact memory abstract.
     /// 精简记忆摘要。
@@ -159,6 +162,7 @@ struct VmmMemoryWriteToolItemArgs {
 /// One typed argument payload accepted by `vmm_memory_write`.
 /// `vmm_memory_write` 接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VmmMemoryWriteToolArgs {
     /// Direct memory items to persist.
     /// 需要持久化的主动记忆项集合。
@@ -168,6 +172,7 @@ struct VmmMemoryWriteToolArgs {
 /// One typed argument payload accepted by `vmm_memory_delete`.
 /// `vmm_memory_delete` 接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VmmMemoryDeleteToolArgs {
     /// Durable VMM memory ids to delete.
     /// 需要删除的长期 VMM 记忆标识集合。
@@ -667,4 +672,25 @@ fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeTo
     } else {
         NativeToolError::new(error.to_string())
     }
+}
+
+/// Verifies memory tool arguments reject undeclared fields, including inside write items.
+/// 验证记忆工具参数拒绝未声明字段，包括写入条目内部。
+#[cfg(test)]
+#[test]
+fn vmm_tool_arguments_reject_unknown_fields() {
+    assert!(
+        serde_json::from_value::<VmmTurnDetailsToolArgs>(serde_json::json!({"turn_ids": [1]}))
+            .is_err()
+    );
+    assert!(
+        serde_json::from_value::<VmmMemoryWriteToolArgs>(serde_json::json!({
+            "items": [{"abstract": "a", "details": "d", "category": 1, "scope_level": 2}]
+        }))
+        .is_err()
+    );
+    serde_json::from_value::<VmmMemoryWriteToolArgs>(serde_json::json!({
+        "items": [{"abstract": "a", "details": "d", "category": 1, "scopeLevel": 2}]
+    }))
+    .expect("declared fields stay accepted");
 }

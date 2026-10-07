@@ -19,6 +19,29 @@ fn terminal_wait_policy_is_hard_bounded() {
     );
 }
 
+/// Undeclared fields are rejected at every level instead of being silently ignored.
+/// 未声明字段在每一层都会被拒绝，而不是被静默忽略。
+#[test]
+fn terminal_session_arguments_reject_unknown_fields() {
+    for arguments in [
+        json!({"action": "list", "timeout_ms": 1000}),
+        json!({"action": "read", "terminal_session_id": "t", "wait_policy": {"mode": "until_quiet", "timeout_ms": 1}}),
+        json!({"action": "send", "terminal_session_id": "t", "inputs": [{"kind": "key", "key": "Enter", "ctrl": true}]}),
+    ] {
+        assert!(
+            serde_json::from_value::<TerminalSessionToolArgs>(arguments.clone()).is_err(),
+            "accepted undeclared field: {arguments}"
+        );
+    }
+    serde_json::from_value::<TerminalSessionToolArgs>(json!({
+        "action": "send",
+        "terminal_session_id": "t",
+        "inputs": [{"kind": "chord", "key": "c", "ctrl": true}],
+        "wait_policy": {"mode": "until_quiet", "max_wait_ms": 1}
+    }))
+    .expect("declared fields stay accepted");
+}
+
 /// Terminal read chunk budgets should apply one host-bounded total across every poll.
 /// 终端读取分片预算应当作为所有轮询共同使用的一份宿主有界总量。
 #[test]
