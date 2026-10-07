@@ -3431,29 +3431,6 @@ impl ConfiguredInferenceService {
         Ok(execution_id)
     }
 
-    /// Executes and aggregates one restricted LLM request through the shared execution record.
-    /// 通过共享执行记录执行并聚合一次受限 LLM 请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `self`, `caller`, and `request` use the same start/status lifecycle as streaming clients.
-    /// `self`、`caller` 与 `request` 使用和流式客户端相同的启动与状态生命周期。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The completed response or the exact retained terminal failure.
-    /// 返回已完成响应或精确保留的终态失败。
-    pub async fn execute_response(
-        self: &Arc<Self>,
-        caller: InferenceCallerContext,
-        request: ResponsesExecutionRequest,
-    ) -> Result<ResponsesExecutionResult, ConfiguredInferenceError> {
-        let caller_id = caller.caller_id.clone();
-        let execution_id = self.start_response_execution(caller, request).await?;
-        self.wait_response(caller_id.as_str(), execution_id.as_str())
-            .await
-    }
-
     /// Waits for one already-started restricted LLM execution without starting a duplicate request.
     /// 等待一项已经启动的受限 LLM 执行，且不会重新发起重复请求。
     ///

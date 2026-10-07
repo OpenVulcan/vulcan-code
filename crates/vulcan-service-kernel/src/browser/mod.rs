@@ -6259,12 +6259,5 @@ mod browser_decimal_u64_option {
     }
 }
 
-/// Returns the current UTC Unix millisecond text used by browser diagnostics.
-/// 返回浏览器诊断使用的当前 UTC Unix 毫秒文本。
-#[allow(dead_code)]
-pub(crate) fn current_browser_millis_text() -> String {
-    current_unix_millis_text()
-}
-
 #[cfg(test)]
 mod tests;

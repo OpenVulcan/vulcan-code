@@ -1107,17 +1107,6 @@ fn service_lifecycle_with_recovery(
     (lifecycle_fallback, last_bootstrap_failure)
 }
 
-/// Counts retained VCE jobs without awaiting async runtime locks from HTTP dispatch.
-/// 在 HTTP 分发线程上统计保留的 VCE 任务，不等待异步运行时锁。
-/// Kept as documentation for the sync gauge boundary; production uses the state projection above.
-/// 作为同步度量边界的说明保留；生产使用上述状态投影。
-#[allow(dead_code)]
-fn service_vce_job_gauge() -> u64 {
-    // VCE job ownership lives behind async locks; /v1/service/status is an activity gauge.
-    // VCE 任务归属位于异步锁之后；/v1/service/status 仅作为活动度量。
-    0
-}
-
 /// Counts running project terminals without blocking HTTP dispatch on host I/O.
 /// 在 HTTP 分发线程上统计运行中的项目终端，不阻塞宿主 I/O。
 fn service_terminal_running_gauge() -> u64 {
