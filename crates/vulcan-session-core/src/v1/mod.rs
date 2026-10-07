@@ -25,6 +25,7 @@ pub mod dynamic_context;
 pub mod errors;
 pub mod event;
 pub mod goal;
+pub mod html_answers;
 pub mod ids;
 pub mod lifetime_usage;
 pub mod projection;

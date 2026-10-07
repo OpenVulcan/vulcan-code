@@ -1,6 +1,7 @@
 //! HTTP and WebSocket host for the Vulcan Core Service.
 //! Vulcan Core Service 的 HTTP 与 WebSocket 宿主层。
 
+pub mod html_answers;
 pub mod instance;
 mod rpc_admission;
 
