@@ -19,10 +19,4 @@ impl PromptSessionBaseline {
             requires_full_rebuild: false,
         }
     }
-
-    /// Mark the baseline as requiring a full rebuild.
-    /// 将基线标记为需要全量重建。
-    pub fn mark_full_rebuild(&mut self) {
-        self.requires_full_rebuild = true;
-    }
 }

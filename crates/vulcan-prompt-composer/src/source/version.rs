@@ -1,5 +1,3 @@
-use crate::source::hashing::stable_text_hash;
-
 /// Stable version marker for one external prompt source.
 /// 单个外部提示词来源的稳定版本标记。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,13 +10,4 @@ pub struct PromptSourceVersion {
     pub fingerprint: u64,
 }
 
-impl PromptSourceVersion {
-    /// Build one source version from arbitrary text content.
-    /// 从任意文本内容构建一个来源版本。
-    pub fn from_text(source_id: impl Into<String>, text: &str) -> Self {
-        Self {
-            source_id: source_id.into(),
-            fingerprint: stable_text_hash(text),
-        }
-    }
-}
+impl PromptSourceVersion {}

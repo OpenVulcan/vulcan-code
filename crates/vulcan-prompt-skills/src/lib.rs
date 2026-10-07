@@ -689,12 +689,6 @@ pub fn configured_system_skill_root(config: &PromptSkillsGlobalConfig) -> PathBu
         .unwrap_or_else(default_system_skill_root)
 }
 
-/// Loads prompt skills from the configured user directory only.
-/// 仅从配置后的用户目录加载提示词技能。
-pub fn load_user_prompt_skills(config: &PromptSkillsGlobalConfig) -> PromptSkillCatalog {
-    load_prompt_skills_from_user_root(configured_user_skill_root(config))
-}
-
 /// Loads prompt skills from the configured system and user directories.
 /// 从配置后的系统目录与用户目录共同加载提示词技能。
 pub fn load_prompt_skills(config: &PromptSkillsGlobalConfig) -> PromptSkillCatalog {

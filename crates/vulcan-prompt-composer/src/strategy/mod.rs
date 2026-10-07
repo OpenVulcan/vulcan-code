@@ -4,9 +4,6 @@
 /// Context compaction strategy.
 /// 上下文压缩策略。
 pub mod compaction;
-/// Stable ordering helpers.
-/// 稳定排序辅助。
-pub mod ordering;
 /// Primary agent strategy.
 /// 主代理策略。
 pub mod primary;
