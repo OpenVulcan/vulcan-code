@@ -33,32 +33,6 @@ pub(super) struct FrozenMediaUploadTelemetry {
 }
 
 impl ResolvedPublicAiExecution {
-    /// Prepares exact admitted `source`/`kind` for `owner_session_id` using frozen `contract` and parent `cancellation`.
-    /// 使用冻结`contract`及父`cancellation`，为`owner_session_id`准备精确准入`source`/`kind`。
-    /// Returns a validated receipt under a new per-transfer budget; callers with earlier source/cache work must pass their existing deadline instead.
-    /// 在新单次传输预算内返回已验证回执；已执行更早来源/缓存工作的调用方必须改传已有截止时间。
-    pub async fn prepare_conversation_upload(
-        &self,
-        source: AdmittedLocalMediaSource<'_>,
-        kind: ResourceKind,
-        owner_session_id: &str,
-        contract: &ConversationMediaUploadContract,
-        cancellation: &MediaUploadCancellation,
-    ) -> Result<PreparedConversationMedia, MediaUploadFailure> {
-        // Existing callers start before credential work; an earlier host stage can use the explicit-deadline entrypoint.
-        // 既有调用方在凭据工作之前计时；更早宿主阶段可使用显式截止时间入口。
-        let deadline = MediaUploadDeadline::for_contract(contract)?;
-        self.prepare_conversation_upload_until(
-            source,
-            kind,
-            owner_session_id,
-            contract,
-            cancellation,
-            &deadline,
-        )
-        .await
-    }
-
     /// Uploads admitted `source` of `kind` for `owner_session_id` through the exact already-selected `contract`.
     /// 为`owner_session_id`通过精确已选`contract`上传已准入`source`及其`kind`。
     /// The caller must finish policy and cache preflight first; `cancellation` belongs to the pending request.

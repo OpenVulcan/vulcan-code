@@ -23,28 +23,6 @@ use std::time::{Duration, Instant};
 const LEGACY_PROVIDER_TOOL_OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl PublicAiRuntime {
-    /// Executes the one exact target selected for a semantic capability.
-    /// 执行某项语义能力唯一选中的精确目标。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `configuration`, `capability`, and `arguments` are frozen invocation inputs.
-    /// `configuration`、`capability` 与 `arguments` 是冻结的调用输入。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A unified typed provider tool result.
-    /// 返回统一强类型供应商工具结果。
-    pub async fn execute_selected_provider_tool(
-        &self,
-        configuration: &PersistedAiConfiguration,
-        capability: ProviderToolCapabilityKind,
-        arguments: serde_json::Value,
-    ) -> Result<ProviderToolExecutionResult, String> {
-        self.execute_selected_provider_tool_for_owner(configuration, capability, arguments, None)
-            .await
-    }
-
     /// Executes one selected provider tool while retaining its optional session ownership.
     /// 执行一个已选供应商工具，同时保留其可选会话所有权。
     ///

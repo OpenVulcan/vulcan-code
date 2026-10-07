@@ -1160,28 +1160,6 @@ impl ProviderExecutionClient {
         })
     }
 
-    /// Resolves the exact non-secret upload-channel identity used for one conversation resource.
-    /// 解析一个对话资源使用的精确非秘密上传通道身份。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `route` is the immutable execution route; `kind` and `mime_type` identify the exact resource.
-    /// `route` 是不可变执行路由；`kind` 与 `mime_type` 标识精确资源。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The manifest channel id, `None` for host inline materialization, or a closed route error.
-    /// 返回 Manifest 通道标识；宿主内联物化返回 `None`；路由错误返回封闭错误。
-    pub fn conversation_media_upload_channel_id(
-        &self,
-        route: &ProviderExecutionRoute,
-        kind: ResourceKind,
-        mime_type: &str,
-    ) -> Result<Option<String>, String> {
-        resolve_conversation_media_upload_channel(route, kind, mime_type)
-            .map(|channel| channel.map(|channel| channel.upload_channel_id.clone()))
-    }
-
     /// Resolves the immutable contract identity used to cache one provider media reference.
     /// 解析缓存供应商媒体引用时使用的不可变契约身份。
     pub fn conversation_media_upload_contract(
@@ -1229,21 +1207,6 @@ impl ProviderExecutionClient {
                 String::from("Provider reference has no applicable executable upload contract.")
             })?;
         crate::upload_engine::validate_prepared_reference(channel, reference)
-    }
-
-    /// Reads one exact source identity without retaining the source bytes in memory.
-    /// 读取一个精确源身份，但不在内存中保留源字节。
-    pub async fn read_media_source_identity(
-        &self,
-        local_path: &Path,
-        cancellation: Option<&MediaUploadCancellation>,
-    ) -> Result<PreparedMediaSourceIdentity, String> {
-        prepared_media_source_fingerprint(local_path, None, cancellation)
-            .await
-            .map(|fingerprint| PreparedMediaSourceIdentity {
-                byte_len: fingerprint.byte_len,
-                content_sha256: hex::encode(fingerprint.content_sha256),
-            })
     }
 
     /// Reads exact `source_byte_len` admitted bytes from `local_path`, observing optional `cancellation` without retaining payload.
@@ -1881,29 +1844,6 @@ impl ProviderExecutionClient {
             session_scope_id,
         )?;
         self.cached_prepared_media_reference(key.as_str(), &source_fingerprint)
-    }
-
-    /// Returns a still-valid provider-native reference for the exact local source.
-    /// 返回精确本地源仍然有效的供应商原生引用。
-    pub async fn prepared_media_url(
-        &self,
-        route: &ProviderExecutionRoute,
-        local_path: &Path,
-        kind: ResourceKind,
-        mime_type: &str,
-        session_scope_id: Option<&str>,
-        cancellation: Option<&MediaUploadCancellation>,
-    ) -> Option<String> {
-        self.prepared_media_reference(
-            route,
-            local_path,
-            kind,
-            mime_type,
-            session_scope_id,
-            cancellation,
-        )
-        .await
-        .map(|snapshot| snapshot.provider_reference)
     }
 }
 

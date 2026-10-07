@@ -2204,28 +2204,6 @@ impl PersistedAiConfiguration {
             .copied()
     }
 
-    /// Returns one account model access policy, falling back to the enabled default.
-    /// 返回一个账号模型访问策略，缺失时回退到默认启用策略。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `connection_id` identifies one exact credential account.
-    /// `connection_id` 标识一个精确凭据账号。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The persisted policy or a safe in-memory default.
-    /// 返回持久化策略或安全的内存默认值。
-    pub fn connection_model_access_policy(
-        &self,
-        connection_id: &str,
-    ) -> ConnectionModelAccessPolicy {
-        self.connection_model_access_policies
-            .get(connection_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     /// Reports whether one exact account model is enabled by user policy.
     /// 报告一个精确账号模型是否被用户策略启用。
     ///
@@ -3253,28 +3231,6 @@ impl PersistedAiConfiguration {
             .get(Self::provider_model_key(provider_id, model_id).as_str())
             .copied()
             .unwrap_or(default_enabled)
-    }
-
-    /// Returns one explicit internal-use override without applying Manifest defaults.
-    /// 返回一项未应用 Manifest 默认值的显式内部使用覆盖。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` and `model_id` identify one exact model.
-    /// `provider_id` 与 `model_id` 标识一个精确模型。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The explicit state or `None` when the selected credential default remains authoritative.
-    /// 返回显式状态；所选凭据默认值仍具权威时返回 `None`。
-    pub fn internal_model_enabled_override(
-        &self,
-        provider_id: &str,
-        model_id: &str,
-    ) -> Option<bool> {
-        self.internal_model_enabled_overrides
-            .get(Self::provider_model_key(provider_id, model_id).as_str())
-            .copied()
     }
 
     /// Stores one explicit non-conversation internal-use state.

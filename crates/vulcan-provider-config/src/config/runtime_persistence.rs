@@ -132,12 +132,6 @@ impl PersistedLuaSkillToolRegistrationState {
     pub fn is_explicit(self) -> bool {
         matches!(self, Self::Explicit)
     }
-
-    /// Returns whether this state still allows host-side deferred dispatch.
-    /// 返回该状态是否仍允许宿主侧延迟调度。
-    pub fn allows_host_dispatch(self) -> bool {
-        !matches!(self, Self::Disabled)
-    }
 }
 
 /// Host-managed LuaSkills tool registration configuration persisted independently from package lifecycle state.
@@ -346,13 +340,6 @@ impl PersistedLuaSkillsConfiguration {
         }
 
         PersistedLuaSkillToolRegistrationState::Explicit
-    }
-
-    /// Returns whether one LuaSkills local tool is disabled for all host invocation paths.
-    /// 返回单个 LuaSkills 本地工具是否已对所有宿主调用路径禁用。
-    pub fn is_tool_disabled(&self, skill_id: &str, local_name: &str) -> bool {
-        self.tool_registration_state(skill_id, local_name)
-            == PersistedLuaSkillToolRegistrationState::Disabled
     }
 
     /// Returns whether one LuaSkills local tool should be registered as a provider-visible function tool.

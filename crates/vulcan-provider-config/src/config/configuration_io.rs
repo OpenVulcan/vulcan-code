@@ -14,17 +14,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Normalizes one persisted transcript turn-page size to the supported fixed presets.
-/// 将一条持久化转录轮次分页大小归一化到受支持的固定档位。
-pub fn normalize_session_transcript_turn_page_size(value: Option<usize>) -> usize {
-    let normalized = value.unwrap_or(SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT);
-    if SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS.contains(&normalized) {
-        normalized
-    } else {
-        SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT
-    }
-}
-
 /// Workbench thinking-output display mode persisted for the WebUI.
 /// 为 WebUI 持久化的工作台思考输出展示模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,21 +433,6 @@ fn read_bounded_configuration_text(path: &Path, document_label: &str) -> Result<
             path.display()
         )
     })
-}
-
-/// Atomically saves the standalone version-one public AI connection file.
-/// 原子保存独立的第一版公共 AI 连接文件。
-///
-/// # Parameters
-/// 参数
-/// `configuration` contains no secret material or runtime model catalogs.
-/// `configuration` 不包含秘密材料或运行时模型目录。
-pub fn save_public_ai_connections_file(
-    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
-) -> Result<(), String> {
-    let path = public_ai_connections_file_path();
-    let app_data_root = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    save_public_ai_connections_with_custom_manifests(configuration, &app_data_root)
 }
 
 /// Atomically persists standalone custom manifests and their central reference document.

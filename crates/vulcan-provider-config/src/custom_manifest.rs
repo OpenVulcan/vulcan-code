@@ -1612,17 +1612,6 @@ pub fn project_persisted_configuration(
     projected
 }
 
-/// Returns the standalone custom manifest directory path below one application data root.
-/// 返回一个应用数据根目录下的独立自定义清单目录路径。
-///
-/// # Parameters
-/// 参数
-/// `app_data_root` is the host-resolved application data directory.
-/// `app_data_root` 是宿主解析的应用数据目录。
-pub fn custom_manifests_directory(app_data_root: &Path) -> std::path::PathBuf {
-    ManifestStoreLayout::new(app_data_root).custom_manifests_dir()
-}
-
 /// Loads every standalone custom provider descriptor without touching a configuration.
 /// 不触碰配置，直接加载全部独立自定义供应商描述。
 ///

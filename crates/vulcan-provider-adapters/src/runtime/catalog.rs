@@ -312,45 +312,6 @@ impl PublicAiRuntime {
             .cloned())
     }
 
-    /// Stages one already validated connection observation without publishing it to requests.
-    /// 暂存一项已验证连接观测，且不向请求发布。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `connection_id` is the durable credential identity, `catalog` is its optional raw source,
-    /// `status` is the exact typed discovery result, and `refresh_error` is the controlled
-    /// diagnostic retained only for provider settings.
-    /// `connection_id` 是持久凭据身份，`catalog` 是其可选原始来源，`status` 是精确类型化
-    /// 发现结果，`refresh_error` 是仅供供应商设置保留的受控诊断。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success after the mutable staging maps own the observation. The immutable provider
-    /// generation remains unchanged until an explicit configuration activation.
-    /// 可变暂存映射持有该观测后返回成功；不可变供应商代际在显式配置激活前保持不变。
-    pub fn stage_connection_catalog_observation(
-        &self,
-        connection_id: &str,
-        catalog: Option<ConnectionModelCatalog>,
-        status: CatalogDiscoveryStatus,
-        refresh_error: Option<String>,
-    ) -> Result<(), String> {
-        // beforeImage makes the single-observation compatibility seam use the same CAS boundary
-        // as production batches.
-        // beforeImage 让单观测兼容接缝使用与生产批次相同的 CAS 边界。
-        let before_image = self.capture_activation_snapshot()?;
-        self.stage_connection_catalog_observations_if_current(
-            &before_image,
-            &[StagedConnectionCatalogObservation {
-                connection_id: connection_id.to_string(),
-                catalog,
-                status,
-                refresh_error,
-            }],
-        )
-        .map(|_| ())
-    }
-
     /// Atomically stages a complete observation batch when its exact before-image is still current.
     /// 仅在精确前镜像仍为当前状态时，原子暂存一批完整观测。
     ///

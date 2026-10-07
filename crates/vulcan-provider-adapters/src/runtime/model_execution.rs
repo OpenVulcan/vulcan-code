@@ -356,33 +356,6 @@ impl PublicAiRuntime {
             .map_err(|failure| failure.error.message)
     }
 
-    /// Executes one resolved internal embedding selection with fresh credential material.
-    /// 使用新鲜凭据材料执行一项已解析内部向量选择。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `selection`, `request`, and `usage_scope` are already authorized immutable facts.
-    /// `selection`、`request` 与 `usage_scope` 是已授权不可变事实。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A normalized complete embedding batch or a structured execution failure.
-    /// 返回归一化完整向量批次或结构化执行失败。
-    pub async fn execute_internal_embedding(
-        &self,
-        selection: &ResolvedPublicAiSelection,
-        request: &EmbeddingRequest,
-        usage_scope: InferenceUsageScope,
-    ) -> Result<EmbeddingResponse, ProviderExecutionFailure> {
-        self.execute_internal_embedding_with_wire_request_capture(
-            selection,
-            request,
-            usage_scope,
-            None,
-        )
-        .await
-    }
-
     /// Plans deterministic asynchronous embedding Batch tasks for one resolved selection.
     /// 为一项已解析选择规划确定性的异步向量 Batch 任务。
     pub fn plan_internal_embedding_batch(

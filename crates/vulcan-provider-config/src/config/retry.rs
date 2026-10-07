@@ -11,14 +11,6 @@ pub const PROVIDER_RETRY_MAX_RETRIES: u32 = 100;
 /// 初始请求后的限流重试所使用的宿主硬上限。
 pub const PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES: u32 = 100_000;
 
-/// Stable transcript turn-page size options exposed by the settings page.
-/// 设置页面暴露的稳定转录轮次分页选项集合。
-pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS: [usize; 4] = [20, 30, 40, 50];
-
-/// Default transcript turn-page size used when no override exists.
-/// 未提供覆盖值时使用的默认转录轮次分页大小。
-pub const SESSION_TRANSCRIPT_TURN_PAGE_SIZE_DEFAULT: usize = 30;
-
 /// Persisted provider retry behavior shared by public-contract transports.
 /// 公共契约传输链路共享的持久化 Provider 重试行为配置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
