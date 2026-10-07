@@ -28,7 +28,7 @@ use crate::app::hit::{ScrollTarget, Target};
 use crate::app::insight::{self, MemoryEntry};
 use crate::app::overlay::MenuItem;
 use crate::app::{App, Focus, PanelTab};
-use crate::backend::{Command, GitBusy};
+use crate::backend::GitBusy;
 use crate::model::*;
 use crate::tr;
 
@@ -564,6 +564,15 @@ fn changes(app: &App, width: usize, focused: bool) -> Vec<Row> {
     {
         repository_rows(app, snapshot, width, &mut out);
     }
+    // A chosen repository waits for its details without showing the previous one's.
+    // 所选仓库等待其详情期间不显示上一仓库的详情。
+    if app.git.pending.is_some() {
+        out.push(Row::new(Line::from(Span::styled(
+            format!("{} {}", spinner(app.phase()), tr!("gitRepository.loading")),
+            theme.muted_text(),
+        ))));
+        return out;
+    }
     if snapshot.selected.is_none() {
         if snapshot.repositories.is_empty() {
             out.push(Row::new(Line::from(Span::styled(
@@ -715,7 +724,7 @@ fn repository_rows(app: &App, snapshot: &GitSnapshot, width: usize, out: &mut Ve
     }
     out.push(row);
     for repository in &snapshot.repositories {
-        let selected = snapshot.selected.as_ref() == Some(&repository.key);
+        let selected = app.git.marked() == Some(&repository.key);
         let counts = if repository.monitoring {
             let mut counts = repository
                 .changes
@@ -754,7 +763,7 @@ fn repository_rows(app: &App, snapshot: &GitSnapshot, width: usize, out: &mut Ve
         // Unmonitored repositories are reached through the monitoring switches instead.
         // 未受监听的仓库改由监听开关进入。
         let target = if repository.monitoring {
-            UiAction::Send(Command::SelectGitRepository(repository.key.clone()))
+            UiAction::SelectGitRepository(repository.key.clone())
         } else {
             match app.git.monitoring_menu() {
                 Some(menu) => UiAction::OpenMenu(Box::new(menu)),

@@ -303,6 +303,9 @@ pub enum UiAction {
     GoPage(PageId),
     OpenAreaPicker,
     SelectConversation(ConversationId),
+    /// Shows one monitored Git repository of the project.
+    /// 显示项目中的一个受监听 Git 仓库。
+    SelectGitRepository(String),
     NewConversation(Option<String>),
     ToggleProject(String),
     ProjectMenu(String),
@@ -514,6 +517,7 @@ pub fn perform(app: &mut App, action: UiAction) {
             app.focus = Focus::AreaPage;
         }
         UiAction::OpenAreaPicker => open_area_picker(app),
+        UiAction::SelectGitRepository(key) => app.select_git_repository(key),
         UiAction::SelectConversation(id) => {
             app.overlay = None;
             app.set_area(Area::Chat);

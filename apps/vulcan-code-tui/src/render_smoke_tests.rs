@@ -1072,7 +1072,7 @@ fn changes_tab_selects_and_unmonitors_repositories() {
     };
     assert_eq!(selected(&h.app).as_deref(), Some("."));
     click(&mut h.app, "second repository", |t| {
-        matches!(t, Target::Do(UiAction::Send(Command::SelectGitRepository(key)))
+        matches!(t, Target::Do(UiAction::SelectGitRepository(key))
             if key == "vendor/demo-lib")
     });
     h.settle();

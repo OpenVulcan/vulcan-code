@@ -138,6 +138,9 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
   切换到另一项目时先发布 `GitCleared`，旧项目的清单不得在新项目加载期间继续显示。仓库多于一个、或没有受监听
   仓库时，变更标签页顶部列出全部仓库（所选标记、相对路径、变更与领先计数，未监听显示 `○`）；点击受监听仓库或
   按 `g` 循环切换，标题行或 `m` 打开监听开关菜单（`workspace.git.setMonitoring`，对应 WebUI Git 设置）。
+  后端在内存中保存每个受监听仓库最近的两个视图：切换已加载的仓库不发请求，`workspaceGitChanged` 只重读事件
+  指明的仓库（与 WebUI 限定 `repositoryKey` 的刷新一致），显式刷新才重读全部。面板点击后立即标记所选仓库并
+  隐藏旧仓库详情，跳过仍带较早选择的快照，直到后端发布该仓库，快速连续点击不会来回跳动。
   文件操作与详情使用服务返回的文件标识。与 WebUI `sessionGitRepositoryAvailable` 一致，目录没有仓库且不在
   加载或 Git 操作中时，面板不显示变更标签（`App::panel_tabs`），所选标签保留并在回到有 Git 的项目时恢复；
   `Alt+1` 在隐藏期间不生效。文件 diff 读取失败或文件已不在变更清单时发布 `GitDiffFailed`，diff 视图以

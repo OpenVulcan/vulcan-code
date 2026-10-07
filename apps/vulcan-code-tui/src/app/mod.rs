@@ -378,13 +378,16 @@ pub struct GitView {
     /// Files whose diff failed to load, with the service's reason when it gave one.
     /// 加载 diff 失败的文件，及服务给出的原因。
     pub diff_failures: HashMap<String, Option<String>>,
+    /// Repository chosen in the panel that the backend has not published yet.
+    /// 已在面板中选择、后端尚未发布的仓库。
+    pub pending: Option<String>,
 }
 
 impl GitView {
     /// Files in panel order: staged first, then unstaged.
     /// 面板顺序的文件：先暂存区，再未暂存。
     pub fn ordered_files(&self) -> Vec<&GitFile> {
-        let Some(snapshot) = &self.snapshot else {
+        let Some(snapshot) = self.snapshot.as_ref().filter(|_| self.pending.is_none()) else {
             return Vec::new();
         };
         let mut files: Vec<&GitFile> = snapshot.files.iter().filter(|f| f.staged).collect();
@@ -406,7 +409,17 @@ impl GitView {
     /// The snapshot when a monitored repository is selected; branch and push need one.
     /// 已选受监听仓库时的快照；分支与推送需要它。
     pub fn repository(&self) -> Option<&GitSnapshot> {
-        self.snapshot.as_ref().filter(|s| s.selected.is_some())
+        self.snapshot
+            .as_ref()
+            .filter(|s| s.selected.is_some() && self.pending.is_none())
+    }
+
+    /// The repository the panel marks: a pending choice before the backend publishes it.
+    /// 面板标记的仓库：后端发布前为待定选择。
+    pub fn marked(&self) -> Option<&String> {
+        self.pending
+            .as_ref()
+            .or(self.snapshot.as_ref()?.selected.as_ref())
     }
 
     /// The monitored repository after the selected one, wrapping around; `None` with fewer
@@ -422,9 +435,7 @@ impl GitView {
         if monitored.len() < 2 {
             return None;
         }
-        let current = monitored
-            .iter()
-            .position(|r| snapshot.selected.as_ref() == Some(&r.key));
+        let current = monitored.iter().position(|r| self.marked() == Some(&r.key));
         let next = current.map_or(0, |index| (index + 1) % monitored.len());
         Some(monitored[next].key.clone())
     }
@@ -1152,6 +1163,20 @@ impl App {
                 insight,
             } => self.session_for(&conversation_id).insight = *insight,
             BackendEvent::Git(snapshot) => {
+                // The backend serves repository choices in order, so snapshots published before the
+                // latest choice are skipped instead of pulling the panel back to them.
+                // 后端按顺序处理仓库选择，因此最新选择之前发布的快照会被跳过，而不是把面板拉回去。
+                if let Some(pending) = &self.git.pending {
+                    let monitored = snapshot
+                        .repositories
+                        .iter()
+                        .any(|r| r.monitoring && &r.key == pending);
+                    let earlier = snapshot.selected.as_ref().is_some_and(|key| key != pending);
+                    if monitored && earlier {
+                        return;
+                    }
+                    self.git.pending = None;
+                }
                 self.git.diffs.clear();
                 self.git.diff_failures.clear();
                 self.git.snapshot = Some(snapshot);
@@ -1160,6 +1185,7 @@ impl App {
                 self.request_visible_diff();
             }
             BackendEvent::GitCleared => {
+                self.git.pending = None;
                 self.git.diffs.clear();
                 self.git.diff_failures.clear();
                 self.git.snapshot = None;
@@ -1512,6 +1538,18 @@ impl App {
             rows.extend(unlinked);
         }
         rows
+    }
+
+    /// Marks a monitored repository at once and asks the backend for its details, which it serves
+    /// from memory once loaded.
+    /// 立即标记受监听仓库并向后端请求其详情；已加载的仓库由后端从内存提供。
+    pub fn select_git_repository(&mut self, key: String) {
+        if self.git.marked() == Some(&key) {
+            return;
+        }
+        self.git.pending = Some(key.clone());
+        self.git.cursor = 0;
+        self.backend.send(Command::SelectGitRepository(key));
     }
 
     pub fn select_conversation(&mut self, id: ConversationId) {

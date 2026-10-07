@@ -1204,7 +1204,10 @@ impl Worker {
             api::ServiceEvent::ConversationEventDeltaV1(delta) => self.event_delta(*delta),
             api::ServiceEvent::WorkspaceGitChanged(change) => {
                 if self.git.matches(&change.workspace_path) {
-                    self.git_refresh();
+                    // Only the changed repositories are reread; an event naming none rereads all.
+                    // 只重读发生变化的仓库；未指明仓库的事件重读全部。
+                    let keys = &change.repository_keys;
+                    self.git_reload((!keys.is_empty()).then_some(keys.as_slice()));
                 }
             }
             api::ServiceEvent::VceProjectChanged(change) => {
@@ -2864,7 +2867,67 @@ mod tests {
         // An unmonitored repository is not a valid selection and sends no request.
         // 未受监听仓库不是有效选择，且不发送请求。
         worker.git_select_repository(".".into());
-        assert!(git_events(&events).is_empty());
+        assert!(
+            matches!(git_events(&events).last(), Some(BackendEvent::Git(snapshot))
+            if snapshot.selected.as_deref() == Some("lib"))
+        );
+        server.thread.join().unwrap();
+    }
+
+    /// Loaded repositories switch from memory, and a change event rereads only the repositories
+    /// it names while the others keep their views.
+    /// 已加载的仓库从内存切换；变更事件只重读其指明的仓库，其他仓库保留视图。
+    #[test]
+    fn repository_switches_read_memory_and_events_reread_named_repositories() {
+        let keys = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = keys.clone();
+        // Catalog and two views of two repositories, then one catalog and two views for the event.
+        // 目录及两个仓库各两个视图，随后变更事件读取一次目录及两个视图。
+        let server = RpcServer::start(8, move |request| {
+            match request.body["method"].as_str().unwrap() {
+                "workspace.git.catalog" => json!({"ok":true,"result":{"projectRoot":"/one",
+                    "repositories":[
+                        {"repositoryKey":".","repositoryRoot":"/one","name":"one","relativePath":".",
+                         "isPrimary":true,"monitoringEnabled":true},
+                        {"repositoryKey":"lib","repositoryRoot":"/one/lib","name":"lib",
+                         "relativePath":"lib","isPrimary":false,"monitoringEnabled":true}]}}),
+                "workspace.diff.snapshot" => {
+                    let key = request
+                        .body
+                        .pointer("/params/request/repositoryKey")
+                        .unwrap();
+                    record.lock().unwrap().push(key.clone());
+                    json!({"ok":true,"result":{"currentBranch":key,
+                        "files":[{"key":"k","newPath":"b.rs","status":"added"}]}})
+                }
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        worker.selected = Some("a".into());
+        worker.git_refresh();
+        events.try_iter().for_each(drop);
+        keys.lock().unwrap().clear();
+        worker.git_select_repository("lib".into());
+        assert!(keys.lock().unwrap().is_empty(), "switching reads memory");
+        assert!(
+            matches!(git_events(&events).last(), Some(BackendEvent::Git(snapshot))
+            if snapshot.selected.as_deref() == Some("lib") && snapshot.branch == "lib")
+        );
+        worker.service_event(api::ServiceEvent::WorkspaceGitChanged(Box::new(
+            api::WorkspaceGitChangedEvent {
+                project_id: Some("one".into()),
+                workspace_path: "/one".into(),
+                repository_keys: vec![".".into()],
+            },
+        )));
+        assert_eq!(*keys.lock().unwrap(), vec![json!("."), json!(".")]);
+        assert!(
+            matches!(git_events(&events).last(), Some(BackendEvent::Git(snapshot))
+            if snapshot.selected.as_deref() == Some("lib")
+               && snapshot.repositories.iter().all(|r| r.changes == Some(2)))
+        );
         server.thread.join().unwrap();
     }
 

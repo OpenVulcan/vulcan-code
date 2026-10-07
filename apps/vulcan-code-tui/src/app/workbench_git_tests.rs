@@ -229,3 +229,46 @@ fn failed_diff_shows_and_retries() {
         |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { path } if path == "a.rs")
     ));
 }
+
+/// A repository click marks it at once; snapshots still carrying the earlier choice are skipped,
+/// so quick clicks never jump back.
+/// 点击仓库立即标记；仍带较早选择的快照会被跳过，因此快速点击不会跳回。
+#[test]
+fn repository_choice_holds_against_earlier_snapshots() {
+    let (mut app, commands) = isolated_app();
+    let repositories = vec![
+        repository(".", true, true),
+        repository("lib", false, true),
+        repository("app", false, true),
+    ];
+    app.apply(git(repositories.clone(), Some(".")));
+    action::perform(
+        &mut app,
+        action::UiAction::SelectGitRepository("lib".into()),
+    );
+    action::perform(
+        &mut app,
+        action::UiAction::SelectGitRepository("app".into()),
+    );
+    assert_eq!(app.git.marked().map(String::as_str), Some("app"));
+    assert!(
+        app.git.repository().is_none(),
+        "no details of another repository"
+    );
+    let sent: Vec<String> = commands
+        .try_iter()
+        .filter_map(|command| match command {
+            Command::SelectGitRepository(key) => Some(key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec!["lib".to_string(), "app".to_string()]);
+    app.apply(git(repositories.clone(), Some("lib")));
+    assert_eq!(app.git.marked().map(String::as_str), Some("app"));
+    app.apply(git(repositories, Some("app")));
+    assert!(app.git.pending.is_none());
+    assert_eq!(
+        app.git.repository().and_then(|s| s.selected.as_deref()),
+        Some("app")
+    );
+}

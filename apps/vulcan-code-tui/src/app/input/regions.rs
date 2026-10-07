@@ -318,7 +318,7 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('r') => app.backend.send(Command::LoadWorkspaceDiffSnapshot),
                 KeyCode::Char('g') => {
                     if let Some(key) = app.git.next_repository() {
-                        app.backend.send(Command::SelectGitRepository(key));
+                        action::perform(app, UiAction::SelectGitRepository(key));
                     }
                 }
                 KeyCode::Char('m') => {
