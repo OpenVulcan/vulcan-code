@@ -25,3 +25,15 @@ CL = { value = "/MD", force = false }
 # Cargo 将 relative=true 路径基于仓库根目录解析；Windows Command 按需补充 .exe。
 PROTOC = { value = ".cargo/protoc/bin/protoc", relative = true, force = false }
 PROTOC_INCLUDE = { value = ".cargo/protoc/include", relative = true, force = false }
+
+# aws-lc-sys, unified into every workspace build by workspace-hack, declares its jitterentropy functions
+# with dllexport. MSVC would then write an unused import library and export file for every linked
+# executable, and a localized linker reports that as a linker_messages warning. Nothing links against
+# workspace executables, and rustc loads proc-macro DLLs directly, so both files are suppressed for
+# every MSVC link here instead of in per-crate build scripts.
+# workspace-hack 将 aws-lc-sys 统一进全部工作区构建，其 jitterentropy 函数以 dllexport 声明。MSVC 因此会为
+# 每个链接出的可执行文件写出无用的导入库与导出文件，本地化链接器会将其报告为 linker_messages 警告。没有任何
+# 目标链接工作区可执行文件，rustc 直接加载过程宏 DLL，因此在此对全部 MSVC 链接统一抑制这两个文件，
+# 而不是在各 crate 的构建脚本中分别处理。
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/NOIMPLIB", "-C", "link-arg=/NOEXP"]

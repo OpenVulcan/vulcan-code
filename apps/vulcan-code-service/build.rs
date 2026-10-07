@@ -1,8 +1,8 @@
 //! Native executable resources for the independent Core service.
 //! 独立 Core 服务的原生可执行文件资源。
 
-// Embed the executable icon and version metadata, and configure platform-specific linking.
-// 嵌入可执行文件图标和版本元数据，并配置平台专属链接行为。
+// Embed the executable icon and version metadata; MSVC link arguments live in `.cargo/config.toml`.
+// 嵌入可执行文件图标和版本元数据；MSVC 链接参数位于 `.cargo/config.toml`。
 //
 // A `--no-default-features` build keeps this script inert so Linux CI can link the
 // headless service without enabling the desktop tray host or its graphics libraries.
@@ -14,10 +14,6 @@ fn main() {
     // 检查编译目标而非构建宿主，使交叉编译选择正确的资源。
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("Cargo target OS");
     if target_os == "windows" {
-        if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-            println!("cargo:rustc-link-arg=/NOIMPLIB");
-            println!("cargo:rustc-link-arg=/NOEXP");
-        }
         #[cfg(feature = "desktop-tray")]
         {
             println!("cargo:rerun-if-changed=icons/icon.ico");
