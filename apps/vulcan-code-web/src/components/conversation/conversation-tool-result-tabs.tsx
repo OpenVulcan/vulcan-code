@@ -10,7 +10,7 @@ import { ConversationModelParameters } from "./conversation-model-parameters";
 // Control tools and file listings retain their dedicated body without payload tabs.
 // 控制工具与文件列表保留专属正文，不展示载荷标签页。
 const DIRECT_TOOL_IDS = new Set(["todolist", "get_goal", "create_goal", "update_goal", "submit_plan", "ask",
-  "shell_command", "shell_session", "terminal_session", "runlua", "runlua_session", "spawn_agent", "send_message", "wait_agent", "wait_agents_result", "list_agents",
+  "shell_command", "terminal_session", "runlua", "runlua_session", "spawn_agent", "send_message", "wait_agent", "wait_agents_result", "list_agents",
   "agent_orchestration_info", "subagent_feedback", "close_agent", "interrupt_agent", "debug_session_open",
   "debug_session_request", "debug_session_events", "debug_session_status", "debug_session_close", "file_edit", "apply_patch", "vulcan_file_list", "get_model_extension_parameters"]);
 

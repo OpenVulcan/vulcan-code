@@ -3,24 +3,22 @@ use super::{
     CommandSessionBackend, CommandSessionOutputChunk, CommandSessionSnapshot,
     DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS, MAX_COMMAND_SESSION_READ_CHUNKS,
     MAX_COMMAND_SESSION_READ_WAIT_MS, NativeGoalRuntime, NativeGoalSnapshot, NativeGoalStatus,
-    NativeGoalTerminalStatus, NativeToolDefinition, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER,
-    TerminalSessionInput, TerminalSessionToolAction, TerminalSessionToolArgs,
-    TerminalSessionWaitPolicy, build_agent_list_tool, build_create_goal_tool, build_get_goal_tool,
+    NativeGoalTerminalStatus, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, TerminalSessionInput,
+    TerminalSessionToolAction, TerminalSessionToolArgs, TerminalSessionWaitPolicy,
+    build_agent_list_tool, build_create_goal_tool, build_get_goal_tool,
     build_knowledge_browse_tool, build_knowledge_read_tool, build_knowledge_search_tool,
     build_mcp_server_list_tool, build_native_tool_catalog, build_prompt_skill_detail_tool,
-    build_shell_command_tool, build_shell_session_tool, build_skill_list_tool,
-    build_submit_plan_tool, build_terminal_session_host_payload,
-    build_terminal_session_render_input, build_terminal_session_tool, build_todolist_tool,
-    build_update_goal_tool, build_workspace_describe_tool, coalesce_terminal_output_chunks,
-    default_terminal_session_backend, display_submit_plan_path, effective_start_append_newline,
-    goal_response_value, knowledge_document_lines, normalize_terminal_session_name,
-    resolve_session_shell_behavior, resolve_shell_command_launcher,
-    resolve_shell_command_working_directory, shell_command_args_schema, shell_session_args_schema,
-    shell_specific_newline, terminal_inputs_request_interrupt,
+    build_shell_command_tool, build_skill_list_tool, build_submit_plan_tool,
+    build_terminal_session_host_payload, build_terminal_session_render_input,
+    build_terminal_session_tool, build_todolist_tool, build_update_goal_tool,
+    build_workspace_describe_tool, coalesce_terminal_output_chunks,
+    default_terminal_session_backend, display_submit_plan_path, goal_response_value,
+    knowledge_document_lines, normalize_terminal_session_name, resolve_session_shell_behavior,
+    resolve_shell_command_launcher, resolve_shell_command_working_directory,
+    shell_command_args_schema, shell_specific_newline, terminal_inputs_request_interrupt,
     terminal_interrupt_drain_chunk_is_visible, terminal_output_chunks_contain_pattern,
     terminal_read_chunk_budget, terminal_screen_text_from_chunks, terminal_session_args_schema,
-    terminal_wait_budget_ms, validate_shell_session_start_stdin_policy,
-    validate_terminal_session_start_shell_policy,
+    terminal_wait_budget_ms, validate_terminal_session_start_shell_policy,
 };
 use crate::agent_runtime::config::{
     AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
@@ -62,24 +60,10 @@ fn test_shell_support() -> HostCommandShellSupport {
     )
 }
 
-/// Builds one interactive child shell that remains available for multiple shell-session writes.
-/// 构建一个可持续接受多次 shell-session 写入的交互式子 shell。
-fn interactive_shell_session_test_command() -> String {
-    if cfg!(windows) {
-        String::from("cmd /D /Q /K \"echo phase-1\"")
-    } else {
-        String::from("sh -c 'echo phase-1; exec sh'")
-    }
-}
-
-/// Builds one long-running test command that keeps the child process alive until the host explicitly stops it.
-/// 构建一条长时间运行的测试命令，使子进程持续存活直到宿主显式停止它。
-fn long_running_shell_session_test_command() -> String {
-    if cfg!(windows) {
-        String::from("while ($true) { Start-Sleep -Milliseconds 100 }")
-    } else {
-        String::from("while true; do sleep 0.1; done")
-    }
+/// Returns one interactive shell command that keeps a terminal session alive until the host explicitly stops it.
+/// 返回一条交互式 shell 命令，使终端会话持续存活直到宿主显式停止它。
+fn long_lived_terminal_test_command() -> &'static str {
+    if cfg!(windows) { "cmd /D /Q" } else { "sh" }
 }
 
 /// Builds one native-tool execution request with only arguments varied.

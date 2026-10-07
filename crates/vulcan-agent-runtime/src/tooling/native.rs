@@ -9,8 +9,6 @@ use crate::tool_result_format::{
     HostRenderOptions, HostTextRenderInput, HostToolOverflowMode, ToolResultBudgetSnapshot,
     render_tool_result_text,
 };
-#[cfg(test)]
-use crate::tooling::command_session_runtime::DEFAULT_COMMAND_SESSION_READ_WAIT_MS;
 use crate::tooling::command_session_runtime::{
     CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
     CommandSessionReadOutcome, CommandSessionRuntime, CommandSessionSnapshot,
@@ -229,8 +227,6 @@ mod knowledge_base;
 mod prompt_skill;
 mod registry;
 mod shell_command;
-#[cfg(test)]
-mod shell_session;
 pub(crate) use apply_patch::*;
 pub(crate) use codebase_retrieval::*;
 pub(crate) use file::*;
@@ -239,8 +235,6 @@ pub(crate) use knowledge_base::*;
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
 pub(crate) use shell_command::*;
-#[cfg(test)]
-pub(crate) use shell_session::*;
 mod browser;
 mod goal;
 mod runtime_config;

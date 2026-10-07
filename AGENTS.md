@@ -36,7 +36,7 @@
 | --- | --- | --- |
 | 修改宿主消息固定指引或锁定基线校验 | 指引版本目录只能追加；已锁定正文不得重写，新版说明通过持久动态上下文追加 | [`host-message-guidance-versions.md`](docs/contracts/host-message-guidance-versions.md) |
 | 修改会话元数据持久字段、模式版本或读取入口 | 递增 `METADATA_SCHEMA_VERSION` 并提供逐版本迁移；升级前保留原字节备份，未知版本不得降级，用户观察权限不得猜测 | [`session-metadata-migrations.md`](docs/contracts/session-metadata-migrations.md) |
-| 修改 `shell_command`、`shell_session`、`terminal_session` 或命令会话状态 | `timeout_ms` 省略表示无限等待；`shell_command` 合并输出超过 8 MiB 硬上限时终止进程树并丢弃全部输出，不返回给模型；内联输出超过 `200000` 字节转到 `.vulcan/temp/` 分页文件；`shell_session.read` 是轮询不是事件推送；`cwd` 只在 `start` 生效 | [`tooling-and-terminal-runtime.md`](docs/contracts/tooling-and-terminal-runtime.md) |
+| 修改 `shell_command`、`terminal_session` 或命令会话状态 | `timeout_ms` 省略表示无限等待；`shell_command` 合并输出超过 8 MiB 硬上限时终止进程树并丢弃全部输出，不返回给模型；内联输出超过 `200000` 字节转到 `.vulcan/temp/` 分页文件；`terminal_session.read` 是轮询不是事件推送；`cwd` 只在 `start` 生效 | [`tooling-and-terminal-runtime.md`](docs/contracts/tooling-and-terminal-runtime.md) |
 | 修改 `ask`、提问状态机、Ask WebUI 或 Markdown 预览/渲染 | 模型可见提问工具只有 `ask`，不保留 `question` 别名；必须复用共享 `QuestionRuntime`，刷新或流式启动不得丢弃等待中的问题；Ask 是会话内非模态面板，不得劫持其他窗口键盘；会话 Markdown 复用当前 `conversation-markdown` 链路，不建立第二套解析器 | [`ask-and-markdown-interaction.md`](docs/contracts/ask-and-markdown-interaction.md) |
 | 编写或修改插件界面挂载、设置版面或插件 UI 模块 | 设置页只用 `kind: settings` 声明式版面，不在模块中手写设置表单；模块页面由 `sdk.components` 页面套件组成，不注入样式、不操作 DOM、不写颜色字面量，`className` 只用 `plugin-host-components.css` 词汇 | [`plugin-ui-authoring.md`](docs/contracts/plugin-ui-authoring.md) |
 | 修改界面文案、语言清单或语言匹配规则 | 唯一权威是 `crates/vulcan-i18n/catalogs/`；任何界面不得另建语言列表、匹配规则或文案表副本；默认语言补全一切，非默认语言不得有额外键，占位符必须一致 | [`shared-language-catalogs.md`](docs/contracts/shared-language-catalogs.md) |

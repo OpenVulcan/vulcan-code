@@ -1,12 +1,11 @@
 # 工具与终端运行时约定
 
-本文仅在修改 AI 可见工具、`shell_command`、`shell_session`、`terminal_session`、命令会话状态或其
+本文仅在修改 AI 可见工具、`shell_command`、`terminal_session`、命令会话状态或其
 WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 
 当前源码权威入口：
 
 - [`shell_command.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_command.rs)；
-- [`shell_session.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_session.rs)；
 - [`terminal.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/terminal.rs)；
 - [`shell_host.rs`](../../crates/vulcan-host-tools/src/shell_host.rs)；
 - [`command_session_runtime`](../../crates/vulcan-host-tools/src/command_session_runtime.rs)。
@@ -56,16 +55,18 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 即使时间戳被外部还原，也最多复用一秒，之后重新读取。优先模板损坏或不可读时明确报错，不悄悄选用
 另一份模板。缓存互斥锁不跨磁盘读取持有。
 
-## 三、`shell_session`
+## 三、`terminal_session`
 
-- `cwd` 只在 `start` 生效；后续 `write` 不改变工作目录。
-- `read` 是轮询，不是事件推送。
-- `wait_for_output_ms` 默认 `0`，表示立即返回当前缓冲。
-- `max_chunks` 默认 `128`。
+旧 `shell_session` 工具已由 `terminal_session` 取代并删除，模型可见的持久命令会话只有 `terminal_session`。
+
+- 动作为 `list`、`start`、`send`、`read`、`snapshot`、`stop`；会话只属于创建它的控制会话，跨会话访问被拒绝。
+- `cwd` 只在 `start` 生效；后续 `send` 只能通过输入 shell 命令改变终端内的工作目录。
+- `read` 是轮询，不是事件推送：从 AI 游标返回新输出；`snapshot` 查看当前状态但不推进游标。
+- 省略 `wait_policy` 时等待预算为 `0`，立即返回当前缓冲；任何等待模式都受宿主读取等待硬上限约束。
+- `max_chunks` 默认值与上限分别是 `DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS` 与 `MAX_COMMAND_SESSION_READ_CHUNKS`
+  （唯一定义在 [`command_session_runtime`](../../crates/vulcan-host-tools/src/command_session_runtime.rs)）。
 - chunk 边界由实现决定，不能假设严格按行或按命令返回。
-- `start` 带 `stdin` 且未指定 `append_newline` 时，默认追加换行；不带 `stdin` 时默认不追加。
-- `write` 未指定 `append_newline` 时默认不追加换行。
-- `start` 不能把一个未以换行结束的开放输入行留给后续 `write` 隐式拼接。
+- `send` 的 `text` 与 `paste` 输入由宿主把 CRLF、CR、LF 归一为当前交互 Shell 的换行；控制键用 `key`/`chord` 项，不手写 ANSI 序列。
 - `stop` 终止会话子进程所在的整棵进程树；子进程退出后，输出排空同样受
   `CHILD_OUTPUT_DRAIN_GRACE` 约束，不会因后台进程持有管道而永久停留在运行态。
 
@@ -89,7 +90,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 
 - 工具描述和 Schema 与解析器默认值一致；
 - Windows 与 POSIX Shell 的 launcher、换行和显式选择测试通过；
-- `start/read/write/stop`、游标、等待、分页和实时状态测试通过；
+- `start/send/read/snapshot/stop`、游标、等待、分页和实时状态测试通过；
 - WebUI 历史回放不会冒充实时运行状态；
 - 没有静默回写用户工具策略；
 - `cargo fmt --all -- --check` 与目标 crate 测试通过。

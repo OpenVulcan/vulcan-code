@@ -32,12 +32,6 @@ const TERMINAL_SESSION_TOOL_NAME: &str = "terminal_session";
 /// Stable host-result kind for the host-owned persistent terminal.
 /// 宿主持有的持久化终端稳定宿主结果类型。
 const TERMINAL_SESSION_HOST_RESULT_KIND: &str = "terminal_session";
-/// Stable public tool name for the legacy shell-backed persistent session.
-/// 旧 shell 后端持久化会话的稳定公开工具名。
-const SHELL_SESSION_TOOL_NAME: &str = "shell_session";
-/// Stable host-result kind for the legacy shell-backed persistent session.
-/// 旧 shell 后端持久化会话的稳定宿主结果类型。
-const SHELL_SESSION_HOST_RESULT_KIND: &str = "command_session";
 /// Stable host-result kind for the Lua persistent-session runtime.
 /// Lua 持久化会话运行时的稳定宿主结果类型。
 const RUNLUA_SESSION_HOST_RESULT_KIND: &str = "lua_runtime_session";
@@ -208,38 +202,6 @@ struct TerminalSessionResourcePayload {
     terminal_sessions: Vec<TerminalSessionListResource>,
 }
 
-/// Shell-session actions accepted by the exact host-result schema.
-/// 精确宿主结果 schema 接受的 shell 会话动作。
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ShellSessionResourceAction {
-    /// Starts one shell session.
-    /// 启动一个 shell 会话。
-    Start,
-    /// Reads one shell session.
-    /// 读取一个 shell 会话。
-    Read,
-    /// Writes to one shell session.
-    /// 写入一个 shell 会话。
-    Write,
-    /// Stops one shell session.
-    /// 停止一个 shell 会话。
-    Stop,
-}
-
-/// Navigation fields owned by the exact `shell_session` host-result schema.
-/// 精确 `shell_session` 宿主结果 schema 拥有的导航字段。
-#[derive(Debug, Deserialize)]
-struct ShellSessionResourcePayload {
-    /// Exact shell-session action that produced this payload.
-    /// 产生此载荷的精确 shell 会话动作。
-    #[serde(rename = "action")]
-    _action: ShellSessionResourceAction,
-    /// Stable command-session identity shared by every shell-session action.
-    /// 每个 shell 会话动作共享的稳定命令会话身份。
-    command_session_id: String,
-}
-
 /// Lua persistent-session actions accepted by the exact host-result schema.
 /// 精确宿主结果 schema 接受的 Lua 持久化会话动作。
 #[derive(Debug, Deserialize)]
@@ -403,7 +365,6 @@ pub fn provider_v1_external_refs_from_tool_result(
     }
     match result.tool_name.as_str() {
         TERMINAL_SESSION_TOOL_NAME => terminal_session_external_refs(result),
-        SHELL_SESSION_TOOL_NAME => shell_session_external_refs(result),
         RUNLUA_SESSION_TOOL_NAME => lua_session_external_refs(result),
         SPAWN_AGENT_TOOL => subagent_external_refs(result),
         _ => Ok(Vec::new()),
@@ -443,26 +404,6 @@ fn terminal_session_external_refs(
             "terminal_session_id",
         )?]),
     }
-}
-
-/// Extracts the single command-session identity from the exact shell host schema.
-/// 从精确 shell 宿主 schema 提取单个命令会话身份。
-fn shell_session_external_refs(
-    result: &ToolInvocationResult,
-) -> Result<Vec<ExternalResourceRef>, ProviderV1ExternalResourceError> {
-    let ShellSessionResourcePayload {
-        _action: _,
-        command_session_id,
-    } = typed_resource_payload::<ShellSessionResourcePayload>(
-        result,
-        SHELL_SESSION_HOST_RESULT_KIND,
-    )?;
-    Ok(vec![required_external_ref(
-        result,
-        ExternalResourceKind::Terminal,
-        command_session_id,
-        "command_session_id",
-    )?])
 }
 
 /// Extracts the addressed Lua lease identity from the exact Lua host schema.
@@ -1347,16 +1288,6 @@ mod tests {
                 }
             }),
         );
-        let shell = resource_tool_result(
-            SHELL_SESSION_TOOL_NAME,
-            serde_json::json!({
-                "kind": SHELL_SESSION_HOST_RESULT_KIND,
-                "payload": {
-                    "action": "read",
-                    "command_session_id": "command-1"
-                }
-            }),
-        );
         let lua = resource_tool_result(
             RUNLUA_SESSION_TOOL_NAME,
             serde_json::json!({
@@ -1381,13 +1312,6 @@ mod tests {
             vec![ExternalResourceRef {
                 kind: ExternalResourceKind::Terminal,
                 id: String::from("terminal-1"),
-            }]
-        );
-        assert_eq!(
-            provider_v1_external_refs_from_tool_result(&shell).expect("shell resource"),
-            vec![ExternalResourceRef {
-                kind: ExternalResourceKind::Terminal,
-                id: String::from("command-1"),
             }]
         );
         assert_eq!(

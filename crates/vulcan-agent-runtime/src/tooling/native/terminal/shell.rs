@@ -21,13 +21,6 @@ pub(crate) fn shell_selector_uses_auto(raw_shell_selector: Option<&str>) -> bool
     normalize_shell_selector(raw_shell_selector).eq_ignore_ascii_case("auto")
 }
 
-/// Reports whether one stdin payload already ends with a line terminator.
-/// 判断一段标准输入载荷是否已经以行终止符结束。
-#[cfg(test)]
-pub(crate) fn stdin_payload_has_trailing_newline(text: &str) -> bool {
-    text.ends_with(['\n', '\r'])
-}
-
 /// Returns the PTY-facing newline sequence used by generated terminal key/control input.
 /// 返回宿主生成的终端按键或控制输入面向 PTY 使用的换行序列。
 pub(crate) fn terminal_session_pty_newline(shell_label: &str) -> &'static str {
@@ -47,32 +40,6 @@ pub(crate) fn terminal_session_pty_newline(shell_label: &str) -> &'static str {
 /// 返回当前宿主上 terminal_session 使用的默认后端。
 pub(crate) fn default_terminal_session_backend() -> CommandSessionBackend {
     CommandSessionBackend::Pty
-}
-
-#[cfg(test)]
-pub(crate) fn effective_start_append_newline(
-    requested_append_newline: Option<bool>,
-    initial_stdin: Option<&str>,
-) -> bool {
-    requested_append_newline.unwrap_or(initial_stdin.is_some())
-}
-
-/// Validates whether `start` stdin is safe to submit without hidden concatenation across later writes.
-/// 校验 `start` 的标准输入是否能安全提交，避免与后续写入发生隐式拼接。
-#[cfg(test)]
-pub(crate) fn validate_shell_session_start_stdin_policy(
-    initial_stdin: Option<&str>,
-    append_newline: bool,
-) -> Result<(), NativeToolError> {
-    if let Some(stdin_text) = initial_stdin
-        && !append_newline
-        && !stdin_payload_has_trailing_newline(stdin_text)
-    {
-        return Err(NativeToolError::new(
-            "shell_session start rejected initial stdin without a trailing newline. Either set `append_newline: true`, include the trailing newline inside `stdin`, or start without `stdin` and use `write` for partial interactive input.",
-        ));
-    }
-    Ok(())
 }
 
 /// Validates whether one requested shell selector may safely rely on `auto` for the resolved session behavior.

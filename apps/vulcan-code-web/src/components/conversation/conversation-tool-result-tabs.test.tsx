@@ -16,7 +16,7 @@ function event(name: string, input: ToolCallEvent["input"] = {}): ToolCallEvent 
 }
 
 describe("tool result presentation policy", () => {
-  it.each(["todolist", "get_goal", "create_goal", "update_goal", "submit_plan", "ask", "shell_command", "shell_session", "terminal_session", "runlua", "runlua_session", "spawn_agent", "send_message", "wait_agent", "list_agents", "agent_orchestration_info", "subagent_feedback", "close_agent", "interrupt_agent", "debug_session_open", "debug_session_request", "debug_session_events", "debug_session_status", "debug_session_close", "file_edit", "apply_patch", "vulcan_file_read"])("keeps %s as a dedicated body", name => {
+  it.each(["todolist", "get_goal", "create_goal", "update_goal", "submit_plan", "ask", "shell_command", "terminal_session", "runlua", "runlua_session", "spawn_agent", "send_message", "wait_agent", "list_agents", "agent_orchestration_info", "subagent_feedback", "close_agent", "interrupt_agent", "debug_session_open", "debug_session_request", "debug_session_events", "debug_session_status", "debug_session_close", "file_edit", "apply_patch", "vulcan_file_read"])("keeps %s as a dedicated body", name => {
     // markup retains the specialized view without raw details or tabs.
     // markup 保留专属视图，不包含原始详情与标签。
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="zh-CN"><ConversationToolResultTabs event={event(name)}><div>dedicated result</div></ConversationToolResultTabs></I18nProvider>);

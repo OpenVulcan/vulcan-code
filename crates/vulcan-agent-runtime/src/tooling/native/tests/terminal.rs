@@ -597,3 +597,80 @@ async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
         })
         .await;
 }
+
+/// The terminal-session tool should reject cross-session control and let the owner stop its own session.
+/// 终端会话工具应拒绝跨会话控制，并允许拥有者停止自己的会话。
+#[tokio::test]
+async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
+    let tool = build_terminal_session_tool(
+        Arc::new(CommandSessionRuntime::new()),
+        HostCommandShellSupport::from_configured_default_id(None),
+    );
+    let owner_session_id = Uuid::from_u128(0x7101);
+    let foreign_session_id = Uuid::from_u128(0x7102);
+    let start_result = tool
+        .invoke(NativeToolExecutionRequest {
+            session_id: Some(owner_session_id),
+            ..test_native_request(json!({
+                "action": "start",
+                "name": "owner isolation",
+                "command": long_lived_terminal_test_command()
+            }))
+        })
+        .await
+        .expect("owner should start a terminal session");
+    let terminal_session_id = start_result
+        .host_result
+        .as_ref()
+        .and_then(|result| result.payload["terminal_session_id"].as_str())
+        .expect("terminal id should exist")
+        .to_string();
+
+    for action in ["read", "snapshot", "stop"] {
+        tool.invoke(NativeToolExecutionRequest {
+            session_id: Some(foreign_session_id),
+            ..test_native_request(json!({
+                "action": action,
+                "terminal_session_id": terminal_session_id
+            }))
+        })
+        .await
+        .expect_err("a foreign controller session must not access another session's terminal");
+    }
+
+    // ownerSnapshot proves the rejected foreign stop left the owner's session running.
+    // ownerSnapshot 证明被拒绝的外部停止没有影响拥有者会话的运行状态。
+    let owner_snapshot = tool
+        .invoke(NativeToolExecutionRequest {
+            session_id: Some(owner_session_id),
+            ..test_native_request(json!({
+                "action": "snapshot",
+                "terminal_session_id": terminal_session_id
+            }))
+        })
+        .await
+        .expect("owner should inspect its terminal session");
+    assert_eq!(
+        owner_snapshot
+            .host_result
+            .expect("snapshot action should expose host metadata")
+            .payload["status"],
+        "running"
+    );
+
+    let stop_result = tool
+        .invoke(NativeToolExecutionRequest {
+            session_id: Some(owner_session_id),
+            ..test_native_request(json!({
+                "action": "stop",
+                "terminal_session_id": terminal_session_id
+            }))
+        })
+        .await
+        .expect("owner should stop its terminal session");
+    let stop_host_result = stop_result
+        .host_result
+        .expect("stop action should expose host metadata");
+    assert_eq!(stop_host_result.kind, "terminal_session");
+    assert_eq!(stop_host_result.payload["status"], "stopped");
+}

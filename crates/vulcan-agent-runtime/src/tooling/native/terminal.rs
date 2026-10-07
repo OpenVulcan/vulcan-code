@@ -457,27 +457,6 @@ fn require_terminal_session_owner_session_id(
     })
 }
 
-/// Parses the caller-provided command-session identifier into the stable UUID-shaped session id.
-/// 将调用方提供的命令会话标识解析为稳定的 UUID 形态会话 id。
-#[cfg(test)]
-pub(crate) fn parse_command_session_id(
-    raw_command_session_id: Option<&str>,
-) -> Result<SessionId, NativeToolError> {
-    let raw_command_session_id = raw_command_session_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            NativeToolError::new(
-                "The shell_session tool is missing the required `command_session_id` argument.",
-            )
-        })?;
-    Uuid::parse_str(raw_command_session_id).map_err(|error| {
-        NativeToolError::new(format!(
-            "The `command_session_id` provided to shell_session is not a valid UUID: {error}"
-        ))
-    })
-}
-
 /// Parses the caller-provided terminal-session identifier into the stable UUID-shaped session id.
 /// 将调用方提供的终端会话标识解析为稳定的 UUID 形态会话 id。
 fn parse_terminal_session_id(

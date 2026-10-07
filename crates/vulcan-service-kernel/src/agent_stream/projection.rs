@@ -1159,10 +1159,7 @@ fn append_runtime_event_projection_with_authority(
 /// 仅当终端会话工具已经完成共享运行时变更后返回 `true`。
 fn runtime_event_changes_command_sessions(event: &RuntimeEvent) -> bool {
     event.kind == RuntimeEventKind::ToolFinished
-        && matches!(
-            runtime_event_tool_name(event),
-            Some("terminal_session" | "shell_session")
-        )
+        && runtime_event_tool_name(event) == Some("terminal_session")
 }
 
 /// Reports whether one runtime event changed the open-subagent navigation lifecycle.
@@ -1569,11 +1566,6 @@ mod tests {
         let terminal_finished =
             RuntimeEvent::new(RuntimeEventKind::ToolFinished, "terminal finished", "")
                 .with_metadata(Some(json!({ "tool_name": "terminal_session" })));
-        // shell_finished preserves synchronization for the retained legacy shell-session tool.
-        // shell_finished 为保留的旧版 shell-session 工具维持同步能力。
-        let shell_finished =
-            RuntimeEvent::new(RuntimeEventKind::ToolFinished, "shell finished", "")
-                .with_metadata(Some(json!({ "tool_name": "shell_session" })));
         // terminal_started must not refresh before the start action has inserted its live runtime record.
         // terminal_started 不得在启动动作写入实时运行时记录前提前刷新。
         let terminal_started =
@@ -1586,7 +1578,6 @@ mod tests {
                 .with_metadata(Some(json!({ "tool_name": "vulcan_file_read" })));
 
         assert!(runtime_event_changes_command_sessions(&terminal_finished));
-        assert!(runtime_event_changes_command_sessions(&shell_finished));
         assert!(!runtime_event_changes_command_sessions(&terminal_started));
         assert!(!runtime_event_changes_command_sessions(&unrelated_finished));
     }
