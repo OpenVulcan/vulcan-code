@@ -126,11 +126,10 @@ pub enum ProviderAsyncTaskRecoveryContext {
     None,
     /// Ordered SHA-256 fingerprints of generic submitted identities.
     /// 通用已提交身份的有序 SHA-256 指纹。
-    #[serde(rename = "ordered_sha256", alias = "fun_asr")]
+    #[serde(rename = "ordered_sha256")]
     OrderedSha256 {
         /// Ordered hexadecimal SHA-256 values without retaining signed object URLs.
         /// 不保留签名对象 URL 的有序十六进制 SHA-256 值。
-        #[serde(rename = "fingerprints", alias = "source_url_sha256")]
         fingerprints: Vec<String>,
     },
 }
