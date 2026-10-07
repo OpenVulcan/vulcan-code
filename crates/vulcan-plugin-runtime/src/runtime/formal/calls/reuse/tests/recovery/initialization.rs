@@ -1,5 +1,5 @@
-//! Real bundle initialization narrows callbacks consistently for cold business and explicit prewarming.
-//! 真实包初始化为冷业务及显式预热一致收窄回调。
+//! Real bundle initialization narrows callbacks consistently for cold business and automatic prewarming.
+//! 真实包初始化为冷业务及自动预热一致收窄回调。
 
 use super::*;
 
@@ -49,19 +49,7 @@ async fn hot_reuse_initialization_policy_applies_to_cold_calls_and_prewarm() {
                 .expect("publish policy");
             let workspace = fixture.root.path().to_path_buf();
             if prewarm {
-                let generation =
-                    fixture.manager.snapshot().enabled_tools["idle_ping"].plugin_generation;
-                fixture
-                    .manager
-                    .prewarm_reusable_tool_instance(
-                        "idle-plugin",
-                        "idle_ping",
-                        generation,
-                        "owner".into(),
-                        workspace.clone(),
-                    )
-                    .await
-                    .expect("explicit prewarm");
+                fixture.converge_target(fixture.target(1)).await;
             }
             assert_eq!(
                 fixture

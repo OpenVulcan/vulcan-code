@@ -20,8 +20,7 @@ async fn hot_reuse_target_admission_failure_retains_prior_success() {
     // Retain the inert original receipt before starting any native initialization.
     // 在启动任何原生初始化前保留原未启动回执。
     let prepared = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(2))
+        .prepare_target(fixture.target(2))
         .expect("register original prewarm target");
     fixture
         .manager
@@ -125,6 +124,60 @@ impl Fixture {
             .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
             .expect("publish target capacity");
     }
+
+    /// Publish request's exact rule as the whole automatic policy; return the acknowledged revision.
+    /// 将 request 的精确规则发布为整个自动策略；返回已确认修订。
+    pub(super) fn publish_target_rule(&self, request: &VulcanPluginPrewarmTargetRequest) -> String {
+        self.publish_prewarm_rules(vec![VulcanPluginAutomaticPrewarmRule {
+            plugin_id: request.plugin_id.clone(),
+            tool_id: request.tool_id.clone(),
+            target_idle: request.target_idle,
+        }])
+    }
+
+    /// Admit request under a policy authorizing exactly it and a fresh trigger owned by this fixture.
+    /// 在恰好授权 request 的策略及此夹具持有的新触发下接纳它。
+    /// Returns the inert receipt or the admission error; nothing is started.
+    /// 返回未启动回执或入场错误；不启动任何工作。
+    pub(super) fn prepare_target(
+        &self,
+        request: VulcanPluginPrewarmTargetRequest,
+    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
+        let revision = self.publish_target_rule(&request);
+        self.prepare_target_under(request, revision)
+    }
+
+    /// Admit request with a fresh trigger under the already acknowledged policy_revision.
+    /// 在已确认的 policy_revision 下以新触发接纳 request。
+    pub(super) fn prepare_target_under(
+        &self,
+        request: VulcanPluginPrewarmTargetRequest,
+        policy_revision: String,
+    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
+        self.manager.prepare_automatic_tool_prewarm(
+            request,
+            VulcanPluginAutomaticPrewarmOrigin {
+                trigger_id: uuid::Uuid::new_v4().to_string(),
+                policy_revision,
+            },
+            self.prewarm_trigger.permit(),
+        )
+    }
+
+    /// Admit, start and observe one target owned by `owner` until it succeeds; return its retained evidence.
+    /// 接纳、启动并观测一个归属 `owner` 的目标直至成功；返回其保留证据。
+    pub(super) async fn converge_target(
+        &self,
+        request: VulcanPluginPrewarmTargetRequest,
+    ) -> VulcanPluginFormalCallStatus {
+        let prepared = self.prepare_target(request).expect("admit target");
+        self.manager
+            .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
+            .expect("start target");
+        let completed = wait_target(self, &prepared.invocation_id).await;
+        assert!(completed.error.is_none(), "{completed:?}");
+        completed
+    }
 }
 
 /// Observe id under its original controller until real retirement; fail on the single fixture deadline.
@@ -153,70 +206,21 @@ pub(super) async fn wait_target(fixture: &Fixture, id: &str) -> VulcanPluginForm
     }
 }
 
-/// Zero, additional and already-satisfied targets execute only the necessary real initializations.
-/// 零目标、增加目标及已满足目标仅执行必要真实初始化。
+/// Additional and already-satisfied targets execute only the necessary real initializations.
+/// 增加目标及已满足目标仅执行必要真实初始化。
 #[tokio::test]
-async fn hot_reuse_target_receipts_are_repeatable_and_keep_distinct_operations() {
+async fn hot_reuse_target_receipts_keep_distinct_operations() {
     // The real enabled fixture owns the authoritative package and formal runtime.
     // 真实已启用夹具拥有权威包及正式运行时。
     let fixture = Fixture::new(10_000, 100);
     fixture.target_capacity(2);
-    // Retain the zero-initialization target receipt for resource and acknowledgement assertions.
-    // 保留零初始化目标回执，用于资源及确认断言。
-    let zero = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(0))
-        .expect("prepare zero");
-    assert!(
-        !zero
-            .prewarm
-            .as_ref()
-            .expect("retained target progress")
-            .started
-    );
-    assert!(!zero.requires_cleanup_recovery);
-    assert_eq!(
-        fixture
-            .owner()
-            .host
-            .runtime()
-            .resources()
-            .expect("query actual native resources")
-            .resident,
-        0
-    );
-    fixture
-        .manager
-        .start_reusable_tool_prewarm(&zero.invocation_id, "owner")
-        .expect("start zero");
-    // Retain the zero-initialization target receipt for resource and acknowledgement assertions.
-    // 保留零初始化目标回执，用于资源及确认断言。
-    let zero = wait_target(&fixture, &zero.invocation_id).await;
-    assert_eq!(
-        zero.value
-            .as_ref()
-            .expect("successful native or target result")["initializations"],
-        0
-    );
-    assert!(zero.operation.is_none());
-    assert_eq!(
-        fixture
-            .owner()
-            .host
-            .runtime()
-            .resources()
-            .expect("query actual native resources")
-            .resident,
-        0
-    );
     // Freeze the exact parent, plugin generation, controller, workspace and desired count.
     // 冻结精确父级、插件代次、控制器、工作区及期望数量。
     let request = fixture.target(2);
     // Retain the inert original receipt before starting any native initialization.
     // 在启动任何原生初始化前保留原未启动回执。
     let prepared = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(request.clone())
+        .prepare_target(request.clone())
         .expect("prepare two");
     fixture
         .manager
@@ -267,6 +271,12 @@ async fn hot_reuse_target_receipts_are_repeatable_and_keep_distinct_operations()
         .as_ref()
         .expect("last original operation");
     assert_ne!(previous.operation_id, latest.operation_id);
+    // Initialization is a tracked module prewarm operation, never a business call.
+    // 初始化是受跟踪的模块预热操作，绝不是业务调用。
+    assert!(matches!(
+        &latest.context,
+        OperationContext::Module(context) if context.prewarm
+    ));
     assert_ne!(
         previous
             .value
@@ -293,8 +303,7 @@ async fn hot_reuse_target_receipts_are_repeatable_and_keep_distinct_operations()
     // An already-satisfied target must retain its own zero-work completion receipt.
     // 已满足目标必须保留自身零工作完成回执。
     let hot = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(2))
+        .prepare_target(fixture.target(2))
         .expect("already hot target");
     fixture
         .manager
@@ -317,11 +326,7 @@ async fn hot_reuse_target_receipts_are_repeatable_and_keep_distinct_operations()
             .expect("invoke first business after prewarming")["count"],
         1
     );
-    for id in [
-        &zero.invocation_id,
-        &completed.invocation_id,
-        &hot.invocation_id,
-    ] {
+    for id in [&completed.invocation_id, &hot.invocation_id] {
         fixture
             .manager
             .forget_formal_call(id, "owner")
@@ -363,23 +368,12 @@ async fn hot_reuse_target_unstarted_cancel_close_and_stale_identity_are_inert() 
     // 仅改变已观测父级身份，证明过期入场被拒绝。
     let mut stale = fixture.target(1);
     stale.runtime_id = "different-parent".into();
-    assert!(
-        fixture
-            .manager
-            .prepare_reusable_tool_prewarm(stale)
-            .is_err()
-    );
-    assert!(
-        fixture
-            .manager
-            .prepare_reusable_tool_prewarm(fixture.target(2))
-            .is_err()
-    );
+    assert!(fixture.prepare_target(stale).is_err());
+    assert!(fixture.prepare_target(fixture.target(2)).is_err());
     // Retain the inert original receipt before starting any native initialization.
     // 在启动任何原生初始化前保留原未启动回执。
     let prepared = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(1))
+        .prepare_target(fixture.target(1))
         .expect("register original prewarm target");
     assert!(
         fixture
@@ -418,8 +412,7 @@ async fn hot_reuse_target_unstarted_cancel_close_and_stale_identity_are_inert() 
     // Retain original work ownership while testing bounded drain or parent shutdown.
     // 测试有界排空或父级关闭时保留原工作归属。
     let pending = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(1))
+        .prepare_target(fixture.target(1))
         .expect("register original prewarm target");
     fixture.close().await;
     // Read the original receipt after parent shutdown rather than inferring completion from resources.
@@ -466,12 +459,7 @@ async fn hot_reuse_target_prepared_generation_and_input_budget_cannot_be_reselec
     // 过量可信路由元数据必须在发布或初始化前失败。
     let mut excess = fixture.target(1);
     excess.owner_session_id = "x".repeat(fixture.owner().settings.parent.max_queued_bytes);
-    assert!(
-        fixture
-            .manager
-            .prepare_reusable_tool_prewarm(excess)
-            .is_err()
-    );
+    assert!(fixture.prepare_target(excess).is_err());
     assert!(
         fixture
             .manager
@@ -482,8 +470,7 @@ async fn hot_reuse_target_prepared_generation_and_input_budget_cannot_be_reselec
     // Retain the inert original receipt before starting any native initialization.
     // 在启动任何原生初始化前保留原未启动回执。
     let prepared = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(1))
+        .prepare_target(fixture.target(1))
         .expect("register original prewarm target");
     // Locate the real declared bundle whose fingerprint owns this generation.
     // 定位其指纹拥有此代次的真实声明 bundle。

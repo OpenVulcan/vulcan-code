@@ -26,10 +26,7 @@ async fn native_identity_records_each_prewarm_and_reusable_finalization_before_f
     fixture.target_capacity(2);
     // Preserve the original host invocation before starting its real target.
     // 启动真实目标之前保留原宿主调用。
-    let prepared = fixture
-        .manager
-        .prepare_reusable_tool_prewarm(fixture.target(2))
-        .expect("target");
+    let prepared = fixture.prepare_target(fixture.target(2)).expect("target");
     fixture
         .manager
         .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")

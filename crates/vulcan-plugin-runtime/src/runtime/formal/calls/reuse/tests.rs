@@ -339,6 +339,9 @@ struct Fixture {
     /// Public production entrypoint under test.
     /// 被测公开生产入口。
     manager: VulcanPluginRuntimeManager,
+    /// Lifecycle owner of every target this fixture admits; dropping it revokes their permits.
+    /// 此夹具接纳的全部目标的生命周期所有者；丢弃即撤销其许可。
+    prewarm_trigger: VulcanPluginAutomaticPrewarmTrigger,
 }
 impl Fixture {
     /// Build the real fixture under exact settings; ttl and uses remain explicit manifest limits.
@@ -445,7 +448,11 @@ return M
             "{:?}",
             manager.snapshot().plugins["idle-plugin"].diagnostics
         );
-        Self { root, manager }
+        Self {
+            root,
+            manager,
+            prewarm_trigger: VulcanPluginAutomaticPrewarmTrigger::default(),
+        }
     }
 
     /// Build a validated version-two package using ttl and uses as exact declared retirement limits.

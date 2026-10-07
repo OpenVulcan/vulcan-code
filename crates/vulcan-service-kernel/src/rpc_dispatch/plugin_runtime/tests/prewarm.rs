@@ -226,11 +226,7 @@ lua_runtime:
             .expect("original receipts");
         targets
             .into_iter()
-            .find(|call| {
-                call.prewarm
-                    .as_ref()
-                    .is_some_and(|target| target.automatic.is_some())
-            })
+            .find(|call| call.prewarm.is_some())
             .expect("automatic target must exist; check real manifest and accepted policy")
             .invocation_id
     }
@@ -260,10 +256,6 @@ async fn plugin_automatic_turn_reuses_workspace_and_survives_receipt_forgetting(
     let target = completed.prewarm.as_ref().expect("prewarm target");
     assert_eq!(target.request.workspace_root, workspace);
     assert_eq!(target.satisfied.as_ref().expect("satisfied").ready, 1);
-    assert!(
-        target.automatic.is_some(),
-        "original provenance must stay on the automatic receipt"
-    );
     assert!(
         spawn_for_turn(
             &fixture.state,

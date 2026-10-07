@@ -228,7 +228,6 @@ impl Preparation {
                 self.admission.export(),
                 match &self.admission {
                     CallAdmission::Controller { tool_id, .. }
-                    | CallAdmission::Prewarm { tool_id, .. }
                     | CallAdmission::PrewarmTarget {
                         request: VulcanPluginPrewarmTargetRequest { tool_id, .. },
                         ..

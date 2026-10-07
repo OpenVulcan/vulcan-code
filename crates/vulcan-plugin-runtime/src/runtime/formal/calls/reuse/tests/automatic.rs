@@ -12,6 +12,27 @@ impl Fixture {
         &self,
         target: Option<usize>,
     ) -> VulcanPluginAutomaticPrewarmOrigin {
+        VulcanPluginAutomaticPrewarmOrigin {
+            trigger_id: uuid::Uuid::new_v4().to_string(),
+            policy_revision: self.publish_prewarm_rules(
+                target
+                    .into_iter()
+                    .map(|target_idle| VulcanPluginAutomaticPrewarmRule {
+                        plugin_id: "idle-plugin".into(),
+                        tool_id: "idle_ping".into(),
+                        target_idle,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Replace the whole automatic policy with rules and acknowledge it; return the committed revision.
+    /// 以 rules 替换整个自动策略并确认；返回已提交修订。
+    pub(super) fn publish_prewarm_rules(
+        &self,
+        rules: Vec<VulcanPluginAutomaticPrewarmRule>,
+    ) -> String {
         // Observe and replace the original policy through the public persistence controls.
         // 通过公开持久控制观测并替换原策略。
         let status = self.manager.prewarm_policy_status().expect("policy");
@@ -19,14 +40,7 @@ impl Fixture {
             update_id: uuid::Uuid::new_v4().to_string(),
             runtime_id: status.runtime_id,
             expected_revision: status.revision,
-            rules: target
-                .into_iter()
-                .map(|target_idle| VulcanPluginAutomaticPrewarmRule {
-                    plugin_id: "idle-plugin".into(),
-                    tool_id: "idle_ping".into(),
-                    target_idle,
-                })
-                .collect(),
+            rules,
         };
         let result = self
             .manager
@@ -37,10 +51,7 @@ impl Fixture {
         self.manager
             .forget_prewarm_policy_update(&request.update_id)
             .expect("acknowledge policy");
-        VulcanPluginAutomaticPrewarmOrigin {
-            trigger_id: uuid::Uuid::new_v4().to_string(),
-            policy_revision: result.result_revision,
-        }
+        result.result_revision
     }
 }
 
@@ -164,7 +175,7 @@ async fn hot_reuse_automatic_trigger_is_atomic_and_preserves_original_deadline()
     assert!(completed.error.is_none(), "{completed:?}");
     assert_eq!(
         completed.prewarm.as_ref().expect("target").automatic,
-        Some(origin.clone())
+        origin.clone()
     );
     assert_eq!(
         completed

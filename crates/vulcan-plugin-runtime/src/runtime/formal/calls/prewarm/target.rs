@@ -11,7 +11,7 @@ pub(in crate::runtime::formal::calls) struct TargetProgress {
     pub(in crate::runtime::formal::calls) request: VulcanPluginPrewarmTargetRequest,
     /// Original trigger provenance is retained with the same input budget as its target.
     /// 原触发来源与其目标保留在同一输入预算中。
-    pub(in crate::runtime::formal::calls) automatic: Option<automatic::AutomaticAdmission>,
+    pub(in crate::runtime::formal::calls) automatic: automatic::AutomaticAdmission,
     /// Transfer evidence distinguishes cancellation before startup from actual supervision.
     /// 转移证据区分启动前取消及真实监督。
     pub(in crate::runtime::formal::calls) started: bool,
@@ -64,13 +64,7 @@ impl TargetProgress {
             .target_idle
             .checked_mul(std::mem::size_of::<OperationHandle>())
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    automatic
-                        .as_ref()
-                        .map_or(0, |value| value.permit.retained_bytes()),
-                )
-            })
+            .and_then(|bytes| bytes.checked_add(automatic.permit.retained_bytes()))
             .and_then(|bytes| {
                 request_bytes
                     .checked_mul(2)
@@ -91,7 +85,7 @@ impl TargetProgress {
     ) -> Result<VulcanPluginPrewarmTargetStatus, VulcanPluginRuntimeError> {
         Ok(VulcanPluginPrewarmTargetStatus {
             request: self.request.clone(),
-            automatic: self.automatic.as_ref().map(|value| value.origin.clone()),
+            automatic: self.automatic.origin.clone(),
             started: self.started,
             completed: self
                 .completed

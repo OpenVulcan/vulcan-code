@@ -18,8 +18,9 @@ fn hot_reuse_target_survives_caller_executor_and_preserves_receipt() {
     let manager = &recovery.fixture.manager;
     // Retain the inert original receipt before starting any native initialization.
     // 在启动任何原生初始化前保留原未启动回执。
-    let prepared = manager
-        .prepare_reusable_tool_prewarm(recovery.fixture.target(1))
+    let prepared = recovery
+        .fixture
+        .prepare_target(recovery.fixture.target(1))
         .expect("register original prewarm target");
     // Supervision belongs to the manager, so synchronous code may start the target directly.
     // 监督属于管理器，因此同步代码可直接启动目标。
@@ -56,42 +57,42 @@ fn hot_reuse_target_survives_caller_executor_and_preserves_receipt() {
             .operation_id,
         operation.operation_id
     );
-    // A new caller executor may cancel and observe cleanup but must not restart convergence.
-    // 新的调用方执行器可以取消并观测清理，但不得重启目标收敛。
+    // A new caller executor may cancel and drain cleanup but must not restart convergence.
+    // 新的调用方执行器可以取消并排空清理，但不得重启目标收敛。
     let replacement = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
         .expect("create test executor");
     replacement.block_on(async {
-        assert!(
-            manager
-                .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "another-owner")
-                .is_err(),
-            "another controller cannot resume original cleanup"
-        );
         manager
             .cancel_formal_call(&prepared.invocation_id, "owner")
             .expect("cancel original target");
-        // Cleanup observation changes nothing while the native callback still owns the VM.
-        // 原生回调仍拥有 VM 时，清理观测不改变任何内容。
+        // A finite drain reports pending ownership while the native callback still owns the VM.
+        // 原生回调仍拥有 VM 时，有限排空报告待完成归属。
         let pending = manager
-            .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
-            .expect("recover original cleanup");
-        assert!(!pending.retired);
+            .drain_owner_sessions("owner")
+            .await
+            .expect("finite drain");
+        assert!(!pending.failures.is_empty());
+        assert!(
+            !manager
+                .formal_call_status(&prepared.invocation_id, "owner")
+                .expect("query original target")
+                .retired
+        );
         recovery.events.release();
-        // Bound observation with the shared fixture timeout without completing native work artificially.
-        // 用共享夹具超时约束观测，不人为完成原生工作。
+        // Later drains resume the same cleanup and never submit another initialization.
+        // 后续排空恢复同一清理，绝不提交另一初始化。
         let deadline = Instant::now() + WAIT;
-        while !manager
-            .recover_reusable_tool_prewarm_cleanup(&prepared.invocation_id, "owner")
-            .expect("observe or resume original cleanup")
-            .retired
-        {
-            assert!(
-                Instant::now() < deadline,
-                "original cleanup did not complete"
-            );
-            tokio::task::yield_now().await;
+        loop {
+            let report = manager
+                .drain_owner_sessions("owner")
+                .await
+                .expect("resume cleanup");
+            if report.failures.is_empty() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{report:?}");
         }
         // Retirement preserves the original operation and explicit cancelled-target failure.
         // 退役保留原操作及明确目标取消失败。
@@ -192,8 +193,14 @@ async fn hot_reuse_target_partial_completion_conflict_and_update_keep_original_w
         let manager = &recovery.fixture.manager;
         // Retain the inert original receipt before starting any native initialization.
         // 在启动任何原生初始化前保留原未启动回执。
-        let prepared = manager
-            .prepare_reusable_tool_prewarm(recovery.fixture.target(2))
+        // Both same-domain targets are admitted under one acknowledged policy revision.
+        // 两个同域目标在同一已确认策略修订下入场。
+        let revision = recovery
+            .fixture
+            .publish_target_rule(&recovery.fixture.target(2));
+        let prepared = recovery
+            .fixture
+            .prepare_target_under(recovery.fixture.target(2), revision.clone())
             .expect("register original prewarm target");
         manager
             .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
@@ -221,13 +228,18 @@ async fn hot_reuse_target_partial_completion_conflict_and_update_keep_original_w
             .as_ref()
             .expect("original native operation");
         assert!(!operation.phase.is_terminal());
+        assert!(matches!(
+            &operation.context,
+            OperationContext::Module(context) if context.prewarm
+        ));
         manager
             .start_reusable_tool_prewarm(&prepared.invocation_id, "owner")
             .expect("start or observe original target");
         // A separate same-domain target must fail without stealing the first target's ownership.
         // 独立同域目标必须失败，且不能夺取首个目标归属。
-        let conflicting = manager
-            .prepare_reusable_tool_prewarm(recovery.fixture.target(2))
+        let conflicting = recovery
+            .fixture
+            .prepare_target_under(recovery.fixture.target(2), revision)
             .expect("register original prewarm target");
         manager
             .start_reusable_tool_prewarm(&conflicting.invocation_id, "owner")
@@ -442,145 +454,4 @@ async fn hot_reuse_target_partial_completion_conflict_and_update_keep_original_w
             tokio::time::sleep(OBSERVATION_INTERVAL).await;
         }
     }
-}
-
-/// Cancellation and a newer package generation cannot release or replay a still-running prewarm callback.
-/// 取消及更新包代次不能释放或重放仍在运行的预热回调。
-#[tokio::test]
-async fn hot_reuse_prewarm_cancel_and_update_keep_actual_initializer_owned() {
-    // The existing fixture blocks a real initialization callback and releases it even during test unwinding.
-    // 既有夹具阻塞真实初始化回调，并在测试展开时仍释放它。
-    let recovery = RecoveryFixture::new(true);
-    // Retain the published generation before queueing this exact prewarm request.
-    // 排队此精确预热请求前保留已发布代次。
-    let generation =
-        recovery.fixture.manager.snapshot().enabled_tools["idle_ping"].plugin_generation;
-    // The original manager and authorized workspace move into the interruptible observation task.
-    // 原管理器及已授权工作区移入可中断观测任务。
-    let manager = recovery.fixture.manager.clone();
-    let workspace = recovery.fixture.root.path().to_path_buf();
-    // Only this observer is aborted; the formal supervisor and real native worker retain ownership.
-    // 仅中止此观测者；正式监督者及真实原生工作者保留归属。
-    let task = tokio::spawn(async move {
-        manager
-            .prewarm_reusable_tool_instance(
-                "idle-plugin",
-                "idle_ping",
-                generation,
-                "owner".to_owned(),
-                workspace,
-            )
-            .await
-    });
-    recovery.events.wait_entered().await;
-    // Capture actual core identity before changing the catalog or requesting cancellation.
-    // 更改目录或请求取消前捕获真实核心身份。
-    let original = recovery
-        .fixture
-        .manager
-        .formal_calls("owner")
-        .expect("prewarm calls")
-        .into_iter()
-        .find(|call| !call.retired)
-        .expect("live prewarm");
-    let operation = original.operation.as_ref().expect("native operation");
-    assert!(matches!(
-        &operation.context,
-        OperationContext::Module(context) if context.prewarm
-    ));
-    // Publish a new source generation while the original callback is still running.
-    // 原回调仍在运行时发布新的源码代次。
-    let source_path = recovery
-        .fixture
-        .root
-        .path()
-        .join("bundled/idle-plugin/runtime/plugin.bundle.lua");
-    let mut source = std::fs::read_to_string(&source_path).expect("old source");
-    source.push_str("\n-- New package generation.\n-- 新包代次。\n");
-    std::fs::write(&source_path, source).expect("new source");
-    recovery
-        .fixture
-        .manager
-        .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
-        .expect("new generation");
-    assert_ne!(
-        recovery.fixture.manager.snapshot().enabled_tools["idle_ping"].plugin_generation,
-        generation
-    );
-    task.abort();
-    assert!(task.await.expect_err("aborted observer").is_cancelled());
-    // Finite drain reports pending ownership rather than pretending that cancellation returned the callback.
-    // 有限排空报告待完成归属，不假装取消已使回调返回。
-    let pending = recovery
-        .fixture
-        .manager
-        .drain_owner_sessions("owner")
-        .await
-        .expect("finite drain");
-    assert!(!pending.failures.is_empty());
-    assert_eq!(
-        recovery
-            .fixture
-            .owner()
-            .host
-            .runtime()
-            .resources()
-            .expect("physical occupancy")
-            .resident,
-        1
-    );
-    let retained = recovery
-        .fixture
-        .manager
-        .formal_call_status(&original.invocation_id, "owner")
-        .expect("retained call");
-    assert_eq!(retained.plugin_generation, generation);
-    assert!(!retained.retired);
-    assert_eq!(
-        retained.operation.expect("same operation").operation_id,
-        operation.operation_id
-    );
-    recovery.events.release();
-    // All subsequent passes resume the same cleanup and never submit another initialization.
-    // 全部后续轮次恢复同一清理，绝不提交另一初始化。
-    let deadline = Instant::now() + WAIT;
-    loop {
-        let report = recovery
-            .fixture
-            .manager
-            .drain_owner_sessions("owner")
-            .await
-            .expect("resume cleanup");
-        if report.failures.is_empty() {
-            break;
-        }
-        assert!(Instant::now() < deadline, "{report:?}");
-    }
-    let terminal = recovery
-        .fixture
-        .manager
-        .formal_call_status(&original.invocation_id, "owner")
-        .expect("terminal evidence");
-    assert!(terminal.retired);
-    assert_eq!(
-        terminal
-            .operation
-            .expect("original terminal operation")
-            .operation_id,
-        operation.operation_id
-    );
-    recovery
-        .fixture
-        .manager
-        .forget_formal_call(&original.invocation_id, "owner")
-        .expect("acknowledge original operation");
-    recovery.fixture.close().await;
-    // Committed callbacks prove initialization was executed once and business was never invoked.
-    // 已提交回调证明初始化只执行一次且业务从未调用。
-    let values = recovery.events.values.lock().expect("actual effects");
-    assert_eq!(
-        values.iter().filter(|event| event.topic == "block").count(),
-        1
-    );
-    assert!(!values.iter().any(|event| event.topic == "business"));
 }

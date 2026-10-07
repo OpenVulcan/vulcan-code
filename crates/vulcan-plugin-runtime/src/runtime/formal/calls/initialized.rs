@@ -132,7 +132,6 @@ impl VulcanPluginRuntimeManager {
     ) -> Result<(), VulcanPluginRuntimeError> {
         match input.admission {
             CallAdmission::Controller { .. }
-            | CallAdmission::Prewarm { .. }
             | CallAdmission::Lifecycle { .. }
             | CallAdmission::ActivationLifecycle { .. }
             | CallAdmission::RemovalLifecycle { .. } => Ok(()),

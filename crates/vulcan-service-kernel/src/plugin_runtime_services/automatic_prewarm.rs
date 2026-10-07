@@ -183,11 +183,7 @@ fn run(
         if call.retired
             && call.error.is_none()
             && call.prewarm.as_ref().is_some_and(|target| {
-                target
-                    .automatic
-                    .as_ref()
-                    .is_some_and(|origin| origin.trigger_id != accepted.trigger_id)
-                    && target.satisfied.is_some()
+                target.automatic.trigger_id != accepted.trigger_id && target.satisfied.is_some()
             })
             && let Err(error) = manager.forget_formal_call(&call.invocation_id, &accepted.owner)
         {

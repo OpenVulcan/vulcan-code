@@ -1,5 +1,5 @@
-//! Explicit reusable-tool initialization under existing controller and module ownership.
-//! 既有控制器及模块归属下的明确可复用工具初始化。
+//! Automatic reusable-tool initialization targets under existing controller and module ownership.
+//! 既有控制器及模块归属下的自动可复用工具初始化目标。
 
 use super::*;
 use luaskills::runtime::embedded::EmbeddedReusablePoolSnapshot;
@@ -49,10 +49,9 @@ pub struct VulcanPluginPrewarmTargetStatus {
     /// Original trusted request; no live routing values are substituted.
     /// 原可信请求；不替换为活动路由值。
     pub request: VulcanPluginPrewarmTargetRequest,
-    /// Trusted automatic trigger provenance; manual targets omit this metadata.
-    /// 可信自动触发来源；手动目标省略此元数据。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub automatic: Option<VulcanPluginAutomaticPrewarmOrigin>,
+    /// Trusted automatic trigger provenance that admitted this target.
+    /// 接纳此目标的可信自动触发来源。
+    pub automatic: VulcanPluginAutomaticPrewarmOrigin,
     /// True only after the original input was transferred to its one supervisor.
     /// 仅在原输入转移至唯一监督者后为真。
     pub started: bool,
@@ -65,22 +64,6 @@ pub struct VulcanPluginPrewarmTargetStatus {
 }
 
 impl VulcanPluginRuntimeManager {
-    /// Register request and input budgets without running Lua or spawning work; return a queryable receipt.
-    /// 登记 request 及输入预算，不运行 Lua 或启动工作；返回可查询回执。
-    /// Repeating preparation creates another inert receipt; start only the selected original invocation ID.
-    /// 重复准备会创建另一份未启动回执；仅启动选定的原调用标识。
-    pub fn prepare_reusable_tool_prewarm(
-        &self,
-        request: VulcanPluginPrewarmTargetRequest,
-    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
-        // Parent identity must be checked before retaining any controller work.
-        // 保留任何控制器工作前必须检查父级身份。
-        let owner = self.required_formal_owner()?;
-        let (plugin, input) = self.reusable_prewarm_input(&owner, request, true)?;
-        self.register_owned_formal_call(&owner, plugin, input)?
-            .status()
-    }
-
     /// Start the existing id owned by owner_session_id exactly once; return its current evidence.
     /// 将 owner_session_id 拥有的既有 id 启动恰好一次；返回当前证据。
     /// Unknown or forgotten IDs fail and never recreate initialization.
@@ -105,44 +88,15 @@ impl VulcanPluginRuntimeManager {
         call.status()
     }
 
-    /// Resume only retained cleanup for id under its original owner_session_id; never replay initialization.
-    /// 仅在原 owner_session_id 下恢复 id 的保留清理；绝不重放初始化。
-    /// Returns current original evidence; active or already retired receipts remain unchanged.
-    /// 返回当前原始证据；活动或已经退役的回执保持不变。
-    pub fn recover_reusable_tool_prewarm_cleanup(
-        &self,
-        id: &str,
-        owner_session_id: &str,
-    ) -> Result<VulcanPluginFormalCallStatus, VulcanPluginRuntimeError> {
-        // Resolve the existing owner and exact controller receipt before inspecting its target kind.
-        // 在检查目标类型前解析既有所有者及精确控制器回执。
-        let owner = self.required_formal_owner()?;
-        // Recovery cannot create or replace the retained invocation.
-        // 恢复不能创建或替换保留调用。
-        let call = owned_call(&owner, id, owner_session_id)?;
-        // Capture only original supervision evidence, not inferred VM idleness.
-        // 仅捕获原监督证据，不推断 VM 空闲状态。
-        let status = call.status()?;
-        if status.prewarm.is_none() {
-            return Err(VulcanPluginRuntimeError::new(
-                "Formal invocation is not a prewarm target.",
-            ));
-        }
-        if status.requires_cleanup_recovery {
-            self.resume_formal_cleanup(&owner, &call)?;
-        }
-        call.status()
-    }
-
-    /// Resolve request against one enabled catalog and owner; target selects bounded convergence or one addition.
-    /// 按单个已启用目录及 owner 解析 request；target 选择有界收敛或单次增加。
+    /// Resolve request against one enabled catalog and owner for bounded convergence admitted by automatic.
+    /// 按单个已启用目录及 owner 解析 request，用于由 automatic 接纳的有界收敛。
     /// Return the original descriptor and deadline-bearing preparation, without creating a VM.
     /// 返回原描述符及携带截止时间的准备输入，不创建 VM。
     fn reusable_prewarm_input(
         &self,
         owner: &ManagedFormalRuntime,
         request: VulcanPluginPrewarmTargetRequest,
-        target: bool,
+        automatic: automatic::AutomaticAdmission,
     ) -> Result<(VulcanPluginDescriptor, Preparation), VulcanPluginRuntimeError> {
         if owner.host.runtime().id() != request.runtime_id {
             return Err(VulcanPluginRuntimeError::new(
@@ -151,7 +105,7 @@ impl VulcanPluginRuntimeManager {
         }
         if request.owner_session_id.trim().is_empty() {
             return Err(VulcanPluginRuntimeError::new(
-                "Explicit prewarming requires a controller owner.",
+                "Prewarming requires a controller owner.",
             ));
         }
         // This snapshot owns both the declaration and plugin-local generation.
@@ -175,9 +129,9 @@ impl VulcanPluginRuntimeManager {
         // The validated manifest is the sole source of the tool's resident ceiling.
         // 已校验清单是工具常驻上限的唯一来源。
         let reuse = tool.manifest.execution.reusable.as_ref().ok_or_else(|| {
-            VulcanPluginRuntimeError::new("Explicit prewarming requires a declared reusable tool.")
+            VulcanPluginRuntimeError::new("Prewarming requires a declared reusable tool.")
         })?;
-        if target && request.target_idle > reuse.max_resident_vms {
+        if request.target_idle > reuse.max_resident_vms {
             return Err(VulcanPluginRuntimeError::new(
                 "Prewarm target exceeds the declared resident limit.",
             ));
@@ -217,56 +171,10 @@ impl VulcanPluginRuntimeManager {
                 timeout_ms: owner.settings.shutdown_timeout_ms,
             }),
             security_partition: format!("tool:{}", request.owner_session_id),
-            admission: if target {
-                CallAdmission::PrewarmTarget {
-                    request,
-                    automatic: None,
-                }
-            } else {
-                CallAdmission::Prewarm {
-                    tool_id: request.tool_id,
-                    owner_session_id: request.owner_session_id,
-                }
-            },
+            admission: CallAdmission::PrewarmTarget { request, automatic },
             scope: VulcanPluginBridgeLeaseScope::Enabled,
             deadline,
         };
         Ok((plugin, input))
-    }
-}
-
-impl VulcanPluginRuntimeManager {
-    /// Initialize one additional VM for plugin_id and its published tool_id at exactly plugin_generation.
-    /// 为 plugin_id 及其已发布 tool_id 在精确 plugin_generation 下初始化一个额外 VM。
-    /// The trusted caller supplies owner_session_id and workspace_root, authorizing normal module initialization capabilities.
-    /// 可信调用方提供 owner_session_id 及 workspace_root，并授权普通模块初始化能力。
-    /// Return the core instance_id object after confirmed initialization; admitted failures retain queryable formal call evidence.
-    /// 确认初始化后返回核心 instance_id 对象；已入场失败保留可查询正式调用证据。
-    /// This explicit operation may produce initialization effects, never invokes business, and never replenishes a target automatically.
-    /// 此明确操作可能产生初始化副作用，绝不调用业务，也不自动补齐目标数量。
-    pub async fn prewarm_reusable_tool_instance(
-        &self,
-        plugin_id: &str,
-        tool_id: &str,
-        plugin_generation: u64,
-        owner_session_id: String,
-        workspace_root: PathBuf,
-    ) -> Result<Value, VulcanPluginRuntimeError> {
-        // Share exact admission validation with retained targets without changing one-addition semantics.
-        // 与保留目标共享精确入场校验，不改变单次增加语义。
-        let owner = self.required_formal_owner()?;
-        // This request selects the original attached parent and trusted controller workspace.
-        // 此请求选择原附加父级及可信控制器工作区。
-        let request = VulcanPluginPrewarmTargetRequest {
-            runtime_id: owner.host.runtime().id().to_owned(),
-            plugin_id: plugin_id.to_owned(),
-            tool_id: tool_id.to_owned(),
-            plugin_generation,
-            owner_session_id,
-            workspace_root,
-            target_idle: 1,
-        };
-        let (plugin, input) = self.reusable_prewarm_input(&owner, request, false)?;
-        self.invoke_owned_formal_call(owner, plugin, input).await
     }
 }

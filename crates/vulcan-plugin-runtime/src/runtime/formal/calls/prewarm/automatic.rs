@@ -66,20 +66,17 @@ impl VulcanPluginRuntimeManager {
                 &calls,
                 &CallAdmission::PrewarmTarget {
                     request: request.clone(),
-                    automatic: Some(AutomaticAdmission {
+                    automatic: AutomaticAdmission {
                         origin: origin.clone(),
                         permit: permit.clone(),
-                    }),
+                    },
                 },
             )? {
                 return original.status();
             }
         }
-        let (plugin, mut input) = self.reusable_prewarm_input(&owner, request, true)?;
-        let CallAdmission::PrewarmTarget { automatic, .. } = &mut input.admission else {
-            unreachable!("target input builder always returns target admission");
-        };
-        *automatic = Some(AutomaticAdmission { origin, permit });
+        let (plugin, input) =
+            self.reusable_prewarm_input(&owner, request, AutomaticAdmission { origin, permit })?;
         self.register_owned_formal_call(&owner, plugin, input)?
             .status()
     }
@@ -95,7 +92,7 @@ pub(in crate::runtime::formal::calls) fn original_call(
 ) -> Result<Option<Arc<FormalCall>>, VulcanPluginRuntimeError> {
     let CallAdmission::PrewarmTarget {
         request,
-        automatic: Some(origin),
+        automatic: origin,
     } = admission
     else {
         return Ok(None);
@@ -105,21 +102,11 @@ pub(in crate::runtime::formal::calls) fn original_call(
         let Some(target) = &state.prewarm else {
             continue;
         };
-        if target
-            .automatic
-            .as_ref()
-            .is_some_and(|original| original.origin == origin.origin)
+        if target.automatic.origin == origin.origin
             && target.request.owner_session_id == request.owner_session_id
             && target.request.tool_id == request.tool_id
         {
-            if target.request != *request
-                || !target
-                    .automatic
-                    .as_ref()
-                    .expect("matched automatic origin")
-                    .permit
-                    .same_owner(&origin.permit)
-            {
+            if target.request != *request || !target.automatic.permit.same_owner(&origin.permit) {
                 return Err(VulcanPluginRuntimeError::new(
                     "Automatic prewarm trigger already belongs to another target.",
                 ));
@@ -130,8 +117,8 @@ pub(in crate::runtime::formal::calls) fn original_call(
     Ok(None)
 }
 
-/// Validate automatic admission against the live policy while publication remains excluded; manual work is unchanged.
-/// 发布保持排除时，对照活动策略校验自动入场；手动工作不变。
+/// Validate target admission against the live policy while publication remains excluded; other calls are unchanged.
+/// 发布保持排除时，对照活动策略校验目标入场；其他调用不变。
 pub(in crate::runtime::formal::calls) fn validate_admission(
     owner: &ManagedFormalRuntime,
     admission: &CallAdmission,
@@ -139,7 +126,7 @@ pub(in crate::runtime::formal::calls) fn validate_admission(
 ) -> Result<Option<VulcanPluginAutomaticPrewarmPermit>, VulcanPluginRuntimeError> {
     if let CallAdmission::PrewarmTarget {
         request,
-        automatic: Some(origin),
+        automatic: origin,
     } = admission
     {
         owner.validate_automatic_prewarm_policy(request, &origin.origin, publication)?;
@@ -156,11 +143,13 @@ pub(in crate::runtime::formal::calls) fn validate_call(
     publication: &std::sync::MutexGuard<'_, ()>,
 ) -> Result<Option<VulcanPluginAutomaticPrewarmPermit>, VulcanPluginRuntimeError> {
     let state = call.lock()?;
-    if let Some(target) = &state.prewarm
-        && let Some(origin) = &target.automatic
-    {
-        owner.validate_automatic_prewarm_policy(&target.request, &origin.origin, publication)?;
-        return Ok(Some(origin.permit.clone()));
+    if let Some(target) = &state.prewarm {
+        owner.validate_automatic_prewarm_policy(
+            &target.request,
+            &target.automatic.origin,
+            publication,
+        )?;
+        return Ok(Some(target.automatic.permit.clone()));
     }
     Ok(None)
 }
@@ -174,6 +163,5 @@ pub(in crate::runtime::formal::calls) fn is_closed(
         .lock()?
         .prewarm
         .as_ref()
-        .and_then(|target| target.automatic.as_ref())
-        .is_some_and(|automatic| automatic.permit.is_closed()))
+        .is_some_and(|target| target.automatic.permit.is_closed()))
 }
