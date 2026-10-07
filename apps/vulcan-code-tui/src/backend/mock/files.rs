@@ -1,5 +1,5 @@
-// Fake filesystem behind `service_list_directory` for the folder and attachment pickers.
-// 文件夹与附件选择器背后的伪造文件系统（对应 `service_list_directory`）。
+// Fake filesystem behind `service_browse_project_directories` and the local attachment listing.
+// `service_browse_project_directories` 与本地附件列表背后的伪造文件系统。
 //
 // The demo never touches the real disk: a flat table of paths stands in for the host so the picker
 // can be exercised identically on every machine.
