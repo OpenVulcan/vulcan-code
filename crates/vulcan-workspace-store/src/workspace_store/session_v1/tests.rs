@@ -4004,67 +4004,71 @@ fn performance_completed_turn_phase_costs() {
     );
 }
 
-/// A production-threshold 100k-event session keeps startup and recent history
-/// bounded, serves an exact Provider range, and edits near seq 90k by copying
+/// A session spanning several sealed production-threshold segments keeps startup and recent history
+/// bounded, serves an exact Provider range, and edits inside an earlier segment by copying
 /// immutable prefix bytes into one new generation.
-/// 使用生产阈值构造的十万事件会话保持启动与最近历史读取有界，精确提供
-/// Provider 范围，并在约九万 seq 处通过复制不可变前缀字节构建一次新代次编辑。
+/// 跨越多个按生产阈值封口分片的会话保持启动与最近历史读取有界，精确提供 Provider 范围，
+/// 并在较早分片内通过复制不可变前缀字节构建一次新代次编辑。
+/// Every bound is derived from the turn count; the I/O limits do not depend on total session size.
+/// 所有边界均由回合数推导；I/O 上限与会话总量无关。
 #[test]
-fn production_scale_windows_and_edit_near_ninety_thousand() {
-    let (root, layout) = fresh_layout("production-scale-windows-edit");
+fn sealed_segments_bound_windows_and_edit_io() {
+    // TURNS spans several sealed segments; each completed scale turn writes EVENTS_PER_TURN lines.
+    // TURNS 跨越多个封口分片；每个完成的规模回合写入 EVENTS_PER_TURN 行。
+    const TURNS: u64 = 2_600;
+    const EVENTS_PER_TURN: u64 = 6;
+    // FLUSH_TURNS seals exactly one production segment per flush.
+    // FLUSH_TURNS 使每次刷写恰好封口一个生产分片。
+    const FLUSH_TURNS: u64 = SEGMENT_MAX_LINES / EVENTS_PER_TURN;
+    let (root, layout) = fresh_layout("sealed-segments-windows-edit");
     let mut document = SessionDocument::new(&layout.session_id, "project-1", "title", 1);
     document.metadata = publish_initial(&layout, &document);
-    let build_started = std::time::Instant::now();
-    let mut build_timings = CompletedTurnTimings::default();
-    for index in 0..16_700u64 {
-        build_timings.accumulate(append_completed_storage_scale_turn(
-            &mut document,
-            index,
-            10 + index as i64,
-        ));
-        if (index + 1) % 500 == 0 {
+    for index in 0..TURNS {
+        append_completed_storage_scale_turn(&mut document, index, 10 + index as i64);
+        if (index + 1) % FLUSH_TURNS == 0 {
             flush_large_session_tail(&layout, &mut document, 10 + index as i64);
         }
     }
     flush_large_session_tail(&layout, &mut document, 20_000);
-    let build_ms = build_started.elapsed().as_millis();
-    assert_eq!(document.events().len(), 100_200);
-    assert!(document.metadata.split_list.len() > 30);
+    let total = TURNS * EVENTS_PER_TURN;
+    assert_eq!(document.events().len() as u64, total);
+    assert!(
+        document.metadata.split_list.len() as u64 > total / SEGMENT_MAX_LINES,
+        "the fixture must span several sealed segments"
+    );
 
-    let tail_load_started = std::time::Instant::now();
     let (tail_loaded, tail_report) = load_session_tail_only(&layout).unwrap();
-    let tail_load_ms = tail_load_started.elapsed().as_millis();
     assert_eq!(tail_report.opened_segment_files, 1);
     assert!(tail_loaded.document.events().len() <= SEGMENT_MAX_LINES as usize);
-    let recent_load_started = std::time::Instant::now();
     let recent = load_recent_turn_window(&layout, 30).unwrap();
-    let recent_load_ms = recent_load_started.elapsed().as_millis();
     assert_eq!(distinct_turn_count(&recent.events), 30);
     assert!(recent.report.opened_segment_files <= 2);
     let older_cursor = recent.older_before_seq.expect("older turns must remain");
-    let older_load_started = std::time::Instant::now();
     let older = load_turn_window_before(&layout, older_cursor, 30).unwrap();
-    let older_load_ms = older_load_started.elapsed().as_millis();
     assert_eq!(distinct_turn_count(&older.events), 30);
     assert_eq!(
         older.events.last().unwrap().seq().value() + 1,
         recent.events.first().unwrap().seq().value()
     );
 
-    let provider_load_started = std::time::Instant::now();
+    // provider_first..=provider_last lies inside the newest segment, near but not at the end.
+    // provider_first..=provider_last 位于最新分片内，接近但不在末尾。
+    let provider_first = total - 299;
+    let provider_last = provider_first + 29;
     let provider = load_provider_event_range(
         &layout,
-        Seq::try_new(99_901).unwrap(),
-        Seq::try_new(99_930).unwrap(),
+        Seq::try_new(provider_first).unwrap(),
+        Seq::try_new(provider_last).unwrap(),
     )
     .unwrap();
-    let provider_load_ms = provider_load_started.elapsed().as_millis();
     assert_eq!(provider.events.len(), 30);
-    assert_eq!(provider.events.first().unwrap().seq().value(), 99_901);
-    assert_eq!(provider.events.last().unwrap().seq().value(), 99_930);
+    assert_eq!(provider.events.first().unwrap().seq().value(), provider_first);
+    assert_eq!(provider.events.last().unwrap().seq().value(), provider_last);
     assert_eq!(provider.report.opened_segment_files, 1);
 
-    let target_seq = Seq::try_new(89_995).unwrap();
+    // target is the user input opening a turn in an earlier sealed segment; its predecessor segment is immutable.
+    // target 是较早封口分片中开启某回合的用户输入；其前一个分片不可变。
+    let target_seq = Seq::try_new((TURNS - FLUSH_TURNS * 3) * EVENTS_PER_TURN + 1).unwrap();
     assert!(matches!(
         document
             .events()
@@ -4072,7 +4076,7 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
             .map(|event| &event.event),
         Some(EventBody::UserInput(_))
     ));
-    let immutable_prefix_number = 29;
+    let immutable_prefix_number = (target_seq.value() - 1) / SEGMENT_MAX_LINES;
     let source_prefix_entry = document
         .metadata
         .split_list
@@ -4081,10 +4085,7 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
         .expect("immutable prefix segment must exist");
     let source_prefix_path = layout.segment_entry_path(1, &source_prefix_entry.file_name);
     let source_prefix_before = std::fs::read(&source_prefix_path).unwrap();
-    let edit_build_started = std::time::Instant::now();
-    let output = build_durable_edit_output(&layout, target_seq, "edited-near-seq-90000", 20_001);
-    let edit_build_ms = edit_build_started.elapsed().as_millis();
-    let edit_publish_started = std::time::Instant::now();
+    let output = build_durable_edit_output(&layout, target_seq, "edited-target", 20_001);
     let edited = publish_edit_generation(
         &layout,
         PublishEditGenerationRequest {
@@ -4093,7 +4094,6 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
         },
     )
     .unwrap();
-    let edit_publish_ms = edit_publish_started.elapsed().as_millis();
     assert_eq!(edited.segment_generation, 2);
     assert_eq!(edited.open_turn_start_seq, Some(target_seq));
     assert_eq!(
@@ -4117,16 +4117,6 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
         source_prefix_before,
         "sealed prefix segments are copied byte-for-byte"
     );
-    let copied_prefix_bytes = edited
-        .split_list
-        .iter()
-        .take(edited.split_list.len().saturating_sub(1))
-        .map(|entry| {
-            std::fs::metadata(layout.segment_entry_path(2, &entry.file_name))
-                .unwrap()
-                .len()
-        })
-        .sum::<u64>();
     let mut edited_loaded = load_session(&layout).unwrap();
     assert_eq!(
         edited_loaded.document.events().len(),
@@ -4134,7 +4124,7 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
     );
     assert!(matches!(
         edited_loaded.document.events().last().map(|event| &event.event),
-        Some(EventBody::UserInput(input)) if input.text == "edited-near-seq-90000"
+        Some(EventBody::UserInput(input)) if input.text == "edited-target"
     ));
     let (edited_tail, edited_tail_report) = load_session_tail_only(&layout).unwrap();
     assert_eq!(edited_tail_report.opened_segment_files, 1);
@@ -4166,9 +4156,7 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
             20_002,
         )
         .unwrap();
-    let append_flush_started = std::time::Instant::now();
     flush_large_session_tail(&layout, &mut edited_loaded.document, 20_002);
-    let append_flush_ms = append_flush_started.elapsed().as_millis();
     let (appended_tail, appended_tail_report) = load_session_tail_only(&layout).unwrap();
     assert_eq!(
         appended_tail
@@ -4181,17 +4169,6 @@ fn production_scale_windows_and_edit_near_ninety_thousand() {
         append_start_seq + 1
     );
     assert_eq!(appended_tail_report.opened_segment_files, 1);
-    eprintln!(
-        "[perf-100k] events={} segments={} build_ms={build_ms} submit_root_ms={} prepare_api_ms={} assistant_ms={} complete_api_ms={} close_turn_ms={} tail_load_ms={tail_load_ms} recent_30_turn_ms={recent_load_ms} older_30_turn_ms={older_load_ms} provider_window_ms={provider_load_ms} provider_opened_segments={} edit_build_ms={edit_build_ms} edit_publish_ms={edit_publish_ms} copied_prefix_bytes={copied_prefix_bytes} append_flush_ms={append_flush_ms}",
-        document.events().len(),
-        document.metadata.split_list.len(),
-        build_timings.submit_root.as_millis(),
-        build_timings.prepare_api.as_millis(),
-        build_timings.append_assistant.as_millis(),
-        build_timings.complete_api.as_millis(),
-        build_timings.close_turn.as_millis(),
-        provider.report.opened_segment_files,
-    );
     drop(root);
 }
 

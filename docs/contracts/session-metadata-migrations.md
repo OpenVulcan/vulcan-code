@@ -50,7 +50,7 @@
 
 ```powershell
 rtk cargo test -p vulcan-workspace-store metadata_migration --lib -- --test-threads=1
-rtk cargo test -p vulcan-workspace-store workspace_store::session_v1::tests --lib -- --test-threads=1 --skip production_scale_windows_and_edit_near_ninety_thousand --skip performance_
+rtk cargo test -p vulcan-workspace-store workspace_store::session_v1::tests --lib -- --test-threads=1 --skip performance_
 rtk cargo check -p vulcan-workspace-store --all-targets
 ```
 

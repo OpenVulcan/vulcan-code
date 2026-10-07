@@ -3,12 +3,15 @@
 
 use super::*;
 
-/// 20,000 mixed events keep a fully contiguous seq stream.
-/// 20,000 条混合事件保持完全连续的 seq 流。
+/// Many mixed-event turns keep a fully contiguous seq stream; the property does not depend on session size.
+/// 多个混合事件回合保持完全连续的 seq 流；该性质与会话规模无关。
 #[test]
-fn ten_thousand_mixed_events_stay_contiguous() {
+fn mixed_turn_events_stay_contiguous() {
+    // TURNS crosses every per-turn event kind many times without paying for a production-size session.
+    // TURNS 多次覆盖每种回合内事件类型，而无需承担生产规模会话的成本。
+    const TURNS: u64 = 250;
     let mut doc = new_document();
-    for index in 0..2_500u64 {
+    for index in 0..TURNS {
         doc.submit_root_input_fixture(format!("prompt {index}"), Vec::new(), T0 + index as i64)
             .unwrap();
         let api = doc
@@ -58,7 +61,7 @@ fn ten_thousand_mixed_events_stay_contiguous() {
         doc.close_turn(TurnOutcome::Completed, 5, T0 + index as i64)
             .unwrap();
     }
-    assert_eq!(doc.events().len(), 2_500 * 8);
+    assert_eq!(doc.events().len() as u64, TURNS * 8);
     let mut expected = 1u64;
     for event in doc.events() {
         assert_eq!(event.seq.value(), expected, "seq must stay contiguous");
