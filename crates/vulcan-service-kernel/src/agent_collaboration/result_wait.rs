@@ -115,26 +115,16 @@ fn reported_work(
     reported
 }
 
-/// Reads versioned host acknowledgements, or the pre-Markdown historical JSON result.
-/// 读取版本化宿主确认信息，或 Markdown 迁移前的历史 JSON 结果。
-/// Takes one successful wait payload; malformed records acknowledge nothing and never inspect Markdown.
-/// 接收成功等待载荷；畸形记录不确认任何内容，绝不解析 Markdown。
+/// Reads the versioned host acknowledgement of one wait result.
+/// 读取单个等待结果的版本化宿主确认信息。
+/// Takes one successful wait payload; records without that acknowledgement acknowledge nothing and never inspect the model output.
+/// 接收成功等待载荷；没有该确认信息的记录不确认任何内容，绝不解析模型输出。
 fn persisted_report_identities(output: &Value) -> BTreeSet<String> {
-    let snapshot = match output.get("host_result").filter(|host| !host.is_null()) {
-        Some(host) => {
-            if host.get("kind").and_then(Value::as_str) != Some(WAIT_RESULT_ACK_KIND) {
-                return BTreeSet::new();
-            }
-            host.get("payload").cloned()
-        }
-        None => output
-            .get("model_output")
-            .and_then(Value::as_str)
-            .and_then(|text| serde_json::from_str::<Value>(text).ok()),
-    };
-    snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.get("reports"))
+    output
+        .get("host_result")
+        .filter(|host| host.get("kind").and_then(Value::as_str) == Some(WAIT_RESULT_ACK_KIND))
+        .and_then(|host| host.get("payload"))
+        .and_then(|payload| payload.get("reports"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -724,20 +714,19 @@ pub(super) async fn wait_agents_result(
 mod acknowledgement_tests {
     use super::*;
 
-    /// Verifies historical and new acknowledgements deduplicate identically without parsing prose.
-    /// 验证历史和新确认信息去重一致且不解析正文。
+    /// Verifies only the versioned host acknowledgement acknowledges reports, never the model output.
+    /// 验证只有版本化宿主确认信息能确认报告，模型输出永远不能。
     #[test]
-    fn persisted_wait_acknowledgements_support_markdown_and_legacy_json() {
+    fn persisted_wait_acknowledgements_read_only_host_results() {
         let reports =
             json!({"reports":[{"work_id":"task:a","outcome":"stopped","reason":"user_stopped"}]});
-        let old = json!({"model_output":reports.to_string(),"host_result":null});
         let current = json!({"model_output":"# Agent wait\nStopped.","host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":reports}});
-        assert!(!persisted_report_identities(&old).is_empty());
-        assert_eq!(
-            persisted_report_identities(&old),
-            persisted_report_identities(&current)
-        );
-        let invalid = json!({"model_output":old["model_output"],"host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":{}}});
+        assert_eq!(persisted_report_identities(&current).len(), 1);
+        let model_output_only = json!({"model_output":reports.to_string(),"host_result":null});
+        assert!(persisted_report_identities(&model_output_only).is_empty());
+        let foreign_kind = json!({"model_output":"","host_result":{"kind":"collaboration_receipt_v1","payload":reports}});
+        assert!(persisted_report_identities(&foreign_kind).is_empty());
+        let invalid = json!({"model_output":reports.to_string(),"host_result":{"kind":WAIT_RESULT_ACK_KIND,"payload":{}}});
         assert!(persisted_report_identities(&invalid).is_empty());
         assert!(
             persisted_report_identities(&json!({"model_output":"# Agent wait\nNo pending work."}))

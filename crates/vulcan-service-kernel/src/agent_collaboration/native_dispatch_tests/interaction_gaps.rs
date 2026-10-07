@@ -3,7 +3,8 @@
 
 use super::*;
 use vulcan_agent_runtime::tooling::collaboration::{
-    ASK_QUESTION_TOOL_ID, AskQuestionArgs, WAIT_AGENTS_RESULT_TOOL_ID, WaitAgentsResultArgs,
+    ASK_QUESTION_TOOL_ID, AskQuestionArgs, WAIT_AGENTS_RESULT_TOOL_ID, WAIT_RESULT_ACK_KIND,
+    WaitAgentsResultArgs,
 };
 use vulcan_session_core::v1::{
     collaboration::SetRunControlInput,
@@ -30,7 +31,12 @@ fn commit_wait(dispatch: &NativeDispatch, result: &Value) {
         .unwrap();
     dispatch.source().mutate_durable(SessionMutationAdmission::ExistingTurn, SessionFlushReason::ToolBoundary,
         |document| document.finish_tool(context.api_call_id, context.tool_call_id, ToolCompletion {
-            output: Some(ToolPayload::try_new(json!({"is_error":false,"tool_name":WAIT_AGENTS_RESULT_TOOL_ID,"model_output":result.to_string()})).unwrap()),
+            output: Some(ToolPayload::try_new(json!({"is_error":false,"tool_name":WAIT_AGENTS_RESULT_TOOL_ID,
+                "model_output":"# Agent wait",
+                "host_result":{"kind":WAIT_RESULT_ACK_KIND,
+                    "payload":{"format":"markdown","status":result["status"],"reports":result["reports"],
+                        "interrupted":false,"context_messages_pending":false}}
+            })).unwrap()),
             changeset: None, status: ToolCallStatus::Completed, finished_at_ms: 31, external_refs: vec![], generated_resources: vec![],
         })).unwrap();
 }
