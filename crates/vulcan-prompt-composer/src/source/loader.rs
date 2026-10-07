@@ -33,23 +33,4 @@ impl TextPromptResourceLoader {
                 ))
             })
     }
-
-    /// Reads one optional UTF-8 or GB18030 text file and trims outer blank lines.
-    /// 读取一个可选 UTF-8 或 GB18030 文本文件并裁剪外层空白行。
-    ///
-    /// Parameters: `path` identifies the optional external prompt resource.
-    /// Returns: trimmed Unicode text, `None` for a missing or blank file, or a load error.
-    /// 参数：`path` 标识可选的外部提示词资源。
-    /// 返回值：裁剪后的 Unicode 文本；文件缺失或为空时返回 `None`；失败时返回加载错误。
-    pub fn read_optional_text_file(path: &Path) -> Result<Option<String>, PromptComposerError> {
-        if !path.exists() {
-            return Ok(None);
-        }
-        let raw = Self::read_text_file(path)?;
-        let trimmed = raw.trim().to_string();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(trimmed))
-    }
 }

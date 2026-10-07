@@ -571,16 +571,18 @@ async fn prepared_media_fingerprint_detects_equal_length_content_replacement() {
     tokio::fs::write(path.as_path(), b"source-a")
         .await
         .expect("first media fixture should be written");
-    let first = prepared_media_source_fingerprint(path.as_path(), None, None)
+    let first = read_prepared_media_source(path.as_path(), None, None, false, None)
         .await
-        .expect("first media fingerprint should be readable");
+        .expect("first media fingerprint should be readable")
+        .fingerprint;
 
     tokio::fs::write(path.as_path(), b"source-b")
         .await
         .expect("replacement media fixture should be written");
-    let second = prepared_media_source_fingerprint(path.as_path(), None, None)
+    let second = read_prepared_media_source(path.as_path(), None, None, false, None)
         .await
-        .expect("replacement media fingerprint should be readable");
+        .expect("replacement media fingerprint should be readable")
+        .fingerprint;
 
     assert_eq!(first.byte_len, second.byte_len);
     assert_ne!(first.content_sha256, second.content_sha256);

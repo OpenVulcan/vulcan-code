@@ -166,44 +166,6 @@ fn apply_dimension(sum: &mut u64, unknown: &mut bool, value: Option<u64>) {
     }
 }
 
-impl AggregatedUsage {
-    /// Aggregates already-aggregated usages (for subagent inclusive returns).
-    /// 聚合已经是聚合形态的用量(用于子代理包容性回流)。
-    ///
-    /// Uses the same poison rule as [`AggregatedUsage::aggregate`]: a
-    /// dimension becomes `Some(sum)` only when every sample reported it.
-    /// 与 [`AggregatedUsage::aggregate`] 使用相同的污染规则：每个样本都上报
-    /// 的维度才变为 `Some(sum)`。
-    pub fn aggregate_aggregated<'a>(
-        samples: impl IntoIterator<Item = &'a AggregatedUsage>,
-    ) -> Self {
-        let mut sums = [0u64; 9];
-        let mut unknown = [false; 9];
-        for sample in samples {
-            apply_dimension(&mut sums[0], &mut unknown[0], sample.input_tokens);
-            apply_dimension(&mut sums[1], &mut unknown[1], sample.uncached_input_tokens);
-            apply_dimension(&mut sums[2], &mut unknown[2], sample.output_tokens);
-            apply_dimension(&mut sums[3], &mut unknown[3], sample.reasoning_tokens);
-            apply_dimension(&mut sums[4], &mut unknown[4], sample.total_tokens);
-            apply_dimension(&mut sums[5], &mut unknown[5], sample.cache_read_tokens);
-            apply_dimension(&mut sums[6], &mut unknown[6], sample.cache_write_tokens);
-            apply_dimension(&mut sums[7], &mut unknown[7], sample.audio_input_tokens);
-            apply_dimension(&mut sums[8], &mut unknown[8], sample.audio_output_tokens);
-        }
-        Self {
-            input_tokens: dimension_value(sums[0], unknown[0]),
-            uncached_input_tokens: dimension_value(sums[1], unknown[1]),
-            output_tokens: dimension_value(sums[2], unknown[2]),
-            reasoning_tokens: dimension_value(sums[3], unknown[3]),
-            total_tokens: dimension_value(sums[4], unknown[4]),
-            cache_read_tokens: dimension_value(sums[5], unknown[5]),
-            cache_write_tokens: dimension_value(sums[6], unknown[6]),
-            audio_input_tokens: dimension_value(sums[7], unknown[7]),
-            audio_output_tokens: dimension_value(sums[8], unknown[8]),
-        }
-    }
-}
-
 /// Produces the final dimension value: `None` when any contributor was unknown.
 /// 生成最终维度值：只要任一贡献者未知即为 `None`。
 fn dimension_value(sum: u64, unknown: bool) -> Option<u64> {

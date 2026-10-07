@@ -23,37 +23,6 @@ use std::time::{Duration, Instant};
 const LEGACY_PROVIDER_TOOL_OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl PublicAiRuntime {
-    /// Executes one selected provider tool while retaining its optional session ownership.
-    /// 执行一个已选供应商工具，同时保留其可选会话所有权。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `configuration`, `capability`, and `arguments` are frozen invocation inputs;
-    /// `owner_session_id` is retained only in non-secret asynchronous task recovery metadata.
-    /// `configuration`、`capability` 与 `arguments` 是冻结调用输入；
-    /// `owner_session_id` 仅保留在非秘密异步任务恢复元数据中。
-    ///
-    /// # Returns
-    /// 返回值
-    /// One normalized terminal result, including recovered asynchronous completion.
-    /// 返回一个归一化终态结果，包括恢复后的异步完成结果。
-    pub async fn execute_selected_provider_tool_for_owner(
-        &self,
-        configuration: &PersistedAiConfiguration,
-        capability: ProviderToolCapabilityKind,
-        arguments: serde_json::Value,
-        owner_session_id: Option<String>,
-    ) -> Result<ProviderToolExecutionResult, String> {
-        self.execute_selected_provider_tool_for_owner_in_workspace(
-            configuration,
-            capability,
-            arguments,
-            owner_session_id,
-            None,
-        )
-        .await
-    }
-
     /// Executes one selected provider tool with an explicit host workspace base.
     /// 使用显式宿主工作区基准执行一个已选供应商工具。
     ///

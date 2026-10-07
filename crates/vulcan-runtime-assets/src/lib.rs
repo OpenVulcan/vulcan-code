@@ -265,15 +265,6 @@ pub fn source_resource_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
 }
 
-/// Returns the source-tree configuration directory used by local development runs.
-/// 返回本地开发运行使用的源码树配置目录。
-pub fn source_config_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("config")
-}
-
 /// Returns the effective packaged system prompt skills directory for the current process.
 /// 返回当前进程使用的生效打包系统提示词技能目录。
 pub fn resolve_system_prompt_skills_resource_directory() -> PathBuf {

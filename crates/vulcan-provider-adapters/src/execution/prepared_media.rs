@@ -458,32 +458,6 @@ struct PreparedMediaSourceRead {
     retained_bytes: Option<Vec<u8>>,
 }
 
-/// Streams and hashes the exact stable source revision used by one media reference.
-/// 流式读取并哈希一个媒体引用所使用的精确稳定源文件修订。
-///
-/// # Parameters
-/// 参数
-/// `local_path` is the exact local file, `progress` observes monotonic bytes for the optional
-/// pre-dispatch read, and `cancellation` cooperatively stops long media hashing.
-/// `local_path` 是精确本地文件，`progress` 观察可选分派前读取的单调字节进度，
-/// `cancellation` 协作终止长媒体哈希。
-///
-/// # Returns
-/// 返回值
-/// A content-addressed fingerprint only when metadata and byte length remain stable for the full
-/// read, otherwise a controlled disappearance, mutation, I/O, or cancellation failure.
-/// 仅当完整读取期间元数据与字节长度保持稳定时返回内容寻址指纹；否则返回受控的消失、
-/// 变更、I/O 或取消失败。
-async fn prepared_media_source_fingerprint(
-    local_path: &Path,
-    progress: Option<MediaUploadProgressCallback>,
-    cancellation: Option<&MediaUploadCancellation>,
-) -> Result<PreparedMediaSourceFingerprint, String> {
-    read_prepared_media_source(local_path, progress, cancellation, false, None)
-        .await
-        .map(|source| source.fingerprint)
-}
-
 /// Streams one stable source revision while optionally retaining the exact bytes for inline use.
 /// 流式读取一个稳定源修订，并可选保留用于内联处理的精确字节。
 ///
@@ -1820,30 +1794,6 @@ impl ProviderExecutionClient {
             session_scope_id,
         )?;
         self.cached_prepared_media_reference(&key, &source_fingerprint)
-    }
-
-    /// Returns a still-valid provider reference and its original wall-clock lifetime.
-    /// 返回仍然有效的供应商引用及其原始墙钟生命周期。
-    pub async fn prepared_media_reference(
-        &self,
-        route: &ProviderExecutionRoute,
-        local_path: &Path,
-        kind: ResourceKind,
-        mime_type: &str,
-        session_scope_id: Option<&str>,
-        cancellation: Option<&MediaUploadCancellation>,
-    ) -> Option<PreparedMediaReferenceSnapshot> {
-        let source_fingerprint = prepared_media_source_fingerprint(local_path, None, cancellation)
-            .await
-            .ok()?;
-        let key = prepared_media_key(
-            route,
-            &source_fingerprint,
-            kind,
-            mime_type,
-            session_scope_id,
-        )?;
-        self.cached_prepared_media_reference(key.as_str(), &source_fingerprint)
     }
 }
 
