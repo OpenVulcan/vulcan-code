@@ -6,11 +6,13 @@ use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::Value;
+use vulcan_session_core::v1::business_hook::BusinessHookMetadata;
 use vulcan_session_core::v1::collaboration::{
     CollaborationAfterState, CollaborationTaskMessageEffectKind,
 };
 use vulcan_session_core::v1::config::{
-    METADATA_CONTRACT, METADATA_SCHEMA_VERSION, MetadataDocument,
+    HtmlAnswerMode, IdFrontier, METADATA_CONTRACT, METADATA_SCHEMA_VERSION, MetadataDocument,
+    SegmentInfo,
 };
 use vulcan_session_core::v1::event::{EventBody, SystemContextOperation, UserInputSource};
 
@@ -29,6 +31,29 @@ struct MetadataHeader {
     /// Exact persisted schema revision; never inferred from missing fields.
     /// 精确持久化模式修订；绝不根据缺失字段猜测版本。
     schema_version: u32,
+}
+
+/// Exact schema-1 provenance fields; the complete upgraded object is validated after all steps.
+/// 精确的模式 1 来源字段；完整升级对象在全部步骤之后校验。
+/// This partial read avoids requiring fields introduced by later metadata versions during v1 -> v2.
+/// 此局部读取避免在 v1 到 v2 阶段要求后续元数据版本才引入的字段。
+#[derive(Deserialize)]
+struct LegacyHookEvidence {
+    /// Session owning the original Hook.
+    /// 拥有原始 Hook 的会话。
+    session_id: String,
+    /// Original declared event-tree generation.
+    /// 原始声明的事件树代次。
+    segment_generation: u64,
+    /// Original allocation boundary for immutable owner checks.
+    /// 用于不可变所属校验的原始分配边界。
+    id_frontier: IdFrontier,
+    /// Exact persisted segment map used to find the original start event.
+    /// 用于查找原始开始事件的精确持久化分片表。
+    split_list: Vec<SegmentInfo>,
+    /// Original Hook binding, after only its schema-1 provisional observer value is supplied.
+    /// 原始 Hook 绑定，仅补入模式 1 的临时观察值后读取。
+    business_hook: BusinessHookMetadata,
 }
 
 /// Acquires the permanent metadata publication lock for an existing session directory.
@@ -148,6 +173,7 @@ pub(super) fn upgrade(path: &Path, mut raw: Value) -> Result<MetadataDocument, S
     while version < METADATA_SCHEMA_VERSION {
         match version {
             1 => migrate_v1_to_v2(path, &mut raw)?,
+            2 => migrate_v2_to_v3(path, &mut raw)?,
             _ => {
                 return Err(SessionV1Error::unsupported(
                     path,
@@ -160,7 +186,13 @@ pub(super) fn upgrade(path: &Path, mut raw: Value) -> Result<MetadataDocument, S
     }
     let document: MetadataDocument = serde_json::from_value(raw)
         .map_err(|error| corrupt(path, format!("validate upgraded metadata: {error}")))?;
-    validate_hook_identity(path, &document)?;
+    validate_hook_identity(
+        path,
+        &document.session_id,
+        document.segment_generation,
+        &document.id_frontier,
+        &document.business_hook,
+    )?;
     Ok(document)
 }
 
@@ -168,21 +200,21 @@ pub(super) fn upgrade(path: &Path, mut raw: Value) -> Result<MetadataDocument, S
 /// 校验 Hook 模式和不可变所属坐标；明确策略不要求读取历史。
 /// `metadata` is detached; invalid identity aborts publication rather than clearing the binding.
 /// `metadata` 为独立候选；身份无效会中止发布，而非清空绑定。
-fn validate_hook_identity(path: &Path, metadata: &MetadataDocument) -> Result<(), SessionV1Error> {
-    metadata
-        .business_hook
-        .validate(metadata.segment_generation)
+fn validate_hook_identity(
+    path: &Path,
+    session_id: &str,
+    segment_generation: u64,
+    id_frontier: &IdFrontier,
+    business_hook: &BusinessHookMetadata,
+) -> Result<(), SessionV1Error> {
+    business_hook
+        .validate(segment_generation)
         .map_err(|error| corrupt(path, format!("invalid legacy Hook: {error}")))?;
-    if metadata
-        .business_hook
-        .binding
-        .as_ref()
-        .is_some_and(|binding| {
-            binding.session_id != metadata.session_id
-                || binding.turn_id.value() >= metadata.id_frontier.next_local_id
-                || binding.start_seq.value() >= metadata.id_frontier.next_seq
-        })
-    {
+    if business_hook.binding.as_ref().is_some_and(|binding| {
+        binding.session_id != session_id
+            || binding.turn_id.value() >= id_frontier.next_local_id
+            || binding.start_seq.value() >= id_frontier.next_seq
+    }) {
         return Err(corrupt(path, "legacy Hook identity or frontier mismatch"));
     }
     Ok(())
@@ -203,7 +235,7 @@ fn migrate_v1_to_v2(path: &Path, raw: &mut Value) -> Result<(), SessionV1Error> 
     // This provisional value exists only in a detached candidate and is never published or executed.
     // 临时值仅存在于独立候选中，绝不发布或执行。
     raw["business_hook"]["binding"]["observes_user"] = Value::Bool(false);
-    let candidate: MetadataDocument = serde_json::from_value(raw.clone()).map_err(|error| {
+    let candidate: LegacyHookEvidence = serde_json::from_value(raw.clone()).map_err(|error| {
         corrupt(
             path,
             format!("decode schema 1 migration candidate: {error}"),
@@ -214,15 +246,42 @@ fn migrate_v1_to_v2(path: &Path, raw: &mut Value) -> Result<(), SessionV1Error> 
     Ok(())
 }
 
+/// Add only the default-off HTML preference to schema 2, leaving unrelated fields untouched.
+/// 仅向模式 2 添加默认关闭的 HTML 偏好，保持无关字段不变。
+/// `raw` is detached; missing configuration or a foreign future field aborts without publication.
+/// `raw` 为独立候选；缺失配置或出现外来的未来字段时中止，不发布。
+fn migrate_v2_to_v3(path: &Path, raw: &mut Value) -> Result<(), SessionV1Error> {
+    let config = raw
+        .get_mut("config")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| corrupt(path, "schema 2 requires a configuration object"))?;
+    if config.contains_key("html_answers") {
+        return Err(corrupt(
+            path,
+            "schema 2 cannot contain schema 3 HTML preferences",
+        ));
+    }
+    let html_answers = serde_json::to_value(HtmlAnswerMode::default())
+        .map_err(|error| corrupt(path, format!("encode HTML preference default: {error}")))?;
+    config.insert("html_answers".to_owned(), html_answers);
+    Ok(())
+}
+
 /// Resolves the exact Hook start event in the declared segment tree and checks its owner.
 /// 在声明分片树中解析精确 Hook 起始事件并校验所属者。
 /// Inputs are a metadata path and typed candidate; returns the policy without guessing missing history.
 /// 输入为元数据路径和强类型候选；返回策略，绝不猜测缺失历史。
 fn infer_observer_from_start(
     path: &Path,
-    metadata: &MetadataDocument,
+    metadata: &LegacyHookEvidence,
 ) -> Result<bool, SessionV1Error> {
-    validate_hook_identity(path, metadata)?;
+    validate_hook_identity(
+        path,
+        &metadata.session_id,
+        metadata.segment_generation,
+        &metadata.id_frontier,
+        &metadata.business_hook,
+    )?;
     let binding = metadata
         .business_hook
         .binding

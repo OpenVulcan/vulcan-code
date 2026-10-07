@@ -2,6 +2,7 @@
 // carry consecutive windows, while live delivery carries sparse patches of the same event shape.
 // V1 服务 DTO 镜像完整事件 envelope。hydration 与分页承载连续窗口，实时投递则承载
 // 相同事件形态的稀疏 patch。
+import type { HtmlAnswerMode } from "@/service/html-answer-mode";
 
 /** JSON value allowed inside manifest-validated tool payloads.
  * 工具 Manifest 已校验载荷内允许的 JSON 值。 */
@@ -1148,6 +1149,9 @@ export type ConversationEventPatchDurability = "volatile" | "durable";
 /** One ownership-bound revisioned sparse live patch whose events remain strictly seq-ascending.
  * 一份带归属与修订的稀疏实时 patch，其中事件仍须按 seq 严格递增。 */
 export interface ConversationEventLivePatch extends ConversationEventWindowBatch {
+  /** Confirmed preference carried only by durable acknowledgements.
+   * 仅可靠确认携带的已确认偏好。 */
+  html_answers?: HtmlAnswerMode;
   /** Stable identity of the service process that emitted this edge.
    * 发出该边的服务进程稳定身份。 */
   service_epoch: string;
@@ -1192,6 +1196,9 @@ export interface ConversationEventTextAppend {
 /** One authoritative reconnect range that may cover multiple memory revisions.
  * 一段可覆盖多个内存修订的权威重连范围。 */
 export interface ConversationEventReconnectPatch extends ConversationEventWindowBatch {
+  /** Persisted preference captured with reconnect storage state.
+   * 与重连存储状态共同捕获的持久偏好。 */
+  html_answers?: HtmlAnswerMode;
   /** Stable identity of the service process that produced the recovery range.
    * 生成该恢复范围的服务进程稳定身份。 */
   service_epoch: string;

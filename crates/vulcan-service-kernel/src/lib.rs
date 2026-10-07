@@ -203,6 +203,7 @@ mod service_state_access;
 mod session_business_hook;
 mod session_goal_lifecycle;
 mod session_goals;
+mod session_html_answers;
 mod session_hydration;
 mod session_media_resources_v1;
 mod session_model_projection_v1;

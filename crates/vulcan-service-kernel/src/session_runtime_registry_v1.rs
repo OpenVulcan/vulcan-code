@@ -3862,7 +3862,12 @@ impl SessionHandle {
             candidate.revision,
         );
         match delta {
-            Ok(delta) => self.publish_live_event_delta_best_effort(delta),
+            Ok(mut delta) => {
+                // Use the flushed candidate, never a potentially newer in-memory preference.
+                // 使用已落盘候选，绝不使用可能更新的内存偏好。
+                delta.html_answers = Some(Box::new(candidate.metadata.config.html_answers.clone()));
+                self.publish_live_event_delta_best_effort(delta);
+            }
             Err(error) => tracing::warn!(
                 "[session-v1-live] rejected invalid durable revision edge: session={} error={error}",
                 self.session_id

@@ -133,8 +133,12 @@ pub(crate) async fn service_session_event_hydration_v1(
         }
         snapshot
     });
-    let (window_generation, events, open_turn_id, open_turn_start_seq, session_config) =
+    // Preference visibility follows confirmed storage, even when transcript memory is newer.
+    // 即使转录内存更新，偏好可见性仍跟随已确认存储。
+    let durable_html_answers = persisted.state.config.html_answers.clone();
+    let (window_generation, events, open_turn_id, open_turn_start_seq, mut session_config) =
         merge_persisted_with_resident(persisted.state, persisted.events, resident, "hydration")?;
+    session_config.html_answers = durable_html_answers;
     let open_turn_id =
         open_turn_id.or_else(|| open_turn_id_from_events(&events, open_turn_start_seq));
     Ok(ConversationEventWindowV1Response::hydration(
@@ -261,6 +265,7 @@ pub(crate) async fn service_session_event_reconnect_v1(
     let persisted_state = locator
         .event_window_state()
         .map_err(|error| format!("failed to read V1 reconnect frontier: {error}"))?;
+    let durable_html_answers = persisted_state.config.html_answers.clone();
     let resident = optional_registered_handle(&registry, session_id)?
         .map(|handle| capture_resident_snapshot(&handle))
         .transpose()?;
@@ -344,7 +349,11 @@ pub(crate) async fn service_session_event_reconnect_v1(
             request.last_confirmed_memory_revision,
             revision_frontier.memory_revision,
             revision_frontier.durable_revision,
-        );
+        )
+        .map(|mut response| {
+            response.html_answers = Some(durable_html_answers);
+            response
+        });
     };
     let mut persisted_events = Vec::new();
     if let Some(persisted_latest) = persisted_latest
@@ -378,6 +387,10 @@ pub(crate) async fn service_session_event_reconnect_v1(
         revision_frontier.memory_revision,
         revision_frontier.durable_revision,
     )
+    .map(|mut response| {
+        response.html_answers = Some(durable_html_answers);
+        response
+    })
 }
 
 /// Reports whether a client cursor is ahead of the authoritative event stream.

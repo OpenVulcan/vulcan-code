@@ -12,6 +12,9 @@ import type { SessionGoalSummary } from "@/types";
 // DraftSessionSettingsEntry contains only overrides explicitly authored for one new-conversation slot.
 // DraftSessionSettingsEntry 仅包含为一个新会话草稿槽显式编写的覆盖项。
 interface DraftSessionSettingsEntry {
+  // Explicit HTML preference captured with all other first-turn settings.
+  // 与其他首轮设置一同捕获的显式 HTML 偏好。
+  htmlAnswersEnabled?: boolean;
   // Explicit output-style override for the new conversation slot.
   // 新会话草稿槽的显式输出风格覆盖。
   outputStyleId?: string;
@@ -65,6 +68,12 @@ export function clearDraftSessionSettingsEntry(
 // ComposerDraftSessionSettingsController exposes draft-local state and an atomic submission capture.
 // ComposerDraftSessionSettingsController 暴露草稿本地状态与原子提交捕获。
 export interface ComposerDraftSessionSettingsController {
+  // Draft-only HTML preference; never overrides an existing session.
+  // 草稿专用 HTML 偏好；不会覆盖已有会话。
+  htmlAnswersEnabled: boolean;
+  // Capture a new draft preference synchronously for the next submission.
+  // 同步捕获新草稿偏好供下一次提交使用。
+  setHtmlAnswersEnabled: (enabled: boolean) => void;
   // Output-style override shown for the current draft, or null when inheriting global settings.
   // 当前草稿显示的输出风格覆盖；继承全局设置时为空。
   outputStyleId: string | null;
@@ -148,6 +157,11 @@ export function useComposerDraftSessionSettings(
   }, [conversationId, scopeKey]);
 
   const current = conversationId ? {} : entries[scopeKey] ?? {};
+  // setHtmlAnswersEnabled shares the exact draft capture and acknowledgement ownership.
+  // setHtmlAnswersEnabled 复用精确草稿捕获及确认归属。
+  const setHtmlAnswersEnabled = React.useCallback((enabled: boolean) => {
+    updateCurrent((entry) => ({ ...entry, htmlAnswersEnabled: enabled }));
+  }, [updateCurrent]);
   const setVmmPolicy = React.useCallback((policy: string, mode: string) => {
     if (!["inherit", "enabled", "disabled"].includes(mode)) return;
     updateCurrent((entry) => {
@@ -242,6 +256,8 @@ export function useComposerDraftSessionSettings(
     ? syntheticDraftGoal(scopeKey, current.initialGoal)
     : null;
   return {
+    htmlAnswersEnabled: current.htmlAnswersEnabled ?? false,
+    setHtmlAnswersEnabled,
     outputStyleId: current.outputStyleId ?? null,
     vmmPolicy: current.vmmPolicy ?? null,
     providerToolSettings: current.providerToolSettings,

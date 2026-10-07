@@ -6,6 +6,61 @@ use vulcan_session_core::v1::business_hook::BusinessHookBinding;
 use vulcan_session_core::v1::collaboration::*;
 use vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION;
 
+/// Schema 2 gains only default-off HTML state, with byte-exact backup and repeatable full loading.
+/// 模式 2 仅增加默认关闭的 HTML 状态，保留精确原字节备份并支持重复完整加载。
+#[test]
+fn metadata_migration_html_answers_v2_to_v3_preserves_original_and_unrelated_state() {
+    let (_root, layout, metadata) = fixture(false);
+    let mut raw = serde_json::to_value(&metadata).unwrap();
+    raw["schema_version"] = 2.into();
+    raw["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("html_answers");
+    let original = serde_json::to_vec_pretty(&raw).unwrap();
+    std::fs::write(layout.metadata_path(), &original).unwrap();
+    let migrated = read_metadata(&layout.metadata_path()).unwrap();
+    assert_eq!(migrated, metadata);
+    assert_eq!(migrated.config.html_answers, Default::default());
+    assert_eq!(
+        std::fs::read(layout.session_dir().join("metadata.schema-2.backup.json")).unwrap(),
+        original
+    );
+    let saved = std::fs::read(layout.metadata_path()).unwrap();
+    assert_eq!(load_session(&layout).unwrap().metadata, migrated);
+    assert_eq!(read_metadata(&layout.metadata_path()).unwrap(), migrated);
+    assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), saved);
+}
+
+/// A corrupt current document cannot borrow old defaults, and an old schema cannot smuggle new intent.
+/// 损坏的当前文档不能借用旧版本默认值，旧模式不能夹带新偏好。
+#[test]
+fn metadata_migration_html_answers_rejects_missing_current_or_foreign_old_state() {
+    for current in [false, true] {
+        let (_root, layout, metadata) = fixture(false);
+        let mut raw = serde_json::to_value(&metadata).unwrap();
+        if current {
+            raw["config"]
+                .as_object_mut()
+                .unwrap()
+                .remove("html_answers");
+        } else {
+            raw["schema_version"] = 2.into();
+            raw["config"]["html_answers"]["enabled"] = true.into();
+        }
+        let original = serde_json::to_vec(&raw).unwrap();
+        std::fs::write(layout.metadata_path(), &original).unwrap();
+        assert!(read_metadata(&layout.metadata_path()).is_err());
+        assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), original);
+        assert!(
+            !layout
+                .session_dir()
+                .join("metadata.schema-2.backup.json")
+                .exists()
+        );
+    }
+}
+
 /// Publishes a real human or agent task turn with its correctly captured Hook policy.
 /// 发布真实用户或代理任务回合，捕获正确的 Hook 策略。
 /// `agent` chooses the origin; returns isolated storage and the published expected metadata.
@@ -82,6 +137,10 @@ fn write_legacy(
 ) -> Vec<u8> {
     let mut raw = serde_json::to_value(metadata).unwrap();
     raw["schema_version"] = 1.into();
+    raw["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("html_answers");
     if omit_policy {
         raw["business_hook"]["binding"]
             .as_object_mut()
@@ -285,6 +344,10 @@ fn metadata_migration_runs_through_configuration_read() {
     let mut raw: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     raw["schema_version"] = 1.into();
+    raw["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("html_answers");
     let original = serde_json::to_vec(&raw).unwrap();
     std::fs::write(&path, &original).unwrap();
     locator.read_request_configuration().unwrap();

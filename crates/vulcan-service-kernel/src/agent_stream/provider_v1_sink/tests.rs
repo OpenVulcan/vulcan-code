@@ -1,4 +1,5 @@
 mod host_guidance;
+mod html_answers;
 mod model_selection;
 mod native_media;
 mod remote_checkpoint;

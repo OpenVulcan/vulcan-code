@@ -1,4 +1,5 @@
 import type { ServiceRequestOptions, ServiceUnsubscribe } from "@/service/protocol";
+import { isHtmlAnswerModeNewer, type HtmlAnswerMode } from "@/service/html-answer-mode";
 import type {
   ConversationEventHydrationV1Response,
   ConversationEventLiveDeltaV1,
@@ -383,6 +384,7 @@ export class ConversationEventWindowController {
       return;
     }
     this.store.applyReconnect(response);
+    this.commitHtmlAnswerMode(response.html_answers);
     this.settleToolRequestProgress(response.events, response.session_id);
     this.publishSnapshotIfChanged();
   }
@@ -410,6 +412,7 @@ export class ConversationEventWindowController {
    * 通过同一严格 store 路径应用一批推送实时事件。 */
   applyLive(delta: ConversationEventLiveDeltaV1): void {
     this.store.applyLive(delta);
+    if (delta.durability === "durable") this.commitHtmlAnswerMode(delta.html_answers);
     this.settleToolRequestProgress(delta.events, delta.session_id);
     this.publishSnapshotIfChanged();
   }
@@ -588,6 +591,7 @@ export class ConversationEventWindowController {
     }
     try {
       this.store.applyLive(delta);
+      if (delta.durability === "durable") this.commitHtmlAnswerMode(delta.html_answers);
       this.settleToolRequestProgress(delta.events, delta.session_id);
       if (publishSnapshot) this.publishSnapshotIfChanged();
     } catch (error) {
@@ -718,6 +722,7 @@ export class ConversationEventWindowController {
       }
       try {
         this.store.applyReconnect(response);
+        this.commitHtmlAnswerMode(response.html_answers);
       } catch (error) {
         // A reconnect replacement that cannot evolve from local state requires one clean durable baseline.
         // 无法从本地状态演进的重连替换需要重新加载一份干净可靠基线。
@@ -744,6 +749,7 @@ export class ConversationEventWindowController {
         }
         try {
           this.store.applyLive(delta);
+          if (delta.durability === "durable") this.commitHtmlAnswerMode(delta.html_answers);
           this.settleToolRequestProgress(delta.events, delta.session_id);
         } catch (error) {
           if (!(error instanceof ConversationEventRevisionGapError)) {
@@ -865,6 +871,15 @@ export class ConversationEventWindowController {
     this.openTurnId = response.open_turn_id;
     this.openTurnStartSeq = response.open_turn_start_seq;
     this.sessionConfig = response.session_config;
+  }
+
+  /** Merge confirmed preference from accepted owner/generation edges without regressing revisions.
+   * 合并已接纳归属与代次边中的已确认偏好，不使修订倒退。 */
+  private commitHtmlAnswerMode(mode: HtmlAnswerMode | undefined): void {
+    if (mode === undefined || this.sessionConfig === null) return;
+    if (isHtmlAnswerModeNewer(mode, this.sessionConfig.html_answers)) {
+      this.sessionConfig = { ...this.sessionConfig, html_answers: mode };
+    }
   }
 
   /** Advances only historical pagination fields after an adjacent prepend.

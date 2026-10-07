@@ -68,7 +68,9 @@ import { useComposerModelSelection } from "@/components/composer/composer-panel/
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
-import { useComposerDraftSessionSettings } from "@/components/composer/composer-panel/use-composer-draft-session-settings";
+import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-html-answers";
+import { HtmlAnswerToggle } from "@/components/composer/composer-panel/html-answer-toggle";
+import type { HtmlAnswerModeOwner } from "@/service/html-answer-mode";
 import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
@@ -77,6 +79,9 @@ export { ComposerSessionProgressCapsule } from "@/components/composer/composer-p
 // Parameters: props supplies the current input owner, services and controlled conversation state; returns the composer and its attachment, goal and toolbar surfaces.
 // 参数：props 提供当前输入归属、服务及受控会话状态；返回输入区及附件、目标和工具栏界面。
 export function ComposerPanel(props: {
+  // Exact hydrated HTML preference; absent while this composer has no loaded owner.
+  // 精确已加载的 HTML 偏好；输入区尚无已加载归属时缺省。
+  htmlAnswerState?: HtmlAnswerModeOwner | null;
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -341,9 +346,8 @@ export function ComposerPanel(props: {
   ]);
   // draftSessionSettings owns overrides that cannot be persisted until a new conversation materializes.
   // draftSessionSettings 持有新会话物化前无法持久化的覆盖项。
-  const draftSessionSettings = useComposerDraftSessionSettings(
-    draftSlotKey,
-    props.conversationId,
+  const { draftSessionSettings, htmlAnswers } = useComposerSessionSettings(
+    draftSlotKey, props.conversationId, props.htmlAnswerState ?? null,
   );
   // providerToolSettingsBlocked mirrors explicit session conflicts into the send boundary.
   // providerToolSettingsBlocked 将显式会话冲突映射到发送边界。
@@ -563,9 +567,7 @@ export function ComposerPanel(props: {
   }, [flushSecondaryRouteSelection]);
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
-  const placeholder = React.useMemo(() => {
-    return t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
-  }, [t]);
+  const placeholder = t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
   // Send controller owns duplicate gating, stop routing, draft consumption, and failure recovery.
   // 发送控制器管理重复门控、停止路由、草稿消费与失败恢复。
   const {
@@ -584,7 +586,7 @@ export function ComposerPanel(props: {
     modelSelection: submittedModelSelection,
     captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
-    beforeSubmit: flushComposerRouteSelections,
+    beforeSubmit: async () => await flushComposerRouteSelections() && await htmlAnswers.flush(),
     isConversationRunning: props.isConversationRunning,
     isDraftReplacementActive: isPendingPromptEditActive,
     clearForSubmission,
@@ -918,6 +920,7 @@ export function ComposerPanel(props: {
         </p> : null}
         <div className="composer-toolbar">
           <div className="composer-toolbar-left">
+            <HtmlAnswerToggle controller={htmlAnswers} disabled={isPendingPromptEditing} />
             <ComposerAttachmentMenu
               capabilities={enabledAttachmentCapabilities}
               conversationId={props.conversationId}

@@ -125,6 +125,7 @@ function sessionConfig(
   overrides: Partial<ConversationSessionConfigV1> = {},
 ): ConversationSessionConfigV1 {
   return {
+    html_answers: { enabled: false, revision: 0, prepared: null },
     current_request: {
       provider: null,
       connection_id: null,
@@ -527,6 +528,39 @@ describe("V1 conversation event window controller", () => {
     await controller.hydrate(SESSION_ID);
 
     expect(controller.snapshot().session_config).toEqual(projectedConfig);
+  });
+
+  it("html_answers follows durable acknowledgements and never regresses on replay", async () => {
+    const controller = new ConversationEventWindowController(rpcMock({ hydrate: async () => response([]) }));
+    await controller.hydrate(SESSION_ID);
+    const enabled = { enabled: true, revision: 1, prepared: null };
+    controller.applyLive(liveDelta([], { revision: 2, html_answers: enabled }));
+    expect(controller.snapshot().session_config?.html_answers.enabled).toBe(false);
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", html_answers: enabled }));
+    expect(controller.snapshot().session_config?.html_answers).toEqual(enabled);
+    const prepared = { ...enabled, prepared: { enabled: true, revision: 1 } };
+    controller.applyLive(liveDelta([], { revision: 3 }));
+    controller.applyLive(liveDelta([], { revision: 3, durability: "durable", html_answers: prepared }));
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", html_answers: enabled }));
+    expect(controller.snapshot().session_config?.html_answers).toEqual(prepared);
+    controller.dispose();
+  });
+
+  it("recovers a missed html_answers acknowledgement through metadata-only reconnect", async () => {
+    // prepared is the durable state missed while this client was disconnected.
+    // prepared 是客户端离线期间遗漏的可靠状态。
+    const prepared = { enabled: true, revision: 1, prepared: { enabled: true, revision: 1 } };
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([summary(1, userInput(1))]),
+      reconnect: async () => reconnectResponse([], {
+        memory_revision: 3, durable_revision: 3, html_answers: prepared,
+      }),
+    }));
+    await controller.hydrate(SESSION_ID);
+    await controller.reconnect();
+    expect(controller.snapshot().session_config?.html_answers).toEqual(prepared);
+    expect(controller.snapshot().events).toHaveLength(1);
+    controller.dispose();
   });
 
   it("prepends only an adjacent complete-Turn page and advances its cursor", async () => {

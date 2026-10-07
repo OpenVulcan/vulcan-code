@@ -1,4 +1,7 @@
 import React from "react";
+import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
+import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
+import type { HtmlAnswerModeOwner } from "@/service/html-answer-mode";
 import { createPortal } from "react-dom";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
@@ -44,6 +47,13 @@ import type {
 } from "@/types";
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
+
+/** Select only HTML ownership/config so streaming tokens do not rerender the composer dock.
+ * 仅选择 HTML 归属与配置，使流式 Token 不触发输入区浮层重绘。 */
+function selectHtmlAnswerMode(snapshot: ConversationEventWindowControllerSnapshot): HtmlAnswerModeOwner | null {
+  if (snapshot.owner === null || snapshot.session_config === null) return null;
+  return { sessionId: snapshot.owner.session_id, generation: snapshot.owner.window_generation, mode: snapshot.session_config.html_answers };
+}
 
 // ComposerDock renders composer-related floating controls.
 // ComposerDock 渲染输入区相关的浮动控件。
@@ -224,6 +234,9 @@ export function ComposerDock(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  // htmlAnswerState stays bound to the exact hydrated owner across selection transitions.
+  // htmlAnswerState 在选择转换期间始终绑定精确已加载归属。
+  const htmlAnswerState = useSelectedConversationEventWindowSelector(selectHtmlAnswerMode, conversationSelectionEqual);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
@@ -272,6 +285,7 @@ export function ComposerDock(props: {
         </div>
       ) : null}
       <ComposerPanel
+        htmlAnswerState={htmlAnswerState}
         attachmentCapabilities={props.attachmentCapabilities}
         projectId={props.projectId}
         conversationId={props.conversationId}

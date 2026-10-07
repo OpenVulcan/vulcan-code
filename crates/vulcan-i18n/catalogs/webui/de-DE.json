@@ -1,4 +1,9 @@
 {
+  "htmlAnswers.label": "HTML-Antwort",
+  "htmlAnswers.hint": "Interaktives HTML verwenden, wenn es die Antwort verständlicher macht.",
+  "htmlAnswers.pending": "Gilt ab der nächsten Modellanfrage",
+  "htmlAnswers.saveFailed": "Die HTML-Antworteinstellung konnte nicht bestätigt werden. Aktualisieren oder erneut versuchen.",
+  "htmlAnswers.conflict": "Ein anderer Client hat diese Einstellung geändert. Der aktuelle Wert wurde geladen.",
   "pluginMaintenance.action.usage": "Nutzung anzeigen",
   "pluginMaintenance.action.recovery": "Unfertige Vorgänge prüfen",
   "pluginMaintenance.action.capacity": "Laufzeitressourcen anpassen",

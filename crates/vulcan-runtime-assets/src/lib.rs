@@ -566,6 +566,16 @@ fn current_executable_directory() -> Option<PathBuf> {
 /// 隐式 LuaSkills 调度使用的规范编译期指引。
 pub const CALL_LUASKILL_USAGE_MD: &str = include_str!("../resources/tool-guides/call-luaskill.md");
 
+/// Canonical optional HTML answer instructions; capacity placeholders are filled from session Core.
+/// 规范的按需 HTML 回答指引；容量占位符由会话 Core 填充。
+pub const HTML_ANSWERS_ENABLED_MD: &str =
+    include_str!("../resources/agent-prompts/html-answers.md");
+
+/// Canonical revocation of the HTML presentation preference, without revoking ordinary file creation.
+/// 规范的 HTML 展示偏好撤销说明，不撤销普通文件创建能力。
+pub const HTML_ANSWERS_DISABLED_MD: &str =
+    include_str!("../resources/agent-prompts/html-answers-disabled.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;

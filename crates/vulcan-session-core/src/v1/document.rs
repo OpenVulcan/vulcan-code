@@ -54,6 +54,7 @@ mod collaboration;
 mod compaction;
 mod dynamic_context;
 mod generation;
+mod html_answers;
 mod hydration;
 mod input;
 mod modes;
@@ -76,6 +77,7 @@ pub use api::{
 pub use child_execution::ChildContextMaintenanceSource;
 pub use collaboration::ChildTaskNonSuccessInput;
 pub use compaction::CompactionCommitInput;
+pub use html_answers::HTML_ANSWER_CONTEXT_KEY;
 pub use input::{
     ClientInputSubmission, DraftMutationReceipt, EnqueueInputDisposition, EnqueueInputReceipt,
     QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,

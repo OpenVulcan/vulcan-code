@@ -1,4 +1,9 @@
 {
+  "htmlAnswers.label": "Ответ HTML",
+  "htmlAnswers.hint": "Использовать интерактивный HTML, когда это помогает понять ответ.",
+  "htmlAnswers.pending": "Применится к следующему запросу модели",
+  "htmlAnswers.saveFailed": "Не удалось подтвердить сохранение настройки ответов HTML. Обновите страницу или повторите попытку.",
+  "htmlAnswers.conflict": "Настройка изменена в другом клиенте. Загружено актуальное значение.",
   "pluginMaintenance.action.usage": "Где используется",
   "pluginMaintenance.action.recovery": "Проверить незавершённые операции",
   "pluginMaintenance.action.capacity": "Настроить ресурсы выполнения",

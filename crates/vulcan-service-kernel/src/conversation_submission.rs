@@ -222,6 +222,10 @@ struct SubmissionProviderToolSettings {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SubmissionSessionSettings {
+    /// Explicit HTML preference captured by the draft; absent preserves the new-session default.
+    /// 草稿捕获的显式 HTML 偏好；缺省时保留新会话默认值。
+    #[serde(default)]
+    html_answers_enabled: Option<bool>,
     /// Optional session output-style identifier captured before the first prompt boundary.
     /// 在首次提示词边界前捕获的可选会话输出风格标识。
     #[serde(default)]
@@ -454,6 +458,7 @@ async fn apply_submission_session_settings(
                 knowledge_libraries: knowledge_selection_v1,
                 vmm: vmm_selection_v1,
             },
+            settings.and_then(|settings| settings.html_answers_enabled),
             updated_at_ms,
         )?;
         Some(
@@ -3798,6 +3803,7 @@ mod submission_session_settings_tests {
     #[test]
     fn ordinary_submission_keeps_output_style_snapshot_unchanged() {
         let settings = SubmissionSessionSettings {
+            html_answers_enabled: None,
             output_style_id: Some(String::from("rigorous")),
             vmm_policy: None,
             provider_tool_settings: None,

@@ -645,6 +645,8 @@ pub(crate) fn set_provider_tool_selection_v1(
 /// `handle` owns the V1 document, `selection` contains all first-turn selections, and `now_ms`
 /// is the semantic mutation time.
 /// `handle` 持有 V1 文档，`selection` 包含全部首轮选择，`now_ms` 是语义修改时间。
+/// `html_answers_enabled` optionally applies the first-turn draft preference in the same transaction.
+/// `html_answers_enabled` 在同一事务中可选地应用首轮草稿偏好。
 ///
 /// # Returns
 /// 返回值
@@ -653,6 +655,7 @@ pub(crate) fn set_provider_tool_selection_v1(
 pub(crate) fn set_session_selection_bundle_v1(
     handle: &SessionHandle,
     selection: SessionSelectionBundleInput,
+    html_answers_enabled: Option<bool>,
     now_ms: i64,
 ) -> Result<bool, String> {
     let receipt = handle
@@ -660,11 +663,18 @@ pub(crate) fn set_session_selection_bundle_v1(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
             move |document| {
-                if document.set_session_selection_bundle(selection, now_ms)? {
-                    Ok(SessionMutationChange::Changed(()))
-                } else {
-                    Ok(SessionMutationChange::Unchanged(()))
-                }
+                document.apply_atomic_transition(|document| {
+                    let mut changed = document.set_session_selection_bundle(selection, now_ms)?;
+                    if let Some(enabled) = html_answers_enabled {
+                        let revision = document.metadata.config.html_answers.revision;
+                        changed |= document.set_html_answer_mode(enabled, revision, now_ms)?;
+                    }
+                    Ok(if changed {
+                        SessionMutationChange::Changed(())
+                    } else {
+                        SessionMutationChange::Unchanged(())
+                    })
+                })
             },
         )
         .map_err(|error| format!("保存 V1 会话选择配置失败：{error}"))?;
@@ -1507,11 +1517,11 @@ mod tests {
         };
 
         assert!(
-            set_session_selection_bundle_v1(handle.as_ref(), input.clone(), 2)
+            set_session_selection_bundle_v1(handle.as_ref(), input.clone(), None, 2)
                 .expect("new selection bundle should persist")
         );
         assert!(
-            !set_session_selection_bundle_v1(handle.as_ref(), input.clone(), 3)
+            !set_session_selection_bundle_v1(handle.as_ref(), input.clone(), None, 3)
                 .expect("same selection bundle should replay idempotently")
         );
         assert_eq!(
@@ -1521,6 +1531,36 @@ mod tests {
                 .knowledge_libraries,
             input.knowledge_libraries
         );
+        assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+    }
+
+    /// Draft HTML preference commits with the selection bundle once and preserves unrelated settings.
+    /// 草稿 HTML 偏好与选择包一次提交，并保留无关设置。
+    #[test]
+    fn html_answers_draft_bundle_is_atomic_and_idempotent() {
+        let (handle, backend) =
+            request_config_handle(SessionId::new_v4(), ActiveRequestConfig::default());
+        let selection = SessionSelectionBundleInput {
+            output_style: Some("concise".into()),
+            provider_tools: Default::default(),
+            knowledge_libraries: Default::default(),
+            vmm: Default::default(),
+        };
+        let before = handle.read(SessionDocument::memory_revision).unwrap();
+        assert!(
+            set_session_selection_bundle_v1(&handle, selection.clone(), Some(true), 2).unwrap()
+        );
+        assert_eq!(
+            handle.read(SessionDocument::memory_revision).unwrap(),
+            before + 1
+        );
+        assert!(
+            handle
+                .read(|document| document.metadata.config.html_answers.enabled)
+                .unwrap()
+        );
+        assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+        assert!(!set_session_selection_bundle_v1(&handle, selection, Some(true), 3).unwrap());
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
     }
 

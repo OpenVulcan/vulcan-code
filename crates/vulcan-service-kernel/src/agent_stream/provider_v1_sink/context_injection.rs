@@ -15,6 +15,33 @@ use vulcan_session_core::v1::event::SystemContextScope;
 /// 路由切换后当前模型身份的稳定生产者。
 pub(super) const MODEL_SELECTION_CONTEXT_KEY: &str = "dynamic.model_selection";
 
+/// Render the authoritative HTML prompt using the unique Core protocol and capacity constants.
+/// 使用唯一 Core 协议和容量常量渲染权威 HTML 提示词。
+/// No input; returns one trimmed producer body without independently defined limits.
+/// 无输入；返回已去除首尾空白且没有独立限额定义的一份生产者正文。
+fn html_answer_enabled_prompt() -> String {
+    use vulcan_session_core::v1::html_answers::{
+        HTML_ANSWER_MAX_PAGE_BYTES, HTML_ANSWER_MAX_PAGES, HTML_ANSWER_MAX_TITLE_CHARS,
+        HTML_ANSWER_MAX_TOTAL_BYTES, HTML_ANSWER_VERSION,
+    };
+    vulcan_runtime_assets::HTML_ANSWERS_ENABLED_MD
+        .trim()
+        .replace("{{version}}", &HTML_ANSWER_VERSION.to_string())
+        .replace("{{max_pages}}", &HTML_ANSWER_MAX_PAGES.to_string())
+        .replace(
+            "{{max_page_bytes}}",
+            &HTML_ANSWER_MAX_PAGE_BYTES.to_string(),
+        )
+        .replace(
+            "{{max_total_bytes}}",
+            &HTML_ANSWER_MAX_TOTAL_BYTES.to_string(),
+        )
+        .replace(
+            "{{max_title_chars}}",
+            &HTML_ANSWER_MAX_TITLE_CHARS.to_string(),
+        )
+}
+
 /// Builds an append-only identity notice from `document` history and the frozen `request`.
 /// 根据 `document` 历史及冻结的 `request` 构建只追加的身份通知。
 /// Returns no initial notice; once a switch is observed, the current identity remains durable and idempotent.
@@ -101,8 +128,20 @@ pub(super) fn synchronize_request_dynamic_context(
                 &candidate.locked_baseline,
             )?);
             inputs.push(model_selection_input(document, &facts.request));
+            // Freeze the preference under the same lock as its request-context publication.
+            // 在请求上下文发布的同一把锁内冻结偏好。
+            let html_guidance = if document.metadata.config.html_answers.enabled {
+                html_answer_enabled_prompt()
+            } else {
+                String::new()
+            };
             document
-                .synchronize_dynamic_context(inputs, facts.prepared_at_ms)
+                .synchronize_context_with_html_answers(
+                    inputs,
+                    &html_guidance,
+                    vulcan_runtime_assets::HTML_ANSWERS_DISABLED_MD.trim(),
+                    facts.prepared_at_ms,
+                )
                 .map(|result| match result {
                     vulcan_session_core::v1::document::IdempotentMutation::Committed(seqs) => {
                         SessionMutationChange::Changed(seqs)

@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use vulcan_session_core::v1::config::{ActiveRequestConfig, PendingRequestConfig, SessionConfig};
+use vulcan_session_core::v1::config::{
+    ActiveRequestConfig, HtmlAnswerMode, PendingRequestConfig, SessionConfig,
+};
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
 use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::{
@@ -146,6 +148,9 @@ impl ConversationRequestConfigV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationSessionConfigV1 {
+    /// Session-owned desired and prepared HTML answer preference.
+    /// 会话自有的 HTML 回答期望与准备偏好。
+    pub html_answers: HtmlAnswerMode,
     /// Request configuration frozen for the current physical API.
     /// 为当前物理 API 锁定的请求配置。
     pub current_request: ConversationRequestConfigV1,
@@ -172,6 +177,7 @@ impl ConversationSessionConfigV1 {
     /// 返回当前/下一请求状态与动态压缩选择。
     pub fn from_session_config(config: &SessionConfig) -> Self {
         Self {
+            html_answers: config.html_answers.clone(),
             current_request: ConversationRequestConfigV1::from_active(&config.active_request),
             next_request: config
                 .pending_request
@@ -351,6 +357,12 @@ pub enum ConversationEventPatchDurabilityV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventLiveDeltaV1 {
+    /// Exact preference in a successfully published candidate; absent on volatile patches.
+    /// 成功发布候选中的精确偏好；内存补丁不携带该字段。
+    /// Boxed so high-frequency volatile outbox entries do not reserve the full preference size.
+    /// 使用堆指针，使高频内存发送队列条目不预留完整偏好空间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_answers: Option<Box<HtmlAnswerMode>>,
     /// Ownership-bound events in ascending seq order. Volatile pushes contain
     /// the exact sparse change set and durable acknowledgements are empty.
     /// 按升序排列的带归属事件。volatile 推送包含精确稀疏变化集，可靠确认为空。
@@ -583,6 +595,7 @@ impl ConversationEventLiveDeltaV1 {
             base_durable_revision: None,
             durability: ConversationEventPatchDurabilityV1::Volatile,
             text_appends: Vec::new(),
+            html_answers: None,
         })
     }
 
@@ -629,6 +642,7 @@ impl ConversationEventLiveDeltaV1 {
             base_durable_revision: Some(base_durable_revision),
             durability: ConversationEventPatchDurabilityV1::Durable,
             text_appends: Vec::new(),
+            html_answers: None,
         })
     }
 
@@ -1035,6 +1049,10 @@ pub enum ConversationEventReconnectDispositionV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventReconnectV1Response {
+    /// Preference read from persisted metadata; absent when a full hydration is required.
+    /// 从持久元数据读取的偏好；要求完整加载时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_answers: Option<HtmlAnswerMode>,
     /// Complete ownership-bound recovery range, empty when rehydration is required.
     /// 完整的带归属恢复范围；要求重新 hydration 时为空。
     #[serde(flatten)]
@@ -1080,6 +1098,7 @@ impl ConversationEventReconnectV1Response {
             memory_revision,
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::Recovery,
+            html_answers: None,
         })
     }
 
@@ -1107,6 +1126,7 @@ impl ConversationEventReconnectV1Response {
             memory_revision,
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::RehydrateRequired(reason),
+            html_answers: None,
         })
     }
 }

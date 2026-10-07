@@ -1,4 +1,9 @@
 {
+  "htmlAnswers.label": "Resposta HTML",
+  "htmlAnswers.hint": "Usar HTML interativo quando ajudar a explicar a resposta.",
+  "htmlAnswers.pending": "Aplica-se à próxima solicitação ao modelo",
+  "htmlAnswers.saveFailed": "Não foi possível confirmar a configuração de respostas HTML. Atualize ou tente novamente.",
+  "htmlAnswers.conflict": "Outro cliente alterou esta configuração. O valor mais recente foi carregado.",
   "pluginMaintenance.action.usage": "Ver onde está em uso",
   "pluginMaintenance.action.recovery": "Verificar operações inacabadas",
   "pluginMaintenance.action.capacity": "Ajustar recursos de execução",

@@ -4,6 +4,7 @@ import type {
   ServiceUnsubscribe,
 } from "@/service/protocol";
 import type { ServiceClient } from "@/service/client";
+import type { HtmlAnswerMode } from "@/service/html-answer-mode";
 import type {
   ConversationEventPatchDurability,
   ConversationEventLivePatch,
@@ -43,6 +44,9 @@ export interface ConversationRequestConfigV1 {
 /** Selected-session configuration whose sole authority is V1 metadata.config.
  * 以 V1 metadata.config 为唯一权威的选中会话配置。 */
 export interface ConversationSessionConfigV1 {
+  /** Persisted HTML preference from Core metadata.
+   * 来自 Core 元数据的持久 HTML 偏好。 */
+  html_answers: HtmlAnswerMode;
   current_request: ConversationRequestConfigV1;
   next_request: ConversationRequestConfigV1 | null;
   context_compaction_window_node_id: string | null;

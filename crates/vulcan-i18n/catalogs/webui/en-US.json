@@ -1,4 +1,9 @@
 {
+  "htmlAnswers.label": "HTML answer",
+  "htmlAnswers.hint": "Use interactive HTML when it helps explain the answer.",
+  "htmlAnswers.pending": "Applies to the next model request",
+  "htmlAnswers.saveFailed": "Could not confirm the HTML answer setting. Refresh or retry.",
+  "htmlAnswers.conflict": "This setting changed in another client. The latest value has been loaded.",
   "pluginMaintenance.action.usage": "See where it is in use",
   "pluginMaintenance.action.recovery": "Check unfinished operations",
   "pluginMaintenance.action.capacity": "Adjust runtime resources",

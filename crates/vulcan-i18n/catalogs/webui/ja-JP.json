@@ -1,4 +1,9 @@
 {
+  "htmlAnswers.label": "HTML 回答",
+  "htmlAnswers.hint": "説明に役立つ場合に対話型 HTML を使用します。",
+  "htmlAnswers.pending": "次のモデルリクエストから適用",
+  "htmlAnswers.saveFailed": "HTML 回答設定の保存を確認できません。再読み込みするか、再試行してください。",
+  "htmlAnswers.conflict": "別のクライアントで設定が変更されました。最新の値を読み込みました。",
   "pluginMaintenance.action.usage": "使用状況を見る",
   "pluginMaintenance.action.recovery": "未完了の操作を確認",
   "pluginMaintenance.action.capacity": "実行リソースを調整",

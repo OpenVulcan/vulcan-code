@@ -22,7 +22,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 
 /// Current metadata schema; storage migrations are required whenever this version increases.
 /// 当前元数据模式版本；每次递增都必须提供存储迁移。
-pub const METADATA_SCHEMA_VERSION: u32 = 2;
+pub const METADATA_SCHEMA_VERSION: u32 = 3;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
@@ -570,6 +570,9 @@ pub struct SelectionConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionConfig {
+    /// Desired HTML answer preference and the last request-preparation snapshot.
+    /// HTML 回答期望偏好和最近一次请求准备快照。
+    pub html_answers: HtmlAnswerMode,
     /// Request configuration effective for the active execution node.
     /// 对当前活动执行节点生效的请求配置。
     pub active_request: ActiveRequestConfig,
@@ -584,6 +587,84 @@ pub struct SessionConfig {
     /// 为下一个安全请求边界选择的稳定上下文压缩窗口节点。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
+}
+
+/// Immutable HTML preference captured at a business request's preparation boundary.
+/// 在业务请求准备边界捕获的不可变 HTML 偏好。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HtmlAnswerPreparedMode {
+    /// Whether the prepared request allows optional HTML answers.
+    /// 准备好的请求是否允许按需 HTML 回答。
+    pub enabled: bool,
+    /// Exact preference revision captured for this preparation.
+    /// 此次准备捕获的精确偏好修订号。
+    pub revision: u64,
+}
+
+/// Session-owned desired preference, independent of Goal/Plan and of an already active API.
+/// 会话持有的期望偏好，独立于 Goal、Plan 和已经活动的 API。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "HtmlAnswerModeWire")]
+pub struct HtmlAnswerMode {
+    /// Latest explicitly saved user preference.
+    /// 最近显式保存的用户偏好。
+    pub enabled: bool,
+    /// Monotonic compare-and-set revision; defaults to zero only for newly created state.
+    /// 单调比较交换修订号；仅新建状态默认为零。
+    pub revision: u64,
+    /// Last business preparation, absent until this session prepares its first request.
+    /// 最近业务请求准备；此会话首次准备请求之前为空。
+    pub prepared: Option<HtmlAnswerPreparedMode>,
+}
+
+/// Required wire fields are separate from validation; no serde defaults repair malformed v3 data.
+/// 必填传输字段与校验分开；不以 serde 默认值修复损坏的 v3 数据。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HtmlAnswerModeWire {
+    /// Serialized desired preference.
+    /// 序列化的期望偏好。
+    enabled: bool,
+    /// Serialized compare-and-set revision.
+    /// 序列化的比较交换修订号。
+    revision: u64,
+    /// Serialized explicit preparation state; the field itself is required.
+    /// 序列化的显式准备状态；字段自身必填。
+    #[serde(deserialize_with = "deserialize_required_html_preparation")]
+    prepared: Option<HtmlAnswerPreparedMode>,
+}
+
+/// Decode a present nullable preparation field; missing state is a schema error.
+/// 解码存在且可为空的准备字段；缺失状态是模式错误。
+fn deserialize_required_html_preparation<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<HtmlAnswerPreparedMode>, D::Error> {
+    Option::deserialize(deserializer)
+}
+
+impl TryFrom<HtmlAnswerModeWire> for HtmlAnswerMode {
+    type Error = &'static str;
+
+    /// Validate JS-safe revisions and agreement at an identical desired/prepared revision.
+    /// 校验 JavaScript 安全修订号，以及相同期望和准备修订下的一致性。
+    /// Returns the typed mode or a stable corruption diagnostic, without changing stored values.
+    /// 返回强类型模式或稳定的损坏诊断，不改变存储值。
+    fn try_from(wire: HtmlAnswerModeWire) -> Result<Self, Self::Error> {
+        if wire.revision > crate::v1::ids::JS_SAFE_INTEGER_MAX
+            || wire.prepared.is_some_and(|prepared| {
+                prepared.revision > wire.revision
+                    || (prepared.revision == wire.revision && prepared.enabled != wire.enabled)
+            })
+        {
+            return Err("invalid HTML answer preference revision");
+        }
+        Ok(Self {
+            enabled: wire.enabled,
+            revision: wire.revision,
+            prepared: wire.prepared,
+        })
+    }
 }
 
 /// Stable identity of one queued input across metadata mutations.

@@ -1,4 +1,9 @@
 {
+  "htmlAnswers.label": "HTML 回答",
+  "htmlAnswers.hint": "在有助理解回答時使用互動式 HTML。",
+  "htmlAnswers.pending": "下次模型請求生效",
+  "htmlAnswers.saveFailed": "無法確認 HTML 回答設定已儲存，請重新整理或重試。",
+  "htmlAnswers.conflict": "其他用戶端已修改此設定，已載入最新狀態。",
   "pluginMaintenance.action.usage": "查看使用情況",
   "pluginMaintenance.action.recovery": "檢查未完成的操作",
   "pluginMaintenance.action.capacity": "調整執行資源",
