@@ -143,6 +143,33 @@ async fn removing_authorization_clears_the_backend_and_notifies_subscribers() {
     assert!(changes.has_changed().unwrap());
 }
 
+/// Tokens saved by a refresh that already holds the manager lock do not survive a concurrent sign-out.
+/// 已持有管理器锁的刷新所保存的令牌，不会在并发退出登录后留存。
+#[tokio::test]
+async fn sign_out_waits_for_an_in_flight_refresh_and_clears_its_tokens() {
+    let backend = Arc::new(McpOAuthMemoryCredentialBackend::default());
+    let session = Arc::new(session(backend.clone(), McpTransportOAuthSpec::default()).await);
+    // Stand in for a refresh: hold the manager lock across the network wait.
+    // 模拟刷新：在网络等待期间持有管理器锁。
+    let refreshing = session.manager.lock().await;
+    let removal = tokio::spawn({
+        let session = session.clone();
+        async move { session.remove_authorization().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!removal.is_finished());
+    // The refresh completes by saving new tokens, then releases the lock.
+    // 刷新以保存新令牌结束，随后释放锁。
+    backend
+        .save(SERVER_ID, &record(SERVER_URL, "client"))
+        .unwrap();
+    drop(refreshing);
+
+    removal.await.unwrap().unwrap();
+
+    assert!(backend.load(SERVER_ID).unwrap().is_none());
+}
+
 #[tokio::test]
 async fn denied_callback_fails_without_contacting_the_server() {
     let backend = Arc::new(McpOAuthMemoryCredentialBackend::default());

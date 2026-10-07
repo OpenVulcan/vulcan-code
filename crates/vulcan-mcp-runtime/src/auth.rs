@@ -421,11 +421,17 @@ impl McpOAuthSession {
     /// Clears every stored credential for this server and wakes connections waiting on authorization.
     /// 清除此服务器的全部已存储凭据，并唤醒等待授权的连接。
     pub async fn remove_authorization(&self) -> Result<(), McpRuntimeError> {
+        // A refresh holds the manager lock from loading tokens until saving new ones; clearing
+        // under the same lock keeps an in-flight refresh from restoring tokens after sign-out.
+        // 刷新从读取令牌到保存新令牌全程持有管理器锁；在同一把锁下清除，
+        // 可防止进行中的刷新在退出登录后写回令牌。
+        let manager = self.manager.lock().await;
         self.credential_store
             .clear()
             .await
             .map_err(|error| McpRuntimeError::transport(format!("mcp.oauth.remove: {error}")))?;
         self.restored.store(false, Ordering::Release);
+        drop(manager);
         self.notify_authorization_changed();
         Ok(())
     }
