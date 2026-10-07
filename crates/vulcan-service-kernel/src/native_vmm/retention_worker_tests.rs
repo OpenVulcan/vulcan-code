@@ -40,10 +40,11 @@ async fn observe(
     }
 }
 
-/// Exercises both production loops without changing their clocks or substituting their storage effects.
-/// 执行两个生产循环，不修改其时钟或替换其存储效果。
-/// `maintenance` belongs exclusively to a temporary controller; workers are aborted and joined on exit.
-/// `maintenance` 专属于临时控制器；退出时中止并等待工作器收回。
+/// Exercises both production loops on the caller's paused tokio time without substituting their storage effects.
+/// 在调用方暂停的 tokio 时间上执行两个生产循环，不替换其存储效果。
+/// `maintenance` belongs exclusively to a temporary controller and must use the tokio clock; workers are
+/// aborted and joined on exit.
+/// `maintenance` 专属于临时控制器且必须使用 tokio 时钟；退出时中止并等待工作器收回。
 pub(in crate::native_vmm) async fn verify_worker_lifecycle(
     maintenance: NativeVmmMaintenance,
     scheduled_memory: vulcan_memorymesh_core::MemoryRecord,
@@ -232,8 +233,8 @@ pub(in crate::native_vmm) async fn verify_worker_lifecycle(
 
 /// Verifies lengthening suppresses the old deadline and shortening retains the last-completion anchor.
 /// 验证延长周期会抑制旧截止时间，缩短周期仍保留上次完成时间锚点。
-/// Uses the running isolated workers and real elapsed time; returns after the shortened full pass finishes.
-/// 使用正在运行的隔离工作器及真实流逝时间，在缩短后的完整扫描完成后返回。
+/// Uses the running isolated workers and paused tokio time; returns after the shortened full pass finishes.
+/// 使用正在运行的隔离工作器及暂停的 tokio 时间，在缩短后的完整扫描完成后返回。
 async fn verify_full_cadence_changes(maintenance: &NativeVmmMaintenance) {
     // The preceding steady-period assertion completed a real full scan, establishing the timer anchor.
     // 前序稳态周期断言完成了一次真实完整扫描，建立计时锚点。
@@ -248,8 +249,8 @@ async fn verify_full_cadence_changes(maintenance: &NativeVmmMaintenance) {
         .update_retention_settings(settings.clone())
         .await
         .expect("lengthen full cadence");
-    // Cross both the policy refresh and the old one-minute deadline without substituting a clock.
-    // 不替换时钟，跨过策略刷新及旧的一分钟截止时间。
+    // Cross both the policy refresh and the old one-minute deadline.
+    // 跨过策略刷新及旧的一分钟截止时间。
     tokio::time::sleep(Duration::from_secs(31)).await;
     assert_eq!(
         maintenance
@@ -302,8 +303,8 @@ async fn verify_full_cadence_changes(maintenance: &NativeVmmMaintenance) {
 
 /// Verifies a genuine second full cadence processes data admitted after the eager first pass.
 /// 验证真实第二次完整周期处理首轮立即扫描之后准入的数据。
-/// The fixture memory belongs to the isolated controller; clocks, worker bodies and storage are unchanged.
-/// 夹具记忆属于隔离控制器；不修改时钟、工作器主体或存储实现。
+/// The fixture memory belongs to the isolated controller; worker bodies and storage are unchanged.
+/// 夹具记忆属于隔离控制器；不修改工作器主体或存储实现。
 async fn verify_steady_cleanup(
     maintenance: &NativeVmmMaintenance,
     first: &NativeVmmRetentionStatus,
@@ -361,8 +362,8 @@ async fn verify_steady_cleanup(
             .iter()
             .any(|record| record.id == expected.id)
     );
-    // Existing bounded observation now spans the remaining twenty-five seconds of the real minute.
-    // 既有有界观察现在覆盖真实一分钟周期剩余的二十五秒。
+    // Existing bounded observation now spans the remaining twenty-five seconds of the minute.
+    // 既有有界观察现在覆盖一分钟周期剩余的二十五秒。
     let second = observe(maintenance, |status| {
         status.last_finished_at_unix_ms > first.last_finished_at_unix_ms
     })

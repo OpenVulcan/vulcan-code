@@ -140,7 +140,7 @@ cargo test --doc
 
 | 命令 | 内容 |
 | --- | --- |
-| `make test` | 以 nextest `fast` 配置运行全工作区测试，跳过依赖真实流逝时间或完整插件生命周期的测试（实测每项 13–200 秒）。 |
+| `make test` | 以 nextest `fast` 配置运行全工作区测试，跳过成本来自真实流逝时间、真实 VMM 控制器或完整插件生命周期的测试。 |
 | `make test full` | 运行全部 nextest 测试、`scripts/test-isolated-callbacks.mjs` 中的进程隔离回调测试，以及 `cargo test --doc`。 |
 
 两者都由 `scripts/test-rust.mjs` 执行，并继承 `.config/nextest.toml` 的线程上限与串行组。`fast` 的排除名单只在 `.config/nextest.toml` 的 `[profile.fast]` 中维护；新增长耗时测试时更新该过滤器，并用 `cargo nextest list --profile fast` 核对实际排除结果。合并或发布前执行 `make test full`。

@@ -24,7 +24,7 @@ test-group = "shared-runtime-resources"
 [profile.fast]
 default-filter = '''
 not (package(vulcan-service-kernel) & (
-    test(/^native_vmm::driver::lexical_driver_tests::real_controller_(retention_workers_follow_saved_cadence|replacement_policy|hybrid_policy|precheck_history_policy|weibull_policy)/)
+    test(/^native_vmm::driver::lexical_driver_tests::real_controller_(replacement_policy|hybrid_policy|precheck_history_policy|weibull_policy)/)
     | test(/^skills_services::vulcan_plugin_lifecycle::generation_tests::published::/)
     | test(/^skills_services::local_plugin_update::target_handoff::predecessor_restoration::/)
     | test(/::real_host_storage_human_jobs/)

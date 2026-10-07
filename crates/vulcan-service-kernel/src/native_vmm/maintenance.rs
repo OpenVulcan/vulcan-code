@@ -933,6 +933,9 @@ pub(crate) struct NativeVmmMaintenance {
     /// Stores the latest completed retention status for diagnostics and the management page.
     /// 保存最近一次已完成保留状态，供诊断与管理页面使用。
     retention_last_status: Arc<RwLock<NativeVmmRetentionStatus>>,
+    /// Supplies every maintenance timestamp; production reads the system clock.
+    /// 提供全部维护时间戳；生产环境读取系统时钟。
+    clock: NativeVmmClock,
     /// Holds only the latest server-prepared manual cleanup plan; a new preview replaces it.
     /// 仅保留服务端最近准备的人工清洗计划，新预览替换旧预览。
     retention_preview: Arc<Mutex<Option<retention_preview::PreparedRetentionCleanup>>>,
@@ -1253,6 +1256,18 @@ impl NativeVmmMaintenance {
         self.runtime.test_noise(text).await
     }
 
+    /// Replaces the system clock with one that follows tokio time from the current Unix instant.
+    /// 以从当前 Unix 时刻起跟随 tokio 时间的时钟替换系统时钟。
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_tokio_clock(mut self) -> Self {
+        self.clock = NativeVmmClock::Tokio {
+            anchor_unix_ns: native_vmm_now_ns().expect("system clock after Unix epoch"),
+            origin: tokio::time::Instant::now(),
+        };
+        self
+    }
+
     /// Creates one maintenance facade over the exact runtime and project catalog.
     /// 基于精确运行时与项目目录创建一个维护门面。
     #[must_use]
@@ -1280,6 +1295,7 @@ impl NativeVmmMaintenance {
             retention_running: Arc::new(AtomicBool::new(false)),
             profile_expiry_running: Arc::new(AtomicBool::new(false)),
             retention_preview: Arc::new(Mutex::new(None)),
+            clock: NativeVmmClock::System,
             session_archive_preview: Arc::new(Mutex::new(None)),
             session_restart_preview: Arc::new(Mutex::new(None)),
             removal_preview: Arc::new(Mutex::new(None)),
@@ -1396,7 +1412,7 @@ impl NativeVmmMaintenance {
                 "原生 VMM 定期清洗仅在内部原生记忆已启用时可运行。",
             ));
         }
-        let started_at_unix_ms = unix_ns_to_ms(native_vmm_now_ns()?);
+        let started_at_unix_ms = unix_ns_to_ms(self.clock.now_ns()?);
         self.retention_running.store(true, Ordering::Release);
         {
             let mut status = self.retention_last_status.write().await;
@@ -1405,7 +1421,7 @@ impl NativeVmmMaintenance {
         }
 
         let outcome = self.run_retention_once_inner(policy).await;
-        let finished_at_unix_ms = native_vmm_now_ns().map(unix_ns_to_ms).ok();
+        let finished_at_unix_ms = self.clock.now_ns().map(unix_ns_to_ms).ok();
         let current_snapshot = self.runtime.storage_snapshot().ok();
         {
             let mut status = self.retention_last_status.write().await;
@@ -1575,7 +1591,7 @@ impl NativeVmmMaintenance {
                         "向量重建期间 Embedding 路由发生变化；已提交批次保持有效，请重新预检剩余记录。",
                     ));
                 }
-                let now_ns = native_vmm_now_ns()?;
+                let now_ns = self.clock.now_ns()?;
                 let batch_operation_id = vector_rebuild_batch_operation_id(
                     operation_id,
                     "active",
@@ -1783,7 +1799,7 @@ impl NativeVmmMaintenance {
         {
             return Ok(existing);
         }
-        let now_ns = native_vmm_now_ns()?;
+        let now_ns = self.clock.now_ns()?;
         let before = self.runtime.storage_snapshot()?;
         if before.storage_version != expected_storage_version {
             return Err(format!(
@@ -1816,6 +1832,9 @@ impl NativeVmmMaintenance {
                 ));
             }
         }
+        // The move closure below reads the same clock as the rest of this restore.
+        // 下方 move 闭包读取与本次恢复其余部分相同的时钟。
+        let clock = self.clock;
         self.runtime
             .transform_storage_snapshot(
                 operation_id,
@@ -1830,7 +1849,7 @@ impl NativeVmmMaintenance {
                     let batch = &snapshot.retention_trash_batches[batch_index];
                     // Provider checks and lock acquisition can outlive the preview's time boundary.
                     // 供应商检查和锁等待可能跨过预检时的时间边界。
-                    let apply_now_ns = native_vmm_now_ns()?;
+                    let apply_now_ns = clock.now_ns()?;
                     if batch.expires_at_ns <= apply_now_ns {
                         return Err(format!("原生 VMM 回收批次 `{batch_id}` 已到期，不能恢复。"));
                     }
@@ -2035,7 +2054,7 @@ impl NativeVmmMaintenance {
         if !self.native_backend_enabled.load(Ordering::Acquire) {
             return Ok(NativeVmmRetentionApplyResult::default());
         }
-        let started_at_unix_ms = unix_ns_to_ms(native_vmm_now_ns()?);
+        let started_at_unix_ms = unix_ns_to_ms(self.clock.now_ns()?);
         self.profile_expiry_running.store(true, Ordering::Release);
         {
             let mut status = self.retention_last_status.write().await;
@@ -2068,7 +2087,7 @@ impl NativeVmmMaintenance {
             Ok(aggregate)
         }
         .await;
-        let finished_at_unix_ms = native_vmm_now_ns().map(unix_ns_to_ms).ok();
+        let finished_at_unix_ms = self.clock.now_ns().map(unix_ns_to_ms).ok();
         {
             let mut status = self.retention_last_status.write().await;
             status.profile_expiry_last_finished_at_unix_ms = finished_at_unix_ms;
@@ -2150,7 +2169,7 @@ impl NativeVmmMaintenance {
         project_id: u64,
         policy: &RetentionPolicy,
     ) -> Result<NativeVmmRetentionApplyResult, String> {
-        let now_ns = native_vmm_now_ns()?;
+        let now_ns = self.clock.now_ns()?;
         let storage_version = self.runtime.storage_snapshot()?.storage_version;
         let plan = self.retention_plan(project_id, now_ns, policy).await?;
         if retention_plan_is_empty(&plan) {
@@ -2178,7 +2197,7 @@ impl NativeVmmMaintenance {
         project_id: u64,
         policy: &RetentionPolicy,
     ) -> Result<NativeVmmRetentionApplyResult, String> {
-        let now_ns = native_vmm_now_ns()?;
+        let now_ns = self.clock.now_ns()?;
         let storage_version = self.runtime.storage_snapshot()?.storage_version;
         let plan = self.retention_plan(project_id, now_ns, policy).await?;
         if retention_plan_is_empty(&plan) {
@@ -2327,7 +2346,7 @@ impl NativeVmmMaintenance {
             &self.runtime.storage_snapshot()?,
             project_id,
             target,
-            native_vmm_now_ns()?,
+            self.clock.now_ns()?,
         )
     }
 
@@ -4379,6 +4398,44 @@ fn native_vmm_subject_id() -> Result<SubjectId, String> {
 fn native_vmm_subject_scope() -> Result<ScopeId, String> {
     ScopeId::new(format!("vmm-subject:{NATIVE_VMM_USER_ID}"))
         .map_err(|error| format!("原生 VMM 固定个人画像作用域无效：{error}"))
+}
+
+/// Wall-clock source for maintenance timestamps and the cleanup cadence they anchor.
+/// 维护时间戳及其锚定的清洗周期所用的墙上时钟来源。
+#[derive(Clone, Copy, Debug)]
+enum NativeVmmClock {
+    /// Reads the operating-system clock.
+    /// 读取操作系统时钟。
+    System,
+    /// Advances from a fixed Unix anchor with tokio time, so paused test time moves timestamps too.
+    /// 从固定 Unix 锚点随 tokio 时间推进，使暂停的测试时间同样推进时间戳。
+    #[cfg(test)]
+    Tokio {
+        /// Unix nanoseconds observed when the clock was installed.
+        /// 安装时钟时观测到的 Unix 纳秒。
+        anchor_unix_ns: i64,
+        /// Tokio instant paired with the anchor.
+        /// 与锚点配对的 tokio 时刻。
+        origin: tokio::time::Instant,
+    },
+}
+
+impl NativeVmmClock {
+    /// Reads the current Unix time in nanoseconds from this source.
+    /// 从此来源读取当前 Unix 纳秒时间。
+    fn now_ns(self) -> Result<i64, String> {
+        match self {
+            Self::System => native_vmm_now_ns(),
+            #[cfg(test)]
+            Self::Tokio {
+                anchor_unix_ns,
+                origin,
+            } => i64::try_from(origin.elapsed().as_nanos())
+                .ok()
+                .and_then(|elapsed| anchor_unix_ns.checked_add(elapsed))
+                .ok_or_else(|| String::from("测试时钟超出 i64 纳秒范围。")),
+        }
+    }
 }
 
 /// Reads the current Unix time in nanoseconds without truncation.

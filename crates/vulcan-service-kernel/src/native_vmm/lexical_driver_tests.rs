@@ -661,11 +661,11 @@ async fn verify_saved_cleanup_policy_on_real_storage(runtime: NativeVmmCoreRunti
 
 /// Verifies both production cleanup workers against saved cadence on a private controller.
 /// 在私有控制器上验证两个生产清洗工作器遵循已保存的执行周期。
-/// The cadence is real elapsed time, so this test is excluded from the fast profile.
-/// 执行周期使用真实流逝时间，因此本测试不在 fast 配置中运行。
+/// The cadence runs on paused tokio time, so minute-long periods elapse without real waiting.
+/// 执行周期运行在暂停的 tokio 时间上，分钟级周期无需真实等待即可流逝。
 #[test]
 fn real_controller_retention_workers_follow_saved_cadence() {
-    run_on_engine_stack(
+    run_on_paused_engine_stack(
         "vmm-retention-workers",
         real_controller_retention_workers_follow_saved_cadence_body,
     );
@@ -697,11 +697,14 @@ async fn real_controller_retention_workers_follow_saved_cadence_body() {
         .expect("fixture vector binding");
     let data_plane = runtime.host.data_plane.clone();
     let runtime = Arc::new(runtime);
+    // Status timestamps and cleanup decisions follow the same paused time that drives the workers.
+    // 状态时间戳与清洗判定跟随驱动工作器的同一暂停时间。
     let maintenance = crate::native_vmm::NativeVmmMaintenance::new(
         Arc::clone(&runtime),
         data_plane,
         Arc::new(tokio::sync::RwLock::new(())),
-    );
+    )
+    .with_tokio_clock();
     maintenance.set_native_backend_enabled(true);
     let mut settings = runtime.retention_settings().await.expect("read cleanup");
     settings.protected_memory_level_floor = 4;
@@ -775,6 +778,33 @@ where
         .enable_all()
         .build()
         .expect("isolated VMM engine runtime");
+    run_executor_on_engine_stack(name, executor, body);
+}
+
+/// Runs `body` on a dedicated large-stack thread with a single-thread runtime whose time starts paused.
+/// 在专用大栈线程上以时间初始暂停的单线程运行时运行 `body`。
+/// Idle waits advance virtual time instantly; blocking work still holds the clock until it finishes.
+/// 空闲等待立即推进虚拟时间；阻塞工作在完成前仍会让时钟停住。
+fn run_on_paused_engine_stack<F, Fut>(name: &str, body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .expect("paused VMM engine runtime");
+    run_executor_on_engine_stack(name, executor, body);
+}
+
+/// Blocks a dedicated `ENGINE_TEST_STACK_BYTES` thread on `executor` until `body` completes.
+/// 在专用 `ENGINE_TEST_STACK_BYTES` 线程上以 `executor` 阻塞运行 `body` 直至完成。
+fn run_executor_on_engine_stack<F, Fut>(name: &str, executor: tokio::runtime::Runtime, body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
     std::thread::Builder::new()
         .name(name.to_owned())
         .stack_size(ENGINE_TEST_STACK_BYTES)

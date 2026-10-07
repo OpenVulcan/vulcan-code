@@ -106,3 +106,6 @@ vulcan-plugin-runtime = { workspace = true, features = ["test-support"] }
 # 供本地签名服务器 E2E 使用的 HTTPS 回环服务器（方案 §R7.14）。
 rcgen.workspace = true
 tokio-rustls.workspace = true
+# Paused tokio time drives the VMM cleanup cadence test without real waiting.
+# 暂停的 tokio 时间驱动 VMM 清洗周期测试，无需真实等待。
+tokio = { workspace = true, features = ["test-util"] }

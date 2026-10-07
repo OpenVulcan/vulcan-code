@@ -79,7 +79,7 @@ impl NativeVmmMaintenance {
             snapshot,
             &projects,
             policies,
-            native_vmm_now_ns()?,
+            self.clock.now_ns()?,
         )
         .await?;
         let summary = prepared.summary.clone();
@@ -142,7 +142,7 @@ impl NativeVmmMaintenance {
             &projects,
             &policies,
         )?;
-        let started_at_unix_ms = unix_ns_to_ms(native_vmm_now_ns()?);
+        let started_at_unix_ms = unix_ns_to_ms(self.clock.now_ns()?);
         self.retention_running.store(true, Ordering::Release);
         {
             let mut status = self.retention_last_status.write().await;
@@ -150,6 +150,7 @@ impl NativeVmmMaintenance {
             status.last_error = None;
         }
         let storage_version = prepared.summary.storage_version;
+        let clock = self.clock;
         let outcome = async {
             let result = self
                 .runtime
@@ -157,7 +158,7 @@ impl NativeVmmMaintenance {
                     operation_id,
                     &mutation_kind,
                     storage_version,
-                    move |snapshot| prepared.apply(snapshot),
+                    move |snapshot| prepared.apply(snapshot, clock),
                 )
                 .await?;
             // Include audit pruning in the reported outcome instead of displaying a false success.
@@ -168,7 +169,7 @@ impl NativeVmmMaintenance {
         .await;
         {
             let mut status = self.retention_last_status.write().await;
-            status.last_finished_at_unix_ms = native_vmm_now_ns().map(unix_ns_to_ms).ok();
+            status.last_finished_at_unix_ms = self.clock.now_ns().map(unix_ns_to_ms).ok();
             match &outcome {
                 Ok(result) => status.last_result = Some(result.clone()),
                 Err(error) => status.last_error = Some(error.clone()),
@@ -216,10 +217,11 @@ impl PreparedRetentionCleanup {
     fn apply(
         self,
         snapshot: &mut StorageSnapshot,
+        clock: NativeVmmClock,
     ) -> Result<NativeVmmRetentionApplyResult, String> {
         // Freeze selection at preview time, but start new retention windows at actual confirmation.
         // 选择范围冻结于预览时，但新的保留期限从实际确认执行开始。
-        let applied_at_ns = native_vmm_now_ns()?;
+        let applied_at_ns = clock.now_ns()?;
         if applied_at_ns < self.evaluated_at_ns {
             return Err(String::from(
                 "系统时间早于清洗预览时间，请校准时间并重新预览。",
