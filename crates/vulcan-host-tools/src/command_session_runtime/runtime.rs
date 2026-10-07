@@ -516,33 +516,6 @@ impl CommandSessionRuntime {
         .await
     }
 
-    /// Reads retained output for a visible display without advancing AI or delivery cursors.
-    /// 为可见显示层读取保留输出，但不推进 AI 或交付游标。
-    ///
-    /// # Parameters / 参数
-    /// - `owner_session_id`: Session that owns the terminal.
-    /// - `command_session_id`: Terminal session to display.
-    /// - `after_seq`: Last output sequence already rendered by this display.
-    /// - `max_chunks`: Maximum output chunks returned in this delivery.
-    /// - `owner_session_id`：拥有该终端的会话。
-    /// - `command_session_id`：需要显示的终端会话。
-    /// - `after_seq`：该显示层已经渲染的最后输出序号。
-    /// - `max_chunks`：本次交付返回的最大输出分片数。
-    ///
-    /// # Returns / 返回值
-    /// Returns the current snapshot and retained chunks strictly after `after_seq`.
-    /// 返回当前快照以及严格晚于 `after_seq` 的保留分片。
-    pub async fn read_session_for_display(
-        &self,
-        owner_session_id: SessionId,
-        command_session_id: SessionId,
-        after_seq: u64,
-        max_chunks: usize,
-    ) -> Result<CommandSessionReadOutcome, String> {
-        let record = self.session_for_owner(owner_session_id, command_session_id)?;
-        Ok(record.read_since(after_seq, max_chunks.max(1), true).await)
-    }
-
     /// Reads the newest retained output for the one-time visible-display bootstrap.
     /// 为可见显示层的一次性首次加载读取最新保留输出。
     ///

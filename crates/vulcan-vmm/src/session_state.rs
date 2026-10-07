@@ -1603,31 +1603,6 @@ impl VmmSessionMemoryState {
         })
     }
 
-    /// Resets every lease and anchor after fork, edit, rollback, or history rewrite.
-    /// 在分叉、编辑、回滚或历史改写后重置全部租约与锚点。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `session_id` is the exact owner of the rewritten history.
-    /// `session_id` 是改写后历史的精确所有者。
-    /// `updated_at` is the reset timestamp.
-    /// `updated_at` 是重置时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success after installing an empty state with a strictly newer revision.
-    /// 安装具有严格更新修订号的空状态后返回成功。
-    pub fn reset_for_history_rewrite(
-        &mut self,
-        session_id: &str,
-        updated_at: &str,
-    ) -> Result<(), String> {
-        let next_revision = self.next_revision()?;
-        *self = Self::new(session_id, updated_at)?;
-        self.revision = next_revision;
-        Ok(())
-    }
-
     /// Builds one active-memory panel card containing leases eligible for the next compaction baseline.
     /// 构建一张活动记忆面板卡片，其中包含有资格进入下一次压缩基线的租约。
     ///

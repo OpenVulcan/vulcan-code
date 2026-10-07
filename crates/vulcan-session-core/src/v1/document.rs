@@ -688,27 +688,6 @@ impl SessionDocument {
         )
     }
 
-    /// Appends one Provider-invisible execution control fact.
-    /// 追加一条 Provider 不可见执行控制事实。
-    pub fn append_execution_control(
-        &mut self,
-        turn_id: Option<TurnId>,
-        control_kind: ExecutionControlKind,
-        api_call_id: Option<ApiCallId>,
-        now_ms: i64,
-    ) -> Result<Seq, DomainError> {
-        self.append_event(
-            turn_id,
-            EventVisibility::HostOnly,
-            EventBody::ExecutionControl(ExecutionControlEvent {
-                control_kind,
-                api_call_id,
-                client_action_id: None,
-            }),
-            now_ms,
-        )
-    }
-
     /// Verifies that an all-or-nothing transition can allocate its complete
     /// contiguous seq and local-id range before performing any mutation.
     /// 在执行任何修改前，校验全有或全无转换能够分配完整连续 seq 与本地 id 范围。

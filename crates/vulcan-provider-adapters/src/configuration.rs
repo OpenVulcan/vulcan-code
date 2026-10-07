@@ -1105,44 +1105,6 @@ impl PersistedAiConfiguration {
         Ok(())
     }
 
-    /// Applies one explicit session reasoning override to the active model-replacement backend.
-    /// 将一项显式会话推理档位覆盖应用到活动的模型代替后端。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `capability` identifies the media-understanding facade and `reasoning_effort` is the exact
-    /// provider-neutral override selected for the session.
-    /// `capability` 标识媒体理解外壳，`reasoning_effort` 是当前会话选择的精确供应商无关覆盖值。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success when the active backend is model replacement, otherwise an explicit mode error.
-    /// 活动后端为模型代替时返回成功，否则返回明确的模式错误。
-    pub fn apply_media_understanding_reasoning_effort(
-        &mut self,
-        capability: ProviderToolCapabilityKind,
-        reasoning_effort: ReasoningEffort,
-    ) -> Result<(), String> {
-        let selection = self
-            .media_understanding_selections
-            .get_mut(&capability)
-            .ok_or_else(|| {
-                format!("Media-understanding capability `{capability:?}` has no active backend.")
-            })?;
-        match selection {
-            MediaUnderstandingBackendSelection::ModelReplacement {
-                reasoning_effort: selected_effort,
-                ..
-            } => {
-                *selected_effort = Some(reasoning_effort);
-                Ok(())
-            }
-            MediaUnderstandingBackendSelection::ProviderTool { .. } => Err(format!(
-                "Media-understanding capability `{capability:?}` cannot apply a reasoning override to a provider-tool backend."
-            )),
-        }
-    }
-
     /// Copies active media selections into missing independent backend mode slots.
     /// 将活动媒体选择补入缺失的独立后端模式槽位。
     ///

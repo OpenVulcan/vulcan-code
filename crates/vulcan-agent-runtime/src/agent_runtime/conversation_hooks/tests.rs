@@ -120,7 +120,9 @@ async fn agent_task_observers_stay_disabled_across_restore_and_completion() {
     // Clear only process-local ownership and restore the serialized policy as on restart.
     // 仅清除进程内归属，像重启一样恢复序列化策略。
     runtime.active_turns.clear();
-    runtime.restore_business_hook_binding(&binding).unwrap();
+    runtime
+        .restore_business_hook_state(&recovery_state(&binding))
+        .unwrap();
     let resumed = runtime.prepare_user_prompt_hook_requests(
         session,
         "resume",
@@ -146,7 +148,9 @@ async fn agent_task_observers_stay_disabled_across_restore_and_completion() {
     );
     completed.run().await.report.unwrap();
     assert!(!runtime.has_active_turn(session));
-    runtime.restore_business_hook_binding(&binding).unwrap();
+    runtime
+        .restore_business_hook_state(&recovery_state(&binding))
+        .unwrap();
     runtime.terminate_turn(session, None, "stopped", 1);
     assert!(!runtime.has_active_turn(session));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -549,7 +553,11 @@ fn business_hook_binding_restores_original_owner_without_replaying_input() {
     // A separate cold runtime must restore that identity without inferring any recent User input.
     // 独立冷运行时必须恢复该身份，不推断任何最近 User 输入。
     let mut restored = ConversationHookRuntime::new();
-    assert!(restored.restore_business_hook_binding(&binding).unwrap());
+    assert!(
+        restored
+            .restore_business_hook_state(&recovery_state(&binding))
+            .unwrap()
+    );
     assert_eq!(
         restored.active_turn_id(session_id),
         Some(prepared.turn_id.as_str())
@@ -573,14 +581,22 @@ fn business_hook_binding_restores_original_owner_without_replaying_input() {
         &SessionConversationState::default(),
         true,
     );
-    assert!(!restored.restore_business_hook_binding(&binding).unwrap());
+    assert!(
+        !restored
+            .restore_business_hook_state(&recovery_state(&binding))
+            .unwrap()
+    );
     assert_eq!(restored.active_turns[&session_id].timeline.len(), 1);
     assert!(restored.active_turns[&session_id].vmm_runtime_ready);
     // A conflicting owner is an explicit error and cannot consume the retained timeline.
     // 冲突所有者是明确错误，不能消费保留时间线。
     let mut conflict = binding;
     conflict.hook_turn_id = "different-owner".into();
-    assert!(restored.restore_business_hook_binding(&conflict).is_err());
+    assert!(
+        restored
+            .restore_business_hook_state(&recovery_state(&conflict))
+            .is_err()
+    );
     assert_eq!(
         restored.active_turn_id(session_id),
         Some(prepared.turn_id.as_str())
@@ -1486,4 +1502,16 @@ fn async_hook_failure_diagnostics_preserve_dispatch_context() {
     assert!(stopped_diagnostics[0].contains("error=stop handler rejected"));
     assert!(stopped_diagnostics[1].contains("hook dispatch stopped after 1 failure(s)"));
     assert!(stopped_diagnostics[1].contains("point=conversation.user.event"));
+}
+
+/// Wraps one captured binding as the durable recovery state that production restores from.
+/// 将一次捕获的绑定包装为生产恢复所使用的可靠恢复状态。
+fn recovery_state(
+    binding: &vulcan_session_core::v1::business_hook::BusinessHookBinding,
+) -> vulcan_session_core::v1::business_hook::BusinessHookMetadata {
+    vulcan_session_core::v1::business_hook::BusinessHookMetadata {
+        version: 1,
+        binding: Some(binding.clone()),
+        observed_inputs: Vec::new(),
+    }
 }
