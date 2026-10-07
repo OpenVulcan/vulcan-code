@@ -76,6 +76,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_media_understanding_selection",
     "service_save_public_ai_provider_extension_target_set",
     "service_test_public_ai_provider_tool",
+    "service_list_provider_tasks",
+    "service_cancel_provider_task",
     "service_save_public_ai_provider_tool_capability_enabled",
     "service_public_ai_session_provider_tool_selections",
     "service_save_public_ai_session_provider_tool_selections",
@@ -541,6 +543,15 @@ pub(super) async fn dispatch(
         "service_test_public_ai_provider_tool" => rpc_json_result(
             service_test_public_ai_provider_tool(state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_list_provider_tasks" => rpc_json_result(service_list_provider_tasks(state)),
+        "service_cancel_provider_task" => rpc_json_result(
+            service_cancel_provider_task(
+                state,
+                rpc_required_param(params, "executionId")?,
+                rpc_optional_param(params, "ownerSessionId")?,
+            )
+            .await,
         ),
         "service_save_public_ai_provider_tool_capability_enabled" => rpc_json_result(
             service_save_public_ai_provider_tool_capability_enabled(

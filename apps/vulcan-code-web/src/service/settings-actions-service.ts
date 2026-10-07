@@ -32,6 +32,7 @@ import type {
   PublicAiOAuthCommitRequest,
   PublicAiOAuthStartRequest,
   PublicAiOAuthTransaction,
+  ProviderTaskSummary,
   PublicAiSettingsSnapshot,
   ProviderManifestStatus,
   ProviderManifestCandidatePreview,
@@ -596,6 +597,26 @@ export async function testPublicAiProviderTool(request: {
     "service_test_public_ai_provider_tool",
     { request },
   );
+}
+
+// listProviderTasks reads every retained provider asynchronous task, newest first.
+// listProviderTasks 读取全部保留的供应商异步任务，最新的在前。
+export async function listProviderTasks(): Promise<ProviderTaskSummary[]> {
+  return serviceClient.request<ProviderTaskSummary[]>("service_list_provider_tasks", {});
+}
+
+// cancelProviderTask asks the provider to cancel one task by its stable identity.
+// cancelProviderTask 按稳定标识请求供应商取消一个任务。
+export async function cancelProviderTask(task: {
+  executionId: string;
+  // ownerSessionId repeats the owner shown in the list so a stale view cannot cancel a task that changed hands.
+  // ownerSessionId 重复列表中显示的所有者，使过期视图无法取消已易主的任务。
+  ownerSessionId: string | null;
+}): Promise<ProviderTaskSummary> {
+  return serviceClient.request<ProviderTaskSummary>("service_cancel_provider_task", {
+    executionId: task.executionId,
+    ownerSessionId: task.ownerSessionId,
+  });
 }
 
 // savePublicAiProviderToolCapabilityEnabled changes one system-level capability switch.

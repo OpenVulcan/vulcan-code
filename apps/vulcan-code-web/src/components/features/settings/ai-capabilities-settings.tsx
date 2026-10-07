@@ -21,6 +21,7 @@ import type {
 
 import { PageTabs } from "@/components/workspace/workspace-directory-layout";
 
+import { ProviderTasksPanel } from "./provider-tasks-panel";
 import { ProviderToolSelectionSettingsArea } from "./provider-tool-selection-settings";
 
 // AiCapabilityDefinition binds one capability to its existing localized label and description keys.
@@ -68,6 +69,14 @@ const AI_CAPABILITY_TABS: Array<{ id: ProviderToolCapabilityGroupId; labelKey: A
     }),
   }));
 
+// PROVIDER_TASKS_TAB is the page tab listing retained provider asynchronous tasks after the capability groups.
+// PROVIDER_TASKS_TAB 是排在能力分组之后、列出保留供应商异步任务的页面标签。
+const PROVIDER_TASKS_TAB = "tasks";
+
+// AiCapabilitiesTabId is either one capability group or the provider task list.
+// AiCapabilitiesTabId 是某个能力分组或供应商任务列表。
+type AiCapabilitiesTabId = ProviderToolCapabilityGroupId | typeof PROVIDER_TASKS_TAB;
+
 // AiCapabilitySummary is the read-only state one overview row shows.
 // AiCapabilitySummary 是单个概览行展示的只读状态。
 interface AiCapabilitySummary {
@@ -94,7 +103,7 @@ export function AiCapabilitiesSettingsArea(props: {
   // reloadVersion refreshes the overview after the drawer, which owns its own snapshot, closes.
   // reloadVersion 在拥有独立快照的抽屉关闭后刷新概览。
   const [reloadVersion, setReloadVersion] = React.useState(0);
-  const [activeTab, setActiveTab] = React.useState<ProviderToolCapabilityGroupId>(() => (
+  const [activeTab, setActiveTab] = React.useState<AiCapabilitiesTabId>(() => (
     AI_CAPABILITY_TABS.find((tab) => tab.items.some((item) => item.capability === props.initialCapability))?.id ?? "search"
   ));
   // editing is the capability whose full editor is open in the drawer.
@@ -127,15 +136,23 @@ export function AiCapabilitiesSettingsArea(props: {
       <PageTabs
         ariaLabel={t("settings.aiCapabilities")}
         onValueChange={setActiveTab}
-        options={AI_CAPABILITY_TABS.map((tab) => ({
-          value: tab.id,
-          label: t(tab.labelKey),
-          count: `${snapshot ? tab.items.filter((item) => summarizeCapability(snapshot, item.capability, t).enabled).length : "–"}/${tab.items.length}`,
-        }))}
+        options={[
+          ...AI_CAPABILITY_TABS.map((tab) => ({
+            value: tab.id as AiCapabilitiesTabId,
+            label: t(tab.labelKey),
+            count: `${snapshot ? tab.items.filter((item) => summarizeCapability(snapshot, item.capability, t).enabled).length : "–"}/${tab.items.length}`,
+          })),
+          { value: PROVIDER_TASKS_TAB, label: t("settings.providerTasks.tab") },
+        ]}
         value={activeTab}
       />
-      <div className="ai-capabilities-panel" key={currentTab.id}>
-        {error && !snapshot ? (
+      <div className="ai-capabilities-panel" key={activeTab}>
+        {activeTab === PROVIDER_TASKS_TAB ? (
+          <ProviderTasksPanel capabilityLabel={(capability) => {
+            const labelKey = AI_CAPABILITY_DEFINITIONS[capability]?.labelKey;
+            return labelKey ? t(labelKey) : capability;
+          }} />
+        ) : error && !snapshot ? (
           <div className="ai-capabilities-message" role="alert">
             <p className="settings-error-text">{error}</p>
             <Button onClick={() => setReloadVersion((value) => value + 1)} size="sm" type="button" variant="outline">

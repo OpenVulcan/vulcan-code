@@ -15,6 +15,7 @@ mod model_selection;
 mod model_settings;
 mod oauth;
 mod provider_synchronization;
+mod provider_tasks;
 mod provider_tools;
 mod publication;
 mod session_tools;
@@ -213,6 +214,7 @@ pub(super) use provider_synchronization::{
     service_rollback_provider_manifest, service_sync_provider_manifest,
     service_sync_provider_manifests,
 };
+pub(super) use provider_tasks::{service_cancel_provider_task, service_list_provider_tasks};
 // Preserve provider-tool request paths when RPC dispatch infers their contracts.
 // RPC 分发推导契约时保留供应商工具请求路径。
 #[expect(

@@ -172,23 +172,15 @@ impl PublicAiRuntime {
         self.provider_tasks.snapshot()
     }
 
-    /// Returns one stable provider-task status snapshot.
-    /// 返回一份稳定供应商任务状态快照。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `execution_id` is the host-owned stable task identifier.
-    /// `execution_id` 是宿主持有的稳定任务标识。
+    /// Returns every retained provider-task record for host status views.
+    /// 返回全部保留的供应商任务记录，供宿主状态视图使用。
     ///
     /// # Returns
     /// 返回值
-    /// The exact retained non-secret record.
-    /// 返回精确保留的非秘密记录。
-    pub fn provider_task_status(
-        &self,
-        execution_id: &str,
-    ) -> Result<ProviderAsyncTaskRecord, String> {
-        self.provider_tasks.require(execution_id)
+    /// One immutable snapshot of the non-secret task store.
+    /// 返回非秘密任务存储的一份不可变快照。
+    pub fn provider_task_records(&self) -> Result<Vec<ProviderAsyncTaskRecord>, String> {
+        self.provider_tasks.snapshot()
     }
 
     /// Performs one recovery observation for every active retained provider task.

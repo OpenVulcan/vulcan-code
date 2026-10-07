@@ -1497,6 +1497,45 @@ export interface PublicAiOAuthTransaction {
   message?: string;
 }
 
+// ProviderTaskPhase mirrors the durable lifecycle phase of one provider asynchronous task.
+// ProviderTaskPhase 镜像单个供应商异步任务的持久生命周期阶段。
+export type ProviderTaskPhase =
+  | "dispatching"
+  | "queued"
+  | "running"
+  | "cancellation_requested"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "dispatch_outcome_unknown";
+
+// ProviderTaskSummary is the non-secret status of one retained provider asynchronous task.
+// ProviderTaskSummary 是单个保留供应商异步任务的非秘密状态。
+export interface ProviderTaskSummary {
+  // Stable task identity used by status and cancellation calls.
+  // 状态查询与取消调用使用的稳定任务标识。
+  executionId: string;
+  ownerSessionId: string | null;
+  capability: PublicAiProviderToolCapabilityKind | null;
+  targetDisplayName: string | null;
+  providerId: string;
+  connectionId: string;
+  targetId: string;
+  phase: ProviderTaskPhase;
+  // Whether the phase can no longer change.
+  // 该阶段是否已不会再变化。
+  terminal: boolean;
+  cancellationSupported: boolean;
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
+  deadlineUnixMs: number;
+  consecutiveObservationFailures: number;
+  error: string | null;
+  // Whether the service process still holds the completed provider result.
+  // 服务进程是否仍持有已完成的供应商结果。
+  resultAvailable: boolean;
+}
+
 // PublicAiOAuthChallenge carries the external authorization URL and transaction state.
 // PublicAiOAuthChallenge 承载外部授权 URL 与事务状态。
 export interface PublicAiOAuthChallenge {
