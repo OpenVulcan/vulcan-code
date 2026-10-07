@@ -78,8 +78,8 @@ pub struct DirEntry {
     pub size: Option<u64>,
 }
 
-/// `service_list_directory` result: the listed path, its parent and children, plus filesystem roots.
-/// `service_list_directory` 结果：所列路径、其父目录与子项，以及文件系统根。
+/// Directory listing from `service_browse_project_directories` or the local attachment listing: the path, its parent and children, plus filesystem roots.
+/// 来自 `service_browse_project_directories` 或本地附件列表的目录列表：所列路径、其父目录与子项，以及文件系统根。
 #[derive(Debug, Clone)]
 pub struct DirectoryListing {
     pub path: String,
