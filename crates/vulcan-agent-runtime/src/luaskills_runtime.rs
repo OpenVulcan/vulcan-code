@@ -85,7 +85,7 @@ where
         tokio::select! {
             permit = &mut permit_future => {
                 break permit.map_err(|_| format!(
-                    "LuaSkills 调用 `{operation_label}` 的宿主入场器已关闭。"
+                    "LuaSkills host admission for `{operation_label}` is closed"
                 ))?;
             }
             _ = tokio::time::sleep(next_diagnostic_delay) => {
@@ -122,15 +122,15 @@ where
                 } else if let Some(message) = panic_payload.downcast_ref::<&'static str>() {
                     (*message).to_string()
                 } else {
-                    String::from("未知 panic")
+                    String::from("unknown panic")
                 };
-                format!("LuaSkills 阻塞线程执行失败：{panic_message}")
+                format!("LuaSkills blocking worker panicked: {panic_message}")
             })
             .and_then(|value| value);
             worker_stage.store(3, Ordering::Release);
             let _ = sender.send(result);
         })
-        .map_err(|error| format!("启动 LuaSkills 阻塞线程失败：{error}"))?;
+        .map_err(|error| format!("failed to start LuaSkills blocking worker: {error}"))?;
 
     // receiver remains pinned to the same worker result while diagnostics wake independently.
     // receiver 在诊断独立唤醒期间始终绑定同一工作线程结果。
@@ -142,7 +142,7 @@ where
         tokio::select! {
             result = &mut receiver => {
                 return result
-                    .map_err(|_| format!("LuaSkills 阻塞线程 `{thread_name}` 意外断开。"))?;
+                    .map_err(|_| format!("LuaSkills blocking worker `{thread_name}` disconnected unexpectedly"))?;
             }
             _ = tokio::time::sleep(next_diagnostic_delay) => {
                 let elapsed_ms = started_at.elapsed().as_millis();
@@ -212,7 +212,11 @@ pub fn list_luaskills_tool_entries(
         .tool_entries
         .lock()
         .map(|entries| entries.clone())
-        .map_err(|_| String::from("LuaSkills 工具入口缓存锁已损坏，无法读取工具表。"))
+        .map_err(|_| {
+            String::from(
+                "LuaSkills tool entry cache lock is poisoned; the tool table cannot be read",
+            )
+        })
 }
 
 /// One compact LuaSkills help summary matched to a runtime entry.
@@ -455,10 +459,9 @@ fn build_default_luaskills_budget_snapshot(_tool_name: &str) -> ToolResultBudget
 fn lock_runtime_engine(
     handle: &LuaSkillsRuntimeHandle,
 ) -> Result<std::sync::RwLockReadGuard<'_, LuaEngine>, String> {
-    handle
-        .engine
-        .read()
-        .map_err(|_| String::from("LuaSkills 运行时读锁已损坏，无法读取技能目录。"))
+    handle.engine.read().map_err(|_| {
+        String::from("LuaSkills runtime read lock is poisoned; the skill catalog cannot be read")
+    })
 }
 
 /// Acquire one mutable runtime-engine guard from the shared host handle.
