@@ -845,7 +845,6 @@ pub enum ResponsesWebsocketPolicy {
     Verified,
     /// Enables an advanced user override while retaining unverified telemetry status.
     /// 启用高级用户覆盖，同时在遥测中保留未验证状态。
-    #[serde(alias = "preferred_with_http_fallback")]
     UnverifiedOverride,
 }
 
@@ -2153,20 +2152,5 @@ mod tests {
         assert!(!AccountUsageQueryKind::MiniMaxTokenPlan.requires_management_credential());
         assert!(!AccountUsageQueryKind::CommandCodeUsage.requires_management_credential());
         assert!(!AccountUsageQueryKind::Unsupported.requires_management_credential());
-    }
-
-    /// Verifies the retired preferred-with-fallback value remains explicitly unverified.
-    /// 验证已退役的优先 WS 并允许回退值仍保持显式未验证语义。
-    #[test]
-    fn websocket_policy_reads_legacy_preferred_with_http_fallback() {
-        let policy: ResponsesWebsocketPolicy =
-            serde_json::from_str(r#""preferred_with_http_fallback""#)
-                .expect("legacy websocket policy should deserialize");
-
-        assert_eq!(policy, ResponsesWebsocketPolicy::UnverifiedOverride);
-        assert_eq!(
-            serde_json::to_string(&policy).expect("websocket policy should serialize"),
-            r#""unverified_override""#
-        );
     }
 }
