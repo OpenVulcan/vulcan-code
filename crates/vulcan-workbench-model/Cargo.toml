@@ -21,9 +21,7 @@ vulcan-core.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-session-core.workspace = true
 vulcan-subagent-core.workspace = true
-vulcan-task-session.workspace = true
 vulcan-vmm.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
-tempfile.workspace = true

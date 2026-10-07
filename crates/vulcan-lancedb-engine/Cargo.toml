@@ -20,7 +20,6 @@ vulcan-file-ownership.workspace = true
 futures.workspace = true
 lance.workspace = true
 lancedb.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

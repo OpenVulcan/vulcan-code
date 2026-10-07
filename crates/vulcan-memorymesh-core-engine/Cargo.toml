@@ -16,7 +16,6 @@ serde.workspace = true
 sha2.workspace = true
 vulcan-memorymesh-core-config.workspace = true
 vulcan-memorymesh-core-contracts.workspace = true
-vulcan-memorymesh-core-storage.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]

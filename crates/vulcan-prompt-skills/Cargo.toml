@@ -10,7 +10,6 @@ license.workspace = true
 dirs.workspace = true
 include_dir.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 serde_yaml.workspace = true
 vulcan-runtime-assets.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
