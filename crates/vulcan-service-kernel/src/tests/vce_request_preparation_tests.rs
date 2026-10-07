@@ -17,6 +17,8 @@ use vulcan_workspace_store::vce_data_plane::{VceDataPlaneFactory, VceJobKind, Vc
 /// 状态、控制器和根目录标识隔离宿主；来源选择普通输入或目标续跑输入。
 /// An optional action must already be admitted by the real V1 Continue authority.
 /// 可选动作必须已经由真实 V1 Continue 权威准入。
+/// `vmm_service_ready` is the service-level memory readiness captured at turn admission.
+/// `vmm_service_ready` 是回合准入时捕获的服务级记忆就绪状态。
 /// Returns the production request after hook completion, V1 projection and exact-generation publication.
 /// 返回完成 Hook、V1 投影及精确代际发布后的生产请求。
 async fn prepare_request(
@@ -25,6 +27,7 @@ async fn prepare_request(
     root: &str,
     source: PendingSessionPromptSource,
     continuation_action_id: Option<ClientActionId>,
+    vmm_service_ready: bool,
 ) -> ExecutionPreparationRequest {
     // Retain the exact bridge and session; no global model or project selection is substituted.
     // 保留精确桥接与会话，不替换全局模型或项目选择。
@@ -73,7 +76,7 @@ async fn prepare_request(
                 append_canonical_user_message: source.persists_canonical_user_message(),
                 append_visible_user_prompt_record: source.appends_visible_user_prompt_record(),
                 source,
-                vmm_runtime_ready: false,
+                vmm_runtime_ready: vmm_service_ready,
                 vmm_precheck_ready: false,
                 execution_mode: String::from("agent"),
                 reasoning_effort: None,
@@ -367,6 +370,7 @@ fn real_host_storage_prompt_preparation_obeys_vce_prerequisites() {
                             &source.display().to_string(),
                             source_kind,
                             None,
+                            false,
                         )
                         .await;
                         assert_eq!(request.project_id.as_deref(), Some(project.id.as_str()));
@@ -460,6 +464,7 @@ fn real_host_storage_prompt_preparation_obeys_vce_prerequisites() {
                         &source.display().to_string(),
                         source_kind,
                         None,
+                        false,
                     )
                     .await;
                     assert!(
@@ -530,6 +535,7 @@ fn real_host_storage_prompt_preparation_obeys_vce_prerequisites() {
                         &source.display().to_string(),
                         PendingSessionPromptSource::ExecutionRetry,
                         Some(action.clone()),
+                        false,
                     )
                     .await;
                     assert_eq!(request.continuation_action_id.as_ref(), Some(&action));
@@ -585,5 +591,88 @@ fn real_host_storage_prompt_preparation_obeys_vce_prerequisites() {
         if let Err(panic) = outer {
             std::panic::resume_unwind(panic);
         }
+    });
+}
+
+/// Verify a ready memory service does not demand a VMM context epoch from a project whose memory is off.
+/// 验证记忆服务就绪时，不会向关闭记忆的项目要求 VMM 上下文纪元。
+/// No input; the private host keeps memory disabled for the project while the service reports ready.
+/// 无输入；私有宿主在服务报告就绪时保持项目记忆关闭。
+#[test]
+fn a_ready_memory_service_prepares_without_vmm_for_a_project_with_memory_off() {
+    // Bound asynchronous work independently of a running user service.
+    // 独立于正在运行的用户服务约束异步工作。
+    let executor = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("private request executor");
+    // Reuse the production-shaped registered inference fixture without accessing credentials.
+    // 复用生产形态已注册推理夹具，不访问凭据。
+    let (state, _runtime, _valid) = configured_state();
+    let session_id = state
+        .lock()
+        .expect("state")
+        .workspace_snapshot
+        .as_ref()
+        .expect("workspace")
+        .selected_session;
+    let storage = TestHostRuntimeRoot::new(session_id);
+    executor.block_on(async {
+        let controller = storage.attached_host_runtime_handle().await;
+        let loaded = vulcan_workspace_store::workspace_store::load_session_v1_full(
+            &storage.v1_storage_locator(),
+        )
+        .expect("private V1 session");
+        let handle = crate::session_runtime_registry_v1::SessionHandle::new(
+            session_id,
+            storage.v1_storage_locator(),
+            loaded.document,
+        );
+        let root = storage.data_root().join("memory-off-project");
+        // The project identity matches actual V1 metadata; its memory settings stay at the disabled default.
+        // 项目身份匹配真实 V1 元数据；其记忆设置保持默认关闭。
+        let project = vulcan_workbench_model::TaskProjectSummary::new(
+            "v1-test-project",
+            "Memory-off project",
+            root.display().to_string(),
+            false,
+            0,
+            None,
+            None,
+            vec![session_id],
+        );
+        {
+            let mut guard = state.lock().expect("state");
+            guard.controller_runtime = Some(controller.clone());
+            guard
+                .session_runtime_registry
+                .register(handle)
+                .expect("register V1 owner");
+            let workspace = guard.workspace_snapshot.as_mut().expect("workspace");
+            workspace.sessions[0].project_id = Some(project.id.clone());
+            workspace.task_projects = vec![project];
+        }
+        // The service-level readiness is true, but the project's effective memory stays disabled.
+        // 服务级就绪为 true，但项目的生效记忆保持关闭。
+        let request = prepare_request(
+            &state,
+            &controller,
+            &root.display().to_string(),
+            PendingSessionPromptSource::UserFollowup,
+            None,
+            true,
+        )
+        .await;
+        assert!(!request.vmm_runtime_ready);
+        assert!(
+            state
+                .lock()
+                .expect("state")
+                .vmm_controller_registry
+                .snapshots()
+                .expect("memory registry")
+                .is_empty()
+        );
     });
 }

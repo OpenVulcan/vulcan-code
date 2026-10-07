@@ -448,6 +448,12 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
     let vmm_domain_active = vulcan_vmm::VmmRuntimeFeaturePolicy::from_env().session_state_enabled
         && start.vmm_runtime_ready
         && effective_vmm_enabled;
+    // The continuation consumes this admitted domain fact instead of raw service readiness, so a
+    // project that turns its memory off continues without VMM state rather than demanding an epoch.
+    // 续接消费这一已准入的领域事实而非原始服务就绪状态，使关闭记忆的项目不带 VMM 状态继续，而不是要求上下文纪元。
+    let vmm_service_ready = start.vmm_runtime_ready;
+    let mut start = start;
+    start.vmm_runtime_ready = vmm_domain_active;
     if vmm_domain_active
         && effective_vmm_backend == vulcan_vmm::VmmBackendMode::Native
         && native_publication.is_none()
@@ -668,8 +674,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         webui_trace(
             "precheck_continue_vmm_bypassed",
             format!(
-                "session={session_id} service_ready={} effective_enabled={effective_vmm_enabled}",
-                replay_continuation_input.start.vmm_runtime_ready
+                "session={session_id} service_ready={vmm_service_ready} effective_enabled={effective_vmm_enabled}"
             ),
         );
         let mut inactive_vmm_state = vulcan_vmm::VmmSessionMemoryState::default();
