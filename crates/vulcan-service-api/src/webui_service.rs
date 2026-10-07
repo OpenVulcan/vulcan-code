@@ -64,7 +64,18 @@ pub fn webui_service_token_from_query(query: &str) -> Option<String> {
 /// `true` when both token strings are exactly equal after trimming request whitespace.
 /// 当两个令牌字符串在裁剪请求空白后完全一致时返回 `true`。
 pub fn webui_service_token_matches(actual: &str, expected: &str) -> bool {
-    actual.trim() == expected
+    let actual = actual.trim().as_bytes();
+    let expected = expected.as_bytes();
+    // Every byte is folded, so the comparison time does not reveal how long a matching prefix is.
+    // 折叠每一个字节，使比较耗时不会泄露匹配前缀的长度。
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
 }
 
 /// Resolves candidate browser-facing local service ports from an optional override value.
@@ -151,5 +162,26 @@ fn hex_digit_value(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::webui_service_token_matches;
+
+    /// Token matching accepts only the exact token, ignoring request whitespace.
+    /// 令牌匹配只接受精确令牌，并忽略请求空白。
+    #[test]
+    fn token_matching_accepts_only_the_exact_token() {
+        assert!(webui_service_token_matches(
+            " secret-token\n",
+            "secret-token"
+        ));
+        for candidate in ["secret-toke", "secret-token-", "secret-tokEn", ""] {
+            assert!(
+                !webui_service_token_matches(candidate, "secret-token"),
+                "{candidate:?}"
+            );
+        }
     }
 }
