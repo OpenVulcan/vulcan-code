@@ -33,6 +33,9 @@ vulcan-service-api.workspace = true
 vulcan-session-core.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
+[target.'cfg(windows)'.dependencies]
+crossterm_winapi.workspace = true
+
 [dev-dependencies]
 regex.workspace = true
 

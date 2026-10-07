@@ -184,6 +184,9 @@ reqwest = { version = "0.13.4", default-features = false, features = ["form", "j
 # TUI 客户端的终端界面栈。
 ratatui = "0.30.2"
 ratatui-textarea = "0.9.2"
+# Writes TUI frames to the client's own Windows console, matching the version crossterm uses.
+# 将 TUI 画面写入客户端自身的 Windows 控制台，版本与 crossterm 所用一致。
+crossterm_winapi = "0.9.1"
 regex = "1.13.1"
 regex-syntax = "0.8.8"
 rmcp = { version = "3.1", default-features = false }

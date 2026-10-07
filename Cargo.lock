@@ -9678,6 +9678,7 @@ name = "vulcan-code-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossterm_winapi",
  "ratatui",
  "ratatui-textarea",
  "regex",

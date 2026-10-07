@@ -1,22 +1,20 @@
 // `vulcan-tui [--backend service|mock] [--service-root <dir>] [--locale <tag>] [--theme dark|light]`
 //
 // Runs the TUI against the running Vulcan Code service (default) or the scripted mock backend.
-// The terminal is restored on exit and on panic (`ratatui::init` installs the panic hook).
+// The terminal is restored on exit and on panic (`console::init` installs the panic hook).
 // 连接运行中的 Vulcan Code 服务（默认）或脚本化模拟后端运行 TUI。退出与 panic 时都会恢复终端
-// （`ratatui::init` 会安装 panic 钩子）。
+// （`console::init` 会安装 panic 钩子）。
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::app::{App, composer, input};
 use crate::backend::{BackendHandle, mock, service};
+use crate::console::{self, ConsoleTerminal};
 use crate::i18n;
 use crate::ui::{self, theme::Theme};
 use anyhow::{Result, bail};
-use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-};
-use ratatui::crossterm::execute;
+use ratatui::crossterm::event;
 
 /// Frame budget while something animates; idle frames wait for input or backend events.
 /// 有动画时的帧间隔；空闲时等待输入或后端事件。
@@ -104,19 +102,13 @@ fn run() -> Result<()> {
     };
     let mut app = App::new(backend, args.theme, args.locale.is_some());
 
-    let mut terminal = ratatui::init();
-    execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste)?;
+    let mut terminal = console::init()?;
     let result = event_loop(&mut terminal, &mut app);
-    let _ = execute!(
-        std::io::stdout(),
-        DisableMouseCapture,
-        DisableBracketedPaste
-    );
-    ratatui::restore();
+    console::restore();
     result
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+fn event_loop(terminal: &mut ConsoleTerminal, app: &mut App) -> Result<()> {
     let mut dirty = true;
     loop {
         while let Ok(event) = app.backend.events.try_recv() {

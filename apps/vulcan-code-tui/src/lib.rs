@@ -9,6 +9,7 @@
 mod app;
 mod backend;
 mod cli;
+mod console;
 mod i18n;
 mod model;
 mod service_api;
