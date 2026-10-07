@@ -305,7 +305,9 @@ fn runtime_shutdown_does_not_fabricate_a_completed_close() {
 /// 生命周期所有权跨越生产观测超时，并取得真正的最终结果。
 /// No inputs or return value; verifies late success and late failure without restarting cleanup.
 /// 无输入与返回值；验证迟到成功及迟到失败，不重新启动清理。
-#[tokio::test]
+/// Paused time expires the production observation window as soon as every task is idle, without wall-clock waiting.
+/// 暂停时间在所有任务空闲时立即使生产观测窗口到期，无需等待真实时间。
+#[tokio::test(start_paused = true)]
 async fn final_close_wait_survives_the_standard_observation_deadline() {
     for failed in [false, true] {
         // The gate remains closed throughout the original five-second observation window.

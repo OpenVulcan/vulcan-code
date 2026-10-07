@@ -2311,7 +2311,9 @@ fn wait_agent_parent_interruption_notification_reports_poisoned_registry() {
 
 /// Verifies wait_agent still times out for a genuinely running child that emits no mailbox event.
 /// 验证真实运行中的子代理没有产生 mailbox 事件时，wait_agent 仍会正常超时。
-#[tokio::test]
+/// Paused time advances to the deadline once the waiter is idle, so the shortest accepted wait costs no wall time.
+/// 暂停时间在等待方空闲时推进到截止时间，因此最短可接受等待不耗费真实时间。
+#[tokio::test(start_paused = true)]
 async fn wait_agent_times_out_without_mailbox_event() {
     let task_runtime = TaskRuntime::new();
     let root_session_id = Uuid::new_v4();
@@ -2321,7 +2323,10 @@ async fn wait_agent_times_out_without_mailbox_event() {
         store_running_wait_agent_child(&task_runtime, root_session_id, "timeout-target");
 
     let result = task_runtime
-        .invoke_wait_agent(root_session_id, json!({ "timeout_ms": 10_000 }))
+        .invoke_wait_agent(
+            root_session_id,
+            json!({ "timeout_ms": WAIT_AGENT_MIN_TIMEOUT_MS }),
+        )
         .await
         .expect("wait_agent should return timeout summary");
 
