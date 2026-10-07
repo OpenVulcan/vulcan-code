@@ -325,6 +325,29 @@ pub(crate) fn registered_session_v1_handle_from_state(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         Arc::clone(&guard.session_runtime_registry)
     };
+    registered_session_v1_handle(&registry, session_id)
+}
+
+/// Returns the already-hydrated V1 session handle from a registry the caller already owns.
+/// 从调用方已持有的注册表返回已完成 hydration 的 V1 会话句柄。
+///
+/// Callers that run while holding another lock use this form so the lookup never waits on the
+/// service state lock.
+/// 在持有其他锁时运行的调用方使用此形式，使查找永不等待服务状态锁。
+///
+/// # Parameters
+/// 参数
+/// `registry` is the process session registry and `session_id` selects the exact registered session.
+/// `registry` 是进程会话注册表，`session_id` 选择精确的已注册会话。
+///
+/// # Returns
+/// 返回值
+/// Returns the unique registered handle, or an explicit lifecycle-ordering failure.
+/// 返回唯一已注册句柄；生命周期顺序错误时返回显式失败。
+pub(crate) fn registered_session_v1_handle(
+    registry: &crate::session_runtime_registry_v1::SessionRuntimeRegistry,
+    session_id: SessionId,
+) -> Result<Arc<SessionHandle>, String> {
     registry
         .get(session_id)
         .map_err(|error| format!("V1 会话 `{session_id}` 尚未完成精确 hydration：{error}"))

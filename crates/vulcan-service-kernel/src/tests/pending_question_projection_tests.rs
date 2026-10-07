@@ -425,3 +425,66 @@ fn plan_confirmation_projection_publishes_once_to_every_client_sink() {
             .is_none()
     );
 }
+
+/// Verifies the production Ask durability bridge never waits on the service state lock.
+/// 验证生产 Ask 可靠性桥接永不等待服务状态锁。
+///
+/// Reply and rejection run the durability callback while holding the pending-question lock, and
+/// workbench projections read pending questions while holding the service state lock, so a
+/// callback that takes the state lock can deadlock against a concurrent projection.
+/// 回答与拒绝在持有待回答问题锁时运行可靠性回调，而工作台投影在持有服务状态锁时读取待回答
+/// 问题；回调若获取状态锁，就可能与并发投影互相死锁。
+#[test]
+fn ask_durability_bridge_does_not_wait_on_service_state_lock() {
+    let mut service_state = test_service_state_with_parent_session(SessionId::new_v4());
+    let agent_runtime = test_agent_runtime_bridge();
+    let question_runtime = Arc::clone(&agent_runtime.question_runtime);
+    service_state.agent_runtime = Some(agent_runtime);
+    let state = Arc::new(Mutex::new(service_state));
+    install_webui_question_runtime_event_bridge(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        &question_runtime,
+    )
+    .expect("question projection bridge should install");
+
+    // stateGuard stands in for a projection that holds the service state lock.
+    // stateGuard 模拟持有服务状态锁的投影。
+    let state_guard = state.lock().expect("service state should lock");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // askThread registers an Ask for a session the registry has never hydrated, so the durable
+    // WaitingUser commit fails as soon as it consults the registry.
+    // askThread 为注册表从未 hydration 的会话注册 Ask，使可靠 WaitingUser 提交一查询注册表即失败。
+    let ask_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("ask runtime should build");
+        let result = runtime.block_on(question_runtime.ask(
+            SessionId::new_v4(),
+            RequestStreamId::try_new("lock-order-stream").expect("request-stream identity"),
+            ApiCallId::try_new(1).expect("API id should be valid"),
+            ToolCallId::try_new(1).expect("tool id should be valid"),
+            String::from("controller-lock-order"),
+            None,
+            String::from("ask"),
+            serde_json::json!({"questions": []}),
+            vec![QuestionPrompt {
+                question: String::from("Proceed?"),
+                header: String::from("Confirm"),
+                options: Vec::new(),
+                multiple: Some(false),
+            }],
+        ));
+        let _ = sender.send(result);
+    });
+
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("Ask durability must settle without the service state lock");
+    drop(state_guard);
+    ask_thread.join().expect("ask thread should join");
+    assert!(
+        result.is_err(),
+        "an unhydrated session must reject the durable WaitingUser commit"
+    );
+}

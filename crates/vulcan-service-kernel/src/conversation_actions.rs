@@ -164,7 +164,17 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
     state: &SharedServiceBridgeState,
     question_runtime: &Arc<QuestionRuntime>,
 ) -> Result<(), String> {
-    let durability_state = Arc::clone(state);
+    // registry is captured once because reply and rejection invoke the durability callback while
+    // holding the pending-question lock, and workbench projections read pending questions while
+    // holding the service state lock; taking the state lock here would invert that order.
+    // registry 只捕获一次：回答与拒绝在持有待回答问题锁时调用可靠性回调，而工作台投影在持有
+    // 服务状态锁时读取待回答问题；在此获取状态锁会反转该加锁顺序。
+    let registry = Arc::clone(
+        &state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .session_runtime_registry,
+    );
     // durabilityCallback is the only bridge allowed to advance an Ask tool before process-local visibility or resumption.
     // durabilityCallback 是在进程内可见或恢复前推进 Ask 工具的唯一桥接。
     let durability_callback: PendingQuestionDurabilityCallback = Arc::new(move |action| {
@@ -173,10 +183,8 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
             | PendingQuestionDurabilityAction::Answered { request, .. }
             | PendingQuestionDurabilityAction::Cancelled { request, .. } => request.session_id,
         };
-        let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
-            &durability_state,
-            session_id,
-        )?;
+        let handle =
+            crate::session_goal_lifecycle::registered_session_v1_handle(&registry, session_id)?;
         let now_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
         match action {
             PendingQuestionDurabilityAction::Waiting { request } => handle
