@@ -128,6 +128,11 @@ arrow-ipc = "58.1.0"
 arrow-schema = "58.1.0"
 fs4 = "1.1.0"
 jieba-rs = "0.10.3"
+# Only local paths are opened, but lancedb 0.38.0 fails to compile without `remote`: its job
+# module names `Error::Http`, a variant that exists only under that feature. Drop it once
+# upstream gates that code; it also pulls in the duplicate axum 0.7 stack.
+# 只打开本地路径，但 lancedb 0.38.0 在未启用 `remote` 时无法编译：其 job 模块引用了仅在该
+# 特性下存在的 `Error::Http` 变体。待上游为该代码加上门控后移除；它同时引入了重复的 axum 0.7 依赖栈。
 lancedb = { version = "0.38.0", features = ["remote"] }
 # The native compaction planner is reachable only through lance itself; it stays on the exact
 # generation lancedb pins and adds no features of its own.
