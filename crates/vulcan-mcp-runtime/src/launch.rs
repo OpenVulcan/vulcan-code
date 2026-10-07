@@ -117,7 +117,7 @@ impl McpTransportLaunchSpec {
                 headers,
                 oauth,
             } => {
-                let auth_session = resolve_auth_session(&uri, oauth, shared_auth_session).await?;
+                let auth_session = resolve_auth_session(&uri, oauth, shared_auth_session)?;
                 let transport = HttpTransport::connect_with_resources(
                     endpoint,
                     uri,
@@ -136,7 +136,7 @@ impl McpTransportLaunchSpec {
                 headers,
                 oauth,
             } => {
-                let auth_session = resolve_auth_session(&uri, oauth, shared_auth_session).await?;
+                let auth_session = resolve_auth_session(&uri, oauth, shared_auth_session)?;
                 let transport = SseTransport::connect_with_resources(
                     endpoint,
                     uri,
@@ -165,19 +165,20 @@ impl McpTransportLaunchSpec {
     }
 }
 
-/// Resolves the effective shared OAuth session by preferring the caller-provided long-lived session and lazily creating one from launch metadata when necessary.
-/// 通过优先使用调用方提供的长期 OAuth 会话，并在需要时根据启动元数据惰性创建新会话，解析生效的共享 OAuth 会话。
-async fn resolve_auth_session(
+/// Requires the host-provided OAuth session for OAuth-enabled transports.
+/// 要求启用 OAuth 的传输使用宿主提供的 OAuth 会话。
+///
+/// A per-launch session would hold tokens nobody else can observe or persist, so its absence is an error.
+/// 每次启动临时创建的会话持有的令牌无人可观察或持久化，因此缺少会话视为错误。
+fn resolve_auth_session(
     uri: &str,
     oauth: Option<McpTransportOAuthSpec>,
     shared_auth_session: Option<Arc<McpOAuthSession>>,
 ) -> Result<Option<Arc<McpOAuthSession>>, McpRuntimeError> {
-    if let Some(auth_session) = shared_auth_session {
-        return Ok(Some(auth_session));
-    }
-
-    match oauth {
-        Some(spec) => Ok(Some(Arc::new(McpOAuthSession::new(uri, spec).await?))),
-        None => Ok(None),
+    match (oauth, shared_auth_session) {
+        (Some(_), None) => Err(McpRuntimeError::invalid_argument(format!(
+            "mcp.oauth.session-missing: OAuth-enabled MCP transport `{uri}` was launched without its host OAuth session"
+        ))),
+        (_, session) => Ok(session),
     }
 }

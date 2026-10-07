@@ -49,6 +49,9 @@ pub enum McpRuntimeServerStatus {
     /// Server is enabled and currently attempting to establish a transport connection.
     /// 服务器已启用，当前正在尝试建立传输连接。
     Connecting,
+    /// Server requires OAuth and waits for the user to authorize before connecting.
+    /// 服务器需要 OAuth，在连接前等待用户授权。
+    AwaitingAuthorization,
     /// Server is enabled and currently has an active transport connection.
     /// 服务器已启用，当前拥有活动传输连接。
     Connected,
@@ -73,6 +76,7 @@ impl McpRuntimeServerStatus {
         match self {
             Self::Disabled => "禁用",
             Self::Connecting => "连接中",
+            Self::AwaitingAuthorization => "等待授权",
             Self::Connected => "在线",
             Self::Disconnected => "离线",
             Self::Failed => "失败",
@@ -230,7 +234,10 @@ impl McpRuntimeServerSnapshot {
                     &self.cached_tools
                 }
             }
+            // Awaiting authorization is not a transient blip, so cached tools are not kept visible.
+            // 等待授权不是瞬时中断，因此不保留缓存工具的可见性。
             McpRuntimeServerStatus::Disabled
+            | McpRuntimeServerStatus::AwaitingAuthorization
             | McpRuntimeServerStatus::Failed
             | McpRuntimeServerStatus::Stopping
             | McpRuntimeServerStatus::Stopped => &self.tools,
@@ -316,6 +323,9 @@ impl McpRuntimeServerDiagnostic {
             }
             McpRuntimeServerStatus::Connecting => {
                 format!("MCP 服务器连接中 · {}", self.server_name())
+            }
+            McpRuntimeServerStatus::AwaitingAuthorization => {
+                format!("MCP 服务器等待授权 · {}", self.server_name())
             }
             McpRuntimeServerStatus::Connected => {
                 format!("MCP 服务器在线 · {}", self.server_name())

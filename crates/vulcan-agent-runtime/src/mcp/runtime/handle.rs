@@ -283,6 +283,8 @@ pub(super) fn prepare_published_mcp_runtime(
 mod release_barrier_tests;
 #[cfg(test)]
 mod remote_release_tests;
+#[cfg(test)]
+mod oauth_gate_tests;
 
 /// Host-owned timeout for optional MCP prompt and resource discovery requests.
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。
@@ -730,35 +732,21 @@ impl McpRuntimeHandle {
         self.inner.registry.server_by_id(server_id).cloned()
     }
 
-    /// Resolves or lazily creates one reusable OAuth session for the target configured remote MCP server.
-    /// 为目标已配置远端 MCP 服务器解析或延迟创建一个可复用 OAuth 会话。
-    async fn auth_session_for_server(
+    /// Returns the OAuth session shared with the server's connection task, creating it on first use.
+    /// 返回与服务器连接任务共享的 OAuth 会话，首次使用时创建。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `None` when the server has no OAuth configuration; an error for an unknown server.
+    /// 服务器未配置 OAuth 时返回 `None`；未知服务器返回错误。
+    pub(super) async fn auth_session_for_server(
         &self,
         server_id: &str,
     ) -> Result<Option<Arc<McpOAuthSession>>, String> {
-        if let Some(session) = self
-            .inner
-            .auth_sessions
-            .read()
-            .await
-            .get(server_id)
-            .cloned()
-        {
-            return Ok(Some(session));
-        }
-
         let Some(server) = self.server_config(server_id) else {
-            return Err(format!("未找到 MCP 服务器 `{server_id}`。"));
+            return Err(format!("mcp_server_not_found: no MCP server `{server_id}`"));
         };
-        let Some(session) = build_server_auth_session(&server).await? else {
-            return Ok(None);
-        };
-        self.inner
-            .auth_sessions
-            .write()
-            .await
-            .insert(server_id.to_string(), session.clone());
-        Ok(Some(session))
+        server_auth_session(&self.inner, &server).await
     }
 
     /// Returns currently available MCP tool views filtered by one allowlist.
@@ -848,58 +836,6 @@ impl McpRuntimeHandle {
                     descriptor.tool_name(),
                 )
             })
-    }
-
-    /// Returns the current OAuth status label for one configured MCP server.
-    /// 返回单个已配置 MCP 服务器的当前 OAuth 状态标签。
-    pub(super) async fn server_auth_status_label(&self, server_id: &str) -> Result<String, String> {
-        let Some(session) = self.auth_session_for_server(server_id).await? else {
-            return Ok(String::from("未配置 OAuth"));
-        };
-        Ok(session.auth_status().await.label().to_string())
-    }
-
-    /// Starts one host-driven OAuth authorization flow for the target MCP server.
-    /// 为目标 MCP 服务器启动一条宿主驱动的 OAuth 授权流程。
-    pub(super) async fn start_server_auth(
-        &self,
-        server_id: &str,
-        client_name: &str,
-    ) -> Result<McpAuthChallenge, String> {
-        let Some(session) = self.auth_session_for_server(server_id).await? else {
-            return Err(format!("MCP 服务器 `{server_id}` 未配置 OAuth。"));
-        };
-        session
-            .start_authorization(client_name)
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    /// Finishes one host-driven OAuth authorization flow for the target MCP server.
-    /// 为目标 MCP 服务器完成一条宿主驱动的 OAuth 授权流程。
-    pub(super) async fn finish_server_auth(
-        &self,
-        server_id: &str,
-        authorization_code: &str,
-        oauth_state: &str,
-    ) -> Result<McpAuthStatus, String> {
-        let Some(session) = self.auth_session_for_server(server_id).await? else {
-            return Err(format!("MCP 服务器 `{server_id}` 未配置 OAuth。"));
-        };
-        session
-            .finish_authorization(authorization_code, oauth_state)
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    /// Removes every stored OAuth credential retained for the target MCP server.
-    /// 移除目标 MCP 服务器当前保留的全部 OAuth 凭据。
-    pub(super) async fn remove_server_auth(&self, server_id: &str) -> Result<(), String> {
-        let Some(session) = self.auth_session_for_server(server_id).await? else {
-            return Err(format!("MCP 服务器 `{server_id}` 未配置 OAuth。"));
-        };
-        session.remove_authorization().await;
-        Ok(())
     }
 
     /// Requests all background MCP runtime tasks to stop and tear down their transports.
@@ -1474,8 +1410,32 @@ pub fn remove_plugin_mcp_runtime_partition(
     current.without_plugin_partition(plugin_id)
 }
 
-/// Builds one reusable host-owned OAuth session for a configured remote MCP server when the server exposes OAuth metadata.
-/// 当服务器暴露 OAuth 元数据时，为已配置的远端 MCP 服务器构建一个可复用的宿主自有 OAuth 会话。
+/// Returns the server's cached OAuth session, creating and caching it on first use.
+/// 返回服务器缓存的 OAuth 会话，首次使用时创建并缓存。
+///
+/// The connection task and host authorization flows must share one session so a completed
+/// authorization wakes the task waiting on it.
+/// 连接任务与宿主授权流程必须共享同一会话，使完成的授权能唤醒等待它的任务。
+async fn server_auth_session(
+    inner: &McpRuntimeInner,
+    server: &McpServerConfig,
+) -> Result<Option<Arc<McpOAuthSession>>, String> {
+    if let Some(session) = inner.auth_sessions.read().await.get(&server.id).cloned() {
+        return Ok(Some(session));
+    }
+    let mut sessions = inner.auth_sessions.write().await;
+    if let Some(session) = sessions.get(&server.id).cloned() {
+        return Ok(Some(session));
+    }
+    let Some(session) = build_server_auth_session(server).await? else {
+        return Ok(None);
+    };
+    sessions.insert(server.id.clone(), session.clone());
+    Ok(Some(session))
+}
+
+/// Builds one OAuth session for a configured remote server over the process credential backend.
+/// 基于进程凭据后端为已配置远端服务器构建 OAuth 会话。
 async fn build_server_auth_session(
     server: &McpServerConfig,
 ) -> Result<Option<Arc<McpOAuthSession>>, String> {
@@ -1484,14 +1444,19 @@ async fn build_server_auth_session(
     };
     let Some(uri) = server.remote_url().map(str::to_owned) else {
         return Err(format!(
-            "MCP 服务器 `{}` 配置了 OAuth，但缺少远端 URL。",
+            "MCP server `{}` configures OAuth but has no remote URL",
             server.name
         ));
     };
 
-    let session = McpOAuthSession::new(uri, oauth.into())
-        .await
-        .map_err(|error| error.to_string())?;
+    let session = McpOAuthSession::new(
+        server.id.clone(),
+        uri,
+        oauth.into(),
+        crate::mcp::mcp_oauth_credential_backend(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(Some(Arc::new(session)))
 }
 
@@ -1569,7 +1534,7 @@ fn spawn_server_runtime_task(
                 // 清理前离开选择表达式，使取消已销毁完整原会话 future。
                 let auth_session_result = tokio::select! {
                     _ = shutdown_rx.changed() => None,
-                    result = build_server_auth_session(&server) => Some(result),
+                    result = server_auth_session(&inner, &server) => Some(result),
                 };
                 let Some(auth_session_result) = auth_session_result else {
                     drop(resources);
@@ -1578,7 +1543,6 @@ fn spawn_server_runtime_task(
                 };
                 match auth_session_result {
                     Ok(session) => {
-                        update_server_auth_session_cache(&inner, &server.id, session.clone()).await;
                         auth_session = Some(session);
                     }
                     Err(error) => {
@@ -1591,6 +1555,69 @@ fn spawn_server_runtime_task(
                             &mut consecutive_failures,
                             None,
                             error,
+                        )
+                        .await
+                        {
+                            return;
+                        }
+                        if wait_for_retry_or_shutdown(
+                            &mut shutdown_rx,
+                            retry_delay(&server.id, consecutive_failures),
+                        )
+                        .await
+                        {
+                            shutdown_server_runtime_state(&inner, &server.id).await;
+                            return;
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(Some(session)) = auth_session.as_ref() {
+                // Subscribe before checking so an authorization completed in between still wakes this task.
+                // 先订阅再检查，使期间完成的授权仍能唤醒本任务。
+                let mut authorization_changes = session.subscribe_authorization_changes();
+                let token = tokio::select! {
+                    _ = shutdown_rx.changed() => None,
+                    result = session.access_token() => Some(result),
+                };
+                match token {
+                    None => {
+                        drop(resources);
+                        shutdown_server_runtime_state(&inner, &server.id).await;
+                        return;
+                    }
+                    Some(Ok(Some(_))) => {}
+                    Some(Ok(None)) => {
+                        // Waiting for the user is not a connection failure and consumes no retry budget.
+                        // 等待用户不是连接失败，不消耗重试额度。
+                        drop(resources);
+                        update_server_status(
+                            &inner,
+                            &server.id,
+                            McpRuntimeServerStatus::AwaitingAuthorization,
+                            None,
+                            Vec::new(),
+                        );
+                        let shutdown = tokio::select! {
+                            _ = shutdown_rx.changed() => true,
+                            _ = authorization_changes.changed() => false,
+                        };
+                        if shutdown {
+                            shutdown_server_runtime_state(&inner, &server.id).await;
+                            return;
+                        }
+                        continue;
+                    }
+                    Some(Err(error)) => {
+                        drop(resources);
+                        if record_server_failure_and_should_stop(
+                            &inner,
+                            &server,
+                            &mut consecutive_failures,
+                            None,
+                            error.to_string(),
                         )
                         .await
                         {
@@ -1913,24 +1940,6 @@ fn retry_delay(server_id: &str, consecutive_failures: u8) -> Duration {
         % 251;
     Duration::from_secs(BACKOFF_SECONDS[backoff_index])
         .saturating_add(Duration::from_millis(jitter_millis))
-}
-
-/// Updates the shared OAuth-session cache for one server after startup or teardown decisions have been made.
-/// 在完成启动或拆除决策后，更新单个服务器对应的共享 OAuth 会话缓存。
-async fn update_server_auth_session_cache(
-    inner: &Arc<McpRuntimeInner>,
-    server_id: &str,
-    auth_session: Option<Arc<McpOAuthSession>>,
-) {
-    let mut sessions = inner.auth_sessions.write().await;
-    match auth_session {
-        Some(session) => {
-            sessions.insert(server_id.to_string(), session);
-        }
-        None => {
-            sessions.remove(server_id);
-        }
-    }
 }
 
 /// Waits for the selected bounded reconnect backoff unless the runtime has already been asked to shut down.

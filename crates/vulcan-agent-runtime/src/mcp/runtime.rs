@@ -17,9 +17,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::{RwLock as AsyncRwLock, watch};
-use vulcan_mcp_runtime::{
-    McpAuthChallenge, McpAuthStatus, McpOAuthSession, McpTransport, McpTransportEvent,
-};
+use vulcan_mcp_runtime::{McpOAuthSession, McpTransport, McpTransportEvent};
 
 use diagnostics::*;
 use handle::McpRuntimeHandle;

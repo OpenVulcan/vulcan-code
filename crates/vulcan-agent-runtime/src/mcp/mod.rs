@@ -2,6 +2,7 @@
 //! 面向 compose 运行时基础架构的 MCP 配置与注册表胶水层。
 
 pub mod config;
+mod oauth_credentials;
 mod plugin;
 pub mod registry;
 pub mod runtime;
@@ -10,6 +11,7 @@ pub use config::{
     McpServerConfig, McpServerOAuthConfig, McpServerSource, McpServerTransportConfig,
     McpTransportKind, runtime_mcp_server_configs,
 };
+pub use oauth_credentials::{install_mcp_oauth_credential_backend, mcp_oauth_credential_backend};
 pub use plugin::{
     PluginMcpSecretStore, PreparedPluginMcpConfigs, PreparedPredecessorPluginMcpConfigs,
     PreparedPublishedPluginMcpConfigs, PreparedTargetPluginMcpConfigs,

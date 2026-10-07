@@ -286,6 +286,9 @@ fn plugin_mcp_server_summary(
             vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Connecting => {
                 String::from("connecting")
             }
+            vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::AwaitingAuthorization => {
+                String::from("awaitingAuthorization")
+            }
             vulcan_agent_runtime::mcp::runtime::McpRuntimeServerStatus::Connected
                 if state.last_error.is_some() =>
             {

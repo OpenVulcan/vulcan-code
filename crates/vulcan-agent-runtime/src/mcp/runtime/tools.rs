@@ -2403,57 +2403,23 @@ impl McpRuntimeAccess {
         has_unconfirmed_cleanup
     }
 
-    /// Returns the current OAuth status label for one configured MCP server when live runtime state is available.
-    /// 当实时运行时状态可用时，返回单个已配置 MCP 服务器的当前 OAuth 状态标签。
-    pub async fn server_oauth_status_label(&self, server_id: &str) -> Result<String, String> {
-        let Some(runtime) = self.partition_for_server(server_id) else {
-            return Ok(String::from("运行时未就绪"));
-        };
-        runtime.server_auth_status_label(server_id).await
-    }
-
-    /// Starts one host-driven OAuth flow for the target MCP server and returns the browser challenge payload.
-    /// 为目标 MCP 服务器启动一条宿主驱动的 OAuth 流程，并返回浏览器挑战载荷。
-    pub async fn start_server_oauth(
+    /// Returns the OAuth session that the owning live partition shares with the server's connection task.
+    /// 返回所属实时分区与该服务器连接任务共享的 OAuth 会话。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `None` when the server has no OAuth configuration; an error when no live partition owns the server.
+    /// 服务器未配置 OAuth 时返回 `None`；没有实时分区持有该服务器时返回错误。
+    pub async fn server_oauth_session(
         &self,
         server_id: &str,
-        client_name: &str,
-    ) -> Result<McpAuthChallenge, String> {
+    ) -> Result<Option<Arc<McpOAuthSession>>, String> {
         let Some(runtime) = self.partition_for_server(server_id) else {
-            return Err(String::from(
-                "MCP 运行时尚未就绪，暂时无法启动 OAuth 授权。",
+            return Err(format!(
+                "mcp_server_not_running: no live MCP runtime owns server `{server_id}`"
             ));
         };
-        runtime.start_server_auth(server_id, client_name).await
-    }
-
-    /// Finishes one host-driven OAuth flow for the target MCP server with the returned authorization code and state.
-    /// 使用回传的授权码与 state 为目标 MCP 服务器完成一条宿主驱动的 OAuth 流程。
-    pub async fn finish_server_oauth(
-        &self,
-        server_id: &str,
-        authorization_code: &str,
-        oauth_state: &str,
-    ) -> Result<McpAuthStatus, String> {
-        let Some(runtime) = self.partition_for_server(server_id) else {
-            return Err(String::from(
-                "MCP 运行时尚未就绪，暂时无法完成 OAuth 授权。",
-            ));
-        };
-        runtime
-            .finish_server_auth(server_id, authorization_code, oauth_state)
-            .await
-    }
-
-    /// Removes stored OAuth credentials for the target MCP server when live runtime state is available.
-    /// 当实时运行时状态可用时，为目标 MCP 服务器移除已存储的 OAuth 凭据。
-    pub async fn remove_server_oauth(&self, server_id: &str) -> Result<(), String> {
-        let Some(runtime) = self.partition_for_server(server_id) else {
-            return Err(String::from(
-                "MCP 运行时尚未就绪，暂时无法清理 OAuth 凭据。",
-            ));
-        };
-        runtime.remove_server_auth(server_id).await
+        runtime.auth_session_for_server(server_id).await
     }
 
     /// Resolves the unique live partition that owns one exact server identifier.

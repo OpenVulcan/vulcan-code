@@ -47,7 +47,10 @@ pub(super) fn select_plugin_mcp_state<'a>(
         .max_by_key(|state| match state.status {
             // A healthy session must not conceal another session's failure or pending cleanup.
             // 健康会话不得掩盖其他会话的失败或尚未完成的清理。
-            McpRuntimeServerStatus::Failed => 7,
+            McpRuntimeServerStatus::Failed => 8,
+            // Waiting for the user needs an action, so it outranks transient degradation.
+            // 等待用户需要操作，因此优先于瞬时降级。
+            McpRuntimeServerStatus::AwaitingAuthorization => 7,
             McpRuntimeServerStatus::Disconnected => 6,
             McpRuntimeServerStatus::Connected if state.last_error.is_some() => 5,
             McpRuntimeServerStatus::Stopping => 4,

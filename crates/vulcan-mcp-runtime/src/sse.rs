@@ -34,7 +34,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::McpTransportResources;
-use crate::auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession};
+use crate::auth::McpOAuthSession;
 use crate::error::McpRuntimeError;
 use crate::http_support::parse_http_headers_to_header_map;
 use crate::resources::RetainedResource;
@@ -515,57 +515,6 @@ impl McpTransport for SseTransport {
             ));
         };
         Ok(result)
-    }
-
-    async fn supports_oauth(&self) -> bool {
-        self.auth_session.is_some()
-    }
-
-    async fn has_stored_tokens(&self) -> Result<bool, McpRuntimeError> {
-        Ok(match self.auth_session.as_ref() {
-            Some(auth_session) => auth_session.has_stored_tokens().await,
-            None => false,
-        })
-    }
-
-    async fn auth_status(&self) -> Result<McpAuthStatus, McpRuntimeError> {
-        Ok(match self.auth_session.as_ref() {
-            Some(auth_session) => auth_session.auth_status().await,
-            None => McpAuthStatus::NotConfigured,
-        })
-    }
-
-    async fn start_auth(&self, client_name: &str) -> Result<McpAuthChallenge, McpRuntimeError> {
-        let Some(auth_session) = self.auth_session.as_ref() else {
-            return Err(McpRuntimeError::transport(format!(
-                "MCP SSE 传输 `{}` 未配置 OAuth。",
-                self.endpoint
-            )));
-        };
-        auth_session.start_authorization(client_name).await
-    }
-
-    async fn finish_auth(
-        &self,
-        authorization_code: &str,
-        oauth_state: &str,
-    ) -> Result<McpAuthStatus, McpRuntimeError> {
-        let Some(auth_session) = self.auth_session.as_ref() else {
-            return Err(McpRuntimeError::transport(format!(
-                "MCP SSE 传输 `{}` 未配置 OAuth。",
-                self.endpoint
-            )));
-        };
-        auth_session
-            .finish_authorization(authorization_code, oauth_state)
-            .await
-    }
-
-    async fn remove_auth(&self) -> Result<(), McpRuntimeError> {
-        if let Some(auth_session) = self.auth_session.as_ref() {
-            auth_session.remove_authorization().await;
-        }
-        Ok(())
     }
 
     async fn call_tool(

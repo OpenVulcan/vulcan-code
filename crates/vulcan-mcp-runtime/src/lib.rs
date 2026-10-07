@@ -29,7 +29,10 @@ pub mod sse;
 pub mod stdio;
 pub mod transport;
 
-pub use auth::{McpAuthChallenge, McpAuthStatus, McpOAuthSession, McpTransportOAuthSpec};
+pub use auth::{
+    McpAuthChallenge, McpAuthStatus, McpOAuthCredentialBackend, McpOAuthCredentialRecord,
+    McpOAuthMemoryCredentialBackend, McpOAuthSession, McpTransportOAuthSpec,
+};
 pub use error::McpRuntimeError;
 pub use http::HttpTransport;
 pub use launch::McpTransportLaunchSpec;

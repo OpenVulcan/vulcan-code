@@ -2,7 +2,6 @@
 //! 宿主自有的 Model Context Protocol 传输抽象。
 
 use crate::McpRuntimeError;
-use crate::auth::{McpAuthChallenge, McpAuthStatus};
 use async_trait::async_trait;
 use rmcp::model::{GetPromptResult, Prompt, ReadResourceResult, Resource};
 use serde_json::Value;
@@ -154,55 +153,6 @@ pub trait McpTransport: Send + Sync {
     /// 关闭观测有界的实现必须覆盖此方法，继续等待原操作。
     async fn shutdown_and_wait(&self) -> Result<(), McpRuntimeError> {
         self.shutdown().await
-    }
-
-    /// Returns whether the transport supports a host-driven OAuth lifecycle.
-    /// 返回当前传输是否支持宿主驱动的 OAuth 生命周期。
-    async fn supports_oauth(&self) -> bool {
-        false
-    }
-
-    /// Returns whether the transport currently retains stored OAuth tokens.
-    /// 返回当前传输是否保留了已存储的 OAuth 令牌。
-    async fn has_stored_tokens(&self) -> Result<bool, McpRuntimeError> {
-        Ok(false)
-    }
-
-    /// Returns the current host-side OAuth status for the transport.
-    /// 返回当前传输对应的宿主侧 OAuth 状态。
-    async fn auth_status(&self) -> Result<McpAuthStatus, McpRuntimeError> {
-        Ok(McpAuthStatus::NotConfigured)
-    }
-
-    /// Starts one host-driven OAuth authorization flow and returns the browser challenge payload.
-    /// 启动一条宿主驱动的 OAuth 授权流程，并返回浏览器挑战载荷。
-    async fn start_auth(&self, _client_name: &str) -> Result<McpAuthChallenge, McpRuntimeError> {
-        Err(McpRuntimeError::transport(format!(
-            "MCP 传输 `{}` 不支持 OAuth 授权。",
-            self.endpoint()
-        )))
-    }
-
-    /// Finishes one host-driven OAuth authorization flow with the returned code and state.
-    /// 使用回传的授权码与 state 完成一条宿主驱动的 OAuth 授权流程。
-    async fn finish_auth(
-        &self,
-        _authorization_code: &str,
-        _oauth_state: &str,
-    ) -> Result<McpAuthStatus, McpRuntimeError> {
-        Err(McpRuntimeError::transport(format!(
-            "MCP 传输 `{}` 不支持 OAuth 授权完成。",
-            self.endpoint()
-        )))
-    }
-
-    /// Removes every stored OAuth credential retained by the transport.
-    /// 移除当前传输保留的全部 OAuth 凭据。
-    async fn remove_auth(&self) -> Result<(), McpRuntimeError> {
-        Err(McpRuntimeError::transport(format!(
-            "MCP 传输 `{}` 不支持 OAuth 凭据清理。",
-            self.endpoint()
-        )))
     }
 
     /// Invoke one named tool with a JSON argument object.
