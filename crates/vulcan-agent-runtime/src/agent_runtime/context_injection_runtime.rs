@@ -324,7 +324,7 @@ pub fn collect_builtin_manual_injection_ops_and_sanitized_prompt(
         helper.inject(
             InjectionKind::Transient,
             "manual_inject",
-            "手动测试注入内容，仅用于验证当前会话的上下文注入链路。",
+            "Manual test injection, used only to verify this session's context injection path.",
             content,
             Some(ttl_turns),
         );
