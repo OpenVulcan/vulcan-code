@@ -481,7 +481,6 @@ function VmmStaticProfileView(props: {
   // 需要渲染的结构化 VMM 画像快照。
   profile: VmmStaticProfileSummary;
 }) {
-  const { t } = useI18n();
   return (
     <div className="vmm-static-profile">
       {props.profile.sections.map((section) => (

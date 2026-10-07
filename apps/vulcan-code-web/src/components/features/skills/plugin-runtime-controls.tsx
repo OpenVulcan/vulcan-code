@@ -12,7 +12,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary } from "@/types";
-import { PLUGIN_CAPACITY_PURPOSES, type PluginCapacityPurpose, type PluginCapacityReceipt, type PluginCapacityStatus } from "@/types/plugin-runtime";
+import { PLUGIN_CAPACITY_PURPOSES, type PluginCapacityPurpose, type PluginCapacityStatus } from "@/types/plugin-runtime";
 import type { PluginRuntimeCommand } from "@/service/plugin-runtime-service";
 import { capacityPredecessor, createCapacityDraft, draftStillCurrent, readCapacityDraft, type PluginCapacityDraft } from "./plugin-capacity-draft";
 import { PageEmptyState, PageFacts, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";

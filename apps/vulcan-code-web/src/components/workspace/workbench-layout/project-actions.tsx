@@ -140,7 +140,6 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t, locale } = useI18n();
   const {
-    workbenchState,
     setWorkbenchState,
     mergeWorkbenchWithLocalCaches,
     acceptServiceWorkbenchSnapshot,

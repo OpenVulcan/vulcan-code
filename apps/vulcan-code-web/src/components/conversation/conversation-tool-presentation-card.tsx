@@ -1,8 +1,8 @@
 import * as React from "react";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
 import { Button } from "@/components/ui/button";
-import type { FileChangeOperation, FileChangePresentation, ToolPresentation, ToolPresentationDisplayState } from "@/components/conversation/conversation-tool-presentations";
-import { useI18n, type TranslationKey } from "@/i18n";
+import type { ToolPresentation } from "@/components/conversation/conversation-tool-presentations";
+import { useI18n } from "@/i18n";
 import { ToolResultEventContext, type ToolRequestCardProgress, type ToolDetailLoader } from "./tool-presentations/tool-card-common";
 import { FileChangePresentationCard } from "./tool-presentations/file-change-card";
 import { FileAccessPresentationCard } from "./tool-presentations/file-access-card";
@@ -285,94 +285,4 @@ function ToolPresentationCardContent(props: {
     );
   }
   return null;
-}
-
-// FILE_CHANGE_OPERATION_LABEL_KEYS maps file-change operations and phases to checked translation keys.
-// FILE_CHANGE_OPERATION_LABEL_KEYS 将文件变更操作与阶段映射到受类型检查的翻译键。
-const FILE_CHANGE_OPERATION_LABEL_KEYS: Record<FileChangeOperation, Record<"running" | "failed" | "preview" | "completed", TranslationKey>> = {
-  create: {
-    running: "toolPresentation.file.create.running",
-    failed: "toolPresentation.file.create.failed",
-    preview: "toolPresentation.file.create.preview",
-    completed: "toolPresentation.file.create.completed",
-  },
-  modify: {
-    running: "toolPresentation.file.modify.running",
-    failed: "toolPresentation.file.modify.failed",
-    preview: "toolPresentation.file.modify.preview",
-    completed: "toolPresentation.file.modify.completed",
-  },
-  delete: {
-    running: "toolPresentation.file.delete.running",
-    failed: "toolPresentation.file.delete.failed",
-    preview: "toolPresentation.file.delete.preview",
-    completed: "toolPresentation.file.delete.completed",
-  },
-  rename: {
-    running: "toolPresentation.file.mixed.running",
-    failed: "toolPresentation.file.mixed.failed",
-    preview: "toolPresentation.file.mixed.preview",
-    completed: "toolPresentation.file.mixed.completed",
-  },
-  mixed: {
-    running: "toolPresentation.file.mixed.running",
-    failed: "toolPresentation.file.mixed.failed",
-    preview: "toolPresentation.file.mixed.preview",
-    completed: "toolPresentation.file.mixed.completed",
-  },
-};
-
-// askQuestionStatusLabel returns the localized ask lifecycle label.
-// askQuestionStatusLabel 返回本地化后的 ask 生命周期文案。
-function askQuestionStatusLabel(
-  state: ToolPresentationDisplayState,
-  t: (key: TranslationKey) => string,
-): string {
-  if (state === "running") return t("toolPresentation.ask.running");
-  if (state === "failed" || state === "stopped") return t("toolPresentation.ask.ignored");
-  return t("toolPresentation.ask.completed");
-}
-
-// fileChangeStatusLabel returns the localized file-change lifecycle label.
-// fileChangeStatusLabel 返回本地化后的文件变更生命周期文案。
-function fileChangeStatusLabel(
-  presentation: FileChangePresentation,
-  operation: FileChangeOperation,
-  t: (key: TranslationKey) => string,
-): string {
-  if (presentation.state === "running") {
-    return fileChangeOperationLabel(operation, "running", t);
-  }
-  if (presentation.hasEffectiveChanges !== null) {
-    // execution reports actual execution outcome independently from file changes.
-    // execution 独立于文件变更报告真实执行结果。
-    const execution = presentation.state === "failed"
-      ? t("toolPresentation.file.executionFailed")
-      : presentation.state === "stopped"
-        ? t("toolPresentation.file.executionStopped")
-        : t("toolPresentation.file.executionCompleted");
-    // change reports whether the authoritative ChangeSet contains effective edits.
-    // change 报告权威 ChangeSet 是否包含有效编辑。
-    const change = presentation.hasEffectiveChanges
-      ? t("toolPresentation.file.edited")
-      : t("toolPresentation.file.notEdited");
-    return `${execution} · ${change}`;
-  }
-  if (presentation.state === "failed") {
-    return fileChangeOperationLabel(operation, "failed", t);
-  }
-  if (presentation.mode === "preview") {
-    return fileChangeOperationLabel(operation, "preview", t);
-  }
-  return fileChangeOperationLabel(operation, "completed", t);
-}
-
-// fileChangeOperationLabel maps one operation and phase to a stable translation key.
-// fileChangeOperationLabel 将操作与阶段映射为稳定翻译键。
-function fileChangeOperationLabel(
-  operation: FileChangeOperation,
-  phase: "running" | "failed" | "preview" | "completed",
-  t: (key: TranslationKey) => string,
-): string {
-  return t(FILE_CHANGE_OPERATION_LABEL_KEYS[operation][phase]);
 }

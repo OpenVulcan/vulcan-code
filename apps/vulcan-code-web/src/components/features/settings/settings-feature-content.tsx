@@ -28,7 +28,6 @@ import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
-  activeSettingsHeaderSummary,
   normalizeSettingsSubArea,
   settingsSubAreaProviderToolCapability,
 } from "@/components/features/settings/settings-navigation";

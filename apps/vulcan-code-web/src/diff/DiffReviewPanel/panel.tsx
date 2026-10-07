@@ -147,10 +147,6 @@ export function DiffReviewPanel(props: {
   // effectiveExpandedFileKey keeps the single-file direct view expanded without mutating manual multi-file selection state.
   // effectiveExpandedFileKey 让单文件直显保持展开，同时不污染多文件手动选择状态。
   const effectiveExpandedFileKey = expandedFileKey ?? autoSelectedSingleFile?.key ?? null;
-  const collapsedFileKeys = React.useMemo(
-    () => diffCollapsedFileKeys(renderedSnapshot, effectiveExpandedFileKey),
-    [effectiveExpandedFileKey, renderedSnapshot],
-  );
   const selectedDiffFile = React.useMemo(
     () => renderedSnapshot?.files.find((file) => file.key === effectiveExpandedFileKey) ?? null,
     [effectiveExpandedFileKey, renderedSnapshot],

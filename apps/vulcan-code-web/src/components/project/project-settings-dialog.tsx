@@ -38,8 +38,6 @@ import type {
   ProjectSettingsSectionId,
 } from "./project-settings-types";
 import {
-  projectAgentSkillSaveMessage,
-  projectAttachmentPreviewFallback,
   projectAttachmentRoot,
   projectConversationCount,
   projectSettingsSections,

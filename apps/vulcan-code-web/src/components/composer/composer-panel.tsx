@@ -53,7 +53,6 @@ import type {
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
 import { composerShortcutHint } from "@/components/composer/composer-panel/helpers";
-import { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 import { ModelSecondaryRouteControl } from "@/components/composer/composer-panel/model-secondary-route-control";
 import { ComposerGoalStrip, ComposerPlanModeChip } from "@/components/composer/composer-panel/goal-strip";
 import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/composer-panel/attachment-preview-strip";

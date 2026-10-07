@@ -767,59 +767,6 @@ function PublicAiDeleteConnectionDialog(props: {
   )
 }
 
-// AccountUsageLine renders explicit unsupported, unavailable, or observed account usage.
-// AccountUsageLine 渲染明确的不支持、不可用或已观测账号用量。
-function AccountUsageLine(props: {
-  // Selected credential profile determines whether lookup exists.
-  // 选定凭据配置档决定是否存在查询能力。
-  credentialProfile?: PublicAiCredentialProfile
-  // Latest memory-only usage observation.
-  // 最新的仅内存用量观测。
-  usage?: PublicAiAccountUsage
-}) {
-  const { t } = useI18n()
-  if (props.credentialProfile?.account_usage_query === "unsupported") {
-    return <span>{t("settings.credentials.usageUnsupported")}</span>
-  }
-  if (!props.usage) {
-    return <span>{t("settings.credentials.usageNotQueried")}</span>
-  }
-  if (props.usage.availability === "temporarily_unavailable") {
-    return <span>{props.usage.refresh_message ?? t("settings.credentials.usageUnavailable")}</span>
-  }
-  if (!Array.isArray(props.usage.quota_windows)) {
-    return <span className="text-destructive">{t("settings.credentials.usageInvalid")}</span>
-  }
-  return (
-    <div className="settings-modal-list">
-      <span>
-        {props.usage.plan_name ? `${props.usage.plan_name} · ` : ""}
-        {props.usage.remaining_amount !== undefined
-          ? t("settings.credentials.remaining").replace("{value}", `${props.usage.remaining_amount}${props.usage.currency ? ` ${props.usage.currency}` : ""}`)
-          : props.usage.quota_windows.length === 0 ? t("settings.credentials.noQuotaWindows") : t("settings.credentials.quotaWindow")}
-        {props.usage.used_amount !== undefined
-          ? ` · ${t("settings.credentials.used").replace("{value}", `${props.usage.used_amount}${props.usage.currency ? ` ${props.usage.currency}` : ""}`)}`
-          : ""}
-      </span>
-      {props.usage.quota_windows.map((window) => (
-        <span key={window.id}>
-          {window.bucket_name ? `${window.bucket_name} · ` : ""}
-          {window.display_name}{t("global.labelSeparator")}
-          {!window.available
-            ? t("settings.credentials.notIncluded")
-            : window.unlimited
-              ? t("settings.credentials.unlimited")
-              : window.total !== undefined && window.total !== "0"
-                ? `${window.remaining ?? t("settings.credentials.unknown")} / ${window.total} ${window.unit}${window.remaining_percent !== undefined ? ` · ${window.remaining_percent}%` : ""}`
-                : window.remaining_percent !== undefined
-                  ? t("settings.credentials.remaining").replace("{value}", `${window.remaining_percent}%`)
-                  : `${window.remaining ?? t("settings.credentials.unknown")} / ${window.total ?? t("settings.credentials.unknown")} ${window.unit}`}
-        </span>
-      ))}
-    </div>
-  )
-}
-
 // PublicAiConnectionDialog creates or edits one credential-scoped connection.
 // PublicAiConnectionDialog 创建或编辑一个凭据作用域连接。
 export function PublicAiConnectionDialog(props: {
@@ -1370,20 +1317,6 @@ function credentialProfileForConnection(
   connection: PublicAiConnection,
 ): PublicAiCredentialProfile | undefined {
   return entry?.credential_profiles.find((profile) => profile.id === connection.credential_profile_id)
-}
-
-// protocolDisplayName maps registered profile identifiers to user-facing labels.
-// protocolDisplayName 把已注册 Profile 标识映射为用户可见标签。
-function protocolDisplayName(protocolId: string): string {
-  const labels: Record<string, string> = {
-    "anthropic-messages.v1": "Anthropic Messages",
-    "anthropic-messages-video.v1": "Anthropic Messages + Video",
-    "claude-code-messages.v1": "Claude Code Messages",
-    "openai-chat-completions.v1": "OpenAI Chat Completions",
-    "openai-codex-responses.v1": "OpenAI Codex Responses",
-    "openai-responses.v1": "OpenAI Responses",
-  }
-  return labels[protocolId] ?? protocolId
 }
 
 // oauthPhaseDisplayName maps exact OAuth phases to user-facing progress labels.

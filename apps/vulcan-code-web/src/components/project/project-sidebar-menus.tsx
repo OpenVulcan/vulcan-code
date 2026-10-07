@@ -9,7 +9,6 @@ import {
   Pencil,
   Pin,
   PinOff,
-  SquarePen,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
@@ -22,7 +21,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useI18n } from "@/i18n";
-import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 

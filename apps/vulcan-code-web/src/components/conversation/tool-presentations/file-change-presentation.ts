@@ -1956,12 +1956,6 @@ function isAbsolutePath(path: string): boolean {
   return /^[a-z]:[\\/]/i.test(path) || path.startsWith("/") || path.startsWith("\\\\");
 }
 
-// basenameFromPath extracts the last segment for path fallback labels.
-// basenameFromPath 提取最终片段作为路径回退标签。
-function basenameFromPath(path: string): string {
-  return path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? path;
-}
-
 // summarizeOperation collapses per-file operations into one row operation.
 // summarizeOperation 将逐文件操作折叠为单个行操作。
 function summarizeOperation(files: FileChangeFilePresentation[]): FileChangeOperation {

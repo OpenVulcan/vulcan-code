@@ -18,7 +18,6 @@ import {
 import type {
   AgentSkillCategorySaveRequest,
   AgentSkillCategorySummary,
-  AgentSkillLocaleSummary,
   AgentSkillRecordSummary,
   AgentSkillSaveRequest,
 } from "@/types"

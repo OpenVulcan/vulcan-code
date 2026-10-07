@@ -358,39 +358,6 @@ export function supportedMediaReplacementReasoningEffort(
     : undefined;
 }
 
-// firstAvailableMediaUnderstandingSelection resolves the system default only as a preference.
-// firstAvailableMediaUnderstandingSelection 仅把系统默认值作为优先项解析。
-function firstAvailableMediaUnderstandingSelection(
-  snapshot: PublicAiSettingsSnapshot,
-  capability: PublicAiMediaUnderstandingCapabilityKind,
-  targets: PublicAiProviderToolTargetSnapshot[],
-  candidates: PublicAiMediaUnderstandingModelCandidate[],
-): PublicAiMediaUnderstandingBackendSelection | undefined {
-  const systemDefault = snapshot.mediaUnderstandingSelections?.[capability];
-  if (systemDefault?.mode === "provider_tool") {
-    const target = targets.find((candidate) => (
-      candidate.connectionId === systemDefault.selection.connection_id
-      && candidate.target.target_id === systemDefault.selection.target_id
-    ));
-    if (target) return providerMediaUnderstandingSelection(target);
-  }
-  if (systemDefault?.mode === "model_replacement") {
-    const candidate = candidates.find((item) => (
-      item.selection.provider_id === systemDefault.selection.provider_id
-      && item.selection.model_id === systemDefault.selection.model_id
-      && item.selection.connection_id === systemDefault.selection.connection_id
-    ));
-    if (candidate) {
-      return modelReplacementSelection(
-        candidate,
-        supportedMediaReplacementReasoningEffort(candidate, systemDefault.reasoning_effort),
-      );
-    }
-  }
-  if (targets[0]) return providerMediaUnderstandingSelection(targets[0]);
-  return candidates[0] ? modelReplacementSelection(candidates[0]) : undefined;
-}
-
 export function uniqueProviderToolModels(
   targets: PublicAiProviderToolTargetSnapshot[],
 ): PublicAiProviderToolTargetSnapshot[] {

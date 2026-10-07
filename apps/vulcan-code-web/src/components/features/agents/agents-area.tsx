@@ -22,7 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { WorkspaceDirectoryMenu } from "@/components/workspace/workspace-directory-layout"
-import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n"
+import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { CapabilityPolicyMode, SubagentCatalogSummary, SubagentCategorySummary, SubagentDefinitionSaveRequest, SubagentDefinitionSummary, WorkbenchSnapshot } from "@/types"
 import type { AgentActionProps } from "./agent-area-types"
 import { colorInputValue, colorSwatchValue } from "@/lib/agent-color"
@@ -538,7 +538,7 @@ function AgentEditorForm(props: {
   // 三态策略表可选择的工具行。
   toolOptions: AgentCapabilityPolicyOption[]
 }) {
-  const { locale, t } = useI18n()
+  const { t } = useI18n()
   // Keep initial focus at the title so opening a long editor never skips its first fields.
   // 初始焦点放在标题上，避免打开长编辑表单时跳过开头字段。
   const editorTitleRef = React.useRef<HTMLHeadingElement>(null)

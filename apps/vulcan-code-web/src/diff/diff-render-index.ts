@@ -343,34 +343,6 @@ function estimateDiffRowsHeight(
   return hunkRows * DIFF_HUNK_HEADER_HEIGHT + lineRows * DIFF_LINE_HEIGHT;
 }
 
-// monotonicDiffFileVirtualRowCount keeps lazy detail hydration from shrinking file scroll space.
-// monotonicDiffFileVirtualRowCount 防止懒加载详情水合缩小文件滚动空间。
-function monotonicDiffFileVirtualRowCount(
-  // File whose scroll-space row count is being estimated.
-  // 正在估算滚动空间行数的文件。
-  file: DiffFile,
-  // Active diff view mode.
-  // 当前 diff 视图模式。
-  viewMode: DiffViewMode = "unified",
-): number {
-  return Math.max(1, fileTotalRowCount(file, viewMode), file.estimatedRowCount ?? 0);
-}
-
-// monotonicDiffFileVirtualHunkCount keeps estimated hidden hunk space when details load.
-// monotonicDiffFileVirtualHunkCount 在详情加载后保留估算的隐藏 hunk 空间。
-function monotonicDiffFileVirtualHunkCount(
-  // File whose scroll-space hunk count is being estimated.
-  // 正在估算滚动空间 hunk 数的文件。
-  file: DiffFile,
-  // Monotonic row count that bounds the hunk count.
-  // 用于约束 hunk 数的单调行数。
-  rowCount: number,
-): number {
-  const loadedHunkCount = file.hunks.length;
-  const estimatedHunkCount = file.estimatedHunkCount ?? 0;
-  return Math.max(1, Math.min(rowCount, Math.max(loadedHunkCount, estimatedHunkCount)));
-}
-
 // diffFileLineOffset estimates the pixel top of one line inside a file body.
 // diffFileLineOffset 估算单条行在文件正文中的像素顶部。
 function diffFileLineOffset(file: DiffFile, hunkIndex: number, lineIndex: number, viewMode: DiffViewMode = "unified"): number {

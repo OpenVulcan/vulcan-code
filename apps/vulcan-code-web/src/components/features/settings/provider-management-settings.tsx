@@ -461,10 +461,3 @@ export function ProviderManagementArea() {
   )
 }
 
-// customProviderDiscoveryModeLabelKeys maps user discovery choices to localized labels.
-// customProviderDiscoveryModeLabelKeys 将用户发现选择映射为本地化标签。
-const customProviderDiscoveryModeLabelKeys = {
-  standard: "settings.customProviders.discovery.standard",
-  custom_path: "settings.customProviders.discovery.custom_path",
-  manual: "settings.customProviders.discovery.manual",
-} as const

@@ -395,13 +395,6 @@ function firstShellCommandDisplay(blocks: ToolExecutionConversationBlock[]): She
   return null;
 }
 
-// shortenCommandSessionId keeps long command-session ids readable in compact rows.
-// shortenCommandSessionId 让较长命令会话标识在紧凑行中保持可读。
-function shortenCommandSessionId(value: string): string {
-  const trimmed = value.trim();
-  return shortenTerminalSessionId(trimmed);
-}
-
 // streamChunksFromText parses `[stdout #n]` and `[stderr #n]` sections from rendered terminal reads.
 // streamChunksFromText 从已渲染终端读取文本解析 `[stdout #n]` 与 `[stderr #n]` 区段。
 function streamChunksFromText(source: string): { stdout: string[]; stderr: string[] } {
