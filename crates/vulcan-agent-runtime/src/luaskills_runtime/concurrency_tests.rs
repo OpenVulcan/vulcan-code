@@ -9,7 +9,11 @@
 //! 会确定性失败，而不只是显得慢。每处等待都有上限，违反契约时给出 panic 信息而不是挂住测试套件。
 
 use super::*;
-use luaskills::{RuntimeHostToolAction, set_host_tool_callback};
+use luaskills::runtime_options::LuaRuntimeRunLuaPoolConfig;
+use luaskills::{
+    LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig, RuntimeHostToolAction,
+    set_host_tool_callback,
+};
 use std::path::Path;
 use std::sync::Barrier;
 use std::sync::Condvar;

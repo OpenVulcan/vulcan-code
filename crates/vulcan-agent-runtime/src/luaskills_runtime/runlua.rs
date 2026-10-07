@@ -405,17 +405,6 @@ pub async fn set_runlua_ai_tools_enabled(
     .await
 }
 
-/// Clears host ownership after any LuaSkills reload replaces the upstream lease manager.
-/// 在 LuaSkills reload 替换上游租约管理器后清空宿主归属。
-pub(super) fn clear_runlua_session_registry(handle: &LuaSkillsRuntimeHandle) {
-    let mut registry = handle
-        .runlua_sessions
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    registry.leases.clear();
-    registry.pending_starts.clear();
-}
-
 /// Executes one isolated RunLua request and returns bounded model output plus UI metadata.
 /// 执行一次隔离 RunLua 请求，并返回有界模型输出与界面元数据。
 async fn execute_runlua_tool(

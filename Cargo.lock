@@ -9626,7 +9626,6 @@ dependencies = [
  "vulcan-hooks",
  "vulcan-host-tools",
  "vulcan-llm-core",
- "vulcan-luaskills-config",
  "vulcan-luaskills-prompt",
  "vulcan-mcp-runtime",
  "vulcan-plugin-runtime",
