@@ -208,12 +208,46 @@ pub(super) async fn uninstall(
     let captured_state = Arc::clone(state);
     // No resource mutex is held by this asynchronous caller during blocking capture.
     // 此异步调用者在阻塞捕获期间不持有资源互斥锁。
+    let oauth_server_ids = plugin_mcp_server_ids(state, &plugin_id);
     let original =
         run_extension_management_blocking("reserve original plugin removal", move || {
             owner::reserve(&captured_state, &plugin_id)
         })
         .await?;
-    execute(app, state, original, false).await
+    let update = execute(app, state, original, false).await?;
+    forget_plugin_mcp_oauth(&oauth_server_ids).await;
+    Ok(update)
+}
+
+/// Runtime MCP server identities of one plugin, read while its manifest is still installed.
+/// 单个插件的运行时 MCP 服务器标识，在其清单仍处于安装状态时读取。
+///
+/// An unreadable manifest yields no identities, so removal itself is never blocked by OAuth cleanup.
+/// 清单无法读取时不返回任何标识，因此 OAuth 清理绝不阻塞移除本身。
+fn plugin_mcp_server_ids(state: &SharedServiceBridgeState, plugin_id: &str) -> Vec<String> {
+    match service_vulcan_plugin_runtime(state).and_then(|runtime| {
+        runtime
+            .permission_preview(plugin_id)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(preview) => preview
+            .mcp_servers
+            .iter()
+            .map(|server| format!("{plugin_id}:{}", server.server_id))
+            .collect(),
+        Err(error) => {
+            tracing::warn!("[plugin-uninstall] cannot list MCP servers for OAuth cleanup: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Deletes the OAuth credentials of a removed plugin's MCP servers.
+/// 删除已移除插件 MCP 服务器的 OAuth 凭据。
+async fn forget_plugin_mcp_oauth(server_ids: &[String]) {
+    for server_id in server_ids {
+        crate::mcp_oauth::forget_removed_mcp_server_oauth(server_id).await;
+    }
 }
 
 /// Resume only actual registry membership; identities are lookup metadata and never reconstruction authority.
@@ -243,7 +277,10 @@ pub(super) async fn resume(
             .pending_local_plugin_uninstalls
             .lookup(plugin_id, request)?
     };
-    execute(app, state, original, acknowledge).await
+    let oauth_server_ids = plugin_mcp_server_ids(state, plugin_id);
+    let update = execute(app, state, original, acknowledge).await?;
+    forget_plugin_mcp_oauth(&oauth_server_ids).await;
+    Ok(update)
 }
 
 /// Complete actual retained work; cancellation never removes the map or moves its original resources out.
