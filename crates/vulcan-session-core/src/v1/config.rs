@@ -405,7 +405,6 @@ pub struct ProviderToolSelectionConfig {
     /// Media backend selections in canonical order.
     /// 按规范顺序排列的媒体后端选择。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[serde(alias = "media_understanding_modes")]
     pub media_understanding_selections: Vec<ProviderMediaUnderstandingSelection>,
     /// Native extension target sets in canonical order.
     /// 按规范顺序排列的原生扩展目标集合。
