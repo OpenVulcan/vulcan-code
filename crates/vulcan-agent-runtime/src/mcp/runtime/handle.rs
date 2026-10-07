@@ -936,10 +936,12 @@ impl McpRuntimeHandle {
                 }));
             }
             if tokio::time::Instant::now() >= deadline {
+                // Status names stay English because tool failures can return this error to the model.
+                // 状态名保持英文，因为工具失败可能将此错误返回给模型。
                 let pending_servers = enabled_servers
                     .iter()
                     .filter(|server| server.status != McpRuntimeServerStatus::Connected)
-                    .map(|server| format!("{}={}", server.name, server.status.label()))
+                    .map(|server| format!("{}={:?}", server.name, server.status))
                     .collect::<Vec<_>>()
                     .join(", ");
                 return Err(format!(
@@ -979,7 +981,7 @@ impl McpRuntimeHandle {
                     .servers
                     .values()
                     .filter(|server| server.status != McpRuntimeServerStatus::Stopped)
-                    .map(|server| format!("{}={}", server.name, server.status.label()))
+                    .map(|server| format!("{}={:?}", server.name, server.status))
                     .collect::<Vec<_>>()
                     .join(", ");
                 return Err(format!(

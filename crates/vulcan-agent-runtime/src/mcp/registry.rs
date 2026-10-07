@@ -107,10 +107,10 @@ impl McpServerRegistry {
     ) -> Result<McpLaunchedTransport, String> {
         let server = self
             .server_by_id(server_id)
-            .ok_or_else(|| format!("未找到 MCP 服务器 `{server_id}`。"))?;
+            .ok_or_else(|| format!("MCP server `{server_id}` is not configured"))?;
 
         if !server.enabled {
-            return Err(format!("MCP 服务器 `{}` 当前未启用。", server.name));
+            return Err(format!("MCP server `{}` is disabled", server.name));
         }
 
         let launch_spec = server.launch_spec()?;

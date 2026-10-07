@@ -564,18 +564,26 @@ impl McpServerConfig {
         }
     }
 
-    /// Converts one low-level launch error into user-facing transport diagnostics.
-    /// 将底层启动错误转换为面向用户的传输诊断文本。
+    /// Converts one low-level launch error into transport diagnostics.
+    /// 将底层启动错误转换为传输诊断文本。
+    /// The text becomes the server's last error, which tool failures can return to the model, so it is English.
+    /// 该文本成为服务器最近错误，工具失败可能将其返回给模型，因此使用英文。
     pub fn launch_error_text(&self, error: impl std::fmt::Display) -> String {
         match self.transport_kind() {
             McpTransportKind::Stdio => {
-                format!("启动 MCP 服务器 `{}` 失败：{}。", self.name, error)
+                format!("failed to start MCP server `{}`: {}", self.name, error)
             }
             McpTransportKind::Http => {
-                format!("连接 MCP HTTP 服务器 `{}` 失败：{}。", self.name, error)
+                format!(
+                    "failed to connect to MCP HTTP server `{}`: {}",
+                    self.name, error
+                )
             }
             McpTransportKind::Sse => {
-                format!("连接 MCP SSE 服务器 `{}` 失败：{}。", self.name, error)
+                format!(
+                    "failed to connect to MCP SSE server `{}`: {}",
+                    self.name, error
+                )
             }
         }
     }
