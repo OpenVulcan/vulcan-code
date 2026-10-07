@@ -33,6 +33,15 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// Create an explicit synthetic viewer endpoint without discovery; returns transport-only credentials.
+    /// 创建显式合成查看器端点，不执行发现；返回仅用于传输的凭据。
+    #[cfg(test)]
+    pub(super) fn viewer_fixture(address: std::net::SocketAddr) -> Self {
+        Self {
+            base_url: format!("http://{address}"),
+            token: "synthetic-fixture".into(),
+        }
+    }
     /// Creates a loopback endpoint for synthetic transport tests without reading user discovery.
     /// 创建合成传输测试使用的回环端点，不读取用户发现文件。
     #[cfg(test)]

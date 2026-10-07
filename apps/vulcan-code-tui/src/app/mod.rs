@@ -16,6 +16,7 @@ pub mod composer;
 pub mod form;
 pub mod history;
 pub mod hit;
+pub mod html_answers;
 pub mod input;
 pub mod insight;
 pub mod menus;
@@ -200,6 +201,9 @@ pub struct SessionState {
     pub agents: Vec<AgentInfo>,
     pub insight: SessionInsight,
     pub mode: ExecutionMode,
+    /// Last accepted HTML preference and exact durable source annotations.
+    /// 最近接纳的 HTML 偏好与精确可靠源码标注。
+    pub html_answers: HtmlAnswerSession,
     /// Blocks whose default fold state the user flipped, keyed by event seq.
     /// 用户翻转过默认折叠状态的块，以事件 seq 为键。
     pub toggled: HashSet<u64>,
@@ -230,6 +234,7 @@ impl SessionState {
             agents: Vec::new(),
             insight: SessionInsight::default(),
             mode: ExecutionMode::Build,
+            html_answers: HtmlAnswerSession::default(),
             toggled: HashSet::new(),
             scroll_from_bottom: 0,
             selected: None,
@@ -1057,10 +1062,29 @@ impl App {
     /// 将一条后端事实折叠进状态。
     pub fn apply(&mut self, event: BackendEvent) {
         match event {
+            BackendEvent::HtmlAnswers {
+                conversation_id,
+                state,
+            } => self.session_for(&conversation_id).html_answers = state,
+            BackendEvent::HtmlAnswerLink {
+                source,
+                link,
+                delivery,
+            } => action::perform(
+                self,
+                action::UiAction::DeliverHtmlAnswer {
+                    source,
+                    link,
+                    delivery,
+                },
+            ),
             BackendEvent::Connection(state) => {
                 self.connection = state;
                 if state != ConnectionState::Connected {
                     self.call_pending = false;
+                    for session in self.sessions.values_mut() {
+                        session.html_answers = HtmlAnswerSession::default();
+                    }
                 }
                 if state == ConnectionState::Connected {
                     self.load_page();
@@ -1135,6 +1159,7 @@ impl App {
             } => {
                 let session = self.session_for(&conversation_id);
                 session.events = events;
+                session.html_answers = HtmlAnswerSession::default();
                 session.events.sort_by_key(|e| e.seq);
                 session.hydrated = true;
             }

@@ -227,6 +227,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.24.1", features = ["v4", "serde"] }
 url = "2.5.8"
+# Opens validated viewer URLs through platform handlers without an interpolated shell command.
+# 通过平台处理器打开已校验的查看地址，不插值构造 shell 命令。
+open = "=5.4.4"
 vt100 = "0.16.2"
 windows-sys = "0.61.2"
 windows = "=0.62.2"

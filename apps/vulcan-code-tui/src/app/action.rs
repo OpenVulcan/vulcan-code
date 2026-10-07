@@ -328,6 +328,20 @@ pub enum UiAction {
     /// 项目模式：添加当前所列的目录。
     FolderUseCurrent,
     Inspect(u64),
+    /// Deliver a verified one-use link without exposing it in diagnostic formatting.
+    /// 交付经过验证的单次链接，不在诊断格式中暴露。
+    DeliverHtmlAnswer {
+        source: vulcan_service_api::HtmlAnswerSourceIdentity,
+        link: HtmlAnswerLink,
+        delivery: HtmlAnswerDelivery,
+    },
+    /// Read or copy one descriptor's original bytes after an explicit source action.
+    /// 在显式源码操作后读取或复制描述对应的原始字节。
+    HtmlAnswerSource {
+        seq: u64,
+        ordinal: usize,
+        copy: bool,
+    },
     /// Puts text on the terminal clipboard.
     /// 将文本放入终端剪贴板。
     CopyText(String),
@@ -609,7 +623,18 @@ pub fn perform(app: &mut App, action: UiAction) {
             app.clipboard.copy(text);
             app.toast(NoticeSeverity::Info, tr!("markdown.copied"));
         }
+        UiAction::DeliverHtmlAnswer {
+            source,
+            link,
+            delivery,
+        } => super::html_answers::deliver(app, source, link, delivery),
+        UiAction::HtmlAnswerSource { seq, ordinal, copy } => {
+            super::html_answers::source(app, seq, ordinal, copy)
+        }
         UiAction::Inspect(seq) => {
+            if super::html_answers::inspect(app, seq) {
+                return;
+            }
             let back = match app.overlay.take() {
                 Some(Overlay::History(history)) => Some(Box::new(history)),
                 _ => None,

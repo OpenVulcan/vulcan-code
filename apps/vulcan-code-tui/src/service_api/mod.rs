@@ -12,6 +12,7 @@
 
 #[cfg(test)]
 mod contracts_tests;
+pub mod html_answers;
 pub mod knowledge_base;
 pub mod licenses;
 pub mod mcp_settings;

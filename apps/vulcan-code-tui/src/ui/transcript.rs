@@ -412,10 +412,35 @@ fn reasoning(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
 }
 
 fn text(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
-    let EventBody::AssistantText { text, status, .. } = &event.body else {
+    let EventBody::AssistantText {
+        text,
+        status,
+        html_answers_allowed,
+    } = &event.body
+    else {
         return Vec::new();
     };
-    let mut lines = markdown::render(text, ctx.width, ctx.theme);
+    let compact = crate::model::html_answers::compact_source(
+        text,
+        ctx.session.html_answers.projections.get(&event.seq),
+    );
+    let status_label = if *status == AssistantSemanticStatus::Streaming {
+        tr!("htmlAnswers.generating")
+    } else {
+        tr!("htmlAnswers.waiting")
+    };
+    let mut lines = if *html_answers_allowed
+        && ctx
+            .session
+            .html_answers
+            .projections
+            .get(&event.seq)
+            .is_none_or(|projection| !projection.answers.is_empty())
+    {
+        markdown::render_with_html_status(&compact, ctx.width, ctx.theme, &status_label)
+    } else {
+        markdown::render(text, ctx.width, ctx.theme)
+    };
     match status {
         AssistantSemanticStatus::Streaming => {
             let caret = Span::styled(

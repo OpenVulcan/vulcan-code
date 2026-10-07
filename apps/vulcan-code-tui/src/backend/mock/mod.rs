@@ -9,6 +9,8 @@
 
 mod files;
 mod fixtures;
+#[cfg(test)]
+mod html_answers_tests;
 mod insight;
 mod script;
 mod service;
@@ -142,6 +144,9 @@ impl Pacing {
 
 #[derive(Default)]
 struct ConversationLog {
+    /// Simulated session-owned HTML state, independent from the plan mode.
+    /// 模拟的会话所有 HTML 状态，独立于计划模式。
+    html_answers: HtmlAnswerSession,
     events: Vec<ConversationEvent>,
     next_seq: u64,
     pending_question: Option<PendingQuestion>,
@@ -871,6 +876,13 @@ impl World {
             conversation_id: id.clone(),
             events: log.events.clone(),
         });
+        let mut html = log.html_answers.clone();
+        html.mode.get_or_insert_with(HtmlAnswerMode::default);
+        html.generation.get_or_insert(1);
+        self.emit(BackendEvent::HtmlAnswers {
+            conversation_id: id.clone(),
+            state: html,
+        });
         self.emit(BackendEvent::PendingQuestion {
             conversation_id: id.clone(),
             question: log.pending_question.clone(),
@@ -980,6 +992,66 @@ impl World {
 
     fn handle(&mut self, command: Command) {
         match command {
+            Command::SetSessionHtmlAnswerMode(request) => {
+                let Some(log) = self.logs.get_mut(&request.session_id) else {
+                    return;
+                };
+                let mode = log
+                    .html_answers
+                    .mode
+                    .get_or_insert_with(HtmlAnswerMode::default);
+                let conflict = mode.revision != request.expected_revision;
+                if mode.revision == request.expected_revision && mode.enabled != request.enabled {
+                    mode.enabled = request.enabled;
+                    mode.revision += 1;
+                }
+                self.hydrate(&request.session_id);
+                if conflict {
+                    self.emit(BackendEvent::Toast {
+                        severity: NoticeSeverity::Warning,
+                        message: crate::tr!("htmlAnswers.conflict"),
+                    });
+                }
+            }
+            Command::CreateHtmlAnswerViewLink {
+                source, delivery, ..
+            } => {
+                let id = source.session_id.to_string();
+                let current = self.logs.get(&id).is_some_and(|log| {
+                    log.html_answers
+                        .projections
+                        .get(&source.event_seq)
+                        .is_some_and(|projection| {
+                            projection.answers.iter().any(|answer| {
+                                log.html_answers
+                                    .source(&id, source.event_seq, answer.ordinal)
+                                    .as_ref()
+                                    == Some(&source)
+                            })
+                        })
+                });
+                if current {
+                    self.emit(BackendEvent::HtmlAnswerLink {
+                        link: HtmlAnswerLink(vulcan_service_api::HtmlAnswerViewLinkResponse {
+                            grant_id: uuid::Uuid::new_v4(),
+                            viewer_url: format!(
+                                "http://127.0.0.1:1/html-answers/{}/{}#ticket=synthetic",
+                                source.session_id, source.artifact_id
+                            ),
+                            expires_in_seconds:
+                                vulcan_session_core::v1::html_answers::HTML_ANSWER_TICKET_SECONDS,
+                        }),
+                        source,
+                        delivery,
+                    });
+                } else {
+                    self.emit(BackendEvent::Toast {
+                        severity: NoticeSeverity::Warning,
+                        message: crate::tr!("htmlAnswers.stale"),
+                    });
+                }
+            }
+            Command::RevokeHtmlAnswerViewLink(_) => {}
             Command::SelectConversation(id) => {
                 self.selected = Some(id.clone());
                 if let Some(row) = self.conversations.iter_mut().find(|c| c.id == id) {

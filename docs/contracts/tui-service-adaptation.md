@@ -30,6 +30,10 @@
 
 ## 页面范围
 
+会话 HTML 回答通过 `service_api/html_answers.rs` 镜像 WebUI 的偏好保存、查看链接签发和撤销。
+权威状态从会话 hydration 与 durable 增量取得，执行身份不由 TUI 解析正文产生；完整行为与验收见
+[`session-html-answers.md`](session-html-answers.md)。
+
 | 页面 | 已适配交互 | 状态来源 |
 | --- | --- | --- |
 | 外观 | TUI 主题、侧栏、思考浮层；语言同步到服务 | 本地状态、Workbench |

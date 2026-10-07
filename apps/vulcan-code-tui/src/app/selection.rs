@@ -91,10 +91,22 @@ impl TextSelection {
 
 /// The selection being shown and the copy waiting to be written to the terminal.
 /// 正在显示的选择，以及等待写入终端的复制内容。
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Clipboard {
     pub selection: Option<TextSelection>,
     outbox: Option<String>,
+}
+
+impl std::fmt::Debug for Clipboard {
+    /// Clipboard payloads can contain one-use viewer links; never format their bytes.
+    /// 剪贴板内容可能包含单次查看链接；绝不格式化其字节。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Clipboard")
+            .field("selection", &self.selection)
+            .field("pending", &self.outbox.is_some())
+            .finish()
+    }
 }
 
 impl Clipboard {

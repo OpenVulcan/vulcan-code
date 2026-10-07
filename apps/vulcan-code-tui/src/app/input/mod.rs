@@ -145,6 +145,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
         Some(AppCommand::NewConversation)
     } else if alt(&key, 'a') {
         Some(AppCommand::Attach)
+    } else if alt(&key, 'h') && in_chat {
+        Some(AppCommand::ToggleHtmlAnswers)
     } else if alt(&key, 'd') {
         Some(AppCommand::OpenDiff)
     } else if alt(&key, 'c') {
@@ -409,6 +411,34 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
                     conversation_id: id,
                     enabled,
                 });
+            }
+        }
+        AppCommand::ToggleHtmlAnswers => super::html_answers::toggle(app),
+        AppCommand::HtmlResults => {
+            let seq = app.session().and_then(|session| {
+                session
+                    .selected
+                    .filter(|seq| {
+                        session
+                            .html_answers
+                            .projections
+                            .get(seq)
+                            .is_some_and(|projection| !projection.answers.is_empty())
+                    })
+                    .or_else(|| {
+                        session
+                            .html_answers
+                            .projections
+                            .iter()
+                            .rev()
+                            .find(|(_, projection)| !projection.answers.is_empty())
+                            .map(|(seq, _)| *seq)
+                    })
+            });
+            if let Some(seq) = seq {
+                super::html_answers::inspect(app, seq);
+            } else {
+                app.toast(NoticeSeverity::Info, tr!("htmlAnswers.unavailable"));
             }
         }
         AppCommand::SelectModel => {

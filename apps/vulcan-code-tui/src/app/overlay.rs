@@ -283,7 +283,7 @@ pub struct SheetAction {
 
 /// Read-only detail sheet with actions: a memory item, a profile node or a subagent.
 /// 带操作的只读详情面板：记忆条目、画像节点或子代理。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DetailSheet {
     pub title: String,
     /// `(label, value)` rows shown as an aligned table.
@@ -297,6 +297,19 @@ pub struct DetailSheet {
     /// 键盘焦点所在按钮；`None` 时回车关闭面板。
     pub focus: Option<usize>,
     pub scroll: usize,
+}
+
+impl std::fmt::Debug for DetailSheet {
+    /// Detail text can contain temporary viewer URLs; diagnostics retain shape rather than values.
+    /// 详情文本可能包含临时查看地址；诊断仅保留形状，不保留取值。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DetailSheet")
+            .field("fields", &self.fields.len())
+            .field("sections", &self.sections.len())
+            .field("actions", &self.actions.len())
+            .finish()
+    }
 }
 
 impl DetailSheet {

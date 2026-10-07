@@ -18,6 +18,30 @@ use super::theme::{Theme, mix};
 /// Renders `source` into lines at most `width` columns wide.
 /// 将 `source` 渲染为不超过 `width` 列的行。
 pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    render_internal(source, width, theme, None)
+}
+
+/// Collapse dedicated HTML code while retaining the existing line renderer and inert status.
+/// 保留既有逐行渲染器并将专用 HTML 代码折叠为不可执行状态。
+/// `status` is display-only; this function never grants a link or parses execution metadata.
+/// `status` 仅用于展示；本函数绝不签发链接或解析执行元信息。
+pub fn render_with_html_status(
+    source: &str,
+    width: usize,
+    theme: &Theme,
+    status: &str,
+) -> Vec<Line<'static>> {
+    render_internal(source, width, theme, Some(status))
+}
+
+/// Render the established Markdown syntax, optionally collapsing HTML candidates for the transcript.
+/// 渲染既有 Markdown 语法，并可为会话区折叠 HTML 候选。
+fn render_internal(
+    source: &str,
+    width: usize,
+    theme: &Theme,
+    html_status: Option<&str>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code = false;
     let code_bg = mix(theme.muted, theme.bg, 0.7);
@@ -31,6 +55,22 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             in_code = !in_code;
             if in_code {
                 let lang = trimmed.trim_start_matches('`').trim();
+                if let Some(status) =
+                    html_status.filter(|_| lang.split_whitespace().next() == Some("vulcan-html"))
+                {
+                    lines.extend(wrap(
+                        &[Span::styled(status.to_owned(), theme.muted_text())],
+                        width,
+                        &[],
+                        &[],
+                    ));
+                    index = source[index..]
+                        .iter()
+                        .position(|line| line.trim_start().starts_with("```"))
+                        .map_or(source.len(), |close| index + close + 1);
+                    in_code = false;
+                    continue;
+                }
                 let label = if lang.is_empty() {
                     String::new()
                 } else {

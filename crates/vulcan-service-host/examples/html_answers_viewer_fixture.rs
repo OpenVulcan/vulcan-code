@@ -15,9 +15,10 @@ use std::{
 };
 use tokio::net::TcpListener;
 use vulcan_service_api::{
-    HtmlAnswerRevokeRequest, HtmlAnswerSourceIdentity, HtmlAnswerViewError,
-    HtmlAnswerViewLinkRequest, WebuiServiceRpcError, build_service_project_resource_response,
-    webui_service_ready_discovery_snapshot,
+    ConversationEventRevisionFrontierV1, ConversationEventWindowV1Response,
+    ConversationSessionConfigV1, HtmlAnswerRevokeRequest, HtmlAnswerSourceIdentity,
+    HtmlAnswerViewError, HtmlAnswerViewLinkRequest, WebuiServiceRpcError,
+    build_service_project_resource_response, webui_service_ready_discovery_snapshot,
 };
 use vulcan_service_host::html_answers::{
     HtmlAnswerContent, HtmlAnswerRuntime, HtmlAnswerRuntimeConfig,
@@ -25,8 +26,9 @@ use vulcan_service_host::html_answers::{
 use vulcan_service_host::{WebuiServiceHttpConfig, build_webui_service_router};
 use vulcan_session_core::v1::{
     ApiCallId, AssistantSemanticStatus, AssistantTextEvent, ConversationEvent, EventBody,
-    EventVisibility, Seq,
-    html_answers::{HtmlAnswerAvailability, project_html_answers},
+    EventVisibility, Seq, SessionConfig,
+    html_answers::{HtmlAnswerAvailability, HtmlAnswerEventProjection, project_html_answers},
+    service_dto::ConversationEventWindowBatch,
 };
 
 /// Synthetic owner shared by fixture-only issuance and standard static serving.
@@ -110,6 +112,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         }),
     )?;
+    let mut hydration = ConversationEventWindowV1Response::hydration(
+        ConversationEventWindowBatch::from_events(
+            session.to_string(),
+            1,
+            std::slice::from_ref(&event),
+        ),
+        None,
+        None,
+        None,
+        ConversationSessionConfigV1::from_session_config(&SessionConfig::default()),
+        ConversationEventRevisionFrontierV1::try_new("synthetic", 1, 1)?,
+    );
+    hydration
+        .html_answer_projections
+        .push(HtmlAnswerEventProjection {
+            seq: event.seq,
+            event_revision: event.event_revision,
+            answers: vec![descriptor.clone()],
+        });
     let fixture = Fixture {
         runtime: runtime.clone(),
         source: identity,
@@ -121,8 +142,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     };
     let rpc_runtime = runtime.clone();
-    // The production transport is real; this dispatcher only permits the two synthetic viewing operations.
-    // 正式传输层真实运行；此分发器只允许两个合成查看操作。
+    // The real transport exposes only this synthetic window and its viewing operations.
+    // 真实传输仅暴露此合成窗口及其查看操作。
     let router = build_webui_service_router(WebuiServiceHttpConfig {
         discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(
             listener.local_addr()?.port(),
@@ -136,7 +157,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         html_answers: Some(runtime.clone()),
         rpc_dispatcher: Arc::new(move |method, params| {
             let runtime = rpc_runtime.clone();
+            let hydration = hydration.clone();
             Box::pin(async move {
+                if method == "service_session_event_hydration_v1" {
+                    if params
+                        .as_ref()
+                        .and_then(|value| value.get("sessionId"))
+                        .and_then(|value| value.as_str())
+                        != Some(hydration.batch.session_id.as_str())
+                    {
+                        return Err(WebuiServiceRpcError::InvalidParams(
+                            "unknown synthetic session".into(),
+                        ));
+                    }
+                    return serde_json::to_value(hydration)
+                        .map_err(|_| WebuiServiceRpcError::Service("serialization failed".into()));
+                }
                 let request = params
                     .and_then(|mut params| params.get_mut("request").map(serde_json::Value::take))
                     .ok_or_else(|| {
@@ -188,7 +224,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_state(fixture),
     );
-    println!("{}", serde_json::json!({ "viewer": origin }));
+    println!(
+        "{}",
+        serde_json::json!({ "viewer": origin, "session": session })
+    );
     let result = axum::serve(listener, router).await;
     runtime.shutdown().await;
     result?;

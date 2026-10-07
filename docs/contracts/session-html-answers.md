@@ -166,11 +166,11 @@ rtk proxy node apps/vulcan-code-desktop/tools/html-answers-security.mjs --fixtur
 `--bundle` 以及本机已有 Chromium 的 `--chromium` 路径；可用 `--report` 保存非敏感观测。
 2026-10-07 Chromium 154.0.8037.0 已验证真实鼠标脚本交互、片段移除、父 DOM/桌面桥接隔离、
 20 次预览/源码切换销毁、链接重放拒绝及页面关闭后租约返回 410。此测试使用合成源码回调；
-内核另以真实隔离分段存储验证精确读取、修订/代次拒绝及会话删除后失效，尚不是三端完整验收。
+内核另以真实隔离分段存储验证精确读取、修订/代次拒绝及会话删除后失效。
 
 会话卡片真实验收：运行 `apps/vulcan-code-web/scripts/build-html-answer-acceptance.mjs`，构建到
 忽略的 `target/html-answer-card-bundle`，再用 `html-answers-card-acceptance.mjs` 指向上述 Rust
-夹具及该目录。夹具使用正式 Core HTTP 鉴权、RPC 和查看传输，仅提供合成窗口及两个查看方法；
+夹具及该目录。夹具使用正式 Core HTTP 鉴权、RPC 和查看传输，仅提供合成窗口加载及查看方法；
 不访问真实会话、发现文件或模型。当前 Chromium 验证了点击前零框架、嵌套页面真实按钮交互、
 最大化保留状态、源码切换销毁、20 次完整打开关闭、390px 窄屏和可选分块加载失败的局部回退。
 新增 Esc 跨两个框架关闭、触发按钮焦点返回与标准文档模式验证均通过。
@@ -187,6 +187,35 @@ Windows 打包宿主可能虚拟化 LocalAppData，测试对浏览器路径调�
 2026-10-07 原型已在 Chromium 154.0.8037.0、Firefox 156.0、Electron 44.4.1 通过。
 页面按钮正常执行；父 DOM、存储、Node 和桌面桥接不可访问；网络与导航逃逸没有到达合成禁止
 目标；打开关闭循环后生成框架被销毁。此版本记录是验收证据，实际依赖版本以清单为准。
+
+## TUI 操作与验证
+
+输入区的 HTML 回答按钮、`Alt+H` 和 `/html` 共用比较交换保存入口。已有会话等待 Core 可靠确认；
+新草稿通过首次提交的 `sessionSettings.htmlAnswersEnabled` 原子创建，提交失败保留草稿偏好。
+`/html-results` 查看所选消息的结果；所选消息没有结果时定位最近一条实际结果。结果面板提供打开、
+复制链接、查看及复制源码。未点击不请求票据，未确认的流式内容仅显示摘要，原始字节仍可检查。
+
+链接只通过类型化 RPC 取得，交付时再次核对当前会话、代次、源码修订及完整身份。平台启动使用
+`open` 的安全默认处理器，不启用 `insecure` 特性。启动失败显示临时地址并提供重新复制操作；
+终端复制使用既有 OSC52，需要终端支持。链接不进入 TUI 的 Debug、日志或持久设置；系统打开
+处理器必然取得该临时地址，测试浏览器则通过标准输入接收，避免测试命令行泄露。
+模拟后端不启动真实浏览器；合成链接只测试动作与权威归属。
+
+常规验证：`rtk cargo nextest run -p vulcan-code-tui` 和
+`rtk cargo clippy -p vulcan-code-tui --all-targets -- -D warnings`。
+实际传输验收先构建上述 Rust 查看器夹具和 WebUI 验收包，再给测试进程显式设置
+`VULCAN_HTML_FIXTURE`（夹具绝对路径）、`VULCAN_HTML_BUNDLE`（包绝对路径）及
+`VULCAN_HTML_CHROMIUM`（已有浏览器绝对路径），运行：
+
+```powershell
+rtk cargo test -p vulcan-code-tui html_tui_production_viewer_acceptance -- --ignored --nocapture --test-threads=1
+```
+
+该可选测试实际执行：正式 HTTP 加载 → TUI 结果面板动作 → 正式票据签发 → 终端剪贴板交付 →
+同一链接在 Chromium 中真实按钮交互、片段移除与框架沙箱检查。2026-10-07 本机执行通过。
+所有内容、端口及服务进程均为测试自有，退出时回收；不读取服务发现或真实用户会话。
+此项不声称验证每个平台的系统默认浏览器关联；Windows/Linux/macOS 的原生打开行为仍需各平台
+发行验收，页面传输及隔离已按对应测试覆盖。
 
 ## 设计参考
 

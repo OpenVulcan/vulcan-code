@@ -29,6 +29,11 @@ serde_json.workspace = true
 tungstenite.workspace = true
 unicode-width.workspace = true
 ureq.workspace = true
+# Typed HTML source ownership and safe native viewer navigation.
+# 强类型 HTML 源码归属与安全原生查看器导航。
+uuid.workspace = true
+url.workspace = true
+open.workspace = true
 vulcan-i18n.workspace = true
 # Shared service DTOs and v1 conversation event types; the TUI reads the wire through them.
 # 共享服务 DTO 与 v1 会话事件类型；TUI 通过它们读取传输数据。

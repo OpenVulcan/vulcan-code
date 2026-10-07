@@ -7,6 +7,12 @@ use crate::tr;
 pub enum AppCommand {
     NewConversation,
     TogglePlan,
+    /// Toggle the session-owned HTML answer preference.
+    /// 切换会话所有的 HTML 回答偏好。
+    ToggleHtmlAnswers,
+    /// Inspect HTML results in the selected or most recent assistant answer.
+    /// 查看选中或最近助手回复中的 HTML 结果。
+    HtmlResults,
     SelectModel,
     CycleReasoning,
     ToggleTheme,
@@ -39,12 +45,14 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
-    pub const ALL: [AppCommand; 28] = [
+    pub const ALL: [AppCommand; 30] = [
         AppCommand::NewConversation,
         AppCommand::AddProject,
         AppCommand::Attach,
         AppCommand::History,
         AppCommand::TogglePlan,
+        AppCommand::ToggleHtmlAnswers,
+        AppCommand::HtmlResults,
         AppCommand::SelectModel,
         AppCommand::CycleReasoning,
         AppCommand::OpenDiff,
@@ -76,6 +84,8 @@ impl AppCommand {
         match self {
             AppCommand::NewConversation => "new",
             AppCommand::TogglePlan => "plan",
+            AppCommand::ToggleHtmlAnswers => "html",
+            AppCommand::HtmlResults => "html-results",
             AppCommand::SelectModel => "model",
             AppCommand::CycleReasoning => "effort",
             AppCommand::ToggleTheme => "theme",
@@ -110,6 +120,7 @@ impl AppCommand {
         match self {
             AppCommand::NewConversation => "Ctrl+N",
             AppCommand::TogglePlan => "Shift+Tab",
+            AppCommand::ToggleHtmlAnswers => "Alt+H",
             AppCommand::SelectModel => "Ctrl+O",
             AppCommand::CycleReasoning => "Ctrl+R",
             AppCommand::ToggleSidebar => "Ctrl+B",
@@ -132,6 +143,8 @@ impl AppCommand {
         match self {
             AppCommand::NewConversation => tr!("projectMenu.newConversation"),
             AppCommand::TogglePlan => tr!("composer.planMode"),
+            AppCommand::ToggleHtmlAnswers => tr!("htmlAnswers.label"),
+            AppCommand::HtmlResults => tr!("htmlAnswers.open"),
             AppCommand::SelectModel => tr!("composer.modelPicker.tooltipTitle"),
             AppCommand::CycleReasoning => tr!("composer.reasoning.subtitle"),
             AppCommand::ToggleTheme => tr!("appChrome.theme"),

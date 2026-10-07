@@ -9,11 +9,13 @@
 // 使模拟后端与未来的服务后端驱动同一个 reducer。只保留 TUI 渲染所需字段；对接时增加从传输 DTO
 // 到这些类型的映射层，而不是改动界面结构。
 
+pub mod html_answers;
 pub mod insight;
 pub mod system;
 
 use serde_json::Value;
 
+pub use html_answers::*;
 pub use insight::*;
 pub use system::*;
 
@@ -198,6 +200,9 @@ pub enum EventBody {
     AssistantText {
         text: String,
         status: AssistantSemanticStatus,
+        /// Provider-visible source may display inert HTML candidates; this is never execution authority.
+        /// Provider 可见源码可以展示不可执行 HTML 候选；此字段绝不是执行权威。
+        html_answers_allowed: bool,
     },
     ToolCall {
         tool_name: String,
