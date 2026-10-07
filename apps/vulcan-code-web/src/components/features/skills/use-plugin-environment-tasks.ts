@@ -53,18 +53,28 @@ export function usePluginEnvironmentTasks(
     });
     return () => { active = false; };
   }, [actions, plugins]);
+  // pendingTaskKey changes only when the set of unfinished tasks changes, not on every status refresh.
+  // pendingTaskKey 仅在未完成任务集合变化时改变，而不是每次状态刷新都改变。
+  const pendingTaskKey = Object.values(installTasksByPlugin)
+    .filter((task) => task.state === "queued" || task.state === "running")
+    .map((task) => task.taskId).sort().join("\u0000");
   // Poll only unfinished Core tasks; unmounting the panel never cancels their installation.
   // 只轮询尚未完成的 Core 任务；卸载面板绝不取消安装。
   React.useEffect(() => {
-    const pending = Object.values(installTasksByPlugin).filter((task) => task.state === "queued" || task.state === "running");
-    if (pending.length === 0) return;
+    if (!pendingTaskKey) return;
+    const pendingTaskIds = pendingTaskKey.split("\u0000");
     let active = true;
     let polling = false;
     const poll = async () => {
       if (polling) return;
       polling = true;
       try {
-        const updates = await Promise.all(pending.map((task) => actions.onPluginEnvironmentInstallStatus(task.taskId)));
+        const updates = await Promise.all(pendingTaskIds.map((taskId) => actions.onPluginEnvironmentInstallStatus(taskId)));
+        if (!active) return;
+        // Readiness is read before publishing, because a finished task ends this effect and its active flag.
+        // 就绪状态在发布前读取，因为任务完成会结束本副作用及其 active 标记。
+        const readiness = await Promise.all(updates.filter((task) => task.state === "succeeded")
+          .map(async (task) => [task.pluginId, await actions.onPluginEnvironmentReady(task.pluginId)] as const));
         if (!active) return;
         setInstallTasksByPlugin((current) => {
           const next = { ...current };
@@ -73,12 +83,7 @@ export function usePluginEnvironmentTasks(
           }
           return next;
         });
-        for (const task of updates) {
-          if (task.state === "succeeded") {
-            const ready = await actions.onPluginEnvironmentReady(task.pluginId);
-            if (active) setEnvironmentReadyByPlugin((current) => ({ ...current, [task.pluginId]: ready }));
-          }
-        }
+        if (readiness.length > 0) setEnvironmentReadyByPlugin((current) => ({ ...current, ...Object.fromEntries(readiness) }));
       } catch (reason) {
         if (active) onError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -88,7 +93,7 @@ export function usePluginEnvironmentTasks(
     void poll();
     const timer = window.setInterval(() => { void poll(); }, 1000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [installTasksByPlugin, actions, onError]);
+  }, [pendingTaskKey, actions, onError]);
   // A second client can start installation while this panel is open, so refresh Core's latest task by plugin.
   // 其他客户端可能在本面板打开期间启动安装，因此按插件刷新 Core 的最近任务。
   React.useEffect(() => {
