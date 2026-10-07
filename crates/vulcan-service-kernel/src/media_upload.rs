@@ -19,7 +19,7 @@ use vulcan_service_api::{
     ComposerAttachmentPreparationSummary, ComposerAttachmentSummary, MediaUploadPhase,
     MediaUploadProgressChangedDelta, ServiceEvent, WorkbenchDelta, WorkbenchDeltaEnvelope,
 };
-use vulcan_workbench_model::{SessionMediaReferenceEntry, SessionMediaReferenceScope};
+use vulcan_workbench_model::SessionMediaReferenceScope;
 
 mod composer_policy;
 mod draft_execution;
@@ -1899,58 +1899,6 @@ async fn prepare_submission_media_inner(
                 continue;
             }
         }
-        let source_ledger_reference = session_runtime_state
-            .and_then(|runtime_state| {
-                runtime_state.media_reference_ledger.find_usable(
-                    source_identity.content_sha256.as_str(),
-                    source_identity.byte_len,
-                    provider_id.as_str(),
-                    execution.route.entry.id.as_str(),
-                    upload_contract.upload_channel_id.as_str(),
-                    upload_contract.contract_fingerprint.as_str(),
-                    reference_scope,
-                    execution.route.connection.id.as_str(),
-                    session_scope_id.as_deref(),
-                    resource_kind_text(resource_kind),
-                    attachment.mime_type.as_str(),
-                    current_unix_millis_u64(),
-                )
-            })
-            .filter(|reference| {
-                // Every provider reference is reusable only while its exact declared TTL remains valid.
-                // 每条供应商引用都只能在其精确声明的 TTL 仍有效时复用。
-                submission_media_reference_is_usable_for_current_attachment(
-                    preparation_attachment.attach_current_owner,
-                    reference.created_at_unix_millis,
-                    reference.expires_at_unix_millis,
-                    now_unix_millis,
-                )
-            })
-            .cloned();
-        if let Some(source_ledger_reference) = source_ledger_reference {
-            deadline
-                .wait(
-                    cancellation,
-                    execution.client.remember_persisted_media_reference(
-                        &execution.route,
-                        media_source_path.as_path(),
-                        resource_kind,
-                        attachment.mime_type.as_str(),
-                        source_ledger_reference.provider_reference.clone(),
-                        source_ledger_reference.source_sha256.as_str(),
-                        source_ledger_reference.source_byte_len,
-                        session_scope_id.as_deref(),
-                        source_ledger_reference.created_at_unix_millis,
-                        source_ledger_reference.expires_at_unix_millis,
-                    ),
-                )
-                .await
-                .map_err(|failure| failure.to_string())??;
-            prepared_submission_media.push_reference(prepared_media_reference_from_ledger(
-                &source_ledger_reference,
-            ));
-            continue;
-        }
         if let Some(prepared_reference) = deadline
             .wait(
                 cancellation,
@@ -2392,29 +2340,6 @@ fn collect_media_preparation_attachments(
         }
     }
     collected
-}
-
-/// Converts a persisted ledger entry into the current submission result shape.
-/// 将已持久化账本条目转换为当前提交结果形状。
-fn prepared_media_reference_from_ledger(
-    entry: &SessionMediaReferenceEntry,
-) -> PreparedSubmissionMediaReference {
-    PreparedSubmissionMediaReference {
-        source_sha256: entry.source_sha256.clone(),
-        source_byte_len: entry.source_byte_len,
-        provider_id: entry.provider_id.clone(),
-        service_entry_id: entry.service_entry_id.clone(),
-        upload_channel_id: entry.upload_channel_id.clone(),
-        upload_contract_fingerprint: entry.upload_contract_fingerprint.clone(),
-        reference_scope: entry.reference_scope,
-        connection_id: entry.connection_id.clone(),
-        session_id: entry.session_id.clone(),
-        resource_kind: entry.resource_kind.clone(),
-        mime_type: entry.mime_type.clone(),
-        provider_reference: entry.provider_reference.clone(),
-        created_at_unix_millis: entry.created_at_unix_millis,
-        expires_at_unix_millis: entry.expires_at_unix_millis,
-    }
 }
 
 /// Converts one prepared result into the attachment-index persistence shape used by drafts.

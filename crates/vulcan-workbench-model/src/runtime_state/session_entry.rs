@@ -390,9 +390,6 @@ pub struct SessionRuntimeStateEntry {
     /// Provider tool capabilities enabled only for this session.
     /// 仅为当前会话启用的供应商工具能力。
     pub provider_tool_enabled_capabilities: BTreeSet<String>,
-    /// Process-local provider media-reference mirror for the active uncompressed conversation window.
-    /// 活动未压缩会话窗口使用的进程内供应商媒体引用镜像。
-    pub media_reference_ledger: SessionMediaReferenceLedger,
     /// Session-selected native model-extension target sets keyed by extension capability.
     /// 按扩展能力索引的会话级原生模型扩展目标集合。
     pub provider_extension_target_sets:
