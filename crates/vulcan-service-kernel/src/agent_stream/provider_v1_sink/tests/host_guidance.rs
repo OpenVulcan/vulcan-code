@@ -424,11 +424,17 @@ fn host_guidance_upgrade_survives_compaction_and_current_baseline_needs_no_overl
     let (_directory, current) = published_stored_open_turn();
     let candidate = candidate_for(&current);
     install_baseline(&current, baseline_with_text(HOST_MESSAGE_GUIDANCE));
-    let revision = current.read(|document| document.memory_revision()).unwrap();
+    // The first preparation may commit metadata (the frozen HTML-answer preference) but no event.
+    // 首次准备可能提交元数据（冻结的 HTML 回答偏好），但不得追加事件。
+    let events = current
+        .read(|document| serde_json::to_value(document.events()).unwrap())
+        .unwrap();
     context_injection::synchronize_request_dynamic_context(&current, &request_facts(), &candidate)
         .unwrap();
     assert_eq!(
-        revision,
-        current.read(|document| document.memory_revision()).unwrap()
+        events,
+        current
+            .read(|document| serde_json::to_value(document.events()).unwrap())
+            .unwrap()
     );
 }
