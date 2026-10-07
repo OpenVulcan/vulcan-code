@@ -169,6 +169,10 @@ pub const MAX_ASYNC_TIMEOUT_MS: u64 = 86_400_000;
 /// 单个服务入口或协议路由声明的最大固定请求头数量。
 pub const MAX_FIXED_HEADERS: usize = 16;
 
+/// Maximum byte length of one manifest-declared fixed request header value.
+/// 单个 Manifest 声明的固定请求头值的最大字节长度。
+pub const MAX_FIXED_HEADER_VALUE_BYTES: usize = 1_024;
+
 /// Manifest engine contract version currently understood by this host.
 /// 当前宿主理解的 Manifest 引擎契约版本。
 pub const CURRENT_MANIFEST_ENGINE: u32 = 2;
