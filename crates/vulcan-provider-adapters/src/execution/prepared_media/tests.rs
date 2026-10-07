@@ -157,7 +157,7 @@ fn prepared_media_key_isolates_frozen_route_identity() {
     assert_eq!(first, replacement_key);
     // other_account proves the default provider-protocol scope ignores concrete accounts.
     // other_account 证明默认供应商协议作用域忽略具体账号。
-    let mut other_account = route.clone();
+    let mut other_account = route;
     other_account.connection.id = String::from("secondary-account");
     let account_key = prepared_media_key(
         &other_account,

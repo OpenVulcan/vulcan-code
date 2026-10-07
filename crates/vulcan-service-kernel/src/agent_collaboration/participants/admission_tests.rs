@@ -114,7 +114,7 @@ fn current_main_only_requires_exact_direct_child() {
     let mut stale_target = target.clone();
     stale_target.turn_id = Some(TurnId::try_new(101).unwrap());
     assert!(require_document_message_admission(&parent, &child, &stale_target).is_err());
-    stale_target = target.clone();
+    stale_target = target;
     stale_target.segment_generation += 1;
     assert!(require_document_message_admission(&parent, &child, &stale_target).is_err());
     assert_eq!(

@@ -42,10 +42,7 @@ fn collaboration_continuation_tracks_result_consumption_and_original_turn() {
             13,
         )
         .unwrap();
-    assert_eq!(
-        source.pending_collaboration_continuation(),
-        Some(authority.clone())
-    );
+    assert_eq!(source.pending_collaboration_continuation(), Some(authority));
     source.interrupt_active_api(14).unwrap();
     assert!(source.events().iter().any(
         |event| matches!(&event.event, EventBody::ApiStats(stats) if stats.api_call_id == api)
@@ -100,7 +97,7 @@ fn collaboration_continuation_tracks_steering_and_stop_control() {
     target
         .apply_task_steering_before_api(
             CollaborationOperationId::try_new("apply-steer").unwrap(),
-            message.delivery_id.clone(),
+            message.delivery_id,
             5,
         )
         .unwrap();

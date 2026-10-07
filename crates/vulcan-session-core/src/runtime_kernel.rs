@@ -560,9 +560,7 @@ mod tests {
         // kernel is isolated and uses a real runtime turn transition.
         // kernel 独立且使用真实运行时回合转换。
         let mut kernel = SessionRuntimeKernel::new(SessionNodeId::new_v4());
-        let kind = ActiveTurnKind::QuestionExecution {
-            execution_id: execution_id.clone(),
-        };
+        let kind = ActiveTurnKind::QuestionExecution { execution_id };
         kernel
             .start_turn("qa-preparation", kind.clone(), 10)
             .unwrap();

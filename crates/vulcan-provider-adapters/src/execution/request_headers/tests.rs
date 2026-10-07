@@ -269,7 +269,7 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
 
     // lite_route freezes the same native route with the adopted Lite model dialect.
     // lite_route 在同一原生路由上冻结已采纳的 Lite 模型方言。
-    let mut lite_route = route.clone();
+    let mut lite_route = route;
     lite_route.codex_behavior = Some(crate::provider_manifest::CodexModelBehavior {
         wire_dialect: crate::provider_manifest::CodexWireDialect::Lite,
         ..Default::default()

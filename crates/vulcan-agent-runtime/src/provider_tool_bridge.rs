@@ -1084,8 +1084,8 @@ fn build_direct_provider_tool_candidate(
     };
     let origin = VulcanToolOrigin::new(
         VulcanToolSourceKind::AiHostBinding,
-        selected.target.provider_id.clone(),
-        contract.tool_id.clone(),
+        selected.target.provider_id,
+        contract.tool_id,
     );
     Ok(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(tool_id.clone(), tool_id, description, None, origin),

@@ -330,7 +330,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_goal.clone(),
             session_todolist.clone(),
             session_plan_mode.clone(),
-            session_vmm_policy_for_list.clone(),
+            session_vmm_policy_for_list,
             session_output_style.clone(),
             session_context_compaction_window_node_id.clone(),
             session_provider_usage.clone(),

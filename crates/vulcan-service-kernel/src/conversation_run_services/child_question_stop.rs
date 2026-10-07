@@ -138,8 +138,7 @@ pub(crate) async fn stop_owned_child_question_execution(
         .clone();
     browser_manager
         .retire_ai_connection_after_turn(session_id)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     let interruption_at_ms = current_v1_goal_unix_millis()?;
     handle
         .mutate_durable_if_changed(

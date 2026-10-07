@@ -412,8 +412,8 @@ fn task_runtime_mirrors_lifecycle_into_subagent_registry() {
     let resolved_config = test_resolved_config(&controller_config, &invocation.invocation_config);
     let running_outcome = TaskExecutionOutcome {
         task_id,
-        controller_config: controller_config.clone(),
-        resolved_config: resolved_config.clone(),
+        controller_config,
+        resolved_config,
         snapshot: CoreConversationSnapshot::default(),
         provider_turns_executed: 0,
         tool_calls_processed: 0,

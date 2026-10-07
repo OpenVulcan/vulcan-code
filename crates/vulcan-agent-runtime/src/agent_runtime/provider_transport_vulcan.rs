@@ -216,8 +216,7 @@ pub(crate) fn capture_vulcan_public_stream(
         let secret = resolved
             .credential
             .resolve_for_request()
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         let encoded = resolved
             .client
             .encode_effective_request_with_credential(

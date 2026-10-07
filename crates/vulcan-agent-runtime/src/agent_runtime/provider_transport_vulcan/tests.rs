@@ -268,7 +268,7 @@ fn uncovered_host_event_blocks_continuation_reuse() {
     // 反证：在宿主消息缺席、且改写指纹取自同一 config 时，构建器必须给出已证明的延续。正因如此，
     // 上面的拒绝才能归因于宿主事件边界，而不是两个夹具都失败的某一项证明。
     let config = vulcan_core::types::ControllerConfig::default();
-    let mut proven = uncovered.clone();
+    let mut proven = uncovered;
     proven.messages = vec![
         text_message("covered-message"),
         text_message("later-message"),

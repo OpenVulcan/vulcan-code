@@ -199,7 +199,7 @@ fn append_section_chunks(
     if section.trim().is_empty() {
         return;
     }
-    let trimmed_start = range.start + content[range.clone()].find(section).unwrap_or(0);
+    let trimmed_start = range.start + content[range].find(section).unwrap_or(0);
     let tokens = estimate_mixed_language_text_tokens(section).max(1);
     if tokens <= HARD_CHUNK_TOKENS {
         push_chunk(

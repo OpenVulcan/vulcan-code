@@ -1288,7 +1288,7 @@ fn wait_agent_event_summaries(events: &[SubagentMailboxEvent]) -> Vec<Value> {
                 wait_agent_payload_text(&event.payload, &["result_text", "result", "message"]);
             let error = wait_agent_payload_text(&event.payload, &["error_text", "error"]);
             let summary = json!({
-                "agent_id": public_id.clone().unwrap_or_else(|| event.child_thread_id.to_string()),
+                "agent_id": public_id.unwrap_or_else(|| event.child_thread_id.to_string()),
                 "subagent_task_id": event.child_thread_id.to_string(),
                 "execution_id": execution_id,
                 "display_title": display_title,

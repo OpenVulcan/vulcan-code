@@ -491,7 +491,7 @@ fn credential_binding_mcp_materialization_uses_frozen_selection_without_fallback
             &generation,
             0,
             preview.permissions.clone(),
-            first.clone(),
+            first,
             vulcan_plugin_runtime::VulcanPluginConfigurationSelection::NotDeclared {},
         )
         .expect("publish first credentials");

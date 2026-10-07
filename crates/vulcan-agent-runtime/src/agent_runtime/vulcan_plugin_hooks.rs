@@ -1525,7 +1525,7 @@ lua_runtime:
         assert!(
             crate::agent_runtime::conversation_hooks::VulcanPluginConversationHooks::prepare(
                 &dispatcher,
-                manager.clone(),
+                manager,
                 Arc::clone(&catalog),
             )
             .is_err(),

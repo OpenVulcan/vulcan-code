@@ -1951,13 +1951,13 @@ mod tests {
 
         let zero = LanceDbCompactionOptions {
             batch_size: Some(0),
-            ..base.clone()
+            ..base
         };
         assert!(validate_compaction_options(&zero).is_err());
 
         let too_many_threads = LanceDbCompactionOptions {
             num_threads: Some(MAX_COMPACTION_THREADS + 1),
-            ..base.clone()
+            ..base
         };
         assert!(validate_compaction_options(&too_many_threads).is_err());
 

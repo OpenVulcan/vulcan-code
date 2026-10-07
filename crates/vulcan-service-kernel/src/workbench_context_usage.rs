@@ -516,7 +516,7 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         auto_compact_context_tokens,
         estimated_total_tokens: active_context_tokens,
         usage_ratio,
-        observed_usage: Some(observed_usage.clone()),
+        observed_usage: Some(observed_usage),
         accounting_source: vulcan_context::ContextBudgetAccountingSource::ProviderReported,
         accounting_warning_code: None,
         provider_anchor_call_id: Some(v1_usage_facts.latest_anchor.api_call_id.value().to_string()),

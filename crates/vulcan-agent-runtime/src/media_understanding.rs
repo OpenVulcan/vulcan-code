@@ -234,7 +234,7 @@ pub(crate) fn build_model_replacement_media_candidate(
     );
     let origin = VulcanToolOrigin::new(
         VulcanToolSourceKind::AiHostBinding,
-        selection.provider_id.clone(),
+        selection.provider_id,
         tool_id.clone(),
     );
     Ok(VulcanToolCandidate {

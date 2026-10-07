@@ -146,10 +146,7 @@ pub(super) async fn create(
     let root_generation = root
         .read(|document| document.segment_generation())
         .map_err(|error| error.to_string())?;
-    let usage_root = parent
-        .lifetime_usage_snapshot()
-        .map_err(|error| error.to_string())?
-        .root_session_id;
+    let usage_root = parent.lifetime_usage_snapshot()?.root_session_id;
     if usage_root != facts.root_session_id.to_string()
         || root_locator.project_id() != invocation.source_locator.project_id()
     {

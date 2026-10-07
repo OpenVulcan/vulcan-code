@@ -217,7 +217,7 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
             title: user_entry.title.clone(),
             body: user_entry.body.clone(),
             metadata: user_entry.metadata.clone(),
-            created_at: user_entry.created_at.clone(),
+            created_at: user_entry.created_at,
         },
     )
     .expect("valid stopped-turn record identity");

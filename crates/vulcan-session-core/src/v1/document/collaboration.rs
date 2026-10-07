@@ -2075,7 +2075,7 @@ impl SessionDocument {
         };
         validate_inbound_settlement(&settlement)?;
         let mut delivery = current;
-        delivery.settlement = Some(settlement.clone());
+        delivery.settlement = Some(settlement);
         delivery.target_revision = revision;
         delivery.updated_at_ms = input.acknowledged_at_ms;
         validate_inbound_delivery_record(&delivery)?;
@@ -2224,7 +2224,7 @@ impl SessionDocument {
         };
         validate_target_settlement_ack(&ack)?;
         let mut delivery = current;
-        delivery.settlement_ack = Some(ack.clone());
+        delivery.settlement_ack = Some(ack);
         delivery.updated_at_ms = input.acknowledged_at_ms;
         validate_delivery_record(&delivery)?;
         let mut state = self.collaboration_state().clone();
@@ -2291,7 +2291,7 @@ impl SessionDocument {
         if question.target != input.responder {
             return Err(DomainError::CollaborationUnauthorized {
                 action: "reply_question",
-                identity: input.responder.session_id.clone(),
+                identity: input.responder.session_id,
             });
         }
         let semantic = CollaborationOperationSemantic::ReplyQuestion {
@@ -2358,7 +2358,7 @@ impl SessionDocument {
         };
         let mut question = question;
         question.state = CollaborationQuestionState::Answered;
-        question.answer = Some(answer.clone());
+        question.answer = Some(answer);
         let delivery = self
             .collaboration_state()
             .outbound_deliveries
@@ -2476,7 +2476,7 @@ impl SessionDocument {
         if current.source != input.requester {
             return Err(DomainError::CollaborationUnauthorized {
                 action: "cancel_question",
-                identity: input.requester.session_id.clone(),
+                identity: input.requester.session_id,
             });
         }
         if current.state != CollaborationQuestionState::Pending {
@@ -2737,7 +2737,7 @@ impl SessionDocument {
             CollaborationEventKind::AnswerDelivered,
             CollaborationAfterState::AnswerDelivery {
                 question_id: input.question_id.clone(),
-                delivery: delivery.clone(),
+                delivery,
             },
             input.delivered_at_ms,
         )?;

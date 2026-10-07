@@ -1326,7 +1326,7 @@ mod tests {
         let a = state.records["a.rs"].blob_name.clone().unwrap();
         let old = state.records["old.rs"].blob_name.clone().unwrap();
         state
-            .commit_checkpoint(Checkpoint::new("chain", 1, [a.clone(), old.clone()]))
+            .commit_checkpoint(Checkpoint::new("chain", 1, [a, old.clone()]))
             .unwrap();
         state
             .reconcile([
@@ -1396,8 +1396,7 @@ mod tests {
                 state
                     .records
                     .values()
-                    .filter_map(|record| record.blob_name.clone())
-                    .collect::<Vec<_>>(),
+                    .filter_map(|record| record.blob_name.clone()),
             ))
             .unwrap();
 

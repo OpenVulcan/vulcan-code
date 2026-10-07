@@ -390,7 +390,7 @@ fn luaskills_route_boundary_rejects_forged_purposes_operations_and_scopes() {
             AiOperation::ConversationRespond,
             InferenceUsageScope::ExternalService,
         )),
-        ..llm.clone()
+        ..llm
     };
     assert!(validate_luaskills_inference_route_request(&external).is_err());
 

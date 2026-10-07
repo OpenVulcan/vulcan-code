@@ -682,7 +682,7 @@ fn slow_host_startup_does_not_block_the_global_state_lock() {
         .expect("create session");
     let worker = {
         let manager = manager.clone();
-        let session_id = session.session_id.clone();
+        let session_id = session.session_id;
         thread::spawn(move || manager.start_host(&session_id))
     };
     // While the host is starting, unrelated state reads must stay responsive.

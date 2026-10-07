@@ -2392,7 +2392,7 @@ mod tests {
         }
         // Keep authorization scope and actual dimensions strict even though neither uses display labels.
         // 即使都不依赖展示标签，授权用途与实际维度仍须严格匹配。
-        result.response.response.route = route.clone();
+        result.response.response.route = route;
         result.response.response.fingerprint.dimensions = 512;
         assert!(adapter.validate_embedding_response(&result).is_err());
         adapter
@@ -2692,7 +2692,7 @@ mod tests {
         let mock = MockHostAiPort::new();
         mock.set_capability_snapshot(InferenceCapabilitySnapshot {
             contract_version: INFERENCE_CONTRACT_VERSION,
-            consumer_profile_id: old_config.consumer_profile_id.clone(),
+            consumer_profile_id: old_config.consumer_profile_id,
             operations: old_registration
                 .requirements
                 .iter()

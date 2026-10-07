@@ -3464,7 +3464,7 @@ fn remote_batch_cancellation_persists_provider_terminal_state() {
         submitted_at_unix_ms: 1,
     };
     let mut record = VceEmbeddingRemoteBatchRecord {
-        remote_task_id: task.task_id.clone(),
+        remote_task_id: task.task_id,
         purpose: VceAiPurpose::CodeDocumentEmbedding.as_str().to_owned(),
         first_logical_batch_index: 0,
         logical_batch_count: 1,

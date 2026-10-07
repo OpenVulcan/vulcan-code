@@ -788,7 +788,7 @@ fn seed_receipt(
             version: 1,
             service_entry_id: execution.route.entry.id.clone(),
             upload_channel_id: contract.upload_channel_id.clone(),
-            upload_contract_fingerprint: contract.contract_fingerprint.clone(),
+            upload_contract_fingerprint: contract.contract_fingerprint,
             resource_kind: ResourceKind::Image,
             mime_type: "image/png".into(),
             source_kind: ResourceSourceKind::ProviderFileId,

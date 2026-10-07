@@ -693,7 +693,7 @@ mod tests {
         let terminal = document
             .terminal_child_task(terminal_input(
                 operation("terminal-a"),
-                task_id.clone(),
+                task_id,
                 CollaborationChildTaskTerminalOutcome::Completed,
             ))
             .expect("terminal transition must commit")
@@ -825,7 +825,7 @@ mod tests {
             .reserve_child_task(reserve)
             .expect("same reservation must be idempotent");
         assert!(matches!(&second, IdempotentMutation::Idempotent(_)));
-        assert_eq!(second.into_value(), first.clone());
+        assert_eq!(second.into_value(), first);
         assert_eq!(document.memory_revision(), revision);
         assert_eq!(document.events().len(), event_count);
 
@@ -1024,7 +1024,7 @@ mod tests {
         assert!(matches!(
             document.activate_child_task(activate_input(
                 operation("activate-stale-generation"),
-                task_id.clone(),
+                task_id,
             )),
             Err(DomainError::CollaborationStateViolation {
                 field: "collaboration.child_task.parent_segment_generation",

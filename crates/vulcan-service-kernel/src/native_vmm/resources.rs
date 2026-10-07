@@ -293,7 +293,7 @@ impl NativeVmmResourceStore {
         user_layer
             .insert(path.to_owned(), content.into_bytes())
             .map_err(|error| error.to_string())?;
-        let mut validation_settings = settings.clone();
+        let mut validation_settings = settings;
         select_resource_for_validation(&mut validation_settings, path)?;
         let active = core.active_snapshot().map_err(|error| error.to_string())?;
         validate_candidate_bundle(self.compose_bundle(
@@ -365,7 +365,7 @@ impl NativeVmmResourceStore {
         } else {
             user_layer.files.remove(path);
         }
-        let mut validation_settings = settings.clone();
+        let mut validation_settings = settings;
         select_resource_for_validation(&mut validation_settings, path)?;
         let active = core.active_snapshot().map_err(|error| error.to_string())?;
         validate_candidate_bundle(self.compose_bundle(

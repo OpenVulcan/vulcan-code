@@ -84,8 +84,7 @@ pub(crate) async fn service_set_session_draft_v1(
         authority.locator.project_id(),
         &attachments,
         &existing_ids,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     let now_ms = current_v1_goal_unix_millis()?;
     if request.text.is_empty() && resource_ids.is_empty() {
         authority

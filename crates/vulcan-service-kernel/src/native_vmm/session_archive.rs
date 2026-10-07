@@ -247,7 +247,7 @@ mod tests {
                 &mut snapshot,
                 VmmNativeSessionArchiveSelection {
                     session_source_ids: vec!["same".to_owned(), "missing".to_owned()],
-                    ..selection.clone()
+                    ..selection
                 }
             )
             .is_err()

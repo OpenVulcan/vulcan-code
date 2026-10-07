@@ -447,7 +447,7 @@ fn full_fidelity_attempt_uses_full_context_state() {
     let old_message = test_message("old-user", "old context");
     let tail_message = test_message("tail-user", "recent tail");
     let full_context_state =
-        conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()])
+        conversation_state_from_session_messages(&[old_message.clone(), tail_message])
             .expect("valid replayed conversation identities");
     let plan = test_plan(vec![old_message]);
     let prepared = prepared_compaction_source_for_attempt(
@@ -507,9 +507,8 @@ fn full_fidelity_boundary_rewrite_keeps_planned_tail() {
         "recent provider segment",
     )
     .with_runtime_metadata("tail-assistant", "t2");
-    let mut state =
-        conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()])
-            .expect("valid replayed conversation identities");
+    let mut state = conversation_state_from_session_messages(&[old_message, tail_message.clone()])
+        .expect("valid replayed conversation identities");
     let source_messages = vulcan_context::conversation_state_to_compaction_source_messages(&state)
         .expect("valid compaction source messages");
     let plan = vulcan_context_compaction::plan_context_compaction(

@@ -85,8 +85,7 @@ impl Fixture {
     fn initialize(&self, settings: VulcanPluginRuntimeSettings) -> Result<(), String> {
         retain_and_initialize_original_manager(&self.state, &self.manager, || {
             self.manager
-                .attach_runtime_engine(Arc::clone(&self.engine))
-                .map_err(|error| error.to_string())?;
+                .attach_runtime_engine(Arc::clone(&self.engine))?;
             self.manager
                 .initialize_formal_runtime(settings)
                 .map_err(|error| error.to_string())
@@ -127,8 +126,7 @@ fn bootstrap_failure_before_agent_publication_retains_and_closes_real_parent() {
         retain_and_initialize_original_manager(&fixture.state, &fixture.manager, || {
             fixture
                 .manager
-                .attach_runtime_engine(fixture.engine.clone())
-                .map_err(|error| error.to_string())?;
+                .attach_runtime_engine(fixture.engine.clone())?;
             fixture
                 .manager
                 .initialize_formal_runtime(VulcanPluginRuntimeSettings::default())
@@ -370,8 +368,7 @@ fn initialization_and_closing_share_the_original_service_gate() {
                         .expect("release constructor boundary");
                     initializing
                         .manager
-                        .attach_runtime_engine(initializing.engine.clone())
-                        .map_err(|error| error.to_string())?;
+                        .attach_runtime_engine(initializing.engine.clone())?;
                     initializing
                         .manager
                         .initialize_formal_runtime(VulcanPluginRuntimeSettings::default())

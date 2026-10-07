@@ -1099,7 +1099,7 @@ fn parse_subagent_definition_text_with_metadata(
         .or_else(|| non_empty_text(body).map(str::to_string));
     let source_key = source_key_for_definition(scope, effective_package_id.as_deref(), &id);
     Ok(SubagentDefinition {
-        id: id.clone(),
+        id,
         name,
         description,
         locales: sidecar
@@ -3210,7 +3210,7 @@ mod tests {
             .expect("definition should write");
         let written_markdown =
             fs::read_to_string(&written_path).expect("written markdown should be readable");
-        let catalog = load_subagent_catalog_from_roots(PathBuf::new(), user_root.clone());
+        let catalog = load_subagent_catalog_from_roots(PathBuf::new(), user_root);
         let parsed = catalog
             .definitions
             .iter()
@@ -3352,7 +3352,7 @@ mod tests {
             user_subagent_sidecar_path(&user_root, "empty-tools").expect("sidecar path");
         let sidecar_text =
             fs::read_to_string(sidecar_path).expect("written sidecar should be readable");
-        let catalog = load_subagent_catalog_from_roots(PathBuf::new(), user_root.clone());
+        let catalog = load_subagent_catalog_from_roots(PathBuf::new(), user_root);
         let parsed = catalog
             .definitions
             .iter()

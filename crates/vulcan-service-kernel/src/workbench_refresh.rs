@@ -1259,7 +1259,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 // sessionIdText 由精确的 Ask 与子任务阻断检查共享。
                 let session_id_text = session.id.to_string();
                 ConversationSummary {
-                    id: session_id_text.clone(),
+                    id: session_id_text,
                     title: session.title.clone(),
                     status: if is_running {
                         SessionState::Running.label()

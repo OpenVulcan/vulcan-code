@@ -3395,7 +3395,7 @@ mod tests {
                 serde_json::to_string(&json!({
                     "type": "response.output_item.done",
                     "output_index": 0,
-                    "item": provider_item.clone(),
+                    "item": provider_item,
                 }))
                 .expect("reasoning event should serialize")
                 .as_str(),

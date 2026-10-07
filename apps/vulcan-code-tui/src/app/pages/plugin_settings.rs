@@ -1221,11 +1221,7 @@ fn data_rows(app: &App, view: &View, section_record: &Value) -> Vec<Row> {
             }),
         ));
     }
-    let reload = view.invoke(
-        &s(source, "/action"),
-        arguments.clone(),
-        CallKind::Load(slot),
-    );
+    let reload = view.invoke(&s(source, "/action"), arguments, CallKind::Load(slot));
     if b(source, "/refreshable") {
         rows.push(button(
             tr!("plugins.data.refresh"),

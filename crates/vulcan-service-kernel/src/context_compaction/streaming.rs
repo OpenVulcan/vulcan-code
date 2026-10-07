@@ -299,7 +299,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
         &state,
         &agent_runtime,
         session_id,
-        plan.clone(),
+        plan,
         full_context_state,
         media_projection,
         None,
@@ -683,7 +683,6 @@ pub(crate) async fn apply_context_compaction_stream_event(
             }
             .await;
             if let Err(error) = v1_result {
-                let error = error.to_string();
                 let _ = completion.complete(Err(error.clone()));
                 return Err(error);
             }

@@ -205,10 +205,7 @@ fn child_non_success_publication_is_atomic_and_recoverable() {
         Some("original diagnostic")
     );
     assert_eq!(
-        parent
-            .reserve_child_task(reservation.clone())
-            .unwrap()
-            .into_value(),
+        parent.reserve_child_task(reservation).unwrap().into_value(),
         reserved
     );
     assert!(
@@ -295,7 +292,7 @@ fn child_non_success_source_requires_exact_durable_failure() {
     ));
     // Removing the real diagnostic cannot create an unsupported host failure classification.
     // 移除真实诊断后，不能生成缺乏支持的宿主失败分类。
-    let mut no_diagnostic = child.clone();
+    let mut no_diagnostic = child;
     no_diagnostic
         .events
         .retain(|event| !matches!(&event.event, EventBody::DisplayNote(_)));

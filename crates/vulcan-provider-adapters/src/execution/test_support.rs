@@ -78,7 +78,7 @@ pub(crate) fn bundled_manifest_route(
         effective_protocol_id.as_str(),
     )
     .expect("bundled manifest route should resolve");
-    route.upload_channels = manifest.upload_channels.clone();
+    route.upload_channels = manifest.upload_channels;
     route
 }
 

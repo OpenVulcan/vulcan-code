@@ -383,7 +383,7 @@ mod tests {
             SessionEventVisibility::Visible,
             json!({
                 "prompt": "hello",
-                "visible_user_prompt_record_id": visible_record_id.clone(),
+                "visible_user_prompt_record_id": visible_record_id,
             }),
         )])
         .expect("project declared visible user identity");

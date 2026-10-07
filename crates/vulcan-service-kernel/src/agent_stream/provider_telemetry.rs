@@ -56,7 +56,7 @@ impl ProviderTelemetryHookGuard {
         state: SharedServiceBridgeState,
         storage_runtime: Option<HostRuntimeHandle>,
     ) -> Self {
-        let native_usage_storage = storage_runtime.clone();
+        let native_usage_storage = storage_runtime;
         let usage_state = state.clone();
         // sender and receiver form one bounded low-frequency Effect queue per execution stream.
         // sender 与 receiver 为每条执行流构成一个有界低频 Effect 队列。

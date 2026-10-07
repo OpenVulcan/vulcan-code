@@ -550,7 +550,7 @@ fn validate_small_documents(layout: &SessionV1Layout) -> Result<SmallDocuments, 
                     pointer.value()
                 ),
             )
-            .with_context(&layout.session_id, runtime_path.clone()));
+            .with_context(&layout.session_id, runtime_path));
         }
     }
     let terminal_compaction_id = compactions_document
@@ -567,7 +567,7 @@ fn validate_small_documents(layout: &SessionV1Layout) -> Result<SmallDocuments, 
                 terminal_compaction_id.map(|id| id.value())
             ),
         )
-        .with_context(&layout.session_id, runtime_path.clone()));
+        .with_context(&layout.session_id, runtime_path));
     }
 
     // The persisted node list must stay strictly ordered by occurrence, ids,
@@ -581,7 +581,7 @@ fn validate_small_documents(layout: &SessionV1Layout) -> Result<SmallDocuments, 
             compactions_path.clone(),
             "compaction nodes are out of order (occurrence, id or retained boundary)",
         )
-        .with_context(&layout.session_id, compactions_path.clone()));
+        .with_context(&layout.session_id, compactions_path));
     }
     let mut previous_retained = 0u64;
     for node in &compactions_document.nodes {
@@ -596,7 +596,7 @@ fn validate_small_documents(layout: &SessionV1Layout) -> Result<SmallDocuments, 
                     node.occurred_at_seq.value()
                 ),
             )
-            .with_context(&layout.session_id, compactions_path.clone()));
+            .with_context(&layout.session_id, compactions_path));
         }
         previous_retained = retained;
     }

@@ -95,7 +95,7 @@ fn child_resumption_intent_rejects_changed_sources_atomically() {
     invalid_revision.origin = ChildCreationOrigin::Resumption {
         base_document_revision: child.memory_revision() + 1,
     };
-    for invalid in [initial.clone(), invalid_turn, invalid_revision] {
+    for invalid in [initial, invalid_turn, invalid_revision] {
         assert!(child.publish_child_resumption(&invalid).is_err());
         assert_eq!(child, original);
     }

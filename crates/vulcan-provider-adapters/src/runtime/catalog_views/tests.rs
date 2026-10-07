@@ -300,7 +300,7 @@ fn openrouter_account_excludes_unreviewed_discovery() {
     assert!(initial_ids.contains(&"openai/gpt-5.6-sol"));
     assert!(!initial_ids.contains(&"vendor/future-model"));
 
-    let mut selected = configuration.clone();
+    let mut selected = configuration;
     selected
         .connection_model_access_policies
         .insert(String::from("one"), initial.clone());

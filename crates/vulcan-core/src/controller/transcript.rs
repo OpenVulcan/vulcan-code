@@ -123,7 +123,7 @@ impl VulcanCoreController {
             id: message_id.clone(),
             payload: ConversationPayload::UserText {
                 text: provider_prompt.to_string(),
-                attachments: attachments.clone(),
+                attachments,
             },
         });
         self.snapshot.records.push(ConversationRecord {

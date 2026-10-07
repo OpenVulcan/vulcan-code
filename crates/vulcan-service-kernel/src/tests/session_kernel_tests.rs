@@ -1031,7 +1031,7 @@ fn terminal_persistence_owner_requires_explicit_release_before_kernel_start() {
     let releasing_guard = SessionTerminalPersistenceOwnerGuard::adopt_registered(
         state.clone(),
         session_id,
-        terminal_owner.clone(),
+        terminal_owner,
     )
     .expect("retained owner should remain adoptable");
     releasing_guard

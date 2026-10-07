@@ -3555,7 +3555,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
                 connection_id: Some(String::from("connection-1")),
                 message_id: Some(String::from("message-1")),
                 response_id: None,
-                replay: Some(envelope.clone()),
+                replay: Some(envelope),
                 covered_until_seq: Seq::try_new(1).expect("valid covered seq"),
                 fingerprint_sha256: String::from("0").repeat(64),
             })),

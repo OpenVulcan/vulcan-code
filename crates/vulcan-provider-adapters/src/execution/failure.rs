@@ -693,7 +693,7 @@ pub(crate) fn http_failure(
     let public_field = |value: String| {
         crate::provider_tool_execution::sanitize_provider_diagnostic_text(value.as_str())
     };
-    let public_upstream_message = upstream_message.clone().map(&public_field);
+    let public_upstream_message = upstream_message.map(&public_field);
     ProviderExecutionFailure {
         error: Box::new(AiExecutionError {
             category,

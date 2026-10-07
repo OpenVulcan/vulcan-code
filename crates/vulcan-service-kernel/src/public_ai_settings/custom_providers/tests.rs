@@ -455,7 +455,7 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
     failing_configuration
         .connection_graph
         .connections
-        .insert(existing.id.clone(), existing.clone());
+        .insert(existing.id.clone(), existing);
     let mut incompatible = sibling;
     incompatible.credential_mode = CredentialMode::Auth;
     failing_configuration
@@ -769,7 +769,7 @@ fn connection_contract_comparison_normalizes_every_route() {
     // execution-only Codex-style Responses feature on the second route.
     // candidate 保持全部面向凭据的路由一致，但第二条路由携带显式且只影响执行的
     // Responses 能力开关。
-    let mut candidate_descriptor = existing_descriptor.clone();
+    let mut candidate_descriptor = existing_descriptor;
     if let Some(route) = candidate_descriptor.service_entries[0]
         .protocol_routes
         .iter_mut()
@@ -840,7 +840,7 @@ fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
     // 运行时重验必须在重载后仍接受相同的请求头。
     ProviderRegistry::effective(&BTreeMap::from([(
         candidate.descriptor.id.clone(),
-        candidate.descriptor.clone(),
+        candidate.descriptor,
     )]))
     .expect("registry revalidation must accept bounded fixed headers");
 }

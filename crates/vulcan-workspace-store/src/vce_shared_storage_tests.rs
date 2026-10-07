@@ -128,7 +128,7 @@ fn shared_storage_unknown_remote_work_requires_reconciliation() {
         std::slice::from_ref(&batch),
     )
     .unwrap();
-    let mut unrelated = batch.clone();
+    let mut unrelated = batch;
     unrelated.input_ids = vec!["other::segment:0".into()];
     shared_result_store::require_resolved_predecessors(&connection, "n", "retry", &[unrelated])
         .unwrap();
@@ -355,7 +355,7 @@ fn shared_storage_retries_are_bounded_and_results_are_reusable() {
     }
     // Different physical producers and segment contracts cannot adopt old vectors.
     // 不同物理生产方和分段契约不能接纳旧向量。
-    let mut changed = contract.clone();
+    let mut changed = contract;
     changed.embedding_space.physical_fingerprint = Some("other-producer".into());
     run(&connection, "different", 31, "running", &changed);
     let transaction = connection.transaction().unwrap();

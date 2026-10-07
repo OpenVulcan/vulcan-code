@@ -468,7 +468,7 @@ impl ProviderExecutionClient {
                 },
                 move |builder| {
                     let part = reqwest::multipart::Part::bytes(payload)
-                        .file_name(file_name.clone())
+                        .file_name(file_name)
                         .mime_str("application/jsonl")
                         .expect("static JSONL MIME type must be valid");
                     builder.multipart(

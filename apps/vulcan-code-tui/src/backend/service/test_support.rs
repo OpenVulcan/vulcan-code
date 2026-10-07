@@ -122,7 +122,7 @@ impl RpcServer {
         let endpoint = Endpoint::test_endpoint(listener.local_addr().unwrap());
         // Client.
         // RPC 传输客户端。
-        let client = RpcClient::new(endpoint.clone());
+        let client = RpcClient::new(endpoint);
         listener.set_nonblocking(true).unwrap();
         // Sender; Requests.
         // 测试请求观察发送端；测试请求观察接收端。

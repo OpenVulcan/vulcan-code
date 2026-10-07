@@ -1103,7 +1103,7 @@ impl VceEngine {
     ) -> Result<Self, VceConfigError> {
         if analyzer.version() != self.config.embedding_space.chunker_version {
             return Err(VceConfigError::Structure(StructureError::VersionMismatch {
-                expected: self.config.embedding_space.chunker_version.clone(),
+                expected: self.config.embedding_space.chunker_version,
                 actual: analyzer.version().to_owned(),
             }));
         }
@@ -1310,7 +1310,7 @@ impl VceEngine {
             return Err(VceError::ResponseIdentity {
                 operation: VcePortOperation::ManagementSnapshot,
                 expected: operation_id,
-                actual: index_snapshot.operation_id.clone(),
+                actual: index_snapshot.operation_id,
             });
         }
         validate_index_management_snapshot(&index_snapshot)?;

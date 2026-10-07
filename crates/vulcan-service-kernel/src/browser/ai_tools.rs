@@ -1265,7 +1265,7 @@ impl CoreNativeBrowserRuntime {
         let host_owner = owner.clone();
         let browser_id = tokio::task::spawn_blocking(move || {
             let created = manager.create_owned_session(&host_owner, profile)?;
-            let browser_id = created.session_id.clone();
+            let browser_id = created.session_id;
             if let Err(error) = manager.start_host(&browser_id) {
                 let _ = manager.close_session(&browser_id);
                 return Err(error);
@@ -1817,20 +1817,17 @@ mod tests {
         let transition = tokio::spawn(CoreNativeBrowserRuntime::await_owner_transition(
             async move {
                 let _slot = transition_slot.lock().await;
-                let (_, lease_secret) = transition_manager
-                    .acquire_lease(&browser_id, "ai:cancel-test", None)
-                    .map_err(|error| error.to_string())?;
-                transition_manager
-                    .attach_automation(&browser_id, &lease_secret, "cancel-test-connection")
-                    .map_err(|error| error.to_string())?;
+                let (_, lease_secret) =
+                    transition_manager.acquire_lease(&browser_id, "ai:cancel-test", None)?;
+                transition_manager.attach_automation(
+                    &browser_id,
+                    &lease_secret,
+                    "cancel-test-connection",
+                )?;
                 let _ = attached_tx.send(lease_secret.clone());
                 let _ = continue_rx.await;
-                transition_manager
-                    .detach_automation(&browser_id, "cancel-test-connection")
-                    .map_err(|error| error.to_string())?;
-                transition_manager
-                    .release_lease(&browser_id, &lease_secret)
-                    .map_err(|error| error.to_string())?;
+                transition_manager.detach_automation(&browser_id, "cancel-test-connection")?;
+                transition_manager.release_lease(&browser_id, &lease_secret)?;
                 Ok::<(), String>(())
             },
         ));

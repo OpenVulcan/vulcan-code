@@ -602,7 +602,7 @@ mod tests {
         assert!(
             !guard
                 .project_admission_reservations
-                .contains_key(&ProjectAdmissionScope::Exact(project_id.clone()))
+                .contains_key(&ProjectAdmissionScope::Exact(project_id))
         );
         start_webui_session_kernel_user_turn(&mut guard, session_id, "accepted-turn")
             .expect("released lifecycle reservation should allow a turn");

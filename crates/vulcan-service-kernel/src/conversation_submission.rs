@@ -1268,7 +1268,7 @@ mod submission_model_selection_tests {
         let selection = SubmissionModelSelection {
             provider_id: pending_selection.provider_id.clone(),
             connection_id: pending_selection.connection_id.clone(),
-            model_id: pending_selection.model_id.clone(),
+            model_id: pending_selection.model_id,
         };
         apply_submission_model_selection(
             &runtime,
@@ -1653,7 +1653,7 @@ mod submission_model_selection_tests {
             .session_runtime_state
             .get_mut(&session_id)
             .expect("session runtime state should exist")
-            .provider_route_lease = Some(previous_identity.clone());
+            .provider_route_lease = Some(previous_identity);
 
         // revisedCatalog keeps the exact model owner and protocol while changing an execution capability.
         // revisedCatalog 保持完全相同的模型所有者与协议，同时修改一项执行能力。
@@ -2283,8 +2283,7 @@ async fn materialize_submission_session_v1(
                 attachments,
                 media_origins,
                 accepted_input,
-            )
-            .map_err(|error| error.to_string())?;
+            )?;
             create_and_register_root_session_v1_with_context_window(
                 controller_runtime,
                 session_registry.as_ref(),
@@ -2327,8 +2326,7 @@ async fn materialize_submission_session_v1(
                 attachments,
                 media_origins,
                 accepted_input,
-            )
-            .map_err(|error| error.to_string())?;
+            )?;
             match submission_mode {
                 ConversationSubmissionMode::UserPrompt => {
                     idle_root_input::submit_root_input_when_idle(
@@ -2786,8 +2784,7 @@ async fn service_start_conversation_execution(
             attachments.as_slice(),
             &media_origins,
             accepted_input.as_ref(),
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
         let client_action_id = ClientActionId::try_new(client_submission_id.clone())
             .map_err(|error| format!("invalid queued client submission id: {error}"))?;
         let bound_request_config = existing_bound_request_config.clone().ok_or_else(|| {

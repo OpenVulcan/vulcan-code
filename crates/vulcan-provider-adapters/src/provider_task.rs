@@ -2064,7 +2064,7 @@ mod tests {
         cancellation.phase = ProviderAsyncTaskPhase::CancellationRequested;
         cancellation.updated_at_unix_ms = 2;
         store
-            .replace(cancellation.clone())
+            .replace(cancellation)
             .expect("cancellation intent should advance");
         let mut stale_poll = running;
         stale_poll.updated_at_unix_ms = 3;

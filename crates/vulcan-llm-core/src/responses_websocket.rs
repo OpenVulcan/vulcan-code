@@ -275,7 +275,7 @@ impl ResponsesWebsocketSession {
                         kind: String::from("text"),
                         payload: text.as_bytes().to_vec(),
                     };
-                    self.last_raw_frame = Some(raw.clone());
+                    self.last_raw_frame = Some(raw);
                     if text.len() > self.config.max_frame_bytes {
                         self.in_flight = false;
                         self.previous_response_id = None;

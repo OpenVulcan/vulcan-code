@@ -685,7 +685,7 @@ mod tests {
             model_id: String::from("claude-sonnet-4-6"),
             system_prompt: String::from("system prompt"),
             prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                String::from("system prompt").clone(),
+                String::from("system prompt"),
             ),
             prompt: String::from("preview prompt"),
             prompt_in_history: false,

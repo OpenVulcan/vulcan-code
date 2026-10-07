@@ -619,7 +619,7 @@ mod tests {
         );
         // replaced verifies Windows and POSIX both publish over an existing settings file.
         // replaced 验证 Windows 与 POSIX 都能覆盖发布已有设置文件。
-        let mut replaced = saved.clone();
+        let mut replaced = saved;
         replaced.vm_pool.max_size = 10;
         let replaced = save_runtime_settings(root.path(), &replaced).expect("replace settings");
         assert_eq!(

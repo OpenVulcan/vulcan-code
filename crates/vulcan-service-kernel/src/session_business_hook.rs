@@ -224,7 +224,7 @@ mod tests {
         // The handler reads actual storage when invoked; a resident-only binding cannot satisfy it.
         // 处理器被调用时读取实际存储；仅驻留的绑定不能满足检查。
         let (sender, receiver) = mpsc::channel();
-        let observer_locator = locator.clone();
+        let observer_locator = locator;
         runtime
             .conversation_hook_runtime
             .lock()
@@ -307,7 +307,7 @@ mod tests {
             .unwrap();
         publish_prepared_business_hook(&handle, &runtime, &start).unwrap();
         let revision = handle.read(|document| document.durable_revision()).unwrap();
-        publish_prepared_business_hook(&handle, &runtime, &start.clone()).unwrap();
+        publish_prepared_business_hook(&handle, &runtime, &start).unwrap();
         let (binding, payload) = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
         let binding = binding.unwrap();
         assert_eq!(binding.hook_turn_id, start.preparation_turn_id);

@@ -1644,10 +1644,7 @@ fn close_agent_cleanup_unloads_runtime_state_and_retains_current_navigation_roun
     let mut guard = test_service_state_with_parent_session(parent_session_id);
     let closed_state = test_completed_subagent_panel_state(parent_session_id, closed_task_id);
     let retained_state = test_completed_subagent_panel_state(parent_session_id, retained_task_id);
-    cache_test_subagent_surface_detail_states(
-        &mut guard,
-        &[closed_state.clone(), retained_state.clone()],
-    );
+    cache_test_subagent_surface_detail_states(&mut guard, &[closed_state, retained_state.clone()]);
     seed_test_live_subagent_registry_from_panel_states(
         &mut guard,
         parent_session_id,

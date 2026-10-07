@@ -109,7 +109,7 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
     let feedback_payload = json!({
         "tool": "subagent_feedback",
         (SUBAGENT_TASK_ID_KEY): task_id_text,
-        "execution_id": execution_id.clone(),
+        "execution_id": execution_id,
         "task_id": state.public_task_id.clone(),
         "subagent": state.subagent_label.clone(),
         "run_state": state.run_state.metadata_key(),
@@ -130,7 +130,7 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
         "subagent_feedback_record": true,
         "parent_session_id": parent_session_id.to_string(),
         (SUBAGENT_TASK_ID_KEY): state.task_id.to_string(),
-        "execution_id": execution_id.clone(),
+        "execution_id": execution_id,
         "task_id": state.public_task_id.clone(),
         "subagent": state.subagent_label.clone(),
         "run_state": state.run_state.metadata_key(),
@@ -158,7 +158,7 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
         "subagent_feedback_record": true,
         "parent_session_id": parent_session_id.to_string(),
         (SUBAGENT_TASK_ID_KEY): state.task_id.to_string(),
-        "execution_id": execution_id.clone(),
+        "execution_id": execution_id,
         "task_id": state.public_task_id.clone(),
         "subagent": state.subagent_label.clone(),
         "turn_stats": turn_stats,
@@ -208,7 +208,7 @@ pub fn task_session_mirror_display_metadata_update(
         json!({
             "tool_name": "spawn_agent",
             "kind": SUBAGENT_TASK_KIND,
-            "payload": payload.clone(),
+            "payload": payload,
         }),
         execution_status,
     );

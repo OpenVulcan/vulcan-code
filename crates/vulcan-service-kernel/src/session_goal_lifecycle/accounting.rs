@@ -91,7 +91,7 @@ pub(crate) fn session_goal_id_for_provider_request(
     if goal.status == SessionGoalStatus::Active
         || previously_bound_goal_id.is_some_and(|goal_id| goal_id == goal.goal_id)
     {
-        return Ok(Some(goal.goal_id.clone()));
+        return Ok(Some(goal.goal_id));
     }
     Ok(None)
 }

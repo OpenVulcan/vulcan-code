@@ -41,7 +41,7 @@ impl SessionDocument {
         if input.source_session_id != self.metadata.session_id {
             return Err(DomainError::CollaborationUnauthorized {
                 action: "grant_add",
-                identity: input.source_session_id.clone(),
+                identity: input.source_session_id,
             });
         }
         if input.actions.is_empty() {
@@ -188,7 +188,7 @@ impl SessionDocument {
         if current.source_session_id != self.metadata.session_id {
             return Err(DomainError::CollaborationUnauthorized {
                 action: "grant_revoke",
-                identity: current.source_session_id.clone(),
+                identity: current.source_session_id,
             });
         }
         if current.revoked_at_ms.is_some() {

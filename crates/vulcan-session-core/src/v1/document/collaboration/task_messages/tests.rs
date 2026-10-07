@@ -230,7 +230,7 @@ fn task_message_conflicting_retries_do_not_change_authority() {
         .into_value();
     let source_before = source.clone();
     let target_before = target.clone();
-    let mut conflicting = message.clone();
+    let mut conflicting = message;
     conflicting.body = "Different work".into();
     assert!(source.send_task_message(conflicting.clone(), 5).is_err());
     assert!(

@@ -707,13 +707,13 @@ fn spawn_agent_stream_task_with_restart_state(
                     if outcome == StreamTaskLaunchFailureOutcome::FailedOwnerFinalized {
                         if let Some(kernel_generation) = expected_kernel_generation_option {
                             spawn_service_task(finalize_failed_execution_stream_retry_lifecycle(
-                                state.clone(),
+                                state,
                                 session_id,
                                 SessionTerminalPersistenceOwner::KernelGeneration(
                                     kernel_generation,
                                 ),
                                 "runtime_event_hook_correlation_rejected",
-                                Some(error.clone()),
+                                Some(error),
                                 restart_state.terminal_scope(),
                             ));
                         } else {

@@ -4345,9 +4345,8 @@ mod optional_capability_tests {
         validate_mcp_tool_schema_list("fixture", &[annotation_data])
             .expect("reference-shaped annotation data is not a schema reference");
 
-        let duplicate_error =
-            validate_mcp_tool_schema_list("fixture", &[valid.clone(), valid.clone()])
-                .expect_err("duplicate names must fail the whole list");
+        let duplicate_error = validate_mcp_tool_schema_list("fixture", &[valid.clone(), valid])
+            .expect_err("duplicate names must fail the whole list");
         assert!(duplicate_error.contains("duplicate tool name"));
 
         let non_object_error = validate_mcp_tool_schema_list(

@@ -356,9 +356,7 @@ pub(super) async fn wake_accepted_question(
     // 共享答疑设置不创建业务 Hook 或人类输入；在可靠执行准入之前完成。
     let start = {
         let _state_guard = invocation.state.lock().map_err(|error| error.to_string())?;
-        let mut hook_runtime = agent_runtime
-            .lock_conversation_hooks()
-            .map_err(|error| error.to_string())?;
+        let mut hook_runtime = agent_runtime.lock_conversation_hooks()?;
         begin_shared_prompt_turn(
             &mut workspace,
             &mut hook_runtime,

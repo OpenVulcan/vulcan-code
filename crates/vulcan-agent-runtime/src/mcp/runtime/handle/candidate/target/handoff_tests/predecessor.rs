@@ -169,6 +169,8 @@ async fn predecessor_native_global_shutdown_rejects_dispatch_and_replay() {
     fixture.access.shutdown();
     // This explicit global closure remains distinct from the permitted local plugin drain.
     // 此显式全局关闭保持独立于允许的本地插件排空。
+    // The clone keeps `prepared` alive for the replay check below; moving it would release it early.
+    // 克隆使 `prepared` 在下方重放检查期间保持存活；直接移动会提前释放它。
     let configs = predecessor_global_mcp_server_configs(prepared.clone(), &NoSecrets)
         .expect("closed input materialization");
     assert!(

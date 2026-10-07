@@ -270,7 +270,7 @@ fn webui_diff_service_paths_cover_real_git_modes() {
             mode: WebuiWorkspaceDiffMode::Commit,
             base_branch: None,
             compare_branch: None,
-            commit_hash: Some(feature_commit.clone()),
+            commit_hash: Some(feature_commit),
         }),
     )
     .expect("commit snapshot should load");

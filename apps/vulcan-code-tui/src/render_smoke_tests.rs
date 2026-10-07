@@ -635,7 +635,7 @@ fn session_bar_composer_pastes_and_sidebar_rail() {
             )
         })
         .collect();
-    input::handle_event(&mut h.app, Event::Paste(pasted.clone()));
+    input::handle_event(&mut h.app, Event::Paste(pasted));
     assert_eq!(h.app.pastes.len(), 1);
     assert_eq!(
         h.app.composer.lines().len(),

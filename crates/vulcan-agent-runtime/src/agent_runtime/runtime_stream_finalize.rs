@@ -383,7 +383,7 @@ mod tests {
                     model_id: String::from("gpt-test"),
                     system_prompt: String::from("system"),
                     prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                        String::from("system").clone(),
+                        String::from("system"),
                     ),
                     temperature: Some(0.2),
                     max_turns: 4,
@@ -405,7 +405,7 @@ mod tests {
             model_id: String::from("gpt-test"),
             system_prompt: String::from("system prompt"),
             prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                String::from("system prompt").clone(),
+                String::from("system prompt"),
             ),
             prompt: String::from("effective prompt"),
             prompt_in_history: false,

@@ -2933,13 +2933,13 @@ fn knowledge_settings_from_request(
         },
     )?;
     let curation_snapshot = curation_route.clone().map(|route| KnowledgeModelSnapshot {
-        route: route.clone(),
+        route,
         dimensions: None,
         capability_revision: curation_capability_revision,
         captured_at_ms,
     });
     let embedding_snapshot = embedding_route.clone().map(|route| KnowledgeModelSnapshot {
-        route: route.clone(),
+        route,
         dimensions: request.embedding.configured_dimension,
         capability_revision: embedding_capability_revision,
         captured_at_ms,

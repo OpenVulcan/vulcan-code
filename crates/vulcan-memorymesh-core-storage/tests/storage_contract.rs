@@ -1375,7 +1375,7 @@ fn external_lexical_materialization_filters_before_limit_and_preserves_scores() 
             session_recall_boundary: None,
         },
         limit: 1,
-        expected_contract: contract.clone(),
+        expected_contract: contract,
         now_ns: 10,
     };
     // result must retain the eighth physical hit, not truncate the unfiltered first hit.

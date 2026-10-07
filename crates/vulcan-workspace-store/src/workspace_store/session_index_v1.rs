@@ -321,9 +321,7 @@ pub async fn ensure_session_index_v1_schema(
         vec![],
     )
     .await
-    .map_err(|error| SessionIndexV1Error::Schema {
-        detail: error.to_string(),
-    })?;
+    .map_err(|error| SessionIndexV1Error::Schema { detail: error })?;
     if result.success {
         Ok(())
     } else {
@@ -414,7 +412,7 @@ pub async fn locate_session_index_v1(
     .await
     .map_err(|error| SessionIndexV1Error::Read {
         session_id: Some(session_id.to_string()),
-        detail: error.to_string(),
+        detail: error,
     })?;
     let rows = decode_query_rows::<SessionIndexV1Row>(&result.json_data).map_err(|detail| {
         SessionIndexV1Error::Read {
@@ -456,7 +454,7 @@ WHERE session_id = ?1 OR relative_path = ?2;
     .await
     .map_err(|error| SessionIndexV1Error::Read {
         session_id: Some(row.session_id.clone()),
-        detail: error.to_string(),
+        detail: error,
     })?;
     let existing_rows =
         decode_query_rows::<SessionIndexV1Row>(&result.json_data).map_err(|detail| {

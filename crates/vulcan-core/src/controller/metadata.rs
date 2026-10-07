@@ -11,7 +11,7 @@ pub(super) fn user_turn_record_metadata(
     Some(json!({
         "canonical_text": prompt,
         "canonical_user_text": prompt,
-        "attachments": serialized_attachments.clone(),
+        "attachments": serialized_attachments,
         "transcript_attachments": serialized_attachments,
     }))
 }

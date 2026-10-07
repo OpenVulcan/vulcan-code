@@ -1374,7 +1374,7 @@ mod tests {
         );
         // Name discovery alone must create a visible draft before arguments or previews arrive.
         // 仅名称发现就必须创建可见草稿，无需等待参数或预览到达。
-        let mut started = progress.clone();
+        let mut started = progress;
         started.kind = RuntimeEventKind::ToolRequestStarted;
         started.metadata.as_mut().unwrap()["received_bytes"] = serde_json::json!(0);
         started.metadata.as_mut().unwrap()["received_characters"] = serde_json::json!(0);

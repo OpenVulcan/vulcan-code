@@ -152,7 +152,7 @@ fn allow_all_plugin_policy_resolves_every_available_tool() {
     assert_eq!(
         resolve_agent_vulcan_plugin_tool_ids(
             &definition,
-            &BTreeMap::from([(String::from("policy-a"), policy.clone())]),
+            &BTreeMap::from([(String::from("policy-a"), policy)]),
             &available,
         ),
         vec![String::from("plugin-a"), String::from("plugin-b")]

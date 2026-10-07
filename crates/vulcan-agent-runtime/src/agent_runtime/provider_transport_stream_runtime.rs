@@ -511,7 +511,7 @@ where
                             )
                             .map(|conversation_state| {
                                 ProviderStreamDelta::FinalConversationState(
-                                    conversation_state.clone(),
+                                    conversation_state,
                                     last_successful_provider_usage,
                                 )
                             });
@@ -614,7 +614,7 @@ where
                             )
                             .map(|conversation_state| {
                                 ProviderStreamDelta::FinalConversationState(
-                                    conversation_state.clone(),
+                                    conversation_state,
                                     last_successful_provider_usage,
                                 )
                             });

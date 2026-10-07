@@ -693,7 +693,7 @@ pub(crate) fn stop_webui_session_work(
         return Ok(false);
     }
     runtime_state.active_precheck_turn_id = None;
-    runtime_state.updated_at = now.clone();
+    runtime_state.updated_at = now;
     let mut terminated_entry = SessionMessageEntry::hidden(
         SessionMessageKind::Assistant,
         SessionMessageRecordKind::TurnTerminated,

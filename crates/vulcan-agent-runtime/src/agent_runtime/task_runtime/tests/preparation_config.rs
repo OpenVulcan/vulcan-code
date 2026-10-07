@@ -2105,9 +2105,9 @@ fn build_task_controller_config_reuses_stored_controller_state_without_prompt() 
         provider_id: String::from("stored-provider"),
         model_id: String::from("stored-model"),
         system_prompt: String::from("Stored prompt"),
-        prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-            String::from("Stored prompt").clone(),
-        ),
+        prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(String::from(
+            "Stored prompt",
+        )),
         temperature: Some(0.7),
         max_turns: 3,
         additional_params: Some(json!({ "stored": true })),

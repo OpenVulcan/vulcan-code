@@ -1286,7 +1286,7 @@ fn continue_api_binding_and_transport_observation_are_restart_idempotent() -> Re
     assert!(continued.guidance_seq.is_some());
     assert_eq!(doc.metadata.config.active_request, continued_request_config);
     let revision_after_continue = doc.memory_revision();
-    let repeated = doc.continue_open_turn(continuation_request.clone(), T0 + 3)?;
+    let repeated = doc.continue_open_turn(continuation_request, T0 + 3)?;
     assert!(!repeated.changed());
     assert_eq!(repeated.into_value(), continued);
     assert_eq!(doc.memory_revision(), revision_after_continue);

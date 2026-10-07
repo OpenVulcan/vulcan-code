@@ -123,7 +123,7 @@ fn zero_limit_media_model_has_no_conversation_route() {
     let catalogs = BTreeMap::from([(
         connection.id.clone(),
         ConnectionModelCatalog {
-            connection_id: connection.id.clone(),
+            connection_id: connection.id,
             models: vec![model],
             generation: 1,
             page_count: 1,
@@ -195,7 +195,7 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
         },
     );
     let model = vulcan_provider_adapters::ConnectionModel {
-        id: model_id.clone(),
+        id: model_id,
         display_name: String::from("Anthropic-only Model"),
         capabilities: ModelCapabilities::default(),
         capability_evidence: vulcan_provider_adapters::ModelCapabilityEvidence::default(),

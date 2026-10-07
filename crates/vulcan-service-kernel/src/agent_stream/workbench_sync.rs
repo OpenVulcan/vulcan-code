@@ -422,7 +422,7 @@ pub(crate) fn mark_webui_prompt_snapshot_preparing(
         .session_runtime_state
         .get_mut(&session_id)
     {
-        runtime_state.updated_at = now.clone();
+        runtime_state.updated_at = now;
     }
     if let Some(session) = workspace_session_summary_for_session_mut(workspace_snapshot, session_id)
     {

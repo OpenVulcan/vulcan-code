@@ -1261,7 +1261,7 @@ fn rebuild_provider_transport_candidate_with_compaction(
         }
         None => initial_locked_baseline_with_host_guidance(&candidate.locked_baseline)?,
     };
-    candidate.locked_baseline = effective_locked_baseline.clone();
+    candidate.locked_baseline = effective_locked_baseline;
     // controller_state is the shared logical V1 projection and therefore cannot contain physical delivery choices.
     // controller_state 是共享逻辑 V1 投影，因此不能包含物理投递选择。
     let controller_state = provider_projection_controller_state(&snapshot)

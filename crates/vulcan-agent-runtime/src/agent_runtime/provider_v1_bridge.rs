@@ -1641,7 +1641,7 @@ mod tests {
             assistant_reasoning: String::new(),
             provider_message_id: Some(String::from("response-1")),
             provider_message_state: Some(serde_json::json!({
-                "vulcan_ai": {"replay": replay.clone()}
+                "vulcan_ai": {"replay": replay}
             })),
             usage: None,
             tool_calls: Vec::new(),

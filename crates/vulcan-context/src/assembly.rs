@@ -597,7 +597,7 @@ mod tests {
     fn layered_context_baseline_ignores_history_and_user_text_changes() {
         let assembly = ContextAssembly::from_provider_request_snapshot(&sample_snapshot());
         let baseline = ContextBaseline::from_assembly(&assembly);
-        let mut changed_assembly = assembly.clone();
+        let mut changed_assembly = assembly;
         changed_assembly.layers[1].content = String::from("history changed");
         changed_assembly.layers[2].content = String::from("user prompt changed");
 
@@ -619,7 +619,7 @@ mod tests {
     fn layered_context_baseline_reports_changed_assembly() {
         let assembly = ContextAssembly::from_provider_request_snapshot(&sample_snapshot());
         let baseline = ContextBaseline::from_assembly(&assembly);
-        let mut changed_assembly = assembly.clone();
+        let mut changed_assembly = assembly;
         changed_assembly.push(super::ContextLayer::new(
             ContextLayerKind::Runtime,
             "Runtime Context",

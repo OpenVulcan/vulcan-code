@@ -208,7 +208,7 @@ fn enqueue_preempts_undispatched_goal_and_replays_exact_receipt() -> Result<(), 
     )?;
     let restored_revision = restored.memory_revision();
     let event_count = restored.events().len();
-    let replay = restored.enqueue_input(submission.clone(), T0 + 3)?;
+    let replay = restored.enqueue_input(submission, T0 + 3)?;
     assert!(!replay.changed());
     assert_eq!(replay.into_value(), receipt);
     assert_eq!(restored.memory_revision(), restored_revision);
@@ -323,10 +323,7 @@ fn draft_and_queued_crud_are_atomic_idempotent_and_reload_strict() -> Result<(),
             .changed()
     );
     let revision = doc.memory_revision();
-    assert!(
-        !doc.reorder_queued_inputs(reverse.clone(), T0 + 4)?
-            .changed()
-    );
+    assert!(!doc.reorder_queued_inputs(reverse, T0 + 4)?.changed());
     assert_eq!(doc.memory_revision(), revision);
     let before_bad_order = doc.clone();
     assert!(matches!(

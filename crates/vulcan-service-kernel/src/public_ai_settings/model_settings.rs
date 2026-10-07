@@ -344,7 +344,7 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
         None
     };
     if active_was_disabled {
-        candidate_configuration.active = replacement.clone();
+        candidate_configuration.active = replacement;
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
 
@@ -457,7 +457,7 @@ pub(crate) async fn service_save_public_ai_connection_models_enabled(
         None
     };
     if active_was_disabled {
-        candidate_configuration.active = replacement.clone();
+        candidate_configuration.active = replacement;
     }
     runtime.validate_model_catalog_overlays(&candidate_configuration)?;
 
@@ -782,7 +782,7 @@ pub(crate) async fn service_save_public_ai_model_enabled(
                     && model_effectively_disabled
             });
     if active_model_is_disabled {
-        candidate_configuration.active = fallback.clone();
+        candidate_configuration.active = fallback;
     }
     let (_configuration, snapshot) =
         mutate_public_ai_configuration_and_publish_sessions_in_transaction(

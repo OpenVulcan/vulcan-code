@@ -1980,9 +1980,7 @@ mod tests {
             .expect("patch 14"),
         ];
         let base: BTreeMap<Seq, ConversationEventSummary> =
-            [(reasoning_1.seq, reasoning_1.clone())]
-                .into_iter()
-                .collect();
+            [(reasoning_1.seq, reasoning_1)].into_iter().collect();
 
         let mut sequential = base.clone();
         for patch in &patches {
@@ -2074,7 +2072,7 @@ mod tests {
         let returned =
             ConversationEventLiveDeltaAccumulatorV1::start(durable.clone()).expect_err("durable");
         assert_eq!(*returned, durable);
-        let mut repeated = first.clone();
+        let mut repeated = first;
         repeated.batch.events = vec![streaming_text_event(5, false, "ab", streaming, 2)];
         assert!(ConversationEventLiveDeltaAccumulatorV1::start(repeated).is_err());
     }

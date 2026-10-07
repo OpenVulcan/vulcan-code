@@ -581,7 +581,6 @@ fn created_submission_slice_commit_preserves_retained_history() {
     .expect("initialized project should admit a new conversation");
     let mut submission_slice = preflight
         .retained_workspace_snapshot
-        .clone()
         .expect("new-session preflight should own one bounded slice");
     let materialized_session = materialize_prompt_session(
         &mut submission_slice,

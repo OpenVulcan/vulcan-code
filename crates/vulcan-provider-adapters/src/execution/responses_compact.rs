@@ -442,7 +442,7 @@ impl ProviderExecutionClient {
                 &value,
                 "Provider compaction response",
             )
-            .map_err(|error| compact_protocol_failure(error.to_string()))
+            .map_err(compact_protocol_failure)
             .inspect_err(|failure| wire_response_capture.observe_failure("response_projection", failure))?;
             apply_response_projection_profiles(&route.response_projection_profiles, &mut value)
                 .map_err(protocol_failure)

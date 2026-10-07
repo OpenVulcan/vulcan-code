@@ -20,7 +20,7 @@ fn text_budget_changes_content_without_disabling_mandatory_cleanup() {
     };
     let small = PostActionTextPolicy {
         max_fragment_tokens: 256,
-        ..large.clone()
+        ..large
     };
     let retained = sanitize_postaction_text_with_policy(&input, &large).expect("large budget");
     assert!(!retained.contains("must-not-survive"));
@@ -67,7 +67,7 @@ fn folding_switch_only_controls_machine_reduction() {
     };
     let disabled = PostActionTextPolicy {
         fold_machine_text: false,
-        ..enabled.clone()
+        ..enabled
     };
     let input = format!("<analysis>hidden</analysis>\n{logs}");
     assert!(

@@ -822,7 +822,7 @@ fn migration_preview_detects_session_conflicts_without_mutating_source() {
         project_scope(2).expect("source project scope")
     );
 
-    let mut changed = snapshot.clone();
+    let mut changed = snapshot;
     changed.dataset.turns[0].analysis_details = Some(String::from("changed detail"));
     let changed_preview = preview_migration(&changed, 2, 3).expect("changed preview");
     assert_ne!(
@@ -1886,7 +1886,7 @@ fn recycle_records_preserve_families_and_versioned_ownership() {
         },
         VmmNativeRecycleRecordQuery {
             batch_id: "missing".to_owned(),
-            ..query.clone()
+            ..query
         },
     ] {
         assert!(recycle_records::build_page(&snapshot, invalid).is_err());

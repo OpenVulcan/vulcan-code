@@ -218,7 +218,7 @@ fn compaction_trace_route(base_url: &str) -> ProviderExecutionRoute {
         vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
     )
     .expect("the codex subscription route must resolve");
-    route.upload_channels = manifest.upload_channels.clone();
+    route.upload_channels = manifest.upload_channels;
     route.protocol_route.base_url_override = Some(base_url.to_string());
     route
 }

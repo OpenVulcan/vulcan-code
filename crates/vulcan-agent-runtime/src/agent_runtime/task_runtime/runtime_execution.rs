@@ -481,7 +481,7 @@ pub(super) fn spawn_admitted_task_execution(
     let compaction_runtime_context = context.clone();
     let running_outcome = build_running_task_execution_outcome(
         task_id,
-        running_controller_config.clone(),
+        running_controller_config,
         resolved_config.clone(),
         request.snapshot.clone(),
     );
@@ -1614,14 +1614,12 @@ pub(crate) async fn run_task_session_context_compaction(
         &mut conversation_state,
         summary_message_id.clone(),
         &execution.compaction_result,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     vulcan_context_compaction::append_remote_responses_compaction_context(
         &mut conversation_state,
         &summary_message_id,
         &execution.compaction_result,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     vulcan_context_compaction::compact_conversation_records_after_summary(
         &mut conversation_state,
         &summary_message_id,

@@ -1381,7 +1381,7 @@ mod skills_catalog_delta_tests {
                 lua_skills: update.lua_skills.clone(),
                 plugins: update.plugins.clone(),
                 agent_skills: update.agent_skills.clone(),
-                subagent_catalog: update.subagent_catalog.clone(),
+                subagent_catalog: update.subagent_catalog,
             }))
         );
     }

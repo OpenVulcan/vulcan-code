@@ -344,11 +344,8 @@ pub fn application_data_root() -> PathBuf {
 
     #[cfg(not(test))]
     {
-        let home = dirs::home_dir().unwrap_or_else(|| {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .to_path_buf()
-        });
+        let home = dirs::home_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         runtime_assets::user_vulcan_code_root_for_home(&home)
     }
@@ -809,7 +806,7 @@ mod tests {
         // 正是精确集合比较捕捉到了这一点。
 
         let observed_sorted = {
-            let mut sorted = observed.clone();
+            let mut sorted = observed;
             sorted.sort();
             sorted
         };

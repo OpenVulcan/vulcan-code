@@ -319,7 +319,7 @@ impl ProviderApiTraceAttemptCapture {
         let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
         let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
         let execution_id = uuid::Uuid::new_v4().to_string();
-        let trace_execution_id = execution_id.clone();
+        let trace_execution_id = execution_id;
         let trace_session_scope_id = identity.session_scope_id.clone();
         tokio::spawn(async move {
             let Ok(ProviderWireRequestTraceDispatch {

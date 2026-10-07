@@ -123,7 +123,7 @@ impl TargetPluginMcpRuntime {
         let observation = CandidatePluginMcpObservation {
             request_id: target.request_id(),
             plugin_id: target.plugin_id().to_owned(),
-            runtime: runtime.clone(),
+            runtime,
             release,
         };
         Ok(Self {

@@ -453,7 +453,7 @@ fn open_log_location(text: &TrayText) {
     if let Err(error) = crate::desktop_integration::open_path_in_system_file_manager(
         &crate::logging::directory(&data_root).to_string_lossy(),
     ) {
-        report_tray_failure(&text.with_reason(keys::LOG_LOCATION_FAILED, &error.to_string()));
+        report_tray_failure(&text.with_reason(keys::LOG_LOCATION_FAILED, &error));
     }
 }
 
@@ -690,7 +690,7 @@ fn run_shutdown_worker(service: &HeadlessService, shutdown_in_progress: &AtomicB
             // HeadlessService owns the admission-recovery decision; never perform a second attempt.
             // HeadlessService 拥有准入恢复决定；绝不执行第二次尝试。
             shutdown_in_progress.store(false, Ordering::Release);
-            TrayEvent::ShutdownFailed(error.to_string())
+            TrayEvent::ShutdownFailed(error)
         }
     }
 }

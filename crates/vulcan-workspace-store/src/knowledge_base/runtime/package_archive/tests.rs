@@ -191,7 +191,7 @@ fn package_preparation_enforces_exact_entries_and_digest() {
 
     // incompatiblePackage proves the SQLite schema version is checked independently.
     // incompatiblePackage 证明 SQLite 结构版本会被独立校验。
-    let mut incompatible_package = package.clone();
+    let mut incompatible_package = package;
     incompatible_package.schema_version += 1;
     let incompatible_path = temporary.path().join("incompatible.vkb");
     write_package_fixture(

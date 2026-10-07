@@ -240,7 +240,7 @@ mod tests {
             first.index.vector_space_id
         );
         vulcan_context_engine::VceEmbeddingExecutionContract::new(
-            first.index.binding.clone(),
+            first.index.binding,
             restored_execution,
             "fixture-approved-origin",
         )

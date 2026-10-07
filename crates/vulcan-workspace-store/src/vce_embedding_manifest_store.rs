@@ -2786,7 +2786,7 @@ mod tests {
                 .expect("production file lifecycle edge must be persistable");
         }
 
-        let mut uploaded = base.clone();
+        let mut uploaded = base;
         uploaded.state = VceEmbeddingRemoteBatchState::Uploaded;
         let mut regressed = uploaded.clone();
         regressed.state = VceEmbeddingRemoteBatchState::Planned;

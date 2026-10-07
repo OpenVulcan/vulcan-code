@@ -515,7 +515,7 @@ fn rebuild_rejects_bad_turn_closure_sequences() {
     // A same-turn event persists after the terminal statistics.
     // 终态统计之后仍然出现同回合事件。
     let event_after_stats = vec![
-        raw_event(1, 1, EventVisibility::UiOnly, user_input.clone()),
+        raw_event(1, 1, EventVisibility::UiOnly, user_input),
         raw_event(2, 1, EventVisibility::UiOnly, boundary),
         raw_event(3, 1, EventVisibility::UiOnly, stats),
         raw_event(

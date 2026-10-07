@@ -443,7 +443,7 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
     ));
     assert_eq!(doc, before_invalid);
 
-    let mut invalid_reasoning_mode = selection.clone();
+    let mut invalid_reasoning_mode = selection;
     invalid_reasoning_mode.media_understanding_selections[0].reasoning_effort =
         Some(ProviderMediaUnderstandingReasoningEffort::Adaptive);
     assert!(matches!(
@@ -488,7 +488,7 @@ fn knowledge_and_vmm_selections_are_atomic_idempotent_and_strict() -> Result<(),
     assert_eq!(doc.memory_revision(), knowledge_revision);
 
     let before_invalid = doc.clone();
-    let mut invalid_order = knowledge.clone();
+    let mut invalid_order = knowledge;
     invalid_order.library_ids.reverse();
     assert!(matches!(
         doc.set_knowledge_library_selection(invalid_order, T0 + 3),
@@ -675,7 +675,7 @@ fn api_request_selection_validation_is_symmetric_and_atomic() -> Result<(), Doma
         Err(DomainError::InvalidRequestConfiguration { field: "profile" })
     ));
 
-    let mut invalid_metadata = new_document().metadata.clone();
+    let mut invalid_metadata = new_document().metadata;
     invalid_metadata.config.active_request.provider = Some("openai ".to_string());
     assert!(matches!(
         SessionDocument::from_parts(

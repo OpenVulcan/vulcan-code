@@ -308,7 +308,7 @@ async fn question_progress_recovery_reads_sealed_target_operation() {
         metadata.clone(),
         runtime_lock,
         compactions,
-        metadata.split_list.clone(),
+        metadata.split_list,
         tail,
     )
     .expect("sealed target history should reload with its collaboration metadata");

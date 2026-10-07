@@ -853,7 +853,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         .storage_locator()
         .map_err(|error| error.to_string())?
         .session_directory();
-    request.session_storage_directory = Some(session_directory.clone());
+    request.session_storage_directory = Some(session_directory);
     webui_after_precheck_trace(
         "after_precheck_11_v1_session_locator_ready",
         format!(
@@ -1460,7 +1460,7 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
                 "Prompt preparation failure message projection failed: {projection_error}"
             ));
         }
-        runtime_state.updated_at = now.clone();
+        runtime_state.updated_at = now;
     } else {
         diagnostics.push(String::from(
             "Prompt preparation failure runtime state is unavailable.",

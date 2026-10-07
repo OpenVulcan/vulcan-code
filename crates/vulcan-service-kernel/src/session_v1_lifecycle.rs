@@ -1547,7 +1547,7 @@ mod tests {
                 sqlite_path: sqlite_path.clone(),
                 sqlite_binding_id: binding_id.clone(),
                 system_statistics_sqlite_path: sqlite_path,
-                system_statistics_sqlite_binding_id: binding_id.clone(),
+                system_statistics_sqlite_binding_id: binding_id,
             });
             Self {
                 _temporary: temporary,

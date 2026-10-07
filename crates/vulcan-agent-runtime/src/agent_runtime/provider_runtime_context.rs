@@ -1630,7 +1630,7 @@ mod tests {
         body_conflict.body = String::from("changed with same hash");
         let mut routing_conflict = original.clone();
         routing_conflict.target = String::from("another-agent");
-        let mut event_conflict = original.clone();
+        let mut event_conflict = original;
         event_conflict.event_id = Some(String::from("second-update-id"));
         for conflict in [body_conflict, routing_conflict, event_conflict] {
             let staged = host_candidate("other", "valid", Some("other-occ"), None, false);

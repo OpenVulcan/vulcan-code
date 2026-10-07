@@ -162,7 +162,7 @@ fn strict_schema_privacy_and_retirement_null() {
     );
     // A future marker outside the explicit selected scope.
     // 明确选中范围之外的未来标记。
-    let mut unselected_version = original.clone();
+    let mut unselected_version = original;
     unselected_version["luaskills_embedded_diagnostic"] = json!(2);
     assert!(
         parse_core(&unselected_version.to_string())

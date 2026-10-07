@@ -1795,7 +1795,7 @@ fn performance_smoke_large_tail_round_trip() {
     // Synthesize a large tail from user inputs without mutation overhead.
     // 直接合成大型尾段，避免 mutation 开销。
     let base = document.events().to_vec();
-    let mut big = base.clone();
+    let mut big = base;
     for _ in 0..40_000u64 {
         let seq = Seq::try_new(big.len() as u64 + 1).unwrap();
         big.push(ConversationEvent {
@@ -2185,7 +2185,7 @@ fn stale_edit_request_cannot_delete_published_generation() {
     let (root, layout) = fresh_layout("stale-edit");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    let stale_metadata = document.metadata.clone();
+    let stale_metadata = document.metadata;
     let first_output =
         build_durable_edit_output(&layout, Seq::try_new(1).unwrap(), "first edit", 12);
     let published = publish_edit_generation(
@@ -2197,7 +2197,7 @@ fn stale_edit_request_cannot_delete_published_generation() {
     )
     .unwrap();
     assert_eq!(published.segment_generation, 2);
-    let stale_output = first_output.clone();
+    let stale_output = first_output;
     let stale_result = publish_edit_generation(
         &layout,
         PublishEditGenerationRequest {
@@ -2574,7 +2574,7 @@ fn corrupt_line_carries_byte_offset() {
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
     let bytes = serialize_segment(document.events()).unwrap();
-    let mut broken = bytes.clone();
+    let mut broken = bytes;
     // Insert an invalid token at the start of the second line: the corruption
     // is invalid JSON no matter where it lands in the stream (byte-offset-based
     // splicing can coincidentally land inside a JSON string and stay valid).
@@ -4062,7 +4062,10 @@ fn sealed_segments_bound_windows_and_edit_io() {
     )
     .unwrap();
     assert_eq!(provider.events.len(), 30);
-    assert_eq!(provider.events.first().unwrap().seq().value(), provider_first);
+    assert_eq!(
+        provider.events.first().unwrap().seq().value(),
+        provider_first
+    );
     assert_eq!(provider.events.last().unwrap().seq().value(), provider_last);
     assert_eq!(provider.report.opened_segment_files, 1);
 

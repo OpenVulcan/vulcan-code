@@ -216,7 +216,7 @@ fn task_result_lifetime_requires_closed_turn_and_complete_snapshot() {
         .collaboration
         .state
         .task_results
-        .insert(message.delivery_id.clone(), result.clone());
+        .insert(message.delivery_id, result.clone());
     assert!(matches!(
         premature.validate_task_result_facts(),
         Err(DomainError::CollaborationStateViolation {

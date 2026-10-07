@@ -136,7 +136,7 @@ impl HookRegistry {
         };
         self.next_sequence = next_sequence;
         self.entries_by_point
-            .entry(registration.point.clone())
+            .entry(registration.point)
             .or_default()
             .push(entry);
         Ok(())

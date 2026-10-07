@@ -342,7 +342,7 @@ fn golden_turn_stats() {
             end_seq: Seq::try_new(8).unwrap(),
             outcome: TurnOutcome::Completed,
             duration_ms: Some(1000),
-            buckets: TurnStatBuckets::combine(bucket.clone(), StatBucket::default()),
+            buckets: TurnStatBuckets::combine(bucket, StatBucket::default()),
         }),
     );
     assert_golden(

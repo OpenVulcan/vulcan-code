@@ -440,8 +440,8 @@ impl SessionDocument {
         let active_mode_keys = active_generation_context_keys(&retained, target_seq)?;
         let mut document = SessionDocument::from_parts(
             metadata.clone(),
-            runtime_lock.clone(),
-            kept_compactions.clone(),
+            runtime_lock,
+            kept_compactions,
             Vec::new(),
             retained,
         )?;

@@ -304,7 +304,7 @@ impl SessionVmmController {
         let previous_state = guard.clone();
         // candidate is the isolated transaction workspace for this command.
         // candidate 是本次命令使用的隔离事务工作区。
-        let mut candidate = previous_state.clone();
+        let mut candidate = previous_state;
         // revision_before_command lets the receipt share an existing domain revision when one changed.
         // revision_before_command 使领域变更发生时命令回执共享其现有 revision。
         let revision_before_command = candidate.revision;

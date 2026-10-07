@@ -850,7 +850,7 @@ fn custom_manifest_descriptor_match_excludes_only_manifest_owned_profiles() {
         "manifest-owned standard Usage payloads must not create a false descriptor mismatch"
     );
 
-    let mut conflicting_provider = provider.clone();
+    let mut conflicting_provider = provider;
     conflicting_provider.service_entries[0].base_url =
         String::from("https://conflicting.example.invalid/v1");
     assert!(

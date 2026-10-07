@@ -1933,7 +1933,7 @@ mod tests {
         };
         let now = 1_000_000;
         let index_bytes =
-            build_index_document(vec![entry.clone()], 3, "test-key-1", now - 1000, now + 1000);
+            build_index_document(vec![entry], 3, "test-key-1", now - 1000, now + 1000);
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let parsed = verify_and_parse_index(
             &index_bytes,
@@ -2025,7 +2025,7 @@ mod tests {
         };
         verify_provider_bytes(&entry, bytes).expect("bundled deepseek must verify");
 
-        let mut wrong = entry.clone();
+        let mut wrong = entry;
         wrong.sha256 = "0".repeat(64);
         let error = verify_provider_bytes(&wrong, bytes).expect_err("digest mismatch must fail");
         assert_eq!(
@@ -2795,7 +2795,7 @@ mod tests {
         candidate.model_rules.push(reviewed_conversation_rule);
         // new_binding independently extends the media/tool catalog through reviewed execution authority.
         // new_binding 通过已审核执行权限独立扩展媒体/工具目录。
-        let mut new_binding = reviewed_binding.clone();
+        let mut new_binding = reviewed_binding;
         new_binding.model_id = String::from("qwen-tool-template-hot-add");
         new_binding.display_name = String::from("Qwen Tool Template Hot Add");
         candidate.tool_target_template_bindings.push(new_binding);
@@ -2996,9 +2996,7 @@ mod tests {
             providers: BTreeMap::new(),
         };
         entry.provider_id = String::from("forged-id");
-        index
-            .providers
-            .insert(String::from("expected-id"), entry.clone());
+        index.providers.insert(String::from("expected-id"), entry);
         let index_bytes = serde_json::to_vec(&index).expect("index should encode");
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let error = verify_and_parse_index(&index_bytes, &signature, &[trusted], now)

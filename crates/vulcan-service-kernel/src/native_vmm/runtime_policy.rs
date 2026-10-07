@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(saved.retrieval, ranking);
         recall.precheck_max_input_tokens = 2048;
         let updated = store
-            .update_runtime_policy(&core, recall.clone())
+            .update_runtime_policy(&core, recall)
             .expect("second recall save");
         assert_eq!(updated.retrieval, ranking);
         let reopened = NativeVmmResourceStore::new(directory.path());
@@ -810,7 +810,7 @@ mod tests {
                 .profiles,
             profile_policy::resolve(&profiles)
         );
-        let mut recall = saved.recall.clone();
+        let mut recall = saved.recall;
         recall.precheck_history_turn_limit = 2;
         let saved = store
             .update_runtime_policy(&core, recall)
@@ -888,7 +888,7 @@ mod tests {
             },
             VmmNativeRetrievalPolicySummary {
                 hard_dedupe_cosine_threshold: 1.1,
-                ..saved.retrieval.clone()
+                ..saved.retrieval
             },
         ] {
             assert!(store.update_retrieval_policy(&core, invalid).is_err());

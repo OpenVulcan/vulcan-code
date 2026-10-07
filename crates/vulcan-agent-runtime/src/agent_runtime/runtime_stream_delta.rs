@@ -780,7 +780,7 @@ pub(crate) fn process_provider_stream_delta(
             conversation_state,
             reason,
         }) => {
-            state.context_compaction_required = Some((conversation_state.clone(), reason.clone()));
+            state.context_compaction_required = Some((conversation_state, reason));
             Vec::new()
         }
         Ok(ProviderStreamDelta::ProviderRouteSwitchRequired {
@@ -804,11 +804,8 @@ pub(crate) fn process_provider_stream_delta(
                     return Vec::new();
                 }
             };
-            state.provider_route_switch_required = Some((
-                conversation_state.clone(),
-                reason.clone(),
-                provider_request_continuation,
-            ));
+            state.provider_route_switch_required =
+                Some((conversation_state, reason, provider_request_continuation));
             Vec::new()
         }
         Ok(ProviderStreamDelta::ContextCompactionPolicyRefreshRequired {
@@ -829,11 +826,8 @@ pub(crate) fn process_provider_stream_delta(
                     return Vec::new();
                 }
             };
-            state.context_compaction_policy_refresh_required = Some((
-                conversation_state.clone(),
-                reason.clone(),
-                provider_request_continuation,
-            ));
+            state.context_compaction_policy_refresh_required =
+                Some((conversation_state, reason, provider_request_continuation));
             Vec::new()
         }
         Ok(ProviderStreamDelta::FinalConversationState(
@@ -997,7 +991,7 @@ mod tests {
                     model_id: String::from("mock-model"),
                     system_prompt: String::from("system"),
                     prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                        String::from("system").clone(),
+                        String::from("system"),
                     ),
                     temperature: Some(0.1),
                     max_turns: 4,

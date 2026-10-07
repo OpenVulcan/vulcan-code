@@ -47,7 +47,7 @@ fn build_test_controller_config(system_prompt: &str) -> CoreControllerConfig {
         model_id: String::from("model"),
         system_prompt: system_prompt.to_string(),
         prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-            system_prompt.to_string().clone(),
+            system_prompt.to_string(),
         ),
         temperature: None,
         max_turns: 8,

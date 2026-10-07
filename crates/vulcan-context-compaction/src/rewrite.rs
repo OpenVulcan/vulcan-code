@@ -182,7 +182,7 @@ fn compact_conversation_with_legacy_inputs(
         compaction_id: plan.compaction_id.clone(),
         created_at: updated_at,
         policy: plan.policy,
-        tail_selection: plan.tail_selection.clone(),
+        tail_selection: plan.tail_selection,
         provider_context_items: Vec::new(),
         provider_context_route: None,
         provider_context_usage: None,
@@ -584,7 +584,7 @@ pub fn compact_conversation_records_after_summary_with_retained_ids(
         }
     }
 
-    let mut full_record_ids = retained_canonical_ids.clone();
+    let mut full_record_ids = retained_canonical_ids;
     full_record_ids.insert(summary_record_id.to_string());
     full_record_ids.extend(additional_retained_record_ids.iter().cloned());
     let mut matched_local_tool_ids = std::collections::BTreeSet::new();

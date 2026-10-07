@@ -363,7 +363,7 @@ fn durable_v1_queue_occupancy_queues_submission_without_process_mirror() {
     // session_id 标识可靠队列已持有一条输入的会话。
     let session_id = SessionId::new_v4();
     let backend = Arc::new(QueueRecordingBackend::default());
-    let handle = queue_v1_test_handle(session_id, backend.clone());
+    let handle = queue_v1_test_handle(session_id, backend);
     // submission is durably admitted before the decision under test runs.
     // submission 在被测决策运行前已可靠准入。
     let submission = ClientInputSubmission::new(

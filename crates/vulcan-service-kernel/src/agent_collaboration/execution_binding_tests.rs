@@ -319,7 +319,7 @@ fn auxiliary_reply_requires_the_bound_execution() {
     );
     // A second accepted question shares the parent turn but not this physical execution's ownership.
     // 第二个已接纳问题共享父回合，但不共享本次物理执行的归属。
-    let mut other = question.clone();
+    let mut other = question;
     other.question_id = CollaborationQuestionId::try_new("other-question").unwrap();
     other.delivery_id = CollaborationDeliveryId::try_new("other-delivery").unwrap();
     document

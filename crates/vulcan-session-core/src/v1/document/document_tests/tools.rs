@@ -620,7 +620,7 @@ fn tool_completion_is_exactly_idempotent_across_reload() -> Result<(), DomainErr
         tool,
         tool_completion(Some(output), ToolCallStatus::Completed, T0 + 99),
     )?;
-    assert_eq!(replayed, IdempotentMutation::Idempotent(receipt.clone()));
+    assert_eq!(replayed, IdempotentMutation::Idempotent(receipt));
     assert_eq!(restored.memory_revision(), revision_before_replay);
 
     let before_drift = restored.clone();

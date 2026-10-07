@@ -506,7 +506,7 @@ impl KnowledgeBaseRuntime {
         let serialized = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
         local_sql::execute_script_async(&self.host_runtime.local, LogicalDatabase::AppState,
             "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-            vec![text(serialized), int(unix_epoch_millis()?), text(library_id)]).await.map_err(|error| error.to_string())?;
+            vec![text(serialized), int(unix_epoch_millis()?), text(library_id)]).await?;
         Ok(settings.ignored_files)
     }
 }

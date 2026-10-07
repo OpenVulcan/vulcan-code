@@ -2159,7 +2159,7 @@ mod tests {
         let binding = SqliteFileBinding::new(directory.path().join("library.sqlite3"));
         runtime.open_sqlite_file(&binding).expect("first open");
 
-        let mut narrower = binding.clone();
+        let mut narrower = binding;
         narrower.options.busy_timeout_ms = 1;
         let conflict = runtime
             .open_sqlite_file(&narrower)
@@ -2616,8 +2616,7 @@ mod tests {
         let (_directory, runtime) = runtime_with_all_resources();
         let app_path = runtime
             .path_for(LogicalDatabase::AppState)
-            .expect("app state should be bound")
-            .to_path_buf();
+            .expect("app state should be bound");
 
         // Opening is lazy, so the handle and its exclusive lock only exist after a real use. Without
         // this step the assertions below would pass vacuously.

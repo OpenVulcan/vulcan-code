@@ -1859,7 +1859,6 @@ impl SessionHandle {
         // 已初始化 generation 以其持久化基线为准；新组装候选只在 generation 为全新或明确待刷新时权威。
         let locked_baseline = snapshot
             .initialized_locked_baseline
-            .clone()
             .unwrap_or(candidate_locked_baseline);
         let receipt_locked_baseline = locked_baseline.clone();
         let receipt = self.mutate_in_memory_if_changed_with_publisher_locked(

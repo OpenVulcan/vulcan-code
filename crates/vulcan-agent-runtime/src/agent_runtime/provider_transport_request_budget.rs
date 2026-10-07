@@ -1243,7 +1243,7 @@ mod tests {
             .build_budget_snapshot(&request)
             .expect("embedded prompt budget should build");
 
-        let mut distinct_request = request.clone();
+        let mut distinct_request = request;
         distinct_request.prompt_in_history = false;
         let distinct_evidence = build_provider_request_budget_evidence(
             &distinct_request,

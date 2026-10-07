@@ -22,7 +22,7 @@ fn draft_receipt_identity_is_write_once_and_never_latest_cache()
         .expect("typed receipt")
         .draft_intent_id = Some(intent.clone());
     let pending = UserPromptResourceDeliveryKind::UploadPending {
-        draft_intent_id: Some(intent.clone().into_boxed_str()),
+        draft_intent_id: Some(intent.into_boxed_str()),
         upload_channel_id: "files".into(),
         upload_contract_fingerprint: format!("sha256:{}", "a".repeat(64)),
     };

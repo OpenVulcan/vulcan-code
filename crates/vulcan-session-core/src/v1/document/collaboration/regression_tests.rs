@@ -650,7 +650,7 @@ fn question_projection_is_atomic_idempotent_and_typed() {
         .begin_question_execution(BeginQuestionExecutionInput {
             operation_id: CollaborationOperationId::try_new("begin-projection").unwrap(),
             execution_id: CollaborationExecutionId::try_new("execution-projection").unwrap(),
-            question_id: question_id.clone(),
+            question_id,
             participant: target_identity,
             purpose: CollaborationExecutionPurpose::NaturallyIdleQuestion,
             parent_turn_id: None,
@@ -717,7 +717,7 @@ fn notification_projection_preserves_prefix_and_does_not_start_question_executio
         .accept_notification(AcceptNotificationInput {
             operation_id: CollaborationOperationId::try_new("stage-one-accept").unwrap(),
             notification_id: notification_id.clone(),
-            delivery_id: delivery_id.clone(),
+            delivery_id,
             source_operation_id: CollaborationOperationId::try_new("stage-one-send").unwrap(),
             source: source_identity,
             target: target_identity,
@@ -1601,7 +1601,7 @@ fn forged_and_cross_question_sequences_are_rejected() {
             "accept-sequence-one",
             delivery_id.clone(),
             question_id.clone(),
-            initial_source_participant.clone(),
+            initial_source_participant,
             target_participant.clone(),
         ))
         .expect("first target acceptance must succeed")
@@ -1781,7 +1781,7 @@ fn accept_retry_preserves_receipt_revision() {
     let input = acceptance_input(
         "accept-retry",
         delivery_id.clone(),
-        question_id.clone(),
+        question_id,
         source_participant,
         target_participant,
     );
@@ -1789,7 +1789,7 @@ fn accept_retry_preserves_receipt_revision() {
         .accept_delivery(input.clone())
         .expect("first target acceptance must succeed");
     assert!(first.changed());
-    let first_receipt = first.clone().into_value();
+    let first_receipt = first.into_value();
     let first_revision = target
         .inbound_delivery_snapshot(&delivery_id)
         .expect("accepted delivery must be resident")
@@ -1822,7 +1822,7 @@ fn answer_wins_over_cancel_and_retry_is_idempotent() {
     let answer_input = ReplyQuestionInput {
         operation_id: CollaborationOperationId::try_new("answer-winner").unwrap(),
         question_id: question_id.clone(),
-        responder: target_participant.clone(),
+        responder: target_participant,
         body: "answer wins".to_string(),
         answered_at_ms: T0 + 3,
     };
@@ -1830,7 +1830,7 @@ fn answer_wins_over_cancel_and_retry_is_idempotent() {
         .reply_question(answer_input.clone())
         .expect("the first answer must settle the question");
     assert!(first.changed());
-    let first_receipt = first.clone().into_value();
+    let first_receipt = first.into_value();
     assert_eq!(first_receipt.state, CollaborationQuestionState::Answered);
     assert_eq!(
         source
@@ -1909,7 +1909,7 @@ fn cancel_wins_over_answer_and_retry_is_idempotent() {
         .cancel_question(cancel_input.clone())
         .expect("the first cancellation must settle the question");
     assert!(first.changed());
-    let first_receipt = first.clone().into_value();
+    let first_receipt = first.into_value();
     assert_eq!(first_receipt.state, CollaborationQuestionState::Cancelled);
 
     let retry = source
@@ -2035,7 +2035,7 @@ fn closed_source_turn_keeps_existing_questions_mutable_without_reopening() {
         .reply_question(ReplyQuestionInput {
             operation_id: CollaborationOperationId::try_new("answer-after-close").unwrap(),
             question_id: first_question_id.clone(),
-            responder: target_participant.clone(),
+            responder: target_participant,
             body: "answer after source closure".to_string(),
             answered_at_ms: T0 + 4,
         })
@@ -2167,7 +2167,7 @@ fn source_and_target_settlement_clear_delete_guard_only_after_both_receipts() {
     let source_ack_input = AcknowledgeDeliverySettlementInput {
         operation_id: CollaborationOperationId::try_new("source-ack-cancellation").unwrap(),
         delivery_id: delivery_id.clone(),
-        question_id: question_id.clone(),
+        question_id,
         settlement: CollaborationTargetSettlementState::Cancelled,
         source_event_seq: cancelled.event_seq,
         target_event_seq: target_first.event_seq,

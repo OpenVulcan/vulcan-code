@@ -527,7 +527,7 @@ impl LuaSkillsModelBridge {
         let context = self.call_context(&operation_id, Arc::clone(&cancellation));
         let execution_request = ResponsesExecutionRequest {
             contract_version: INFERENCE_CONTRACT_VERSION,
-            request_id: operation_id.clone(),
+            request_id: operation_id,
             idempotency_key: None,
             consumer_profile_id: String::from(LUASKILLS_CONSUMER_PROFILE_ID),
             purpose_id: String::from(LUASKILLS_TEMPORARY_LLM_PURPOSE_ID),
@@ -640,7 +640,7 @@ impl LuaSkillsModelBridge {
             vector_space_id: String::from(LUASKILLS_VECTOR_SPACE_ID),
             request: EmbeddingRequest {
                 contract_version: INFERENCE_CONTRACT_VERSION,
-                request_id: operation_id.clone(),
+                request_id: operation_id,
                 idempotency_key: None,
                 consumer_profile_id: String::from(LUASKILLS_CONSUMER_PROFILE_ID),
                 inputs: vec![EmbeddingInput {

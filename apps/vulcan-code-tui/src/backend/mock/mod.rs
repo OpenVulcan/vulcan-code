@@ -894,7 +894,7 @@ impl World {
         });
         self.emit_agents(conversation_id);
         self.emit(BackendEvent::PlanMode {
-            conversation_id: id.clone(),
+            conversation_id: id,
             mode: log.mode.unwrap_or(ExecutionMode::Build),
         });
         self.emit_usage(conversation_id);

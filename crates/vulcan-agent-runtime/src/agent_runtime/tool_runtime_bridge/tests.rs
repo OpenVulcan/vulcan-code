@@ -539,7 +539,7 @@ impl VulcanProviderAdapter for MockControllerProviderAdapter {
             model_id: config.model_id.clone(),
             system_prompt: config.system_prompt.clone(),
             prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                config.system_prompt.clone().clone(),
+                config.system_prompt.clone(),
             ),
             prompt: String::from("controller-integration"),
             prompt_in_history: false,
@@ -1085,7 +1085,7 @@ fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
             model_id: String::from("mock-model"),
             system_prompt: String::from("system"),
             prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                String::from("system").clone(),
+                String::from("system"),
             ),
             temperature: Some(0.2),
             max_turns: 3,
@@ -1174,7 +1174,7 @@ fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() 
             model_id: String::from("mock-model"),
             system_prompt: String::from("system"),
             prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
-                String::from("system").clone(),
+                String::from("system"),
             ),
             temperature: Some(0.2),
             max_turns: 3,

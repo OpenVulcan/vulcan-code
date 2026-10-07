@@ -1798,8 +1798,8 @@ pub(crate) async fn service_start_plugin_environment_install(
     }
     let task_id = enqueue.status.task_id.clone();
     let task_plugin_id = plugin_id.clone();
-    let task_runtime = runtime.clone();
-    let task_registry = registry.clone();
+    let task_runtime = runtime;
+    let task_registry = registry;
     // Detached ownership keeps installation alive when an RPC waiter or GUI disappears.
     // 分离任务拥有安装生命周期，即使 RPC 等待者或 GUI 消失也继续执行。
     spawn_service_task(async move {
@@ -2742,7 +2742,7 @@ pub(crate) async fn service_save_subagent_definition(
         &target_agent_id,
         target_package_id.as_deref(),
     );
-    definition.source.package_id = target_package_id.clone();
+    definition.source.package_id = target_package_id;
     definition.source.updated_at = Some(current_unix_millis_text());
     definition.source.override_of = None;
     let written_user_file = vulcan_task_session::write_user_subagent_definition(

@@ -169,18 +169,18 @@ fn build_cached_task_invocation_result(
     input: TaskCachedInvocationResultInput,
 ) -> VulcanToolInvocationResult {
     let model_output = json!({
-        "task_id": input.public_task_id.clone(),
+        "task_id": input.public_task_id,
         (SUBAGENT_TASK_ID_KEY): input.task_id.to_string(),
-        "display_title": input.display_title.clone(),
+        "display_title": input.display_title,
         "status": "resumed",
-        "execution_status": input.execution_status.clone(),
+        "execution_status": input.execution_status,
         "origin_session_id": input.current_session_id.to_string(),
         "parent_task_id": input.parent_task_id.map(|value| value.to_string()),
         "depth": input.depth,
-        "description": input.description.clone(),
-        "subagent": input.subagent.clone(),
+        "description": input.description,
+        "subagent": input.subagent,
         "final_assistant_message_id": Value::Null,
-        "result": input.result_text.clone(),
+        "result": input.result_text,
         "cached": true,
     });
     let payload = json!({

@@ -537,7 +537,7 @@ fn run_service_bootstrap(
         "[webui-service] vldb ready: {}",
         controller_report.handle.sqlite_path.display()
     ));
-    let controller_runtime = controller_report.handle.clone();
+    let controller_runtime = controller_report.handle;
     let knowledge_runtime = vulcan_workspace_store::knowledge_base::KnowledgeBaseRuntime::new(
         controller_runtime.clone(),
     );
@@ -1510,7 +1510,7 @@ fn run_service_bootstrap(
         agent_profile_catalog,
         subagent_catalog: Arc::new(subagent_catalog),
         luaskills_runtime: agent_luaskills_runtime,
-        vulcan_plugin_runtime: vulcan_plugin_runtime.clone(),
+        vulcan_plugin_runtime,
         vulcan_plugin_native_mcp_host,
         extension_generation: Arc::new(ExtensionGeneration::new_with_plugin_conversation_hooks(
             vulcan_plugin_catalog.revision,
@@ -1751,7 +1751,7 @@ fn run_service_bootstrap(
         ),
         &logs,
     );
-    startup.ui_locale = provider_configuration.ui_locale.clone();
+    startup.ui_locale = provider_configuration.ui_locale;
     startup.model_reconciliation_notices = model_reconciliation_notices;
     // initial_projection_started_at measures selected-session locator validation and first workbench projection.
     // initial_projection_started_at 测量选中会话定位校验与首次工作台投影。

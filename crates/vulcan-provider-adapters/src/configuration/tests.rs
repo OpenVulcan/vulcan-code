@@ -1752,7 +1752,7 @@ fn removing_model_clears_every_model_owned_non_route_setting() {
         .secondary_routes
         .insert(connection_model_key, SecondaryRouteSelection::Automatic);
     configuration.custom_model_template_decisions.insert(
-        provider_model_key.clone(),
+        provider_model_key,
         CustomModelTemplateDecision::Rejected {
             template_key: String::from("private-model"),
             template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
@@ -2469,7 +2469,7 @@ fn schema_three_migration_skips_values_equal_to_provider_defaults() {
             context_limit: Some(defaults.context_limit),
             output_limit: Some(defaults.output_limit),
             input_resources: defaults.input_resources.clone(),
-            output_resources: defaults.output_resources.clone(),
+            output_resources: defaults.output_resources,
             ..ModelCapabilities::default()
         },
         request_projection: Default::default(),

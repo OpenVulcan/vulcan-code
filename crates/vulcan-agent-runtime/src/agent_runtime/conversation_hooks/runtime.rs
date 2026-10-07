@@ -503,8 +503,8 @@ impl ConversationHookRuntime {
         // precheck_payload 持有用户提示召回上下文，且不包含系统画像字段。
         let precheck_payload = json!({
             "session_id": session_id.to_string(),
-            "project_id": project_id.clone(),
-            "workspace_path": workspace_path.clone(),
+            "project_id": project_id,
+            "workspace_path": workspace_path,
             "turn_id": turn_id,
             "event_kind": event_kind,
             "is_new_turn": is_new_turn,

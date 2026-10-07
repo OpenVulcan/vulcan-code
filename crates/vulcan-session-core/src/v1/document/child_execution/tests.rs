@@ -85,7 +85,7 @@ fn child_preparation_round_trip_binds_real_document_turn() {
     expected.segment_generation = document.segment_generation();
     expected.business_turn_id = turn;
     assert!(preparation.clone().bind_child_turn(0, turn).is_err());
-    let mut self_parent = preparation.clone();
+    let mut self_parent = preparation;
     self_parent.parent_session_id = task_id;
     assert!(
         self_parent
