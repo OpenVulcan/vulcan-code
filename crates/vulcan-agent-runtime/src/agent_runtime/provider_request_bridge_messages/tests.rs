@@ -304,59 +304,6 @@ fn provider_visible_history_downgrades_model_unsupported_attachments() {
     assert_eq!(canonical_attachments.len(), 1);
 }
 
-/// Verifies legacy project-scope Explore records are removed from provider-visible history.
-/// 验证旧版项目范围 Explore 记录会从 Provider 可见历史中移除。
-#[test]
-fn provider_visible_history_filters_legacy_explore_assistant_projection() {
-    let messages = vec![
-        CoreConversationMessage {
-            id: String::from("user-1"),
-            payload: CoreConversationPayload::UserText {
-                text: String::from("介绍下你自己"),
-                attachments: Vec::new(),
-            },
-        },
-        CoreConversationMessage {
-            id: String::from("explore-1"),
-            payload: CoreConversationPayload::Assistant {
-                text: String::from(
-                    "This session is bound to project `test-project` with root directory `D:\\openvulcan\\test-project`. Future explore and triage steps should prioritize that scope.",
-                ),
-                reasoning: String::new(),
-                provider_message_id: None,
-                provider_message_state: None,
-                usage: None,
-                tool_calls: Vec::new(),
-            },
-        },
-        CoreConversationMessage {
-            id: String::from("user-2"),
-            payload: CoreConversationPayload::UserText {
-                text: String::from("继续"),
-                attachments: Vec::new(),
-            },
-        },
-    ];
-
-    let projected = core_messages_to_provider_visible_history_for_model(
-        &messages,
-        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
-        None,
-    )
-    .expect("valid provider history projection");
-
-    assert_eq!(projected.len(), 2);
-    assert!(projected.iter().all(|message| message.id != "explore-1"));
-    assert!(matches!(
-        &projected[0].payload,
-        CoreConversationPayload::UserText { text, .. } if text == "介绍下你自己"
-    ));
-    assert!(matches!(
-        &projected[1].payload,
-        CoreConversationPayload::UserText { text, .. } if text == "继续"
-    ));
-}
-
 /// Verifies matched tool results remain protocol tool responses in provider-visible history.
 /// 验证已匹配的工具结果在 Provider 可见历史中仍保持协议工具响应形态。
 #[test]

@@ -115,18 +115,6 @@ fn project_core_messages_to_provider_visible_history_for_model(
                 usage,
                 tool_calls,
             } => {
-                if is_legacy_explore_assistant_projection(
-                    text,
-                    reasoning,
-                    provider_message_id,
-                    provider_message_state,
-                    usage.as_deref(),
-                    tool_calls,
-                ) {
-                    index += 1;
-                    continue;
-                }
-
                 if tool_calls.is_empty() {
                     projected.push(CoreConversationMessage {
                         id: message.id.clone(),
@@ -455,31 +443,6 @@ pub(crate) fn validate_provider_visible_tool_topology(
         ));
     }
     Ok(())
-}
-
-/// Detects legacy hidden Explore records that were accidentally mirrored as assistant messages.
-/// 识别曾被错误镜像成助手消息的旧版隐藏 Explore 记录。
-fn is_legacy_explore_assistant_projection(
-    text: &str,
-    reasoning: &str,
-    provider_message_id: &Option<String>,
-    provider_message_state: &Option<serde_json::Value>,
-    usage: Option<&vulcan_core::types::ProviderUsageSnapshot>,
-    tool_calls: &[CoreConversationToolCall],
-) -> bool {
-    if !reasoning.trim().is_empty()
-        || provider_message_id.is_some()
-        || provider_message_state.is_some()
-        || usage.is_some()
-        || !tool_calls.is_empty()
-    {
-        return false;
-    }
-
-    let trimmed = text.trim_start();
-    trimmed.starts_with("This session is bound to project `")
-        || trimmed.starts_with("This session is bound to project id `")
-        || trimmed.starts_with("This session is not bound to an explicit project directory.")
 }
 
 /// Normalizes one user-text payload for the selected provider API family and model capabilities.
