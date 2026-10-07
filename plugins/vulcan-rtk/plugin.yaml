@@ -94,7 +94,9 @@ lua_runtime:
       result_cache_ms: 1800000
       function: statistics_get
       output_schema_file: schemas/statistics-output.json
-      timeout_ms: 12000
+      # Two back-to-back `rtk gain` runs of STATISTICS_PROCESS_TIMEOUT_MS each, plus setup headroom.
+      # 两次连续的 `rtk gain`（各 STATISTICS_PROCESS_TIMEOUT_MS），另留准备余量。
+      timeout_ms: 125000
       callers:
         - plugin_ui
     - id: self_check

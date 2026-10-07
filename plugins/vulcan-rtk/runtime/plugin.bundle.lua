@@ -523,6 +523,12 @@ local function parse_gain_by_command(stdout)
     return rows
 end
 
+-- Bound for each RTK statistics process; `rtk gain` rescans the whole history, so it slows as data grows.
+-- The `statistics-get` action timeout in plugin.yaml must cover two of these run back to back.
+-- 每个 RTK 统计进程的超时；`rtk gain` 会重新扫描全部历史，数据越多越慢。
+-- plugin.yaml 中 `statistics-get` 的 action 超时必须容纳两次连续执行。
+local STATISTICS_PROCESS_TIMEOUT_MS = 60000
+
 -- Load RTK token-saving statistics for the mounted plugin UI.
 -- 为挂载的插件界面加载 RTK Token 节省统计。
 --
@@ -536,7 +542,7 @@ function M.statistics_get(args)
     local config = read_config()
     -- result is the bounded JSON export command result.
     -- result 是受边界约束的 JSON 导出命令结果。
-    local result = run_rtk({ "gain", "--all", "--format", "json" }, nil, 5000, config)
+    local result = run_rtk({ "gain", "--all", "--format", "json" }, nil, STATISTICS_PROCESS_TIMEOUT_MS, config)
     if not result.success then
         return success({
             available = false,
@@ -553,7 +559,7 @@ function M.statistics_get(args)
     local statistics = vulcan.json.decode(result.stdout)
     -- by_command_result reads the human table because RTK's JSON export does not include this breakdown.
     -- by_command_result 读取人类可读表格，因为 RTK JSON 导出不包含此明细。
-    local by_command_result = run_rtk({ "gain" }, nil, 5000, config)
+    local by_command_result = run_rtk({ "gain" }, nil, STATISTICS_PROCESS_TIMEOUT_MS, config)
     statistics.available = true
     statistics.byCommand = by_command_result.success
         and parse_gain_by_command(by_command_result.stdout)
