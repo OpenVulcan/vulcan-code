@@ -657,12 +657,12 @@ fn real_host_storage_registered_configuration_revokes_existing_index_access() {
     });
 }
 
-/// Verify a hundred enabled cold projects remain metadata-only until one explicit initialization.
-/// 验证一百个启用冷态项目在其中一个被明确初始化前，始终只读取元数据。
+/// Verify several enabled cold projects remain metadata-only until one explicit initialization.
+/// 验证多个启用冷态项目在其中一个被明确初始化前，始终只读取元数据。
 /// No input; uses a real isolated controller/watcher and credential-rejecting registered AI, never user data.
 /// 无输入；使用真实隔离宿主存储、监听器和拒绝凭据的注册模型，不使用用户数据。
 #[test]
-fn real_host_storage_hundred_cold_projects_only_initialize_explicit_target() {
+fn real_host_storage_cold_projects_only_initialize_explicit_target() {
     use super::test_support::TestHostRuntimeRoot;
     use futures_util::FutureExt;
     use std::time::Duration;
@@ -718,7 +718,9 @@ fn real_host_storage_hundred_cold_projects_only_initialize_explicit_target() {
             update_mode: ProjectVceUpdateMode::Automatic,
             ..ProjectVceSettings::default()
         };
-        let projects = (0..100)
+        // Three projects separate the selected target from more than one untouched sibling; the property is per project.
+        // 三个项目足以区分所选目标与多个未触碰的同级项目；该性质按项目成立。
+        let projects = (0..3)
             .map(|index| {
                 TaskProjectSummary::new(
                     format!("cold-project-{index}"),

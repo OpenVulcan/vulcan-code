@@ -291,17 +291,14 @@ pub(super) async fn verify(
         .expect("disable unrelated queued semantic noise");
     // Each queued request is admitted first; only then is its actual analysis policy formally saved.
     // 每个排队请求先准入，然后才正式保存实际分析策略。
+    // Three representative rows prove the saved fields reach real writes; the remaining floor, window,
+    // and hard-dedupe combinations are covered by the engine's replacement_decision_tests.
+    // 三组代表性参数证明已保存字段到达真实写入；其余下限、窗口与硬去重组合由引擎层
+    // replacement_decision_tests 覆盖。
     for (name, floor, limit, threshold, pool, similar, hard_drop) in [
         ("queue-all", 0.0, 3, 0.0, 3, vec![0, 1, 2], false),
-        ("queue-floor-middle", 0.86, 3, 0.0, 3, vec![0, 1], false),
         ("queue-floor-high", 0.9, 3, 0.0, 3, vec![0], false),
-        ("queue-floor-one", 1.0, 3, 0.0, 3, vec![], false),
-        ("queue-window-one", 0.0, 1, 0.0, 3, vec![0], false),
-        ("queue-window-two", 0.0, 2, 0.0, 3, vec![0, 1], false),
-        ("queue-window-five", 0.0, 5, 0.0, 3, vec![0, 1, 2], false),
         ("queue-hard-below", 0.0, 1, 0.55, 3, vec![], true),
-        ("queue-hard-above", 0.0, 1, 0.65, 3, vec![0], false),
-        ("queue-hard-small", 0.0, 1, 0.55, 1, vec![0], false),
     ] {
         // Fresh physical scopes isolate prior replacements without mutating any source records directly.
         // 新物理作用域隔离先前替代，不直接修改任何来源记录。

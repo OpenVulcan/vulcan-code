@@ -11,6 +11,9 @@ mod separate_fallback_tests;
 #[cfg(test)]
 #[path = "review_query_tests.rs"]
 mod review_query_tests;
+#[cfg(test)]
+#[path = "replacement_decision_tests.rs"]
+mod replacement_decision_tests;
 
 #[path = "review_query_checkpoint.rs"]
 mod review_query_checkpoint;
@@ -9119,18 +9122,27 @@ fn finish_scored_pipeline(
 ) -> Result<CommandStep, CoreError> {
     let policy = record.snapshot.memory_policy.retrieval_policy.clone();
     apply_context_scores(&pipeline.work, &policy, &mut hits);
-    let hard_dedupe_pool = hits
-        .iter()
-        .take(
-            policy
-                .hard_dedupe_pool_top_k
-                .max(pipeline.work.limit)
-                .min(policy.candidate_pool_max) as usize,
-        )
-        .map(|hit| hit.memory.clone())
-        .collect();
+    let hard_dedupe_pool = hard_dedupe_pool(&hits, pipeline.work.limit, &policy);
     let selected = retrieval_kernel::mmr_select(hits, pipeline.work.limit as usize, &policy.mmr);
     finish_pipeline(record, pipeline, selected, hard_dedupe_pool)
+}
+
+/// Takes the hard-dedupe review pool from the ranked hits before MMR narrows them to the final limit.
+/// 在 MMR 收窄到最终数量之前，从已排序命中中截取硬去重预审池。
+fn hard_dedupe_pool(
+    ranked: &[SearchHit],
+    limit: u32,
+    policy: &vulcan_memorymesh_core_contracts::RetrievalPolicy,
+) -> Vec<MemoryRecord> {
+    let window = policy
+        .hard_dedupe_pool_top_k
+        .max(limit)
+        .min(policy.candidate_pool_max);
+    ranked
+        .iter()
+        .take(window as usize)
+        .map(|hit| hit.memory.clone())
+        .collect()
 }
 
 /// Applies the frozen VMM decay rules before issuing the live evidence read.
