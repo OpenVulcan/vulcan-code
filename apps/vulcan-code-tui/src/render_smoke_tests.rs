@@ -1105,3 +1105,22 @@ fn changes_tab_selects_and_unmonitors_repositories() {
     assert_eq!(selected(&h.app).as_deref(), Some("."));
     assert_eq!(h.app.git.next_repository(), None);
 }
+
+/// With the labeled activity bar and the panel inline, the sidebar starts on the top row and the
+/// panel tabs sit below the header cell; narrower layouts keep one header row across the window.
+/// 标签式活动栏与面板同时内联时，侧栏从顶行开始，面板标签位于标题单元格下方；较窄布局保留横跨窗口的
+/// 标题行。
+#[test]
+fn top_row_holds_the_sidebar_when_the_side_columns_carry_the_header() {
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    let top = |app: &App, pred: &dyn Fn(&Target) -> bool| app.hits.find(pred).map(|rect| rect.y);
+    let new_conversation = |t: &Target| matches!(t, Target::Do(UiAction::NewConversation(_)));
+    let panel_tab = |t: &Target| matches!(t, Target::PanelTab(_));
+    h.frame();
+    assert_eq!(top(&h.app, &new_conversation), Some(0));
+    assert_eq!(top(&h.app, &panel_tab), Some(1));
+    let mut narrow = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    narrow.draw(|frame| ui::draw(frame, &mut h.app)).unwrap();
+    assert!(top(&h.app, &new_conversation).is_some_and(|y| y > 0));
+}

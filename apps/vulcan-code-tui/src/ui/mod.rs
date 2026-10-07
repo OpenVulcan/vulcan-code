@@ -68,6 +68,25 @@ fn sidebar_width(width: u16) -> u16 {
     SIDEBAR_WIDTH.max(width / 7)
 }
 
+/// The first row of `area`.
+/// `area` 的第一行。
+fn top_row(area: Rect) -> Rect {
+    Rect {
+        height: area.height.min(1),
+        ..area
+    }
+}
+
+/// `area` without its first row.
+/// 去掉第一行后的 `area`。
+fn below_top_row(area: Rect) -> Rect {
+    Rect {
+        y: area.y + area.height.min(1),
+        height: area.height.saturating_sub(1),
+        ..area
+    }
+}
+
 /// Session panel width for a body `width`: a quarter of it, never below [`PANEL_WIDTH`].
 /// 主体宽度为 `width` 时的会话面板宽度：取四分之一，不低于 [`PANEL_WIDTH`]。
 fn panel_width(width: u16) -> u16 {
@@ -95,31 +114,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    let [header, body, status] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .areas(area);
+    let [main, status] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
     let in_chat = app.area == Area::Chat;
-    // The activity bar takes the left edge; everything else lays out in the remaining body.
-    // 活动栏占据左边缘；其余内容在剩余主体中排布。
-    let workbench = sidebar_width(body.width) + CENTER_MIN_WIDTH + panel_width(body.width);
-    let activity_width = activity::width(body.width, workbench, CENTER_MIN_WIDTH);
-    let [activity_area, body] =
-        Layout::horizontal([Constraint::Length(activity_width), Constraint::Fill(1)]).areas(body);
-    chrome::header(app, header, buf, activity_width == 0);
-    if activity_width > 0 {
-        activity::render(app, activity_area, buf);
-    }
-    // The center column is as tall as the body, so the session bar's visibility is known here.
-    // 对话列与主体等高，因此此处即可确定会话栏是否显示。
-    let session_bar = in_chat && session_bar::visible(app, body.height);
-    chrome::status_bar(app, status, buf, !session_bar);
+    // The activity bar takes the left edge; everything else lays out in the remaining columns.
+    // 活动栏占据左边缘；其余内容在剩余列中排布。
+    let workbench = sidebar_width(main.width) + CENTER_MIN_WIDTH + panel_width(main.width);
+    let activity_width = activity::width(main.width, workbench, CENTER_MIN_WIDTH);
+    let [activity_column, columns] =
+        Layout::horizontal([Constraint::Length(activity_width), Constraint::Fill(1)]).areas(main);
 
     // The project and conversation list belongs to the workbench; system areas show only their
     // own navigation.
     // 项目与会话列表只属于工作台；系统区域只显示自身的导航。
+    let body = below_top_row(columns);
     let sidebar_width = sidebar_width(body.width);
     let panel_width = panel_width(body.width);
     let sidebar_inline = in_chat
@@ -143,7 +150,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Fill(1),
         Constraint::Length(if panel_inline { panel_width } else { 0 }),
     ])
-    .areas(body);
+    .areas(columns);
+    // With the labeled activity bar and the panel beside the conversation, the top row only holds
+    // the wordmark above the activity bar and the state above the panel; the sidebar and
+    // conversation take the top row. Otherwise one header row spans the window.
+    // 标签式活动栏与会话面板同时显示时，顶行只在活动栏上方放品牌字标、在面板上方放状态，侧栏与
+    // 对话列占用顶行；否则由一整行标题栏横跨窗口。
+    let split_header = activity_width >= chrome::brand_width(app)
+        && panel_inline
+        && chrome::header_state(app).width() < panel_width as usize;
+    let (sidebar_area, center) = if split_header {
+        chrome::header_cells(app, top_row(activity_column), top_row(panel_area), buf);
+        (sidebar_area, center)
+    } else {
+        chrome::header(app, top_row(main), buf, activity_width == 0);
+        (below_top_row(sidebar_area), below_top_row(center))
+    };
+    let panel_area = below_top_row(panel_area);
+    if activity_width > 0 {
+        activity::render(app, below_top_row(activity_column), buf);
+    }
+    // The session bar's visibility follows the conversation column's height.
+    // 会话栏是否显示取决于对话列高度。
+    let session_bar = in_chat && session_bar::visible(app, center.height);
+    chrome::status_bar(app, status, buf, !session_bar);
 
     if sidebar_inline {
         sidebar::render(app, sidebar_area, buf);

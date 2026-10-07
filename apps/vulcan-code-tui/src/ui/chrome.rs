@@ -66,15 +66,16 @@ pub fn splash(app: &App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// Top bar: wordmark, then Git and connection state on the right. `switcher` adds the area switcher
-/// button used when the activity bar has no room; it takes precedence over the right-hand state.
-/// 顶栏：品牌字标，右侧为 Git 与连接状态。`switcher` 为真时加入区域切换按钮，供活动栏放不下时使用；
-/// 其优先级高于右侧状态。
-pub fn header(app: &App, area: Rect, buf: &mut Buffer, switcher: bool) {
-    let theme = &app.theme;
-    let bg = theme.sidebar;
-    buf.set_style(area, Style::new().bg(bg).fg(theme.sidebar_fg));
+/// Width of the wordmark cell: the wordmark with one column of padding on each side.
+/// 品牌字标单元格宽度：字标两侧各留一列空白。
+pub fn brand_width(app: &App) -> u16 {
+    brand::wordmark(&app.theme).width() as u16 + 2
+}
 
+/// Git and connection state shown at the right end of the top row.
+/// 顶行右端显示的 Git 与连接状态。
+pub fn header_state(app: &App) -> Line<'static> {
+    let theme = &app.theme;
     let mut right = Vec::new();
     if let Some(snapshot) = app.git.repository() {
         right.push(Span::styled(
@@ -112,9 +113,68 @@ pub fn header(app: &App, area: Rect, buf: &mut Buffer, switcher: bool) {
         ));
     }
     right.push(Span::raw(" "));
-    let right_line = Line::from(right);
+    Line::from(right)
+}
+
+/// The top row split over the side columns: the wordmark above the activity bar and the state
+/// above the session panel, so the sidebar and conversation reach the top row. Each cell continues
+/// the border of the column below it.
+/// 拆分到两侧列的顶行：品牌字标位于活动栏上方，状态位于会话面板上方，使侧栏与对话列直达顶行。
+/// 每个单元格延续其下方列的边框。
+pub fn header_cells(app: &App, brand: Rect, state: Rect, buf: &mut Buffer) {
+    let theme = &app.theme;
+    let style = Style::new().bg(theme.sidebar).fg(theme.sidebar_fg);
+    buf.set_style(brand, style);
+    buf.set_style(state, style);
+    brand::wordmark(theme).render(
+        Rect {
+            x: brand.x + 1,
+            width: brand.width.saturating_sub(2),
+            ..brand
+        },
+        buf,
+    );
+    if brand.width > 0 {
+        buf.set_string(
+            brand.right() - 1,
+            brand.y,
+            "│",
+            Style::new().fg(theme.sidebar_border),
+        );
+    }
+    if state.width == 0 {
+        return;
+    }
+    let panel_border = if app.focus == Focus::Panel {
+        theme.primary
+    } else {
+        theme.sidebar_border
+    };
+    buf.set_string(state.x, state.y, "│", Style::new().fg(panel_border));
+    let line = header_state(app);
+    let width = (line.width() as u16).min(state.width.saturating_sub(1));
+    line.render(
+        Rect {
+            x: state.right() - width,
+            width,
+            ..state
+        },
+        buf,
+    );
+}
+
+/// Top bar: wordmark, then Git and connection state on the right. `switcher` adds the area switcher
+/// button used when the activity bar has no room; it takes precedence over the right-hand state.
+/// 顶栏：品牌字标，右侧为 Git 与连接状态。`switcher` 为真时加入区域切换按钮，供活动栏放不下时使用；
+/// 其优先级高于右侧状态。
+pub fn header(app: &App, area: Rect, buf: &mut Buffer, switcher: bool) {
+    let theme = &app.theme;
+    let bg = theme.sidebar;
+    buf.set_style(area, Style::new().bg(bg).fg(theme.sidebar_fg));
+
+    let right_line = header_state(app);
     let wordmark = brand::wordmark(theme);
-    let brand_width = wordmark.width() as u16 + 2;
+    let brand_width = brand_width(app);
     // The current area plus a switcher that opens the area picker.
     // 当前区域加一个打开区域选择器的切换按钮。
     let switch_text = switcher.then(|| format!(" {} ▾ F2 ", app.area.label()));
