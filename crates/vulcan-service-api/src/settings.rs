@@ -664,6 +664,9 @@ pub struct McpServerSummary {
     /// Request headers resolved from environment variables.
     /// 从环境变量解析的请求头。
     pub headers_from_env: Vec<KeyValueSummary>,
+    /// Whether the server signs in through OAuth, including dynamic client registration.
+    /// 服务器是否通过 OAuth 登录（包括动态客户端注册）。
+    pub oauth_enabled: bool,
     /// OAuth client identifier.
     /// OAuth 客户端标识。
     pub oauth_client_id: String,

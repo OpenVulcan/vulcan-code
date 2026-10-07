@@ -9,7 +9,7 @@ export function createMcpDraft(server: McpServerSummary | null): McpServerSaveRe
     serverId: server?.id ?? null, name: server?.name ?? "", enabled: server?.enabled ?? true,
     transport: server?.transport ?? "stdio", command: server?.command ?? "", args: [...(server?.args ?? [])],
     url: server?.url ?? "", bearerToken: server?.bearerToken ?? "", headers: (server?.headers ?? []).map(row => ({ ...row })),
-    headersFromEnv: (server?.headersFromEnv ?? []).map(row => ({ ...row })), oauthClientId: server?.oauthClientId ?? "",
+    headersFromEnv: (server?.headersFromEnv ?? []).map(row => ({ ...row })), oauthEnabled: server?.oauthEnabled ?? false, oauthClientId: server?.oauthClientId ?? "",
     oauthClientSecret: server?.oauthClientSecret ?? "", oauthScopes: [...(server?.oauthScopes ?? [])],
     oauthRedirectUri: server?.oauthRedirectUri ?? "", cwd: server?.cwd ?? "", env: (server?.env ?? []).map(row => ({ ...row })),
     envPassthrough: [...(server?.envPassthrough ?? [])],

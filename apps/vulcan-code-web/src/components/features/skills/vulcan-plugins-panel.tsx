@@ -66,6 +66,7 @@ function pluginMcpStatusLabel(status: string, t: ReturnType<typeof useI18n>["t"]
     case "disabled": return t("skills.plugins.mcpStatus.disabled");
     case "preparing": return t("skills.plugins.mcpStatus.preparing");
     case "connecting": return t("skills.plugins.mcpStatus.connecting");
+    case "awaitingAuthorization": return t("skills.plugins.mcpStatus.awaitingAuthorization");
     case "ready": return t("skills.plugins.mcpStatus.ready");
     case "degraded": return t("skills.plugins.mcpStatus.degraded");
     case "failed": return t("skills.plugins.mcpStatus.failed");

@@ -2,7 +2,7 @@ import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtim
 
 // McpConnectionStatus mirrors the serialized Agent runtime state exactly.
 // McpConnectionStatus 精确对应 Agent 运行时序列化状态。
-export type McpConnectionStatus = "disabled" | "connecting" | "connected" | "disconnected" | "failed" | "stopping" | "stopped"
+export type McpConnectionStatus = "disabled" | "connecting" | "awaiting_authorization" | "connected" | "disconnected" | "failed" | "stopping" | "stopped"
 
 // McpToolInspection retains both original schemas without narrowing JSON Schema keywords.
 // McpToolInspection 保留两份原始 Schema，不收窄 JSON Schema 关键字。
@@ -76,4 +76,78 @@ export async function loadMcpRuntimeSnapshot(): Promise<McpServerInspection[]> {
 export async function loadMcpServerCapabilities(serverId: string): Promise<McpCapabilities> {
   if (!hasServiceRuntime()) throw new Error("MCP runtime is unavailable in preview mode.")
   return serviceClient.request<McpCapabilities>("service_mcp_server_capabilities", { serverId })
+}
+
+// McpAuthStatus mirrors the runtime credential status codes.
+// McpAuthStatus 对应运行时凭据状态代码。
+export type McpAuthStatus = "not_configured" | "not_authenticated" | "authenticated" | "expired"
+
+// McpOAuthFlowPhase mirrors the host sign-in flow phases.
+// McpOAuthFlowPhase 对应宿主登录流程阶段。
+export type McpOAuthFlowPhase = "awaiting_callback" | "exchanging" | "succeeded" | "failed" | "expired"
+
+// McpOAuthFlow is the public view of one sign-in flow; it never carries tokens or PKCE material.
+// McpOAuthFlow 是单个登录流程的公开视图，从不携带令牌或 PKCE 材料。
+export interface McpOAuthFlow {
+  // Opaque identity echoed by finish and cancel.
+  // 完成与取消时回传的不透明标识。
+  flowId: string; phase: McpOAuthFlowPhase
+  // Loopback flows finish by themselves; manual flows need the pasted callback URL.
+  // 回环流程自动完成；手动流程需要粘贴回调 URL。
+  callbackMode: "loopback" | "manual"
+  // Authorization page and the redirect registered for this flow.
+  // 授权页面与本流程登记的回调地址。
+  authorizationUrl: string; redirectUri: string
+  // Failure detail and wall-clock expiry in Unix milliseconds.
+  // 失败详情与以 Unix 毫秒表示的墙钟过期时间。
+  error: string | null; expiresAtUnixMs: number
+}
+
+// McpOAuthStatus is the OAuth view of one server for the settings page.
+// McpOAuthStatus 是设置页使用的单个服务器 OAuth 视图。
+export interface McpOAuthStatus {
+  // authStatus is null when the host could not determine it; statusError says why.
+  // 宿主无法确定时 authStatus 为 null，statusError 说明原因。
+  serverId: string; authStatus: McpAuthStatus | null; statusError: string | null; flow: McpOAuthFlow | null
+}
+
+// requireServiceRuntime rejects OAuth operations in preview mode.
+// requireServiceRuntime 在预览模式下拒绝 OAuth 操作。
+function requireServiceRuntime() {
+  if (!hasServiceRuntime()) throw new Error("MCP runtime is unavailable in preview mode.")
+}
+
+// loadMcpOAuthStatus reads the credential status and the latest sign-in flow of one server.
+// loadMcpOAuthStatus 读取单个服务器的凭据状态与最近登录流程。
+export async function loadMcpOAuthStatus(serverId: string): Promise<McpOAuthStatus> {
+  requireServiceRuntime()
+  return serviceClient.request<McpOAuthStatus>("service_mcp_oauth_status", { serverId })
+}
+
+// startMcpOAuth starts a sign-in flow, replacing any earlier one, and opens the authorization page.
+// startMcpOAuth 启动登录流程（替换先前流程）并打开授权页面。
+export async function startMcpOAuth(serverId: string): Promise<McpOAuthStatus> {
+  requireServiceRuntime()
+  return serviceClient.request<McpOAuthStatus>("service_start_mcp_oauth", { serverId })
+}
+
+// finishMcpOAuth completes a manual flow with the URL the browser was redirected to.
+// finishMcpOAuth 使用浏览器被重定向到的 URL 完成手动流程。
+export async function finishMcpOAuth(request: { serverId: string; flowId: string; callbackUrl: string }): Promise<McpOAuthStatus> {
+  requireServiceRuntime()
+  return serviceClient.request<McpOAuthStatus>("service_finish_mcp_oauth", { request })
+}
+
+// cancelMcpOAuth cancels the exact flow and releases its callback port.
+// cancelMcpOAuth 取消精确流程并释放其回调端口。
+export async function cancelMcpOAuth(request: { serverId: string; flowId: string }): Promise<McpOAuthStatus> {
+  requireServiceRuntime()
+  return serviceClient.request<McpOAuthStatus>("service_cancel_mcp_oauth", { request })
+}
+
+// removeMcpOAuth signs out by deleting the stored credentials of one server.
+// removeMcpOAuth 删除单个服务器已存储的凭据以退出登录。
+export async function removeMcpOAuth(serverId: string): Promise<McpOAuthStatus> {
+  requireServiceRuntime()
+  return serviceClient.request<McpOAuthStatus>("service_remove_mcp_oauth", { serverId })
 }

@@ -8,13 +8,15 @@ import type { LogEntrySummary, McpServerSummary, RuntimeModuleSnapshot, StartupS
 import { loadMcpRuntimeSnapshot, loadMcpServerCapabilities, type McpServerInspection, type McpCapabilities, type McpConnectionStatus, type McpToolInspection } from "@/service/mcp-settings-service"
 import { McpServerDialog, type McpSettingsActionProps } from "./mcp-server-dialog"
 import { McpSchemaDetail } from "./mcp-schema-detail"
+import { McpOAuthPanel } from "./mcp-oauth-panel"
 import "@/styles/mcp.css"
 import { useI18n, formatMessage, type Translate } from "@/i18n"
 
 // connectionLabels distinguishes configured enablement from observed connectivity.
 // connectionLabels 区分配置启用与已观测连接状态。
 function connectionLabels(t: Translate): Record<McpConnectionStatus, string> { return {
-  disabled: t("settings.mcp.disabled"), connecting: t("settings.mcp.connecting"), connected: t("settings.mcp.connected"),
+  disabled: t("settings.mcp.disabled"), connecting: t("settings.mcp.connecting"), awaiting_authorization: t("settings.mcp.awaitingAuthorization"),
+  connected: t("settings.mcp.connected"),
   disconnected: t("settings.mcp.disconnected"), failed: t("settings.mcp.failed"), stopped: t("settings.mcp.stopped"),
   stopping: t("settings.mcp.stopping"),
 } }
@@ -131,6 +133,7 @@ export function McpSettingsArea(props: {
         {tab === "overview" && loaded && <>
           <p>{selected.runtime ? `${error ? t("settings.mcp.previousState") : ""}${statusLabels[selected.runtime.state.status]}` : t("settings.mcp.noConnectionStatusYet")}</p>
           {selected.config && !selected.config.enabled && <p>{t("settings.mcp.thisServerIsDisabled")}</p>}
+          {(selected.config?.oauthEnabled || selected.runtime?.state.status === "awaiting_authorization") && <McpOAuthPanel serverId={selected.id} connectionStatus={selected.runtime?.state.status} />}
           {selected.runtime && <dl className="mcp-overview">
             <dt>{t("settings.mcp.address")}</dt><dd>{selected.runtime.state.endpoint}</dd>
             <dt>{t("settings.mcp.source")}</dt><dd>{selected.runtime.state.source === "plugin" ? formatMessage(t("settings.mcp.plugin2"), { pluginId: selected.runtime.state.pluginId ?? "" }) : t("settings.mcp.addedByYou")}{selected.runtime.state.generation !== null && formatMessage(t("settings.mcp.rev"), { generation: selected.runtime.state.generation })}</dd>

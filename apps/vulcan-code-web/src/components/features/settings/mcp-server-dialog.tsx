@@ -51,6 +51,9 @@ export interface McpServerSaveRequest {
   // Request headers sourced from environment variables.
   // 从环境变量读取的请求头。
   headersFromEnv: Array<{ key: string; value: string }>
+  // Whether the server signs in through OAuth, including dynamic client registration.
+  // 服务器是否通过 OAuth 登录（包括动态客户端注册）。
+  oauthEnabled: boolean
   // OAuth client id.
   // OAuth 客户端标识。
   oauthClientId: string
@@ -115,7 +118,10 @@ export function McpServerDialog(props: {
     const issue = validateMcpDraft(draft, t)
     if (issue) { setError(issue); return }
     saving.current = true; setBusy(true); setError("")
-    try { await props.actions.onSaveMcpServer(draft); props.onOpenChange(false) }
+    // Turning OAuth off drops its fields, because any filled field would keep OAuth enabled on the host.
+    // 关闭 OAuth 时丢弃其字段，因为任何已填写字段都会让宿主保持 OAuth 启用。
+    const request = draft.oauthEnabled ? draft : { ...draft, oauthClientId: "", oauthClientSecret: "", oauthScopes: [], oauthRedirectUri: "" }
+    try { await props.actions.onSaveMcpServer(request); props.onOpenChange(false) }
     catch (failure) { setError(String(failure)) }
     finally { saving.current = false; setBusy(false) }
   }
@@ -152,10 +158,14 @@ export function McpServerDialog(props: {
           </section>
           <DisclosureSection className="mcp-oauth" description={t("settings.mcp.onlyNeededIfThe")} title={t("settings.mcp.oauthSignIn")}>
             <div className="mcp-form-section">
+            <label className="settings-check-row inline"><Switch checked={draft.oauthEnabled} disabled={busy} onCheckedChange={value => change("oauthEnabled", value)} />{t("settings.mcp.oauth.enable")}</label>
+            {draft.oauthEnabled && <>
+            <p className="settings-muted-line">{t("settings.mcp.oauth.dynamicRegistrationHint")}</p>
             <label className="settings-form-field"><span>Client ID</span><Input value={draft.oauthClientId} onChange={e => change("oauthClientId", e.target.value)} /></label>
             <label className="settings-form-field"><span>Client secret</span><Input autoComplete="off" type="password" value={draft.oauthClientSecret} onChange={e => change("oauthClientSecret", e.target.value)} /></label>
             <McpStringRows label="OAuth scopes" values={draft.oauthScopes} onChange={value => change("oauthScopes", value)} placeholder="read" />
             <label className="settings-form-field"><span>Redirect URI</span><Input value={draft.oauthRedirectUri} onChange={e => change("oauthRedirectUri", e.target.value)} /></label>
+            </>}
             </div>
           </DisclosureSection>
         </>}

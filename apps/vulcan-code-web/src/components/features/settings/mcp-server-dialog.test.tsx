@@ -54,4 +54,24 @@ describe("MCP save draft lifecycle", () => {
       expect(container.querySelector('[role="alert"]')).toBeNull()
     } finally { await act(async () => root.unmount()); container.remove() }
   })
+
+  it("sends OAuth fields only while OAuth sign-in is switched on", async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    // save resolves immediately; only the submitted request matters here.
+    // save 立即完成；这里只关心提交的请求。
+    const save = vi.fn(async (_request: McpServerSaveRequest) => undefined)
+    const container = document.createElement("div")
+    const root = createRoot(container)
+    document.body.append(container)
+    try {
+      for (const oauthEnabled of [true, false]) {
+        const server = { ...createMcpDraft(null), id: "remote", name: "Remote", transport: "http", url: "https://mcp.example.test/mcp",
+          oauthEnabled, oauthClientId: "client", oauthScopes: ["read"], oauthRedirectUri: "https://app.example.test/cb" } as McpServerSummary
+        await act(async () => root.render(<McpServerDialog key={String(oauthEnabled)} open server={server} onOpenChange={vi.fn()} actions={{ onSaveMcpServer: save, onRemoveMcpServer: vi.fn() }} />))
+        await act(async () => { Array.from(container.querySelectorAll("button")).find(value => value.textContent === "保存")?.click() })
+      }
+      expect(save.mock.calls[0]?.[0]).toMatchObject({ oauthEnabled: true, oauthClientId: "client", oauthScopes: ["read"], oauthRedirectUri: "https://app.example.test/cb" })
+      expect(save.mock.calls[1]?.[0]).toMatchObject({ oauthEnabled: false, oauthClientId: "", oauthClientSecret: "", oauthScopes: [], oauthRedirectUri: "" })
+    } finally { await act(async () => root.unmount()); container.remove() }
+  })
 })

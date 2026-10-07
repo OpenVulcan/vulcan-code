@@ -110,6 +110,9 @@ export interface McpServerSaveRequest {
   // Headers resolved from environment variables.
   // 从环境变量解析的请求头。
   headersFromEnv: Array<{ key: string; value: string }>
+  // Whether the server signs in through OAuth, including dynamic client registration.
+  // 服务器是否通过 OAuth 登录（包括动态客户端注册）。
+  oauthEnabled: boolean
   // OAuth client id.
   // OAuth 客户端标识。
   oauthClientId: string

@@ -629,6 +629,7 @@ pub(crate) fn mcp_servers(
             bearer_token: entry.bearer_token.clone().unwrap_or_default(),
             headers: key_value_summaries(&entry.headers),
             headers_from_env: key_value_summaries(&entry.headers_from_env),
+            oauth_enabled: entry.oauth.is_some(),
             oauth_client_id: entry
                 .oauth
                 .as_ref()
