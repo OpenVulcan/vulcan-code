@@ -44,7 +44,10 @@ fn pending_actions_follow_durable_phase_and_live_ownership() {
         };
         let offers = status.pending_actions();
         let actions: Vec<_> = offers.iter().map(|offer| offer.action).collect();
-        assert_eq!(actions, expected, "phase {phase:?} with owner {has_service_owner}");
+        assert_eq!(
+            actions, expected,
+            "phase {phase:?} with owner {has_service_owner}"
+        );
         for offer in offers {
             assert_eq!(offer.requires_acknowledgement, offer.action == Abort);
         }
@@ -1098,10 +1101,9 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
             );
             // Query live service ownership independently from the successful coordinator result.
             // 独立于协调器成功结果查询实时服务所有权。
-            let records =
-                local_plugin_update_records(Arc::clone(&fixture.state))
-                    .await
-                    .expect("actual durable and live status");
+            let records = local_plugin_update_records(Arc::clone(&fixture.state))
+                .await
+                .expect("actual durable and live status");
             assert_eq!(records.len(), 2);
             // Stable phase identity selects the completed original without tying assertions to a changing index.
             // 按稳定阶段身份选择已完成原请求，不将断言绑定到变化下标。
@@ -1223,10 +1225,9 @@ async fn immutable_service_update_publishes_without_replacing_old_bytes() {
             );
             // Query production status independently from foreground success.
             // 独立于前台成功查询生产状态。
-            let records =
-                local_plugin_update_records(Arc::clone(&fixture.state))
-                    .await
-                    .expect("RPC status");
+            let records = local_plugin_update_records(Arc::clone(&fixture.state))
+                .await
+                .expect("RPC status");
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].phase, Some(Phase::Completed));
             assert_eq!(

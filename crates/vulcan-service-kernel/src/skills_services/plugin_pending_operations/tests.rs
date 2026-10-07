@@ -16,7 +16,10 @@ fn decode(value: serde_json::Value) -> Result<PluginPendingContinuation, serde_j
 
 /// Build one prewarm receipt in phase, optionally carrying live persistence uncertainty.
 /// 以 phase 构建单个预热回执，可选携带活动持久化不确定性。
-fn prewarm_receipt(phase: &str, persistence_error: Option<&str>) -> VulcanPluginPrewarmPolicyRecord {
+fn prewarm_receipt(
+    phase: &str,
+    persistence_error: Option<&str>,
+) -> VulcanPluginPrewarmPolicyRecord {
     let mut value = json!({
         "request": { "updateId": OPERATION, "runtimeId": "runtime", "expectedRevision": "before", "rules": [] },
         "phase": phase,
@@ -90,7 +93,10 @@ fn continuation_requires_exactly_the_identities_of_its_kind() {
     .expect("acknowledged uninstall continuation");
     assert!(matches!(
         decoded,
-        PluginPendingContinuation::Uninstall { acknowledge_external_effects: true, .. }
+        PluginPendingContinuation::Uninstall {
+            acknowledge_external_effects: true,
+            ..
+        }
     ));
 }
 
@@ -102,13 +108,25 @@ fn policy_receipts_offer_forget_only_once_durably_terminal() {
         (prewarm_receipt("publishing", None), vec![Resume]),
         (prewarm_receipt("committed", None), vec![Forget]),
         (prewarm_receipt("interrupted", None), vec![Forget]),
-        (prewarm_receipt("committed", Some("disk full")), vec![Resume]),
+        (
+            prewarm_receipt("committed", Some("disk full")),
+            vec![Resume],
+        ),
     ];
     for (record, expected) in cases {
         let phase = record.phase;
         let operation = PluginPendingOperation::prewarm_policy(record);
-        assert_eq!(offered(&operation), expected, "prewarm receipt in {phase:?}");
-        assert!(operation.actions.iter().all(|offer| !offer.requires_acknowledgement));
+        assert_eq!(
+            offered(&operation),
+            expected,
+            "prewarm receipt in {phase:?}"
+        );
+        assert!(
+            operation
+                .actions
+                .iter()
+                .all(|offer| !offer.requires_acknowledgement)
+        );
     }
 }
 

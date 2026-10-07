@@ -197,7 +197,10 @@ pub(crate) async fn service_plugin_pending_operations(
         let Some(status) = runtime.formal_runtime_status()? else {
             return Ok((None, None));
         };
-        Ok((status.policy_update, runtime.prewarm_policy_status()?.update))
+        Ok((
+            status.policy_update,
+            runtime.prewarm_policy_status()?.update,
+        ))
     })
     .await?;
     operations.extend(capacity.map(PluginPendingOperation::capacity_policy));

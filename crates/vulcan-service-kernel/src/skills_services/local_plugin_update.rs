@@ -215,7 +215,9 @@ impl LocalPluginUpdateStatus {
     /// 提供此请求仍接受的继续操作；无存活所有者的已结束历史不提供任何操作。
     /// Abandoning never undoes attempted external effects, so it always requires explicit acknowledgement.
     /// 放弃绝不撤销已尝试的外部副作用，因此总是要求明确确认。
-    pub(super) fn pending_actions(&self) -> Vec<super::plugin_pending_operations::PluginPendingActionOffer> {
+    pub(super) fn pending_actions(
+        &self,
+    ) -> Vec<super::plugin_pending_operations::PluginPendingActionOffer> {
         use super::plugin_pending_operations::{PluginPendingAction, PluginPendingActionOffer};
         use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
         let owned = self.has_service_owner;
@@ -231,7 +233,9 @@ impl LocalPluginUpdateStatus {
         };
         let mut actions = Vec::new();
         if abort {
-            actions.push(PluginPendingActionOffer::acknowledged(PluginPendingAction::Abort));
+            actions.push(PluginPendingActionOffer::acknowledged(
+                PluginPendingAction::Abort,
+            ));
         }
         if resume {
             actions.push(PluginPendingActionOffer::plain(PluginPendingAction::Resume));

@@ -181,10 +181,9 @@ async fn release_acceptance_service_one_hundred_actual_updates_and_rollbacks() {
             }
             // Query durable final records through the actual service path, independently from returned response counts.
             // 经实际服务路径查询持久最终记录，独立于已返回响应计数。
-            let requests =
-                local_plugin_update_records(Arc::clone(&fixture.state))
-                    .await
-                    .expect("actual terminal package-cycle records");
+            let requests = local_plugin_update_records(Arc::clone(&fixture.state))
+                .await
+                .expect("actual terminal package-cycle records");
             assert_eq!(requests.len(), PACKAGE_PUBLICATIONS);
             assert!(
                 requests

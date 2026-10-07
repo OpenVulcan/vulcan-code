@@ -302,8 +302,8 @@ async fn assert_owner(state: &SharedServiceBridgeState, request: uuid::Uuid, exp
     // Read-only service status remains independent of the slot's asynchronous work and private fields.
     // 只读服务状态独立于槽的异步工作及私有字段。
     let rows = local_plugin_update_records(Arc::clone(state))
-    .await
-    .expect("actual service update status");
+        .await
+        .expect("actual service update status");
     // Serialize the declared camelCase DTO instead of accessing inaccessible ownership implementation fields.
     // 序列化声明的驼峰命名 DTO，不访问不可见所有权实现字段。
     let rows = serde_json::to_value(rows).expect("actual status serialization");

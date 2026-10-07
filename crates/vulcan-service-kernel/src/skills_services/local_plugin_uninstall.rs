@@ -180,7 +180,9 @@ impl LocalPluginUninstallStatus {
 
     /// Offer continuation unless an executor currently borrows the original; acknowledgement follows the retained failure.
     /// 除非执行器正借用原实例，否则提供继续操作；确认要求取决于保留的失败。
-    pub(super) fn pending_actions(&self) -> Vec<super::plugin_pending_operations::PluginPendingActionOffer> {
+    pub(super) fn pending_actions(
+        &self,
+    ) -> Vec<super::plugin_pending_operations::PluginPendingActionOffer> {
         use super::plugin_pending_operations::{PluginPendingAction, PluginPendingActionOffer};
         if self.phase == LocalPluginUninstallPhase::Executing {
             return Vec::new();

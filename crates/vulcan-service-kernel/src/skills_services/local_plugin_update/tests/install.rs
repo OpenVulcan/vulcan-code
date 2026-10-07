@@ -56,10 +56,9 @@ async fn first_install_publishes_a_disabled_managed_generation() {
                     .disabled_vulcan_plugins
                     .contains(PLUGIN)
             );
-            let records =
-                local_plugin_update_records(Arc::clone(&fixture.state))
-                    .await
-                    .expect("request status");
+            let records = local_plugin_update_records(Arc::clone(&fixture.state))
+                .await
+                .expect("request status");
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].phase, Some(Phase::Completed));
             assert!(!records[0].has_service_owner);
@@ -109,10 +108,9 @@ async fn interrupted_first_install_is_aborted_through_update_requests() {
                 .await
                 .expect_err("candidate readiness fails");
             assert!(!fixture.runtime.snapshot().plugins.contains_key(PLUGIN));
-            let records =
-                local_plugin_update_records(Arc::clone(&fixture.state))
-                    .await
-                    .expect("request status");
+            let records = local_plugin_update_records(Arc::clone(&fixture.state))
+                .await
+                .expect("request status");
             assert_eq!(records.len(), 1);
             assert!(records[0].has_service_owner);
             assert_ne!(records[0].phase, Some(Phase::Completed));
