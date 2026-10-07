@@ -8,6 +8,49 @@ use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
 mod install;
 mod soak;
 
+/// Durable phase and live ownership select exactly the offered continuations; abandonment always needs acknowledgement.
+/// 持久阶段与实时所有权精确选择可用继续方式；放弃始终需要确认。
+#[test]
+fn pending_actions_follow_durable_phase_and_live_ownership() {
+    use super::super::plugin_pending_operations::PluginPendingAction::{Abort, Resume};
+    let cases = [
+        (None, false, vec![]),
+        (None, true, vec![Abort, Resume]),
+        (Some(Phase::Preparing), false, vec![Abort]),
+        (Some(Phase::Preparing), true, vec![Abort, Resume]),
+        (Some(Phase::Prepared), true, vec![Abort]),
+        (Some(Phase::Committing), false, vec![Abort, Resume]),
+        (Some(Phase::Published), false, vec![Resume]),
+        (Some(Phase::Completed), false, vec![]),
+        (Some(Phase::Completed), true, vec![Resume]),
+        (Some(Phase::Aborted), false, vec![]),
+        (Some(Phase::Aborted), true, vec![Abort]),
+    ];
+    for (phase, has_service_owner, expected) in cases {
+        let status = LocalPluginUpdateStatus {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            plugin_id: String::from("fixture"),
+            phase,
+            candidate: vulcan_plugin_runtime::VulcanPluginGenerationIdentity {
+                plugin_id: String::from("fixture"),
+                generation_id: uuid::Uuid::new_v4().to_string(),
+                version: String::from("2.0.0"),
+                content_fingerprint: String::from("fingerprint"),
+            },
+            activation_revision: String::from("1"),
+            installation: None,
+            effects: Vec::new(),
+            has_service_owner,
+        };
+        let offers = status.pending_actions();
+        let actions: Vec<_> = offers.iter().map(|offer| offer.action).collect();
+        assert_eq!(actions, expected, "phase {phase:?} with owner {has_service_owner}");
+        for offer in offers {
+            assert_eq!(offer.requires_acknowledgement, offer.action == Abort);
+        }
+    }
+}
+
 /// Normal failures before, inside and after the blocking worker return the actual original request lock.
 /// 阻塞工作线程之前、之中与之后的正常失败返回实际原请求锁。
 /// No inputs or return value; assertions use production package inspection, MCP startup and disk ownership.
@@ -1056,7 +1099,7 @@ async fn immutable_service_update_target_handoff_publishes_real_extension_genera
             // Query live service ownership independently from the successful coordinator result.
             // 独立于协调器成功结果查询实时服务所有权。
             let records =
-                service_local_plugin_update_requests(Arc::clone(&fixture.state), PLUGIN.to_owned())
+                local_plugin_update_records(Arc::clone(&fixture.state))
                     .await
                     .expect("actual durable and live status");
             assert_eq!(records.len(), 2);
@@ -1181,7 +1224,7 @@ async fn immutable_service_update_publishes_without_replacing_old_bytes() {
             // Query production status independently from foreground success.
             // 独立于前台成功查询生产状态。
             let records =
-                service_local_plugin_update_requests(Arc::clone(&fixture.state), PLUGIN.to_owned())
+                local_plugin_update_records(Arc::clone(&fixture.state))
                     .await
                     .expect("RPC status");
             assert_eq!(records.len(), 1);

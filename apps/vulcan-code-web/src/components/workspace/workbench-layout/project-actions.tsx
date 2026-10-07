@@ -1,6 +1,5 @@
 import React from "react";
-import { readLocalPluginUpdates, resumeLocalPluginUpdate, abortLocalPluginUpdate } from "@/service/plugin-update-service";
-import { readPluginUninstallRequests, resumePluginUninstallRequest } from "@/service/plugin-uninstall-recovery-service";
+import { continuePluginPendingOperation, readPluginPendingOperations } from "@/service/plugin-pending-operations-service";
 import type { AgentActionProps } from "@/components/features/agents/agents-area";
 import type { SkillCatalogActionProps } from "@/components/features/skills/skill-area-types";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
@@ -341,11 +340,13 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onUpdateLocalPlugin: (sourcePath, contentFingerprint, approvedPermissions, allowRegistryDependencies, initialSecrets) => runLuaSkillsCatalogAction(
       () => updateLocalPlugin(sourcePath, contentFingerprint, approvedPermissions, allowRegistryDependencies, initialSecrets),
     ),
-    onReadLocalPluginUpdates: readLocalPluginUpdates,
-    onResumeLocalPluginUpdate: (pluginId, requestId) => runLuaSkillsCatalogAction(() => resumeLocalPluginUpdate(pluginId, requestId)),
-    onAbortLocalPluginUpdate: abortLocalPluginUpdate,
-    onReadPluginUninstallRequests: readPluginUninstallRequests,
-    onResumePluginUninstallRequest: (pluginId, requestId, acknowledgeExternalEffects) => runLuaSkillsCatalogAction(() => resumePluginUninstallRequest(pluginId, requestId, acknowledgeExternalEffects)),
+    onReadPluginPendingOperations: readPluginPendingOperations,
+    onContinuePluginPendingOperation: async (continuation) => {
+      // Policy continuations publish no catalog; install, update and uninstall continuations do.
+      // 策略继续不发布目录；安装、更新与卸载继续会发布目录。
+      const catalog = await continuePluginPendingOperation(continuation);
+      if (catalog !== null) applyLuaSkillsCatalogUpdate(catalog);
+    },
     onUninstallUserPlugin: (pluginId) => runLuaSkillsCatalogAction(() => uninstallUserPlugin(pluginId)),
     onSetVulcanPluginCredentials: (pluginId, changes) => runLuaSkillsCatalogAction(
       () => setVulcanPluginCredentials(pluginId, changes),
@@ -360,7 +361,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onSetLuaSkillConfig: setLuaSkillConfig,
     onDeleteLuaSkillConfig: deleteLuaSkillConfig,
     onPollLuaSkillConfigEvents: pollLuaSkillConfigEvents,
-  }), [runLuaSkillsCatalogAction]);
+  }), [applyLuaSkillsCatalogUpdate, runLuaSkillsCatalogAction]);
 
   // agentSkillActions groups the independent prompt-based Agent Skills boundary.
   // agentSkillActions 归组独立提示词 Agent Skills 边界。

@@ -25,13 +25,17 @@ const plugin: PluginSummary = { id: "fixture", name: "Fixture", kind: "plugin", 
 const workbench = { plugins: [plugin], conversations: [{ id: "conversation-original" }], selectedConversationId: null } as WorkbenchSnapshot;
 // actions keep mutation/recovery calls observable without dispatching production changes.
 // actions 使变更及恢复调用可观测，不派发生产变更。
+// The registry lists both originals of the unlisted owner directly; no per-plugin probing is needed to find them.
+// 登记表直接列出未列出所有者的两个原实例；无需逐插件探测即可找到它们。
 const actions = { onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null,
-  onReadPluginUninstallRequests: vi.fn().mockResolvedValue([{ pluginId: "hidden-plugin", requestId: "original-uninstall", phase: "collection", requiresExternalEffectsAcknowledgement: false }]),
-  // Updates are read per plugin, so only the unlisted owner reports its retained original.
-  // 更新按插件读取，因此只有未列出的所有者报告其保留原实例。
-  onReadLocalPluginUpdates: vi.fn(async (pluginId: string) => pluginId !== "hidden-plugin" ? [] : [{ pluginId, requestId: "original-update", phase: "published",
-    candidate: { version: "3.0.0" }, installation: "succeeded", effects: [], hasServiceOwner: false }]),
-  onResumeLocalPluginUpdate: vi.fn(), onAbortLocalPluginUpdate: vi.fn(), onResumePluginUninstallRequest: vi.fn(),
+  onReadPluginPendingOperations: vi.fn().mockResolvedValue([
+    { kind: "uninstall", operationId: "original-uninstall", pluginId: "hidden-plugin", actions: [{ action: "resume", requiresAcknowledgement: false }],
+      detail: { pluginId: "hidden-plugin", requestId: "original-uninstall", phase: "collection", requiresExternalEffectsAcknowledgement: false } },
+    { kind: "update", operationId: "original-update", pluginId: "hidden-plugin", actions: [{ action: "resume", requiresAcknowledgement: false }],
+      detail: { pluginId: "hidden-plugin", requestId: "original-update", phase: "published", candidate: { version: "3.0.0" }, installation: "succeeded",
+        effects: [], hasServiceOwner: false } },
+  ]),
+  onContinuePluginPendingOperation: vi.fn(),
 } as unknown as SkillActionProps;
 // host owns the actual lazy workspace management DOM.
 // host 拥有实际懒加载工作台管理 DOM。
@@ -160,36 +164,19 @@ it("surfaces retained uninstalls and locates originals through diagnostics witho
   // The located usage opens beside the recovery item in the same drawer view.
   // 定位到的使用情况在同一抽屉视图中、恢复条目旁打开。
   expect(stat(drawer(), "pluginDiagnostics.pinned")).toBe("1");
-  expect(actions.onResumePluginUninstallRequest).not.toHaveBeenCalled();
-  expect(actions.onResumeLocalPluginUpdate).not.toHaveBeenCalled();
-  expect(actions.onAbortLocalPluginUpdate).not.toHaveBeenCalled();
+  expect(actions.onContinuePluginPendingOperation).not.toHaveBeenCalled();
 });
 
-it("checks an unlisted plugin's update on the maintenance page and locates its original without recovery", async () => {
+it("lists an unlisted plugin's update on the maintenance page and locates its original without recovery", async () => {
   await mount("plugin-maintenance");
   // page is the dedicated maintenance home; the unlisted owner has no card anywhere.
   // page 是专属维护页面；未列出的所有者在任何地方都没有卡片。
   const page = host.querySelector<HTMLElement>(".plugin-maintenance-page");
   if (!page) throw new Error("Expected the plugin maintenance page; its structure may have changed");
-  expect(actions.onReadLocalPluginUpdates).not.toHaveBeenCalledWith("hidden-plugin");
-  await click(en("pluginRecovery.extraToggle"), page);
-  // extra is the explicit unlisted-owner field, identified by its associated label.
-  // extra 是明确的未列出所有者字段，由其关联标签标识。
-  const label = [...page.querySelectorAll("label")].find((candidate) => candidate.textContent === en("pluginRecovery.extraField"));
-  if (!label) throw new Error("Expected the unlisted plugin field; its label may have changed");
-  const extra = document.getElementById(label.htmlFor) as HTMLInputElement;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(extra, "hidden-plugin");
-    extra.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await click(en("pluginRecovery.extraAdd"), extra.closest("form")!);
-  expect(actions.onReadLocalPluginUpdates).toHaveBeenCalledWith("hidden-plugin");
   // update is located by the retained request UUID, never candidate version or array index.
   // update 根据保留请求 UUID 定位，绝不使用候选版本或数组下标。
   await click(en("pluginDiagnostics.locateRequest"), requestRow(page, "original-update"));
   expect(readPluginResourceDiagnostics).toHaveBeenLastCalledWith({ kind: "update", pluginId: "hidden-plugin", requestId: "original-update" });
   expect(stat(page, "pluginDiagnostics.pinned")).toBe("1");
-  expect(actions.onResumePluginUninstallRequest).not.toHaveBeenCalled();
-  expect(actions.onResumeLocalPluginUpdate).not.toHaveBeenCalled();
-  expect(actions.onAbortLocalPluginUpdate).not.toHaveBeenCalled();
+  expect(actions.onContinuePluginPendingOperation).not.toHaveBeenCalled();
 });

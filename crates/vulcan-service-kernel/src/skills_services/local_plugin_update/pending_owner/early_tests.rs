@@ -229,7 +229,7 @@ async fn pending_update_early_reserved_query_and_original_abort() {
             .contains("still holds the requested lease")
     );
     let rows =
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.into())
+        local_plugin_update_records(Arc::clone(&harness.fixture.state))
             .await
             .expect("sealed original query");
     let row = rows
@@ -284,7 +284,7 @@ async fn pending_update_early_first_journal_worker_panic_retains_owner() {
         &owner
     ));
     let rows =
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.into())
+        local_plugin_update_records(Arc::clone(&harness.fixture.state))
             .await
             .expect("sealed actual journal");
     assert_eq!(
@@ -481,7 +481,7 @@ async fn pending_update_early_completed_package_corruption_retains_original_abor
         vulcan_plugin_runtime::VulcanPluginGenerationPhase::Prepared
     );
     let rows =
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.into())
+        local_plugin_update_records(Arc::clone(&harness.fixture.state))
             .await
             .expect("terminal live owner query");
     let row = rows
@@ -598,7 +598,7 @@ async fn pending_update_early_credential_namespace_query_and_abort() {
     }
     assert!(list(&harness.fixture.runtime, PLUGIN).is_err());
     let rows =
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.into())
+        local_plugin_update_records(Arc::clone(&harness.fixture.state))
             .await
             .expect("sealed original credential namespace");
     let row = rows
@@ -679,7 +679,7 @@ async fn pending_update_early_frozen_values_and_terminal_file_backend_cleanup_re
         assert!(abort_preparation_with_backend(&mut resources, true, &backend).is_err());
     }
     let rows =
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.into())
+        local_plugin_update_records(Arc::clone(&harness.fixture.state))
             .await
             .expect("original terminal live owner");
     let row = rows
@@ -1063,7 +1063,7 @@ async fn terminal_cleanup_loss(boundary: Boundary, panic: bool) {
         _ => panic!("only actual terminal cleanup checkpoints are accepted"),
     }
     let rows =
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.into())
+        local_plugin_update_records(Arc::clone(&harness.fixture.state))
             .await
             .expect("terminal original query without joining worker");
     let row = rows

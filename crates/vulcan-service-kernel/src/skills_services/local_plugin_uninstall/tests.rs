@@ -6,6 +6,36 @@ use super::*;
 use crate::tests::provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// An executing removal offers nothing; every retained phase offers resume with the record's own acknowledgement flag.
+/// 执行中的移除不提供动作；每个保留阶段提供继续，并带有记录自身的确认标志。
+#[test]
+fn pending_actions_offer_resume_only_outside_execution() {
+    use super::super::plugin_pending_operations::PluginPendingAction;
+    for phase in [
+        LocalPluginUninstallPhase::Executing,
+        LocalPluginUninstallPhase::Reserved,
+        LocalPluginUninstallPhase::Lifecycle,
+        LocalPluginUninstallPhase::Publishing,
+        LocalPluginUninstallPhase::Collection,
+    ] {
+        for acknowledgement in [false, true] {
+            let executing = phase == LocalPluginUninstallPhase::Executing;
+            let status = LocalPluginUninstallStatus {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                plugin_id: String::from(PLUGIN),
+                phase,
+                requires_external_effects_acknowledgement: acknowledgement,
+            };
+            let offers = status.pending_actions();
+            assert_eq!(offers.len(), usize::from(!executing), "phase {phase:?}");
+            for offer in offers {
+                assert_eq!(offer.action, PluginPendingAction::Resume);
+                assert_eq!(offer.requires_acknowledgement, acknowledgement);
+            }
+        }
+    }
+}
+
 /// Count only real native events emitted by the declared actual Lua Uninstall callback.
 /// 仅统计声明实际 Lua 卸载回调发出的真实原生事件。
 #[derive(Default)]
@@ -254,7 +284,7 @@ async fn retained_service_uninstall_pending_callback_resumes_same_uuid_once() {
             .expect("actual Uninstall publisher entered");
             // Original UUID is read from the actual retained service registry while the callback is still live.
             // 回调仍活动时，从实际保留服务注册表读取原 UUID。
-            let row = service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+            let row = local_plugin_uninstall_records(Arc::clone(&fixture.state))
                 .expect("actual original query")
                 .into_iter()
                 .find(|row| row.plugin_id == PLUGIN)
@@ -296,7 +326,7 @@ async fn retained_service_uninstall_pending_callback_resumes_same_uuid_once() {
             );
             // Retained metadata authorizes only the existing failed callback, never unknown replay.
             // 保留元数据仅授权既有失败回调，绝不授权未知重放。
-            let observed = service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+            let observed = local_plugin_uninstall_records(Arc::clone(&fixture.state))
                 .expect("known retired original")
                 .into_iter()
                 .find(|current| current.request_id == row.request_id)
@@ -321,7 +351,7 @@ async fn retained_service_uninstall_pending_callback_resumes_same_uuid_once() {
             );
             assert!(!fixture.runtime.user_plugin_root().join(PLUGIN).exists());
             assert!(
-                service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+                local_plugin_uninstall_records(Arc::clone(&fixture.state))
                     .expect("original slot released")
                     .is_empty()
             );
@@ -382,7 +412,7 @@ async fn retained_service_uninstall_failed_callback_requires_ack_without_replay(
             assert_eq!(events.0.load(Ordering::Acquire), 1);
             // Sanitized status exposes acknowledgement without private callback diagnostics.
             // 脱敏状态暴露确认需求，不暴露私有回调诊断。
-            let row = service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+            let row = local_plugin_uninstall_records(Arc::clone(&fixture.state))
                 .expect("live original query")
                 .into_iter()
                 .find(|row| row.plugin_id == PLUGIN)
@@ -562,7 +592,7 @@ async fn retained_service_uninstall_failed_callback_requires_ack_without_replay(
             ));
             assert_eq!(events.0.load(Ordering::Acquire), 1);
             assert!(
-                service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+                local_plugin_uninstall_records(Arc::clone(&fixture.state))
                     .expect("empty original query")
                     .is_empty()
             );
@@ -657,7 +687,7 @@ async fn retained_service_uninstall_terminal_releases_actual_original() {
             .expect("actual managed terminal removal");
             assert!(!fixture.runtime.snapshot().plugins.contains_key(PLUGIN));
             assert!(
-                service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+                local_plugin_uninstall_records(Arc::clone(&fixture.state))
                     .expect("readonly query")
                     .is_empty()
             );
@@ -706,7 +736,7 @@ async fn retained_service_uninstall_managed_external_pin_reuses_original() {
             .expect_err("actual external reader must block collection");
             // Stable identity locates the one live request without relying on row order.
             // 稳定身份定位单个存活请求，不依赖行顺序。
-            let row = service_local_plugin_uninstall_requests(Arc::clone(&fixture.state))
+            let row = local_plugin_uninstall_records(Arc::clone(&fixture.state))
                 .expect("live query")
                 .into_iter()
                 .find(|row| row.plugin_id == PLUGIN)

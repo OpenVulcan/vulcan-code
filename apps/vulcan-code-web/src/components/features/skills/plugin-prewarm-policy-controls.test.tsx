@@ -6,12 +6,16 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readLocaleMessage, type TranslationKey } from "@/i18n";
 import wire from "@/service/__fixtures__/plugin-prewarm-policy-wire.json";
 import { parsePluginPrewarmPolicyStatus } from "@/service/plugin-prewarm-policy-contract";
-import { executePluginPrewarmPolicyCommand, readPluginPrewarmPolicyStatus } from "@/service/plugin-prewarm-policy-service";
+import { prewarmReceiptOffers } from "@/service/__fixtures__/plugin-pending-offers";
+import { executePluginPrewarmPolicyCommand, readPluginPrewarmPolicyObservation } from "@/service/plugin-prewarm-policy-service";
 import type { PluginSummary } from "@/types";
 import type { PluginPrewarmPolicyStatus } from "@/types/plugin-prewarm-policy";
 import { PluginPrewarmPolicyControls } from "./plugin-prewarm-policy-controls";
 
-vi.mock("@/service/plugin-prewarm-policy-service", () => ({ executePluginPrewarmPolicyCommand: vi.fn(), readPluginPrewarmPolicyStatus: vi.fn() }));
+vi.mock("@/service/plugin-prewarm-policy-service", () => ({ executePluginPrewarmPolicyCommand: vi.fn(), readPluginPrewarmPolicyObservation: vi.fn() }));
+// readStatus supplies the atomic status read; the observation pairs it with the registry's declared receipt offers.
+// readStatus 提供原子状态读取；观测将其与登记表声明的回执动作组合。
+const readStatus = vi.fn<() => Promise<PluginPrewarmPolicyStatus>>();
 vi.mock("@/i18n", async (importOriginal) => {
   // actual retains production localization while selecting a deterministic UI language.
   // actual 保留生产本地化，同时选择确定的界面语言。
@@ -85,9 +89,13 @@ async function mount(): Promise<void> {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.resetAllMocks();
+  vi.mocked(readPluginPrewarmPolicyObservation).mockImplementation(async () => {
+    const status = await readStatus();
+    return { status, receiptActions: prewarmReceiptOffers(status.update) };
+  });
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
   policy = parsePluginPrewarmPolicyStatus(wire.initial);
-  vi.mocked(readPluginPrewarmPolicyStatus).mockImplementation(async () => policy);
+  readStatus.mockImplementation(async () => policy);
   vi.mocked(executePluginPrewarmPolicyCommand).mockImplementation(async (command) => {
     if (command.kind === "forget") { policy = { ...policy, update: null }; return null; }
     // The mock publishes only on an explicit command, preserving its complete original request.
@@ -107,7 +115,7 @@ afterEach(async () => {
 // 挂载只读取；编辑器只保存一次精确字段，回执以平实语言说明结果。
 it("reads on mount, then edits and saves complete rules once", async () => {
   await mount();
-  expect(readPluginPrewarmPolicyStatus).toHaveBeenCalledTimes(1);
+  expect(readStatus).toHaveBeenCalledTimes(1);
   expect(executePluginPrewarmPolicyCommand).not.toHaveBeenCalled();
   expect(host.textContent).toContain(m("pluginPrewarmPolicy.disabled"));
   await act(async () => button(m("pluginPrewarmPolicy.add")).click());
@@ -168,7 +176,7 @@ it("rejects invalid counts and duplicate tool identities in the actual form", as
 // 读取失败时保留最后规则作为证据，但在完整读取成功前禁止编辑。
 it("keeps stale rules visible and blocks edits until a fresh read", async () => {
   policy = { ...published, update: null }; await mount();
-  vi.mocked(readPluginPrewarmPolicyStatus).mockRejectedValueOnce(new Error("offline"));
+  readStatus.mockRejectedValueOnce(new Error("offline"));
   await act(async () => button(m("pluginRuntime.refresh")).click());
   expect(host.textContent).toContain(m("pluginPrewarmPolicy.stale"));
   expect(host.textContent).toContain("control_tool");
@@ -237,12 +245,12 @@ it("cancels the exact prepared receipt", async () => {
 it("shows an acknowledged publication separately from stale status", async () => {
   policy = { ...published, update: null }; await mount();
   await act(async () => button(m("pluginPrewarmPolicy.edit")).click());
-  vi.mocked(readPluginPrewarmPolicyStatus).mockRejectedValueOnce(new Error("refresh offline"));
+  readStatus.mockRejectedValueOnce(new Error("refresh offline"));
   await act(async () => button(m("pluginPrewarmPolicy.save")).click());
   expect(host.textContent).toContain(m("pluginPrewarmPolicy.receipt.committed"));
   expect(host.textContent).toContain(m("pluginPrewarmPolicy.stale"));
   expect(host.textContent).not.toContain(m("pluginPrewarmPolicy.unknown"));
-  expect(button(m("pluginPrewarmPolicy.forget")).disabled).toBe(true);
+  expect(() => button(m("pluginPrewarmPolicy.forget"))).toThrow();
   expect(button(m("pluginPrewarmPolicy.edit")).disabled).toBe(true);
   expect(executePluginPrewarmPolicyCommand).toHaveBeenCalledTimes(1);
 });

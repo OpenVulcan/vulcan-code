@@ -53,12 +53,6 @@ async fn plugin_prewarm_policy_rpc_requires_explicit_named_rules() {
             "service_begin_plugin_prewarm_policy_update",
             json!({"request": ["update", "runtime", "revision", []]}),
         ),
-        ("service_resume_plugin_prewarm_policy_update", json!({})),
-        (
-            "service_cancel_plugin_prewarm_policy_update",
-            json!({"updateId": "id", "force": true}),
-        ),
-        ("service_forget_plugin_prewarm_policy_update", json!(["id"])),
     ] {
         assert!(
             matches!(
@@ -130,52 +124,63 @@ async fn plugin_prewarm_policy_rpc_preserves_original_receipt_without_execution(
         0
     );
     assert_browser_policy_wire_fixture(&initial, &published);
-    for method in [
-        "service_resume_plugin_prewarm_policy_update",
-        "service_cancel_plugin_prewarm_policy_update",
-        "service_forget_plugin_prewarm_policy_update",
+    // Malformed continuations fail at the top-level boundary before any receipt is consulted.
+    // 畸形继续请求在顶层边界失败，不会查询任何回执。
+    for params in [
+        json!({"kind": "prewarmPolicy", "action": "resume"}),
+        json!({"kind": "prewarmPolicy", "operationId": request["updateId"], "action": "cancel", "force": true}),
+        json!([request["updateId"]]),
     ] {
         assert!(
-            fixture
-                .rpc(
-                    method,
-                    json!({"updateId": uuid::Uuid::new_v4().to_string()})
-                )
-                .await
-                .is_err(),
-            "{method} must retain exact receipt identity"
+            matches!(
+                fixture
+                    .rpc("service_continue_plugin_pending_operation", params.clone())
+                    .await,
+                Err(WebuiServiceRpcError::InvalidParams(_))
+            ),
+            "continuation must reject ambiguous input {params}"
         );
     }
+    let stranger = json!(uuid::Uuid::new_v4().to_string());
+    for action in ["resume", "cancel", "forget"] {
+        assert!(
+            continue_prewarm(&fixture, &stranger, action).await.is_err(),
+            "{action} must retain exact receipt identity"
+        );
+    }
+    // The committed receipt is listed with acknowledgement as its only offered continuation.
+    // 已提交回执以确认作为唯一提供的继续方式被列出。
+    let pending = fixture
+        .rpc("service_plugin_pending_operations", json!({}))
+        .await
+        .expect("pending list");
+    let listed = pending
+        .as_array()
+        .expect("pending array")
+        .iter()
+        .find(|operation| operation["kind"] == "prewarmPolicy")
+        .expect("listed prewarm receipt");
+    assert_eq!(listed["operationId"], request["updateId"]);
+    assert_eq!(listed["detail"], receipt);
     assert_eq!(
-        fixture
-            .rpc(
-                "service_resume_plugin_prewarm_policy_update",
-                json!({"updateId": request["updateId"]})
-            )
-            .await
-            .expect("resume original"),
-        receipt
+        listed["actions"],
+        json!([{"action": "forget", "requiresAcknowledgement": false}])
     );
-    assert_eq!(
-        fixture
-            .rpc(
-                "service_cancel_plugin_prewarm_policy_update",
-                json!({"updateId": request["updateId"]})
-            )
+    for action in ["resume", "cancel"] {
+        continue_prewarm(&fixture, &request["updateId"], action)
             .await
-            .expect("terminal cancel observes original"),
-        receipt
-    );
-    assert_eq!(
-        fixture
-            .rpc(
-                "service_forget_plugin_prewarm_policy_update",
-                json!({"updateId": request["updateId"]})
-            )
-            .await
-            .expect("acknowledge"),
-        Value::Null
-    );
+            .unwrap_or_else(|error| panic!("terminal {action} observes original: {error:?}"));
+        assert_eq!(
+            fixture
+                .rpc("service_plugin_prewarm_policy_status", json!({}))
+                .await
+                .expect("status")["update"],
+            receipt
+        );
+    }
+    continue_prewarm(&fixture, &request["updateId"], "forget")
+        .await
+        .expect("acknowledge");
     let acknowledged = fixture
         .rpc("service_plugin_prewarm_policy_status", json!({}))
         .await
@@ -193,6 +198,21 @@ async fn plugin_prewarm_policy_rpc_preserves_original_receipt_without_execution(
             .is_err()
     );
     fixture.close().await;
+}
+
+/// Continue the prewarm receipt update_id with action through the unified pending-operation entry.
+/// 通过统一待处理操作入口以 action 继续预热回执 update_id。
+async fn continue_prewarm(
+    fixture: &Fixture,
+    update_id: &Value,
+    action: &str,
+) -> Result<Value, WebuiServiceRpcError> {
+    fixture
+        .rpc(
+            "service_continue_plugin_pending_operation",
+            json!({"kind": "prewarmPolicy", "operationId": update_id, "action": action}),
+        )
+        .await
 }
 
 /// Compare actual initial and published RPC values with the browser artifact; only observed opaque IDs change.

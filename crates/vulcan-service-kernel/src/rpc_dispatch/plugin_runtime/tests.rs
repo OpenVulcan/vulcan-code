@@ -128,6 +128,36 @@ lua_runtime:
         .await
     }
 
+    /// Find the capacity receipt update_id in the unified pending list; panic when it is not listed.
+    /// 在统一待处理列表中查找容量回执 update_id；未列出时失败。
+    async fn pending_capacity_receipt(&self, update_id: &Value) -> Value {
+        self.rpc("service_plugin_pending_operations", json!({}))
+            .await
+            .expect("pending list")
+            .as_array()
+            .expect("pending array")
+            .iter()
+            .find(|operation| {
+                operation["kind"] == "capacityPolicy" && &operation["operationId"] == update_id
+            })
+            .cloned()
+            .expect("listed capacity receipt")
+    }
+
+    /// Continue the capacity receipt update_id with action through the unified entry.
+    /// 通过统一入口以 action 继续容量回执 update_id。
+    async fn continue_capacity_receipt(
+        &self,
+        update_id: &Value,
+        action: &str,
+    ) -> Result<Value, WebuiServiceRpcError> {
+        self.rpc(
+            "service_continue_plugin_pending_operation",
+            json!({"kind": "capacityPolicy", "operationId": update_id, "action": action}),
+        )
+        .await
+    }
+
     /// Close the real parent and await physical termination; return only when native ownership is released.
     /// 关闭真实父级并等待物理终止；仅在原生归属释放后返回。
     async fn close(&self) {
@@ -161,10 +191,6 @@ async fn plugin_control_rpc_rejects_ambiguous_parameters() {
         ("service_plugin_runtime_status", json!({"request": {}})),
         ("service_plugin_capacity_catalog", json!(null)),
         ("service_plugin_capacity_catalog", json!([])),
-        (
-            "service_plugin_capacity_policy_update_status",
-            json!(["transaction"]),
-        ),
         ("service_register_plugin_capacity", json!({"request": {}})),
         (
             "service_register_plugin_capacity",
@@ -179,19 +205,6 @@ async fn plugin_control_rpc_rejects_ambiguous_parameters() {
         (
             "service_plugin_capacity_registration_status",
             json!({"registrationId": "unknown"}),
-        ),
-        (
-            "service_resume_plugin_capacity_policy_update",
-            json!({"updateId": "id", "force": true}),
-        ),
-        ("service_cancel_plugin_capacity_policy_update", json!({})),
-        (
-            "service_forget_plugin_capacity_policy_update",
-            json!({"updateId": null}),
-        ),
-        (
-            "service_plugin_capacity_policy_update_status",
-            json!({"updateId": 1}),
         ),
         (
             "service_begin_plugin_capacity_policy_update",
@@ -396,32 +409,25 @@ async fn plugin_control_rpc_preserves_registration_policy_and_exact_closure() {
             .join("state/plugin-runtime-settings.json")
             .is_file()
     );
+    // The unified pending list exposes the terminal receipt with acknowledgement as its only continuation.
+    // 统一待处理列表暴露终态回执，确认是其唯一继续方式。
+    let listed = fixture.pending_capacity_receipt(&update["updateId"]).await;
+    assert_eq!(listed["detail"], committed);
     assert_eq!(
-        fixture
-            .rpc(
-                "service_plugin_capacity_policy_update_status",
-                json!({"updateId": update["updateId"]})
-            )
-            .await
-            .expect("receipt"),
-        committed
+        listed["actions"],
+        json!([{"action": "forget", "requiresAcknowledgement": false}])
     );
+    fixture
+        .continue_capacity_receipt(&update["updateId"], "resume")
+        .await
+        .expect("terminal resume");
     assert_eq!(
-        fixture
-            .rpc(
-                "service_resume_plugin_capacity_policy_update",
-                json!({"updateId": update["updateId"]})
-            )
-            .await
-            .expect("terminal resume"),
+        fixture.pending_capacity_receipt(&update["updateId"]).await["detail"],
         committed
     );
     assert!(
         fixture
-            .rpc(
-                "service_cancel_plugin_capacity_policy_update",
-                json!({"updateId": update["updateId"]})
-            )
+            .continue_capacity_receipt(&update["updateId"], "cancel")
             .await
             .is_err()
     );
@@ -482,21 +488,20 @@ async fn plugin_control_rpc_preserves_registration_policy_and_exact_closure() {
         false
     );
     fixture
-        .rpc(
-            "service_forget_plugin_capacity_policy_update",
-            json!({"updateId": update["updateId"]}),
-        )
+        .continue_capacity_receipt(&update["updateId"], "forget")
         .await
         .expect("acknowledge transaction");
-    assert_eq!(
-        fixture
-            .rpc(
-                "service_plugin_capacity_policy_update_status",
-                json!({"updateId": update["updateId"]})
-            )
-            .await
-            .expect("forgotten"),
-        Value::Null
+    let pending = fixture
+        .rpc("service_plugin_pending_operations", json!({}))
+        .await
+        .expect("pending list");
+    assert!(
+        pending
+            .as_array()
+            .expect("pending array")
+            .iter()
+            .all(|operation| operation["kind"] != "capacityPolicy"),
+        "a forgotten receipt leaves the pending list"
     );
     fixture.close().await;
 }

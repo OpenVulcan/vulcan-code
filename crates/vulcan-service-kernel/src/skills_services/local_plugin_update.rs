@@ -165,6 +165,81 @@ pub(super) fn list_owned(
     pending_owner::list_owned(runtime, plugin_id, registry)
 }
 
+/// List original requests of every namespace holding a journal or a live owner, including uninstalled plugins.
+/// 列出每个持有日志或存活所有者的命名空间的原请求，包含已卸载插件。
+/// Runtime supplies the sole user root and registry the live owners; returns redacted rows of every namespace.
+/// runtime 提供唯一用户根，registry 提供存活所有者；返回所有命名空间的脱敏行。
+pub(super) fn list_all_owned(
+    runtime: &VulcanPluginRuntimeManager,
+    registry: &pending_owner::PendingLocalPluginUpdateRegistry,
+) -> Result<Vec<LocalPluginUpdateStatus>, String> {
+    // A live owner may still lack its journal, so its namespace joins the durable inventory explicitly.
+    // 存活所有者可能尚无日志，因此其命名空间明确并入持久清单。
+    let mut plugin_ids = registry.plugin_ids()?;
+    if let Some(store) = VulcanPluginGenerationStore::open_existing(runtime.user_plugin_root())
+        .map_err(|error| error.to_string())?
+    {
+        plugin_ids.extend(
+            store
+                .activation_transaction_plugin_ids()
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    let mut rows = Vec::new();
+    for plugin_id in plugin_ids {
+        rows.extend(list_owned(runtime, &plugin_id, registry)?);
+    }
+    Ok(rows)
+}
+
+impl LocalPluginUpdateStatus {
+    /// Exact original request UUID text used as the pending-operation identity.
+    /// 用作待处理操作身份的精确原请求 UUID 文本。
+    pub(super) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    /// Exact owning namespace of the original request.
+    /// 原请求的精确所属命名空间。
+    pub(super) fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// Return whether the durable record confirms an abandoned request.
+    /// 返回持久记录是否确认请求已放弃。
+    pub(super) fn is_aborted(&self) -> bool {
+        self.phase == Some(vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase::Aborted)
+    }
+
+    /// Offer the continuations this request still accepts; finished history without a live owner offers none.
+    /// 提供此请求仍接受的继续操作；无存活所有者的已结束历史不提供任何操作。
+    /// Abandoning never undoes attempted external effects, so it always requires explicit acknowledgement.
+    /// 放弃绝不撤销已尝试的外部副作用，因此总是要求明确确认。
+    pub(super) fn pending_actions(&self) -> Vec<super::plugin_pending_operations::PluginPendingActionOffer> {
+        use super::plugin_pending_operations::{PluginPendingAction, PluginPendingActionOffer};
+        use vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase as Phase;
+        let owned = self.has_service_owner;
+        let resume = match self.phase {
+            None | Some(Phase::Preparing) | Some(Phase::Completed) => owned,
+            Some(Phase::Committing) | Some(Phase::Published) => true,
+            Some(Phase::Prepared) | Some(Phase::Aborted) => false,
+        };
+        let abort = match self.phase {
+            None | Some(Phase::Aborted) => owned,
+            Some(Phase::Preparing) | Some(Phase::Prepared) | Some(Phase::Committing) => true,
+            Some(Phase::Published) | Some(Phase::Completed) => false,
+        };
+        let mut actions = Vec::new();
+        if abort {
+            actions.push(PluginPendingActionOffer::acknowledged(PluginPendingAction::Abort));
+        }
+        if resume {
+            actions.push(PluginPendingActionOffer::plain(PluginPendingAction::Resume));
+        }
+        actions
+    }
+}
+
 /// Parse one explicitly supplied original request identity; aliases and nil values are rejected.
 /// 解析单个明确提供的原请求身份；拒绝别名及空值。
 fn request_identity(value: &str) -> Result<uuid::Uuid, String> {

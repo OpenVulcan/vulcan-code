@@ -261,6 +261,16 @@ impl PendingLocalPluginUpdateRegistry {
             .cloned())
     }
 
+    /// Snapshot every namespace with a live original owner, including one whose journal does not exist yet.
+    /// 快照每个具有存活原所有者的命名空间，包括尚无日志的命名空间。
+    pub(super) fn plugin_ids(&self) -> Result<std::collections::BTreeSet<String>, String> {
+        let owners = self.owners.lock().map_err(|error| error.to_string())?;
+        Ok(owners
+            .values()
+            .map(|owner| owner.plugin_id.clone())
+            .collect())
+    }
+
     /// Remove only this exact confirmed terminal owner after the caller has awaited actual resource retirement.
     /// 调用方等待实际资源退役后，仅移除此精确已确认终态所有者。
     /// The resource guard proves executor exclusion; failures preserve the slot unchanged.

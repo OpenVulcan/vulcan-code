@@ -4,13 +4,12 @@ import { Button, IconButton } from "@/components/ui/button";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { PluginSummary, WorkbenchSnapshot } from "@/types";
 import type { PluginDiagnosticsSelection } from "@/types/plugin-resource-diagnostics";
-import type { PluginUninstallStatus } from "@/service/plugin-uninstall-recovery-service";
+import type { PluginUninstallStatus } from "@/service/plugin-uninstall-contract";
 import { PageGuide, PageSection } from "@/components/page";
 import { PluginPrewarmPolicyControls } from "./plugin-prewarm-policy-controls";
-import { PluginRecoveryCenter, type RecoveryKind } from "./plugin-recovery-center";
+import { PluginRecoveryCenter, type PluginUninstallUncertainty, type RecoveryKind } from "./plugin-recovery-center";
 import { PluginResourceDiagnostics } from "./plugin-resource-diagnostics";
 import { PluginRuntimeControls } from "./plugin-runtime-controls";
-import type { PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
 import type { SkillActionProps } from "./skill-area-types";
 
 // PluginMaintenanceSectionId names one maintenance concern; it doubles as the in-drawer scroll anchor.
@@ -105,7 +104,7 @@ export function RecoveryMaintenanceSection(props: PluginMaintenanceContext & {
       title={t(props.uninstallOnly ? "pluginMaintenance.uninstalls.title" : "pluginMaintenance.recovery.title")}>
       <PluginRecoveryCenter actions={props.actions} gate={props.gate} kinds={props.kinds} onLocate={props.onLocate}
         onUninstallConfirmed={props.onUninstallConfirmed} onUninstallRecordsObserved={props.onUninstallRecordsObserved}
-        pluginName={props.pluginName} plugins={props.plugins} scanToken={scanToken} scopePluginId={props.scopePluginId}
+        pluginName={props.pluginName} scanToken={scanToken} scopePluginId={props.scopePluginId}
         uninstallUncertainty={props.uninstallUncertainty} />
     </PageSection>
   );

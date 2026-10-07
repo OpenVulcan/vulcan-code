@@ -19,8 +19,7 @@ const mounted = vi.hoisted(() => [] as string[]);
 vi.mock("./plugin-runtime-controls", () => ({ PluginRuntimeControls: () => { mounted.push("capacity"); return <p>capacity-probe</p>; } }));
 vi.mock("./plugin-resource-diagnostics", () => ({ PluginResourceDiagnostics: () => { mounted.push("usage"); return <p>usage-probe</p>; } }));
 vi.mock("./plugin-prewarm-policy-controls", () => ({ PluginPrewarmPolicyControls: () => { mounted.push("prewarm"); return <p>prewarm-probe</p>; } }));
-vi.mock("./plugin-update-controls", () => ({ PluginUpdateControls: () => { mounted.push("recovery"); return <p>recovery-probe</p>; } }));
-vi.mock("./plugin-uninstall-recovery-controls", () => ({ PluginUninstallRecoveryControls: () => null }));
+vi.mock("./plugin-recovery-center", () => ({ PluginRecoveryCenter: () => { mounted.push("recovery"); return <p>recovery-probe</p>; } }));
 
 // plugin is a content-only package, so it owns no Lua runtime capacity.
 // plugin 是纯内容插件包，因此不拥有 Lua 运行时容量。

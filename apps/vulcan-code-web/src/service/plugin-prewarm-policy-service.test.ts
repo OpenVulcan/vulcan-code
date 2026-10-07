@@ -23,12 +23,13 @@ it("sends all five exact method shapes and strips display-only fields", async ()
   vi.mocked(serviceClient.request).mockResolvedValueOnce(receipt);
   expect(await executePluginPrewarmPolicyCommand({ kind: "begin", request: richRequest })).toEqual(receipt);
   expect(serviceClient.request).toHaveBeenLastCalledWith("service_begin_plugin_prewarm_policy_update", { request });
-  const methods = { resume: "service_resume_plugin_prewarm_policy_update", cancel: "service_cancel_plugin_prewarm_policy_update",
-    forget: "service_forget_plugin_prewarm_policy_update" } as const;
+  // Receipt continuations travel through the unified pending-operation entry with the original UUID only.
+  // 回执继续仅携带原 UUID，经由统一待处理操作入口传输。
   for (const kind of ["resume", "cancel", "forget"] as const) {
-    vi.mocked(serviceClient.request).mockResolvedValueOnce(kind === "forget" ? null : receipt);
-    await executePluginPrewarmPolicyCommand({ kind, request: richRequest });
-    expect(serviceClient.request).toHaveBeenLastCalledWith(methods[kind], { updateId: request.updateId });
+    vi.mocked(serviceClient.request).mockResolvedValueOnce({ catalog: null });
+    expect(await executePluginPrewarmPolicyCommand({ kind, request: richRequest })).toBeNull();
+    expect(serviceClient.request).toHaveBeenLastCalledWith("service_continue_plugin_pending_operation",
+      { kind: "prewarmPolicy", operationId: request.updateId, action: kind });
   }
   expect(serviceClient.request).toHaveBeenCalledTimes(5);
 });
@@ -44,10 +45,10 @@ it("rejects mismatched receipts and lost responses without replacing the origina
     { rules: request.rules.map((rule) => ({ ...rule, pluginId: "another" })) },
     { rules: request.rules.map((rule) => ({ ...rule, toolId: "another" })) }]) {
     vi.mocked(serviceClient.request).mockResolvedValueOnce({ ...receipt, request: { ...request, ...changed } });
-    await expect(executePluginPrewarmPolicyCommand({ kind: "resume", request })).rejects.toThrow("request mismatch");
+    await expect(executePluginPrewarmPolicyCommand({ kind: "begin", request })).rejects.toThrow("request mismatch");
   }
   vi.mocked(serviceClient.request).mockResolvedValueOnce(false);
-  await expect(executePluginPrewarmPolicyCommand({ kind: "forget", request })).rejects.toThrow("expected null");
+  await expect(executePluginPrewarmPolicyCommand({ kind: "forget", request })).rejects.toThrow("continuation response");
   expect(serviceClient.request).toHaveBeenCalledTimes(9);
 });
 

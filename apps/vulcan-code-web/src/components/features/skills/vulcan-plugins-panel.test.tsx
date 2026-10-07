@@ -3,6 +3,8 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formatMessage, readLocaleMessage } from "@/i18n";
+import type { PluginPendingOperation } from "@/service/plugin-pending-operations-service";
+import type { PluginUninstallStatus } from "@/service/plugin-uninstall-contract";
 import type { PluginSummary } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel";
@@ -27,6 +29,10 @@ let host: HTMLDivElement;
 // en resolves the actual English copy for key, filling the fixture's display name.
 // en 解析 key 的实际英文文案，并填入夹具显示名称。
 const en = (key: import("@/i18n").TranslationKey) => formatMessage(readLocaleMessage("en-US", key), { name: plugin.name });
+// pendingUninstall lists one retained uninstall as the registry declares it, offering only an unacknowledged resume.
+// pendingUninstall 按登记表声明列出单个保留卸载，仅提供无需确认的继续。
+const pendingUninstall = (detail: PluginUninstallStatus): PluginPendingOperation => ({ kind: "uninstall", operationId: detail.requestId,
+  pluginId: detail.pluginId, actions: [{ action: "resume", requiresAcknowledgement: false }], detail });
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   // scrollIntoView is a browser API absent from jsdom; the usage view calls it when a selection changes.
@@ -43,7 +49,7 @@ it("shows Playwright MCP and optional Core browser readiness independently", asy
   await act(async () => root.render(<VulcanPluginsPanel plugins={[browserPlugin]} actions={{
     onPluginEnvironmentReady: async () => true,
     onPluginEnvironmentInstallStatusForPlugin: async () => null,
-    onReadPluginUninstallRequests: async () => [],
+    onReadPluginPendingOperations: async () => [],
   } as unknown as SkillActionProps} />));
   expect(host.textContent).toContain(formatMessage(readLocaleMessage("en-US", "skills.plugins.playwrightStatus"), {
     status: readLocaleMessage("en-US", "skills.plugins.playwrightReady"),
@@ -58,7 +64,7 @@ it("requires shared confirmation and discovers the original after uninstall fail
     requiresExternalEffectsAcknowledgement: false };
   // read observes the registry on mount and then the actual retained original after failure.
   // read 在挂载时观测注册表，然后在失败后观测实际保留原实例。
-  const read = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([original]);
+  const read = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([pendingUninstall(original)]);
   // resume completes only the captured original UUID, never the ordinary uninstall entry.
   // resume 仅完成捕获原 UUID，绝不调用普通卸载入口。
   const resume = vi.fn().mockResolvedValue(undefined);
@@ -66,7 +72,7 @@ it("requires shared confirmation and discovers the original after uninstall fail
   // uninstall 独立于保留请求观测报告前台失败。
   const uninstall = vi.fn().mockRejectedValueOnce(new Error("busy runtime")).mockResolvedValue(undefined);
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onUninstallUserPlugin: uninstall,
-    onReadPluginUninstallRequests: read, onResumePluginUninstallRequest: resume,
+    onReadPluginPendingOperations: read, onContinuePluginPendingOperation: resume,
     onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')!.click());
   expect(uninstall).not.toHaveBeenCalled();
@@ -97,7 +103,7 @@ it("requires shared confirmation and discovers the original after uninstall fail
   // finalConfirm 属于原请求确认门户。
   const finalConfirm = [...document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")].find((button) => button.textContent === "Confirm")!;
   await act(async () => finalConfirm.click());
-  expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
+  expect(resume).toHaveBeenCalledExactlyOnceWith({ kind: "uninstall", operationId: original.requestId, pluginId: plugin.id, action: "resume", acknowledgeExternalEffects: false });
   expect(uninstall).toHaveBeenCalledTimes(1);
 });
 
@@ -113,7 +119,7 @@ it.each(["empty", "failed"] as const)("shows an initial no-ID uninstall result a
   if (outcome === "empty") read.mockResolvedValue([]);
   else read.mockRejectedValue(new Error("query unavailable"));
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onUninstallUserPlugin: uninstall,
-    onReadPluginUninstallRequests: read, onPluginEnvironmentReady: async () => true,
+    onReadPluginPendingOperations: read, onPluginEnvironmentReady: async () => true,
     onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Uninstall user plugin"]')!.click());
   // confirm is the ordinary uninstall confirmation, selected by its current semantic text.
@@ -130,7 +136,7 @@ it.each(["empty", "failed"] as const)("shows an initial no-ID uninstall result a
 it("shows a lifecycle failure and clears it when the same action succeeds", async () => {
   const toggle = vi.fn().mockRejectedValueOnce(new Error("activation failed")).mockResolvedValue(undefined);
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{ onSetVulcanPluginEnabled: toggle,
-    onReadPluginUninstallRequests: async () => [], onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
+    onReadPluginPendingOperations: async () => [], onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
   const control = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
   await act(async () => control.click());
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("activation failed");
@@ -153,7 +159,7 @@ it("keeps enable unavailable until the explicit environment install succeeds", a
   const toggle = vi.fn().mockResolvedValue(undefined);
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
     onPluginEnvironmentReady: async () => ready,
-    onReadPluginUninstallRequests: async () => [],
+    onReadPluginPendingOperations: async () => [],
     onPluginEnvironmentInstallStatusForPlugin: async () => null,
     onStartPluginEnvironmentInstall: start,
     onPluginEnvironmentInstallStatus: status,
@@ -187,7 +193,7 @@ it("resumes a Core-owned install task after the panel mounts", async () => {
   const latest = vi.fn().mockResolvedValue({ taskId: "foreign-1", pluginId: "fixture", generation: "generation-1", state: "failed", stage: "failed", error: "registry unavailable" });
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
     onPluginEnvironmentReady: async () => false,
-    onReadPluginUninstallRequests: async () => [],
+    onReadPluginPendingOperations: async () => [],
     onPluginEnvironmentInstallStatusForPlugin: latest,
   } as unknown as SkillActionProps} />));
   expect(latest).toHaveBeenCalledWith("fixture");
@@ -210,7 +216,7 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   const resume = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
   // read removes the original only after the foreground response is acknowledged.
   // read 仅在前台响应已确认之后移除原实例。
-  const read = vi.fn().mockResolvedValue([original]);
+  const read = vi.fn().mockResolvedValue([pendingUninstall(original)]);
   // toggle and uninstall observe ordinary actions, which must never dispatch during continuation.
   // toggle 及 uninstall 观测普通动作，继续期间绝不应派发。
   const toggle = vi.fn();
@@ -218,7 +224,7 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   // uninstall 独立于原继续记录替代入口调用。
   const uninstall = vi.fn();
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={{
-    onReadPluginUninstallRequests: read, onResumePluginUninstallRequest: resume,
+    onReadPluginPendingOperations: read, onContinuePluginPendingOperation: resume,
     onUninstallUserPlugin: uninstall, onSetVulcanPluginEnabled: toggle,
     onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null,
   } as unknown as SkillActionProps} />));
@@ -251,7 +257,7 @@ it("holds ordinary controls closed during exact uninstall continuation without r
   read.mockResolvedValue([]); await act(async () => finish());
   expect(control.disabled).toBe(false); expect(remove.disabled).toBe(false);
   expect(host.querySelector("[data-attention='plugin-maintenance']")).toBeNull();
-  expect(resume).toHaveBeenCalledExactlyOnceWith(plugin.id, original.requestId, false);
+  expect(resume).toHaveBeenCalledExactlyOnceWith({ kind: "uninstall", operationId: original.requestId, pluginId: plugin.id, action: "resume", acknowledgeExternalEffects: false });
 });
 
 it("lists retained runtime errors newest first behind a folded disclosure", async () => {
@@ -262,7 +268,7 @@ it("lists retained runtime errors newest first behind a folded disclosure", asyn
     { atUnixMs: 2_000, kind: "action", name: "refresh", message: "newer action failure" },
   ] };
   await act(async () => root.render(<VulcanPluginsPanel plugins={[failingPlugin]} actions={{
-    onReadPluginUninstallRequests: async () => [], onPluginEnvironmentReady: async () => true,
+    onReadPluginPendingOperations: async () => [], onPluginEnvironmentReady: async () => true,
     onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps} />));
   const label = formatMessage(readLocaleMessage("en-US", "skills.plugins.runtimeErrors"), { count: 2 });
   const trigger = [...host.querySelectorAll("button")].find((button) => button.textContent === label)!;
@@ -290,7 +296,7 @@ it("offers a confirmed configuration reset only for plugins that declare configu
   // resetItem 按当前标签在菜单门户中查找重置入口。
   const resetItem = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
     .find((item) => item.textContent === en("skills.plugins.resetConfiguration"));
-  const actions = { onResetVulcanPluginConfig: reset, onReadPluginUninstallRequests: async () => [],
+  const actions = { onResetVulcanPluginConfig: reset, onReadPluginPendingOperations: async () => [],
     onPluginEnvironmentReady: async () => true, onPluginEnvironmentInstallStatusForPlugin: async () => null } as unknown as SkillActionProps;
   await act(async () => root.render(<VulcanPluginsPanel plugins={[plugin]} actions={actions} />));
   await openMenu();

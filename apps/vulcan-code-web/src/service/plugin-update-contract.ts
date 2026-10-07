@@ -1,6 +1,3 @@
-import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
-import type { LuaSkillsCatalogUpdate } from "@/types";
-
 // LocalPluginUpdateEffect exposes one durable original operation without callback data.
 // LocalPluginUpdateEffect 公开单个持久原操作，不包含回调数据。
 export interface LocalPluginUpdateEffect {
@@ -12,8 +9,8 @@ export interface LocalPluginUpdateEffect {
   phase: "started" | "succeeded" | "observation_failed";
 }
 
-// LocalPluginUpdateStatus is the sanitized original-request projection owned by the service coordinator.
-// LocalPluginUpdateStatus 是服务协调器持有的脱敏原请求投影。
+// LocalPluginUpdateStatus is the sanitized original-request projection carried by a pending update operation.
+// LocalPluginUpdateStatus 是待处理更新操作携带的脱敏原请求投影。
 export interface LocalPluginUpdateStatus {
   // requestId is the original canonical UUID; recovery never allocates a replacement.
   // requestId 为原规范 UUID；恢复绝不分配替代标识。
@@ -103,46 +100,4 @@ export function parseLocalPluginUpdateStatus(value: unknown, pluginId: string): 
     candidate: { plugin_id: pluginId, generation_id: candidate.generation_id, version: candidate.version, content_fingerprint: candidate.content_fingerprint },
     activationRevision: record.activationRevision, installation: record.installation, effects,
   };
-}
-
-// readLocalPluginUpdates reads every original request for pluginId without creating or recovering work.
-// readLocalPluginUpdates 读取 pluginId 的全部原请求，不创建或恢复工作。
-// Returns validated records; a failed or mixed-owner response must not authorize UI actions.
-// 返回已校验记录；失败或混合所有者响应不得授权界面操作。
-export async function readLocalPluginUpdates(pluginId: string): Promise<LocalPluginUpdateStatus[]> {
-  if (!hasServiceRuntime()) throw new Error("Plugin update recovery requires an attached Core service.");
-  // response belongs to this single explicit namespace, independent from the current public package version.
-  // response 属于此单个明确命名空间，独立于当前公开插件包版本。
-  const response = await serviceClient.request<unknown>("service_local_plugin_update_requests", { pluginId });
-  if (!Array.isArray(response)) throw new Error("Invalid plugin update request list.");
-  // Duplicate identities cannot represent two independent original requests or two independently actionable rows.
-  // 重复身份不能表示两个独立原请求或两行可独立操作条目。
-  const records = response.map((record) => parseLocalPluginUpdateStatus(record, pluginId));
-  if (new Set(records.map((record) => record.requestId)).size !== records.length) throw new Error("Duplicate plugin update request identity.");
-  return records;
-}
-
-// resumeLocalPluginUpdate continues the retained service-owned request or completes its committed original route.
-// resumeLocalPluginUpdate 继续保留的服务自有请求，或补齐已提交原路由。
-// Exact pluginId/requestId identify the request; returns the service's revisioned catalog update.
-// 精确 pluginId/requestId 标识请求；返回服务带修订的目录更新。
-export async function resumeLocalPluginUpdate(pluginId: string, requestId: string): Promise<LuaSkillsCatalogUpdate> {
-  if (!hasServiceRuntime()) throw new Error("Plugin update recovery requires an attached Core service.");
-  return serviceClient.request<LuaSkillsCatalogUpdate>("service_resume_local_plugin_update", { pluginId, requestId });
-}
-
-// abortLocalPluginUpdate abandons an exact unpublished request after explicit acknowledgement of retained external effects.
-// abortLocalPluginUpdate 在明确确认外部副作用仍保留后，放弃精确尚未发布请求。
-// Parameters preserve the reviewed request and acknowledgement; returns validated durable status, not a rollback claim.
-// 参数保留已审阅请求及确认；返回已校验持久状态，不声称回滚。
-export async function abortLocalPluginUpdate(pluginId: string, requestId: string, acknowledgeExternalEffects: boolean): Promise<LocalPluginUpdateStatus> {
-  if (!hasServiceRuntime()) throw new Error("Plugin update recovery requires an attached Core service.");
-  // The acknowledgement authorizes this original request only and is never inferred from phase.
-  // 确认仅授权此原请求，绝不从阶段推断。
-  const response = parseLocalPluginUpdateStatus(await serviceClient.request<unknown>("service_abort_local_plugin_update", {
-    pluginId, requestId, acknowledgeExternalEffects,
-  }), pluginId);
-  if (response.requestId !== requestId) throw new Error("Plugin update acknowledgement belongs to another request.");
-  if (response.phase !== "aborted") throw new Error("Plugin update abandonment was not confirmed.");
-  return response;
 }

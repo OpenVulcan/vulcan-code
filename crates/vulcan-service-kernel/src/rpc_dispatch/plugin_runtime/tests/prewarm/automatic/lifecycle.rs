@@ -17,8 +17,8 @@ impl Fixture {
             "expectedRevision": status["revision"], "rules": [{"pluginId":"control-plugin", "toolId":"control_ping", "targetIdle":1}]
         }})).await.expect("explicit rule");
         self.rpc(
-            "service_forget_plugin_prewarm_policy_update",
-            json!({"updateId":receipt["request"]["updateId"]}),
+            "service_continue_plugin_pending_operation",
+            json!({"kind": "prewarmPolicy", "operationId": receipt["request"]["updateId"], "action": "forget"}),
         )
         .await
         .expect("acknowledge policy");

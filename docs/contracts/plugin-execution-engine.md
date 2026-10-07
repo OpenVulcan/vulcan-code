@@ -1226,10 +1226,11 @@ Action 与探测分别在 `ui_action`、`activation_probe` 用途容量下使用
 已完成步骤；只有实际完整发布、全部回收、策略提交及工作台投影确认后才退休同强槽。所有可失败协调
 锁先成功取得，再释放原物理文件与强预约；执行器引用仍存活时也必须确实完成释放。
 
-`service_local_plugin_uninstall_requests` 无参数读取全部实际保留原请求，脱敏字段仅为 `requestId`、
+保留原请求经待处理操作登记表以 `uninstall` 类别列出与继续，见
+[`plugin-pending-operations.md`](plugin-pending-operations.md)。其 `detail` 脱敏字段仅为 `requestId`、
 `pluginId`、`phase`、`requiresExternalEffectsAcknowledgement`。阶段为 `executing`、`reserved`、
 `lifecycle`、`publishing`、`collection`；它们是资源借用及待办步骤观察，不是资源退役权威。
-`service_resume_local_plugin_uninstall` 按原插件及 UUID 查相同强槽，确认参数默认假；缺失原槽明确失败，
+继续按原插件及 UUID 查相同强槽，确认参数默认假；缺失原槽明确失败，
 不从磁盘重建。成功返回既有目录更新；界面空查询、请求缺失或错误字符串不能证明已完成。
 
 共享工作台投影使用临时类型明确的实际卸载借用，在服务锁内核验相同原槽、真实 Full、目录和首次

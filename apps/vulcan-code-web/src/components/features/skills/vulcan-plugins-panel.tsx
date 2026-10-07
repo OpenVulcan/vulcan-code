@@ -15,7 +15,7 @@ import { formatMessage, useI18n } from "@/i18n";
 import { CoreBrowserRuntimeControls } from "@/components/features/browser/core-browser-runtime-controls";
 import { ALL_PLUGINS_SCOPE, PluginMaintenanceDrawer, usePluginMaintenanceDrawer } from "./plugin-maintenance-drawer";
 import { PageEmptyState, PageNotice } from "@/components/page";
-import type { PluginUninstallUncertainty } from "./plugin-uninstall-recovery-controls";
+import type { PluginUninstallUncertainty } from "./plugin-recovery-center";
 import type { PluginRuntimeErrorRecord, PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
@@ -562,9 +562,9 @@ export function VulcanPluginsPanel(props: {
       try {
         // matching selects this dispatched namespace without inferring success from an empty list.
         // matching 选择此已派发命名空间，不从空列表推断成功。
-        const matching = (await props.actions.onReadPluginUninstallRequests()).filter((record) => record.pluginId === plugin.id);
+        const matching = (await props.actions.onReadPluginPendingOperations()).filter((operation) => operation.kind === "uninstall" && operation.pluginId === plugin.id);
         if (matching.length > 1) throw new Error(t("pluginRecovery.identityMismatch"));
-        if (matching.length === 1) requestId = matching[0].requestId;
+        if (matching.length === 1) requestId = matching[0].operationId;
       } catch (observationError) { failures.push(String(observationError)); }
       setUninstallUncertainty({ pluginId: plugin.id, requestId });
       setInstallError(failures.join("\n"));

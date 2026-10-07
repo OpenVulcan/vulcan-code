@@ -8,7 +8,8 @@ import type { PluginSummary } from "@/types";
 import type { PluginAutomaticPrewarmRule, PluginPrewarmPolicyPhase } from "@/types/plugin-prewarm-policy";
 import { PageEmptyState, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
 import { TechnicalDetails } from "./plugin-maintenance-section";
-import { policyReceiptAllows, usePluginPrewarmPolicy } from "./use-plugin-prewarm-policy";
+import { prewarmActionLabels, prewarmReceiptLabels } from "./plugin-policy-labels";
+import { usePluginPrewarmPolicy } from "./use-plugin-prewarm-policy";
 
 // RuleDraft keeps editable text separate from the validated wire count and stable row identity.
 // RuleDraft 将可编辑文本与已校验线协议数量及稳定行身份分离。
@@ -49,13 +50,6 @@ function draftRules(rows: RuleDraft[]): PluginAutomaticPrewarmRule[] | null {
   return rules;
 }
 
-// receiptLabels explains the last rule publication in plain words.
-// receiptLabels 以平实语言说明上一次规则发布。
-const receiptLabels: Record<PluginPrewarmPolicyPhase, TranslationKey> = {
-  prepared: "pluginPrewarmPolicy.receipt.prepared", publishing: "pluginPrewarmPolicy.receipt.publishing",
-  committed: "pluginPrewarmPolicy.receipt.committed", cancelled: "pluginPrewarmPolicy.receipt.cancelled",
-  interrupted: "pluginPrewarmPolicy.receipt.interrupted",
-};
 
 // PluginPrewarmPolicyControls lists the automatic prewarm rules and edits them as one full replacement.
 // PluginPrewarmPolicyControls 列出自动预热规则，并以整体替换方式编辑。
@@ -64,7 +58,7 @@ const receiptLabels: Record<PluginPrewarmPolicyPhase, TranslationKey> = {
 export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] }) {
   const management = usePluginPrewarmPolicy();
   const { observation, busy } = management;
-  const { status, fresh, pending, acknowledged, error } = observation;
+  const { status, receiptActions, fresh, pending, acknowledged, error } = observation;
   const { t } = useI18n();
   const prefix = React.useId();
   const [draft, setDraft] = React.useState<PolicyDraft | null>(null);
@@ -120,15 +114,15 @@ export function PluginPrewarmPolicyControls(props: { plugins: PluginSummary[] })
       <p>{t("pluginPrewarmPolicy.unknown")}</p>
       <TechnicalDetails entries={[]} extra={<pre>{JSON.stringify(pending, null, 2)}</pre>} />
     </PageNotice>}
-    {receipt && <PageNotice actions={<>
-      {policyReceiptAllows(receipt, "cancel") && <Button disabled={busy || !fresh || pending !== null} onClick={() => void management.execute({ kind: "cancel", request: receipt.request })}
-        size="sm" type="button" variant="ghost">{t("pluginPrewarmPolicy.cancel")}</Button>}
-      {((receipt.phase !== "committed" && receipt.phase !== "cancelled") || receipt.persistenceError !== undefined) && <Button disabled={busy || !fresh || pending !== null}
-        onClick={() => void management.execute({ kind: "resume", request: receipt.request })} size="sm" type="button">{t("pluginPrewarmPolicy.resume")}</Button>}
-      {policyReceiptAllows(receipt, "forget") && <Button disabled={busy || !fresh || pending !== null} onClick={() => void management.execute({ kind: "forget", request: receipt.request })}
-        size="sm" type="button" variant="outline">{t("pluginPrewarmPolicy.forget")}</Button>}
-    </>} tone={receipt.phase === "committed" ? "success" : receipt.phase === "interrupted" ? "error" : receipt.phase === "cancelled" ? "info" : "warning"}>
-      <p>{t(receiptLabels[receipt.phase])}</p>
+    {/* Offers belong to the fresh status receipt only; an acknowledged begin shown after a failed read offers nothing. */}
+    {/* 可用动作仅属于最新状态回执；读取失败后显示的已确认发布不提供动作。 */}
+    {receipt && <PageNotice actions={receipt === status?.update && receiptActions.map(({ action }) => {
+      if (action === "abort") return null;
+      const [label, variant] = prewarmActionLabels[action];
+      return <Button disabled={busy || !fresh || pending !== null} key={action} onClick={() => void management.execute({ kind: action, request: receipt.request })}
+        size="sm" type="button" variant={variant}>{t(label)}</Button>;
+    })} tone={receipt.phase === "committed" ? "success" : receipt.phase === "interrupted" ? "error" : receipt.phase === "cancelled" ? "info" : "warning"}>
+      <p>{t(prewarmReceiptLabels[receipt.phase])}</p>
       {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
         extra={<pre>{JSON.stringify(receipt, null, 2)}</pre>} />

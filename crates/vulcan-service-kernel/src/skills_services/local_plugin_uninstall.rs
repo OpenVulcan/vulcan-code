@@ -165,6 +165,33 @@ pub(crate) struct LocalPluginUninstallStatus {
     requires_external_effects_acknowledgement: bool,
 }
 
+impl LocalPluginUninstallStatus {
+    /// Exact original request UUID text used as the pending-operation identity.
+    /// 用作待处理操作身份的精确原请求 UUID 文本。
+    pub(super) fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    /// Namespace captured before any callback.
+    /// 任何回调之前捕获的命名空间。
+    pub(super) fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    /// Offer continuation unless an executor currently borrows the original; acknowledgement follows the retained failure.
+    /// 除非执行器正借用原实例，否则提供继续操作；确认要求取决于保留的失败。
+    pub(super) fn pending_actions(&self) -> Vec<super::plugin_pending_operations::PluginPendingActionOffer> {
+        use super::plugin_pending_operations::{PluginPendingAction, PluginPendingActionOffer};
+        if self.phase == LocalPluginUninstallPhase::Executing {
+            return Vec::new();
+        }
+        vec![PluginPendingActionOffer {
+            action: PluginPendingAction::Resume,
+            requires_acknowledgement: self.requires_external_effects_acknowledgement,
+        }]
+    }
+}
+
 /// Reserve before effects; app/state own publication and plugin_id selects one disabled actual source.
 /// 在副作用之前预留；app／state 拥有发布，plugin_id 选择单个停用实际来源。
 /// Returns the existing catalog response only after actual terminal collection and projection.

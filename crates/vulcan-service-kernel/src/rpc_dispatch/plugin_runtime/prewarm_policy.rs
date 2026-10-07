@@ -48,33 +48,6 @@ pub(super) async fn dispatch(
                 .await,
             )
         }
-        "service_resume_plugin_prewarm_policy_update" => {
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.resume_prewarm_policy_update(&request.update_id)
-                })
-                .await,
-            )
-        }
-        "service_cancel_plugin_prewarm_policy_update" => {
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.cancel_prewarm_policy_update(&request.update_id)
-                })
-                .await,
-            )
-        }
-        "service_forget_plugin_prewarm_policy_update" => {
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.forget_prewarm_policy_update(&request.update_id)
-                })
-                .await,
-            )
-        }
         _ => return prewarm::dispatch(state, method, params).await,
     };
     Ok(ServiceRpcDispatch::Handled(result))

@@ -145,6 +145,14 @@ pub struct VulcanPluginCapacityPolicyRecord {
     pub persistence_error: Option<String>,
 }
 
+impl VulcanPluginCapacityPolicyRecord {
+    /// Return whether this receipt is terminal, the sole condition under which it may be forgotten.
+    /// 返回此回执是否为终态，这是允许遗忘它的唯一条件。
+    pub fn is_acknowledgeable(&self) -> bool {
+        self.phase.is_terminal()
+    }
+}
+
 /// Version-six container commits settings and one mutually exclusive policy receipt in one replacement.
 /// 第六版容器通过一次替换提交设置及单个互斥策略回执。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { samePluginPrewarmPolicyRequest } from "@/service/plugin-prewarm-policy-contract";
-import { executePluginPrewarmPolicyCommand, readPluginPrewarmPolicyStatus, type PluginPrewarmPolicyCommand } from "@/service/plugin-prewarm-policy-service";
+import type { PluginPendingActionOffer } from "@/service/plugin-pending-operations-service";
+import { executePluginPrewarmPolicyCommand, readPluginPrewarmPolicyObservation, type PluginPrewarmPolicyCommand } from "@/service/plugin-prewarm-policy-service";
 import type { PluginPrewarmPolicyReceipt, PluginPrewarmPolicyStatus } from "@/types/plugin-prewarm-policy";
 
 // PolicyObservation separates a complete read from acknowledged writes and unresolved original intent.
@@ -9,6 +10,9 @@ interface PolicyObservation {
   // status is the last complete atomic host projection; failed reads preserve it as stale evidence.
   // status 为最后完整原子宿主投影；读取失败时保留为陈旧证据。
   status: PluginPrewarmPolicyStatus | null;
+  // receiptActions are the service-declared continuations of status.update from the same complete read.
+  // receiptActions 是同一完整读取中 status.update 的服务端声明继续方式。
+  receiptActions: PluginPendingActionOffer[];
   // fresh grants eligibility only after a successful complete read.
   // fresh 仅在完整读取成功后授予操作资格。
   fresh: boolean;
@@ -23,20 +27,12 @@ interface PolicyObservation {
   error: string;
 }
 
-// policyReceiptAllows returns whether the host checkpoint permits an explicit management action.
-// policyReceiptAllows 返回宿主检查点是否允许明确管理操作。
-export function policyReceiptAllows(receipt: PluginPrewarmPolicyReceipt, kind: Exclude<PluginPrewarmPolicyCommand["kind"], "begin">): boolean {
-  if (kind === "resume") return true;
-  if (kind === "cancel") return receipt.phase === "prepared";
-  return ["committed", "cancelled", "interrupted"].includes(receipt.phase) && receipt.persistenceError === undefined;
-}
-
 // usePluginPrewarmPolicy returns explicit policy controls; mounting never reads, writes, or initializes Lua.
 // usePluginPrewarmPolicy 返回明确策略控件；挂载绝不读取、写入或初始化 Lua。
 export function usePluginPrewarmPolicy() {
   // observation and retained share one snapshot; the ref fences same-tick handlers before React renders.
   // observation 与 retained 共用快照；引用在 React 渲染前隔离同一时刻处理器。
-  const [observation, setObservation] = React.useState<PolicyObservation>({ status: null, fresh: false, pending: null, acknowledged: null, error: "" });
+  const [observation, setObservation] = React.useState<PolicyObservation>({ status: null, receiptActions: [], fresh: false, pending: null, acknowledged: null, error: "" });
   const retained = React.useRef(observation);
   const [busy, setBusy] = React.useState(false);
   const busyRef = React.useRef(false);
@@ -67,8 +63,8 @@ export function usePluginPrewarmPolicy() {
     try {
       // status replaces only the atomic host projection; uncertainty remains until explicit acknowledgement.
       // status 仅替换原子宿主投影；不确定性保留至明确确认。
-      const status = await readPluginPrewarmPolicyStatus();
-      if (mounted.current && token === epoch.current) retain({ ...original, status, fresh: true, error: "" });
+      const { status, receiptActions } = await readPluginPrewarmPolicyObservation();
+      if (mounted.current && token === epoch.current) retain({ ...original, status, receiptActions, fresh: true, error: "" });
     } catch (reason) {
       if (mounted.current && token === epoch.current) retain({ ...original, fresh: false, error: String(reason) });
     } finally {
@@ -88,7 +84,7 @@ export function usePluginPrewarmPolicy() {
       if (previous.status.update || previous.status.capacityUpdateRetained
         || previous.status.runtimeId !== command.request.runtimeId || previous.status.revision !== command.request.expectedRevision) return;
     } else if (!previous.status.update || !samePluginPrewarmPolicyRequest(previous.status.update.request, command.request)
-      || !policyReceiptAllows(previous.status.update, command.kind)) return;
+      || !previous.receiptActions.some((offer) => offer.action === command.kind)) return;
     // original copies caller-owned mutable arrays so a later editor change cannot rewrite uncertain intent.
     // original 复制调用方可变数组，防止后续编辑重写未决意图。
     const original = { ...command, request: { ...command.request, rules: command.request.rules.map((rule) => ({ ...rule })) } };
@@ -104,8 +100,8 @@ export function usePluginPrewarmPolicy() {
       const receipt = await executePluginPrewarmPolicyCommand(original);
       if (!mounted.current || token !== epoch.current) return;
       next = { ...next, pending: null, acknowledged: receipt }; retain(next);
-      const status = await readPluginPrewarmPolicyStatus();
-      if (mounted.current && token === epoch.current) retain({ ...next, status, fresh: true });
+      const { status, receiptActions } = await readPluginPrewarmPolicyObservation();
+      if (mounted.current && token === epoch.current) retain({ ...next, status, receiptActions, fresh: true });
     } catch (reason) {
       if (mounted.current && token === epoch.current) retain({ ...next, error: String(reason) });
     } finally {

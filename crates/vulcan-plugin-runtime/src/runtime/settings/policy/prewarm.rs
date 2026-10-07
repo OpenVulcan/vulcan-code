@@ -101,6 +101,14 @@ pub struct VulcanPluginPrewarmPolicyRecord {
     pub persistence_error: Option<String>,
 }
 
+impl VulcanPluginPrewarmPolicyRecord {
+    /// Return whether this receipt is durably terminal, the sole condition under which it may be forgotten.
+    /// 返回此回执是否已持久终态，这是允许遗忘它的唯一条件。
+    pub fn is_acknowledgeable(&self) -> bool {
+        self.phase.is_terminal() && self.persistence_error.is_none()
+    }
+}
+
 /// One atomic administrative view exposes live policy and any retained original publication receipt.
 /// 单个原子管理视图暴露活动策略及保留的原发布回执。
 #[derive(Debug, Clone, Serialize)]
@@ -282,7 +290,7 @@ impl PolicyStore {
             .prewarm_update
             .as_ref()
             .ok_or("Prewarm policy receipt is not retained.")?;
-        if !record.phase.is_terminal() || record.persistence_error.is_some() {
+        if !record.is_acknowledgeable() {
             return Err("Prewarm policy receipt is not durably terminal.".into());
         }
         let document = self.prewarm_document(self.settings.clone(), None);

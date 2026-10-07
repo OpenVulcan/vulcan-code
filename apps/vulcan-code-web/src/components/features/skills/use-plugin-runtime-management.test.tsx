@@ -16,7 +16,7 @@ let root: Root;
 let state: ReturnType<typeof usePluginRuntimeManagement>;
 // observation reuses the Rust wire contract, including its globally retained receipt.
 // observation 复用 Rust 线协议契约，包括全局保留回执。
-const observation: PluginRuntimeObservation = { runtime: parsePluginRuntime(wire.runtime), catalog: parseCapacityCatalog(wire.catalog) };
+const observation: PluginRuntimeObservation = { runtime: parsePluginRuntime(wire.runtime), catalog: parseCapacityCatalog(wire.catalog), receiptActions: [] };
 
 // Probe renders a real hook instance and captures its current return value for behavioral assertions.
 // Probe 渲染真实钩子实例，捕获当前返回值用于行为断言。
@@ -61,7 +61,7 @@ it("ignores out-of-order reads and refuses same-tick writes during refresh", asy
   await act(async () => root.render(<Probe />));
   await act(async () => state.refresh());
   expect(state.observation).toEqual(observation);
-  await act(async () => { oldRead.resolve({ runtime: null, catalog: null }); });
+  await act(async () => { oldRead.resolve({ runtime: null, catalog: null, receiptActions: [] }); });
   expect(state.observation).toEqual(observation);
   // nextRead revokes eligibility before React has updated the disabled controls.
   // nextRead 在 React 更新禁用控件之前撤销资格。

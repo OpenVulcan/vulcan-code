@@ -301,10 +301,7 @@ pub(in crate::skills_services) async fn failed_update_with_fixture(
 async fn assert_owner(state: &SharedServiceBridgeState, request: uuid::Uuid, expected: bool) {
     // Read-only service status remains independent of the slot's asynchronous work and private fields.
     // 只读服务状态独立于槽的异步工作及私有字段。
-    let rows = crate::skills_services::service_local_plugin_update_requests(
-        Arc::clone(state),
-        String::from("published-service"),
-    )
+    let rows = local_plugin_update_records(Arc::clone(state))
     .await
     .expect("actual service update status");
     // Serialize the declared camelCase DTO instead of accessing inaccessible ownership implementation fields.

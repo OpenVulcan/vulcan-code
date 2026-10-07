@@ -26,10 +26,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_register_plugin_capacity",
     "service_control_plugin_capacity",
     "service_begin_plugin_capacity_policy_update",
-    "service_plugin_capacity_policy_update_status",
-    "service_resume_plugin_capacity_policy_update",
-    "service_cancel_plugin_capacity_policy_update",
-    "service_forget_plugin_capacity_policy_update",
     "service_plugin_prewarm_targets",
     "service_prepare_plugin_prewarm",
     "service_plugin_prewarm_status",
@@ -39,9 +35,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_forget_plugin_prewarm",
     "service_plugin_prewarm_policy_status",
     "service_begin_plugin_prewarm_policy_update",
-    "service_resume_plugin_prewarm_policy_update",
-    "service_cancel_plugin_prewarm_policy_update",
-    "service_forget_plugin_prewarm_policy_update",
 ];
 
 /// Empty reads reject accidental mutation parameters instead of silently ignoring them.
@@ -111,16 +104,6 @@ fn require_diagnostic_names(runtime_id: &str, plugin_id: &str) -> Result<(), Web
         ));
     }
     Ok(())
-}
-
-/// Durable UUID selects the same transaction even after an explicit process restart recovery.
-/// 持久 UUID 即使在明确进程重启恢复后也选择同一事务。
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateParams {
-    /// Exact original transaction identity is never replaced by a latest-record lookup.
-    /// 精确原始事务身份绝不由最新记录查找替代。
-    update_id: String,
 }
 
 /// Decode params using its exact serde contract; return a canonical parameter error before accessing state.
@@ -261,50 +244,6 @@ pub(super) async fn dispatch(
             rpc_json_result(
                 run_plugin_runtime_control(state, move |runtime| {
                     runtime.begin_capacity_policy_update(request)
-                })
-                .await,
-            )
-        }
-        "service_plugin_capacity_policy_update_status" => {
-            // Lookup never acquires the settings writer or advances the record.
-            // 查找绝不取得设置写入租约或推进记录。
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.capacity_policy_update(&request.update_id)
-                })
-                .await,
-            )
-        }
-        "service_resume_plugin_capacity_policy_update" => {
-            // Recovery reuses the retained original checkpoint and never refreshes its predecessor.
-            // 恢复复用保留原始检查点，绝不刷新其前驱。
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.resume_capacity_policy_update(&request.update_id)
-                })
-                .await,
-            )
-        }
-        "service_cancel_plugin_capacity_policy_update" => {
-            // Cancellation is an explicit manager operation, not inferred from a disconnected HTTP observer.
-            // 取消为明确管理器操作，不从 HTTP 观测者断线推断。
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.cancel_capacity_policy_update(&request.update_id)
-                })
-                .await,
-            )
-        }
-        "service_forget_plugin_capacity_policy_update" => {
-            // Only a terminal original receipt may be durably acknowledged.
-            // 仅终态原回执可以被持久确认。
-            let request: UpdateParams = parse_params(params)?;
-            rpc_json_result(
-                run_plugin_runtime_control(state, move |runtime| {
-                    runtime.forget_capacity_policy_update(&request.update_id)
                 })
                 .await,
             )

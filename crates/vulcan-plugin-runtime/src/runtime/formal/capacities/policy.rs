@@ -304,7 +304,7 @@ impl VulcanPluginRuntimeManager {
         // The receipt stays in memory if durable removal fails.
         // 持久移除失败时，回执继续保留在内存。
         let mut registry = owner.capacities.lock().map_err(|_| capacity_lock_error())?;
-        if !require_update(&registry, update_id)?.phase.is_terminal() {
+        if !require_update(&registry, update_id)?.is_acknowledgeable() {
             return Err(VulcanPluginRuntimeError::new(
                 "Capacity policy update is not terminal.",
             ));

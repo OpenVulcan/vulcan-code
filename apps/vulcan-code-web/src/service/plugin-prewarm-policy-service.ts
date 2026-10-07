@@ -1,4 +1,5 @@
 import { hasServiceRuntime, serviceClient } from "./webui-service-runtime";
+import { continuePluginPendingOperation, pendingOffers, readPluginPendingOperations, type PluginPendingActionOffer } from "./plugin-pending-operations-service";
 import { parsePluginPrewarmPolicyReceipt, parsePluginPrewarmPolicyStatus, samePluginPrewarmPolicyRequest } from "./plugin-prewarm-policy-contract";
 import type { PluginPrewarmPolicyReceipt, PluginPrewarmPolicyStatus, PluginPrewarmPolicyUpdate } from "@/types/plugin-prewarm-policy";
 
@@ -26,24 +27,42 @@ export async function readPluginPrewarmPolicyStatus(): Promise<PluginPrewarmPoli
   return parsePluginPrewarmPolicyStatus(await serviceClient.request<unknown>("service_plugin_prewarm_policy_status", {}));
 }
 
-// executePluginPrewarmPolicyCommand sends one explicit original command; returns validated receipt or null on forget.
-// executePluginPrewarmPolicyCommand 发送单个明确原命令；返回已校验回执，遗忘时返回空值。
+// PluginPrewarmPolicyObservation pairs the policy status with the service-declared continuations of its receipt.
+// PluginPrewarmPolicyObservation 组合策略状态及其回执的服务端声明继续方式。
+export interface PluginPrewarmPolicyObservation {
+  // status is the atomic host projection.
+  // status 为原子宿主投影。
+  status: PluginPrewarmPolicyStatus;
+  // receiptActions describe status.update in the same phase; empty without a receipt.
+  // receiptActions 描述同一阶段的 status.update；无回执时为空。
+  receiptActions: PluginPendingActionOffer[];
+}
+
+// readPluginPrewarmPolicyObservation reads status and the unified registry together; it performs no write.
+// readPluginPrewarmPolicyObservation 同时读取状态与统一登记表；不执行写入。
+export async function readPluginPrewarmPolicyObservation(): Promise<PluginPrewarmPolicyObservation> {
+  const [status, operations] = await Promise.all([readPluginPrewarmPolicyStatus(), readPluginPendingOperations()]);
+  const receipt = status.update;
+  return { status, receiptActions: receipt === null ? [] : pendingOffers(operations, "prewarmPolicy", receipt.request.updateId, receipt.phase) };
+}
+
+// executePluginPrewarmPolicyCommand sends one explicit original command; returns the validated receipt of begin, otherwise null.
+// executePluginPrewarmPolicyCommand 发送单个明确原命令；begin 返回已校验回执，其余返回空值。
 // Failed transport never implies rollback; the original UUID must be observed before another change.
 // 传输失败绝不表示回滚；另一变更前必须观测原 UUID。
 export async function executePluginPrewarmPolicyCommand(command: PluginPrewarmPolicyCommand): Promise<PluginPrewarmPolicyReceipt | null> {
   requireService();
-  // methods uses exact registered names rather than deriving an unchecked service method.
-  // methods 使用精确注册名称，不推导未经检查的服务方法。
-  const methods = { begin: "service_begin_plugin_prewarm_policy_update", resume: "service_resume_plugin_prewarm_policy_update",
-    cancel: "service_cancel_plugin_prewarm_policy_update", forget: "service_forget_plugin_prewarm_policy_update" } as const;
   const { updateId, runtimeId, expectedRevision } = command.request;
-  const rules = command.request.rules.map(({ pluginId, toolId, targetIdle }) => ({ pluginId, toolId, targetIdle }));
-  const params = command.kind === "begin" ? { request: { updateId, runtimeId, expectedRevision, rules } } : { updateId };
-  const value = await serviceClient.request<unknown>(methods[command.kind], params);
-  if (command.kind === "forget") {
-    if (value !== null) throw new Error("prewarm policy forget: expected null");
+  if (command.kind !== "begin") {
+    // Receipt continuations share the unified pending-operation entry and carry only the original UUID.
+    // 回执继续共用统一待处理操作入口，仅携带原 UUID。
+    if (await continuePluginPendingOperation({ kind: "prewarmPolicy", operationId: updateId, action: command.kind }) !== null) {
+      throw new Error("prewarm policy continuation: unexpected catalog");
+    }
     return null;
   }
+  const rules = command.request.rules.map(({ pluginId, toolId, targetIdle }) => ({ pluginId, toolId, targetIdle }));
+  const value = await serviceClient.request<unknown>("service_begin_plugin_prewarm_policy_update", { request: { updateId, runtimeId, expectedRevision, rules } });
   const receipt = parsePluginPrewarmPolicyReceipt(value);
   if (!samePluginPrewarmPolicyRequest(receipt.request, command.request)) throw new Error("prewarm policy: response request mismatch");
   return receipt;

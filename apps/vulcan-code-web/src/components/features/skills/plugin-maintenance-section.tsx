@@ -14,22 +14,3 @@ export function TechnicalDetails(props: { entries: ReadonlyArray<readonly [strin
     </PageDetails>
   );
 }
-
-// RecoveryReport is what one recovery reader tells its container: still loading, and how many rows it shows.
-// RecoveryReport 是单个恢复读取器告知容器的信息：是否仍在加载，以及显示多少行。
-export interface RecoveryReport {
-  // loading is true until the first read of this reader settles.
-  // loading 在此读取器首次读取完成前为真。
-  loading: boolean;
-  // visible counts rendered rows and notices, so the container can show an all-clear state.
-  // visible 统计已渲染的行与提示，使容器可显示一切正常状态。
-  visible: number;
-}
-
-// useRecoveryReport forwards a reader's report only when it changes, keeping parents free of render loops.
-// useRecoveryReport 仅在报告变化时转发，避免父级渲染循环。
-export function useRecoveryReport(onReport: ((report: RecoveryReport) => void) | undefined, loading: boolean, visible: number): void {
-  const callback = React.useRef(onReport);
-  React.useEffect(() => { callback.current = onReport; });
-  React.useEffect(() => { callback.current?.({ loading, visible }); }, [loading, visible]);
-}

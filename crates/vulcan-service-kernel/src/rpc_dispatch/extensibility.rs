@@ -17,12 +17,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_inspect_local_plugin",
     "service_install_local_plugin",
     "service_update_local_plugin",
-    "service_local_plugin_update_requests",
-    "service_resume_local_plugin_update",
-    "service_abort_local_plugin_update",
     "service_uninstall_user_plugin",
-    "service_local_plugin_uninstall_requests",
-    "service_resume_local_plugin_uninstall",
+    "service_plugin_pending_operations",
+    "service_continue_plugin_pending_operation",
     "service_set_vulcan_plugin_credentials",
     "service_load_plugin_ui_module",
     "service_read_plugin_text_asset",
@@ -152,28 +149,6 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_local_plugin_update_requests" => rpc_json_result(
-            service_local_plugin_update_requests(state, rpc_required_param(params, "pluginId")?)
-                .await,
-        ),
-        "service_resume_local_plugin_update" => rpc_json_result(
-            service_resume_local_plugin_update(
-                app.clone(),
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "requestId")?,
-            )
-            .await,
-        ),
-        "service_abort_local_plugin_update" => rpc_json_result(
-            service_abort_local_plugin_update(
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "requestId")?,
-                rpc_required_param(params, "acknowledgeExternalEffects")?,
-            )
-            .await,
-        ),
         "service_uninstall_user_plugin" => rpc_json_result(
             service_uninstall_user_plugin(
                 app.clone(),
@@ -182,19 +157,22 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_local_plugin_uninstall_requests" => {
-            rpc_json_result(service_local_plugin_uninstall_requests(state))
+        "service_plugin_pending_operations" => {
+            rpc_json_result(service_plugin_pending_operations(state).await)
         }
-        "service_resume_local_plugin_uninstall" => rpc_json_result(
-            service_resume_local_plugin_uninstall(
-                app.clone(),
-                state,
-                rpc_required_param(params, "pluginId")?,
-                rpc_required_param(params, "requestId")?,
-                rpc_optional_param(params, "acknowledgeExternalEffects")?.unwrap_or(false),
+        "service_continue_plugin_pending_operation" => {
+            // The whole params object is the typed continuation; invalid kind/action pairs fail here.
+            // 整个 params 对象即类型明确的继续请求；无效类别与动作组合在此失败。
+            let request: PluginPendingContinuation = serde_json::from_value(params.clone())
+                .map_err(|error| {
+                    WebuiServiceRpcError::InvalidParams(format!(
+                        "invalid params for service_continue_plugin_pending_operation: {error}"
+                    ))
+                })?;
+            rpc_json_result(
+                service_continue_plugin_pending_operation(app.clone(), state, request).await,
             )
-            .await,
-        ),
+        }
         "service_set_vulcan_plugin_credentials" => rpc_json_result(
             service_set_vulcan_plugin_credentials(
                 app.clone(),

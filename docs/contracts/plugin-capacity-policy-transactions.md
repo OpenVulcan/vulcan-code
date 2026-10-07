@@ -105,10 +105,10 @@ LuaSkills 的 `capacity_policy`／`revise_capacity` 是原生修订及资源计�
 | `service_register_plugin_capacity` | `request` 为完整登记请求；返回原容量状态 |
 | `service_control_plugin_capacity` | `request` 为精确控制请求；返回映射存在性 |
 | `service_begin_plugin_capacity_policy_update` | `request` 为完整策略事务；返回保留检查点 |
-| `service_plugin_capacity_policy_update_status` | `updateId`；返回原检查点或空值 |
-| `service_resume_plugin_capacity_policy_update` | `updateId`；从原检查点明确恢复 |
-| `service_cancel_plugin_capacity_policy_update` | `updateId`；明确取消尚未应用的原事务 |
-| `service_forget_plugin_capacity_policy_update` | `updateId`；成功持久确认终态后返回空值 |
+
+保留检查点的继续统一经待处理操作登记表，类别为 `capacityPolicy`，见
+[`plugin-pending-operations.md`](plugin-pending-operations.md)：恢复从原检查点继续，取消仅针对尚未应用的
+原事务，遗忘在成功持久确认终态后释放记录。当前检查点亦随 `service_plugin_runtime_status` 返回。
 
 宿主包装沿用驼峰字段，内嵌 LuaSkills 类型沿用核心序列化结构，例如 `snapshot.capacity_id` 和
 `config.max_queued_calls`；不猜测别名。核心类型更新时应同步消费契约，不能仅修改文档。

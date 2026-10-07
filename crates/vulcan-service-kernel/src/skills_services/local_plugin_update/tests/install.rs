@@ -57,7 +57,7 @@ async fn first_install_publishes_a_disabled_managed_generation() {
                     .contains(PLUGIN)
             );
             let records =
-                service_local_plugin_update_requests(Arc::clone(&fixture.state), PLUGIN.to_owned())
+                local_plugin_update_records(Arc::clone(&fixture.state))
                     .await
                     .expect("request status");
             assert_eq!(records.len(), 1);
@@ -110,7 +110,7 @@ async fn interrupted_first_install_is_aborted_through_update_requests() {
                 .expect_err("candidate readiness fails");
             assert!(!fixture.runtime.snapshot().plugins.contains_key(PLUGIN));
             let records =
-                service_local_plugin_update_requests(Arc::clone(&fixture.state), PLUGIN.to_owned())
+                local_plugin_update_records(Arc::clone(&fixture.state))
                     .await
                     .expect("request status");
             assert_eq!(records.len(), 1);

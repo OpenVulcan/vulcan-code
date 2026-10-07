@@ -17,6 +17,7 @@ import type { PluginRuntimeCommand } from "@/service/plugin-runtime-service";
 import { capacityPredecessor, createCapacityDraft, draftStillCurrent, readCapacityDraft, type PluginCapacityDraft } from "./plugin-capacity-draft";
 import { PageEmptyState, PageFacts, PageHint, PageItem, PageItemList, PageNotice, PageToolbar } from "@/components/page";
 import { TechnicalDetails } from "./plugin-maintenance-section";
+import { capacityActionLabels, capacityPurposeLabels, capacityReceiptLabels } from "./plugin-policy-labels";
 import { usePluginRuntimeManagement } from "./use-plugin-runtime-management";
 
 // PluginRuntimeControlProps supplies installed ownership and the existing explicit business-catalog refresh.
@@ -33,14 +34,6 @@ interface PluginRuntimeControlProps {
   pluginId?: string;
 }
 
-// purposeLabels names each native capacity purpose by what the user does with the plugin.
-// purposeLabels 以用户使用插件的方式命名各原生容量用途。
-const purposeLabels: Record<PluginCapacityPurpose, TranslationKey> = {
-  tool_call: "pluginRuntime.purpose.toolCall", tool_session: "pluginRuntime.purpose.toolSession",
-  hook: "pluginRuntime.purpose.hook", ui_action: "pluginRuntime.purpose.uiAction",
-  lifecycle: "pluginRuntime.purpose.lifecycle", activation_probe: "pluginRuntime.purpose.activationProbe",
-};
-
 // numericFields lists every editable native number with its label and plain explanation, in form order.
 // numericFields 按表单顺序列出每个可编辑原生数字及其标签与平实说明。
 const numericFields: ReadonlyArray<readonly [keyof PluginCapacityDraft["numbers"], TranslationKey, TranslationKey]> = [
@@ -50,13 +43,6 @@ const numericFields: ReadonlyArray<readonly [keyof PluginCapacityDraft["numbers"
   ["max_queued_calls", "pluginRuntime.queueCalls", "pluginRuntime.queueCallsHint"],
   ["max_queued_bytes", "pluginRuntime.queueBytes", "pluginRuntime.queueBytesHint"],
 ];
-
-// receiptLabels explains the last capacity change in plain words.
-// receiptLabels 以平实语言说明上一次容量调整。
-const receiptLabels: Record<PluginCapacityReceipt["phase"], TranslationKey> = {
-  prepared: "pluginRuntime.receipt.prepared", applied: "pluginRuntime.receipt.applied", committed: "pluginRuntime.receipt.committed",
-  rejected: "pluginRuntime.receipt.rejected", interrupted: "pluginRuntime.receipt.interrupted",
-};
 
 // Confirmation holds one reviewed command, or null for discarding this view's uncertain tracking.
 // Confirmation 持有单个已审阅命令；null 表示放弃本视图的不确定追踪。
@@ -144,15 +130,13 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
       <p>{t("pluginRuntime.unknown")}</p>
       <TechnicalDetails entries={[]} extra={<pre>{JSON.stringify(state.pending, null, 2)}</pre>} />
     </PageNotice>}
-    {receipt && <PageNotice actions={<>
-      {receiptActive && receipt.phase === "prepared" && <Button disabled={!canWrite} onClick={() => void state.execute({ kind: "cancel", updateId: receipt.request.updateId })}
-        size="sm" type="button" variant="ghost">{t("pluginRuntime.cancelUpdate")}</Button>}
-      {receiptActive && <Button disabled={!canWrite} onClick={() => void state.execute({ kind: "resume", updateId: receipt.request.updateId })} size="sm" type="button">
-        {t("pluginRuntime.resume")}</Button>}
-      {!receiptActive && <Button disabled={!canWrite} onClick={() => void state.execute({ kind: "forget", updateId: receipt.request.updateId })} size="sm" type="button" variant="outline">
-        {t("pluginRuntime.ack")}</Button>}
-    </>} tone={receipt.phase === "committed" ? "success" : receiptActive ? "warning" : "error"}>
-      <p>{formatMessage(t(receiptLabels[receipt.phase]), { name: nameOf(receipt.request.pluginId), purpose: t(purposeLabels[receipt.request.purpose]) })}</p>
+    {receipt && <PageNotice actions={(state.observation?.receiptActions ?? []).map(({ action }) => {
+      if (action === "abort") return null;
+      const [label, variant] = capacityActionLabels[action];
+      return <Button disabled={!canWrite} key={action} onClick={() => void state.execute({ kind: action, updateId: receipt.request.updateId })}
+        size="sm" type="button" variant={variant}>{t(label)}</Button>;
+    })} tone={receipt.phase === "committed" ? "success" : receiptActive ? "warning" : "error"}>
+      <p>{formatMessage(t(capacityReceiptLabels[receipt.phase]), { name: nameOf(receipt.request.pluginId), purpose: t(capacityPurposeLabels[receipt.request.purpose]) })}</p>
       {(receipt.error || receipt.persistenceError) && <p className="whitespace-pre-wrap break-all">{[receipt.error, receipt.persistenceError].filter(Boolean).join("\n")}</p>}
       <TechnicalDetails entries={[["updateId", <code key="id">{receipt.request.updateId}</code>], ["phase", <code key="phase">{receipt.phase}</code>]]}
         extra={<pre>{JSON.stringify(receipt.request, null, 2)}</pre>} />
@@ -185,7 +169,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
             <FieldLabel htmlFor={`${fieldPrefix}-register-purpose`}>{t("pluginRuntime.purposeField")}</FieldLabel>
             <Select disabled={!registerPlugin} onValueChange={(value) => setRegisterPurpose(value as PluginCapacityPurpose)} value={registerPurpose}>
               <SelectTrigger id={`${fieldPrefix}-register-purpose`}><SelectValue placeholder={t("pluginRuntime.purposeField")} /></SelectTrigger>
-              <SelectContent>{unregistered.map((purpose) => <SelectItem key={purpose} value={purpose}>{t(purposeLabels[purpose])}</SelectItem>)}</SelectContent>
+              <SelectContent>{unregistered.map((purpose) => <SelectItem key={purpose} value={purpose}>{t(capacityPurposeLabels[purpose])}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
           <Button disabled={!canRegister} onClick={() => {
@@ -204,7 +188,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
     <Dialog onOpenChange={(open) => { if (!open) { setDraft(null); setFormError(""); } }} open={draft !== null}>
       <DialogContent size="md" scrollMode="fixed-footer">
         <DialogHeader>
-          <DialogTitle>{draft ? formatMessage(t("pluginRuntime.editTitle"), { name: nameOf(draft.predecessor.pluginId), purpose: t(purposeLabels[draft.predecessor.purpose]) }) : ""}</DialogTitle>
+          <DialogTitle>{draft ? formatMessage(t("pluginRuntime.editTitle"), { name: nameOf(draft.predecessor.pluginId), purpose: t(capacityPurposeLabels[draft.predecessor.purpose]) }) : ""}</DialogTitle>
           <DialogDescription>{t("pluginRuntime.editDescription")}</DialogDescription>
         </DialogHeader>
         {draft && <div className="plugin-capacity-form">
@@ -267,7 +251,7 @@ function CapacityRow(props: {
   const capacity = props.capacity;
   const snapshot = capacity.snapshot;
   const config = snapshot.config;
-  const label = t(purposeLabels[capacity.purpose]);
+  const label = t(capacityPurposeLabels[capacity.purpose]);
   // meters compare live usage with the configured limit; a zero limit renders an empty bar.
   // meters 将实时用量与配置上限比较；上限为零时显示空条。
   const meters: ReadonlyArray<readonly [TranslationKey, number, number]> = [

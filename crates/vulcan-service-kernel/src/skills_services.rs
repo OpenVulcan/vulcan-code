@@ -8,12 +8,17 @@ use vulcan_service_api::{LuaSkillsManagedRuntimeProgressSummary, ProjectSettings
 mod local_plugin_uninstall;
 mod local_plugin_update;
 mod plugin_credentials;
+mod plugin_pending_operations;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallDrainDiagnostics;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
 pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
 pub(crate) use local_plugin_update::LocalPluginUpdateStatus;
 pub(crate) use local_plugin_update::pending_owner::PendingLocalPluginUpdateRegistry;
 pub(crate) use plugin_credentials::service_set_vulcan_plugin_credentials;
+pub(crate) use plugin_pending_operations::{
+    PluginPendingContinuation, service_continue_plugin_pending_operation,
+    service_plugin_pending_operations,
+};
 mod vulcan_plugin_lifecycle;
 
 /// Serializes user-agent catalog file mutations across concurrent service requests.
@@ -1065,13 +1070,12 @@ pub(crate) async fn service_update_local_plugin(
     .await
 }
 
-/// Read sanitized original update records without starting work or creating a store.
-/// 读取脱敏原更新记录，不启动工作或创建存储。
-/// State selects the configured runtime and plugin_id selects one exact namespace; returns durable status rows.
-/// state 选择配置运行时，plugin_id 选择单个精确命名空间；返回持久状态行。
-pub(crate) async fn service_local_plugin_update_requests(
+/// Read sanitized original update records of every namespace without starting work or creating a store.
+/// 读取所有命名空间的脱敏原更新记录，不启动工作或创建存储。
+/// State selects the configured runtime; returns durable status rows including finished history.
+/// state 选择配置运行时；返回持久状态行，包含已结束历史。
+pub(crate) async fn local_plugin_update_records(
     state: SharedServiceBridgeState,
-    plugin_id: String,
 ) -> Result<Vec<LocalPluginUpdateStatus>, String> {
     // Read-only status must remain available while the mutation owner is busy.
     // 变更所有者忙碌时，只读状态必须仍可用。
@@ -1086,7 +1090,7 @@ pub(crate) async fn service_local_plugin_update_requests(
     );
     let mut rows =
         run_extension_management_blocking("inspect original plugin updates", move || {
-            local_plugin_update::list_owned(&runtime, &plugin_id, &registry)
+            local_plugin_update::list_all_owned(&runtime, &registry)
         })
         .await?;
     // Read the actual strong owner map without joining or waiting for its mutation executor.
@@ -1156,7 +1160,7 @@ pub(crate) async fn service_uninstall_user_plugin(
 /// 读取每个实际保留移除，不取得变更准入；state 选择存活注册表。
 /// Returns sanitized live ownership, including executing owners, while shutdown is closed.
 /// 关闭期间返回脱敏实时所有权，包含执行中所有者。
-pub(crate) fn service_local_plugin_uninstall_requests(
+pub(crate) fn local_plugin_uninstall_records(
     state: SharedServiceBridgeState,
 ) -> Result<Vec<local_plugin_uninstall::LocalPluginUninstallStatus>, String> {
     // Release service exclusion before trying resource borrows for read-only projection.

@@ -1,4 +1,5 @@
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
+import { continuePluginPendingOperation, pendingOffers, readPluginPendingOperations, type PluginPendingActionOffer } from "./plugin-pending-operations-service";
 import { parseCapacityCatalog, parseCapacityReceipt, parseCapacityStatus, parsePluginRuntime } from "./plugin-runtime-contract";
 import type {
   PluginCapacityCatalog, PluginCapacityPredecessor, PluginCapacityRegistration, PluginCapacityUpdate, PluginRuntimeView,
@@ -13,6 +14,9 @@ export interface PluginRuntimeObservation {
   // catalog is the host mapping observation, not a global atomic resource sample.
   // catalog 为宿主映射观测，而非全局原子资源样本。
   catalog: PluginCapacityCatalog | null;
+  // receiptActions are the service-declared continuations of runtime.policyUpdate; empty without a receipt.
+  // receiptActions 是 runtime.policyUpdate 的服务端声明继续方式；无回执时为空。
+  receiptActions: PluginPendingActionOffer[];
 }
 
 // PluginRuntimeCommand preserves one original explicit mutation through transport uncertainty.
@@ -29,12 +33,17 @@ export async function readPluginRuntime(): Promise<PluginRuntimeObservation> {
   if (!hasServiceRuntime()) throw new Error("Plugin runtime management requires an attached Core service");
   // Independent RPCs may race a restart; reject mixed generations instead of combining them.
   // 独立 RPC 可能与重启竞争；拒绝混合代际，而非拼接。
-  const [runtime, catalog] = await Promise.all([
+  const [runtime, catalog, operations] = await Promise.all([
     serviceClient.request<unknown>("service_plugin_runtime_status", {}).then(parsePluginRuntime),
     serviceClient.request<unknown>("service_plugin_capacity_catalog", {}).then(parseCapacityCatalog),
+    readPluginPendingOperations(),
   ]);
   if (runtime?.runtimeId !== catalog?.runtimeId) throw new Error("Plugin runtime changed during observation; refresh explicitly");
-  return { runtime, catalog };
+  // receipt actions come from the unified registry and must describe the same receipt phase.
+  // 回执动作来自统一登记表，且必须描述相同回执阶段。
+  const receipt = runtime?.policyUpdate ?? null;
+  const receiptActions = receipt === null ? [] : pendingOffers(operations, "capacityPolicy", receipt.request.updateId, receipt.phase);
+  return { runtime, catalog, receiptActions };
 }
 
 // executePluginRuntimeCommand makes one service-client call for the exact intent and validates its acknowledgement.
@@ -61,14 +70,11 @@ export async function executePluginRuntimeCommand(command: PluginRuntimeCommand)
     }
     case "resume":
     case "cancel":
-      parseCapacityReceipt(await serviceClient.request<unknown>(
-        command.kind === "resume" ? "service_resume_plugin_capacity_policy_update" : "service_cancel_plugin_capacity_policy_update",
-        { updateId: command.updateId },
-      ));
-      return;
     case "forget":
-      if (await serviceClient.request<unknown>("service_forget_plugin_capacity_policy_update", { updateId: command.updateId }) !== null) {
-        throw new Error("policy acknowledgement: expected null");
+      // Receipt continuations share the unified pending-operation entry with every other retained operation.
+      // 回执继续与其他所有保留操作共用统一待处理操作入口。
+      if (await continuePluginPendingOperation({ kind: "capacityPolicy", operationId: command.updateId, action: command.kind }) !== null) {
+        throw new Error("capacity policy continuation: unexpected catalog");
       }
   }
 }

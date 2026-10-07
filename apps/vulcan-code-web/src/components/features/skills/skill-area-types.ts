@@ -50,21 +50,12 @@ export interface SkillActionProps extends McpSettingsActionProps {
   // Updates one disabled local user plugin through the same exact authorization surface.
   // 通过同一精确授权界面更新单个已停用本地用户插件。
   onUpdateLocalPlugin: (sourcePath: string, contentFingerprint: string, approvedPermissions: string[], allowRegistryDependencies: boolean, initialSecrets: VulcanPluginInitialSecret[]) => Promise<void>
-  // Reads original immutable update requests without starting or replaying work.
-  // 读取原不可变更新请求，不启动或重放工作。
-  onReadLocalPluginUpdates: typeof import("@/service/plugin-update-service").readLocalPluginUpdates
-  // Completes the explicitly identified published request and applies its catalog projection.
-  // 完成明确标识的已发布请求，并应用其目录投影。
-  onResumeLocalPluginUpdate: (pluginId: string, requestId: string) => Promise<void>
-  // Abandons the original unpublished request after explicit external-effect acknowledgement.
-  // 明确确认外部副作用后，放弃原尚未发布请求。
-  onAbortLocalPluginUpdate: typeof import("@/service/plugin-update-service").abortLocalPluginUpdate
-  // Reads every retained uninstall, including originals hidden from the current catalog.
-  // 读取所有保留卸载，包括当前目录中已隐藏的原实例。
-  onReadPluginUninstallRequests: typeof import("@/service/plugin-uninstall-recovery-service").readPluginUninstallRequests
-  // Continues only the exact uninstall UUID and applies its committed catalog after success.
-  // 仅继续精确卸载 UUID，并在成功后应用其已提交目录。
-  onResumePluginUninstallRequest: (pluginId: string, requestId: string, acknowledgeExternalEffects: boolean) => Promise<void>
+  // Lists every retained plugin operation (install/update, uninstall, policy receipts) without starting work.
+  // 列出所有保留插件操作（安装／更新、卸载、策略回执），不启动工作。
+  onReadPluginPendingOperations: typeof import("@/service/plugin-pending-operations-service").readPluginPendingOperations
+  // Continues one exact retained operation and applies any republished catalog it returns.
+  // 继续单个精确保留操作，并应用其返回的重新发布目录。
+  onContinuePluginPendingOperation: (continuation: import("@/service/plugin-pending-operations-service").PluginPendingContinuation) => Promise<void>
   // Uninstalls one disabled user plugin.
   // 卸载单个已停用用户插件。
   onUninstallUserPlugin: (pluginId: string) => Promise<void>

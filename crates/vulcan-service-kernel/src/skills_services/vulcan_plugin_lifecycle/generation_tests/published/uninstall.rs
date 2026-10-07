@@ -225,7 +225,7 @@ async fn retained_service_uninstall_published_node_disable_drains_originals_befo
             // Live query identifies the retained original by plugin identity, never by row order.
             // 实时查询按插件身份定位保留原实例，绝不依赖行顺序。
             let requests = serde_json::to_value(
-                service_local_plugin_uninstall_requests(Arc::clone(&state))
+                local_plugin_uninstall_records(Arc::clone(&state))
                     .expect("actual retained removal query"),
             )
             .expect("actual public retained removal protocol");
@@ -294,7 +294,7 @@ async fn retained_service_uninstall_published_node_disable_drains_originals_befo
             assert!(!package.exists());
             assert!(!environment.exists());
             assert!(
-                service_local_plugin_uninstall_requests(Arc::clone(&state))
+                local_plugin_uninstall_records(Arc::clone(&state))
                     .expect("actual terminal query")
                     .is_empty()
             );

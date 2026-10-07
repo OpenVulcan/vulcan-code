@@ -76,6 +76,7 @@ beforeEach(() => {
   observation = {
     runtime: { ...parsePluginRuntime(wire.runtime)!, policyUpdate: null },
     catalog: { runtimeId: wire.catalog.runtimeId, registryRevision: wire.catalog.registryRevision, capacities: [parseCapacityStatus(wire.initialCapacity)] },
+    receiptActions: [],
   };
   vi.mocked(readPluginRuntime).mockImplementation(async () => observation);
   vi.mocked(executePluginRuntimeCommand).mockResolvedValue();
@@ -132,9 +133,14 @@ it("retains an uncertain submission across refresh and retries the identical req
 it("shows another plugin's retained transaction and requires explicit recovery", async () => {
   observation.runtime!.policyUpdate = { ...parseCapacityReceipt(wire.runtime.policyUpdate), phase: "prepared",
     appliedRevision: null, request: { ...parseCapacityReceipt(wire.runtime.policyUpdate).request, pluginId: "another-plugin" } };
+  // The buttons are exactly the continuations the service declared for this receipt, in its order.
+  // 按钮恰为服务为此回执声明的继续方式，并保持其顺序。
+  observation.receiptActions = [{ action: "cancel", requiresAcknowledgement: false }, { action: "resume", requiresAcknowledgement: false }];
   await mount();
   expect(host.textContent).toContain("another-plugin");
   expect(button("pluginRuntime.edit").disabled).toBe(true);
+  expect(() => button("pluginRuntime.ack")).toThrow();
+  expect(button("pluginRuntime.cancelUpdate").disabled).toBe(false);
   expect(executePluginRuntimeCommand).not.toHaveBeenCalled();
   await act(async () => button("pluginRuntime.resume").click());
   expect(executePluginRuntimeCommand).toHaveBeenCalledWith({ kind: "resume", updateId: wire.runtime.policyUpdate.request.updateId });

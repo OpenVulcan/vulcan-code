@@ -68,9 +68,10 @@
 | --- | --- |
 | `service_plugin_prewarm_policy_status` | 空具名对象；返回当前策略及保留回执 |
 | `service_begin_plugin_prewarm_policy_update` | `request` 包含完整原请求；返回原发布回执 |
-| `service_resume_plugin_prewarm_policy_update` | 原 `updateId`；仅恢复原发布或确认 |
-| `service_cancel_plugin_prewarm_policy_update` | 原 `updateId`；准备可取消，终态返回原证据，发布不确定时拒绝 |
-| `service_forget_plugin_prewarm_policy_update` | 原 `updateId`；明确确认终态回执，成功返回空值 |
+
+保留回执的继续统一经待处理操作登记表，类别为 `prewarmPolicy`，见
+[`plugin-pending-operations.md`](plugin-pending-operations.md)。恢复仅恢复原发布或确认；准备阶段可取消，
+发布不确定时拒绝取消；遗忘只确认终态回执。
 
 未知字段、位置数组、缺失或空值规则均拒绝；嵌套规则也必须为具名对象。
 此协议属于已认证宿主管理面，不能从插件业务 Action 调用。阻塞文件操作使用服务既有阻塞执行器，

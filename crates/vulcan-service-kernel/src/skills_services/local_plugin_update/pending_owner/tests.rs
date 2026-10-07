@@ -514,7 +514,7 @@ async fn pending_update_owner_survives_cancelled_rpc_waiter() {
     // 原子任务仍持有异步资源借用期间，状态必须完成。
     let rows = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        service_local_plugin_update_requests(Arc::clone(&harness.fixture.state), PLUGIN.to_owned()),
+        local_plugin_update_records(Arc::clone(&harness.fixture.state)),
     )
     .await
     .expect("live status must not wait for owner")

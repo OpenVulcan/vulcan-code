@@ -10,13 +10,32 @@ beforeEach(() => { vi.clearAllMocks(); vi.mocked(hasServiceRuntime).mockReturnVa
 // Separate reads must agree on their parent before either can authorize an edit.
 // 独立读取须在父级上一致，才能授权编辑。
 it("rejects a restart between read RPCs and never creates a parent in preview", async () => {
-  vi.mocked(serviceClient.request).mockImplementation(async (method) => method === "service_plugin_runtime_status"
-    ? wire.runtime : { ...wire.catalog, runtimeId: "new-runtime", capacities: [] });
+  vi.mocked(serviceClient.request).mockImplementation(async (method) => method === "service_plugin_runtime_status" ? wire.runtime
+    : method === "service_plugin_pending_operations" ? [] : { ...wire.catalog, runtimeId: "new-runtime", capacities: [] });
   await expect(readPluginRuntime()).rejects.toThrow("changed");
-  expect(serviceClient.request).toHaveBeenCalledTimes(2);
+  expect(serviceClient.request).toHaveBeenCalledTimes(3);
   vi.mocked(hasServiceRuntime).mockReturnValue(false);
   await expect(readPluginRuntime()).rejects.toThrow("requires");
-  expect(serviceClient.request).toHaveBeenCalledTimes(2);
+  expect(serviceClient.request).toHaveBeenCalledTimes(3);
+});
+
+// Receipt actions come from the unified registry only when it describes the same receipt in the same phase.
+// 仅当统一登记表描述相同阶段的同一回执时，回执动作才来自该登记表。
+it("takes receipt actions from the registry row of the same receipt and phase", async () => {
+  // listed is the registry row of the observed receipt; offers are whatever the service declared.
+  // listed 是已观测回执的登记表行；可用动作即服务所声明的内容。
+  const receipt = wire.runtime.policyUpdate;
+  const offers = [{ action: "cancel", requiresAcknowledgement: false }, { action: "resume", requiresAcknowledgement: false }];
+  const listed = { kind: "capacityPolicy", operationId: receipt.request.updateId, pluginId: receipt.request.pluginId, actions: offers, detail: receipt };
+  for (const [operations, expected] of [
+    [[listed], offers],
+    [[{ ...listed, detail: { ...receipt, phase: receipt.phase === "prepared" ? "applied" : "prepared" } }], []],
+    [[], []],
+  ] as const) {
+    vi.mocked(serviceClient.request).mockImplementation(async (method) => method === "service_plugin_runtime_status" ? wire.runtime
+      : method === "service_plugin_pending_operations" ? operations : wire.catalog);
+    expect((await readPluginRuntime()).receiptActions).toEqual(expected);
+  }
 });
 
 // Every command carries its original intent to the sole declared RPC; null is an explicit reset.
@@ -31,14 +50,15 @@ it("sends each exact management command and validates acknowledgements", async (
     [{ kind: "register", request: registration }, "service_register_plugin_capacity", wire.initialCapacity],
     [{ kind: "update", request: reset }, "service_begin_plugin_capacity_policy_update", { ...wire.runtime.policyUpdate, request: reset }],
     [{ kind: "control", request: { runtimeId: receipt.request.runtimeId, capacityId: receipt.request.capacityId, expectedRevision: receipt.request.expectedRevision, pluginId: receipt.request.pluginId, purpose: receipt.request.purpose, action: "close" } }, "service_control_plugin_capacity", false],
-    [{ kind: "resume", updateId: receipt.request.updateId }, "service_resume_plugin_capacity_policy_update", wire.runtime.policyUpdate],
-    [{ kind: "cancel", updateId: receipt.request.updateId }, "service_cancel_plugin_capacity_policy_update", wire.runtime.policyUpdate],
-    [{ kind: "forget", updateId: receipt.request.updateId }, "service_forget_plugin_capacity_policy_update", null],
+    [{ kind: "resume", updateId: receipt.request.updateId }, "service_continue_plugin_pending_operation", { catalog: null }],
+    [{ kind: "cancel", updateId: receipt.request.updateId }, "service_continue_plugin_pending_operation", { catalog: null }],
+    [{ kind: "forget", updateId: receipt.request.updateId }, "service_continue_plugin_pending_operation", { catalog: null }],
   ];
   for (const [command, method, acknowledgement] of cases) {
     vi.mocked(serviceClient.request).mockResolvedValueOnce(acknowledgement);
     await executePluginRuntimeCommand(command);
-    expect(serviceClient.request).toHaveBeenLastCalledWith(method, "request" in command ? { request: command.request } : { updateId: command.updateId });
+    expect(serviceClient.request).toHaveBeenLastCalledWith(method, "request" in command ? { request: command.request }
+      : { kind: "capacityPolicy", operationId: command.updateId, action: command.kind });
   }
 });
 

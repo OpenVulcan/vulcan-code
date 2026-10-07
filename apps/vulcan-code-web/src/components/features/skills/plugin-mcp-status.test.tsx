@@ -42,7 +42,7 @@ function browserPlugin(status: string): PluginSummary {
 const actions = {
   onPluginEnvironmentReady: async () => true,
   onPluginEnvironmentInstallStatusForPlugin: async () => null,
-  onReadPluginUninstallRequests: async () => [],
+  onReadPluginPendingOperations: async () => [],
 } as unknown as SkillActionProps;
 
 it.each(["onDemand", "connecting", "ready", "failed", "draining", "stopped"] as const)(

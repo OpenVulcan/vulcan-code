@@ -5,11 +5,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import wire from "@/service/__fixtures__/plugin-prewarm-policy-wire.json";
 import { parsePluginPrewarmPolicyStatus } from "@/service/plugin-prewarm-policy-contract";
-import { executePluginPrewarmPolicyCommand, readPluginPrewarmPolicyStatus, type PluginPrewarmPolicyCommand } from "@/service/plugin-prewarm-policy-service";
+import { prewarmReceiptOffers } from "@/service/__fixtures__/plugin-pending-offers";
+import { executePluginPrewarmPolicyCommand, readPluginPrewarmPolicyObservation, type PluginPrewarmPolicyCommand } from "@/service/plugin-prewarm-policy-service";
 import type { PluginPrewarmPolicyReceipt, PluginPrewarmPolicyStatus } from "@/types/plugin-prewarm-policy";
 import { usePluginPrewarmPolicy } from "./use-plugin-prewarm-policy";
 
-vi.mock("@/service/plugin-prewarm-policy-service", () => ({ executePluginPrewarmPolicyCommand: vi.fn(), readPluginPrewarmPolicyStatus: vi.fn() }));
+vi.mock("@/service/plugin-prewarm-policy-service", () => ({ executePluginPrewarmPolicyCommand: vi.fn(), readPluginPrewarmPolicyObservation: vi.fn() }));
+// readStatus supplies the atomic status read; the observation pairs it with the registry's declared receipt offers.
+// readStatus 提供原子状态读取；观测将其与登记表声明的回执动作组合。
+const readStatus = vi.fn<() => Promise<PluginPrewarmPolicyStatus>>();
 // Real service wire fixtures supply policy identities; only asynchronous delivery is mocked.
 // 真实服务线协议夹具提供策略身份；仅模拟异步传递。
 const initial = parsePluginPrewarmPolicyStatus(wire.initial);
@@ -39,7 +43,11 @@ function deferred<T>() {
 
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.resetAllMocks();
-  vi.mocked(readPluginPrewarmPolicyStatus).mockResolvedValue(initial);
+  vi.mocked(readPluginPrewarmPolicyObservation).mockImplementation(async () => {
+    const status = await readStatus();
+    return { status, receiptActions: prewarmReceiptOffers(status.update) };
+  });
+  readStatus.mockResolvedValue(initial);
   vi.mocked(executePluginPrewarmPolicyCommand).mockResolvedValue(receipt);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root.render(<Probe />));
@@ -49,12 +57,12 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 // Only an explicit complete read can authorize a mutation, including within a single render tick.
 // 仅明确完整读取能授权修改，包括同一渲染时刻。
 it("stays inert on mount and blocks commands during an in-flight read", async () => {
-  expect(readPluginPrewarmPolicyStatus).not.toHaveBeenCalled();
+  expect(readStatus).not.toHaveBeenCalled();
   await act(async () => state.execute(command));
   expect(executePluginPrewarmPolicyCommand).not.toHaveBeenCalled();
   await act(async () => state.refresh());
   const waiting = deferred<PluginPrewarmPolicyStatus>();
-  vi.mocked(readPluginPrewarmPolicyStatus).mockReturnValueOnce(waiting.promise);
+  readStatus.mockReturnValueOnce(waiting.promise);
   await act(async () => { void state.refresh(); void state.execute(command); });
   expect(executePluginPrewarmPolicyCommand).not.toHaveBeenCalled();
   await act(async () => waiting.resolve(initial));
@@ -75,7 +83,7 @@ it("retains unknown intent without same-tick duplication or automatic replay", a
   await act(async () => waiting.reject(new Error("response lost")));
   await act(async () => state.acknowledgeUncertainty());
   expect(state.observation.pending).toEqual(command);
-  vi.mocked(readPluginPrewarmPolicyStatus).mockResolvedValue(published);
+  readStatus.mockResolvedValue(published);
   await act(async () => state.refresh());
   await act(async () => state.execute(command));
   expect(executePluginPrewarmPolicyCommand).toHaveBeenCalledTimes(1);
@@ -88,7 +96,7 @@ it("retains unknown intent without same-tick duplication or automatic replay", a
 // 后续读取失败时已确认写入仍可见；陈旧证据绝不允许另一写入。
 it("keeps acknowledgement separate from a failed post-write read", async () => {
   await act(async () => state.refresh());
-  vi.mocked(readPluginPrewarmPolicyStatus).mockRejectedValueOnce(new Error("read failed"));
+  readStatus.mockRejectedValueOnce(new Error("read failed"));
   await act(async () => state.execute(command));
   expect(state.observation.pending).toBeNull();
   expect(state.observation.acknowledged).toEqual(receipt);
@@ -103,7 +111,7 @@ it("keeps acknowledgement separate from a failed post-write read", async () => {
 it("rejects stale drafts and competing retained transactions", async () => {
   for (const status of [{ ...initial, runtimeId: "replacement" }, { ...initial, revision: "newer" },
     { ...initial, capacityUpdateRetained: true }, published]) {
-    vi.mocked(readPluginPrewarmPolicyStatus).mockResolvedValue(status);
+    readStatus.mockResolvedValue(status);
     await act(async () => state.refresh());
     await act(async () => state.execute(command));
   }
@@ -113,7 +121,7 @@ it("rejects stale drafts and competing retained transactions", async () => {
 // Recovery uses exact retained identity even after restart; publishing cannot be cancelled or forgotten.
 // 重启后恢复仍使用精确保留身份；发布中不能取消或遗忘。
 it("allows only checkpoint-appropriate operations on the exact historical receipt", async () => {
-  vi.mocked(readPluginPrewarmPolicyStatus).mockResolvedValue({ ...published, runtimeId: "replacement",
+  readStatus.mockResolvedValue({ ...published, runtimeId: "replacement",
     update: { ...receipt, phase: "publishing", persistenceError: "confirmation lost" } });
   await act(async () => state.refresh());
   await act(async () => state.execute({ kind: "cancel", request: receipt.request }));
@@ -122,10 +130,10 @@ it("allows only checkpoint-appropriate operations on the exact historical receip
   expect(executePluginPrewarmPolicyCommand).not.toHaveBeenCalled();
   await act(async () => state.execute({ kind: "resume", request: receipt.request }));
   expect(executePluginPrewarmPolicyCommand).toHaveBeenLastCalledWith({ kind: "resume", request: receipt.request });
-  vi.mocked(readPluginPrewarmPolicyStatus).mockResolvedValue(published);
+  readStatus.mockResolvedValue(published);
   await act(async () => state.refresh());
   vi.mocked(executePluginPrewarmPolicyCommand).mockResolvedValueOnce(null);
-  vi.mocked(readPluginPrewarmPolicyStatus).mockResolvedValue({ ...published, update: null });
+  readStatus.mockResolvedValue({ ...published, update: null });
   await act(async () => state.execute({ kind: "forget", request: receipt.request }));
   expect(state.observation.status?.update).toBeNull();
 });
@@ -141,6 +149,6 @@ it("drops late observer responses without cancelling admitted host work", async 
   await act(async () => root.render(<Probe />));
   await act(async () => waiting.resolve(receipt));
   expect(state.observation.status).toBeNull();
-  expect(readPluginPrewarmPolicyStatus).toHaveBeenCalledTimes(1);
+  expect(readStatus).toHaveBeenCalledTimes(1);
   expect(executePluginPrewarmPolicyCommand).toHaveBeenCalledTimes(1);
 });
