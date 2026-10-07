@@ -92,9 +92,9 @@ pub(crate) async fn run(
     // Events keep the real service emitter without manufacturing a root run.
     // 事件保留真实服务发送器，不制造根运行。
     let app = app.clone();
-    // The completion receiver can be dropped without cancelling the owned worker or its cleanup.
-    // 完成接收端可以被丢弃，不会取消所属工作任务或清理。
-    let result = spawn(state, &registry, &handle, profile, async move {
+    // Boxed so the compaction work's large state stays on the heap instead of in every awaiting future.
+    // 装箱使压缩工作的大体积状态位于堆上，而不是撑大每个等待它的 future。
+    let work = Box::pin(async move {
         // Acquire shared task exclusion before waiting, so an idle QA cannot replace the maintenance source.
         // 等待前获取共享任务互斥，防止空闲答疑替换维护来源。
         let Some(admission) = runtime.try_reserve_child_context_maintenance(
@@ -138,8 +138,10 @@ pub(crate) async fn run(
         )
         .await?;
         child_compaction::compact_admitted(&app, &work_state, request, Some(execution)).await
-    })
-    .await?;
+    });
+    // The completion receiver can be dropped without cancelling the owned worker or its cleanup.
+    // 完成接收端可以被丢弃，不会取消所属工作任务或清理。
+    let result = spawn(state, &registry, &handle, profile, work).await?;
     result
         .await
         .map_err(|_| String::from("Child maintenance worker exited without a result."))?

@@ -1123,7 +1123,9 @@ fn build_remote_responses_compaction_request(
 pub fn stream_prompt_compaction_job(
     request: PromptCompactionJobRequest,
 ) -> impl Stream<Item = PromptCompactionStreamEvent> + Send + 'static {
-    stream! {
+    // Boxed so the generator's large state lives on the heap instead of inflating every caller's future.
+    // 装箱使生成器的大体积状态位于堆上，而不是撑大每个调用方的 future。
+    Box::pin(stream! {
         // remoteFoundation resolves the exact ordinary-turn tool catalog before optional remote compaction.
         // remoteFoundation 在可选远端压缩前解析普通回合使用的精确工具目录。
         let remote_foundation = if request
@@ -1391,7 +1393,7 @@ pub fn stream_prompt_compaction_job(
                 }
             }
         }
-    }
+    })
 }
 
 /// Streams one prompt-based compaction job through an already resolved runtime foundation.
@@ -1399,7 +1401,9 @@ pub fn stream_prompt_compaction_job(
 pub fn stream_prompt_compaction_foundation_job(
     request: PromptCompactionFoundationJobRequest,
 ) -> impl Stream<Item = PromptCompactionStreamEvent> + Send + 'static {
-    stream! {
+    // Boxed so the generator's large state lives on the heap instead of inflating every caller's future.
+    // 装箱使生成器的大体积状态位于堆上，而不是撑大每个调用方的 future。
+    Box::pin(stream! {
         if let (Some(runtime), Some(model_target)) = (
             request.foundation.public_ai_runtime(),
             request
@@ -1700,7 +1704,7 @@ pub fn stream_prompt_compaction_foundation_job(
                 }
             }
         }
-    }
+    })
 }
 
 /// Builds the shared execution-preparation request for prompt-based context compaction.
