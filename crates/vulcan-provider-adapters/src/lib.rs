@@ -26,8 +26,6 @@ pub mod provider_manifest_fixture;
 mod provider_operational_telemetry;
 mod provider_task;
 mod provider_tool_execution;
-#[cfg(test)]
-mod reasoning_catalog;
 pub mod registry;
 pub mod runtime;
 mod upload_engine;

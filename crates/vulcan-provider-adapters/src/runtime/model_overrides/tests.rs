@@ -4,8 +4,7 @@
 use super::{apply_model_parameter_defaults, validate_model_overrides};
 use crate::runtime::test_support::catalog;
 use crate::{
-    MINIMAX_REASONING_SPLIT_PARAMETER_ID, ModelExecutionOverrides,
-    parse_minimax_openai_model_catalog,
+    MINIMAX_REASONING_SPLIT_PARAMETER_ID, ModelExecutionOverrides, parse_openai_model_catalog,
 };
 use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
@@ -53,7 +52,7 @@ fn declared_model_limits_reject_expansive_overrides() {
 /// 验证适配器声明的显式默认值会成为不可变执行值。
 #[test]
 fn explicit_model_parameter_defaults_are_applied_before_validation() {
-    let mut catalog = parse_minimax_openai_model_catalog(
+    let mut catalog = parse_openai_model_catalog(
         "connection",
         1,
         r#"{"object":"list","data":[{"id":"MiniMax-M2.7","object":"model","created":1,"owned_by":"minimax"}]}"#,
