@@ -210,6 +210,9 @@ pub struct Worker {
     /// Selected repository identity and latest staged/unstaged file snapshots.
     /// 所选仓库身份及最新暂存、未暂存文件快照。
     pub(super) git: GitState,
+    /// Git state of projects not shown, by workspace path, so returning to one reads memory.
+    /// 未显示项目的 Git 状态，按工作区路径保存，使回到该项目时读取内存。
+    pub(super) git_parked: HashMap<String, GitState>,
     /// Last loader per slot, so mutations can reload what they invalidate.
     /// 每个槽位最近一次的加载器，供变更重新加载其失效的槽位。
     loaders: HashMap<Slot, ServiceCall>,
@@ -294,6 +297,7 @@ impl Worker {
             draft_serial: 0,
             model_keys: HashMap::new(),
             git: GitState::default(),
+            git_parked: HashMap::new(),
             loaders: HashMap::new(),
             load_sequences: HashMap::new(),
             vce_job_sequences: HashMap::new(),
@@ -439,7 +443,7 @@ impl Worker {
         {
             self.hydrate(&id);
         }
-        self.git_refresh();
+        self.git_reconnected();
         Ok(())
     }
 
@@ -1203,12 +1207,7 @@ impl Worker {
             api::ServiceEvent::WorkbenchDelta(envelope) => self.workbench_delta(*envelope),
             api::ServiceEvent::ConversationEventDeltaV1(delta) => self.event_delta(*delta),
             api::ServiceEvent::WorkspaceGitChanged(change) => {
-                if self.git.matches(&change.workspace_path) {
-                    // Only the changed repositories are reread; an event naming none rereads all.
-                    // 只重读发生变化的仓库；未指明仓库的事件重读全部。
-                    let keys = &change.repository_keys;
-                    self.git_reload((!keys.is_empty()).then_some(keys.as_slice()));
-                }
+                self.git_changed(&change.workspace_path, &change.repository_keys);
             }
             api::ServiceEvent::VceProjectChanged(change) => {
                 for slot in [Slot::VceOverview, Slot::VceStatus] {
@@ -1929,7 +1928,7 @@ impl Worker {
         self.emit_conversation_state(&id);
         self.emit_question(&id);
         self.hydrate(&id);
-        self.git_refresh();
+        self.git_show();
     }
 
     /// Saves the selected catalog model route for the exact conversation or local draft.
@@ -2881,9 +2880,9 @@ mod tests {
     fn repository_switches_read_memory_and_events_reread_named_repositories() {
         let keys = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let record = keys.clone();
-        // Catalog and two views of two repositories, then one catalog and two views for the event.
-        // 目录及两个仓库各两个视图，随后变更事件读取一次目录及两个视图。
-        let server = RpcServer::start(8, move |request| {
+        // Catalog and both views of two repositories, then both views of the named repository.
+        // 目录及两个仓库各两个视图，随后读取变更事件所指仓库的两个视图。
+        let server = RpcServer::start(7, move |request| {
             match request.body["method"].as_str().unwrap() {
                 "workspace.git.catalog" => json!({"ok":true,"result":{"projectRoot":"/one",
                     "repositories":[
@@ -2968,6 +2967,70 @@ mod tests {
             vec![
                 ("a.rs".into(), Some("Repository is not available".into())),
                 ("gone.rs".into(), None),
+            ]
+        );
+        server.thread.join().unwrap();
+    }
+
+    /// Leaving a project keeps its Git state: returning shows memory without a request, and a
+    /// change seen while away rereads only the repository it names.
+    /// 离开项目会保留其 Git 状态：回到时直接显示内存而不发请求，离开期间的变更只重读其指明的仓库。
+    #[test]
+    fn projects_return_from_memory_and_reread_only_what_changed() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = seen.clone();
+        // Two full loads, then the two views of the repository changed while away.
+        // 两次完整加载，随后读取离开期间变化仓库的两个视图。
+        let server = RpcServer::start(8, move |request| {
+            let workspace = request
+                .body
+                .pointer("/params/workspacePath")
+                .unwrap()
+                .clone();
+            let method = request.body["method"].as_str().unwrap().to_string();
+            record
+                .lock()
+                .unwrap()
+                .push(format!("{method} {}", workspace.as_str().unwrap()));
+            match method.as_str() {
+                "workspace.git.catalog" => json!({"ok":true,"result":{"projectRoot":workspace,
+                    "repositories":[{"repositoryKey":".","repositoryRoot":workspace,"name":"root",
+                    "relativePath":".","isPrimary":true,"monitoringEnabled":true}]}}),
+                "workspace.diff.snapshot" => json!({"ok":true,"result":{"currentBranch":"main",
+                    "files":[{"key":"k","newPath":"a.rs","status":"modified"}]}}),
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        let show = |worker: &mut Worker, id: &str| {
+            worker.selected = Some(id.into());
+            worker.git_show();
+        };
+        show(&mut worker, "a");
+        show(&mut worker, "b");
+        assert_eq!(seen.lock().unwrap().len(), 6, "each project loads once");
+        worker.git_changed("/one", &[".".into()]);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            6,
+            "a hidden project only marks the change"
+        );
+        events.try_iter().for_each(drop);
+        show(&mut worker, "a");
+        let returned = git_events(&events);
+        assert!(matches!(returned.first(), Some(BackendEvent::GitCleared)));
+        assert!(
+            matches!(returned.get(1), Some(BackendEvent::Git(snapshot))
+            if snapshot.selected.as_deref() == Some(".")),
+            "memory shows before the reread"
+        );
+        show(&mut worker, "b");
+        assert_eq!(
+            seen.lock().unwrap()[6..],
+            [
+                "workspace.diff.snapshot /one".to_string(),
+                "workspace.diff.snapshot /one".to_string()
             ]
         );
         server.thread.join().unwrap();

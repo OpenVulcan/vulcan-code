@@ -7,7 +7,7 @@
 // 工作区为选中会话所属的项目（未选中时取第一个项目），仓库为目录中的主仓库。未暂存与已暂存快照
 // 合并为一个 `GitSnapshot`；其传输文件标识被保留，用于文件操作与详情。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
@@ -42,6 +42,26 @@ pub struct GitState {
     /// Last loaded views of each monitored repository, so switching repositories reads memory.
     /// 每个受监听仓库最近加载的视图，使切换仓库只读内存。
     views: HashMap<String, RepositoryViews>,
+    /// The catalog has been read, so memory can be shown before any reread.
+    /// 目录已读取，因此可在重读前先显示内存内容。
+    catalog_loaded: bool,
+    /// Repositories that changed while the project was not shown; they are reread on return.
+    /// 项目未显示期间发生变化的仓库；回到该项目时重读。
+    dirty: HashSet<String>,
+}
+
+/// What a Git reload rereads; repositories without views in memory are always read.
+/// Git 重载重读的范围；内存中没有视图的仓库总会读取。
+pub(super) enum GitReload<'a> {
+    /// The catalog and every monitored repository.
+    /// 目录及每个受监听仓库。
+    All,
+    /// The catalog alone, as after a monitoring switch.
+    /// 仅目录，例如监听开关变化之后。
+    Catalog,
+    /// The named repositories, without the catalog.
+    /// 指定的仓库，不读目录。
+    Repositories(&'a [String]),
 }
 
 /// Unstaged and staged diff snapshots of one repository, as the service returned them.
@@ -53,6 +73,18 @@ struct RepositoryViews {
 }
 
 impl GitState {
+    /// Marks repositories of a project that is not shown as changed: `keys`, or every monitored
+    /// repository when the event names none.
+    /// 将未显示项目的仓库标记为已变化：`keys`，事件未指明仓库时标记每个受监听仓库。
+    fn mark_dirty(&mut self, keys: &[String]) {
+        if keys.is_empty() {
+            let monitored = self.repositories.iter().filter(|r| r.monitoring);
+            self.dirty.extend(monitored.map(|r| r.key.clone()));
+        } else {
+            self.dirty.extend(keys.iter().cloned());
+        }
+    }
+
     /// Whether a `workspaceGitChanged` path concerns the current workspace.
     /// `workspaceGitChanged` 的路径是否属于当前工作区。
     /// `path` is the exact requested path.
@@ -116,60 +148,154 @@ impl Worker {
         params
     }
 
-    /// Loads the repository catalog and both views of every monitored repository of the selected
-    /// project, as `refreshProjectGitSummary`; details belong to the selected repository.
-    /// 加载所选项目的仓库目录及每个受监听仓库的两个视图，对应 `refreshProjectGitSummary`；
-    /// 详情属于所选仓库。
+    /// Rereads the catalog and every monitored repository of the selected project, as
+    /// `refreshProjectGitSummary`; an explicit refresh and a new connection use it.
+    /// 重读所选项目的目录及每个受监听仓库，对应 `refreshProjectGitSummary`；显式刷新与新连接使用。
     pub(super) fn git_refresh(&mut self) {
-        self.git_reload(None);
+        self.git_reload(GitReload::All);
     }
 
-    /// Rereads the catalog and the views of `only` repositories, every monitored one when absent;
-    /// other repositories keep their views in memory, as the WebUI limits a change event's reads
-    /// to its repository keys.
-    /// 重读目录及 `only` 中仓库的视图，为空时重读每个受监听仓库；其他仓库保留内存中的视图，
-    /// 对应 WebUI 将变更事件的读取限定在其仓库键内。
-    pub(super) fn git_reload(&mut self, only: Option<&[String]>) {
+    /// Shows the selected conversation's project from memory, rereading only the repositories that
+    /// changed while it was not shown; a project never read loads in full.
+    /// 从内存显示所选会话的项目，只重读其未显示期间发生变化的仓库；从未读取的项目完整加载。
+    pub(super) fn git_show(&mut self) {
+        if !self.git_enter_project() {
+            return;
+        }
+        if !self.git.catalog_loaded {
+            self.git_reload(GitReload::All);
+            return;
+        }
+        self.emit_git_selected();
+        if !self.git.dirty.is_empty() {
+            let keys: Vec<String> = self.git.dirty.iter().cloned().collect();
+            self.git_reload(GitReload::Repositories(&keys));
+        }
+    }
+
+    /// Rereads the selected repository after an action changed it.
+    /// 在操作改变所选仓库后重读该仓库。
+    pub(super) fn git_reload_selected(&mut self) {
+        let keys: Vec<String> = self.git.repository_key.iter().cloned().collect();
+        self.git_reload(GitReload::Repositories(&keys));
+    }
+
+    /// Applies a `workspaceGitChanged` event: the shown project rereads the named repositories,
+    /// every monitored one when the event names none; a project kept in memory marks them for its
+    /// return.
+    /// 应用 `workspaceGitChanged` 事件：显示中的项目重读指明的仓库，未指明时重读每个受监听仓库；
+    /// 内存中保留的项目将其标记，待回到该项目时重读。
+    /// `path` is the event's workspace path; `keys` its repository keys.
+    /// `path` 为事件的工作区路径；`keys` 为其仓库键。
+    pub(super) fn git_changed(&mut self, path: &str, keys: &[String]) {
+        if self.git.matches(path) {
+            let keys: Vec<String> = if keys.is_empty() {
+                let monitored = self.git.repositories.iter().filter(|r| r.monitoring);
+                monitored.map(|r| r.key.clone()).collect()
+            } else {
+                keys.to_vec()
+            };
+            self.git_reload(GitReload::Repositories(&keys));
+            return;
+        }
+        for state in self.git_parked.values_mut() {
+            if state.matches(path) {
+                state.mark_dirty(keys);
+            }
+        }
+    }
+
+    /// A new connection may have lost the service's watches and missed events, so every project
+    /// kept in memory reads its catalog again on return, and the shown one rereads now.
+    /// 新连接可能丢失服务端监听并错过事件，因此内存中的每个项目回到时重读目录，显示中的项目立即重读。
+    pub(super) fn git_reconnected(&mut self) {
+        for state in self.git_parked.values_mut() {
+            state.catalog_loaded = false;
+        }
+        self.git_refresh();
+    }
+
+    /// Makes the selected conversation's project the shown Git state, keeping the previous
+    /// project's state in memory.
+    /// 将所选会话的项目设为显示中的 Git 状态，并在内存中保留上一项目的状态。
+    /// Returns `false` without a selected project.
+    /// 没有所选项目时返回 `false`。
+    fn git_enter_project(&mut self) -> bool {
         // Project.
         // 所选项目数据。
         let Some(project) = self.selected_project() else {
-            return;
+            return false;
         };
         // Workspace; Project id.
         // 所选 Git 工作区；准确宿主项目身份。
         let (workspace, project_id) = (project.path.clone(), project.id.clone());
-        if self.git.workspace.as_deref() != Some(workspace.as_str()) {
-            self.git = GitState {
+        if self.git.workspace.as_deref() == Some(workspace.as_str()) {
+            return true;
+        }
+        let entering = self
+            .git_parked
+            .remove(&workspace)
+            .unwrap_or_else(|| GitState {
                 workspace: Some(workspace),
                 project_id: Some(project_id),
                 ..GitState::default()
-            };
-            // The previous project's repositories must not stay on screen while this one loads.
-            // 本项目加载期间不得继续显示上一项目的仓库。
-            self.emit(BackendEvent::GitCleared);
+            });
+        let leaving = std::mem::replace(&mut self.git, entering);
+        if let Some(path) = leaving.workspace.clone() {
+            self.git_parked.insert(path, leaving);
         }
-        // Catalog.
-        // 服务发布的目录。
-        let Some(catalog) = self.call("workspace.git.catalog", self.workspace_params(json!({})))
-        else {
-            // The screen keeps its last state, and a project read for the first time still leaves
-            // the loading state.
-            // 画面保留最近状态，首次读取的项目仍需离开加载状态。
-            self.emit_git_selected();
+        // The previous project's repositories must not stay on screen.
+        // 不得继续显示上一项目的仓库。
+        self.emit(BackendEvent::GitCleared);
+        true
+    }
+
+    /// Rereads what `scope` names for the selected project, then publishes from memory; a project
+    /// whose catalog was never read loads in full.
+    /// 为所选项目重读 `scope` 指定的内容，随后从内存发布；从未读取目录的项目完整加载。
+    pub(super) fn git_reload(&mut self, scope: GitReload) {
+        if !self.git_enter_project() {
             return;
+        }
+        let scope = if self.git.catalog_loaded {
+            scope
+        } else {
+            GitReload::All
         };
-        let mut repositories: Vec<GitRepository> = arr(&catalog, "repositories")
-            .iter()
-            .map(|repository| GitRepository {
-                key: str_at(repository, "repositoryKey"),
-                name: str_at(repository, "name"),
-                relative_path: str_at(repository, "relativePath"),
-                primary: bool_at(repository, "isPrimary"),
-                monitoring: bool_at(repository, "monitoringEnabled"),
-                changes: None,
-                ahead: 0,
-            })
-            .collect();
+        // Catalog read; Repositories reread whatever their memory.
+        // 是否读取目录；无论内存如何都重读的仓库。
+        let (read_catalog, only): (bool, Option<Vec<String>>) = match scope {
+            GitReload::All => (true, None),
+            GitReload::Catalog => (true, Some(Vec::new())),
+            GitReload::Repositories(keys) => (false, Some(keys.to_vec())),
+        };
+        if read_catalog {
+            // Catalog.
+            // 服务发布的目录。
+            let Some(catalog) =
+                self.call("workspace.git.catalog", self.workspace_params(json!({})))
+            else {
+                // The screen keeps its last state, and a project read for the first time still
+                // leaves the loading state.
+                // 画面保留最近状态，首次读取的项目仍需离开加载状态。
+                self.emit_git_selected();
+                return;
+            };
+            self.git.repositories = arr(&catalog, "repositories")
+                .iter()
+                .map(|repository| GitRepository {
+                    key: str_at(repository, "repositoryKey"),
+                    name: str_at(repository, "name"),
+                    relative_path: str_at(repository, "relativePath"),
+                    primary: bool_at(repository, "isPrimary"),
+                    monitoring: bool_at(repository, "monitoringEnabled"),
+                    changes: None,
+                    ahead: 0,
+                })
+                .collect();
+            self.git.catalog_loaded = true;
+        }
+        let repositories = &self.git.repositories;
         // The current choice stays while monitored; otherwise the primary, then the first
         // monitored repository.
         // 当前选择在仍受监听时保留；否则依次取主仓库、第一个受监听仓库。
@@ -179,7 +305,7 @@ impl Worker {
             .find(|r| r.primary)
             .or(repositories.first())
             .map(|r| r.key.clone());
-        self.git.repository_key = self
+        let selected = self
             .git
             .repository_key
             .clone()
@@ -191,7 +317,14 @@ impl Worker {
                     .find(|r| r.monitoring)
                     .map(|r| r.key.clone())
             });
-        self.git.views.retain(|key, _| monitored(key));
+        let keys: Vec<String> = repositories
+            .iter()
+            .filter(|r| r.monitoring)
+            .map(|r| r.key.clone())
+            .collect();
+        self.git.repository_key = selected;
+        self.git.views.retain(|key, _| keys.contains(key));
+        self.git.dirty.retain(|key| keys.contains(key));
         // Snapshot.
         // 权威快照。
         let snapshot = |worker: &mut Worker, key: &str, mode: &str| {
@@ -202,32 +335,32 @@ impl Worker {
             }));
             worker.call("workspace.diff.snapshot", params)
         };
-        for repository in &mut repositories {
-            if !repository.monitoring {
+        for key in keys {
+            let requested = only.as_ref().is_none_or(|only| only.contains(&key));
+            if !requested && self.git.views.contains_key(&key) {
                 continue;
             }
-            let key = repository.key.clone();
-            let requested = only.is_none_or(|keys| keys.contains(&key));
-            if requested || !self.git.views.contains_key(&key) {
-                // A failed read keeps the repository's previous views.
-                // 读取失败时保留该仓库先前的视图。
-                let views = snapshot(self, &key, "unstaged")
-                    .and_then(|unstaged| Some((unstaged, snapshot(self, &key, "staged")?)));
-                if let Some((unstaged, staged)) = views {
-                    self.git
-                        .views
-                        .insert(key.clone(), RepositoryViews { unstaged, staged });
-                }
-            }
-            if let Some(views) = self.git.views.get(&key) {
-                repository.changes = Some(
-                    map::git_file_refs(&views.unstaged).len()
-                        + map::git_file_refs(&views.staged).len(),
-                );
-                repository.ahead = u64_at(&views.unstaged, "currentBranchUnpushedCommits") as u32;
+            // A failed read keeps the repository's previous views and its mark.
+            // 读取失败时保留该仓库先前的视图及其标记。
+            let views = snapshot(self, &key, "unstaged")
+                .and_then(|unstaged| Some((unstaged, snapshot(self, &key, "staged")?)));
+            if let Some((unstaged, staged)) = views {
+                self.git.dirty.remove(&key);
+                self.git
+                    .views
+                    .insert(key, RepositoryViews { unstaged, staged });
             }
         }
-        self.git.repositories = repositories;
+        let views = &self.git.views;
+        for repository in &mut self.git.repositories {
+            let view = views.get(&repository.key).filter(|_| repository.monitoring);
+            repository.changes = view.map(|view| {
+                map::git_file_refs(&view.unstaged).len() + map::git_file_refs(&view.staged).len()
+            });
+            repository.ahead = view.map_or(0, |view| {
+                u64_at(&view.unstaged, "currentBranchUnpushedCommits") as u32
+            });
+        }
         self.emit_git_selected();
     }
 
@@ -278,14 +411,13 @@ impl Worker {
         }));
     }
 
-    /// Points details and actions at one monitored repository.
-    /// 将详情与操作指向一个受监听仓库。
+    /// Points details and actions at one monitored repository. Loaded repositories switch from
+    /// memory without a request; one never read is loaded alone. Every call publishes, so the
+    /// panel always learns where the selection landed.
+    /// 将详情与操作指向一个受监听仓库。已加载的仓库从内存切换，不发请求；从未读取的仓库单独加载。
+    /// 每次调用都会发布，使面板总能得知选择的落点。
     /// `key` is the exact repository key from the catalog.
     /// `key` 为目录中的准确仓库键。
-    /// Loaded repositories switch from memory without a request; one never read is loaded alone.
-    /// Every call publishes, so the panel always learns where the selection landed.
-    /// 已加载的仓库从内存切换，不发请求；从未读取的仓库单独加载。每次调用都会发布，使面板总能得知
-    /// 选择的落点。
     pub(super) fn git_select_repository(&mut self, key: String) {
         let monitored = self
             .git
@@ -296,7 +428,7 @@ impl Worker {
             self.git.repository_key = Some(key.clone());
         }
         if monitored && !self.git.views.contains_key(&key) {
-            self.git_reload(Some(&[key]));
+            self.git_reload(GitReload::Repositories(&[key]));
         } else {
             self.emit_git_selected();
         }
@@ -311,7 +443,7 @@ impl Worker {
             "request": { "repositoryKey": key, "enabled": enabled },
         }));
         if self.call("workspace.git.setMonitoring", params).is_some() {
-            self.git_refresh();
+            self.git_reload(GitReload::Catalog);
         }
     }
 
@@ -349,7 +481,7 @@ impl Worker {
             },
         }));
         if self.call("workspace.git.fileAction", params).is_some() {
-            self.git_refresh();
+            self.git_reload_selected();
         }
     }
 
@@ -457,7 +589,7 @@ impl Worker {
             } else {
                 GitNotice::Switched(branch)
             }));
-            self.git_refresh();
+            self.git_reload_selected();
         }
     }
 
@@ -540,7 +672,7 @@ impl Worker {
                         if bool_at(&value, "pushed") {
                             worker.emit(BackendEvent::GitNotice(GitNotice::Pushed));
                         }
-                        worker.git_refresh();
+                        worker.git_reload_selected();
                     }
                     Err(error) => worker.failed(error),
                 }
