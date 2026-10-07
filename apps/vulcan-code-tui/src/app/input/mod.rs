@@ -498,6 +498,9 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
         }
         AppCommand::OpenDiff => open_diff(app, app.git.cursor),
         AppCommand::Commit => open_commit(app),
+        AppCommand::SwitchBranch | AppCommand::Push if app.git.repository().is_none() => {
+            app.toast(NoticeSeverity::Info, tr!("gitRepository.unavailable"));
+        }
         AppCommand::SwitchBranch => {
             app.backend.send(Command::LoadWorkspaceGitBranches);
             app.overlay = Some(Overlay::Picker(Picker::new(

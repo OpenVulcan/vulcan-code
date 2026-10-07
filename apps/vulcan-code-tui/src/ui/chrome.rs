@@ -76,7 +76,7 @@ pub fn header(app: &App, area: Rect, buf: &mut Buffer, switcher: bool) {
     buf.set_style(area, Style::new().bg(bg).fg(theme.sidebar_fg));
 
     let mut right = Vec::new();
-    if let Some(snapshot) = &app.git.snapshot {
+    if let Some(snapshot) = app.git.repository() {
         right.push(Span::styled(
             format!("⎇ {}", snapshot.branch),
             Style::new().fg(theme.teal),

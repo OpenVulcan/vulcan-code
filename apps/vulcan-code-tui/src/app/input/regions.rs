@@ -315,6 +315,16 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('b') => execute(app, AppCommand::SwitchBranch, None),
                 KeyCode::Char('p') => execute(app, AppCommand::Push, None),
                 KeyCode::Char('r') => app.backend.send(Command::LoadWorkspaceDiffSnapshot),
+                KeyCode::Char('g') => {
+                    if let Some(key) = app.git.next_repository() {
+                        app.backend.send(Command::SelectGitRepository(key));
+                    }
+                }
+                KeyCode::Char('m') => {
+                    if let Some(menu) = app.git.monitoring_menu() {
+                        app.overlay = Some(crate::app::overlay::Overlay::Menu(menu));
+                    }
+                }
                 _ => {}
             }
         }

@@ -1065,6 +1065,51 @@ impl World {
                 });
             }
             Command::LoadWorkspaceDiffSnapshot => self.emit(BackendEvent::Git(self.git.clone())),
+            Command::SelectGitRepository(key) => {
+                if self
+                    .git
+                    .repositories
+                    .iter()
+                    .any(|r| r.monitoring && r.key == key)
+                {
+                    self.git.selected = Some(key);
+                }
+                self.emit(BackendEvent::Git(self.git.clone()));
+            }
+            Command::SetGitMonitoring {
+                repository_key,
+                enabled,
+            } => {
+                for repository in &mut self.git.repositories {
+                    if repository.key == repository_key {
+                        repository.monitoring = enabled;
+                    }
+                }
+                // Same fallback as the service worker: keep, then primary, then first monitored.
+                // 与服务工作线程相同的回退：保留、主仓库、第一个受监听仓库。
+                let repositories = &self.git.repositories;
+                let monitored =
+                    |key: &String| repositories.iter().any(|r| r.monitoring && &r.key == key);
+                self.git.selected = self
+                    .git
+                    .selected
+                    .clone()
+                    .filter(monitored)
+                    .or_else(|| {
+                        repositories
+                            .iter()
+                            .find(|r| r.primary)
+                            .map(|r| r.key.clone())
+                            .filter(monitored)
+                    })
+                    .or_else(|| {
+                        repositories
+                            .iter()
+                            .find(|r| r.monitoring)
+                            .map(|r| r.key.clone())
+                    });
+                self.emit(BackendEvent::Git(self.git.clone()));
+            }
             Command::RunWorkspaceGitFileAction { paths, stage } => {
                 for file in self
                     .git

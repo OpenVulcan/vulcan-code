@@ -25,9 +25,12 @@ pub struct GitState {
     /// Host project identity owning the selected workspace.
     /// 持有所选工作区的宿主项目身份。
     project_id: Option<String>,
-    /// Exact repository identity returned by the service repository catalog.
-    /// 服务仓库目录返回的准确仓库身份。
+    /// Selected monitored repository that details and actions target.
+    /// 详情与操作所指向的已选受监听仓库。
     repository_key: Option<String>,
+    /// Latest repository catalog with its review counts.
+    /// 最新的仓库目录及其审查计数。
+    repositories: Vec<GitRepository>,
     /// Latest service identities for changes outside the staging area.
     /// 暂存区外变更的最新服务身份。
     unstaged: Vec<GitFileRef>,
@@ -100,8 +103,10 @@ impl Worker {
         params
     }
 
-    /// Loads repository catalogs and both staged and unstaged views for the selected workspace.
-    /// 为所选工作区加载仓库目录及已暂存、未暂存视图。
+    /// Loads the repository catalog and both views of every monitored repository of the selected
+    /// project, as `refreshProjectGitSummary`; details belong to the selected repository.
+    /// 加载所选项目的仓库目录及每个受监听仓库的两个视图，对应 `refreshProjectGitSummary`；
+    /// 详情属于所选仓库。
     pub(super) fn git_refresh(&mut self) {
         // Project.
         // 所选项目数据。
@@ -117,46 +122,94 @@ impl Worker {
                 project_id: Some(project_id),
                 ..GitState::default()
             };
+            // The previous project's repositories must not stay on screen while this one loads.
+            // 本项目加载期间不得继续显示上一项目的仓库。
+            self.emit(BackendEvent::GitCleared);
         }
-        if self.git.repository_key.is_none() {
-            // Catalog.
-            // 服务发布的目录。
-            let catalog = self.call("workspace.git.catalog", self.workspace_params(json!({})));
-            // Catalog.
-            // 服务发布的目录。
-            let Some(catalog) = catalog else {
-                return;
-            };
-            // Repositories.
-            // 服务发布的仓库目录。
-            let repositories = arr(&catalog, "repositories");
-            self.git.repository_key = repositories
-                .iter()
-                .find(|r| bool_at(r, "isPrimary"))
-                .or_else(|| repositories.first())
-                .and_then(|r| opt_str(r, "repositoryKey"));
-            if self.git.repository_key.is_none() {
-                return;
+        // Catalog.
+        // 服务发布的目录。
+        let Some(catalog) = self.call("workspace.git.catalog", self.workspace_params(json!({})))
+        else {
+            // A project read for the first time still leaves the loading state.
+            // 首次读取的项目仍需离开加载状态。
+            if self.git.repositories.is_empty() {
+                self.emit_git_without_details(Vec::new());
             }
-        }
+            return;
+        };
+        let mut repositories: Vec<GitRepository> = arr(&catalog, "repositories")
+            .iter()
+            .map(|repository| GitRepository {
+                key: str_at(repository, "repositoryKey"),
+                name: str_at(repository, "name"),
+                relative_path: str_at(repository, "relativePath"),
+                primary: bool_at(repository, "isPrimary"),
+                monitoring: bool_at(repository, "monitoringEnabled"),
+                changes: None,
+                ahead: 0,
+            })
+            .collect();
+        // The current choice stays while monitored; otherwise the primary, then the first
+        // monitored repository.
+        // 当前选择在仍受监听时保留；否则依次取主仓库、第一个受监听仓库。
+        let monitored = |key: &str| repositories.iter().any(|r| r.monitoring && r.key == key);
+        let primary = repositories
+            .iter()
+            .find(|r| r.primary)
+            .or(repositories.first())
+            .map(|r| r.key.clone());
+        self.git.repository_key = self
+            .git
+            .repository_key
+            .clone()
+            .filter(|key| monitored(key))
+            .or(primary.filter(|key| monitored(key)))
+            .or_else(|| {
+                repositories
+                    .iter()
+                    .find(|r| r.monitoring)
+                    .map(|r| r.key.clone())
+            });
         // Snapshot.
         // 权威快照。
-        let snapshot = |worker: &mut Worker, mode: &str| {
+        let snapshot = |worker: &mut Worker, key: &str, mode: &str| {
             // Exact RPC parameters.
             // 准确 RPC 参数。
             let params = worker.workspace_params(json!({
-                "request": { "repositoryKey": worker.git.repository_key, "mode": mode },
+                "request": { "repositoryKey": key, "mode": mode },
             }));
             worker.call("workspace.diff.snapshot", params)
         };
-        // Unstaged.
-        // 未暂存差异。
-        let Some(unstaged) = snapshot(self, "unstaged") else {
-            return;
-        };
-        // Staged.
-        // 已暂存差异。
-        let Some(staged) = snapshot(self, "staged") else {
+        // Views of the selected repository.
+        // 所选仓库的视图。
+        let mut selected = None;
+        for repository in &mut repositories {
+            if !repository.monitoring {
+                continue;
+            }
+            let key = repository.key.clone();
+            let views = snapshot(self, &key, "unstaged")
+                .and_then(|unstaged| Some((unstaged, snapshot(self, &key, "staged")?)));
+            let Some((unstaged, staged)) = views else {
+                // The selected repository keeps its previous details when its read fails.
+                // 所选仓库读取失败时保留其先前详情。
+                if self.git.repository_key.as_deref() == Some(key.as_str()) {
+                    return;
+                }
+                continue;
+            };
+            repository.changes =
+                Some(map::git_file_refs(&unstaged).len() + map::git_file_refs(&staged).len());
+            repository.ahead = u64_at(&unstaged, "currentBranchUnpushedCommits") as u32;
+            if self.git.repository_key.as_deref() == Some(key.as_str()) {
+                selected = Some((unstaged, staged));
+            }
+        }
+        self.git.repositories = repositories.clone();
+        let Some((unstaged, staged)) = selected else {
+            self.git.unstaged.clear();
+            self.git.staged.clear();
+            self.emit_git_without_details(repositories);
             return;
         };
         self.git.unstaged = map::git_file_refs(&unstaged);
@@ -169,6 +222,8 @@ impl Worker {
         // 未推送提交数量。
         let ahead = u64_at(&unstaged, "currentBranchUnpushedCommits") as usize;
         self.emit(BackendEvent::Git(GitSnapshot {
+            repositories,
+            selected: self.git.repository_key.clone(),
             branch: str_at(&unstaged, "currentBranch"),
             upstream: opt_str(&unstaged, "defaultBranch"),
             ahead: ahead as u32,
@@ -176,6 +231,52 @@ impl Worker {
             files,
             unpushed: map::git_commits(&unstaged, ahead),
         }));
+    }
+
+    /// Publishes repositories without a selected one: none is monitored, or none is readable.
+    /// 发布没有已选仓库的状态：没有受监听仓库，或没有可读仓库。
+    /// `repositories` is the project's catalog, empty when it could not be read.
+    /// `repositories` 为项目目录，无法读取时为空。
+    fn emit_git_without_details(&mut self, repositories: Vec<GitRepository>) {
+        self.emit(BackendEvent::Git(GitSnapshot {
+            repositories,
+            selected: None,
+            branch: String::new(),
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            files: Vec::new(),
+            unpushed: Vec::new(),
+        }));
+    }
+
+    /// Points details and actions at one monitored repository.
+    /// 将详情与操作指向一个受监听仓库。
+    /// `key` is the exact repository key from the catalog.
+    /// `key` 为目录中的准确仓库键。
+    pub(super) fn git_select_repository(&mut self, key: String) {
+        if self
+            .git
+            .repositories
+            .iter()
+            .any(|r| r.monitoring && r.key == key)
+        {
+            self.git.repository_key = Some(key);
+            self.git_refresh();
+        }
+    }
+
+    /// Persists one repository's monitoring switch, then rereads the project.
+    /// 持久化单个仓库的监听开关，随后重读项目。
+    /// `key` is the exact repository key; `enabled` the new switch state.
+    /// `key` 为准确仓库键；`enabled` 为新的开关状态。
+    pub(super) fn git_set_monitoring(&mut self, key: String, enabled: bool) {
+        let params = self.workspace_params(json!({
+            "request": { "repositoryKey": key, "enabled": enabled },
+        }));
+        if self.call("workspace.git.setMonitoring", params).is_some() {
+            self.git_refresh();
+        }
     }
 
     /// Sends stage or unstage actions for exact displayed service file identities.

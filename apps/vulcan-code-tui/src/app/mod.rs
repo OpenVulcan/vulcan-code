@@ -29,6 +29,8 @@ mod plugin_settings_tests;
 mod preview;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod workbench_git_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -386,6 +388,70 @@ impl GitView {
         files.extend(snapshot.files.iter().filter(|f| !f.staged));
         files
     }
+
+    /// The snapshot when a monitored repository is selected; branch and push need one.
+    /// 已选受监听仓库时的快照；分支与推送需要它。
+    pub fn repository(&self) -> Option<&GitSnapshot> {
+        self.snapshot.as_ref().filter(|s| s.selected.is_some())
+    }
+
+    /// The monitored repository after the selected one, wrapping around; `None` with fewer
+    /// than two monitored repositories.
+    /// 所选仓库之后的受监听仓库，循环回绕；受监听仓库少于两个时为 `None`。
+    pub fn next_repository(&self) -> Option<String> {
+        let snapshot = self.snapshot.as_ref()?;
+        let monitored: Vec<&GitRepository> = snapshot
+            .repositories
+            .iter()
+            .filter(|r| r.monitoring)
+            .collect();
+        if monitored.len() < 2 {
+            return None;
+        }
+        let current = monitored
+            .iter()
+            .position(|r| snapshot.selected.as_ref() == Some(&r.key));
+        let next = current.map_or(0, |index| (index + 1) % monitored.len());
+        Some(monitored[next].key.clone())
+    }
+
+    /// The repository monitoring switches as a menu, as the WebUI Git settings dialog.
+    /// 以菜单呈现的仓库监听开关，对应 WebUI 的 Git 设置对话框。
+    pub fn monitoring_menu(&self) -> Option<overlay::Menu> {
+        let snapshot = self.snapshot.as_ref()?;
+        if snapshot.repositories.is_empty() {
+            return None;
+        }
+        Some(overlay::Menu {
+            title: tr!("gitCommitDialog.monitoringManager"),
+            items: snapshot
+                .repositories
+                .iter()
+                .map(|repository| overlay::MenuItem {
+                    label: format!(
+                        "{} {}",
+                        if repository.monitoring { "☑" } else { "☐" },
+                        repository.name
+                    ),
+                    hint: repository_path(repository).unwrap_or_default().to_string(),
+                    action: action::UiAction::Send(Command::SetGitMonitoring {
+                        repository_key: repository.key.clone(),
+                        enabled: !repository.monitoring,
+                    }),
+                    danger: false,
+                })
+                .collect(),
+            cursor: 0,
+            anchor: None,
+        })
+    }
+}
+
+/// The relative path shown beside a repository name, omitted when it adds nothing.
+/// 显示在仓库名称旁的相对路径；不提供额外信息时省略。
+pub fn repository_path(repository: &GitRepository) -> Option<&str> {
+    let path = repository.relative_path.as_str();
+    (!path.is_empty() && path != "." && path != repository.name).then_some(path)
 }
 
 pub struct App {
@@ -924,8 +990,19 @@ impl App {
                         self.reset_composer();
                     }
                 }
-                self.selected = snapshot.selected_conversation_id;
-                self.sidebar_cursor = self.selected.clone().map(SidebarRow::Conversation);
+                // The worker serves selections in order, so a snapshot can still carry an earlier
+                // one; the user's latest listed choice stands, and the snapshot only fills in a
+                // missing or removed selection. The sidebar cursor follows real changes only.
+                // 工作线程按顺序处理选择，快照可能仍带有较早的选择；用户最近且仍在列表中的选择
+                // 保持不变，快照只补上缺失或已移除的选择。侧栏光标只随实际变化移动。
+                let listed = self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| self.conversations.iter().any(|row| &row.id == id));
+                if !listed && self.selected != snapshot.selected_conversation_id {
+                    self.selected = snapshot.selected_conversation_id;
+                    self.sidebar_cursor = self.selected.clone().map(SidebarRow::Conversation);
+                }
             }
             BackendEvent::Selected(id) => self.select_conversation(id),
             BackendEvent::ModelSelection {
@@ -1045,6 +1122,11 @@ impl App {
                 let len = self.git.ordered_files().len();
                 self.git.cursor = self.git.cursor.min(len.saturating_sub(1));
                 self.request_visible_diff();
+            }
+            BackendEvent::GitCleared => {
+                self.git.diffs.clear();
+                self.git.snapshot = None;
+                self.git.cursor = 0;
             }
             BackendEvent::GitDiff(diff) => {
                 self.git.diffs.insert(diff.path.clone(), diff);

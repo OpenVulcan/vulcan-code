@@ -391,8 +391,31 @@ pub struct GitCommit {
     pub subject: String,
 }
 
+/// One repository of the selected project, as `WorkspaceGitRepositorySummary`, with its counts.
+/// 所选项目的一个仓库，对应 `WorkspaceGitRepositorySummary`，并带有其计数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRepository {
+    pub key: String,
+    pub name: String,
+    pub relative_path: String,
+    pub primary: bool,
+    pub monitoring: bool,
+    /// Changed files in both views; `None` while monitoring is off or the read failed.
+    /// 两个视图中的变更文件数；监听关闭或读取失败时为 `None`。
+    pub changes: Option<usize>,
+    pub ahead: u32,
+}
+
+/// Git state of the selected project. The branch, files and commits belong to `selected`;
+/// without a monitored repository they are empty and `selected` is `None`.
+/// 所选项目的 Git 状态。分支、文件与提交属于 `selected`；没有受监听仓库时它们为空且
+/// `selected` 为 `None`。
 #[derive(Debug, Clone)]
 pub struct GitSnapshot {
+    /// Every repository of the project in catalog order.
+    /// 按目录顺序排列的项目全部仓库。
+    pub repositories: Vec<GitRepository>,
+    pub selected: Option<String>,
     pub branch: String,
     pub upstream: Option<String>,
     pub ahead: u32,

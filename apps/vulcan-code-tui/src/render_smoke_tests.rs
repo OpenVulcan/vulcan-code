@@ -10,7 +10,7 @@ use crate::app::hit::Target;
 use crate::app::overlay::{Menu, Overlay};
 use crate::app::pages::Area;
 use crate::app::{App, PanelTab, SidebarMode, input};
-use crate::backend::mock;
+use crate::backend::{Command, mock};
 use crate::i18n;
 use crate::model::{AgentState, SessionGoalStatus};
 use crate::ui::{self, theme::Theme};
@@ -1054,4 +1054,54 @@ fn memory_recall_notice_follows_the_precheck_phase() {
         !buffer_text(terminal.backend().buffer()).contains("VMM"),
         "the recall notice is no longer drawn"
     );
+}
+
+/// The Changes tab lists every repository; a click selects a monitored one, and turning its
+/// monitoring off returns the details to the primary repository.
+/// 变更标签页列出全部仓库；点击可选择受监听仓库，关闭其监听后详情回到主仓库。
+#[test]
+fn changes_tab_selects_and_unmonitors_repositories() {
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    h.app.panel_tab = PanelTab::Changes;
+    h.frame();
+    let selected = |app: &App| {
+        app.git
+            .repository()
+            .and_then(|snapshot| snapshot.selected.clone())
+    };
+    assert_eq!(selected(&h.app).as_deref(), Some("."));
+    click(&mut h.app, "second repository", |t| {
+        matches!(t, Target::Do(UiAction::Send(Command::SelectGitRepository(key)))
+            if key == "vendor/demo-lib")
+    });
+    h.settle();
+    assert_eq!(selected(&h.app).as_deref(), Some("vendor/demo-lib"));
+    snapshot(&mut h.app, "changes-repositories");
+    h.frame();
+
+    click(&mut h.app, "repository settings", |t| {
+        matches!(t, Target::Do(UiAction::OpenMenu(menu))
+            if menu.title == i18n::text("gitCommitDialog.monitoringManager"))
+    });
+    h.frame();
+    let Some(Overlay::Menu(menu)) = &h.app.overlay else {
+        panic!("the repository settings open a menu");
+    };
+    let index = menu
+        .items
+        .iter()
+        .position(|item| {
+            matches!(&item.action, UiAction::Send(Command::SetGitMonitoring { repository_key, enabled })
+                if repository_key == "vendor/demo-lib" && !enabled)
+        })
+        .expect("the selected repository can be unmonitored");
+    click(
+        &mut h.app,
+        "monitoring switch",
+        |t| matches!(t, Target::MenuItem(i) if *i == index),
+    );
+    h.settle();
+    assert_eq!(selected(&h.app).as_deref(), Some("."));
+    assert_eq!(h.app.git.next_repository(), None);
 }

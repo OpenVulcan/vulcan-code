@@ -411,6 +411,7 @@
   "tui.palette.title": "命令面板",
   "tui.panel.agentsHint": "↑↓ 选择 · Enter 详情 · m 消息 · s 停止 · x 结束",
   "tui.panel.diff": "差异",
+  "tui.panel.nextRepository": "下一个仓库",
   "tui.panel.memoryHint": "↑↓ 选择 · Enter 详情 · v 动态/静态",
   "tui.panel.stage": "暂存",
   "tui.panel.stageAll": "全部暂存",

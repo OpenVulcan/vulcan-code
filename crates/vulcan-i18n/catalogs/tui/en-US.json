@@ -411,6 +411,7 @@
   "tui.palette.title": "Command palette",
   "tui.panel.agentsHint": "↑↓ select · Enter details · m message · s stop · x end",
   "tui.panel.diff": "Diff",
+  "tui.panel.nextRepository": "Next repository",
   "tui.panel.memoryHint": "↑↓ select · Enter details · v dynamic/static",
   "tui.panel.stage": "Stage",
   "tui.panel.stageAll": "Stage all",

@@ -28,7 +28,7 @@ use crate::app::hit::{ScrollTarget, Target};
 use crate::app::insight::{self, MemoryEntry};
 use crate::app::overlay::MenuItem;
 use crate::app::{App, Focus, PanelTab};
-use crate::backend::GitBusy;
+use crate::backend::{Command, GitBusy};
 use crate::model::*;
 use crate::tr;
 
@@ -208,7 +208,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     .filter(|_| focused);
     let footer_rows: u16 = match tab {
-        PanelTab::Changes if app.git.snapshot.is_some() => 2,
+        PanelTab::Changes if app.git.repository().is_some() => 2,
         _ if hint.is_some() => 1,
         _ => 0,
     };
@@ -553,6 +553,23 @@ fn changes(app: &App, width: usize, focused: bool) -> Vec<Row> {
         ))]);
     };
     let mut out: Vec<Row> = Vec::new();
+    // Several repositories, or only unmonitored ones, get the repository list, as the WebUI
+    // shows its repository manager.
+    // 多个仓库，或只有未受监听的仓库时显示仓库清单，与 WebUI 显示仓库管理器的条件一致。
+    if snapshot.repositories.len() > 1
+        || (!snapshot.repositories.is_empty() && snapshot.selected.is_none())
+    {
+        repository_rows(app, snapshot, width, &mut out);
+    }
+    if snapshot.selected.is_none() {
+        if snapshot.repositories.is_empty() {
+            out.push(Row::new(Line::from(Span::styled(
+                tr!("gitRepository.unavailable"),
+                theme.muted_text(),
+            ))));
+        }
+        return out;
+    }
     let mut branch = vec![
         Span::styled("⎇ ", theme.primary_text()),
         Span::styled(snapshot.branch.clone(), theme.strong()),
@@ -672,6 +689,78 @@ fn changes(app: &App, width: usize, focused: bool) -> Vec<Row> {
         }
     }
     out
+}
+
+/// The project's repositories: the selected one marked, each with its change and ahead counts;
+/// a click selects a monitored repository, and the header opens the monitoring switches.
+/// 项目的仓库：标记所选仓库，各自显示变更与领先计数；点击选择受监听仓库，标题打开监听开关。
+fn repository_rows(app: &App, snapshot: &GitSnapshot, width: usize, out: &mut Vec<Row>) {
+    let theme = &app.theme;
+    let mut header = vec![Span::styled(
+        format!("⚙ {} · m", tr!("gitCommitDialog.monitoringManager")),
+        Style::new().fg(theme.muted_fg).add_modifier(Modifier::BOLD),
+    )];
+    if app.git.next_repository().is_some() {
+        header.push(Span::styled(
+            format!("  ⇄ {} · g", tr!("tui.panel.nextRepository")),
+            Style::new().fg(theme.faint_fg(theme.sidebar)),
+        ));
+    }
+    let mut row = Row::new(Line::from(header));
+    if let Some(menu) = app.git.monitoring_menu() {
+        row = row.target(Target::Do(UiAction::OpenMenu(Box::new(menu))));
+    }
+    out.push(row);
+    for repository in &snapshot.repositories {
+        let selected = snapshot.selected.as_ref() == Some(&repository.key);
+        let counts = if repository.monitoring {
+            let mut counts = repository
+                .changes
+                .map_or_else(|| "—".to_string(), |changes| format!("±{changes}"));
+            if repository.ahead > 0 {
+                counts.push_str(&format!(" ↑{}", repository.ahead));
+            }
+            counts
+        } else {
+            "○".to_string()
+        };
+        let path = crate::app::repository_path(repository)
+            .map(|path| format!(" {path}"))
+            .unwrap_or_default();
+        let name_width = width.saturating_sub(width_of(&counts) + 3);
+        let name = truncate(&repository.name, name_width);
+        let path = truncate(&path, name_width.saturating_sub(width_of(&name)));
+        let pad = name_width.saturating_sub(width_of(&name) + width_of(&path));
+        let name_style = if !repository.monitoring {
+            Style::new().fg(theme.faint_fg(theme.sidebar))
+        } else if selected {
+            theme.strong()
+        } else {
+            Style::new().fg(theme.fg)
+        };
+        let mut line = Line::from(vec![
+            Span::styled(if selected { "› " } else { "  " }, theme.primary_text()),
+            Span::styled(name, name_style),
+            Span::styled(path, Style::new().fg(theme.faint_fg(theme.sidebar))),
+            Span::raw(" ".repeat(pad + 1)),
+            Span::styled(counts, theme.muted_text()),
+        ]);
+        if selected {
+            line = line.style(Style::new().bg(theme.sidebar_accent));
+        }
+        // Unmonitored repositories are reached through the monitoring switches instead.
+        // 未受监听的仓库改由监听开关进入。
+        let target = if repository.monitoring {
+            UiAction::Send(Command::SelectGitRepository(repository.key.clone()))
+        } else {
+            match app.git.monitoring_menu() {
+                Some(menu) => UiAction::OpenMenu(Box::new(menu)),
+                None => continue,
+            }
+        };
+        out.push(Row::new(line).target(Target::Do(target)));
+    }
+    out.push(Row::new(Line::default()));
 }
 
 fn progress(app: &App, width: usize) -> Vec<Line<'static>> {

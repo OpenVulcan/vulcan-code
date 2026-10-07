@@ -88,7 +88,23 @@ pub fn git_snapshot() -> GitSnapshot {
         additions,
         deletions,
     };
+    // Two monitored repositories exercise the multi-repository list.
+    // 两个受监听仓库用于验证多仓库清单。
+    let repository = |key: &str, name: &str, primary, changes, ahead| GitRepository {
+        key: key.into(),
+        name: name.into(),
+        relative_path: key.into(),
+        primary,
+        monitoring: true,
+        changes: Some(changes),
+        ahead,
+    };
     GitSnapshot {
+        repositories: vec![
+            repository(".", "vulcan-code", true, 5, 2),
+            repository("vendor/demo-lib", "demo-lib", false, 1, 0),
+        ],
+        selected: Some(".".into()),
         branch: "feat/tui-shell".into(),
         upstream: Some("origin/feat/tui-shell".into()),
         ahead: 2,

@@ -69,6 +69,15 @@ pub enum Command {
     /// `loadWorkspaceGitCatalog` + `loadWorkspaceDiffSnapshot` (unstaged and staged).
     /// 加载 Git 目录与差异快照（未暂存与已暂存）。
     LoadWorkspaceDiffSnapshot,
+    /// Targets the details, commit and push at one monitored repository of the project, as
+    /// `handleSelectReviewRepository`.
+    /// 将详情、提交与推送指向项目中一个受监听的仓库，对应 `handleSelectReviewRepository`。
+    SelectGitRepository(String),
+    /// `setWorkspaceGitMonitoring` (`workspace.git.setMonitoring`).
+    SetGitMonitoring {
+        repository_key: String,
+        enabled: bool,
+    },
     /// `runWorkspaceGitFileAction` (`stageFile` / `unstageFile`)
     RunWorkspaceGitFileAction { paths: Vec<String>, stage: bool },
     /// `loadWorkspaceDiffFileDetail`
@@ -254,6 +263,9 @@ pub enum BackendEvent {
     },
     /// `workspaceGitChanged` followed by a diff snapshot.
     Git(GitSnapshot),
+    /// The selected project changed; the previous project's Git state no longer applies.
+    /// 所选项目已变化；上一项目的 Git 状态不再适用。
+    GitCleared,
     GitDiff(FileDiff),
     GitBranches(Vec<GitBranch>),
     /// Streaming commit message generation; `done` closes the stream.

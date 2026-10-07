@@ -1689,6 +1689,11 @@ impl Worker {
                 }
             }
             Command::LoadWorkspaceDiffSnapshot => self.git_refresh(),
+            Command::SelectGitRepository(key) => self.git_select_repository(key),
+            Command::SetGitMonitoring {
+                repository_key,
+                enabled,
+            } => self.git_set_monitoring(repository_key, enabled),
             Command::RunWorkspaceGitFileAction { paths, stage } => self.git_stage(paths, stage),
             Command::LoadWorkspaceDiffFileDetail { path } => self.git_diff(path),
             Command::LoadWorkspaceGitBranches => self.git_branches(),
@@ -2743,5 +2748,123 @@ mod tests {
         assert_eq!(utf16_prefix("a😀b", 1), "a");
         assert_eq!(utf16_prefix("a😀b", 3), "a😀");
         assert_eq!(utf16_prefix("ab", 9), "ab");
+    }
+
+    /// Builds a synthetic workbench with two projects; conversation `a` belongs to `one` and `b`
+    /// to `two`.
+    /// 构建含两个项目的合成工作台；会话 `a` 属于 `one`，`b` 属于 `two`。
+    /// Returns the shared DTO.
+    /// 返回共享 DTO。
+    fn two_project_workbench() -> api::WorkbenchSnapshot {
+        let row = |id: &str, project: &str| {
+            json!({"id": id, "title": id, "status": "idle", "runPhase": "idle",
+                "lastUpdatedLabel": "", "lastUpdatedAt": "", "unread": false,
+                "projectId": project})
+        };
+        serde_json::from_value(json!({
+            "revision": 1, "appVersion": "", "modules": [],
+            "projects": [{"id": "one", "name": "one", "path": "/one"},
+                         {"id": "two", "name": "two", "path": "/two"}],
+            "projectSettingsRevisions": api::ProjectSettingsRevisionSnapshot::default(),
+            "conversations": [row("a", "one"), row("b", "two")],
+            "toolCalls": [], "plugins": [], "settings": [], "providers": [], "memories": [],
+            "commandSessions": [], "logs": []
+        }))
+        .expect("synthetic snapshot matches the shared DTO")
+    }
+
+    /// Returns the Git panel events published so far.
+    /// 返回目前已发布的 Git 面板事件。
+    fn git_events(events: &Receiver<BackendEvent>) -> Vec<BackendEvent> {
+        events
+            .try_iter()
+            .filter(|event| matches!(event, BackendEvent::Git(_) | BackendEvent::GitCleared))
+            .collect()
+    }
+
+    /// Entering a project without repositories clears the previous project's list instead of
+    /// leaving it on screen.
+    /// 进入没有仓库的项目时清除上一项目的清单，而不是继续显示。
+    #[test]
+    fn git_refresh_replaces_the_previous_project_with_an_empty_catalog() {
+        let server = RpcServer::start(4, |request| {
+            let workspace = request.body.pointer("/params/workspacePath").unwrap();
+            match (request.body["method"].as_str().unwrap(), workspace.as_str()) {
+                ("workspace.git.catalog", Some("/one")) => json!({"ok":true,"result":{
+                    "projectRoot":"/one","repositories":[{"repositoryKey":".","repositoryRoot":"/one",
+                    "name":"one","relativePath":".","isPrimary":true,"monitoringEnabled":true}]}}),
+                ("workspace.git.catalog", Some("/two")) => {
+                    json!({"ok":true,"result":{"projectRoot":"/two","repositories":[]}})
+                }
+                ("workspace.diff.snapshot", Some("/one")) => json!({"ok":true,"result":{
+                    "currentBranch":"main","files":[{"key":"k","newPath":"a.rs","status":"modified"}]}}),
+                _ => panic!("unexpected synthetic RPC request"),
+            }
+        });
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        worker.selected = Some("a".into());
+        worker.git_refresh();
+        let first = git_events(&events);
+        assert!(matches!(first.last(), Some(BackendEvent::Git(snapshot))
+            if snapshot.repositories.len() == 1 && snapshot.selected.as_deref() == Some(".")
+               && snapshot.files.len() == 2));
+        worker.selected = Some("b".into());
+        worker.git_refresh();
+        let second = git_events(&events);
+        assert!(matches!(second.first(), Some(BackendEvent::GitCleared)));
+        assert!(matches!(second.last(), Some(BackendEvent::Git(snapshot))
+            if snapshot.repositories.is_empty() && snapshot.selected.is_none()
+               && snapshot.files.is_empty() && snapshot.branch.is_empty()));
+        server.thread.join().unwrap();
+    }
+
+    /// Only monitored repositories are read; an unmonitored primary yields the selection to the
+    /// first monitored one, and selecting it again is the only accepted choice.
+    /// 仅读取受监听仓库；主仓库未受监听时选择让给第一个受监听仓库，且只接受受监听仓库的选择。
+    #[test]
+    fn git_refresh_details_only_monitored_repositories() {
+        let keys = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = keys.clone();
+        let server = RpcServer::start(3, move |request| {
+            match request.body["method"].as_str().unwrap() {
+                "workspace.git.catalog" => json!({"ok":true,"result":{"projectRoot":"/one",
+                    "repositories":[
+                        {"repositoryKey":".","repositoryRoot":"/one","name":"one","relativePath":".",
+                         "isPrimary":true,"monitoringEnabled":false},
+                        {"repositoryKey":"lib","repositoryRoot":"/one/lib","name":"lib",
+                         "relativePath":"lib","isPrimary":false,"monitoringEnabled":true}]}}),
+                "workspace.diff.snapshot" => {
+                    record.lock().unwrap().push(
+                        request
+                            .body
+                            .pointer("/params/request/repositoryKey")
+                            .unwrap()
+                            .clone(),
+                    );
+                    json!({"ok":true,"result":{"currentBranch":"dev","currentBranchUnpushedCommits":1,
+                        "files":[{"key":"k","newPath":"b.rs","status":"added"}]}})
+                }
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        worker.selected = Some("a".into());
+        worker.git_refresh();
+        let published = git_events(&events);
+        let Some(BackendEvent::Git(snapshot)) = published.last() else {
+            panic!("a Git snapshot is published");
+        };
+        assert_eq!(snapshot.selected.as_deref(), Some("lib"));
+        assert_eq!(snapshot.repositories[0].changes, None);
+        assert_eq!(snapshot.repositories[1].changes, Some(2));
+        assert_eq!(snapshot.repositories[1].ahead, 1);
+        assert_eq!(*keys.lock().unwrap(), vec![json!("lib"), json!("lib")]);
+        // An unmonitored repository is not a valid selection and sends no request.
+        // 未受监听仓库不是有效选择，且不发送请求。
+        worker.git_select_repository(".".into());
+        assert!(git_events(&events).is_empty());
+        server.thread.join().unwrap();
     }
 }
