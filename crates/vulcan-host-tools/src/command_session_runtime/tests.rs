@@ -1,14 +1,14 @@
 use super::{
     COMMAND_SESSION_CONTROL_QUEUE_LIMIT, COMMAND_SESSION_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES,
     COMMAND_SESSION_RETAINED_BYTE_LIMIT, COMMAND_SESSION_RETAINED_CHUNK_LIMIT,
-    CommandSessionBackend, CommandSessionDisplayCursor, CommandSessionInputEvent,
-    CommandSessionMutableState, CommandSessionOutputChunk, CommandSessionOutputStream,
-    CommandSessionRecord, CommandSessionRuntime, CommandSessionSharedState, CommandSessionStatus,
-    DEFAULT_PTY_SCREEN_COLS, DEFAULT_PTY_SCREEN_ROWS, MAX_COMMAND_SESSION_READ_CHUNKS,
-    MAX_COMMAND_SESSION_READ_WAIT_MS, PtyScreenFrameState, append_output_chunk_to_state,
-    bounded_command_session_read_chunks, bounded_command_session_read_wait_ms,
-    can_coalesce_output_chunk, encode_command_session_input_events,
-    output_chunk_ends_with_line_boundary,
+    COMMAND_SESSION_RETAINED_FINISHED_LIMIT, CommandSessionBackend, CommandSessionDisplayCursor,
+    CommandSessionInputEvent, CommandSessionMutableState, CommandSessionOutputChunk,
+    CommandSessionOutputStream, CommandSessionRecord, CommandSessionRuntime,
+    CommandSessionSharedState, CommandSessionStatus, DEFAULT_PTY_SCREEN_COLS,
+    DEFAULT_PTY_SCREEN_ROWS, MAX_COMMAND_SESSION_READ_CHUNKS, MAX_COMMAND_SESSION_READ_WAIT_MS,
+    PtyScreenFrameState, append_output_chunk_to_state, bounded_command_session_read_chunks,
+    bounded_command_session_read_wait_ms, can_coalesce_output_chunk,
+    encode_command_session_input_events, output_chunk_ends_with_line_boundary,
 };
 use crate::model::SessionId;
 use std::path::PathBuf;
@@ -114,6 +114,7 @@ async fn retained_command_session_output_is_bounded_and_reports_a_gap() {
     let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
     let record = CommandSessionRecord {
         command_session_id: SessionId::from_u128(0xCA15),
+        admission_seq: 0,
         owner_session_id: SessionId::from_u128(0x0A16),
         display_name: Some(String::from("bounded output test")),
         command: String::from("echo bounded"),
@@ -150,6 +151,7 @@ async fn display_bootstrap_freezes_rendered_chunk_sequence() {
             command_session_id,
             Arc::new(CommandSessionRecord {
                 command_session_id,
+                admission_seq: 0,
                 owner_session_id,
                 display_name: Some(String::from("display cursor test")),
                 command: String::from("echo partial"),
@@ -246,6 +248,7 @@ fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
             command_session_id,
             Arc::new(CommandSessionRecord {
                 command_session_id,
+                admission_seq: 0,
                 owner_session_id,
                 display_name: None,
                 command: String::from("echo live"),
@@ -306,6 +309,7 @@ async fn display_wait_observes_frame_and_failure_metadata_without_output() {
             command_session_id,
             Arc::new(CommandSessionRecord {
                 command_session_id,
+                admission_seq: 0,
                 owner_session_id,
                 display_name: Some(String::from("display metadata test")),
                 command: String::from("echo metadata"),
@@ -370,6 +374,7 @@ async fn peek_session_for_ai_does_not_advance_ai_cursor() {
             command_session_id,
             Arc::new(CommandSessionRecord {
                 command_session_id,
+                admission_seq: 0,
                 owner_session_id,
                 display_name: Some(String::from("peek test")),
                 command: String::from("echo visible"),
@@ -651,4 +656,85 @@ fn stop_marking_does_not_claim_process_reaping() {
     super::finalize_process_exit_state(&mut state, true, None, None, false);
     assert_eq!(state.status, CommandSessionStatus::Stopped);
     assert!(state.process_reaped);
+}
+
+/// Builds one registry record with the given admission order and lifecycle status.
+/// 构建一条带指定准入顺序与生命周期状态的注册表记录。
+fn retention_test_record(
+    admission_seq: u64,
+    status: CommandSessionStatus,
+) -> Arc<CommandSessionRecord> {
+    let shared_state = Arc::new(CommandSessionSharedState::default());
+    shared_state
+        .mutable_state
+        .try_lock()
+        .expect("lock shared state")
+        .status = status;
+    let (control_sender, _control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
+    Arc::new(CommandSessionRecord {
+        command_session_id: SessionId::from_u128(0x5E55_0000 + u128::from(admission_seq)),
+        admission_seq,
+        owner_session_id: SessionId::from_u128(0x0A17),
+        display_name: None,
+        command: String::from("retention test"),
+        shell_label: String::from("sh"),
+        launcher_shell_label: String::from("sh"),
+        interactive_newline: String::from("\n"),
+        cwd: PathBuf::from("."),
+        backend: CommandSessionBackend::Pipe,
+        control_sender,
+        shared_state,
+    })
+}
+
+/// Registering sessions keeps every running session and only the newest finished ones within the limit.
+/// 注册会话时保留全部运行中会话，且已结束会话只保留上限内最新的部分。
+#[test]
+fn register_session_evicts_oldest_finished_sessions_beyond_limit() {
+    let runtime = CommandSessionRuntime::new();
+    let finished_total = COMMAND_SESSION_RETAINED_FINISHED_LIMIT as u64 + 3;
+    let mut admission_seq = 0;
+    let mut running_ids = Vec::new();
+    let mut finished_ids = Vec::new();
+    for index in 0..finished_total {
+        // Interleave running sessions so eviction must skip them rather than trim by position.
+        // 穿插运行中会话，使淘汰必须跳过它们而不是按位置截断。
+        if index % 4 == 0 {
+            let running = retention_test_record(admission_seq, CommandSessionStatus::Running);
+            admission_seq += 1;
+            running_ids.push(running.command_session_id);
+            runtime
+                .register_session(&running)
+                .expect("register running session");
+        }
+        let status = match index % 3 {
+            0 => CommandSessionStatus::Completed,
+            1 => CommandSessionStatus::Failed,
+            _ => CommandSessionStatus::Stopped,
+        };
+        let finished = retention_test_record(admission_seq, status);
+        admission_seq += 1;
+        finished_ids.push(finished.command_session_id);
+        runtime
+            .register_session(&finished)
+            .expect("register finished session");
+    }
+
+    let sessions = runtime.sessions.read().expect("lock runtime registry");
+    assert!(running_ids.iter().all(|id| sessions.contains_key(id)));
+    let evicted = finished_ids.len() - COMMAND_SESSION_RETAINED_FINISHED_LIMIT;
+    assert!(
+        finished_ids[..evicted]
+            .iter()
+            .all(|id| !sessions.contains_key(id))
+    );
+    assert!(
+        finished_ids[evicted..]
+            .iter()
+            .all(|id| sessions.contains_key(id))
+    );
+    assert_eq!(
+        sessions.len(),
+        running_ids.len() + COMMAND_SESSION_RETAINED_FINISHED_LIMIT
+    );
 }

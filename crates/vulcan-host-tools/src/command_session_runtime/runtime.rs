@@ -40,6 +40,7 @@ impl CommandSessionRuntime {
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            next_admission_seq: AtomicU64::new(0),
         }
     }
 
@@ -109,6 +110,7 @@ impl CommandSessionRuntime {
         let (control_sender, control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
         let record = Arc::new(CommandSessionRecord {
             command_session_id,
+            admission_seq: self.next_admission_seq.fetch_add(1, Ordering::Relaxed),
             owner_session_id: request.owner_session_id,
             display_name: request.display_name,
             command: request.command,
@@ -121,14 +123,7 @@ impl CommandSessionRuntime {
             shared_state: Arc::clone(&shared_state),
         });
 
-        self.sessions
-            .write()
-            .map_err(|_| {
-                String::from(
-                    "The command session registry is locked and cannot store a new session.",
-                )
-            })?
-            .insert(command_session_id, Arc::clone(&record));
+        self.register_session(&record)?;
 
         tokio::spawn(run_command_session_supervisor(
             CommandSessionSupervisorInput {
@@ -172,6 +167,7 @@ impl CommandSessionRuntime {
         let (control_sender, control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
         let record = Arc::new(CommandSessionRecord {
             command_session_id,
+            admission_seq: self.next_admission_seq.fetch_add(1, Ordering::Relaxed),
             owner_session_id: request.owner_session_id,
             display_name: request.display_name,
             command: request.command,
@@ -184,14 +180,7 @@ impl CommandSessionRuntime {
             shared_state: Arc::clone(&shared_state),
         });
 
-        self.sessions
-            .write()
-            .map_err(|_| {
-                String::from(
-                    "The command session registry is locked and cannot store a new session.",
-                )
-            })?
-            .insert(command_session_id, Arc::clone(&record));
+        self.register_session(&record)?;
 
         tokio::spawn(run_pty_command_session_supervisor(
             PtyCommandSessionSupervisorInput {
@@ -648,6 +637,35 @@ impl CommandSessionRuntime {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default()
+    }
+
+    /// Stores one started session and evicts the oldest finished sessions beyond the retention limit.
+    /// 保存一条已启动会话，并淘汰超出保留上限的最早已结束会话。
+    ///
+    /// Running sessions are never evicted; a session whose state lock is busy counts as running.
+    /// 运行中的会话从不淘汰；状态锁忙碌的会话按运行中处理。
+    pub(super) fn register_session(
+        &self,
+        record: &Arc<CommandSessionRecord>,
+    ) -> Result<(), String> {
+        let mut sessions = self.sessions.write().map_err(|_| {
+            String::from("The command session registry is locked and cannot store a new session.")
+        })?;
+        sessions.insert(record.command_session_id, Arc::clone(record));
+        let finished = sessions
+            .values()
+            .filter_map(|candidate| {
+                let state = candidate.shared_state.mutable_state.try_lock().ok()?;
+                (state.status != CommandSessionStatus::Running)
+                    .then_some((candidate.admission_seq, candidate.command_session_id))
+            })
+            .collect::<Vec<_>>();
+        for command_session_id in
+            finished_sessions_to_evict(finished, COMMAND_SESSION_RETAINED_FINISHED_LIMIT)
+        {
+            sessions.remove(&command_session_id);
+        }
+        Ok(())
     }
 
     /// Resolves one command-session record and enforces that the caller owns it.

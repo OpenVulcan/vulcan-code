@@ -84,6 +84,9 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - `owner_session_id` 必须保留在 metadata、payload 和 transcript attributes 中，以便重新绑定。
 - 历史 tool result 只在实时会话不可用时作为展示回退，不能覆盖实时状态。
 - 运行时已找不到对应 `command_session_id` 时，当前语义是 `stopped`，不能继续显示 `running`。
+- 注册表只保留有限数量的已结束会话（`COMMAND_SESSION_RETAINED_FINISHED_LIMIT`，唯一定义在
+  [`command_session_runtime`](../../crates/vulcan-host-tools/src/command_session_runtime.rs)）；新会话
+  启动时按准入顺序淘汰最早的已结束会话，运行中会话从不淘汰。被淘汰的会话按上一条语义视为 `stopped`。
 - 一次性命令主要依赖历史结果；长生命周期命令必须始终保留按 ID 回查实时状态的路径。
 
 ## 六、修改后的最低验证

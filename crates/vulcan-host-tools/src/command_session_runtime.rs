@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
@@ -79,6 +80,32 @@ const COMMAND_SESSION_RETAINED_CHUNK_LIMIT: usize = 4_096;
 /// Bounds decoded command-session output retained in memory for AI and visible display cursors.
 /// 限制为 AI 与可见显示游标保留在内存中的命令会话解码输出大小。
 const COMMAND_SESSION_RETAINED_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+
+/// Bounds finished command sessions kept for later reads; running sessions are never evicted.
+/// 限制为后续读取而保留的已结束命令会话数量；运行中的会话从不淘汰。
+const COMMAND_SESSION_RETAINED_FINISHED_LIMIT: usize = 32;
+
+/// Picks the oldest finished sessions that exceed the retention limit.
+/// 选出超出保留上限的最早已结束会话。
+///
+/// # Parameters / 参数
+/// - `finished`: Admission sequence and identifier of every finished session.
+///   每个已结束会话的准入序号与标识。
+/// - `limit`: Maximum number of finished sessions to keep.
+///   最多保留的已结束会话数量。
+///
+/// # Returns / 返回值
+/// Identifiers to remove, oldest admission first.
+/// 需要移除的标识，按准入顺序从早到晚排列。
+fn finished_sessions_to_evict(mut finished: Vec<(u64, SessionId)>, limit: usize) -> Vec<SessionId> {
+    let excess = finished.len().saturating_sub(limit);
+    finished.sort_unstable_by_key(|(admission_seq, _)| *admission_seq);
+    finished
+        .into_iter()
+        .take(excess)
+        .map(|(_, command_session_id)| command_session_id)
+        .collect()
+}
 
 /// Explains a bounded-history gap to every AI or display cursor that fell behind eviction.
 /// 向落后于淘汰边界的每个 AI 或显示游标说明有界历史缺口。
@@ -706,6 +733,9 @@ struct CommandSessionRecord {
     /// Stable command-session identifier keyed inside the runtime registry.
     /// 在运行时注册表内作为键使用的稳定命令会话标识。
     command_session_id: SessionId,
+    /// Registry admission order, used to evict the oldest finished sessions first.
+    /// 注册表准入顺序，用于优先淘汰最早的已结束会话。
+    admission_seq: u64,
     /// Controller session that owns this command session.
     /// 拥有该命令会话的控制器会话。
     owner_session_id: SessionId,
@@ -925,4 +955,7 @@ pub struct CommandSessionRuntime {
     /// Registry of command sessions keyed by their stable command-session identifier.
     /// 以稳定命令会话标识为键建立的命令会话注册表。
     sessions: RwLock<HashMap<SessionId, Arc<CommandSessionRecord>>>,
+    /// Next registry admission sequence assigned to a started session.
+    /// 分配给新启动会话的下一个注册表准入序号。
+    next_admission_seq: AtomicU64,
 }
