@@ -11,7 +11,7 @@
   "htmlAnswers.busy": "Trop de demandes d’affichage. Fermez les vues inutilisées ou réessayez bientôt.",
   "htmlAnswers.open": "Ouvrir la réponse HTML",
   "htmlAnswers.copyLink": "Copier le lien temporaire",
-  "htmlAnswers.linkCopied": "Lien temporaire copié. Il peut être ouvert une seule fois avant son expiration.",
+  "htmlAnswers.linkCopied": "Lien temporaire copié. Il peut être ouvert une fois dans les {seconds} secondes.",
   "htmlAnswers.generating": "Génération du HTML…",
   "htmlAnswers.waiting": "En attente de l’enregistrement de la réponse…",
   "htmlAnswers.cannotOpen": "Ce résultat ne peut pas être ouvert.",

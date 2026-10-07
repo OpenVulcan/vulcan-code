@@ -5,19 +5,24 @@
 
 use axum::{
     Json, Router,
-    extract::{OriginalUri, State},
+    extract::State,
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use tokio::net::TcpListener;
 use vulcan_service_api::{
-    HtmlAnswerSourceIdentity, HtmlAnswerViewError, HtmlAnswerViewLinkRequest,
-    build_webui_static_response,
+    HtmlAnswerRevokeRequest, HtmlAnswerSourceIdentity, HtmlAnswerViewError,
+    HtmlAnswerViewLinkRequest, WebuiServiceRpcError, build_service_project_resource_response,
+    webui_service_ready_discovery_snapshot,
 };
 use vulcan_service_host::html_answers::{
     HtmlAnswerContent, HtmlAnswerRuntime, HtmlAnswerRuntimeConfig,
 };
+use vulcan_service_host::{WebuiServiceHttpConfig, build_webui_service_router};
 use vulcan_session_core::v1::{
     ApiCallId, AssistantSemanticStatus, AssistantTextEvent, ConversationEvent, EventBody,
     EventVisibility, Seq,
@@ -34,9 +39,9 @@ struct Fixture {
     /// Only source this test listener is allowed to authorize.
     /// 测试监听器唯一可以授权的源码。
     source: HtmlAnswerSourceIdentity,
-    /// Explicit built WebUI directory provided by the test runner.
-    /// 测试运行器提供的显式已构建 WebUI 目录。
-    static_root: PathBuf,
+    /// Canonical synthetic window, including the real Core parser's descriptors.
+    /// 权威合成窗口，包含真实 Core 解析器的描述。
+    window: serde_json::Value,
 }
 
 /// Start a temporary listener with the supplied built WebUI root; print only its public origin.
@@ -70,7 +75,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     };
     let descriptor = project_html_answers(&session.to_string(), &event, true).remove(0);
-    let HtmlAnswerAvailability::Ready { artifact_id, .. } = descriptor.availability else {
+    let HtmlAnswerAvailability::Ready {
+        ref artifact_id, ..
+    } = descriptor.availability
+    else {
         return Err("fixture source must be valid".into());
     };
     let identity = HtmlAnswerSourceIdentity {
@@ -79,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         window_generation: 1,
         event_seq: event.seq.value(),
         event_revision: event.event_revision,
-        artifact_id,
+        artifact_id: artifact_id.clone(),
     };
     let selected = identity.clone();
     let runtime = HtmlAnswerRuntime::new(
@@ -105,13 +113,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture {
         runtime: runtime.clone(),
         source: identity,
-        static_root,
+        window: serde_json::json!({
+            "owner": { "session_id": session, "window_generation": 1 }, "service_epoch": "synthetic",
+            "memory_revision": 1, "durable_revision": 1, "events": [event], "older_before_seq": null,
+            "has_more": false, "open_turn_id": null, "open_turn_start_seq": null, "session_config": null,
+            "html_answer_projections": [{ "seq": event.seq, "event_revision": event.event_revision, "answers": [descriptor] }]
+        }),
     };
-    let router = Router::new()
-        .route("/fixture/issue", post(issue))
-        .fallback(static_asset)
-        .with_state(fixture)
-        .merge(runtime.viewer_router());
+    let rpc_runtime = runtime.clone();
+    // The production transport is real; this dispatcher only permits the two synthetic viewing operations.
+    // 正式传输层真实运行；此分发器只允许两个合成查看操作。
+    let router = build_webui_service_router(WebuiServiceHttpConfig {
+        discovery: Arc::new(Mutex::new(webui_service_ready_discovery_snapshot(
+            listener.local_addr()?.port(),
+            std::process::id(),
+            "synthetic",
+            "synthetic-fixture",
+        ))),
+        service_token: "synthetic-fixture".to_owned(),
+        event_bus: tokio::sync::broadcast::channel(8).0,
+        static_root: Some(static_root),
+        html_answers: Some(runtime.clone()),
+        rpc_dispatcher: Arc::new(move |method, params| {
+            let runtime = rpc_runtime.clone();
+            Box::pin(async move {
+                let request = params
+                    .and_then(|mut params| params.get_mut("request").map(serde_json::Value::take))
+                    .ok_or_else(|| {
+                        WebuiServiceRpcError::InvalidParams("request required".to_owned())
+                    })?;
+                match method.as_str() {
+                    "service_create_html_answer_view_link" => {
+                        let request: HtmlAnswerViewLinkRequest = serde_json::from_value(request)
+                            .map_err(|_| {
+                                WebuiServiceRpcError::InvalidParams("invalid request".to_owned())
+                            })?;
+                        let link = runtime.issue(request).await.map_err(fixture_error)?;
+                        serde_json::to_value(link).map_err(|_| {
+                            WebuiServiceRpcError::Service("serialization failed".to_owned())
+                        })
+                    }
+                    "service_revoke_html_answer_view_link" => {
+                        let request: HtmlAnswerRevokeRequest = serde_json::from_value(request)
+                            .map_err(|_| {
+                                WebuiServiceRpcError::InvalidParams("invalid request".to_owned())
+                            })?;
+                        runtime
+                            .revoke(request.client_id, request.grant_id)
+                            .map_err(fixture_error)?;
+                        Ok(serde_json::Value::Null)
+                    }
+                    _ => Err(WebuiServiceRpcError::Service(
+                        "unsupported fixture method".to_owned(),
+                    )),
+                }
+            })
+        }),
+        session_resource_resolver: Arc::new(|_| {
+            Box::pin(async {
+                build_service_project_resource_response(b"", Some("text/plain"), false, None)
+            })
+        }),
+        client_disconnected: Arc::new(|_| {}),
+        status_provider: None,
+        browser_stream: None,
+        browser_download_resolver: None,
+    })
+    .merge(
+        Router::new()
+            .route("/fixture/issue", post(issue))
+            .route(
+                "/fixture/window",
+                get(|State(fixture): State<Fixture>| async { Json(fixture.window) }),
+            )
+            .with_state(fixture),
+    );
     println!("{}", serde_json::json!({ "viewer": origin }));
     let result = axum::serve(listener, router).await;
     runtime.shutdown().await;
@@ -140,20 +216,14 @@ async fn issue(State(fixture): State<Fixture>, Json(locale): Json<String>) -> Re
     }
 }
 
-/// Serve only the explicit test bundle through the same path validation as the production host.
-/// 仅通过与正式宿主相同的路径校验提供显式测试静态包。
-async fn static_asset(State(fixture): State<Fixture>, OriginalUri(uri): OriginalUri) -> Response {
-    let response = build_webui_static_response(
-        Some(&fixture.static_root),
-        uri.path(),
-        "no-store",
-        "Not found",
-    );
-    let mut builder = Response::builder().status(response.status);
-    for (key, value) in response.headers {
-        builder = builder.header(key, value);
-    }
-    builder
-        .body(axum::body::Body::from(response.body))
-        .expect("validated fixture static response")
+/// Match the production string-error envelope without exposing source or capability data.
+/// 匹配正式字符串错误信封，不暴露源码或能力数据。
+fn fixture_error(error: HtmlAnswerViewError) -> WebuiServiceRpcError {
+    WebuiServiceRpcError::Service(
+        serde_json::to_value(error)
+            .expect("enum serializes")
+            .as_str()
+            .expect("enum string")
+            .to_owned(),
+    )
 }

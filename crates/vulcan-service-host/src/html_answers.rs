@@ -77,7 +77,7 @@ impl HtmlAnswerOrigins {
              style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; \
              connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; \
              object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors {}",
-            self.viewer
+            trusted_ancestors(&self.viewer)
         );
         headers.insert(
             header::CONTENT_SECURITY_POLICY,
@@ -91,7 +91,17 @@ impl HtmlAnswerOrigins {
     /// Authorization and fresh source ownership checks are required before this method is called.
     /// 调用此方法之前必须完成授权及最新源码归属校验。
     pub fn content_response(&self, source: String) -> Response {
-        (self.content_headers(), source).into_response()
+        // Establish standards mode and capture Escape before generated scripts register handlers.
+        // 先建立标准模式并捕获 Esc，再允许生成脚本注册处理器。
+        // This response-only prefix never changes persisted/copied source or exposes a host capability.
+        // 此响应专用前缀绝不改变持久化或复制的源码，也不暴露宿主能力。
+        const CLOSE_BOOTSTRAP: &str = concat!(
+            "<!doctype html><script>",
+            "addEventListener('keydown',function(event){",
+            "if(event.key==='Escape')parent.postMessage('vulcan-html-answer-close-v1','*')",
+            "},true);</script>"
+        );
+        (self.content_headers(), format!("{CLOSE_BOOTSTRAP}{source}")).into_response()
     }
 }
 
@@ -114,14 +124,27 @@ fn viewer_headers(renderer: Option<&str>) -> HeaderMap {
     let csp = format!(
         "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
          img-src data:; connect-src 'self'; frame-src {}; worker-src 'none'; \
-         object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
-        renderer.unwrap_or("'none'")
+         object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors {}",
+        renderer.unwrap_or("'none'"),
+        trusted_ancestors("'self'")
     );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_str(&csp).expect("validated origins form a header"),
     );
     headers
+}
+
+/// Permit the configured viewer and the one existing debug workbench origin as ancestors.
+/// 允许已配置查看器及唯一既有调试工作台来源作为祖先。
+/// All ancestors of nested frames must match CSP; release builds retain only the configured origin.
+/// 嵌套框架的所有祖先都必须匹配 CSP；发行构建仅保留配置来源。
+fn trusted_ancestors(primary: &str) -> String {
+    if cfg!(debug_assertions) {
+        format!("{primary} {}", crate::DEV_WEBUI_ORIGIN)
+    } else {
+        primary.to_owned()
+    }
 }
 
 /// Return no-store, no-referrer and restricted-device defaults for either HTML surface.

@@ -1,4 +1,5 @@
 import type { TranslationKey } from "@/i18n-messages";
+import { htmlAnswerErrorLabel } from "@/service/html-answer-errors";
 
 /** A one-result ticket parsed from the trusted viewer URL, never a Core instance token.
  * 从可信查看器 URL 解析的单结果票据，绝不是 Core 实例令牌。 */
@@ -77,16 +78,4 @@ export function releaseHtmlAnswerLease(leaseToken: string): void {
     method: "POST", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leaseToken }), keepalive: true,
   }).catch(() => undefined);
-}
-
-/** Translate stable server codes into shared user labels; unknown transport failures remain explicit.
- * 将稳定服务端错误码映射为共享用户文案；未知传输失败保持显式。 */
-export function htmlAnswerErrorLabel(code: string): TranslationKey {
-  switch (code) {
-    case "expired": return "htmlAnswers.expired";
-    case "stale_source": return "htmlAnswers.stale";
-    case "invalid_request": return "htmlAnswers.invalid";
-    case "capacity": case "rate_limited": return "htmlAnswers.busy";
-    default: return "htmlAnswers.unavailable";
-  }
 }

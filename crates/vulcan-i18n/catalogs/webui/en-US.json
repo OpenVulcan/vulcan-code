@@ -11,7 +11,7 @@
   "htmlAnswers.busy": "Too many viewing requests. Close unused views or try again shortly.",
   "htmlAnswers.open": "Open HTML answer",
   "htmlAnswers.copyLink": "Copy temporary link",
-  "htmlAnswers.linkCopied": "Temporary link copied. It can be opened once before it expires.",
+  "htmlAnswers.linkCopied": "Temporary link copied. It can be opened once within {seconds} seconds.",
   "htmlAnswers.generating": "Generating HTML…",
   "htmlAnswers.waiting": "Waiting for the answer to be saved…",
   "htmlAnswers.cannotOpen": "This result cannot be opened.",

@@ -209,6 +209,7 @@ export function ConversationBlocksView(props: {
     return (
       <MarkdownMessage
         content={block.body}
+        sourceMessageId={block.sourceMessageId}
         eager={props.forceEagerMarkdown}
         streaming={props.itemStreaming}
         onOpenMedia={props.onOpenMedia}

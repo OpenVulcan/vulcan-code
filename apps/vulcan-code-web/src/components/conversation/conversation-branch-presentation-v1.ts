@@ -391,6 +391,9 @@ function conversationMessagesForV1Event(
         body: summary.event.text,
         metadata: {
           ...presentationMetadata(summary, rootInput),
+          // Preserve canonical coordinates before legacy block splitting; this hint grants no execution identity.
+          // 在旧版分块前保留权威坐标；此提示不授予执行身份。
+          v1_html_answer_source: summary.visibility === "provider" && summary.event.text.includes("vulcan-html"),
           api_call_id: summary.event.api_call_id,
           status: summary.event.status,
           stream_state: summary.event.status === "streaming" ? "active" : "sealed",

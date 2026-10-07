@@ -11,7 +11,7 @@
   "htmlAnswers.busy": "查看请求过多，请关闭不用的页面或稍后重试。",
   "htmlAnswers.open": "打开 HTML 回答",
   "htmlAnswers.copyLink": "复制临时链接",
-  "htmlAnswers.linkCopied": "临时链接已复制，可在到期前打开一次。",
+  "htmlAnswers.linkCopied": "临时链接已复制，可在 {seconds} 秒内打开一次。",
   "htmlAnswers.generating": "正在生成 HTML…",
   "htmlAnswers.waiting": "正在等待回答保存…",
   "htmlAnswers.cannotOpen": "此结果无法打开。",

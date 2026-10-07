@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { HTML_ANSWER_CLOSE } from "@/service/html-answer-close";
 import type { HtmlAnswerLease } from "./transport";
 
 /** Trusted viewer state; only a successfully exchanged lease may create an executing iframe.
@@ -14,6 +15,28 @@ export function HtmlAnswerViewer({ state }: { state: HtmlAnswerViewerState }) {
   const { t } = useI18n();
   const [showSource, setShowSource] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<TranslationKey | null>(null);
+  // Only the current opaque child may relay Escape; standalone viewers never close their browser.
+  // 仅当前不透明子框架可转发 Esc；独立查看器绝不关闭浏览器。
+  const content = useRef<HTMLIFrameElement>(null);
+  useEffect(() => {
+    /** Relay the sole non-sensitive notification to the embedding workbench, if present.
+     * 如存在嵌入工作台，转发唯一不含敏感信息的通知。 */
+    const requestClose = () => {
+      if (window.parent !== window) window.parent.postMessage(HTML_ANSWER_CLOSE, "*");
+    };
+    /** Authenticate both the child Window and its sandboxed origin before relaying.
+     * 转发前同时认证子窗口与其沙箱来源。 */
+    const receiveClose = (event: MessageEvent) => {
+      if (event.data === HTML_ANSWER_CLOSE && event.origin === "null"
+        && content.current?.contentWindow && event.source === content.current.contentWindow) requestClose();
+    };
+    /** Close an embedded viewer when Escape originates in its own trusted controls.
+     * Esc 来自可信控件时关闭嵌入查看器。 */
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") requestClose(); };
+    window.addEventListener("message", receiveClose);
+    window.addEventListener("keydown", keydown);
+    return () => { window.removeEventListener("message", receiveClose); window.removeEventListener("keydown", keydown); };
+  }, []);
   if (state.status !== "ready") {
     return <main className="html-viewer-state" role={state.status === "error" ? "alert" : "status"}>
       {t(state.status === "loading" ? "ui.loading" : state.label)}
@@ -37,7 +60,7 @@ export function HtmlAnswerViewer({ state }: { state: HtmlAnswerViewerState }) {
     </header>
     {copyFeedback && <p className="html-viewer-feedback" role="status">{t(copyFeedback)}</p>}
     {showSource ? <pre className="html-viewer-source" tabIndex={0}><code>{lease.source}</code></pre>
-      : <iframe className="html-viewer-content" title={lease.title} src={lease.contentUrl}
+      : <iframe ref={content} className="html-viewer-content" title={lease.title} src={lease.contentUrl}
         sandbox="allow-scripts" referrerPolicy="no-referrer" />}
   </main>;
 }

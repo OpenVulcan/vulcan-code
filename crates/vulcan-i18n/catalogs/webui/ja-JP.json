@@ -11,7 +11,7 @@
   "htmlAnswers.busy": "表示リクエストが多すぎます。不要なページを閉じるか、しばらくして再試行してください。",
   "htmlAnswers.open": "HTML 回答を開く",
   "htmlAnswers.copyLink": "一時リンクをコピー",
-  "htmlAnswers.linkCopied": "一時リンクをコピーしました。有効期限内に一度だけ開けます。",
+  "htmlAnswers.linkCopied": "一時リンクをコピーしました。{seconds} 秒以内に一度だけ開けます。",
   "htmlAnswers.generating": "HTML を生成中…",
   "htmlAnswers.waiting": "回答の保存を待機中…",
   "htmlAnswers.cannotOpen": "この結果は開けません。",

@@ -5,6 +5,10 @@ pub mod html_answers;
 pub mod instance;
 mod rpc_admission;
 
+/// Exact developer workbench origin shared by health admission and nested HTML viewer policies.
+/// 健康准入与嵌套 HTML 查看器策略共用的精确开发工作台来源。
+const DEV_WEBUI_ORIGIN: &str = "http://127.0.0.1:17601";
+
 use std::{
     collections::{HashMap, VecDeque},
     fs,
@@ -521,7 +525,7 @@ fn webui_service_health_origin_is_allowed(headers: &AxumHeaderMap, service_origi
         return false;
     }
     origin.to_str().is_ok_and(|origin| {
-        origin == service_origin || (cfg!(debug_assertions) && origin == "http://127.0.0.1:17601")
+        origin == service_origin || (cfg!(debug_assertions) && origin == DEV_WEBUI_ORIGIN)
     })
 }
 

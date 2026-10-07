@@ -11,7 +11,7 @@
   "htmlAnswers.busy": "檢視要求過多，請關閉不使用的頁面或稍後再試。",
   "htmlAnswers.open": "開啟 HTML 回答",
   "htmlAnswers.copyLink": "複製臨時連結",
-  "htmlAnswers.linkCopied": "臨時連結已複製，可在到期前開啟一次。",
+  "htmlAnswers.linkCopied": "臨時連結已複製，可在 {seconds} 秒內開啟一次。",
   "htmlAnswers.generating": "正在產生 HTML…",
   "htmlAnswers.waiting": "正在等待儲存回答…",
   "htmlAnswers.cannotOpen": "無法開啟此結果。",

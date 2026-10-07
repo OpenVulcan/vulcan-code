@@ -1,4 +1,5 @@
 import * as React from "react";
+import { HtmlAnswerWindowProvider } from "./html-answer-context";
 import { useConversationToolRequestMembership } from "@/state/conversation-live-stream-context";
 import { ConversationAgentInteractionActionsContext } from "./conversation-collaboration-card";
 import { conversationV1SubagentNames, createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
@@ -88,6 +89,9 @@ export interface ConversationBranchWorkspaceV1Props {
   // Exact selected persisted session identity.
   // 精确选中的持久化会话身份。
   sessionId: string;
+  // Explicit embedded parent used by this branch's hydration; absent for root sessions.
+  // 当前分支加载使用的显式嵌入父会话；根会话不提供。
+  parentSessionId?: string | null;
   // Current conversation summary used only by established visual chrome.
   // 仅供既有视觉外壳使用的当前会话摘要。
   conversation: ConversationSummary;
@@ -332,6 +336,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   }, [props.onRootInputGenerationAction, props.sessionRunning]);
 
   return (
+    <HtmlAnswerWindowProvider snapshot={props.snapshot} sessionId={props.sessionId} parentSessionId={props.parentSessionId ?? null}>
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
     <ConversationAgentInteractionActionsContext.Provider value={collaborationActions}>
     <ConversationCollaborationStateContext.Provider value={collaborationState}>
@@ -375,6 +380,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     </ConversationCollaborationStateContext.Provider>
     </ConversationAgentInteractionActionsContext.Provider>
     </ThinkingPopupContext.Provider>
+    </HtmlAnswerWindowProvider>
   );
 }
 

@@ -117,6 +117,13 @@ export function parseConversationBlocks(
     ];
   }
 
+  // Canonical HTML candidates need one untouched document for Core offsets and reference definitions.
+  // 权威 HTML 候选需要一份未经修改的完整文档，以保持 Core 偏移和引用定义。
+  // The explicit V1 projection flag only preserves source; the later Core context decides card validity.
+  // 显式 V1 投影标记仅保留源码；后续 Core 上下文决定卡片有效性。
+  if (metadataValue(message.metadata, ["v1_html_answer_source"]) === true) {
+    return [conversationMarkdownBlock(message.id, 0, message.body)];
+  }
   const source = message.body.replace(/\r\n/g, "\n");
   const directiveBlocks = parseDirectiveConversationBlocks(message.id, source);
   if (directiveBlocks.some((block) => block.kind !== "markdown")) {

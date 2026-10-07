@@ -1,0 +1,26 @@
+/* Load HTML-specific styling with the deferred card, leaving ordinary conversation CSS unchanged.
+   HTML 专属样式随延迟卡片加载，普通会话 CSS 保持原状。 */
+.html-answer-card {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+  background: var(--card);
+}
+.html-answer-card > figcaption,
+.html-answer-card-actions,
+.html-answer-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.html-answer-card-actions { flex-wrap: wrap; margin-top: 8px; }
+.html-answer-card > p { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
+.html-answer-card .html-answer-source { max-height: 55dvh; overflow: auto; white-space: pre; }
+.html-answer-dialog { grid-template-rows: auto minmax(0, 1fr); }
+/* Fullscreen uses all four inset edges; an explicit full width would overflow the right edge.
+   全屏使用四边内缩；显式满宽会使右边缘溢出。 */
+.html-answer-dialog[data-size="fullscreen"] { width: auto; }
+.html-answer-dialog-header { justify-content: space-between; padding: 12px 48px 12px 16px; border-bottom: 1px solid var(--border); }
+.html-answer-dialog-header > [data-slot="dialog-title"] { overflow-wrap: anywhere; }
+.html-answer-viewer-frame { width: 100%; height: 100%; min-height: 0; border: 0; }

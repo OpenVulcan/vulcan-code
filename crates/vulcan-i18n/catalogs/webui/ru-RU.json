@@ -11,7 +11,7 @@
   "htmlAnswers.busy": "Слишком много запросов просмотра. Закройте ненужные страницы или повторите позже.",
   "htmlAnswers.open": "Открыть HTML-ответ",
   "htmlAnswers.copyLink": "Копировать временную ссылку",
-  "htmlAnswers.linkCopied": "Временная ссылка скопирована. Её можно открыть один раз до истечения срока.",
+  "htmlAnswers.linkCopied": "Временная ссылка скопирована. Её можно открыть один раз в течение {seconds} секунд.",
   "htmlAnswers.generating": "Создание HTML…",
   "htmlAnswers.waiting": "Ожидание сохранения ответа…",
   "htmlAnswers.cannotOpen": "Этот результат нельзя открыть.",
