@@ -7,35 +7,6 @@ use crate::{
     workspace_task_project_for_project_id,
 };
 
-/// Rejects the retired native attachment picker RPC.
-/// 拒绝已退役的原生附件选择器 RPC。
-///
-/// # Parameters
-/// 参数
-/// `_state` is retained for the retired RPC signature.
-/// `_state` 为已退役 RPC 签名保留。
-/// `_project_id` is retained for the retired RPC signature.
-/// `_project_id` 为已退役 RPC 签名保留。
-/// `_conversation_id` is retained for the retired RPC signature.
-/// `_conversation_id` 为已退役 RPC 签名保留。
-/// `_kind` is retained for the retired RPC signature.
-/// `_kind` 为已退役 RPC 签名保留。
-///
-/// # Returns
-/// 返回值
-/// Always returns an error directing callers to WebUI upload and path staging APIs.
-/// 始终返回错误，引导调用方使用 WebUI 上传与路径暂存接口。
-pub(crate) async fn service_pick_composer_attachments(
-    _state: SharedServiceBridgeState,
-    _project_id: Option<String>,
-    _conversation_id: Option<String>,
-    _kind: Option<String>,
-) -> Result<Vec<ComposerAttachmentSummary>, String> {
-    Err(String::from(
-        "原生附件选择器已从服务壳层移除，请使用 WebUI 文件上传或路径暂存接口。",
-    ))
-}
-
 /// Stages existing local paths as composer attachments.
 /// 将已有本地路径暂存为输入区附件。
 ///

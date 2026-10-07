@@ -246,9 +246,9 @@ use attachments::{
     composer_attachment_summary_to_provider_core, composer_attachment_workspace_path,
     composer_attachment_workspace_path_from_snapshot,
     resolve_composer_attachment_summary_for_workspace, service_execute_project_attachment_cleanup,
-    service_pick_composer_attachments, service_preview_project_attachment_cleanup,
-    service_reconcile_composer_attachment_draft, service_stage_composer_attachment_bytes,
-    service_stage_composer_attachment_paths, service_stage_composer_attachment_preview_bytes,
+    service_preview_project_attachment_cleanup, service_reconcile_composer_attachment_draft,
+    service_stage_composer_attachment_bytes, service_stage_composer_attachment_paths,
+    service_stage_composer_attachment_preview_bytes,
 };
 use command_sessions::*;
 use context_compaction::{

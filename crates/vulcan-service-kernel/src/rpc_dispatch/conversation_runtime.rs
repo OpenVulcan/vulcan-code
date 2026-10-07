@@ -50,7 +50,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_insert_pending_prompt",
     "service_remove_pending_prompt",
     "service_reorder_pending_prompts",
-    "service_pick_composer_attachments",
     "service_stage_composer_attachment_paths",
     "service_stage_composer_attachment_bytes",
     "service_stage_composer_attachment_preview_bytes",
@@ -347,15 +346,6 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "conversationId")?,
                 rpc_required_param(params, "draggedEntryId")?,
                 rpc_optional_param(params, "targetEntryId")?,
-            )
-            .await,
-        ),
-        "service_pick_composer_attachments" => rpc_json_result(
-            service_pick_composer_attachments(
-                state,
-                rpc_optional_param(params, "projectId")?,
-                rpc_optional_param(params, "conversationId")?,
-                rpc_optional_param(params, "kind")?,
             )
             .await,
         ),
