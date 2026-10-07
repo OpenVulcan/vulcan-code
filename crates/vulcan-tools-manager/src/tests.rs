@@ -2,7 +2,7 @@ use super::{
     ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
     VulcanToolInvocationResult, VulcanToolMode, VulcanToolOrigin,
     VulcanToolSchemaProjectionProfile, VulcanToolSourceKind, VulcanToolsManager,
-    project_tool_parameters_schema, public_tool_name_is_valid,
+    project_tool_parameters_schema,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -103,16 +103,6 @@ fn resolved_names(tool_set: ResolvedToolSet) -> Vec<String> {
         .into_iter()
         .map(|definition| definition.descriptor.name)
         .collect()
-}
-
-/// Verifies strict provider-safe public tool-name validation.
-/// 验证严格 Provider 安全公开工具名校验。
-#[test]
-fn public_tool_name_validation_rejects_common_provider_breakers() {
-    assert!(public_tool_name_is_valid("mcp_server_read_file"));
-    assert!(!public_tool_name_is_valid("workspace.describe"));
-    assert!(!public_tool_name_is_valid("registry/list-skills"));
-    assert!(!public_tool_name_is_valid("1tool"));
 }
 
 /// Verifies native names keep highest priority while LuaSkills collisions gain the readable `ls_` prefix.

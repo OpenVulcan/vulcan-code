@@ -1,5 +1,5 @@
-//! Shared public tool-name normalization helpers used by host-managed tool surfaces.
-//! 宿主管理工具面对外工具名标准化所复用的共享辅助逻辑。
+//! Shared public tool-name rules: the single source for every host-managed tool surface.
+//! 共享公开工具名规则：所有宿主管理工具面的唯一来源。
 
 use std::collections::BTreeSet;
 

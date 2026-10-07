@@ -8,11 +8,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
 
-/// Maximum public tool-name length kept compatible with strict provider validators.
-/// 与严格 Provider 校验器兼容的公开工具名最大长度。
-const MAX_PUBLIC_TOOL_NAME_LEN: usize = 64;
-
 mod manager;
+pub mod public_name;
 mod public_names;
 mod request_streaming;
 pub mod result_markdown;
@@ -22,7 +19,7 @@ mod tests;
 mod types;
 
 pub use manager::VulcanToolsManager;
-pub use public_names::public_tool_name_is_valid;
+pub use public_name::public_tool_name_is_valid;
 pub use request_streaming::{
     IncrementalJsonEvent, IncrementalJsonPathSegment, IncrementalJsonScalar,
     ToolRequestParserContext, ToolRequestParserFactory, ToolRequestParserSession,

@@ -9,11 +9,9 @@ pub use command_session_runtime::CommandSessionRuntime;
 pub use native::{
     NativeToolCatalog, NativeToolDescriptor, NativeToolExecutionRequest, build_native_tool_catalog,
 };
-pub use public_name::{
+pub use vulcan_change_set as change_set;
+pub use vulcan_host_tools::{command_session_runtime, output_decode, result_format, shell_host};
+pub use vulcan_tools_manager::public_name::{
     allocate_unique_public_tool_name, build_direct_public_tool_name,
     build_prefixed_public_tool_name,
-};
-pub use vulcan_change_set as change_set;
-pub use vulcan_host_tools::{
-    command_session_runtime, output_decode, public_name, result_format, shell_host,
 };
