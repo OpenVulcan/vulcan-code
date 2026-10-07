@@ -456,10 +456,6 @@ pub struct ProviderSummary {
     /// 启用过滤前的完整目录模型摘要。
     #[serde(default)]
     pub catalog_models: Vec<ProviderModelSummary>,
-    /// Editable provider form fields projected from the provider catalog definition.
-    /// 从供应商目录定义投影出的可编辑 Provider 表单字段。
-    #[serde(default)]
-    pub fields: Vec<ProviderFieldSummary>,
 }
 
 /// Summarizes one enabled model under a provider.
@@ -602,31 +598,6 @@ pub struct ProviderModelSecondaryRouteSelection {
     /// 人类可读的端点名称。
     #[serde(default)]
     pub endpoint_name: String,
-}
-
-/// Summarizes one editable provider configuration field.
-/// 汇总单个可编辑 Provider 配置字段。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderFieldSummary {
-    /// Stable field key used by save requests.
-    /// 保存请求使用的稳定字段键。
-    pub key: String,
-    /// User-facing field label.
-    /// 面向用户显示的字段标签。
-    pub label: String,
-    /// Field placeholder text.
-    /// 字段占位提示文本。
-    pub placeholder: String,
-    /// Stored field value.
-    /// 已保存的字段值。
-    pub value: String,
-    /// Whether the field should be edited as a secret.
-    /// 该字段是否应按密文字段编辑。
-    pub secret: bool,
-    /// Whether the field must be non-empty before saving.
-    /// 保存前该字段是否必须非空。
-    pub required: bool,
 }
 
 /// Summarizes one persisted MCP server configuration.

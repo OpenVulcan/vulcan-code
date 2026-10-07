@@ -101,9 +101,6 @@ export interface ProviderSummary {
   // Full catalog model list before enabled filtering.
   // 启用过滤前的完整目录模型列表。
   catalogModels?: ProviderModelSummary[];
-  // Editable provider fields.
-  // 可编辑 Provider 字段。
-  fields?: ProviderFieldSummary[];
 }
 
 // ProviderModelSummary describes one enabled model under a provider.
@@ -218,29 +215,6 @@ export interface ProviderModelSecondaryRouteSelection {
   // Endpoint display name.
   // 端点显示名称。
   endpointName?: string;
-}
-
-// ProviderFieldSummary describes one editable provider field.
-// ProviderFieldSummary 描述单个可编辑 Provider 字段。
-export interface ProviderFieldSummary {
-  // Stable field key.
-  // 稳定字段键。
-  key: string;
-  // Field display label.
-  // 字段显示名称。
-  label: string;
-  // Field placeholder text.
-  // 字段占位提示。
-  placeholder: string;
-  // Stored field value.
-  // 已保存字段值。
-  value: string;
-  // Whether this field should use password input.
-  // 该字段是否使用密码输入。
-  secret: boolean;
-  // Whether this field is required.
-  // 该字段是否必填。
-  required: boolean;
 }
 
 // KeyValueSummary describes one string key/value pair.

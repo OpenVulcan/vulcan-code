@@ -526,7 +526,6 @@ pub(crate) fn public_ai_provider_rows_for_selection(
             active,
             catalog_models,
             models,
-            fields: Vec::new(),
         });
     }
     Ok(rows)
