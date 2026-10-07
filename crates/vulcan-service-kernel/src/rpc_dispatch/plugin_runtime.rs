@@ -10,7 +10,6 @@ use vulcan_plugin_runtime::{
     VulcanPluginCapacityRegistrationRequest, VulcanPluginRuntimeManager,
 };
 
-mod prewarm;
 mod prewarm_policy;
 
 /// Exact wire names have one domain owner; plugin business actions do not dispatch these methods.
@@ -26,13 +25,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_register_plugin_capacity",
     "service_control_plugin_capacity",
     "service_begin_plugin_capacity_policy_update",
-    "service_plugin_prewarm_targets",
-    "service_prepare_plugin_prewarm",
-    "service_plugin_prewarm_status",
-    "service_start_plugin_prewarm",
-    "service_cancel_plugin_prewarm",
-    "service_recover_plugin_prewarm_cleanup",
-    "service_forget_plugin_prewarm",
     "service_plugin_prewarm_policy_status",
     "service_begin_plugin_prewarm_policy_update",
 ];

@@ -48,7 +48,7 @@ pub(super) async fn dispatch(
                 .await,
             )
         }
-        _ => return prewarm::dispatch(state, method, params).await,
+        _ => return Ok(ServiceRpcDispatch::Unknown),
     };
     Ok(ServiceRpcDispatch::Handled(result))
 }

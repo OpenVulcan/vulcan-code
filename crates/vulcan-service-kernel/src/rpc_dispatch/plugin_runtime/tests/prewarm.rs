@@ -1,119 +1,8 @@
-//! Real SQLite ownership and native initialization cross the complete service router.
-//! 真实 SQLite 归属及原生初始化穿过完整服务路由。
+//! Real service generations drive production automatic prewarm triggers and original native receipts.
+//! 真实服务代际驱动生产自动预热触发及原原生回执。
 
 use super::*;
-
-mod automatic;
-
-/// Compare real RPC serialization against the browser artifact, normalizing only observed opaque identities.
-/// 比较真实 RPC 序列化与浏览器产物，仅规范化观测到的不透明身份。
-/// Inputs are the initial catalog, inert receipt and completed receipt; assertion failure reports contract drift.
-/// 输入为初始目录、未启动回执及完成回执；断言失败报告契约变化。
-fn assert_browser_prewarm_wire_fixture(catalog: &Value, prepared: &Value, completed: &Value) {
-    // Identity replacements preserve every field, optional value and resource counter.
-    // 身份替换保留每个字段、可选值及资源计数。
-    let mut tokens = vec![
-        (
-            prepared["runtimeId"].as_str().expect("runtime"),
-            "runtime-fixture".to_owned(),
-        ),
-        (
-            prepared["ownerSessionId"].as_str().expect("owner"),
-            "00000000-0000-4000-8000-000000000001".to_owned(),
-        ),
-        (
-            prepared["invocationId"].as_str().expect("invocation"),
-            "prewarm-fixture".to_owned(),
-        ),
-        (
-            prepared["workspaceRoot"].as_str().expect("workspace"),
-            "/fixture/workspace".to_owned(),
-        ),
-        (
-            completed["satisfied"]["pool_id"].as_str().expect("pool"),
-            "pool-fixture".to_owned(),
-        ),
-    ];
-    // The ordered operation sequence is retained; each original ID has one stable fixture identity.
-    // 保留有序操作序列；每个原始 ID 具有唯一稳定夹具身份。
-    let operations = completed["completed"]
-        .as_array()
-        .expect("completed operations")
-        .iter()
-        .chain(std::iter::once(&completed["operation"]));
-    // VM identities come from a process-wide allocator and must not depend on which test ran first.
-    // VM 身份来自进程级分配器，不能依赖先运行了哪个测试。
-    let mut instance_tokens = BTreeMap::new();
-    for operation in operations {
-        let instance_id = operation["value"]["instance_id"]
-            .as_str()
-            .expect("successful native prewarm instance");
-        if !instance_tokens.contains_key(instance_id) {
-            instance_tokens.insert(
-                instance_id,
-                format!("embedded-vm:{}", instance_tokens.len() + 1),
-            );
-        }
-        let operation_id = operation["operation_id"]
-            .as_str()
-            .expect("actual native operation");
-        if !tokens.iter().any(|(original, _)| *original == operation_id) {
-            tokens.push((operation_id, format!("operation-{}", tokens.len())));
-        }
-        let revision = operation["context"]["capability_revision"]
-            .as_str()
-            .expect("module capability revision");
-        if !tokens.iter().any(|(original, _)| *original == revision) {
-            tokens.push((revision, "capability-fixture".to_owned()));
-        }
-        // Native authority retains its own canonical path and per-domain revision/partition tokens.
-        // 原生权威保留自身规范路径与每域修订／分区令牌。
-        for (field, replacement) in [
-            ("execution_revision", "execution-fixture"),
-            ("security_partition", "tool:partition-fixture"),
-            ("workspace_root", "/fixture/workspace"),
-        ] {
-            let original = operation["context"]["caller"][field]
-                .as_str()
-                .expect("native caller identity");
-            if !tokens.iter().any(|(value, _)| *value == original) {
-                tokens.push((original, replacement.to_owned()));
-            }
-        }
-    }
-    // Append instance mappings after operation mappings so existing opaque operation labels remain stable.
-    // 在操作映射之后追加实例映射，保持既有不透明操作标签稳定。
-    tokens.extend(instance_tokens);
-    // Borrow replacement strings only after collecting them to avoid invalidation by vector growth.
-    // 在收集完成后才借用替换字符串，避免向量增长导致失效。
-    let replacements: Vec<_> = tokens
-        .iter()
-        .map(|(original, replacement)| (*original, replacement.as_str()))
-        .collect();
-    let mut actual = json!({"catalog": catalog, "prepared": prepared, "completed": completed});
-    super::normalize_wire_tokens(&mut actual, &replacements);
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../apps/vulcan-code-web/src/service/__fixtures__/plugin-prewarm-wire.json");
-    if std::env::var("VULCAN_UPDATE_PLUGIN_PREWARM_WIRE_FIXTURE").as_deref() == Ok("1") {
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n",
-                serde_json::to_string_pretty(&actual).expect("wire JSON")
-            ),
-        )
-        .expect("explicit prewarm fixture regeneration");
-    }
-    let expected: Value = serde_json::from_str(
-        &std::fs::read_to_string(&path)
-            .expect("regenerate this test with VULCAN_UPDATE_PLUGIN_PREWARM_WIRE_FIXTURE=1"),
-    )
-    .expect("browser prewarm wire JSON");
-    assert_eq!(
-        actual, expected,
-        "prewarm RPC contract changed; inspect browser decoding before regenerating"
-    );
-}
+use crate::plugin_runtime_services::automatic_prewarm::spawn_for_turn;
 use crate::tests::test_support::TestHostRuntimeRoot;
 
 impl Fixture {
@@ -267,20 +156,24 @@ lua_runtime:
             .to_string()
     }
 
-    /// Poll only request's original receipt until actual retirement within one test deadline.
-    /// 在单个测试截止时间内仅轮询 request 的原回执，直到真实退役。
+    /// Poll only the original automatic receipt until actual retirement within one test deadline.
+    /// 在单个测试截止时间内仅轮询原自动回执，直到真实退役。
     /// Returns retained successful or failed evidence without acknowledging it.
     /// 返回保留成功或失败证据，不确认回执。
-    async fn wait_prewarm(&self, request: &Value) -> Value {
+    async fn wait_prewarm(
+        &self,
+        owner: uuid::Uuid,
+        invocation_id: &str,
+    ) -> vulcan_plugin_runtime::VulcanPluginFormalCallStatus {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 // Never replace an unknown receipt with another preparation.
                 // 绝不将未知回执替换为其他准备。
                 let status = self
-                    .rpc("service_plugin_prewarm_status", request.clone())
-                    .await
+                    .runtime
+                    .formal_call_status(invocation_id, &owner.to_string())
                     .expect("original status");
-                if status["retired"] == true {
+                if status.retired {
                     return status;
                 }
                 tokio::task::yield_now().await;
@@ -289,450 +182,395 @@ lua_runtime:
         .await
         .expect("prewarm cleanup reached its test deadline")
     }
+
+    /// Publish one exact tool rule through the production RPC; return no execution authority.
+    /// 通过生产 RPC 发布单个精确工具规则；不返回执行权威。
+    async fn automatic_rule(&self) {
+        let status = self
+            .rpc("service_plugin_prewarm_policy_status", json!({}))
+            .await
+            .expect("policy read");
+        let receipt = self.rpc("service_begin_plugin_prewarm_policy_update", json!({"request": {
+            "updateId": uuid::Uuid::new_v4().to_string(), "runtimeId": status["runtimeId"],
+            "expectedRevision": status["revision"], "rules": [{"pluginId":"control-plugin", "toolId":"control_ping", "targetIdle":1}]
+        }})).await.expect("explicit rule");
+        self.rpc(
+            "service_continue_plugin_pending_operation",
+            json!({"kind": "prewarmPolicy", "operationId": receipt["request"]["updateId"], "action": "forget"}),
+        )
+        .await
+        .expect("acknowledge policy");
+    }
+
+    /// Start a real authoritative kernel turn; return its exact current preparation generation.
+    /// 启动真实权威内核回合；返回其精确当前准备代际。
+    fn accept_turn(&self, owner: uuid::Uuid, turn: &str) -> u64 {
+        let mut state = self.state.lock().expect("service state");
+        crate::start_webui_session_kernel_user_turn(&mut state, owner, turn)
+            .expect("accepted turn");
+        crate::current_webui_prompt_preparation_generation(&state, owner, turn)
+            .expect("exact preparation generation")
+    }
+
+    /// Run the production admission and await only metadata submission, then return the original invocation.
+    /// 运行生产入场并仅等待元数据提交，随后返回原调用标识。
+    async fn automatic_target(&self, owner: uuid::Uuid, turn: &str, generation: u64) -> String {
+        spawn_for_turn(&self.state, self.runtime.clone(), owner, turn, generation)
+            .expect("automatic trigger")
+            .expect("first trigger task")
+            .await
+            .expect("batch observer");
+        let targets = self
+            .runtime
+            .formal_calls(&owner.to_string())
+            .expect("original receipts");
+        targets
+            .into_iter()
+            .find(|call| {
+                call.prewarm
+                    .as_ref()
+                    .is_some_and(|target| target.automatic.is_some())
+            })
+            .expect("automatic target must exist; check real manifest and accepted policy")
+            .invocation_id
+    }
 }
 
-/// Indexed ownership, exact retries and original native evidence survive the full management chain.
-/// 索引归属、精确重试及原生证据在完整管理链路中保持有效。
+/// An accepted turn warms the ordinary workspace once, and receipt forgetting cannot re-arm that turn.
+/// 已接纳回合对普通工作区只预热一次，遗忘回执不能重新激活此回合。
 #[tokio::test]
-async fn plugin_prewarm_rpc_uses_indexed_workspace_and_original_receipts() {
-    // Retain both real runtime and indexed storage for the full request lifetime.
-    // 在完整请求寿命内保留真实运行时及索引存储。
+async fn plugin_automatic_turn_reuses_workspace_and_survives_receipt_forgetting() {
     let fixture = Fixture::new();
-    // Observe the exact enabled declaration rather than inventing a generation.
-    // 观测精确已启用声明，不构造代次。
-    let generation = fixture.enable_prewarm();
-    // The session UUID selects SQLite authority; no workspace path crosses this request.
-    // 会话 UUID 选择 SQLite 权威；没有工作区路径跨越此请求。
     let owner = uuid::Uuid::new_v4();
-    // Ordinary plugin execution must share this project workspace, not the storage root below.
-    // 普通插件执行必须共享此项目工作区，而非下方存储根。
-    let execution_workspace = fixture.attach_workspace(owner);
-    // Physical storage is retained separately from navigation and plugin state.
-    // 物理存储与导航及插件状态分开保留。
+    let workspace = fixture.attach_workspace(owner);
     let storage = TestHostRuntimeRoot::new(owner);
-    // Attach the actual indexed controller without loading a conversation runtime.
-    // 附加真实索引控制器，不加载对话运行时。
-    let controller = storage.attached_host_runtime_handle().await;
-    fixture.state.lock().expect("state").controller_runtime = Some(controller);
-    // The one native parent is the mandatory request fence.
-    // 唯一原生父级是必需请求屏障。
-    let runtime = fixture
+    fixture.state.lock().expect("state").controller_runtime =
+        Some(storage.attached_host_runtime_handle().await);
+    fixture.enable_prewarm();
+    fixture.automatic_rule().await;
+    assert!(
+        spawn_for_turn(&fixture.state, fixture.runtime.clone(), owner, "first", 0)
+            .expect("unaccepted trigger ignored")
+            .is_none()
+    );
+    let generation = fixture.accept_turn(owner, "first");
+    let invocation = fixture.automatic_target(owner, "first", generation).await;
+    let completed = fixture.wait_prewarm(owner, &invocation).await;
+    assert_eq!(completed.error, None, "{completed:?}");
+    let target = completed.prewarm.as_ref().expect("prewarm target");
+    assert_eq!(target.request.workspace_root, workspace);
+    assert_eq!(target.satisfied.as_ref().expect("satisfied").ready, 1);
+    assert!(
+        target.automatic.is_some(),
+        "original provenance must stay on the automatic receipt"
+    );
+    assert!(
+        spawn_for_turn(
+            &fixture.state,
+            fixture.runtime.clone(),
+            owner,
+            "first",
+            generation
+        )
+        .expect("duplicate")
+        .is_none()
+    );
+    fixture
         .runtime
-        .formal_runtime_status()
-        .expect("prewarm fixture must provide the requested evidence")
-        .expect("prewarm fixture must provide the requested evidence")
-        .runtime_id;
-    // Retain exact read identities for every subsequent catalog observation.
-    // 为每次后续目录观测保留精确读取身份。
-    let read = json!({"runtimeId": runtime, "ownerSessionId": owner});
-    // The enabled manifest is projected without native allocation.
-    // 投影已启用清单，不分配原生资源。
-    let catalog = fixture
-        .rpc("service_plugin_prewarm_targets", read.clone())
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
-    assert_eq!(catalog["targets"], json!([]));
-    assert_eq!(
-        catalog["tools"],
-        json!([{
-            "pluginId":"control-plugin", "toolId":"control_ping",
-            "pluginGeneration":generation, "maxResidentVms":2
-        }])
+        .forget_formal_call(&invocation, &owner.to_string())
+        .expect("explicit original acknowledgement");
+    assert!(
+        spawn_for_turn(
+            &fixture.state,
+            fixture.runtime.clone(),
+            owner,
+            "first",
+            generation
+        )
+        .expect("forgotten original cannot rearm turn")
+        .is_none()
     );
-    // Prepare the original request with no untrusted filesystem field.
-    // 准备原始请求，不携带不可信文件系统字段。
-    let preparation = json!({"request":{
-        "runtimeId":runtime, "ownerSessionId":owner, "pluginId":"control-plugin",
-        "toolId":"control_ping", "pluginGeneration":generation, "targetIdle":2
-    }});
-    // Inert registration reserves a receipt but no VM.
-    // 未启动登记预留回执，但不预留 VM。
-    let prepared = fixture
-        .rpc("service_prepare_plugin_prewarm", preparation.clone())
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
-    assert_eq!(prepared["workspaceRoot"], json!(execution_workspace));
-    assert_ne!(
-        prepared["workspaceRoot"],
-        json!(storage.v1_storage_locator().project_directory())
-    );
-    assert_eq!(prepared["pluginGeneration"], generation);
-    assert_eq!(prepared["started"], false);
-    assert_eq!(prepared["retired"], false);
-    assert_eq!(prepared["operation"], Value::Null);
-    assert_eq!(
+    assert!(
         fixture
             .runtime
-            .formal_runtime_status()
-            .expect("prewarm fixture must provide the requested evidence")
-            .expect("prewarm fixture must provide the requested evidence")
-            .resources
-            .resident,
-        0
+            .formal_calls(&owner.to_string())
+            .expect("no replay")
+            .is_empty()
     );
-    assert!(
-        fixture
-            .state
-            .lock()
-            .expect("prewarm fixture must provide the requested evidence")
-            .session_runtime_registry
-            .get(owner)
-            .is_err()
-    );
-    // Every action uses the original invocation rather than tool-based lookup.
-    // 每个动作使用原始调用，而非按工具查找。
-    let original =
-        json!({"runtimeId":runtime,"ownerSessionId":owner,"invocationId":prepared["invocationId"]});
-    assert!(
-        fixture
-            .rpc("service_forget_plugin_prewarm", original.clone())
-            .await
-            .is_err()
-    );
-    {
-        // Outer admission covers the deletion transaction before plugin drain or storage locking.
-        // 外层准入在插件排空或存储加锁前覆盖删除事务。
-        let _deletion = crate::project_conversation_services::begin_session_lifecycle_transition(
-            &fixture.state,
-            [owner],
-            "prewarm lifecycle race",
-        )
-        .expect("reserve conflicting lifecycle admission");
-        assert!(
-            fixture
-                .rpc("service_start_plugin_prewarm", original.clone())
-                .await
-                .is_err()
-        );
-        assert!(
-            fixture
-                .rpc("service_prepare_plugin_prewarm", preparation.clone())
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            fixture
-                .rpc("service_plugin_prewarm_status", original.clone())
-                .await
-                .expect("prewarm fixture must provide the requested evidence"),
-            prepared
-        );
-    }
-    {
-        // Change only the retained project's execution path to simulate a reviewed workspace switch.
-        // 仅改变保留项目的执行路径，模拟经过审阅的工作区切换。
-        let mut state = fixture.state.lock().expect("service state");
-        state
-            .workspace_snapshot
-            .as_mut()
-            .expect("workspace")
-            .task_projects
-            .iter_mut()
-            .find(|project| project.id == "v1-test-project")
-            .expect("project fixture changed")
-            .path = fixture
-            .root
-            .path()
-            .join("replacement-workspace")
-            .to_string_lossy()
-            .into_owned();
-    }
-    assert!(
-        fixture
-            .rpc("service_start_plugin_prewarm", original.clone())
-            .await
-            .is_err(),
-        "old receipt cannot redirect initialization to a new workspace"
-    );
-    fixture.attach_workspace(owner);
-    // Another controller cannot observe or cancel this target even with its invocation UUID.
-    // 即使持有调用 UUID，其他控制器也不能观测或取消此目标。
-    let mut foreign = original.clone();
-    foreign["ownerSessionId"] = json!(uuid::Uuid::new_v4());
-    for method in [
-        "service_plugin_prewarm_status",
-        "service_cancel_plugin_prewarm",
-        "service_recover_plugin_prewarm_cleanup",
-        "service_forget_plugin_prewarm",
-    ] {
-        assert!(
-            fixture.rpc(method, foreign.clone()).await.is_err(),
-            "{method}"
-        );
-    }
-    foreign = original.clone();
-    foreign["runtimeId"] = json!("another-runtime");
-    assert!(
-        fixture
-            .rpc("service_cancel_plugin_prewarm", foreign)
-            .await
-            .is_err()
-    );
-    fixture
-        .rpc("service_start_plugin_prewarm", original.clone())
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
-    fixture
-        .rpc("service_start_plugin_prewarm", original.clone())
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
-    // Two actual initialized VMs establish readiness before the first business invocation.
-    // 首次业务调用前，两个真实已初始化 VM 建立就绪证据。
-    let completed = fixture.wait_prewarm(&original).await;
-    assert_eq!(completed["error"], Value::Null, "{completed}");
-    assert_eq!(completed["succeeded"], true);
-    assert_eq!(completed["satisfied"]["ready"], 2);
-    assert_eq!(completed["satisfied"]["physical"]["resident"], 2);
-    assert_browser_prewarm_wire_fixture(&catalog, &prepared, &completed);
-    assert_eq!(
-        completed["completed"]
-            .as_array()
-            .expect("prewarm fixture must provide the requested evidence")
-            .len(),
-        1
-    );
-    assert_eq!(
-        fixture
-            .rpc("service_start_plugin_prewarm", original.clone())
-            .await
-            .expect("prewarm fixture must provide the requested evidence"),
-        completed
-    );
-    assert_eq!(
-        fixture
-            .rpc("service_recover_plugin_prewarm_cleanup", original.clone())
-            .await
-            .expect("prewarm fixture must provide the requested evidence"),
-        completed
-    );
-    assert_eq!(
-        fixture
-            .rpc("service_plugin_prewarm_targets", read.clone())
-            .await
-            .expect("prewarm fixture must provide the requested evidence")["targets"],
-        json!([completed])
-    );
-    // Ordinary dispatch must borrow the prewarmed workspace domain, not allocate a storage-directory domain.
-    // 普通派发必须借用已预热工作区域，不能分配存储目录域。
     let business = fixture
         .runtime
         .invoke(vulcan_plugin_runtime::VulcanPluginInvocationRequest {
             tool_id: "control_ping".into(),
             arguments: json!({}),
             owner_session_id: owner.to_string(),
-            workspace_root: execution_workspace.clone(),
+            workspace_root: workspace,
         })
         .await
-        .expect("ordinary tool must reuse the prewarmed domain");
+        .expect("ordinary same-domain business");
     assert_eq!(
         business["count"], 1,
-        "prewarm must not execute the business export"
+        "initialization cannot run the business export"
     );
     assert_eq!(
         fixture
             .runtime
             .reusable_tool_domains(&owner.to_string())
-            .expect("original controller domains")
+            .expect("same domain")
             .len(),
-        1,
-        "prewarm and business must share one workspace domain"
+        1
     );
     assert_eq!(
         fixture
             .runtime
             .formal_runtime_status()
-            .expect("native usage")
-            .expect("native owner")
+            .expect("physical state")
+            .expect("parent")
             .resources
             .resident,
-        2
-    );
-    // A stale or non-canonical generation cannot allocate another inert receipt.
-    // 过期或非规范代次不能分配其他未启动回执。
-    for invalid in ["0", "01", "18446744073709551616"] {
-        let mut stale = preparation.clone();
-        stale["request"]["pluginGeneration"] = json!(invalid);
-        assert!(
-            fixture
-                .rpc("service_prepare_plugin_prewarm", stale)
-                .await
-                .is_err()
-        );
-    }
-    assert_eq!(
-        fixture
-            .rpc("service_forget_plugin_prewarm", original.clone())
-            .await
-            .expect("prewarm fixture must provide the requested evidence"),
-        Value::Null
-    );
-    assert!(
-        fixture
-            .rpc("service_start_plugin_prewarm", original.clone())
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        fixture
-            .rpc("service_plugin_prewarm_targets", read)
-            .await
-            .expect("prewarm fixture must provide the requested evidence")["targets"],
-        json!([])
+        1
     );
     fixture.close().await;
 }
 
-/// Missing current session authority blocks initialization but never blocks cancellation or acknowledgement.
-/// 缺失当前会话权威阻止初始化，但绝不阻止取消或确认。
+/// Stop closes queued admission before its worker can create a receipt, and a later generation may warm normally.
+/// 停止在工作者创建回执前关闭排队入场，后续代际可以正常预热。
 #[tokio::test]
-async fn plugin_prewarm_rpc_preserves_cleanup_without_live_session_authority() {
-    // Keep native and indexed fixtures independently removable from service navigation.
-    // 保持原生及索引夹具可独立从服务导航中移除。
+async fn plugin_automatic_stopped_batch_cannot_initialize_or_replay_into_new_generation() {
     let fixture = Fixture::new();
-    // Use a real enabled generation for the original preparation.
-    // 为原准备使用真实已启用代次。
-    let generation = fixture.enable_prewarm();
-    // Authoritative identity selects a dedicated real storage fixture.
-    // 权威身份选择专用真实存储夹具。
     let owner = uuid::Uuid::new_v4();
     fixture.attach_workspace(owner);
-    // Storage survives removal of the service's live controller reference.
-    // 存储在移除服务实时控制器引用后仍存活。
-    let storage = TestHostRuntimeRoot::new(owner);
-    // Finish asynchronous attachment before acquiring the synchronous service lock.
-    // 在取得同步服务锁前完成异步附加。
-    let controller = storage.attached_host_runtime_handle().await;
-    fixture
-        .state
-        .lock()
-        .expect("prewarm fixture must provide the requested evidence")
-        .controller_runtime = Some(controller);
-    // Exact native parent must be retained on every action.
-    // 每个动作必须保留精确原生父级。
-    let runtime = fixture
-        .runtime
-        .formal_runtime_status()
-        .expect("prewarm fixture must provide the requested evidence")
-        .expect("prewarm fixture must provide the requested evidence")
-        .runtime_id;
-    // Prepare no new target for an unindexed UUID, even when navigation has a different valid session.
-    // 即使导航包含其他有效会话，也不为未索引 UUID 准备新目标。
-    let mut preparation = json!({"request":{
-        "runtimeId":runtime, "ownerSessionId":uuid::Uuid::new_v4(), "pluginId":"control-plugin",
-        "toolId":"control_ping", "pluginGeneration":generation, "targetIdle":1
-    }});
+    fixture.enable_prewarm();
+    fixture.automatic_rule().await;
+    let original = fixture.accept_turn(owner, "same-logical-turn");
+    // The current-thread runtime cannot poll this task before the synchronous stop below.
+    // 当前线程运行时不能在下方同步停止前轮询此任务。
+    let queued = spawn_for_turn(
+        &fixture.state,
+        fixture.runtime.clone(),
+        owner,
+        "same-logical-turn",
+        original,
+    )
+    .expect("queue original")
+    .expect("task");
+    crate::stop_webui_session_kernel_generation(&mut fixture.state.lock().expect("state"), owner);
+    queued.await.expect("stopped batch observer");
     assert!(
         fixture
-            .rpc("service_prepare_plugin_prewarm", preparation.clone())
-            .await
-            .is_err()
+            .runtime
+            .formal_calls(&owner.to_string())
+            .expect("no late registration")
+            .is_empty()
     );
-    preparation["request"]["ownerSessionId"] = json!(owner);
-    // Original inert receipt remains queryable after its session controller becomes unavailable.
-    // 原未启动回执在会话控制器不可用后保持可查询。
-    let prepared = fixture
-        .rpc("service_prepare_plugin_prewarm", preparation)
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
-    // Exact original invocation is reused for failed startup and successful cancellation.
-    // 失败启动及成功取消复用精确原始调用。
-    let original =
-        json!({"runtimeId":runtime,"ownerSessionId":owner,"invocationId":prepared["invocationId"]});
-    fixture
-        .state
-        .lock()
-        .expect("prewarm fixture must provide the requested evidence")
-        .controller_runtime = None;
-    assert!(
-        fixture
-            .rpc("service_start_plugin_prewarm", original.clone())
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        fixture
-            .rpc("service_plugin_prewarm_status", original.clone())
-            .await
-            .expect("prewarm fixture must provide the requested evidence"),
-        prepared
-    );
-    // Explicit cancellation retires only the inert input and retains an inspectable original error.
-    // 明确取消仅退役未启动输入，并保留可检查原始错误。
-    let cancelled = fixture
-        .rpc("service_cancel_plugin_prewarm", original.clone())
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
-    assert_eq!(cancelled["retired"], true);
-    assert_eq!(cancelled["started"], false);
-    assert_eq!(cancelled["succeeded"], false);
-    assert!(cancelled["error"].is_string());
     assert_eq!(
         fixture
             .runtime
             .formal_runtime_status()
-            .expect("prewarm fixture must provide the requested evidence")
-            .expect("prewarm fixture must provide the requested evidence")
+            .expect("physical")
+            .expect("parent")
             .resources
             .resident,
         0
     );
-    fixture
-        .rpc("service_forget_plugin_prewarm", original)
-        .await
-        .expect("prewarm fixture must provide the requested evidence");
+    let replacement = fixture.accept_turn(owner, "same-logical-turn");
+    assert_ne!(
+        replacement, original,
+        "ABA restart must change the authoritative generation"
+    );
+    assert!(
+        spawn_for_turn(
+            &fixture.state,
+            fixture.runtime.clone(),
+            owner,
+            "same-logical-turn",
+            original
+        )
+        .expect("old generation ignored")
+        .is_none()
+    );
+    let invocation = fixture
+        .automatic_target(owner, "same-logical-turn", replacement)
+        .await;
+    let completed = fixture.wait_prewarm(owner, &invocation).await;
+    assert!(completed.value.is_some(), "{completed:?}");
     fixture.close().await;
 }
 
-/// Wire decoding rejects unknown paths, numeric generations and positional structs before state access.
-/// 线协议解码在访问状态前拒绝未知路径、数字代次及位置结构体。
+/// Lifecycle drain closes an already accepted queued trigger before an empty registry can be declared drained.
+/// 生命周期排空在空注册表可被判为已排空之前，关闭已接纳排队触发。
 #[tokio::test]
-async fn plugin_prewarm_rpc_rejects_ambiguous_wire_parameters() {
-    // Missing service runtime proves rejection occurs at the decoding boundary.
-    // 缺失服务运行时证明拒绝发生于解码边界。
-    let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
-        uuid::Uuid::new_v4(),
-    )));
-    // Valid carrier identities allow individual malformed fields to be tested independently.
-    // 有效载体身份允许独立测试各畸形字段。
+async fn plugin_automatic_drain_fences_queued_trigger_before_owner_removal() {
+    let fixture = Fixture::new();
     let owner = uuid::Uuid::new_v4();
-    // The sole valid request shape deliberately excludes workspace paths.
-    // 唯一有效请求形状刻意排除工作区路径。
-    let valid = json!({"runtimeId":"runtime","ownerSessionId":owner,"pluginId":"plugin","toolId":"tool","pluginGeneration":"1","targetIdle":1});
-    // Exercise each independent malformed value without inventing a fallback spelling.
-    // 验证每个独立畸形值，不构造备用拼写。
-    let mut path = valid.clone();
-    path["workspaceRoot"] = json!("D:/untrusted");
-    // JSON numeric generations are rejected even when the numeric value looks small.
-    // 即使数值看似很小，也拒绝 JSON 数字代次。
-    let mut number = valid;
-    number["pluginGeneration"] = json!(1);
-    for (method, params) in [
-        ("service_prepare_plugin_prewarm", json!({"request":path})),
-        ("service_prepare_plugin_prewarm", json!({"request":number})),
-        (
-            "service_prepare_plugin_prewarm",
-            json!({"request":["runtime",owner,"plugin","tool","1",1]}),
-        ),
-        ("service_plugin_prewarm_targets", json!(["runtime", owner])),
-        (
-            "service_plugin_prewarm_targets",
-            json!({"runtimeId":"runtime","ownerSessionId":"unknown"}),
-        ),
-        (
-            "service_start_plugin_prewarm",
-            json!({"runtimeId":"runtime","ownerSessionId":owner,"invocationId":"original","retry":true}),
-        ),
-        (
-            "service_cancel_plugin_prewarm",
-            json!({"runtimeId":"runtime","ownerSessionId":owner}),
-        ),
-    ] {
-        assert!(
-            matches!(
-                dispatch(state.clone(), method, &params).await,
-                Err(WebuiServiceRpcError::InvalidParams(_))
-            ),
-            "{method}"
+    fixture.attach_workspace(owner);
+    fixture.enable_prewarm();
+    fixture.automatic_rule().await;
+    let generation = fixture.accept_turn(owner, "draining");
+    let queued = spawn_for_turn(
+        &fixture.state,
+        fixture.runtime.clone(),
+        owner,
+        "draining",
+        generation,
+    )
+    .expect("queue original")
+    .expect("task");
+    let failures = crate::drain_vulcan_plugin_sessions_for_owners(&fixture.state, &[owner]).await;
+    assert!(failures.is_empty(), "{failures:?}");
+    queued.await.expect("drained batch observer");
+    assert!(
+        fixture
+            .runtime
+            .formal_calls(&owner.to_string())
+            .expect("no late work after drain")
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .formal_runtime_status()
+            .expect("physical")
+            .expect("parent")
+            .resources
+            .resident,
+        0
+    );
+    assert!(
+        spawn_for_turn(
+            &fixture.state,
+            fixture.runtime.clone(),
+            owner,
+            "draining",
+            generation
+        )
+        .expect("original remains consumed")
+        .is_none()
+    );
+    fixture.close().await;
+}
+
+/// Disabled policy consumes this accepted trigger, and later turns reclaim prior successful automatic history.
+/// 关闭策略消费此次已接纳触发，后续回合回收先前成功自动历史。
+#[tokio::test]
+async fn plugin_automatic_turns_keep_bounded_success_history_without_midturn_policy_replay() {
+    let fixture = Fixture::new();
+    let owner = uuid::Uuid::new_v4();
+    fixture.attach_workspace(owner);
+    fixture.enable_prewarm();
+    let generation = fixture.accept_turn(owner, "disabled-policy");
+    spawn_for_turn(
+        &fixture.state,
+        fixture.runtime.clone(),
+        owner,
+        "disabled-policy",
+        generation,
+    )
+    .expect("disabled first trigger")
+    .expect("once-only observer")
+    .await
+    .expect("policy observation");
+    assert!(
+        fixture
+            .runtime
+            .formal_calls(&owner.to_string())
+            .expect("default disabled")
+            .is_empty()
+    );
+    fixture.automatic_rule().await;
+    assert!(
+        spawn_for_turn(
+            &fixture.state,
+            fixture.runtime.clone(),
+            owner,
+            "disabled-policy",
+            generation
+        )
+        .expect("policy save is not a new turn")
+        .is_none()
+    );
+    for turn in ["first-enabled", "second-enabled", "third-enabled"] {
+        crate::finish_webui_session_kernel_turn(
+            &mut fixture.state.lock().expect("state"),
+            owner,
+            vulcan_session_core::TurnTerminalStatus::Completed,
+        );
+        let generation = fixture.accept_turn(owner, turn);
+        let invocation = fixture.automatic_target(owner, turn, generation).await;
+        let completed = fixture.wait_prewarm(owner, &invocation).await;
+        assert!(completed.value.is_some(), "{completed:?}");
+        assert_eq!(
+            fixture
+                .runtime
+                .formal_calls(&owner.to_string())
+                .expect("bounded retained success")
+                .len(),
+            1,
+            "only this turn's successful target should remain"
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .formal_runtime_status()
+                .expect("native state")
+                .expect("parent")
+                .resources
+                .resident,
+            1,
+            "subsequent turns must reuse the same initialized VM"
         );
     }
+    fixture.close().await;
+}
+
+/// Normal or failed terminalization revokes queued work just as an explicit stop does.
+/// 正常或失败终态与明确停止一样撤销排队工作。
+#[tokio::test]
+async fn plugin_automatic_terminal_turn_revokes_queued_initialization() {
+    let fixture = Fixture::new();
+    let owner = uuid::Uuid::new_v4();
+    fixture.attach_workspace(owner);
+    fixture.enable_prewarm();
+    fixture.automatic_rule().await;
+    for (turn, terminal) in [
+        (
+            "completed",
+            vulcan_session_core::TurnTerminalStatus::Completed,
+        ),
+        ("failed", vulcan_session_core::TurnTerminalStatus::Failed),
+    ] {
+        let generation = fixture.accept_turn(owner, turn);
+        let queued = spawn_for_turn(
+            &fixture.state,
+            fixture.runtime.clone(),
+            owner,
+            turn,
+            generation,
+        )
+        .expect("queue trigger")
+        .expect("first trigger");
+        crate::finish_webui_session_kernel_turn(
+            &mut fixture.state.lock().expect("state"),
+            owner,
+            terminal,
+        );
+        queued.await.expect("terminal batch");
+        assert!(
+            fixture
+                .runtime
+                .formal_calls(&owner.to_string())
+                .expect("no late work")
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .formal_runtime_status()
+                .expect("physical")
+                .expect("parent")
+                .resources
+                .resident,
+            0
+        );
+    }
+    fixture.close().await;
 }
