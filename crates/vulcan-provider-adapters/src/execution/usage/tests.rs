@@ -2,8 +2,10 @@
 //! 用量抽取与响应开始排序的回归覆盖。
 
 use super::*;
-use std::collections::BTreeSet;
+use serde_json::json;
 use vulcan_ai_contract::AiStreamStateMachine;
+use vulcan_ai_contract::{UsageValue, UsageValueSource};
+use vulcan_llm_core::UsageField;
 
 /// Verifies raw usage is retained but cannot precede the normalized response start.
 /// 验证原始用量会被保留但不能先于规范化响应开始事件。
@@ -152,58 +154,172 @@ fn unregistered_error_usage_kind_does_not_parse_plain_text() {
     );
 }
 
-/// Verifies bundled manifest usage profiles equal the legacy provider functions (plan §15.4).
-/// 验证内置清单 usage Profile 与旧版供应商函数等价（方案 §15.4）。
+/// Returns the first usage profile one bundled manifest declares for a record kind.
+/// 返回单个内置清单为某一记录类型声明的首个用量 Profile。
+fn bundled_usage_profile(
+    provider_id: &str,
+    record_kind: UsageRecordKind,
+) -> UsageExtractionProfile {
+    let directory = vulcan_runtime_assets::resolve_bundled_provider_manifests_directory();
+    let text = std::fs::read_to_string(directory.join(format!("{provider_id}.json")))
+        .unwrap_or_else(|_| panic!("missing bundled manifest `{provider_id}`"));
+    let manifest = crate::provider_manifest::compile_manifest_text(
+        &text,
+        crate::provider_manifest::ManifestOwnership::System,
+    )
+    .expect("bundled manifest must compile");
+    manifest
+        .provider()
+        .service_entries
+        .iter()
+        .flat_map(|entry| entry.protocol_routes.iter())
+        .flat_map(|route| route.usage_extraction_profiles.iter())
+        .find(|profile| profile.record_kind == record_kind)
+        .cloned()
+        .unwrap_or_else(|| panic!("`{provider_id}` must declare a {record_kind:?} usage profile"))
+}
+
+/// Verifies Alibaba Responses billing partitions remain typed and separate from top-level totals.
+/// 验证阿里云 Responses 计费分区保持强类型并与顶层合计分离。
 #[test]
-fn bundled_usage_profiles_match_legacy_provider_functions() {
-    for (provider_id, expected) in [
-        (
-            "alibaba",
-            vulcan_llm_core::alibaba_responses_usage_profiles(),
-        ),
-        ("deepseek", vulcan_llm_core::deepseek_chat_usage_profiles()),
-        (
-            "openrouter",
-            vulcan_llm_core::openrouter_chat_usage_profiles(),
-        ),
-    ] {
-        let directory = vulcan_runtime_assets::resolve_bundled_provider_manifests_directory();
-        let text = std::fs::read_to_string(directory.join(format!("{provider_id}.json")))
-            .unwrap_or_else(|_| panic!("missing bundled manifest `{provider_id}`"));
-        let manifest = crate::provider_manifest::compile_manifest_text(
-            &text,
-            crate::provider_manifest::ManifestOwnership::System,
+fn alibaba_responses_profile_preserves_billing_details() {
+    let profile = bundled_usage_profile("alibaba", UsageRecordKind::JsonBody);
+    let observation = profile
+        .extract(
+            UsageRecordKind::JsonBody,
+            &json!({
+                "id": "resp_alibaba",
+                "model": "qwen-plus",
+                "usage": {
+                    "input_tokens": 52,
+                    "output_tokens": 1280,
+                    "total_tokens": 1332,
+                    "x_details": [{
+                        "input_tokens": 52,
+                        "output_tokens": 1280,
+                        "total_tokens": 1332,
+                        "image_tokens": 12,
+                        "input_tokens_details": {
+                            "text_tokens": 40,
+                            "image_tokens": 12
+                        },
+                        "output_tokens_details": {"reasoning_tokens": 1122},
+                        "x_billing_type": "response_api"
+                    }]
+                }
+            }),
         )
-        .expect("bundled manifest must compile");
-        // manifest_profiles keeps the exact declared order across every route, deduplicated
-        // by profile id because multiple routes may reference the same declaration.
-        // manifest_profiles 跨全部路由保持精确声明顺序，并按 Profile 标识去重
-        // （多条路由可能引用同一声明）。
-        let mut seen = BTreeSet::new();
-        let manifest_profiles = manifest
-            .provider()
-            .service_entries
-            .iter()
-            .flat_map(|entry| entry.protocol_routes.iter())
-            .flat_map(|route| route.usage_extraction_profiles.iter())
-            .filter(|profile| profile.profile_id.starts_with(provider_id))
-            .filter(|profile| seen.insert(profile.profile_id.clone()))
-            .collect::<Vec<_>>();
-        assert!(
-            !manifest_profiles.is_empty(),
-            "{provider_id} manifest must declare its usage profiles"
-        );
-        assert_eq!(
-            manifest_profiles.len(),
-            expected.len(),
-            "{provider_id} profile count must match the legacy function"
-        );
-        for (actual, legacy) in manifest_profiles.iter().zip(expected.iter()) {
-            assert_eq!(
-                **actual, *legacy,
-                "{provider_id} profile `{}` must equal the legacy declaration",
-                actual.profile_id
-            );
+        .expect("Alibaba usage should parse")
+        .expect("Alibaba usage should match");
+    assert_eq!(observation.usage.billing_details.len(), 1);
+    let detail = &observation.usage.billing_details[0];
+    assert_eq!(detail.billing_type, "response_api");
+    assert_eq!(detail.input_tokens, Some(52));
+    assert_eq!(detail.output_tokens, Some(1280));
+    assert_eq!(detail.total_tokens, Some(1332));
+    assert_eq!(detail.text_tokens, Some(40));
+    assert_eq!(detail.image_tokens, Some(12));
+    assert_eq!(detail.reasoning_tokens, Some(1122));
+    assert_eq!(
+        observation
+            .source_paths
+            .get(&UsageField::BillingDetails)
+            .map(String::as_str),
+        Some("/usage/x_details")
+    );
+
+    profile
+        .extract(
+            UsageRecordKind::JsonBody,
+            &json!({
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2,
+                    "x_details": [{
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                        "x_billing_type": "unregistered_type"
+                    }]
+                }
+            }),
+        )
+        .expect_err("unregistered Alibaba billing type must fail");
+}
+
+/// Verifies OpenRouter Chat ignores provider-reported cost and retains token facts only.
+/// 验证 OpenRouter Chat 忽略供应商上报金额，仅保留 Token 事实。
+#[test]
+fn openrouter_chat_profile_retains_token_facts_only() {
+    let profile = bundled_usage_profile("openrouter", UsageRecordKind::JsonBody);
+    let observation = profile
+        .extract(
+            UsageRecordKind::JsonBody,
+            &json!({
+                "id": "chatcmpl-openrouter",
+                "model": "openai/gpt-5",
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                    "cost": 0.00125
+                }
+            }),
+        )
+        .expect("OpenRouter usage should parse")
+        .expect("OpenRouter usage should match");
+    assert!(matches!(
+        &observation.usage.input_tokens,
+        UsageValue::Known { value: 100, .. }
+    ));
+    assert!(matches!(
+        &observation.usage.output_tokens,
+        UsageValue::Known { value: 20, .. }
+    ));
+    assert!(matches!(
+        &observation.usage.total_tokens,
+        UsageValue::Known { value: 120, .. }
+    ));
+    assert!(
+        !observation
+            .source_paths
+            .values()
+            .any(|path| path == "/usage/cost")
+    );
+}
+
+/// Verifies DeepSeek streaming usage reads cache hits and misses only from their registered paths.
+/// 验证 DeepSeek 流式用量只从已注册路径读取缓存命中与未命中。
+#[test]
+fn deepseek_profile_uses_only_registered_cache_paths() {
+    let profile = bundled_usage_profile("deepseek", UsageRecordKind::SseEvent);
+    let observation = profile
+        .extract(
+            UsageRecordKind::SseEvent,
+            &json!({
+                "id": "response-1",
+                "model": "deepseek-chat",
+                "usage": {
+                    "prompt_tokens": 100,
+                    "prompt_cache_hit_tokens": 70,
+                    "prompt_cache_miss_tokens": 30,
+                    "completion_tokens": 9,
+                    "total_tokens": 109
+                }
+            }),
+        )
+        .expect("DeepSeek usage should parse")
+        .expect("usage record should match");
+    assert_eq!(
+        observation.usage.cache_read_tokens,
+        UsageValue::Known {
+            value: 70,
+            source: UsageValueSource::Reported,
         }
-    }
+    );
+    assert_eq!(
+        observation.source_paths[&UsageField::UncachedInputTokens],
+        "/usage/prompt_cache_miss_tokens"
+    );
 }

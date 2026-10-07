@@ -38,7 +38,6 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 [dev-dependencies]
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
-vulcan-llm-core = { workspace = true, features = ["provider-migration-oracles"] }
 
 [lints]
 workspace = true

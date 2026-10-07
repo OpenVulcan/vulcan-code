@@ -433,35 +433,6 @@ pub fn standard_usage_profiles(protocol: crate::UpstreamProtocol) -> Vec<UsageEx
     }
 }
 
-/// Rebuilds the historical Alibaba Responses profiles as a migration-test oracle.
-/// 作为迁移测试对照重建历史阿里云 Responses Profile。
-///
-/// # Returns
-/// 返回值
-/// Historical JSON, SSE, and WebSocket profiles for comparing manifest-owned definitions.
-/// 返回用于对比 Manifest 权威定义的历史 JSON、SSE 与 WebSocket Profile。
-#[cfg(any(test, feature = "provider-migration-oracles"))]
-pub fn alibaba_responses_usage_profiles() -> Vec<UsageExtractionProfile> {
-    responses_usage_profiles()
-        .into_iter()
-        .map(|mut profile| {
-            profile.profile_id = format!("alibaba.{}", profile.profile_id);
-            let pointer = match profile.record_kind {
-                UsageRecordKind::JsonBody | UsageRecordKind::ErrorJsonBody => "/usage/x_details",
-                UsageRecordKind::SseEvent | UsageRecordKind::WebSocketFrame => {
-                    "/response/usage/x_details"
-                }
-            };
-            profile.bindings.push(UsageFieldBinding {
-                field: UsageField::BillingDetails,
-                pointers: vec![pointer.to_string()],
-                encoding: UsageValueEncoding::AlibabaResponsesBillingDetails,
-            });
-            profile
-        })
-        .collect()
-}
-
 /// Builds revised Gemini Interactions terminal-event usage profiles.
 /// 构建修订版 Gemini Interactions 终态事件用量 Profile。
 fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
@@ -552,60 +523,6 @@ fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
                 ),
             ],
             derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
-        },
-    ]
-}
-
-/// Rebuilds the historical DeepSeek Chat profiles as a migration-test oracle.
-/// 作为迁移测试对照重建历史 DeepSeek Chat Profile。
-///
-/// # Returns
-/// 返回值
-/// Historical non-streaming and SSE profiles for comparing manifest-owned definitions.
-/// 返回用于对比 Manifest 权威定义的历史非流式与 SSE Profile。
-#[cfg(any(test, feature = "provider-migration-oracles"))]
-pub fn deepseek_chat_usage_profiles() -> Vec<UsageExtractionProfile> {
-    let bindings = vec![
-        token_binding(UsageField::InputTokens, "/usage/prompt_tokens"),
-        token_binding(
-            UsageField::UncachedInputTokens,
-            "/usage/prompt_cache_miss_tokens",
-        ),
-        token_binding(
-            UsageField::CacheReadTokens,
-            "/usage/prompt_cache_hit_tokens",
-        ),
-        token_binding(UsageField::OutputTokens, "/usage/completion_tokens"),
-        token_binding(
-            UsageField::ReasoningTokens,
-            "/usage/completion_tokens_details/reasoning_tokens",
-        ),
-        token_binding(UsageField::TotalTokens, "/usage/total_tokens"),
-        string_binding(UsageField::ResponseModel, "/model"),
-        string_binding(UsageField::ResponseId, "/id"),
-    ];
-    vec![
-        UsageExtractionProfile {
-            profile_id: String::from("deepseek.chat.body.v1"),
-            revision: 1,
-            record_kind: UsageRecordKind::JsonBody,
-            update_kind: UsageUpdateKind::Final,
-            event_type_pointer: None,
-            event_type_value: None,
-            required_pointer: Some(String::from("/usage")),
-            bindings: bindings.clone(),
-            derivations: Vec::new(),
-        },
-        UsageExtractionProfile {
-            profile_id: String::from("deepseek.chat.sse.usage.v1"),
-            revision: 1,
-            record_kind: UsageRecordKind::SseEvent,
-            update_kind: UsageUpdateKind::Final,
-            event_type_pointer: None,
-            event_type_value: None,
-            required_pointer: Some(String::from("/usage")),
-            bindings,
-            derivations: Vec::new(),
         },
     ]
 }
@@ -715,19 +632,6 @@ fn chat_usage_profiles() -> Vec<UsageExtractionProfile> {
             derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
         },
     ]
-}
-
-/// Rebuilds the historical OpenRouter Chat token profiles as a migration-test oracle.
-/// 作为迁移测试对照重建历史 OpenRouter Chat Token Profile。
-#[cfg(any(test, feature = "provider-migration-oracles"))]
-pub fn openrouter_chat_usage_profiles() -> Vec<UsageExtractionProfile> {
-    let mut profiles = chat_usage_profiles();
-    for profile in &mut profiles {
-        profile.profile_id = profile
-            .profile_id
-            .replacen("openai.chat.", "openrouter.chat.", 1);
-    }
-    profiles
 }
 
 /// Builds Anthropic message-start and message-delta usage profiles.
@@ -2050,161 +1954,6 @@ mod tests {
             .expect("nullable usage placeholder should be accepted");
 
         assert!(observation.is_none());
-    }
-
-    /// Verifies Alibaba Responses billing partitions remain typed and separate from top-level totals.
-    /// 验证阿里云 Responses 计费分区保持强类型并与顶层合计分离。
-    #[test]
-    fn alibaba_responses_profile_preserves_billing_details() {
-        let profile = alibaba_responses_usage_profiles()
-            .into_iter()
-            .find(|profile| profile.record_kind == UsageRecordKind::JsonBody)
-            .expect("Alibaba Responses JSON profile should exist");
-        let observation = profile
-            .extract(
-                UsageRecordKind::JsonBody,
-                &json!({
-                    "id": "resp_alibaba",
-                    "model": "qwen-plus",
-                    "usage": {
-                        "input_tokens": 52,
-                        "output_tokens": 1280,
-                        "total_tokens": 1332,
-                        "x_details": [{
-                            "input_tokens": 52,
-                            "output_tokens": 1280,
-                            "total_tokens": 1332,
-                            "image_tokens": 12,
-                            "input_tokens_details": {
-                                "text_tokens": 40,
-                                "image_tokens": 12
-                            },
-                            "output_tokens_details": {"reasoning_tokens": 1122},
-                            "x_billing_type": "response_api"
-                        }]
-                    }
-                }),
-            )
-            .expect("Alibaba usage should parse")
-            .expect("Alibaba usage should match");
-        assert_eq!(observation.usage.billing_details.len(), 1);
-        let detail = &observation.usage.billing_details[0];
-        assert_eq!(detail.billing_type, "response_api");
-        assert_eq!(detail.input_tokens, Some(52));
-        assert_eq!(detail.output_tokens, Some(1280));
-        assert_eq!(detail.total_tokens, Some(1332));
-        assert_eq!(detail.text_tokens, Some(40));
-        assert_eq!(detail.image_tokens, Some(12));
-        assert_eq!(detail.reasoning_tokens, Some(1122));
-        assert_eq!(
-            observation
-                .source_paths
-                .get(&UsageField::BillingDetails)
-                .map(String::as_str),
-            Some("/usage/x_details")
-        );
-
-        let error = profile
-            .extract(
-                UsageRecordKind::JsonBody,
-                &json!({
-                    "usage": {
-                        "input_tokens": 1,
-                        "output_tokens": 1,
-                        "total_tokens": 2,
-                        "x_details": [{
-                            "input_tokens": 1,
-                            "output_tokens": 1,
-                            "total_tokens": 2,
-                            "x_billing_type": "unregistered_type"
-                        }]
-                    }
-                }),
-            )
-            .expect_err("unregistered Alibaba billing type must fail");
-        assert!(error.message.contains("must equal `response_api`"));
-    }
-
-    /// Verifies OpenRouter Chat ignores provider-reported cost and retains token facts only.
-    /// 验证 OpenRouter Chat 忽略供应商上报金额，仅保留 Token 事实。
-    #[test]
-    fn openrouter_chat_profile_retains_token_facts_only() {
-        // profile is the exact non-streaming OpenRouter Chat extraction contract.
-        // profile 是精确的非流式 OpenRouter Chat 提取契约。
-        let profile = openrouter_chat_usage_profiles()
-            .into_iter()
-            .find(|profile| profile.record_kind == UsageRecordKind::JsonBody)
-            .expect("OpenRouter Chat JSON profile should exist");
-        let observation = profile
-            .extract(
-                UsageRecordKind::JsonBody,
-                &json!({
-                    "id": "chatcmpl-openrouter",
-                    "model": "openai/gpt-5",
-                    "usage": {
-                        "prompt_tokens": 100,
-                        "completion_tokens": 20,
-                        "total_tokens": 120,
-                        "cost": 0.00125
-                    }
-                }),
-            )
-            .expect("OpenRouter usage should parse")
-            .expect("OpenRouter usage should match");
-        assert!(matches!(
-            &observation.usage.input_tokens,
-            UsageValue::Known { value: 100, .. }
-        ));
-        assert!(matches!(
-            &observation.usage.output_tokens,
-            UsageValue::Known { value: 20, .. }
-        ));
-        assert!(matches!(
-            &observation.usage.total_tokens,
-            UsageValue::Known { value: 120, .. }
-        ));
-        assert!(
-            !observation
-                .source_paths
-                .values()
-                .any(|path| path == "/usage/cost")
-        );
-    }
-
-    #[test]
-    fn deepseek_profile_uses_only_registered_cache_paths() {
-        let profile = deepseek_chat_usage_profiles()
-            .into_iter()
-            .find(|profile| profile.record_kind == UsageRecordKind::SseEvent)
-            .expect("DeepSeek SSE profile should exist");
-        let observation = profile
-            .extract(
-                UsageRecordKind::SseEvent,
-                &json!({
-                    "id":"response-1",
-                    "model":"deepseek-chat",
-                    "usage": {
-                        "prompt_tokens":100,
-                        "prompt_cache_hit_tokens":70,
-                        "prompt_cache_miss_tokens":30,
-                        "completion_tokens":9,
-                        "total_tokens":109
-                    }
-                }),
-            )
-            .expect("DeepSeek usage should parse")
-            .expect("usage record should match");
-        assert_eq!(
-            observation.usage.cache_read_tokens,
-            UsageValue::Known {
-                value: 70,
-                source: UsageValueSource::Reported,
-            }
-        );
-        assert_eq!(
-            observation.source_paths[&UsageField::UncachedInputTokens],
-            "/usage/prompt_cache_miss_tokens"
-        );
     }
 
     /// Verifies Anthropic input and cache dimensions follow their disjoint provider semantics.
