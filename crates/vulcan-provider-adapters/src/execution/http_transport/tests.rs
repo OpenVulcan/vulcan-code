@@ -607,7 +607,6 @@ async fn http_wire_response_capture_survives_tool_argument_abort() {
 #[tokio::test]
 async fn responses_failure_never_touches_other_protocol_endpoints() {
     use std::sync::Mutex as StdMutex;
-    use std::time::Duration;
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -615,15 +614,23 @@ async fn responses_failure_never_touches_other_protocol_endpoints() {
     let address = listener.local_addr().expect("address should resolve");
     let observed_paths = std::sync::Arc::new(StdMutex::new(Vec::<String>::new()));
     let server_paths = std::sync::Arc::clone(&observed_paths);
+    // client_done fires once the execution stream is dropped; the client awaits every response before
+    // yielding its terminal error, so any request it made is already pending or accepted by then.
+    // client_done 在执行流被丢弃后触发；客户端在产生终态错误前等待每个响应，
+    // 因此其发出的任何请求届时都已在等待接受或已被接受。
+    let (client_done, mut client_finished) = oneshot::channel::<()>();
     let server = tokio::spawn(async move {
         // Accept up to four requests to detect any cross-protocol attempt; each returns a
         // terminal 400 so the client must never follow up on another protocol endpoint.
         // 最多接受四个请求以探测任何跨协议尝试；每个都返回终态 400，
         // 客户端绝不能在另一协议端点上继续跟进。
         for _ in 0..4 {
-            let accepted = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await;
-            let Ok(accept_result) = accepted else {
-                break;
+            // A pending connection is accepted before the finish signal is honoured.
+            // 先接受已挂起的连接，再响应结束信号。
+            let accept_result = tokio::select! {
+                biased;
+                accepted = listener.accept() => accepted,
+                _ = &mut client_finished => break,
             };
             let Ok((mut stream, _)) = accept_result else {
                 break;
@@ -676,6 +683,7 @@ connection: close
         }
     }
     drop(stream);
+    client_done.send(()).expect("mock server is still listening");
     server.await.expect("mock server should finish");
 
     assert!(
