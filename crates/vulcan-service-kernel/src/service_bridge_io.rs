@@ -73,7 +73,9 @@ pub(crate) fn service_open_external_url(
 /// `url` 是调用方提供的精确外部 URL。
 /// Returns true only for HTTPS URLs with a host and without embedded credentials.
 /// 仅对包含主机且不内嵌凭据的 HTTPS URL 返回 true。
-fn external_url_is_safe(url: &str) -> bool {
+/// Every host-initiated browser open of a URL from outside the host must pass this rule.
+/// 宿主主动在浏览器中打开来自宿主之外的 URL 时，都必须通过此规则。
+pub(crate) fn external_url_is_safe(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };

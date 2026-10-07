@@ -316,6 +316,7 @@ pub(crate) async fn service_start_mcp_oauth(
         .start_authorization(MCP_OAUTH_CLIENT_NAME, &plan.redirect_uri)
         .await
         .map_err(|error| error.to_string())?;
+    ensure_openable_authorization_url(challenge.authorization_url())?;
     let flow_id = uuid::Uuid::new_v4().to_string();
     let expires_at = Instant::now() + MCP_OAUTH_FLOW_TIMEOUT;
     let expires_at_unix_ms =
@@ -361,6 +362,22 @@ pub(crate) async fn service_start_mcp_oauth(
         tracing::warn!("[mcp-oauth] failed to open the authorization URL: {error}");
     }
     service_mcp_oauth_status(state, server_id).await
+}
+
+/// Rejects authorization URLs the host must not hand to the system browser.
+/// 拒绝宿主不得交给系统浏览器的授权 URL。
+///
+/// The authorization endpoint comes from remote server metadata, and the system opener dispatches
+/// any scheme to its registered handler, so only the shared external-URL rule (HTTPS) is accepted.
+/// 授权端点来自远端服务器元数据，而系统打开器会把任意协议分派给其注册处理程序，
+/// 因此只接受共享外部 URL 规则（HTTPS）。
+fn ensure_openable_authorization_url(url: &str) -> Result<(), String> {
+    if crate::service_bridge_io::external_url_is_safe(url) {
+        return Ok(());
+    }
+    Err(String::from(
+        "mcp_oauth_authorization_url_unsafe: the authorization server returned an authorization URL that is not HTTPS or embeds credentials; refusing to open it",
+    ))
 }
 
 /// Receives the loopback callback and completes the flow.

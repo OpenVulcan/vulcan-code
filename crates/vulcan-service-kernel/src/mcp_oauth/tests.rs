@@ -153,3 +153,20 @@ async fn snapshots_use_stable_codes_and_hide_the_oauth_state() {
     assert!(!json.to_string().contains("secret-state-value"));
     discard_flow(server);
 }
+
+/// Remote metadata cannot make the host hand a non-HTTPS URL to the system opener.
+/// 远端元数据无法让宿主把非 HTTPS URL 交给系统打开器。
+#[test]
+fn only_https_authorization_urls_are_opened() {
+    assert!(
+        ensure_openable_authorization_url("https://auth.example.test/authorize?state=s").is_ok()
+    );
+    for url in [
+        "file:///C:/Windows/System32/calc.exe?state=s",
+        "ms-msdt:/id PCWDiagnostic?state=s",
+        "http://auth.example.test/authorize?state=s",
+        "https://user:secret@auth.example.test/authorize?state=s",
+    ] {
+        assert!(ensure_openable_authorization_url(url).is_err(), "{url}");
+    }
+}
