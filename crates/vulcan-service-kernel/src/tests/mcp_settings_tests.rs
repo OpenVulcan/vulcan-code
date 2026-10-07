@@ -23,6 +23,38 @@ fn mcp_settings_preserves_exact_argument_boundaries() {
     assert_eq!(entry.env["EXACT_VALUE"], " a=b ");
 }
 
+/// Builds one synthetic remote save request with every OAuth field empty.
+/// 构建一个全部 OAuth 字段为空的合成远端保存请求。
+fn remote_request_without_oauth_fields(oauth_enabled: Option<bool>) -> McpServerSaveRequest {
+    let mut value = serde_json::json!({
+        "serverId": null, "name": "remote-fixture", "enabled": true, "transport": "http",
+        "command": "", "args": [], "url": "https://mcp.example.test/mcp",
+        "bearerToken": "", "headers": [], "headersFromEnv": [], "oauthClientId": "", "oauthClientSecret": "",
+        "oauthScopes": [], "oauthRedirectUri": "", "cwd": "", "env": [], "envPassthrough": []
+    });
+    if let Some(enabled) = oauth_enabled {
+        value["oauthEnabled"] = serde_json::Value::Bool(enabled);
+    }
+    serde_json::from_value(value).expect("decode synthetic request")
+}
+
+/// Verifies dynamic-registration OAuth persists an empty OAuth block only when explicitly enabled.
+/// 验证动态注册 OAuth 仅在显式启用时持久化空 OAuth 配置块。
+#[test]
+fn oauth_enabled_flag_keeps_an_empty_oauth_block() {
+    let (_, enabled) =
+        mcp_server_entry_from_request(remote_request_without_oauth_fields(Some(true)))
+            .expect("parse enabled request");
+    assert!(enabled.oauth.is_some());
+
+    for flag in [Some(false), None] {
+        let (_, disabled) =
+            mcp_server_entry_from_request(remote_request_without_oauth_fields(flag))
+                .expect("parse request without OAuth");
+        assert!(disabled.oauth.is_none());
+    }
+}
+
 /// Builds one minimal stdio MCP server entry for configuration mutation tests.
 /// 为配置变更测试构建一个最小 stdio MCP 服务器条目。
 ///

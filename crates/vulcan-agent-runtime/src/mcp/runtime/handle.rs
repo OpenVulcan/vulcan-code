@@ -280,11 +280,11 @@ pub(super) fn prepare_published_mcp_runtime(
 }
 
 #[cfg(test)]
+mod oauth_gate_tests;
+#[cfg(test)]
 mod release_barrier_tests;
 #[cfg(test)]
 mod remote_release_tests;
-#[cfg(test)]
-mod oauth_gate_tests;
 
 /// Host-owned timeout for optional MCP prompt and resource discovery requests.
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。

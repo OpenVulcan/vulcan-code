@@ -33,6 +33,9 @@ pub use auth::{
     McpAuthChallenge, McpAuthStatus, McpOAuthCredentialBackend, McpOAuthCredentialRecord,
     McpOAuthMemoryCredentialBackend, McpOAuthSession, McpTransportOAuthSpec,
 };
+// Stored credential payload carried inside each persisted OAuth record.
+// 每条持久化 OAuth 记录中携带的已存储凭据载荷。
+pub use rmcp::transport::auth::StoredCredentials as McpOAuthStoredCredentials;
 pub use error::McpRuntimeError;
 pub use http::HttpTransport;
 pub use launch::McpTransportLaunchSpec;

@@ -90,6 +90,11 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_mcp_runtime_snapshot",
     "service_mcp_server_capabilities",
     "service_remove_mcp_server_configuration",
+    "service_mcp_oauth_status",
+    "service_start_mcp_oauth",
+    "service_finish_mcp_oauth",
+    "service_cancel_mcp_oauth",
+    "service_remove_mcp_oauth",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -619,6 +624,41 @@ pub(super) async fn dispatch(
         "service_remove_mcp_server_configuration" => rpc_json_result(
             service_remove_mcp_server_configuration(
                 app,
+                state,
+                rpc_required_param(params, "serverId")?,
+            )
+            .await,
+        ),
+        "service_mcp_oauth_status" => rpc_json_result(
+            crate::mcp_oauth::service_mcp_oauth_status(
+                state,
+                rpc_required_param(params, "serverId")?,
+            )
+            .await,
+        ),
+        "service_start_mcp_oauth" => rpc_json_result(
+            crate::mcp_oauth::service_start_mcp_oauth(
+                state,
+                rpc_required_param(params, "serverId")?,
+            )
+            .await,
+        ),
+        "service_finish_mcp_oauth" => rpc_json_result(
+            crate::mcp_oauth::service_finish_mcp_oauth(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_cancel_mcp_oauth" => rpc_json_result(
+            crate::mcp_oauth::service_cancel_mcp_oauth(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_remove_mcp_oauth" => rpc_json_result(
+            crate::mcp_oauth::service_remove_mcp_oauth(
                 state,
                 rpc_required_param(params, "serverId")?,
             )

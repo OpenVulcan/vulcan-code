@@ -11,7 +11,8 @@ use rmcp::transport::auth::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, OnceCell, watch};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Mutex, watch};
 
 /// Stable host-owned OAuth configuration attached to one remote MCP transport.
 /// 附加到单个远端 MCP 传输上的稳定宿主自有 OAuth 配置。
@@ -239,9 +240,12 @@ pub struct McpOAuthSession {
     /// Stable host-owned OAuth configuration.
     /// 稳定的宿主自有 OAuth 配置。
     spec: McpTransportOAuthSpec,
-    /// Completes once persisted credentials were restored; a failed restore retries on the next use.
-    /// 持久化凭据还原后完成；还原失败会在下次使用时重试。
-    restored: OnceCell<()>,
+    /// Whether the manager holds a configured client for the stored tokens.
+    /// 管理器是否已为已存储令牌配置好客户端。
+    ///
+    /// Stays false while nothing is stored, so tokens another session saves for the same server are picked up later.
+    /// 未存储任何内容时保持 false，使其他会话为同一服务器保存的令牌之后仍能被读取。
+    restored: AtomicBool,
     /// Generation bumped whenever authorization completes or is removed.
     /// 授权完成或被移除时递增的代次。
     authorization_generation: watch::Sender<u64>,
@@ -287,31 +291,40 @@ impl McpOAuthSession {
             manager: Arc::new(Mutex::new(manager)),
             credential_store,
             spec,
-            restored: OnceCell::new(),
+            restored: AtomicBool::new(false),
             authorization_generation,
         })
     }
 
-    /// Restores persisted tokens into the manager once, rediscovering metadata only when tokens exist.
-    /// 将持久化令牌一次性还原到管理器，仅在存在令牌时重新发现元数据。
+    /// Restores stored tokens into the manager, rediscovering metadata only when tokens exist.
+    /// 将已存储令牌还原到管理器，仅在存在令牌时重新发现元数据。
+    ///
+    /// Failed or empty restores run again on the next use; a successful one is kept.
+    /// 失败或为空的还原会在下次使用时重新执行；成功的还原会被保留。
     async fn ensure_restored(&self) -> Result<(), McpRuntimeError> {
-        self.restored
-            .get_or_try_init(|| async {
-                let mut manager = self.manager.lock().await;
-                let restored = manager.initialize_from_store().await.map_err(|error| {
-                    McpRuntimeError::transport(format!("mcp.oauth.restore: {error}"))
-                })?;
-                // Restoration configures only the client id; a pre-registered confidential client needs its secret to refresh.
-                // 还原只配置客户端标识；预注册的机密客户端刷新时需要其密钥。
-                if restored && let Some(client_config) = self.preregistered_client_config(None) {
-                    manager.configure_client(client_config).map_err(|error| {
-                        McpRuntimeError::transport(format!("mcp.oauth.configure: {error}"))
-                    })?;
-                }
-                Ok(())
-            })
+        if self.restored.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let mut manager = self.manager.lock().await;
+        if self.restored.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let restored = manager
+            .initialize_from_store()
             .await
-            .map(|_| ())
+            .map_err(|error| McpRuntimeError::transport(format!("mcp.oauth.restore: {error}")))?;
+        if !restored {
+            return Ok(());
+        }
+        // Restoration configures only the client id; a pre-registered confidential client needs its secret to refresh.
+        // 还原只配置客户端标识；预注册的机密客户端刷新时需要其密钥。
+        if let Some(client_config) = self.preregistered_client_config(None) {
+            manager.configure_client(client_config).map_err(|error| {
+                McpRuntimeError::transport(format!("mcp.oauth.configure: {error}"))
+            })?;
+        }
+        self.restored.store(true, Ordering::Release);
+        Ok(())
     }
 
     /// Builds the pre-registered client configuration, if one is configured.
@@ -398,8 +411,10 @@ impl McpOAuthSession {
             )
             .await
             .map_err(|error| McpRuntimeError::transport(format!("mcp.oauth.finish: {error}")))?;
-        self.authorization_generation
-            .send_modify(|generation| *generation += 1);
+        // The flow configured the client before exchanging, so the stored tokens are usable as-is.
+        // 流程在交换前已配置客户端，因此已存储令牌可直接使用。
+        self.restored.store(true, Ordering::Release);
+        self.notify_authorization_changed();
         Ok(())
     }
 
@@ -410,9 +425,16 @@ impl McpOAuthSession {
             .clear()
             .await
             .map_err(|error| McpRuntimeError::transport(format!("mcp.oauth.remove: {error}")))?;
+        self.restored.store(false, Ordering::Release);
+        self.notify_authorization_changed();
+        Ok(())
+    }
+
+    /// Wakes connections waiting on this session after another session changed the shared credentials.
+    /// 其他会话修改共享凭据后，唤醒等待本会话的连接。
+    pub fn notify_authorization_changed(&self) {
         self.authorization_generation
             .send_modify(|generation| *generation += 1);
-        Ok(())
     }
 
     /// Subscribes to authorization changes; the receiver observes only changes made after subscribing.

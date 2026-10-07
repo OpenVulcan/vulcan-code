@@ -73,6 +73,10 @@ pub(super) struct McpServerSaveRequest {
     /// OAuth redirect URI.
     /// OAuth 回调 URI。
     oauth_redirect_uri: String,
+    /// Whether OAuth is enabled even when every OAuth field is empty, as dynamic registration needs none.
+    /// 即使全部 OAuth 字段为空也启用 OAuth；动态注册不需要任何字段。
+    #[serde(default)]
+    oauth_enabled: bool,
     /// Stdio working directory.
     /// Stdio 工作目录。
     cwd: String,
@@ -192,13 +196,16 @@ pub(super) async fn service_remove_mcp_server_configuration(
     // Release the global configuration transaction only after the rebuilt runtime is stored.
     // 仅在重建运行时完成回存后释放全局配置事务。
     drop(configuration_transaction);
+    // A later server reusing this identifier must not inherit the removed server's sign-in.
+    // 之后复用此标识的服务器不得继承已移除服务器的登录。
+    crate::mcp_oauth::forget_removed_mcp_server_oauth(server_id.trim()).await;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
 
 /// Clones the currently published Agent MCP access generation before asynchronous replacement.
 /// 在异步替换前克隆当前已发布的 Agent MCP 访问代次。
-fn agent_mcp_runtime_from_state(
+pub(super) fn agent_mcp_runtime_from_state(
     state: &SharedServiceBridgeState,
 ) -> Result<McpRuntimeAccess, String> {
     state
@@ -407,7 +414,11 @@ pub(super) fn mcp_oauth_config_from_request(
         .map(|scope| scope.trim().to_string())
         .filter(|scope| !scope.is_empty())
         .collect::<Vec<_>>();
-    if client_id.is_none() && client_secret.is_none() && redirect_uri.is_none() && scopes.is_empty()
+    if !request.oauth_enabled
+        && client_id.is_none()
+        && client_secret.is_none()
+        && redirect_uri.is_none()
+        && scopes.is_empty()
     {
         None
     } else {

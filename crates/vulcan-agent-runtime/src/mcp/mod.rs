@@ -12,6 +12,8 @@ pub use config::{
     McpTransportKind, runtime_mcp_server_configs,
 };
 pub use oauth_credentials::{install_mcp_oauth_credential_backend, mcp_oauth_credential_backend};
+// Re-exported so hosts drive OAuth through this crate without depending on the transport crate.
+// 重新导出，使宿主通过本 crate 驱动 OAuth，而无需依赖传输 crate。
 pub use plugin::{
     PluginMcpSecretStore, PreparedPluginMcpConfigs, PreparedPredecessorPluginMcpConfigs,
     PreparedPublishedPluginMcpConfigs, PreparedTargetPluginMcpConfigs,
@@ -32,4 +34,8 @@ pub use runtime::{
     configured_mcp_runtime_access, remove_plugin_mcp_runtime_partition,
     replace_plugin_mcp_runtime_partition, replace_user_mcp_runtime_partition,
     validate_plugin_mcp_runtime_partition,
+};
+pub use vulcan_mcp_runtime::{
+    McpAuthChallenge, McpAuthStatus, McpOAuthCredentialBackend, McpOAuthCredentialRecord,
+    McpOAuthMemoryCredentialBackend, McpOAuthSession, McpOAuthStoredCredentials, McpRuntimeError,
 };

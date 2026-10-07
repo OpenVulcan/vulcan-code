@@ -172,6 +172,7 @@ mod licenses;
 pub mod luaskills_diagnostics;
 mod luaskills_install_progress;
 mod luaskills_model;
+mod mcp_oauth;
 mod mcp_settings;
 mod media_upload;
 mod native_plugin_shutdown;

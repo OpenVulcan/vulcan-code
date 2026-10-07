@@ -990,6 +990,17 @@ fn run_service_bootstrap(
                 format!("Agent MCP Runtime 配置无效：{error}"),
             )
         })?;
+    // MCP OAuth tokens persist in the OS secure store; install before any MCP session exists.
+    // MCP OAuth 令牌持久化在操作系统安全存储中；须在任何 MCP 会话存在之前安装。
+    // Unit tests keep the in-memory default so they never touch the user's keyring.
+    // 单元测试保留内存默认值，绝不触及用户钥匙串。
+    if cfg!(not(test))
+        && let Err(error) = vulcan_agent_runtime::mcp::install_mcp_oauth_credential_backend(
+            std::sync::Arc::new(crate::mcp_oauth::OsMcpOAuthCredentialBackend::os()),
+        )
+    {
+        tracing::warn!("[webui-service] MCP OAuth credentials will not persist: {error}");
+    }
     // Materialize explicit source contracts before any original native task can start.
     // 在任何原原生任务可能启动之前，物化明确来源契约。
     let plugin_secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
