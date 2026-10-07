@@ -3,6 +3,7 @@
 // V1 服务 DTO 镜像完整事件 envelope。hydration 与分页承载连续窗口，实时投递则承载
 // 相同事件形态的稀疏 patch。
 import type { HtmlAnswerMode } from "@/service/html-answer-mode";
+import type { HtmlAnswerEventProjection } from "@/service/html-answer-projections";
 
 /** JSON value allowed inside manifest-validated tool payloads.
  * 工具 Manifest 已校验载荷内允许的 JSON 值。 */
@@ -1149,6 +1150,9 @@ export type ConversationEventPatchDurability = "volatile" | "durable";
 /** One ownership-bound revisioned sparse live patch whose events remain strictly seq-ascending.
  * 一份带归属与修订的稀疏实时 patch，其中事件仍须按 seq 严格递增。 */
 export interface ConversationEventLivePatch extends ConversationEventWindowBatch {
+  /** Optional derived descriptors carried only by durable acknowledgements.
+   * 仅可靠确认携带的可选派生描述。 */
+  html_answer_projections?: readonly HtmlAnswerEventProjection[];
   /** Confirmed preference carried only by durable acknowledgements.
    * 仅可靠确认携带的已确认偏好。 */
   html_answers?: HtmlAnswerMode;
@@ -1196,6 +1200,9 @@ export interface ConversationEventTextAppend {
 /** One authoritative reconnect range that may cover multiple memory revisions.
  * 一段可覆盖多个内存修订的权威重连范围。 */
 export interface ConversationEventReconnectPatch extends ConversationEventWindowBatch {
+  /** Durable annotations for all loaded events, including the prefix outside this event batch.
+   * 全部已加载事件的可靠标注，包含本事件批次之外的前缀。 */
+  html_answer_projections?: readonly HtmlAnswerEventProjection[];
   /** Persisted preference captured with reconnect storage state.
    * 与重连存储状态共同捕获的持久偏好。 */
   html_answers?: HtmlAnswerMode;

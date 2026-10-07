@@ -8,6 +8,7 @@ use vulcan_session_core::v1::config::{
     ActiveRequestConfig, HtmlAnswerMode, PendingRequestConfig, SessionConfig,
 };
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
+use vulcan_session_core::v1::html_answers::HtmlAnswerEventProjection;
 use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::{
     ConversationEventSummary, ConversationEventWindowBatch,
@@ -53,6 +54,10 @@ pub struct ConversationEventPageV1Request {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationEventReconnectV1Request {
+    /// Earliest loaded event needing derived HTML annotations, including previously missed acknowledgements.
+    /// 需要派生 HTML 标注的最早已加载事件，包含之前遗漏的确认。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_answers_from_seq: Option<u64>,
     /// Cross-system session identity owning the frontend window.
     /// 拥有前端窗口的跨系统会话身份。
     pub session_id: String,
@@ -195,6 +200,10 @@ impl ConversationSessionConfigV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventWindowV1Response {
+    /// Durable HTML annotations matching exact revisions in this window.
+    /// 匹配此窗口精确修订的可靠 HTML 标注。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub html_answer_projections: Vec<HtmlAnswerEventProjection>,
     /// Ownership-bound event batch consumed directly by the WebUI window store.
     /// 由 WebUI 窗口 store 直接消费的带归属事件批次。
     #[serde(flatten)]
@@ -305,6 +314,7 @@ impl ConversationEventWindowV1Response {
             open_turn_start_seq,
             session_config,
             revision_frontier: Some(revision_frontier),
+            html_answer_projections: Vec::new(),
         }
     }
 
@@ -335,6 +345,7 @@ impl ConversationEventWindowV1Response {
             open_turn_start_seq: None,
             session_config,
             revision_frontier: None,
+            html_answer_projections: Vec::new(),
         }
     }
 }
@@ -357,6 +368,12 @@ pub enum ConversationEventPatchDurabilityV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventLiveDeltaV1 {
+    /// Derived HTML annotations published only after the exact source candidate is durable.
+    /// 仅在精确源码候选可靠保存后发布的派生 HTML 标注。
+    /// Rare durable metadata stays boxed so ordinary streaming outbox entries remain small.
+    /// 低频可靠元数据放在堆上，使普通流式发送队列条目保持小体积。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_answer_projections: Option<Box<Vec<HtmlAnswerEventProjection>>>,
     /// Exact preference in a successfully published candidate; absent on volatile patches.
     /// 成功发布候选中的精确偏好；内存补丁不携带该字段。
     /// Boxed so high-frequency volatile outbox entries do not reserve the full preference size.
@@ -596,6 +613,7 @@ impl ConversationEventLiveDeltaV1 {
             durability: ConversationEventPatchDurabilityV1::Volatile,
             text_appends: Vec::new(),
             html_answers: None,
+            html_answer_projections: None,
         })
     }
 
@@ -643,6 +661,7 @@ impl ConversationEventLiveDeltaV1 {
             durability: ConversationEventPatchDurabilityV1::Durable,
             text_appends: Vec::new(),
             html_answers: None,
+            html_answer_projections: None,
         })
     }
 
@@ -1049,6 +1068,10 @@ pub enum ConversationEventReconnectDispositionV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventReconnectV1Response {
+    /// Durable annotations for the client's loaded range, including events outside the recovery tail.
+    /// 客户端已加载范围的可靠标注，包含恢复尾段之外的事件。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub html_answer_projections: Vec<HtmlAnswerEventProjection>,
     /// Preference read from persisted metadata; absent when a full hydration is required.
     /// 从持久元数据读取的偏好；要求完整加载时缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1099,6 +1122,7 @@ impl ConversationEventReconnectV1Response {
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::Recovery,
             html_answers: None,
+            html_answer_projections: Vec::new(),
         })
     }
 
@@ -1127,6 +1151,7 @@ impl ConversationEventReconnectV1Response {
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::RehydrateRequired(reason),
             html_answers: None,
+            html_answer_projections: Vec::new(),
         })
     }
 }

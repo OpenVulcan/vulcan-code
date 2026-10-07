@@ -182,6 +182,11 @@
   "open_turn_id": 2,
   "open_turn_start_seq": 1,
   "session_config": {
+    "html_answers": {
+      "enabled": false,
+      "revision": 0,
+      "prepared": null
+    },
     "current_request": {
       "provider": "anthropic",
       "connection_id": "conn-2",

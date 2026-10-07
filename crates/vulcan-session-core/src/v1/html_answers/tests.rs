@@ -29,6 +29,38 @@ fn page(source: &str) -> String {
     format!("```vulcan-html {{\"version\":1,\"title\":\"页面\"}}\n{source}\n```\n")
 }
 
+/// Annotation publication requires physical evidence; event revisions are not document frontiers.
+/// 标注发布要求物理证据；事件修订不是文档前沿。
+#[test]
+fn html_answers_event_projection_requires_the_exact_durable_source() {
+    let mut event = assistant_event(page("<p>ready</p>"));
+    event.event_revision = 5;
+    assert!(HtmlAnswerEventProjection::from_event("s", &event, false).is_none());
+    let projection = HtmlAnswerEventProjection::from_event("s", &event, true).unwrap();
+    assert_eq!(projection.seq, event.seq);
+    assert_eq!(projection.event_revision, event.event_revision);
+    assert!(matches!(
+        projection.answers[0].availability,
+        HtmlAnswerAvailability::Ready { .. }
+    ));
+    let EventBody::AssistantText(assistant) = &mut event.event else {
+        unreachable!()
+    };
+    assistant.status = AssistantSemanticStatus::Streaming;
+    assert!(HtmlAnswerEventProjection::from_event("s", &event, true).is_none());
+    let example = assistant_event("Use a vulcan-html fence when needed.");
+    assert!(
+        HtmlAnswerEventProjection::from_event("s", &example, true)
+            .unwrap()
+            .answers
+            .is_empty()
+    );
+    assert!(
+        HtmlAnswerEventProjection::from_event("s", &assistant_event("ordinary answer"), true)
+            .is_none()
+    );
+}
+
 /// Borrow the identity of a ready descriptor; fail with the actual unexpected state.
 /// 借用可打开描述的身份；状态异常时用实际状态报告失败。
 fn identity(descriptor: &HtmlAnswerDescriptor) -> &str {

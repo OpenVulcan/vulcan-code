@@ -154,6 +154,53 @@ pub struct HtmlAnswerDescriptor {
     pub availability: HtmlAnswerAvailability,
 }
 
+/// Derived annotations bound to one exact durable event revision, separate from canonical facts.
+/// 绑定到精确可靠事件修订的派生标注，与权威事实分离。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HtmlAnswerEventProjection {
+    /// Owning assistant event sequence within the enclosing session and generation.
+    /// 外层会话及代次中的所属助手事件序号。
+    pub seq: super::Seq,
+    /// Exact source revision used to derive all descriptors.
+    /// 派生全部描述时使用的精确源码修订。
+    pub event_revision: u64,
+    /// Nonempty descriptors; no source copies or executable browser state.
+    /// 非空描述集合，不包含源码副本或浏览器执行状态。
+    pub answers: Vec<HtmlAnswerDescriptor>,
+}
+
+impl HtmlAnswerEventProjection {
+    /// Project `event` only when captured from confirmed storage or a successfully flushed candidate.
+    /// 仅投影从确认存储或成功落盘候选中捕获的 `event`。
+    /// `durable` is physical publication evidence; event and document revisions are different counters.
+    /// `durable` 为物理发布证据；事件修订和文档修订是不同的计数器。
+    /// `session_id` is the enclosing canonical owner, never a model-authored value.
+    /// `session_id` 为外层权威归属，绝不能取自模型生成内容。
+    pub fn from_event(session_id: &str, event: &ConversationEvent, durable: bool) -> Option<Self> {
+        if !durable {
+            return None;
+        }
+        let EventBody::AssistantText(assistant) = &event.event else {
+            return None;
+        };
+        if event.visibility != EventVisibility::Provider
+            || assistant.status == AssistantSemanticStatus::Streaming
+            || !assistant.text.contains("vulcan-html")
+        {
+            return None;
+        }
+        // An empty result still acknowledges examined examples, avoiding repeated recovery scans.
+        // 空结果仍确认已检查的示例，避免重连时反复扫描。
+        let answers = project_html_answers(session_id, event, true);
+        Some(Self {
+            seq: event.seq,
+            event_revision: event.event_revision,
+            answers,
+        })
+    }
+}
+
 /// Strict model-authored fence metadata; serde rejects duplicate and unknown fields.
 /// 严格的模型生成围栏元信息；serde 拒绝重复字段和未知字段。
 #[derive(Deserialize)]

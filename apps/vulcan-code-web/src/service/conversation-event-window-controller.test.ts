@@ -16,6 +16,7 @@ import {
   type ConversationSessionConfigV1,
 } from "./conversation-event-window-client";
 import { ConversationEventWindowController } from "./conversation-event-window-controller";
+import type { HtmlAnswerEventProjection } from "./html-answer-projections";
 import {
   ConversationEventWindowStore,
   clientActionId,
@@ -116,6 +117,18 @@ function assistantText(
     api_call_id: 2,
     text,
     status,
+  };
+}
+
+/** Build source-free synthetic Core annotations for ownership and publication behavior tests.
+ * 为归属与发布行为测试构建不含源码的合成 Core 标注。 */
+function htmlProjection(seq: number, eventRevision: number): HtmlAnswerEventProjection {
+  return {
+    seq, event_revision: eventRevision, answers: [{
+      ordinal: 0, title: "test", fence: { byte_start: 0, byte_end: 10, utf16_start: 0, utf16_end: 10 },
+      availability: { status: "ready", artifact_id: "f".repeat(64),
+        source: { byte_start: 2, byte_end: 8, utf16_start: 2, utf16_end: 8 } },
+    }],
   };
 }
 
@@ -323,6 +336,48 @@ type ConversationEventWindowRpcTestRequest = <T>(
 ) => Promise<T>;
 
 describe("V1 conversation event window controller", () => {
+  it("publishes HTML annotations only on durable exact revisions and clears them on rebase", async () => {
+    const projection = htmlProjection(1, 2);
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([summary(1, assistantText("streaming", "partial"))]),
+    }));
+    await controller.hydrate(SESSION_ID);
+    controller.applyLive(liveDelta([summary(1, assistantText("completed", "finished"), 20, 2)], {
+      revision: 2, html_answer_projections: [projection],
+    }));
+    expect(controller.snapshot().html_answer_projections).toEqual([]);
+    const acknowledgement = liveDelta([], {
+      revision: 2, durability: "durable", html_answer_projections: [projection],
+    });
+    controller.applyLive(acknowledgement);
+    const ready = controller.snapshot();
+    expect(ready.html_answer_projections).toEqual([projection]);
+    controller.applyLive(structuredClone(acknowledgement));
+    expect(controller.snapshot()).toBe(ready);
+    controller.rebase(response([], { window_generation: 2 }));
+    expect(controller.snapshot().html_answer_projections).toEqual([]);
+    controller.dispose();
+  });
+
+  it("recovers annotations before the reconnect tail and preserves them in cached windows", async () => {
+    const projection = htmlProjection(1, 1);
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => response([
+        summary(1, assistantText("completed", "```vulcan-html candidate")), summary(2, userInput(2)),
+      ]),
+      reconnect: async () => reconnectResponse([summary(2, userInput(2))], {
+        memory_revision: 2, durable_revision: 2, html_answer_projections: [projection, htmlProjection(2, 1)],
+      }),
+    }));
+    await controller.hydrate(SESSION_ID);
+    await controller.reconnect();
+    expect(controller.snapshot().html_answer_projections).toEqual([projection]);
+    const restored = new ConversationEventWindowController(rpcMock({}));
+    restored.restoreCachedSnapshot(controller.snapshot());
+    expect(restored.snapshot().html_answer_projections).toEqual([projection]);
+    restored.dispose();
+    controller.dispose();
+  });
   it("restores paged history before reconnecting and retains it while missing events arrive", async () => {
     // The first visit has loaded older pages; these events are required by saved viewport anchors.
     // 首次访问已加载更早分页；保存的视口锚点依赖这些事件。
@@ -345,7 +400,7 @@ describe("V1 conversation event window controller", () => {
     expect(subscribeLive).not.toHaveBeenCalled();
     await restored.resumeCachedWindow();
     expect(subscribeLive).toHaveBeenCalledOnce();
-    expect(reconnect).toHaveBeenCalledWith(cached.owner, 4, 1, SERVICE_EPOCH, undefined);
+    expect(reconnect).toHaveBeenCalledWith(cached.owner, 4, 1, SERVICE_EPOCH, undefined, null);
     expect(restored.snapshot().events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
     restored.dispose();
   });
@@ -705,6 +760,7 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
+      null,
     );
     expect(controller.snapshot().events.map((event) => event.seq)).toEqual([1, 2]);
     expect(controller.snapshot().events[0].event).toMatchObject({ status: "completed" });
@@ -844,6 +900,7 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
+      null,
     );
     expect(controller.snapshot().events.map((event) => event.event_revision)).toEqual([2, 4, 3]);
     expect(controller.snapshot().events.map((event) =>
@@ -952,6 +1009,7 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
+      null,
     );
     expect(controller.snapshot()).toMatchObject({
       memory_revision: 1,
@@ -1018,6 +1076,8 @@ describe("V1 conversation event window controller", () => {
       100,
       3,
       SERVICE_EPOCH,
+      undefined,
+      null,
     );
   });
 
@@ -1143,6 +1203,7 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
+      null,
     );
     expect(controller.snapshot()).toMatchObject({ memory_revision: 2, durable_revision: 1 });
     expect(controller.snapshot().events.map((event) => event.seq)).toEqual([1, 2]);
