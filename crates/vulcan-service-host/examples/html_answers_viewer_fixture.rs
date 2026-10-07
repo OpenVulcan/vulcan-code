@@ -63,6 +63,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let origin = format!("http://{}", listener.local_addr()?);
     let session = uuid::Uuid::new_v4();
     let html = "<!doctype html><meta charset=\"utf-8\"><button id=\"run\" onclick=\"document.getElementById('value').textContent=Number(document.getElementById('value').textContent)+1\">Run</button><span id=\"value\">0</span>";
+    // Explicit fixture-only draft selection exercises the same source identity and capability routes.
+    // 显式的夹具专用草稿选择覆盖同一源码身份与授权路由。
+    let template = (std::env::args().nth(2).as_deref() == Some("--draft"))
+        .then_some(vulcan_session_core::v1::html_answers::templates::HtmlAnswerTemplate::Dashboard);
+    let html = if template.is_some() {
+        include_str!("../../vulcan-session-core/src/v1/html_answers/templates/example.md")
+    } else {
+        html
+    };
+    let metadata = match template {
+        Some(template) => {
+            serde_json::json!({"version": vulcan_session_core::v1::html_answers::HTML_ANSWER_DRAFT_VERSION, "title": "Synthetic answer", "template": template.name()})
+        }
+        None => {
+            serde_json::json!({"version": vulcan_session_core::v1::html_answers::HTML_ANSWER_VERSION, "title": "Synthetic answer"})
+        }
+    };
     let event = ConversationEvent {
         seq: Seq::try_new(3)?,
         turn_id: None,
@@ -74,9 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             api_call_id: ApiCallId::try_new(1)?,
             status: AssistantSemanticStatus::Completed,
             provider_source: None,
-            text: format!(
-                "```vulcan-html {{\"version\":1,\"title\":\"Synthetic answer\"}}\n{html}\n```\n"
-            ),
+            text: format!("````vulcan-html {metadata}\n{html}\n````\n"),
         }),
     };
     let descriptor = project_html_answers(&session.to_string(), &event, true).remove(0);
@@ -108,10 +123,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !matches {
                     return Err(HtmlAnswerViewError::StaleSource);
                 }
-                Ok(HtmlAnswerContent {
-                    title: "Synthetic answer".to_owned(),
-                    source: format!("{html}\n"),
-                })
+                HtmlAnswerContent::from_source(
+                    "Synthetic answer".to_owned(),
+                    format!("{html}\n"),
+                    template,
+                )
             })
         }),
     )?;

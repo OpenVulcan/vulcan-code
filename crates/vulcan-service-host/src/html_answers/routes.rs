@@ -236,7 +236,7 @@ async fn content(
     let Some(origins) = state.origins.get() else {
         return reject(HtmlAnswerViewError::Unavailable);
     };
-    origins.content_response(content.source)
+    origins.content_response(content.into_html())
 }
 
 /// Show a localized failure inside the isolated frame when authority changes after exchange.

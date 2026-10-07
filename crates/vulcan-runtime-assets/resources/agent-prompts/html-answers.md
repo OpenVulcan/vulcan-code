@@ -1,21 +1,39 @@
-HTML answers are enabled for this conversation. Use them selectively when a diagram, comparison, simulation, or interactive explanation materially improves the answer. Keep a short readable summary in the normal reply. Simple answers, progress updates, and ordinary code explanations should remain plain text or Markdown.
+HTML answers are enabled. Use a visual result only when a comparison, diagram, overview or interaction helps; keep simple answers and progress updates in normal Markdown. Keep a useful short conclusion outside each result. Follow the user's language; do not explain this output protocol unless asked.
 
-An HTML answer is part of your assistant reply, not a tool call or a file-writing workflow. Emit a complete self-contained HTML document in a top-level backtick fence using this exact format:
+Prefer a compact content draft. Core supplies layout, responsive styling, light/dark colors and component interactions. Do not repeat HTML/CSS/JavaScript boilerplate. Emit the draft directly in your assistant reply, not via tools or file writes:
 
-````text
-```vulcan-html {"version":{{version}},"title":"A concise descriptive title"}
-<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>A concise descriptive title</title></head>
-<body><p>Your content and page-local interactions.</p></body>
-</html>
+`````text
+````vulcan-html {"version":{{draft_version}},"title":"Pool selection","template":"comparison"}
+Use shared pools for light plugins and dedicated pools for sustained expensive work.
+
+## Choices
+| Pool | Benefit |
+| --- | --- |
+| Shared | Lower memory |
+| Dedicated | Scheduling isolation |
+
+```ui-flow
+Call -> Read configuration -> Acquire VM -> Execute -> Release
+```
+
+```ui-details Why isolate?
+Keep expensive work from delaying lightweight plugins.
 ```
 ````
+`````
 
-Only `version` and `title` are allowed in the fence metadata; both are required. The title must be nonempty and contain at most {{max_title_chars}} Unicode characters with no control characters. Do not invent result IDs, session IDs, paths, URLs, or access tokens. If your document contains backtick runs, make the outer fence longer and explicitly close it.
+Draft metadata requires exactly `version`, `title`, `template`. Templates: `document` for linear explanations, `dashboard` for overview cards, `comparison` for side-by-side analysis. Level-two headings (`##`) begin sections. Use ordinary Markdown paragraphs, lists, tables and code. Raw HTML is displayed as text; links/images do not fetch resources. Content is not evaluated as script.
 
-Use at most {{max_pages}} pages in one reply. Each page is limited to {{max_page_bytes}} UTF-8 bytes, and the combined HTML source is limited to {{max_total_bytes}} bytes. Keep each page compact and avoid repeated framework boilerplate.
+Components use explicitly closed backtick fences. These are the complete supported names and syntax; do not invent others:
+- `ui-kv`: one `label | value` per line.
+- `ui-metrics`: one `label | value | maximum | unit` per line; finite numbers, `0 <= value <= maximum`, `maximum > 0`.
+- `ui-flow`: one directed path per line, e.g. `A -> B -> C`; repeat a node label on different lines to describe branches. No graph IDs, coordinates or Mermaid syntax needed.
+- `ui-timeline`: one `time | title | description` per line.
+- `ui-callout info Title` (also `success`, `warning`, `danger`): Markdown body.
+- `ui-details Title`: Markdown body inside a collapsible section.
+- `ui-tabs Group label`: each tab starts with `### Tab title`, followed by nonempty Markdown content. Switching and arrow-key navigation are built in.
+All row cells must be nonempty; `|` is a separator, so do not place it inside cells. Components are top-level within the draft and cannot nest. Sections and component blocks are each capped at {{max_blocks}} per draft; each component has at most {{max_items}} rows/nodes/tabs. Use a longer outer fence than any inner fence; always close it explicitly. Use only components that improve the answer.
 
-The user opens the result explicitly. The page runs in an isolated frame with inline styles, page-local classic JavaScript, inline SVG/Canvas, and embedded data resources. It has no network access, CDN, external modules, eval, workers, nested frames, popups, automatic downloads, form submission, storage, parent DOM, Core APIs, plugins, desktop bridge, or filesystem APIs. Do not attempt any of these. Keep controls within the page and keep processing bounded so the page remains responsive.
+For a custom simulation or interaction these components cannot express, explicitly use the raw format: `vulcan-html {"version":{{version}},"title":"Title"}` followed by complete self-contained HTML. Raw metadata has no `template` field. Inline CSS, classic JavaScript, SVG/Canvas and embedded data are supported. No network, CDN, external modules, eval, workers, nested frames, popups, automatic downloads, form submission, storage, parent DOM, Core APIs, plugins, desktop bridge or filesystem APIs are available. Keep processing bounded and controls keyboard accessible. Do not switch formats merely to imitate built-in styling.
 
-Match the user's language. Use semantic HTML, labeled keyboard-accessible controls, readable contrast, narrow-screen layouts, and reduced-motion support. Use verified facts; clearly label illustrative or simulated data. Retain the useful textual conclusion outside the HTML result.
+For either format: title is nonempty, at most {{max_title_chars}} Unicode characters, without control characters. At most {{max_pages}} pages per reply, {{max_page_bytes}} UTF-8 source bytes per page, {{max_total_bytes}} total. Do not invent IDs, paths, viewer URLs or access tokens. The user opens results explicitly. Use verified facts and label illustrative data. The original draft remains available as source; Core produces the page.

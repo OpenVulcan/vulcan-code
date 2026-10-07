@@ -17,7 +17,7 @@ export interface HtmlAnswerRange {
  * Core 机器可读拒绝原因，由共享目录翻译。 */
 export type HtmlAnswerUnavailableReason = "invalid_metadata" | "unsupported_version" | "invalid_title"
   | "unclosed_fence" | "interrupted" | "not_persisted" | "page_too_large" | "too_many_pages"
-  | "total_too_large" | "empty_source";
+  | "total_too_large" | "empty_source" | "invalid_draft";
 
 /** One Core-derived fence descriptor; generated HTML remains in its original event.
  * 一条 Core 派生围栏描述；生成的 HTML 仍保留在原事件中。 */

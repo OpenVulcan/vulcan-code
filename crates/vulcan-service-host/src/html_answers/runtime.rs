@@ -31,6 +31,40 @@ pub struct HtmlAnswerContent {
     /// Exact UTF-8 source range reconstructed from the original assistant event.
     /// 从原助手事件重建的精确 UTF-8 源码范围。
     pub source: String,
+    /// Compiled draft only; raw version-one answers retain their original source without a second copy.
+    /// 仅保存编译后的草稿；版本一原始回答保留源码，不生成第二份副本。
+    rendered_html: Option<String>,
+}
+
+impl HtmlAnswerContent {
+    /// Build content from a freshly authorized `source`, declared `template` and validated `title`.
+    /// 根据刚获授权的 `source`、声明的 `template` 及已校验的 `title` 构建内容。
+    /// Returns an error for invalid drafts; the kernel calls this within its blocking stored-source read.
+    /// 非法草稿返回错误；内核在阻塞式持久源码读取过程中调用此方法。
+    pub fn from_source(
+        title: String,
+        source: String,
+        template: Option<templates::HtmlAnswerTemplate>,
+    ) -> Result<Self, HtmlAnswerViewError> {
+        let rendered_html = template
+            .map(|template| templates::render_draft(template, &title, &source))
+            .transpose()
+            .map_err(|_| HtmlAnswerViewError::InvalidRequest)?;
+        Ok(Self {
+            title,
+            source,
+            rendered_html,
+        })
+    }
+
+    /// Consume the transient result and return its explicitly selected executable representation.
+    /// 消费瞬态结果，返回由声明明确选择的可执行表示。
+    pub(super) fn into_html(self) -> String {
+        match self.rendered_html {
+            Some(html) => html,
+            None => self.source,
+        }
+    }
 }
 
 /// Async authority callback; the kernel must recheck storage, generation, revision and complete identity.

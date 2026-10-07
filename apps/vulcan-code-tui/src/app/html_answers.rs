@@ -68,11 +68,13 @@ pub fn inspect(app: &mut App, seq: u64) -> bool {
                 sheet = sheet.action(
                     format!("{title} · {label}"),
                     false,
-                    UiAction::Send(Command::CreateHtmlAnswerViewLink {
-                        source: source.clone(),
-                        delivery,
-                        locale: crate::i18n::active_locale().to_owned(),
-                    }),
+                    match delivery {
+                        HtmlAnswerDelivery::Open => UiAction::OpenHtmlAnswer(source.clone()),
+                        HtmlAnswerDelivery::Copy => UiAction::RequestHtmlAnswer {
+                            source: source.clone(),
+                            delivery,
+                        },
+                    },
                 );
             }
         } else {
@@ -96,6 +98,103 @@ pub fn inspect(app: &mut App, seq: u64) -> bool {
     sheet.focus = (!sheet.actions.is_empty()).then_some(0);
     app.overlay = Some(Overlay::Detail(Box::new(sheet)));
     true
+}
+
+/// Look up the exact selected immutable identity; returns its title only while still current.
+/// 查找精确选中的不可变身份；仅在身份仍为当前值时返回标题。
+fn current_title(
+    app: &App,
+    source: &vulcan_service_api::HtmlAnswerSourceIdentity,
+) -> Option<String> {
+    let id = source.session_id.to_string();
+    if app.selected.as_deref() != Some(id.as_str()) {
+        return None;
+    }
+    let session = app.session()?;
+    let projection = session.html_answers.projections.get(&source.event_seq)?;
+    projection
+        .answers
+        .iter()
+        .find(|answer| {
+            session
+                .html_answers
+                .source(&id, source.event_seq, answer.ordinal)
+                .as_ref()
+                == Some(source)
+        })
+        .and_then(|answer| answer.title.clone())
+}
+
+/// Ask before opening `source`; cancel creates no ticket and launches no browser.
+/// 打开 `source` 前提问；取消不会生成票据或启动浏览器。
+pub fn confirm_open(app: &mut App, source: vulcan_service_api::HtmlAnswerSourceIdentity) {
+    let Some(title) = current_title(app, &source) else {
+        app.toast(NoticeSeverity::Warning, tr!("htmlAnswers.stale"));
+        return;
+    };
+    app.overlay = Some(Overlay::Confirm(Box::new(super::action::ConfirmDialog {
+        title: tr!("browser.openInDefaultBrowser"),
+        body: tr!("tui.htmlAnswers.confirmOpen", title = title),
+        confirm_label: tr!("htmlAnswers.open"),
+        danger: false,
+        then: UiAction::RequestHtmlAnswer {
+            source,
+            delivery: HtmlAnswerDelivery::Open,
+        },
+        focus_confirm: false,
+    })));
+}
+
+/// Revalidate a confirmed/copy `source` and submit the matching backend request without launching here.
+/// 重新校验已确认或复制的 `source`，提交匹配的后端请求，不在此处启动浏览器。
+pub fn request(
+    app: &mut App,
+    source: vulcan_service_api::HtmlAnswerSourceIdentity,
+    delivery: HtmlAnswerDelivery,
+) {
+    if current_title(app, &source).is_none() {
+        app.toast(NoticeSeverity::Warning, tr!("htmlAnswers.stale"));
+        return;
+    }
+    app.backend.send(Command::CreateHtmlAnswerViewLink {
+        source,
+        delivery,
+        locale: crate::i18n::active_locale().to_owned(),
+    });
+}
+
+/// Activate the selected result from the keyboard; multiple results open the existing chooser.
+/// 从键盘激活选中结果；多个结果打开既有选择面板。
+pub fn activate_selected(app: &mut App) -> bool {
+    let Some((seq, sources)) = app.session().and_then(|session| {
+        let seq = session.selected?;
+        let projection = session
+            .html_answers
+            .projections
+            .get(&seq)
+            .filter(|projection| !projection.answers.is_empty())?;
+        let id = app.selected.as_deref()?;
+        Some((
+            seq,
+            projection
+                .answers
+                .iter()
+                .filter_map(|answer| session.html_answers.source(id, seq, answer.ordinal))
+                .collect::<Vec<_>>(),
+        ))
+    }) else {
+        return false;
+    };
+    if sources.len() == 1 {
+        super::action::perform(
+            app,
+            UiAction::OpenHtmlAnswer(sources.into_iter().next().expect("one source")),
+        );
+        true
+    } else {
+        super::action::perform(app, UiAction::Inspect(seq));
+        true
+    }
 }
 
 /// Read the exact selected raw range; source UI uses text, never an HTML renderer.
@@ -170,60 +269,44 @@ pub fn deliver(
     link: HtmlAnswerLink,
     delivery: HtmlAnswerDelivery,
 ) {
-    let id = source.session_id.to_string();
-    let current = app.selected.as_deref() == Some(id.as_str())
-        && app.session().is_some_and(|session| {
-            session
-                .html_answers
-                .projections
-                .get(&source.event_seq)
-                .is_some_and(|projection| {
-                    projection.answers.iter().any(|answer| {
-                        session
-                            .html_answers
-                            .source(&id, source.event_seq, answer.ordinal)
-                            .as_ref()
-                            == Some(&source)
-                    })
-                })
-        });
+    let current = current_title(app, &source).is_some();
     if !current || !valid_viewer_url(&source, &link.0.viewer_url) {
         app.backend
             .send(Command::RevokeHtmlAnswerViewLink(link.0.grant_id));
         return;
     }
-    if matches!(delivery, HtmlAnswerDelivery::Open) && !app.backend.is_mock {
+    if matches!(delivery, HtmlAnswerDelivery::Open) {
         // The safe default handler accepts a URL value; the insecure cmd/start feature is never enabled.
         // 安全默认处理器接收地址值；绝不启用不安全的 cmd/start 特性。
-        if open::that_detached(&link.0.viewer_url).is_ok() {
-            return;
-        }
-        // Keep a visible, selectable address if the desktop opener is missing; retry-copy issues a fresh ticket.
-        // 桌面打开器缺失时保留可见可选择地址；重试复制会申请新票据。
+        let opened = !app.backend.is_mock && open::that_detached(&link.0.viewer_url).is_ok();
+        // A launcher receipt cannot prove the user can see a browser (SSH/WSL/headless terminals).
+        // 启动器回执无法证明用户能看见浏览器（SSH、WSL 或无界面终端）。
+        // Always retain the actual URL; fresh-copy obtains a new ticket if the first was consumed.
+        // 始终保留实际地址；首次票据已消费时，重新复制会取得新票据。
         app.overlay = Some(Overlay::Detail(Box::new(
-            DetailSheet::new(tr!("htmlAnswers.cannotOpen"))
-                .section(tr!("htmlAnswers.copyLink"), link.0.viewer_url.clone())
-                .action(
-                    tr!("htmlAnswers.copyLink"),
-                    false,
-                    UiAction::Send(Command::CreateHtmlAnswerViewLink {
-                        source,
-                        delivery: HtmlAnswerDelivery::Copy,
-                        locale: crate::i18n::active_locale().to_owned(),
-                    }),
-                ),
-        )));
-        app.toast(
-            NoticeSeverity::Warning,
-            format!(
-                "{} {}",
-                tr!("htmlAnswers.cannotOpen"),
+            DetailSheet::new(if opened {
+                tr!("browser.openInDefaultBrowser")
+            } else {
+                tr!("htmlAnswers.cannotOpen")
+            })
+            .section(
+                String::new(),
                 tr!(
-                    "htmlAnswers.linkCopied",
+                    "tui.htmlAnswers.openFallback",
                     seconds = link.0.expires_in_seconds
-                )
+                ),
+            )
+            .section(tr!("htmlAnswers.copyLink"), link.0.viewer_url.clone())
+            .action(
+                tr!("htmlAnswers.copyLink"),
+                false,
+                UiAction::RequestHtmlAnswer {
+                    source,
+                    delivery: HtmlAnswerDelivery::Copy,
+                },
             ),
-        );
+        )));
+        return;
     } else {
         app.toast(
             NoticeSeverity::Info,
@@ -316,7 +399,7 @@ mod tests {
             .actions
             .iter()
             .filter_map(|action| match &action.action {
-                UiAction::Send(Command::CreateHtmlAnswerViewLink { source, .. }) => {
+                UiAction::OpenHtmlAnswer(source) | UiAction::RequestHtmlAnswer { source, .. } => {
                     assert_eq!(source, &identity);
                     Some(action.action.clone())
                 }
@@ -325,7 +408,16 @@ mod tests {
             .collect();
         assert_eq!(commands_to_run.len(), 2);
         for action in commands_to_run {
+            let opening = matches!(action, UiAction::OpenHtmlAnswer(_));
             perform(&mut app, action);
+            if opening {
+                assert!(
+                    commands.try_recv().is_err(),
+                    "Confirmation must precede ticket issuance"
+                );
+                assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+                perform(&mut app, UiAction::ConfirmAccept);
+            }
         }
         assert_eq!(commands.try_iter().count(), 2);
         source(&mut app, identity.event_seq, 0, false);
@@ -443,5 +535,88 @@ mod tests {
                 matches!(commands.try_recv(), Ok(Command::SetSessionHtmlAnswerMode(request)) if request.enabled)
             );
         }
+    }
+
+    /// Real terminal hits and Enter reach confirmation; cancellation and changed owners cannot issue links.
+    /// 真实终端命中和回车均到达确认；取消及归属改变后不能签发链接。
+    #[test]
+    fn html_result_inline_button_requires_confirmation_at_each_width() {
+        let _locale = crate::i18n::lock_locale("en-US");
+        for (width, height) in [(160, 45), (64, 20)] {
+            let (mut app, commands, identity) = app();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| crate::ui::draw(frame, &mut app))
+                .unwrap();
+            let at = app.hits.find(|target| matches!(target, Target::Do(UiAction::OpenHtmlAnswer(source)) if source == &identity)).expect("Result button must remain visible at the current terminal width");
+            input::handle_event(
+                &mut app,
+                Event::Mouse(ratatui::crossterm::event::MouseEvent {
+                    kind: ratatui::crossterm::event::MouseEventKind::Down(
+                        ratatui::crossterm::event::MouseButton::Left,
+                    ),
+                    column: at.x,
+                    row: at.y,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            );
+            assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+            assert!(commands.try_recv().is_err());
+            input::handle_event(
+                &mut app,
+                Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            );
+            assert!(app.overlay.is_none());
+            assert!(commands.try_recv().is_err());
+            app.focus = crate::app::Focus::Transcript;
+            app.session_mut().unwrap().selected = Some(identity.event_seq);
+            input::handle_event(
+                &mut app,
+                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            );
+            assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+            assert!(commands.try_recv().is_err());
+            perform(&mut app, UiAction::ConfirmAccept);
+            assert!(
+                matches!(commands.try_recv(), Ok(Command::CreateHtmlAnswerViewLink { source, delivery: HtmlAnswerDelivery::Open, .. }) if source == identity)
+            );
+            confirm_open(&mut app, identity.clone());
+            app.selected = Some(uuid::Uuid::new_v4().to_string());
+            perform(&mut app, UiAction::ConfirmAccept);
+            assert!(commands.try_recv().is_err());
+        }
+    }
+
+    /// Unsupported browser environments retain the actual one-use URL in redacted, copyable UI state.
+    /// 不支持浏览器的环境在已遮蔽诊断的可复制界面状态中保留实际单次地址。
+    #[test]
+    fn html_result_browser_fallback_shows_the_actual_url() {
+        let (mut app, _, identity) = app();
+        let url = format!(
+            "http://127.0.0.1:7331/html-answers/{}/{}#ticket=synthetic-fallback",
+            identity.session_id, identity.artifact_id
+        );
+        deliver(
+            &mut app,
+            identity,
+            HtmlAnswerLink(vulcan_service_api::HtmlAnswerViewLinkResponse {
+                grant_id: uuid::Uuid::new_v4(),
+                viewer_url: url.clone(),
+                expires_in_seconds: 45,
+            }),
+            HtmlAnswerDelivery::Open,
+        );
+        let Some(Overlay::Detail(sheet)) = &app.overlay else {
+            panic!("Fallback URL must be visible");
+        };
+        assert!(sheet.sections.iter().any(|(_, body)| body == &url));
+        assert!(sheet.actions.iter().any(|action| matches!(
+            action.action,
+            UiAction::RequestHtmlAnswer {
+                delivery: HtmlAnswerDelivery::Copy,
+                ..
+            }
+        )));
+        assert!(!format!("{sheet:?}").contains("synthetic-fallback"));
     }
 }

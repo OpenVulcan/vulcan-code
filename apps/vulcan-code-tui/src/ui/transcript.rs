@@ -68,6 +68,9 @@ fn blocks(events: &[ConversationEvent]) -> Vec<Block<'_>> {
 struct Layout {
     lines: Vec<Line<'static>>,
     items: Vec<(u64, usize, usize)>,
+    /// Result button positions as (layout line, owning event, descriptor ordinal).
+    /// 结果按钮位置，依次为排版行、所属事件、描述序号。
+    html_actions: Vec<(usize, u64, usize)>,
 }
 
 struct Ctx<'a> {
@@ -214,6 +217,27 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
             );
         }
     }
+    // Register only visible result controls after the generic transcript hit region.
+    // 在通用会话命中区域之后，仅登记可见结果控件。
+    for (line, seq, ordinal) in &layout.html_actions {
+        if *line >= top
+            && *line < top + height
+            && let Some(source) = app
+                .selected
+                .as_deref()
+                .and_then(|id| session.html_answers.source(id, *seq, *ordinal))
+        {
+            app.hits.add(
+                Rect {
+                    x: content.x,
+                    y: area.y + (*line - top) as u16,
+                    width: content.width,
+                    height: 1,
+                },
+                Target::Do(crate::app::action::UiAction::OpenHtmlAnswer(source)),
+            );
+        }
+    }
     let items = layout.items;
     app.hits.transcript_top = top;
     app.hits.transcript_items = items;
@@ -241,6 +265,7 @@ fn lay_out(ctx: &Ctx) -> Layout {
     let mut layout = Layout {
         lines: Vec::new(),
         items: Vec::new(),
+        html_actions: Vec::new(),
     };
     let all = blocks(&ctx.session.events);
     for (index, block) in all.iter().enumerate() {
@@ -253,16 +278,22 @@ fn lay_out(ctx: &Ctx) -> Layout {
             layout.lines.push(Line::default());
         }
         let start = layout.lines.len();
+        let mut html_actions = Vec::new();
         let mut lines = match block {
             Block::User(event) => user(ctx, event),
             Block::Reasoning(event) => reasoning(ctx, event),
-            Block::Text(event) => text(ctx, event),
+            Block::Text(event) => text(ctx, event, &mut html_actions),
             Block::Tools(group) => tools(ctx, group),
             Block::Note(event) => note(ctx, event),
             Block::Stats(event) => stats(ctx, event),
         };
         let len = lines.len();
         layout.lines.append(&mut lines);
+        layout.html_actions.extend(
+            html_actions
+                .into_iter()
+                .map(|(line, ordinal)| (start + line, block.seq(), ordinal)),
+        );
         layout.items.push((block.seq(), start, len));
     }
     layout
@@ -411,7 +442,15 @@ fn reasoning(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     lines
 }
 
-fn text(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
+/// Render ordinary text and authoritative result cards, recording exact local button rows in `actions`.
+/// 渲染普通文字及权威结果卡，并在 `actions` 中记录精确局部按钮行。
+/// Returns display lines without executing or parsing HTML content.
+/// 返回展示行，不执行或解析 HTML 内容。
+fn text(
+    ctx: &Ctx,
+    event: &ConversationEvent,
+    actions: &mut Vec<(usize, usize)>,
+) -> Vec<Line<'static>> {
     let EventBody::AssistantText {
         text,
         status,
@@ -420,27 +459,76 @@ fn text(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     else {
         return Vec::new();
     };
-    let compact = crate::model::html_answers::compact_source(
-        text,
-        ctx.session.html_answers.projections.get(&event.seq),
-    );
     let status_label = if *status == AssistantSemanticStatus::Streaming {
         tr!("htmlAnswers.generating")
     } else {
         tr!("htmlAnswers.waiting")
     };
-    let mut lines = if *html_answers_allowed
-        && ctx
-            .session
-            .html_answers
-            .projections
-            .get(&event.seq)
-            .is_none_or(|projection| !projection.answers.is_empty())
-    {
-        markdown::render_with_html_status(&compact, ctx.width, ctx.theme, &status_label)
-    } else {
-        markdown::render(text, ctx.width, ctx.theme)
-    };
+    let projection = html_answers_allowed
+        .then(|| ctx.session.html_answers.projections.get(&event.seq))
+        .flatten();
+    let mut lines = Vec::new();
+    for part in crate::model::html_answers::source_parts(text, projection) {
+        match part {
+            crate::model::html_answers::HtmlAnswerDisplayPart::Text(source) => {
+                if source.trim().is_empty() {
+                    continue;
+                }
+                if *html_answers_allowed
+                    && projection.is_none_or(|projection| !projection.answers.is_empty())
+                {
+                    lines.extend(markdown::render_with_html_status(
+                        source,
+                        ctx.width,
+                        ctx.theme,
+                        &status_label,
+                    ));
+                } else {
+                    lines.extend(markdown::render(source, ctx.width, ctx.theme));
+                }
+            }
+            crate::model::html_answers::HtmlAnswerDisplayPart::Answer(answer) => {
+                lines.push(Line::default());
+                let title = answer
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| tr!("htmlAnswers.label"));
+                lines.extend(wrap(
+                    &[Span::styled(
+                        format!("◆ {} · {title}", tr!("htmlAnswers.label")),
+                        ctx.theme.strong(),
+                    )],
+                    ctx.width,
+                    &[],
+                    &[],
+                ));
+                if matches!(answer.availability, HtmlAnswerAvailability::Ready { .. }) {
+                    let start = lines.len();
+                    lines.extend(wrap(
+                        &[Span::styled(
+                            format!("[ ↗ {} ]", tr!("browser.openInDefaultBrowser")),
+                            ctx.theme.primary_text().add_modifier(Modifier::UNDERLINED),
+                        )],
+                        ctx.width,
+                        &[],
+                        &[],
+                    ));
+                    actions.extend((start..lines.len()).map(|line| (line, answer.ordinal)));
+                } else {
+                    lines.extend(wrap(
+                        &[Span::styled(
+                            tr!("htmlAnswers.cannotOpen"),
+                            ctx.theme.muted_text(),
+                        )],
+                        ctx.width,
+                        &[],
+                        &[],
+                    ));
+                }
+                lines.push(Line::default());
+            }
+        }
+    }
     match status {
         AssistantSemanticStatus::Streaming => {
             let caret = Span::styled(

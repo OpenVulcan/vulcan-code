@@ -19,14 +19,18 @@ pub(super) const MODEL_SELECTION_CONTEXT_KEY: &str = "dynamic.model_selection";
 /// 使用唯一 Core 协议和容量常量渲染权威 HTML 提示词。
 /// No input; returns one trimmed producer body without independently defined limits.
 /// 无输入；返回已去除首尾空白且没有独立限额定义的一份生产者正文。
-fn html_answer_enabled_prompt() -> String {
+pub(super) fn html_answer_enabled_prompt() -> String {
     use vulcan_session_core::v1::html_answers::{
-        HTML_ANSWER_MAX_PAGE_BYTES, HTML_ANSWER_MAX_PAGES, HTML_ANSWER_MAX_TITLE_CHARS,
-        HTML_ANSWER_MAX_TOTAL_BYTES, HTML_ANSWER_VERSION,
+        HTML_ANSWER_DRAFT_VERSION, HTML_ANSWER_MAX_PAGE_BYTES, HTML_ANSWER_MAX_PAGES,
+        HTML_ANSWER_MAX_TITLE_CHARS, HTML_ANSWER_MAX_TOTAL_BYTES, HTML_ANSWER_VERSION,
+        templates::{DRAFT_MAX_BLOCKS, DRAFT_MAX_ITEMS},
     };
     vulcan_runtime_assets::HTML_ANSWERS_ENABLED_MD
         .trim()
         .replace("{{version}}", &HTML_ANSWER_VERSION.to_string())
+        .replace("{{draft_version}}", &HTML_ANSWER_DRAFT_VERSION.to_string())
+        .replace("{{max_blocks}}", &DRAFT_MAX_BLOCKS.to_string())
+        .replace("{{max_items}}", &DRAFT_MAX_ITEMS.to_string())
         .replace("{{max_pages}}", &HTML_ANSWER_MAX_PAGES.to_string())
         .replace(
             "{{max_page_bytes}}",

@@ -29,6 +29,68 @@ fn page(source: &str) -> String {
     format!("```vulcan-html {{\"version\":1,\"title\":\"页面\"}}\n{source}\n```\n")
 }
 
+/// A published version-one identity is a wire contract and must survive the draft protocol addition.
+/// 已发布的版本一身份属于协议契约，增加草稿协议后必须保持不变。
+#[test]
+fn html_answers_raw_identity_remains_compatible() {
+    let event = assistant_event(page("<p>legacy</p>"));
+    let descriptors = project_html_answers("s", &event, true);
+    assert_eq!(
+        identity(&descriptors[0]),
+        "34965c21bd462d1012489e6acbc424c92ee5f14826d2f1b5752ad6220441b29e"
+    );
+}
+
+/// Draft declarations bind template/version while preserving the original source coordinates.
+/// 草稿声明绑定模板及版本，同时保留原始源码坐标。
+#[test]
+fn html_answers_drafts_are_versioned_and_bound_to_the_selected_template() {
+    let draft = "中文😀\r\n\r\n```ui-kv\r\nPool | Shared\r\n```\r\n";
+    let event_for = |template: &str| {
+        assistant_event(format!(
+            "````vulcan-html {{\"version\":2,\"title\":\"草稿\",\"template\":\"{template}\"}}\r\n{draft}````\r\n"
+        ))
+    };
+    let first = event_for("document");
+    let first_descriptors = project_html_answers("s", &first, true);
+    let second = project_html_answers("s", &event_for("dashboard"), true);
+    assert_ne!(identity(&first_descriptors[0]), identity(&second[0]));
+    assert_eq!(first_descriptors, project_html_answers("s", &first, true));
+    let EventBody::AssistantText(body) = &first.event else {
+        unreachable!()
+    };
+    let descriptor = &first_descriptors[0];
+    let HtmlAnswerAvailability::Ready { source, .. } = &descriptor.availability else {
+        unreachable!()
+    };
+    assert_eq!(&body.text[source.byte_start..source.byte_end], draft);
+    assert_eq!(
+        html_answer_template(&body.text[descriptor.fence.byte_start..descriptor.fence.byte_end])
+            .unwrap(),
+        Some(templates::HtmlAnswerTemplate::Document)
+    );
+    for metadata in [
+        r#"{"version":2,"title":"x"}"#,
+        r#"{"version":2,"title":"x","template":"unknown"}"#,
+        r#"{"version":2,"title":"x","template":"document","template":"dashboard"}"#,
+        r#"{"version":2,"title":"x","template":null}"#,
+        r#"{"version":1,"title":"x","template":null}"#,
+        r#"{"version":1,"title":"x","template":"document"}"#,
+    ] {
+        assert!(
+            validate_metadata(metadata).is_err(),
+            "Invalid declaration: {metadata}"
+        );
+    }
+    let invalid = assistant_event(
+        "````vulcan-html {\"version\":2,\"title\":\"x\",\"template\":\"document\"}\n```ui-made-up\ndata\n```\n````",
+    );
+    assert_rejected(
+        &project_html_answers("s", &invalid, true)[0],
+        HtmlAnswerUnavailableReason::InvalidDraft,
+    );
+}
+
 /// Annotation publication requires physical evidence; event revisions are not document frontiers.
 /// 标注发布要求物理证据；事件修订不是文档前沿。
 #[test]
@@ -190,7 +252,7 @@ fn html_answers_metadata_is_strict_and_title_is_bounded() {
         assert_eq!(descriptors[0].title, None);
     }
     assert_eq!(
-        validate_metadata("{\"version\":2,\"title\":\"x\"}").err(),
+        validate_metadata("{\"version\":99,\"title\":\"x\"}").err(),
         Some(HtmlAnswerUnavailableReason::UnsupportedVersion)
     );
     for title in [

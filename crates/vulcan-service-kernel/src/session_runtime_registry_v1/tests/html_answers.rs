@@ -7,6 +7,25 @@ use super::*;
 /// 加载与重连只授权已存储源码，绝不授权更新的驻留语义修订。
 #[tokio::test]
 async fn html_answers_window_requires_exact_physically_persisted_source() {
+    for (source, expected) in [
+        (
+            "```vulcan-html {\"version\":1,\"title\":\"saved\"}\n<p>content</p>\n```\n",
+            "<p>content</p>\n",
+        ),
+        (
+            "````vulcan-html {\"version\":2,\"title\":\"saved\",\"template\":\"document\"}\n```ui-kv\nPool | Shared\n```\n````\n",
+            "```ui-kv\nPool | Shared\n```\n",
+        ),
+    ] {
+        assert_persisted_html_source(source, expected).await;
+    }
+}
+
+/// Run the same real-storage lifecycle assertions for raw HTML and compact draft `source`.
+/// 对原始 HTML 及精简草稿 `source` 执行同一组真实存储生命周期断言。
+/// `expected` is the original inner source, never generated markup; returns after cleanup succeeds.
+/// `expected` 为原始内部源码，绝非生成标记；清理成功后返回。
+async fn assert_persisted_html_source(source: &str, expected: &str) {
     use crate::conversation_events_v1::{
         service_session_event_hydration_v1, service_session_event_reconnect_v1,
     };
@@ -34,7 +53,6 @@ async fn html_answers_window_requires_exact_physically_persisted_source() {
         .register(handle.clone())
         .unwrap();
     let api = start_initialized_test_api(&handle);
-    let source = "```vulcan-html {\"version\":1,\"title\":\"saved\"}\n<p>content</p>\n```\n";
     handle
         .mutate_durable(
             SessionMutationAdmission::ExistingTurn,
@@ -135,7 +153,7 @@ async fn html_answers_window_requires_exact_physically_persisted_source() {
     let content = resolve_html_answer_source(state.clone(), identity.clone())
         .await
         .unwrap();
-    assert_eq!(content.source, "<p>content</p>\n");
+    assert_eq!(content.source, expected);
     for field in ["generation", "revision", "artifact"] {
         let mut invalid = identity.clone();
         match field {

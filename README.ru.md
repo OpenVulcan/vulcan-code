@@ -222,7 +222,7 @@ Vulcan Code построен на множестве замечательных 
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): референс для протокола Gemini и совместимых преобразований
 - [OpenCode](https://github.com/anomalyco/opencode): референс для каталогов провайдеров и системных промптов
 - [agency-agents](https://github.com/msitarzewski/agency-agents): источник шаблонов ролей субагентов
-- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html): идея интерактивных HTML-ответов по необходимости; протокол и изолированный просмотрщик реализованы самостоятельно, без зависимости от CLI этого проекта
+- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html): идея HTML-ответов, кратких черновиков и шаблонных компонентов; протокол, встроенный рендерер и изолированный просмотрщик реализованы самостоятельно, без зависимости от CLI этого проекта
 
 **Сообщество**
 

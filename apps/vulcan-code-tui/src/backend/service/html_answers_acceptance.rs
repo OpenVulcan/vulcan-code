@@ -82,6 +82,9 @@ fn html_tui_production_viewer_acceptance() {
         true,
     );
     app.selected = Some(id.clone());
+    // This fixture installs an authenticated client directly instead of running the discovery loop.
+    // 此夹具直接安装已认证客户端，不执行服务发现循环。
+    app.connection = crate::backend::ConnectionState::Connected;
     for event in events.try_iter() {
         app.apply(event);
     }
@@ -91,26 +94,33 @@ fn html_tui_production_viewer_acceptance() {
         .keys()
         .next()
         .expect("Core annotation");
-    crate::app::action::perform(&mut app, crate::app::action::UiAction::Inspect(seq));
-    let Some(crate::app::overlay::Overlay::Detail(sheet)) = &app.overlay else {
-        panic!("TUI result sheet")
-    };
-    let action = sheet
-        .actions
-        .iter()
-        .find(|action| {
-            matches!(
-                action.action,
-                crate::app::action::UiAction::Send(Command::CreateHtmlAnswerViewLink {
-                    delivery: HtmlAnswerDelivery::Copy,
-                    ..
-                })
-            )
-        })
-        .expect("TUI copy action")
-        .action
-        .clone();
-    crate::app::action::perform(&mut app, action);
+    // Drive the rendered result button so transport acceptance covers the user-visible opening path.
+    // 驱动实际渲染的结果按钮，使传输验收覆盖用户可见的打开路径。
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 42)).unwrap();
+    terminal
+        .draw(|frame| crate::ui::draw(frame, &mut app))
+        .unwrap();
+    let at = app.hits.find(|target| matches!(target, crate::app::hit::Target::Do(crate::app::action::UiAction::OpenHtmlAnswer(source)) if source.event_seq == seq)).expect("TUI inline result button");
+    crate::app::input::handle_event(
+        &mut app,
+        ratatui::crossterm::event::Event::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Down(
+                ratatui::crossterm::event::MouseButton::Left,
+            ),
+            column: at.x,
+            row: at.y,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        }),
+    );
+    assert!(matches!(
+        app.overlay,
+        Some(crate::app::overlay::Overlay::Confirm(_))
+    ));
+    assert!(
+        requests.try_recv().is_err(),
+        "No ticket before confirmation"
+    );
+    crate::app::action::perform(&mut app, crate::app::action::UiAction::ConfirmAccept);
     let Command::CreateHtmlAnswerViewLink {
         source,
         delivery,
@@ -137,9 +147,14 @@ fn html_tui_production_viewer_acceptance() {
         link,
         delivery,
     });
+    // The inert terminal deliberately cannot launch an OS browser; the actual signed URL remains visible.
+    // 静默终端刻意不能启动系统浏览器；实际签发的地址仍保持可见。
+    let Some(crate::app::overlay::Overlay::Detail(sheet)) = &app.overlay else {
+        panic!("TUI browser fallback sheet")
+    };
     assert!(
-        app.clipboard.take_sequence().is_some(),
-        "TUI clipboard delivery"
+        sheet.sections.iter().any(|(_, body)| body == &url),
+        "Actual fallback URL must remain accessible"
     );
 
     let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

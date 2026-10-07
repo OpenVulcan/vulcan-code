@@ -6,6 +6,48 @@ use super::host_guidance::{candidate_for, install_baseline};
 use super::*;
 use vulcan_session_core::v1::document::HTML_ANSWER_CONTEXT_KEY;
 
+/// The actual request guide has resolved limits and a draft example accepted by the production parser.
+/// 实际请求指南具有已解析限额，且草稿示例被生产解析器接受。
+#[test]
+fn html_answers_enabled_guide_example_is_executable() {
+    let prompt = super::super::context_injection::html_answer_enabled_prompt();
+    assert!(
+        !prompt.contains("{{"),
+        "Prompt parameters must be resolved before injection"
+    );
+    let start = prompt
+        .find("````vulcan-html ")
+        .expect("The guide must provide a protocol example");
+    let end = prompt[start..]
+        .find("\n````\n")
+        .expect("The example must be explicitly closed")
+        + start
+        + "\n````".len();
+    let event = vulcan_session_core::v1::ConversationEvent {
+        seq: vulcan_session_core::v1::Seq::try_new(1).unwrap(),
+        turn_id: None,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        event_revision: 1,
+        visibility: vulcan_session_core::v1::EventVisibility::Provider,
+        event: vulcan_session_core::v1::EventBody::AssistantText(
+            vulcan_session_core::v1::AssistantTextEvent {
+                api_call_id: vulcan_session_core::v1::ApiCallId::try_new(1).unwrap(),
+                text: prompt[start..end].to_owned(),
+                status: vulcan_session_core::v1::AssistantSemanticStatus::Completed,
+                provider_source: None,
+            },
+        ),
+    };
+    let result =
+        vulcan_session_core::v1::html_answers::project_html_answers("synthetic", &event, true);
+    assert_eq!(result.len(), 1);
+    assert!(matches!(
+        result[0].availability,
+        vulcan_session_core::v1::html_answers::HtmlAnswerAvailability::Ready { .. }
+    ));
+}
+
 /// Render the captured producer through the authoritative host envelope for physical-message assertions.
 /// 通过权威宿主信封渲染捕获的生产者，以断言物理请求消息。
 /// `state` supplies the durable sequence and unescaped body; returns the actual wire encoding.

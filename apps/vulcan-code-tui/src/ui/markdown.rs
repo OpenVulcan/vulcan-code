@@ -64,9 +64,16 @@ fn render_internal(
                         &[],
                         &[],
                     ));
+                    // Inner component fences must not end the outer result while it is still streaming.
+                    // 仍在流式输出时，内部组件围栏不能结束外层结果块。
+                    let opening_ticks = trimmed.bytes().take_while(|byte| *byte == b'`').count();
                     index = source[index..]
                         .iter()
-                        .position(|line| line.trim_start().starts_with("```"))
+                        .position(|line| {
+                            let closing = line.trim_start();
+                            let ticks = closing.bytes().take_while(|byte| *byte == b'`').count();
+                            ticks >= opening_ticks && closing[ticks..].trim().is_empty()
+                        })
                         .map_or(source.len(), |close| index + close + 1);
                     in_code = false;
                     continue;
@@ -604,5 +611,29 @@ graph TD
 A[Plan] --> B[Build]";
         let texts: Vec<String> = render(open, 60, &theme).iter().map(text_of).collect();
         assert!(texts.iter().any(|t| t.contains("A[Plan] --> B[Build]")));
+    }
+
+    /// Draft component fences remain inside one inert placeholder until the outer fence closes.
+    /// 草稿组件围栏在外层围栏闭合之前始终位于同一个不可执行占位中。
+    #[test]
+    fn html_draft_streaming_does_not_leak_nested_component_source() {
+        let source = "before\n````vulcan-html {\"version\":2,\"title\":\"x\",\"template\":\"document\"}\n```ui-kv\nsecret-marker | value\n```\nmore-internal-content\n";
+        for suffix in ["", "````\nafter"] {
+            let rendered = render_with_html_status(
+                &format!("{source}{suffix}"),
+                60,
+                &Theme::dark(),
+                "pending",
+            )
+            .iter()
+            .map(text_of)
+            .collect::<Vec<_>>()
+            .join("\n");
+            assert!(rendered.contains("before") && rendered.contains("pending"));
+            assert!(
+                !rendered.contains("secret-marker") && !rendered.contains("more-internal-content")
+            );
+            assert_eq!(rendered.contains("after"), !suffix.is_empty());
+        }
     }
 }

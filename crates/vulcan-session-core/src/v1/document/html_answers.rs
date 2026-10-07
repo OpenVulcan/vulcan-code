@@ -266,4 +266,35 @@ mod tests {
             assert!(serde_json::from_value::<HtmlAnswerMode>(invalid).is_err());
         }
     }
+
+    /// An enabled conversation receives upgraded renderer guidance once without rewriting history.
+    /// 已开启会话仅接收一次升级后的渲染指引，不重写历史。
+    #[test]
+    fn html_answers_prompt_upgrade_is_append_only_without_a_toggle() {
+        let mut document = SessionDocument::new("html-upgrade", "p", "t", 1);
+        document.set_html_answer_mode(true, 0, 2).unwrap();
+        document
+            .synchronize_context_with_html_answers(Vec::new(), "old renderer", "off", 3)
+            .unwrap();
+        let before = document.events().to_vec();
+        let mode = document.metadata.config.html_answers.clone();
+        assert!(
+            document
+                .synchronize_context_with_html_answers(Vec::new(), "new renderer", "off", 4)
+                .unwrap()
+                .changed()
+        );
+        assert!(document.events().starts_with(&before));
+        assert_eq!(document.metadata.config.html_answers, mode);
+        assert_eq!(
+            document.metadata.dynamic_context[HTML_ANSWER_CONTEXT_KEY].raw_content,
+            "new renderer"
+        );
+        assert!(
+            !document
+                .synchronize_context_with_html_answers(Vec::new(), "new renderer", "off", 5)
+                .unwrap()
+                .changed()
+        );
+    }
 }

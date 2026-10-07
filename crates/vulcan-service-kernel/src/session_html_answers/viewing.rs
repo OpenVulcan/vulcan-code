@@ -206,6 +206,8 @@ pub(crate) async fn resolve_html_answer_source(
         let HtmlAnswerAvailability::Ready { source: offsets, .. } = descriptor.availability else { return Err(HtmlAnswerViewError::StaleSource); };
         let EventBody::AssistantText(assistant) = &event.event else { return Err(HtmlAnswerViewError::StaleSource); };
         let text = assistant.text.get(offsets.byte_start..offsets.byte_end).ok_or(HtmlAnswerViewError::StaleSource)?;
-        Ok(HtmlAnswerContent { title: descriptor.title.ok_or(HtmlAnswerViewError::StaleSource)?, source: text.to_owned() })
+        let fence = assistant.text.get(descriptor.fence.byte_start..descriptor.fence.byte_end).ok_or(HtmlAnswerViewError::StaleSource)?;
+        let template = vulcan_session_core::v1::html_answers::html_answer_template(fence).map_err(|_| HtmlAnswerViewError::StaleSource)?;
+        HtmlAnswerContent::from_source(descriptor.title.ok_or(HtmlAnswerViewError::StaleSource)?, text.to_owned(), template)
     }).await.map_err(|_| HtmlAnswerViewError::Unavailable)?
 }

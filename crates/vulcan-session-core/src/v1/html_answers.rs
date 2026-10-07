@@ -9,9 +9,14 @@ use sha2::{Digest, Sha256};
 
 use super::{AssistantSemanticStatus, ConversationEvent, EventBody, EventVisibility};
 
+pub mod templates;
+
 /// Version accepted by the dedicated assistant Markdown fence.
 /// 专用助手 Markdown 围栏所接受的版本。
 pub const HTML_ANSWER_VERSION: u32 = 1;
+/// Content-draft protocol, pinned to the built-in version-two renderer.
+/// 内容草稿协议，固定使用内置版本二渲染器。
+pub const HTML_ANSWER_DRAFT_VERSION: u32 = 2;
 /// Maximum executable bytes in a single page; measured before browser parsing.
 /// 单页可执行正文的最大字节数，在浏览器解析前计算。
 pub const HTML_ANSWER_MAX_PAGE_BYTES: usize = 512 * 1024;
@@ -124,6 +129,9 @@ pub enum HtmlAnswerUnavailableReason {
     /// There is no HTML source between the two fence markers.
     /// 两个围栏标记之间没有 HTML 源码。
     EmptySource,
+    /// The content draft has invalid components or exceeds renderer complexity limits.
+    /// 内容草稿包含非法组件或超过渲染复杂度限制。
+    InvalidDraft,
 }
 
 /// Execution authority is explicit and is never inferred by a client from code text.
@@ -227,6 +235,34 @@ struct FenceMetadata {
     /// Model-provided plain-text title.
     /// 模型提供的纯文本标题。
     title: String,
+    /// Required only for draft version two; explicit null is never a valid template.
+    /// 仅草稿版本二要求此字段；显式 null 不是合法模板。
+    #[serde(default, deserialize_with = "deserialize_template")]
+    template: Option<templates::HtmlAnswerTemplate>,
+}
+
+/// Deserialize a present template field; return its typed value and reject null or unknown names.
+/// 反序列化已出现的模板字段；返回强类型值，拒绝 null 和未知名称。
+fn deserialize_template<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<templates::HtmlAnswerTemplate>, D::Error> {
+    templates::HtmlAnswerTemplate::deserialize(deserializer).map(Some)
+}
+
+/// Select the immutable renderer declared by a validated original fence; never inspect body heuristics.
+/// 从已校验的原始围栏选择不可变渲染器；绝不启发式探测正文。
+/// Returns None for raw version one, or the exact version-two template; errors reject the declaration.
+/// 版本一返回空，版本二返回精确模板；错误直接拒绝声明。
+pub fn html_answer_template(
+    fence: &str,
+) -> Result<Option<templates::HtmlAnswerTemplate>, HtmlAnswerUnavailableReason> {
+    let line = fence
+        .lines()
+        .next()
+        .ok_or(HtmlAnswerUnavailableReason::InvalidMetadata)?;
+    let info = line.trim_start_matches(' ').trim_start_matches('`');
+    let json = dedicated_metadata(info).ok_or(HtmlAnswerUnavailableReason::InvalidMetadata)?;
+    validate_metadata(json).map(|metadata| metadata.template)
 }
 
 /// Monotonic conversion cursor prevents repeated scans of a long source prefix.
@@ -316,34 +352,45 @@ pub fn project_html_answers(
                         utf16_start: fence_start,
                         utf16_end: cursor.advance(&assistant.text, range.end),
                     };
-                    let checked = checked_metadata.and_then(|_| {
-                        let source = source.ok_or(HtmlAnswerUnavailableReason::UnclosedFence)?;
-                        let bytes = source.byte_end - source.byte_start;
-                        if assistant.status != AssistantSemanticStatus::Completed {
-                            return Err(HtmlAnswerUnavailableReason::Interrupted);
-                        }
-                        if !durable {
-                            return Err(HtmlAnswerUnavailableReason::NotPersisted);
-                        }
-                        if assistant.text[source.byte_start..source.byte_end]
-                            .trim()
-                            .is_empty()
-                        {
-                            return Err(HtmlAnswerUnavailableReason::EmptySource);
-                        }
-                        if bytes > HTML_ANSWER_MAX_PAGE_BYTES {
-                            return Err(HtmlAnswerUnavailableReason::PageTooLarge);
-                        }
-                        if accepted_count >= HTML_ANSWER_MAX_PAGES {
-                            return Err(HtmlAnswerUnavailableReason::TooManyPages);
-                        }
-                        if bytes > HTML_ANSWER_MAX_TOTAL_BYTES - accepted_bytes {
-                            return Err(HtmlAnswerUnavailableReason::TotalTooLarge);
-                        }
-                        accepted_count += 1;
-                        accepted_bytes += bytes;
-                        Ok(source)
-                    });
+                    let checked = checked_metadata
+                        .as_ref()
+                        .map_err(|reason| *reason)
+                        .and_then(|metadata| {
+                            let source =
+                                source.ok_or(HtmlAnswerUnavailableReason::UnclosedFence)?;
+                            let bytes = source.byte_end - source.byte_start;
+                            if assistant.status != AssistantSemanticStatus::Completed {
+                                return Err(HtmlAnswerUnavailableReason::Interrupted);
+                            }
+                            if !durable {
+                                return Err(HtmlAnswerUnavailableReason::NotPersisted);
+                            }
+                            if assistant.text[source.byte_start..source.byte_end]
+                                .trim()
+                                .is_empty()
+                            {
+                                return Err(HtmlAnswerUnavailableReason::EmptySource);
+                            }
+                            if bytes > HTML_ANSWER_MAX_PAGE_BYTES {
+                                return Err(HtmlAnswerUnavailableReason::PageTooLarge);
+                            }
+                            if accepted_count >= HTML_ANSWER_MAX_PAGES {
+                                return Err(HtmlAnswerUnavailableReason::TooManyPages);
+                            }
+                            if bytes > HTML_ANSWER_MAX_TOTAL_BYTES - accepted_bytes {
+                                return Err(HtmlAnswerUnavailableReason::TotalTooLarge);
+                            }
+                            if let Some(template) = metadata.template {
+                                templates::render_draft(
+                                    template,
+                                    &metadata.title,
+                                    &assistant.text[source.byte_start..source.byte_end],
+                                )?;
+                            }
+                            accepted_count += 1;
+                            accepted_bytes += bytes;
+                            Ok(source)
+                        });
                     let availability = match checked {
                         Ok(source) => HtmlAnswerAvailability::Ready {
                             artifact_id: artifact_identity(
@@ -352,7 +399,7 @@ pub fn project_html_answers(
                                 assistant.api_call_id.value(),
                                 ordinal,
                                 &assistant.text[source.byte_start..source.byte_end],
-                                title.as_deref().expect("validated metadata has a title"),
+                                checked_metadata.as_ref().expect("validated metadata"),
                             ),
                             source,
                         },
@@ -390,8 +437,11 @@ fn dedicated_metadata(info: &str) -> Option<&str> {
 fn validate_metadata(json: &str) -> Result<FenceMetadata, HtmlAnswerUnavailableReason> {
     let metadata: FenceMetadata =
         serde_json::from_str(json).map_err(|_| HtmlAnswerUnavailableReason::InvalidMetadata)?;
-    if metadata.version != HTML_ANSWER_VERSION {
+    if metadata.version != HTML_ANSWER_VERSION && metadata.version != HTML_ANSWER_DRAFT_VERSION {
         return Err(HtmlAnswerUnavailableReason::UnsupportedVersion);
+    }
+    if (metadata.version == HTML_ANSWER_DRAFT_VERSION) != metadata.template.is_some() {
+        return Err(HtmlAnswerUnavailableReason::InvalidMetadata);
     }
     if metadata.title.trim().is_empty()
         || metadata.title.chars().count() > HTML_ANSWER_MAX_TITLE_CHARS
@@ -445,7 +495,7 @@ fn artifact_identity(
     api_call_id: u64,
     ordinal: usize,
     source: &str,
-    title: &str,
+    metadata: &FenceMetadata,
 ) -> String {
     let mut hash = Sha256::new();
     for field in [
@@ -454,12 +504,19 @@ fn artifact_identity(
         &event.seq.value().to_le_bytes(),
         &api_call_id.to_le_bytes(),
         &(ordinal as u64).to_le_bytes(),
-        &HTML_ANSWER_VERSION.to_le_bytes(),
-        title.as_bytes(),
+        &metadata.version.to_le_bytes(),
+        metadata.title.as_bytes(),
         Sha256::digest(source.as_bytes()).as_slice(),
     ] {
         hash.update((field.len() as u64).to_le_bytes());
         hash.update(field);
+    }
+    // Preserve every version-one digest while binding the draft layout to its result identity.
+    // 保持所有版本一摘要，同时将草稿布局绑定到结果身份。
+    if let Some(template) = metadata.template {
+        let name = template.name();
+        hash.update((name.len() as u64).to_le_bytes());
+        hash.update(name.as_bytes());
     }
     hash.finalize()
         .iter()

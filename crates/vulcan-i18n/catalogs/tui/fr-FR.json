@@ -1,0 +1,4 @@
+{
+  "tui.htmlAnswers.confirmOpen": "Ouvrir « {title} » dans le navigateur par défaut ? Le résultat s’exécutera dans une page isolée.",
+  "tui.htmlAnswers.openFallback": "Si le navigateur ne s’ouvre pas, utilisez l’adresse ci-dessous. Le lien temporaire peut être ouvert une fois dans les {seconds} secondes. Copier le lien crée un nouveau lien."
+}

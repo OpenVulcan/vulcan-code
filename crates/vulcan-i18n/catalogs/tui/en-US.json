@@ -1,4 +1,6 @@
 {
+  "tui.htmlAnswers.confirmOpen": "Open “{title}” in your default browser? The result runs in an isolated page.",
+  "tui.htmlAnswers.openFallback": "If no browser opens, use the address below. The temporary link can be opened once within {seconds} seconds. Copy link creates a fresh link.",
   "tui.agents.activity": "Recent activity",
   "tui.agents.task": "Task",
   "tui.area.short": "Areas",

@@ -100,40 +100,66 @@ mod tests {
         assert_eq!(state.mode, Some(prepared));
         assert!(!state.awaiting_request());
     }
+
+    /// Cards retain original order and invalid Core ranges cannot become clickable display segments.
+    /// 卡片保留原始顺序，非法 Core 范围不能成为可点击展示片段。
+    #[test]
+    fn html_answer_parts_preserve_source_order_and_reject_invalid_ranges() {
+        let (_, event, mut projection) = fixture();
+        let vulcan_session_core::v1::EventBody::AssistantText(body) = event.event else {
+            unreachable!()
+        };
+        let parts = source_parts(&body.text, Some(&projection));
+        assert!(
+            matches!(parts.as_slice(), [HtmlAnswerDisplayPart::Text(before), HtmlAnswerDisplayPart::Answer(_), HtmlAnswerDisplayPart::Text(after)] if before.contains("中文") && after.contains("after"))
+        );
+        projection.answers.first_mut().unwrap().fence.byte_end = body.text.len() + 1;
+        assert!(
+            matches!(source_parts(&body.text, Some(&projection)).as_slice(), [HtmlAnswerDisplayPart::Text(text)] if *text == body.text)
+        );
+    }
 }
 
-/// Substitute exact Core fence intervals with short inert summaries; ordinary text stays borrowed.
-/// 将精确 Core 围栏区间替换为简短不可执行摘要；普通正文保持借用。
-/// Invalid byte intervals fail closed to the original display source without minting authority.
-/// 无效字节区间仅保留原始展示源码，绝不签发权威。
-pub fn compact_source<'a>(
+/// One authoritative display segment; action identity is never encoded in model-authored Markdown.
+/// 一段权威展示内容；动作身份绝不编码进模型生成的 Markdown。
+pub enum HtmlAnswerDisplayPart<'a> {
+    /// Original ordinary text between result fences.
+    /// 结果围栏之间的原始普通文字。
+    Text(&'a str),
+    /// Exact Core descriptor at its original position.
+    /// 原始位置上的精确 Core 描述。
+    Answer(&'a vulcan_session_core::v1::html_answers::HtmlAnswerDescriptor),
+}
+
+/// Split exact Core fence intervals into typed result cards, preserving ordinary source order.
+/// 按精确 Core 围栏区间拆分强类型结果卡，保留普通源码顺序。
+/// Invalid ranges return only original text; no action is minted from unverified offsets.
+/// 非法范围仅返回原始文字；不从未经验证的偏移生成动作。
+pub fn source_parts<'a>(
     text: &'a str,
-    projection: Option<&HtmlAnswerEventProjection>,
-) -> std::borrow::Cow<'a, str> {
+    projection: Option<&'a HtmlAnswerEventProjection>,
+) -> Vec<HtmlAnswerDisplayPart<'a>> {
     let Some(projection) = projection.filter(|value| !value.answers.is_empty()) else {
-        return text.into();
+        return vec![HtmlAnswerDisplayPart::Text(text)];
     };
-    let mut compact = String::new();
+    let mut parts = Vec::new();
     let mut cursor = 0;
     for answer in &projection.answers {
         let Some(before) = text.get(cursor..answer.fence.byte_start) else {
-            return text.into();
+            return vec![HtmlAnswerDisplayPart::Text(text)];
         };
         if text
             .get(answer.fence.byte_start..answer.fence.byte_end)
             .is_none()
         {
-            return text.into();
+            return vec![HtmlAnswerDisplayPart::Text(text)];
         }
-        compact.push_str(before);
-        compact.push_str(&crate::tr!("htmlAnswers.label"));
-        compact.push_str(" · ");
-        compact.push_str(answer.title.as_deref().unwrap_or("HTML"));
-        compact.push_str(" · i / /html-results\n");
+        parts.push(HtmlAnswerDisplayPart::Text(before));
+        parts.push(HtmlAnswerDisplayPart::Answer(answer));
         cursor = answer.fence.byte_end;
     }
-    compact.push_str(&text[cursor..]);
-    compact.into()
+    parts.push(HtmlAnswerDisplayPart::Text(&text[cursor..]));
+    parts
 }
 
 /// Ephemeral viewer receipt; diagnostics deliberately omit its URL and one-use ticket.

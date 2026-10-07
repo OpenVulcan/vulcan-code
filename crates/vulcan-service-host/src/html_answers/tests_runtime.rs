@@ -22,6 +22,23 @@ use vulcan_service_api::{
 };
 use vulcan_session_core::v1::html_answers::*;
 
+/// Draft source stays copyable while only the compiled representation reaches the isolated response.
+/// 草稿源码保持可复制，只有编译表示进入隔离响应。
+#[test]
+fn html_answers_draft_source_and_rendered_body_remain_distinct() {
+    let source = "```ui-details More\ncontent\n```\n";
+    let content = HtmlAnswerContent::from_source(
+        "draft".into(),
+        source.into(),
+        Some(templates::HtmlAnswerTemplate::Document),
+    )
+    .unwrap();
+    assert_eq!(content.source, source);
+    assert!(content.into_html().contains("<details>"));
+    let legacy = HtmlAnswerContent::from_source("raw".into(), "<p>old</p>".into(), None).unwrap();
+    assert_eq!(legacy.into_html(), "<p>old</p>");
+}
+
 /// Create a synthetic exact identity with no access to any real session or model.
 /// 创建不访问真实会话或模型的合成精确身份。
 fn source_identity() -> HtmlAnswerSourceIdentity {
@@ -211,10 +228,11 @@ async fn html_answers_routes_revalidate_authority_and_stop_the_listener() {
         let available = read_available.clone();
         Box::pin(async move {
             if available.load(Ordering::SeqCst) {
-                Ok(HtmlAnswerContent {
-                    title: "result".to_owned(),
-                    source: "<button>run</button>".to_owned(),
-                })
+                HtmlAnswerContent::from_source(
+                    "result".to_owned(),
+                    "<button>run</button>".to_owned(),
+                    None,
+                )
             } else {
                 Err(HtmlAnswerViewError::StaleSource)
             }
@@ -349,10 +367,7 @@ async fn html_answers_cancelled_exchange_reclaims_its_reservation() {
                 entered.notify_one();
                 std::future::pending::<()>().await;
             }
-            Ok(HtmlAnswerContent {
-                title: "page".to_owned(),
-                source: "<p>hello</p>".to_owned(),
-            })
+            HtmlAnswerContent::from_source("page".to_owned(), "<p>hello</p>".to_owned(), None)
         })
     }));
     let selected = source_identity();

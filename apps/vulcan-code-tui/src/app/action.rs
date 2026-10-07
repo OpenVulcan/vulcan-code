@@ -328,6 +328,19 @@ pub enum UiAction {
     /// 项目模式：添加当前所列的目录。
     FolderUseCurrent,
     Inspect(u64),
+    /// Confirm an exact result before requesting authority to open the system browser.
+    /// 请求系统浏览器打开权限前，先确认精确结果。
+    OpenHtmlAnswer(vulcan_service_api::HtmlAnswerSourceIdentity),
+    /// Recheck current ownership before minting a one-use viewing link.
+    /// 签发单次查看链接前重新检查当前归属。
+    RequestHtmlAnswer {
+        /// Exact Core-owned source selected before confirmation or copying.
+        /// 确认或复制前选中的精确 Core 源码归属。
+        source: vulcan_service_api::HtmlAnswerSourceIdentity,
+        /// User-selected browser or clipboard delivery.
+        /// 用户选择的浏览器或剪贴板交付方式。
+        delivery: HtmlAnswerDelivery,
+    },
     /// Deliver a verified one-use link without exposing it in diagnostic formatting.
     /// 交付经过验证的单次链接，不在诊断格式中暴露。
     DeliverHtmlAnswer {
@@ -628,6 +641,10 @@ pub fn perform(app: &mut App, action: UiAction) {
             link,
             delivery,
         } => super::html_answers::deliver(app, source, link, delivery),
+        UiAction::OpenHtmlAnswer(source) => super::html_answers::confirm_open(app, source),
+        UiAction::RequestHtmlAnswer { source, delivery } => {
+            super::html_answers::request(app, source, delivery)
+        }
         UiAction::HtmlAnswerSource { seq, ordinal, copy } => {
             super::html_answers::source(app, seq, ordinal, copy)
         }

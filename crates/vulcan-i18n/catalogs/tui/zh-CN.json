@@ -1,4 +1,6 @@
 {
+  "tui.htmlAnswers.confirmOpen": "是否使用默认浏览器访问“{title}”？结果将在隔离页面中运行。",
+  "tui.htmlAnswers.openFallback": "如果浏览器没有打开，请使用下方地址。临时链接可在 {seconds} 秒内打开一次。“复制链接”会生成新链接。",
   "tui.agents.activity": "最近活动",
   "tui.agents.task": "任务",
   "tui.area.short": "区域",

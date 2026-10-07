@@ -222,7 +222,7 @@ Vulcan Code는 수많은 훌륭한 오픈소스 프로젝트 위에 만들어졌
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI): Gemini 프로토콜과 호환 변환 참고
 - [OpenCode](https://github.com/anomalyco/opencode): 공급자 카탈로그와 시스템 프롬프트 참고
 - [agency-agents](https://github.com/msitarzewski/agency-agents): 서브 에이전트 역할 템플릿 출처
-- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html): 필요에 따른 HTML 답변 시각화와 상호작용 설계 참고. 프로토콜과 격리 뷰어는 독자 구현하며 해당 CLI에 의존하지 않습니다
+- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html): HTML 답변, 간결한 콘텐츠 초안 및 템플릿 구성 요소의 설계 참고. 프로토콜, 내장 렌더러와 격리 뷰어는 독자 구현하며 해당 CLI에 의존하지 않습니다
 
 **커뮤니티**
 
