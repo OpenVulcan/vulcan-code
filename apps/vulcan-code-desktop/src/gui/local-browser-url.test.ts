@@ -16,6 +16,18 @@ test('external conversation links accept explicit websites and files but never a
   }
 });
 
+test('external file links never hand executables or scripts to the OS default handler', () => {
+  for (const url of ['file:///C:/docs/report.pdf', 'file:///tmp/diagram.SVG', 'file:///C:/notes/readme.md']) {
+    assert.equal(validateExternalBrowserUrl(url, blockedOrigins), url);
+  }
+  // Encoded dots, trailing dots and stream suffixes are judged on the decoded path the OS receives.
+  // 编码点号、末尾点号与数据流后缀按操作系统实际收到的解码路径判断。
+  for (const url of ['file:///C:/Users/me/Downloads/payload.bat', 'file:///C:/tools/setup.exe', 'file:///C:/x/link.lnk',
+    'file:///tmp/run', 'file:///C:/x/a%2Ebat', 'file:///C:/x/a.bat.', 'file:///C:/x/a.html:evil.exe', 'file:///C:/x/']) {
+    assert.throws(() => validateExternalBrowserUrl(url, blockedOrigins), /cannot be opened externally/, url);
+  }
+});
+
 test('converts absolute file paths before considering web hosts', () => {
   // These forms cover the reported Windows path, copied paths, UNC and POSIX absolute paths.
   // 这些形式覆盖反馈中的 Windows 路径、复制路径、UNC 与 POSIX 绝对路径。

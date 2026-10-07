@@ -1,6 +1,14 @@
 // Native browser addresses are normalized on the host so filesystem paths never become web hosts.
 // 原生浏览器地址在宿主侧规范化，避免文件系统路径被误当作网页主机。
+import { posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+// The OS default handler executes scripts and programs, so external file links are limited to display-only types.
+// 操作系统默认处理器会执行脚本与程序，因此外部文件链接仅限只读展示类型。
+const EXTERNAL_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.html', '.htm', '.xhtml', '.svg', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.avif', '.ico',
+  '.txt', '.md', '.json', '.mp4', '.webm', '.mp3', '.wav',
+]);
 
 // normalizeLocalBrowserUrl accepts an address and protected origins, returning a navigable canonical URL.
 // normalizeLocalBrowserUrl 接受地址和受保护来源，返回可导航的规范 URL。
@@ -69,5 +77,20 @@ export function validateExternalBrowserUrl(input: string, blockedOrigins: Readon
     || !isAllowedLocalBrowserUrl(destination.href, blockedOrigins)) {
     throw new Error('Only website or file URLs outside the workbench can be opened externally.');
   }
+  if (destination.protocol === 'file:' && !isDisplayOnlyFilePath(destination.pathname)) {
+    throw new Error('This file type cannot be opened externally; open it in the built-in browser instead.');
+  }
   return destination.href;
+}
+
+// isDisplayOnlyFilePath judges the decoded path the OS receives, so encoded dots and stream suffixes cannot hide a type.
+// isDisplayOnlyFilePath 按操作系统实际收到的解码路径判断，编码点号与数据流后缀无法隐藏真实类型。
+// pathname is a file URL pathname; returns false for malformed encoding or any extension outside the allowlist.
+// pathname 为文件 URL 路径；编码非法或扩展名不在允许列表内时返回 false。
+function isDisplayOnlyFilePath(pathname: string): boolean {
+  try {
+    return EXTERNAL_FILE_EXTENSIONS.has(posix.extname(decodeURIComponent(pathname)).toLowerCase());
+  } catch {
+    return false;
+  }
 }
