@@ -167,15 +167,34 @@ fn run_webui_git_command_with_stdin_context(
             args.join(" ")
         )
     })?;
-    if let Some(mut child_stdin) = child.stdin.take() {
-        child_stdin.write_all(stdin).map_err(|error| {
-            format!(
-                "failed to write stdin for {command_label} `{}`: {error}",
-                args.join(" ")
-            )
-        })?;
-    }
-    child.wait_with_output().map_err(|error| {
+    let child_stdin = child.stdin.take();
+    // Git can emit output while it still reads stdin, so stdin is written concurrently with draining
+    // stdout and stderr; writing it first deadlocks once both pipe buffers fill.
+    // Git 可能在仍读取 stdin 时输出，因此 stdin 与 stdout、stderr 的排空并发进行；先写完 stdin
+    // 会在两端管道缓冲区写满后死锁。
+    let (written, output) = std::thread::scope(|scope| {
+        let writer = child_stdin.map(|mut child_stdin| {
+            scope.spawn(move || {
+                // Dropping the pipe at the end of the closure signals end of input.
+                // 闭包结束时释放管道以发出输入结束信号。
+                child_stdin.write_all(stdin)
+            })
+        });
+        let output = child.wait_with_output();
+        let written = writer.map_or(Ok(()), |writer| {
+            writer
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("stdin writer panicked")))
+        });
+        (written, output)
+    });
+    written.map_err(|error| {
+        format!(
+            "failed to write stdin for {command_label} `{}`: {error}",
+            args.join(" ")
+        )
+    })?;
+    output.map_err(|error| {
         format!(
             "failed to wait for {command_label} `{}` with stdin: {error}",
             args.join(" ")

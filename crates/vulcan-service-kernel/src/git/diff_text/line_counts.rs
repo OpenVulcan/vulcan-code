@@ -444,4 +444,42 @@ mod tests {
         assert_eq!(line_counts.get("222222"), None);
         assert_eq!(line_counts.get("333333"), Some(&1));
     }
+
+    /// Verifies a large batch completes, because Git emits blob payloads while it still reads object ids.
+    /// 验证大批量读取能够完成，因为 Git 在仍读取对象 ID 时就输出 blob 载荷。
+    #[test]
+    fn webui_git_blob_line_counts_completes_for_large_batches() {
+        let repository = tempfile::tempdir().expect("temporary repository");
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repository.path())
+                .stdout(std::process::Stdio::null())
+                .status()
+                .expect("run git");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        // Enough distinct multi-line blobs overflow both the stdin and stdout pipe buffers.
+        // 足够多的不同多行 blob 会同时撑满 stdin 与 stdout 管道缓冲区。
+        let paths = (0..4000)
+            .map(|index| {
+                let path = format!("file-{index}.txt");
+                let body = format!("{index}\n").repeat(200);
+                fs::write(repository.path().join(&path), body).expect("write fixture file");
+                path
+            })
+            .collect::<Vec<_>>();
+        git(&["add", "-A"]);
+        let root = repository.path().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(webui_git_index_line_counts(&root, &paths));
+        });
+        let line_counts = receiver
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("batched cat-file read must not deadlock");
+        assert_eq!(line_counts.len(), 4000);
+        assert!(line_counts.values().all(|count| *count == 200));
+    }
 }
