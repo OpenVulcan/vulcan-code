@@ -123,38 +123,6 @@ impl WaitAgentActivityResult {
     }
 }
 
-/// Returns whether a tool name belongs to the core subagent surface.
-/// 返回工具名称是否属于核心子代理工具面。
-///
-/// # Parameters
-/// 参数
-/// `tool_name` is the candidate model-visible tool name.
-/// `tool_name` 是候选模型可见工具名称。
-///
-/// # Returns
-/// 返回值
-/// `true` when the name is one of the canonical core subagent tools.
-/// 当名称是规范核心子代理工具之一时返回 `true`。
-pub fn is_core_subagent_tool(tool_name: &str) -> bool {
-    CORE_SUBAGENT_TOOLS.contains(&tool_name)
-}
-
-/// Returns whether a host-result kind is the canonical child-agent task kind.
-/// 返回宿主结果类型是否为规范子代理任务类型。
-///
-/// # Parameters
-/// 参数
-/// `kind` is the host-result kind to inspect.
-/// `kind` 是需要检查的宿主结果类型。
-///
-/// # Returns
-/// 返回值
-/// `true` when the kind is `subagent_task`.
-/// 当类型为 `subagent_task` 时返回 `true`。
-pub fn is_subagent_task_kind(kind: &str) -> bool {
-    kind == SUBAGENT_TASK_KIND
-}
-
 /// Returns whether a host-result kind is accepted as a child-agent task payload.
 /// 返回宿主结果类型是否可作为子代理任务载荷读取。
 ///

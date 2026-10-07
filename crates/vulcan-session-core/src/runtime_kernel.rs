@@ -317,12 +317,6 @@ impl SessionRuntimeKernel {
         }
     }
 
-    /// Returns whether a new user-authored turn may be started immediately.
-    /// 返回是否可以立即启动新的用户编写回合。
-    pub fn can_start_user_turn(&self) -> bool {
-        self.active_turn.is_none()
-    }
-
     /// Returns whether a mailbox-triggered turn may be started immediately.
     /// 返回是否可以立即启动 mailbox 触发回合。
     pub fn can_start_mailbox_turn(&self) -> bool {

@@ -176,13 +176,6 @@ impl SessionBoundaryEvent {
         self
     }
 
-    /// Attaches an item identifier to this event.
-    /// 为该事件附加条目标识符。
-    pub fn with_item_id(mut self, item_id: impl Into<String>) -> Self {
-        self.item_id = Some(item_id.into());
-        self
-    }
-
     /// Attaches a structured payload to this event.
     /// 为该事件附加结构化载荷。
     pub fn with_payload(mut self, payload: Value) -> Self {

@@ -258,48 +258,6 @@ impl VulcanCoreController {
         })
     }
 
-    /// Executes one provider turn and updates the controller phase according to the outcome.
-    /// 执行一次 Provider 回合，并根据结果更新控制器阶段。
-    pub async fn execute_once<A>(&mut self, adapter: &A) -> Result<A::Response, CoreError>
-    where
-        A: VulcanProviderAdapter,
-    {
-        let request = self.build_request(adapter).await?;
-        if let Err(error) = adapter.validate_built_request(&request) {
-            self.phase = ControllerPhase::Failed;
-            self.push_event(CoreEvent {
-                kind: CoreEventKind::Error,
-                title: String::from("控制器失败"),
-                body: error.to_string(),
-                metadata: Some(Value::String(adapter.provider_id().to_string())),
-            });
-            return Err(error);
-        }
-        self.phase = ControllerPhase::WaitingForProvider;
-        match adapter.execute_request(request).await {
-            Ok(response) => {
-                self.phase = ControllerPhase::Completed;
-                self.push_event(CoreEvent {
-                    kind: CoreEventKind::Final,
-                    title: String::from("控制器完成"),
-                    body: String::from("一次 Provider 回合已成功结束。"),
-                    metadata: None,
-                });
-                Ok(response)
-            }
-            Err(error) => {
-                self.phase = ControllerPhase::Failed;
-                self.push_event(CoreEvent {
-                    kind: CoreEventKind::Error,
-                    title: String::from("控制器失败"),
-                    body: error.to_string(),
-                    metadata: Some(Value::String(adapter.provider_id().to_string())),
-                });
-                Err(error)
-            }
-        }
-    }
-
     /// Runs one complete user-authored turn through the host-owned provider and tool loop until the assistant settles.
     /// 运行一次完整的用户输入回合，并由宿主自有 Provider 与工具循环持续推进直到助手稳定结束。
     pub async fn run_user_turn<A, E, P>(

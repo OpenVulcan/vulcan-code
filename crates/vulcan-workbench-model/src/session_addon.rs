@@ -594,26 +594,6 @@ impl SessionAddonState {
         changed
     }
 
-    /// Removes one exact addon namespace and advances the document revision when present.
-    /// 移除一个精确附属状态命名空间，并在其存在时推进文档版本。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `namespace` is the exact known namespace to remove.
-    /// `namespace` 是需要移除的精确已知命名空间。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when a persisted namespace was physically removed.
-    /// 物理移除了一个持久化命名空间时返回 `true`。
-    pub fn remove_namespace(&mut self, namespace: SessionAddonNamespace) -> bool {
-        let removed = self.namespaces.remove(&namespace).is_some();
-        if removed {
-            self.revision = self.revision.saturating_add(1).max(1);
-        }
-        removed
-    }
-
     /// Reads runtime controls from the addon namespace.
     /// 从附属状态命名空间读取运行控制配置。
     ///
@@ -623,28 +603,6 @@ impl SessionAddonState {
     /// 存在且有效时返回反序列化后的运行控制配置。
     pub fn runtime_controls(&self) -> Option<SessionRuntimeControls> {
         self.typed_namespace(SessionAddonNamespace::RuntimeControls)
-    }
-
-    /// Writes runtime controls to the addon namespace.
-    /// 将运行控制配置写入附属状态命名空间。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `controls` are the provider/model/reasoning controls to persist.
-    /// `controls` 是要持久化的供应商、模型与推理控制配置。
-    /// `updated_at` is the timestamp applied when changed.
-    /// `updated_at` 是变化时应用的时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the namespace changed.
-    /// 当命名空间发生变化时返回 `true`。
-    pub fn set_runtime_controls(
-        &mut self,
-        controls: &SessionRuntimeControls,
-        updated_at: String,
-    ) -> bool {
-        self.set_typed_namespace(SessionAddonNamespace::RuntimeControls, controls, updated_at)
     }
 
     /// Reads work mode from the addon namespace.
@@ -667,24 +625,6 @@ impl SessionAddonState {
     /// 存在且有效时返回反序列化后的 todolist。
     pub fn todolist(&self) -> Option<SessionTodolistState> {
         self.typed_namespace(SessionAddonNamespace::Todolist)
-    }
-
-    /// Writes the session todolist namespace.
-    /// 写入会话 todolist命名空间。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `todolist` is the latest session-scoped todolist state.
-    /// `todolist` 是最新的会话级 todolist 状态。
-    /// `updated_at` is the timestamp applied when changed.
-    /// `updated_at` 是变化时应用的时间戳。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` when the namespace changed.
-    /// 当命名空间发生变化时返回 `true`。
-    pub fn set_todolist(&mut self, todolist: &SessionTodolistState, updated_at: String) -> bool {
-        self.set_typed_namespace(SessionAddonNamespace::Todolist, todolist, updated_at)
     }
 
     /// Reads the session knowledge-library selection from its independent namespace.

@@ -98,13 +98,6 @@ impl HookPointDescriptor {
         self.default_scope = scope;
         self
     }
-
-    /// Sets the optional payload schema for this point descriptor.
-    /// 设置该点位描述的可选 payload schema。
-    pub fn with_payload_schema(mut self, schema: Value) -> Self {
-        self.payload_schema = Some(schema);
-        self
-    }
 }
 
 /// Describes the configuration layer that owns a hook registration.
@@ -353,14 +346,6 @@ pub struct HookCapabilitySet {
 }
 
 impl HookCapabilitySet {
-    /// Builds a capability set from an iterable list.
-    /// 根据可迭代列表构建能力集合。
-    pub fn from_values(values: impl IntoIterator<Item = HookCapability>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
-        }
-    }
-
     /// Returns true when the capability has been granted.
     /// 当指定能力已被授予时返回 true。
     pub fn contains(&self, capability: &HookCapability) -> bool {

@@ -128,12 +128,6 @@ impl TurnInputQueue {
         self.delivery_phase
     }
 
-    /// Enqueues one input directly into the current turn buffer.
-    /// 将一条输入直接加入当前回合缓冲区。
-    pub fn enqueue_current_turn_input(&mut self, input: TurnInput) {
-        self.current_turn_inputs.push_back(input);
-    }
-
     /// Enqueues one mailbox input according to the current delivery phase.
     /// 根据当前投递阶段加入一条 mailbox 输入。
     ///
@@ -202,17 +196,6 @@ impl TurnInputQueue {
             .collect()
     }
 
-    /// Returns a cloned snapshot of mailbox input without consuming it.
-    /// 返回 mailbox 输入项的克隆快照且不消费。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Current mailbox inputs in FIFO order.
-    /// 按 FIFO 顺序排列的当前 mailbox 输入项。
-    pub fn get_mailbox_input(&self) -> Vec<TurnInput> {
-        self.session_mailbox_inputs.iter().cloned().collect()
-    }
-
     /// Returns an unconsumed cloned snapshot of mailbox input without consuming it.
     /// 返回未消费 mailbox 输入项的克隆快照且不消费。
     pub fn get_unconsumed_mailbox_input(&self) -> Vec<TurnInput> {
@@ -231,35 +214,6 @@ impl TurnInputQueue {
             .drain(..)
             .filter(|input| !self.consumed_input_ids.contains(&input.input_id))
             .collect()
-    }
-
-    /// Drains current-turn inputs of the requested kind while retaining every other input.
-    /// 取出指定类型的当前回合输入，并保留其他所有输入。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `kind` is the input kind that should be removed and returned.
-    /// `kind` 是需要移除并返回的输入类型。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Matching unconsumed inputs in FIFO order.
-    /// 按 FIFO 顺序返回匹配的未消费输入。
-    pub fn drain_current_turn_inputs_by_kind(&mut self, kind: TurnInputKind) -> Vec<TurnInput> {
-        let mut retained = VecDeque::new();
-        let mut drained = Vec::new();
-        while let Some(input) = self.current_turn_inputs.pop_front() {
-            if self.consumed_input_ids.contains(&input.input_id) {
-                continue;
-            }
-            if input.kind == kind {
-                drained.push(input);
-            } else {
-                retained.push_back(input);
-            }
-        }
-        self.current_turn_inputs = retained;
-        drained
     }
 
     /// Moves unconsumed current-turn inputs back to the session mailbox for a later turn.
@@ -299,15 +253,6 @@ impl TurnInputQueue {
     /// 按先进先出顺序取出全部会话 mailbox 输入项。
     pub fn drain_mailbox_input_items(&mut self) -> Vec<TurnInput> {
         self.session_mailbox_inputs.drain(..).collect()
-    }
-
-    /// Drains unconsumed session-mailbox input items in FIFO order.
-    /// 按先进先出顺序取出未消费的会话 mailbox 输入项。
-    pub fn drain_unconsumed_mailbox_input_items(&mut self) -> Vec<TurnInput> {
-        self.session_mailbox_inputs
-            .drain(..)
-            .filter(|input| !self.consumed_input_ids.contains(&input.input_id))
-            .collect()
     }
 
     /// Marks one input identifier as consumed.

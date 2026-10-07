@@ -345,38 +345,6 @@ impl StatBucket {
             output_timing: None,
         }
     }
-
-    /// Builds the parent subagent bucket from exact child inclusive totals.
-    /// 从精确子会话包容性总量构建父会话子代理统计桶。
-    ///
-    /// Every child total is copied dimension-for-dimension; the parent adds one
-    /// return count for that child while preserving all descendant return counts.
-    /// 每个子会话总量都逐维复制；父会话为该子会话增加一次回流计数，同时保留全部
-    /// 后代回流计数。
-    pub fn from_subagent_returns<'a>(
-        child_totals: impl IntoIterator<Item = &'a StatBucket>,
-    ) -> Self {
-        let totals: Vec<&StatBucket> = child_totals.into_iter().collect();
-        Self {
-            api_call_count: totals.iter().map(|bucket| bucket.api_call_count).sum(),
-            unknown_usage_api_call_count: totals
-                .iter()
-                .map(|bucket| bucket.unknown_usage_api_call_count)
-                .sum(),
-            tool_call_count: totals.iter().map(|bucket| bucket.tool_call_count).sum(),
-            subagent_return_count: totals.iter().fold(0u64, |count, bucket| {
-                count
-                    .saturating_add(1)
-                    .saturating_add(bucket.subagent_return_count)
-            }),
-            usage: AggregatedUsage::aggregate_aggregated(totals.iter().map(|bucket| &bucket.usage)),
-            output_timing: ProviderOutputTiming::aggregate(
-                totals
-                    .iter()
-                    .filter_map(|bucket| bucket.output_timing.as_ref()),
-            ),
-        }
-    }
 }
 
 /// Direct/subagent/total triple preserved by one terminal turn statistic.

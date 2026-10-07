@@ -85,12 +85,6 @@ impl VulcanCoreController {
         &self.events
     }
 
-    /// Clears the accumulated controller events.
-    /// 清空当前累计的控制器事件。
-    pub fn clear_events(&mut self) {
-        self.events.clear();
-    }
-
     /// Appends one controller event to the in-memory event buffer.
     /// 向内存事件缓冲区追加一条控制器事件。
     pub fn push_event(&mut self, event: CoreEvent) {

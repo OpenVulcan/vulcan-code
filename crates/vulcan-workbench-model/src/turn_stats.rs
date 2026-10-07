@@ -477,38 +477,6 @@ impl SessionTurnStats {
             .retain(SessionTurnUsageGroup::has_accounting);
     }
 
-    /// Returns a compact one-line summary used by transcript chips and lightweight projections.
-    /// 返回供转录统计标签与轻量投影使用的紧凑单行摘要。
-    pub fn summary_line(&self) -> String {
-        let mut parts = vec![
-            format!("{} 次调用", self.provider_call_count),
-            format!("{} 个工具", self.tool_call_count),
-        ];
-        if self.total_tokens > 0 {
-            parts.push(format!("{} tokens", self.total_tokens));
-        }
-        if let Some(cached_input_tokens) = self.cached_input_tokens
-            && cached_input_tokens > 0
-        {
-            parts.push(format!("缓存命中 {}", cached_input_tokens));
-        }
-        if let Some(speed) = self.output_tokens_per_second
-            && speed.is_finite()
-            && speed > 0.0
-        {
-            parts.push(format!("{speed:.1}/s"));
-        }
-        if let Some(subagent_group) = self
-            .usage_groups
-            .iter()
-            .find(|group| group.kind == SessionTurnUsageGroupKind::Subagent)
-            && subagent_group.total_tokens > 0
-        {
-            parts.push(format!("智能体 {}", subagent_group.total_tokens));
-        }
-        parts.join(" · ")
-    }
-
     /// Returns a multi-line human-readable detail body used by raw-source and future hover/detail surfaces.
     /// 返回供原文与后续悬浮或详情表面使用的多行人类可读详情正文。
     pub fn detail_body(&self) -> String {
