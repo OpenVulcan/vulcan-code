@@ -9,7 +9,7 @@ use ratatui::layout::Position;
 
 use super::overlay::{confirm_picker, menu_pick};
 use super::regions::{
-    activate_sidebar_row, ask_click_option, scroll_transcript, select_seq, toggle_selected,
+    activate_sidebar_row, ask_click_option, mark_seq, scroll_transcript, toggle_selected,
 };
 use super::{open_diff, pages, run_slash, slash_matches};
 use crate::app::action::{self, AskStep, UiAction};
@@ -324,7 +324,7 @@ fn click_transcript(app: &mut App, at: Position, double: bool) {
     let Some((seq, _, _)) = transcript_item_at(app, at) else {
         return;
     };
-    select_seq(app, seq);
+    mark_seq(app, seq);
     if double {
         toggle_selected(app);
     }
@@ -358,7 +358,7 @@ fn right_click(app: &mut App, target: Target, at: Position) {
         Target::Transcript => {
             app.focus = Focus::Transcript;
             if let Some((seq, _, _)) = transcript_item_at(app, at) {
-                select_seq(app, seq);
+                mark_seq(app, seq);
                 action::perform(app, UiAction::Inspect(seq));
             }
         }

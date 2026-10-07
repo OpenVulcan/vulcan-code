@@ -12,7 +12,9 @@ use crate::app::pages::Area;
 use crate::app::{App, PanelTab, SidebarMode, input};
 use crate::backend::{Command, mock};
 use crate::i18n;
-use crate::model::{AgentState, SessionGoalStatus};
+use crate::model::{
+    AgentState, AssistantSemanticStatus, ConversationEvent, EventBody, SessionGoalStatus,
+};
 use crate::ui::{self, theme::Theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -944,6 +946,57 @@ fn single_click_selects_and_double_click_expands() {
     assert!(!h.app.page_state(page).expanded.contains(&id));
     press(&mut h.app, rect);
     assert!(h.app.page_state(page).expanded.contains(&id));
+}
+
+/// Clicking inside a block whose top has scrolled out selects it without moving the view.
+/// 点击顶部已滚出视图的块时只选中它，不移动视图。
+#[test]
+fn clicking_a_partly_visible_block_keeps_the_view() {
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    // A reply taller than the view, appended after the mock turn.
+    // 一条高于视图的回复，追加在模拟轮次之后。
+    let session = h.app.session_mut().expect("session");
+    let seq = session.events.last().map_or(0, |e| e.seq) + 1;
+    session.events.push(ConversationEvent {
+        seq,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        body: EventBody::AssistantText {
+            text: (1..=80).map(|n| format!("line {n}\n\n")).collect(),
+            status: AssistantSemanticStatus::Completed,
+        },
+    });
+    h.frame();
+    let height = h.app.hits.transcript.height as usize;
+    let total = h.app.hits.transcript_lines;
+    let (seq, start, _) = h
+        .app
+        .hits
+        .transcript_items
+        .iter()
+        .copied()
+        .find(|(_, start, len)| *len >= 2 && start + 1 + height <= total)
+        .expect("a multi-line block that can straddle the top edge");
+    // Scroll so the block's first line sits just above the view.
+    // 滚动使该块首行恰好位于视图上方。
+    let scroll = total - height - (start + 1);
+    h.app.session_mut().expect("session").scroll_from_bottom = scroll;
+    h.frame();
+    assert_eq!(h.app.hits.transcript_top, start + 1);
+
+    let first_row = Rect {
+        height: 1,
+        ..h.app.hits.transcript
+    };
+    press(&mut h.app, first_row);
+    h.frame();
+    let session = h.app.session().expect("session");
+    assert_eq!(session.selected, Some(seq));
+    assert_eq!(
+        session.scroll_from_bottom, scroll,
+        "a click must not scroll"
+    );
 }
 
 /// The activity bar labels its entries on wide terminals, shows icons on narrower ones and gives

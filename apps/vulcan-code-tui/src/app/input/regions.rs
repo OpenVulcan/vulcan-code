@@ -143,10 +143,10 @@ pub(super) fn select_seq(app: &mut App, seq: u64) {
         .copied();
     let total = app.hits.transcript_lines;
     let height = app.hits.transcript.height as usize;
+    mark_seq(app, seq);
     let Some(session) = app.session_mut() else {
         return;
     };
-    session.selected = Some(seq);
     let Some((_, start, len)) = item else {
         return;
     };
@@ -156,6 +156,15 @@ pub(super) fn select_seq(app: &mut App, seq: u64) {
     } else if start + len > top + height {
         let new_top = (start + len).saturating_sub(height).min(start);
         session.scroll_from_bottom = total.saturating_sub(height + new_top);
+    }
+}
+
+/// Selects one transcript item where it stands; pointer selection uses this because the block is
+/// already on screen and scrolling to its top would move the text away from the pointer.
+/// 原地选中一个会话记录条目；指针选择使用此函数，因为块已在屏幕上，滚动到其顶部会让文本离开指针。
+pub(super) fn mark_seq(app: &mut App, seq: u64) {
+    if let Some(session) = app.session_mut() {
+        session.selected = Some(seq);
     }
 }
 
