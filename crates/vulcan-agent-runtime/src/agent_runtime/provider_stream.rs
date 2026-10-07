@@ -9,7 +9,6 @@ use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use vulcan_ai_contract::{AiExecutionError, AiTransportKind};
@@ -50,9 +49,6 @@ pub(crate) enum ProviderStreamDelta {
         /// 随许可返回的精确上下文预算判定。
         context_budget: Option<ContextBudgetSnapshot>,
     },
-    /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
-    /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
-    WireRequest(Value),
     /// Exact upstream transport facts observed by the physical dispatcher.
     /// 真实分派器观察到的精确上游传输事实。
     TransportObserved {

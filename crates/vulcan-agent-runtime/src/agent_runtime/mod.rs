@@ -48,7 +48,6 @@ pub mod provider_v1_bridge;
 pub mod provider_visible_agent_messages;
 pub mod question_runtime;
 pub mod runtime;
-pub mod runtime_request_capture;
 pub mod runtime_stream;
 pub mod runtime_stream_bootstrap;
 pub mod runtime_stream_bootstrap_core;

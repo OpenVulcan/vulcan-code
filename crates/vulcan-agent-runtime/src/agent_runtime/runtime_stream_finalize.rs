@@ -13,7 +13,6 @@ use crate::context_budget::{
 };
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
-use serde_json::Value;
 use vulcan_context::{ContextBaseline, build_provider_request_context_assembly};
 use vulcan_core::types::{
     CoreEvent as CoreControllerEvent, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -75,24 +74,6 @@ pub(crate) fn apply_latest_request_snapshot(
             request_snapshot,
         );
     preparation.provider_request_snapshot_json = serde_json::to_value(request_snapshot).ok();
-}
-
-/// Applies the latest captured wire-level provider request to the mutable preparation object.
-/// 将最近捕获到的 wire-level Provider 请求应用到可变执行准备对象。
-///
-/// # Parameters
-/// 参数
-/// `preparation` receives the final request JSON used by the request inspection tab.
-/// `preparation` 接收请求检查页使用的最终请求 JSON。
-/// `wire_request_json` is the provider-specific HTTP request captured immediately before dispatch.
-/// `wire_request_json` 是发送前捕获到的 Provider 专用 HTTP 请求。
-fn apply_latest_wire_request_json(
-    preparation: &mut ExecutionPreparation,
-    wire_request_json: Option<&Value>,
-) {
-    if let Some(wire_request_json) = wire_request_json {
-        preparation.provider_wire_request_json = Some(wire_request_json.clone());
-    }
 }
 
 /// Builds the standard failed runtime event emitted when provider execution terminates with one error.
@@ -192,7 +173,6 @@ pub(crate) fn build_failure_terminal_events(
         events.push(thinking_completed_event);
     }
     apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
-    apply_latest_wire_request_json(&mut preparation, stream_state.latest_wire_request_json());
     let last_safe_conversation_state = stream_state.take_final_conversation_state();
     let last_successful_provider_usage = stream_state.take_last_successful_provider_usage();
     let cumulative_successful_provider_usage =
@@ -238,7 +218,6 @@ pub(crate) fn build_success_terminal_events(
     }
 
     apply_latest_request_snapshot(&mut preparation, stream_state.latest_request_snapshot());
-    apply_latest_wire_request_json(&mut preparation, stream_state.latest_wire_request_json());
 
     // visibleOutput preserves a genuinely absent assistant message when the run only requested tools.
     // visibleOutput 在本次运行仅请求工具时保留助手消息确实缺失的事实。
@@ -353,7 +332,6 @@ mod tests {
             warnings: Vec::new(),
             provider_request_preview_markdown: String::new(),
             provider_request_snapshot_json: None,
-            provider_wire_request_json: None,
             context_budget: None,
             context_compaction_policy: None,
             context_budget_override: None,

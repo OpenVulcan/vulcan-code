@@ -18,7 +18,6 @@ use crate::agent_runtime::provider_stream_projection::{
 use crate::agent_runtime::tool_request_stream::ToolRequestStreamCoordinator;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
-use serde_json::Value;
 use std::mem;
 use vulcan_ai_contract::{AiErrorCategory, AiExecutionError};
 use vulcan_core::controller::VulcanCoreController;
@@ -52,9 +51,6 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Latest structured request snapshot captured before the most recent provider request.
     /// 最近一次 Provider 请求发出前捕获到的最新结构化请求快照。
     latest_request_snapshot: Option<CoreProviderRequestSnapshot>,
-    /// Latest final wire-level provider request captured before network dispatch.
-    /// 网络发送前捕获到的最近一次最终 wire-level Provider 请求。
-    latest_wire_request_json: Option<Value>,
     /// Number of real provider requests observed during the current runtime stream.
     /// 当前运行时流期间观测到的真实 Provider 请求次数。
     provider_request_count: usize,
@@ -137,7 +133,6 @@ impl RuntimeStreamDeltaState {
             assistant_output: String::new(),
             thinking_completed_emitted: false,
             latest_request_snapshot: None,
-            latest_wire_request_json: None,
             provider_request_count: 0,
             final_conversation_state: None,
             last_successful_provider_usage: None,
@@ -212,12 +207,6 @@ impl RuntimeStreamDeltaState {
     /// 返回流式执行期间最近一次捕获到的结构化请求快照（如果存在）。
     pub(crate) fn latest_request_snapshot(&self) -> Option<&CoreProviderRequestSnapshot> {
         self.latest_request_snapshot.as_ref()
-    }
-
-    /// Returns the latest final wire-level provider request captured during the stream.
-    /// 返回流式执行期间捕获到的最近一次最终 wire-level Provider 请求。
-    pub(crate) fn latest_wire_request_json(&self) -> Option<&Value> {
-        self.latest_wire_request_json.as_ref()
     }
 
     /// Returns the number of real provider requests captured during the stream so far.
@@ -650,10 +639,6 @@ pub(crate) fn process_provider_stream_delta(
                 .into_iter()
                 .collect();
             provider_request_events_with_durability_boundary(telemetry_events, completion)
-        }
-        Ok(ProviderStreamDelta::WireRequest(request_json)) => {
-            state.latest_wire_request_json = Some(request_json);
-            vec![ExecutionStreamEvent::WireRequestReady { session_id }]
         }
         Ok(ProviderStreamDelta::Thinking(delta)) => state.process_thinking_delta(session_id, delta),
         Ok(ProviderStreamDelta::TransientReasoningStatusChanged(status)) => {

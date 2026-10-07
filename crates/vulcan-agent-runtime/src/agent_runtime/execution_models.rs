@@ -778,9 +778,6 @@ pub struct ExecutionPreparation {
     /// Structured provider-request snapshot JSON captured by `vulcan-core` right before dispatch.
     /// 由 `vulcan-core` 在分发前捕获的结构化 Provider 请求快照 JSON。
     pub provider_request_snapshot_json: Option<Value>,
-    /// Final provider-specific HTTP request JSON captured immediately before network dispatch.
-    /// 在网络发送前捕获到的最终 Provider 专用 HTTP 请求 JSON。
-    pub provider_wire_request_json: Option<Value>,
     /// Optional context-budget snapshot captured from the final provider-facing request shape.
     /// 从最终面向 Provider 的请求形态捕获到的可选上下文预算快照。
     pub context_budget: Option<ContextBudgetSnapshot>,

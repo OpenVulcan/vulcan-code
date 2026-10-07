@@ -2,19 +2,17 @@
 //! Vulcan 公共契约适配器状态与宿主执行入口。
 
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
-use crate::agent_runtime::provider_stream::{ProviderDeltaStream, ProviderStreamDelta};
+use crate::agent_runtime::provider_stream::ProviderDeltaStream;
 use crate::agent_runtime::provider_transport_entry_inputs::{
     PreparedProviderTransportStreamLaunch, prepare_provider_transport_stream_launch,
 };
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::provider_transport_request::ProviderTransportExecutionRequest;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
-use async_stream::try_stream;
 use vulcan_ai_contract::{
     ModelParameterValue, NativeToolKind, PromptCachePolicy, ReasoningEffort, ResourceKind,
     ToolDefinition,
 };
-use vulcan_core::provider::VulcanProviderAdapter;
 use vulcan_core::types::{
     CoreError as VulcanCoreError, ProviderPromptLayers as CoreProviderPromptLayers,
 };
@@ -25,7 +23,6 @@ use vulcan_provider_adapters::{
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 
 mod accumulator;
-mod capture_media;
 mod generated_resources;
 mod input_resources;
 mod message_projection;
@@ -139,95 +136,6 @@ pub(crate) fn execute_vulcan_public_stream(
         "Vulcan 公共契约",
         prompt_intervention,
     )
-}
-
-/// Captures one exact public wire request without dispatching network traffic.
-/// 捕获一个精确的公共线级请求，但不分派网络流量。
-///
-/// # Parameters
-/// 参数
-/// `request` owns the same host inputs as normal execution and `resolved` freezes the route.
-/// `request` 持有与正常执行相同的宿主输入，`resolved` 冻结执行路由。
-///
-/// # Returns
-/// 返回值
-/// A one-item stream containing the projected wire JSON or a controlled error.
-/// 返回只包含投影线级 JSON 的单项流，或受控错误。
-pub(crate) fn capture_vulcan_public_stream(
-    request: ProviderTransportExecutionRequest,
-    resolved: ResolvedPublicAiExecution,
-    reasoning_effort: Option<ReasoningEffort>,
-    media_projection: Option<
-        std::sync::Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>,
-    >,
-) -> ProviderDeltaStream {
-    // Capture retains the same explicit execution even though it does not commit a V1 request.
-    // 即使捕获不提交V1请求，也保留同一明确执行。
-    let resolved = std::sync::Arc::new(resolved);
-    let cache_scope_id = request.session_id.to_string();
-    let workspace_path = request.workspace_path.clone();
-    let output_token_limit = resolved_public_output_token_limit(
-        resolved.overrides.output_limit,
-        resolved.model.capabilities.output_limit,
-    );
-    Box::pin(try_stream! {
-        let prompt_cache = resolved.overrides.prompt_cache.clone().unwrap_or_default();
-        let prepared = prepare_provider_transport_stream_launch(request);
-        let controller_config = prepared.runtime_inputs.entry_inputs.controller_config;
-        let provider_tool_definitions = prepared
-            .runtime_inputs
-            .tool_context
-            .provider_tool_definitions;
-        let (live_sender, _live_receiver) = tokio::sync::mpsc::unbounded_channel();
-        let adapter = VulcanPublicContractAdapter::new(
-            false,
-            resolved.route.clone(),
-            resolved.model.id.clone(),
-            cache_scope_id.clone(),
-            resolved.credential.clone(),
-            resolved.client.clone(),
-            provider_tool_definitions,
-            resolved.model.capabilities.provider_native_tools.clone(),
-            output_token_limit,
-            prompt_cache,
-            reasoning_effort,
-            resolved.overrides.model_parameters.clone(),
-            resolved.model.capabilities.output_resources.clone(),
-            workspace_path,
-            live_sender,
-            prepared.dynamic_prompt_layers,
-            prepared.locked_baseline,
-            std::sync::Arc::clone(&resolved),
-        );
-        let mut public_request = adapter
-            .build_request(&prepared.core_snapshot, &controller_config)
-            .await
-            .map_err(|error| error.to_string())?;
-        capture_media::prepare_capture_user_media(
-            &mut public_request,
-            crate::agent_runtime::events::ProviderRequestMediaContext {
-                execution: std::sync::Arc::clone(&resolved),
-                session_scope_id: cache_scope_id,
-            },
-            media_projection.as_deref(),
-        ).await?;
-        // secret is resolved at capture time so previews observe the same latest-revision boundary as execution.
-        // secret 在捕获时解析，使预览与执行观察到相同的最新修订版边界。
-        let secret = resolved
-            .credential
-            .resolve_for_request()
-            .await?;
-        let encoded = resolved
-            .client
-            .encode_effective_request_with_credential(
-                &resolved.route,
-                &public_request.public,
-                &secret,
-            )
-            .await
-            .map_err(|failure| failure.to_string())?;
-        yield ProviderStreamDelta::WireRequest(encoded.body);
-    })
 }
 
 /// Bridges Vulcan public requests and events into the host-owned controller.

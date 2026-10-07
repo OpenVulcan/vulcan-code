@@ -486,7 +486,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         warnings,
         provider_request_preview_markdown: String::new(),
         provider_request_snapshot_json: None,
-        provider_wire_request_json: None,
         context_budget: None,
         context_compaction_policy: Some(resolved_context_compaction_policy),
         context_budget_override: request.context_budget_override,

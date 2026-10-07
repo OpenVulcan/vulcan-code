@@ -135,82 +135,6 @@ fn resolve_runtime_reasoning_effort_for_capabilities(
     validate_exact_wire_reasoning_effort(capabilities, requested)
 }
 
-/// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
-/// 针对当前选中的运行时族执行一次 Provider 提示词调用，并返回增量流。
-pub(crate) fn execute_provider_prompt_stream(
-    config: &ProviderConfigurationFile,
-    preparation: &ExecutionPreparation,
-    active_agent: Option<&RuntimeAgentDefinition>,
-    system_preamble: &str,
-    dynamic_prompt_layers: CoreProviderPromptLayers,
-    locked_baseline: LockedBaselineProjection,
-    prompt: &str,
-    turn_start_mode: ProviderTransportTurnStartMode,
-    core_snapshot: CoreConversationSnapshot,
-    task_runtime: Arc<TaskRuntime>,
-    tools_manager: VulcanToolsManager,
-    resolved_tools: Vec<ResolvedToolDefinition>,
-    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
-    prompt_intervention: Option<RuntimePromptIntervention>,
-) -> ProviderDeltaStream {
-    execute_provider_prompt_stream_with_capture_mode(
-        config,
-        preparation,
-        active_agent,
-        system_preamble,
-        dynamic_prompt_layers,
-        locked_baseline,
-        prompt,
-        turn_start_mode,
-        core_snapshot,
-        task_runtime,
-        tools_manager,
-        resolved_tools,
-        public_ai_runtime,
-        false,
-        prompt_intervention,
-        None,
-    )
-}
-
-/// Executes one provider prompt in capture-only mode and returns the final request as stream data without network dispatch.
-/// 以仅捕获模式执行一次 Provider 提示词调用，通过流数据返回最终请求且不进行网络发送。
-pub(crate) fn execute_provider_prompt_capture_stream(
-    config: &ProviderConfigurationFile,
-    preparation: &ExecutionPreparation,
-    active_agent: Option<&RuntimeAgentDefinition>,
-    system_preamble: &str,
-    dynamic_prompt_layers: CoreProviderPromptLayers,
-    locked_baseline: LockedBaselineProjection,
-    prompt: &str,
-    turn_start_mode: ProviderTransportTurnStartMode,
-    core_snapshot: CoreConversationSnapshot,
-    task_runtime: Arc<TaskRuntime>,
-    tools_manager: VulcanToolsManager,
-    resolved_tools: Vec<ResolvedToolDefinition>,
-    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
-    media_projection: Option<Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>>,
-) -> ProviderDeltaStream {
-    execute_provider_prompt_stream_with_capture_mode(
-        config,
-        preparation,
-        active_agent,
-        system_preamble,
-        dynamic_prompt_layers,
-        locked_baseline,
-        prompt,
-        turn_start_mode,
-        core_snapshot,
-        task_runtime,
-        tools_manager,
-        resolved_tools,
-        public_ai_runtime,
-        true,
-        None,
-        media_projection,
-    )
-}
-
 /// Builds the credential-bearing execution from the exact selection frozen during preparation.
 /// 从准备阶段冻结的精确选择构建携带凭据的执行对象。
 ///
@@ -276,9 +200,9 @@ fn diagnose_provider_failure(error: String, context: &str) -> String {
     format!("{error} [provider_route: {context}]")
 }
 
-/// Executes one provider prompt with an explicit request-capture switch shared by real and simulated paths.
-/// 使用真实路径与模拟路径共享的显式请求捕获开关执行一次 Provider 提示词调用。
-fn execute_provider_prompt_stream_with_capture_mode(
+/// Executes one provider prompt against the currently selected runtime family and returns a delta stream.
+/// 针对当前选中的运行时族执行一次 Provider 提示词调用，并返回增量流。
+pub(crate) fn execute_provider_prompt_stream(
     config: &ProviderConfigurationFile,
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
@@ -292,9 +216,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
-    capture_only: bool,
     prompt_intervention: Option<RuntimePromptIntervention>,
-    media_projection: Option<Arc<dyn crate::prompt_media_projection::PromptMediaProjectionRuntime>>,
 ) -> ProviderDeltaStream {
     let Some(public_ai_runtime) = public_ai_runtime else {
         return one_shot_provider_error_stream(
@@ -313,32 +235,24 @@ fn execute_provider_prompt_stream_with_capture_mode(
     // maxTurns 保持无限，因此只有模型返回无工具调用的响应才会结束 Provider 循环。
     let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
-    let request_budget_guard = if capture_only {
-        None
-    } else {
-        Some(ProviderRequestBudgetGuard::new_v1(
-            preparation.model_blueprint.provider_id.clone(),
-            preparation.model_blueprint.model_id.clone(),
-            preparation.model_blueprint.protocol_profile_id.clone(),
-            preparation.model_blueprint.route_revision.clone(),
-            preparation.model_blueprint.public_capabilities.clone(),
-            preparation.model_blueprint.reasoning.clone(),
-            preparation.context_compaction_policy,
-            preparation.context_budget_override,
-            preparation
-                .context_budget
-                .as_ref()
-                .and_then(|budget| budget.auto_compact_prefill_input_tokens),
-        ))
-    };
-    let retry_policy = if capture_only {
-        ProviderRetryPolicy::disabled()
-    } else {
-        ProviderRetryPolicy::from_config(&config.retry)
-    };
+    let request_budget_guard = Some(ProviderRequestBudgetGuard::new_v1(
+        preparation.model_blueprint.provider_id.clone(),
+        preparation.model_blueprint.model_id.clone(),
+        preparation.model_blueprint.protocol_profile_id.clone(),
+        preparation.model_blueprint.route_revision.clone(),
+        preparation.model_blueprint.public_capabilities.clone(),
+        preparation.model_blueprint.reasoning.clone(),
+        preparation.context_compaction_policy,
+        preparation.context_budget_override,
+        preparation
+            .context_budget
+            .as_ref()
+            .and_then(|budget| budget.auto_compact_prefill_input_tokens),
+    ));
+    let retry_policy = ProviderRetryPolicy::from_config(&config.retry);
 
     let mut transport_request = build_provider_transport_execution_request(
-        config.provider_request_trace_enabled && !capture_only,
+        config.provider_request_trace_enabled,
         preparation.model_blueprint.provider_id.clone(),
         model_id,
         preparation.workspace_path.as_str(),
@@ -443,20 +357,12 @@ fn execute_provider_prompt_stream_with_capture_mode(
                     return;
                 }
             };
-        let mut provider_stream = if capture_only {
-            crate::agent_runtime::provider_transport_vulcan::capture_vulcan_public_stream(
-                transport_request,
-                public_execution,
-                reasoning_effort,
-                media_projection,
-            )
-        } else {
+        let mut provider_stream =
             crate::agent_runtime::provider_transport_vulcan::execute_vulcan_public_stream(
                 transport_request,
                 public_execution,
                 reasoning_effort,
-            )
-        };
+            );
         while let Some(delta) = provider_stream.next().await {
             yield delta.map_err(|error| {
                 diagnose_provider_failure(error, diagnostic_context.as_str())

@@ -104,25 +104,6 @@ impl ProviderRetryPolicy {
         }
     }
 
-    /// Builds a disabled retry policy for capture-only or explicitly non-retryable paths.
-    /// 为仅捕获或显式不可重试路径构建禁用的重试策略。
-    pub(crate) fn disabled() -> Self {
-        Self {
-            enabled: false,
-            max_retries: 0,
-            initial_delay: Duration::from_millis(1),
-            max_delay: Duration::from_millis(1),
-            backoff_factor: 1.0,
-            jitter_percent: 0,
-            respect_retry_after: false,
-            retry_429: false,
-            rate_limit_max_retries: 0,
-            rate_limit_initial_delay: Duration::from_millis(1),
-            rate_limit_max_delay: Duration::from_millis(1),
-            rate_limit_backoff_factor: 1.0,
-        }
-    }
-
     /// Classifies one failed attempt and returns the next retry decision when retry is still allowed.
     /// 对一次失败尝试进行分类，并在仍允许重试时返回下一次重试决策。
     ///
