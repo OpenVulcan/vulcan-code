@@ -14,7 +14,6 @@ use super::{int, text};
 use crate::local_database_runtime::LogicalDatabase;
 use crate::local_sql;
 use serde::Deserialize;
-use std::fs;
 use uuid::Uuid;
 use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
@@ -521,6 +520,10 @@ impl KnowledgeBaseRuntime {
     /// Deletes one isolated library after revoking access and validating its canonical path.
     /// 在撤销访问并验证规范路径后删除一个隔离知识库。
     ///
+    /// A library left in the `deleting` state by an interrupted attempt resumes its removal, so a failed
+    /// deletion is always retryable instead of locking the library out of every operation.
+    /// 被中断的尝试留在 `deleting` 状态的知识库会继续移除，因此失败的删除总能重试，而不会让该知识库被所有操作拒之门外。
+    ///
     /// # Parameters
     /// 参数
     /// `library_id` is the canonical immutable library UUID.
@@ -532,53 +535,48 @@ impl KnowledgeBaseRuntime {
     /// 返回撤销访问、移除存储及删除注册记录后的成功，或明确失败。
     pub async fn delete_library(&self, library_id: &str) -> Result<(), String> {
         let _guard = self.library_mutation_guard(library_id).await?;
-        self.require_active_library(library_id).await?;
-        local_sql::execute_script_async(
-            &self.host_runtime.local,
-            LogicalDatabase::AppState,
-                "UPDATE knowledge_libraries SET lifecycle_state = 'deleting', updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
-                vec![int(unix_epoch_millis()?), text(library_id)],
-            ).await
-            .map_err(|error| format!("撤销知识库访问失败：{error}"))?;
+        let library = self.get_library(library_id).await?;
+        match library.lifecycle_state.as_str() {
+            "active" => {
+                local_sql::execute_script_async(
+                    &self.host_runtime.local,
+                    LogicalDatabase::AppState,
+                    "UPDATE knowledge_libraries SET lifecycle_state = 'deleting', updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
+                    vec![int(unix_epoch_millis()?), text(library_id)],
+                )
+                .await
+                .map_err(|error| format!("撤销知识库访问失败：{error}"))?;
+            }
+            "deleting" => {}
+            state => {
+                return Err(format!("知识库当前不可删除：{library_id} ({state})"));
+            }
+        }
 
         let (_space_id, binding_id) = self.library_binding_identity(library_id)?;
-        let _ = local_sql::execute_script_async(
-            &self.host_runtime.local,
-            self.resolve_library_binding(&binding_id)?,
-            "PRAGMA wal_checkpoint(TRUNCATE);",
-            Vec::new(),
-        )
-        .await;
+        // A binding registers on first use in this process, so an unregistered one holds no WAL to checkpoint.
+        // 绑定在本进程首次使用时才登记，因此未登记的绑定没有需要检查点的 WAL。
+        if let Ok(binding) = self.resolve_library_binding(&binding_id) {
+            let _ = local_sql::execute_script_async(
+                &self.host_runtime.local,
+                binding,
+                "PRAGMA wal_checkpoint(TRUNCATE);",
+                Vec::new(),
+            )
+            .await;
+        }
         self.release_library_binding(library_id).await?;
 
+        // Removal tolerates a directory an earlier attempt already removed and runs off the async workers.
+        // 移除容忍先前尝试已删除的目录，并在异步工作线程之外执行。
         let root = self.library_root(library_id)?;
-        let knowledge_root = self.knowledge_root();
-        let canonical_knowledge_root = fs::canonicalize(&knowledge_root).map_err(|error| {
-            format!(
-                "规范化知识库根目录失败（{}）：{error}",
-                knowledge_root.display()
-            )
-        })?;
-        let canonical_library_root = fs::canonicalize(&root).map_err(|error| {
-            format!("规范化待删除知识库目录失败（{}）：{error}", root.display())
-        })?;
-        if canonical_library_root.parent() != Some(canonical_knowledge_root.as_path())
-            || canonical_library_root
-                .file_name()
-                .and_then(|name| name.to_str())
-                != Some(library_id)
-        {
-            return Err(format!(
-                "拒绝删除知识库根目录之外的路径：{}",
-                canonical_library_root.display()
-            ));
-        }
-        fs::remove_dir_all(&canonical_library_root).map_err(|error| {
-            format!(
-                "删除知识库目录失败（{}）：{error}",
-                canonical_library_root.display()
-            )
-        })?;
+        let runtime = self.clone();
+        let expected_name = library_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            runtime.remove_host_owned_child_directory_if_exists(&root, &expected_name)
+        })
+        .await
+        .map_err(|error| format!("删除知识库目录任务失败：{error}"))??;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,

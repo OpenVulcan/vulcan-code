@@ -1089,3 +1089,95 @@ async fn a_fresh_directory_round_trips_through_a_real_close_and_reopen() {
 
     drop(temporary);
 }
+
+/// Deleting a library this process never opened succeeds instead of stranding it in `deleting`.
+/// 删除本进程从未打开过的资料库会成功，而不会使其滞留在 `deleting` 状态。
+#[tokio::test]
+async fn a_library_unused_since_reopen_deletes_completely() {
+    let temporary = tempdir().expect("create deletion data root");
+    let root = temporary.path().to_path_buf();
+    let library_id = {
+        let runtime = open_over(&root).await;
+        runtime
+            .create_library("重开后删除", "", &[])
+            .await
+            .expect("create the library in the first lifetime")
+            .id
+    };
+
+    let reopened = open_over(&root).await;
+    let library_root = reopened.library_root(&library_id).expect("library root");
+    reopened
+        .delete_library(&library_id)
+        .await
+        .expect("delete a library whose binding was never registered in this process");
+
+    assert!(reopened.get_library(&library_id).await.is_err());
+    assert!(!library_root.exists());
+}
+
+/// A deletion interrupted after access was revoked resumes on retry, even when its directory is already gone.
+/// 撤销访问后被中断的删除在重试时继续，即使其目录已经不存在。
+#[tokio::test]
+async fn an_interrupted_deletion_resumes_on_retry() {
+    let (_temporary, runtime, library_id) = in_process_runtime("中断删除").await;
+    runtime
+        .release_library_binding(&library_id)
+        .await
+        .expect("release the library before simulating an interrupted removal");
+    crate::local_sql::execute_script_async(
+        &runtime.host_runtime.local,
+        LogicalDatabase::AppState,
+        "UPDATE knowledge_libraries SET lifecycle_state = 'deleting' WHERE id = ?;",
+        vec![super::super::text(library_id.as_str())],
+    )
+    .await
+    .expect("mark the library as mid-deletion");
+    fs::remove_dir_all(runtime.library_root(&library_id).expect("library root"))
+        .expect("remove the directory as the interrupted attempt did");
+
+    runtime
+        .delete_library(&library_id)
+        .await
+        .expect("retry completes the interrupted deletion");
+    assert!(runtime.get_library(&library_id).await.is_err());
+}
+
+/// A removal blocked by a held file keeps the library in `deleting` and succeeds once the file is released.
+/// 被占用文件阻断的移除使资料库保持 `deleting`，文件释放后重试成功。
+#[cfg(windows)]
+#[tokio::test]
+async fn a_blocked_deletion_stays_retryable() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let (_temporary, runtime, library_id) = in_process_runtime("占用删除").await;
+    let library_root = runtime.library_root(&library_id).expect("library root");
+    // A zero share mode denies deletion of the held file until the handle closes.
+    // 共享模式为零时，在句柄关闭前拒绝删除被占用文件。
+    let held = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .share_mode(0)
+        .open(library_root.join("held.bin"))
+        .expect("hold a file inside the library");
+
+    let blocked = runtime.delete_library(&library_id).await;
+    assert!(blocked.is_err(), "a held file must block the removal");
+    assert_eq!(
+        runtime
+            .get_library(&library_id)
+            .await
+            .expect("the registry row survives a blocked removal")
+            .lifecycle_state,
+        "deleting"
+    );
+
+    drop(held);
+    runtime
+        .delete_library(&library_id)
+        .await
+        .expect("retry succeeds once the file is released");
+    assert!(runtime.get_library(&library_id).await.is_err());
+    assert!(!library_root.exists());
+}
