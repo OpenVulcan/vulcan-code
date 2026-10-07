@@ -375,6 +375,9 @@ pub struct GitView {
     pub busy: Option<GitBusy>,
     pub branches: Vec<GitBranch>,
     pub diffs: HashMap<String, FileDiff>,
+    /// Files whose diff failed to load, with the service's reason when it gave one.
+    /// 加载 diff 失败的文件，及服务给出的原因。
+    pub diff_failures: HashMap<String, Option<String>>,
 }
 
 impl GitView {
@@ -387,6 +390,17 @@ impl GitView {
         let mut files: Vec<&GitFile> = snapshot.files.iter().filter(|f| f.staged).collect();
         files.extend(snapshot.files.iter().filter(|f| !f.staged));
         files
+    }
+
+    /// Whether the selected project has Git, as the WebUI `sessionGitRepositoryAvailable`: the
+    /// catalog lists repositories, the first read is still loading, or Git work is running.
+    /// 所选项目是否有 Git，对应 WebUI `sessionGitRepositoryAvailable`：目录列出了仓库、首次读取
+    /// 仍在加载，或 Git 操作正在执行。
+    pub fn available(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_none_or(|snapshot| !snapshot.repositories.is_empty())
+            || self.busy.is_some()
     }
 
     /// The snapshot when a monitored repository is selected; branch and push need one.
@@ -606,6 +620,27 @@ pub struct App {
 }
 
 impl App {
+    /// Panel tabs in strip order; Changes is left out while the project has no Git.
+    /// 按标签条顺序排列的面板标签；项目没有 Git 时不含变更页。
+    pub fn panel_tabs(&self) -> Vec<PanelTab> {
+        PanelTab::ALL
+            .into_iter()
+            .filter(|tab| *tab != PanelTab::Changes || self.git.available())
+            .collect()
+    }
+
+    /// The shown panel tab: the chosen one, or the first shown tab while the chosen one is hidden,
+    /// so the choice returns with a project that has Git.
+    /// 显示的面板标签：所选标签，或在其隐藏期间显示第一个标签，使选择随有 Git 的项目恢复。
+    pub fn active_panel_tab(&self) -> PanelTab {
+        let tabs = self.panel_tabs();
+        if tabs.contains(&self.panel_tab) {
+            self.panel_tab
+        } else {
+            tabs.first().copied().unwrap_or(self.panel_tab)
+        }
+    }
+
     pub fn new(backend: BackendHandle, theme: Theme, locale_explicit: bool) -> Self {
         let now = Instant::now();
         App {
@@ -1118,6 +1153,7 @@ impl App {
             } => self.session_for(&conversation_id).insight = *insight,
             BackendEvent::Git(snapshot) => {
                 self.git.diffs.clear();
+                self.git.diff_failures.clear();
                 self.git.snapshot = Some(snapshot);
                 let len = self.git.ordered_files().len();
                 self.git.cursor = self.git.cursor.min(len.saturating_sub(1));
@@ -1125,11 +1161,16 @@ impl App {
             }
             BackendEvent::GitCleared => {
                 self.git.diffs.clear();
+                self.git.diff_failures.clear();
                 self.git.snapshot = None;
                 self.git.cursor = 0;
             }
             BackendEvent::GitDiff(diff) => {
+                self.git.diff_failures.remove(&diff.path);
                 self.git.diffs.insert(diff.path.clone(), diff);
+            }
+            BackendEvent::GitDiffFailed { path, message } => {
+                self.git.diff_failures.insert(path, message);
             }
             BackendEvent::GitBranches(branches) => {
                 self.git.branches = branches;
@@ -1417,8 +1458,9 @@ impl App {
         self.paste_serial = 0;
     }
 
-    /// Asks the backend for the diff of the file under the Git cursor when it is not cached.
-    /// 当 Git 光标所在文件的 diff 未缓存时向后端请求。
+    /// Asks the backend for the diff of the file under the Git cursor when it is not cached; a
+    /// failed file is asked again, so stepping onto it retries.
+    /// 当 Git 光标所在文件的 diff 未缓存时向后端请求；失败的文件会再次请求，因此切到该文件即重试。
     pub fn request_visible_diff(&mut self) {
         let path = match &self.overlay {
             Some(Overlay::Diff(view)) => self
@@ -1431,6 +1473,7 @@ impl App {
         if let Some(path) = path
             && !self.git.diffs.contains_key(&path)
         {
+            self.git.diff_failures.remove(&path);
             self.backend
                 .send(Command::LoadWorkspaceDiffFileDetail { path });
         }

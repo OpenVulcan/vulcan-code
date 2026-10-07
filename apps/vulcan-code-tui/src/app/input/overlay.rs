@@ -283,6 +283,7 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent) {
                 toggle_stage(app, index);
             }
             KeyCode::Char('c') => open_commit(app),
+            KeyCode::Char('r') => diff_step(app, 0),
             _ => {}
         },
         Overlay::Commit(dialog) => {

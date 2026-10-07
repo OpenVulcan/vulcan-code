@@ -164,7 +164,9 @@ fn on_key(app: &mut App, key: KeyEvent) {
         && let KeyCode::Char(ch @ '1'..='6') = key.code
     {
         let tab = PanelTab::ALL[(ch as usize) - ('1' as usize)];
-        action::perform(app, UiAction::ShowPanel(tab));
+        if app.panel_tabs().contains(&tab) {
+            action::perform(app, UiAction::ShowPanel(tab));
+        }
         return;
     }
     let tab = matches!(key.code, KeyCode::Tab | KeyCode::BackTab);

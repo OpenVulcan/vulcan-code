@@ -98,7 +98,7 @@ fn wheel(app: &mut App, at: Position, direction: isize) {
                 state.scroll = step(state.scroll);
             }
         }
-        ScrollTarget::Panel => match app.panel_tab {
+        ScrollTarget::Panel => match app.active_panel_tab() {
             PanelTab::Terminal => {
                 let last = app.command_sessions.len().saturating_sub(1);
                 app.terminal_cursor = step(app.terminal_cursor).min(last);

@@ -267,6 +267,13 @@ pub enum BackendEvent {
     /// 所选项目已变化；上一项目的 Git 状态不再适用。
     GitCleared,
     GitDiff(FileDiff),
+    /// A file's diff could not be loaded; `message` is the service's sanitized reason, absent when
+    /// the file is no longer in the current change list.
+    /// 无法加载某文件的 diff；`message` 为服务的脱敏原因，文件已不在当前变更清单时为空。
+    GitDiffFailed {
+        path: String,
+        message: Option<String>,
+    },
     GitBranches(Vec<GitBranch>),
     /// Streaming commit message generation; `done` closes the stream.
     /// 流式生成提交信息；`done` 结束该流。

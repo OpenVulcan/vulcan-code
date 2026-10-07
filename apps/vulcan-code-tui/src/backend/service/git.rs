@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::map::{self, GitFileRef};
 use super::wire::*;
 use super::worker::Worker;
-use crate::backend::{BackendEvent, GitBusy, GitNotice};
+use crate::backend::{BackendEvent, GitBusy, GitNotice, Notice};
 use crate::model::*;
 
 /// Keeps the selected service repository and its exact staged/unstaged file identities.
@@ -337,6 +337,10 @@ impl Worker {
         // Mode; File.
         // 已声明操作模式；当前文件数据。
         let Some((mode, file)) = found else {
+            self.emit(BackendEvent::GitDiffFailed {
+                path,
+                message: None,
+            });
             return;
         };
         // Exact RPC parameters.
@@ -345,11 +349,22 @@ impl Worker {
             "request": { "repositoryKey": self.git.repository_key, "mode": mode },
             "file": { "key": file.key, "oldPath": file.old_path, "newPath": file.new_path },
         }));
-        if let Some(detail) = self.call("workspace.diff.fileDetail", params) {
-            self.emit(BackendEvent::GitDiff(map::unified_diff(
+        let Some(client) = self.client.clone() else {
+            self.emit(BackendEvent::Notice(Notice::NotConnected));
+            return;
+        };
+        match client.call("workspace.diff.fileDetail", params) {
+            Ok(detail) => self.emit(BackendEvent::GitDiff(map::unified_diff(
                 &path,
                 &str_at(&detail, "unifiedDiff"),
-            )));
+            ))),
+            // The diff view shows the reason in place of its loading state.
+            // diff 视图以失败原因取代其加载状态。
+            Err(error) => {
+                let message = Some(error.message.clone());
+                self.failed(error);
+                self.emit(BackendEvent::GitDiffFailed { path, message });
+            }
         }
     }
 

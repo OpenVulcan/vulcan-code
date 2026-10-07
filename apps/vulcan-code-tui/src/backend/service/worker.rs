@@ -2867,4 +2867,46 @@ mod tests {
         assert!(git_events(&events).is_empty());
         server.thread.join().unwrap();
     }
+
+    /// A diff that cannot load reports its reason, and a file outside the change list reports
+    /// none, so the diff view leaves its loading state either way.
+    /// 无法加载的 diff 报告其原因，不在变更清单中的文件不带原因报告，两种情况下 diff 视图都会离开加载状态。
+    #[test]
+    fn diff_failures_reach_the_diff_view() {
+        let server = RpcServer::start(4, |request| {
+            match request.body["method"].as_str().unwrap() {
+                "workspace.git.catalog" => json!({"ok":true,"result":{"projectRoot":"/one",
+                "repositories":[{"repositoryKey":".","repositoryRoot":"/one","name":"one",
+                "relativePath":".","isPrimary":true,"monitoringEnabled":true}]}}),
+                "workspace.diff.snapshot" => json!({"ok":true,"result":{"currentBranch":"main",
+                "files":[{"key":"k","newPath":"a.rs","status":"modified"}]}}),
+                "workspace.diff.fileDetail" => {
+                    json!({"ok":false,"error":{"message":"Repository is not available"}})
+                }
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        worker.selected = Some("a".into());
+        worker.git_refresh();
+        events.try_iter().for_each(drop);
+        worker.git_diff("a.rs".into());
+        worker.git_diff("gone.rs".into());
+        let failures: Vec<(String, Option<String>)> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                BackendEvent::GitDiffFailed { path, message } => Some((path, message)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            failures,
+            vec![
+                ("a.rs".into(), Some("Repository is not available".into())),
+                ("gone.rs".into(), None),
+            ]
+        );
+        server.thread.join().unwrap();
+    }
 }

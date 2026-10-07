@@ -355,6 +355,36 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
         ..inner
     };
 
+    if let Some(reason) = app.git.diff_failures.get(&file.path) {
+        let mut y = body.y + 1;
+        buf.set_string(
+            body.x + 2,
+            y,
+            format!("✕ {}", tr!("diff.load.failed")),
+            Style::new().fg(theme.danger),
+        );
+        if let Some(reason) = reason {
+            y += 1;
+            buf.set_string(
+                body.x + 4,
+                y,
+                truncate(reason, body.width.saturating_sub(6) as usize),
+                theme.muted_text(),
+            );
+        }
+        let retry = format!("r {}", tr!("diff.load.retry"));
+        let normal = button_style(app, ButtonKind::Normal, theme.popover);
+        button(
+            app,
+            buf,
+            body.x + 2,
+            y + 2,
+            &retry,
+            normal,
+            UiAction::DiffStep(0),
+        );
+        return;
+    }
     let Some(diff) = app.git.diffs.get(&file.path) else {
         buf.set_string(
             body.x + 2,

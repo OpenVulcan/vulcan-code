@@ -170,3 +170,62 @@ fn monitoring_menu_sends_inverted_switches() {
         .collect();
     assert_eq!(sent, vec![(".".into(), false), ("off".into(), true)]);
 }
+
+/// A project without Git hides the Changes tab; the choice returns with a project that has Git.
+/// 没有 Git 的项目隐藏变更页；回到有 Git 的项目时恢复该选择。
+#[test]
+fn changes_tab_hides_without_git_and_returns_with_it() {
+    let (mut app, _) = isolated_app();
+    assert_eq!(app.panel_tab, PanelTab::Changes);
+    assert_eq!(
+        app.active_panel_tab(),
+        PanelTab::Changes,
+        "shown while loading"
+    );
+    app.apply(git(Vec::new(), None));
+    assert!(!app.panel_tabs().contains(&PanelTab::Changes));
+    assert_eq!(app.active_panel_tab(), app.panel_tabs()[0]);
+    assert_eq!(
+        app.panel_tab,
+        PanelTab::Changes,
+        "the choice itself is kept"
+    );
+    app.apply(BackendEvent::GitCleared);
+    app.apply(git(vec![repository(".", true, true)], Some(".")));
+    assert_eq!(app.active_panel_tab(), PanelTab::Changes);
+}
+
+/// A failed diff replaces the loading state, and retrying asks for it again.
+/// 失败的 diff 取代加载状态，重试会再次请求。
+#[test]
+fn failed_diff_shows_and_retries() {
+    let (mut app, commands) = isolated_app();
+    let mut snapshot = git(vec![repository(".", true, true)], Some("."));
+    if let BackendEvent::Git(git) = &mut snapshot {
+        git.files.push(GitFile {
+            path: "a.rs".into(),
+            status: GitFileStatus::Modified,
+            staged: false,
+            additions: 1,
+            deletions: 0,
+        });
+    }
+    app.apply(snapshot);
+    input::open_diff(&mut app, 0);
+    assert!(commands.try_iter().any(
+        |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { path } if path == "a.rs")
+    ));
+    app.apply(BackendEvent::GitDiffFailed {
+        path: "a.rs".into(),
+        message: Some("unavailable".into()),
+    });
+    assert_eq!(
+        app.git.diff_failures.get("a.rs"),
+        Some(&Some("unavailable".into()))
+    );
+    action::perform(&mut app, action::UiAction::DiffStep(0));
+    assert!(!app.git.diff_failures.contains_key("a.rs"));
+    assert!(commands.try_iter().any(
+        |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { path } if path == "a.rs")
+    ));
+}

@@ -1122,8 +1122,12 @@ impl World {
                 self.emit(BackendEvent::Git(self.git.clone()));
             }
             Command::LoadWorkspaceDiffFileDetail { path } => {
-                if let Some(file) = self.git.files.iter().find(|f| f.path == path) {
-                    self.emit(BackendEvent::GitDiff(fixtures::fake_diff(file)));
+                match self.git.files.iter().find(|f| f.path == path) {
+                    Some(file) => self.emit(BackendEvent::GitDiff(fixtures::fake_diff(file))),
+                    None => self.emit(BackendEvent::GitDiffFailed {
+                        path,
+                        message: None,
+                    }),
                 }
             }
             Command::LoadWorkspaceGitBranches => self.emit(BackendEvent::GitBranches(

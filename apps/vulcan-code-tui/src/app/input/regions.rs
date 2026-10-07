@@ -277,18 +277,19 @@ pub(super) fn activate_sidebar_row(app: &mut App, row: &SidebarRow) {
 // ---- Right panel ----
 
 pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
-    let tab_index = PanelTab::ALL
+    let shown = app.panel_tabs();
+    let tab_index = shown
         .iter()
-        .position(|t| *t == app.panel_tab)
+        .position(|t| *t == app.active_panel_tab())
         .unwrap_or(0);
-    let tabs = PanelTab::ALL.len();
+    let tabs = shown.len();
     match key.code {
         KeyCode::Left | KeyCode::Char('[') => {
-            app.panel_tab = PanelTab::ALL[(tab_index + tabs - 1) % tabs];
+            app.panel_tab = shown[(tab_index + tabs - 1) % tabs];
             return;
         }
         KeyCode::Right | KeyCode::Char(']') => {
-            app.panel_tab = PanelTab::ALL[(tab_index + 1) % tabs];
+            app.panel_tab = shown[(tab_index + 1) % tabs];
             return;
         }
         KeyCode::Esc => {
@@ -297,7 +298,7 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
-    match app.panel_tab {
+    match app.active_panel_tab() {
         PanelTab::Changes => {
             let count = app.git.ordered_files().len();
             match key.code {
@@ -347,7 +348,7 @@ pub(super) fn on_panel_key(app: &mut App, key: KeyEvent) {
 /// Memory and Agents: a cursor over rows; Enter opens the detail sheet.
 /// 记忆与代理：在行间移动光标；Enter 打开详情面板。
 fn on_panel_list_key(app: &mut App, key: KeyEvent) {
-    let tab = app.panel_tab;
+    let tab = app.active_panel_tab();
     let count = insight::item_count(app, tab);
     let cursor = app.panel.cursor(tab);
     let select = |app: &mut App, index: usize| {

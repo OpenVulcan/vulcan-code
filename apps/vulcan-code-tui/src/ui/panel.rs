@@ -117,12 +117,15 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     let left = inner.x + 1;
     let right = inner.right().saturating_sub(1);
     let y = inner.y;
-    let texts: Vec<(PanelTab, String)> = PanelTab::ALL
-        .into_iter()
+    let active_tab = app.active_panel_tab();
+    let tabs = app.panel_tabs();
+    let texts: Vec<(PanelTab, String)> = tabs
+        .iter()
+        .copied()
         .map(|tab| (tab, tab_text(app, tab)))
         .collect();
     let widths: Vec<usize> = texts.iter().map(|(_, text)| width_of(text)).collect();
-    let active_index = PanelTab::ALL.iter().position(|tab| *tab == app.panel_tab);
+    let active_index = tabs.iter().position(|tab| *tab == active_tab);
     let shown = fit_strip(
         &widths,
         1,
@@ -134,7 +137,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     for &index in &shown {
         let (tab, text) = (texts[index].0, &texts[index].1);
         let w = widths[index] as u16;
-        let active = app.panel_tab == tab;
+        let active = active_tab == tab;
         let style = if active {
             Style::new()
                 .fg(if focused { theme.primary } else { theme.fg })
@@ -183,7 +186,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         return;
     }
     app.hits.add_scroll(body, ScrollTarget::Panel);
-    let tab = app.panel_tab;
+    let tab = app.active_panel_tab();
     // Scrolling tabs keep one blank column before their scrollbar.
     // 可滚动标签页在滚动条前保留一列空白。
     let width = body.width as usize - usize::from(tab.scrolls());
