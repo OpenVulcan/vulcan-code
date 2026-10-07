@@ -351,19 +351,6 @@ pub fn resolve_app_resources_directory() -> PathBuf {
     source_resource_directory()
 }
 
-/// Returns the effective application configuration directory for the current process.
-/// 返回当前进程使用的生效应用配置目录。
-pub fn resolve_app_config_directory() -> PathBuf {
-    if let Some(output_root) = resolve_output_root() {
-        let packaged_config = output_root.join(CONFIG_DIR_NAME);
-        if packaged_config.is_dir() {
-            return packaged_config;
-        }
-    }
-
-    source_config_directory()
-}
-
 /// Returns the output-owned configuration directory without falling back to source files.
 /// 返回 output 持有的配置目录，且不会回退到源码文件。
 ///

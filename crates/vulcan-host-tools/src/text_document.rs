@@ -174,21 +174,6 @@ impl TextDocument {
         encode_text(&self.text, self.encoding, self.bom)
     }
 
-    /// Returns a copy with every logical terminator normalized to one style.
-    /// 返回将全部逻辑终止符归一化为一种样式的副本。
-    pub fn with_uniform_line_ending(&self, ending: LineEnding) -> Self {
-        let text = rewrite_line_endings(&self.text, ending);
-        let mut document = Self::from_decoded(DecodedText {
-            text,
-            encoding: self.encoding,
-            bom: self.bom,
-            source: self.encoding_source,
-            certain: self.encoding_certain,
-        });
-        document.preferred_line_ending = ending;
-        document
-    }
-
     /// Replaces one exact normalized substring while preserving untouched terminators.
     /// 替换一个精确归一化子串，同时保留未触及的终止符。
     pub fn replace_exact(

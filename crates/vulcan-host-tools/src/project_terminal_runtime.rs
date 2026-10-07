@@ -970,29 +970,6 @@ impl ProjectTerminalRuntime {
         Ok(())
     }
 
-    /// Stops and removes every terminal owned by one project.
-    /// 停止并移除一个项目拥有的全部终端。
-    ///
-    /// # Parameters / 参数
-    /// - `project_id`: Exact project identity being removed or shut down.
-    /// - `project_id`：正在被移除或关闭的精确项目标识。
-    ///
-    /// # Returns / 返回值
-    /// Returns the number of removed runtime records after all stop requests are acknowledged.
-    /// 全部停止请求确认后返回已移除运行时记录数量。
-    pub async fn close_project_terminals(&self, project_id: &str) -> Result<usize, String> {
-        let terminal_ids = self
-            .list_project_terminals(project_id)
-            .await?
-            .into_iter()
-            .map(|snapshot| snapshot.terminal_id)
-            .collect::<Vec<_>>();
-        for terminal_id in &terminal_ids {
-            self.close_terminal(project_id, *terminal_id).await?;
-        }
-        Ok(terminal_ids.len())
-    }
-
     /// Queues a graceful stop for every isolated project terminal before application shutdown.
     /// 在应用关闭前为每个隔离项目终端排入优雅停止请求。
     ///

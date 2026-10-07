@@ -281,12 +281,6 @@ impl SqliteRuntime {
         closed
     }
 
-    /// Lists normalized database paths currently registered.
-    /// 列出当前已注册的规范化数据库路径。
-    pub fn list_databases(&self) -> Vec<PathBuf> {
-        lock_unpoisoned(&self.databases).keys().cloned().collect()
-    }
-
     /// Returns how many databases are currently registered.
     /// 返回当前已注册的数据库数量。
     pub fn database_count(&self) -> usize {
@@ -339,12 +333,6 @@ impl SqliteDatabaseHandle {
     /// 返回本句柄持有的锁文件路径（若持有）。
     pub fn lock_path(&self) -> Option<&Path> {
         self.file_lock.as_ref().map(DatabaseFileLock::lock_path)
-    }
-
-    /// Returns the lock owner record path, if this handle holds a lock.
-    /// 返回锁持有者记录路径（若持有锁）。
-    pub fn lock_owner_path(&self) -> Option<&Path> {
-        self.file_lock.as_ref().map(DatabaseFileLock::owner_path)
     }
 
     /// Returns the recorded lock owner identity, if this handle holds a lock.

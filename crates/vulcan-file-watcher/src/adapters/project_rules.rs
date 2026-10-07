@@ -101,9 +101,3 @@ impl ProjectRulesWatchTarget {
 pub fn default_project_rules_route(workspace_path: impl Into<PathBuf>) -> FileWatchRoute {
     ProjectRulesWatchTarget::workspace_default(workspace_path).to_route()
 }
-
-/// Build the default live watch path for one workspace project-rules file.
-/// 为单个工作区项目规则文件构建默认实时监听路径。
-pub fn default_project_rules_live_watch_path(workspace_path: impl Into<PathBuf>) -> LiveWatchPath {
-    ProjectRulesWatchTarget::workspace_default(workspace_path).to_live_watch_path()
-}
