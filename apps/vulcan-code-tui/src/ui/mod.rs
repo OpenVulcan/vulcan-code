@@ -31,6 +31,7 @@ mod composer;
 mod dialogs;
 mod history;
 pub mod markdown;
+mod mermaid;
 mod notice;
 mod overlays;
 mod pages;

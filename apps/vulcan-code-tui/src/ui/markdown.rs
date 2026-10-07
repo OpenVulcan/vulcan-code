@@ -2,14 +2,16 @@
 // 助手文本的最小 Markdown 渲染器。
 //
 // Covers what assistant replies use most: headings, paragraphs, bullet and numbered lists, block
-// quotes, fenced code, pipe tables, inline code, bold and italic. HTML is shown as plain text. It
-// is line-oriented so a half-streamed reply renders stably while text is still arriving.
-// 覆盖助手回复最常用的元素：标题、段落、无序与有序列表、引用、代码块、管道表格、行内代码、粗体与
-// 斜体。HTML 按纯文本显示。按行处理，因此流式输出到一半的回复也能稳定渲染。
+// quotes, fenced code, Mermaid diagrams (`mermaid.rs`), pipe tables, inline code, bold and
+// italic. HTML is shown as plain text. It is line-oriented so a half-streamed reply renders stably
+// while text is still arriving.
+// 覆盖助手回复最常用的元素：标题、段落、无序与有序列表、引用、代码块、Mermaid 图表（`mermaid.rs`）、
+// 管道表格、行内代码、粗体与斜体。HTML 按纯文本显示。按行处理，因此流式输出到一半的回复也能稳定渲染。
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::mermaid;
 use super::text::{width_of, wrap};
 use super::theme::{Theme, mix};
 
@@ -38,6 +40,33 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
                     Span::styled("╭─".to_string(), Style::new().fg(theme.border)),
                     Span::styled(label, theme.muted_text()),
                 ]));
+                // A complete Mermaid block is drawn as a diagram inside the same frame; while it is
+                // still streaming, or when it cannot be drawn, its source shows as code.
+                // 完整的 Mermaid 代码块在同一框内绘制为图表；仍在流式输出或无法绘制时显示源码。
+                let close = source[index..]
+                    .iter()
+                    .position(|line| line.trim_start().starts_with("```"));
+                let diagram = close.filter(|_| lang == "mermaid").and_then(|close| {
+                    let body = source[index..index + close].join("\n");
+                    Some((
+                        close,
+                        mermaid::render(&body, width.saturating_sub(2), theme)?,
+                    ))
+                });
+                if let Some((close, diagram)) = diagram {
+                    let bar = Span::styled("│ ".to_string(), Style::new().fg(theme.border));
+                    for line in diagram {
+                        let mut spans = vec![bar.clone()];
+                        spans.extend(line.spans);
+                        lines.push(Line::from(spans));
+                    }
+                    lines.push(Line::from(Span::styled(
+                        "╰─".to_string(),
+                        Style::new().fg(theme.border),
+                    )));
+                    in_code = false;
+                    index += close + 1;
+                }
             } else {
                 lines.push(Line::from(Span::styled(
                     "╰─".to_string(),
@@ -504,5 +533,36 @@ mod tests {
             plain.iter().map(text_of).collect::<Vec<_>>(),
             ["a | b", "c | d"]
         );
+    }
+
+    #[test]
+    fn complete_mermaid_blocks_draw_and_streaming_ones_show_source() {
+        let theme = Theme::dark();
+        let block = "```mermaid
+graph TD
+A[Plan] --> B[Build]
+```
+after";
+        let texts: Vec<String> = render(block, 60, &theme).iter().map(text_of).collect();
+        assert!(texts[0].starts_with("╭─"));
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Plan") && t.starts_with("│ "))
+        );
+        assert!(
+            texts.iter().all(|t| !t.contains("-->")),
+            "no source once drawn"
+        );
+        assert_eq!(texts.last().map(String::as_str), Some("after"));
+        assert!(texts[texts.len() - 2].starts_with("╰─"));
+
+        // Still streaming: no closing fence yet, so the source shows as code.
+        // 仍在流式输出：尚无结束围栏，因此以代码显示源码。
+        let open = "```mermaid
+graph TD
+A[Plan] --> B[Build]";
+        let texts: Vec<String> = render(open, 60, &theme).iter().map(text_of).collect();
+        assert!(texts.iter().any(|t| t.contains("A[Plan] --> B[Build]")));
     }
 }
