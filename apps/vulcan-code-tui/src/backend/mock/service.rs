@@ -905,8 +905,7 @@ impl FakeService {
                     [string(params, "/request/providerId")?] =
                     required(params, "/request/connectionId")?.clone()
             }
-            "service_save_public_ai_model_enabled"
-            | "service_save_public_ai_internal_model_enabled" => {
+            "service_save_public_ai_model_enabled" => {
                 // Exact protocol request.
                 // 协议请求文档。
                 let request = required(params, "/request")?;
@@ -915,17 +914,69 @@ impl FakeService {
                 let rows = self.loads["service_public_ai_settings_snapshot"]["modelAccessRecords"]
                     .as_array_mut()
                     .ok_or("model fixture")?;
-                // Current row.
-                // 当前条目。
-                let row = rows
-                    .iter_mut()
-                    .find(|row| {
-                        row.get("providerId") == request.get("providerId")
-                            && row.get("modelId") == request.get("modelId")
-                    })
-                    .ok_or("unknown demo model")?;
-                row["enabled"] = required(request, "/enabled")?.clone();
-                row["customized"] = json!(true);
+                // Models without a record use the default; the first save creates one.
+                // 没有记录的模型使用默认值；首次保存时创建记录。
+                let index = match rows.iter().position(|row| {
+                    row.get("providerId") == request.get("providerId")
+                        && row.get("modelId") == request.get("modelId")
+                }) {
+                    Some(index) => index,
+                    None => {
+                        rows.push(json!({"providerId":required(request,"/providerId")?,
+                            "modelId":required(request,"/modelId")?,"defaultEnabled":true}));
+                        rows.len() - 1
+                    }
+                };
+                rows[index]["enabled"] = required(request, "/enabled")?.clone();
+                rows[index]["customized"] = json!(true);
+            }
+            "service_save_public_ai_internal_model_enabled" => {
+                // Exact protocol request.
+                // 协议请求文档。
+                let request = required(params, "/request")?;
+                // Matching candidates share one model-level switch across operations.
+                // 匹配的候选在各操作间共享同一个模型级开关。
+                let mut matched = false;
+                for candidate in
+                    self.loads["service_public_ai_settings_snapshot"]["internalInferenceCandidates"]
+                        .as_array_mut()
+                        .ok_or("candidate fixture")?
+                        .iter_mut()
+                        .filter(|candidate| {
+                            candidate.pointer("/route/provider_id") == request.get("providerId")
+                                && candidate.pointer("/route/model_id") == request.get("modelId")
+                        })
+                {
+                    candidate["enabled"] = required(request, "/enabled")?.clone();
+                    matched = true;
+                }
+                if !matched {
+                    return Err("unknown demo internal model".into());
+                }
+            }
+            "service_save_public_ai_multimodal_understanding_candidate" => {
+                // Exact protocol request.
+                // 协议请求文档。
+                let request = required(params, "/request")?;
+                // Admitted provider/model pairs.
+                // 已准入的供应商与模型对。
+                let records = self.loads["service_public_ai_settings_snapshot"]
+                    ["multimodalUnderstandingCandidateModels"]
+                    .as_array_mut()
+                    .ok_or("candidate fixture")?;
+                records.retain(|record| {
+                    record.get("providerId") != request.get("providerId")
+                        || record.get("modelId") != request.get("modelId")
+                });
+                if required(request, "/enabled")? == true {
+                    records.push(json!({"providerId":required(request,"/providerId")?,
+                        "modelId":required(request,"/modelId")?}));
+                }
+            }
+            "service_save_public_ai_provider_extension_target_set" => {
+                self.loads["service_public_ai_settings_snapshot"]["providerExtensionTargetSets"]
+                    [string(params, "/request/capability")?] =
+                    required(params, "/request/selections")?.clone()
             }
             "service_save_public_ai_provider_tool_selection" => {
                 self.loads["service_public_ai_settings_snapshot"]["providerToolSelections"]

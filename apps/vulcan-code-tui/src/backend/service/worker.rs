@@ -646,35 +646,51 @@ impl Worker {
                 self.emit(BackendEvent::Slot { slot, call, value });
             }
             CallKind::Mutate(slots) => {
-                for slot in slots.iter() {
-                    match slot {
-                        // Mutation results are not workbench snapshots; read the revisioned one.
-                        // 变更结果不是工作台快照；读取带修订号的快照。
-                        Slot::Workbench => self.reload_workbench(),
-                        _ => {
-                            if let Some(loader) = self.loaders.get(slot).map(ServiceCall::renewed) {
-                                // Publish authoritative refreshes before unlocking another full-document edit.
-                                // 解锁另一份完整文档编辑前发布权威刷新。
-                                *self.load_sequences.entry(*slot).or_default() += 1;
-                                self.loaders.insert(*slot, loader.clone());
-                                match self.call(loader.method, loader.params.clone()) {
-                                    Some(value) => self.call_done(loader, value),
-                                    None => self.emit(BackendEvent::Slot {
-                                        slot: *slot,
-                                        call: loader,
-                                        value: Value::Null,
-                                    }),
-                                }
-                            }
-                        }
-                    }
-                }
+                self.reload_slots(&slots);
                 self.emit(BackendEvent::Notice(Notice::Completed(call.function)));
             }
+            CallKind::Then(next) => match self.call(next.method, next.params.clone()) {
+                Some(value) => self.call_done(*next, value),
+                None => {
+                    if let CallKind::Mutate(slots) = &next.kind {
+                        self.reload_slots(slots);
+                    }
+                }
+            },
             CallKind::Preview(_) => self.emit(BackendEvent::Preview {
                 call,
                 result: value,
             }),
+        }
+    }
+
+    /// Rereads the slots a write invalidated with their latest loaders.
+    /// 用最近的加载器重读写入使其失效的槽位。
+    /// `slots` is the write's declared reload set.
+    /// `slots` 为写入声明的重读集合。
+    fn reload_slots(&mut self, slots: &[Slot]) {
+        for slot in slots {
+            match slot {
+                // Mutation results are not workbench snapshots; read the revisioned one.
+                // 变更结果不是工作台快照；读取带修订号的快照。
+                Slot::Workbench => self.reload_workbench(),
+                _ => {
+                    if let Some(loader) = self.loaders.get(slot).map(ServiceCall::renewed) {
+                        // Publish authoritative refreshes before unlocking another full-document edit.
+                        // 解锁另一份完整文档编辑前发布权威刷新。
+                        *self.load_sequences.entry(*slot).or_default() += 1;
+                        self.loaders.insert(*slot, loader.clone());
+                        match self.call(loader.method, loader.params.clone()) {
+                            Some(value) => self.call_done(loader, value),
+                            None => self.emit(BackendEvent::Slot {
+                                slot: *slot,
+                                call: loader,
+                                value: Value::Null,
+                            }),
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2524,6 +2540,80 @@ mod tests {
         ));
         assert!(matches!(received[2], BackendEvent::CallFinished));
         server.thread.join().unwrap();
+    }
+
+    /// A chained write sends its follow-up only after the first succeeds, and a failed follow-up
+    /// still refreshes the state the first write already changed.
+    /// 链式写入仅在首个写入成功后发送后续写入；后续写入失败时仍刷新首个写入已改变的状态。
+    #[test]
+    fn failed_follow_up_write_still_reloads_its_slots() {
+        // Methods in arrival order.
+        // 按到达顺序记录的方法。
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = seen.clone();
+        // Server.
+        // 当前服务器或本地合成监听器。
+        let server = RpcServer::start(3, move |request| {
+            let method = request.body["method"].as_str().unwrap().to_string();
+            record.lock().unwrap().push(method.clone());
+            match method.as_str() {
+                "service_save_public_ai_provider_extension_target_set" => {
+                    json!({"ok":true,"result":{}})
+                }
+                "service_save_public_ai_provider_tool_capability_enabled" => {
+                    json!({"ok":false,"error":{"message":"capability rejected"}})
+                }
+                "service_public_ai_settings_snapshot" => {
+                    json!({"ok":true,"result":{"providerToolEnabledCapabilities":[]}})
+                }
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        // Worker; Events; Current input.
+        // 串行服务工作线程状态；事件集合或事件接收通道；当前输入。
+        let (mut worker, events, input) = worker_fixture(server.client.clone());
+        worker.loaders.insert(
+            Slot::PublicAiSettings,
+            settings_actions::load_public_ai_settings(),
+        );
+        worker.service_call(
+            settings_actions::save_public_ai_provider_extension_target_set(
+                "image_generate",
+                vec![json!({"connection_id":"synthetic","target_id":"synthetic-target"})],
+            )
+            .then(
+                settings_actions::save_public_ai_provider_tool_capability_enabled(
+                    "image_generate",
+                    true,
+                ),
+            ),
+        );
+        worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
+        server.thread.join().unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "service_save_public_ai_provider_extension_target_set",
+                "service_save_public_ai_provider_tool_capability_enabled",
+                "service_public_ai_settings_snapshot",
+            ]
+        );
+        // Received.
+        // 接收到的消息。
+        let received: Vec<_> = events.try_iter().collect();
+        assert!(received.iter().any(|event| matches!(
+            event,
+            BackendEvent::Slot {
+                slot: Slot::PublicAiSettings,
+                ..
+            }
+        )));
+        assert!(
+            !received
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Notice(Notice::Completed(_))))
+        );
+        assert!(matches!(received.last(), Some(BackendEvent::CallFinished)));
     }
 
     /// Drops completion closures from disconnected/replaced connections and supports explicit shutdown.

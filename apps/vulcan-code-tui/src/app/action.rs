@@ -68,6 +68,15 @@ pub enum LocalSetting {
     /// by `pages::PERIOD_SEPARATOR`.
     /// 单个插件图表显示的周期；值为以 `pages::PERIOD_SEPARATOR` 连接的图表键与周期标识。
     PluginChartPeriod,
+    /// Provider whose models the model list shows.
+    /// 模型清单显示其模型的供应商。
+    ModelProvider,
+    /// Model list usage filter: all, conversation, internal or multimodal.
+    /// 模型清单用途筛选：all、conversation、internal 或 multimodal。
+    ModelUsage,
+    /// Model list output-modality filter: all or one modality.
+    /// 模型清单输出模态筛选：all 或单一模态。
+    ModelOutput,
 }
 
 /// Where an edited value goes.
@@ -116,6 +125,9 @@ pub enum PromptThen {
     /// Filters prompt-skill records using their searchable metadata.
     /// 使用可搜索元数据筛选提示词技能记录。
     SkillSearch,
+    /// Filters the model list by display name or model id.
+    /// 按显示名称或模型标识筛选模型清单。
+    ModelSearch,
     SetGoal(ConversationId),
     /// A typed number, validated against the row's range before it is applied.
     /// 输入的数字，在应用前按该行的范围校验。
@@ -143,6 +155,7 @@ impl PromptThen {
                 | PromptThen::KnowledgeSearch
                 | PromptThen::AgentSearch
                 | PromptThen::SkillSearch
+                | PromptThen::ModelSearch
                 | PromptThen::Edit(_)
                 | PromptThen::ResourceWrite(_)
         ) || matches!(self, PromptThen::Form(form) if form.fields[form.index].optional)
@@ -819,6 +832,11 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     app.skill_source = value.as_str().to_string();
                     app.pages.remove(&PageId::SkillList);
                 }
+                // Model filters sit above the list, so the cursor stays on the changed filter.
+                // 模型筛选位于清单上方，因此光标停留在被修改的筛选上。
+                LocalSetting::ModelProvider => app.model_provider = value.as_str().to_string(),
+                LocalSetting::ModelUsage => app.model_usage = value.as_str().to_string(),
+                LocalSetting::ModelOutput => app.model_output = value.as_str().to_string(),
                 LocalSetting::VmmProject => {
                     app.vmm_project = value.as_str().parse().ok();
                     app.slots.clear(crate::service_api::Slot::VmmRecords);
@@ -999,6 +1017,7 @@ fn accept_prompt(app: &mut App) {
             app.skill_query = value;
             app.pages.remove(&PageId::SkillList);
         }
+        PromptThen::ModelSearch => app.model_query = value,
         PromptThen::SetGoal(conversation_id) => {
             // Editing the objective retains the service-projected token budget.
             // 编辑目标内容时保留服务投影的令牌预算。

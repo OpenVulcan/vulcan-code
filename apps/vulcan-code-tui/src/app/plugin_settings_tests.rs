@@ -193,7 +193,10 @@ fn plugin_settings_layout_reads_writes_and_renders() {
             _ => None,
         })
         .expect("credential item");
-    perform(&mut app, credential[0].action.clone());
+    perform(
+        &mut app,
+        credential[0].action.clone().expect("enabled chip"),
+    );
     assert!(matches!(&app.overlay, Some(overlay::Overlay::Prompt(dialog)) if dialog.secret));
     input::handle_event(
         &mut app,

@@ -1340,6 +1340,7 @@ impl World {
                 }
                 self.emit(BackendEvent::Notice(Notice::Completed(call.function)));
             }
+            CallKind::Then(next) => self.handle_call(*next),
             CallKind::Preview(_) => self.emit(BackendEvent::Preview {
                 call,
                 result: value,

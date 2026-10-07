@@ -15,6 +15,7 @@
 | --- | --- |
 | `Load(Slot)` | 保存该槽位的最近加载器；返回值替换槽位 |
 | `Mutate(&[Slot])` | 成功后按最近加载器重读已登记的受影响槽位；吸收工作台快照 |
+| `Then(Box<ServiceCall>)` | 对应 WebUI 中顺序等待两个请求的函数：首个写入成功后发送后续写入；后续写入失败时仍重读其槽位 |
 | `Preview(Preview)` | 只读预检，展示完整影响、目标及决定，再构建真正的确认请求 |
 
 设置编辑使用 `Setter::Dto` 保留完整 DTO 的同级字段；协议定义的部分更新使用专用构建器。
@@ -35,7 +36,7 @@
 | Git 提交设置 | 分支前缀、补充提示、摘要模型，完整配置保存 | Workbench、PublicAiSettings |
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
 | 凭据 | 添加、启用、同步、设默认、移除；默认移除时原子选择同提供方替代连接 | PublicAiSettings |
-| 模型 | 按 providerId/modelId 启用，查看定制状态 | PublicAiSettings |
+| 模型 | 镜像 WebUI 模型清单：供应商分组与优先级、仅列有可用账号的模型、搜索及用途/输出筛选；每个模型的对话使用、多模态理解、内部使用与签名扩展开关；接入路由与账号详情；失效准入关闭及受阻路由诊断 | PublicAiSettings |
 | AI 能力 | 选择服务公开的能力目标、启用能力 | PublicAiSettings |
 | MCP | stdio/http/sse 配置表单、移除、运行态与能力检查 | Workbench.mcpServers、McpRuntime、McpCapabilities |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
@@ -159,6 +160,8 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `settings_actions::save_public_ai_new_session_context_window_default` | savePublicAiNewSessionContextWindowDefault | `service_save_public_ai_new_session_context_window_default` |
 | `settings_actions::save_public_ai_model_enabled` | savePublicAiModelEnabled | `service_save_public_ai_model_enabled` |
 | `settings_actions::save_public_ai_internal_model_enabled` | savePublicAiInternalModelEnabled | `service_save_public_ai_internal_model_enabled` |
+| `settings_actions::save_public_ai_multimodal_understanding_candidate` | savePublicAiMultimodalUnderstandingCandidate | `service_save_public_ai_multimodal_understanding_candidate` |
+| `settings_actions::save_public_ai_provider_extension_target_set` | savePublicAiProviderExtensionTargetSet | `service_save_public_ai_provider_extension_target_set` |
 | `settings_actions::save_public_ai_inference_route` | savePublicAiInferenceRoute | `service_save_public_ai_inference_route` |
 | `settings_actions::test_public_ai_inference_route` | testPublicAiInferenceRoute | `service_test_public_ai_inference_route` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |

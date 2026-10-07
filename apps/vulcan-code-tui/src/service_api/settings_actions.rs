@@ -211,6 +211,66 @@ pub fn save_public_ai_model_enabled(
     )
 }
 
+/// Builds the request for `service_save_public_ai_internal_model_enabled`, the model-level
+/// switch shared by every non-conversation internal operation.
+/// 构建 `service_save_public_ai_internal_model_enabled` 的请求，即所有非会话内部操作共用的模型级开关。
+/// `provider_id` and `model_id` name the exact provider model; `enabled` is the requested state.
+/// `provider_id` 与 `model_id` 指明准确的提供方模型；`enabled` 为请求的状态。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_public_ai_internal_model_enabled(
+    provider_id: &str,
+    model_id: &str,
+    enabled: bool,
+) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_public_ai_internal_model_enabled",
+        "service_save_public_ai_internal_model_enabled",
+        json!({ "request": { "providerId": provider_id, "modelId": model_id, "enabled": enabled } }),
+        PUBLIC_AI,
+    )
+}
+
+/// Builds the request for `service_save_public_ai_multimodal_understanding_candidate`, the shared
+/// provider-model admission switch independent from conversation use.
+/// 构建 `service_save_public_ai_multimodal_understanding_candidate` 的请求，即独立于会话使用的共享
+/// 提供方模型准入开关。
+/// `provider_id` and `model_id` name the exact provider model; `enabled` is the requested state.
+/// `provider_id` 与 `model_id` 指明准确的提供方模型；`enabled` 为请求的状态。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_public_ai_multimodal_understanding_candidate(
+    provider_id: &str,
+    model_id: &str,
+    enabled: bool,
+) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_public_ai_multimodal_understanding_candidate",
+        "service_save_public_ai_multimodal_understanding_candidate",
+        json!({ "request": { "providerId": provider_id, "modelId": model_id, "enabled": enabled } }),
+        PUBLIC_AI,
+    )
+}
+
+/// Builds the request for `service_save_public_ai_provider_extension_target_set`, which replaces
+/// the complete native extension-model set of one capability.
+/// 构建 `service_save_public_ai_provider_extension_target_set` 的请求，替换一项能力的完整原生扩展模型集合。
+/// `capability` is the extension capability; `selections` is the full `{connection_id, target_id}` array.
+/// `capability` 为扩展能力；`selections` 为完整的 `{connection_id, target_id}` 数组。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_public_ai_provider_extension_target_set(
+    capability: &str,
+    selections: Vec<Value>,
+) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_public_ai_provider_extension_target_set",
+        "service_save_public_ai_provider_extension_target_set",
+        json!({ "request": { "capability": capability, "selections": selections } }),
+        PUBLIC_AI,
+    )
+}
+
 /// `route` is a `PublicAiInferenceRoute` (`null` clears the route).
 /// `route` 为 `PublicAiInferenceRoute`（`null` 表示清除路由）。
 /// Builds the request for `service_save_public_ai_inference_route`.

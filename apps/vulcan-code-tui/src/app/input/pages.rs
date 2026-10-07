@@ -242,14 +242,25 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
         } => {
             let state = app.page_state(page);
             let chosen = state.action.min(actions.len().saturating_sub(1));
+            // Disabled chips are skipped, as disabled WebUI controls leave the tab order.
+            // 跳过禁用按钮，与禁用的 WebUI 控件退出 Tab 顺序一致。
+            let chosen_action = actions.get(chosen).and_then(|chip| chip.action.clone());
             match how {
-                Activate::Left => app.page_state_mut(page).action = chosen.saturating_sub(1),
+                Activate::Left => {
+                    if let Some(previous) = (0..chosen).rev().find(|&k| actions[k].enabled()) {
+                        app.page_state_mut(page).action = previous;
+                    }
+                }
                 Activate::Right => {
-                    app.page_state_mut(page).action =
-                        (chosen + 1).min(actions.len().saturating_sub(1));
+                    if let Some(next) = (chosen + 1..actions.len()).find(|&k| actions[k].enabled())
+                    {
+                        app.page_state_mut(page).action = next;
+                    }
                 }
                 Activate::Enter if !actions.is_empty() => {
-                    action::perform(app, actions[chosen].action.clone());
+                    if let Some(chosen_action) = chosen_action {
+                        action::perform(app, chosen_action);
+                    }
                 }
                 // A single click only selects an item; most clicks aim at the item, not its details.
                 // 单击只选中条目；多数点击是为了选取条目而非展开其详情。
@@ -261,7 +272,9 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
                     }
                 }
                 Activate::Space if !actions.is_empty() => {
-                    action::perform(app, actions[chosen].action.clone());
+                    if let Some(chosen_action) = chosen_action {
+                        action::perform(app, chosen_action);
+                    }
                 }
                 _ => {}
             }
@@ -293,8 +306,8 @@ pub fn row_action(app: &mut App, page: PageId, index: usize, chip: usize) {
     }
     match &row.kind {
         RowKind::Item { actions, .. } => {
-            if let Some(chip) = actions.get(chip) {
-                action::perform(app, chip.action.clone());
+            if let Some(chip_action) = actions.get(chip).and_then(|chip| chip.action.clone()) {
+                action::perform(app, chip_action);
             }
         }
         RowKind::Choice { .. } | RowKind::Number { .. } | RowKind::Toggle { .. } => {

@@ -19,6 +19,8 @@ pub mod hit;
 pub mod input;
 pub mod insight;
 pub mod menus;
+#[cfg(test)]
+mod model_list_tests;
 pub mod notice;
 pub mod overlay;
 pub mod pages;
@@ -517,6 +519,18 @@ pub struct App {
     /// WebUI source filter; all shows runtime-effective records only.
     /// WebUI 来源筛选；all 仅展示运行时生效记录。
     pub skill_source: String,
+    /// Provider shown by the model list; empty or unknown falls back to the first group.
+    /// 模型清单显示的供应商；为空或未知时回退到第一个分组。
+    pub model_provider: String,
+    /// Local model-list search text matched against display names and model ids.
+    /// 与显示名称及模型标识匹配的本地模型清单搜索文本。
+    pub model_query: String,
+    /// Declared all/conversation/internal/multimodal model usage filter.
+    /// 已声明的 all/conversation/internal/multimodal 模型用途筛选。
+    pub model_usage: String,
+    /// Declared all or single output-modality model filter.
+    /// 已声明的 all 或单一输出模态模型筛选。
+    pub model_output: String,
     /// Files attached to the next prompt.
     /// 附加到下一条提示的文件。
     pub attachments: Vec<String>,
@@ -595,6 +609,10 @@ impl App {
             skill_query: String::new(),
             skill_status: "all".into(),
             skill_source: "all".into(),
+            model_provider: String::new(),
+            model_query: String::new(),
+            model_usage: "all".into(),
+            model_output: "all".into(),
             attachments: Vec::new(),
             last_click: None,
         }

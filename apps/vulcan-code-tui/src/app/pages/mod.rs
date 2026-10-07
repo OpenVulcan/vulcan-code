@@ -13,6 +13,7 @@ mod catalog;
 mod inference;
 mod knowledge;
 mod memory;
+mod models;
 mod navigation;
 mod plugin_settings;
 mod plugins;
@@ -291,12 +292,14 @@ impl PageId {
     pub fn badge(self, app: &App) -> Option<(String, Tone)> {
         // Each pointer comes from its corresponding WebUI catalog type.
         // 每个指针均来自对应的 WebUI 目录类型。
+        // The model list counts the models it offers, as the WebUI provider menu does.
+        // 模型清单统计其提供的模型，与 WebUI 供应商菜单一致。
+        if self == Self::Models {
+            let count = models::model_count(app);
+            return (count > 0).then(|| (count.to_string(), Tone::Muted));
+        }
         let entries = match self {
             Self::Credentials => a(app.slots.value(Slot::PublicAiSettings), "/connections"),
-            Self::Models => a(
-                app.slots.value(Slot::PublicAiSettings),
-                "/modelAccessRecords",
-            ),
             Self::KnowledgeBases => a(app.slots.value(Slot::KnowledgeLibraries), ""),
             Self::MemoryProjects => a(app.slots.value(Slot::VmmProjects), "/data/value/projects"),
             Self::AgentList => a(
@@ -455,6 +458,11 @@ impl PageId {
                 &app.skill_query,
                 PromptThen::SkillSearch,
             ),
+            PageId::Models => (
+                tr!("settings.models.searchLabel"),
+                &app.model_query,
+                PromptThen::ModelSearch,
+            ),
             page if page.area() == Area::Knowledge => (
                 tr!("knowledge.search"),
                 &app.knowledge_query,
@@ -511,8 +519,21 @@ pub enum Tone {
 #[derive(Debug, Clone)]
 pub struct RowAction {
     pub label: String,
-    pub action: UiAction,
+    /// `None` marks a disabled chip that neither takes focus nor runs anything.
+    /// `None` 表示禁用按钮，既不获得焦点也不执行任何操作。
+    pub action: Option<UiAction>,
     pub tone: Tone,
+    /// `Some(on)` draws the chip as a labelled switch, as the WebUI switch cells.
+    /// `Some(on)` 将按钮绘制为带标签的开关，对应 WebUI 的开关单元格。
+    pub switch: Option<bool>,
+}
+
+impl RowAction {
+    /// Whether keyboard focus and clicks reach this chip.
+    /// 键盘焦点与点击是否可到达此按钮。
+    pub fn enabled(&self) -> bool {
+        self.action.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -651,8 +672,31 @@ fn button(label: String, action: UiAction, tone: Tone) -> Row {
 fn action(label: String, action: UiAction, tone: Tone) -> RowAction {
     RowAction {
         label,
-        action,
+        action: Some(action),
         tone,
+        switch: None,
+    }
+}
+
+/// A labelled switch chip; `action` is `None` while the switch is disabled.
+/// 带标签的开关按钮；开关禁用时 `action` 为 `None`。
+fn switch(label: String, on: bool, action: Option<UiAction>) -> RowAction {
+    RowAction {
+        label,
+        action,
+        tone: Tone::Normal,
+        switch: Some(on),
+    }
+}
+
+/// A disabled cell standing where a control does not apply, shown as `label —`.
+/// 控件不适用处的禁用单元格，显示为 `label —`。
+fn absent(label: String) -> RowAction {
+    RowAction {
+        label: format!("{label} —"),
+        action: None,
+        tone: Tone::Muted,
+        switch: None,
     }
 }
 
@@ -958,7 +1002,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::GitCommit => settings::git_commit(app),
         PageId::Providers => settings::providers(app),
         PageId::Credentials => settings::credentials(app),
-        PageId::Models => settings::models(app),
+        PageId::Models => models::models(app),
         PageId::Capabilities => settings::capabilities(app),
         PageId::Mcp => settings::mcp(app),
         PageId::Archived => settings::archived(app),

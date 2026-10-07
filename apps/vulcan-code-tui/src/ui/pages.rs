@@ -777,9 +777,20 @@ fn lay_out(
                 let chosen = state.action.min(actions.len() - 1);
                 let texts: Vec<String> = actions
                     .iter()
-                    .map(|action| format!(" {} ", truncate(&action.label, width.saturating_sub(6))))
+                    .map(|action| {
+                        format!(" {} ", truncate(&action.label, width.saturating_sub(10)))
+                    })
                     .collect();
-                let widths: Vec<usize> = texts.iter().map(|text| width_of(text)).collect();
+                // Switch chips end with a knob track, the same glyphs as toggle rows.
+                // 开关按钮以滑轨结尾，字形与开关行相同。
+                let knob = |on: bool| if on { "━● " } else { "●━ " };
+                let widths: Vec<usize> = actions
+                    .iter()
+                    .zip(&texts)
+                    .map(|(action, text)| {
+                        width_of(text) + action.switch.map_or(0, |on| width_of(knob(on)))
+                    })
+                    .collect();
                 let shown = fit_strip(
                     &widths,
                     1,
@@ -792,21 +803,40 @@ fn lay_out(
                 let mut folded = Vec::new();
                 for (chip, (action, text)) in actions.iter().zip(texts).enumerate() {
                     if !shown.contains(&chip) {
-                        folded.push(MenuItem {
-                            label: action.label.clone(),
-                            hint: String::new(),
-                            action: action.action.clone(),
-                            danger: action.tone == Tone::Bad,
-                        });
+                        // Disabled chips have nothing to offer from the overflow menu.
+                        // 禁用按钮在溢出菜单中无可执行内容。
+                        if let Some(run) = &action.action {
+                            folded.push(MenuItem {
+                                label: match action.switch {
+                                    Some(on) => format!(
+                                        "{} · {}",
+                                        action.label,
+                                        if on {
+                                            tr!("tui.page.on")
+                                        } else {
+                                            tr!("tui.page.off")
+                                        }
+                                    ),
+                                    None => action.label.clone(),
+                                },
+                                hint: String::new(),
+                                action: run.clone(),
+                                danger: action.tone == Tone::Bad,
+                            });
+                        }
                         continue;
                     }
-                    let w = width_of(&text) as u16;
+                    let w = widths[chip] as u16;
                     let color = match action.tone {
                         Tone::Normal | Tone::Muted => theme.fg,
                         tone => tone_color(theme, tone),
                     };
-                    let active = chip == chosen && state.cursor == index;
-                    let style = if active {
+                    let active = chip == chosen && state.cursor == index && action.enabled();
+                    let style = if !action.enabled() {
+                        Style::new()
+                            .fg(theme.faint_fg(theme.control_bg()))
+                            .bg(theme.control_bg())
+                    } else if active {
                         Style::new()
                             .fg(theme.primary_fg)
                             .bg(if color == theme.fg {
@@ -819,8 +849,25 @@ fn lay_out(
                         Style::new().fg(color).bg(theme.control_bg())
                     };
                     spans.push(Span::styled(text, style));
+                    if let Some(on) = action.switch {
+                        let track = if !action.enabled() {
+                            Style::new()
+                                .fg(theme.faint_fg(theme.control_bg()))
+                                .bg(theme.control_bg())
+                        } else if on {
+                            Style::new()
+                                .fg(theme.primary_fg)
+                                .bg(theme.success)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::new().fg(theme.fg).bg(theme.control_bg())
+                        };
+                        spans.push(Span::styled(knob(on), track));
+                    }
                     spans.push(Span::raw(" "));
-                    chips.push((line_index, x, w, Target::PageRowAction(index, chip)));
+                    if action.enabled() {
+                        chips.push((line_index, x, w, Target::PageRowAction(index, chip)));
+                    }
                     x += w + 1;
                 }
                 if !folded.is_empty() {

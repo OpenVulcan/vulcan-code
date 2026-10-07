@@ -428,30 +428,6 @@ fn connection_removal(ai: &Value, connection: &Value) -> UiAction {
     UiAction::Detail(Box::new(sheet))
 }
 
-/// Uses providerId/modelId pairs from modelAccessRecords for global enablement.
-/// 使用 modelAccessRecords 的 providerId/modelId 对控制全局启用状态。
-pub(super) fn models(app: &App) -> Vec<Row> {
-    a(
-        app.slots.value(Slot::PublicAiSettings),
-        "/modelAccessRecords",
-    )
-    .iter()
-    .map(|model| {
-        toggle(
-            format!("{} / {}", s(model, "/providerId"), s(model, "/modelId")),
-            b(model, "/enabled"),
-            dto(model.clone(), "/enabled", |request| {
-                settings::save_public_ai_model_enabled(
-                    &s(&request, "/providerId"),
-                    &s(&request, "/modelId"),
-                    b(&request, "/enabled"),
-                )
-            }),
-        )
-    })
-    .collect()
-}
-
 /// Presents service-published capability targets and exact connection/target selections.
 /// 显示服务发布的能力目标及精确的连接与目标选择。
 pub(super) fn capabilities(app: &App) -> Vec<Row> {

@@ -198,6 +198,12 @@ pub enum CallKind {
     /// 变更：成功后所列槽位用其最近一次的加载器重新加载。多数列表固定；插件设置在运行时列出当前
     /// 版面的按位置槽位。
     Mutate(Cow<'static, [Slot]>),
+    /// A write whose success sends one follow-up write, as WebUI functions that await two
+    /// requests in order do. The first write has already taken effect when the follow-up runs, so
+    /// the follow-up's reload set refreshes whether or not it succeeds.
+    /// 成功后再发送一个后续写入的写入，对应 WebUI 中按顺序等待两个请求的函数。后续写入执行时第一个
+    /// 写入已经生效，因此无论后续写入是否成功，都会刷新其重读集合。
+    Then(Box<ServiceCall>),
     /// The read-only first step of a two-step action; its result opens a confirmation whose
     /// accept sends the second step, built from this call and its result.
     /// 两步操作中只读的第一步；其结果打开确认框，接受后发送由本调用及其结果构建的第二步。
@@ -324,6 +330,13 @@ impl ServiceCall {
             params,
             kind: CallKind::Mutate(Cow::Borrowed(reload)),
         }
+    }
+
+    /// This write followed, once it succeeds, by `next`; see `CallKind::Then`.
+    /// 本写入成功后再发送 `next`；参见 `CallKind::Then`。
+    pub fn then(mut self, next: ServiceCall) -> ServiceCall {
+        self.kind = CallKind::Then(Box::new(next));
+        self
     }
 
     /// The same request ready to be sent again: a one-shot invocation identity is replaced,

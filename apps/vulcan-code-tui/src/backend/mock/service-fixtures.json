@@ -328,6 +328,26 @@
               ]
             }
           ]
+        },
+        {
+          "id": "demo-media",
+          "display_name": "Demo Media",
+          "category": "official",
+          "service_entries": [
+            {
+              "id": "demo-media-api",
+              "display_name": "Demo Media API",
+              "kind": "openai",
+              "base_url": "https://media.example.invalid/v1",
+              "credential_profiles": [
+                {
+                  "id": "demo-media-token",
+                  "display_name": "Token",
+                  "credential_mode": "token"
+                }
+              ]
+            }
+          ]
         }
       ],
       "connections": [
@@ -337,6 +357,17 @@
           "service_entry_id": "demo-api",
           "credential_profile_id": "demo-token",
           "display_name": "Demo Account",
+          "credential_mode": "token",
+          "enabled": true,
+          "pending_validation": false,
+          "has_management_key": false
+        },
+        {
+          "id": "demo-media-connection",
+          "provider_id": "demo-media",
+          "service_entry_id": "demo-media-api",
+          "credential_profile_id": "demo-media-token",
+          "display_name": "Demo Media Account",
           "credential_mode": "token",
           "enabled": true,
           "pending_validation": false,
@@ -369,7 +400,69 @@
           "customized": false
         }
       ],
-      "providerToolTargets": [],
+      "providerToolTargets": [
+        {
+          "connectionId": "demo-media-connection",
+          "connectionDisplayName": "Demo Media Account",
+          "manifestSourceLayer": "bundled",
+          "target": {
+            "target_id": "demo-image-generate",
+            "provider_id": "demo-media",
+            "service_entry_id": "demo-media-api",
+            "credential_profile_ids": [
+              "demo-media-token"
+            ],
+            "upstream_target_id": "demo-image-1",
+            "display_name": "Demo Image",
+            "contract": {
+              "tool_id": "demo-image-generate",
+              "description": "Synthetic media target",
+              "capability": "image_generate",
+              "input_schema": {
+                "type": "object"
+              },
+              "output": {
+                "kind": "resources",
+                "source_path": "/data",
+                "normalized_result_path": "/resources",
+                "resource_kind": "image"
+              },
+              "extension_profile": {
+                "summary": "Synthetic image extension"
+              }
+            }
+          }
+        },
+        {
+          "connectionId": "demo-media-connection",
+          "connectionDisplayName": "Demo Media Account",
+          "manifestSourceLayer": "bundled",
+          "target": {
+            "target_id": "demo-image-edit",
+            "provider_id": "demo-media",
+            "service_entry_id": "demo-media-api",
+            "credential_profile_ids": [
+              "demo-media-token"
+            ],
+            "upstream_target_id": "demo-image-1",
+            "display_name": "Demo Image",
+            "contract": {
+              "tool_id": "demo-image-edit",
+              "description": "Synthetic media target",
+              "capability": "image_edit",
+              "input_schema": {
+                "type": "object"
+              },
+              "output": {
+                "kind": "resources",
+                "source_path": "/data",
+                "normalized_result_path": "/resources",
+                "resource_kind": "image"
+              }
+            }
+          }
+        }
+      ],
       "providerToolSelections": {},
       "providerToolEnabledCapabilities": [],
       "contextCompactionWindowNodes": {
@@ -705,7 +798,167 @@
           }
         }
       },
-      "inferenceRouteDiagnostics": []
+      "inferenceRouteDiagnostics": [],
+      "catalogs": {
+        "demo-connection": {
+          "connection_id": "demo-connection",
+          "models": [
+            {
+              "id": "demo-model-0",
+              "display_name": "Demo Chat",
+              "capabilities": {
+                "operations": [
+                  "conversation_respond"
+                ],
+                "input_resources": [
+                  "image"
+                ]
+              }
+            },
+            {
+              "id": "demo-model-1",
+              "display_name": "Demo Embedding",
+              "capabilities": {
+                "operations": [
+                  "embedding_create"
+                ]
+              }
+            },
+            {
+              "id": "demo-model-2",
+              "display_name": "Demo Rerank",
+              "capabilities": {
+                "operations": [
+                  "rerank_documents"
+                ]
+              }
+            }
+          ],
+          "generation": 1,
+          "page_count": 1,
+          "discovery_schema_revision": 1
+        }
+      },
+      "modelSupportCatalogs": {
+        "demo-connection": {
+          "connection_id": "demo-connection",
+          "models": [
+            {
+              "id": "demo-model-0",
+              "display_name": "Demo Chat",
+              "capabilities": {
+                "operations": [
+                  "conversation_respond"
+                ],
+                "input_resources": [
+                  "image"
+                ]
+              }
+            },
+            {
+              "id": "demo-model-1",
+              "display_name": "Demo Embedding",
+              "capabilities": {
+                "operations": [
+                  "embedding_create"
+                ]
+              }
+            },
+            {
+              "id": "demo-model-2",
+              "display_name": "Demo Rerank",
+              "capabilities": {
+                "operations": [
+                  "rerank_documents"
+                ]
+              }
+            },
+            {
+              "id": "demo-model-3",
+              "display_name": "Demo Preview",
+              "capabilities": {
+                "operations": [
+                  "conversation_respond"
+                ]
+              }
+            }
+          ],
+          "generation": 1,
+          "page_count": 1,
+          "discovery_schema_revision": 1
+        }
+      },
+      "modelRouteRecords": [
+        {
+          "providerId": "demo-provider",
+          "connectionId": "demo-connection",
+          "serviceEntryId": "demo-api",
+          "modelId": "demo-model-0",
+          "protocolId": "openai-chat-completions.v1",
+          "availableProtocols": [
+            "openai-chat-completions.v1"
+          ],
+          "bindingSource": "system_manifest",
+          "bindingRuleId": "demo-chat",
+          "manifestRevision": 1,
+          "executable": true
+        },
+        {
+          "providerId": "demo-provider",
+          "connectionId": "demo-connection",
+          "serviceEntryId": "demo-api",
+          "modelId": "demo-model-3",
+          "availableProtocols": [],
+          "manifestRevision": 1,
+          "executable": false,
+          "unavailableReason": "no protocol binding admits this model"
+        }
+      ],
+      "providerToolTemplateModels": [
+        {
+          "providerId": "demo-media",
+          "connectionId": "demo-media-connection",
+          "serviceEntryId": "demo-media-api",
+          "modelId": "demo-image-1",
+          "displayName": "Demo Image",
+          "capabilities": [
+            "image_generate",
+            "image_edit"
+          ]
+        }
+      ],
+      "providerExtensionTargetSets": {},
+      "providerPriorities": {
+        "demo-provider": 10
+      },
+      "mediaUnderstandingModelCandidates": [
+        {
+          "providerDisplayName": "Demo Provider",
+          "serviceEntryDisplayName": "Demo API",
+          "connectionDisplayName": "Demo Account",
+          "modelDisplayName": "Demo Chat",
+          "selection": {
+            "provider_id": "demo-provider",
+            "connection_id": "demo-connection",
+            "model_id": "demo-model-0"
+          },
+          "catalogGeneration": 1,
+          "capabilities": {
+            "operations": [
+              "conversation_respond"
+            ],
+            "input_resources": [
+              "image"
+            ]
+          }
+        }
+      ],
+      "multimodalUnderstandingCandidateModels": [
+        {
+          "providerId": "demo-provider",
+          "modelId": "retired-model"
+        }
+      ]
     },
     "service_list_knowledge_libraries": [
       {
