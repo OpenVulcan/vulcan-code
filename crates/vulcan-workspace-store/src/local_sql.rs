@@ -330,44 +330,6 @@ pub async fn with_read_snapshot_async<T: Send + 'static>(
     .await
 }
 
-/// Runs ordered scripts and one parameterized terminal statement atomically on the blocking boundary.
-/// 在阻塞边界上原子执行有序脚本与一条参数化终结语句。
-///
-/// # Parameters / 参数
-/// `runtime` and `target` select one admitted database; `scripts` are executed in order;
-/// `terminal_sql` and `terminal_params` record completion inside the same transaction.
-/// `runtime` 与 `target` 选择一个已准入数据库；`scripts` 按顺序执行；`terminal_sql` 与
-/// `terminal_params` 在同一事务中记录完成状态。
-///
-/// # Returns / 返回值
-/// Returns the committed execution result, or the operation or blocking-boundary error.
-/// 返回已提交的执行结果，或操作/阻塞边界错误。
-pub async fn execute_scripts_transaction_async(
-    runtime: &Arc<LocalDatabaseRuntime>,
-    target: impl Into<OwnedDatabaseTarget>,
-    scripts: Vec<String>,
-    terminal_sql: impl Into<String>,
-    terminal_params: Vec<SqliteValue>,
-) -> Result<ExecuteScriptResult, String> {
-    let target = target.into();
-    let key = target.key_async(runtime, None).await?;
-    let boundary = runtime.boundary().clone();
-    let shared = Arc::clone(runtime);
-    let terminal_sql = terminal_sql.into();
-    boundary
-        .run(key, move || {
-            execute_scripts_transaction(
-                shared.as_ref(),
-                target.as_target(),
-                &scripts,
-                &terminal_sql,
-                &terminal_params,
-            )
-        })
-        .await
-        .map_err(render_boundary_failure)
-}
-
 /// Runs one query on the blocking boundary, off the Tokio core threads.
 /// 在阻塞边界上运行一次查询，离开 Tokio 核心线程。
 ///

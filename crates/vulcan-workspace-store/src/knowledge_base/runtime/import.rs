@@ -184,32 +184,6 @@ impl KnowledgeBaseRuntime {
         .await
     }
 
-    /// Starts one detached Markdown import whose lifetime is independent from the browser request.
-    /// 启动一个生命周期独立于浏览器请求的分离式 Markdown 导入。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `library_id` is the exact active library being imported.
-    /// `library_id` 是本次导入的精确活动知识库。
-    /// `source_id` is the explicit retained or resolved durable source identity.
-    /// `source_id` 是明确保留或已解析的持久来源身份。
-    /// `source_root` is the native source directory to canonicalize before reserving work.
-    /// `source_root` 是预留工作前要规范化的原生来源目录。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the durable queued snapshot after detached executor startup, or an error.
-    /// 返回分离执行器启动后的持久排队快照，或错误。
-    pub async fn start_import_markdown_directory_for_source(
-        &self,
-        library_id: &str,
-        source_id: Option<&str>,
-        source_root: &Path,
-    ) -> Result<KnowledgeImportJobSummary, String> {
-        self.start_import_with_confirmation(library_id, source_id, source_root, None)
-            .await
-    }
-
     /// Starts only the eligible files explicitly confirmed in `confirmation`; returns a durable job.
     /// 仅启动 `confirmation` 明确确认的可用文件，返回持久化任务。
     pub async fn start_confirmed_knowledge_import(

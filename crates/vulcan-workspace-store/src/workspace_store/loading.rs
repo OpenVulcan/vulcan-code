@@ -4,16 +4,6 @@ const DEFAULT_WORKSPACE_PROJECT_NAME: &str = "VulcanProject";
 const DEFAULT_WORKSPACE_PROJECT_DIRECTORY: &str = "vulcan_project";
 const DEFAULT_WORKSPACE_PROJECT_ID_PREFIX: &str = "vulcanproject";
 
-/// Loads or seeds only the project/session index used during startup.
-/// 启动时仅加载或播种项目与会话索引。
-/// Session history and runtime state require an explicit session-storage load.
-/// 会话历史及运行态必须通过显式会话存储入口加载。
-pub async fn load_or_seed_workspace_index(
-    host_runtime: HostRuntimeHandle,
-) -> Result<WorkspaceSnapshot, String> {
-    load_workspace_index_snapshot(host_runtime).await
-}
-
 /// Validated project row used by deterministic workspace loading and default-project decisions.
 /// 确定性工作区加载与默认项目决策使用的已验证项目行。
 #[derive(Debug)]

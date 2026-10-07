@@ -184,15 +184,6 @@ impl KnowledgeBaseRuntime {
         ))
     }
 
-    /// Preserves the original import-only cancellation API for internal compatibility.
-    /// 为内部兼容保留原有仅导入取消 API。
-    ///
-    /// Parameters and return value are identical to `cancel_operation`.
-    /// 参数与返回值和 `cancel_operation` 完全一致。
-    pub async fn cancel_import(&self, library_id: &str, job_id: &str) -> Result<bool, String> {
-        self.cancel_operation(library_id, job_id).await
-    }
-
     /// Returns the latest durable import job for one library.
     /// 返回一个知识库最近的持久化导入任务。
     ///
@@ -372,16 +363,6 @@ impl KnowledgeBaseRuntime {
             ).await
             .map_err(|error| format!("更新知识库操作可观测状态失败：{error}"))?;
         Ok(())
-    }
-
-    /// Returns whether one service-owned operation still holds the exact runtime reservation.
-    /// 返回一个由服务层执行的操作是否仍持有精确运行时预留。
-    ///
-    /// Parameters: `job_id` is the operation identity to check.
-    /// Returns: `true` while the operation may continue, otherwise `false`.
-    /// 参数：`job_id` 是待检查的操作身份。返回值：操作可继续时为 `true`，否则为 `false`。
-    pub async fn operation_is_active(&self, job_id: &str) -> Result<bool, String> {
-        self.active_operation_for_job(job_id).await
     }
 
     /// Checks whether one library owns any active import or derived-index operation.

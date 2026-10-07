@@ -2,9 +2,7 @@
 //! 进程内应用数据平面引导辅助模块。
 
 use crate::knowledge_base::KnowledgeBaseRuntimeSharedState;
-use crate::local_database_runtime::{
-    LanceDbDirectoryBinding, LocalDatabaseRuntime, LogicalDatabase,
-};
+use crate::local_database_runtime::{LocalDatabaseRuntime, LogicalDatabase};
 #[cfg(not(test))]
 use crate::runtime_assets;
 use std::fmt;
@@ -353,33 +351,6 @@ pub fn application_data_root() -> PathBuf {
         });
 
         runtime_assets::user_vulcan_code_root_for_home(&home)
-    }
-}
-
-/// Builds the LanceDB directory binding rooted under the application data root.
-/// 构建以应用数据根为根的 LanceDB 目录绑定。
-///
-/// The vector store lives beside the SQLite files rather than in the operating system's temporary
-/// directory, so every artefact the application creates stays inside the one root the host owns and
-/// authorizes.
-///
-/// 向量存储位于 SQLite 文件旁，而不是操作系统的临时目录中，使应用创建的每个产物都留在宿主拥有并授权的
-/// 唯一根目录内。
-///
-/// The limits are the engine's defaults, which is what the application-level store ran with before
-/// the controller was removed; a subsystem with a genuine reason to bound itself more tightly
-/// declares its own binding in its own module.
-///
-/// 限制采用引擎默认值，也就是移除控制器前应用级存储实际使用的值；有真实理由收紧边界的子系统在自己的
-/// 模块里声明自己的绑定。
-pub fn application_lancedb_binding(data_root: &Path) -> LanceDbDirectoryBinding {
-    let options = vulcan_lancedb_engine::engine::LanceDbEngineOptions::default();
-    LanceDbDirectoryBinding {
-        directory: data_root.join("lancedb"),
-        read_consistency_interval_ms: None,
-        max_upsert_payload: options.max_upsert_payload,
-        max_search_limit: options.max_search_limit,
-        max_concurrent_requests: options.max_concurrent_requests,
     }
 }
 
