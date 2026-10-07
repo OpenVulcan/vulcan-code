@@ -527,8 +527,12 @@ impl NativeVmmResourceStore {
             }
             let destination = prompts_root.join(bundle_name);
             let staging_path = staging.keep();
-            fs::rename(&staging_path, &destination)
-                .map_err(|error| format!("发布完整提示词 Bundle 失败：{error}"))?;
+            if let Err(error) = fs::rename(&staging_path, &destination) {
+                // The disarmed staging guard no longer cleans up, so a failed publish removes it here.
+                // 已解除的暂存守卫不再自动清理，因此发布失败时在此移除暂存目录。
+                let _ = fs::remove_dir_all(&staging_path);
+                return Err(format!("发布完整提示词 Bundle 失败：{error}"));
+            }
             return Ok(());
         }
         if existing_count != bundle_paths.len() {
@@ -1029,6 +1033,40 @@ mod tests {
                 .iter()
                 .all(|path| store.override_path(path).is_file())
         );
+    }
+
+    /// Verifies a failed bundle publication leaves no staging directory behind.
+    /// 验证 Bundle 发布失败后不会遗留暂存目录。
+    #[test]
+    fn failed_prompt_bundle_publication_removes_staging_directory() {
+        let temporary = tempfile::tempdir().expect("create VMM resource test root");
+        let store = NativeVmmResourceStore::new(temporary.path());
+        let core = MemoryMeshCore::new().expect("create Core");
+        // A non-empty unrelated destination makes the final directory rename fail on every platform.
+        // 非空的无关目标目录会使最终目录重命名在所有平台上失败。
+        let bundle_root = store
+            .override_path("prompts/default_cn/precheck_l1_main.md")
+            .parent()
+            .expect("bundle directory")
+            .to_path_buf();
+        fs::create_dir_all(&bundle_root).expect("create occupied bundle directory");
+        fs::write(bundle_root.join("unrelated.txt"), b"occupied").expect("occupy bundle directory");
+        store
+            .write_file(
+                &core,
+                "prompts/default_cn/precheck_l1_main.md",
+                String::from("custom precheck prompt"),
+                true,
+                true,
+            )
+            .expect_err("publishing onto an occupied directory must fail");
+        let prompts_root = bundle_root.parent().expect("prompts root");
+        let leftovers = fs::read_dir(prompts_root)
+            .expect("list prompts root")
+            .map(|entry| entry.expect("prompts entry").file_name())
+            .filter(|name| name.to_string_lossy().contains(".stage-"))
+            .collect::<Vec<_>>();
+        assert!(leftovers.is_empty(), "staging leftovers: {leftovers:?}");
     }
 
     /// Verifies every resource write is rejected unless both edit confirmations are explicit.
