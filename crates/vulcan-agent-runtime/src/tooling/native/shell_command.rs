@@ -227,7 +227,7 @@ pub(crate) struct ShellCommandExecutionReport {
 /// 构建一次性 shell 命令工具面向 AI 的英文描述。
 pub(crate) fn shell_command_tool_description() -> String {
     format!(
-        "Run a one-shot command in the host environment and return the full decoded stdout/stderr plus the exit status, not just a summary. Default `timeout_ms`: unlimited. If `timeout_ms` is omitted, no timeout is applied and the host waits until the process exits. If the combined raw stdout/stderr exceeds {SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES} bytes, the host terminates the command's process tree immediately and returns status `output_limit_exceeded` with no output at all; narrow such commands with `head`, `tail`, `grep`, or line ranges, or redirect output to a file and inspect it in slices. When the inline result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
+        "Run a one-shot command in the host environment and return the full decoded stdout/stderr plus the exit status, not just a summary. Default `timeout_ms`: unlimited. If `timeout_ms` is omitted, no timeout is applied and the host waits until the process exits. If the combined raw stdout/stderr exceeds {SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES} bytes, the host terminates the command's process tree immediately and returns status `output_limit_exceeded` with no output at all; narrow such commands with `head`, `tail`, `grep`, or line ranges, or redirect output to a file and inspect it in slices. When the inline result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using exclusively created names like `tool_output_<random_id>.md`; the result reports the exact file path. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
     )
 }
 
@@ -240,7 +240,7 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             "command": {
                 "type": "string",
                 "description": format!(
-                    "Raw command text executed by the selected shell. On success, the tool returns the full decoded stdout/stderr plus exit status, not just a summary. If the rendered result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host spills the full output into `.vulcan/temp/tool_output_overflow_page_md_<unix_ms>.md`."
+                    "Raw command text executed by the selected shell. On success, the tool returns the full decoded stdout/stderr plus exit status, not just a summary. If the rendered result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host spills the full output into an exclusively created `.vulcan/temp/tool_output_<random_id>.md` file and reports its exact path."
                 )
             },
             "cwd": {
