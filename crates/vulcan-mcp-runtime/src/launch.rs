@@ -150,19 +150,6 @@ impl McpTransportLaunchSpec {
             }
         }
     }
-
-    /// Launch one concrete MCP transport from the host-owned specification.
-    /// 根据宿主自有规格启动一个具体 MCP 传输实例。
-    pub async fn launch(
-        self,
-        shared_auth_session: Option<Arc<McpOAuthSession>>,
-    ) -> Result<Arc<dyn McpTransport>, McpRuntimeError> {
-        // All launch variants use the same resource-aware dispatch with an empty host bundle.
-        // 全部启动变体使用相同资源感知分派及空宿主资源包。
-        let (resources, _) = crate::McpTransportResources::new(());
-        self.launch_with_resources(shared_auth_session, resources)
-            .await
-    }
 }
 
 /// Requires the host-provided OAuth session for OAuth-enabled transports.
