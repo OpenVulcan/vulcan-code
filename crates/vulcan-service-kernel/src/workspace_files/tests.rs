@@ -40,6 +40,33 @@ fn workspace_file_parent_inside_root_uses_workspace_boundary() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
+/// Verifies a drive-root workspace contains its children while sibling drives and prefixes stay outside.
+/// 验证盘符根工作区包含其子路径，而其他盘符与同前缀路径仍在外部。
+#[cfg(windows)]
+#[test]
+fn workspace_path_inside_root_accepts_drive_root_children() {
+    let drive_root = Path::new(r"D:\");
+    assert!(workspace_path_is_inside_root(drive_root, drive_root));
+    assert!(workspace_path_is_inside_root(
+        Path::new(r"D:\src\main.rs"),
+        drive_root
+    ));
+    assert!(!workspace_path_is_inside_root(
+        Path::new(r"E:\src"),
+        drive_root
+    ));
+
+    let project_root = Path::new(r"D:\work\app");
+    assert!(workspace_path_is_inside_root(
+        Path::new(r"d:\WORK\app\src"),
+        project_root
+    ));
+    assert!(!workspace_path_is_inside_root(
+        Path::new(r"D:\work\application"),
+        project_root
+    ));
+}
+
 /// Verifies relative path projection keeps root and nested child semantics.
 /// 验证相对路径投影会保持根目录与嵌套子路径语义。
 #[test]

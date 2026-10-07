@@ -95,9 +95,12 @@ pub(crate) fn workspace_file_canonical_child_path(
 pub(crate) fn workspace_path_is_inside_root(path: &Path, workspace_root: &Path) -> bool {
     let path_text = normalized_workspace_path_text_from_path(path).to_ascii_lowercase();
     let root_text = normalized_workspace_path_text_from_path(workspace_root).to_ascii_lowercase();
+    // A drive root keeps its trailing separator (`d:\`), so compare against the separator-free stem.
+    // 盘符根保留结尾分隔符（`d:\`），因此与去掉分隔符的主干比较。
+    let root_stem = root_text.trim_end_matches(['\\', '/']);
     path_text == root_text
         || path_text
-            .strip_prefix(&root_text)
+            .strip_prefix(root_stem)
             .is_some_and(|suffix| suffix.starts_with('\\') || suffix.starts_with('/'))
 }
 
