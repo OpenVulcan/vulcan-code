@@ -19,6 +19,7 @@ import type { PluginUninstallUncertainty } from "./plugin-recovery-center";
 import type { PluginRuntimeErrorRecord, PluginSummary, VulcanPluginPermissionPreview, WorkbenchSnapshot } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
+import { usePluginEnvironmentTasks } from "./use-plugin-environment-tasks";
 
 // VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
 // VulcanPluginStatusFilter 标识 Vulcan 插件列表中显示的生命周期子集。
@@ -228,12 +229,6 @@ export function VulcanPluginsPanel(props: {
   // busyPluginId identifies the single Vulcan Plugin mutation currently in flight.
   // busyPluginId 标识当前正在执行变更的唯一 Vulcan Plugin。
   const [busyPluginId, setBusyPluginId] = React.useState<string | null>(null);
-  // environmentReadyByPlugin records the service-checked readiness of each exact plugin generation.
-  // environmentReadyByPlugin 记录每个精确插件代次经服务检查后的就绪状态。
-  const [environmentReadyByPlugin, setEnvironmentReadyByPlugin] = React.useState<Record<string, boolean>>({});
-  // installTasksByPlugin reflects Core-owned work, including work started by another client.
-  // installTasksByPlugin 反映 Core 持有的任务，包括其他客户端启动的任务。
-  const [installTasksByPlugin, setInstallTasksByPlugin] = React.useState<Record<string, import("../../../service/skills-actions-service").PluginEnvironmentInstallTaskStatus>>({});
   // installSourcePath stores the exact local plugin directory selected for inspection.
   // installSourcePath 保存等待检查的精确本地插件目录。
   const [installSourcePath, setInstallSourcePath] = React.useState("");
@@ -302,84 +297,9 @@ export function VulcanPluginsPanel(props: {
     () => props.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin"),
     [props.plugins],
   );
-  // Refresh readiness when the committed plugin catalog changes; stale responses cannot replace a newer view.
-  // 已提交插件目录变化时刷新就绪状态；过期响应不能覆盖较新的视图。
-  React.useEffect(() => {
-    // active prevents an outdated catalog request from publishing readiness after cleanup.
-    // active 防止过期目录请求在清理后发布就绪状态。
-    let active = true;
-    void Promise.all(vulcanPlugins.map(async (plugin) => {
-      // ready is read from Core, which owns the plugin generation and private environment.
-      // ready 从持有插件代次和私有环境的 Core 读取。
-      const ready = await props.actions.onPluginEnvironmentReady(plugin.id).catch(() => false);
-      const task = await props.actions.onPluginEnvironmentInstallStatusForPlugin(plugin.id).catch(() => null);
-      return [plugin.id, ready, task] as const;
-    })).then((entries) => {
-      if (active) {
-        setEnvironmentReadyByPlugin(Object.fromEntries(entries.map(([id, ready]) => [id, ready])));
-        setInstallTasksByPlugin(Object.fromEntries(entries.flatMap(([id, , task]) => task ? [[id, task]] : [])));
-      }
-    });
-    return () => { active = false; };
-  }, [props.actions, vulcanPlugins]);
-  // Poll only unfinished Core tasks; unmounting the panel never cancels their installation.
-  // 只轮询尚未完成的 Core 任务；卸载面板绝不取消安装。
-  React.useEffect(() => {
-    const pending = Object.values(installTasksByPlugin).filter((task) => task.state === "queued" || task.state === "running");
-    if (pending.length === 0) return;
-    let active = true;
-    let polling = false;
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const updates = await Promise.all(pending.map((task) => props.actions.onPluginEnvironmentInstallStatus(task.taskId)));
-        if (!active) return;
-        setInstallTasksByPlugin((current) => {
-          const next = { ...current };
-          for (const task of updates) {
-            if (next[task.pluginId]?.taskId === task.taskId) next[task.pluginId] = task;
-          }
-          return next;
-        });
-        for (const task of updates) {
-          if (task.state === "succeeded") {
-            const ready = await props.actions.onPluginEnvironmentReady(task.pluginId);
-            if (active) setEnvironmentReadyByPlugin((current) => ({ ...current, [task.pluginId]: ready }));
-          }
-        }
-      } catch (reason) {
-        if (active) setInstallError(reason instanceof Error ? reason.message : String(reason));
-      } finally {
-        polling = false;
-      }
-    };
-    void poll();
-    const timer = window.setInterval(() => { void poll(); }, 1000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [installTasksByPlugin, props.actions]);
-  // A second client can start installation while this panel is open, so refresh Core's latest task by plugin.
-  // 其他客户端可能在本面板打开期间启动安装，因此按插件刷新 Core 的最近任务。
-  React.useEffect(() => {
-    if (vulcanPlugins.length === 0) return;
-    let active = true;
-    const synchronize = async () => {
-      const entries = await Promise.all(vulcanPlugins.map(async (plugin) => [
-        plugin.id,
-        await props.actions.onPluginEnvironmentInstallStatusForPlugin(plugin.id).catch(() => null),
-      ] as const));
-      if (!active) return;
-      setInstallTasksByPlugin(Object.fromEntries(entries.flatMap(([id, task]) => task ? [[id, task] as const] : [])));
-      const succeeded = entries.filter(([, task]) => task?.state === "succeeded");
-      const readiness = await Promise.all(succeeded.map(async ([id]) => [
-        id,
-        await props.actions.onPluginEnvironmentReady(id).catch(() => false),
-      ] as const));
-      if (active) setEnvironmentReadyByPlugin((current) => ({ ...current, ...Object.fromEntries(readiness) }));
-    };
-    const timer = window.setInterval(() => { void synchronize(); }, 3000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [props.actions, vulcanPlugins]);
+  // Readiness and install tasks are observed from Core; polling failures surface as install diagnostics.
+  // 就绪状态与安装任务从 Core 观测；轮询失败以安装诊断呈现。
+  const { environmentReadyByPlugin, installTasksByPlugin, recordInstallTask } = usePluginEnvironmentTasks(props.actions, vulcanPlugins, setInstallError);
   // visiblePlugins applies localized text and lifecycle filters to the Vulcan Plugin projection.
   // visiblePlugins 对 Vulcan 插件投影应用本地化文本与生命周期筛选。
   const visiblePlugins = React.useMemo(() => vulcanPlugins.filter((plugin) => {
@@ -450,15 +370,14 @@ export function VulcanPluginsPanel(props: {
     setBusyPluginId(plugin.id);
     setInstallError("");
     try {
-      const task = await props.actions.onStartPluginEnvironmentInstall(plugin.id);
-      setInstallTasksByPlugin((current) => ({ ...current, [plugin.id]: task }));
+      recordInstallTask(plugin.id, await props.actions.onStartPluginEnvironmentInstall(plugin.id));
     } catch (reason) {
       setInstallError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       actionRunningRef.current = false;
       setBusyPluginId(null);
     }
-  }, [installTasksByPlugin, props.actions]);
+  }, [installTasksByPlugin, props.actions, recordInstallTask]);
 
   // inspectPluginPackage validates the current path and resets every prior authorization decision.
   // inspectPluginPackage 校验当前路径并重置此前的所有授权决定。

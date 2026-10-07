@@ -42,7 +42,7 @@ const oversizedComponentCeilings = new Map([
   ["components/features/settings/provider-manifest-status.tsx#ProviderManifestStatusPanel", 498],
   ["components/features/settings/provider-model-settings.tsx#ModelListSettingsArea", 573],
   ["components/features/skills/lua-skill-config-dialog.tsx#LuaSkillConfigDialog", 507],
-  ["components/features/skills/vulcan-plugins-panel.tsx#VulcanPluginsPanel", 746],
+  ["components/features/skills/vulcan-plugins-panel.tsx#VulcanPluginsPanel", 699],
   ["components/project/project-settings-dialog.tsx#ProjectSettingsDialog", 613],
   ["components/project/terminal/project-floating-terminal-layer.tsx#ProjectFloatingTerminalLayer", 550],
   ["components/workspace/workbench-layout.tsx#WorkbenchLayout", 875],
