@@ -17,6 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+# Encodes copies for the OSC 52 clipboard sequence.
+# 为 OSC 52 剪贴板序列编码复制内容。
+base64.workspace = true
 ratatui.workspace = true
 ratatui-textarea.workspace = true
 serde.workspace = true

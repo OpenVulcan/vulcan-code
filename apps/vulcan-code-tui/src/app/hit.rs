@@ -82,6 +82,11 @@ pub struct HitMap {
     pub transcript_top: usize,
     pub transcript_items: Vec<(u64, usize, usize)>,
     pub transcript_lines: usize,
+    /// Where transcript lines are drawn (the area minus its selection gutter) and the lines of the
+    /// last layout, so a drag can be mapped to text and copied.
+    /// 会话记录行的绘制区域（区域减去选择栏）及最近一次排版的各行，用于把拖动映射为文本并复制。
+    pub transcript_content: Rect,
+    pub transcript_text: Vec<ratatui::text::Line<'static>>,
     /// Visible rows of the current page and of the sidebar list, for paging and wheel limits.
     /// 当前页面与侧栏列表的可见行数，用于翻页与滚轮边界。
     pub page_height: u16,

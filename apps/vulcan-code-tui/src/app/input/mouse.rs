@@ -16,6 +16,7 @@ use crate::app::action::{self, AskStep, UiAction};
 use crate::app::hit::{ScrollTarget, Target};
 use crate::app::overlay::Overlay;
 use crate::app::pages::Area;
+use crate::app::selection::{Point, TextSelection};
 use crate::app::{App, Focus, PanelTab, SidebarRow, history};
 
 /// Lines moved per wheel notch.
@@ -43,10 +44,13 @@ pub(super) fn on_mouse(app: &mut App, event: MouseEvent) {
             } else {
                 Some((now, at.x, at.y))
             };
+            app.clipboard.selection = None;
             if let Some(target) = app.hits.hit(at) {
                 left_click(app, target, at, double);
             }
         }
+        MouseEventKind::Drag(MouseButton::Left) => drag_selection(app, at),
+        MouseEventKind::Up(MouseButton::Left) => finish_selection(app, at),
         MouseEventKind::Down(MouseButton::Right) => {
             app.last_click = Some((Instant::now(), at.x, at.y));
             if let Some(target) = app.hits.hit(at) {
@@ -321,12 +325,107 @@ fn left_click(app: &mut App, target: Target, at: Position, double: bool) {
 /// 右键打开检视器（同 `i`）。
 fn click_transcript(app: &mut App, at: Position, double: bool) {
     app.focus = Focus::Transcript;
+    if let (Some(conversation), Some(point)) = (app.selected.clone(), content_point(app, at)) {
+        app.clipboard.selection = Some(TextSelection {
+            conversation,
+            width: app.hits.transcript_content.width as usize,
+            anchor: point,
+            head: point,
+            dragging: true,
+        });
+    }
     let Some((seq, _, _)) = transcript_item_at(app, at) else {
         return;
     };
     mark_seq(app, seq);
     if double {
         toggle_selected(app);
+    }
+}
+
+/// The transcript content cell under `at`; the gutter maps to the first column.
+/// `at` 处的会话记录内容单元格；选择栏映射到第一列。
+fn content_point(app: &App, at: Position) -> Option<Point> {
+    let content = app.hits.transcript_content;
+    if content.width == 0 || at.y < content.y || at.y >= content.bottom() {
+        return None;
+    }
+    let column = at.x.saturating_sub(content.x).min(content.width - 1);
+    Some(Point {
+        line: app.hits.transcript_top + (at.y - content.y) as usize,
+        column: column as usize,
+    })
+}
+
+/// Extends a held selection to the pointer; past the top or bottom edge the transcript scrolls one
+/// line toward the pointer and the selection follows to the edge line.
+/// 将按住中的选择延伸到指针处；越过上下边缘时会话记录向指针方向滚动一行，选择随之到达边缘行。
+fn drag_selection(app: &mut App, at: Position) {
+    if !app
+        .clipboard
+        .selection
+        .as_ref()
+        .is_some_and(|selection| selection.dragging)
+    {
+        return;
+    }
+    let content = app.hits.transcript_content;
+    if content.height == 0 {
+        return;
+    }
+    let edge = if at.y < content.y {
+        scroll_transcript(app, 1);
+        Some(0)
+    } else if at.y >= content.bottom() {
+        scroll_transcript(app, -1);
+        Some(content.height as usize - 1)
+    } else {
+        None
+    };
+    let head = match edge {
+        // The scroll above takes effect on the next frame, so the edge line is derived here.
+        // 上面的滚动在下一帧才生效，因此在此推算边缘行。
+        Some(row) => {
+            let total = app.hits.transcript_lines;
+            let height = content.height as usize;
+            let scroll = app.session().map_or(0, |s| s.scroll_from_bottom);
+            let column = at.x.saturating_sub(content.x).min(content.width - 1);
+            Point {
+                line: total.saturating_sub(height + scroll) + row,
+                column: column as usize,
+            }
+        }
+        None => {
+            let column = at.x.clamp(content.x, content.right() - 1);
+            match content_point(app, Position::new(column, at.y)) {
+                Some(point) => point,
+                None => return,
+            }
+        }
+    };
+    if let Some(selection) = &mut app.clipboard.selection {
+        selection.head = head;
+    }
+}
+
+/// Releasing the button copies a non-empty selection and keeps it shown; a plain click leaves none.
+/// 松开按键时复制非空选择并保持显示；普通点击不留下选择。
+fn finish_selection(app: &mut App, at: Position) {
+    drag_selection(app, at);
+    let Some(selection) = app.clipboard.selection.as_mut() else {
+        return;
+    };
+    if !selection.dragging {
+        return;
+    }
+    selection.dragging = false;
+    if selection.span().is_none() {
+        app.clipboard.selection = None;
+        return;
+    }
+    let text = selection.text(&app.hits.transcript_text);
+    if !text.trim().is_empty() {
+        action::perform(app, UiAction::CopyText(text));
     }
 }
 

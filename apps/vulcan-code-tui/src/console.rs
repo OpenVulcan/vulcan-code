@@ -40,6 +40,14 @@ pub fn init() -> io::Result<ConsoleTerminal> {
     Terminal::new(CrosstermBackend::new(output))
 }
 
+/// Writes a control sequence the frame does not carry, such as an OSC 52 clipboard copy.
+/// 写出画面之外的控制序列，例如 OSC 52 剪贴板复制。
+pub fn write_sequence(terminal: &mut ConsoleTerminal, sequence: &str) -> io::Result<()> {
+    let output = terminal.backend_mut();
+    io::Write::write_all(output, sequence.as_bytes())?;
+    io::Write::flush(output)
+}
+
 /// Leaves every mode `init` entered; failures are reported on stderr because nothing else can be done.
 /// 退出 `init` 进入的全部模式；失败只能输出到 stderr。
 pub fn restore() {

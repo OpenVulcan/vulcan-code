@@ -82,6 +82,8 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     buf.set_style(area, theme.base());
     app.hits.transcript = area;
     app.hits.transcript_top = 0;
+    app.hits.transcript_content = Rect::default();
+    app.hits.transcript_text.clear();
     app.hits.add(area, Target::Transcript);
     app.hits.add_scroll(area, ScrollTarget::Transcript);
     let Some(session) = app.session() else {
@@ -131,6 +133,11 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         phase: app.phase(),
         session,
     };
+    let content = Rect {
+        x: area.x + gutter,
+        width: content_width as u16,
+        ..area
+    };
     let mut layout = lay_out(&ctx);
     if app.run_phase().is_active() && session.live_reasoning().is_none() && !streaming_text(session)
     {
@@ -162,6 +169,11 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         .and_then(|seq| layout.items.iter().find(|(s, _, _)| *s == seq))
         .map(|(_, start, len)| *start..*start + *len);
     let focused = app.focus == Focus::Transcript;
+    let conversation = app.selected.as_ref();
+    let dragged = app.clipboard.selection.as_ref().filter(|selection| {
+        Some(&selection.conversation) == conversation && selection.width == content_width
+    });
+    let highlight = Style::new().fg(theme.primary_fg).bg(theme.primary);
 
     for (row, line) in layout.lines.iter().skip(top).take(height).enumerate() {
         let index = top + row;
@@ -172,13 +184,23 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         line.render(
             Rect {
-                x: area.x + gutter,
                 y,
-                width: content_width as u16,
                 height: 1,
+                ..content
             },
             buf,
         );
+        let columns = dragged.and_then(|selection| selection.columns(index, line.width()));
+        if let Some((from, to)) = columns {
+            let to = to.min(content_width);
+            let cells = Rect {
+                x: content.x + from as u16,
+                y,
+                width: to.saturating_sub(from) as u16,
+                height: 1,
+            };
+            buf.set_style(cells, highlight);
+        }
     }
     if scroll > 0 {
         let hint = format!(" ↓ {} · End ", tr!("composer.scrollToBottom"));
@@ -196,6 +218,8 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.hits.transcript_top = top;
     app.hits.transcript_items = items;
     app.hits.transcript_lines = total;
+    app.hits.transcript_content = content;
+    app.hits.transcript_text = layout.lines;
     if let Some(session) = app.session_mut() {
         session.scroll_from_bottom = scroll;
     }

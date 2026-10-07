@@ -948,6 +948,124 @@ fn single_click_selects_and_double_click_expands() {
     assert!(h.app.page_state(page).expanded.contains(&id));
 }
 
+/// Appends a completed assistant reply to the open conversation and renders it.
+/// 向当前会话追加一条已完成的助手回复并渲染。
+fn push_reply(h: &mut Harness, text: String) {
+    let session = h.app.session_mut().expect("session");
+    let seq = session.events.last().map_or(0, |e| e.seq) + 1;
+    session.events.push(ConversationEvent {
+        seq,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        body: EventBody::AssistantText {
+            text,
+            status: AssistantSemanticStatus::Completed,
+        },
+    });
+    h.frame();
+}
+
+fn mouse(app: &mut App, kind: MouseEventKind, column: u16, row: u16) {
+    let event = MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    input::handle_event(app, Event::Mouse(event));
+}
+
+/// Dragging across transcript text highlights it and copies exactly the dragged cells on release;
+/// a plain click copies nothing.
+/// 在会话记录文本上拖动会高亮所选内容，松开时恰好复制拖过的单元格；普通点击不复制任何内容。
+#[test]
+fn dragging_over_the_transcript_selects_and_copies_text() {
+    use base64::Engine;
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    push_reply(&mut h, "row one\nrow two\nrow three".into());
+    let content = h.app.hits.transcript_content;
+    let screen_row = |app: &App, text: &str| {
+        let line = app
+            .hits
+            .transcript_text
+            .iter()
+            .position(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    == text
+            })
+            .expect("reply line in the layout");
+        content.y + (line - app.hits.transcript_top) as u16
+    };
+    let first = screen_row(&h.app, "row one");
+    let last = screen_row(&h.app, "row three");
+
+    mouse(
+        &mut h.app,
+        MouseEventKind::Down(MouseButton::Left),
+        content.x + 4,
+        first,
+    );
+    mouse(
+        &mut h.app,
+        MouseEventKind::Drag(MouseButton::Left),
+        content.x + 1,
+        last,
+    );
+    mouse(
+        &mut h.app,
+        MouseEventKind::Drag(MouseButton::Left),
+        content.x + 2,
+        last,
+    );
+    h.frame();
+    let cell = &h.wide.backend().buffer()[(content.x + 4, first)];
+    assert_eq!(
+        cell.bg, h.app.theme.primary,
+        "dragged cells are highlighted"
+    );
+    mouse(
+        &mut h.app,
+        MouseEventKind::Up(MouseButton::Left),
+        content.x + 2,
+        last,
+    );
+
+    let sequence = h.app.clipboard.take_sequence().expect("release copies");
+    let payload = sequence
+        .strip_prefix("\x1b]52;c;")
+        .and_then(|rest| rest.strip_suffix('\x07'))
+        .expect("OSC 52 framing");
+    let copied = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .expect("base64 payload");
+    assert_eq!(String::from_utf8(copied).unwrap(), "one\nrow two\nrow");
+    assert!(
+        h.app.clipboard.selection.is_some(),
+        "the selection stays shown"
+    );
+
+    // A click clears it and copies nothing.
+    // 单击清除选择且不复制。
+    mouse(
+        &mut h.app,
+        MouseEventKind::Down(MouseButton::Left),
+        content.x + 1,
+        first,
+    );
+    mouse(
+        &mut h.app,
+        MouseEventKind::Up(MouseButton::Left),
+        content.x + 1,
+        first,
+    );
+    assert!(h.app.clipboard.selection.is_none());
+    assert!(h.app.clipboard.take_sequence().is_none());
+}
+
 /// Clicking inside a block whose top has scrolled out selects it without moving the view.
 /// 点击顶部已滚出视图的块时只选中它，不移动视图。
 #[test]
@@ -956,18 +1074,7 @@ fn clicking_a_partly_visible_block_keeps_the_view() {
     let mut h = Harness::connected();
     // A reply taller than the view, appended after the mock turn.
     // 一条高于视图的回复，追加在模拟轮次之后。
-    let session = h.app.session_mut().expect("session");
-    let seq = session.events.last().map_or(0, |e| e.seq) + 1;
-    session.events.push(ConversationEvent {
-        seq,
-        created_at_ms: 0,
-        updated_at_ms: 0,
-        body: EventBody::AssistantText {
-            text: (1..=80).map(|n| format!("line {n}\n\n")).collect(),
-            status: AssistantSemanticStatus::Completed,
-        },
-    });
-    h.frame();
+    push_reply(&mut h, (1..=80).map(|n| format!("line {n}\n\n")).collect());
     let height = h.app.hits.transcript.height as usize;
     let total = h.app.hits.transcript_lines;
     let (seq, start, _) = h

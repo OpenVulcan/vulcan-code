@@ -27,6 +27,7 @@ pub mod pages;
 #[cfg(test)]
 mod plugin_settings_tests;
 mod preview;
+pub mod selection;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
@@ -657,6 +658,9 @@ pub struct App {
     /// Last left click `(time, column, row)`, for double clicks and menu anchoring.
     /// 最近一次左键点击 `(时间, 列, 行)`，用于双击与菜单定位。
     pub last_click: Option<(Instant, u16, u16)>,
+    /// Transcript text selection and the copy waiting for the terminal clipboard.
+    /// 会话记录文本选择，以及等待写入终端剪贴板的复制内容。
+    pub clipboard: selection::Clipboard,
 }
 
 impl App {
@@ -756,6 +760,7 @@ impl App {
             model_output: "all".into(),
             attachments: Vec::new(),
             last_click: None,
+            clipboard: selection::Clipboard::default(),
         }
     }
 

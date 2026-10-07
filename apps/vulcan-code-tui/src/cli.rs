@@ -144,6 +144,9 @@ fn event_loop(terminal: &mut ConsoleTerminal, app: &mut App) -> Result<()> {
             for event in composer::coalesce(batch) {
                 input::handle_event(app, event);
             }
+            if let Some(sequence) = app.clipboard.take_sequence() {
+                console::write_sequence(terminal, &sequence)?;
+            }
             dirty = true;
         }
     }

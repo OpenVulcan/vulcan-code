@@ -328,6 +328,9 @@ pub enum UiAction {
     /// 项目模式：添加当前所列的目录。
     FolderUseCurrent,
     Inspect(u64),
+    /// Puts text on the terminal clipboard.
+    /// 将文本放入终端剪贴板。
+    CopyText(String),
     OpenHistory,
     OpenLanguagePicker,
     OpenDiff(usize),
@@ -602,6 +605,10 @@ pub fn perform(app: &mut App, action: UiAction) {
             }
         }
         UiAction::FolderUseCurrent => folder_use_current(app),
+        UiAction::CopyText(text) => {
+            app.clipboard.copy(text);
+            app.toast(NoticeSeverity::Info, tr!("markdown.copied"));
+        }
         UiAction::Inspect(seq) => {
             let back = match app.overlay.take() {
                 Some(Overlay::History(history)) => Some(Box::new(history)),
