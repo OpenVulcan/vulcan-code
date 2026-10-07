@@ -1616,7 +1616,9 @@ fn write_host_prompt_skill_catalog(
     let directory = user_root.join(VULCAN_SKILL_CATALOG_DIR_NAME);
     ensure_managed_prompt_skill_directory(&directory, "Agent Skills metadata directory")?;
     let target = directory.join(VULCAN_SKILL_CATALOG_FILE_NAME);
-    let target_exists = managed_prompt_skill_file_exists(&target, "Agent Skills catalog")?;
+    // An existing catalog must be a regular file; links are never replaced.
+    // 已有目录必须是普通文件；链接永不被替换。
+    managed_prompt_skill_file_exists(&target, "Agent Skills catalog")?;
     let temporary = directory.join(format!(
         "catalog-{}.yaml.tmp",
         next_prompt_skill_transaction_token()
@@ -1640,32 +1642,14 @@ fn write_host_prompt_skill_catalog(
         .sync_all()
         .map_err(|error| format!("Failed to flush Agent Skills catalog transaction: {error}"))?;
     drop(temporary_file);
-    let backup = directory.join(format!(
-        "catalog-{}.yaml.backup",
-        next_prompt_skill_transaction_token()
-    ));
-    if fs::symlink_metadata(&backup).is_ok() {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "Agent Skills catalog backup path already exists: {}",
-            vulcan_runtime_assets::native_host_path_text_from_path(&backup)
-        ));
-    }
-    if target_exists && let Err(error) = fs::rename(&target, &backup) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "Failed to stage Agent Skills catalog backup: {error}"
-        ));
-    }
+    // Rename replaces the catalog atomically on every platform (MoveFileExW with
+    // MOVEFILE_REPLACE_EXISTING on Windows), so readers see the old or the new catalog and never
+    // a missing one, which would read as empty.
+    // 重命名在所有平台上原子替换目录（Windows 上为带 MOVEFILE_REPLACE_EXISTING 的 MoveFileExW），
+    // 读取方只会看到旧目录或新目录，绝不会看到缺失（缺失会被读作空目录）。
     if let Err(error) = fs::rename(&temporary, &target) {
-        if target_exists {
-            let _ = fs::rename(&backup, &target);
-        }
         let _ = fs::remove_file(&temporary);
         return Err(format!("Failed to commit Agent Skills catalog: {error}"));
-    }
-    if target_exists {
-        let _ = fs::remove_file(backup);
     }
     Ok(())
 }
