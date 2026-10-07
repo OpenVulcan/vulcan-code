@@ -498,26 +498,6 @@ impl VmmDataPlaneHandle {
             .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))
     }
 
-    /// Lists every VulcanCode project currently bound to one native memory project.
-    /// 列出当前绑定到一个原生记忆项目的全部 VulcanCode 项目。
-    ///
-    /// # Errors
-    /// Returns a validation, storage, or JSON error.
-    /// 返回校验、存储或 JSON 错误。
-    pub async fn bound_vulcan_project_ids(&self, project_id: u64) -> Result<Vec<String>, String> {
-        let result =
-            local_sql::query_json_async(
-                &self.local,
-                LogicalDatabase::VmmMetadata,
-                "SELECT vulcan_project_id FROM vmm_project_bindings WHERE vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
-                vec![SqliteValue::Integer(project_id_i64(project_id)?)],
-            ).await
-            .map_err(|error| format!("读取原生 VMM 项目绑定失败：{error}"))?;
-        let rows: Vec<VulcanProjectIdRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 项目绑定失败：{error}"))?;
-        Ok(rows.into_iter().map(|row| row.vulcan_project_id).collect())
-    }
-
     /// Resolves every owner and linked-query association for one native VMM project.
     /// 解析一个原生 VMM 项目的全部归属与连带查询关联。
     ///
@@ -609,46 +589,6 @@ impl VmmDataPlaneHandle {
             })
             .collect()
         }).await
-    }
-
-    /// Deletes one unbound non-protected native VMM project row.
-    /// 删除一个未绑定且不受保护的原生 VMM 项目记录。
-    ///
-    /// # Errors
-    /// Returns an explicit protected, bound, missing, or storage error.
-    /// 返回明确的受保护、已绑定、缺失或存储错误。
-    pub async fn delete_unbound_project(&self, project_id: u64) -> Result<(), String> {
-        let project = self
-            .project_by_id(project_id)
-            .await?
-            .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))?;
-        if project.protected {
-            return Err(String::from("default VMM 项目不允许删除"));
-        }
-        let usage = self.project_usage(project_id).await?;
-        if !usage.owner_vulcan_project_ids.is_empty() || !usage.linked_vulcan_project_ids.is_empty()
-        {
-            return Err(format!(
-                "VMM 项目 {project_id} 仍有关联；归属项目：[{}]，连带查询项目：[{}]",
-                usage.owner_vulcan_project_ids.join(", "),
-                usage.linked_vulcan_project_ids.join(", ")
-            ));
-        }
-        let result = local_sql::execute_script_async(
-            &self.local,
-            LogicalDatabase::VmmMetadata,
-            "DELETE FROM vmm_projects WHERE id = ? AND protected = 0;",
-            vec![SqliteValue::Integer(project_id_i64(project_id)?)],
-        )
-        .await
-        .map_err(|error| format!("删除原生 VMM 项目失败：{error}"))?;
-        if !result.success {
-            return Err(format!("删除原生 VMM 项目失败：{}", result.message));
-        }
-        if self.project_by_id(project_id).await?.is_some() {
-            return Err(format!("原生 VMM 项目 {project_id} 未被删除"));
-        }
-        Ok(())
     }
 
     /// Deletes one non-protected project after atomically detaching every owner and query link.
@@ -1008,41 +948,6 @@ ORDER BY l.position ASC, p.id ASC;"#,
         }
     }
 
-    /// Persists one relational-only native Core snapshot as the durable commit point.
-    /// 将一份仅含关系数据的原生 Core 快照持久化为耐久提交点。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `snapshot_json` is a validated serialized Core StorageSnapshot without embeddings.
-    /// `snapshot_json` 是已校验序列化且不含嵌入的 Core StorageSnapshot。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success after the local transaction commits the row, or a controlled persistence error.
-    /// 本地事务提交记录后返回成功，否则返回受控持久化错误。
-    pub async fn persist_core_snapshot_json(&self, snapshot_json: &str) -> Result<(), String> {
-        let result = local_sql::execute_script_async(
-            &self.local,
-            LogicalDatabase::VmmMetadata,
-            r#"INSERT INTO vmm_core_snapshots(snapshot_key, snapshot_json, updated_at_unix_ms)
-VALUES (?, ?, ?)
-ON CONFLICT(snapshot_key) DO UPDATE SET
-    snapshot_json = excluded.snapshot_json,
-    updated_at_unix_ms = excluded.updated_at_unix_ms;"#,
-            vec![
-                sqlite_text(VMM_CORE_SNAPSHOT_KEY),
-                sqlite_text(snapshot_json),
-                SqliteValue::Integer(current_unix_epoch_millis_i64()?),
-            ],
-        )
-        .await
-        .map_err(|error| format!("保存原生 VMM Core 快照失败：{error}"))?;
-        if !result.success {
-            return Err(format!("保存原生 VMM Core 快照失败：{}", result.message));
-        }
-        Ok(())
-    }
-
     /// Inserts or validates one durable native post-action analysis job.
     /// 插入或校验一条耐久原生 PostAction 分析作业。
     ///
@@ -1148,52 +1053,6 @@ ON CONFLICT(snapshot_key) DO UPDATE SET
                 "原生 VMM PostAction 操作标识返回了多条作业记录",
             )),
         }
-    }
-
-    /// Lists due durable analysis jobs in stable scheduling order.
-    /// 按稳定调度顺序列出已到期的耐久分析作业。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `now_unix_ms` is the inclusive retry boundary and `limit` bounds one drain pass.
-    /// `now_unix_ms` 是包含端点的重试边界，`limit` 限制单次排空数量。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Ready jobs whose durable turn identity is present.
-    /// 返回包含耐久回合身份的已就绪作业。
-    pub async fn list_due_pending_analysis_jobs(
-        &self,
-        now_unix_ms: i64,
-        limit: u32,
-    ) -> Result<Vec<NativeVmmPendingAnalysisJob>, String> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        let result = local_sql::query_json_async(
-            &self.local,
-            LogicalDatabase::VmmMetadata,
-            r#"SELECT operation_id, request_fingerprint, payload_json,
-                          intake_mutation_operation_id, turn_id, state, attempt_count,
-                          next_attempt_at_unix_ms, last_error
-                   FROM vmm_pending_analysis_jobs
-                   WHERE state = 'ready'
-                     AND turn_id IS NOT NULL
-                     AND next_attempt_at_unix_ms <= ?
-                   ORDER BY next_attempt_at_unix_ms, created_at_unix_ms, operation_id
-                   LIMIT ?;"#,
-            vec![
-                SqliteValue::Integer(now_unix_ms),
-                SqliteValue::Integer(i64::from(limit)),
-            ],
-        )
-        .await
-        .map_err(|error| format!("列出原生 VMM 待分析作业失败：{error}"))?;
-        let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 待分析作业列表失败：{error}"))?;
-        rows.into_iter()
-            .map(NativeVmmPendingAnalysisJobRow::into_job)
-            .collect()
     }
 
     /// Lists every intake or ready native analysis job that still owns its original payload.
