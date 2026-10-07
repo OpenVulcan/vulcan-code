@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "Die Komprimierungslaufzeit ist bereit; die Anfrage an den Anbieter wird gestartet.",
   "contextCompaction.progress.prepared": "Die Modellanfrage ist vorbereitet.",
   "contextCompaction.progress.requestReady": "Der Snapshot der Modellanfrage ist erstellt; er wird in das Anbieterformat umgewandelt.",
-  "contextCompaction.progress.providerCheckpoint": "Checkpoint der Anbieteranfrage aufgezeichnet.",
   "contextCompaction.progress.providerLoweringRepair": "Kompatibilitätskorrektur auf die Anbieteranfrage angewendet.",
   "contextCompaction.progress.wireRequestReady": "Der Inhalt der Anbieteranfrage ist bereit zum Senden.",
   "contextCompaction.progress.requestStarted": "Die Anbieteranfrage wurde gesendet; Warten auf die erste Ausgabe.",

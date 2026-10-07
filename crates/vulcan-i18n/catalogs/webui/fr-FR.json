@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "L’environnement d’exécution de compression est prêt ; lancement de la requête au fournisseur.",
   "contextCompaction.progress.prepared": "La requête au modèle est prête.",
   "contextCompaction.progress.requestReady": "L’instantané de la requête au modèle est créé ; conversion au format du fournisseur.",
-  "contextCompaction.progress.providerCheckpoint": "Point de contrôle de la requête au fournisseur enregistré.",
   "contextCompaction.progress.providerLoweringRepair": "Correctif de compatibilité appliqué à la requête au fournisseur.",
   "contextCompaction.progress.wireRequestReady": "Le contenu de la requête au fournisseur est prêt à être envoyé.",
   "contextCompaction.progress.requestStarted": "La requête au fournisseur a été envoyée ; attente de la première sortie.",

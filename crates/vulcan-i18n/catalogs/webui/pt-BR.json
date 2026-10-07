@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "O runtime de compressão está pronto; iniciando a solicitação ao provedor.",
   "contextCompaction.progress.prepared": "A solicitação ao modelo está preparada.",
   "contextCompaction.progress.requestReady": "O snapshot da solicitação ao modelo foi criado; convertendo para o formato do provedor.",
-  "contextCompaction.progress.providerCheckpoint": "Checkpoint da solicitação ao provedor registrado.",
   "contextCompaction.progress.providerLoweringRepair": "Correção de compatibilidade aplicada à solicitação ao provedor.",
   "contextCompaction.progress.wireRequestReady": "O conteúdo da solicitação ao provedor está pronto para envio.",
   "contextCompaction.progress.requestStarted": "A solicitação ao provedor foi enviada; aguardando a primeira saída.",

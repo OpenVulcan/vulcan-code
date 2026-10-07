@@ -792,8 +792,7 @@ pub(crate) fn active_kernel_session_ids(state: &ServiceBridgeState) -> BTreeSet<
 pub(crate) fn execution_stream_event_session_id(event: &ExecutionStreamEvent) -> SessionId {
     match event {
         ExecutionStreamEvent::Prepared(preparation) => preparation.session_id,
-        ExecutionStreamEvent::ProviderRequestCheckpoint { session_id, .. }
-        | ExecutionStreamEvent::RequestReady { session_id }
+        ExecutionStreamEvent::RequestReady { session_id }
         | ExecutionStreamEvent::WireRequestReady { session_id }
         | ExecutionStreamEvent::ProviderLoweringRepair { session_id, .. }
         | ExecutionStreamEvent::RequestStarted { session_id }

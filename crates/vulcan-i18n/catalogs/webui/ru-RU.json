@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "Среда сжатия готова; запускается запрос к провайдеру.",
   "contextCompaction.progress.prepared": "Запрос к модели подготовлен.",
   "contextCompaction.progress.requestReady": "Снимок запроса к модели создан; выполняется преобразование в формат провайдера.",
-  "contextCompaction.progress.providerCheckpoint": "Контрольная точка запроса к провайдеру записана.",
   "contextCompaction.progress.providerLoweringRepair": "К запросу провайдера применено исправление совместимости.",
   "contextCompaction.progress.wireRequestReady": "Содержимое запроса к провайдеру готово к отправке.",
   "contextCompaction.progress.requestStarted": "Запрос к провайдеру отправлен; ожидание первого вывода.",

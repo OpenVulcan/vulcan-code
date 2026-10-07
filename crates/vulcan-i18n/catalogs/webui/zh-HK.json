@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "壓縮執行階段已準備完成，正在啟動 Provider 請求。",
   "contextCompaction.progress.prepared": "模型請求準備完成。",
   "contextCompaction.progress.requestReady": "模型請求快照已建立，正在轉換為 Provider 內容。",
-  "contextCompaction.progress.providerCheckpoint": "已記錄 Provider 請求檢查點。",
   "contextCompaction.progress.providerLoweringRepair": "已對 Provider 請求轉換執行相容性修正。",
   "contextCompaction.progress.wireRequestReady": "Provider 請求內容已建立，準備傳送。",
   "contextCompaction.progress.requestStarted": "Provider 請求已傳送，正在等待第一個輸出。",

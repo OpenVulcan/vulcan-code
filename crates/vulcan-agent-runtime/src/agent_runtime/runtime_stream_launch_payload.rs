@@ -129,13 +129,6 @@ pub(crate) fn build_runtime_stream_launch_payload(
         &bootstrap.preparation,
         request.provider_request_continuation.as_ref(),
     )?;
-    // provider_api_family preserves the canonical typed API family before preparation moves into the launch payload.
-    // provider_api_family 在执行准备移入启动载荷前保留规范强类型 API 协议族。
-    let protocol_profile_id = bootstrap
-        .preparation
-        .model_blueprint
-        .protocol_profile_id
-        .clone();
     // streamResolvedTools freezes parser capabilities before definitions move into the launch payload.
     // streamResolvedTools 在工具定义移入启动载荷前冻结解析器能力。
     let stream_resolved_tools = bootstrap.resolved_tool_definitions.clone();
@@ -157,7 +150,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         dynamic_prompt_layers: bootstrap.dynamic_prompt_layers,
         locked_baseline: bootstrap.locked_baseline,
         core_snapshot: bootstrap.core_snapshot,
-        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller, protocol_profile_id)
+        stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller)
             .with_tool_request_stream(&stream_resolved_tools)
             .with_provider_request_telemetry_context(provider_telemetry_context),
         lowering_repair_events: bootstrap.lowering_repair_events,

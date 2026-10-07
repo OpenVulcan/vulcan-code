@@ -913,10 +913,6 @@ fn spawn_agent_stream_task_with_restart_state(
                         }
                     }
                 }
-                ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => {
-                    // The V1 Provider permit and bounded trace store already own exact request facts.
-                    // V1 Provider 许可与有界追踪存储已经拥有精确请求事实。
-                }
                 ExecutionStreamEvent::ProviderRequestPreparationBoundary {
                     event,
                     candidate,

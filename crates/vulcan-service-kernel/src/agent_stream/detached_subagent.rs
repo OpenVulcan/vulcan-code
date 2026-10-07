@@ -519,7 +519,6 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
 ) -> Result<(), String> {
     match event {
         ExecutionStreamEvent::Prepared(_) => Ok(()),
-        ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRequestTelemetry(event) => {
             if event.kind == ProviderRequestTelemetryEventKind::FirstToken {
                 // Preserve replay-safety evidence without treating best-effort Started as admission.

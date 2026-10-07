@@ -659,9 +659,6 @@ fn prompt_compaction_progress_for_runtime_event(
         ExecutionStreamEvent::RequestReady { .. } => {
             Some(prompt_compaction_progress("request_ready"))
         }
-        ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => {
-            Some(prompt_compaction_progress("provider_checkpoint"))
-        }
         ExecutionStreamEvent::ProviderRequestPreparationBoundary { .. } => {
             Some(prompt_compaction_progress("provider_preparation"))
         }

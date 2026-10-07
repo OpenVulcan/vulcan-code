@@ -848,23 +848,6 @@ impl ProviderRequestTelemetryTracker {
         self.context = Some(context);
     }
 
-    /// Returns the exact identity of the active physical request for retry-checkpoint persistence.
-    /// 返回用于持久化重试检查点的当前活动物理请求精确身份。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The logical request id, optional logical turn id, and current physical attempt index.
-    /// 返回逻辑请求标识、可选逻辑回合标识及当前物理 attempt 索引。
-    pub(crate) fn active_checkpoint_identity(&self) -> Option<(String, Option<String>, u32)> {
-        let context = self.context.as_ref()?;
-        let active_request = self.active_request.as_ref()?;
-        Some((
-            context.execution_id.clone(),
-            context.turn_id.clone(),
-            active_request.attempt_index,
-        ))
-    }
-
     /// Returns the exact logical identity reserved for the next Provider request after a safe loop boundary.
     /// 返回安全循环边界后为下一次 Provider 请求保留的精确逻辑身份。
     ///
@@ -888,96 +871,6 @@ impl ProviderRequestTelemetryTracker {
             logical_turn_id: context.turn_id.clone(),
             next_provider_attempt_index: self.next_attempt_index,
         })
-    }
-
-    /// Starts one physical request and closes any impossible overlapping request explicitly.
-    /// 开始一次真实请求，并显式关闭任何不可能存在的重叠请求。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `snapshot` is the exact provider-neutral request dispatched by the controller.
-    /// `snapshot` 是控制器分发的精确 Provider 中立请求。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns zero events without context, otherwise one started event plus an invariant failure when needed; unsafe request evidence returns a controlled error.
-    /// 缺少上下文时不返回事件；否则返回开始事件，并在需要时附带不变量失败事件；不安全的请求证据返回受控错误。
-    pub(crate) fn start_request(
-        &mut self,
-        snapshot: &ProviderRequestSnapshot,
-        context_budget: Option<&ContextBudgetSnapshot>,
-    ) -> Result<Vec<ProviderRequestTelemetryEvent>, String> {
-        if self.pending_request.is_some() {
-            return Err(String::from(
-                "A legacy Provider request cannot start while a prepared request is awaiting its durable permit.",
-            ));
-        }
-        let Some(context) = self.context.clone() else {
-            return Ok(Vec::new());
-        };
-        let budget_evidence = build_provider_request_budget_evidence(
-            snapshot,
-            context.protocol_profile_id.as_str(),
-            context.route_revision.as_str(),
-        )?;
-        // events preserves the terminal-before-next-start ordering for invariant violations.
-        // events 在不变量违规时保留先终态、后新开始的顺序。
-        let mut events = Vec::new();
-        if let Some(active_request) = self.active_request.take() {
-            events.push(build_completed_event(
-                &context,
-                active_request,
-                ProviderRequestTerminalStatus::Failed,
-                None,
-                Some("telemetry_invariant"),
-                Some("overlapping_request"),
-                None,
-                None,
-                0,
-                false,
-            ));
-        }
-        // startedAt captures one timestamp for both state and payload.
-        // startedAt 为状态与载荷捕获同一个时间戳。
-        let started_at = telemetry_clock_snapshot();
-        // activeRequest is the sole mutable owner of terminal emission state.
-        // activeRequest 是终态发射状态的唯一可变持有者。
-        let request_id = Uuid::new_v4().to_string();
-        // v1RequestFacts is derived from typed request state before any telemetry JSON exists.
-        // v1RequestFacts 在任何遥测 JSON 产生前从强类型请求状态派生。
-        let v1_request_facts = context.v1_request_template.request_facts(
-            request_id.clone(),
-            snapshot,
-            self.retry_count,
-            self.next_attempt_index == context.initial_attempt_index,
-            started_at.timestamp_ms,
-        );
-        let active_request = ActiveProviderRequestTelemetry {
-            request_id,
-            provider_key: snapshot.provider_id.clone(),
-            model_key: snapshot.model_id.clone(),
-            attempt_index: self.next_attempt_index,
-            retry_count: self.retry_count,
-            started_at_ms: started_at.timestamp_ms,
-            first_event_at_ms: None,
-            first_token_at_ms: None,
-            transport: None,
-            dispatched_at_ms: None,
-            headers_at_ms: None,
-            http_status: None,
-            provider_request_id: None,
-            rate_limit_headers: std::collections::BTreeMap::new(),
-            semantic_output_observed: false,
-            calendar_date: started_at.calendar_date,
-            timezone_offset_minutes: started_at.timezone_offset_minutes,
-            budget_evidence,
-            context_budget: context_budget.cloned(),
-            v1_request_facts,
-        };
-        self.next_attempt_index = self.next_attempt_index.saturating_add(1);
-        events.push(build_started_event(&context, &active_request));
-        self.active_request = Some(active_request);
-        Ok(events)
     }
 
     /// Reserves one physical request identity without publishing a started fact.
@@ -2420,6 +2313,30 @@ mod tests {
         }
     }
 
+    /// Starts one physical request through durable preparation and permit confirmation.
+    /// 通过可靠准备与许可确认开始一次物理请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `tracker` owns the lifecycle and `snapshot` is both the candidate and the permitted request.
+    /// `tracker` 持有生命周期，`snapshot` 同时作为候选与已许可请求。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the sole publishable Started event.
+    /// 返回唯一可发布的 Started 事件。
+    fn start_confirmed_request(
+        tracker: &mut ProviderRequestTelemetryTracker,
+        snapshot: &ProviderRequestSnapshot,
+    ) -> ProviderRequestTelemetryEvent {
+        tracker
+            .prepare_request(snapshot, None)
+            .expect("request preparation identity should build");
+        tracker
+            .confirm_prepared_request(snapshot, None)
+            .expect("durable permit should promote the prepared identity")
+    }
+
     /// Builds explicit native telemetry ownership while keeping the existing fixture's immutable identities.
     /// 构建明确原生遥测归属，同时保留既有夹具的不可变身份。
     /// Returns an idle Codex compaction tracker; no provider or credentials are contacted.
@@ -2595,42 +2512,39 @@ mod tests {
         // tracker owns the lifecycle under test.
         // tracker 持有待测生命周期。
         let mut tracker = test_tracker();
-        let started = tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build");
-        assert_eq!(started.len(), 1);
-        assert_eq!(started[0].kind, ProviderRequestTelemetryEventKind::Started);
-        assert_eq!(started[0].payload["provider_key"], "provider-key");
-        assert_eq!(started[0].payload["service_entry_id"], "public-api");
-        assert_eq!(started[0].payload["connection_id"], "connection-1");
+        let started = start_confirmed_request(&mut tracker, &test_request_snapshot());
+        assert_eq!(started.kind, ProviderRequestTelemetryEventKind::Started);
+        assert_eq!(started.payload["provider_key"], "provider-key");
+        assert_eq!(started.payload["service_entry_id"], "public-api");
+        assert_eq!(started.payload["connection_id"], "connection-1");
         assert_eq!(
-            started[0].payload["protocol_profile_id"],
+            started.payload["protocol_profile_id"],
             vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
         );
-        assert_eq!(started[0].payload["manifest_revision"], 17);
-        assert_eq!(started[0].payload["manifest_generation"], 23);
-        assert_eq!(started[0].payload["binding_source"], "system_manifest");
-        assert_eq!(started[0].payload["binding_rule_id"], "claude-exact");
+        assert_eq!(started.payload["manifest_revision"], 17);
+        assert_eq!(started.payload["manifest_generation"], 23);
+        assert_eq!(started.payload["binding_source"], "system_manifest");
+        assert_eq!(started.payload["binding_rule_id"], "claude-exact");
         assert_eq!(
-            started[0].payload["request_profiles"][0]["profile_id"],
+            started.payload["request_profiles"][0]["profile_id"],
             "request.anthropic"
         );
-        assert_eq!(started[0].payload["request_profiles"][0]["revision"], 5);
+        assert_eq!(started.payload["request_profiles"][0]["revision"], 5);
         assert_eq!(
-            started[0].payload["response_profiles"][0]["profile_id"],
+            started.payload["response_profiles"][0]["profile_id"],
             "response.anthropic"
         );
-        assert_eq!(started[0].payload["response_profiles"][0]["revision"], 6);
-        assert_eq!(started[0].payload["route_revision"], "sha256:test-route");
-        assert_eq!(started[0].payload["secondary_route_id"], "route-1");
-        assert_eq!(started[0].payload["secondary_provider_name"], "DeepInfra");
+        assert_eq!(started.payload["response_profiles"][0]["revision"], 6);
+        assert_eq!(started.payload["route_revision"], "sha256:test-route");
+        assert_eq!(started.payload["secondary_route_id"], "route-1");
+        assert_eq!(started.payload["secondary_provider_name"], "DeepInfra");
         assert_eq!(
-            started[0].payload["secondary_endpoint_name"],
+            started.payload["secondary_endpoint_name"],
             "DeepInfra endpoint"
         );
-        assert_eq!(started[0].payload["model_key"], "model-key");
-        assert_eq!(started[0].payload["request_prompt_in_history"], false);
-        let v1_request_facts = match started[0].v1_lifecycle.as_ref() {
+        assert_eq!(started.payload["model_key"], "model-key");
+        assert_eq!(started.payload["request_prompt_in_history"], false);
+        let v1_request_facts = match started.v1_lifecycle.as_ref() {
             Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => facts.clone(),
             other => panic!("expected typed V1 request facts, got {other:?}"),
         };
@@ -2736,7 +2650,7 @@ mod tests {
             .as_u64()
             .expect("prepared character count must be numeric");
 
-        assert!(tracker.active_checkpoint_identity().is_none());
+        assert!(tracker.active_request.is_none());
         assert!(
             tracker
                 .next_request_continuation_identity()
@@ -2770,13 +2684,8 @@ mod tests {
                 .expect("confirmed character count must be numeric")
                 > prepared_character_count
         );
-        assert_eq!(
-            tracker
-                .active_checkpoint_identity()
-                .expect("confirmed request must become active")
-                .2,
-            0
-        );
+        assert_eq!(started.payload["attempt_index"], 0);
+        assert!(tracker.active_request.is_some());
         assert!(tracker.confirm_prepared_request(&exact, None).is_err());
     }
 
@@ -2854,19 +2763,8 @@ mod tests {
             0
         );
 
-        tracker
-            .prepare_request(&snapshot, None)
-            .expect("replacement preparation should be accepted");
-        tracker
-            .confirm_prepared_request(&snapshot, None)
-            .expect("replacement permit should be confirmed");
-        assert_eq!(
-            tracker
-                .active_checkpoint_identity()
-                .expect("confirmed replacement must become active")
-                .2,
-            0
-        );
+        let started = start_confirmed_request(&mut tracker, &snapshot);
+        assert_eq!(started.payload["attempt_index"], 0);
     }
 
     /// Verifies Started telemetry preserves the canonical prompt-ownership fact used by Provider anchor deltas.
@@ -2885,15 +2783,12 @@ mod tests {
             },
         });
 
-        let started = tracker
-            .start_request(&snapshot, None)
-            .expect("request evidence should build");
+        let started = start_confirmed_request(&mut tracker, &snapshot);
 
-        assert_eq!(started.len(), 1);
-        assert_eq!(started[0].payload["request_prompt_in_history"], true);
-        assert_eq!(started[0].payload["request_history_message_count"], 1);
-        assert!(started[0].payload["request_history_fingerprint"].is_string());
-        assert!(started[0].payload["request_prefix_invariant_fingerprint"].is_string());
+        assert_eq!(started.payload["request_prompt_in_history"], true);
+        assert_eq!(started.payload["request_history_message_count"], 1);
+        assert!(started.payload["request_history_fingerprint"].is_string());
+        assert!(started.payload["request_prefix_invariant_fingerprint"].is_string());
     }
 
     /// Verifies every physical request receives a unique trace while retaining one frozen route.
@@ -2908,25 +2803,21 @@ mod tests {
         let mut second_tracker = test_tracker();
         // firstStarted and secondStarted retain the emitted immutable start facts.
         // firstStarted 与 secondStarted 保留发出的不可变启动事实。
-        let first_started = first_tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("first request evidence should build");
-        let second_started = second_tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("second request evidence should build");
+        let first_started = start_confirmed_request(&mut first_tracker, &test_request_snapshot());
+        let second_started = start_confirmed_request(&mut second_tracker, &test_request_snapshot());
 
         assert_ne!(
-            first_started[0].payload["request_id"], second_started[0].payload["request_id"],
+            first_started.payload["request_id"], second_started.payload["request_id"],
             "physical requests must never share one trace identity"
         );
-        for events in [&first_started, &second_started] {
-            assert_eq!(events[0].payload["manifest_revision"], 17);
-            assert_eq!(events[0].payload["manifest_generation"], 23);
-            assert_eq!(events[0].payload["binding_source"], "system_manifest");
-            assert_eq!(events[0].payload["binding_rule_id"], "claude-exact");
-            assert_eq!(events[0].payload["route_revision"], "sha256:test-route");
-            assert_eq!(events[0].payload["request_profiles"][0]["revision"], 5);
-            assert_eq!(events[0].payload["response_profiles"][0]["revision"], 6);
+        for started in [&first_started, &second_started] {
+            assert_eq!(started.payload["manifest_revision"], 17);
+            assert_eq!(started.payload["manifest_generation"], 23);
+            assert_eq!(started.payload["binding_source"], "system_manifest");
+            assert_eq!(started.payload["binding_rule_id"], "claude-exact");
+            assert_eq!(started.payload["route_revision"], "sha256:test-route");
+            assert_eq!(started.payload["request_profiles"][0]["revision"], 5);
+            assert_eq!(started.payload["response_profiles"][0]["revision"], 6);
         }
     }
 
@@ -2937,9 +2828,7 @@ mod tests {
         // tracker owns one physical request whose provider returned no accounting fields.
         // tracker 持有一次 Provider 未返回任何计量字段的物理请求。
         let mut tracker = test_tracker();
-        tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build");
+        start_confirmed_request(&mut tracker, &test_request_snapshot());
         let completed = tracker
             .complete_success(
                 Some(&ProviderUsageSnapshot::default()),
@@ -3163,18 +3052,11 @@ mod tests {
         let mut tracker = ProviderRequestTelemetryTracker::default();
         tracker.install_context(context);
 
-        tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("restored request evidence should build");
+        let started = start_confirmed_request(&mut tracker, &test_request_snapshot());
 
-        assert_eq!(
-            tracker.active_checkpoint_identity(),
-            Some((
-                String::from("logical-request-a"),
-                Some(String::from("logical-turn-a")),
-                4,
-            ))
-        );
+        assert_eq!(started.payload["execution_id"], "logical-request-a");
+        assert_eq!(started.payload["turn_id"], "logical-turn-a");
+        assert_eq!(started.payload["attempt_index"], 4);
     }
 
     /// Verifies a completed physical request exposes the exact identity reserved for a host restart.
@@ -3189,9 +3071,7 @@ mod tests {
         context.initial_attempt_index = 4;
         let mut tracker = ProviderRequestTelemetryTracker::default();
         tracker.install_context(context);
-        tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build");
+        start_confirmed_request(&mut tracker, &test_request_snapshot());
         tracker
             .complete_success(
                 None,
@@ -3219,9 +3099,7 @@ mod tests {
         // tracker owns the lifecycle under test.
         // tracker 持有待测生命周期。
         let mut tracker = test_tracker();
-        tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build");
+        start_confirmed_request(&mut tracker, &test_request_snapshot());
         let events = tracker.complete_failure(
             true,
             1,
@@ -3236,10 +3114,8 @@ mod tests {
         assert_eq!(events[0].payload["status"], "failed");
         assert_eq!(events[1].kind, ProviderRequestTelemetryEventKind::Retrying);
         assert_eq!(events[1].payload["retry_number"], 1);
-        let next_started = tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("retry request evidence should build");
-        assert_eq!(next_started[0].payload["retry_count"], 1);
+        let next_started = start_confirmed_request(&mut tracker, &test_request_snapshot());
+        assert_eq!(next_started.payload["retry_count"], 1);
     }
 
     /// Verifies a failed physical request retains usage reported before its terminal error.
@@ -3247,9 +3123,7 @@ mod tests {
     #[test]
     fn failed_request_retains_reported_partial_usage() {
         let mut tracker = test_tracker();
-        tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build");
+        start_confirmed_request(&mut tracker, &test_request_snapshot());
         let usage = ProviderUsageSnapshot {
             input_tokens: Some(13),
             output_tokens: Some(2),
@@ -3286,9 +3160,7 @@ mod tests {
     #[test]
     fn agentspace_reconciliation_persists_pending_terminal_status() {
         let mut tracker = test_tracker();
-        tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build");
+        start_confirmed_request(&mut tracker, &test_request_snapshot());
         // error is already classified by the route-aware streaming boundary.
         // error 已由感知路由的流边界完成分类。
         let error = AiExecutionError {
@@ -3355,10 +3227,7 @@ mod tests {
         let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
         // started is the sole request identity source for the cancellation result.
         // started 是取消结果唯一的请求身份来源。
-        let started = tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build")
-            .remove(0);
+        let started = start_confirmed_request(&mut tracker, &test_request_snapshot());
         cancellation.observe(&started);
         // dispatched proves the request crossed the network dispatch boundary before cancellation.
         // dispatched 证明请求在取消前已经越过网络分派边界。
@@ -3407,10 +3276,7 @@ mod tests {
         let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
         // started establishes the unique physical Provider call identity.
         // started 建立唯一物理 Provider 调用身份。
-        let started = tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build")
-            .remove(0);
+        let started = start_confirmed_request(&mut tracker, &test_request_snapshot());
         cancellation.observe(&started);
         // dispatched proves transport dispatch while no visible output has crossed the boundary.
         // dispatched 证明传输已经分派，同时尚无可见输出越过边界。
@@ -3448,10 +3314,7 @@ mod tests {
         let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
         // started establishes the sole active physical Provider call.
         // started 建立唯一活动物理 Provider 调用。
-        let started = tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build")
-            .remove(0);
+        let started = start_confirmed_request(&mut tracker, &test_request_snapshot());
         cancellation.observe(&started);
         // dispatched proves the transport boundary before tool-only semantic output appears.
         // dispatched 证明纯工具语义输出出现前已经越过传输边界。
@@ -3492,10 +3355,7 @@ mod tests {
         let mut cancellation = ProviderRequestTelemetryCancellationTracker::default();
         // started alone cannot prove whether transport dispatch raced task cancellation.
         // 仅有 started 无法证明传输分派是否与任务取消发生竞争。
-        let started = tracker
-            .start_request(&test_request_snapshot(), None)
-            .expect("request evidence should build")
-            .remove(0);
+        let started = start_confirmed_request(&mut tracker, &test_request_snapshot());
         cancellation.observe(&started);
 
         // cancelled keeps dispatch unknown instead of guessing not-dispatched.

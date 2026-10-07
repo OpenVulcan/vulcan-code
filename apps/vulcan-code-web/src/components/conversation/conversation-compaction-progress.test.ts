@@ -7,7 +7,6 @@ import { contextCompactionProgressKey } from "./conversation-blocks";
 const declaredCompactionStages = [
   "prepared",
   "request_ready",
-  "provider_checkpoint",
   "provider_lowering_repair",
   "wire_request_ready",
   "request_started",

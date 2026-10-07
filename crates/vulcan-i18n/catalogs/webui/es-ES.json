@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "El entorno de ejecución de la compresión está listo; iniciando la solicitud al proveedor.",
   "contextCompaction.progress.prepared": "La solicitud al modelo está preparada.",
   "contextCompaction.progress.requestReady": "Se creó la instantánea de la solicitud al modelo; convirtiéndola al formato del proveedor.",
-  "contextCompaction.progress.providerCheckpoint": "Se registró el punto de control de la solicitud al proveedor.",
   "contextCompaction.progress.providerLoweringRepair": "Se aplicó una corrección de compatibilidad a la solicitud al proveedor.",
   "contextCompaction.progress.wireRequestReady": "El contenido de la solicitud al proveedor está listo para enviarse.",
   "contextCompaction.progress.requestStarted": "Se envió la solicitud al proveedor; esperando la primera salida.",

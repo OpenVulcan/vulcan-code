@@ -537,37 +537,6 @@ pub enum ExecutionStreamEvent {
         /// 拥有该 Provider 请求的会话标识。
         session_id: SessionId,
     },
-    /// Provider request snapshot checkpoint emitted for runtime audit persistence.
-    /// 为运行时审计持久化发出的 Provider 请求快照检查点。
-    ProviderRequestCheckpoint {
-        /// Session identifier owning the provider request checkpoint.
-        /// 拥有该 Provider 请求检查点的会话标识。
-        session_id: SessionId,
-        /// Stable logical request identity shared across restored physical attempts.
-        /// 跨恢复物理 attempt 共享的稳定逻辑请求身份。
-        logical_request_id: Option<String>,
-        /// Stable logical conversation-turn identity when one exists.
-        /// 存在时的稳定逻辑会话回合身份。
-        logical_turn_id: Option<String>,
-        /// Zero-based index of the exact physical Provider attempt being checkpointed.
-        /// 当前检查点对应精确物理 Provider attempt 的从零开始索引。
-        provider_attempt_index: Option<u32>,
-        /// Canonical provider API family resolved by execution preparation.
-        /// 执行准备解析出的规范 Provider API 协议族。
-        provider_family: String,
-        /// Provider-neutral request snapshot captured before wire lowering.
-        /// 线协议转换前捕获的 Provider 中立请求快照。
-        snapshot: CoreProviderRequestSnapshot,
-        /// Exact provider-neutral request persisted before network dispatch.
-        /// 网络分派前持久化的精确 Provider 中立请求。
-        exact_request: Option<AiExecutionRequest>,
-        /// Exact controller configuration frozen for retry restoration.
-        /// 为重试恢复冻结的精确控制器配置。
-        controller_config: Option<vulcan_core::types::ControllerConfig>,
-        /// Exact canonical controller snapshot frozen at this request boundary.
-        /// 在当前请求边界冻结的精确规范控制器快照。
-        controller_snapshot: Option<vulcan_core::types::ConversationSnapshot>,
-    },
     /// Provider-specific wire request payload has been built immediately before the HTTP/API call.
     /// Provider 专用线缆请求载荷已在 HTTP/API 调用前构建完成。
     WireRequestReady {

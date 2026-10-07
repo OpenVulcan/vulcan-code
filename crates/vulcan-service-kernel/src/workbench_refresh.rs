@@ -976,9 +976,6 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
             "child.prepared"
         }
         DetachedTaskRuntimeEvent::ChildExecution(
-            ExecutionStreamEvent::ProviderRequestCheckpoint { .. },
-        ) => "child.provider_request_checkpoint",
-        DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ProviderRequestTelemetry(_),
         ) => "child.provider_request_telemetry",
         DetachedTaskRuntimeEvent::ChildExecution(

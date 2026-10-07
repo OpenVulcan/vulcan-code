@@ -555,7 +555,6 @@ pub(crate) async fn apply_context_compaction_stream_event(
     // 仅由精确接收器处理物理准备与语义持久化。
     let result = match event {
         ExecutionStreamEvent::Prepared(_)
-        | ExecutionStreamEvent::ProviderRequestCheckpoint { .. }
         | ExecutionStreamEvent::ProviderLoweringRepair { .. }
         | ExecutionStreamEvent::RequestReady { .. } => Ok(()),
         ExecutionStreamEvent::ProviderRequestTelemetry(event) => {

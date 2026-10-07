@@ -812,13 +812,12 @@ where
 ///
 /// # Returns
 /// 返回值
-/// `true` only after Started durability is confirmed, plus the retained legacy snapshot boundary.
-/// 仅在 Started 可靠性得到确认后返回 `true`，另保留旧式快照边界。
+/// `true` only after Started durability is confirmed.
+/// 仅在 Started 可靠性得到确认后返回 `true`。
 fn provider_delta_starts_physical_request(delta: &ProviderStreamDelta) -> bool {
     matches!(
         delta,
         ProviderStreamDelta::RequestStartDurabilityConfirmed { .. }
-            | ProviderStreamDelta::RequestSnapshot(_)
     )
 }
 
@@ -838,7 +837,6 @@ fn observe_physical_request_activity(
     } else if matches!(
         delta,
         ProviderStreamDelta::RequestSucceeded { .. }
-            | ProviderStreamDelta::RequestFailed { .. }
             | ProviderStreamDelta::RequestFailedDurable { .. }
     ) {
         *physical_request_active = false;

@@ -262,9 +262,10 @@ mod tests {
 
     use super::*;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext;
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
     use crate::agent_runtime::runtime_stream_delta::{
-        RuntimeStreamDeltaState, process_provider_stream_delta,
+        RuntimeStreamDeltaState, process_provider_stream_delta, test_start_durable_request,
     };
     use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use crate::context_budget::ContextBudgetSnapshot;
@@ -371,8 +372,8 @@ mod tests {
                 ConversationSnapshot::default(),
             )
             .expect("valid core conversation snapshot"),
-            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
         )
+        .with_provider_request_telemetry_context(ProviderRequestTelemetryContext::for_test())
     }
 
     /// Builds one minimal structured request snapshot used to verify final preview backfill.
@@ -414,13 +415,7 @@ mod tests {
         let session_id = Uuid::nil();
         let mut stream_state = build_stream_state();
 
-        let _ = process_provider_stream_delta(
-            session_id,
-            &mut stream_state,
-            Ok(ProviderStreamDelta::RequestSnapshot(
-                build_request_snapshot(),
-            )),
-        );
+        let _ = test_start_durable_request(session_id, &mut stream_state, build_request_snapshot());
         let _ = process_provider_stream_delta(
             session_id,
             &mut stream_state,
@@ -519,13 +514,7 @@ mod tests {
         let session_id = Uuid::nil();
         let mut stream_state = build_stream_state();
 
-        let _ = process_provider_stream_delta(
-            session_id,
-            &mut stream_state,
-            Ok(ProviderStreamDelta::RequestSnapshot(
-                build_request_snapshot(),
-            )),
-        );
+        let _ = test_start_durable_request(session_id, &mut stream_state, build_request_snapshot());
         let _ = process_provider_stream_delta(
             session_id,
             &mut stream_state,
@@ -569,15 +558,25 @@ mod tests {
     #[test]
     fn failure_report_carries_only_the_ending_request_category() {
         let session_id = Uuid::nil();
-        let request_failed = |will_retry, category| {
-            Ok(ProviderStreamDelta::RequestFailed {
-                will_retry,
-                retry_number: 0,
-                max_retries: 0,
-                delay_ms: 0,
-                error_category: String::from("provider_error"),
-                error: Some(Box::new(test_execution_error(category))),
-            })
+        let start_request = |stream_state: &mut RuntimeStreamDeltaState| {
+            let _ = test_start_durable_request(session_id, stream_state, build_request_snapshot());
+        };
+        let fail_request = |stream_state: &mut RuntimeStreamDeltaState, will_retry, category| {
+            let (completion, _receiver) =
+                crate::agent_runtime::events::provider_request_durability_barrier();
+            let _ = process_provider_stream_delta(
+                session_id,
+                stream_state,
+                Ok(ProviderStreamDelta::RequestFailedDurable {
+                    will_retry,
+                    retry_number: 0,
+                    max_retries: 0,
+                    delay_ms: 0,
+                    error_category: String::from("provider_error"),
+                    error: Some(Box::new(test_execution_error(category))),
+                    completion,
+                }),
+            );
         };
         let finished_category = |stream_state: &mut RuntimeStreamDeltaState| {
             build_failure_terminal_events(
@@ -596,23 +595,18 @@ mod tests {
             })
             .expect("a failure batch always finishes with a report")
         };
-        let snapshot = || {
-            Ok(ProviderStreamDelta::RequestSnapshot(
-                build_request_snapshot(),
-            ))
-        };
 
         // A retried failure does not end the run; the final non-retried one does.
         // 被重试的失败不会结束运行；最后一次不再重试的失败才会。
         let mut ended_by_provider = build_stream_state();
-        for delta in [
-            snapshot(),
-            request_failed(true, AiErrorCategory::ProviderOverloaded),
-            snapshot(),
-            request_failed(false, AiErrorCategory::RateLimited),
-        ] {
-            let _ = process_provider_stream_delta(session_id, &mut ended_by_provider, delta);
-        }
+        start_request(&mut ended_by_provider);
+        fail_request(
+            &mut ended_by_provider,
+            true,
+            AiErrorCategory::ProviderOverloaded,
+        );
+        start_request(&mut ended_by_provider);
+        fail_request(&mut ended_by_provider, false, AiErrorCategory::RateLimited);
         assert_eq!(
             finished_category(&mut ended_by_provider),
             Some(AiErrorCategory::RateLimited)
@@ -621,13 +615,13 @@ mod tests {
         // A later request supersedes an earlier failure, so a non-Provider ending has no category.
         // 后续请求会取代先前失败，因此非 Provider 原因的结束不带类别。
         let mut ended_elsewhere = build_stream_state();
-        for delta in [
-            snapshot(),
-            request_failed(false, AiErrorCategory::ContextLengthExceeded),
-            snapshot(),
-        ] {
-            let _ = process_provider_stream_delta(session_id, &mut ended_elsewhere, delta);
-        }
+        start_request(&mut ended_elsewhere);
+        fail_request(
+            &mut ended_elsewhere,
+            false,
+            AiErrorCategory::ContextLengthExceeded,
+        );
+        start_request(&mut ended_elsewhere);
         assert_eq!(finished_category(&mut ended_elsewhere), None);
     }
 

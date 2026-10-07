@@ -12,7 +12,6 @@ use futures_util::Stream;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use vulcan_ai_contract::{AiExecutionError, AiTransportKind};
-use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
@@ -21,14 +20,7 @@ use vulcan_session_core::v1::event::ProviderSourceInput;
 
 /// Lightweight provider-stream delta emitted while one real run is still in progress.
 /// 单次真实运行仍在进行中时发出的轻量 Provider 流式增量。
-// Synthetic runtime tests still inject the full neutral delta contract, while the public adapter
-// routes text through the Core sink and emits only host-side fragments in production.
-// 合成运行时测试仍会注入完整中立增量契约；公共适配器在生产环境中通过 Core sink 路由文本，并仅发出宿主侧碎片。
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ProviderStreamDelta {
-    /// Structured request snapshot captured right before the next provider request is dispatched.
-    /// 在下一次 Provider 请求真正发出前捕获的结构化请求快照。
-    RequestSnapshot(CoreProviderRequestSnapshot),
     /// Structured request snapshot whose durable start record must be acknowledged before dispatch.
     /// 结构化请求快照；分派前必须确认其开始记录已可靠持久化。
     RequestPrepared {
@@ -111,28 +103,6 @@ pub(crate) enum ProviderStreamDelta {
         /// 终态会话状态持久化后由宿主释放的完成句柄。
         completion: ProviderRequestDurabilityCompletion,
     },
-    /// Terminal failure metadata for the currently active physical Provider request.
-    /// 当前活动真实 Provider 请求的终态失败元数据。
-    RequestFailed {
-        /// Whether the transport will start another attempt.
-        /// 传输层是否会开始另一次尝试。
-        will_retry: bool,
-        /// One-based retry number, or zero when no retry follows.
-        /// 从一开始的重试序号；不继续重试时为零。
-        retry_number: u32,
-        /// Effective finite retry ceiling, or zero when no retry follows.
-        /// 有效有限重试上限；不继续重试时为零。
-        max_retries: u32,
-        /// Retry delay in milliseconds, or zero when no retry follows.
-        /// 重试延迟毫秒数；不继续重试时为零。
-        delay_ms: u64,
-        /// Stable redacted failure category.
-        /// 稳定脱敏失败类别。
-        error_category: String,
-        /// Structured provider failure facts retained without parsing display text.
-        /// 无需解析展示文本即可保留的结构化供应商失败事实。
-        error: Option<Box<AiExecutionError>>,
-    },
     /// Failed physical request boundary that must be durable before retry or teardown.
     /// 失败物理请求边界；重试或清理前必须可靠持久化。
     RequestFailedDurable {
@@ -158,9 +128,6 @@ pub(crate) enum ProviderStreamDelta {
         /// 终态会话状态持久化后由宿主释放的完成句柄。
         completion: ProviderRequestDurabilityCompletion,
     },
-    /// Provider lowering repair, downgrade, or rejection emitted for runtime audit.
-    /// 为运行时审计发出的 Provider 转换修复、降级或拒绝事件。
-    LoweringRepair(RuntimeProviderLoweringRepairEvent),
     /// Final canonical conversation state plus the latest successful provider usage from the current run.
     /// 当前运行结束后的最终规范会话状态，以及本次运行中最近一次成功 Provider 用量。
     FinalConversationState(SessionConversationState, Option<CoreProviderUsageSnapshot>),

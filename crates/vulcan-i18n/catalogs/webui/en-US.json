@@ -1137,7 +1137,6 @@
   "contextCompaction.progress.runtimeReady": "The compaction runtime is ready; starting the provider request.",
   "contextCompaction.progress.prepared": "The model request is prepared.",
   "contextCompaction.progress.requestReady": "The model request snapshot is built; converting it to the provider payload.",
-  "contextCompaction.progress.providerCheckpoint": "Recorded the provider request checkpoint.",
   "contextCompaction.progress.providerLoweringRepair": "Applied provider request compatibility repair.",
   "contextCompaction.progress.wireRequestReady": "The provider request payload is ready to send.",
   "contextCompaction.progress.requestStarted": "The provider request has been sent; waiting for the first output.",

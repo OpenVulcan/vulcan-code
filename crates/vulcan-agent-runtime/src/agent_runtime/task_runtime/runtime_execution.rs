@@ -2091,11 +2091,13 @@ mod standalone_compaction_tests {
         let preparation = compaction_preparation();
         let mut tracker = compaction_tracker(&preparation, true);
         let mut owner = StandalonePromptCompactionOwner::new(preparation.session_id);
-        for event in tracker.start_request(&request_snapshot(), None).unwrap() {
-            owner
-                .observe(ExecutionStreamEvent::ProviderRequestTelemetry(event))
-                .unwrap();
-        }
+        tracker.prepare_request(&request_snapshot(), None).unwrap();
+        let started = tracker
+            .confirm_prepared_request(&request_snapshot(), None)
+            .unwrap();
+        owner
+            .observe(ExecutionStreamEvent::ProviderRequestTelemetry(started))
+            .unwrap();
         let failure = tracker.complete_failure(true, 1, 1, 0, "oauth_refresh", None, None);
         let retry = failure
             .iter()
@@ -2561,15 +2563,12 @@ mod standalone_compaction_tests {
         .expect("the launch fixture conversation must be valid");
         // The initial telemetry context is derived exactly as the production launch assembler does.
         // 初始遥测上下文完全按生产启动装配器的方式派生。
-        let stream_state = RuntimeStreamDeltaState::new(
-            controller,
-            String::from(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID),
-        )
-        .with_tool_request_stream(&[])
-        .with_provider_request_telemetry_context(
-            ProviderRequestTelemetryContext::from_preparation(&preparation, None)
-                .expect("the fixture preparation must derive a telemetry context"),
-        );
+        let stream_state = RuntimeStreamDeltaState::new(controller)
+            .with_tool_request_stream(&[])
+            .with_provider_request_telemetry_context(
+                ProviderRequestTelemetryContext::from_preparation(&preparation, None)
+                    .expect("the fixture preparation must derive a telemetry context"),
+            );
         RuntimeStreamLaunch {
             task_execution_context: None,
             session_id: preparation.session_id,
