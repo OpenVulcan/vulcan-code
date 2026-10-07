@@ -1119,19 +1119,6 @@ impl VceEngine {
         Ok(self)
     }
 
-    /// Construct an engine whose pure workspace state was restored by the host.
-    /// 构造一个使用宿主恢复的纯工作区状态的引擎。
-    pub fn from_workspace_snapshot(
-        config: VceConfig,
-        snapshot: WorkspaceSnapshot,
-    ) -> Result<Self, VceConfigError> {
-        let mut engine = Self::new(config)?;
-        engine.workspace =
-            WorkspaceState::from_snapshot(snapshot).map_err(VceConfigError::WorkspaceSnapshot)?;
-        engine.state = workspace_state(&engine.workspace);
-        Ok(engine)
-    }
-
     /// Construct an engine from one validated, namespace-bound persisted snapshot.
     /// 根据一份经过校验且绑定命名空间的持久化快照构造引擎。
     pub fn from_state_snapshot(
