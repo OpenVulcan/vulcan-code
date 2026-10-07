@@ -5677,30 +5677,6 @@ pub async fn service_browser_viewport_set(
         .await
 }
 
-/// Attaches one automation connection from shared service state.
-/// 从共享服务状态挂接一个自动化连接。
-pub async fn service_browser_automation_attach(
-    state: SharedServiceBridgeState,
-    request: BrowserAutomationAttachRequest,
-) -> Result<BrowserSessionProjection, String> {
-    let manager = browser_manager_from_state(&state)?;
-    manager.attach_automation(
-        &request.session_id,
-        &request.lease_secret,
-        &request.connection_id,
-    )
-}
-
-/// Detaches one automation connection from shared service state.
-/// 从共享服务状态分离一个自动化连接。
-pub async fn service_browser_automation_detach(
-    state: SharedServiceBridgeState,
-    request: BrowserAutomationDetachRequest,
-) -> Result<BrowserSessionProjection, String> {
-    let manager = browser_manager_from_state(&state)?;
-    manager.detach_automation(&request.session_id, &request.connection_id)
-}
-
 /// Resolves the Core browser manager owned by shared service state.
 /// 解析共享服务状态拥有的 Core 浏览器管理器。
 fn browser_manager_from_state(state: &SharedServiceBridgeState) -> Result<BrowserManager, String> {
@@ -5939,35 +5915,6 @@ pub struct BrowserViewportSetRequest {
     /// Viewport height in device-independent pixels.
     /// 视口高度（设备无关像素）。
     pub height: u32,
-}
-
-/// Attaches one automation connection.
-/// 挂接一个自动化连接。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BrowserAutomationAttachRequest {
-    /// Stable session identifier.
-    /// 稳定会话标识。
-    pub session_id: String,
-    /// Lease secret returned by acquisition.
-    /// 获取时返回的租约凭据。
-    pub lease_secret: String,
-    /// Stable automation connection identity.
-    /// 稳定自动化连接身份。
-    pub connection_id: String,
-}
-
-/// Detaches one automation connection.
-/// 分离一个自动化连接。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BrowserAutomationDetachRequest {
-    /// Stable session identifier.
-    /// 稳定会话标识。
-    pub session_id: String,
-    /// Stable automation connection identity.
-    /// 稳定自动化连接身份。
-    pub connection_id: String,
 }
 
 /// Lists the pages registered for one Core browser session.
