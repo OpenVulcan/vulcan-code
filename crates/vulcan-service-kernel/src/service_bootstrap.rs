@@ -1559,18 +1559,15 @@ fn run_service_bootstrap(
         mcp_catalog.prompt_count,
         mcp_catalog.resource_count,
     ));
-    install_webui_question_runtime_event_bridge(
-        event_emitter,
-        state,
-        &agent_runtime.question_runtime,
-    )
-    .map_err(|error| {
-        ServiceBootstrapError::new(
-            "service-process",
-            "Core Service",
-            format!("安装 ask 弹窗事件桥失败：{error}"),
-        )
-    })?;
+    install_webui_question_runtime_event_bridge(event_emitter, state, &agent_runtime).map_err(
+        |error| {
+            ServiceBootstrapError::new(
+                "service-process",
+                "Core Service",
+                format!("安装 ask 弹窗事件桥失败：{error}"),
+            )
+        },
+    )?;
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));

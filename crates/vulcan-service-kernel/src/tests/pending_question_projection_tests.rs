@@ -184,7 +184,7 @@ async fn ask_completions_publish_once_to_every_client_sink() {
     // questionRuntime is retained for creating and inspecting pending requests.
     // questionRuntime 用于创建并检查待回答请求。
     let question_runtime = Arc::clone(&agent_runtime.question_runtime);
-    service_state.agent_runtime = Some(agent_runtime);
+    service_state.agent_runtime = Some(agent_runtime.clone());
     // state shares the authoritative service projection state with the callback and handlers.
     // state 在回调与处理器之间共享权威服务投影状态。
     let state = Arc::new(Mutex::new(service_state));
@@ -204,7 +204,7 @@ async fn ask_completions_publish_once_to_every_client_sink() {
             events: Arc::clone(&second_client_events),
         }),
     ]);
-    install_webui_question_runtime_event_bridge(&app, &state, &question_runtime)
+    install_webui_question_runtime_event_bridge(&app, &state, &agent_runtime)
         .expect("question projection bridge should install");
     // This focused projection test supplies deterministic successful durability after verifying
     // the production installer wires both callbacks. V1 mutation semantics are covered by the
@@ -439,12 +439,12 @@ fn ask_durability_bridge_does_not_wait_on_service_state_lock() {
     let mut service_state = test_service_state_with_parent_session(SessionId::new_v4());
     let agent_runtime = test_agent_runtime_bridge();
     let question_runtime = Arc::clone(&agent_runtime.question_runtime);
-    service_state.agent_runtime = Some(agent_runtime);
+    service_state.agent_runtime = Some(agent_runtime.clone());
     let state = Arc::new(Mutex::new(service_state));
     install_webui_question_runtime_event_bridge(
         &ServiceEventEmitter::new(Vec::new()),
         &state,
-        &question_runtime,
+        &agent_runtime,
     )
     .expect("question projection bridge should install");
 
@@ -486,5 +486,126 @@ fn ask_durability_bridge_does_not_wait_on_service_state_lock() {
     assert!(
         result.is_err(),
         "an unhydrated session must reject the durable WaitingUser commit"
+    );
+}
+
+/// Verifies committed answers and rejections reach plugins subscribed to the question hook points.
+/// 验证已提交的回答与拒绝会送达订阅问题 hook 点位的插件。
+#[tokio::test]
+async fn committed_ask_outcomes_dispatch_question_hooks() {
+    use vulcan_agent_runtime::agent_runtime::conversation_hooks::{
+        HOOK_CONVERSATION_QUESTION_ANSWERED, HOOK_CONVERSATION_QUESTION_REJECTED,
+    };
+    use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
+
+    let session_id = SessionId::new_v4();
+    let mut service_state = test_service_state_with_parent_session(session_id);
+    let agent_runtime = test_agent_runtime_bridge();
+    let question_runtime = Arc::clone(&agent_runtime.question_runtime);
+    service_state.agent_runtime = Some(agent_runtime.clone());
+    let state = Arc::new(Mutex::new(service_state));
+    install_webui_question_runtime_event_bridge(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        &agent_runtime,
+    )
+    .expect("question projection bridge should install");
+    // Durable V1 Ask mutations are covered with real documents elsewhere; this test isolates hooks.
+    // V1 Ask 可靠修改由其他使用真实文档的测试覆盖；本测试只隔离 hook 行为。
+    question_runtime
+        .set_durability_callback(Some(Arc::new(|_| Ok(()))))
+        .expect("focused durability callback should install");
+
+    // observed receives (hook point, request id) for every question outcome hook.
+    // observed 接收每个问题结局 hook 的 (hook 点位, 请求标识)。
+    let (sender, observed) = std::sync::mpsc::channel::<(String, String)>();
+    let sender = Arc::new(Mutex::new(sender));
+    {
+        let mut hooks = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("hook runtime should lock");
+        for point in [
+            HOOK_CONVERSATION_QUESTION_ANSWERED,
+            HOOK_CONVERSATION_QUESTION_REJECTED,
+        ] {
+            let sender = Arc::clone(&sender);
+            hooks
+                .dispatcher_mut()
+                .register(
+                    HookRegistration::new(format!("listener-{point}"), point, HookMode::Effect),
+                    Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
+                        let request_id = invocation
+                            .payload
+                            .value
+                            .get("request_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let _ = sender
+                            .lock()
+                            .expect("observer sender should lock")
+                            .send((point.to_string(), request_id));
+                        async { Ok(HookResult::default()) }
+                    })),
+                )
+                .expect("question hook listener should register");
+        }
+    }
+
+    let (reply_task, reply_request_id) = start_pending_question(
+        Arc::clone(&question_runtime),
+        session_id,
+        ApiCallId::try_new(1).expect("reply API id should be valid"),
+        ToolCallId::try_new(1).expect("reply tool id should be valid"),
+        "provider-tool-call-hook-reply",
+        "Approve execution?",
+    )
+    .await;
+    service_reply_pending_question(
+        Arc::clone(&state),
+        reply_request_id.clone(),
+        vec![vec![String::from("Approve")]],
+    )
+    .expect("reply should commit");
+    reply_task
+        .await
+        .expect("reply ask task should join")
+        .expect("reply ask task should complete");
+    assert_eq!(
+        observed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("answered hook should run"),
+        (
+            HOOK_CONVERSATION_QUESTION_ANSWERED.to_string(),
+            reply_request_id
+        )
+    );
+
+    let (reject_task, reject_request_id) = start_pending_question(
+        Arc::clone(&question_runtime),
+        session_id,
+        ApiCallId::try_new(1).expect("reject API id should be valid"),
+        ToolCallId::try_new(2).expect("reject tool id should be valid"),
+        "provider-tool-call-hook-reject",
+        "Abandon execution?",
+    )
+    .await;
+    service_reject_pending_question(Arc::clone(&state), reject_request_id.clone())
+        .expect("rejection should commit");
+    assert!(
+        reject_task
+            .await
+            .expect("reject ask task should join")
+            .is_err()
+    );
+    assert_eq!(
+        observed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("rejected hook should run"),
+        (
+            HOOK_CONVERSATION_QUESTION_REJECTED.to_string(),
+            reject_request_id
+        )
     );
 }

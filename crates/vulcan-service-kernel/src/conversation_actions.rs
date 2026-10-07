@@ -34,15 +34,26 @@ pub(crate) fn service_reply_pending_question(
             String::from("service is still starting; question runtime is not ready")
         })?
     };
+    let request = pending_question_request(&agent_runtime, &request_id)?;
     let answered = agent_runtime
         .question_runtime
-        .reply(&request_id, answers)
+        .reply(&request_id, answers.clone())
         .map_err(|error| format!("failed to submit ask answers: {error}"))?;
     if !answered {
         return Err(format!(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
+    // The hook observes only a committed answer and runs after the pending lock is released.
+    // hook 只观察已提交的回答，并在 pending 锁释放后运行。
+    record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
+        hooks.record_question_answered(
+            request.session_id,
+            &request_id,
+            &request.questions,
+            &answers,
+        )
+    });
     Ok(true)
 }
 
@@ -72,6 +83,7 @@ pub(crate) fn service_reject_pending_question(
             String::from("service is still starting; question runtime is not ready")
         })?
     };
+    let request = pending_question_request(&agent_runtime, &request_id)?;
     let rejected = agent_runtime
         .question_runtime
         .reject(&request_id)
@@ -81,7 +93,57 @@ pub(crate) fn service_reject_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
+    // The hook observes only a committed rejection and runs after the pending lock is released.
+    // hook 只观察已提交的拒绝，并在 pending 锁释放后运行。
+    record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
+        hooks.record_question_rejected(request.session_id, &request_id)
+    });
     Ok(true)
+}
+
+/// Returns the exact pending Ask request so its lifecycle hook can name the owning session and prompts.
+/// 返回精确的待回答 Ask 请求，使其生命周期 hook 能给出所属会话与问题。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` owns the question runtime and `request_id` selects the pending request.
+/// `agent_runtime` 持有问题运行时，`request_id` 选择待回答请求。
+///
+/// # Returns
+/// 返回值
+/// The pending request, or the same inactive-request error the commit would report.
+/// 返回待回答请求；不存在时返回与提交相同的失效请求错误。
+fn pending_question_request(
+    agent_runtime: &AgentRuntimeBridge,
+    request_id: &str,
+) -> Result<vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest, String> {
+    agent_runtime
+        .question_runtime
+        .list_pending()?
+        .into_iter()
+        .find(|request| request.id == request_id)
+        .ok_or_else(|| format!("pending ask request `{request_id}` is no longer active"))
+}
+
+/// Reports one committed Ask lifecycle change to conversation hooks without failing the commit.
+/// 将一次已提交的 Ask 生命周期变化上报给会话 hook，且不使该提交失败。
+///
+/// Hooks only observe the change; a poisoned hook runtime is traced instead of undoing a durable
+/// Ask transition.
+/// hook 仅观察该变化；hook 运行时中毒时只记录追踪，不撤销已可靠落盘的 Ask 转换。
+///
+/// # Parameters
+/// 参数
+/// `hook_runtime` is the shared conversation hook runtime and `record` performs one observation.
+/// `hook_runtime` 是共享会话 hook 运行时，`record` 执行一次观察记录。
+fn record_question_lifecycle_hook(
+    hook_runtime: &Mutex<ConversationHookRuntime>,
+    record: impl FnOnce(&mut ConversationHookRuntime),
+) {
+    match hook_runtime.lock() {
+        Ok(mut hooks) => record(&mut hooks),
+        Err(error) => webui_trace("question_lifecycle_hook_failed", format!("error={error}")),
+    }
 }
 
 /// Emits only the ask-modal pending question projection as a workbench delta.
@@ -152,8 +214,8 @@ pub(crate) fn emit_pending_question_changed_delta(
 /// `app` 向每个已注册客户端 sink 广播权威投影事件。
 /// `state` owns the retained workbench projection updated by the callback.
 /// `state` 持有由回调更新的保留工作台投影。
-/// `question_runtime` owns all pending Ask state transitions.
-/// `question_runtime` 持有全部待回答 Ask 状态转换。
+/// `agent_runtime` owns the question runtime and the conversation hook runtime it reports to.
+/// `agent_runtime` 持有问题运行时及其上报的会话 hook 运行时。
 ///
 /// # Returns
 /// 返回值
@@ -162,8 +224,10 @@ pub(crate) fn emit_pending_question_changed_delta(
 pub(crate) fn install_webui_question_runtime_event_bridge(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
-    question_runtime: &Arc<QuestionRuntime>,
+    agent_runtime: &AgentRuntimeBridge,
 ) -> Result<(), String> {
+    let question_runtime = &agent_runtime.question_runtime;
+    let hook_runtime = Arc::clone(&agent_runtime.conversation_hook_runtime);
     // registry is captured once because reply and rejection invoke the durability callback while
     // holding the pending-question lock, and workbench projections read pending questions while
     // holding the service state lock; taking the state lock here would invert that order.
@@ -187,10 +251,17 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
             crate::session_goal_lifecycle::registered_session_v1_handle(&registry, session_id)?;
         let now_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
         match action {
-            PendingQuestionDurabilityAction::Waiting { request } => handle
-                .mark_tool_waiting_user(request.api_call_id, request.tool_call_id, now_ms)
-                .map(|_| ())
-                .map_err(|error| error.to_string()),
+            PendingQuestionDurabilityAction::Waiting { request } => {
+                handle
+                    .mark_tool_waiting_user(request.api_call_id, request.tool_call_id, now_ms)
+                    .map_err(|error| error.to_string())?;
+                // Registration commits outside the pending lock, so the hook lock nests under nothing.
+                // 注册在 pending 锁之外提交，因此 hook 锁不嵌套在任何锁之下。
+                record_question_lifecycle_hook(&hook_runtime, |hooks| {
+                    hooks.record_question_asked(request.session_id, &request.id, &request.questions)
+                });
+                Ok(())
+            }
             PendingQuestionDurabilityAction::Answered { request, result } => {
                 let output = persistent_tool_output_from_result(&result)
                     .map_err(|error| error.to_string())?;
