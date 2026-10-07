@@ -27,9 +27,7 @@ use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_composer::{AdditionalPromptSegment, PromptOutputStyleSnapshot};
 use vulcan_prompt_skills::ResolvedPromptSkill;
-use vulcan_session_boundary::{
-    SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
-};
+use vulcan_session_boundary::SessionBoundaryEvent;
 use vulcan_session_core::v1::ClientActionId;
 use vulcan_session_core::{
     CapabilityPolicySnapshot, ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot,
@@ -140,28 +138,7 @@ pub struct ExecutionProviderVisibleAgentMessage {
     pub metadata: Option<Value>,
 }
 
-impl ExecutionProviderVisibleAgentMessage {
-    /// Converts this typed runtime message into a core controller append request.
-    /// 将该类型化运行消息转换为核心控制器追加请求。
-    ///
-    /// # Returns
-    /// 返回值
-    /// A provider-visible core append request with the same model payload.
-    /// 携带相同模型载荷的 Provider 可见核心追加请求。
-    pub fn to_core_append_request(&self) -> vulcan_core::controller::AgentMessageAppendRequest {
-        vulcan_core::controller::AgentMessageAppendRequest {
-            kind: self.kind,
-            message_type: self.message_type.clone(),
-            task_id: self.task_id.clone(),
-            task_name: self.task_name.clone(),
-            sender: self.sender.clone(),
-            recipient: self.recipient.clone(),
-            payload: self.payload.clone(),
-            trigger_turn: self.trigger_turn,
-            metadata: self.metadata.clone(),
-        }
-    }
-}
+impl ExecutionProviderVisibleAgentMessage {}
 
 /// Request-scoped session goal binding captured before provider execution.
 /// 在 Provider 执行前捕获的请求级会话目标绑定。
@@ -1248,74 +1225,5 @@ impl ExecutionRunReport {
     /// 返回当前报告是否成功完成。
     pub const fn is_success(&self) -> bool {
         self.error.is_none()
-    }
-
-    /// Builds the session-boundary final assistant event for this report when output exists.
-    /// 当输出存在时，为当前报告构建 会话边界的最终助手事件。
-    pub fn final_assistant_boundary_event(
-        &self,
-        timestamp_ms: u64,
-    ) -> Option<SessionBoundaryEvent> {
-        let preparation = self.preparation.as_ref()?;
-        let boundary_event = preparation.boundary_events.first()?;
-        let turn_id = boundary_event.turn_id.clone()?;
-        let assistant_output = self.assistant_output.as_ref()?;
-        if assistant_output.is_empty() {
-            return None;
-        }
-        Some(
-            SessionBoundaryEvent::new(
-                format!("{}:{turn_id}:assistant-final", self.session_id),
-                boundary_event.thread_id,
-                0,
-                SessionBoundaryEventKind::AgentMessage,
-                SessionEventScope::Turn,
-                SessionEventVisibility::Visible,
-                timestamp_ms,
-            )
-            .with_turn_id(turn_id)
-            .with_payload(serde_json::json!({
-                "text": assistant_output,
-                "source": "provider_final_output",
-                "provider_request_count": self.provider_request_count,
-            })),
-        )
-    }
-
-    /// Builds the session-boundary terminal turn event for this report when boundary data exists.
-    /// 当边界数据存在时，为当前报告构建 会话边界的终态轮次事件。
-    pub fn turn_completed_boundary_event(&self, timestamp_ms: u64) -> Option<SessionBoundaryEvent> {
-        let preparation = self.preparation.as_ref()?;
-        let boundary_event = preparation.boundary_events.first()?;
-        let turn_id = boundary_event.turn_id.clone()?;
-        let sequence = preparation
-            .boundary_events
-            .iter()
-            .map(|event| event.sequence)
-            .max()
-            .unwrap_or_default()
-            .saturating_add(1);
-        Some(
-            SessionBoundaryEvent::new(
-                format!("{}:{turn_id}:turn-completed", self.session_id),
-                boundary_event.thread_id,
-                sequence,
-                SessionBoundaryEventKind::TurnCompleted,
-                SessionEventScope::Turn,
-                SessionEventVisibility::Hidden,
-                timestamp_ms,
-            )
-            .with_turn_id(turn_id)
-            .with_payload(serde_json::json!({
-                "status": if self.is_success() { "completed" } else { "failed" },
-                "provider_request_count": self.provider_request_count,
-                "assistant_output_chars": self
-                    .assistant_output
-                    .as_deref()
-                    .map(|value| value.chars().count())
-                    .unwrap_or_default(),
-                "error": &self.error,
-            })),
-        )
     }
 }

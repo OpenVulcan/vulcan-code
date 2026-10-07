@@ -19,60 +19,6 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Captures the final provider wire request for one simulated runtime turn without sending it.
-/// 捕获一次模拟运行时回合的最终 Provider wire 请求，但不实际发送。
-///
-/// # Parameters
-/// 参数
-/// `config` is the provider configuration used by the normal runtime launch path.
-/// `config` 是普通运行时启动链路使用的 Provider 配置。
-/// `agent_profile_catalog` is the current resolved agent profile catalog.
-/// `agent_profile_catalog` 是当前已解析的代理画像目录。
-/// `luaskills_runtime` is the optional shared LuaSkills runtime handle.
-/// `luaskills_runtime` 是可选的共享 LuaSkills 运行时句柄。
-/// `mcp_runtime` is the optional preconfigured MCP runtime access surface.
-/// `mcp_runtime` 是可选的已配置 MCP 运行时访问面。
-/// `task_runtime` is the shared resumable task runtime used by provider execution.
-/// `task_runtime` 是 Provider 执行复用的共享可恢复任务运行时。
-/// `question_runtime` is the shared question runtime used by host tools.
-/// `question_runtime` 是宿主工具使用的共享提问运行时。
-/// `command_session_runtime` is the shared command-session runtime used by shell tools.
-/// `command_session_runtime` 是 shell 工具使用的共享命令会话运行时。
-/// `public_ai_runtime` owns the process-local catalogs, routes, and credential boundary.
-/// `public_ai_runtime` 持有进程内目录、路由与凭据边界。
-/// `request` is the simulated execution request to assemble.
-/// `request` 是需要装配的模拟执行请求。
-///
-/// # Returns
-/// 返回值
-/// The captured provider-specific HTTP request JSON.
-/// 捕获到的 Provider 专用 HTTP 请求 JSON。
-pub async fn capture_runtime_provider_wire_request(
-    config: ProviderConfigurationFile,
-    agent_profile_catalog: AgentProfileCatalog,
-    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    mcp_runtime: Option<McpRuntimeAccess>,
-    task_runtime: Arc<TaskRuntime>,
-    question_runtime: Arc<QuestionRuntime>,
-    command_session_runtime: Arc<CommandSessionRuntime>,
-    public_ai_runtime: Arc<vulcan_provider_adapters::PublicAiRuntime>,
-    request: ExecutionPreparationRequest,
-) -> Result<Value, String> {
-    capture_runtime_provider_wire_request_with_media_projection(
-        config,
-        agent_profile_catalog,
-        luaskills_runtime,
-        mcp_runtime,
-        task_runtime,
-        question_runtime,
-        command_session_runtime,
-        public_ai_runtime,
-        request,
-        None,
-    )
-    .await
-}
-
 /// Captures an exact wire request using the ordinary launch inputs and optional prompt-owned media authority.
 /// 使用普通启动输入及可选提示词所有媒体权威捕获精确线上请求。
 /// `config` and `agent_profile_catalog` freeze configuration and agents; optional LuaSkills/MCP handles supply tools.

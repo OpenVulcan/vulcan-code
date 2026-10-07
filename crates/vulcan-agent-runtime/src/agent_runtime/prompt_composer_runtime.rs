@@ -227,16 +227,6 @@ pub fn reload_runtime_prompt_composer_engine(
     Ok(())
 }
 
-/// Reload the shared runtime prompt composer from default user resource directories.
-/// 从默认用户资源目录重载共享运行时提示词组合器。
-pub fn reload_default_runtime_prompt_composer_engine() -> Result<(), PromptComposerError> {
-    if let Some(resources) = default_prompt_composer_resource_config() {
-        reload_runtime_prompt_composer_engine(&resources)
-    } else {
-        reload_runtime_prompt_composer_engine(&PromptComposerResourceConfig::default())
-    }
-}
-
 /// Invalidate reusable prompt-composer cache entries for changed prompt resources.
 /// 为已变化的提示词资源使可复用组合器缓存条目失效。
 pub fn invalidate_runtime_prompt_composer_cache_for_reason(reason: PromptInvalidationReason) {

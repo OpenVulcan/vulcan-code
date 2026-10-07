@@ -4,8 +4,7 @@
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::config::{
-    AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeSkillKind,
-    RuntimeToolPolicyDefinition,
+    AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
 };
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_bootstrap_core::after_precheck_trace;
@@ -459,49 +458,6 @@ impl RuntimeFoundation {
         }
     }
 
-    /// Returns lightweight agent rows used by placeholder UI surfaces.
-    /// 返回供占位 UI 表面使用的轻量代理行文本。
-    pub fn agent_rows(&self) -> Vec<String> {
-        self.config
-            .agents
-            .iter()
-            .map(|definition| {
-                format!(
-                    "{} · {} · {} 技能 · {} 委派 · {}",
-                    definition.name,
-                    definition.kind.label(),
-                    definition.skill_ids.len(),
-                    definition.delegates.len(),
-                    definition
-                        .tool_policy
-                        .clone()
-                        .unwrap_or_else(|| String::from("无策略"))
-                )
-            })
-            .collect()
-    }
-
-    /// Returns lightweight skill rows filtered by skill family.
-    /// 返回按技能类型过滤后的轻量技能行文本。
-    pub fn skill_rows(&self, kind: RuntimeSkillKind) -> Vec<String> {
-        self.config
-            .skills
-            .iter()
-            .filter(|definition| definition.kind == kind)
-            .map(|definition| format!("{} · {}", definition.name, definition.id))
-            .collect()
-    }
-
-    /// Returns lightweight native-tool rows for UI placeholder surfaces.
-    /// 返回供 UI 占位面板使用的轻量原生工具行文本。
-    pub fn native_tool_rows(&self) -> Vec<String> {
-        self.native_tools
-            .descriptors
-            .iter()
-            .map(|descriptor| format!("{} · {}", descriptor.name, descriptor.description))
-            .collect()
-    }
-
     /// Returns the shared native tool catalog used by the current runtime foundation.
     /// 返回当前运行时基础架构使用的共享原生工具目录。
     pub fn native_tool_catalog(&self) -> &NativeToolCatalog {
@@ -547,26 +503,6 @@ impl RuntimeFoundation {
     /// 返回当前基础架构使用的共享命令会话运行时。
     pub fn command_session_runtime(&self) -> Arc<CommandSessionRuntime> {
         Arc::clone(&self.command_session_runtime)
-    }
-
-    /// Returns lightweight tool-policy rows for UI placeholder surfaces.
-    /// 返回供 UI 占位面板使用的轻量工具策略行文本。
-    pub fn tool_policy_rows(&self) -> Vec<String> {
-        self.config
-            .tool_policies
-            .values()
-            .map(|policy| {
-                format!(
-                    "{} · {} · 原生 {} · Vulcan 插件 {} · MCP 服务器 {} · MCP 工具 {}",
-                    policy.id,
-                    policy.name,
-                    policy.native_tools.len(),
-                    policy.plugin_tools.len(),
-                    policy.mcp_servers.len(),
-                    policy.mcp_tools.len()
-                )
-            })
-            .collect()
     }
 
     /// Returns the runtime definition of the currently active agent.

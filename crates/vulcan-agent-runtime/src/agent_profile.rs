@@ -409,12 +409,6 @@ pub fn parse_agent_profile_list_text(value: &str) -> Vec<String> {
     )
 }
 
-/// Formats one profile list for compact form editing.
-/// 将配置列表格式化为适合表单编辑的紧凑文本。
-pub fn format_agent_profile_list_text(values: &[String]) -> String {
-    values.join(", ")
-}
-
 /// Parses an optional runtime-policy YAML object from one profile form field.
 /// 从配置表单字段解析可选运行时策略 YAML 对象。
 pub fn parse_runtime_policy_request_text(

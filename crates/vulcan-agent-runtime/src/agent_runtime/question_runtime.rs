@@ -898,15 +898,6 @@ fn validate_question_prompts(questions: &[QuestionPrompt]) -> Result<(), String>
     Ok(())
 }
 
-/// Builds one compact Markdown summary of the final ask answers that will be returned back to the model.
-/// 构建一份紧凑 Markdown 形式的 ask 最终答案摘要，并将其回传给模型。
-pub fn build_question_reply_markdown(
-    questions: &[QuestionPrompt],
-    answers: &[Vec<String>],
-) -> String {
-    build_question_reply_projection(questions, answers)
-}
-
 /// Produces one shared answer body from accepted prompts and ordered answers.
 /// 根据已接受题目与有序答案生成唯一共享正文。
 /// Returns Markdown consumed directly after any host redaction or post-processing.
