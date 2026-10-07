@@ -63,8 +63,8 @@ afterEach(async () => {
 
 // render mounts the panel and settles its first status read.
 // render 挂载面板并等待首次状态读取完成。
-async function render(): Promise<void> {
-  await act(async () => { root.render(<McpOAuthPanel serverId="remote" connectionStatus="awaiting_authorization" />) })
+async function render(serverId = "remote"): Promise<void> {
+  await act(async () => { root.render(<McpOAuthPanel serverId={serverId} connectionStatus="awaiting_authorization" />) })
 }
 
 // button finds one rendered control by its exact label.
@@ -122,6 +122,18 @@ describe("McpOAuthPanel", () => {
     await click("Sign out")
     expect(service.removeMcpOAuth).toHaveBeenCalledWith("remote")
     expect(button("Sign out")).toBeUndefined()
+  })
+
+  it("keeps another server usable while one server's operation is still pending", async () => {
+    host = status("not_authenticated")
+    service.startMcpOAuth.mockImplementation(() => new Promise(() => undefined))
+    await render()
+
+    await click("Sign in")
+    expect(button("Sign in")?.disabled).toBe(true)
+    await render("other")
+
+    expect(button("Sign in")?.disabled).toBe(false)
   })
 
   it("shows no sign-in controls for a server without OAuth", async () => {
