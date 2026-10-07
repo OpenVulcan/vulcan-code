@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "La requête au modèle est prête.",
   "contextCompaction.progress.requestReady": "L’instantané de la requête au modèle est créé ; conversion au format du fournisseur.",
   "contextCompaction.progress.providerLoweringRepair": "Correctif de compatibilité appliqué à la requête au fournisseur.",
-  "contextCompaction.progress.wireRequestReady": "Le contenu de la requête au fournisseur est prêt à être envoyé.",
   "contextCompaction.progress.requestStarted": "La requête au fournisseur a été envoyée ; attente de la première sortie.",
   "contextCompaction.progress.thinkingDelta": "Le modèle a commencé à diffuser sa réflexion.",
   "contextCompaction.progress.outputDelta": "Le modèle a commencé à générer le résumé de compression.",

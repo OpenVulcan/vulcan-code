@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "モデルへのリクエストを準備しました。",
   "contextCompaction.progress.requestReady": "モデルへのリクエストのスナップショットを作成しました。プロバイダーのペイロードに変換しています。",
   "contextCompaction.progress.providerLoweringRepair": "プロバイダーへのリクエストに互換性の修正を適用しました。",
-  "contextCompaction.progress.wireRequestReady": "プロバイダーへのリクエストのペイロードを送信する準備ができました。",
   "contextCompaction.progress.requestStarted": "プロバイダーにリクエストを送信しました。最初の出力を待っています。",
   "contextCompaction.progress.thinkingDelta": "モデルが思考内容のストリーミングを開始しました。",
   "contextCompaction.progress.outputDelta": "モデルが圧縮の要約の生成を開始しました。",

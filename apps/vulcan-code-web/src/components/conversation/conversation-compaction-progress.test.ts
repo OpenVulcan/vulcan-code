@@ -8,7 +8,6 @@ const declaredCompactionStages = [
   "prepared",
   "request_ready",
   "provider_lowering_repair",
-  "wire_request_ready",
   "request_started",
   "thinking_delta",
   "output_delta",

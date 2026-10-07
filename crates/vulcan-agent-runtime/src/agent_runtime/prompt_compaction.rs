@@ -665,9 +665,6 @@ fn prompt_compaction_progress_for_runtime_event(
         ExecutionStreamEvent::ProviderLoweringRepair { .. } => {
             Some(prompt_compaction_progress("provider_lowering_repair"))
         }
-        ExecutionStreamEvent::WireRequestReady { .. } => {
-            Some(prompt_compaction_progress("wire_request_ready"))
-        }
         ExecutionStreamEvent::RequestStarted { .. } => {
             Some(prompt_compaction_progress("request_started"))
         }

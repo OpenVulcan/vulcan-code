@@ -715,7 +715,6 @@ pub(crate) async fn apply_context_compaction_stream_event(
             let _ = completion.complete(permit_result);
             response
         }
-        ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
         ExecutionStreamEvent::RequestStarted { .. } => {
             if let Some(presentation) = presentation {
                 apply_session_phase(

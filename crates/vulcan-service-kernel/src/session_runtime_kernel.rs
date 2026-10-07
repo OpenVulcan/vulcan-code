@@ -793,7 +793,6 @@ pub(crate) fn execution_stream_event_session_id(event: &ExecutionStreamEvent) ->
     match event {
         ExecutionStreamEvent::Prepared(preparation) => preparation.session_id,
         ExecutionStreamEvent::RequestReady { session_id }
-        | ExecutionStreamEvent::WireRequestReady { session_id }
         | ExecutionStreamEvent::ProviderLoweringRepair { session_id, .. }
         | ExecutionStreamEvent::RequestStarted { session_id }
         | ExecutionStreamEvent::ThinkingDelta { session_id, .. }

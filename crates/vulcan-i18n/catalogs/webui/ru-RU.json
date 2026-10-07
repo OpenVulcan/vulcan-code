@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "Запрос к модели подготовлен.",
   "contextCompaction.progress.requestReady": "Снимок запроса к модели создан; выполняется преобразование в формат провайдера.",
   "contextCompaction.progress.providerLoweringRepair": "К запросу провайдера применено исправление совместимости.",
-  "contextCompaction.progress.wireRequestReady": "Содержимое запроса к провайдеру готово к отправке.",
   "contextCompaction.progress.requestStarted": "Запрос к провайдеру отправлен; ожидание первого вывода.",
   "contextCompaction.progress.thinkingDelta": "Модель начала передавать рассуждения.",
   "contextCompaction.progress.outputDelta": "Модель начала создавать сводку сжатия.",

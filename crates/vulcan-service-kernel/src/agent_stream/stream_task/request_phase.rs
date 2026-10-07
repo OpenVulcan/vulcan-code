@@ -10,9 +10,6 @@ pub(super) enum RequestPhaseStreamEvent {
     /// The canonical structured request snapshot is ready.
     /// 规范结构化请求快照已经就绪。
     RequestReady,
-    /// The final provider wire request is ready for dispatch.
-    /// 最终 Provider 线协议请求已经准备发送。
-    WireRequestReady,
     /// A new physical provider request has started.
     /// 新的真实 Provider 请求已经启动。
     RequestStarted,
@@ -64,17 +61,6 @@ pub(super) fn handle_request_phase_stream_event(
             );
             webui_after_precheck_trace("after_precheck_30_request_ready", detail.clone());
             webui_trace("stream_provider_request_ready", detail);
-        }
-        RequestPhaseStreamEvent::WireRequestReady => {
-            // Wire latency starts at RequestStarted and remains explicit when no request boundary exists.
-            // 线协议延迟从 RequestStarted 开始；缺少请求边界时继续显式呈现未知状态。
-            let detail = format!(
-                "session={session_id} elapsed_ms_since_request={} elapsed_ms_since_task={}",
-                request_trace_state.provider_request_elapsed_label_at(observed_at),
-                observed_at.saturating_sub(stream_task_started_at)
-            );
-            webui_after_precheck_trace("after_precheck_31_wire_request_ready", detail.clone());
-            webui_trace("stream_wire_request_ready", detail);
         }
         RequestPhaseStreamEvent::RequestStarted => {
             request_trace_state.begin_provider_request(observed_at);
@@ -140,7 +126,6 @@ fn request_phase_session_phase(_event: RequestPhaseStreamEvent) -> SessionRunPha
 fn request_phase_failure_context(event: RequestPhaseStreamEvent) -> &'static str {
     match event {
         RequestPhaseStreamEvent::RequestReady => "apply request-ready phase failed",
-        RequestPhaseStreamEvent::WireRequestReady => "apply wire-request-ready phase failed",
         RequestPhaseStreamEvent::RequestStarted => "apply request-started failed",
     }
 }
@@ -165,7 +150,6 @@ mod tests {
     fn request_lifecycle_markers_share_requesting_phase() {
         for event in [
             RequestPhaseStreamEvent::RequestReady,
-            RequestPhaseStreamEvent::WireRequestReady,
             RequestPhaseStreamEvent::RequestStarted,
         ] {
             assert_eq!(
@@ -192,10 +176,6 @@ mod tests {
         assert_eq!(
             request_phase_failure_context(RequestPhaseStreamEvent::RequestReady),
             "apply request-ready phase failed"
-        );
-        assert_eq!(
-            request_phase_failure_context(RequestPhaseStreamEvent::WireRequestReady),
-            "apply wire-request-ready phase failed"
         );
         assert_eq!(
             request_phase_failure_context(RequestPhaseStreamEvent::RequestStarted),

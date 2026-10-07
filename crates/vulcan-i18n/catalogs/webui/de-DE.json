@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "Die Modellanfrage ist vorbereitet.",
   "contextCompaction.progress.requestReady": "Der Snapshot der Modellanfrage ist erstellt; er wird in das Anbieterformat umgewandelt.",
   "contextCompaction.progress.providerLoweringRepair": "Kompatibilitätskorrektur auf die Anbieteranfrage angewendet.",
-  "contextCompaction.progress.wireRequestReady": "Der Inhalt der Anbieteranfrage ist bereit zum Senden.",
   "contextCompaction.progress.requestStarted": "Die Anbieteranfrage wurde gesendet; Warten auf die erste Ausgabe.",
   "contextCompaction.progress.thinkingDelta": "Das Modell hat begonnen, Denkinhalte zu streamen.",
   "contextCompaction.progress.outputDelta": "Das Modell hat begonnen, die Komprimierungszusammenfassung zu erstellen.",

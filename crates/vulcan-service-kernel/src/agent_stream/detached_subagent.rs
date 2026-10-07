@@ -633,8 +633,7 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
             // 子会话通过自身的 V1 Provider 许可持久化精确请求事实。
             Ok(())
         }
-        ExecutionStreamEvent::RequestReady { session_id }
-        | ExecutionStreamEvent::WireRequestReady { session_id } => {
+        ExecutionStreamEvent::RequestReady { session_id } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
         ExecutionStreamEvent::RequestStarted { session_id } => {

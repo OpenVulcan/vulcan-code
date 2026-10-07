@@ -60,22 +60,6 @@ impl StreamRequestTraceState {
         self.first_visible_delta_emitted = false;
     }
 
-    /// Formats the elapsed time since the active provider request from a shared observation timestamp.
-    /// 使用共享观测时间戳格式化活动 Provider 请求启动后的已用时间。
-    ///
-    /// # Parameters
-    /// # 参数
-    /// `observed_at` is the timestamp shared by every trace sink for one event.
-    /// `observed_at` 是单个事件的所有追踪接收端共享的时间戳。
-    ///
-    /// # Returns
-    /// # 返回值
-    /// Milliseconds as text, or `<unknown>` before a request-start event is observed.
-    /// 返回毫秒文本；在观察到请求启动事件前返回 `<unknown>`。
-    pub(super) fn provider_request_elapsed_label_at(&self, observed_at: i128) -> String {
-        self.elapsed_since_provider_request_label(observed_at)
-    }
-
     /// Emits the first content event even when a provider request boundary has not arrived yet.
     /// 即使 Provider 请求边界尚未到达，也发送首个内容事件。
     ///

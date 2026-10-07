@@ -216,8 +216,6 @@ export function contextCompactionProgressKey(stage: string): TranslationKey {
       return "contextCompaction.progress.requestReady";
     case "provider_lowering_repair":
       return "contextCompaction.progress.providerLoweringRepair";
-    case "wire_request_ready":
-      return "contextCompaction.progress.wireRequestReady";
     case "request_started":
       return "contextCompaction.progress.requestStarted";
     case "thinking_delta":

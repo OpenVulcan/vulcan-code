@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "The model request is prepared.",
   "contextCompaction.progress.requestReady": "The model request snapshot is built; converting it to the provider payload.",
   "contextCompaction.progress.providerLoweringRepair": "Applied provider request compatibility repair.",
-  "contextCompaction.progress.wireRequestReady": "The provider request payload is ready to send.",
   "contextCompaction.progress.requestStarted": "The provider request has been sent; waiting for the first output.",
   "contextCompaction.progress.thinkingDelta": "The model has started streaming thinking content.",
   "contextCompaction.progress.outputDelta": "The model has started generating the compaction summary.",

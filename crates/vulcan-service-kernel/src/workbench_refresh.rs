@@ -990,9 +990,6 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RequestReady { .. }) => {
             "child.request_ready"
         }
-        DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::WireRequestReady {
-            ..
-        }) => "child.wire_request_ready",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RequestStarted {
             ..
         }) => "child.request_started",

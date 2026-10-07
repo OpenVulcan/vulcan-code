@@ -1124,17 +1124,6 @@ fn spawn_agent_stream_task_with_restart_state(
                         RequestPhaseStreamEvent::RequestReady,
                     );
                 }
-                ExecutionStreamEvent::WireRequestReady { session_id } => {
-                    handle_request_phase_stream_event(
-                        &app,
-                        &task_state,
-                        &mut request_trace_state,
-                        session_id,
-                        active_stream_task_id,
-                        stream_task_started_at,
-                        RequestPhaseStreamEvent::WireRequestReady,
-                    );
-                }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
                     handle_request_phase_stream_event(
                         &app,

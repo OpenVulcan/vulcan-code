@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "模型請求準備完成。",
   "contextCompaction.progress.requestReady": "模型請求快照已建立，正在轉換為 Provider 內容。",
   "contextCompaction.progress.providerLoweringRepair": "已對 Provider 請求轉換執行相容性修正。",
-  "contextCompaction.progress.wireRequestReady": "Provider 請求內容已建立，準備傳送。",
   "contextCompaction.progress.requestStarted": "Provider 請求已傳送，正在等待第一個輸出。",
   "contextCompaction.progress.thinkingDelta": "模型已開始輸出思考內容。",
   "contextCompaction.progress.outputDelta": "模型已開始產生壓縮摘要。",

@@ -1162,7 +1162,6 @@
   "contextCompaction.progress.prepared": "模型请求准备完成。",
   "contextCompaction.progress.requestReady": "模型请求快照已构建，正在转换为 Provider 载荷。",
   "contextCompaction.progress.providerLoweringRepair": "Provider 请求转换已执行兼容性修复。",
-  "contextCompaction.progress.wireRequestReady": "Provider 请求载荷已构建，准备发送。",
   "contextCompaction.progress.requestStarted": "Provider 请求已发送，正在等待首个输出。",
   "contextCompaction.progress.thinkingDelta": "模型已开始输出思考内容。",
   "contextCompaction.progress.outputDelta": "模型已开始生成压缩总结。",
