@@ -2,10 +2,10 @@
 // 助手文本的最小 Markdown 渲染器。
 //
 // Covers what assistant replies use most: headings, paragraphs, bullet and numbered lists, block
-// quotes, fenced code, inline code, bold and italic. Tables and HTML are shown as plain text. It
+// quotes, fenced code, pipe tables, inline code, bold and italic. HTML is shown as plain text. It
 // is line-oriented so a half-streamed reply renders stably while text is still arriving.
-// 覆盖助手回复最常用的元素：标题、段落、无序与有序列表、引用、代码块、行内代码、粗体与斜体。
-// 表格与 HTML 按纯文本显示。按行处理，因此流式输出到一半的回复也能稳定渲染。
+// 覆盖助手回复最常用的元素：标题、段落、无序与有序列表、引用、代码块、管道表格、行内代码、粗体与
+// 斜体。HTML 按纯文本显示。按行处理，因此流式输出到一半的回复也能稳定渲染。
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -19,7 +19,11 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code = false;
     let code_bg = mix(theme.muted, theme.bg, 0.7);
-    for raw in source.lines() {
+    let source: Vec<&str> = source.lines().collect();
+    let mut index = 0;
+    while index < source.len() {
+        let raw = source[index];
+        index += 1;
         let trimmed = raw.trim_start();
         if trimmed.starts_with("```") {
             in_code = !in_code;
@@ -80,6 +84,19 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             ));
             continue;
         }
+        if let Some(aligns) = source
+            .get(index)
+            .and_then(|next| table_alignments(raw, next))
+        {
+            let mut rows = vec![table_cells(raw)];
+            index += 1;
+            while let Some(row) = source.get(index).filter(|row| is_table_row(row)) {
+                rows.push(table_cells(row));
+                index += 1;
+            }
+            lines.extend(table(&rows, &aligns, width, theme));
+            continue;
+        }
         if is_rule(trimmed) {
             lines.push(Line::from(Span::styled(
                 "─".repeat(width.min(48)),
@@ -107,6 +124,197 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         }
         lines.extend(wrap(&inline(trimmed, theme.base(), theme), width, &[], &[]));
     }
+    lines
+}
+
+/// Column alignment taken from a table's delimiter row.
+/// 取自表格分隔行的列对齐方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+/// Narrowest a shrunk table column gets before the table falls back to plain rows.
+/// 表格列收缩的最小宽度，再窄时表格退回为纯文本行。
+const MIN_COLUMN: usize = 3;
+
+fn is_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && trimmed.contains('|')
+}
+
+/// Splits a table row into cells, dropping the outer pipes and unescaping `\|`.
+/// 将表格行拆分为单元格，去掉两侧管道符并还原 `\|`。
+fn table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let trimmed = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let trimmed = match trimmed.strip_suffix('|') {
+        Some(inner) if !inner.ends_with('\\') => inner,
+        _ => trimmed,
+    };
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = trimmed.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if chars.peek() == Some(&'|') => {
+                cell.push('|');
+                chars.next();
+            }
+            '|' => cells.push(std::mem::take(&mut cell).trim().to_string()),
+            _ => cell.push(ch),
+        }
+    }
+    cells.push(cell.trim().to_string());
+    cells
+}
+
+/// Reads the delimiter row under a header row; both must hold the same number of cells.
+/// 读取表头下方的分隔行；两者的单元格数必须一致。
+fn table_alignments(header: &str, delimiter: &str) -> Option<Vec<Align>> {
+    if !is_table_row(header) || !is_table_row(delimiter) {
+        return None;
+    }
+    let aligns = table_cells(delimiter)
+        .iter()
+        .map(|cell| {
+            let left = cell.starts_with(':');
+            let right = cell.ends_with(':');
+            let dashes = cell.trim_matches(':');
+            if dashes.is_empty() || !dashes.chars().all(|c| c == '-') {
+                return None;
+            }
+            Some(match (left, right) {
+                (true, true) => Align::Center,
+                (false, true) => Align::Right,
+                _ => Align::Left,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (aligns.len() == table_cells(header).len()).then_some(aligns)
+}
+
+/// Shares `room` columns among cells whose natural widths are `natural`: narrow columns keep their
+/// width and the rest split what remains. `None` when even the minimum does not fit.
+/// 在自然宽度为 `natural` 的列之间分配 `room` 列：窄列保持原宽，其余列平分剩余空间。连最小宽度都
+/// 放不下时返回 `None`。
+fn column_widths(natural: &[usize], room: usize) -> Option<Vec<usize>> {
+    let mut widths: Vec<usize> = natural.iter().map(|w| (*w).max(1)).collect();
+    if widths.iter().sum::<usize>() <= room {
+        return Some(widths);
+    }
+    if natural.len() * MIN_COLUMN > room {
+        return None;
+    }
+    let mut open: Vec<usize> = (0..widths.len()).collect();
+    let mut left = room;
+    loop {
+        let share = left / open.len();
+        let (fits, wide): (Vec<usize>, Vec<usize>) =
+            open.iter().partition(|i| widths[**i] <= share);
+        if fits.is_empty() {
+            let extra = left - share * wide.len();
+            for (n, i) in wide.iter().enumerate() {
+                widths[*i] = share + usize::from(n < extra);
+            }
+            return Some(widths);
+        }
+        for i in &fits {
+            left -= widths[*i];
+        }
+        open = wide;
+    }
+}
+
+/// Draws a pipe table with box borders; the header row is bold and long cells wrap inside their
+/// column. Rows too narrow for the terminal fall back to one plain line per row.
+/// 用方框边框绘制管道表格；表头加粗，过长的单元格在列内换行。终端过窄时每行退回为一条纯文本。
+fn table(
+    rows: &[Vec<String>],
+    aligns: &[Align],
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let border = Style::new().fg(theme.border);
+    let columns = aligns.len();
+    let cell_spans = |row: usize, column: usize| {
+        let style = if row == 0 {
+            theme.strong()
+        } else {
+            theme.base()
+        };
+        let text = rows[row].get(column).map(String::as_str).unwrap_or("");
+        inline(text, style, theme)
+    };
+    let natural: Vec<usize> = (0..columns)
+        .map(|column| {
+            (0..rows.len())
+                .map(|row| {
+                    cell_spans(row, column)
+                        .iter()
+                        .map(|s| width_of(&s.content))
+                        .sum()
+                })
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    // Each column carries one space of padding per side plus one border, and the row one more.
+    // 每列两侧各留一格空白并带一条边框，整行另加一条边框。
+    let frame = columns * 3 + 1;
+    let Some(widths) = width
+        .checked_sub(frame)
+        .and_then(|room| column_widths(&natural, room))
+    else {
+        return rows
+            .iter()
+            .flat_map(|cells| {
+                let spans = inline(&cells.join(" | "), theme.base(), theme);
+                wrap(&spans, width, &[], &[])
+            })
+            .collect();
+    };
+    let rule = |left: &str, middle: &str, right: &str| {
+        let segments: Vec<String> = widths.iter().map(|w| "─".repeat(w + 2)).collect();
+        Line::from(Span::styled(
+            format!("{left}{}{right}", segments.join(middle)),
+            border,
+        ))
+    };
+    let mut lines = vec![rule("┌", "┬", "┐")];
+    for row in 0..rows.len() {
+        let cells: Vec<Vec<Line<'static>>> = (0..columns)
+            .map(|column| wrap(&cell_spans(row, column), widths[column], &[], &[]))
+            .collect();
+        let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+        for physical in 0..height {
+            let mut spans = vec![Span::styled("│".to_string(), border)];
+            for (column, cell) in cells.iter().enumerate() {
+                let content = cell
+                    .get(physical)
+                    .map(|l| l.spans.clone())
+                    .unwrap_or_default();
+                let used: usize = content.iter().map(|s| width_of(&s.content)).sum();
+                let gap = widths[column].saturating_sub(used);
+                let (before, after) = match aligns[column] {
+                    Align::Left => (0, gap),
+                    Align::Right => (gap, 0),
+                    Align::Center => (gap / 2, gap - gap / 2),
+                };
+                spans.push(Span::raw(" ".repeat(before + 1)));
+                spans.extend(content);
+                spans.push(Span::raw(" ".repeat(after + 1)));
+                spans.push(Span::styled("│".to_string(), border));
+            }
+            lines.push(Line::from(spans));
+        }
+        if row == 0 {
+            lines.push(rule("├", "┼", "┤"));
+        }
+    }
+    lines.push(rule("└", "┴", "┘"));
     lines
 }
 
@@ -235,5 +443,66 @@ mod tests {
             .find(|s| s.content == "bold")
             .expect("bold span");
         assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    /// Every rendered table line has the same display width, never wider than the view.
+    /// 渲染出的表格各行显示宽度一致，且不超过视图宽度。
+    fn assert_boxed(lines: &[Line], width: usize) {
+        let widths: Vec<usize> = lines.iter().map(|l| width_of(&text_of(l))).collect();
+        assert!(
+            widths.iter().all(|w| *w == widths[0]),
+            "ragged table: {widths:?}"
+        );
+        assert!(widths[0] <= width, "table wider than {width}: {widths:?}");
+    }
+
+    #[test]
+    fn renders_pipe_tables_with_borders_and_alignment() {
+        let theme = Theme::dark();
+        let source = "| Name | 數量 |\n|:--|--:|\n| a | 1 |\n| `b\\|c` | 22 |\n\nafter";
+        let lines = render(source, 60, &theme);
+        let texts: Vec<String> = lines.iter().map(text_of).collect();
+        let end = texts
+            .iter()
+            .position(String::is_empty)
+            .expect("blank line after the table");
+        assert_boxed(&lines[..end], 60);
+        assert!(texts[0].starts_with('┌') && texts[0].ends_with('┐'));
+        assert!(texts[2].starts_with('├'));
+        assert!(texts[end - 1].starts_with('└'));
+        // Header cells are bold; the right-aligned column ends at its border.
+        // 表头单元格加粗；右对齐列紧贴其边框。
+        assert!(
+            lines[1]
+                .spans
+                .iter()
+                .any(|s| s.content == "Name" && s.style.add_modifier.contains(Modifier::BOLD))
+        );
+        assert!(texts[3].ends_with(" 1 │"));
+        // An escaped pipe stays inside its cell.
+        // 转义的管道符留在其单元格内。
+        assert_eq!(texts[4].matches('│').count(), 3);
+        assert_eq!(texts.last().map(String::as_str), Some("after"));
+    }
+
+    #[test]
+    fn tables_wrap_to_narrow_views_and_need_a_delimiter_row() {
+        let theme = Theme::dark();
+        let long = "word ".repeat(20);
+        let source = format!("| key | value |\n|---|---|\n| k | {long} |");
+        let lines = render(&source, 30, &theme);
+        assert_boxed(&lines, 30);
+        assert!(
+            lines.len() > 5,
+            "the long cell should wrap onto several lines"
+        );
+
+        // Without a delimiter row, pipes are ordinary text.
+        // 没有分隔行时，管道符只是普通文本。
+        let plain = render("a | b\nc | d", 30, &theme);
+        assert_eq!(
+            plain.iter().map(text_of).collect::<Vec<_>>(),
+            ["a | b", "c | d"]
+        );
     }
 }
