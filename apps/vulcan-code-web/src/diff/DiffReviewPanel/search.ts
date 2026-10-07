@@ -398,18 +398,6 @@ function diffSearchMatchMatchesSummaryTarget(match: DiffSearchMatch, target: Wor
   return true;
 }
 
-// isPromiseLike checks whether a refresh result exposes a finalizer.
-// isPromiseLike 检查刷新结果是否提供完成回调。
-export function isPromiseLike(
-  // Unknown refresh return value from the optional host callback.
-  // 可选宿主回调返回的未知刷新结果。
-  value: unknown,
-): value is Promise<void> {
-  return Boolean(value)
-    && (typeof value === "object" || typeof value === "function")
-    && typeof (value as Promise<void>).finally === "function";
-}
-
 // diffCollapsedFileKeys builds the default-collapsed, single-expanded file key set.
 // diffCollapsedFileKeys 构建默认全折叠且仅允许单个文件展开的 key 集合。
 export function diffCollapsedFileKeys(

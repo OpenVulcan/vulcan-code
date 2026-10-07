@@ -267,12 +267,6 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-// tokensToHtml converts Shiki tokens into compact inline span HTML.
-// tokensToHtml 将 Shiki token 转换为紧凑的行内 span HTML。
-export function tokensToHtml(tokens: ThemedToken[]): string {
-  return tokenSpansToHtml(tokensToSpans(tokens));
-}
-
 // tokensToSpans converts Shiki tokens into serializable token span data.
 // tokensToSpans 将 Shiki token 转换为可序列化的 token span 数据。
 export function tokensToSpans(tokens: ThemedToken[]): DiffShikiTokenSpan[] {

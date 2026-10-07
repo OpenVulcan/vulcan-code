@@ -10,22 +10,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { StatusPill } from "@/components/shared/status";
-import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
-import { areaIconMap } from "@/components/features/feature-shell";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { SUPPORTED_LOCALES } from "@/i18n-locales";
 import { createShellClient } from "@/host-shell";
-import type {
-  FeatureAreaSummary,
-  MainAreaId,
-  StartupSnapshot,
-} from "@/types";
+import type { StartupSnapshot } from "@/types";
 import { toast } from "sonner";
 import {
   Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Minimize2,
   MinusIcon,
   Moon,
@@ -47,124 +39,6 @@ const shellClient = createShellClient();
 // AppChromeThemeMode describes the theme modes accepted by the shell chrome controls.
 // AppChromeThemeMode 描述外壳 chrome 控件接受的主题模式。
 export type AppChromeThemeMode = "light" | "dark";
-
-// BrandHeader renders the product brand area.
-// BrandHeader 渲染产品品牌区域。
-export function BrandHeader(props: {
-  // Whether the brand block should behave as a native Tauri drag region.
-  // 品牌块是否应作为 Tauri 原生拖动区域。
-  dragRegion?: boolean;
-}) {
-  return (
-    <div className="brand" data-tauri-drag-region={props.dragRegion ? "" : undefined}>
-      <VulcanSymbol className="brand-logo app-brand-logo" />
-      <div>
-        <strong>Vulcan Code</strong>
-      </div>
-    </div>
-  );
-}
-
-// FeatureNav renders the primary workbench navigation.
-// FeatureNav 渲染工作台主导航。
-export function FeatureNav(props: {
-  // Feature summaries rendered as the primary navigation buttons.
-  // 渲染为主导航按钮的功能区摘要。
-  areas: FeatureAreaSummary[];
-  // Currently selected top-level feature area.
-  // 当前选中的顶层功能区。
-  activeArea: MainAreaId;
-  // Selects one top-level feature area.
-  // 选择一个顶层功能区。
-  onSelect: (area: MainAreaId) => void;
-}) {
-  // t translates navigation accessibility labels.
-  // t 翻译导航无障碍标签。
-  const { t } = useI18n();
-  // scrollRef points to the horizontal navigation viewport.
-  // scrollRef 指向横向导航视口。
-  const scrollRef = React.useRef<HTMLElement | null>(null);
-  // navOverflow stores whether each arrow can move the navigation viewport.
-  // navOverflow 保存左右箭头是否还能移动导航视口。
-  const [navOverflow, setNavOverflow] = React.useState({ left: false, right: false });
-
-  // updateNavOverflow refreshes arrow enabled state from the scroll viewport.
-  // updateNavOverflow 根据滚动视口刷新箭头启用状态。
-  const updateNavOverflow = React.useCallback(() => {
-    const element = scrollRef.current;
-    if (!element) {
-      setNavOverflow({ left: false, right: false });
-      return;
-    }
-    const maxScrollLeft = element.scrollWidth - element.clientWidth;
-    setNavOverflow({
-      left: element.scrollLeft > 2,
-      right: element.scrollLeft < maxScrollLeft - 2,
-    });
-  }, []);
-
-  // scrollNav moves the navigation viewport by one compact page.
-  // scrollNav 按一个紧凑页宽移动导航视口。
-  const scrollNav = React.useCallback((direction: -1 | 1) => {
-    const element = scrollRef.current;
-    if (!element) {
-      return;
-    }
-    element.scrollBy({ left: direction * Math.max(120, element.clientWidth * 0.7), behavior: "smooth" });
-    window.setTimeout(updateNavOverflow, 180);
-  }, [updateNavOverflow]);
-
-  React.useEffect(() => {
-    updateNavOverflow();
-    window.addEventListener("resize", updateNavOverflow);
-    return () => window.removeEventListener("resize", updateNavOverflow);
-  }, [props.areas.length, updateNavOverflow]);
-
-  return (
-    <div className="feature-nav-shell">
-      {navOverflow.left ? (
-        <Button
-          aria-label={t("appChrome.scrollFeaturesLeft")}
-          className="feature-nav-arrow"
-          onClick={() => scrollNav(-1)}
-          size="icon-sm"
-          type="button"
-          variant="ghost"
-        >
-          <ChevronLeft size={15} />
-        </Button>
-      ) : null}
-      <nav className="feature-nav" aria-label={t("sidebar.overview")} onScroll={updateNavOverflow} ref={scrollRef}>
-        {props.areas.map((area) => (
-          <Button
-            className="feature-button"
-            key={area.id}
-            onClick={() => props.onSelect(area.id)}
-            size="sm"
-            title={area.description}
-            type="button"
-            variant={props.activeArea === area.id ? "secondary" : "ghost"}
-          >
-            {areaIconMap[area.id]}
-            <span>{area.label}</span>
-          </Button>
-        ))}
-      </nav>
-      {navOverflow.right ? (
-        <Button
-          aria-label={t("appChrome.scrollFeaturesRight")}
-          className="feature-nav-arrow"
-          onClick={() => scrollNav(1)}
-          size="icon-sm"
-          type="button"
-          variant="ghost"
-        >
-          <ChevronRight size={15} />
-        </Button>
-      ) : null}
-    </div>
-  );
-}
 
 // GlobalActions renders app-wide controls in the primary menu bar.
 // GlobalActions 渲染主菜单栏中的全局控制。

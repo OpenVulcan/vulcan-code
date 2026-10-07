@@ -479,37 +479,6 @@ export function targetExpandedLineCount(
   return lineCount;
 }
 
-// targetComputeApproximateBodyHeight mirrors the target approximate size loop for file bodies.
-// targetComputeApproximateBodyHeight 对齐目标文件正文近似高度计算循环。
-export function targetComputeApproximateBodyHeight(
-  diff: TargetDiffFile,
-  diffStyle: DiffViewMode,
-  metrics: TargetDiffVirtualMetrics = TARGET_DIFF_VIRTUAL_METRICS,
-): number {
-  let height = 0;
-  targetIterateOverDiff({
-    diff,
-    diffStyle,
-    callback: ({ hunkIndex, collapsedBefore, collapsedAfter, deletionLine, additionLine }) => {
-      if (collapsedBefore > 0) {
-        if (hunkIndex > 0) {
-          height += metrics.fileGap;
-        }
-        height += metrics.hunkSeparatorHeight + metrics.fileGap;
-      }
-      const noEOFCR = Boolean(additionLine?.noEOFCR) || Boolean(deletionLine?.noEOFCR);
-      height += metrics.lineHeight * (noEOFCR ? 2 : 1);
-      if (collapsedAfter > 0) {
-        height += metrics.fileGap + metrics.hunkSeparatorHeight;
-      }
-    },
-  });
-  if (diff.hunks.length > 0) {
-    height += metrics.fileGap;
-  }
-  return height;
-}
-
 // targetComputeRenderRangeFromWindow mirrors VirtualizedFileDiff.computeRenderRangeFromWindow.
 // targetComputeRenderRangeFromWindow 对齐 VirtualizedFileDiff.computeRenderRangeFromWindow。
 export function targetComputeRenderRangeFromWindow(options: {

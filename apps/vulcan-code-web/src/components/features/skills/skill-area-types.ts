@@ -227,17 +227,6 @@ export function localizedPluginCapability(plugin: PluginSummary, locale: string)
   return languageCapabilityEntry ? languageCapabilityEntry[1] : plugin.capability
 }
 
-// hasEnabledPluginDetailMount reports whether one exact enabled plugin contributes the requested integrated mount point.
-// hasEnabledPluginDetailMount 判断一个精确的已启用插件是否贡献了请求的集成挂载点。
-//
-// Parameters: plugins is the committed plugin projection and pluginId is the exact manifest identifier.
-// 参数：plugins 是已提交插件投影，pluginId 是精确清单标识。
-// Returns: true only when the plugin is available, enabled, runtime-ready, and declares the detail mount.
-// 返回值：仅当插件可用、已启用、运行时就绪且声明详情挂载点时返回 true。
-export function hasEnabledPluginDetailMount(plugins: PluginSummary[], pluginId: string): boolean {
-  return enabledPluginDetailMounts(plugins).some((selection) => selection.plugin.id === pluginId)
-}
-
 // SkillHeaderBusyActionId identifies one title-bar skill action currently showing feedback.
 // SkillHeaderBusyActionId 标识当前正在标题栏展示反馈的技能动作。
 export type SkillHeaderBusyActionId = "lua-refresh"

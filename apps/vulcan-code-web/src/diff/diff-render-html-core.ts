@@ -238,12 +238,6 @@ export function renderPlainDiffVirtualRowsHtmlCore(options: DiffPlainRowsRenderO
   return renderDiffVirtualRowsHtmlCore(options, 0, options.rows.length);
 }
 
-// renderHighlightedDiffVirtualRowsHtmlCore renders one virtual row window with cached token spans.
-// renderHighlightedDiffVirtualRowsHtmlCore 使用缓存 token span 渲染一个虚拟行窗口。
-export function renderHighlightedDiffVirtualRowsHtmlCore(options: DiffHighlightedRowsRenderOptions): string {
-  return renderDiffVirtualRowsHtmlCore(options, 0, options.rows.length);
-}
-
 // renderPlainDiffVirtualRowsHtmlRangeCore renders a bounded plain row range without slicing.
 // renderPlainDiffVirtualRowsHtmlRangeCore 在不切片数组的情况下渲染受限纯文本行范围。
 export function renderPlainDiffVirtualRowsHtmlRangeCore(

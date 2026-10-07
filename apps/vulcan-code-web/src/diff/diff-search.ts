@@ -147,46 +147,9 @@ const diffSearchMatchDerivedCache = new WeakMap<readonly DiffSearchMatch[], Diff
 // diffSearchPageFileKeysCache 按稳定命中数组与分页起点缓存文件分页集合。
 const diffSearchPageFileKeysCache = new WeakMap<readonly DiffSearchMatch[], Map<number, ReadonlySet<string>>>();
 
-// diffSearchLineKeysForFilesCache stores visible line-key sets for stable match and file-key sets.
-// diffSearchLineKeysForFilesCache 按稳定命中数组与文件 key 集合缓存可见行 key。
-const diffSearchLineKeysForFilesCache = new WeakMap<readonly DiffSearchMatch[], WeakMap<ReadonlySet<string>, ReadonlySet<string>>>();
-
 // diffSearchVisiblePageCache stores current-page descriptors by numeric match and file page starts.
 // diffSearchVisiblePageCache 按数值化命中分页起点与文件分页起点缓存当前分页描述符。
 const diffSearchVisiblePageCache = new WeakMap<readonly DiffSearchMatch[], Map<number, Map<number, DiffSearchVisiblePage>>>();
-
-// buildDiffSearchIndex searches only currently loaded parsed hunk lines.
-// buildDiffSearchIndex 仅搜索当前已加载的已解析 hunk 行。
-export function buildDiffSearchIndex(snapshot: DiffPanelSnapshot, query: string, previousIndex?: DiffSearchIndex | null): DiffSearchIndex {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) {
-    return EMPTY_DIFF_SEARCH_INDEX;
-  }
-  const refinedIndex = previousIndex ? refinedDiffSearchIndex(snapshot, normalizedQuery, previousIndex) : null;
-  if (refinedIndex) {
-    return refinedIndex;
-  }
-  const matches: DiffSearchMatch[] = [];
-  let scannedLines = 0;
-  for (let fileIndex = 0; fileIndex < snapshot.files.length; fileIndex += 1) {
-    const file = snapshot.files[fileIndex];
-    for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex += 1) {
-      const hunk = file.hunks[hunkIndex];
-      for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex += 1) {
-        const line = hunk.lines[lineIndex];
-        scannedLines += 1;
-        if (!normalizedDiffLineContent(line).includes(normalizedQuery)) {
-          continue;
-        }
-        matches.push(diffSearchMatchFromLine(file, fileIndex, hunkIndex, lineIndex, line));
-        if (matches.length >= DIFF_SEARCH_MAX_RESULTS) {
-          return { query: normalizedQuery, matches, truncated: true, scannedLines };
-        }
-      }
-    }
-  }
-  return { query: normalizedQuery, matches, truncated: false, scannedLines };
-}
 
 // buildDiffSearchIndexSliced searches loaded hunk lines while yielding between bounded slices.
 // buildDiffSearchIndexSliced 在有界片段之间让出执行权来搜索已加载 hunk 行。
@@ -240,43 +203,6 @@ export async function buildDiffSearchIndexSliced(
     }
   }
   return { query: normalizedQuery, matches, truncated: false, scannedLines };
-}
-
-// refinedDiffSearchIndex filters a previous complete result when the new query only narrows it.
-// refinedDiffSearchIndex 在新查询仅收窄旧查询时过滤上一份完整结果。
-function refinedDiffSearchIndex(
-  // Parsed diff snapshot that owns the previous matches.
-  // 拥有上一份命中结果的已解析 diff snapshot。
-  snapshot: DiffPanelSnapshot,
-  // Already normalized query for the next search.
-  // 下一次搜索已经规范化后的查询。
-  normalizedQuery: string,
-  // Previous search result from the same snapshot.
-  // 同一 snapshot 上一次搜索结果。
-  previousIndex: DiffSearchIndex,
-): DiffSearchIndex | null {
-  if (previousIndex.query === normalizedQuery) {
-    return previousIndex;
-  }
-  if (!previousIndex.query || previousIndex.truncated || !normalizedQuery.startsWith(previousIndex.query)) {
-    return null;
-  }
-  const matches: DiffSearchMatch[] = [];
-  for (const match of previousIndex.matches) {
-    const line = diffLineForSearchMatch(snapshot, match);
-    if (!line) {
-      return null;
-    }
-    if (normalizedDiffLineContent(line).includes(normalizedQuery)) {
-      matches.push(match);
-    }
-  }
-  return {
-    query: normalizedQuery,
-    matches,
-    truncated: false,
-    scannedLines: previousIndex.scannedLines,
-  };
 }
 
 // refinedDiffSearchIndexSliced filters a previous result while preserving worker preemption points.
@@ -354,30 +280,6 @@ function normalizedDiffLineContent(line: DiffLine): string {
   return normalized;
 }
 
-// diffSearchPage returns the 20-result page containing the active match.
-// diffSearchPage 返回包含活跃命中的 20 条分页结果。
-export function diffSearchPage(matches: DiffSearchMatch[], activeIndex: number): DiffSearchMatch[] {
-  if (!matches.length) {
-    return [];
-  }
-  const safeIndex = clampDiffSearchIndex(activeIndex, matches.length);
-  const pageStart = Math.floor(safeIndex / DIFF_SEARCH_PAGE_SIZE) * DIFF_SEARCH_PAGE_SIZE;
-  return diffSearchPageByStart(matches, pageStart);
-}
-
-// diffSearchPageFileKeys returns the matching file page containing the active match's file.
-// diffSearchPageFileKeys 返回包含活跃命中文件的匹配文件分页。
-export function diffSearchPageFileKeys(matches: DiffSearchMatch[], activeIndex: number): ReadonlySet<string> {
-  if (!matches.length) {
-    return EMPTY_DIFF_SEARCH_FILE_KEYS;
-  }
-  const uniqueFileKeyIndex = diffSearchMatchDerived(matches).fileKeyIndex;
-  const activeMatch = matches[clampDiffSearchIndex(activeIndex, matches.length)];
-  const activeFileIndex = uniqueFileKeyIndex.indexByKey.get(activeMatch?.fileKey ?? "") ?? 0;
-  const pageStart = Math.floor(activeFileIndex / DIFF_SEARCH_PAGE_SIZE) * DIFF_SEARCH_PAGE_SIZE;
-  return cachedDiffSearchPageFileKeysByStart(matches, uniqueFileKeyIndex, pageStart);
-}
-
 // diffSearchVisiblePage returns one descriptor for the active search match and file pages.
 // diffSearchVisiblePage 返回活跃搜索命中分页与文件分页的统一描述符。
 export function diffSearchVisiblePage(matches: DiffSearchMatch[], activeIndex: number): DiffSearchVisiblePage {
@@ -410,26 +312,6 @@ export function diffSearchVisiblePage(matches: DiffSearchMatch[], activeIndex: n
   const visiblePage = { matches: pageMatches, fileKeys, lineKeys };
   visiblePagesByFileStart.set(filePageStart, visiblePage);
   return visiblePage;
-}
-
-// diffSearchLineKeysForFiles returns every matched line key for one visible file page.
-// diffSearchLineKeysForFiles 返回一个可见文件分页内的全部命中行 key。
-export function diffSearchLineKeysForFiles(matches: DiffSearchMatch[], fileKeys: ReadonlySet<string>): ReadonlySet<string> {
-  if (!matches.length || !fileKeys.size) {
-    return EMPTY_DIFF_SEARCH_LINE_KEYS;
-  }
-  let lineKeysByFileKeys = diffSearchLineKeysForFilesCache.get(matches);
-  if (!lineKeysByFileKeys) {
-    lineKeysByFileKeys = new WeakMap();
-    diffSearchLineKeysForFilesCache.set(matches, lineKeysByFileKeys);
-  }
-  const cached = lineKeysByFileKeys.get(fileKeys);
-  if (cached) {
-    return cached;
-  }
-  const lineKeys = diffSearchLineKeysForFileSet(matches, fileKeys, diffSearchMatchDerived(matches).lineKeysByFile);
-  lineKeysByFileKeys.set(fileKeys, lineKeys);
-  return lineKeys;
 }
 
 // diffSearchPageByStart returns a cached match page for one precomputed page start.

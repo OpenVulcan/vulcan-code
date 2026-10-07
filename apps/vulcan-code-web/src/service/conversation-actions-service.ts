@@ -315,21 +315,6 @@ export async function stopCommandSession(commandSessionId: string, ownerSessionI
   });
 }
 
-// getCommandSessionSnapshot reads one live command-session snapshot without refreshing the full workbench.
-// getCommandSessionSnapshot 读取单条实时命令会话快照，但不刷新完整工作台。
-export async function getCommandSessionSnapshot(
-  commandSessionId: string,
-  ownerSessionId?: string | null,
-): Promise<CommandSessionSummary | null> {
-  if (!hasServiceRuntime()) {
-    return null;
-  }
-  return serviceClient.request<CommandSessionSummary>("service_get_command_session_snapshot", {
-    commandSessionId,
-    ownerSessionId: ownerSessionId ?? null,
-  });
-}
-
 /** Reprojects the exact retained command-session runtime after a durable terminal mutation.
  * 在可靠终端变更后重新投影精确保留的命令会话运行时。
  *
@@ -352,25 +337,6 @@ export type TerminalInputEvent =
   | { kind: "paste"; text: string }
   | { kind: "key"; key: string }
   | { kind: "chord"; key: string; ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean };
-
-// sendCommandSessionInput sends structured input events to one live terminal session.
-// sendCommandSessionInput 向单条实时终端会话发送结构化输入事件。
-export async function sendCommandSessionInput(
-  commandSessionId: string,
-  ownerSessionId: string | null | undefined,
-  inputs: TerminalInputEvent[],
-): Promise<CommandSessionSummary[]> {
-  if (!hasServiceRuntime()) {
-    return [];
-  }
-  return serviceClient.request<CommandSessionSummary[]>("service_send_command_session_input", {
-    request: {
-      commandSessionId,
-      ownerSessionId: ownerSessionId ?? null,
-      inputs,
-    },
-  });
-}
 
 // GitCommitSummaryGenerateResponse describes backend-generated commit message text and accounting metadata.
 // GitCommitSummaryGenerateResponse 描述后端生成的提交信息文本与统计元数据。
@@ -463,27 +429,6 @@ export async function runGitCommitAction(request: {
     return null;
   }
   return serviceClient.request<GitCommitActionResponse>("service_run_git_commit_action", { request });
-}
-
-// resizeCommandSession resizes one live terminal session.
-// resizeCommandSession 调整单条实时终端会话尺寸。
-export async function resizeCommandSession(
-  commandSessionId: string,
-  ownerSessionId: string | null | undefined,
-  rows: number,
-  cols: number,
-): Promise<CommandSessionSummary[]> {
-  if (!hasServiceRuntime()) {
-    return [];
-  }
-  return serviceClient.request<CommandSessionSummary[]>("service_resize_command_session", {
-    request: {
-      commandSessionId,
-      ownerSessionId: ownerSessionId ?? null,
-      rows,
-      cols,
-    },
-  });
 }
 
 // saveSessionGoal persists a user-authored goal for the current conversation.

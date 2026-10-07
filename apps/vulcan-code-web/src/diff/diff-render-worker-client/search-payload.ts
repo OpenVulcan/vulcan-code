@@ -79,45 +79,6 @@ function serializedSearchPayloadParts(searchLineKeys: ReadonlySet<string>): Requ
   return { keys, signature };
 }
 
-// serializedSearchLineKeyString returns a cached joined search-key string.
-// serializedSearchLineKeyString 返回缓存后的搜索键拼接字符串。
-export function serializedSearchLineKeyString(searchLineKeys?: ReadonlySet<string>): string {
-  if (!searchLineKeys) {
-    return "";
-  }
-  const cached = serializedSearchLineKeyStringCache.get(searchLineKeys);
-  if (cached != null) {
-    return cached;
-  }
-  const serializedKeyString = serializedSearchPayloadParts(searchLineKeys).signature;
-  serializedSearchLineKeyStringCache.set(searchLineKeys, serializedKeyString);
-  return serializedKeyString;
-}
-
-// serializedSearchLineKeys converts a readonly set into a stable string array.
-// serializedSearchLineKeys 将只读集合转换为稳定字符串数组。
-export function serializedSearchLineKeys(searchLineKeys?: ReadonlySet<string>): string[] {
-  if (!searchLineKeys) {
-    return EMPTY_SERIALIZED_SEARCH_LINE_KEYS;
-  }
-  const cached = serializedSearchLineKeysCache.get(searchLineKeys);
-  if (cached) {
-    return cached;
-  }
-  if (!searchLineKeys.size) {
-    serializedSearchLineKeysCache.set(searchLineKeys, EMPTY_SERIALIZED_SEARCH_LINE_KEYS);
-    return EMPTY_SERIALIZED_SEARCH_LINE_KEYS;
-  }
-  const serializedKeys: string[] = new Array(searchLineKeys.size);
-  let index = 0;
-  for (const key of searchLineKeys) {
-    serializedKeys[index] = key;
-    index += 1;
-  }
-  serializedSearchLineKeysCache.set(searchLineKeys, serializedKeys);
-  return serializedKeys;
-}
-
 // serializedSearchLineKeyStringFromKeys joins cached keys without rebuilding the key array.
 // serializedSearchLineKeyStringFromKeys 复用已缓存 key 数组生成签名。
 export function serializedSearchLineKeyStringFromKeys(keys: readonly string[]): string {

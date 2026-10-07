@@ -7,7 +7,6 @@ import type {
   KnowledgePackageFileListing,
   KnowledgePackageImportResult,
   KnowledgePackageInspection,
-  KnowledgeCustomWord,
   KnowledgeImportJobSummary,
   KnowledgeIndexIntegritySummary,
   KnowledgeLibrarySummary,
@@ -165,24 +164,6 @@ export async function getKnowledgeIndexIntegrity(libraryId: string): Promise<Kno
   return serviceClient.request<KnowledgeIndexIntegritySummary>("service_get_knowledge_index_integrity", { libraryId });
 }
 
-// listKnowledgeCustomWords loads one library-local Jieba dictionary.
-// listKnowledgeCustomWords 加载一个知识库局部 Jieba 词典。
-export async function listKnowledgeCustomWords(libraryId: string): Promise<KnowledgeCustomWord[]> {
-  return serviceClient.request<KnowledgeCustomWord[]>("service_list_knowledge_custom_words", { libraryId });
-}
-
-// upsertKnowledgeCustomWord writes one library-local Jieba dictionary entry.
-// upsertKnowledgeCustomWord 写入一个知识库局部 Jieba 词典条目。
-export async function upsertKnowledgeCustomWord(libraryId: string, word: string, weight: number): Promise<void> {
-  await serviceClient.request("service_upsert_knowledge_custom_word", { request: { libraryId, word, weight } });
-}
-
-// removeKnowledgeCustomWord deletes one library-local Jieba dictionary entry.
-// removeKnowledgeCustomWord 删除一个知识库局部 Jieba 词典条目。
-export async function removeKnowledgeCustomWord(libraryId: string, word: string): Promise<void> {
-  await serviceClient.request("service_remove_knowledge_custom_word", { libraryId, word });
-}
-
 // listManagedKnowledgeDocuments loads one library page without applying project or session ACLs.
 // listManagedKnowledgeDocuments 加载一个知识库分页，不应用项目或会话 ACL。
 export async function listManagedKnowledgeDocuments(
@@ -291,39 +272,6 @@ export async function importKnowledgePackage(
 // browseKnowledgePackages 为导入选择器列出目录和普通 .vkb 文件。
 export async function browseKnowledgePackages(path: string | null): Promise<KnowledgePackageFileListing> {
   return serviceClient.request<KnowledgePackageFileListing>("service_browse_knowledge_packages", { path });
-}
-
-// listKnowledgeDocuments loads one bounded project-authorized document page.
-// listKnowledgeDocuments 加载一个有界且经过项目授权的文档分页。
-export async function listKnowledgeDocuments(
-  projectId: string,
-  libraryId: string,
-  folderPath: string | null = null,
-  limit = 100,
-  offset = 0,
-): Promise<KnowledgeDocumentSummary[]> {
-  return serviceClient.request<KnowledgeDocumentSummary[]>("service_list_knowledge_documents", {
-    request: { projectId, libraryId, folderPath, limit, offset },
-  });
-}
-
-// readKnowledgeDocument loads one exact project-authorized Markdown document.
-// readKnowledgeDocument 加载一份精确且经过项目授权的 Markdown 文档。
-export async function readKnowledgeDocument(projectId: string, libraryId: string, documentId: string): Promise<KnowledgeDocumentContent> {
-  return serviceClient.request<KnowledgeDocumentContent>("service_read_knowledge_document", { projectId, libraryId, documentId });
-}
-
-// searchKnowledge executes bounded federated Jieba BM25 search.
-// searchKnowledge 执行有界联合 Jieba BM25 检索。
-export async function searchKnowledge(
-  projectId: string,
-  libraryIds: string[],
-  query: string,
-  retrievalMode?: "raw_bm25" | "display_bm25" | "display_hybrid",
-): Promise<KnowledgeSearchResult> {
-  return serviceClient.request<KnowledgeSearchResult>("service_search_knowledge", {
-    request: { projectId, libraryIds, query, limit: 20, retrievalMode: retrievalMode ?? null },
-  });
 }
 
 // browseKnowledgeSourceDirectories reuses the host directory browser contract.

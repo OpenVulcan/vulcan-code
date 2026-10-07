@@ -9,18 +9,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary } from "@/types";
-// parseModelPickerChoiceKey splits only the provider prefix because model ids may contain slashes.
-// parseModelPickerChoiceKey 只拆分 Provider 前缀，因为模型标识本身可能包含斜杠。
-export function parseModelPickerChoiceKey(value: string): { providerId: string; modelId: string } | null {
-  const separatorIndex = value.indexOf("/");
-  if (separatorIndex <= 0 || separatorIndex >= value.length - 1) {
-    return null;
-  }
-  return {
-    providerId: value.slice(0, separatorIndex),
-    modelId: value.slice(separatorIndex + 1),
-  };
-}
 
 // secondaryRouteIdentity returns the stable identity used to reconcile optimistic and authoritative selections.
 // secondaryRouteIdentity 返回用于协调乐观选择与权威选择的稳定标识。

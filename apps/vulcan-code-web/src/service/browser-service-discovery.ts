@@ -468,27 +468,6 @@ function browserServiceEndpointFromDiscovery(
   };
 }
 
-// browserServiceIdentityMatches reports whether two endpoints describe the same service generation.
-// browserServiceIdentityMatches 报告两个端点是否描述同一服务代际。
-export function browserServiceIdentityMatches(
-  first: Pick<BrowserServiceEndpoint, "pid" | "startedAt" | "serviceToken"> | null,
-  second: Pick<BrowserServiceEndpoint, "pid" | "startedAt" | "serviceToken"> | null,
-): boolean {
-  if (!first || !second) {
-    return false;
-  }
-  if (first.pid === null || second.pid === null || first.pid !== second.pid) {
-    return false;
-  }
-  if (!first.startedAt || !second.startedAt || first.startedAt !== second.startedAt) {
-    return false;
-  }
-  if (!first.serviceToken || !second.serviceToken || first.serviceToken !== second.serviceToken) {
-    return false;
-  }
-  return true;
-}
-
 // rememberBrowserServiceEndpoint stores one discovered endpoint for future sync helpers.
 // rememberBrowserServiceEndpoint 保存一个已发现端点，供后续同步辅助逻辑使用。
 function rememberBrowserServiceEndpoint(endpoint: BrowserServiceEndpoint): void {

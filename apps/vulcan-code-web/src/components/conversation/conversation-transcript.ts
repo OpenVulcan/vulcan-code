@@ -16,19 +16,6 @@ export { generatedMediaAttachmentsFromToolDetailPayload } from "@/components/con
 export { parseConversationBlocks } from "@/components/conversation/conversation-transcript-parser";
 export { metadataString } from "@/components/conversation/conversation-metadata";
 
-// projectConversationRenderItems merges related low-level transcript rows for display.
-// projectConversationRenderItems 合并相关底层转录行以生成最终展示项。
-export function projectConversationRenderItems(
-  // Messages to project into render items.
-  // 需要投影为渲染项的消息集合。
-  messages: ConversationMessage[],
-  // Optional translator used for localized metadata summaries.
-  // 用于本地化元数据摘要的可选翻译函数。
-  t?: (key: TranslationKey) => string,
-): ConversationRenderItem[] {
-  return projectConversationRenderItemsWith(messages, (message, projectionMessage) => sourceBoundConversationBlocks(message, projectionMessage, t));
-}
-
 // ConversationRenderItemsProjector projects render items for one transcript surface across successive updates.
 // ConversationRenderItemsProjector 为单个转录界面在连续更新之间投影渲染项。
 export type ConversationRenderItemsProjector = (messages: ConversationMessage[]) => ConversationRenderItem[];
