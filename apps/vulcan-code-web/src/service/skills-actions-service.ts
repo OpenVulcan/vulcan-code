@@ -421,6 +421,20 @@ export async function inspectLocalPlugin(sourcePath: string): Promise<VulcanPlug
   return serviceClient.request<VulcanPluginPermissionPreview>("service_inspect_local_plugin", { sourcePath });
 }
 
+// loadInstalledPluginPermissionPreview reads the authorization surface of the installed package version.
+// loadInstalledPluginPermissionPreview 读取已安装插件包版本的授权界面数据。
+//
+// Parameters: pluginId is the exact installed plugin identity.
+// 参数：pluginId 是精确的已安装插件身份。
+// Returns: the host-derived preview of the installed version, for comparison with an update candidate.
+// 返回值：宿主派生的已安装版本预览，用于与更新候选比较。
+export async function loadInstalledPluginPermissionPreview(pluginId: string): Promise<VulcanPluginPermissionPreview> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Installed plugin inspection requires the Vulcan service runtime.");
+  }
+  return serviceClient.request<VulcanPluginPermissionPreview>("service_installed_plugin_permission_preview", { pluginId });
+}
+
 // installLocalPlugin atomically installs one package with the exact approved capability set.
 // installLocalPlugin 使用精确批准的能力集合原子安装一个插件包。
 // Parameters: sourcePath selects the package, contentFingerprint binds its inspection, and the remaining values carry exact user consent.

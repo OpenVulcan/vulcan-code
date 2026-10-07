@@ -923,6 +923,21 @@ pub(crate) async fn service_inspect_local_plugin(
     .await
 }
 
+/// Returns the authorization preview of one installed plugin, for comparison with an update candidate.
+/// 返回单个已安装插件的授权预览，用于与更新候选比较。
+pub(crate) async fn service_installed_plugin_permission_preview(
+    state: SharedServiceBridgeState,
+    plugin_id: String,
+) -> Result<vulcan_plugin_runtime::VulcanPluginPermissionPreview, String> {
+    let runtime = service_vulcan_plugin_runtime(&state)?;
+    run_extension_management_blocking("read installed plugin permissions", move || {
+        runtime
+            .permission_preview(&plugin_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
 /// Validates installation Secret inputs against the exact inspected local-MCP requirement set.
 /// 根据已检查的精确本地 MCP 要求集合校验安装 Secret 输入。
 ///

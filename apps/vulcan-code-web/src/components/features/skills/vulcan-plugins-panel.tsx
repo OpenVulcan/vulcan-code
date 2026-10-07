@@ -20,6 +20,7 @@ import type { PluginRuntimeErrorRecord, PluginSummary, VulcanPluginPermissionPre
 import type { SkillActionProps } from "./skill-area-types";
 import { localizedPluginText, pluginDisplayName } from "./plugin-localized-text";
 import { usePluginEnvironmentTasks } from "./use-plugin-environment-tasks";
+import { InspectedPluginNotices } from "./plugin-permission-changes";
 
 // VulcanPluginStatusFilter identifies the lifecycle subset shown in the Vulcan Plugin list.
 // VulcanPluginStatusFilter 标识 Vulcan 插件列表中显示的生命周期子集。
@@ -677,15 +678,7 @@ export function VulcanPluginsPanel(props: {
                 })}
               </div>
             ) : null}
-            {inspectedInstalledPlugin ? (
-              <PageNotice tone={inspectedInstalledPlugin.extension?.origin === "userInstalled" && inspectedInstalledPlugin.runtimeState === "disabled" ? "info" : "warning"}>
-                {inspectedInstalledPlugin.extension?.origin !== "userInstalled"
-                  ? t("skills.plugins.thisIdIsOwned")
-                  : inspectedInstalledPlugin.runtimeState === "disabled"
-                    ? t("skills.plugins.thisWillUpdateThe")
-                    : t("skills.plugins.disableAndFullyDrain")}
-              </PageNotice>
-            ) : null}
+            <InspectedPluginNotices candidate={permissionPreview} installed={inspectedInstalledPlugin} />
             <Button
               disabled={mutationBusy
                  || !authorizationConfirmed

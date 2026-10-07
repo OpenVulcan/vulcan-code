@@ -15,6 +15,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_refresh_luaskill_config",
     "service_poll_luaskill_config_events",
     "service_inspect_local_plugin",
+    "service_installed_plugin_permission_preview",
     "service_install_local_plugin",
     "service_update_local_plugin",
     "service_uninstall_user_plugin",
@@ -124,6 +125,13 @@ pub(super) async fn dispatch(
         ),
         "service_inspect_local_plugin" => rpc_json_result(
             service_inspect_local_plugin(state, rpc_required_param(params, "sourcePath")?).await,
+        ),
+        "service_installed_plugin_permission_preview" => rpc_json_result(
+            service_installed_plugin_permission_preview(
+                state,
+                rpc_required_param(params, "pluginId")?,
+            )
+            .await,
         ),
         "service_install_local_plugin" => rpc_json_result(
             service_install_local_plugin(
