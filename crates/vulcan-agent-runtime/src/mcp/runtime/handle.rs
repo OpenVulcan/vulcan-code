@@ -290,6 +290,10 @@ mod remote_release_tests;
 /// MCP 可选 prompt 与 resource 发现请求使用的宿主持有超时。
 const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Host-owned deadline for launching one MCP transport and completing its initialize handshake.
+/// 启动单个 MCP 传输并完成 initialize 握手的宿主持有期限。
+const MCP_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Host-owned per-partition readiness timeout for one plugin MCP partition.
 /// 单个插件 MCP 分区使用的宿主持有就绪超时。
 ///
@@ -1665,7 +1669,7 @@ fn spawn_server_runtime_task(
                 _ = shutdown_rx.changed() => None,
                 result = async {
                     tokio::time::timeout(
-                        Duration::from_secs(15),
+                        MCP_INITIALIZE_TIMEOUT,
                         inner.registry.spawn_transport(
                             &server.id,
                             auth_session.as_ref().cloned().flatten(),
@@ -1676,8 +1680,9 @@ fn spawn_server_runtime_task(
                     .await
                     .map_err(|_| {
                         format!(
-                            "MCP server `{}` initialize timed out after 15 seconds.",
-                            server.name
+                            "MCP server `{}` initialize timed out after {} seconds.",
+                            server.name,
+                            MCP_INITIALIZE_TIMEOUT.as_secs()
                         )
                     })?
                 } => Some(result),
