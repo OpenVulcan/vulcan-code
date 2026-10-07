@@ -175,11 +175,17 @@ function PluginSettingsPageBody(props: { layout: PluginSettingsLayout; configSch
       }
       return <SettingsActionRow busy={busy !== null} item={item} key={item.id} message={host.message} notice={notice(item.id)}
         onRun={() => void run(item.id, async () => {
+          // Retain the load generation so an old action cannot update a replacement page.
+          // 保留加载代次，防止旧操作更新已经替换的页面。
+          const current = sequence.current;
           await host.invoke(item.action, {});
+          // Refresh only credential validation; rereading configuration would discard the draft.
+          // 仅刷新凭据校验；重新读取配置会丢弃草稿。
+          const credentialStatuses = await Promise.all(credentials.map((credential) =>
+            host.invoke<PluginCredentialStatus>(credential.status_action, {})));
+          if (!mounted.current || current !== sequence.current) return;
+          setStatuses(Object.fromEntries(credentials.map((credential, index) => [credential.id, credentialStatuses[index] ?? null])));
           rowSuccess(item.id, item.success_message_key ? host.message(item.success_message_key) : t("plugins.settings.actionDone"));
-          // A test or refresh may change credential validation, so statuses are re-read quietly.
-          // 测试或刷新可能改变凭据校验状态，因此静默重新读取状态。
-          if (credentials.length > 0) void load();
         }, rowFailure(item.id))} />;
     });
   }

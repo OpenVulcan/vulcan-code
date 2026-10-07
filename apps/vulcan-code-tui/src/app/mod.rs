@@ -374,16 +374,45 @@ pub struct GitView {
     pub cursor: usize,
     pub busy: Option<GitBusy>,
     pub branches: Vec<GitBranch>,
-    pub diffs: HashMap<String, FileDiff>,
+    /// Successful diffs keyed by their complete workspace, repository, path and mode identity.
+    /// 按完整工作区、仓库、路径及模式身份保存的成功差异。
+    pub diffs: HashMap<GitDiffKey, FileDiff>,
     /// Files whose diff failed to load, with the service's reason when it gave one.
     /// 加载 diff 失败的文件，及服务给出的原因。
-    pub diff_failures: HashMap<String, Option<String>>,
+    pub diff_failures: HashMap<GitDiffKey, Option<String>>,
     /// Repository chosen in the panel that the backend has not published yet.
     /// 已在面板中选择、后端尚未发布的仓库。
     pub pending: Option<String>,
 }
 
 impl GitView {
+    /// Returns the full identity of `file` in the displayed repository, or none during selection.
+    /// 返回显示仓库内 `file` 的完整身份；选择切换期间返回空。
+    pub fn diff_key(&self, file: &GitFile) -> Option<GitDiffKey> {
+        // Only a resolved selection can own a diff request.
+        // 只有已经确定的选择才能拥有差异请求。
+        let snapshot = self.repository()?;
+        Some(GitDiffKey {
+            workspace: snapshot.workspace.clone(),
+            repository_key: snapshot.selected.clone()?,
+            path: file.path.clone(),
+            staged: file.staged,
+        })
+    }
+
+    /// Accepts a result only while its workspace, repository and file mode are still displayed.
+    /// 仅当结果的工作区、仓库及文件模式仍在显示时接收结果。
+    pub fn accepts_diff(&self, key: &GitDiffKey) -> bool {
+        self.repository().is_some_and(|snapshot| {
+            snapshot.workspace == key.workspace
+                && snapshot.selected.as_ref() == Some(&key.repository_key)
+                && snapshot
+                    .files
+                    .iter()
+                    .any(|file| file.path == key.path && file.staged == key.staged)
+        })
+    }
+
     /// Files in panel order: staged first, then unstaged.
     /// 面板顺序的文件：先暂存区，再未暂存。
     pub fn ordered_files(&self) -> Vec<&GitFile> {
@@ -745,6 +774,19 @@ impl App {
     /// 经对应 WebUI 服务函数加载可见页面；会话区域不需要系统加载器。
     pub fn load_page(&mut self) {
         if let Some(page) = self.current_page() {
+            // An explicit null workbench slot records a failed refresh, so page reload retries it.
+            // 明确为空的工作台槽位记录刷新失败，因此重新加载页面时重试该读取。
+            if self
+                .slots
+                .value(crate::service_api::Slot::Workbench)
+                .is_null()
+                && let Some(loader) = self
+                    .slots
+                    .loader(crate::service_api::Slot::Workbench)
+                    .cloned()
+            {
+                action::perform(self, action::UiAction::Send(Command::Call(loader)));
+            }
             // Route page effects through the same dispatcher used by mouse and keyboard.
             // 页面副作用经过鼠标与键盘共用的分发入口。
             for call in page.loaders(self) {
@@ -1191,12 +1233,16 @@ impl App {
                 self.git.snapshot = None;
                 self.git.cursor = 0;
             }
-            BackendEvent::GitDiff(diff) => {
-                self.git.diff_failures.remove(&diff.path);
-                self.git.diffs.insert(diff.path.clone(), diff);
+            BackendEvent::GitDiff { key, diff } => {
+                if self.git.accepts_diff(&key) {
+                    self.git.diff_failures.remove(&key);
+                    self.git.diffs.insert(key, diff);
+                }
             }
-            BackendEvent::GitDiffFailed { path, message } => {
-                self.git.diff_failures.insert(path, message);
+            BackendEvent::GitDiffFailed { key, message } => {
+                if self.git.accepts_diff(&key) {
+                    self.git.diff_failures.insert(key, message);
+                }
             }
             BackendEvent::GitBranches(branches) => {
                 self.git.branches = branches;
@@ -1488,20 +1534,20 @@ impl App {
     /// failed file is asked again, so stepping onto it retries.
     /// 当 Git 光标所在文件的 diff 未缓存时向后端请求；失败的文件会再次请求，因此切到该文件即重试。
     pub fn request_visible_diff(&mut self) {
-        let path = match &self.overlay {
+        let key = match &self.overlay {
             Some(Overlay::Diff(view)) => self
                 .git
                 .ordered_files()
                 .get(view.file_index)
-                .map(|f| f.path.clone()),
+                .and_then(|file| self.git.diff_key(file)),
             _ => None,
         };
-        if let Some(path) = path
-            && !self.git.diffs.contains_key(&path)
+        if let Some(key) = key
+            && !self.git.diffs.contains_key(&key)
         {
-            self.git.diff_failures.remove(&path);
+            self.git.diff_failures.remove(&key);
             self.backend
-                .send(Command::LoadWorkspaceDiffFileDetail { path });
+                .send(Command::LoadWorkspaceDiffFileDetail { key });
         }
     }
 

@@ -355,7 +355,12 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
         ..inner
     };
 
-    if let Some(reason) = app.git.diff_failures.get(&file.path) {
+    // The displayed row owns both the repository and staged/unstaged cache identity.
+    // 显示行同时拥有仓库身份及暂存／未暂存缓存身份。
+    let Some(key) = app.git.diff_key(file) else {
+        return;
+    };
+    if let Some(reason) = app.git.diff_failures.get(&key) {
         let mut y = body.y + 1;
         buf.set_string(
             body.x + 2,
@@ -385,7 +390,7 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
         );
         return;
     }
-    let Some(diff) = app.git.diffs.get(&file.path) else {
+    let Some(diff) = app.git.diffs.get(&key) else {
         buf.set_string(
             body.x + 2,
             body.y + 1,

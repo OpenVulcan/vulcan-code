@@ -342,6 +342,7 @@ impl Worker {
             }
             // A failed read keeps the repository's previous views and its mark.
             // 读取失败时保留该仓库先前的视图及其标记。
+            self.git.dirty.insert(key.clone());
             let views = snapshot(self, &key, "unstaged")
                 .and_then(|unstaged| Some((unstaged, snapshot(self, &key, "staged")?)));
             if let Some((unstaged, staged)) = views {
@@ -368,6 +369,11 @@ impl Worker {
     /// the panel shows the catalog alone.
     /// 从内存发布所选仓库；没有已选或可读仓库时面板只显示目录。
     fn emit_git_selected(&mut self) {
+        // An empty worker has no workspace and cannot publish a repository snapshot.
+        // 空工作器没有工作区，不能发布仓库快照。
+        let Some(workspace) = self.git.workspace.clone() else {
+            return;
+        };
         let repositories = self.git.repositories.clone();
         let views = self
             .git
@@ -379,6 +385,7 @@ impl Worker {
             self.git.unstaged.clear();
             self.git.staged.clear();
             self.emit(BackendEvent::Git(GitSnapshot {
+                workspace,
                 repositories,
                 selected: None,
                 branch: String::new(),
@@ -400,6 +407,7 @@ impl Worker {
         // 未推送提交数量。
         let ahead = u64_at(&unstaged, "currentBranchUnpushedCommits") as usize;
         self.emit(BackendEvent::Git(GitSnapshot {
+            workspace,
             repositories,
             selected: self.git.repository_key.clone(),
             branch: str_at(&unstaged, "currentBranch"),
@@ -427,7 +435,7 @@ impl Worker {
         if monitored {
             self.git.repository_key = Some(key.clone());
         }
-        if monitored && !self.git.views.contains_key(&key) {
+        if monitored && (!self.git.views.contains_key(&key) || self.git.dirty.contains(&key)) {
             self.git_reload(GitReload::Repositories(&[key]));
         } else {
             self.emit_git_selected();
@@ -485,30 +493,26 @@ impl Worker {
         }
     }
 
-    /// Loads one file's diff, preferring its unstaged changes.
-    /// 加载单个文件的 diff，优先取未暂存的变更。
-    /// `path` is the exact requested path.
-    /// `path` 为准确请求路径。
-    pub(super) fn git_diff(&mut self, path: String) {
-        // Found.
-        // 是否找到有效结果。
-        let found = [
-            ("unstaged", &self.git.unstaged),
-            ("staged", &self.git.staged),
-        ]
-        .into_iter()
-        .find_map(|(mode, refs)| {
-            refs.iter()
-                .find(|f| path_of(f) == path)
-                .map(|f| (mode, f.clone()))
-        });
-        // Mode; File.
-        // 已声明操作模式；当前文件数据。
-        let Some((mode, file)) = found else {
-            self.emit(BackendEvent::GitDiffFailed {
-                path,
-                message: None,
-            });
+    /// Loads the exact diff identified by `key`; stale owners never send a service request.
+    /// 加载 `key` 指定的准确差异；过期归属绝不发送服务请求。
+    pub(super) fn git_diff(&mut self, key: GitDiffKey) {
+        if self.git.workspace.as_ref() != Some(&key.workspace)
+            || self.git.repository_key.as_ref() != Some(&key.repository_key)
+        {
+            self.emit(BackendEvent::GitDiffFailed { key, message: None });
+            return;
+        }
+        // The selected row, rather than a path lookup order, determines the comparison mode.
+        // 由选中行决定比较模式，而非路径查询顺序。
+        let (mode, files) = if key.staged {
+            ("staged", &self.git.staged)
+        } else {
+            ("unstaged", &self.git.unstaged)
+        };
+        // Resolve only inside the declared mode's service-issued file identities.
+        // 仅在声明模式中由服务签发的文件身份内查找。
+        let Some(file) = files.iter().find(|file| path_of(file) == key.path) else {
+            self.emit(BackendEvent::GitDiffFailed { key, message: None });
             return;
         };
         // Exact RPC parameters.
@@ -519,19 +523,20 @@ impl Worker {
         }));
         let Some(client) = self.client.clone() else {
             self.emit(BackendEvent::Notice(Notice::NotConnected));
+            self.emit(BackendEvent::GitDiffFailed { key, message: None });
             return;
         };
         match client.call("workspace.diff.fileDetail", params) {
-            Ok(detail) => self.emit(BackendEvent::GitDiff(map::unified_diff(
-                &path,
-                &str_at(&detail, "unifiedDiff"),
-            ))),
+            Ok(detail) => self.emit(BackendEvent::GitDiff {
+                diff: map::unified_diff(&str_at(&detail, "unifiedDiff")),
+                key,
+            }),
             // The diff view shows the reason in place of its loading state.
             // diff 视图以失败原因取代其加载状态。
             Err(error) => {
                 let message = Some(error.message.clone());
                 self.failed(error);
-                self.emit(BackendEvent::GitDiffFailed { path, message });
+                self.emit(BackendEvent::GitDiffFailed { key, message });
             }
         }
     }

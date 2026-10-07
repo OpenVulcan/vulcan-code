@@ -412,6 +412,9 @@ pub struct GitRepository {
 /// `selected` 为 `None`。
 #[derive(Debug, Clone)]
 pub struct GitSnapshot {
+    /// Exact workspace path owning this repository catalog.
+    /// 拥有此仓库目录的准确工作区路径。
+    pub workspace: String,
     /// Every repository of the project in catalog order.
     /// 按目录顺序排列的项目全部仓库。
     pub repositories: Vec<GitRepository>,
@@ -445,10 +448,31 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 
+/// Parsed diff contents; the enclosing response carries the complete GitDiffKey identity.
+/// 已解析差异内容；外层响应携带完整的 GitDiffKey 身份。
 #[derive(Debug, Clone)]
 pub struct FileDiff {
-    pub path: String,
+    /// Ordered change hunks from the selected comparison mode.
+    /// 来自选定比较模式的有序变更片段。
     pub hunks: Vec<DiffHunk>,
+}
+
+/// Immutable identity of one diff view, shared by its request, response and cache entry.
+/// 单个差异视图的不可变身份，由请求、响应和缓存条目共用。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GitDiffKey {
+    /// Exact workspace path from the displayed snapshot.
+    /// 显示快照中的准确工作区路径。
+    pub workspace: String,
+    /// Service-issued repository key within the workspace.
+    /// 工作区内由服务签发的仓库键。
+    pub repository_key: String,
+    /// Displayed file path within that repository.
+    /// 该仓库中显示的文件路径。
+    pub path: String,
+    /// Whether the view compares the index with HEAD instead of the working tree with the index.
+    /// 是否比较索引与 HEAD，而非工作树与索引。
+    pub staged: bool,
 }
 
 #[derive(Debug, Clone)]

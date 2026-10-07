@@ -4,7 +4,9 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { createPluginPanel, formatMoney, presetTimeRange } from "./index.mjs";
 import { createPluginQueryClient, invalidatePluginQueries } from "../../../apps/vulcan-code-web/src/service/plugin-ui-query-runtime.ts";
-import { SUPPORTED_LOCALES } from "../../../apps/vulcan-code-web/src/i18n-locales.ts";
+// Read the authoritative registry without depending on the WebUI bundler's aliases.
+// 直接读取权威注册表，不依赖 WebUI 打包器的别名。
+const SUPPORTED_LOCALES = JSON.parse(readFileSync(new URL("../../../crates/vulcan-i18n/catalogs/locales.json", import.meta.url), "utf8")).locales;
 
 // require resolves the existing host test dependencies without adding a plugin bundle dependency.
 // require 解析现有宿主测试依赖，不向插件包添加依赖。

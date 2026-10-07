@@ -225,6 +225,9 @@ pub struct Worker {
     /// Last emitted workbench slot, to emit only changes.
     /// 最近一次发出的工作台槽位，只在变化时发出。
     workbench_slot: Value,
+    /// Whether a full authoritative snapshot permits publishing editable workbench settings.
+    /// 是否已有完整权威快照，允许发布可编辑的工作台设置。
+    workbench_slot_valid: bool,
 }
 
 /// Owns the worker event loop and stops transport readers when the UI closes.
@@ -302,6 +305,7 @@ impl Worker {
             load_sequences: HashMap::new(),
             vce_job_sequences: HashMap::new(),
             workbench_slot: Value::Null,
+            workbench_slot_valid: false,
         }
     }
 
@@ -704,14 +708,27 @@ impl Worker {
         // Exact service call.
         // 准确服务调用。
         let call = load_workbench_snapshot();
-        if let Some(snapshot) = self.call_as(call.method, call.params) {
+        if let Some(snapshot) = self.call_as(call.method, call.params.clone()) {
             self.apply_snapshot(snapshot);
+        } else {
+            // Keep conversation projections, but never republish stale settings through a delta.
+            // 保留会话投影，但绝不能通过增量重新发布过期设置。
+            self.workbench_slot_valid = false;
+            self.workbench_slot = Value::Null;
+            self.emit(BackendEvent::Slot {
+                slot: Slot::Workbench,
+                call,
+                value: Value::Null,
+            });
         }
     }
 
     /// Emits the workbench slot when the fields system areas read have changed.
     /// 系统区域读取的字段变化时发出工作台槽位。
     pub(super) fn emit_workbench_slot(&mut self) {
+        if !self.workbench_slot_valid {
+            return;
+        }
         // The typed snapshot serializes to the wire shape the system pages read.
         // 类型化快照序列化为系统页面读取的传输形状。
         let Some(Ok(Value::Object(mut whole))) = self.wb.as_ref().map(serde_json::to_value) else {
@@ -755,6 +772,7 @@ impl Worker {
             self.selected = snapshot.selected_conversation_id.clone();
         }
         self.wb = Some(snapshot);
+        self.workbench_slot_valid = true;
         let Some(wb) = self.wb.as_ref() else {
             return;
         };
@@ -1697,7 +1715,7 @@ impl Worker {
                 enabled,
             } => self.git_set_monitoring(repository_key, enabled),
             Command::RunWorkspaceGitFileAction { paths, stage } => self.git_stage(paths, stage),
-            Command::LoadWorkspaceDiffFileDetail { path } => self.git_diff(path),
+            Command::LoadWorkspaceDiffFileDetail { key } => self.git_diff(key),
             Command::LoadWorkspaceGitBranches => self.git_branches(),
             Command::SwitchWorkspaceGitBranch { name, create } => self.git_switch(name, create),
             Command::GenerateGitCommitMessage => self.git_generate_message(),
@@ -2953,12 +2971,12 @@ mod tests {
         worker.selected = Some("a".into());
         worker.git_refresh();
         events.try_iter().for_each(drop);
-        worker.git_diff("a.rs".into());
-        worker.git_diff("gone.rs".into());
+        worker.git_diff(diff_key("a.rs", false));
+        worker.git_diff(diff_key("gone.rs", false));
         let failures: Vec<(String, Option<String>)> = events
             .try_iter()
             .filter_map(|event| match event {
-                BackendEvent::GitDiffFailed { path, message } => Some((path, message)),
+                BackendEvent::GitDiffFailed { key, message } => Some((key.path, message)),
                 _ => None,
             })
             .collect();
@@ -2969,6 +2987,198 @@ mod tests {
                 ("gone.rs".into(), None),
             ]
         );
+        server.thread.join().unwrap();
+    }
+
+    /// Returns an exact diff identity for the synthetic first project's primary repository.
+    /// 返回合成首个项目主仓库中由路径与暂存模式确定的差异身份。
+    fn diff_key(path: &str, staged: bool) -> GitDiffKey {
+        GitDiffKey {
+            workspace: "/one".into(),
+            repository_key: ".".into(),
+            path: path.into(),
+            staged,
+        }
+    }
+
+    /// Failed or malformed refreshes invalidate editable settings until a full snapshot recovers.
+    /// 刷新失败或响应格式错误后，使可编辑设置失效，直到完整快照恢复。
+    #[test]
+    fn workbench_refresh_failure_clears_settings_before_unlock_and_recovers() {
+        for failure in [
+            json!({"ok":false,"error":{"message":"synthetic refresh failure"}}),
+            json!({"ok":true,"result":null}),
+        ] {
+            // The write succeeds, the first refresh fails, and an explicit retry returns the saved value.
+            // 写入成功，首次刷新失败，显式重试返回已保存值。
+            let mut updated = two_project_workbench();
+            updated.revision += 1;
+            updated.git_commit.new_branch_prefix = "saved-prefix".into();
+            // Fail only the first refresh so the same transport can exercise recovery.
+            // 仅令首次刷新失败，以便同一传输继续验证恢复。
+            let mut failed_once = false;
+            // Three synthetic requests cover the write, failed refresh and successful retry.
+            // 三次合成请求覆盖写入、刷新失败和成功重试。
+            let server = RpcServer::start(3, move |request| {
+                match request.body["method"].as_str().unwrap() {
+                    "service_save_git_commit_settings" => json!({"ok":true,"result":{}}),
+                    "workbench.snapshot" if !failed_once => {
+                        failed_once = true;
+                        failure.clone()
+                    }
+                    "workbench.snapshot" => json!({"ok":true,"result":updated}),
+                    _ => panic!("unexpected synthetic RPC method"),
+                }
+            });
+            // Observe the production worker without connecting to any user service.
+            // 观察生产工作器，但不连接任何用户服务。
+            let (mut worker, events, input) = worker_fixture(server.client.clone());
+            worker.apply_snapshot(two_project_workbench());
+            events.try_iter().for_each(drop);
+            worker.service_call(settings_actions::save_git_commit_settings(
+                json!({"newBranchPrefix":"saved-prefix"}),
+            ));
+            worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
+            // Preserve emission order to check that stale editors disappear before unlocking.
+            // 保留事件发出顺序，检查旧编辑器在解锁之前消失。
+            let received: Vec<_> = events.try_iter().collect();
+            // Locate invalidation by behavior rather than a fixed event position.
+            // 按行为定位失效事件，而非固定事件位置。
+            let cleared = received.iter().position(|event| matches!(event, BackendEvent::Slot { slot: Slot::Workbench, value, .. } if value.is_null())).expect("failed refresh must clear the editable slot");
+            // Locate the event that permits another mutation.
+            // 定位允许下一次变更的事件。
+            let unlocked = received
+                .iter()
+                .position(|event| matches!(event, BackendEvent::CallFinished))
+                .expect("write finishes");
+            assert!(
+                cleared < unlocked,
+                "stale settings must disappear before another write"
+            );
+            worker.emit_workbench_slot();
+            assert!(
+                events.try_iter().all(|event| !matches!(
+                    event,
+                    BackendEvent::Slot {
+                        slot: Slot::Workbench,
+                        ..
+                    }
+                )),
+                "unrelated deltas must not republish old settings"
+            );
+            worker.reload_workbench();
+            assert!(events.try_iter().any(|event| matches!(event, BackendEvent::Slot { slot: Slot::Workbench, value, .. } if value["gitCommit"]["newBranchPrefix"] == "saved-prefix")));
+            server.thread.join().unwrap();
+        }
+    }
+
+    /// Both versions of a partially staged file use the selected mode; another owner sends no RPC.
+    /// 部分暂存文件的两个版本使用各自选中模式；其他归属不发送 RPC。
+    #[test]
+    fn diff_requests_preserve_mode_and_repository_owner() {
+        // Two snapshot modes and two detail modes must remain distinct on the actual transport.
+        // 两个快照模式与两个详情模式必须在实际传输上保持独立。
+        let server = RpcServer::start(5, |request| {
+            match request.body["method"].as_str().unwrap() {
+                "workspace.git.catalog" => {
+                    json!({"ok":true,"result":{"repositories":[{"repositoryKey":".","name":"one","isPrimary":true,"monitoringEnabled":true}]}})
+                }
+                "workspace.diff.snapshot" => {
+                    json!({"ok":true,"result":{"files":[{"key":request.body["params"]["request"]["mode"],"newPath":"a.rs","status":"modified"}]}})
+                }
+                "workspace.diff.fileDetail" => {
+                    assert_eq!(
+                        request.body["params"]["file"]["key"],
+                        request.body["params"]["request"]["mode"]
+                    );
+                    json!({"ok":true,"result":{"unifiedDiff":"@@ -1 +1 @@\n-old\n+new"}})
+                }
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        // Exercise the real worker with a local synthetic transport.
+        // 使用本地合成传输验证真实工作器。
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        worker.selected = Some("a".into());
+        worker.git_refresh();
+        events.try_iter().for_each(drop);
+        for staged in [true, false] {
+            worker.git_diff(diff_key("a.rs", staged));
+        }
+        assert_eq!(
+            events
+                .try_iter()
+                .filter_map(|event| match event {
+                    BackendEvent::GitDiff { key, .. } => Some(key.staged),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![true, false]
+        );
+        for key in [
+            GitDiffKey {
+                workspace: "/two".into(),
+                ..diff_key("a.rs", true)
+            },
+            GitDiffKey {
+                repository_key: "nested".into(),
+                ..diff_key("a.rs", true)
+            },
+        ] {
+            worker.git_diff(key.clone());
+            assert!(events.try_iter().any(|event| matches!(event, BackendEvent::GitDiffFailed { key: rejected, .. } if rejected == key)));
+        }
+        server.thread.join().unwrap();
+    }
+
+    /// A failed active-project refresh remains dirty and retries on returning to that project.
+    /// 当前项目刷新失败后保持失效标记，并在回到该项目时重试。
+    #[test]
+    fn failed_git_refresh_retries_after_project_switch() {
+        // Fail the first changed view of project one after its initial pair of successful views.
+        // 首个项目的两个初始视图成功后，让首次变更视图读取失败。
+        let mut reads = 0;
+        // Count only this scenario's catalog and snapshot reads; no real service is contacted.
+        // 仅计数此场景的目录和快照读取，不连接真实服务。
+        let server = RpcServer::start(9, move |request| {
+            match request.body["method"].as_str().unwrap() {
+                "workspace.git.catalog" => {
+                    json!({"ok":true,"result":{"repositories":[{"repositoryKey":".","name":"root","isPrimary":true,"monitoringEnabled":true}]}})
+                }
+                "workspace.diff.snapshot" => {
+                    if request.body["params"]["workspacePath"] == "/one" {
+                        reads += 1;
+                        if reads == 3 {
+                            return json!({"ok":false,"error":{"message":"synthetic read failure"}});
+                        }
+                    }
+                    json!({"ok":true,"result":{"currentBranch":if reads > 3 {"updated"} else {"initial"},"files":[]}})
+                }
+                _ => panic!("unexpected synthetic RPC method"),
+            }
+        });
+        // Keep both projects in the production worker's cache throughout the failure and retry.
+        // 在失败及重试期间，将两个项目保留在生产工作器缓存中。
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        worker.apply_snapshot(two_project_workbench());
+        worker.selected = Some("a".into());
+        worker.git_show();
+        worker.git_changed("/one", &[".".into()]);
+        worker.selected = Some("b".into());
+        worker.git_show();
+        events.try_iter().for_each(drop);
+        worker.selected = Some("a".into());
+        worker.git_show();
+        assert!(
+            events.try_iter().any(
+                |event| matches!(event, BackendEvent::Git(snapshot) if snapshot.branch == "updated")
+            ),
+            "returning must reread a failed active-project update"
+        );
+        // Successful recovery clears the mark; another display needs no extra RPC.
+        // 成功恢复会清除标记；再次显示不需要额外 RPC。
+        worker.git_show();
         server.thread.join().unwrap();
     }
 

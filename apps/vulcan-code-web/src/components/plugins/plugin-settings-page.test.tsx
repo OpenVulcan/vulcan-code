@@ -127,6 +127,27 @@ it("writes credentials through the declared set action", async () => {
   expect(host.textContent).toContain("msg:tested");
 });
 
+// A status refresh must preserve edits both when it succeeds and when the status endpoint fails.
+// 状态刷新成功或状态端点失败时都必须保留编辑。
+it.each([false, true])("preserves a draft after a connection test (status fails: %s)", async (statusFails) => {
+  // The initial config is persisted, while the switch edit remains an unsaved draft.
+  // 初始配置已持久化，开关编辑仍为未保存草稿。
+  const invoke = await mountPage({ fast: false, timeout: 30, mode: "selected", routes: [] });
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  invoke.mockImplementationOnce(async () => ({})).mockImplementationOnce(async () => {
+    if (statusFails) throw new Error("synthetic status failure");
+    return { configured: true };
+  });
+  await act(async () => button("msg:test").click());
+  expect(host.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("true");
+  expect(button(en("plugins.settings.save")).disabled).toBe(false);
+  expect(invoke.mock.calls.filter(([action]) => action === "settings-get")).toHaveLength(1);
+  if (statusFails) expect(host.textContent).toContain(en("plugins.settings.actionFailed"));
+  else expect(host.textContent).toContain(en("plugins.settings.credentialConfigured"));
+  await act(async () => button(en("plugins.settings.save")).click());
+  expect(invoke).toHaveBeenLastCalledWith("settings-update", { fast: true, timeout: 30, mode: "selected", routes: [] });
+});
+
 // Verifies exclude checklists store unchecked offered values and keep values the layout does not offer.
 // 验证排除型清单保存未勾选的提供值，并保留版面未提供的值。
 it("maps checklist selection modes without dropping unknown stored values", () => {

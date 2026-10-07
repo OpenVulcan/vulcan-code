@@ -100,6 +100,7 @@ pub fn git_snapshot() -> GitSnapshot {
         ahead,
     };
     GitSnapshot {
+        workspace: "/mock/vulcan-code".into(),
         repositories: vec![
             repository(".", "vulcan-code", true, 5, 2),
             repository("vendor/demo-lib", "demo-lib", false, 1, 0),
@@ -227,7 +228,6 @@ pub fn fake_diff(file: &GitFile) -> FileDiff {
             })
             .collect();
         return FileDiff {
-            path: file.path.clone(),
             hunks: vec![DiffHunk {
                 header: format!("@@ -0,0 +1,{} @@", file.additions),
                 lines,
@@ -244,7 +244,6 @@ pub fn fake_diff(file: &GitFile) -> FileDiff {
             })
             .collect();
         return FileDiff {
-            path: file.path.clone(),
             hunks: vec![DiffHunk {
                 header: format!("@@ -1,{} +0,0 @@", file.deletions),
                 lines,
@@ -322,10 +321,7 @@ pub fn fake_diff(file: &GitFile) -> FileDiff {
         old_no += 25;
         new_no += 25;
     }
-    FileDiff {
-        path: file.path.clone(),
-        hunks,
-    }
+    FileDiff { hunks }
 }
 
 fn markdown_line(index: usize) -> &'static str {

@@ -672,11 +672,11 @@ pub fn git_commits(snapshot: &Value, limit: usize) -> Vec<GitCommit> {
 
 /// Parses a unified diff into hunks; `diff --git`/`---`/`+++` headers are skipped.
 /// 将统一 diff 解析为块；跳过 `diff --git`/`---`/`+++` 头部。
-/// `path` is the exact requested path.
-/// `path` 为准确请求路径。
+/// `text` is the service-returned unified diff body.
+/// `text` 为服务返回的统一差异正文。
 /// Returns `FileDiff`.
 /// 返回 `FileDiff`。
-pub fn unified_diff(path: &str, text: &str) -> FileDiff {
+pub fn unified_diff(text: &str) -> FileDiff {
     // Hunks.
     // 差异片段集合。
     let mut hunks: Vec<DiffHunk> = Vec::new();
@@ -740,10 +740,7 @@ pub fn unified_diff(path: &str, text: &str) -> FileDiff {
             text: text.to_string(),
         });
     }
-    FileDiff {
-        path: path.to_string(),
-        hunks,
-    }
+    FileDiff { hunks }
 }
 
 // ---- Directories ----
@@ -846,7 +843,6 @@ mod tests {
     #[test]
     fn parses_unified_diff() {
         let diff = unified_diff(
-            "a.rs",
             "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -3,2 +3,3 @@ fn x\n a\n-b\n+c\n+d\n",
         );
         assert_eq!(diff.hunks.len(), 1);

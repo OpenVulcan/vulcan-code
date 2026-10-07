@@ -67,6 +67,7 @@ fn repository(key: &str, primary: bool, monitoring: bool) -> GitRepository {
 /// 包含 `repositories` 且详情属于 `selected` 的 Git 快照。
 fn git(repositories: Vec<GitRepository>, selected: Option<&str>) -> BackendEvent {
     BackendEvent::Git(GitSnapshot {
+        workspace: "/test/workspace".into(),
         repositories,
         selected: selected.map(Into::into),
         branch: "main".into(),
@@ -211,23 +212,174 @@ fn failed_diff_shows_and_retries() {
         });
     }
     app.apply(snapshot);
+    // Retain the exact displayed file identity across its failure and retry.
+    // 在失败与重试期间保留准确的显示文件身份。
+    let key = app
+        .git
+        .diff_key(
+            app.git
+                .ordered_files()
+                .into_iter()
+                .find(|f| f.path == "a.rs")
+                .unwrap(),
+        )
+        .unwrap();
     input::open_diff(&mut app, 0);
     assert!(commands.try_iter().any(
-        |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { path } if path == "a.rs")
+        |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { key: requested } if requested == key)
     ));
     app.apply(BackendEvent::GitDiffFailed {
-        path: "a.rs".into(),
+        key: key.clone(),
         message: Some("unavailable".into()),
     });
     assert_eq!(
-        app.git.diff_failures.get("a.rs"),
+        app.git.diff_failures.get(&key),
         Some(&Some("unavailable".into()))
     );
     action::perform(&mut app, action::UiAction::DiffStep(0));
-    assert!(!app.git.diff_failures.contains_key("a.rs"));
+    assert!(!app.git.diff_failures.contains_key(&key));
     assert!(commands.try_iter().any(
-        |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { path } if path == "a.rs")
+        |command| matches!(command, Command::LoadWorkspaceDiffFileDetail { key: requested } if requested == key)
     ));
+}
+
+/// Staged and unstaged rows keep distinct requests and caches; results from another owner are ignored.
+/// 暂存与未暂存行保持独立请求及缓存；其他归属的结果被丢弃。
+#[test]
+fn diff_rows_keep_mode_and_reject_old_owners() {
+    // One path has different staged and unstaged changes in the same repository.
+    // 同一路径在相同仓库中具有不同的暂存及未暂存变更。
+    let (mut app, commands) = isolated_app();
+    // Both rows belong to one authoritative repository snapshot.
+    // 两行均归属于同一权威仓库快照。
+    let mut snapshot = git(vec![repository(".", true, true)], Some("."));
+    if let BackendEvent::Git(snapshot) = &mut snapshot {
+        snapshot.files = [true, false]
+            .map(|staged| GitFile {
+                path: "a.rs".into(),
+                status: GitFileStatus::Modified,
+                staged,
+                additions: 1,
+                deletions: 1,
+            })
+            .into();
+    }
+    app.apply(snapshot);
+    for staged in [true, false] {
+        // Find the row by its mode, since file positions are not a stable contract.
+        // 按模式查找行，因为文件位置不是稳定契约。
+        let index = app
+            .git
+            .ordered_files()
+            .iter()
+            .position(|file| file.staged == staged)
+            .expect("expected file mode may have changed");
+        input::open_diff(&mut app, index);
+        // Inspect the production command identity rather than reconstructing the expected request.
+        // 检查生产命令身份，而非重建期望请求。
+        let key = commands
+            .try_iter()
+            .find_map(|command| match command {
+                Command::LoadWorkspaceDiffFileDetail { key } => Some(key),
+                _ => None,
+            })
+            .expect("uncached mode must request a diff");
+        assert_eq!(key.staged, staged);
+        app.apply(BackendEvent::GitDiff {
+            key,
+            diff: FileDiff { hunks: Vec::new() },
+        });
+    }
+    assert_eq!(
+        app.git.diffs.len(),
+        2,
+        "same-path modes must not share a cache entry"
+    );
+    input::diff_step(&mut app, -1);
+    assert!(
+        commands
+            .try_iter()
+            .all(|command| !matches!(command, Command::LoadWorkspaceDiffFileDetail { .. })),
+        "a cached mode needs no new request"
+    );
+    // Both a different workspace and a different repository must be rejected, including failures.
+    // 必须拒绝不同工作区及不同仓库的响应，包括失败响应。
+    let original = app.git.diffs.keys().next().unwrap().clone();
+    for stale in [
+        GitDiffKey {
+            workspace: "/another-workspace".into(),
+            ..original.clone()
+        },
+        GitDiffKey {
+            repository_key: "nested".into(),
+            ..original
+        },
+    ] {
+        app.apply(BackendEvent::GitDiff {
+            key: stale.clone(),
+            diff: FileDiff { hunks: Vec::new() },
+        });
+        app.apply(BackendEvent::GitDiffFailed {
+            key: stale,
+            message: None,
+        });
+    }
+    assert_eq!(app.git.diffs.len(), 2);
+    assert!(app.git.diff_failures.is_empty());
+}
+
+/// Invalid workbench settings cannot produce edits, and reloading the page retries their full snapshot.
+/// 失效工作台设置不能生成编辑操作，重新加载页面会重试完整快照。
+#[test]
+fn invalid_workbench_settings_retry_from_the_page() {
+    use crate::service_api::{Slot, workbench_snapshot::load_workbench_snapshot};
+    // Select the settings page by identity instead of a structural position.
+    // 按身份选择设置页，不依赖结构位置。
+    let (mut app, commands) = isolated_app();
+    app.area = Area::Settings;
+    app.nav.insert(
+        Area::Settings,
+        Area::Settings
+            .pages()
+            .iter()
+            .position(|page| *page == PageId::GitCommit)
+            .expect("Git settings page may have moved"),
+    );
+    // The invalidation preserves its real loader while removing the editable DTO.
+    // 失效事件保留真实加载器，同时移除可编辑 DTO。
+    app.apply(BackendEvent::Slot {
+        slot: Slot::Workbench,
+        call: load_workbench_snapshot(),
+        value: serde_json::Value::Null,
+    });
+    app.apply(BackendEvent::CallFinished);
+    assert!(
+        pages::rows(&app, PageId::GitCommit)
+            .iter()
+            .all(|row| !matches!(
+                row.kind,
+                pages::RowKind::Text { .. } | pages::RowKind::Choice { .. }
+            )),
+        "invalid settings must expose no editors"
+    );
+    app.load_page();
+    assert!(commands.try_iter().any(
+        |command| matches!(command, Command::Call(call) if call.method == "workbench.snapshot")
+    ));
+    app.apply(BackendEvent::Slot { slot: Slot::Workbench, call: load_workbench_snapshot(), value: serde_json::json!({"gitCommit":{"newBranchPrefix":"saved-prefix","summaryExtraPrompt":"","summaryModel":{"mode":"session"}}}) });
+    assert!(
+        pages::rows(&app, PageId::GitCommit).iter().any(
+            |row| matches!(&row.kind, pages::RowKind::Text { value, .. } if value == "saved-prefix")
+        ),
+        "the recovered editor must use the saved snapshot"
+    );
+    app.load_page();
+    assert!(
+        commands.try_iter().all(
+            |command| !matches!(command, Command::Call(call) if call.method == "workbench.snapshot")
+        ),
+        "a valid snapshot must not add page-reload RPCs"
+    );
 }
 
 /// A repository click marks it at once; snapshots still carrying the earlier choice are skipped,

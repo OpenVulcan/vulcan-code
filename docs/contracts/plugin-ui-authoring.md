@@ -165,6 +165,8 @@ WebUI 只读取 `web` 提示，TUI 只读取 `tui` 提示。TUI 中 `chart` 默�
 
 无参数运行一个声明了 `plugin_ui` 调用方、接受空对象的 Action，例如连接测试。`label_message_key` 同时作为按钮文字；`success_message_key` 在成功后显示。
 
+Action 完成后宿主只重读凭据校验状态，不重置配置草稿；状态读取失败也保留尚未保存的编辑，并在操作行显示错误。
+
 ### 文案与校验
 
 - 所有 `*_message_key` 必须存在于插件 `en` 语言资源且非空；其余语言按[多语言要求](plugin-development-guide.md#多语言资源与界面)补齐。

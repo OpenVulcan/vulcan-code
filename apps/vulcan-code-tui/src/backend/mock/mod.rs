@@ -1121,13 +1121,18 @@ impl World {
                 }
                 self.emit(BackendEvent::Git(self.git.clone()));
             }
-            Command::LoadWorkspaceDiffFileDetail { path } => {
-                match self.git.files.iter().find(|f| f.path == path) {
-                    Some(file) => self.emit(BackendEvent::GitDiff(fixtures::fake_diff(file))),
-                    None => self.emit(BackendEvent::GitDiffFailed {
-                        path,
-                        message: None,
+            Command::LoadWorkspaceDiffFileDetail { key } => {
+                match self.git.files.iter().find(|file| {
+                    file.path == key.path
+                        && file.staged == key.staged
+                        && self.git.workspace == key.workspace
+                        && self.git.selected.as_ref() == Some(&key.repository_key)
+                }) {
+                    Some(file) => self.emit(BackendEvent::GitDiff {
+                        key,
+                        diff: fixtures::fake_diff(file),
                     }),
+                    None => self.emit(BackendEvent::GitDiffFailed { key, message: None }),
                 }
             }
             Command::LoadWorkspaceGitBranches => self.emit(BackendEvent::GitBranches(

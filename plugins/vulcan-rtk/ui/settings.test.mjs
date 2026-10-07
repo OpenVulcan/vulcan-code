@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
-import { SUPPORTED_LOCALES } from "../../../apps/vulcan-code-web/src/i18n-locales.ts";
+// Read the authoritative registry without depending on the WebUI bundler's aliases.
+// 直接读取权威注册表，不依赖 WebUI 打包器的别名。
+const SUPPORTED_LOCALES = JSON.parse(await readFile(new URL("../../../crates/vulcan-i18n/catalogs/locales.json", import.meta.url), "utf8")).locales;
 
 // Dependencies come from the existing host; no runtime plugin bundle dependency is added.
 // 依赖来自现有宿主，不添加运行时插件打包依赖。

@@ -81,7 +81,8 @@ pub enum Command {
     /// `runWorkspaceGitFileAction` (`stageFile` / `unstageFile`)
     RunWorkspaceGitFileAction { paths: Vec<String>, stage: bool },
     /// `loadWorkspaceDiffFileDetail`
-    LoadWorkspaceDiffFileDetail { path: String },
+    /// 读取由完整差异身份指定的文件详情。
+    LoadWorkspaceDiffFileDetail { key: GitDiffKey },
     /// `loadWorkspaceGitBranches`
     LoadWorkspaceGitBranches,
     /// `switchWorkspaceGitBranch`; `create` makes a new branch from HEAD.
@@ -266,12 +267,21 @@ pub enum BackendEvent {
     /// The selected project changed; the previous project's Git state no longer applies.
     /// 所选项目已变化；上一项目的 Git 状态不再适用。
     GitCleared,
-    GitDiff(FileDiff),
+    /// Parsed diff content owned by the exact originating request.
+    /// 由准确原始请求拥有的已解析差异内容。
+    GitDiff {
+        /// Immutable request and cache identity.
+        /// 不可变请求及缓存身份。
+        key: GitDiffKey,
+        /// Parsed contents from the selected comparison mode.
+        /// 选定比较模式的已解析内容。
+        diff: FileDiff,
+    },
     /// A file's diff could not be loaded; `message` is the service's sanitized reason, absent when
     /// the file is no longer in the current change list.
     /// 无法加载某文件的 diff；`message` 为服务的脱敏原因，文件已不在当前变更清单时为空。
     GitDiffFailed {
-        path: String,
+        key: GitDiffKey,
         message: Option<String>,
     },
     GitBranches(Vec<GitBranch>),
