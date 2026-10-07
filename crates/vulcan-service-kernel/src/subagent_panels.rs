@@ -210,28 +210,6 @@ pub(super) fn build_readonly_subagent_panel_route_response_for_task_locked(
     response
 }
 
-/// Handles the legacy close-subagent RPC without mutating global panel state.
-/// 处理旧版关闭子代理 RPC，且不变更全局面板状态。
-pub(super) async fn service_close_subagent_panel(
-    _app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-) -> Result<SubagentPanelRouteResponse, String> {
-    let _ = runtime_parts_from_state(&state)?;
-    let guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    webui_trace(
-        "close_subagent_panel_local_noop",
-        String::from("scope=client"),
-    );
-    Ok(SubagentPanelRouteResponse {
-        parent_conversation_id: guard.workbench.selected_conversation_id.clone(),
-        active_conversation_id: guard.workbench.selected_conversation_id.clone(),
-        subagent_navigation: None,
-        revision: guard.workbench.revision,
-    })
-}
-
 /// Stops one running subagent task through the direct service runtime path.
 /// 通过独立服务运行时路径停止单个运行中的子代理任务。
 pub(super) async fn service_stop_subagent_task(

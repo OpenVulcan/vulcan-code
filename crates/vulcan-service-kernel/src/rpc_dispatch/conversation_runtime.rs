@@ -44,7 +44,6 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_reply_pending_question",
     "service_reject_pending_question",
     "service_open_subagent_panel",
-    "service_close_subagent_panel",
     "service_stop_subagent_task",
     "service_close_subagent_task",
     "service_edit_pending_prompt",
@@ -314,9 +313,6 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
-        "service_close_subagent_panel" => {
-            rpc_json_result(service_close_subagent_panel(app, state).await)
-        }
         "service_stop_subagent_task" => rpc_json_result(
             service_stop_subagent_task(
                 app,
