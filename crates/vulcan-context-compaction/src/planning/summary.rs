@@ -21,14 +21,6 @@ impl CompactionResult {
         build_compaction_result_from_summary_text(plan, summary_text.into())
     }
 
-    /// Builds one fallback compaction result from the legacy host-side summary lines when prompt-based compaction cannot complete.
-    /// 当提示词式压缩无法完成时，根据旧版宿主侧摘要行构建一份回退压缩结果。
-    pub fn from_legacy_plan(plan: &CompactionPlan) -> Self {
-        let summary_text =
-            build_legacy_compaction_summary_text(&plan.source_messages, plan.policy.prune);
-        build_compaction_result_from_summary_text(plan, summary_text)
-    }
-
     /// Builds a route-bound remote compaction result while retaining optional upstream metadata.
     /// 构建绑定路由的远端压缩结果，并保留可选上游元数据。
     ///
@@ -300,96 +292,6 @@ fn build_compaction_result_from_summary_text(
         provider_context_route: None,
         provider_context_usage: None,
         provider_context_response_id: None,
-    }
-}
-
-/// Builds the legacy host-side summary text retained as a fallback when prompt-based model compaction cannot complete.
-/// 构建在提示词式模型压缩无法完成时保留的旧版宿主侧回退总结文本。
-pub(super) fn build_legacy_compaction_summary_text(
-    messages: &[SessionMessageEntry],
-    prune_tools: bool,
-) -> String {
-    messages
-        .iter()
-        .map(|message| compaction_summary_line_for_message(message, prune_tools))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Resolves the absolute persisted user-turn index for one transcript message identifier by replaying user-turn boundaries over the full session transcript history.
-/// 通过在完整会话转录历史上重放用户轮次边界，解析某条转录消息标识对应的绝对持久化用户轮次索引。
-fn compaction_summary_line_for_message(message: &SessionMessageEntry, prune_tools: bool) -> String {
-    let label = canonical_compaction_message_label(message);
-    let title = canonical_compaction_message_title(message);
-    let preview = if prune_tools
-        && matches!(
-            message.record_kind,
-            SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
-        ) {
-        String::from("Tool output was compacted into this placeholder.")
-    } else {
-        let preview_body = if message.record_kind == SessionMessageRecordKind::CompactionSummary {
-            extract_compaction_previous_summary(&message.body)
-        } else {
-            message.body.clone()
-        };
-        truncate_preview_lines(&preview_body, 1, 88)
-    };
-
-    if title == label {
-        format!("{label}: {preview}")
-    } else {
-        format!("{label} · {title}: {preview}")
-    }
-}
-
-/// Resolves the stable English label used for model-facing compaction summaries.
-/// 解析供面向模型的压缩摘要使用的稳定英文标签。
-fn canonical_compaction_message_label(message: &SessionMessageEntry) -> &'static str {
-    match message.record_kind {
-        SessionMessageRecordKind::Transcript => message.kind.label(),
-        SessionMessageRecordKind::ThinkingOutput => "THINKING",
-        SessionMessageRecordKind::AssistantOutput => "OUTPUT",
-        SessionMessageRecordKind::ToolCallOutput => "TOOL_CALL",
-        SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
-        SessionMessageRecordKind::SummaryOutput => "SUMMARY",
-        SessionMessageRecordKind::ExploreOutput => "EXPLORE",
-        SessionMessageRecordKind::ToolDetailOutput => "TOOL_DETAIL",
-        SessionMessageRecordKind::CompactionSummary => "COMPACTION",
-        SessionMessageRecordKind::CompactionStatus => "COMPACTION_STATUS",
-        SessionMessageRecordKind::DisplayNote => "DISPLAY_NOTE",
-        SessionMessageRecordKind::TitleOutput => "TITLE",
-        SessionMessageRecordKind::TurnTerminated => "TERMINATED",
-        SessionMessageRecordKind::TurnStats => "TURN_STATS",
-    }
-}
-
-/// Resolves the stable English headline used for model-facing compaction summaries without depending on WebUI locale.
-/// 解析供面向模型的压缩摘要使用的稳定英文标题，并且不依赖WebUI语言。
-fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
-    match message.record_kind {
-        SessionMessageRecordKind::Transcript => match message.kind {
-            SessionMessageKind::User => String::from("User Prompt"),
-            SessionMessageKind::Assistant => String::from("Assistant Message"),
-            SessionMessageKind::Error => String::from("System Error"),
-        },
-        SessionMessageRecordKind::ThinkingOutput => String::from("Thinking"),
-        SessionMessageRecordKind::AssistantOutput => String::from("Output"),
-        SessionMessageRecordKind::ToolCallOutput => {
-            canonical_tool_summary_title(message, "Tool Call")
-        }
-        SessionMessageRecordKind::ToolResultOutput => {
-            canonical_tool_summary_title(message, "Tool Result")
-        }
-        SessionMessageRecordKind::SummaryOutput => String::from("Execution Summary"),
-        SessionMessageRecordKind::ExploreOutput => String::from("Explore Context"),
-        SessionMessageRecordKind::ToolDetailOutput => String::from("Tool Detail"),
-        SessionMessageRecordKind::CompactionSummary => String::from("Context Compaction Summary"),
-        SessionMessageRecordKind::CompactionStatus => String::from("Context Compaction Status"),
-        SessionMessageRecordKind::DisplayNote => String::from("Display Note"),
-        SessionMessageRecordKind::TitleOutput => String::from("Title Update"),
-        SessionMessageRecordKind::TurnTerminated => String::from("Turn Terminated"),
-        SessionMessageRecordKind::TurnStats => String::from("Turn Statistics"),
     }
 }
 

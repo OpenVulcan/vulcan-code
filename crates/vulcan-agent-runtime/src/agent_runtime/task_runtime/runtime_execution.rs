@@ -2197,7 +2197,10 @@ mod standalone_compaction_tests {
     /// 构建独立流在成功摘要后报告的终态执行。
     fn compaction_execution() -> PromptCompactionExecution {
         PromptCompactionExecution {
-            compaction_result: CompactionResult::from_legacy_plan(&compaction_plan()),
+            compaction_result: CompactionResult::from_model_summary(
+                &compaction_plan(),
+                "Compacted summary.",
+            ),
             fallback_used: false,
             provider_request_count: 1,
             last_successful_provider_usage: Some(vulcan_core::types::ProviderUsageSnapshot {
