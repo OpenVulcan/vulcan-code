@@ -15,11 +15,11 @@ use vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID;
 
 use super::{
     EnginePrimitiveRegistry, FORBIDDEN_MANIFEST_HEADERS, MANIFEST_SCHEMA_VERSION,
-    MAX_ASYNC_POLL_OR_BACKOFF_MS, MAX_ASYNC_TIMEOUT_MS, MAX_FIXED_HEADERS, MAX_JSON_DEPTH,
-    MAX_JSON_NODES, MAX_MANIFEST_BYTES, MAX_MATCHER_VALUE_LEN, MAX_MIME_TYPES, MAX_MODEL_RULES,
-    MAX_PROTOCOL_ROUTES, MAX_PROVIDER_IDENTIFIER_LEN, MAX_REQUEST_ID_HEADERS, MAX_SERVICES,
-    MAX_STRING_LEN, MIN_ASYNC_POLL_INTERVAL_MS, ManifestValidationError,
-    PROTECTED_REQUEST_BODY_ROOTS, ProviderManifestV1, UnknownModelPolicy,
+    MAX_ASYNC_POLL_OR_BACKOFF_MS, MAX_ASYNC_TIMEOUT_MS, MAX_FIXED_HEADER_VALUE_BYTES,
+    MAX_FIXED_HEADERS, MAX_JSON_DEPTH, MAX_JSON_NODES, MAX_MANIFEST_BYTES, MAX_MATCHER_VALUE_LEN,
+    MAX_MIME_TYPES, MAX_MODEL_RULES, MAX_PROTOCOL_ROUTES, MAX_PROVIDER_IDENTIFIER_LEN,
+    MAX_REQUEST_ID_HEADERS, MAX_SERVICES, MAX_STRING_LEN, MIN_ASYNC_POLL_INTERVAL_MS,
+    ManifestValidationError, PROTECTED_REQUEST_BODY_ROOTS, ProviderManifestV1, UnknownModelPolicy,
 };
 use crate::ModelDiscoveryKind;
 use crate::provider_manifest::schema::{
@@ -5722,8 +5722,6 @@ fn validate_provider_tool_fixed_headers(
     execution_path: &str,
     errors: &mut Vec<ManifestValidationError>,
 ) {
-    const MAX_FIXED_HEADERS: usize = 16;
-    const MAX_FIXED_HEADER_VALUE_BYTES: usize = 1024;
     for (field, headers) in [
         ("fixed_headers", &execution.fixed_headers),
         ("start_fixed_headers", &execution.start_fixed_headers),
@@ -7109,7 +7107,9 @@ fn validate_fixed_headers(
                 format!("{owner} header name `{name}` contains invalid characters"),
             ));
         }
-        if value.len() > 1_024 || value.chars().any(|character| character.is_control()) {
+        if value.len() > MAX_FIXED_HEADER_VALUE_BYTES
+            || value.chars().any(|character| character.is_control())
+        {
             errors.push(ManifestValidationError::new(
                 "invalid_header_value",
                 path,
