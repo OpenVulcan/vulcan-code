@@ -567,7 +567,7 @@ fn tools(ctx: &Ctx, group: &[&ConversationEvent]) -> Vec<Line<'static>> {
         if !tail.is_empty() {
             spans.push(Span::styled(
                 format!("  {tail}"),
-                Style::new().fg(mix(theme.muted_fg, theme.bg, 0.7)),
+                Style::new().fg(theme.faint_fg(theme.bg)),
             ));
         }
         lines.push(Line::from(spans));

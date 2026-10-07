@@ -21,7 +21,7 @@ use super::text::{
     OVERFLOW_CHIP, compact_count, compact_duration, fit, fit_strip, spinner, truncate, width_of,
     wrap,
 };
-use super::theme::{Theme, mix};
+use super::theme::{TERMINAL_FG, TERMINAL_SURFACE, Theme, mix};
 use crate::app::action::UiAction;
 use crate::app::commands::AppCommand;
 use crate::app::hit::{ScrollTarget, Target};
@@ -276,7 +276,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                 body.x,
                 footer_y,
                 truncate(&hint, body.width as usize),
-                Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.75)),
+                Style::new().fg(theme.faint_fg(theme.sidebar)),
             );
         }
         _ => {}
@@ -498,7 +498,7 @@ fn section(theme: &Theme, title: String, count: usize) -> Line<'static> {
         ),
         Span::styled(
             format!("  {count}"),
-            Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.6)),
+            Style::new().fg(theme.faint_fg(theme.sidebar)),
         ),
     ])
 }
@@ -632,7 +632,7 @@ fn changes(app: &App, width: usize, focused: bool) -> Vec<Row> {
             Span::styled(name, Style::new().fg(theme.fg)),
             Span::styled(
                 format!(" {dir}"),
-                Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.7)),
+                Style::new().fg(theme.faint_fg(theme.sidebar)),
             ),
             Span::raw(" ".repeat(pad)),
             Span::styled(
@@ -792,13 +792,16 @@ fn terminal(app: &App, width: usize, height: usize) -> Vec<Row> {
         return out;
     };
     out.push(Row::new(Line::default()));
-    let screen_bg = mix(theme.bg, Color::Rgb(0, 0, 0), 0.6);
+    // The screen is dark in both themes, so its status colors come from the dark palette.
+    // 屏幕在两种主题下都是深色，因此其状态颜色取自深色调色板。
+    let screen = Theme::dark();
+    let screen_bg = TERMINAL_SURFACE;
     out.push(Row::new(
         Line::from(vec![
-            Span::styled("$ ", Style::new().fg(theme.success)),
+            Span::styled("$ ", Style::new().fg(screen.success)),
             Span::styled(
                 truncate(&session.command, width.saturating_sub(2)),
-                Style::new().fg(theme.fg),
+                Style::new().fg(TERMINAL_FG),
             ),
         ])
         .style(Style::new().bg(screen_bg)),
@@ -807,11 +810,11 @@ fn terminal(app: &App, width: usize, height: usize) -> Vec<Row> {
     let skip = session.screen.len().saturating_sub(room);
     for text in &session.screen[skip..] {
         let color = if text.contains("error") {
-            theme.danger
+            screen.danger
         } else if text.contains("warning") {
-            theme.warning
+            screen.warning
         } else {
-            theme.muted_fg
+            TERMINAL_FG
         };
         out.push(Row::new(
             Line::from(Span::styled(truncate(text, width), Style::new().fg(color)))
@@ -962,7 +965,7 @@ fn memory(app: &App, width: usize, focused: bool) -> Vec<Row> {
                     last_date = Some(node.date.as_str());
                     out.push(Row::new(Line::from(Span::styled(
                         format!("  {}", node.date),
-                        Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.5)),
+                        Style::new().fg(theme.faint_fg(theme.sidebar)),
                     ))));
                 }
                 (
@@ -1000,7 +1003,7 @@ fn memory(app: &App, width: usize, focused: bool) -> Vec<Row> {
         }
         block.push(Line::from(Span::styled(
             format!("  {}", truncate(&meta, width.saturating_sub(2))),
-            Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.35)),
+            Style::new().fg(theme.faint_fg(theme.sidebar)),
         )));
         for mut line in block {
             if highlight {
@@ -1506,7 +1509,7 @@ fn agent_detail(
     for activity in &agent.activity[recent..] {
         push(Line::from(Span::styled(
             format!("   · {}", truncate(activity, width.saturating_sub(5))),
-            Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.3)),
+            Style::new().fg(theme.faint_fg(theme.sidebar)),
         )));
     }
     if let Some(result) = &agent.result {

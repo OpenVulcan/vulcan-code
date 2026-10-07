@@ -67,10 +67,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
             ),
             Span::styled(label, Style::new().fg(theme.sidebar_fg)),
             Span::raw(" ".repeat(pad + 1)),
-            Span::styled(
-                key,
-                Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.7)),
-            ),
+            Span::styled(key, Style::new().fg(theme.faint_fg(theme.sidebar))),
         ])
         .render(rect, buf);
         app.hits.add(rect, Target::Do(action));
@@ -215,7 +212,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                 spans.push(Span::raw(" ".repeat(pad + 1)));
                 spans.push(Span::styled(
                     tail.clone(),
-                    Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.7)),
+                    Style::new().fg(theme.faint_fg(theme.sidebar)),
                 ));
                 Line::from(spans)
                     .style(Style::new().bg(bg))
@@ -280,10 +277,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
                     Span::raw(" "),
                     Span::styled(title, title_style),
                     Span::raw(" ".repeat(pad)),
-                    Span::styled(
-                        tail.clone(),
-                        Style::new().fg(mix(theme.muted_fg, theme.sidebar, 0.7)),
-                    ),
+                    Span::styled(tail.clone(), Style::new().fg(theme.faint_fg(theme.sidebar))),
                 ])
                 .style(Style::new().bg(bg))
                 .render(rect, buf);

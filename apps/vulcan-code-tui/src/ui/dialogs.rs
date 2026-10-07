@@ -352,7 +352,7 @@ pub fn render_folder(app: &App, picker: &mut FolderPicker, area: Rect, buf: &mut
     let up_style = if up {
         normal
     } else {
-        normal.fg(mix(theme.muted_fg, bg, 0.5))
+        normal.fg(theme.faint_fg(bg))
     };
     cx += button(app, buf, cx, y, "↑", up_style, UiAction::FolderUp) + 1;
     let hidden_label = format!(
@@ -720,7 +720,7 @@ pub fn render_detail(app: &App, sheet: &mut DetailSheet, area: Rect, buf: &mut B
             inner.right().saturating_sub(width_of(&more) as u16 + 1),
             inner.bottom().saturating_sub(rows + 1),
             more,
-            Style::new().fg(mix(theme.muted_fg, theme.popover, 0.5)),
+            Style::new().fg(theme.faint_fg(theme.popover)),
         );
     }
     for (row, buttons) in button_rows.into_iter().enumerate() {

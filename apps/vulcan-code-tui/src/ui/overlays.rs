@@ -171,7 +171,7 @@ fn render_picker(app: &App, picker: &mut Picker, area: Rect, buf: &mut Buffer) {
             Span::styled("⌕ ", theme.primary_text()),
             Span::styled(
                 picker.placeholder.clone(),
-                Style::new().fg(mix(theme.muted_fg, theme.popover, 0.7)),
+                Style::new().fg(theme.faint_fg(theme.popover)),
             ),
         ])
     } else {
@@ -369,7 +369,7 @@ fn render_diff(app: &App, view: &mut DiffView, area: Rect, buf: &mut Buffer) {
         return;
     };
     let mut lines: Vec<Line> = Vec::new();
-    let gutter_style = Style::new().fg(mix(theme.muted_fg, theme.popover, 0.6));
+    let gutter_style = Style::new().fg(theme.faint_fg(theme.popover));
     for hunk in &diff.hunks {
         lines.push(
             Line::from(Span::styled(
@@ -492,7 +492,7 @@ fn render_commit(app: &App, dialog: &mut CommitDialog, area: Rect, buf: &mut Buf
         let value = if dialog.branch_name.is_empty() && !editing {
             Span::styled(
                 tr!("gitBranchCreate.placeholder", prefix = "feat/"),
-                Style::new().fg(mix(theme.muted_fg, theme.popover, 0.6)),
+                Style::new().fg(theme.faint_fg(theme.popover)),
             )
         } else {
             Span::styled(
@@ -557,7 +557,7 @@ fn render_commit(app: &App, dialog: &mut CommitDialog, area: Rect, buf: &mut Buf
     dialog.message.set_cursor_line_style(Style::new());
     dialog
         .message
-        .set_placeholder_style(Style::new().fg(mix(theme.muted_fg, theme.popover, 0.6)));
+        .set_placeholder_style(Style::new().fg(theme.faint_fg(theme.popover)));
     dialog.message.set_cursor_style(if focused {
         Style::new().bg(theme.primary).fg(theme.popover)
     } else {

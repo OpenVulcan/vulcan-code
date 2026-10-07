@@ -512,7 +512,7 @@ fn lay_out(
             lines.extend(wrap(
                 &[Span::styled(
                     row.detail.clone(),
-                    Style::new().fg(mix(theme.muted_fg, theme.bg, 0.2)),
+                    Style::new().fg(theme.faint_fg(theme.bg)),
                 )],
                 width,
                 &[],
@@ -617,7 +617,7 @@ fn lay_out(
                     Span::styled(" › ", dim(value < max)),
                     Span::styled(
                         format!(" {min}–{max}"),
-                        Style::new().fg(mix(theme.muted_fg, theme.bg, 0.4)),
+                        Style::new().fg(theme.faint_fg(theme.bg)),
                     ),
                 ],
             ));
@@ -630,7 +630,7 @@ fn lay_out(
             let shown = if value.is_empty() {
                 Span::styled(
                     tr!("tui.page.notSet"),
-                    Style::new().fg(mix(theme.muted_fg, theme.bg, 0.4)),
+                    Style::new().fg(theme.faint_fg(theme.bg)),
                 )
             } else if *secret {
                 Span::styled(
@@ -697,10 +697,9 @@ fn lay_out(
                 Span::raw(" ".repeat(pad)),
             ];
             if let Some((text, tone)) = badge {
-                let color = tone_color(theme, *tone);
                 spans.push(Span::styled(
                     format!(" {text} "),
-                    Style::new().fg(color).bg(mix(color, theme.bg, 0.85)),
+                    theme.badge(tone_color(theme, *tone)),
                 ));
             }
             lines.push(Line::from(spans));

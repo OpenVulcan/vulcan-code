@@ -53,6 +53,24 @@ pub const USAGE_WARNING_PERCENT: u8 = 90;
 /// 上下文用量达到此百分比时进度条进入危急状态（`threshold-95`）。
 pub const USAGE_CRITICAL_PERCENT: u8 = 95;
 
+/// Command screen surface. It stays dark in both themes, like the WebUI emulator theme in
+/// `components/terminal/terminal-viewport-runtime.tsx`; re-read that file when it changes.
+/// 命令屏幕表面，与 WebUI `components/terminal/terminal-viewport-runtime.tsx` 的模拟器主题一样在两种主题下
+/// 都保持深色；该文件变化时回读同步。
+pub const TERMINAL_SURFACE: Color = rgb(0x111318);
+/// Plain output on the command screen, from the same WebUI emulator theme.
+/// 命令屏幕上的普通输出，取自同一 WebUI 模拟器主题。
+pub const TERMINAL_FG: Color = rgb(0xd9dee8);
+/// Share of `muted_fg` in faint secondary text; the rest is the surface beneath it.
+/// 弱化次要文字中 `muted_fg` 的占比；其余为其下方表面色。
+const FAINT_TEXT_WEIGHT: f32 = 0.75;
+/// Share of the tone color in a badge's text; the rest is `fg`.
+/// 标签片文字中语气颜色的占比；其余为 `fg`。
+const BADGE_TEXT_WEIGHT: f32 = 0.8;
+/// Share of the tone color in a badge's background; the rest is `bg`.
+/// 标签片底色中语气颜色的占比；其余为 `bg`。
+const BADGE_TINT_WEIGHT: f32 = 0.12;
+
 impl Theme {
     /// Color of a usage gauge at `percent`: normal, warning, then critical.
     /// 用量进度条在 `percent` 时的颜色：正常、警示、危急。
@@ -166,6 +184,21 @@ impl Theme {
         mix(self.input, self.bg, 0.75)
     }
 
+    /// Secondary text one step quieter than `muted_fg`, drawn on `surface`; it still keeps
+    /// a 3:1 contrast against that surface in both palettes.
+    /// 比 `muted_fg` 再弱一级、绘制在 `surface` 上的次要文字；两套调色板中仍保持 3:1 对比度。
+    pub fn faint_fg(&self, surface: Color) -> Color {
+        mix(self.muted_fg, surface, FAINT_TEXT_WEIGHT)
+    }
+
+    /// Tinted label chip in `color`: a light wash of the color behind text pulled toward `fg`.
+    /// 以 `color` 着色的标签片：底色为该颜色的浅色淡染，文字向 `fg` 偏移。
+    pub fn badge(&self, color: Color) -> Style {
+        Style::new()
+            .fg(mix(color, self.fg, BADGE_TEXT_WEIGHT))
+            .bg(mix(color, self.bg, BADGE_TINT_WEIGHT))
+    }
+
     /// Switch drawn as a track with a knob; both states have the same width so rows never shift.
     /// 以轨道加滑块绘制的开关；两种状态宽度相同，行内容不会跳动。
     /// `on` is the current state and `labels` the localized on/off words; returns the switch spans.
@@ -213,5 +246,70 @@ pub fn mix(a: Color, b: Color, t: f32) -> Color {
             Color::Rgb(blend(ar, br), blend(ag, bg), blend(ab, bb))
         }
         _ => a,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lowest WCAG contrast ratio any themed text may have against the surface it is drawn on.
+    /// 任何主题文字相对其所在表面允许的最低 WCAG 对比度。
+    const MIN_TEXT_CONTRAST: f64 = 3.0;
+
+    /// WCAG contrast ratio of two RGB colors.
+    /// 两个 RGB 颜色的 WCAG 对比度。
+    fn contrast(a: Color, b: Color) -> f64 {
+        let luminance = |color| match color {
+            Color::Rgb(r, g, b) => {
+                let channel = |value: u8| {
+                    let value = f64::from(value) / 255.0;
+                    if value <= 0.039_28 {
+                        value / 12.92
+                    } else {
+                        ((value + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+            }
+            other => panic!("theme colors are RGB, got {other:?}"),
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Derived text tiers stay legible on every surface and tone in both palettes.
+    /// 派生文字层级在两套调色板的每个表面与语气上都保持可读。
+    #[test]
+    fn derived_text_keeps_minimum_contrast() {
+        for theme in [Theme::dark(), Theme::light()] {
+            for surface in [theme.bg, theme.card, theme.popover, theme.sidebar] {
+                let ratio = contrast(theme.faint_fg(surface), surface);
+                assert!(
+                    ratio >= MIN_TEXT_CONTRAST,
+                    "{:?} faint text on {surface:?}: {ratio:.2}",
+                    theme.mode
+                );
+            }
+            for tone in [
+                theme.fg,
+                theme.muted_fg,
+                theme.primary,
+                theme.info,
+                theme.success,
+                theme.warning,
+                theme.danger,
+                theme.violet,
+                theme.teal,
+            ] {
+                let style = theme.badge(tone);
+                let ratio = contrast(style.fg.unwrap(), style.bg.unwrap());
+                assert!(
+                    ratio >= MIN_TEXT_CONTRAST,
+                    "{:?} badge in {tone:?}: {ratio:.2}",
+                    theme.mode
+                );
+            }
+        }
     }
 }

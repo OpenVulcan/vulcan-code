@@ -151,7 +151,7 @@ fn body_rows(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {
     };
     rows.push(Row::plain(Line::from(Span::styled(
         hint,
-        Style::new().fg(mix(theme.muted_fg, theme.card, 0.7)),
+        Style::new().fg(theme.faint_fg(theme.card)),
     ))));
     for (i, option) in question.options.iter().enumerate() {
         let selected = ask.is_selected(index, i);
@@ -206,7 +206,7 @@ fn body_rows(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {
     let other_value = if other.is_empty() && !ask.editing_other {
         Span::styled(
             tr!("ask.custom.textPlaceholder"),
-            Style::new().fg(mix(theme.muted_fg, theme.bg, 0.6)),
+            Style::new().fg(theme.faint_fg(theme.bg)),
         )
     } else {
         Span::styled(
@@ -398,13 +398,12 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
             ) + 1;
         } else {
             let text = format!(" {prev_label} ");
+            let surface = mix(theme.accent, bg, 0.5);
             buf.set_string(
                 bx,
                 y,
                 &text,
-                Style::new()
-                    .fg(mix(theme.muted_fg, bg, 0.5))
-                    .bg(mix(theme.accent, bg, 0.5)),
+                Style::new().fg(theme.faint_fg(surface)).bg(surface),
             );
             bx += width_of(&text) as u16 + 1;
         }

@@ -100,16 +100,14 @@ pub fn render_history(app: &App, state: &mut History, area: Rect, buf: &mut Buff
         width,
         height: 1,
     };
-    buf.set_style(
-        query_row,
-        Style::new().bg(mix(theme.input, theme.popover, 0.5)),
-    );
+    let field = mix(theme.input, theme.popover, 0.5);
+    buf.set_style(query_row, Style::new().bg(field));
     let query = if state.query.is_empty() {
         Line::from(vec![
             Span::styled(" ⌕ ", theme.primary_text()),
             Span::styled(
                 tr!("tui.history.search"),
-                Style::new().fg(mix(theme.muted_fg, theme.popover, 0.6)),
+                Style::new().fg(theme.faint_fg(field)),
             ),
         ])
     } else {
@@ -171,10 +169,7 @@ pub fn render_history(app: &App, state: &mut History, area: Rect, buf: &mut Buff
         };
         Line::from(vec![
             Span::styled(if selected { "›" } else { " " }, theme.primary_text()),
-            Span::styled(
-                seq,
-                Style::new().fg(mix(theme.muted_fg, theme.popover, 0.6)),
-            ),
+            Span::styled(seq, Style::new().fg(theme.faint_fg(theme.popover))),
             Span::styled(format!(" {icon} "), icon_style),
             Span::styled(
                 title,

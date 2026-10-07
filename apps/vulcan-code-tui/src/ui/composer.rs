@@ -89,7 +89,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.composer
         .set_style(Style::new().fg(theme.fg).bg(theme.card));
     app.composer
-        .set_placeholder_style(Style::new().fg(mix(theme.muted_fg, theme.card, 0.75)));
+        .set_placeholder_style(Style::new().fg(theme.faint_fg(theme.card)));
     app.composer.set_cursor_line_style(Style::new());
     app.composer.set_cursor_style(if focused {
         Style::new().fg(theme.card).bg(theme.primary)
@@ -209,12 +209,7 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
         UiAction::App(AppCommand::TogglePlan),
     );
     let hint = " ⇧Tab ";
-    buf.set_string(
-        x,
-        area.y,
-        hint,
-        Style::new().fg(mix(theme.muted_fg, bg, 0.6)),
-    );
+    buf.set_string(x, area.y, hint, Style::new().fg(theme.faint_fg(bg)));
     x += width_of(hint) as u16;
     let attach = format!("⊕ {}", tr!("composer.attachment.add"));
     if x + width_of(&attach) as u16 + 24 < area.right() {
