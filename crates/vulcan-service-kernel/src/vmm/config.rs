@@ -155,8 +155,6 @@ pub(crate) async fn save_vmm_memory_config(
     )
     .unwrap_or_default();
     let next_layer = vmm_config_layer_from_draft(&request.draft, true)?;
-    let current_effective =
-        vulcan_vmm::VmmEffectiveConfig::resolve(&current_configuration.vmm, None, None);
     let next_effective = vulcan_vmm::VmmEffectiveConfig::resolve(&next_layer, None, None);
     if next_effective.enabled && next_effective.backend_mode == vulcan_vmm::VmmBackendMode::Native {
         let maintenance = state
@@ -167,12 +165,12 @@ pub(crate) async fn save_vmm_memory_config(
             .ok_or_else(|| String::from("原生 VMM 运行时尚未就绪。"))?;
         maintenance.validate_host_ai().await?;
     }
-    // Binding reconciliation is mandatory only when a backend becomes active or the caller
-    // explicitly submits a retry plan. Ordinary edits on the same active backend must remain
-    // possible after an earlier per-project binding failure.
-    // 仅在后端开始生效或调用方明确提交重试计划时强制绑定对账；同一活动后端的普通编辑在此前个别绑定失败后仍必须可保存。
+    // Initial setup, backend changes and explicit plans reconcile bindings. Resuming the same
+    // configured backend preserves existing choices and leaves unbound projects for explicit management.
+    // 首次配置、后端切换及显式计划会对账绑定。恢复同一已配置后端会保留原有选择，
+    // 未绑定项目继续由用户显式管理。
     let prepared_binding_plan = if should_prepare_project_binding_plan(
-        &current_effective,
+        &current_configuration.vmm,
         &next_effective,
         !request.binding_plan.is_empty(),
     ) {
@@ -252,13 +250,24 @@ pub(crate) async fn save_vmm_memory_config(
 
 /// Decides whether one global save must validate and reconcile every unbound project.
 /// 判断一次全局保存是否必须校验并对账全部未绑定项目。
+/// `current` is the persisted layer; `next` is the requested effective configuration.
+/// `current` 是持久化配置层；`next` 是请求的最终配置。
+/// `has_explicit_plan` requests reconciliation even for an unchanged backend.
+/// `has_explicit_plan` 要求即使后端未变也执行对账。
+/// Returns true for initial activation, backend changes or an explicit binding plan.
+/// 首次启用、后端变更或显式绑定计划时返回 true。
 fn should_prepare_project_binding_plan(
-    current: &vulcan_vmm::VmmEffectiveConfig,
+    current: &vulcan_vmm::VmmConfigLayer,
     next: &vulcan_vmm::VmmEffectiveConfig,
     has_explicit_plan: bool,
 ) -> bool {
-    has_explicit_plan
-        || (next.enabled && (!current.enabled || current.backend_mode != next.backend_mode))
+    // Configuration identity is independent of the current execution switch.
+    // 配置身份独立于当前执行开关。
+    let configured = vmm_deployment_mode(current) != VmmDeploymentMode::Disabled;
+    // Resolve the same legacy backend rules as the runtime before comparing the requested backend.
+    // 比较请求后端之前，使用与运行时相同的旧配置后端解析规则。
+    let current_backend = vulcan_vmm::VmmEffectiveConfig::resolve(current, None, None).backend_mode;
+    has_explicit_plan || (next.enabled && (!configured || current_backend != next.backend_mode))
 }
 
 /// Validates every explicit unbound-project decision without mutating project bindings.
@@ -1429,20 +1438,32 @@ mod tests {
         assert_eq!(format_project_binding_failures(&[]), None);
     }
 
-    /// Binding plans are mandatory for activation and backend switches but not ordinary repairs.
-    /// 绑定计划在启用和后端切换时必需，但同一活动后端的普通修正不应被阻断。
+    /// Requires plans for first activation and backend switches, while allowing same-backend resumes.
+    /// 首次启用和后端切换需要计划，恢复同一已配置后端则不需要。
     #[test]
     fn binding_plan_requirement_distinguishes_activation_from_ordinary_save() {
-        let disabled_native = vulcan_vmm::VmmEffectiveConfig {
-            enabled: false,
-            backend_mode: vulcan_vmm::VmmBackendMode::Native,
-            ..vulcan_vmm::VmmEffectiveConfig::default()
+        // A paused native deployment retains its explicit backend identity.
+        // 已暂停的原生部署保留明确的后端身份。
+        let disabled_native = vulcan_vmm::VmmConfigLayer {
+            enabled: Some(false),
+            backend_mode: Some(vulcan_vmm::VmmBackendMode::Native),
+            ..vulcan_vmm::VmmConfigLayer::default()
         };
+        // Ordinary saves use the same persisted backend even when it is already active.
+        // 普通保存使用同一持久化后端，即使该后端已经启用。
+        let active_native = vulcan_vmm::VmmConfigLayer {
+            enabled: Some(true),
+            ..disabled_native.clone()
+        };
+        // Requested effective configurations distinguish resume from backend replacement.
+        // 请求的最终配置用于区分恢复与后端替换。
         let enabled_native = vulcan_vmm::VmmEffectiveConfig {
             enabled: true,
             backend_mode: vulcan_vmm::VmmBackendMode::Native,
             ..vulcan_vmm::VmmEffectiveConfig::default()
         };
+        // Switching to external memory still needs an explicit binding plan.
+        // 切换到外置记忆仍需显式绑定计划。
         let enabled_external = vulcan_vmm::VmmEffectiveConfig {
             enabled: true,
             backend_mode: vulcan_vmm::VmmBackendMode::ExternalGrpc,
@@ -1450,22 +1471,27 @@ mod tests {
         };
 
         assert!(should_prepare_project_binding_plan(
+            &vulcan_vmm::VmmConfigLayer::default(),
+            &enabled_native,
+            false
+        ));
+        assert!(!should_prepare_project_binding_plan(
             &disabled_native,
             &enabled_native,
             false
         ));
         assert!(should_prepare_project_binding_plan(
-            &enabled_native,
+            &disabled_native,
             &enabled_external,
             false
         ));
         assert!(should_prepare_project_binding_plan(
-            &enabled_native,
+            &disabled_native,
             &enabled_native,
             true
         ));
         assert!(!should_prepare_project_binding_plan(
-            &enabled_native,
+            &active_native,
             &enabled_native,
             false
         ));

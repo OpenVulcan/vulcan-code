@@ -175,7 +175,7 @@ fn vmm_experience_state(
     let deployment = vmm_deployment_mode(global_layer);
     let lifecycle = vmm_lifecycle_state(runtime);
     let required_configuration_ready =
-        effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
+        effective.diagnose_memory_configuration(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
     let setup = if deployment == VmmDeploymentMode::Disabled {
         VmmSetupState::NotConfigured
     } else if !required_configuration_ready {
@@ -219,23 +219,18 @@ fn vmm_experience_state(
 ///
 /// # Parameters
 /// 参数
-/// `effective` is the resolved VMM configuration.
-/// `effective` 是解析后的 VMM 配置。
 /// `global_layer` is the persisted global VMM layer.
 /// `global_layer` 是持久化的全局 VMM 配置层。
 ///
 /// # Returns
 /// 返回值
-/// The configured deployment mode.
-/// 返回已配置的部署方式。
+/// The configured backend, or Disabled only when no deployment has been selected.
+/// 返回已配置后端；仅在尚未选择部署时返回 Disabled。
 pub(super) fn vmm_deployment_mode(global_layer: &vulcan_vmm::VmmConfigLayer) -> VmmDeploymentMode {
-    if global_layer.enabled != Some(true) {
-        return VmmDeploymentMode::Disabled;
-    }
-    // Built-in effective values keep runtime clients ready but do not prove that a user configured
-    // a deployment. Only explicit global transport or enable state may classify external VMM.
-    // 内置最终值用于让运行时客户端保持就绪，但不能证明用户已经配置部署。只有明确的
-    // 全局传输或启用状态才能归类为外部 VMM。
+    // A saved backend or legacy endpoint survives disabling memory. Runtime defaults alone
+    // cannot prove setup; legacy enable-only configurations continue to select native memory.
+    // 已保存后端或旧版端点在关闭记忆后仍然有效。运行时默认值不能证明已配置；
+    // 仅保存启用状态的旧版配置仍选择原生记忆。
     match global_layer.backend_mode {
         Some(vulcan_vmm::VmmBackendMode::Native) => VmmDeploymentMode::Native,
         Some(vulcan_vmm::VmmBackendMode::ExternalGrpc) => VmmDeploymentMode::External,
@@ -246,7 +241,8 @@ pub(super) fn vmm_deployment_mode(global_layer: &vulcan_vmm::VmmConfigLayer) -> 
         {
             VmmDeploymentMode::External
         }
-        None => VmmDeploymentMode::Native,
+        None if global_layer.enabled == Some(true) => VmmDeploymentMode::Native,
+        None => VmmDeploymentMode::Disabled,
     }
 }
 

@@ -682,6 +682,16 @@ impl VmmEffectiveConfig {
         if !self.enabled {
             return VmmConfigDiagnostic::DisabledByConfig;
         }
+        self.diagnose_memory_configuration(grpc_online)
+    }
+
+    /// Diagnoses saved backend requirements independently of the memory execution switch.
+    /// 独立于记忆执行开关诊断已保存的后端配置要求。
+    /// `grpc_online` reports external transport availability; native configuration ignores it.
+    /// `grpc_online` 表示外部传输可用性；原生配置不使用该参数。
+    /// Returns the first missing requirement, or Ready even when configured memory is paused.
+    /// 返回首个未满足要求；配置完整时即使记忆已暂停也返回 Ready。
+    pub fn diagnose_memory_configuration(&self, grpc_online: bool) -> VmmConfigDiagnostic {
         if self.backend_mode == VmmBackendMode::Native {
             return VmmConfigDiagnostic::Ready;
         }
@@ -1080,6 +1090,45 @@ mod tests {
             missing_target.diagnose_memory_flow(true),
             VmmConfigDiagnostic::MissingGrpcTarget
         );
+    }
+
+    /// Preserves configured backend readiness while keeping paused memory execution disabled.
+    /// 保留已配置后端的配置就绪状态，同时维持暂停期间的记忆执行禁用状态。
+    #[test]
+    fn paused_memory_keeps_configuration_ready_without_enabling_flows() {
+        // Both backends share the execution switch but validate their own configuration requirements.
+        // 两种后端共用执行开关，但分别校验自身的配置要求。
+        for backend in [VmmBackendMode::Native, VmmBackendMode::ExternalGrpc] {
+            // The saved endpoint and identity are complete even though memory is paused.
+            // 即使记忆已暂停，保存的端点和身份仍然完整。
+            let resolved = VmmEffectiveConfig::resolve(
+                &VmmConfigLayer {
+                    backend_mode: Some(backend),
+                    enabled: Some(false),
+                    precheck_enabled: Some(true),
+                    memory_writeback_enabled: Some(true),
+                    ..base_global_layer()
+                },
+                None,
+                None,
+            );
+            assert_eq!(
+                resolved.diagnose_memory_configuration(true),
+                VmmConfigDiagnostic::Ready
+            );
+            assert_eq!(
+                resolved.diagnose_memory_flow(true),
+                VmmConfigDiagnostic::DisabledByConfig
+            );
+            assert_eq!(
+                resolved.diagnose_precheck_flow(true),
+                VmmConfigDiagnostic::DisabledByConfig
+            );
+            assert_eq!(
+                resolved.diagnose_writeback_flow(true),
+                VmmConfigDiagnostic::DisabledByConfig
+            );
+        }
     }
 
     #[test]

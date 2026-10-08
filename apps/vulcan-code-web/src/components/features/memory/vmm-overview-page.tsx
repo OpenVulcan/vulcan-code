@@ -375,7 +375,7 @@ function vmmPrerequisiteTitleKey(id: string): TranslationKey {
 // vmmPrerequisiteDescriptionKey maps prerequisite ids to actionable description keys.
 // vmmPrerequisiteDescriptionKey 将前置条件标识映射为可操作说明键。
 function vmmPrerequisiteDescriptionKey(id: string): TranslationKey {
-  if (id === "memory_enabled") return "vmm.experience.prerequisite.memory.description"
+  if (id === "memory_enabled") return "memory.rules.enableDescription"
   if (id === "transport" || id === "external_transport") {
     return "vmm.experience.prerequisite.transport.description"
   }

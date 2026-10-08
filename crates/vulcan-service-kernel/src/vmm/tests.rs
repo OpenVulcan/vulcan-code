@@ -904,15 +904,55 @@ fn vmm_project_display_summary_protects_default_project_without_parsing_display_
 /// 验证运行时默认值不会冒充用户明确配置的 VMM 部署。
 #[test]
 fn vmm_deployment_mode_requires_explicit_global_configuration() {
+    // Runtime defaults and a disabled-only layer do not prove prior setup.
+    // 运行时默认值和仅有关闭开关的配置层不能证明已完成配置。
     let empty = vulcan_vmm::VmmConfigLayer::default();
     assert_eq!(vmm_deployment_mode(&empty), VmmDeploymentMode::Disabled);
+    assert_eq!(
+        vmm_deployment_mode(&vulcan_vmm::VmmConfigLayer {
+            enabled: Some(false),
+            ..empty
+        }),
+        VmmDeploymentMode::Disabled
+    );
 
+    // Legacy external deployments retain their endpoint without a backend discriminator.
+    // 旧版外置部署在没有后端判别字段时仍保留端点。
     let external = vulcan_vmm::VmmConfigLayer {
         enabled: Some(true),
         grpc_target: Some(String::from("127.0.0.1:17625")),
         ..vulcan_vmm::VmmConfigLayer::default()
     };
     assert_eq!(vmm_deployment_mode(&external), VmmDeploymentMode::External);
+    assert_eq!(
+        vmm_deployment_mode(&vulcan_vmm::VmmConfigLayer {
+            enabled: Some(false),
+            ..external
+        }),
+        VmmDeploymentMode::External
+    );
+
+    // Pausing either explicitly configured backend must not restart first-time setup.
+    // 暂停任一明确配置的后端均不得重新触发首次配置。
+    for (backend, deployment) in [
+        (
+            vulcan_vmm::VmmBackendMode::Native,
+            VmmDeploymentMode::Native,
+        ),
+        (
+            vulcan_vmm::VmmBackendMode::ExternalGrpc,
+            VmmDeploymentMode::External,
+        ),
+    ] {
+        assert_eq!(
+            vmm_deployment_mode(&vulcan_vmm::VmmConfigLayer {
+                enabled: Some(false),
+                backend_mode: Some(backend),
+                ..vulcan_vmm::VmmConfigLayer::default()
+            }),
+            deployment
+        );
+    }
 }
 
 /// Verifies static profile snapshots group active nodes by target and date.
