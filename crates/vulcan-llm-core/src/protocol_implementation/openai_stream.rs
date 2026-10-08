@@ -2820,6 +2820,9 @@ mod tests {
                     )
                     .unwrap();
                 events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":3,"function":{"name":"tool"}}]},"finish_reason":"tool_calls"}]}"#).unwrap());
+                // StepFun keeps empty identity fields in argument-only deltas; these must preserve the unknown name.
+                // StepFun 在仅含参数的增量中保留空身份字段；这些字段必须保留已收到的未知工具名。
+                events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":3,"id":"","function":{"name":"","arguments":""}}]}}]}"#).unwrap());
                 events.extend(if eof {
                     decoder.finish().unwrap()
                 } else {

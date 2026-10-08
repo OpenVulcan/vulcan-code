@@ -142,6 +142,11 @@ pub(crate) fn merge_streamed_tool_name(
     fragment: &str,
     registered_tools: &BTreeSet<String>,
 ) -> String {
+    // Empty names in argument-only deltas carry no identity update, including for unknown tools.
+    // 仅含参数的增量中的空名称不携带身份更新，未知工具同样如此。
+    if fragment.is_empty() {
+        return current.to_string();
+    }
     if registered_tools.contains(fragment) {
         return fragment.to_string();
     }
