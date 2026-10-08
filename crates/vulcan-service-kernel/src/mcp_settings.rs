@@ -238,10 +238,25 @@ pub(super) fn agent_mcp_runtime_from_state(
 pub(super) fn apply_mcp_server_entry_to_configuration(
     configuration: &mut ProviderConfigurationFile,
     server_id: String,
-    entry: PersistedMcpServerEntry,
+    mut entry: PersistedMcpServerEntry,
     create_new_server: bool,
 ) -> Result<(), String> {
-    let existing = configuration.mcp.servers.contains_key(&server_id);
+    let current = configuration.mcp.servers.get(&server_id);
+    let existing = current.is_some();
+    // Snapshots carry only placeholders for configured secrets, so an unchanged form echoes them back.
+    // 快照只为已配置的秘密携带占位符，因此未改动的表单会把占位符原样回传。
+    entry.bearer_token = vulcan_service_api::restore_redacted_webui_secret(
+        entry.bearer_token.take(),
+        current.and_then(|current| current.bearer_token.as_deref()),
+    );
+    if let Some(oauth) = entry.oauth.as_mut() {
+        oauth.client_secret = vulcan_service_api::restore_redacted_webui_secret(
+            oauth.client_secret.take(),
+            current
+                .and_then(|current| current.oauth.as_ref())
+                .and_then(|oauth| oauth.client_secret.as_deref()),
+        );
+    }
     if create_new_server && existing {
         return Err(format!(
             "MCP 服务器 `{server_id}` 已存在。请更换名称，或编辑现有服务器。"

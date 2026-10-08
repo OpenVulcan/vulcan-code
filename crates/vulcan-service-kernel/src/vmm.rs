@@ -13,7 +13,7 @@ use vulcan_service_api::{
     VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot, VmmPrerequisiteSummary,
     VmmProjectScopeSummary, VmmRecentActivitySummary, VmmRuntimeSummary, VmmSetupState,
     VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
-    VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER, WorkbenchSnapshot,
+    VmmStaticProfileSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{SessionRuntimeStateEntry, TaskProjectSummary};
 

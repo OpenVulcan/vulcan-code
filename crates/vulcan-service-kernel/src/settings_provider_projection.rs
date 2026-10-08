@@ -625,7 +625,7 @@ pub(crate) fn mcp_servers(
             command: entry.command.clone(),
             args: entry.args.clone(),
             url: entry.url.clone().unwrap_or_default(),
-            bearer_token: entry.bearer_token.clone().unwrap_or_default(),
+            bearer_token: vulcan_service_api::redacted_webui_secret(entry.bearer_token.as_deref()),
             headers: key_value_summaries(&entry.headers),
             headers_from_env: key_value_summaries(&entry.headers_from_env),
             oauth_enabled: entry.oauth.is_some(),
@@ -634,11 +634,12 @@ pub(crate) fn mcp_servers(
                 .as_ref()
                 .and_then(|oauth| oauth.client_id.clone())
                 .unwrap_or_default(),
-            oauth_client_secret: entry
-                .oauth
-                .as_ref()
-                .and_then(|oauth| oauth.client_secret.clone())
-                .unwrap_or_default(),
+            oauth_client_secret: vulcan_service_api::redacted_webui_secret(
+                entry
+                    .oauth
+                    .as_ref()
+                    .and_then(|oauth| oauth.client_secret.as_deref()),
+            ),
             oauth_scopes: entry
                 .oauth
                 .as_ref()

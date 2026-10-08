@@ -7,6 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
+use vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER;
 use vulcan_service_runtime::vmm_management::VmmWorkbenchAction;
 use vulcan_vmm::{ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget};
 use vulcan_workbench_model::{SessionId, SessionState, SessionSummary};

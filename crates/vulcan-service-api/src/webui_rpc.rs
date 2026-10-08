@@ -350,6 +350,12 @@ pub fn webui_service_rpc_secret_key_should_be_redacted(key: &str) -> bool {
             | "refresh_token"
             | "clientSecret"
             | "client_secret"
+            | "oauthClientSecret"
+            | "oauth_client_secret"
+            | "bearerToken"
+            | "bearer_token"
+            | "managementBearerToken"
+            | "management_bearer_token"
             | "secret"
     )
 }

@@ -23,6 +23,52 @@ pub const SERVICE_MEDIA_RANGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 /// 通过浏览器侧 HTTP 快照返回的敏感信息脱敏占位符。
 pub const WEBUI_REDACTED_SECRET_PLACEHOLDER: &str = "********";
 
+/// Projects one optional persisted secret into its browser-facing form.
+/// 将一个可选持久化秘密投影为浏览器侧形态。
+///
+/// # Parameters
+/// 参数
+/// `value` is a persisted secret that must never cross the service response boundary.
+/// `value` 是不得跨过服务响应边界的持久化秘密。
+///
+/// # Returns
+/// 返回值
+/// The stable placeholder for a configured secret, or an empty value when none is configured.
+/// 已配置秘密时返回稳定占位符，未配置时返回空值。
+pub fn redacted_webui_secret(value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(|_| String::from(WEBUI_REDACTED_SECRET_PLACEHOLDER))
+        .unwrap_or_default()
+}
+
+/// Resolves one submitted secret against its persisted value, keeping the persisted value when the
+/// client echoed the placeholder back.
+/// 将一个提交的秘密与其持久化值对照解析：客户端回传占位符时保留持久化值。
+///
+/// # Parameters
+/// 参数
+/// `submitted` is the secret received from the client, possibly the placeholder.
+/// `submitted` 是从客户端收到的秘密，可能是占位符。
+/// `persisted` is the currently stored secret.
+/// `persisted` 是当前已存储的秘密。
+///
+/// # Returns
+/// 返回值
+/// The persisted secret for an echoed placeholder; otherwise the submitted secret unchanged.
+/// 回传占位符时返回持久化秘密；否则原样返回提交的秘密。
+pub fn restore_redacted_webui_secret(
+    submitted: Option<String>,
+    persisted: Option<&str>,
+) -> Option<String> {
+    match submitted {
+        Some(value) if value.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER => {
+            persisted.map(ToOwned::to_owned)
+        }
+        other => other,
+    }
+}
+
 /// Default local port used by the browser-facing WebUI service.
 /// 浏览器侧 WebUI 服务使用的默认本地端口。
 pub const WEBUI_SERVICE_HTTP_PORT: u16 = vulcan_runtime_assets::default_webui_service_http_port();
@@ -164,7 +210,15 @@ mod tests {
     /// 验证浏览器侧敏感字段匹配器覆盖当前设置字段。
     #[test]
     fn browser_rpc_secret_key_matcher_covers_settings_fields() {
-        for key in ["apiKey", "api_key", "grpcApiKey", "grpc_api_key"] {
+        for key in [
+            "apiKey",
+            "api_key",
+            "grpcApiKey",
+            "grpc_api_key",
+            "bearerToken",
+            "oauthClientSecret",
+            "managementBearerToken",
+        ] {
             assert!(webui_service_rpc_secret_key_should_be_redacted(key));
         }
         assert!(!webui_service_rpc_secret_key_should_be_redacted("baseUrl"));

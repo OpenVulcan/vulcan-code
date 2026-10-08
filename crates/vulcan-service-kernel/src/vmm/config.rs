@@ -144,20 +144,16 @@ pub(crate) async fn save_vmm_memory_config(
         return Err(format!("不支持的 VMM 配置作用域：{scope}"));
     }
     let current_configuration = provider_configuration_from_state(state)?;
-    if request.draft.grpc_api_key.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
-        request.draft.grpc_api_key = current_configuration
-            .vmm
-            .grpc_api_key
-            .clone()
-            .unwrap_or_default();
-    }
-    if request.draft.management_bearer_token.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
-        request.draft.management_bearer_token = current_configuration
-            .vmm
-            .management_bearer_token
-            .clone()
-            .unwrap_or_default();
-    }
+    request.draft.grpc_api_key = vulcan_service_api::restore_redacted_webui_secret(
+        Some(std::mem::take(&mut request.draft.grpc_api_key)),
+        current_configuration.vmm.grpc_api_key.as_deref(),
+    )
+    .unwrap_or_default();
+    request.draft.management_bearer_token = vulcan_service_api::restore_redacted_webui_secret(
+        Some(std::mem::take(&mut request.draft.management_bearer_token)),
+        current_configuration.vmm.management_bearer_token.as_deref(),
+    )
+    .unwrap_or_default();
     let next_layer = vmm_config_layer_from_draft(&request.draft, true)?;
     let current_effective =
         vulcan_vmm::VmmEffectiveConfig::resolve(&current_configuration.vmm, None, None);

@@ -129,3 +129,60 @@ fn update_mcp_server_entry_rejects_missing_id() {
     assert!(error.contains("未找到"), "unexpected error: {error}");
     assert!(configuration.mcp.servers.is_empty());
 }
+
+/// Verifies MCP secrets leave the service only as placeholders and an untouched form keeps them.
+/// 验证 MCP 秘密仅以占位符离开服务，且未改动的表单会保留原秘密。
+#[test]
+fn mcp_secrets_round_trip_through_placeholders() {
+    let mut configuration = ProviderConfigurationFile::default();
+    let mut remote = test_stdio_mcp_server_entry("Remote", "");
+    remote.transport = PersistedMcpTransportKind::Http;
+    remote.url = Some(String::from("https://mcp.example.test/mcp"));
+    remote.bearer_token = Some(String::from("synthetic-bearer"));
+    remote.oauth = Some(PersistedMcpOAuthConfig {
+        client_id: Some(String::from("client")),
+        client_secret: Some(String::from("synthetic-client-secret")),
+        scopes: Vec::new(),
+        redirect_uri: None,
+    });
+    configuration
+        .mcp
+        .servers
+        .insert(String::from("remote"), remote);
+
+    let summary = crate::settings_provider_projection::mcp_servers(&configuration)
+        .pop()
+        .expect("projected server");
+    assert_eq!(
+        summary.bearer_token,
+        vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER
+    );
+    assert_eq!(
+        summary.oauth_client_secret,
+        vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER
+    );
+
+    // The form echoes the snapshot unchanged, placeholders included.
+    // 表单原样回传快照，包括占位符。
+    let request: McpServerSaveRequest = serde_json::from_value(serde_json::json!({
+        "serverId": "remote", "name": "Remote", "enabled": true, "transport": "http",
+        "command": "", "args": [], "url": "https://mcp.example.test/mcp",
+        "bearerToken": summary.bearer_token, "headers": [], "headersFromEnv": [],
+        "oauthEnabled": true, "oauthClientId": "client", "oauthClientSecret": summary.oauth_client_secret,
+        "oauthScopes": [], "oauthRedirectUri": "", "cwd": "", "env": [], "envPassthrough": []
+    }))
+    .expect("decode synthetic request");
+    let (server_id, entry) = mcp_server_entry_from_request(request).expect("parse edit");
+    apply_mcp_server_entry_to_configuration(&mut configuration, server_id, entry, false)
+        .expect("apply edit");
+
+    let saved = &configuration.mcp.servers["remote"];
+    assert_eq!(saved.bearer_token.as_deref(), Some("synthetic-bearer"));
+    assert_eq!(
+        saved
+            .oauth
+            .as_ref()
+            .and_then(|oauth| oauth.client_secret.as_deref()),
+        Some("synthetic-client-secret")
+    );
+}
