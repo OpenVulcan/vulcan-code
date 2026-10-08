@@ -42,8 +42,8 @@
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
 | 凭据 | 添加、启用、同步、设默认、移除；默认移除时原子选择同提供方替代连接 | PublicAiSettings |
 | 模型 | 镜像 WebUI 模型清单：供应商分组与优先级、仅列有可用账号的模型、搜索及用途/输出筛选；每个模型的对话使用、多模态理解、内部使用与签名扩展开关；接入路由与账号详情；失效准入关闭及受阻路由诊断 | PublicAiSettings |
-| AI 能力 | 选择服务公开的能力目标、启用能力 | PublicAiSettings |
-| MCP | stdio/http/sse 配置表单、移除、运行态与能力检查 | Workbench.mcpServers、McpRuntime、McpCapabilities |
+| AI 能力 | 选择服务公开的能力目标、启用能力；供应商异步任务列表与取消，仍有未终结任务时每 5 秒重读 | PublicAiSettings、ProviderTasks |
+| MCP | stdio/http/sse 配置表单（含 OAuth 开关）、移除、运行态与能力检查；启用 OAuth 或等待授权的服务器可登录、打开授权页、手动完成、取消与退出，流程进行中每 2 秒重读 | Workbench.mcpServers、McpRuntime、McpCapabilities、McpOAuth |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
 | 诊断 | 重试配置、请求追踪开关、打开及清理追踪目录、模块与日志 | Workbench |
 | 关于 | 应用版本、许可证目录与按哈希读取正文 | Workbench、Licenses、LicenseBody |
@@ -117,6 +117,11 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `licenses::load_license_body` | loadLicenseBody | `service_license_body` |
 | `mcp_settings::load_mcp_runtime_snapshot` | loadMcpRuntimeSnapshot | `service_mcp_runtime_snapshot` |
 | `mcp_settings::load_mcp_server_capabilities` | loadMcpServerCapabilities | `service_mcp_server_capabilities` |
+| `mcp_settings::load_mcp_oauth_status` | loadMcpOAuthStatus | `service_mcp_oauth_status` |
+| `mcp_settings::start_mcp_oauth` | startMcpOAuth | `service_start_mcp_oauth` |
+| `mcp_settings::finish_mcp_oauth` | finishMcpOAuth | `service_finish_mcp_oauth` |
+| `mcp_settings::cancel_mcp_oauth` | cancelMcpOAuth | `service_cancel_mcp_oauth` |
+| `mcp_settings::remove_mcp_oauth` | removeMcpOAuth | `service_remove_mcp_oauth` |
 | `memory_actions::native_project_catalog` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_project_catalog` |
 | `memory_actions::native_memory_records` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_memory_records` |
 | `memory_actions::native_profile_records` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_profile_records` |
@@ -152,6 +157,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `memory_actions::native_recycle_purge` | runVmmMemoryAction | `service_run_vmm_memory_action` · `native_recycle_purge` |
 | `project_actions::restore_archived_conversations` | restoreArchivedConversations | `service_restore_archived_conversations` |
 | `project_actions::delete_archived_conversations` | deleteArchivedConversations | `service_delete_archived_conversations` |
+| `project_actions::open_external_url` | openExternalUrl | `service_open_external_url` |
 | `settings_actions::load_output_style_catalog` | loadOutputStyleCatalog | `service_output_style_catalog` |
 | `settings_actions::save_prompt_output_style` | savePromptOutputStyle | `service_save_prompt_output_style` |
 | `settings_actions::load_public_ai_settings` | loadPublicAiSettings | `service_public_ai_settings_snapshot` |
@@ -171,6 +177,8 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `settings_actions::test_public_ai_inference_route` | testPublicAiInferenceRoute | `service_test_public_ai_inference_route` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |
 | `settings_actions::save_public_ai_provider_tool_capability_enabled` | savePublicAiProviderToolCapabilityEnabled | `service_save_public_ai_provider_tool_capability_enabled` |
+| `settings_actions::list_provider_tasks` | listProviderTasks | `service_list_provider_tasks` |
+| `settings_actions::cancel_provider_task` | cancelProviderTask | `service_cancel_provider_task` |
 | `settings_actions::select_workbench_thinking_display_mode` | selectWorkbenchThinkingDisplayMode | `service_select_workbench_thinking_display_mode` |
 | `settings_actions::save_tool_collapse_default` | saveToolCollapseDefault | `service_save_tool_collapse_default` |
 | `settings_actions::select_webui_locale` | selectWebuiLocale | `service_select_webui_locale` |
@@ -245,6 +253,7 @@ Git 目录/仓库监听（`workspace.git.setMonitoring`）/差异/分支/提交�
 
 发现文件只由程序读取，传输令牌仅用于请求头及套接字认证。
 递归清理明确的密钥/令牌/密码字段和所有 MCP headers/env、initialSecrets 的值。
+服务以 `********` 占位符投影的已存储机密原样保留；表单中机密字段留空即回传占位符，由服务还原原值。
 文件 key、repositoryKey、安装 secretKey 与 headersFromEnv 的变量名称引用保留。
 ServiceCall、Setter、Form、输入框及发现端点的 Debug 输出省略机密；
 错误文本移除已知输入密钥、JSON 转义形式及服务令牌。

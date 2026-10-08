@@ -633,6 +633,13 @@ impl FakeService {
                         .cloned()
                         .unwrap_or(Value::Null));
                 }
+                // The demo keeps one sign-in status and reports it for the requested server.
+                // 演示仅保留一个登录状态，并按所请求服务器报告。
+                "service_mcp_oauth_status" => {
+                    let mut status = self.loads["service_mcp_oauth_status"].clone();
+                    status["serverId"] = required(&call.params, "/serverId")?.clone();
+                    return Ok(status);
+                }
                 _ => {}
             }
             // Result.
@@ -1159,6 +1166,39 @@ impl FakeService {
                     .ok_or("MCP configurations")?;
                 configurations.retain(|server| server["id"] != id);
                 configurations.push(request);
+            }
+            "service_cancel_provider_task" => {
+                let task = self.loads["service_list_provider_tasks"]
+                    .as_array_mut()
+                    .ok_or("provider task fixture")?
+                    .iter_mut()
+                    .find(|task| task.get("executionId") == params.get("executionId"))
+                    .ok_or("Unknown provider task")?;
+                task["phase"] = json!("cancellation_requested");
+            }
+            "service_start_mcp_oauth" => {
+                let server_id = string(params, "/serverId")?.to_string();
+                self.loads["service_mcp_oauth_status"]["flow"] = json!({
+                    "flowId": self.id("oauth"), "phase": "awaiting_callback", "callbackMode": "manual",
+                    "authorizationUrl": "https://example.invalid/authorize",
+                    "redirectUri": "https://example.invalid/callback", "error": null, "serverId": server_id,
+                });
+            }
+            "service_finish_mcp_oauth" => {
+                let status = &mut self.loads["service_mcp_oauth_status"];
+                if status["flow"]["flowId"] != *required(params, "/request/flowId")? {
+                    return Err("Unknown sign-in flow".into());
+                }
+                status["flow"]["phase"] = json!("succeeded");
+                status["authStatus"] = json!("authenticated");
+            }
+            "service_cancel_mcp_oauth" => {
+                self.loads["service_mcp_oauth_status"]["flow"] = Value::Null;
+            }
+            "service_remove_mcp_oauth" => {
+                let status = &mut self.loads["service_mcp_oauth_status"];
+                status["flow"] = Value::Null;
+                status["authStatus"] = json!("not_authenticated");
             }
             "service_remove_mcp_server_configuration" => {
                 self.loads["service_mcp_runtime_snapshot"]

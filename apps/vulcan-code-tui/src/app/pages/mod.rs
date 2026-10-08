@@ -330,14 +330,24 @@ impl PageId {
                 calls.push(settings::load_public_ai_settings());
                 calls.push(settings::load_output_style_catalog());
             }
+            Self::Capabilities => {
+                calls.push(settings::load_public_ai_settings());
+                calls.push(settings::list_provider_tasks());
+            }
             Self::Providers
             | Self::Credentials
             | Self::Models
-            | Self::Capabilities
             | Self::MemoryInference
             | Self::EngineSettings
             | Self::GitCommit => calls.push(settings::load_public_ai_settings()),
-            Self::Mcp => calls.push(api::mcp_settings::load_mcp_runtime_snapshot()),
+            Self::Mcp => {
+                calls.push(api::mcp_settings::load_mcp_runtime_snapshot());
+                // The sign-in status belongs to the server last opened for sign-in.
+                // 登录状态属于最近打开登录的服务器。
+                if let Some(loader) = app.slots.loader(Slot::McpOAuth) {
+                    calls.push(loader.clone());
+                }
+            }
             Self::About => calls.push(api::licenses::load_license_catalog()),
             // The layout's own reads follow its arrival, since they depend on its content.
             // 版面自身的读取在其到达后发出，因为它们取决于版面内容。
@@ -433,6 +443,16 @@ impl PageId {
             calls.push(api::vce::load_vce_job(project, None));
         }
         calls
+    }
+
+    /// Slots this page keeps re-reading while their content can still change.
+    /// 本页在内容仍可能变化时持续重读的槽位。
+    pub fn live_slots(self) -> &'static [Slot] {
+        match self {
+            Self::Capabilities => &[Slot::ProviderTasks],
+            Self::Mcp => &[Slot::McpOAuth],
+            _ => &[],
+        }
     }
 
     /// The page's search prompt, reached with `/`.

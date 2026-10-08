@@ -265,7 +265,8 @@
         "cwd": "",
         "env": [],
         "envPassthrough": [],
-        "id": "demo-mcp"
+        "id": "demo-mcp",
+        "oauthEnabled": true
       }
     ],
     "mcpTools": [],
@@ -1168,6 +1169,50 @@
       ],
       "failures": [],
       "ftsQueries": []
+    },
+    "service_list_provider_tasks": [
+      {
+        "executionId": "demo-task-video",
+        "ownerSessionId": null,
+        "capability": "video_generation",
+        "targetDisplayName": "Demo video",
+        "providerId": "demo",
+        "connectionId": "demo-connection",
+        "targetId": "demo-video",
+        "phase": "running",
+        "terminal": false,
+        "cancellationSupported": true,
+        "createdAtUnixMs": 1791400000000,
+        "updatedAtUnixMs": 1791400060000,
+        "deadlineUnixMs": 1791403600000,
+        "consecutiveObservationFailures": 0,
+        "error": null,
+        "resultAvailable": false
+      },
+      {
+        "executionId": "demo-task-music",
+        "ownerSessionId": null,
+        "capability": "music_generation",
+        "targetDisplayName": null,
+        "providerId": "demo",
+        "connectionId": "demo-connection",
+        "targetId": "demo-music",
+        "phase": "completed",
+        "terminal": true,
+        "cancellationSupported": true,
+        "createdAtUnixMs": 1791300000000,
+        "updatedAtUnixMs": 1791300300000,
+        "deadlineUnixMs": 1791303600000,
+        "consecutiveObservationFailures": 0,
+        "error": null,
+        "resultAvailable": true
+      }
+    ],
+    "service_mcp_oauth_status": {
+      "serverId": "demo-mcp",
+      "authStatus": "not_authenticated",
+      "statusError": null,
+      "flow": null
     }
   },
   "memory": {

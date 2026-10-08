@@ -83,6 +83,59 @@ fn secret_form_is_transient_masked_and_sends_once() {
     assert!(!format!("{call:?}").contains("synthetic-credential"));
 }
 
+/// An empty answer to a stored secret keeps the service placeholder; an empty new secret stays empty.
+/// 已存储机密留空回答保留服务占位符；新机密留空仍为空。
+#[test]
+fn empty_secret_answer_keeps_the_stored_secret_placeholder() {
+    let placeholder = vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER;
+    for (stored, expected) in [(placeholder, placeholder), ("", "")] {
+        let (mut app, commands) = isolated_app();
+        let form = form::Form {
+            request: json!({"bearerToken": stored}),
+            fields: vec![form::FormField {
+                title: "Token".into(),
+                pointer: "/bearerToken".into(),
+                secret: true,
+                optional: true,
+                parse: |input| Some(json!(input)),
+                validate: |_, _| true,
+            }],
+            index: 0,
+            save: form::FormSubmit::Prepared(ServiceCall::mutate(
+                "save_mcp_server_configuration",
+                "service_save_mcp_server_configuration",
+                Value::Null,
+                &[],
+            )),
+        };
+        perform(&mut app, UiAction::Form(Box::new(form)));
+        perform(&mut app, UiAction::PromptAccept);
+        let Command::Call(call) = commands.try_recv().unwrap() else {
+            panic!("service call")
+        };
+        assert_eq!(call.param("/bearerToken"), expected);
+    }
+}
+
+/// A live provider-task slot is re-read only while a task can still change phase.
+/// 供应商任务槽位仅在仍有任务可能改变阶段时重读。
+#[test]
+fn provider_tasks_are_polled_only_while_live() {
+    let (mut app, _commands) = isolated_app();
+    for (tasks, armed) in [
+        (json!([{"executionId": "a", "terminal": false}]), true),
+        (json!([{"executionId": "a", "terminal": true}]), false),
+    ] {
+        app.slots.set(
+            Slot::ProviderTasks,
+            settings_actions::list_provider_tasks(),
+            tasks,
+        );
+        app.arm_live_poll(Slot::ProviderTasks);
+        assert_eq!(app.live_poll_due.contains_key(&Slot::ProviderTasks), armed);
+    }
+}
+
 /// Resource input preserves pasted line breaks, indentation and explicit newline keys through confirmation.
 /// 资源输入通过确认保留粘贴换行、缩进及明确换行按键。
 #[test]

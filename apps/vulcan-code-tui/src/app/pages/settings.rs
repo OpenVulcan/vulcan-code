@@ -488,14 +488,108 @@ pub(super) fn capabilities(app: &App) -> Vec<Row> {
             }),
         ));
     }
+    rows.extend(provider_tasks(app));
     rows
+}
+
+/// Lists retained provider asynchronous tasks with their phase and cancellation, as the WebUI tasks tab does.
+/// 与 WebUI 任务页一致，列出保留的供应商异步任务及其阶段与取消操作。
+fn provider_tasks(app: &App) -> Vec<Row> {
+    let mut rows = vec![section(tr!("settings.providerTasks.tab"))];
+    let tasks = a(app.slots.value(Slot::ProviderTasks), "");
+    if app.slots.loaded(Slot::ProviderTasks) && tasks.is_empty() {
+        rows.push(note(tr!("settings.providerTasks.empty"), Tone::Muted));
+    }
+    for task in tasks {
+        // Stable task identity used by status and cancellation calls.
+        // 状态查询与取消调用使用的稳定任务标识。
+        let id = s(task, "/executionId");
+        let title = task
+            .get("capability")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| tr!("settings.providerTasks.untitled"));
+        let target = task
+            .get("targetDisplayName")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| s(task, "/targetId"));
+        let started = tr!(
+            "settings.providerTasks.started",
+            time = utc_time(n(task, "/createdAtUnixMs"))
+        );
+        let phase = s(task, "/phase");
+        let terminal = b(task, "/terminal");
+        // The error explains a failure; otherwise a live task shows its deadline.
+        // 错误说明失败原因；否则进行中的任务显示截止时间。
+        let status = match task.get("error").and_then(Value::as_str) {
+            Some(error) => error.to_string(),
+            None if !terminal => tr!(
+                "settings.providerTasks.deadline",
+                time = utc_time(n(task, "/deadlineUnixMs"))
+            ),
+            None => String::new(),
+        };
+        let tone = match phase.as_str() {
+            "completed" => Tone::Good,
+            "failed" | "dispatch_outcome_unknown" => Tone::Bad,
+            "cancelled" => Tone::Muted,
+            _ => Tone::Info,
+        };
+        let mut actions = Vec::new();
+        if !terminal && b(task, "/cancellationSupported") && phase != "cancellation_requested" {
+            actions.push(action(
+                tr!("settings.providerTasks.cancel"),
+                call(settings::cancel_provider_task(
+                    &id,
+                    task.get("ownerSessionId").and_then(Value::as_str),
+                )),
+                Tone::Bad,
+            ));
+        }
+        rows.push(
+            item(&id, title, format!("{target} · {started}"))
+                .badge(provider_task_phase_label(&phase), tone)
+                .lines(if status.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![status]
+                })
+                .actions(actions),
+        );
+    }
+    rows
+}
+
+/// Names one durable provider-task phase in the active language.
+/// 以当前语言命名一个持久供应商任务阶段。
+fn provider_task_phase_label(phase: &str) -> String {
+    match phase {
+        "dispatching" => tr!("settings.providerTasks.phase.dispatching"),
+        "queued" => tr!("settings.providerTasks.phase.queued"),
+        "running" => tr!("settings.providerTasks.phase.running"),
+        "cancellation_requested" => tr!("settings.providerTasks.phase.cancellationRequested"),
+        "completed" => tr!("settings.providerTasks.phase.completed"),
+        "failed" => tr!("settings.providerTasks.phase.failed"),
+        "cancelled" => tr!("settings.providerTasks.phase.cancelled"),
+        "dispatch_outcome_unknown" => tr!("settings.providerTasks.phase.dispatchOutcomeUnknown"),
+        other => other.to_string(),
+    }
+}
+
+/// Formats Unix milliseconds as a UTC minute, or `-` when the value is out of range.
+/// 将 Unix 毫秒格式化为 UTC 分钟；超出范围时为 `-`。
+fn utc_time(unix_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(unix_ms)
+        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| String::from("-"))
 }
 
 /// Initializes the full HTTP server DTO using the upstream createMcpDraft defaults.
 /// 使用上游 createMcpDraft 默认值初始化完整 HTTP 服务器 DTO。
 fn mcp_http_request() -> Value {
     json!({"serverId":null,"name":"","enabled":true,"transport":"http","command":"","args":[],
-        "url":"","bearerToken":"","headers":[],"headersFromEnv":[],"oauthClientId":"",
+        "url":"","bearerToken":"","headers":[],"headersFromEnv":[],"oauthEnabled":false,"oauthClientId":"",
         "oauthClientSecret":"","oauthScopes":[],"oauthRedirectUri":"","cwd":"","env":[],"envPassthrough":[]})
 }
 
@@ -516,6 +610,7 @@ fn mcp_edit_request(server: &Value) -> Option<Value> {
         "bearerToken",
         "headers",
         "headersFromEnv",
+        "oauthEnabled",
         "oauthClientId",
         "oauthClientSecret",
         "oauthScopes",
@@ -587,6 +682,18 @@ fn mcp_form(request: Value) -> UiAction {
                 false,
                 parse_pairs,
             ),
+            super::super::form::FormField {
+                title: tr!("tui.field.oauthEnabledInput"),
+                pointer: "/oauthEnabled".into(),
+                secret: false,
+                optional: false,
+                validate: |_, _| true,
+                parse: |input| match input {
+                    "true" => Some(json!(true)),
+                    "false" => Some(json!(false)),
+                    _ => None,
+                },
+            },
             field(tr!("tui.field.oauthClient"), "/oauthClientId", false, true),
             field(
                 tr!("tui.field.oauthSecret"),
@@ -608,7 +715,123 @@ fn mcp_form(request: Value) -> UiAction {
             ),
         ]);
     }
-    form(request, fields, settings::save_mcp_server_configuration)
+    form(request, fields, |mut request| {
+        // OAuth fields apply only when sign-in is enabled, matching the WebUI dialog.
+        // 仅在启用登录时应用 OAuth 字段，与 WebUI 对话框一致。
+        if request.get("oauthEnabled").and_then(Value::as_bool) != Some(true) {
+            request["oauthClientId"] = json!("");
+            request["oauthClientSecret"] = json!("");
+            request["oauthScopes"] = json!([]);
+            request["oauthRedirectUri"] = json!("");
+        }
+        settings::save_mcp_server_configuration(request)
+    })
+}
+
+/// Describes the stored credential state of one MCP server, or why it is unknown.
+/// 描述单个 MCP 服务器已存储凭据的状态，或其未知的原因。
+fn mcp_auth_status_text(status: &Value) -> String {
+    match status.get("authStatus").and_then(Value::as_str) {
+        Some("authenticated") => tr!("settings.mcp.oauth.statusAuthenticated"),
+        Some("expired") => tr!("settings.mcp.oauth.statusExpired"),
+        Some("not_authenticated") => tr!("settings.mcp.oauth.statusNotAuthenticated"),
+        Some("not_configured") => tr!("settings.mcp.oauth.statusNotConfigured"),
+        _ => tr!(
+            "settings.mcp.oauth.statusUnknown",
+            error = s(status, "/statusError")
+        ),
+    }
+}
+
+/// Signs the opened MCP server in or out; tokens never reach the TUI, only status codes.
+/// 为已打开的 MCP 服务器登录或退出；令牌从不到达 TUI，只有状态代码。
+fn mcp_oauth(status: &Value) -> Row {
+    let server_id = s(status, "/serverId");
+    let flow = status.get("flow").filter(|flow| flow.is_object());
+    let phase = flow.map(|flow| s(flow, "/phase")).unwrap_or_default();
+    let flow_active = matches!(phase.as_str(), "awaiting_callback" | "exchanging");
+    let mut lines = Vec::new();
+    let mut actions = Vec::new();
+    if let Some(flow) = flow {
+        let flow_id = s(flow, "/flowId");
+        let manual = s(flow, "/callbackMode") == "manual";
+        match phase.as_str() {
+            "awaiting_callback" | "exchanging" => {
+                lines.push(if phase == "exchanging" {
+                    tr!("settings.mcp.oauth.exchanging")
+                } else {
+                    tr!("settings.mcp.oauth.waitingForBrowser")
+                });
+                lines.push(s(flow, "/authorizationUrl"));
+            }
+            "failed" => lines.push(tr!("settings.mcp.oauth.failed", error = s(flow, "/error"))),
+            "expired" => lines.push(tr!("settings.mcp.oauth.expired")),
+            _ => {}
+        }
+        if phase == "awaiting_callback" {
+            if manual {
+                lines.push(tr!("settings.mcp.oauth.manualHint"));
+                actions.push(action(
+                    tr!("settings.mcp.oauth.finish"),
+                    form(
+                        json!({"serverId": server_id, "flowId": flow_id, "callbackUrl": ""}),
+                        vec![field(
+                            tr!("settings.mcp.oauth.callbackUrl"),
+                            "/callbackUrl",
+                            false,
+                            false,
+                        )],
+                        api::mcp_settings::finish_mcp_oauth,
+                    ),
+                    Tone::Accent,
+                ));
+            }
+            // Choosing the action is the explicit confirmation for this exact authorization URL.
+            // 选择该操作即为对此精确授权 URL 的显式确认。
+            actions.push(action(
+                tr!("settings.mcp.oauth.openPage"),
+                call(api::project_actions::open_external_url(
+                    &s(flow, "/authorizationUrl"),
+                    true,
+                )),
+                Tone::Normal,
+            ));
+            actions.push(action(
+                tr!("settings.mcp.oauth.cancel"),
+                call(api::mcp_settings::cancel_mcp_oauth(&server_id, &flow_id)),
+                Tone::Bad,
+            ));
+        }
+    }
+    let auth_status = status.get("authStatus").and_then(Value::as_str);
+    if !flow_active && auth_status != Some("not_configured") {
+        let signed_in = matches!(auth_status, Some("authenticated" | "expired"));
+        actions.push(action(
+            if signed_in {
+                tr!("settings.mcp.oauth.signInAgain")
+            } else {
+                tr!("settings.mcp.oauth.signIn")
+            },
+            call(api::mcp_settings::start_mcp_oauth(&server_id)),
+            Tone::Accent,
+        ));
+        // Sign-out also clears credentials whose status is unknown, for example while the server is stopped.
+        // 退出登录也会清除状态未知的凭据，例如服务器已停止时。
+        if signed_in || auth_status.is_none() {
+            actions.push(action(
+                tr!("settings.mcp.oauth.signOut"),
+                call(api::mcp_settings::remove_mcp_oauth(&server_id)),
+                Tone::Bad,
+            ));
+        }
+    }
+    item(
+        &format!("mcp-oauth-{server_id}"),
+        format!("{} · {server_id}", tr!("settings.mcp.oauthSignIn")),
+        mcp_auth_status_text(status),
+    )
+    .lines(lines)
+    .actions(actions)
 }
 
 /// Displays runtime schemas and real MCP configuration actions.
@@ -642,12 +865,22 @@ pub(super) fn mcp(app: &App) -> Vec<Row> {
             call(api::mcp_settings::load_mcp_server_capabilities(&id)),
             Tone::Normal,
         )];
+        // Persisted configuration of a user-defined server.
+        // 用户定义服务器的持久化配置。
+        let server = servers
+            .iter()
+            .find(|server| v(server, "/id").as_str() == Some(id.as_str()));
+        if server.is_some_and(|server| b(server, "/oauthEnabled"))
+            || s(inspection, "/state/status") == "awaiting_authorization"
+        {
+            actions.push(action(
+                tr!("settings.mcp.oauthSignIn"),
+                call(api::mcp_settings::load_mcp_oauth_status(&id)),
+                Tone::Normal,
+            ));
+        }
         if s(inspection, "/state/source") == "user" {
-            if let Some(server) = servers
-                .iter()
-                .find(|server| v(server, "/id").as_str() == Some(id.as_str()))
-                && let Some(request) = mcp_edit_request(server)
-            {
+            if let Some(request) = server.and_then(mcp_edit_request) {
                 actions.push(action(
                     tr!("tui.field.edit"),
                     mcp_form(request),
@@ -674,6 +907,9 @@ pub(super) fn mcp(app: &App) -> Vec<Row> {
             .lines(details(inspection))
             .actions(actions),
         );
+    }
+    if app.slots.loaded(Slot::McpOAuth) {
+        rows.push(mcp_oauth(app.slots.value(Slot::McpOAuth)));
     }
     if app.slots.loaded(Slot::McpCapabilities) {
         rows.push(

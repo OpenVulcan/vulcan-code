@@ -55,6 +55,14 @@ use pages::{Area, PageId, PageState};
 /// 仅在前一次观察已返回后轮询活动知识库任务。
 const KNOWLEDGE_JOB_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Re-read provider tasks while one can still change phase, as the WebUI tasks tab does.
+/// 仍有任务可能改变阶段时重新读取供应商任务，与 WebUI 任务页一致。
+const PROVIDER_TASK_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Re-read an MCP sign-in while its flow waits for the browser or exchanges the code.
+/// MCP 登录流程等待浏览器或交换授权码期间重新读取其状态。
+const MCP_OAUTH_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Sidebar,
@@ -624,6 +632,9 @@ pub struct App {
     /// Next read-only observation of an active job; None also prevents overlapping polls.
     /// 活动任务的下一次只读观察时间；None 同时防止轮询重叠。
     knowledge_poll_due: Option<Instant>,
+    /// Next re-read of a live provider-task or sign-in slot; armed only by a result, so reads never overlap.
+    /// 实时供应商任务或登录槽位的下一次重读；只由结果设置，因此读取不会重叠。
+    live_poll_due: std::collections::BTreeMap<crate::service_api::Slot, Instant>,
     /// Backend-defined category currently filtering agent definitions.
     /// 当前筛选智能体定义的后端分类。
     pub agent_category: String,
@@ -752,6 +763,7 @@ impl App {
             knowledge_document: None,
             knowledge_corpus: "raw".into(),
             knowledge_poll_due: None,
+            live_poll_due: std::collections::BTreeMap::new(),
             agent_category: String::new(),
             skill_category: String::new(),
             agent_query: String::new(),
@@ -1055,6 +1067,58 @@ impl App {
                     crate::service_api::knowledge_base::get_knowledge_import_job(&library),
                 )),
             );
+        }
+        // A due slot is re-read only while its page is open; leaving the page drops the schedule.
+        // 到期槽位仅在其页面打开时重读；离开页面即放弃该计划。
+        let page = self.current_page();
+        let due = self
+            .live_poll_due
+            .iter()
+            .filter(|(_, due)| **due <= now)
+            .map(|(slot, _)| *slot)
+            .collect::<Vec<_>>();
+        for slot in due {
+            self.live_poll_due.remove(&slot);
+            if page.is_some_and(|page| page.live_slots().contains(&slot))
+                && let Some(loader) = self.slots.loader(slot).map(|loader| loader.renewed())
+            {
+                action::perform(self, action::UiAction::Send(Command::Call(loader)));
+            }
+        }
+    }
+
+    /// Schedules the next read of a provider-task or sign-in slot while its content can still change.
+    /// 在供应商任务或登录槽位内容仍可能变化时安排下一次读取。
+    /// `slot` is the slot whose result just arrived.
+    /// `slot` 为刚收到结果的槽位。
+    fn arm_live_poll(&mut self, slot: crate::service_api::Slot) {
+        use crate::service_api::Slot;
+        let value = self.slots.value(slot);
+        let interval = match slot {
+            Slot::ProviderTasks => value
+                .as_array()
+                .is_some_and(|tasks| {
+                    tasks
+                        .iter()
+                        .any(|task| task.get("terminal").and_then(|t| t.as_bool()) == Some(false))
+                })
+                .then_some(PROVIDER_TASK_POLL_INTERVAL),
+            Slot::McpOAuth => matches!(
+                value
+                    .pointer("/flow/phase")
+                    .and_then(|phase| phase.as_str()),
+                Some("awaiting_callback" | "exchanging")
+            )
+            .then_some(MCP_OAUTH_POLL_INTERVAL),
+            _ => return,
+        };
+        match interval {
+            Some(interval) => {
+                self.live_poll_due.insert(slot, self.now + interval);
+            }
+            None => {
+                self.live_poll_due.remove(&slot);
+            }
         }
     }
 
@@ -1375,6 +1439,7 @@ impl App {
                         self.load_page();
                     }
                 }
+                self.arm_live_poll(slot);
                 self.accept_catalog(slot);
             }
             BackendEvent::SlotFailed {
@@ -1390,6 +1455,7 @@ impl App {
                 if slot == crate::service_api::Slot::KnowledgeJob {
                     self.knowledge_poll_due = None;
                 }
+                self.live_poll_due.remove(&slot);
             }
             BackendEvent::Preview { call, result } => preview::open(self, call, result),
             BackendEvent::CallFinished => self.call_pending = false,

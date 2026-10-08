@@ -20,6 +20,9 @@ anyhow.workspace = true
 # Encodes copies for the OSC 52 clipboard sequence.
 # 为 OSC 52 剪贴板序列编码复制内容。
 base64.workspace = true
+# Formats provider-task timestamps as UTC without reading the host clock.
+# 以 UTC 格式化供应商任务时间戳，无需读取宿主时钟。
+chrono.workspace = true
 ratatui.workspace = true
 ratatui-textarea.workspace = true
 serde.workspace = true

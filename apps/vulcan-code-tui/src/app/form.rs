@@ -107,15 +107,21 @@ impl Form {
                     _ => String::new(),
                 }
             };
+            // A stored secret arrives as the service placeholder and is kept by an empty answer.
+            // 已存储的机密以服务占位符到达，留空回答即保留。
+            let mut step = tr!(
+                "tui.form.step",
+                current = self.index + 1,
+                total = self.fields.len()
+            );
+            if field.secret && self.holds_stored_secret(&field.pointer) {
+                step = format!("{step} {}", tr!("tui.form.secretKept"));
+            }
             perform(
                 app,
                 UiAction::Prompt(Box::new(PromptDialog::new(
                     field.title.clone(),
-                    tr!(
-                        "tui.form.step",
-                        current = self.index + 1,
-                        total = self.fields.len()
-                    ),
+                    step,
                     input,
                     PromptThen::Form(Box::new(self)),
                     field.secret,
@@ -135,12 +141,26 @@ impl Form {
         }
     }
 
+    /// Reports whether `pointer` still holds the service placeholder for a stored secret.
+    /// 报告 `pointer` 是否仍为已存储机密的服务占位符。
+    fn holds_stored_secret(&self, pointer: &str) -> bool {
+        self.request.pointer(pointer).and_then(Value::as_str)
+            == Some(vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER)
+    }
+
     /// Stores `input` at the current verified pointer and advances; invalid schemas report error.
     /// 在当前已确认的指针保存 `input` 并前进；无效结构明确报告错误。
     pub fn accept(mut self, app: &mut App, input: String) {
         // Field.
         // 准确字段定义。
         let field = &self.fields[self.index];
+        // An empty answer leaves the placeholder, which the service restores to the stored secret.
+        // 留空回答保留占位符，由服务还原为已存储的机密。
+        if field.secret && input.is_empty() && self.holds_stored_secret(&field.pointer) {
+            self.index += 1;
+            self.open(app);
+            return;
+        }
         // Parsed.
         // 通过解析的输入值。
         let Some(parsed) =

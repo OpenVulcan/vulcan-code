@@ -83,6 +83,12 @@ pub enum Slot {
     /// `loadMcpServerCapabilities` of the open server.
     /// 当前打开服务器的能力。
     McpCapabilities,
+    /// `loadMcpOAuthStatus` of the open server.
+    /// 当前打开服务器的 OAuth 登录状态。
+    McpOAuth,
+    /// `listProviderTasks`
+    /// 保留的供应商异步任务。
+    ProviderTasks,
     /// `listKnowledgeLibraries`
     /// 知识库目录。
     KnowledgeLibraries,
@@ -524,7 +530,13 @@ pub fn scrub_secrets(value: &mut Value) {
                         }
                     }
                 }
-                if secret_field(key) && item.is_string() {
+                // The service placeholder stands for a stored secret; echoing it back keeps that secret.
+                // 服务占位符代表已存储的机密；原样回传即保留该机密。
+                if secret_field(key)
+                    && item.as_str().is_some_and(|value| {
+                        value != vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER
+                    })
+                {
                     *item = Value::String(String::new());
                 } else {
                     scrub_secrets(item);
@@ -624,5 +636,21 @@ mod tests {
         assert_eq!(value["repositoryKey"], "repo");
         assert_eq!(value["serviceToken"], "");
         assert_eq!(value["maxTokens"], 8);
+    }
+
+    /// The service placeholder for a stored secret survives scrubbing so an edit keeps that secret.
+    /// 已存储机密的服务占位符在清理后保留，使编辑能保留该机密。
+    #[test]
+    fn scrubbing_keeps_the_stored_secret_placeholder() {
+        let mut value = serde_json::json!({
+            "bearerToken": vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER,
+            "oauthClientSecret": "raw-secret",
+        });
+        scrub_secrets(&mut value);
+        assert_eq!(
+            value["bearerToken"],
+            vulcan_service_api::WEBUI_REDACTED_SECRET_PLACEHOLDER
+        );
+        assert_eq!(value["oauthClientSecret"], "");
     }
 }

@@ -233,6 +233,60 @@ fn settings_writes_reload_authority_without_retaining_credentials() {
     );
 }
 
+/// Provider-task cancellation and an MCP sign-in follow the service phases through the public builders.
+/// 供应商任务取消与 MCP 登录经公开构建器遵循服务阶段。
+#[test]
+fn provider_task_cancel_and_mcp_sign_in_follow_service_phases() {
+    let mut service = FakeService::new();
+    service
+        .answer(&settings::cancel_provider_task("demo-task-video", None))
+        .unwrap();
+    let tasks = service.answer(&settings::list_provider_tasks()).unwrap();
+    let task = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["executionId"] == "demo-task-video")
+        .expect("the cancelled task is still listed");
+    assert_eq!(task["phase"], "cancellation_requested");
+    assert!(
+        service
+            .answer(&settings::cancel_provider_task("missing-task", None))
+            .is_err()
+    );
+
+    use crate::service_api::mcp_settings as mcp;
+    service.answer(&mcp::start_mcp_oauth("demo-mcp")).unwrap();
+    let status = service
+        .answer(&mcp::load_mcp_oauth_status("demo-mcp"))
+        .unwrap();
+    assert_eq!(status["serverId"], "demo-mcp");
+    assert_eq!(status["flow"]["phase"], "awaiting_callback");
+    let flow_id = status["flow"]["flowId"].as_str().unwrap().to_string();
+    assert!(
+        service
+            .answer(&mcp::finish_mcp_oauth(json!({
+                "serverId": "demo-mcp", "flowId": "stale-flow", "callbackUrl": "https://example.invalid/callback?code=x"
+            })))
+            .is_err()
+    );
+    service
+        .answer(&mcp::finish_mcp_oauth(json!({
+            "serverId": "demo-mcp", "flowId": flow_id, "callbackUrl": "https://example.invalid/callback?code=x"
+        })))
+        .unwrap();
+    let status = service
+        .answer(&mcp::load_mcp_oauth_status("demo-mcp"))
+        .unwrap();
+    assert_eq!(status["authStatus"], "authenticated");
+    service.answer(&mcp::remove_mcp_oauth("demo-mcp")).unwrap();
+    let status = service
+        .answer(&mcp::load_mcp_oauth_status("demo-mcp"))
+        .unwrap();
+    assert_eq!(status["authStatus"], "not_authenticated");
+    assert!(status["flow"].is_null());
+}
+
 /// A deleted final library leaves reusable creation defaults and independent source state.
 /// 删除最后一个知识库后仍保留可复用的创建默认值及独立来源状态。
 #[test]

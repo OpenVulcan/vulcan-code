@@ -519,3 +519,33 @@ pub fn remove_mcp_server_configuration(server_id: &str) -> ServiceCall {
         &[Slot::Workbench, Slot::McpRuntime],
     )
 }
+
+/// Builds the request for `service_list_provider_tasks`.
+/// 构建 `service_list_provider_tasks` 的请求。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn list_provider_tasks() -> ServiceCall {
+    ServiceCall::load(
+        "list_provider_tasks",
+        "service_list_provider_tasks",
+        json!({}),
+        Slot::ProviderTasks,
+    )
+}
+
+/// Builds the request for `service_cancel_provider_task`.
+/// 构建 `service_cancel_provider_task` 的请求。
+/// `execution_id` is the stable task identity shown in the list.
+/// `execution_id` 为列表中显示的稳定任务标识。
+/// `owner_session_id` repeats the listed owner so a stale view cannot cancel a task that changed hands.
+/// `owner_session_id` 重复列表中的所有者，使过期视图无法取消已易主的任务。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn cancel_provider_task(execution_id: &str, owner_session_id: Option<&str>) -> ServiceCall {
+    ServiceCall::mutate(
+        "cancel_provider_task",
+        "service_cancel_provider_task",
+        json!({ "executionId": execution_id, "ownerSessionId": owner_session_id }),
+        &[Slot::ProviderTasks],
+    )
+}
