@@ -113,6 +113,94 @@ pub(crate) fn session_context_usage_facts_from_v1_registry(
         })
 }
 
+/// Publishes committed API usage for the selected composer without refreshing the workspace.
+/// 为选中会话的输入区发布已提交 API 用量，不刷新整个工作区。
+/// `app` delivers deltas, `state` owns the selection, and `session_id` identifies the completed API owner.
+/// `app` 发送增量，`state` 持有选中状态，`session_id` 标识已完成 API 的所属会话。
+/// Returns success for an unchanged or unselected surface, or an explicit projection error.
+/// 未变化或未选中的界面返回成功，投影失败时返回明确错误。
+pub(crate) fn emit_session_context_usage_changed(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // Read the session owner outside the service lock to preserve the existing lock order.
+    // 在服务锁外读取会话所有者，保持现有锁顺序。
+    let conversation_id = session_id.to_string();
+    // Skip unrelated completions before scanning their API history.
+    // 扫描 API 历史前跳过无关会话的完成事件。
+    let registry = {
+        // The full Workbench snapshot binds composer usage to selected_conversation_id too.
+        // 完整 Workbench 快照同样将输入区用量绑定到 selected_conversation_id。
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.workbench.selected_conversation_id.as_deref() != Some(&conversation_id) {
+            return Ok(());
+        }
+        guard.session_runtime_registry.clone()
+    };
+    // Usage is derived from the same durable API facts used when switching conversations.
+    // 用量来自切换会话时使用的同一份可靠 API 事实。
+    let facts = session_context_usage_facts_from_v1_registry(registry.as_ref(), session_id)?;
+    // Recheck selection after reading facts so background completion cannot replace another session's orb.
+    // 读取事实后重新检查选中状态，避免后台完成覆盖其他会话的用量圈。
+    let envelope = {
+        // This guard commits the retained value and its revision atomically.
+        // 此守卫原子提交保留值及其修订号。
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.workbench.selected_conversation_id.as_deref() != Some(&conversation_id) {
+            return Ok(());
+        }
+        // Runtime identity and capabilities are the existing authoritative projection inputs.
+        // 运行时身份与能力是现有权威投影输入。
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        // Select the runtime row that owns these API facts.
+        // 选择拥有这些 API 事实的运行时行。
+        let runtime_state = workspace.session_runtime_state.get(&session_id);
+        // Resolve capabilities without starting a new Provider request.
+        // 解析能力时不启动新的 Provider 请求。
+        let capabilities = session_public_ai_model_capabilities(
+            guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.public_ai_runtime.as_ref()),
+            session_id,
+            runtime_state,
+        );
+        // Reuse the canonical calibrated projection instead of maintaining a second token counter.
+        // 复用规范校准投影，避免维护第二份 Token 计数器。
+        let context_usage = context_usage_snapshot_from_runtime_state(
+            session_id,
+            runtime_state,
+            facts.as_ref(),
+            &guard.live_context_budgets,
+            capabilities.as_ref(),
+            None,
+        );
+        if guard.workbench.context_usage == context_usage {
+            return Ok(());
+        }
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.revision = guard.workbench_generation;
+        guard.workbench.context_usage = context_usage.clone();
+        WorkbenchDeltaEnvelope {
+            generation: guard.workbench_generation,
+            delta: WorkbenchDelta::ContextUsageChanged(ContextUsageChangedDelta { context_usage }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_api_usage_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(envelope)),
+    );
+    Ok(())
+}
+
 /// Finds the immutable V1 API-start fact paired with one terminal stats event.
 /// 查找与一条终态统计事件配对的不可变 V1 API 起始事实。
 fn matching_v1_api_started<'a>(

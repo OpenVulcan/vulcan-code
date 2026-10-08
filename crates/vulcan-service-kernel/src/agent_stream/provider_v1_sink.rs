@@ -2127,7 +2127,13 @@ impl ProviderV1StreamSink {
         let Some(vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts::ApiTerminal(terminal)) = &event.v1_lifecycle else {
             return Err(ProviderV1SinkError::MissingTypedTerminalFacts);
         };
-        self.accept_terminal(terminal.clone()).await
+        // API usage becomes observable only after the canonical terminal facts commit.
+        // 规范终态事实提交后，API 用量才可供界面观测。
+        let outcome = self.accept_terminal(terminal.clone()).await?;
+        if outcome == ProviderV1TerminalOutcome::Completed {
+            self.publish_context_usage(app, state);
+        }
+        Ok(outcome)
     }
 
     /// Accepts one typed API terminal and durably closes a tool-free group.
@@ -2296,6 +2302,11 @@ impl ProviderV1StreamSink {
         // outcome is available only after persistence succeeds; failed boundaries must not publish lifecycle changes.
         // outcome 仅在持久化成功后可用；失败边界不得发布生命周期变更。
         let outcome = self.apply_tool_boundary(boundary, now_ms).await?;
+        // The final tool commits deferred ApiStats; earlier tool boundaries have no new context usage.
+        // 最后一个工具提交延迟的 ApiStats；更早的工具边界没有新上下文用量。
+        if self.active.is_none() {
+            self.publish_context_usage(app, state);
+        }
         crate::session_plan_runtime::emit_lifetime_usage_changed(app, state, &self.handle);
         // This projector owns only live resources and request progress, never legacy transcript persistence.
         // 此投影器仅拥有实时资源和请求进度，不负责旧转录持久化。
@@ -2304,6 +2315,22 @@ impl ProviderV1StreamSink {
         super::append_runtime_event_projection(app, state, self.handle.session_id(), event)
             .map_err(ProviderV1SinkError::ToolLifecycleProjection)?;
         Ok(outcome)
+    }
+
+    /// Refreshes the selected composer's usage through `app` and `state` after an API commit.
+    /// 在 API 提交后通过 `app` 和 `state` 刷新选中会话输入区的用量。
+    /// Returns nothing; a display failure is logged without rejecting an already durable API result.
+    /// 无返回值；显示失败会记录日志，不拒绝已可靠保存的 API 结果。
+    fn publish_context_usage(
+        &self,
+        app: &vulcan_service_api::ServiceEventEmitter,
+        state: &SharedServiceBridgeState,
+    ) {
+        if let Err(error) =
+            crate::emit_session_context_usage_changed(app, state, self.handle.session_id())
+        {
+            tracing::warn!("[context-usage] publish: {error}");
+        }
     }
 
     /// Applies one exact tool boundary through Prepared, Running, and terminal on one event seq.
