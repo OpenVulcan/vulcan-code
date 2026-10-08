@@ -18,7 +18,7 @@ use luaskills::{
     SkillManagementAuthority,
 };
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -219,49 +219,111 @@ pub fn list_luaskills_tool_entries(
         })
 }
 
-/// One compact LuaSkills help summary matched to a runtime entry.
-/// 匹配到单个运行时入口的一份紧凑 LuaSkills 帮助摘要。
+/// One rendered help node of a LuaSkills package.
+/// LuaSkills 包中一个已渲染的帮助节点。
 #[derive(Debug, Clone)]
-pub struct LuaSkillsEntryHelpSummary {
-    /// Resolved help flow name used for the entry.
-    /// 当前入口使用的已解析帮助流程名称。
+pub struct LuaSkillsHelpNode {
+    /// Help flow name: the main flow or one declared topic.
+    /// 帮助流程名：主流程或一个已声明主题。
     pub flow_name: String,
-    /// Human-readable help node description.
-    /// 帮助节点的人类可读说明。
+    /// One-line node description declared by the package.
+    /// 包声明的单行节点说明。
     pub description: String,
-    /// Rendered help body returned by LuaSkills.
-    /// LuaSkills 返回的已渲染帮助正文。
+    /// Rendered Markdown body.
+    /// 已渲染的 Markdown 正文。
     pub content: String,
 }
 
-/// Render the best matching LuaSkills help text for one runtime entry.
-/// 为单个运行时入口渲染最匹配的 LuaSkills 帮助文本。
-pub fn render_luaskills_entry_help_summary(
+/// Rendered help tree of one LuaSkills package.
+/// 单个 LuaSkills 包的已渲染帮助树。
+#[derive(Debug, Clone)]
+pub struct LuaSkillsHelpTree {
+    /// Stable skill identifier.
+    /// 稳定技能标识。
+    pub skill_id: String,
+    /// Main help node; its content is empty when rendering failed.
+    /// 主帮助节点；渲染失败时正文为空。
+    pub main: LuaSkillsHelpNode,
+    /// Successfully rendered topics in declaration order.
+    /// 按声明顺序排列的已成功渲染主题。
+    pub topics: Vec<LuaSkillsHelpNode>,
+    /// Rendered topic name keyed by canonical entry name; absent entries are covered by main help.
+    /// 以 canonical 入口名为键的已渲染主题名；未出现的入口由主帮助覆盖。
+    pub entry_topics: BTreeMap<String, String>,
+}
+
+/// Render the help trees of the given LuaSkills packages.
+/// 渲染指定 LuaSkills 包的帮助树。
+///
+/// # Parameters
+/// 参数
+/// - `handle`: Shared LuaSkills runtime handle.
+/// - `handle`：共享 LuaSkills 运行时句柄。
+/// - `skill_ids`: Packages whose help is needed.
+/// - `skill_ids`：需要帮助的包。
+///
+/// # Returns
+/// 返回值
+/// Help trees plus one warning per help node that failed to render, or the help listing failure.
+/// 帮助树以及每个渲染失败帮助节点的一条警告；帮助列表失败时返回错误。
+pub fn render_luaskills_help_trees(
     handle: &LuaSkillsRuntimeHandle,
-    entry: &RuntimeEntryDescriptor,
-) -> Result<Option<LuaSkillsEntryHelpSummary>, String> {
+    skill_ids: &BTreeSet<String>,
+) -> Result<(Vec<LuaSkillsHelpTree>, Vec<String>), String> {
     let engine = lock_runtime_engine(handle)?;
-    let flow_name = entry.local_name.trim();
-    if flow_name.is_empty() {
-        return Ok(None);
-    }
-    let Some(detail) = engine
-        .render_skill_help_detail_for_authority(
+    let descriptors = engine.list_skill_help_for_authority(SkillManagementAuthority::System)?;
+    let mut warnings = Vec::new();
+    let mut render_node = |skill_id: &str, flow_name: &str| -> Option<String> {
+        match engine.render_skill_help_detail_for_authority(
             SkillManagementAuthority::System,
-            &entry.skill_id,
+            skill_id,
             flow_name,
             None,
-        )
-        .ok()
-        .flatten()
-    else {
-        return Ok(None);
+        ) {
+            Ok(Some(detail)) => Some(detail.content),
+            Ok(None) => None,
+            Err(error) => {
+                warnings.push(format!(
+                    "渲染 LuaSkills 包 `{skill_id}` 的帮助 `{flow_name}` 失败：{error}"
+                ));
+                None
+            }
+        }
     };
-    Ok(Some(LuaSkillsEntryHelpSummary {
-        flow_name: detail.flow_name,
-        description: detail.description,
-        content: detail.content,
-    }))
+    let mut trees = Vec::new();
+    for descriptor in descriptors
+        .into_iter()
+        .filter(|descriptor| skill_ids.contains(&descriptor.skill_id))
+    {
+        let skill_id = descriptor.skill_id;
+        let main_content = render_node(&skill_id, &descriptor.main.flow_name).unwrap_or_default();
+        let mut topics = Vec::new();
+        let mut entry_topics = BTreeMap::new();
+        for flow in descriptor.flows {
+            let Some(content) = render_node(&skill_id, &flow.flow_name) else {
+                continue;
+            };
+            for entry in flow.related_entries {
+                entry_topics.insert(entry, flow.flow_name.clone());
+            }
+            topics.push(LuaSkillsHelpNode {
+                flow_name: flow.flow_name,
+                description: flow.description,
+                content,
+            });
+        }
+        trees.push(LuaSkillsHelpTree {
+            skill_id,
+            main: LuaSkillsHelpNode {
+                flow_name: descriptor.main.flow_name,
+                description: descriptor.main.description,
+                content: main_content,
+            },
+            topics,
+            entry_topics,
+        });
+    }
+    Ok((trees, warnings))
 }
 
 /// Call one LuaSkills runtime entry on a dedicated blocking thread and return the structured result.

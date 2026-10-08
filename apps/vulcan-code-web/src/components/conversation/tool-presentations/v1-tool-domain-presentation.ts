@@ -316,9 +316,12 @@ export function resolveV1ToolDomainPresentation(tool: ToolCallEvent, t: (key: Tr
       addSection(sections, t("toolDomain.memory.deleteResult"), object === null ? undefined : fields(object, ["deleted_count", "not_found_count", "deleted_memory_ids", "not_found_memory_ids"]));
       break;
     case "skill":
-    case "luaskill":
     case "call_luaskill":
       summary = textField(tool.input, "name");
+      addSection(sections, t("toolDomain.skill.content"), result, typeof result === "string");
+      break;
+    case "luaskill_help":
+      summary = textField(tool.input, "name") || [textField(tool.input, "skill"), textField(tool.input, "topic")].filter(Boolean).join(" / ");
       addSection(sections, t("toolDomain.skill.content"), result, typeof result === "string");
       break;
     case "context7_resolve_library_id":

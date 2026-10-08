@@ -280,7 +280,7 @@ mod tests {
         // Git may check out Markdown as CRLF; fence parsing must be platform independent.
         // Git 可能将 Markdown 检出为 CRLF；围栏解析必须独立于平台换行。
         let guide = super::CALL_LUASKILL_USAGE_MD.replace("\r\n", "\n");
-        assert!(guide.contains("`luaskill`") && guide.contains("complete canonical"));
+        assert!(guide.contains("`luaskill_help`") && guide.contains("complete canonical"));
         let example = guide
             .split_once("```json\n")
             .expect("documented JSON example")

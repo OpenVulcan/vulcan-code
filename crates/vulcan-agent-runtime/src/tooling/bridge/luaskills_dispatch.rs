@@ -1,20 +1,20 @@
-//! LuaSkills implicit help, dispatch, and host-managed argument injection helpers.
-//! LuaSkills 隐式帮助、调度与宿主管理参数注入辅助逻辑。
+//! LuaSkills package help, implicit dispatch, and host-managed argument injection helpers.
+//! LuaSkills 包帮助、隐式调度与宿主管理参数注入辅助逻辑。
 
 use super::*;
 
-/// Builds the AI-visible LuaSkill help tool paired with the implicit dispatcher.
-/// 构建与隐式调度器配对的 AI 可见 LuaSkill 帮助工具。
+/// Builds the AI-visible LuaSkills help tool over the help trees of every enabled package.
+/// 基于每个已启用包的帮助树构建 AI 可见的 LuaSkills 帮助工具。
 pub(super) fn build_luaskills_help_candidate(
-    entries: Vec<LuaSkillPromptEntry>,
+    packages: Vec<LuaSkillPackageHelp>,
 ) -> VulcanToolCandidate {
-    let entries = Arc::new(entries);
+    let packages = Arc::new(packages);
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
             LUASKILL_HELP_TOOL_NAME,
             LUASKILL_HELP_TOOL_NAME,
             String::from(
-                "Return full prompt help and structured Markdown argument schema help for one enabled implicit LuaSkills entry by complete canonical name.",
+                "Read help for enabled LuaSkills packages. {skill} returns the package guide and topic index; {skill, topic} returns one topic; {name} returns the help of one entry by complete canonical name, plus its argument schema when the entry is implicit and called through call_luaskill.",
             ),
             None,
             VulcanToolOrigin::new(
@@ -25,13 +25,11 @@ pub(super) fn build_luaskills_help_candidate(
         ),
         parameters_schema: luaskill_help_args_schema(),
         ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
-            "luaskill implicit LuaSkills help and Markdown schema",
-        )),
+        plan_policy: VulcanPlanToolPolicy::Visible,
         request_streaming: None,
         invoke: Arc::new(move |args, _session_id| {
-            let entries = Arc::clone(&entries);
-            Box::pin(async move { execute_luaskills_help_tool(entries, args).await })
+            let packages = Arc::clone(&packages);
+            Box::pin(async move { execute_luaskills_help_tool(packages, args).await })
         }),
     }
 }
@@ -57,7 +55,7 @@ pub(super) fn build_luaskills_dispatch_candidate(
             String::from(
                 "Call one enabled LuaSkills entry by its complete canonical tool name with compact argument pairs. Use this dispatcher for implicit LuaSkills entries that are not registered as direct function tools.",
             ),
-            None,
+            Some(CALL_LUASKILL_USAGE_MD.trim().to_string()),
             VulcanToolOrigin::new(
                 VulcanToolSourceKind::Native,
                 "native",
@@ -88,37 +86,14 @@ pub(super) fn build_luaskills_dispatch_candidate(
     }
 }
 
-/// Builds the compact JSON schema accepted by the `luaskill` help tool.
-/// 构建 `luaskill` 帮助工具接受的紧凑 JSON Schema。
-fn luaskill_help_args_schema() -> Value {
-    serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-            "name": {
-                "type": "string",
-                "description": "Complete canonical LuaSkills tool name, such as vulcan-codekit-ast-tree."
-            }
-        },
-        "required": ["name"]
-    })
-}
-
-/// Executes the LuaSkill help lookup tool from one implicit dispatch snapshot.
-/// 基于单份隐式调度快照执行 LuaSkill 帮助查询工具。
+/// Executes the LuaSkills help tool over one request-scoped package snapshot.
+/// 基于单份请求级包快照执行 LuaSkills 帮助工具。
 async fn execute_luaskills_help_tool(
-    entries: Arc<Vec<LuaSkillPromptEntry>>,
+    packages: Arc<Vec<LuaSkillPackageHelp>>,
     args: Value,
 ) -> Result<VulcanToolInvocationResult, String> {
-    let Value::Object(mut object) = args else {
-        return Err(String::from("`luaskill` arguments must be a JSON object."));
-    };
-    let name = object
-        .remove("name")
-        .and_then(|value| value.as_str().map(str::trim).map(str::to_string))
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("`luaskill.name` must be a non-empty string."))?;
-    let output = render_luaskill_help_output(&name, &entries)?;
+    let request = parse_luaskill_help_request(&args)?;
+    let output = render_luaskill_help_output(&request, &packages)?;
     Ok(VulcanToolInvocationResult::from_model_output(
         Value::String(output),
     ))

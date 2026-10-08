@@ -58,11 +58,11 @@ const RUNLUA_MAX_CODE_BYTES: usize = 128 * 1024;
 
 /// Concise provider-facing guidance for the isolated RunLua tool.
 /// 面向 Provider 的一次性 RunLua 工具简短指引。
-const RUNLUA_TOOL_DESCRIPTION: &str = "Execute one bounded Lua snippet in the LuaSkills runtime. Before first use, call the native `skill` tool with {\"name\":\"runlua\"}; do not use `luaskill` to retrieve this guide.";
+const RUNLUA_TOOL_DESCRIPTION: &str = "Execute one bounded Lua snippet in the LuaSkills runtime. Before first use, call the native `skill` tool with {\"name\":\"runlua\"}; do not use `luaskill_help` to retrieve this guide.";
 
 /// Concise provider-facing guidance for the persistent RunLua session tool.
 /// 面向 Provider 的持久 RunLua 会话工具简短指引。
-const RUNLUA_SESSION_TOOL_DESCRIPTION: &str = "Manage stateful Lua runtime leases for multi-step execution. Before first use, call the native `skill` tool with {\"name\":\"runlua\"}; do not use `luaskill` to retrieve this guide.";
+const RUNLUA_SESSION_TOOL_DESCRIPTION: &str = "Manage stateful Lua runtime leases for multi-step execution. Before first use, call the native `skill` tool with {\"name\":\"runlua\"}; do not use `luaskill_help` to retrieve this guide.";
 
 /// One-shot RunLua arguments decoded from the provider tool call.
 /// 从 Provider 工具调用解码的一次性 RunLua 参数。
@@ -1495,7 +1495,7 @@ mod tests {
         for description in [RUNLUA_TOOL_DESCRIPTION, RUNLUA_SESSION_TOOL_DESCRIPTION] {
             assert!(description.contains("native `skill` tool"));
             assert!(description.contains("{\"name\":\"runlua\"}"));
-            assert!(description.contains("do not use `luaskill`"));
+            assert!(description.contains("do not use `luaskill_help`"));
             assert!(description.len() < 260);
         }
     }

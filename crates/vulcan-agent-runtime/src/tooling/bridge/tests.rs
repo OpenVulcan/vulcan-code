@@ -24,7 +24,9 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use vulcan_luaskills_prompt::{LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry};
+use vulcan_luaskills_prompt::{
+    LUASKILL_HELP_TOOL_NAME, LuaSkillPackageHelp, LuaSkillPromptEntry, LuaSkillRegistration,
+};
 use vulcan_plugin_runtime::VulcanPluginRuntimeManager;
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
 use vulcan_tools_manager::{
@@ -184,9 +186,16 @@ fn implicit_luaskills_expose_help_and_call_tool_pair() {
         }),
     };
     let manager = VulcanToolsManager::new(vec![
-        build_luaskills_help_candidate(vec![LuaSkillPromptEntry::new(
-            "vulcan-codekit-ast-tree",
-            "Inspect source tree structure.",
+        build_luaskills_help_candidate(vec![LuaSkillPackageHelp::new(
+            "vulcan-codekit",
+            "",
+            "",
+            Vec::new(),
+            vec![LuaSkillPromptEntry::new(
+                "vulcan-codekit-ast-tree",
+                "Inspect source tree structure.",
+                LuaSkillRegistration::Implicit,
+            )],
         )]),
         build_luaskills_dispatch_candidate(None, None, vec![entry]),
     ]);

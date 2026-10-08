@@ -1,8 +1,9 @@
 ### Calling an implicit LuaSkill
 
-First call `luaskill` with the complete canonical name from the enabled implicit
-LuaSkills catalog. Read the returned usage and input schema before dispatching.
-Do not guess a short entry name, a package alias, or arguments from another version.
+First call `luaskill_help` with `{"name":"<complete canonical name>"}` for an
+implicit entry listed in its package's invocation block. Read the returned help
+and argument schema before dispatching. Do not guess a short entry name, a
+package alias, or arguments from another version.
 
 Call `call_luaskill` with the same complete canonical name and an `args` array.
 Every array element contains exactly a parameter `name` and a string `value`.
@@ -18,9 +19,10 @@ parameters, the dispatcher argument shape is:
 {"name":"example-package-search","args":[{"name":"query","value":"source ownership"},{"name":"limit","value":"4"}]}
 ```
 
-The example name is illustrative, not an installed capability. Dispatch only a
-name currently returned by discovery. Required fields and additional constraints
-come from that entry's schema and help. Do not invent defaults or bypass a refused
-call by selecting another entry. Report an explicit host or skill failure rather
-than treating it as a successful empty result. Missing skill configuration must
-be supplied through the supported configuration UI, not copied into tool hints.
+The example name is illustrative, not an installed capability. Dispatch only an
+implicit entry currently listed for its package. Required fields and additional
+constraints come from that entry's schema and help. Do not invent defaults or
+bypass a refused call by selecting another entry. Report an explicit host or skill
+failure rather than treating it as a successful empty result. Missing skill
+configuration must be supplied through the supported configuration UI, not copied
+into tool hints.

@@ -23,7 +23,10 @@ use crate::workspace_path::normalize_workspace_path_text;
 use std::path::PathBuf;
 use std::sync::Arc;
 use vulcan_core::types::ConversationPayload as CoreConversationPayload;
-use vulcan_luaskills_prompt::{LuaSkillPromptEntry, render_luaskills_prompt_segment};
+use vulcan_luaskills_prompt::{
+    LUASKILL_HELP_TOOL_NAME, LuaSkillInvocationRoutes, LuaSkillPackageHelp,
+    render_luaskill_package_segment,
+};
 use vulcan_prompt_composer::{
     AdditionalPromptSegment, PromptBaselineKind, PromptBaselineProvenance,
 };
@@ -32,7 +35,10 @@ use vulcan_prompt_skills::{
     resolve_prompt_skills,
 };
 use vulcan_session_core::{CapabilityPolicyMode, CapabilityPolicySnapshot};
-use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
+use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
+use vulcan_tools_manager::{
+    ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind, VulcanToolsManager,
+};
 
 pub(crate) mod captured_child_tool_admission;
 #[path = "execution_preparation/codebase_tool_routing_prompt.rs"]
@@ -252,13 +258,8 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         )
     });
     let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
-    let implicit_luaskill_prompt_entries = tool_exposure.luaskill_prompt_entries.clone();
     let mut additional_developer_segments = Vec::new();
-    if let Some(segment) = build_skill_developer_segment(
-        request.prompt_purpose,
-        &prompt_skills,
-        &implicit_luaskill_prompt_entries,
-    ) {
+    if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
         additional_developer_segments.push(AdditionalPromptSegment::locked(
             "Prompt Skill Injection",
             segment,
@@ -347,7 +348,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         enabled_prompt_skill_names,
         prepared_prompt_skills,
         prompt_skill_user_root.clone(),
-        implicit_luaskill_prompt_entries.clone(),
+        tool_exposure.luaskill_help_packages.clone(),
         project_vmm.clone(),
         session_vmm.clone(),
         request.vmm_runtime_ready,
@@ -401,6 +402,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         foundation.vulcan_plugin_catalog().as_deref(),
         &resolved_tools.descriptors,
     );
+    if request.prompt_purpose.supports_user_turn_tooling() {
+        append_luaskill_package_segments(
+            &mut additional_developer_segments,
+            &tool_exposure.luaskill_help_packages,
+            &resolved_tools.descriptors,
+        );
+    }
 
     if workspace_path.is_empty() {
         warnings.push(String::from(
@@ -465,7 +473,6 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         prompt_purpose: request.prompt_purpose,
         prompt_skills,
         prompt_skill_user_root,
-        implicit_luaskill_prompt_entries,
         additional_developer_segments,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
         tool_descriptors,
@@ -591,25 +598,70 @@ fn append_vulcan_plugin_prompt_contributions(
     }
 }
 
-/// Builds the AI-visible skill developer segment only for user-turn-like requests.
-/// 仅为类似用户回合的请求构建 AI 可见的技能开发者片段。
+/// Builds the AI-visible prompt-skill developer segment only for user-turn-like requests.
+/// 仅为类似用户回合的请求构建 AI 可见的提示词技能开发者片段。
 fn build_skill_developer_segment(
     purpose: ExecutionPromptPurpose,
     prompt_skills: &[vulcan_prompt_skills::ResolvedPromptSkill],
-    implicit_luaskills: &[LuaSkillPromptEntry],
 ) -> Option<String> {
     if !purpose.supports_user_turn_tooling() {
         return None;
     }
+    render_prompt_skills_instructions(prompt_skills)
+}
 
-    let mut segments = Vec::new();
-    if let Some(segment) = render_prompt_skills_instructions(prompt_skills) {
-        segments.push(segment);
+/// Appends one locked developer segment per LuaSkills package that keeps an invocable entry.
+/// 为每个仍含可调用入口的 LuaSkills 包追加一条锁定开发者片段。
+///
+/// # Parameters
+/// 参数
+/// - `developer_segments`: Developer segments of the prepared request.
+/// - `developer_segments`：已准备请求的开发者片段。
+/// - `packages`: Help trees limited to request-visible entries.
+/// - `packages`：限定为请求可见入口的帮助树。
+/// - `visible_tools`: Tool descriptors remaining after all host and model filters.
+/// - `visible_tools`：经过全部宿主与模型过滤后保留的工具描述。
+fn append_luaskill_package_segments(
+    developer_segments: &mut Vec<AdditionalPromptSegment>,
+    packages: &[LuaSkillPackageHelp],
+    visible_tools: &[VulcanToolDescriptor],
+) {
+    if packages.is_empty() {
+        return;
     }
-    if let Some(segment) = render_luaskills_prompt_segment(implicit_luaskills) {
-        segments.push(segment);
+    let native_visible = |tool_id: &str| {
+        visible_tools.iter().any(|descriptor| {
+            descriptor.id == tool_id && descriptor.source == VulcanToolSourceKind::Native
+        })
+    };
+    let routes = LuaSkillInvocationRoutes {
+        function_tools: visible_tools
+            .iter()
+            .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
+            .map(|descriptor| {
+                (
+                    descriptor.origin().original_name().to_string(),
+                    descriptor.id.clone(),
+                )
+            })
+            .collect(),
+        dispatcher_visible: native_visible(CALL_LUASKILL_TOOL_NAME),
+        help_tool_visible: native_visible(LUASKILL_HELP_TOOL_NAME),
+    };
+    for package in packages {
+        let Some(body) = render_luaskill_package_segment(package, &routes) else {
+            continue;
+        };
+        developer_segments.push(AdditionalPromptSegment::locked(
+            format!("LuaSkills Package: {}", package.skill_id),
+            body,
+            format!("LuaSkills package {}", package.skill_id),
+            PromptBaselineProvenance::new(
+                PromptBaselineKind::PromptSkillInjection,
+                format!("luaskills/{}", package.skill_id),
+            ),
+        ));
     }
-    (!segments.is_empty()).then(|| segments.join("\n\n"))
 }
 
 /// Builds project-level prompt-skill resolver input from one preparation request.

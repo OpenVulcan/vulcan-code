@@ -168,6 +168,23 @@ LuaSkills 技能列表仅对声明了配置的技能显示配置入口，并显�
 
 宿主固定使用 `mode=effective` 和 `include_values=false`。AI 不能通过该工具执行 `get`、`list`、`set`、`delete`、`refresh`，也不能读取敏感或非敏感的当前配置值。
 
+### 6.1 技能包帮助与调用说明
+
+契约归属：帮助树形状以上游 `list_skill_help` / `render_skill_help_detail` 为准；宿主实现位于
+`luaskills_runtime.rs`（`render_luaskills_help_trees`）、`vulcan-luaskills-prompt` 与
+`tooling/bridge/luaskills_dispatch.rs`。上游帮助接口变化时回读源码同步本节。
+
+- 入口到帮助主题的映射只取上游帮助节点的 `related_entries`，不得用入口名猜测主题；没有专属主题的
+  入口由 `main` 覆盖。帮助渲染失败作为基础架构警告暴露，不得静默吞掉。
+- 只要包内存在显式或隐式启用入口，就向开发者提示词注入该包的锁定片段：`main` 正文（超过
+  `LUASKILL_MAIN_HELP_INLINE_LIMIT_BYTES` 时只注入说明并指向 `luaskill_help`）、宿主生成的调用说明
+  （canonical 名到直接函数工具名的映射，以及经 `call_luaskill` 调用的隐式入口）和主题索引。调用说明
+  依据最终可见工具集生成。
+- 模型可见帮助工具只有 `luaskill_help`，不保留 `luaskill` 别名：`{skill}` 返回 `main` 与主题索引，
+  `{skill, topic}` 返回单个主题，`{name}` 返回入口的主题；隐式入口另附隐藏宿主管理字段后的参数 Schema。
+- 技能包作者编写的 `main` 与主题必须与调用方式无关：使用 canonical 入口名，不写宿主工具名、调度器
+  或注册方式，这些由宿主调用说明负责。
+
 ## 7. 配置缺失处理
 
 技能包声明必填项但没有显式值或默认值时：

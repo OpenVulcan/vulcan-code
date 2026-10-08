@@ -24,7 +24,6 @@ use vulcan_core::types::{
     ProviderContextInjection as CoreProviderContextInjection, ProviderUsageSnapshot,
 };
 use vulcan_hooks::SystemPromptHookBlock;
-use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_composer::{AdditionalPromptSegment, PromptOutputStyleSnapshot};
 use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_session_boundary::SessionBoundaryEvent;
@@ -742,9 +741,6 @@ pub struct ExecutionPreparation {
     /// User prompt-skill root captured for this run.
     /// 为本次运行捕获的用户提示词技能根目录。
     pub prompt_skill_user_root: Option<PathBuf>,
-    /// Prompt entries for LuaSkills enabled through implicit host dispatch in this run.
-    /// 本次运行中通过隐式宿主调度启用的 LuaSkills 提示词入口集合。
-    pub implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
     /// Producer-typed developer prompt segments frozen for this prepared request.
     /// 为当前已准备请求冻结、并由生产者强类型标注的开发者提示词片段。
     pub additional_developer_segments: Vec<AdditionalPromptSegment>,

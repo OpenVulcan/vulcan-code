@@ -1,6 +1,6 @@
 [package]
 name = "vulcan-luaskills-prompt"
-description = "Prompt rendering helpers for implicit LuaSkills dispatch in VulcanCode."
+description = "Prompt and help rendering for enabled LuaSkills packages in VulcanCode."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

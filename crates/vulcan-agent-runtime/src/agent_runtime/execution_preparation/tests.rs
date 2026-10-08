@@ -1,7 +1,7 @@
 use super::tool_exposure::{
-    ExecutionToolExposureSelection, ToolExposureSelectorState, filter_luaskill_prompt_entries,
-    filter_luaskills_entries, filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
-    vulcan_tool_descriptor_is_visible,
+    ExecutionToolExposureSelection, ToolExposureSelectorState, filter_luaskills_entries,
+    filter_native_tool_ids, filter_resolved_tool_set_by_tool_exposure,
+    retain_visible_luaskill_help_packages, vulcan_tool_descriptor_is_visible,
 };
 use super::{append_vulcan_plugin_prompt_contributions, prepare_execution_with_tool_snapshot};
 use crate::agent_profile::AgentProfileCatalog;
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_hooks::{SystemPromptHookBlock, SystemPromptHookPhase};
-use vulcan_luaskills_prompt::LuaSkillPromptEntry;
+use vulcan_luaskills_prompt::{LuaSkillPackageHelp, LuaSkillPromptEntry, LuaSkillRegistration};
 use vulcan_plugin_runtime::{VulcanPluginCatalogSnapshot, VulcanPluginPromptContribution};
 use vulcan_prompt_composer::PromptBaselineKind;
 use vulcan_session_core::{
@@ -345,28 +345,10 @@ fn execution_tool_exposure_keeps_luaskills_file_tools_before_migration_gate() {
     assert_eq!(filtered[5].canonical_name, "vulcan-file-tools-readme");
 }
 
-/// Verifies LuaSkills file-tool prompts remain until real-model evaluation authorizes retirement.
-/// 验证真实模型评估授权退役前 LuaSkills 文件工具提示词仍会保留。
+/// Verifies LuaSkills family overrides limit package help trees to the visible entries.
+/// 验证 LuaSkills 族覆盖会将包帮助树限定为可见入口。
 #[test]
-fn execution_tool_exposure_keeps_luaskills_file_prompts_before_migration_gate() {
-    let selectors = ToolExposureSelectorState::default();
-    let entries = vec![
-        LuaSkillPromptEntry::new("vulcan-file-read", "legacy read"),
-        LuaSkillPromptEntry::new("vulcan-file-edit", "legacy edit"),
-        LuaSkillPromptEntry::new("vulcan-file-tools-readme", "documentation"),
-    ];
-
-    let filtered = filter_luaskill_prompt_entries(entries, &selectors);
-
-    assert_eq!(filtered.len(), 3);
-    assert_eq!(filtered[0].name, "vulcan-file-read");
-    assert_eq!(filtered[2].name, "vulcan-file-tools-readme");
-}
-
-/// Verifies LuaSkills family overrides trim implicit prompt entries with the same selectors.
-/// 验证 LuaSkills 族覆盖会使用同一选择器裁剪隐式提示词条目。
-#[test]
-fn execution_tool_exposure_filters_luaskill_prompt_entries_with_family_overrides() {
+fn execution_tool_exposure_limits_luaskill_help_packages_to_visible_entries() {
     let snapshot = ToolExposureSnapshot {
         luaskills_overrides: json!({
             "enabled": ["vulcan-codekit-rg"],
@@ -375,16 +357,50 @@ fn execution_tool_exposure_filters_luaskill_prompt_entries_with_family_overrides
         ..ToolExposureSnapshot::default()
     };
     let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
-    let entries = vec![
-        LuaSkillPromptEntry::new("vulcan-codekit-rg", "codekit search"),
-        LuaSkillPromptEntry::new("vulcan-codekit-ast-detail", "codekit ast-detail"),
-        LuaSkillPromptEntry::new("vulcan-curl-get", "curl get"),
-    ];
+    let visible = filter_luaskills_entries(
+        vec![
+            test_luaskills_entry("vulcan-codekit", "rg"),
+            test_luaskills_entry("vulcan-codekit", "ast-detail"),
+            test_luaskills_entry("vulcan-curl", "get"),
+        ],
+        &selectors,
+    );
+    let package = |skill_id: &str, local_names: &[&str]| {
+        LuaSkillPackageHelp::new(
+            skill_id,
+            "",
+            "",
+            Vec::new(),
+            local_names
+                .iter()
+                .map(|local_name| {
+                    LuaSkillPromptEntry::new(
+                        format!("{skill_id}-{local_name}"),
+                        "",
+                        LuaSkillRegistration::Direct,
+                    )
+                })
+                .collect(),
+        )
+    };
 
-    let filtered = filter_luaskill_prompt_entries(entries, &selectors);
+    let retained = retain_visible_luaskill_help_packages(
+        vec![
+            package("vulcan-codekit", &["rg", "ast-detail"]),
+            package("vulcan-curl", &["get"]),
+        ],
+        &visible,
+        &[],
+    );
 
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].name, "vulcan-codekit-rg");
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].skill_id, "vulcan-codekit");
+    let names = retained[0]
+        .entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["vulcan-codekit-rg"]);
 }
 
 /// Verifies legacy global tool allow-lists do not hide configured AI fallback tools.
@@ -448,10 +464,7 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
         native_tool_ids: Vec::new(),
         luaskills_tools: Vec::new(),
         luaskills_dispatch_tools: vec![test_luaskills_entry("vulcan-codekit", "rg")],
-        luaskill_prompt_entries: vec![LuaSkillPromptEntry::new(
-            "vulcan-codekit-rg",
-            "codekit search",
-        )],
+        luaskill_help_packages: Vec::new(),
         mcp_tools: Vec::new(),
         selectors,
     };
@@ -922,7 +935,7 @@ fn test_exposure_with_selectors(
         native_tool_ids: Vec::new(),
         luaskills_tools: Vec::new(),
         luaskills_dispatch_tools: Vec::new(),
-        luaskill_prompt_entries: Vec::new(),
+        luaskill_help_packages: Vec::new(),
         mcp_tools: Vec::new(),
         selectors,
     }

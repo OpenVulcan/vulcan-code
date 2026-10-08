@@ -11,7 +11,7 @@ use crate::agent_runtime::runtime_stream_bootstrap_core::after_precheck_trace;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::{
     LuaSkillsRuntimeHandle, list_luaskills_tool_entries, luaskills_entry_args_schema,
-    render_luaskills_entry_help_summary,
+    render_luaskills_help_trees,
 };
 use crate::mcp::{
     McpRuntimeAccess, McpRuntimeOverview, McpRuntimeToolAllowlist, McpRuntimeToolBinding,
@@ -27,7 +27,8 @@ use luaskills::RuntimeEntryDescriptor;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use vulcan_luaskills_prompt::{
-    LuaSkillPromptEntry, render_luaskill_argument_summary, render_luaskill_schema_markdown,
+    LuaSkillHelpTopic, LuaSkillPackageHelp, LuaSkillPromptEntry, LuaSkillRegistration,
+    render_luaskill_schema_markdown,
 };
 use vulcan_plugin_runtime::{
     VulcanPluginCatalogSnapshot, VulcanPluginRuntimeManager, VulcanPluginToolDescriptor,
@@ -105,9 +106,9 @@ pub struct RuntimeFoundation {
     /// LuaSkills-backed runtime tool descriptors allowed through the host-side dispatcher.
     /// 允许通过宿主侧调度器调用的 LuaSkills 运行时工具描述集合。
     luaskills_dispatch_tools: Vec<RuntimeEntryDescriptor>,
-    /// Prompt entries for LuaSkills allowed through implicit host dispatch.
-    /// 允许通过隐式宿主调度访问的 LuaSkills 提示词入口集合。
-    implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
+    /// Help trees of every LuaSkills package with at least one explicit or implicit entry.
+    /// 至少拥有一个显式或隐式入口的每个 LuaSkills 包的帮助树。
+    luaskill_help_packages: Vec<LuaSkillPackageHelp>,
     /// Unified MCP runtime access surface that hides live-versus-configured source selection.
     /// 隐藏实时与配置来源选择细节的统一 MCP 运行时访问面。
     mcp_runtime_access: McpRuntimeAccess,
@@ -323,7 +324,7 @@ impl RuntimeFoundation {
             "after_precheck_24a7_subagent_catalog_retained",
             format!("extension_revision={extension_revision}"),
         );
-        let (luaskills_tools, luaskills_dispatch_tools, implicit_luaskill_prompt_entries) =
+        let (luaskills_tools, luaskills_dispatch_tools, luaskill_help_packages) =
             match luaskills_runtime.as_ref() {
                 Some(handle) => match list_luaskills_tool_entries(handle) {
                     Ok(entries) => {
@@ -333,9 +334,13 @@ impl RuntimeFoundation {
                         );
                         let dispatch_entries =
                             filter_luaskills_entries_by_host_dispatch(entries, &config.luaskills);
-                        let prompt_entries =
-                            build_luaskill_prompt_entries(handle, &dispatch_entries, &mut warnings);
-                        (explicit_entries, dispatch_entries, prompt_entries)
+                        let help_packages = build_luaskill_help_packages(
+                            handle,
+                            &explicit_entries,
+                            &dispatch_entries,
+                            &mut warnings,
+                        );
+                        (explicit_entries, dispatch_entries, help_packages)
                     }
                     Err(error) => {
                         warnings.push(format!("加载 LuaSkills 工具表失败：{error}"));
@@ -347,11 +352,11 @@ impl RuntimeFoundation {
         after_precheck_trace(
             "after_precheck_24a8_luaskills_catalog_ready",
             format!(
-                "extension_revision={} explicit_tools={} dispatch_tools={} prompt_entries={}",
+                "extension_revision={} explicit_tools={} dispatch_tools={} help_packages={}",
                 extension_revision,
                 luaskills_tools.len(),
                 luaskills_dispatch_tools.len(),
-                implicit_luaskill_prompt_entries.len()
+                luaskill_help_packages.len()
             ),
         );
         Self {
@@ -363,7 +368,7 @@ impl RuntimeFoundation {
             prompt_skill_catalog,
             luaskills_tools,
             luaskills_dispatch_tools,
-            implicit_luaskill_prompt_entries,
+            luaskill_help_packages,
             mcp_runtime_access,
             warnings,
             task_runtime,
@@ -666,12 +671,12 @@ impl RuntimeFoundation {
         self.luaskills_dispatch_tools.clone()
     }
 
-    /// Resolves prompt entries for LuaSkills callable through the host-side dispatcher.
-    /// 解析可通过宿主侧调度器调用的 LuaSkills 提示词入口。
-    pub fn resolved_luaskills_prompt_entries_for_agent(
+    /// Resolves help trees of LuaSkills packages with enabled entries.
+    /// 解析拥有已启用入口的 LuaSkills 包帮助树。
+    pub fn resolved_luaskill_help_packages_for_agent(
         &self,
         agent_id: &str,
-    ) -> Vec<LuaSkillPromptEntry> {
+    ) -> Vec<LuaSkillPackageHelp> {
         let Some(definition) = self
             .config
             .agents
@@ -682,7 +687,7 @@ impl RuntimeFoundation {
         };
 
         let _ = definition;
-        self.implicit_luaskill_prompt_entries.clone()
+        self.luaskill_help_packages.clone()
     }
 
     /// Resolves the MCP runtime tools currently visible to one agent.
@@ -868,39 +873,99 @@ fn filter_luaskills_entries_by_host_dispatch(
         .collect()
 }
 
-/// Builds cached prompt entries for implicit LuaSkills during runtime-foundation refresh.
-/// 在运行时基础架构刷新期间构建隐式 LuaSkills 提示词入口缓存。
-fn build_luaskill_prompt_entries(
+/// Builds cached help trees for every package with explicit or implicit entries during runtime-foundation refresh.
+/// 在运行时基础架构刷新期间为拥有显式或隐式入口的每个包构建帮助树缓存。
+///
+/// # Parameters
+/// 参数
+/// - `runtime`: Shared LuaSkills runtime handle.
+/// - `runtime`：共享 LuaSkills 运行时句柄。
+/// - `explicit_entries`: Entries registered as direct function tools.
+/// - `explicit_entries`：注册为直接函数工具的入口。
+/// - `implicit_entries`: Entries reached through `call_luaskill`.
+/// - `implicit_entries`：通过 `call_luaskill` 调用的入口。
+/// - `warnings`: Foundation warnings receiving help rendering failures.
+/// - `warnings`：接收帮助渲染失败的基础架构警告。
+///
+/// # Returns
+/// 返回值
+/// Package help trees sorted by skill identifier.
+/// 按技能标识排序的包帮助树。
+fn build_luaskill_help_packages(
     runtime: &LuaSkillsRuntimeHandle,
-    entries: &[RuntimeEntryDescriptor],
+    explicit_entries: &[RuntimeEntryDescriptor],
+    implicit_entries: &[RuntimeEntryDescriptor],
     warnings: &mut Vec<String>,
-) -> Vec<LuaSkillPromptEntry> {
-    entries
+) -> Vec<LuaSkillPackageHelp> {
+    let registered_entries = explicit_entries
         .iter()
-        .map(|entry| {
-            let visible_schema = luaskills_entry_args_schema(entry, true, true);
-            let argument_summary = render_luaskill_argument_summary(&visible_schema);
-            let schema_markdown = render_luaskill_schema_markdown(&visible_schema);
-            let mut prompt_entry =
-                LuaSkillPromptEntry::new(&entry.canonical_name, &entry.description);
-            if let Some(argument_summary) = argument_summary {
-                prompt_entry = prompt_entry.with_argument_summary(argument_summary);
-            }
-            if let Some(schema_markdown) = schema_markdown {
-                prompt_entry = prompt_entry.with_schema_markdown(schema_markdown);
-            }
-            match render_luaskills_entry_help_summary(runtime, entry) {
-                Ok(Some(help)) => {
-                    prompt_entry = prompt_entry
-                        .with_help_summary(Some(help.flow_name), Some(help.description));
-                    if !help.content.trim().is_empty() {
-                        prompt_entry = prompt_entry.with_help_content(help.content);
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => warnings.push(error),
-            }
-            prompt_entry
+        .map(|entry| (entry, LuaSkillRegistration::Direct))
+        .chain(
+            implicit_entries
+                .iter()
+                .map(|entry| (entry, LuaSkillRegistration::Implicit)),
+        )
+        .collect::<Vec<_>>();
+    if registered_entries.is_empty() {
+        return Vec::new();
+    }
+    let skill_ids = registered_entries
+        .iter()
+        .map(|(entry, _)| entry.skill_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut trees = match render_luaskills_help_trees(runtime, &skill_ids) {
+        Ok((trees, help_warnings)) => {
+            warnings.extend(help_warnings);
+            trees
+                .into_iter()
+                .map(|tree| (tree.skill_id.clone(), tree))
+                .collect::<BTreeMap<_, _>>()
+        }
+        Err(error) => {
+            warnings.push(format!("加载 LuaSkills 帮助失败：{error}"));
+            BTreeMap::new()
+        }
+    };
+
+    let mut packages = BTreeMap::<String, Vec<LuaSkillPromptEntry>>::new();
+    for (entry, registration) in registered_entries {
+        let mut prompt_entry =
+            LuaSkillPromptEntry::new(&entry.canonical_name, &entry.description, registration);
+        if let Some(topic) = trees
+            .get(&entry.skill_id)
+            .and_then(|tree| tree.entry_topics.get(&entry.canonical_name))
+        {
+            prompt_entry = prompt_entry.with_help_topic(topic);
+        }
+        if registration == LuaSkillRegistration::Implicit
+            && let Some(schema_markdown) =
+                render_luaskill_schema_markdown(&luaskills_entry_args_schema(entry, true, true))
+        {
+            prompt_entry = prompt_entry.with_schema_markdown(schema_markdown);
+        }
+        packages
+            .entry(entry.skill_id.clone())
+            .or_default()
+            .push(prompt_entry);
+    }
+    packages
+        .into_iter()
+        .map(|(skill_id, entries)| match trees.remove(&skill_id) {
+            Some(tree) => LuaSkillPackageHelp::new(
+                skill_id,
+                tree.main.description,
+                tree.main.content,
+                tree.topics
+                    .into_iter()
+                    .map(|topic| LuaSkillHelpTopic {
+                        name: topic.flow_name,
+                        description: topic.description,
+                        content: topic.content,
+                    })
+                    .collect(),
+                entries,
+            ),
+            None => LuaSkillPackageHelp::new(skill_id, "", "", Vec::new(), entries),
         })
         .collect()
 }

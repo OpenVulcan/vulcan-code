@@ -27,14 +27,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use vulcan_luaskills_prompt::{
-    LUASKILL_HELP_TOOL_NAME, LuaSkillPromptEntry, render_luaskill_help_output,
+    LUASKILL_HELP_TOOL_NAME, LuaSkillPackageHelp, luaskill_help_args_schema,
+    parse_luaskill_help_request, render_luaskill_help_output,
 };
 use vulcan_plugin_runtime::{
     VulcanPluginInvocationRequest, VulcanPluginRuntimeManager, VulcanPluginToolDescriptor,
 };
 use vulcan_tools_luaskills_call::{
-    CALL_LUASKILL_TOOL_NAME, LuaSkillCallEntryView, call_luaskill_args_schema,
-    parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
+    CALL_LUASKILL_TOOL_NAME, CALL_LUASKILL_USAGE_MD, LuaSkillCallEntryView,
+    call_luaskill_args_schema, parse_call_luaskill_request, resolve_call_luaskill_entry_by_name,
     restore_call_luaskill_args_for_entry,
 };
 use vulcan_tools_manager::{
@@ -84,7 +85,7 @@ pub fn build_vulcan_tools_manager(
     enabled_prompt_skill_names: Vec<String>,
     prepared_prompt_skills: Vec<vulcan_prompt_skills::PromptSkill>,
     prompt_skill_user_root: Option<PathBuf>,
-    implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
+    luaskill_help_packages: Vec<LuaSkillPackageHelp>,
     project_vmm: vulcan_vmm::VmmConfigLayer,
     session_vmm: vulcan_vmm::VmmConfigLayer,
     vmm_runtime_ready: bool,
@@ -313,11 +314,12 @@ pub fn build_vulcan_tools_manager(
         }
     }
 
-    if !candidate_luaskills_dispatch_tools.is_empty() {
-        let luaskill_help_candidate =
-            build_luaskills_help_candidate(implicit_luaskill_prompt_entries);
+    if !luaskill_help_packages.is_empty() {
+        let luaskill_help_candidate = build_luaskills_help_candidate(luaskill_help_packages);
         occupied_public_tool_ids.insert(luaskill_help_candidate.descriptor.id.clone());
         candidates.push(luaskill_help_candidate);
+    }
+    if !candidate_luaskills_dispatch_tools.is_empty() {
         let dispatcher_candidate = build_luaskills_dispatch_candidate(
             luaskills_runtime.clone(),
             workspace_root.clone(),
