@@ -329,6 +329,11 @@ impl PageId {
             Self::Context => {
                 calls.push(settings::load_public_ai_settings());
                 calls.push(settings::load_output_style_catalog());
+                // Reloads keep the scope the system prompt editor last loaded.
+                // 重新加载时保留系统提示词编辑器最近加载的作用域。
+                calls.push(settings::load_system_prompt_settings(
+                    app.slots.at(Slot::SystemPrompt, "/projectId").as_str(),
+                ));
             }
             Self::Capabilities => {
                 calls.push(settings::load_public_ai_settings());

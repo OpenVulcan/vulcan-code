@@ -328,3 +328,63 @@ fn reconnect_and_catalog_removal_reload_current_scope() {
     assert_eq!(app.library.as_deref(), Some("survivor"));
     assert!(!app.slots.loaded(Slot::KnowledgeSources));
 }
+
+/// The system prompt editor follows the loaded scope: unchanged text rereads, edits save to the
+/// snapshot's scope, and restore exists only while that scope has an override.
+/// 系统提示词编辑器跟随已加载作用域：未修改的正文只重读，编辑保存到快照的作用域，且仅在该作用域
+/// 存在覆盖时才提供恢复。
+#[test]
+fn system_prompt_editor_targets_the_loaded_scope() {
+    let (mut app, commands) = isolated_app();
+    let load = settings_actions::load_system_prompt_settings(Some("p-core"));
+    app.apply(BackendEvent::Slot {
+        slot: Slot::SystemPrompt,
+        call: load.clone(),
+        value: json!({"builtInText":"built-in","userPath":"u","userText":"user rules",
+            "projectId":"p-core","projectPath":"p","projectText":null,"effectiveSource":"user"}),
+    });
+    let rows = pages::rows(&app, pages::PageId::Context);
+    // Editor.
+    // 正文编辑行。
+    let edit = rows
+        .iter()
+        .find_map(|row| match &row.kind {
+            pages::RowKind::Text { value, edit, .. } => {
+                assert_eq!(
+                    value, "user rules",
+                    "a project without override inherits the user text"
+                );
+                Some(edit.clone())
+            }
+            _ => None,
+        })
+        .expect("system prompt editor");
+    // Restore button label for the project scope, resolved from its catalog key.
+    // 项目作用域恢复按钮的标签，由目录键解析。
+    let restore = crate::tr!("settings.systemPrompt.resetProject");
+    assert!(
+        !rows.iter().any(|row| row.label == restore),
+        "restore requires an override in the selected scope"
+    );
+    action::apply_edit(
+        &mut app,
+        edit.clone(),
+        SettingValue::Text("user rules\n".into()),
+    );
+    action::apply_edit(&mut app, edit, SettingValue::Text("project rules".into()));
+    let calls: Vec<_> = commands
+        .try_iter()
+        .filter_map(|command| match command {
+            Command::Call(call) => Some(call),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].method, "service_system_prompt_settings");
+    assert_eq!(calls[0].param("/projectId"), "p-core");
+    assert_eq!(calls[1].method, "service_save_system_prompt");
+    assert_eq!(
+        calls[1].params,
+        json!({"request":{"scope":"project","projectId":"p-core","text":"project rules"}})
+    );
+}

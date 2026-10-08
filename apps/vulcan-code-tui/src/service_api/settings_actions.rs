@@ -2,6 +2,7 @@
 // `service/settings-actions-service.ts` 的镜像。
 
 use serde_json::{Value, json};
+use vulcan_service_api::SystemPromptScope;
 
 use super::{ServiceCall, Slot};
 
@@ -33,6 +34,61 @@ pub fn save_prompt_output_style(style_id: &str) -> ServiceCall {
         "service_save_prompt_output_style",
         json!({ "request": { "styleId": style_id } }),
         &[Slot::OutputStyleCatalog],
+    )
+}
+
+/// Builds the request for `service_system_prompt_settings`.
+/// 构建 `service_system_prompt_settings` 的请求。
+/// `project_id` is the exact project whose layer is included, or `None` for the user layer only.
+/// `project_id` 为需包含其层级的准确项目；`None` 表示仅用户层级。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_system_prompt_settings(project_id: Option<&str>) -> ServiceCall {
+    ServiceCall::load(
+        "load_system_prompt_settings",
+        "service_system_prompt_settings",
+        json!({ "projectId": project_id }),
+        Slot::SystemPrompt,
+    )
+}
+
+/// Builds the request for `service_save_system_prompt`.
+/// 构建 `service_save_system_prompt` 的请求。
+/// `scope` is the target override layer.
+/// `scope` 为目标覆盖层级。
+/// `project_id` is the exact project identity; the service requires it for the project scope.
+/// `project_id` 为准确项目标识；项目作用域时服务要求必填。
+/// `text` is the complete prompt body; the service rejects blank text.
+/// `text` 为完整提示词正文；服务拒绝空白正文。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_system_prompt(
+    scope: SystemPromptScope,
+    project_id: Option<&str>,
+    text: &str,
+) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_system_prompt",
+        "service_save_system_prompt",
+        json!({ "request": { "scope": scope, "projectId": project_id, "text": text } }),
+        &[Slot::SystemPrompt],
+    )
+}
+
+/// Builds the request for `service_reset_system_prompt`.
+/// 构建 `service_reset_system_prompt` 的请求。
+/// `scope` is the target override layer.
+/// `scope` 为目标覆盖层级。
+/// `project_id` is the exact project identity; the service requires it for the project scope.
+/// `project_id` 为准确项目标识；项目作用域时服务要求必填。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn reset_system_prompt(scope: SystemPromptScope, project_id: Option<&str>) -> ServiceCall {
+    ServiceCall::mutate(
+        "reset_system_prompt",
+        "service_reset_system_prompt",
+        json!({ "request": { "scope": scope, "projectId": project_id } }),
+        &[Slot::SystemPrompt],
     )
 }
 

@@ -46,7 +46,7 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 | 页面 | 已适配交互 | 状态来源 |
 | --- | --- | --- |
 | 外观 | TUI 主题、侧栏、思考浮层；语言同步到服务 | 本地状态、Workbench |
-| 上下文 | 五档压缩窗口、新会话默认档位、用量刷新、输出风格、思考展示、工具折叠 | PublicAiSettings、OutputStyleCatalog、Workbench |
+| 上下文 | 五档压缩窗口、新会话默认档位、用量刷新、输出风格、思考展示、工具折叠；基础系统提示词按用户或项目作用域编辑与恢复（作用域取自已加载快照的 `projectId`，未修改的正文只重读不写入） | PublicAiSettings、OutputStyleCatalog、SystemPrompt、Workbench |
 | Git 提交设置 | 分支前缀、补充提示、摘要模型，完整配置保存 | Workbench、PublicAiSettings |
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
 | 凭据 | 添加、启用、同步、设默认、移除；默认移除时原子选择同提供方替代连接 | PublicAiSettings |
@@ -169,6 +169,9 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `project_actions::open_external_url` | openExternalUrl | `service_open_external_url` |
 | `settings_actions::load_output_style_catalog` | loadOutputStyleCatalog | `service_output_style_catalog` |
 | `settings_actions::save_prompt_output_style` | savePromptOutputStyle | `service_save_prompt_output_style` |
+| `settings_actions::load_system_prompt_settings` | loadSystemPromptSettings | `service_system_prompt_settings` |
+| `settings_actions::save_system_prompt` | saveSystemPrompt | `service_save_system_prompt` |
+| `settings_actions::reset_system_prompt` | resetSystemPrompt | `service_reset_system_prompt` |
 | `settings_actions::load_public_ai_settings` | loadPublicAiSettings | `service_public_ai_settings_snapshot` |
 | `settings_actions::add_public_ai_connection` | addPublicAiConnection | `service_add_public_ai_connection` |
 | `settings_actions::save_public_ai_connection_enabled` | savePublicAiConnectionEnabled | `service_save_public_ai_connection_enabled` |

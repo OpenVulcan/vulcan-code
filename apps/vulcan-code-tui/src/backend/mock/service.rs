@@ -51,6 +51,9 @@ pub struct FakeService {
     /// Plugin invocation identities already accepted; each is accepted once.
     /// 已接受的插件调用身份；每个只接受一次。
     invocations: BTreeSet<String>,
+    /// Base system prompt layers: built-in text, the user override and per-project overrides.
+    /// 基础系统提示词层级：内置正文、用户覆盖及逐项目覆盖。
+    system_prompts: Value,
 }
 
 /// Exact synthetic import key exposed by the demo preflight.
@@ -433,7 +436,98 @@ impl FakeService {
             version: 1,
             plugin,
             invocations: BTreeSet::new(),
+            system_prompts: json!({
+                "builtInText":"You are Vulcan Code, a demo coding assistant.",
+                "userText":null,"projectTexts":{}
+            }),
         }
+    }
+
+    /// Resolves an optional project identity the way the service does: blank means none, and a
+    /// named project must be a registered host project.
+    /// 按服务方式解析可选项目身份：空白视为无项目，具名项目必须是已登记的宿主项目。
+    /// Returns the trimmed project identity, or `None` for the user layer only.
+    /// 返回去除空白后的项目身份；仅用户层级时为 `None`。
+    fn system_prompt_project(&self, project_id: &Value) -> Result<Option<String>, String> {
+        let Some(id) = project_id
+            .as_str()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
+        if !self.vce_projects.contains_key(id) {
+            return Err(format!("unknown project: {id}"));
+        }
+        Ok(Some(id.to_string()))
+    }
+
+    /// Builds the `SystemPromptSettingsSnapshot` for the user layer and an optional project.
+    /// 为用户层级与可选项目构建 `SystemPromptSettingsSnapshot`。
+    fn system_prompt_snapshot(&self, project_id: &Value) -> Result<Value, String> {
+        let project = self.system_prompt_project(project_id)?;
+        let user_text = &self.system_prompts["userText"];
+        let project_text = project
+            .as_deref()
+            .and_then(|id| self.system_prompts["projectTexts"].get(id))
+            .cloned()
+            .unwrap_or(Value::Null);
+        // Precedence matches the runtime resolver: project, then user, then built-in.
+        // 优先级与运行时解析器一致：项目、用户、内置。
+        let effective = if !project_text.is_null() {
+            "project"
+        } else if !user_text.is_null() {
+            "user"
+        } else {
+            "builtIn"
+        };
+        Ok(json!({
+            "builtInText":self.system_prompts["builtInText"],
+            "userPath":"demo/.vulcan/code/prompt/system-prompt.md",
+            "userText":user_text,
+            "projectId":project,
+            "projectPath":project.as_deref().map(|id| format!("demo/{id}/.vulcan/code/prompt/system-prompt.md")),
+            "projectText":project_text,
+            "effectiveSource":effective,
+        }))
+    }
+
+    /// Saves (`Some(text)`) or resets (`None`) one override and returns the refreshed snapshot.
+    /// 保存（`Some(text)`）或重置（`None`）一个覆盖，并返回刷新后的快照。
+    fn write_system_prompt(
+        &mut self,
+        request: &Value,
+        text: Option<&str>,
+    ) -> Result<Value, String> {
+        let project_id = request.get("projectId").unwrap_or(&Value::Null);
+        let text = match text.map(str::trim) {
+            Some("") => {
+                return Err(
+                    "System prompt text is empty; remove the override to use the inherited prompt."
+                        .into(),
+                );
+            }
+            Some(text) => json!(text),
+            None => Value::Null,
+        };
+        match string(request, "/scope")? {
+            "user" => self.system_prompts["userText"] = text,
+            "project" => {
+                let id = self
+                    .system_prompt_project(project_id)?
+                    .ok_or("projectId is required for the project scope")?;
+                let texts = self.system_prompts["projectTexts"]
+                    .as_object_mut()
+                    .ok_or("projectTexts fixture")?;
+                if text.is_null() {
+                    texts.remove(&id);
+                } else {
+                    texts.insert(id, text);
+                }
+            }
+            scope => return Err(format!("Unknown system prompt scope: {scope}")),
+        }
+        self.system_prompt_snapshot(project_id)
     }
 
     /// Generates a stable synthetic id unrelated to any real service installation.
@@ -635,6 +729,9 @@ impl FakeService {
                 }
                 // The demo keeps one sign-in status and reports it for the requested server.
                 // 演示仅保留一个登录状态，并按所请求服务器报告。
+                "service_system_prompt_settings" => {
+                    return self.system_prompt_snapshot(required(&call.params, "/projectId")?);
+                }
                 "service_mcp_oauth_status" => {
                     let mut status = self.loads["service_mcp_oauth_status"].clone();
                     status["serverId"] = required(&call.params, "/serverId")?.clone();
@@ -801,6 +898,16 @@ impl FakeService {
             "service_save_public_ai_usage_refresh_settings" => {
                 self.loads["service_public_ai_settings_snapshot"]["usageRefreshIntervalSeconds"] =
                     required(params, "/request/intervalSeconds")?.clone()
+            }
+            // Both writes return the refreshed snapshot, as the service does.
+            // 两种写入均与服务一致，返回刷新后的快照。
+            "service_save_system_prompt" => {
+                let request = required(params, "/request")?;
+                let text = string(request, "/text")?.to_string();
+                return self.write_system_prompt(request, Some(&text));
+            }
+            "service_reset_system_prompt" => {
+                return self.write_system_prompt(required(params, "/request")?, None);
             }
             "service_save_prompt_output_style" => {
                 self.loads["service_output_style_catalog"]["selectedId"] =

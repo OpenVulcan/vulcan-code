@@ -5,6 +5,7 @@ use super::*;
 use crate::app::action::LocalSetting;
 use crate::i18n;
 use api::settings_actions as settings;
+use vulcan_service_api::SystemPromptScope;
 
 pub(super) fn appearance(app: &App) -> Vec<Row> {
     // Locales.
@@ -184,6 +185,140 @@ pub(super) fn context(app: &App) -> Vec<Row> {
             build: |_, value| Some(settings::save_tool_collapse_default(value.as_bool())),
         }),
     ));
+    rows.extend(system_prompt(app));
+    rows
+}
+
+/// Builds the base system prompt editor for the user layer or one project.
+/// 构建用户层级或单个项目的基础系统提示词编辑器。
+/// The selected scope is the loaded snapshot's `projectId`; choosing another scope reloads the slot.
+/// 所选作用域即已加载快照的 `projectId`；选择其他作用域会重新加载该槽位。
+fn system_prompt(app: &App) -> Vec<Row> {
+    // Snapshot.
+    // 基础系统提示词层级快照。
+    let snapshot = app.slots.value(Slot::SystemPrompt);
+    // Project id; empty selects the user scope.
+    // 项目标识；为空时选择用户作用域。
+    let project = s(snapshot, "/projectId");
+    let mut scopes = vec![(String::new(), tr!("settings.systemPrompt.scopeUser"))];
+    scopes.extend(app.projects.iter().map(|p| {
+        (
+            p.id.clone(),
+            tr!("settings.systemPrompt.scopeProject", name = p.name.as_str()),
+        )
+    }));
+    let mut rows = vec![
+        section(tr!("settings.modelExperience.systemPrompt")),
+        note(tr!("settings.systemPrompt.description"), Tone::Muted),
+        choice(
+            tr!("settings.systemPrompt.scope"),
+            scopes,
+            project.clone(),
+            Edit::Call(Setter::Build {
+                ctx: Value::Null,
+                build: |_, value| {
+                    let id = value.as_str();
+                    Some(settings::load_system_prompt_settings(
+                        (!id.is_empty()).then_some(id),
+                    ))
+                },
+            }),
+        ),
+    ];
+    if snapshot.is_null() {
+        return rows;
+    }
+    // Override of the selected scope; the editor's baseline is the text this scope inherits.
+    // 所选作用域的覆盖；编辑器基线为该作用域继承的正文。
+    let override_text = v(
+        snapshot,
+        if project.is_empty() {
+            "/userText"
+        } else {
+            "/projectText"
+        },
+    );
+    let baseline = [
+        override_text,
+        v(snapshot, "/userText"),
+        v(snapshot, "/builtInText"),
+    ]
+    .into_iter()
+    .find_map(Value::as_str)
+    .unwrap_or_default();
+    let source = match s(snapshot, "/effectiveSource").as_str() {
+        "project" => tr!("settings.systemPrompt.sourceProject"),
+        "user" => tr!("settings.systemPrompt.sourceUser"),
+        _ => tr!("settings.systemPrompt.sourceBuiltIn"),
+    };
+    rows.push(note(source, Tone::Info));
+    let editor = text(
+        tr!("settings.systemPrompt.textLabel"),
+        baseline.to_string(),
+        Edit::Call(Setter::Build {
+            ctx: json!({ "projectId": snapshot["projectId"], "baseline": baseline }),
+            build: |ctx, value| {
+                let project = ctx["projectId"].as_str();
+                let text = value.as_str();
+                if text.trim().is_empty() {
+                    return None;
+                }
+                // An unchanged body stays inherited, so it only rereads the snapshot.
+                // 未修改的正文保持继承，因此只重新读取快照。
+                if text.trim() == ctx["baseline"].as_str().unwrap_or_default().trim() {
+                    return Some(settings::load_system_prompt_settings(project));
+                }
+                let scope = if project.is_some() {
+                    SystemPromptScope::Project
+                } else {
+                    SystemPromptScope::User
+                };
+                Some(settings::save_system_prompt(scope, project, text))
+            },
+        }),
+    );
+    // The empty-text hint points at the restore action, which exists only with an override.
+    // 空正文提示指向恢复操作，仅在存在覆盖时才有该操作。
+    rows.push(if override_text.is_null() {
+        editor
+    } else {
+        editor.detail(tr!("settings.systemPrompt.empty"))
+    });
+    let path = s(
+        snapshot,
+        if project.is_empty() {
+            "/userPath"
+        } else {
+            "/projectPath"
+        },
+    );
+    if !path.is_empty() {
+        rows.push(note(
+            tr!("settings.systemPrompt.savedTo", path = path.as_str()),
+            Tone::Muted,
+        ));
+    }
+    if !override_text.is_null() {
+        let (scope, label) = if project.is_empty() {
+            (
+                SystemPromptScope::User,
+                tr!("settings.systemPrompt.resetUser"),
+            )
+        } else {
+            (
+                SystemPromptScope::Project,
+                tr!("settings.systemPrompt.resetProject"),
+            )
+        };
+        rows.push(button(
+            label,
+            call(settings::reset_system_prompt(
+                scope,
+                (!project.is_empty()).then_some(project.as_str()),
+            )),
+            Tone::Normal,
+        ));
+    }
     rows
 }
 

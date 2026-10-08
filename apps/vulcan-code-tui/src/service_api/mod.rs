@@ -77,6 +77,9 @@ pub enum Slot {
     /// `loadOutputStyleCatalog`
     /// 输出风格目录。
     OutputStyleCatalog,
+    /// `loadSystemPromptSettings` for the user layer and the optional selected project.
+    /// 用户层级与可选所选项目的基础系统提示词设置。
+    SystemPrompt,
     /// `loadMcpRuntimeSnapshot`
     /// MCP 运行时快照。
     McpRuntime,

@@ -5,6 +5,7 @@ use super::*;
 use crate::service_api::{
     knowledge_base as kb, memory_actions as vmm, settings_actions as settings, vce,
 };
+use vulcan_service_api::SystemPromptScope;
 /// Managed browsing and reading round-trip exact identities, folder boundaries and pagination.
 /// 托管浏览及阅读往返准确身份、目录边界和分页。
 #[test]
@@ -560,5 +561,75 @@ fn migration_keeps_reviewed_collision_renames_and_target_content() {
             .as_array()
             .unwrap()
             .is_empty()
+    );
+}
+
+/// System prompt overrides follow project, user, built-in precedence and reset to the next layer.
+/// 系统提示词覆盖遵循项目、用户、内置优先级，重置后回到下一层。
+#[test]
+fn system_prompt_layers_save_reset_and_reject_invalid_targets() {
+    // Synthetic service authority with registered host projects.
+    // 带已登记宿主项目的合成服务权威状态。
+    let mut service = FakeService::new();
+    let initial = service
+        .answer(&settings::load_system_prompt_settings(None))
+        .unwrap();
+    assert_eq!(initial["effectiveSource"], "builtIn");
+    assert!(initial["projectPath"].is_null());
+    let user = service
+        .answer(&settings::save_system_prompt(
+            SystemPromptScope::User,
+            None,
+            "  user rules \n",
+        ))
+        .unwrap();
+    assert_eq!(user["userText"], "user rules");
+    assert_eq!(user["effectiveSource"], "user");
+    let project = service
+        .answer(&settings::save_system_prompt(
+            SystemPromptScope::Project,
+            Some("p-core"),
+            "project rules",
+        ))
+        .unwrap();
+    assert_eq!(project["projectId"], "p-core");
+    assert_eq!(project["effectiveSource"], "project");
+    // Other projects keep inheriting the user layer.
+    // 其他项目继续继承用户层级。
+    assert_eq!(
+        service
+            .answer(&settings::load_system_prompt_settings(Some("p-tui")))
+            .unwrap()["effectiveSource"],
+        "user"
+    );
+    let reset = service
+        .answer(&settings::reset_system_prompt(
+            SystemPromptScope::Project,
+            Some("p-core"),
+        ))
+        .unwrap();
+    assert!(reset["projectText"].is_null());
+    assert_eq!(reset["effectiveSource"], "user");
+    assert!(
+        service
+            .answer(&settings::save_system_prompt(
+                SystemPromptScope::User,
+                None,
+                "   "
+            ))
+            .is_err()
+    );
+    assert!(
+        service
+            .answer(&settings::reset_system_prompt(
+                SystemPromptScope::Project,
+                None
+            ))
+            .is_err()
+    );
+    assert!(
+        service
+            .answer(&settings::load_system_prompt_settings(Some("p-missing")))
+            .is_err()
     );
 }
