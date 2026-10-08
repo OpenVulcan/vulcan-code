@@ -31,6 +31,7 @@ target
 /target
 /third_party
 /.qwen
+/.claude
 /.vulcan/
 /output
 /temp
