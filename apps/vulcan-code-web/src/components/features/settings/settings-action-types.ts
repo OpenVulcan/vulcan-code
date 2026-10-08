@@ -1,3 +1,5 @@
+import type { AnswerMode } from "@/service/answer-mode"
+
 // GitCommitSettingsSaveRequest describes one Git commit settings submission.
 // GitCommitSettingsSaveRequest 描述一次 Git 提交设置提交。
 export interface GitCommitSettingsSaveRequest {
@@ -142,6 +144,9 @@ export interface SettingsActionProps {
   // Saves the global default output style for new sessions and compaction boundaries.
   // 保存供新会话与压缩边界使用的全局默认输出风格。
   onSavePromptOutputStyle: (styleId: string) => Promise<void>
+  // Saves the global answer mode copied into new conversations.
+  // 保存复制到新会话的全局回答模式。
+  onSavePromptAnswerMode: (mode: AnswerMode) => Promise<void>
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>

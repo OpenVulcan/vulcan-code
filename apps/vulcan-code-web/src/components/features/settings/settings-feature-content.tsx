@@ -9,6 +9,7 @@ import { VisualLabSettingsArea } from "@/components/dev/visual-lab-settings-area
 import {
   ArchivedRestoreSettingsArea,
   GitCommitSettingsArea,
+  AnswerModeSettingsSection,
   OutputStyleSettingsSection,
 } from "@/components/features/settings/misc-settings-areas";
 import { AboutLicensesSettingsArea } from "@/components/features/settings/about-licenses-settings-area";
@@ -131,6 +132,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         onOpenUsageStatistics={props.onOpenUsageStatistics}
         outputStyleSettings={<>
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
+          <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode ?? "standard"} />
           <ToolCollapseSettingsSection />
           <ThinkingPopupSettingsSection />
           <ConversationLinkSettingsSection />

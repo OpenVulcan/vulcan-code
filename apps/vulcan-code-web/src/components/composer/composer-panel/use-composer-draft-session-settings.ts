@@ -7,14 +7,15 @@ import type {
   ComposerSessionSettingsSnapshot,
   ComposerVmmPolicySnapshot,
 } from "@/components/composer/composer-model";
+import type { AnswerMode } from "@/service/answer-mode";
 import type { SessionGoalSummary } from "@/types";
 
 // DraftSessionSettingsEntry contains only overrides explicitly authored for one new-conversation slot.
 // DraftSessionSettingsEntry 仅包含为一个新会话草稿槽显式编写的覆盖项。
 interface DraftSessionSettingsEntry {
-  // Explicit HTML preference captured with all other first-turn settings.
-  // 与其他首轮设置一同捕获的显式 HTML 偏好。
-  htmlAnswersEnabled?: boolean;
+  // Explicit answer mode captured with all other first-turn settings.
+  // 与其他首轮设置一同捕获的显式回答模式。
+  answerMode?: AnswerMode;
   // Explicit output-style override for the new conversation slot.
   // 新会话草稿槽的显式输出风格覆盖。
   outputStyleId?: string;
@@ -68,12 +69,12 @@ export function clearDraftSessionSettingsEntry(
 // ComposerDraftSessionSettingsController exposes draft-local state and an atomic submission capture.
 // ComposerDraftSessionSettingsController 暴露草稿本地状态与原子提交捕获。
 export interface ComposerDraftSessionSettingsController {
-  // Draft-only HTML preference; never overrides an existing session.
-  // 草稿专用 HTML 偏好；不会覆盖已有会话。
-  htmlAnswersEnabled: boolean;
-  // Capture a new draft preference synchronously for the next submission.
-  // 同步捕获新草稿偏好供下一次提交使用。
-  setHtmlAnswersEnabled: (enabled: boolean) => void;
+  // Explicit draft answer mode, or null while the draft follows the global default.
+  // 显式草稿回答模式；草稿跟随全局默认值时为空。
+  answerMode: AnswerMode | null;
+  // Capture a new draft answer mode synchronously for the next submission.
+  // 同步捕获新草稿回答模式供下一次提交使用。
+  setAnswerMode: (mode: AnswerMode) => void;
   // Output-style override shown for the current draft, or null when inheriting global settings.
   // 当前草稿显示的输出风格覆盖；继承全局设置时为空。
   outputStyleId: string | null;
@@ -157,10 +158,10 @@ export function useComposerDraftSessionSettings(
   }, [conversationId, scopeKey]);
 
   const current = conversationId ? {} : entries[scopeKey] ?? {};
-  // setHtmlAnswersEnabled shares the exact draft capture and acknowledgement ownership.
-  // setHtmlAnswersEnabled 复用精确草稿捕获及确认归属。
-  const setHtmlAnswersEnabled = React.useCallback((enabled: boolean) => {
-    updateCurrent((entry) => ({ ...entry, htmlAnswersEnabled: enabled }));
+  // setAnswerMode shares the exact draft capture and acknowledgement ownership.
+  // setAnswerMode 复用精确草稿捕获及确认归属。
+  const setAnswerMode = React.useCallback((mode: AnswerMode) => {
+    updateCurrent((entry) => ({ ...entry, answerMode: mode }));
   }, [updateCurrent]);
   const setVmmPolicy = React.useCallback((policy: string, mode: string) => {
     if (!["inherit", "enabled", "disabled"].includes(mode)) return;
@@ -256,8 +257,8 @@ export function useComposerDraftSessionSettings(
     ? syntheticDraftGoal(scopeKey, current.initialGoal)
     : null;
   return {
-    htmlAnswersEnabled: current.htmlAnswersEnabled ?? false,
-    setHtmlAnswersEnabled,
+    answerMode: current.answerMode ?? null,
+    setAnswerMode,
     outputStyleId: current.outputStyleId ?? null,
     vmmPolicy: current.vmmPolicy ?? null,
     providerToolSettings: current.providerToolSettings,

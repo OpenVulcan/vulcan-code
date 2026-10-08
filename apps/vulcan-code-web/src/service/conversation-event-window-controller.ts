@@ -1,6 +1,5 @@
 import type { ServiceRequestOptions, ServiceUnsubscribe } from "@/service/protocol";
-import { isHtmlAnswerModeNewer, type HtmlAnswerMode } from "@/service/html-answer-mode";
-import { htmlAnswerRecoveryStart, mergeHtmlAnswerProjections, type HtmlAnswerEventProjection } from "@/service/html-answer-projections";
+import { isAnswerModeNewer, type AnswerModePreference } from "@/service/answer-mode";
 import type {
   ConversationEventHydrationV1Response,
   ConversationEventLiveDeltaV1,
@@ -36,9 +35,6 @@ export type ConversationEventWindowControllerListener = () => void;
 /** Immutable controller snapshot rendered by the Stage 8 test host.
  * 阶段 8 测试宿主渲染的不可变控制器快照。 */
 export interface ConversationEventWindowControllerSnapshot {
-  /** Durable derived annotations; older cached snapshots may omit this optional extension.
-   * 可靠派生标注；旧缓存快照可以省略此可选扩展。 */
-  html_answer_projections?: readonly HtmlAnswerEventProjection[];
   /** Current ownership boundary, or null before hydration.
    * 当前归属边界；hydration 前为空。 */
   owner: ConversationEventWindowOwner | null;
@@ -108,9 +104,6 @@ export class ConversationEventWindowController {
   /** Current selected-session configuration from the latest atomic boundary.
    * 来自最近一次原子边界的当前选中会话配置。 */
   private sessionConfig: ConversationSessionConfigV1 | null = null;
-  /** Descriptors contain no source copies and share the canonical window lifetime.
-   * 描述不复制源码，并与权威窗口共享生命周期。 */
-  private htmlAnswerProjections: readonly HtmlAnswerEventProjection[] = [];
   /** Monotonic hydration request token used to discard delayed old ownership.
    * 用于丢弃延迟旧归属的单调 hydration 请求令牌。 */
   private hydrationRequestToken = 0;
@@ -189,11 +182,7 @@ export class ConversationEventWindowController {
   private buildSnapshot(): ConversationEventWindowControllerSnapshot {
     const frontier = this.store.getFrontier();
     const events = this.store.render();
-    this.htmlAnswerProjections = mergeHtmlAnswerProjections(
-      this.htmlAnswerProjections, undefined, events,
-    );
     return {
-      html_answer_projections: this.htmlAnswerProjections,
       owner: this.store.getOwner(),
       service_epoch: frontier?.service_epoch ?? null,
       memory_revision: frontier?.memory_revision ?? null,
@@ -308,7 +297,6 @@ export class ConversationEventWindowController {
       open_turn_id: snapshot.open_turn_id,
       open_turn_start_seq: snapshot.open_turn_start_seq,
       session_config: snapshot.session_config,
-      html_answer_projections: snapshot.html_answer_projections,
     });
   }
 
@@ -391,15 +379,13 @@ export class ConversationEventWindowController {
       frontier.memory_revision,
       frontier.service_epoch,
       options,
-      htmlAnswerRecoveryStart(this.htmlAnswerProjections, this.store.render()),
     );
     if (response.disposition.kind === "rehydrate_required") {
       await this.recoverConnection(true, options);
       return;
     }
     this.store.applyReconnect(response);
-    this.commitHtmlAnswerMode(response.html_answers);
-    this.commitHtmlAnswerProjections(response.html_answer_projections);
+    this.commitAnswerMode(response.answer_mode);
     this.settleToolRequestProgress(response.events, response.session_id);
     this.publishSnapshotIfChanged();
   }
@@ -428,8 +414,7 @@ export class ConversationEventWindowController {
   applyLive(delta: ConversationEventLiveDeltaV1): void {
     this.store.applyLive(delta);
     if (delta.durability === "durable") {
-      this.commitHtmlAnswerMode(delta.html_answers);
-      this.commitHtmlAnswerProjections(delta.html_answer_projections);
+      this.commitAnswerMode(delta.answer_mode);
     }
     this.settleToolRequestProgress(delta.events, delta.session_id);
     this.publishSnapshotIfChanged();
@@ -610,8 +595,7 @@ export class ConversationEventWindowController {
     try {
       this.store.applyLive(delta);
       if (delta.durability === "durable") {
-        this.commitHtmlAnswerMode(delta.html_answers);
-        this.commitHtmlAnswerProjections(delta.html_answer_projections);
+        this.commitAnswerMode(delta.answer_mode);
       }
       this.settleToolRequestProgress(delta.events, delta.session_id);
       if (publishSnapshot) this.publishSnapshotIfChanged();
@@ -728,7 +712,6 @@ export class ConversationEventWindowController {
         frontier.memory_revision,
         frontier.service_epoch,
         undefined,
-        htmlAnswerRecoveryStart(this.htmlAnswerProjections, this.store.render()),
       );
       const currentOwner = this.store.getOwner();
       if (
@@ -745,8 +728,7 @@ export class ConversationEventWindowController {
       }
       try {
         this.store.applyReconnect(response);
-        this.commitHtmlAnswerMode(response.html_answers);
-        this.commitHtmlAnswerProjections(response.html_answer_projections);
+        this.commitAnswerMode(response.answer_mode);
       } catch (error) {
         // A reconnect replacement that cannot evolve from local state requires one clean durable baseline.
         // 无法从本地状态演进的重连替换需要重新加载一份干净可靠基线。
@@ -774,8 +756,7 @@ export class ConversationEventWindowController {
         try {
           this.store.applyLive(delta);
           if (delta.durability === "durable") {
-            this.commitHtmlAnswerMode(delta.html_answers);
-            this.commitHtmlAnswerProjections(delta.html_answer_projections);
+            this.commitAnswerMode(delta.answer_mode);
           }
           this.settleToolRequestProgress(delta.events, delta.session_id);
         } catch (error) {
@@ -898,37 +879,20 @@ export class ConversationEventWindowController {
     this.openTurnId = response.open_turn_id;
     this.openTurnStartSeq = response.open_turn_start_seq;
     this.sessionConfig = response.session_config;
-    // Same-owner refreshes can retain older paged events; keep their exact matching annotations.
-    // 同归属刷新可能保留更早已分页事件；保留其精确匹配的标注。
-    const previous = this.snapshotCache;
-    if (previous.owner?.session_id !== response.session_id
-      || previous.owner.window_generation !== response.window_generation
-      || previous.service_epoch !== response.service_epoch) this.htmlAnswerProjections = [];
-    this.commitHtmlAnswerProjections(response.html_answer_projections);
   }
 
-  /** Apply source-free annotations only after the canonical ownership transition succeeds.
-   * 仅在权威归属转换成功后应用不含源码的标注。 */
-  private commitHtmlAnswerProjections(projections: readonly HtmlAnswerEventProjection[] | undefined): void {
-    if (!projections?.length) return;
-    this.htmlAnswerProjections = mergeHtmlAnswerProjections(
-      this.htmlAnswerProjections, projections, this.store.render(),
-    );
-  }
-
-  /** Merge confirmed preference from accepted owner/generation edges without regressing revisions.
-   * 合并已接纳归属与代次边中的已确认偏好，不使修订倒退。 */
-  private commitHtmlAnswerMode(mode: HtmlAnswerMode | undefined): void {
+  /** Merge confirmed answer mode from accepted owner/generation edges without regressing revisions.
+   * 合并已接纳归属与代次边中的已确认回答模式，不使修订倒退。 */
+  private commitAnswerMode(mode: AnswerModePreference | undefined): void {
     if (mode === undefined || this.sessionConfig === null) return;
-    if (isHtmlAnswerModeNewer(mode, this.sessionConfig.html_answers)) {
-      this.sessionConfig = { ...this.sessionConfig, html_answers: mode };
+    if (isAnswerModeNewer(mode, this.sessionConfig.answer_mode)) {
+      this.sessionConfig = { ...this.sessionConfig, answer_mode: mode };
     }
   }
 
   /** Advances only historical pagination fields after an adjacent prepend.
    * 在相邻前插后仅推进历史分页字段。 */
   private commitHistoricalBoundary(response: ConversationEventWindowV1BaseResponse): void {
-    this.commitHtmlAnswerProjections(response.html_answer_projections);
     this.olderBeforeSeq = response.older_before_seq;
     this.hasMore = response.has_more;
   }
@@ -973,7 +937,6 @@ function sameControllerSnapshot(
     left.open_turn_id !== right.open_turn_id ||
     left.open_turn_start_seq !== right.open_turn_start_seq ||
     left.session_config !== right.session_config ||
-    left.html_answer_projections !== right.html_answer_projections ||
     left.events.length !== right.events.length
   ) {
     return false;

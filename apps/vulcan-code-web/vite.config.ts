@@ -43,12 +43,6 @@ export default defineConfig(({ mode }) => {
       // manifest 暴露真实静态导入图，供首屏工作台资源预算核算。
       manifest: true,
       rollupOptions: {
-        // Build the isolated trusted viewer with the workbench so Core can serve both without Vite.
-        // 将隔离可信查看器与工作台一同构建，使 Core 无需 Vite 即可提供两者。
-        input: {
-          workbench: path.resolve(__dirname, "index.html"),
-          htmlAnswerViewer: path.resolve(__dirname, "html-answer-viewer.html"),
-        },
         output: {
           // Each locale catalog gets its own chunk and cache identity. Only the English fallback is a
           // static import counted by the initial-workbench budget; every other language loads on demand.

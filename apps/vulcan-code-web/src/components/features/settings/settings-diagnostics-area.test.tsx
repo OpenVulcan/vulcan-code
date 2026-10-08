@@ -13,6 +13,7 @@ import { LogsArea } from "./settings-diagnostics-area";
 // SETTINGS_ACTIONS 为诊断页面渲染提供稳定的空操作服务回调。
 const SETTINGS_ACTIONS = {
   onSavePromptOutputStyle: async () => undefined,
+  onSavePromptAnswerMode: async () => undefined,
   onSaveGitCommitSettings: async () => undefined,
   onSaveProviderRetrySettings: async () => undefined,
   onSaveProviderRequestTraceSettings: async () => undefined,

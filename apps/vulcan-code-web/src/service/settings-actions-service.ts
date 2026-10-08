@@ -51,6 +51,7 @@ import {
   serviceClient,
 } from "@/service/webui-service-runtime";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
+import type { AnswerMode } from "@/service/answer-mode";
 
 // loadOutputStyleCatalog reads the packaged prompt-style catalog and persisted global selection.
 // loadOutputStyleCatalog 读取打包的提示词风格目录与已持久化全局选择。
@@ -70,6 +71,15 @@ export async function savePromptOutputStyle(styleId: string): Promise<OutputStyl
   return serviceClient.request<OutputStyleCatalogSummary>("service_save_prompt_output_style", {
     request: { styleId },
   });
+}
+
+// savePromptAnswerMode persists the global answer mode copied into conversations created afterwards.
+// savePromptAnswerMode 持久化之后新建会话所复制的全局回答模式。
+export async function savePromptAnswerMode(mode: AnswerMode): Promise<AnswerMode | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<AnswerMode>("service_save_prompt_answer_mode", { request: { mode } });
 }
 
 // loadSystemPromptSettings reads the built-in, user, and optional project base system prompt layers.

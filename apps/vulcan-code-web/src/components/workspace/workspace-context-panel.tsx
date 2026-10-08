@@ -1084,7 +1084,6 @@ function WorkspaceSubagentPanel(args: {
         providers={args.props.workbench.providers}
         commandSessions={subagentCommandSessions}
         commands={transcriptOwner.commands}
-        parentSessionId={parentConversationId}
         conversation={subagentConversation}
         initialExpandedState={args.expandedStates.current.get(taskId) ?? null}
         onExpandedStateChange={writeSubagentExpandedState}

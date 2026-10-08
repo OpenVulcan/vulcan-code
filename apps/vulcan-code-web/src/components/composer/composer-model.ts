@@ -1,3 +1,4 @@
+import type { AnswerMode } from "@/service/answer-mode";
 import type { LocaleCode } from "@/i18n";
 import { pickBilingualText } from "@/i18n-locales";
 import type {
@@ -82,9 +83,9 @@ export interface ComposerInitialGoalSnapshot {
 // ComposerSessionSettingsSnapshot contains draft-only session overrides applied during materialization.
 // ComposerSessionSettingsSnapshot 包含在物化期间应用的草稿专属会话覆盖项。
 export interface ComposerSessionSettingsSnapshot {
-  // Explicit HTML preference for the first request of the new session.
-  // 新会话首次请求的显式 HTML 偏好。
-  htmlAnswersEnabled?: boolean;
+  // Explicit answer mode for the new session; absence copies the global default.
+  // 新会话的显式回答模式；缺省时复制全局默认值。
+  answerMode?: AnswerMode;
   // Optional output-style override captured only when creating a new conversation.
   // 仅在创建新会话时捕获的可选输出风格覆盖。
   outputStyleId?: string;

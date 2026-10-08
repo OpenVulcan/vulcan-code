@@ -16,7 +16,6 @@ import {
   type ConversationSessionConfigV1,
 } from "./conversation-event-window-client";
 import { ConversationEventWindowController } from "./conversation-event-window-controller";
-import type { HtmlAnswerEventProjection } from "./html-answer-projections";
 import {
   ConversationEventWindowStore,
   clientActionId,
@@ -120,25 +119,13 @@ function assistantText(
   };
 }
 
-/** Build source-free synthetic Core annotations for ownership and publication behavior tests.
- * 为归属与发布行为测试构建不含源码的合成 Core 标注。 */
-function htmlProjection(seq: number, eventRevision: number): HtmlAnswerEventProjection {
-  return {
-    seq, event_revision: eventRevision, answers: [{
-      ordinal: 0, title: "test", fence: { byte_start: 0, byte_end: 10, utf16_start: 0, utf16_end: 10 },
-      availability: { status: "ready", artifact_id: "f".repeat(64),
-        source: { byte_start: 2, byte_end: 8, utf16_start: 2, utf16_end: 8 } },
-    }],
-  };
-}
-
 /** Builds one V1 metadata configuration for selected-session projection tests.
  * 为选中会话投影测试构建一份 V1 metadata 配置。 */
 function sessionConfig(
   overrides: Partial<ConversationSessionConfigV1> = {},
 ): ConversationSessionConfigV1 {
   return {
-    html_answers: { enabled: false, revision: 0, prepared: null },
+    answer_mode: { mode: "standard", revision: 0, prepared: null },
     current_request: {
       provider: null,
       connection_id: null,
@@ -336,48 +323,6 @@ type ConversationEventWindowRpcTestRequest = <T>(
 ) => Promise<T>;
 
 describe("V1 conversation event window controller", () => {
-  it("publishes HTML annotations only on durable exact revisions and clears them on rebase", async () => {
-    const projection = htmlProjection(1, 2);
-    const controller = new ConversationEventWindowController(rpcMock({
-      hydrate: async () => response([summary(1, assistantText("streaming", "partial"))]),
-    }));
-    await controller.hydrate(SESSION_ID);
-    controller.applyLive(liveDelta([summary(1, assistantText("completed", "finished"), 20, 2)], {
-      revision: 2, html_answer_projections: [projection],
-    }));
-    expect(controller.snapshot().html_answer_projections).toEqual([]);
-    const acknowledgement = liveDelta([], {
-      revision: 2, durability: "durable", html_answer_projections: [projection],
-    });
-    controller.applyLive(acknowledgement);
-    const ready = controller.snapshot();
-    expect(ready.html_answer_projections).toEqual([projection]);
-    controller.applyLive(structuredClone(acknowledgement));
-    expect(controller.snapshot()).toBe(ready);
-    controller.rebase(response([], { window_generation: 2 }));
-    expect(controller.snapshot().html_answer_projections).toEqual([]);
-    controller.dispose();
-  });
-
-  it("recovers annotations before the reconnect tail and preserves them in cached windows", async () => {
-    const projection = htmlProjection(1, 1);
-    const controller = new ConversationEventWindowController(rpcMock({
-      hydrate: async () => response([
-        summary(1, assistantText("completed", "```vulcan-html candidate")), summary(2, userInput(2)),
-      ]),
-      reconnect: async () => reconnectResponse([summary(2, userInput(2))], {
-        memory_revision: 2, durable_revision: 2, html_answer_projections: [projection, htmlProjection(2, 1)],
-      }),
-    }));
-    await controller.hydrate(SESSION_ID);
-    await controller.reconnect();
-    expect(controller.snapshot().html_answer_projections).toEqual([projection]);
-    const restored = new ConversationEventWindowController(rpcMock({}));
-    restored.restoreCachedSnapshot(controller.snapshot());
-    expect(restored.snapshot().html_answer_projections).toEqual([projection]);
-    restored.dispose();
-    controller.dispose();
-  });
   it("restores paged history before reconnecting and retains it while missing events arrive", async () => {
     // The first visit has loaded older pages; these events are required by saved viewport anchors.
     // 首次访问已加载更早分页；保存的视口锚点依赖这些事件。
@@ -400,7 +345,7 @@ describe("V1 conversation event window controller", () => {
     expect(subscribeLive).not.toHaveBeenCalled();
     await restored.resumeCachedWindow();
     expect(subscribeLive).toHaveBeenCalledOnce();
-    expect(reconnect).toHaveBeenCalledWith(cached.owner, 4, 1, SERVICE_EPOCH, undefined, null);
+    expect(reconnect).toHaveBeenCalledWith(cached.owner, 4, 1, SERVICE_EPOCH, undefined);
     expect(restored.snapshot().events.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5]);
     restored.dispose();
   });
@@ -585,35 +530,35 @@ describe("V1 conversation event window controller", () => {
     expect(controller.snapshot().session_config).toEqual(projectedConfig);
   });
 
-  it("html_answers follows durable acknowledgements and never regresses on replay", async () => {
+  it("answer_mode follows durable acknowledgements and never regresses on replay", async () => {
     const controller = new ConversationEventWindowController(rpcMock({ hydrate: async () => response([]) }));
     await controller.hydrate(SESSION_ID);
-    const enabled = { enabled: true, revision: 1, prepared: null };
-    controller.applyLive(liveDelta([], { revision: 2, html_answers: enabled }));
-    expect(controller.snapshot().session_config?.html_answers.enabled).toBe(false);
-    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", html_answers: enabled }));
-    expect(controller.snapshot().session_config?.html_answers).toEqual(enabled);
-    const prepared = { ...enabled, prepared: { enabled: true, revision: 1 } };
+    const interactive = { mode: "interactive" as const, revision: 1, prepared: null };
+    controller.applyLive(liveDelta([], { revision: 2, answer_mode: interactive }));
+    expect(controller.snapshot().session_config?.answer_mode.mode).toBe("standard");
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", answer_mode: interactive }));
+    expect(controller.snapshot().session_config?.answer_mode).toEqual(interactive);
+    const prepared = { ...interactive, prepared: { mode: "interactive" as const, revision: 1 } };
     controller.applyLive(liveDelta([], { revision: 3 }));
-    controller.applyLive(liveDelta([], { revision: 3, durability: "durable", html_answers: prepared }));
-    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", html_answers: enabled }));
-    expect(controller.snapshot().session_config?.html_answers).toEqual(prepared);
+    controller.applyLive(liveDelta([], { revision: 3, durability: "durable", answer_mode: prepared }));
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", answer_mode: interactive }));
+    expect(controller.snapshot().session_config?.answer_mode).toEqual(prepared);
     controller.dispose();
   });
 
-  it("recovers a missed html_answers acknowledgement through metadata-only reconnect", async () => {
+  it("recovers a missed answer_mode acknowledgement through metadata-only reconnect", async () => {
     // prepared is the durable state missed while this client was disconnected.
     // prepared 是客户端离线期间遗漏的可靠状态。
-    const prepared = { enabled: true, revision: 1, prepared: { enabled: true, revision: 1 } };
+    const prepared = { mode: "interactive" as const, revision: 1, prepared: { mode: "interactive" as const, revision: 1 } };
     const controller = new ConversationEventWindowController(rpcMock({
       hydrate: async () => response([summary(1, userInput(1))]),
       reconnect: async () => reconnectResponse([], {
-        memory_revision: 3, durable_revision: 3, html_answers: prepared,
+        memory_revision: 3, durable_revision: 3, answer_mode: prepared,
       }),
     }));
     await controller.hydrate(SESSION_ID);
     await controller.reconnect();
-    expect(controller.snapshot().session_config?.html_answers).toEqual(prepared);
+    expect(controller.snapshot().session_config?.answer_mode).toEqual(prepared);
     expect(controller.snapshot().events).toHaveLength(1);
     controller.dispose();
   });
@@ -760,7 +705,6 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
-      null,
     );
     expect(controller.snapshot().events.map((event) => event.seq)).toEqual([1, 2]);
     expect(controller.snapshot().events[0].event).toMatchObject({ status: "completed" });
@@ -900,7 +844,6 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
-      null,
     );
     expect(controller.snapshot().events.map((event) => event.event_revision)).toEqual([2, 4, 3]);
     expect(controller.snapshot().events.map((event) =>
@@ -1009,7 +952,6 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
-      null,
     );
     expect(controller.snapshot()).toMatchObject({
       memory_revision: 1,
@@ -1077,7 +1019,6 @@ describe("V1 conversation event window controller", () => {
       3,
       SERVICE_EPOCH,
       undefined,
-      null,
     );
   });
 
@@ -1203,7 +1144,6 @@ describe("V1 conversation event window controller", () => {
       1,
       SERVICE_EPOCH,
       undefined,
-      null,
     );
     expect(controller.snapshot()).toMatchObject({ memory_revision: 2, durable_revision: 1 });
     expect(controller.snapshot().events.map((event) => event.seq)).toEqual([1, 2]);

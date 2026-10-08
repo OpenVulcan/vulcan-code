@@ -1,9 +1,6 @@
 import React from "react";
 import { runConversationControlAction } from "./conversation-control-feedback";
 import ReactMarkdown, { defaultUrlTransform, type UrlTransform, type ExtraProps } from "react-markdown";
-import { useHtmlAnswerMessage, type HtmlAnswerMessageContext } from "./html-answer-context";
-import { HtmlAnswerLazyCard as HtmlAnswerCard } from "./html-answer-lazy-card";
-import { hasStreamingHtmlAnswerHint, originalMarkdownOffset, rehypeHtmlAnswerCandidates, type HtmlAnswerMarkdownScope, type MarkdownSourceEdit } from "./html-answer-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Check, Copy, Globe, Text, TextWrap } from "lucide-react";
@@ -43,10 +40,6 @@ const markdownSanitizers: NonNullable<React.ComponentProps<typeof ReactMarkdown>
   ...defaultSchema,
   protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "file"] },
 }]];
-
-// The candidate pass shares the existing AST and only runs for eligible assistant bodies.
-// 候选标注复用既有 AST，仅为符合条件的助手正文运行。
-const htmlAnswerSanitizers = [...markdownSanitizers, rehypeHtmlAnswerCandidates];
 
 // markdownUrlTransform preserves explicit file hyperlinks while retaining the default policy for all other URLs.
 // markdownUrlTransform 保留明确的文件超链接，其余 URL 继续使用默认安全策略。
@@ -90,9 +83,6 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   // Markdown source content to render.
   // 需要渲染的 Markdown 源内容。
   content: string;
-  // Exact canonical message ID; only provider-visible assistant events receive HTML context.
-  // 精确权威消息标识；仅供应商可见助手事件获得 HTML 上下文。
-  sourceMessageId?: string;
   // Whether to bypass viewport lazy mounting for overlays and modal surfaces.
   // 是否为浮层和弹窗界面绕过视口懒挂载。
   eager?: boolean;
@@ -107,27 +97,24 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const workspacePath = React.useContext(MarkdownImageWorkspacePathContext);
-  const htmlMessage = useHtmlAnswerMessage(props.sourceMessageId);
   // finalizedContent keeps non-streaming Markdown normalized only when the stable body changes.
   // finalizedContent 让非流式 Markdown 只在稳定正文变化时执行归一化。
   const finalizedContent = React.useMemo(
-    () => props.streaming ? { content: props.content } : normalizeMarkdownWithHtmlScope(props.content, workspacePath, htmlMessage),
-    [props.content, props.streaming, workspacePath, htmlMessage],
+    () => props.streaming ? props.content : normalizeMarkdownLocalImageLinks(props.content, workspacePath),
+    [props.content, props.streaming, workspacePath],
   );
   return (
     <div className="markdown-message">
       {props.streaming ? (
         <StreamingMarkdownMessage
           content={props.content}
-          htmlMessage={htmlMessage}
           defaultCodeWrap={props.defaultCodeWrap}
           onOpenMedia={props.onOpenMedia}
           workspacePath={workspacePath}
         />
       ) : (
         <LazyMarkdownMessage
-          content={finalizedContent.content}
-          htmlScope={finalizedContent.htmlScope}
+          content={finalizedContent}
           defaultCodeWrap={props.defaultCodeWrap}
           eager={props.eager}
           onOpenMedia={props.onOpenMedia}
@@ -141,9 +128,6 @@ export const MarkdownMessage = React.memo(function MarkdownMessage(props: {
 // StreamingMarkdownMessage renders a growing body as independent blocks so each update re-parses only changed blocks.
 // StreamingMarkdownMessage 将增长中的正文渲染为独立块，使每次更新只重新解析发生变化的块。
 function StreamingMarkdownMessage(props: {
-  // Eligible assistant context, used only for nonexecuting streaming placeholders.
-  // 符合条件的助手上下文，仅用于不执行的流式占位。
-  htmlMessage?: HtmlAnswerMessageContext;
   // Raw Markdown content for the active streaming block.
   // 活跃流式块的原始 Markdown 内容。
   content: string;
@@ -169,14 +153,11 @@ function StreamingMarkdownMessage(props: {
   return (
     <>
       {blocks.map((block, index) => (
-        props.htmlMessage && hasStreamingHtmlAnswerHint(block) ? (
-          <HtmlAnswerCard key={index} message={props.htmlMessage} source={block} streaming copyText={copyMarkdownCode} />
-        ) : index === blocks.length - 1 && block.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS ? (
+        index === blocks.length - 1 && block.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS ? (
           <pre className="streaming-markdown-raw-preview" key={index}><code>{block}</code></pre>
         ) : (
           <StreamingMarkdownBlock
             content={block}
-            htmlMessage={props.htmlMessage}
             defaultCodeWrap={props.defaultCodeWrap}
             key={index}
             onOpenMedia={props.onOpenMedia ? openMedia : undefined}
@@ -191,9 +172,6 @@ function StreamingMarkdownMessage(props: {
 // StreamingMarkdownBlock parses one block and is skipped by React while the block's text is unchanged.
 // StreamingMarkdownBlock 解析单个块；块文本不变时 React 会跳过它。
 const StreamingMarkdownBlock = React.memo(function StreamingMarkdownBlock(props: {
-  // Parent assistant identity; streaming never obtains execution authority.
-  // 父级助手身份；流式绝不获得执行权威。
-  htmlMessage?: HtmlAnswerMessageContext;
   // Markdown source of one top-level block.
   // 单个顶层块的 Markdown 源码。
   content: string;
@@ -208,13 +186,12 @@ const StreamingMarkdownBlock = React.memo(function StreamingMarkdownBlock(props:
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const normalizedContent = React.useMemo(
-    () => normalizeMarkdownWithHtmlScope(props.content, props.workspacePath, props.htmlMessage, true),
-    [props.content, props.workspacePath, props.htmlMessage],
+    () => normalizeMarkdownLocalImageLinks(props.content, props.workspacePath),
+    [props.content, props.workspacePath],
   );
   return (
     <MarkdownContentRenderer
-      content={normalizedContent.content}
-      htmlScope={normalizedContent.htmlScope}
+      content={normalizedContent}
       defaultCodeWrap={props.defaultCodeWrap}
       onOpenMedia={props.onOpenMedia}
       renderDiagrams={false}
@@ -226,9 +203,6 @@ const StreamingMarkdownBlock = React.memo(function StreamingMarkdownBlock(props:
 // MarkdownContentRenderer renders one already-normalized Markdown fragment.
 // MarkdownContentRenderer 渲染单个已经规范化的 Markdown 片段。
 function MarkdownContentRenderer(props: {
-  // Original coordinates and Core descriptors, absent for ordinary Markdown.
-  // 原始坐标和 Core 描述；普通 Markdown 不提供。
-  htmlScope?: HtmlAnswerMarkdownScope;
   // Markdown fragment to render.
   // 需要渲染的 Markdown 片段。
   content: string;
@@ -288,14 +262,14 @@ function MarkdownContentRenderer(props: {
       );
     },
     pre: ({ children, node }: { children?: React.ReactNode } & ExtraProps) => (
-      <MarkdownPreBlock node={node} htmlScope={props.htmlScope} defaultCodeWrap={props.defaultCodeWrap} renderDiagrams={props.renderDiagrams}>{children}</MarkdownPreBlock>
+      <MarkdownPreBlock node={node} defaultCodeWrap={props.defaultCodeWrap} renderDiagrams={props.renderDiagrams}>{children}</MarkdownPreBlock>
     ),
     table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
-  }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath, props.htmlScope]);
+  }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   return (
     <ReactMarkdown
       components={components}
-      rehypePlugins={props.htmlScope ? htmlAnswerSanitizers : markdownSanitizers}
+      rehypePlugins={markdownSanitizers}
       remarkPlugins={markdownPlugins}
       urlTransform={markdownUrlTransform}
     >
@@ -307,9 +281,6 @@ function MarkdownContentRenderer(props: {
 // LazyMarkdownMessage keeps one complete Markdown document mounted for stable layout.
 // LazyMarkdownMessage 保持完整 Markdown 文档挂载以获得稳定布局。
 function LazyMarkdownMessage(props: {
-  // Optional exact source mapping for Core-derived result cards.
-  // Core 派生结果卡的可选精确源码映射。
-  htmlScope?: HtmlAnswerMarkdownScope;
   // Already-normalized Markdown content.
   // 已经规范化的 Markdown 内容。
   content: string;
@@ -329,7 +300,6 @@ function LazyMarkdownMessage(props: {
   return (
     <MarkdownContentRenderer
       content={props.content}
-      htmlScope={props.htmlScope}
       defaultCodeWrap={props.defaultCodeWrap}
       onOpenMedia={props.onOpenMedia}
       renderDiagrams
@@ -354,7 +324,6 @@ function MarkdownPreBlock(props: {
   // Existing sanitized AST node and optional canonical source context.
   // 既有已清理 AST 节点及可选权威源码上下文。
   node?: ExtraProps["node"];
-  htmlScope?: HtmlAnswerMarkdownScope;
   // ReactMarkdown code element children wrapped by the pre component.
   // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
   children?: React.ReactNode;
@@ -371,24 +340,6 @@ function MarkdownPreBlock(props: {
   // language is the normalized information string attached to the fenced block.
   // language 是围栏代码块携带的规范化信息字符串。
   const language = markdownCodeLanguage(codeElement?.props.className)?.toLowerCase();
-  const scope = props.htmlScope;
-  const position = props.node?.position;
-  if (scope && props.node?.properties.dataHtmlAnswerCandidate && position?.start.offset !== undefined && position.end.offset !== undefined) {
-    const start = originalMarkdownOffset(position.start.offset, scope.edits);
-    const end = originalMarkdownOffset(position.end.offset, scope.edits);
-    const originalFence = scope.original.slice(start, end);
-    const descriptor = scope.streaming ? undefined : scope.message.projection?.answers.find((answer) =>
-      answer.fence.utf16_start === start
-      && scope.original.slice(start, answer.fence.utf16_end).replace(/[\r\n]+$/u, "") === originalFence.replace(/[\r\n]+$/u, ""));
-    if (descriptor || (!scope.message.projection && /^ {0,3}`{3,}/u.test(originalFence))) {
-      const availability = descriptor?.availability;
-      const source = availability?.status === "ready"
-        ? scope.original.slice(availability.source.utf16_start, availability.source.utf16_end) : originalFence;
-      const identity = scope.message.source;
-      return <HtmlAnswerCard key={`${identity.sessionId}:${identity.windowGeneration}:${identity.eventSeq}:${identity.eventRevision}:${start}`}
-        message={scope.message} descriptor={descriptor} source={source} streaming={scope.streaming} copyText={copyMarkdownCode} />;
-    }
-  }
   if (props.renderDiagrams && (language === "mermaid" || language === "svg")) {
     // source is the complete finalized diagram definition without ReactMarkdown's trailing newline.
     // source 是移除 ReactMarkdown 尾随换行后的完整最终图表定义。
@@ -735,32 +686,16 @@ function decodeURIComponentSafe(value: string): string {
 
 // normalizeMarkdownLocalImageLinks rewrites local image links before Markdown sanitization removes them.
 // normalizeMarkdownLocalImageLinks 在 Markdown 清理移除本地路径前重写本地图片链接。
-function normalizeMarkdownLocalImageLinks(content: string, workspacePath?: string | null, htmlMessage?: HtmlAnswerMessageContext, edits?: MarkdownSourceEdit[]): string {
+function normalizeMarkdownLocalImageLinks(content: string, workspacePath?: string | null): string {
   return content.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (full, alt: string, destination: string, offset: number) => {
-    // Core fences retain their exact bytes; image-looking strings inside HTML are not Markdown images.
-    // Core 围栏保留精确字节；HTML 内看似图片的字符串不属于 Markdown 图片。
-    if (htmlMessage?.projection?.answers.some((answer) => offset >= answer.fence.utf16_start && offset < answer.fence.utf16_end)) return full;
     const normalized = normalizeMarkdownImageDestination(destination, workspacePath);
     const width = markdownImageWidthFromAlt(alt);
     const cleanAlt = width ? alt.replace(/\|\s*\d+\s*$/u, "").trim() : alt;
     const nextDestination = normalized ?? destination.trim();
     const widthTitle = width ? ` "width=${width}"` : "";
     const imageMarkdown = normalized || width ? `![${cleanAlt}](${nextDestination}${widthTitle})` : full;
-    const replacement = `${markdownImageLeadingBlockPrefix(content, offset)}${imageMarkdown}`;
-    if (replacement !== full) edits?.push({ start: offset, end: offset + full.length, length: replacement.length });
-    return replacement;
+    return `${markdownImageLeadingBlockPrefix(content, offset)}${imageMarkdown}`;
   });
-}
-
-/** Normalize through the established image path while preserving original offsets for Core cards.
- * 沿既有图片路径规范化，同时为 Core 卡片保留原始偏移。
- * Inputs are the raw body, project and optional authority; returns one complete Markdown document.
- * 输入为原正文、项目及可选权威；返回一份完整 Markdown 文档。 */
-function normalizeMarkdownWithHtmlScope(content: string, workspacePath: string | null, message?: HtmlAnswerMessageContext, streaming = false): { content: string; htmlScope?: HtmlAnswerMarkdownScope } {
-  if (!message) return { content: normalizeMarkdownLocalImageLinks(content, workspacePath) };
-  const edits: MarkdownSourceEdit[] = [];
-  return { content: normalizeMarkdownLocalImageLinks(content, workspacePath, streaming ? undefined : message, edits),
-    htmlScope: { message, original: content, edits, streaming } };
 }
 
 // markdownImageLeadingBlockPrefix returns the newline prefix needed to render an image as its own block.

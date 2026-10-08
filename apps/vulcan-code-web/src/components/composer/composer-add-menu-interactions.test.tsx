@@ -40,6 +40,7 @@ beforeEach(() => {
       { id: "balanced", labelZh: "平衡结构", labelEn: "Balanced", constraintLevel: "balanced", promptCharCount: 815, isDefault: true },
       { id: "structured", labelZh: "严格结构", labelEn: "Structured", constraintLevel: "strong", promptCharCount: 2464, isDefault: false },
     ] }, onOutputStyleChange: vi.fn(),
+    answerMode: { mode: "standard", saving: false, awaitingRequest: false, available: true, select: vi.fn(), flush: vi.fn(async () => true) },
   };
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); footer.remove(); vi.unstubAllGlobals(); });

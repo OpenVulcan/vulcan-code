@@ -11,6 +11,7 @@ import {
   CircleAlert,
   FileText,
   Image as ImageIcon,
+  LayoutPanelTop,
   ListChecks,
   Music2,
   Paperclip,
@@ -63,12 +64,16 @@ import type {
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
 import type { ComposerKnowledgeSelectionSnapshot } from "./composer-model";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
+import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
 
 // ComposerAttachmentMenu renders the plus button and attachment submenu.
 // ComposerAttachmentMenu 渲染加号按钮与附件子菜单。
 // Parameters: props supplies attachment capabilities, output styles and selection callbacks; returns the accessible add menu.
 // 参数：props 提供附件能力、输出风格与选择回调；返回可访问的添加菜单。
 export function ComposerAttachmentMenu(props: {
+  // Owner-scoped answer mode for the current conversation or draft.
+  // 当前会话或草稿的按归属限定回答模式。
+  answerMode: ComposerAnswerModeController;
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
   capabilities: ComposerAttachmentCapabilitySummary[];
@@ -237,6 +242,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
           onChange={props.onOutputStyleChange}
           sessionOutputStyle={props.sessionOutputStyle}
         />
+        <AnswerModeSubMenu controller={props.answerMode} />
         <ComposerKnowledgeControl
           conversationId={props.conversationId}
           draftSelection={props.draftKnowledgeSelection}
@@ -359,6 +365,40 @@ function OutputStyleSubMenu(props: {
         </DropdownMenuRadioGroup>
         {props.conversationId && props.sessionOutputStyle?.pendingActivation ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
           {t("composer.outputStyle.savedPending")}
+        </p> : null}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+// AnswerModeSubMenu chooses whether answers may use native answer components.
+// AnswerModeSubMenu 选择回答是否可使用原生回答组件。
+function AnswerModeSubMenu(props: { controller: ComposerAnswerModeController }) {
+  const { t } = useI18n();
+  const { mode, saving, available, awaitingRequest, select } = props.controller;
+  const options = [
+    { value: "standard", label: "answerMode.standard", hint: "answerMode.standardHint" },
+    { value: "interactive", label: "answerMode.interactive", hint: "answerMode.interactiveHint" },
+  ] as const;
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger disabled={!available}>
+        <LayoutPanelTop size={15} />
+        <span>{t("answerMode.label")}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="composer-thinking-menu" aria-busy={saving}>
+        <DropdownMenuRadioGroup value={mode ?? ""}>
+          {options.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value} disabled={saving} onSelect={() => select(option.value)}>
+              <span className="composer-thinking-mode-label">
+                <span>{t(option.label)}</span>
+                <small>{t(option.hint)}</small>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        {awaitingRequest ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
+          {t("answerMode.pending")}
         </p> : null}
       </DropdownMenuSubContent>
     </DropdownMenuSub>

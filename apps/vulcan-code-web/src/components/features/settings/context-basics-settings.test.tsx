@@ -54,6 +54,7 @@ describe("context settings draft navigation", () => {
     try {
       await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><ContextBasicsSettingsArea actions={{
         onSavePromptOutputStyle: vi.fn(async () => undefined),
+        onSavePromptAnswerMode: vi.fn(async () => undefined),
         onSaveGitCommitSettings: vi.fn(async () => undefined),
         onSaveProviderRetrySettings: vi.fn(async () => undefined),
         onSaveProviderRequestTraceSettings: vi.fn(async () => undefined),

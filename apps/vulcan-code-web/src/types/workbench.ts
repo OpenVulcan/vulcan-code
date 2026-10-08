@@ -1,3 +1,4 @@
+import type { AnswerMode } from "@/service/answer-mode";
 import type {
   AgentSkillsCatalogSummary,
   ComposerAttachmentCapabilitySummary,
@@ -246,6 +247,9 @@ export interface WorkbenchSnapshot {
   // Output-style catalog and the persisted global selection.
   // 输出风格目录与已持久化全局选择。
   outputStyleCatalog: OutputStyleCatalogSummary;
+  // Persisted global answer mode copied into new conversations.
+  // 复制到新会话的已持久化全局回答模式。
+  defaultAnswerMode?: AnswerMode;
   // Composer slash commands projected by the shared service command catalog.
   // 共享服务指令目录投影出的输入区 slash 指令。
   composerSlashCommands?: ComposerSlashCommandSummary[];

@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice"
 import { formatMessage, pickBilingualText, useI18n } from "@/i18n"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
+import type { AnswerMode } from "@/service/answer-mode"
 import type {
   ConversationSummary,
   ProjectSummary,
@@ -296,6 +297,61 @@ export function OutputStyleSettingsSection(props: {
   </div>
 }
 
+// AnswerModeSettingsSection chooses the answer mode new conversations copy when they are created.
+// AnswerModeSettingsSection 选择新会话创建时复制的回答模式。
+// Parameters: actions persists the mode; defaultAnswerMode is the persisted global value.
+// 参数：actions 持久化模式；defaultAnswerMode 是已持久化的全局值。
+export function AnswerModeSettingsSection(props: {
+  // Service-backed answer-mode action.
+  // 服务端回答模式动作。
+  actions: SettingsActionProps
+  // Persisted global answer mode.
+  // 已持久化的全局回答模式。
+  defaultAnswerMode: AnswerMode
+}) {
+  const { t } = useI18n()
+  // mode follows the authoritative value unless a save is pending or failed.
+  // mode 跟随权威值，保存进行中或失败时除外。
+  const [mode, setMode] = React.useState(props.defaultAnswerMode)
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState("")
+  const savingRef = React.useRef(false)
+  React.useEffect(() => { setMode(props.defaultAnswerMode) }, [props.defaultAnswerMode])
+  // selectMode saves a changed choice at once and keeps it for retry on failure.
+  // selectMode 立即保存有变化的选择，失败时保留以便重试。
+  const selectMode = async (next: string) => {
+    if (next !== "standard" && next !== "interactive") return
+    setMode(next)
+    if (next === props.defaultAnswerMode || savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setError("")
+    try {
+      await props.actions.onSavePromptAnswerMode(next)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+  return <div className="settings-form-grid">
+    <label className="settings-form-field">
+      <span>{t("answerMode.globalDefault")}</span>
+      <Select disabled={saving} onValueChange={(next) => void selectMode(next)} value={mode}>
+        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="standard">{t("answerMode.standard")}</SelectItem>
+          <SelectItem value="interactive">{t("answerMode.interactive")}</SelectItem>
+        </SelectContent>
+      </Select>
+    </label>
+    <p className="settings-muted-line">{t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}</p>
+    <p className="settings-muted-line">{t("settings.misc.takesEffectForNew")}</p>
+    {saving ? <p className="settings-muted-line" role="status">{t("settings.misc.saving2")}</p> : null}
+    {error ? <SettingsErrorNotice detail={error} message={t("answerMode.saveFailed")} /> : null}
+  </div>
+}
 
 // ArchivedRestoreSettingsArea renders restorable archived conversations from service snapshots.
 // ArchivedRestoreSettingsArea 根据服务快照渲染可恢复的归档会话。

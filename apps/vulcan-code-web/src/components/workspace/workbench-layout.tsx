@@ -118,6 +118,7 @@ import {
   saveProviderRequestTraceSettings,
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
+  savePromptAnswerMode,
   savePromptOutputStyle,
   selectWebuiLocale,
 } from "@/service/settings-actions-service";
@@ -1169,6 +1170,10 @@ export function WorkbenchLayout(props: {
                     id: "output-style-safe-boundary",
                   });
                 }
+                return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
+              }),
+              onSavePromptAnswerMode: (mode) => applySkillWorkbenchAction(async () => {
+                await savePromptAnswerMode(mode);
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),

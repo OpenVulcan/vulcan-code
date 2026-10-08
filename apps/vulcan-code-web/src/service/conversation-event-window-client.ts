@@ -4,8 +4,7 @@ import type {
   ServiceUnsubscribe,
 } from "@/service/protocol";
 import type { ServiceClient } from "@/service/client";
-import type { HtmlAnswerMode } from "@/service/html-answer-mode";
-import type { HtmlAnswerEventProjection } from "@/service/html-answer-projections";
+import type { AnswerModePreference } from "@/service/answer-mode";
 import type {
   ConversationEventPatchDurability,
   ConversationEventLivePatch,
@@ -45,9 +44,9 @@ export interface ConversationRequestConfigV1 {
 /** Selected-session configuration whose sole authority is V1 metadata.config.
  * 以 V1 metadata.config 为唯一权威的选中会话配置。 */
 export interface ConversationSessionConfigV1 {
-  /** Persisted HTML preference from Core metadata.
-   * 来自 Core 元数据的持久 HTML 偏好。 */
-  html_answers: HtmlAnswerMode;
+  /** Persisted answer mode from Core metadata.
+   * 来自 Core 元数据的持久回答模式。 */
+  answer_mode: AnswerModePreference;
   current_request: ConversationRequestConfigV1;
   next_request: ConversationRequestConfigV1 | null;
   context_compaction_window_node_id: string | null;
@@ -56,9 +55,6 @@ export interface ConversationSessionConfigV1 {
 /** Common V1 response fields shared by authoritative hydration and historical paging.
  * 权威 hydration 与历史分页共享的 V1 响应字段。 */
 export interface ConversationEventWindowV1BaseResponse extends ConversationEventWindowBatch {
-  /** Optional durable annotations; omitted by Core when this window has no HTML results.
-   * 可选可靠标注；窗口没有 HTML 结果时由 Core 省略。 */
-  html_answer_projections?: readonly HtmlAnswerEventProjection[];
   /** Exclusive cursor for the immediately older complete-Turn page.
    * 紧邻更早完整 Turn 分页的排他游标。 */
   older_before_seq: number | null;
@@ -162,7 +158,6 @@ export interface ConversationEventWindowRpc {
     lastConfirmedMemoryRevision: number,
     serviceEpoch: string,
     options?: ServiceRequestOptions,
-    htmlAnswersFromSeq?: number | null,
   ): Promise<ConversationEventReconnectV1Response>;
   /** Subscribes to volatile mutation patches and duplicate-safe durable confirmations.
    * 订阅瞬态内存变更 patch 与可安全去重的可靠确认。*/
@@ -237,7 +232,6 @@ export class ServiceConversationEventWindowClient implements ConversationEventWi
     lastConfirmedMemoryRevision: number,
     serviceEpoch: string,
     options?: ServiceRequestOptions,
-    htmlAnswersFromSeq?: number | null,
   ): Promise<ConversationEventReconnectV1Response> {
     return this.service.request<ConversationEventReconnectV1Response>(
       SESSION_EVENT_RECONNECT_V1_METHOD,
@@ -247,7 +241,6 @@ export class ServiceConversationEventWindowClient implements ConversationEventWi
         lastConfirmedSeq,
         lastConfirmedMemoryRevision,
         serviceEpoch,
-        ...(htmlAnswersFromSeq == null ? {} : { htmlAnswersFromSeq }),
       },
       options,
     );

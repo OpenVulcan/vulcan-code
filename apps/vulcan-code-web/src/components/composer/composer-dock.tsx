@@ -1,7 +1,7 @@
 import React from "react";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import type { HtmlAnswerModeOwner } from "@/service/html-answer-mode";
+import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
 import { createPortal } from "react-dom";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
@@ -48,11 +48,11 @@ import type {
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 
-/** Select only HTML ownership/config so streaming tokens do not rerender the composer dock.
- * 仅选择 HTML 归属与配置，使流式 Token 不触发输入区浮层重绘。 */
-function selectHtmlAnswerMode(snapshot: ConversationEventWindowControllerSnapshot): HtmlAnswerModeOwner | null {
+/** Select only answer-mode ownership/config so streaming tokens do not rerender the composer dock.
+ * 仅选择回答模式归属与配置，使流式 Token 不触发输入区浮层重绘。 */
+function selectAnswerMode(snapshot: ConversationEventWindowControllerSnapshot): AnswerModeOwner | null {
   if (snapshot.owner === null || snapshot.session_config === null) return null;
-  return { sessionId: snapshot.owner.session_id, generation: snapshot.owner.window_generation, mode: snapshot.session_config.html_answers };
+  return { sessionId: snapshot.owner.session_id, generation: snapshot.owner.window_generation, mode: snapshot.session_config.answer_mode };
 }
 
 // ComposerDock renders composer-related floating controls.
@@ -211,6 +211,9 @@ export function ComposerDock(props: {
   // Output-style catalog and persisted global selection.
   // 输出风格目录与已持久化全局选择。
   outputStyleCatalog: OutputStyleCatalogSummary;
+  // Global answer mode a new conversation copies unless its draft chooses one.
+  // 新会话在草稿未选择时复制的全局回答模式。
+  defaultAnswerMode: AnswerMode;
   // Current persisted output-style state for the selected conversation.
   // 当前选中会话的持久化输出风格状态。
   sessionOutputStyle: SessionOutputStyleSummary | null;
@@ -234,9 +237,9 @@ export function ComposerDock(props: {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
-  // htmlAnswerState stays bound to the exact hydrated owner across selection transitions.
-  // htmlAnswerState 在选择转换期间始终绑定精确已加载归属。
-  const htmlAnswerState = useSelectedConversationEventWindowSelector(selectHtmlAnswerMode, conversationSelectionEqual);
+  // answerModeState stays bound to the exact hydrated owner across selection transitions.
+  // answerModeState 在选择转换期间始终绑定精确已加载归属。
+  const answerModeState = useSelectedConversationEventWindowSelector(selectAnswerMode, conversationSelectionEqual);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
@@ -285,7 +288,8 @@ export function ComposerDock(props: {
         </div>
       ) : null}
       <ComposerPanel
-        htmlAnswerState={htmlAnswerState}
+        answerModeState={answerModeState}
+        defaultAnswerMode={props.defaultAnswerMode}
         attachmentCapabilities={props.attachmentCapabilities}
         projectId={props.projectId}
         conversationId={props.conversationId}

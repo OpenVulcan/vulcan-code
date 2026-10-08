@@ -33,7 +33,6 @@ export function StreamingMarkdownDocument(props: {
     >
       <MarkdownMessage
         content={props.fallbackContent}
-        sourceMessageId={props.messageId}
         eager
         onOpenMedia={props.onOpenMedia}
         streaming={props.fallbackStreaming}

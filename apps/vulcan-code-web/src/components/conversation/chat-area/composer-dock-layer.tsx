@@ -125,6 +125,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       sessionPlanMode={props.conversationId ? workbench.sessionPlanMode ?? null : null}
       sessionVmmPolicy={props.conversationId ? workbench.sessionVmmPolicy ?? null : null}
       outputStyleCatalog={workbench.outputStyleCatalog}
+      defaultAnswerMode={workbench.defaultAnswerMode ?? "standard"}
       sessionOutputStyle={props.conversationId ? workbench.sessionOutputStyle ?? null : null}
       vmmAvailable={memoryEnabled === true}
       vmmStatus={memoryEnabled === false ? "disabled" : memoryEnabled !== true || memoryReady === undefined ? undefined : memoryReady ? "ready" : "not_ready"}
