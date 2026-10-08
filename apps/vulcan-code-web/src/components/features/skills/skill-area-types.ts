@@ -1,6 +1,6 @@
 import type { FeatureHeaderSummary } from "@/components/features/feature-area-types"
 import type { McpSettingsActionProps } from "@/components/features/settings/mcp-server-dialog"
-import type { LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor, LuaSkillConfigEventBatch, LuaSkillConfigSetRequest, LuaSkillConfigSetResult, LuaSkillConfigValidation, LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginCredentialChange, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
+import type { LuaSkillConfigDeleteRequest, LuaSkillConfigDeleteResult, LuaSkillConfigDescriptor, LuaSkillConfigEventBatch, LuaSkillConfigSetRequest, LuaSkillConfigStoreRefresh, LuaSkillConfigSetResult, LuaSkillConfigValidation, LuaSkillsManagedRuntimeTarget, LuaSkillsRuntimeSettings, PluginSummary, VulcanPluginCredentialChange, VulcanPluginInitialSecret, VulcanPluginPermissionPreview } from "@/types"
 
 // SkillActionProps groups service-backed actions used by the skill page, including the MCP server page it hosts.
 // SkillActionProps 分组技能页面使用的服务端动作，包括其承载的 MCP 服务器页面。
@@ -86,6 +86,9 @@ export interface SkillActionProps extends McpSettingsActionProps {
   // Polls package configuration events after one optional cursor.
   // 轮询一个可选游标之后的技能包配置事件。
   onPollLuaSkillConfigEvents: (afterSequence?: string | null) => Promise<LuaSkillConfigEventBatch>
+  // Reloads package configuration stores from disk; null refreshes both stores.
+  // 从磁盘重新载入技能包配置存储；null 刷新两个存储。
+  onRefreshLuaSkillConfig: (storeScope: string | null) => Promise<LuaSkillConfigStoreRefresh[]>
 }
 
 // SkillCatalogActionProps is the LuaSkills and plugin lifecycle subset owned by the project action hook.

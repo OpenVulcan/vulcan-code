@@ -438,8 +438,10 @@ export function LuaSkillConfigDialog(props: {
     return true;
   }, [loadDescriptor, t]);
 
-  // reloadDescriptor refreshes the latest snapshot with consistent busy and error handling.
-  // reloadDescriptor 使用一致的忙碌状态与错误处理刷新最新快照。
+  // reloadDescriptor reloads the package's store from disk, then refreshes the snapshot with
+  // consistent busy and error handling, so a change the file watcher missed still becomes visible.
+  // reloadDescriptor 先从磁盘重新载入技能包所在存储，再以一致的忙碌状态与错误处理刷新快照，
+  // 使文件监听遗漏的变更也能显示。
   //
   // Returns: a promise that settles after the manual refresh completes.
   // 返回值：手动刷新完成后结束的 Promise。
@@ -449,6 +451,7 @@ export function LuaSkillConfigDialog(props: {
     setBusy(true);
     setErrorMessage(null);
     try {
+      await props.actions.onRefreshLuaSkillConfig(descriptor?.storeScope ?? null);
       await loadDescriptor(true);
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : String(error));
@@ -456,7 +459,7 @@ export function LuaSkillConfigDialog(props: {
       mutationRef.current = false;
       setBusy(false);
     }
-  }, [loadDescriptor]);
+  }, [descriptor?.storeScope, loadDescriptor, props.actions]);
 
   // submitChangedValues sends one non-empty typed CAS batch and clears sensitive inputs afterward.
   // submitChangedValues 发送一组非空类型化 CAS 批次，并在完成后清空敏感输入。

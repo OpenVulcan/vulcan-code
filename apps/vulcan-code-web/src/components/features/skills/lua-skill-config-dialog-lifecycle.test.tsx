@@ -150,3 +150,22 @@ it("keeps a watcher failure through local writes and clears it after external re
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1800)); });
   expect(document.body.textContent).not.toContain("watcher needs recovery");
 }, 15000);
+
+it("reloads the package store from disk before re-reading the descriptor", async () => {
+  // calls records the order of host requests so the descriptor read is proven to follow the disk reload.
+  // calls 记录宿主请求顺序，以证明描述读取发生在磁盘重载之后。
+  const calls: string[] = [];
+  const refresh = vi.fn(async (storeScope: string | null) => {
+    calls.push("refresh");
+    return [{ storeScope: storeScope ?? "skills", revision: "4", changed: true }];
+  });
+  const actions = { onDescribeLuaSkillConfig: async () => { calls.push("describe"); return descriptor; },
+    onValidateLuaSkillConfig: async () => ({ complete: true, missing: [], invalid: [], businessIssues: [] }),
+    onRefreshLuaSkillConfig: refresh,
+    onPollLuaSkillConfigEvents: () => new Promise(() => {}) } as unknown as SkillActionProps;
+  await act(async () => root.render(<LuaSkillConfigDialog actions={actions} skill={skill} open onOpenChange={() => {}} />));
+  calls.length = 0;
+  await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="skills.luaConfig.reload"]')!.click());
+  expect(refresh).toHaveBeenCalledWith("skills");
+  expect(calls).toEqual(["refresh", "describe"]);
+});

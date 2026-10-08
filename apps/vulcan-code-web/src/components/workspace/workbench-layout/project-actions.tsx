@@ -33,6 +33,7 @@ import {
   refreshAgentSkillsCatalog,
   refreshLuaSkillsCatalog,
   pollLuaSkillConfigEvents,
+  refreshLuaSkillConfig,
   pluginEnvironmentReady,
   pluginEnvironmentInstallStatus,
   pluginEnvironmentInstallStatusForPlugin,
@@ -360,6 +361,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     onSetLuaSkillConfig: setLuaSkillConfig,
     onDeleteLuaSkillConfig: deleteLuaSkillConfig,
     onPollLuaSkillConfigEvents: pollLuaSkillConfigEvents,
+    onRefreshLuaSkillConfig: refreshLuaSkillConfig,
   }), [applyLuaSkillsCatalogUpdate, runLuaSkillsCatalogAction]);
 
   // agentSkillActions groups the independent prompt-based Agent Skills boundary.

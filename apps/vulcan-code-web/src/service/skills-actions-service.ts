@@ -8,6 +8,7 @@ import type {
   LuaSkillConfigDeleteResult,
   LuaSkillConfigDescriptor,
   LuaSkillConfigEventBatch,
+  LuaSkillConfigStoreRefresh,
   LuaSkillConfigSetRequest,
   LuaSkillConfigSetResult,
   LuaSkillConfigValidation,
@@ -197,6 +198,25 @@ export async function pollLuaSkillConfigEvents(
   return serviceClient.request<LuaSkillConfigEventBatch>(
     "service_poll_luaskill_config_events",
     { afterSequence: afterSequence ?? null },
+  );
+}
+
+// refreshLuaSkillConfig reloads package configuration stores from disk through the host.
+// refreshLuaSkillConfig 通过宿主从磁盘重新载入技能包配置存储。
+//
+// Parameters: storeScope selects one exact store; null refreshes both configured stores.
+// 参数：storeScope 选择一个精确存储；null 刷新两个已配置存储。
+// Returns: one value-free refresh result per refreshed store.
+// 返回值：每个已刷新存储对应一个不含值的刷新结果。
+export async function refreshLuaSkillConfig(
+  storeScope: string | null,
+): Promise<LuaSkillConfigStoreRefresh[]> {
+  if (!hasServiceRuntime()) {
+    throw new Error("LuaSkills package configuration requires the local service runtime.");
+  }
+  return serviceClient.request<LuaSkillConfigStoreRefresh[]>(
+    "service_refresh_luaskill_config",
+    { request: { storeScope } },
   );
 }
 

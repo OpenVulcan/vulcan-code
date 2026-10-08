@@ -555,6 +555,20 @@ export interface LuaSkillConfigEvent {
   error?: LuaSkillConfigIssue | null;
 }
 
+// LuaSkillConfigStoreRefresh is the value-free result of reloading one configuration store from disk.
+// LuaSkillConfigStoreRefresh 是从磁盘重新载入单个配置存储后不含值的结果。
+export interface LuaSkillConfigStoreRefresh {
+  // Refreshed store scope.
+  // 已刷新的存储作用域。
+  storeScope: string;
+  // Revision visible after the refresh.
+  // 刷新后可见的修订号。
+  revision: string;
+  // Whether a newer snapshot was installed.
+  // 是否安装了更新的快照。
+  changed: boolean;
+}
+
 // LuaSkillConfigEventBatch describes a bounded ordered event poll result.
 // LuaSkillConfigEventBatch 描述有界有序事件轮询结果。
 export interface LuaSkillConfigEventBatch {
