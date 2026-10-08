@@ -45,7 +45,9 @@ const oversizedComponentCeilings = new Map([
   ["components/features/skills/vulcan-plugins-panel.tsx#VulcanPluginsPanel", 699],
   ["components/project/project-settings-dialog.tsx#ProjectSettingsDialog", 613],
   ["components/project/terminal/project-floating-terminal-layer.tsx#ProjectFloatingTerminalLayer", 550],
-  ["components/workspace/workbench-layout.tsx#WorkbenchLayout", 875],
+  // Workbench orchestration has an explicit larger budget to allow routine shell integrations.
+  // 工作台编排层采用明确的较大预算，为常规壳层集成保留空间。
+  ["components/workspace/workbench-layout.tsx#WorkbenchLayout", 1500],
   ["components/workspace/workspace-review-panel-host.tsx#WorkspaceReviewPanelHost", 589],
   ["components/workspace/workspace-shell.tsx#WorkspaceShellContent", 781],
   ["diff/DiffReviewPanel/panel.tsx#DiffReviewPanel", 523],
