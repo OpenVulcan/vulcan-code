@@ -162,6 +162,8 @@ mod conversation_run_services;
 mod conversation_submission;
 mod execution_report_memory;
 mod fallback_workbench_projection;
+#[cfg(test)]
+mod generated_ts_constants;
 mod git;
 mod git_diff_services;
 mod git_watcher;
@@ -189,8 +191,6 @@ mod plugin_ui_events;
 mod plugin_vldb;
 mod project_conversation_services;
 mod project_directories;
-#[cfg(test)]
-mod generated_ts_constants;
 mod project_terminals;
 mod provider_manifest_sync;
 mod provider_settings;
