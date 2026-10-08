@@ -373,20 +373,26 @@ export function WorkbenchLayout(props: {
   // localeSaveSeqRef prevents older locale-save responses from overriding newer choices.
   // localeSaveSeqRef 防止较早的语言保存响应覆盖较新的选择。
   const localeSaveSeqRef = React.useRef(0);
-  // handleWebuiLocaleChange applies the locale immediately and persists it through the service.
-  // handleWebuiLocaleChange 立即应用语言，并通过服务持久化。
+  // handleWebuiLocaleChange loads the requested language before applying and persisting it.
+  // handleWebuiLocaleChange 在应用及持久化所选语言之前先加载其目录。
   const handleWebuiLocaleChange = React.useCallback((locale: LocaleCode) => {
     const previousLocale = i18n.locale;
     const requestSeq = localeSaveSeqRef.current + 1;
     localeSaveSeqRef.current = requestSeq;
-    i18n.setLocale(locale);
-    void selectWebuiLocale(locale).then((snapshot) => {
+    void i18n.setLocale(locale).then(() => {
+      // A superseded download must not persist a language the user has already moved away from.
+      // 已被替代的下载不得持久化用户已经放弃的语言。
+      if (localeSaveSeqRef.current !== requestSeq) return null;
+      return selectWebuiLocale(locale);
+    }).then((snapshot) => {
       if (snapshot && localeSaveSeqRef.current === requestSeq) {
         setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     }).catch((error) => {
       if (localeSaveSeqRef.current === requestSeq) {
-        i18n.setLocale(previousLocale);
+        void i18n.setLocale(previousLocale).catch((rollbackError: unknown) => {
+          console.error("Could not restore the previous locale after a failed save.", rollbackError);
+        });
         toast.error(formatWorkbenchTranslation(i18n.t, "global.languageSaveFailed", {
           error: error instanceof Error ? error.message : String(error),
         }));

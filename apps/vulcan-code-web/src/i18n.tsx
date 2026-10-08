@@ -1,6 +1,9 @@
 import * as React from "react"
 import { UiTextProvider } from "@/components/ui/ui-text"
-import { ensureLocaleCatalog, loadedLocaleCatalog, registerLocaleCatalog } from "@/i18n-catalogs"
+import {
+  ensureLocaleCatalog, loadedLocaleCatalog, registerLocaleCatalog,
+  localeCatalogRevision, subscribeLocaleCatalogs,
+} from "@/i18n-catalogs"
 import { DEFAULT_LOCALE, normalizeLocaleCode, resolveAppLocale, type LocaleCode } from "@/i18n-locales"
 import type { TranslationKey } from "@/i18n-messages"
 import enUSTranslations from "@catalogs/webui/en-US.json"
@@ -23,9 +26,9 @@ interface I18nContextValue {
   // Current language code.
   // 当前语言代码。
   locale: LocaleCode
-  // Updates the current language code.
-  // 更新当前语言代码。
-  setLocale: (locale: LocaleCode) => void
+  // Loads and applies the language; rejects without switching if its catalog is unavailable.
+  // 加载并应用语言；目录不可用时拒绝操作，保持当前语言。
+  setLocale: (locale: LocaleCode) => Promise<void>
   // Translates one stable text key.
   // 翻译单个稳定文本键。
   t: Translate
@@ -120,29 +123,29 @@ function I18nProvider(props: {
   // locale stores the active WebUI language.
   // locale 保存当前 WebUI 语言。
   const [locale, setLocaleState] = React.useState<LocaleCode>(() => resolveAppLocale(props.initialLocale))
-  // catalogRevision re-renders the tree once the active language finishes downloading.
-  // catalogRevision 在当前语言下载完成后重新渲染子树。
-  const [catalogRevision, setCatalogRevision] = React.useState(0)
+  // Catalog publication must invalidate translations even when the selected locale is unchanged.
+  // 即使所选语言不变，目录发布也必须使翻译重新计算。
+  const catalogRevision = React.useSyncExternalStore(
+    subscribeLocaleCatalogs, localeCatalogRevision, localeCatalogRevision,
+  )
   // requestedLocaleRef lets only the newest selection apply when downloads finish out of order.
   // requestedLocaleRef 使下载乱序完成时只有最新选择生效。
   const requestedLocaleRef = React.useRef(locale)
   // setLocale switches after the catalog is available, so the tree never flashes the fallback language.
   // setLocale 在目录可用后才切换，使子树不会闪现回退语言。
-  const setLocale = React.useCallback((nextLocale: LocaleCode) => {
+  // Parameter: nextLocale is the selection. Resolves after loading, or rejects without applying it.
+  // 参数：nextLocale 是所选语言。加载后完成；失败则拒绝，且不应用该选择。
+  const setLocale = React.useCallback(async (nextLocale: LocaleCode): Promise<void> => {
     requestedLocaleRef.current = nextLocale
-    if (loadedLocaleCatalog(nextLocale)) {
-      setLocaleState(nextLocale)
-      return
-    }
-    void ensureLocaleCatalog(nextLocale).then(
-      () => { if (requestedLocaleRef.current === nextLocale) setLocaleState(nextLocale) },
-      () => { if (requestedLocaleRef.current === nextLocale) setLocaleState(nextLocale) },
-    )
+    await ensureLocaleCatalog(nextLocale)
+    if (requestedLocaleRef.current === nextLocale) setLocaleState(nextLocale)
   }, [])
   React.useEffect(() => {
     const nextLocale = normalizeLocaleCode(props.initialLocale)
     if (nextLocale) {
-      setLocale(nextLocale)
+      void setLocale(nextLocale).catch((error: unknown) => {
+        console.error(`Saved locale catalog could not be loaded: ${nextLocale}`, error)
+      })
     }
   }, [props.initialLocale, setLocale])
   React.useEffect(() => {
@@ -151,9 +154,9 @@ function I18nProvider(props: {
     if (loadedLocaleCatalog(locale)) {
       return
     }
-    let cancelled = false
-    void ensureLocaleCatalog(locale).then(() => { if (!cancelled) setCatalogRevision((revision) => revision + 1) }, () => undefined)
-    return () => { cancelled = true }
+    void ensureLocaleCatalog(locale).catch((error: unknown) => {
+      console.error(`Initial locale catalog could not be loaded: ${locale}`, error)
+    })
   }, [locale])
   React.useEffect(() => {
     document.documentElement.lang = locale
