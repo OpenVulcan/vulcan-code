@@ -17,5 +17,9 @@
   "closeBrowserMessage": "{count} pages are open. Close all of them?",
   "closeBrowserDetail": "This releases the resources used by these pages and then closes the browser tab.",
   "cancel": "Cancel",
-  "closeAll": "Close all"
+  "closeAll": "Close all",
+  "rendererFailureTitle": "Workbench renderer stopped",
+  "rendererFailureMessage": "The workbench page has stopped. Reload it to reconnect to the running service.",
+  "rendererFailureDetail": "Reason: {reason}; exit code: {code}.\n\nReloading reconnects to Core without resending your last message. Closing this window leaves Core running. Unsaved input may be lost.\n\nDiagnostic log: {path}",
+  "reloadWorkbench": "Reload workbench"
 }

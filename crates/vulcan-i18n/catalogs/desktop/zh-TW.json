@@ -17,5 +17,9 @@
   "closeBrowserMessage": "目前有 {count} 個開啟中的頁面，要全部關閉嗎？",
   "closeBrowserDetail": "全部關閉會釋放這些網頁佔用的資源，然後關閉內建瀏覽器分頁。",
   "cancel": "取消",
-  "closeAll": "全部關閉"
+  "closeAll": "全部關閉",
+  "rendererFailureTitle": "工作台轉譯程序已結束",
+  "rendererFailureMessage": "工作台頁面已停止，請重新載入以連接仍在執行的服務。",
+  "rendererFailureDetail": "原因：{reason}；結束代碼：{code}。\n\n重新載入會重新連線至 Core，不會再次傳送上一則訊息。關閉此視窗不會停止 Core。尚未儲存的輸入可能遺失。\n\n診斷記錄：{path}",
+  "reloadWorkbench": "重新載入工作台"
 }

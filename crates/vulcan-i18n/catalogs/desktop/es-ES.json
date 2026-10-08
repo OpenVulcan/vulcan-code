@@ -17,5 +17,9 @@
   "closeBrowserMessage": "Hay {count} páginas abiertas. ¿Quieres cerrarlas todas?",
   "closeBrowserDetail": "Se liberarán los recursos que usan estas páginas y después se cerrará la pestaña del navegador.",
   "cancel": "Cancelar",
-  "closeAll": "Cerrar todas"
+  "closeAll": "Cerrar todas",
+  "rendererFailureTitle": "El proceso de renderizado se ha detenido",
+  "rendererFailureMessage": "La página del entorno de trabajo se ha detenido. Recárgala para volver a conectarte al servicio en ejecución.",
+  "rendererFailureDetail": "Motivo: {reason}; código de salida: {code}.\n\nLa recarga vuelve a conectar con Core sin reenviar el último mensaje. Cerrar esta ventana no detiene Core. Puede perderse el texto no guardado.\n\nRegistro de diagnóstico: {path}",
+  "reloadWorkbench": "Recargar entorno de trabajo"
 }

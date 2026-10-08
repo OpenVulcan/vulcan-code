@@ -16,7 +16,13 @@ export interface UiText {
 
 // UiTextContext has an explicit English standalone contract, without browser or document language inference.
 // UiTextContext 明确约定独立模式使用英文，不推断浏览器或文档语言。
-const UiTextContext = React.createContext<UiText>({ close: "Close", loading: "Loading", notifications: "Notifications" })
+// The optional context is owned by Vite hot.data and survives module replacement in development.
+// 可选上下文由 Vite hot.data 持有，在开发模式下跨模块替换保留。
+const hotState: { context?: React.Context<UiText> } | undefined = import.meta.hot?.data
+// Stable identity keeps existing primitive providers connected when their hook module refreshes.
+// 稳定标识使基础组件的 hook 模块刷新时仍连接既有 provider。
+const UiTextContext = hotState?.context ?? React.createContext<UiText>({ close: "Close", loading: "Loading", notifications: "Notifications" })
+if (hotState) hotState.context = UiTextContext
 
 // UiTextProvider lets the application localization authority supply current primitive labels.
 // UiTextProvider 允许应用本地化权威提供当前基础组件文案。

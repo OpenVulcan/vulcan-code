@@ -4,3 +4,7 @@
 /docs/contracts/plugin-runtime-requirements.schema.json text eol=lf
 /docs/contracts/plugin-tool-reuse.schema.json text eol=lf
 /docs/contracts/plugin-settings-layout.schema.json text eol=lf
+
+# Keep the dependency patch hash stable on Windows and Unix checkouts.
+# 保证依赖补丁摘要在 Windows 与 Unix 检出后保持一致。
+/apps/vulcan-code-web/patches/*.patch text eol=lf

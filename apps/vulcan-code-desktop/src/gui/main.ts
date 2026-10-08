@@ -37,6 +37,7 @@ import {
 } from './desktop-text.js';
 import { canUseNativeNotifications, configureGuiNotificationIdentity } from './notification-identity.js';
 import { createWindowsToastXml } from './notification-toast.js';
+import { registerRendererRecovery } from './renderer-recovery.js';
 
 // Direct development launches bypass the packaged entry but keep the same identity contract.
 // 直接开发启动会绕开发行入口，但仍遵循相同的身份契约。
@@ -478,6 +479,9 @@ async function runDesktopGui(): Promise<void> {
       window.destroy();
       throw new Error(formatDesktopText(text.workbenchLoadFailed, { url: webUiUrl, error: String(error) }));
     }
+    // Startup failures use the startup surface; subsequent renderer loss uses native recovery.
+    // 启动失败使用启动界面；后续渲染进程退出使用原生恢复入口。
+    registerRendererRecovery(window, webUiUrl, description.dataRoot, locale);
     window.show();
     startupWindow.destroy();
   } catch (error) {

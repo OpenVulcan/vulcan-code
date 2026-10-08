@@ -31,9 +31,24 @@ interface I18nContextValue {
   t: Translate
 }
 
-// I18nContext stores the WebUI localization state.
-// I18nContext 保存 WebUI 本地化状态。
-const I18nContext = React.createContext<I18nContextValue | null>(null)
+// I18nHotState retains this module's context identity and active locale across Vite replacement.
+// I18nHotState 在 Vite 替换模块时保留本模块的上下文标识和当前语言。
+interface I18nHotState {
+  // context is initialized once per document, so retained providers and refreshed hooks share it.
+  // context 在每个文档中只初始化一次，使保留的 provider 与刷新的 hook 共享同一对象。
+  context?: React.Context<I18nContextValue | null>
+  // activeLocale preserves non-React translation until the refreshed provider renders.
+  // activeLocale 在刷新的 provider 渲染前保留 React 外部的翻译语言。
+  activeLocale?: LocaleCode | null
+}
+
+// Vite owns hot.data across module versions; production creates an ordinary document-local context.
+// Vite 跨模块版本持有 hot.data；生产构建创建普通的文档内上下文。
+const hotState: I18nHotState | undefined = import.meta.hot?.data
+// Recreating the context during HMR disconnects mounted providers from refreshed consumers.
+// 在 HMR 期间重建上下文会使已挂载的 provider 与刷新的消费者断开连接。
+const I18nContext = hotState?.context ?? React.createContext<I18nContextValue | null>(null)
+if (hotState) hotState.context = I18nContext
 
 // readLocaleMessage reads one localized app-shell label outside the i18n provider.
 // readLocaleMessage 在 i18n provider 外读取单个本地化应用外壳文案。
@@ -53,7 +68,12 @@ export function readLocaleMessage(locale: LocaleCode, key: TranslationKey): stri
 
 // activeLocale mirrors the mounted provider's language for modules that run outside React.
 // activeLocale 为 React 之外运行的模块镜像当前已挂载 provider 的语言。
-let activeLocale: LocaleCode | null = null
+let activeLocale: LocaleCode | null = hotState?.activeLocale ?? null
+if (import.meta.hot) {
+  // Save the current value before replacement; never write a user preference during hot reload.
+  // 在模块替换前保存当前值；热更新期间绝不写入用户偏好。
+  import.meta.hot.dispose((data: I18nHotState) => { data.activeLocale = activeLocale })
+}
 
 // translateActive reads one message in the mounted provider's language for service adapters and stores.
 // translateActive 按已挂载 provider 的语言为服务适配器与状态仓库读取单条文案。

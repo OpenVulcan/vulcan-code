@@ -59,3 +59,12 @@ cargo nextest run -p vulcan-service-api localized_message
 ```
 
 WebUI 侧执行 `pnpm run typecheck` 与 `vitest run src/i18n-locales.test.ts`。
+
+## 开发热更新与桌面故障恢复
+
+- WebUI 的语言上下文与基础组件文案上下文在开发模式中通过 Vite 的 `hot.data` 保留对象标识，
+  防止热更新后的消费者与已挂载的提供者使用不同上下文；不向用户配置写入任何值。
+- 桌面渲染进程退出后的恢复提示由 Electron 主进程使用 `desktop` 分面显示，不依赖 React、
+  WebUI IPC 或已经失效的页面按钮。恢复只重新加载工作台，不重新发送用户消息、不重启 Core。
+- 原生退出原因和退出码记录到 Core 声明的数据目录中的 `logs/desktop-renderer.jsonl`，
+  日志不包含服务发现令牌、页面地址及会话正文。

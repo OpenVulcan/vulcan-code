@@ -17,5 +17,9 @@
   "closeBrowserMessage": "当前有 {count} 个正在访问的页面，是否全部关闭？",
   "closeBrowserDetail": "全部关闭将释放这些网页占用的资源，然后关闭内置浏览器页签。",
   "cancel": "取消",
-  "closeAll": "全部关闭"
+  "closeAll": "全部关闭",
+  "rendererFailureTitle": "工作台渲染进程已退出",
+  "rendererFailureMessage": "工作台页面已停止，请重新加载以连接仍在运行的服务。",
+  "rendererFailureDetail": "原因：{reason}；退出码：{code}。\n\n重新加载会重连 Core，不会重新发送上一条消息。关闭此窗口不会停止 Core。尚未保存的输入可能丢失。\n\n诊断日志：{path}",
+  "reloadWorkbench": "重新加载工作台"
 }

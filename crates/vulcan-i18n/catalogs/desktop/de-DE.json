@@ -17,5 +17,9 @@
   "closeBrowserMessage": "{count} Seiten sind geöffnet. Alle schließen?",
   "closeBrowserDetail": "Dadurch werden die von diesen Seiten belegten Ressourcen freigegeben und anschließend der Browser-Tab geschlossen.",
   "cancel": "Abbrechen",
-  "closeAll": "Alle schließen"
+  "closeAll": "Alle schließen",
+  "rendererFailureTitle": "Der Renderer wurde beendet",
+  "rendererFailureMessage": "Die Arbeitsoberfläche wurde angehalten. Laden Sie sie neu, um die Verbindung zum laufenden Dienst wiederherzustellen.",
+  "rendererFailureDetail": "Grund: {reason}; Exit-Code: {code}.\n\nDas Neuladen verbindet erneut mit Core, ohne die letzte Nachricht erneut zu senden. Das Schließen dieses Fensters beendet Core nicht. Nicht gespeicherte Eingaben können verloren gehen.\n\nDiagnoseprotokoll: {path}",
+  "reloadWorkbench": "Arbeitsoberfläche neu laden"
 }

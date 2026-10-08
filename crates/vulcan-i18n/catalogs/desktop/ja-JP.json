@@ -17,5 +17,9 @@
   "closeBrowserMessage": "{count} 個のページが開いています。すべて閉じますか？",
   "closeBrowserDetail": "これらのページが使用しているリソースを解放してから、ブラウザータブを閉じます。",
   "cancel": "キャンセル",
-  "closeAll": "すべて閉じる"
+  "closeAll": "すべて閉じる",
+  "rendererFailureTitle": "ワークベンチの描画プロセスが終了しました",
+  "rendererFailureMessage": "ワークベンチのページが停止しました。再読み込みして、稼働中のサービスに再接続してください。",
+  "rendererFailureDetail": "理由: {reason}、終了コード: {code}。\n\n再読み込みは Core に再接続し、直前のメッセージを再送しません。このウィンドウを閉じても Core は動作を続けます。未保存の入力は失われる場合があります。\n\n診断ログ: {path}",
+  "reloadWorkbench": "ワークベンチを再読み込み"
 }

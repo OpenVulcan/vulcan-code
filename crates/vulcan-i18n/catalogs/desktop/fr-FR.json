@@ -17,5 +17,9 @@
   "closeBrowserMessage": "{count} pages sont ouvertes. Les fermer toutes ?",
   "closeBrowserDetail": "Les ressources utilisées par ces pages seront libérées, puis l’onglet du navigateur sera fermé.",
   "cancel": "Annuler",
-  "closeAll": "Tout fermer"
+  "closeAll": "Tout fermer",
+  "rendererFailureTitle": "Le processus de rendu s’est arrêté",
+  "rendererFailureMessage": "La page de l’espace de travail s’est arrêtée. Rechargez-la pour vous reconnecter au service en cours d’exécution.",
+  "rendererFailureDetail": "Raison : {reason} ; code de sortie : {code}.\n\nLe rechargement reconnecte Core sans renvoyer votre dernier message. Fermer cette fenêtre n’arrête pas Core. Le texte non enregistré peut être perdu.\n\nJournal de diagnostic : {path}",
+  "reloadWorkbench": "Recharger l’espace de travail"
 }

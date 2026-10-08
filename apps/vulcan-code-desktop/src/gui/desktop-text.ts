@@ -58,6 +58,18 @@ export interface DesktopText {
   // Workbench failure: the WebUI could not be loaded, `{url}` and `{error}`.
   // 工作台失败：无法加载 WebUI，`{url}` 与 `{error}`。
   workbenchLoadFailed: string;
+  // Native renderer recovery dialog title.
+  // 原生渲染进程恢复对话框标题。
+  rendererFailureTitle: string;
+  // Native renderer recovery explanation, available even when the page cannot render.
+  // 原生渲染进程恢复说明，即使页面无法渲染也可显示。
+  rendererFailureMessage: string;
+  // Recovery diagnostics and behavior, with {reason}, {code} and {path}.
+  // 恢复诊断与行为说明，包含 {reason}、{code} 和 {path}。
+  rendererFailureDetail: string;
+  // Native action that reloads the workbench without restarting Core.
+  // 重新加载工作台而不重启 Core 的原生动作。
+  reloadWorkbench: string;
   // Built-in browser close confirmation title.
   // 内置浏览器关闭确认标题。
   closeBrowserTitle: string;
@@ -82,6 +94,7 @@ const DESKTOP_TEXT_FIELDS: Readonly<Record<keyof DesktopText, true>> = {
   startupTitle: true, closeWindow: true, preparing: true, startupFailed: true, checkingInstance: true,
   reusingInstance: true, startingService: true, awaitingReady: true, serviceReady: true, launchFailed: true,
   exitedBeforeReady: true, serviceUnavailable: true, readyTimeout: true, workbenchLoadFailed: true,
+  rendererFailureTitle: true, rendererFailureMessage: true, rendererFailureDetail: true, reloadWorkbench: true,
   closeBrowserTitle: true, closeBrowserMessage: true, closeBrowserDetail: true, cancel: true, closeAll: true,
 };
 

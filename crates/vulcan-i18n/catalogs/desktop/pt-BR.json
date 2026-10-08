@@ -17,5 +17,9 @@
   "closeBrowserMessage": "Há {count} páginas abertas. Fechar todas?",
   "closeBrowserDetail": "Isso libera os recursos usados por essas páginas e depois fecha a aba do navegador.",
   "cancel": "Cancelar",
-  "closeAll": "Fechar todas"
+  "closeAll": "Fechar todas",
+  "rendererFailureTitle": "O processo de renderização foi encerrado",
+  "rendererFailureMessage": "A página da área de trabalho parou. Recarregue-a para se reconectar ao serviço em execução.",
+  "rendererFailureDetail": "Motivo: {reason}; código de saída: {code}.\n\nRecarregar reconecta ao Core sem reenviar a última mensagem. Fechar esta janela não encerra o Core. Entradas não salvas podem ser perdidas.\n\nRegistro de diagnóstico: {path}",
+  "reloadWorkbench": "Recarregar área de trabalho"
 }
