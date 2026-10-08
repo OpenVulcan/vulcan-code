@@ -122,7 +122,7 @@ async fn retained_command_session_output_is_bounded_and_reports_a_gap() {
         launcher_shell_label: String::from("pwsh"),
         interactive_newline: String::from("\r\n"),
         cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
-        backend: CommandSessionBackend::Pipe,
+        backend: CommandSessionBackend::Pty,
         control_sender,
         shared_state,
     };
@@ -159,7 +159,7 @@ async fn display_bootstrap_freezes_rendered_chunk_sequence() {
                 launcher_shell_label: String::from("pwsh"),
                 interactive_newline: String::from("\r\n"),
                 cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
-                backend: CommandSessionBackend::Pipe,
+                backend: CommandSessionBackend::Pty,
                 control_sender,
                 shared_state: Arc::clone(&shared_state),
             }),
@@ -256,7 +256,7 @@ fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
                 launcher_shell_label: String::from("pwsh"),
                 interactive_newline: String::from("\r\n"),
                 cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
-                backend: CommandSessionBackend::Pipe,
+                backend: CommandSessionBackend::Pty,
                 control_sender,
                 shared_state,
             }),
@@ -382,7 +382,7 @@ async fn peek_session_for_ai_does_not_advance_ai_cursor() {
                 launcher_shell_label: String::from("pwsh"),
                 interactive_newline: String::from("\r\n"),
                 cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
-                backend: CommandSessionBackend::Pipe,
+                backend: CommandSessionBackend::Pty,
                 control_sender,
                 shared_state: Arc::clone(&shared_state),
             }),
@@ -602,49 +602,6 @@ fn structured_terminal_input_events_reject_unknown_keys() {
     assert!(error.contains("Unsupported terminal key `VolumeUp`"));
 }
 
-/// Stopping a pipe session must wait for reaping even though the status already reads stopped.
-/// 停止管道会话时即使状态已显示停止，也必须等待进程被回收。
-#[cfg(unix)]
-#[tokio::test]
-async fn stop_session_waits_for_process_reaping() {
-    let runtime = Arc::new(CommandSessionRuntime::new());
-    let owner_session_id = SessionId::from_u128(0x0B0B);
-    let temp = tempfile::tempdir().expect("create stop-wait test directory");
-    let snapshot = runtime
-        .start_session(super::CommandSessionStartRequest {
-            owner_session_id,
-            display_name: None,
-            command: String::from("sleep 600 & wait"),
-            shell_label: String::from("sh"),
-            launcher_shell_label: String::from("sh"),
-            cwd: temp.path().to_path_buf(),
-            launcher_program: String::from("sh"),
-            launcher_args: vec![String::from("-c"), String::from("sleep 600 & wait")],
-            path_prefixes: Vec::new(),
-            initial_stdin: None,
-            initial_stdin_append_newline: false,
-            interactive_newline: String::from("\n"),
-            backend: CommandSessionBackend::Pipe,
-        })
-        .await
-        .expect("start stop-wait test session");
-    let command_session_id = snapshot.command_session_id;
-
-    let stopped = runtime
-        .stop_session(owner_session_id, command_session_id, Some(10_000))
-        .await
-        .expect("stop stop-wait test session");
-    assert_eq!(stopped.status, CommandSessionStatus::Stopped);
-    let record = runtime
-        .sessions
-        .read()
-        .expect("lock runtime registry")
-        .get(&command_session_id)
-        .cloned()
-        .expect("stopped session stays registered");
-    assert!(record.shared_state.process_reaped().await);
-}
-
 /// A host stop marks the status immediately, while only process finalization records reaping.
 /// 宿主停止会立即标记状态，而只有进程收尾才会记录回收。
 #[test]
@@ -681,7 +638,7 @@ fn retention_test_record(
         launcher_shell_label: String::from("sh"),
         interactive_newline: String::from("\n"),
         cwd: PathBuf::from("."),
-        backend: CommandSessionBackend::Pipe,
+        backend: CommandSessionBackend::Pty,
         control_sender,
         shared_state,
     })

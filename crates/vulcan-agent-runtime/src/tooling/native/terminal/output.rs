@@ -181,11 +181,5 @@ pub(crate) fn terminal_input_capabilities(snapshot: &CommandSessionSnapshot) -> 
             "encoding": "ansi_vt",
             "common_keys": ["Enter", "Tab", "Esc", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "F1"],
         }),
-        CommandSessionBackend::Pipe => json!({
-            "text": true,
-            "paste": true,
-            "key": false,
-            "chord": false,
-        }),
     }
 }

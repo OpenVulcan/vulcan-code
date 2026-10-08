@@ -3,15 +3,12 @@
 
 use crate::model::SessionId;
 use crate::output_decode::ShellOutputStreamDecoder;
-use crate::process_creation::{apply_child_path_prefixes, new_background_tokio_command};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::{Mutex, Notify, oneshot};
 use tokio::time::{Duration, Instant, timeout};
@@ -124,10 +121,6 @@ const COMMAND_SESSION_CONTROL_QUEUE_LIMIT: usize = 128;
 /// 定义停止请求后无响应终端宿主被强制回收前的宽限时间。
 const TERMINAL_HOST_STOP_GRACE: Duration = Duration::from_secs(2);
 
-/// Maximum time allowed for one stdin pipe write before the runtime treats the child as incompatible with pipe input.
-/// 单次标准输入管道写入的最长等待时间，超过后运行时会认为子进程与管道输入不兼容。
-const COMMAND_SESSION_STDIN_WRITE_TIMEOUT_MS: u64 = 1_000;
-
 /// Default PTY screen rows mirrored into WebUI terminal frames.
 /// 镜像到 WebUI 终端帧的默认 PTY 屏幕行数。
 const DEFAULT_PTY_SCREEN_ROWS: u16 = 24;
@@ -171,9 +164,6 @@ impl CommandSessionStatus {
 /// 命令会话使用的具体宿主 I/O 后端。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandSessionBackend {
-    /// Standard process pipes for command-style shell sessions.
-    /// 面向命令式 shell 会话的标准进程管道。
-    Pipe,
     /// Pseudo terminal for interactive TUI sessions.
     /// 面向交互式 TUI 会话的伪终端。
     Pty,
@@ -184,7 +174,6 @@ impl CommandSessionBackend {
     /// 渲染稳定的小写后端标签。
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Pipe => "pipe",
             Self::Pty => "pty",
         }
     }
@@ -649,7 +638,6 @@ pub struct CommandSessionStartRequest {
     pub backend: CommandSessionBackend,
 }
 
-mod pipe;
 mod pty;
 mod runtime;
 mod state;
@@ -657,7 +645,6 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-use pipe::*;
 use pty::*;
 use state::*;
 

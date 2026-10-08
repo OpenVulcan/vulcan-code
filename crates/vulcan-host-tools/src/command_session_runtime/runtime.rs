@@ -58,87 +58,8 @@ impl CommandSessionRuntime {
         request.launcher_program =
             vulcan_runtime_assets::native_host_path_text(&request.launcher_program);
         match request.backend {
-            CommandSessionBackend::Pipe => self.start_pipe_session(request).await,
             CommandSessionBackend::Pty => self.start_pty_session(request).await,
         }
-    }
-
-    /// Starts one pipe-backed host-managed command session and returns its initial snapshot.
-    /// 启动一条管道后端的宿主管理命令会话并返回其初始快照。
-    async fn start_pipe_session(
-        self: &Arc<Self>,
-        request: CommandSessionStartRequest,
-    ) -> Result<CommandSessionSnapshot, String> {
-        let mut command = new_background_tokio_command(&request.launcher_program);
-        command.args(&request.launcher_args);
-        command.current_dir(&request.cwd);
-        command.stdin(Stdio::piped());
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-        command.kill_on_drop(true);
-        // Stop requests must reach background descendants that inherited the session pipes.
-        // 停止请求必须触达继承了会话管道的后台后代进程。
-        crate::process_tree::isolate_child_process_tree(&mut command);
-        // VULCAN_HOME keeps long-lived shell sessions aligned with the compiled user profile.
-        // VULCAN_HOME 让长生命周期 shell 会话与当前编译用户配置保持一致。
-        if std::env::var_os("VULCAN_HOME").is_none()
-            && let Some(user_vulcan_root) = vulcan_runtime_assets::resolve_user_vulcan_root()
-        {
-            command.env(
-                "VULCAN_HOME",
-                vulcan_runtime_assets::native_host_path(&user_vulcan_root),
-            );
-        }
-        apply_child_path_prefixes(&mut command, &request.path_prefixes)?;
-
-        let mut child = command.spawn().map_err(|error| {
-            format!(
-                "Failed to start the command session: program `{}` could not be executed: {error}",
-                request.launcher_program
-            )
-        })?;
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take().ok_or_else(|| {
-            String::from("The command session started, but stdout could not be captured.")
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            String::from("The command session started, but stderr could not be captured.")
-        })?;
-
-        let command_session_id = Uuid::new_v4();
-        let shared_state = Arc::new(CommandSessionSharedState::default());
-        let (control_sender, control_receiver) = channel(COMMAND_SESSION_CONTROL_QUEUE_LIMIT);
-        let record = Arc::new(CommandSessionRecord {
-            command_session_id,
-            admission_seq: self.next_admission_seq.fetch_add(1, Ordering::Relaxed),
-            owner_session_id: request.owner_session_id,
-            display_name: request.display_name,
-            command: request.command,
-            shell_label: request.shell_label,
-            launcher_shell_label: request.launcher_shell_label,
-            interactive_newline: request.interactive_newline,
-            cwd: request.cwd,
-            backend: CommandSessionBackend::Pipe,
-            control_sender,
-            shared_state: Arc::clone(&shared_state),
-        });
-
-        self.register_session(&record)?;
-
-        tokio::spawn(run_command_session_supervisor(
-            CommandSessionSupervisorInput {
-                record: Arc::clone(&record),
-                child,
-                stdin,
-                stdout,
-                stderr,
-                control_receiver,
-                initial_stdin: request.initial_stdin,
-                initial_stdin_append_newline: request.initial_stdin_append_newline,
-            },
-        ));
-
-        Ok(record.snapshot().await)
     }
 
     /// Starts one PTY-backed host-managed command session and returns its initial snapshot.
@@ -288,7 +209,7 @@ impl CommandSessionRuntime {
             .await
             .map_err(|_| {
                 String::from(
-                    "Timed out waiting for the command session supervisor to acknowledge stdin; the process may be a Windows console-input TUI that is incompatible with pipe stdin.",
+                    "Timed out waiting for the command session supervisor to acknowledge stdin; the terminal host may have stopped reading input.",
                 )
             })?
             .map_err(|_| {
