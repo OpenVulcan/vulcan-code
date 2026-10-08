@@ -17,6 +17,7 @@
   "htmlAnswers.cannotOpen": "이 결과를 열 수 없습니다.",
   "htmlAnswers.maximize": "최대화",
   "htmlAnswers.restore": "크기 복원",
+  "htmlAnswers.reload": "다시 불러오기",
   "htmlAnswers.invalidFormat": "HTML 답변 형식이 올바르지 않습니다. 소스는 확인할 수 있습니다.",
   "htmlAnswers.interrupted": "생성이 중단되었습니다. 소스는 확인할 수 있습니다.",
   "htmlAnswers.tooLarge": "HTML 답변이 실행 한도를 초과했습니다. 소스는 확인할 수 있습니다.",

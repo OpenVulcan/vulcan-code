@@ -62,6 +62,12 @@ pub const HTML_ANSWER_SECRET_BYTES: usize = 32;
 /// Maximum JSON body for ticket exchange or lease release, independent of generated page size.
 /// 票据兑换或租约释放 JSON 正文上限，独立于生成页面大小。
 pub const HTML_ANSWER_VIEW_REQUEST_MAX_BYTES: usize = 4096;
+/// Parameterless notification a rendered page posts to close or restore its embedding viewer.
+/// 渲染页面发送的无参数通知，用于关闭或还原其嵌入查看器。
+pub const HTML_ANSWER_CLOSE_MESSAGE: &str = "vulcan-html-answer-close-v1";
+/// Message type carrying only a rendered page's content height, so an inline viewer can size itself.
+/// 仅携带渲染页面内容高度的消息类型，供内嵌查看器调整自身高度。
+pub const HTML_ANSWER_HEIGHT_MESSAGE: &str = "vulcan-html-answer-height-v1";
 /// Hexadecimal width of the complete SHA-256 result identity.
 /// 完整 SHA-256 结果身份的十六进制宽度。
 pub const HTML_ANSWER_ID_HEX_LENGTH: usize = 64;

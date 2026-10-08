@@ -17,6 +17,7 @@
   "htmlAnswers.cannotOpen": "無法開啟此結果。",
   "htmlAnswers.maximize": "最大化",
   "htmlAnswers.restore": "還原大小",
+  "htmlAnswers.reload": "重新載入",
   "htmlAnswers.invalidFormat": "HTML 回答格式不正確，仍可檢視原始碼。",
   "htmlAnswers.interrupted": "產生過程已中斷，仍可檢查原始碼。",
   "htmlAnswers.tooLarge": "HTML 回答超過執行限制，仍可檢視原始碼。",

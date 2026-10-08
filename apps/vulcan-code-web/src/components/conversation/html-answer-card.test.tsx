@@ -11,7 +11,7 @@ import { createHtmlAnswerViewLink, revokeHtmlAnswerViewLink, type HtmlAnswerView
 import { STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "./streaming-markdown-blocks";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { parseConversationBlocks } from "./conversation-transcript-parser";
-import { HTML_ANSWER_CLOSE } from "@/service/html-answer-close";
+import { HTML_ANSWER_CLOSE_MESSAGE, HTML_ANSWER_HEIGHT_MESSAGE } from "@/generated/protocol-limits";
 
 vi.mock("@/service/html-answers-service", () => ({ createHtmlAnswerViewLink: vi.fn(), revokeHtmlAnswerViewLink: vi.fn(), htmlAnswerRequestErrorLabel: () => "htmlAnswers.cannotOpen" }));
 vi.mock("@/i18n", async (original) => ({ ...await original<typeof import("@/i18n")>(), useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
@@ -26,12 +26,30 @@ const receipt: HtmlAnswerViewLink = { grantId: "grant", viewerUrl: "http://127.0
 let root: Root;
 let host: HTMLDivElement;
 let clipboard: ReturnType<typeof vi.fn>;
+// Viewport proximity is driven explicitly; jsdom performs no layout.
+// 视口距离由测试显式驱动；jsdom 不执行布局。
+let observers: Set<IntersectionObserverCallback>;
+
+/** Report every observed card as entering (`near`) or leaving the viewport margins.
+ * 将所有被观察卡片报告为进入（`near`）或离开视口边距。 */
+async function setNear(near: boolean) {
+  await act(async () => {
+    for (const callback of observers) callback([{ isIntersecting: near } as IntersectionObserverEntry], {} as IntersectionObserver);
+  });
+}
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("localStorage", { getItem: () => null });
   vi.stubGlobal("sessionStorage", { getItem: () => null });
   clipboard = vi.fn().mockResolvedValue(undefined);
+  observers = new Set();
+  vi.stubGlobal("IntersectionObserver", class {
+    readonly callback: IntersectionObserverCallback;
+    constructor(callback: IntersectionObserverCallback) { this.callback = callback; }
+    observe() { observers.add(this.callback); }
+    disconnect() { observers.delete(this.callback); }
+  });
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: clipboard } });
   vi.mocked(createHtmlAnswerViewLink).mockReset().mockResolvedValue(receipt);
   vi.mocked(revokeHtmlAnswerViewLink).mockReset().mockResolvedValue(undefined);
@@ -113,59 +131,73 @@ it("preserves Unicode/CRLF coordinates, image normalization, reference context a
   expect(host.querySelector("script")).toBeNull();
 });
 
-it("issues only after click, keeps exact parent/revision and releases the viewer on close", async () => {
+it("renders inline once near the viewport, keeps exact parent/revision and releases far away", async () => {
   await renderWindow(windowSnapshot(), "parent");
-  await click("htmlAnswers.open");
+  expect(createHtmlAnswerViewLink).not.toHaveBeenCalled();
+  await setNear(true);
   expect(createHtmlAnswerViewLink).toHaveBeenCalledWith({ sessionId: "session", parentSessionId: "parent", windowGeneration: 4,
     eventSeq: 3, eventRevision: 7, artifactId: "a".repeat(64) }, "en-US");
-  const frame = document.querySelector("iframe");
-  expect(frame?.src).toBe(receipt.viewerUrl);
+  const frame = document.querySelector(".html-answer-render iframe");
+  expect(frame?.getAttribute("src")).toBe(receipt.viewerUrl);
   await click("htmlAnswers.maximize");
+  expect(host.querySelector(".html-answer-card[data-maximized]")).not.toBeNull();
   expect(document.querySelector("iframe")).toBe(frame);
-  await click("Close");
+  await click("htmlAnswers.restore");
+  await setNear(false);
   expect(document.querySelector("iframe")).toBeNull();
   expect(revokeHtmlAnswerViewLink).toHaveBeenCalledWith(receipt.grantId);
 });
 
-it("keeps an opened viewer mounted across unrelated event appends and revokes it on generation change", async () => {
+it("keeps an inline viewer mounted across unrelated event appends and revokes it on generation change", async () => {
   const first = windowSnapshot();
   await renderWindow(first);
-  await click("htmlAnswers.open");
+  await setNear(true);
   const frame = document.querySelector("iframe");
   await renderWindow({ ...first, events: [...first.events, event(5, "ordinary text")] });
   expect(document.querySelector("iframe")).toBe(frame);
   expect(revokeHtmlAnswerViewLink).not.toHaveBeenCalled();
   await renderWindow({ ...first, owner: { session_id: "session", window_generation: 5 } });
-  expect(document.querySelector("iframe")).toBeNull();
+  expect(document.querySelector("iframe")).not.toBe(frame);
   expect(revokeHtmlAnswerViewLink).toHaveBeenCalledWith(receipt.grantId);
 });
 
-it("accepts a close relay only from its exact viewer window and origin", async () => {
+it("accepts height and close relays only from its exact viewer window and origin", async () => {
   await renderWindow(windowSnapshot());
-  await click("htmlAnswers.open");
+  await setNear(true);
+  await click("htmlAnswers.maximize");
   const frame = document.querySelector("iframe")!;
+  const area = host.querySelector<HTMLElement>(".html-answer-render")!;
   const origin = new URL(receipt.viewerUrl).origin;
-  for (const message of [
-    { data: HTML_ANSWER_CLOSE, origin, source: window },
-    { data: HTML_ANSWER_CLOSE, origin: "null", source: frame.contentWindow },
-    { data: "open-host-api", origin, source: frame.contentWindow },
-  ]) {
-    await act(async () => window.dispatchEvent(new MessageEvent("message", message)));
-    expect(document.querySelector("iframe")).toBe(frame);
+  const send = (data: unknown, from = origin, source: MessageEventSource | null = frame.contentWindow) =>
+    act(async () => window.dispatchEvent(new MessageEvent("message", { data, origin: from, source })));
+  for (const [data, from, source] of [
+    [HTML_ANSWER_CLOSE_MESSAGE, origin, window],
+    [HTML_ANSWER_CLOSE_MESSAGE, "null", frame.contentWindow],
+    ["open-host-api", origin, frame.contentWindow],
+  ] as const) {
+    await send(data, from, source);
+    expect(host.querySelector(".html-answer-card[data-maximized]")).not.toBeNull();
   }
-  await act(async () => window.dispatchEvent(new MessageEvent("message", {
-    data: HTML_ANSWER_CLOSE, origin, source: frame.contentWindow,
-  })));
-  expect(document.querySelector("iframe")).toBeNull();
-  expect(revokeHtmlAnswerViewLink).toHaveBeenCalledWith(receipt.grantId);
+  await send(HTML_ANSWER_CLOSE_MESSAGE);
+  expect(host.querySelector(".html-answer-card[data-maximized]")).toBeNull();
+  expect(document.querySelector("iframe")).toBe(frame);
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 640 });
+  expect(area.style.height).toBe("640px");
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 900 }, "null");
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: "900" });
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: Number.POSITIVE_INFINITY });
+  expect(area.style.height).toBe("640px");
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 1e9 });
+  expect(Number.parseInt(area.style.height, 10)).toBeLessThan(1e9);
+  expect(revokeHtmlAnswerViewLink).not.toHaveBeenCalled();
 });
 
-it("revokes a late grant when its pending modal closes without mounting a frame", async () => {
+it("revokes a late grant when the card leaves the viewport before issuance completes", async () => {
   let resolve!: (value: HtmlAnswerViewLink) => void;
   vi.mocked(createHtmlAnswerViewLink).mockImplementation(() => new Promise((done) => { resolve = done; }));
   await renderWindow(windowSnapshot());
-  await click("htmlAnswers.open");
-  await click("Close");
+  await setNear(true);
+  await setNear(false);
   await act(async () => resolve(receipt));
   expect(document.querySelector("iframe")).toBeNull();
   expect(revokeHtmlAnswerViewLink).toHaveBeenCalledWith(receipt.grantId);
@@ -174,7 +206,8 @@ it("revokes a late grant when its pending modal closes without mounting a frame"
 it("keeps missing authority and streaming inert and excludes non-assistant and nested samples", async () => {
   const pending = windowSnapshot([event()], false);
   await renderWindow(pending);
-  expect(host.querySelector('.html-answer-card button')?.hasAttribute("disabled")).toBe(true);
+  await setNear(true);
+  expect(host.querySelector(".html-answer-card iframe")).toBeNull();
   const growing = event();
   if (growing.event.kind === "assistant_text") growing.event.status = "streaming";
   await renderWindow(windowSnapshot([growing], false));
@@ -187,19 +220,30 @@ it("keeps missing authority and streaming inert and excludes non-assistant and n
   expect(createHtmlAnswerViewLink).not.toHaveBeenCalled();
 });
 
-it("keeps one hundred unopened cards free of frames, requests and injected HTML", async () => {
+it("streams a short draft into the card as text, without its fence line or a frame", async () => {
+  const growing = event(3, prefix + '```vulcan-html {"version":2,"title":"t","template":"document"}\n## Panel\n```ui-flow\nA -> B');
+  if (growing.event.kind === "assistant_text") growing.event.status = "streaming";
+  await renderWindow(windowSnapshot([growing], false));
+  const stream = host.querySelector(".html-answer-stream");
+  expect(stream?.textContent).toContain("A -> B");
+  expect(stream?.textContent).not.toContain("vulcan-html");
+  expect(host.querySelector("iframe,script")).toBeNull();
+});
+
+it("keeps one hundred offscreen cards free of frames, requests and injected HTML", async () => {
   await renderWindow(windowSnapshot(Array.from({ length: 100 }, (_, index) => event(index + 1))));
   expect(host.querySelectorAll(".html-answer-card")).toHaveLength(100);
   expect(host.querySelector("iframe,script")).toBeNull();
   expect(createHtmlAnswerViewLink).not.toHaveBeenCalled();
 });
 
-it("collapses a large growing HTML tail without parsing or exposing an executable frame", async () => {
+it("shows only a bounded tail of a large growing draft and no executable frame", async () => {
   const growing = event(3, fence.replace(html, "x".repeat(STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS * 2)));
   if (growing.event.kind === "assistant_text") growing.event.status = "streaming";
   await renderWindow(windowSnapshot([growing], false));
   expect(host.querySelectorAll('.html-answer-card[data-status="generating"]')).toHaveLength(1);
-  expect(host.querySelector("iframe,pre")).toBeNull();
+  expect(host.querySelector(".html-answer-stream")?.textContent?.length).toBeLessThanOrEqual(STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS);
+  expect(host.querySelector("iframe")).toBeNull();
   expect(createHtmlAnswerViewLink).not.toHaveBeenCalled();
 });
 

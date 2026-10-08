@@ -169,7 +169,7 @@ function StreamingMarkdownMessage(props: {
   return (
     <>
       {blocks.map((block, index) => (
-        block.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS && props.htmlMessage && hasStreamingHtmlAnswerHint(block) ? (
+        props.htmlMessage && hasStreamingHtmlAnswerHint(block) ? (
           <HtmlAnswerCard key={index} message={props.htmlMessage} source={block} streaming copyText={copyMarkdownCode} />
         ) : index === blocks.length - 1 && block.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS ? (
           <pre className="streaming-markdown-raw-preview" key={index}><code>{block}</code></pre>

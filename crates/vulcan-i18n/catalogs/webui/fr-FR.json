@@ -17,6 +17,7 @@
   "htmlAnswers.cannotOpen": "Ce résultat ne peut pas être ouvert.",
   "htmlAnswers.maximize": "Agrandir",
   "htmlAnswers.restore": "Rétablir la taille",
+  "htmlAnswers.reload": "Recharger",
   "htmlAnswers.invalidFormat": "Le format de la réponse HTML est invalide. La source reste disponible.",
   "htmlAnswers.interrupted": "La génération a été interrompue. La source peut être consultée.",
   "htmlAnswers.tooLarge": "La réponse HTML dépasse la limite d’exécution. La source reste disponible.",

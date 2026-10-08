@@ -17,6 +17,7 @@
   "htmlAnswers.cannotOpen": "この結果は開けません。",
   "htmlAnswers.maximize": "最大化",
   "htmlAnswers.restore": "元のサイズに戻す",
+  "htmlAnswers.reload": "再読み込み",
   "htmlAnswers.invalidFormat": "HTML 回答の形式が無効です。ソースは確認できます。",
   "htmlAnswers.interrupted": "生成が中断されました。ソースは確認できます。",
   "htmlAnswers.tooLarge": "HTML 回答が実行上限を超えています。ソースは確認できます。",

@@ -2,25 +2,74 @@
    HTML 专属样式随延迟卡片加载，普通会话 CSS 保持原状。 */
 .html-answer-card {
   margin: 10px 0;
-  padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-md);
   background: var(--card);
+  overflow: hidden;
 }
-.html-answer-card > figcaption,
-.html-answer-card-actions,
-.html-answer-dialog-header {
+.html-answer-card-bar {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 36px;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border);
 }
-.html-answer-card-actions { flex-wrap: wrap; margin-top: 8px; }
-.html-answer-card > p { color: var(--muted-foreground); font-size: var(--vcn-font-size-sm); }
-.html-answer-card .html-answer-source { max-height: 55dvh; overflow: auto; white-space: pre; }
-.html-answer-dialog { grid-template-rows: auto minmax(0, 1fr); }
-/* Fullscreen uses all four inset edges; an explicit full width would overflow the right edge.
-   全屏使用四边内缩；显式满宽会使右边缘溢出。 */
-.html-answer-dialog[data-size="fullscreen"] { width: auto; }
-.html-answer-dialog-header { justify-content: space-between; padding: 12px 48px 12px 16px; border-bottom: 1px solid var(--border); }
-.html-answer-dialog-header > [data-slot="dialog-title"] { overflow-wrap: anywhere; }
-.html-answer-viewer-frame { width: 100%; height: 100%; min-height: 0; border: 0; }
+.html-answer-card-bar > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.html-answer-card-status,
+.html-answer-card-feedback {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}
+.html-answer-card-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.html-answer-card-actions { display: flex; flex-shrink: 0; gap: 2px; margin-inline-start: auto; }
+.html-answer-card-feedback { margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.html-answer-card .html-answer-source,
+.html-answer-card .html-answer-stream {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre;
+  font-size: var(--vcn-font-size-sm);
+}
+.html-answer-card .html-answer-source { max-height: 55dvh; }
+/* The streamed draft stays a fixed window that follows the newest lines.
+   流式草稿保持固定窗口并跟随最新内容。 */
+.html-answer-card .html-answer-stream { max-height: 240px; color: var(--muted-foreground); }
+/* The render area is its own isolated frame; only its height follows the page.
+   渲染区是独立的隔离框架；只有高度跟随页面。 */
+.html-answer-render { position: relative; display: flex; }
+.html-answer-render[hidden] { display: none; }
+.html-answer-render-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 16px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+  text-align: center;
+}
+.html-answer-viewer-frame { display: block; width: 100%; height: 100%; min-height: 0; border: 0; }
+/* Maximize shows the same card in the top layer over the whole window, so page state survives.
+   最大化在顶层以整个窗口显示同一卡片，页面状态得以保留。 */
+.html-answer-card[data-maximized] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--foreground);
+  background: var(--card);
+}
+.html-answer-card[data-maximized] > .html-answer-render { flex: 1; min-height: 0; }

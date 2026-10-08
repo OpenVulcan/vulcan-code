@@ -2,6 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { HTML_ANSWER_CLOSE_MESSAGE, HTML_ANSWER_HEIGHT_MESSAGE } from "@/generated/protocol-limits";
 import { HtmlAnswerViewer } from "./viewer";
 import { exchangeHtmlAnswerTicket, parseHtmlAnswerTicket, releaseHtmlAnswerLease, type HtmlAnswerLease } from "./transport";
 
@@ -57,4 +58,24 @@ it("exposes stable error categories without echoing response diagnostics or secr
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "expired", detail: "secret" }), { status: 410 })));
   await expect(exchangeHtmlAnswerTicket({ sessionId: "session", artifactId: "artifact", ticket: "secret" }, new AbortController().signal))
     .rejects.toThrow("htmlAnswers.expired");
+});
+
+it("embeds only the page frame and relays nothing but a finite height or a close signal", async () => {
+  const parent = { postMessage: vi.fn() };
+  vi.stubGlobal("parent", parent);
+  await act(async () => root.render(<HtmlAnswerViewer state={{ status: "ready", lease }} />));
+  expect(host.querySelector("button")).toBeNull();
+  const frame = host.querySelector("iframe")!;
+  expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+  const send = (data: unknown, origin = "null", source: MessageEventSource | null = frame.contentWindow) =>
+    act(async () => window.dispatchEvent(new MessageEvent("message", { data, origin, source })));
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 420, secret: "page data" });
+  expect(parent.postMessage).toHaveBeenLastCalledWith({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 420 }, "*");
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 10 }, "http://127.0.0.1:7202");
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: 10 }, "null", window);
+  await send({ type: HTML_ANSWER_HEIGHT_MESSAGE, height: Number.NaN });
+  await send("open-host-api");
+  expect(parent.postMessage).toHaveBeenCalledTimes(1);
+  await send(HTML_ANSWER_CLOSE_MESSAGE);
+  expect(parent.postMessage).toHaveBeenLastCalledWith(HTML_ANSWER_CLOSE_MESSAGE, "*");
 });

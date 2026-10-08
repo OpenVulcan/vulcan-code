@@ -17,6 +17,7 @@
   "htmlAnswers.cannotOpen": "Dieses Ergebnis kann nicht geöffnet werden.",
   "htmlAnswers.maximize": "Maximieren",
   "htmlAnswers.restore": "Größe wiederherstellen",
+  "htmlAnswers.reload": "Neu laden",
   "htmlAnswers.invalidFormat": "Das Format der HTML-Antwort ist ungültig. Der Quelltext bleibt verfügbar.",
   "htmlAnswers.interrupted": "Die Erstellung wurde unterbrochen. Der Quelltext kann geprüft werden.",
   "htmlAnswers.tooLarge": "Die HTML-Antwort überschreitet das Ausführungslimit. Der Quelltext bleibt verfügbar.",

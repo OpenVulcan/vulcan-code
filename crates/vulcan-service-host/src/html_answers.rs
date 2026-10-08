@@ -6,6 +6,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use url::Url;
+use vulcan_session_core::v1::html_answers::{
+    HTML_ANSWER_CLOSE_MESSAGE, HTML_ANSWER_HEIGHT_MESSAGE,
+};
 
 mod grants;
 mod routes;
@@ -91,17 +94,20 @@ impl HtmlAnswerOrigins {
     /// Authorization and fresh source ownership checks are required before this method is called.
     /// 调用此方法之前必须完成授权及最新源码归属校验。
     pub fn content_response(&self, source: String) -> Response {
-        // Establish standards mode and capture Escape before generated scripts register handlers.
-        // 先建立标准模式并捕获 Esc，再允许生成脚本注册处理器。
+        // Establish standards mode, capture Escape and report the content height before generated
+        // scripts run, so an inline viewer can size the frame without scrolling inside it.
+        // 先建立标准模式、捕获 Esc 并上报内容高度，再运行生成脚本，使内嵌查看器无需内部滚动即可调整框架。
         // This response-only prefix never changes persisted/copied source or exposes a host capability.
         // 此响应专用前缀绝不改变持久化或复制的源码，也不暴露宿主能力。
-        const CLOSE_BOOTSTRAP: &str = concat!(
-            "<!doctype html><script>",
-            "addEventListener('keydown',function(event){",
-            "if(event.key==='Escape')parent.postMessage('vulcan-html-answer-close-v1','*')",
-            "},true);</script>"
+        let bootstrap = format!(
+            "<!doctype html><script>(function(){{var last=-1;\
+             addEventListener('keydown',function(event){{\
+             if(event.key==='Escape')parent.postMessage('{HTML_ANSWER_CLOSE_MESSAGE}','*')}},true);\
+             function report(){{var height=Math.ceil(document.documentElement.getBoundingClientRect().height);\
+             if(height!==last){{last=height;parent.postMessage({{type:'{HTML_ANSWER_HEIGHT_MESSAGE}',height:height}},'*')}}}}\
+             new ResizeObserver(report).observe(document.documentElement);addEventListener('load',report)}})();</script>"
         );
-        (self.content_headers(), format!("{CLOSE_BOOTSTRAP}{source}")).into_response()
+        (self.content_headers(), format!("{bootstrap}{source}")).into_response()
     }
 }
 

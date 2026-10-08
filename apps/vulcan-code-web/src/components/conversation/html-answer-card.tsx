@@ -1,19 +1,30 @@
 import * as React from "react";
-import { Code, Copy, FileCode2, Maximize2, Minimize2 } from "lucide-react";
+import { Code, Copy, FileCode2, Link2, Maximize2, Minimize2, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { formatMessage, useI18n } from "@/i18n";
 import type { TranslationKey } from "@/i18n-messages";
+import { HTML_ANSWER_CLOSE_MESSAGE, HTML_ANSWER_HEIGHT_MESSAGE } from "@/generated/protocol-limits";
 import type { HtmlAnswerDescriptor } from "@/service/html-answer-projections";
-import { HTML_ANSWER_CLOSE } from "@/service/html-answer-close";
 import { createHtmlAnswerViewLink, htmlAnswerRequestErrorLabel, revokeHtmlAnswerViewLink, type HtmlAnswerViewLink } from "@/service/html-answers-service";
+import { STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "./streaming-markdown-blocks";
 import type { HtmlAnswerMessageContext } from "./html-answer-context";
 import "./html-answer-card.css";
 
-/** Collapsed, nonexecuting result card. Only Core-ready descriptors enable a viewer request.
- * 收起且不执行页面的结果卡。仅 Core 就绪描述允许申请查看器。
- * Inputs preserve raw source and exact ownership; returns a card plus an explicitly opened dialog.
- * 输入保留原始源码和精确归属；返回卡片及明确操作打开的弹窗。 */
+// Inline frame height bounds in CSS pixels; taller pages scroll inside the frame or use maximize.
+// 内嵌框架的高度范围（CSS 像素）；更高的页面在框架内滚动或使用最大化。
+const FRAME_MIN_HEIGHT = 120;
+const FRAME_MAX_HEIGHT = 4000;
+const FRAME_INITIAL_HEIGHT = 280;
+// Mount once the card comes within this margin of the viewport, release beyond the wider one.
+// 卡片进入视口此边距内时挂载，超出更宽边距后释放。
+const MOUNT_MARGIN = "50% 0px";
+const RELEASE_MARGIN = "200% 0px";
+
+/** Inline result card: streams the draft source, then renders the Core-authorized page in place.
+ * 内嵌结果卡：先流式显示草稿源码，再就地渲染经 Core 授权的页面。
+ * Only Core-ready descriptors request a viewer, and only while the card is near the viewport;
+ * the page runs in the isolated viewer frame and never in the workbench document.
+ * 仅 Core 就绪描述且卡片接近视口时才申请查看器；页面运行于隔离查看器框架，绝不进入工作台文档。 */
 export function HtmlAnswerCard(props: {
   /** Canonical source authority for this message.
    * 当前消息的权威源码归属。 */
@@ -32,86 +43,87 @@ export function HtmlAnswerCard(props: {
   copyText: (text: string) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
-  const [open, setOpen] = React.useState(false);
-  const [fullscreen, setFullscreen] = React.useState(false);
+  const [maximized, setMaximized] = React.useState(false);
   const [showSource, setShowSource] = React.useState(false);
   const [link, setLink] = React.useState<HtmlAnswerViewLink | null>(null);
   const [pending, setPending] = React.useState(false);
+  const [failure, setFailure] = React.useState<TranslationKey | null>(null);
   const [feedback, setFeedback] = React.useState<TranslationKey | null>(null);
+  const [height, setHeight] = React.useState(FRAME_INITIAL_HEIGHT);
+  const [near, setNear] = React.useState(false);
   // The displayed link lifetime is supplied by Core, never duplicated as a client constant.
   // 链接有效期由 Core 提供，绝不重复定义为客户端常量。
   const [copiedTicketSeconds, setCopiedTicketSeconds] = React.useState(0);
-  // The operation token invalidates delayed opens after close, owner change or unmount.
-  // 操作令牌使关闭、归属变化或卸载后的迟到打开失效。
-  const operation = React.useRef<object | null>(null);
+  const [copyPending, setCopyPending] = React.useState(false);
+  // Operation tokens invalidate late grants after release, owner change or unmount; the inline
+  // frame and a copied link are independent grants.
+  // 操作令牌使释放、归属变化或卸载后的迟到授权失效；内嵌框架与复制链接是相互独立的授权。
+  const viewOperation = React.useRef<object | null>(null);
+  const copyOperation = React.useRef<object | null>(null);
   const ownedGrant = React.useRef<string | null>(null);
   const mounted = React.useRef(false);
-  // Retain the exact trigger and viewer for focus restoration and sender authentication.
-  // 保留精确触发按钮与查看器，用于焦点恢复及发送者认证。
-  const trigger = React.useRef<HTMLButtonElement>(null);
+  const card = React.useRef<HTMLElement>(null);
   const viewer = React.useRef<HTMLIFrameElement>(null);
+  const streamTail = React.useRef<HTMLPreElement>(null);
   const title = props.descriptor?.title ?? t("htmlAnswers.label");
-  const ready = props.descriptor?.availability.status === "ready";
+  const availability = props.descriptor?.availability;
+  const ready = availability?.status === "ready";
+
+  /** Drop the frame and revoke its grant; late issuance for the old token is revoked on arrival.
+   * 移除框架并撤销其授权；旧令牌的迟到签发在到达时撤销。 */
+  const release = React.useCallback(() => {
+    viewOperation.current = null;
+    setPending(false);
+    setLink(null);
+    const grant = ownedGrant.current;
+    ownedGrant.current = null;
+    if (grant) void revokeHtmlAnswerViewLink(grant).catch(() => undefined);
+  }, []);
+
   React.useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      operation.current = null;
+      viewOperation.current = null;
+      copyOperation.current = null;
       if (ownedGrant.current) void revokeHtmlAnswerViewLink(ownedGrant.current).catch(() => undefined);
       ownedGrant.current = null;
     };
   }, []);
 
-  /** Close immediately and invalidate both an in-flight issuance and an already exchanged grant.
-   * 立即关闭，同时使签发中的操作和已兑换授权失效。 */
-  const close = React.useCallback(() => {
-    operation.current = null;
-    setOpen(false);
-    setPending(false);
-    setLink(null);
-    const grant = ownedGrant.current;
-    ownedGrant.current = null;
-    if (grant) void revokeHtmlAnswerViewLink(grant).catch(() => {
-      if (mounted.current) setFeedback("htmlAnswers.unavailable");
-    });
-  }, []);
-
+  // Track viewport proximity with hysteresis so scrolling past does not churn single-use tickets.
+  // 以滞后区间跟踪视口距离，避免滚动经过时反复消耗单次票据。
   React.useEffect(() => {
-    if (!open || !link) return;
-    const origin = new URL(link.viewerUrl).origin;
-    /** Accept only this trusted viewer's close signal; no generated-page host API is exposed.
-     * 仅接受当前可信查看器的关闭信号；不向生成页面暴露宿主 API。 */
-    const receiveClose = (event: MessageEvent) => {
-      if (event.data === HTML_ANSWER_CLOSE && event.origin === origin
-        && viewer.current?.contentWindow && event.source === viewer.current.contentWindow) close();
-    };
-    window.addEventListener("message", receiveClose);
-    return () => window.removeEventListener("message", receiveClose);
-  }, [open, link, close]);
+    const element = card.current;
+    if (!element || !ready) return;
+    if (typeof IntersectionObserver === "undefined") { setNear(true); return; }
+    const mount = new IntersectionObserver(([entry]) => { if (entry?.isIntersecting) setNear(true); }, { rootMargin: MOUNT_MARGIN });
+    const keep = new IntersectionObserver(([entry]) => { if (entry && !entry.isIntersecting) setNear(false); }, { rootMargin: RELEASE_MARGIN });
+    mount.observe(element);
+    keep.observe(element);
+    return () => { mount.disconnect(); keep.disconnect(); };
+  }, [ready]);
 
-  /** Issue only on a user click; obsolete responses are revoked instead of opening another owner.
-   * 仅在用户点击时签发；过期回包会撤销，绝不打开其他归属。
-   * copy selects clipboard delivery; returns after issuance and the selected action finish.
-   * copy 选择剪贴板交付；签发及对应操作结束后返回。 */
-  const requestView = async (copy: boolean) => {
-    const availability = props.descriptor?.availability;
+  /** Issue one grant for `copy` delivery or for the inline frame; obsolete responses are revoked.
+   * 为复制交付或内嵌框架签发一份授权；过期回包会被撤销。 */
+  const { copyText, message: { source: owner } } = props;
+  const request = React.useCallback(async (copy: boolean) => {
+    const operation = copy ? copyOperation : viewOperation;
     if (availability?.status !== "ready" || operation.current) return;
     const token = {};
     operation.current = token;
-    setPending(true);
-    setFeedback(null);
-    if (!copy) { setOpen(true); setFullscreen(false); }
-    let copying = false;
+    if (copy) { setCopyPending(true); setFeedback(null); } else { setPending(true); setFailure(null); }
+    let delivering = false;
     try {
-      const result = await createHtmlAnswerViewLink({ ...props.message.source, artifactId: availability.artifact_id }, locale);
+      const result = await createHtmlAnswerViewLink({ ...owner, artifactId: availability.artifact_id }, locale);
       if (!mounted.current || operation.current !== token) {
         await revokeHtmlAnswerViewLink(result.grantId);
         return;
       }
       if (copy) {
-        copying = true;
+        delivering = true;
         try {
-          await props.copyText(result.viewerUrl);
+          await copyText(result.viewerUrl);
           if (mounted.current && operation.current === token) {
             setCopiedTicketSeconds(result.expiresInSeconds);
             setFeedback("htmlAnswers.linkCopied");
@@ -126,48 +138,126 @@ export function HtmlAnswerCard(props: {
       }
     } catch (error) {
       if (mounted.current && operation.current === token) {
-        setOpen(false);
-        setFeedback(copying ? "htmlAnswers.copyFailed" : htmlAnswerRequestErrorLabel(error));
+        if (copy) setFeedback(delivering ? "htmlAnswers.copyFailed" : htmlAnswerRequestErrorLabel(error));
+        else setFailure(htmlAnswerRequestErrorLabel(error));
       }
     } finally {
       if (mounted.current && operation.current === token) {
         operation.current = null;
-        setPending(false);
+        if (copy) setCopyPending(false); else setPending(false);
       }
     }
-  };
+  }, [availability, locale, owner, copyText]);
 
+  // Render automatically once ready and near the viewport; release when it moves far away.
+  // 就绪且接近视口时自动渲染；远离视口后释放。
+  React.useEffect(() => {
+    if (!ready) return;
+    if (near && !link && !pending && !failure) void request(false);
+    if (!near && (link || pending) && !maximized) release();
+  }, [ready, near, link, pending, failure, maximized, request, release]);
+
+  // Size the frame from the trusted viewer's relay and restore from maximize on its close signal.
+  // 依据可信查看器的转发调整框架高度，并在收到关闭信号时退出最大化。
+  React.useEffect(() => {
+    if (!link) return;
+    const origin = new URL(link.viewerUrl).origin;
+    /** Accept only this viewer window's messages; the page can report a height or ask to close.
+     * 仅接受当前查看器窗口的消息；页面只能上报高度或请求关闭。 */
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== origin || !viewer.current?.contentWindow || event.source !== viewer.current.contentWindow) return;
+      if (event.data === HTML_ANSWER_CLOSE_MESSAGE) { setMaximized(false); return; }
+      const data = event.data as { type?: unknown; height?: unknown } | null;
+      if (data?.type === HTML_ANSWER_HEIGHT_MESSAGE && typeof data.height === "number" && Number.isFinite(data.height)) {
+        setHeight(Math.min(FRAME_MAX_HEIGHT, Math.max(FRAME_MIN_HEIGHT, Math.ceil(data.height))));
+      }
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [link]);
+
+  // Maximize promotes the card itself to the top layer: transformed transcript ancestors cannot
+  // offset it, and the frame is never moved, so the page keeps its state.
+  // 最大化将卡片自身提升到顶层：带变换的会话祖先无法使其偏移，框架也不会移动，页面状态得以保留。
+  React.useLayoutEffect(() => {
+    const element = card.current;
+    if (!element || typeof element.showPopover !== "function") return;
+    if (maximized) {
+      element.setAttribute("popover", "manual");
+      element.showPopover();
+      return () => { if (element.matches(":popover-open")) element.hidePopover(); element.removeAttribute("popover"); };
+    }
+  }, [maximized]);
+
+  React.useEffect(() => {
+    if (!maximized) return;
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") setMaximized(false); };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [maximized]);
+
+  // Keep the newest streamed lines in view while the draft grows.
+  // 草稿增长时保持最新流式内容可见。
+  React.useLayoutEffect(() => {
+    if (streamTail.current) streamTail.current.scrollTop = streamTail.current.scrollHeight;
+  }, [props.source]);
+
+  /** Re-render from a fresh grant after an error, an expired lease or a user request.
+   * 出错、租约过期或用户请求后使用新授权重新渲染。 */
+  const reload = () => { release(); setFailure(null); };
+
+  const status = ready ? null : htmlAnswerStatusLabel(props.descriptor, props.streaming);
+  const preview = !ready && (props.streaming || status === "htmlAnswers.waiting");
   return (
-    <figure className="html-answer-card" data-status={ready ? "ready" : props.streaming ? "generating" : "unavailable"}>
-      <figcaption><FileCode2 aria-hidden="true" size={18} /><strong>{title}</strong></figcaption>
-      {!ready && <p role="status">{t(htmlAnswerStatusLabel(props.descriptor, props.streaming))}</p>}
-      <div className="html-answer-card-actions">
-        <Button ref={trigger} variant="outline" size="sm" disabled={!ready || pending} onClick={() => void requestView(false)}>{t("htmlAnswers.open")}</Button>
-        {ready && <Button variant="ghost" size="sm" disabled={pending} onClick={() => void requestView(true)}>{t("htmlAnswers.copyLink")}</Button>}
-        <Button variant="ghost" size="sm" aria-expanded={showSource} onClick={() => setShowSource(!showSource)}><Code size={14} />{t("htmlAnswers.source")}</Button>
-        <Button variant="ghost" size="sm" onClick={() => {
-          void props.copyText(props.source).then(() => {
-            if (mounted.current) setFeedback("htmlAnswers.copied");
-          }, () => { if (mounted.current) { setShowSource(true); setFeedback("htmlAnswers.copyFailed"); } });
-        }}><Copy size={14} />{t("htmlAnswers.copySource")}</Button>
-      </div>
-      {feedback && <p role="status">{feedback === "htmlAnswers.linkCopied" ? formatMessage(t(feedback), { seconds: copiedTicketSeconds }) : t(feedback)}</p>}
-      {showSource && <pre className="html-answer-source"><code>{props.source}</code></pre>}
-      <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }}>
-        <DialogContent size={fullscreen ? "fullscreen" : "viewer"} layout="viewer" className="html-answer-dialog" aria-describedby={undefined}
-          onCloseAutoFocus={(event) => { event.preventDefault(); trigger.current?.focus(); }}>
-          <div className="html-answer-dialog-header">
-            <DialogTitle>{t("htmlAnswers.label")}</DialogTitle>
-            <Button variant="ghost" size="icon-sm" aria-label={t(fullscreen ? "htmlAnswers.restore" : "htmlAnswers.maximize")} onClick={() => setFullscreen(!fullscreen)}>
-              {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+    <figure ref={card} className="html-answer-card" data-status={ready ? "ready" : props.streaming ? "generating" : "unavailable"}
+      data-maximized={maximized || undefined}>
+      <figcaption className="html-answer-card-bar">
+        <FileCode2 aria-hidden="true" size={16} />
+        <strong>{title}</strong>
+        {status && <span role="status" className="html-answer-card-status">{t(status)}</span>}
+        <span className="html-answer-card-actions">
+          <Button variant="ghost" size="icon-sm" aria-pressed={showSource} aria-label={t("htmlAnswers.source")} title={t("htmlAnswers.source")}
+            onClick={() => setShowSource(!showSource)}><Code size={15} /></Button>
+          <Button variant="ghost" size="icon-sm" aria-label={t("htmlAnswers.copySource")} title={t("htmlAnswers.copySource")} onClick={() => {
+            void props.copyText(props.source).then(() => {
+              if (mounted.current) setFeedback("htmlAnswers.copied");
+            }, () => { if (mounted.current) { setShowSource(true); setFeedback("htmlAnswers.copyFailed"); } });
+          }}><Copy size={15} /></Button>
+          {ready && <>
+            <Button variant="ghost" size="icon-sm" aria-label={t("htmlAnswers.copyLink")} title={t("htmlAnswers.copyLink")}
+              disabled={copyPending} onClick={() => void request(true)}><Link2 size={15} /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={t("htmlAnswers.reload")} title={t("htmlAnswers.reload")}
+              disabled={pending} onClick={reload}><RotateCw size={15} /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={t(maximized ? "htmlAnswers.restore" : "htmlAnswers.maximize")}
+              title={t(maximized ? "htmlAnswers.restore" : "htmlAnswers.maximize")} onClick={() => setMaximized(!maximized)}>
+              {maximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
             </Button>
-          </div>
-          {open && link ? <iframe ref={viewer} title={title} src={link.viewerUrl} allow="clipboard-write" referrerPolicy="no-referrer" className="html-answer-viewer-frame" />
-            : <p role="status">{t("ui.loading")}</p>}
-        </DialogContent>
-      </Dialog>
+          </>}
+        </span>
+      </figcaption>
+      {feedback && <p role="status" className="html-answer-card-feedback">
+        {feedback === "htmlAnswers.linkCopied" ? formatMessage(t(feedback), { seconds: copiedTicketSeconds }) : t(feedback)}
+      </p>}
+      {preview && !showSource && <pre ref={streamTail} className="html-answer-stream" aria-live="off"><code>
+        {streamedDraft(props.source)}
+      </code></pre>}
+      {showSource && <pre className="html-answer-source"><code>{props.source}</code></pre>}
+      {ready && <div className="html-answer-render" hidden={showSource} style={maximized ? undefined : { height }}>
+        {link ? <iframe ref={viewer} title={title} src={link.viewerUrl} allow="clipboard-write" referrerPolicy="no-referrer"
+          className="html-answer-viewer-frame" />
+          : <div className="html-answer-render-state" role={failure ? "alert" : "status"}>
+            {failure ? <>{t(failure)} <Button variant="outline" size="sm" onClick={reload}>{t("htmlAnswers.reload")}</Button></> : t("ui.loading")}
+          </div>}
+      </div>}
     </figure>
   );
+}
+
+/** Return the bounded display tail of a growing fence without its marker lines; text only, never parsed.
+ * 返回增长中围栏去除标记行后的有界展示尾部；仅为文字，绝不解析。 */
+function streamedDraft(source: string): string {
+  const body = source.replace(/^(?:\r?\n)* {0,3}`{3,}[^\n]*\n?/u, "").replace(/\n {0,3}`{3,}[ \t]*\r?\n?$/u, "");
+  return body.length > STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS ? body.slice(-STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS) : body;
 }
 
 /** Map Core rejection categories to shared copy; never infer executable validity in the UI.

@@ -16,3 +16,11 @@ export const PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES = 65536;
 /** Service hard limit on the input events carried by one project terminal batch.
  * 服务端对单个项目终端批次承载输入事件数的硬限制。 */
 export const PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS = 256;
+
+/** Parameterless notification a rendered HTML answer posts to close or restore its viewer.
+ * 渲染后的 HTML 回答发送的无参数通知，用于关闭或还原其查看器。 */
+export const HTML_ANSWER_CLOSE_MESSAGE = "vulcan-html-answer-close-v1";
+
+/** Message type carrying only a rendered HTML answer's content height.
+ * 仅携带渲染后 HTML 回答内容高度的消息类型。 */
+export const HTML_ANSWER_HEIGHT_MESSAGE = "vulcan-html-answer-height-v1";
