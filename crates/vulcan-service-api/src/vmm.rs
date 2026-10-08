@@ -554,7 +554,7 @@ pub struct VmmEffectiveSummary {
 
 /// Editable VMM configuration draft summary.
 /// 可编辑 VMM 配置草稿摘要。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmmConfigDraftSummary {
     /// Whether this layer has explicit overrides.
@@ -647,6 +647,68 @@ pub struct VmmConfigDraftSummary {
     /// Editable injection description.
     /// 可编辑注入说明。
     pub injection_description: String,
+}
+
+impl std::fmt::Debug for VmmConfigDraftSummary {
+    /// Formats the draft while reducing the transport secrets, which a save request carries verbatim, to presence flags.
+    /// 格式化草稿，同时将保存请求会原样携带的传输秘密收敛为存在性标记。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `formatter` receives the redacted structural representation.
+    /// `formatter` 接收脱敏后的结构表示。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the formatter result without any secret value.
+    /// 返回不含任何秘密值的格式化结果。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VmmConfigDraftSummary")
+            .field("has_override", &self.has_override)
+            .field("backend_mode", &self.backend_mode)
+            .field(
+                "native_project_binding_mode",
+                &self.native_project_binding_mode,
+            )
+            .field(
+                "external_project_binding_mode",
+                &self.external_project_binding_mode,
+            )
+            .field("native_fixed_project_id", &self.native_fixed_project_id)
+            .field("external_project_prefix", &self.external_project_prefix)
+            .field("enabled", &self.enabled)
+            .field("grpc_target", &self.grpc_target)
+            .field("has_grpc_api_key", &!self.grpc_api_key.is_empty())
+            .field("management_base_url", &self.management_base_url)
+            .field(
+                "has_management_bearer_token",
+                &!self.management_bearer_token.is_empty(),
+            )
+            .field("management_timeout_ms", &self.management_timeout_ms)
+            .field("user_id", &self.user_id)
+            .field("project_id", &self.project_id)
+            .field("receive_timeout_ms", &self.receive_timeout_ms)
+            .field("handshake_timeout_ms", &self.handshake_timeout_ms)
+            .field("max_receive_message_bytes", &self.max_receive_message_bytes)
+            .field("grpc_keepalive_time_ms", &self.grpc_keepalive_time_ms)
+            .field("grpc_keepalive_timeout_ms", &self.grpc_keepalive_timeout_ms)
+            .field(
+                "grpc_keepalive_permit_without_calls",
+                &self.grpc_keepalive_permit_without_calls,
+            )
+            .field("implicit_memory_turns", &self.implicit_memory_turns)
+            .field("profile_refresh_turns", &self.profile_refresh_turns)
+            .field("profile_node_limit", &self.profile_node_limit)
+            .field("ai_tools_enabled", &self.ai_tools_enabled)
+            .field("precheck_enabled", &self.precheck_enabled)
+            .field("precheck_mode", &self.precheck_mode)
+            .field("memory_writeback_enabled", &self.memory_writeback_enabled)
+            .field("memory_writeback_mode", &self.memory_writeback_mode)
+            .field("injection_tag", &self.injection_tag)
+            .field("injection_description", &self.injection_description)
+            .finish()
+    }
 }
 
 /// Project scope row available to VMM project settings.

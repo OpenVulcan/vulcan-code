@@ -46,7 +46,7 @@ use responses::*;
 
 /// Runtime transport options for the VMM gRPC client.
 /// VMM gRPC 客户端的运行时传输选项。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct VmmTransportConfig {
     /// gRPC target such as 127.0.0.1:50051.
     /// gRPC 目标，例如 127.0.0.1:50051。

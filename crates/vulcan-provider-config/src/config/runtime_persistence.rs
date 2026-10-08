@@ -556,7 +556,7 @@ impl fmt::Display for PersistedMcpTransportKind {
 
 /// One persisted MCP server entry stored in the shared configuration file.
 /// 存储在共享配置文件中的单个持久化 MCP 服务器条目。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedMcpOAuthConfig {
     /// Optional pre-registered OAuth client identifier.
@@ -579,7 +579,7 @@ pub struct PersistedMcpOAuthConfig {
 
 /// One persisted MCP server entry stored in the shared configuration file.
 /// 存储在共享配置文件中的单个持久化 MCP 服务器条目。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedMcpServerEntry {
     /// Human-readable server name.
@@ -632,6 +632,49 @@ pub struct PersistedMcpServerEntry {
     /// 当前宿主进程中存在时应被透传的可选环境变量名称集合。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_passthrough: Vec<String>,
+}
+
+impl fmt::Debug for PersistedMcpServerEntry {
+    /// Formats the server topology while redacting the token, OAuth secret, header and environment values.
+    /// 格式化服务器拓扑，同时脱敏 Token、OAuth 密钥、请求头与环境变量值。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `formatter` receives only key names and presence flags for credential-bearing values.
+    /// `formatter` 对承载凭据的值只接收键名与存在性标记。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the formatter result without any secret value.
+    /// 返回不含任何秘密值的格式化结果。
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PersistedMcpServerEntry")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("transport", &self.transport)
+            .field("command", &self.command)
+            .field("argument_count", &self.args.len())
+            .field("url", &self.url)
+            .field("has_bearer_token", &self.bearer_token.is_some())
+            .field("header_keys", &self.headers.keys().collect::<Vec<_>>())
+            .field("headers_from_env", &self.headers_from_env)
+            .field(
+                "oauth",
+                &self.oauth.as_ref().map(|oauth| {
+                    (
+                        oauth.client_id.as_deref(),
+                        oauth.client_secret.is_some(),
+                        &oauth.scopes,
+                        oauth.redirect_uri.as_deref(),
+                    )
+                }),
+            )
+            .field("cwd", &self.cwd)
+            .field("environment_keys", &self.env.keys().collect::<Vec<_>>())
+            .field("env_passthrough", &self.env_passthrough)
+            .finish()
+    }
 }
 
 /// MCP configuration block persisted inside the shared Vulcan configuration file.

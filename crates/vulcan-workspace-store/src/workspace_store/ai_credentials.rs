@@ -5,7 +5,7 @@ use super::*;
 
 /// Stores one complete relational AI credential row without provider-domain interpretation.
 /// 保存一条完整关系化 AI 凭据记录，不在存储层解释供应商领域语义。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct AiCredentialSecretRecord {
     /// Opaque reference retained by the public AI connection graph.
     /// 公共 AI 连接图持有的不透明引用。

@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, watch};
 
 /// Stable host-owned OAuth configuration attached to one remote MCP transport.
 /// 附加到单个远端 MCP 传输上的稳定宿主自有 OAuth 配置。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTransportOAuthSpec {
     /// Optional pre-registered OAuth client identifier.
@@ -93,7 +93,7 @@ impl McpAuthChallenge {
 
 /// One persisted OAuth credential record bound to the server URL it was issued for.
 /// 绑定到签发时服务器 URL 的单条持久化 OAuth 凭据记录。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpOAuthCredentialRecord {
     /// Remote MCP URL the credentials were issued for; a different configured URL treats the record as absent.
@@ -125,7 +125,7 @@ pub trait McpOAuthCredentialBackend: Send + Sync + 'static {
 
 /// Process-local credential backend used when the host installs no persistent store.
 /// 宿主未安装持久化存储时使用的进程内凭据后端。
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct McpOAuthMemoryCredentialBackend {
     /// Records keyed by server identifier.
     /// 以服务器标识为键的记录。

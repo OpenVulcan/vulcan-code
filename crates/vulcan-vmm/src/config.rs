@@ -213,7 +213,7 @@ impl VmmBackendMode {
 
 /// One optional VMM configuration layer.
 /// 一层可选的 VMM 配置。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmmConfigLayer {
     /// Optional global backend selection; project and session layers leave it unset.
     /// 可选的全局后端选择；项目层和会话层保持未设置。
@@ -333,6 +333,67 @@ pub struct VmmConfigLayer {
     pub injection_description: Option<String>,
 }
 
+impl std::fmt::Debug for VmmConfigLayer {
+    /// Formats every override while reducing the transport secrets to presence flags.
+    /// 格式化全部覆盖项，同时将传输秘密收敛为存在性标记。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `formatter` receives the redacted structural representation.
+    /// `formatter` 接收脱敏后的结构表示。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the formatter result without any secret value.
+    /// 返回不含任何秘密值的格式化结果。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VmmConfigLayer")
+            .field("backend_mode", &self.backend_mode)
+            .field(
+                "native_project_binding_mode",
+                &self.native_project_binding_mode,
+            )
+            .field(
+                "external_project_binding_mode",
+                &self.external_project_binding_mode,
+            )
+            .field("native_fixed_project_id", &self.native_fixed_project_id)
+            .field("external_project_prefix", &self.external_project_prefix)
+            .field("enabled", &self.enabled)
+            .field("grpc_target", &self.grpc_target)
+            .field("has_grpc_api_key", &self.grpc_api_key.is_some())
+            .field("management_base_url", &self.management_base_url)
+            .field(
+                "has_management_bearer_token",
+                &self.management_bearer_token.is_some(),
+            )
+            .field("management_timeout_ms", &self.management_timeout_ms)
+            .field("handshake_timeout_ms", &self.handshake_timeout_ms)
+            .field("receive_timeout_ms", &self.receive_timeout_ms)
+            .field("max_receive_message_bytes", &self.max_receive_message_bytes)
+            .field("grpc_keepalive_time_ms", &self.grpc_keepalive_time_ms)
+            .field("grpc_keepalive_timeout_ms", &self.grpc_keepalive_timeout_ms)
+            .field(
+                "grpc_keepalive_permit_without_calls",
+                &self.grpc_keepalive_permit_without_calls,
+            )
+            .field("user_id", &self.user_id)
+            .field("project_id", &self.project_id)
+            .field("visible_memory_injection", &self.visible_memory_injection)
+            .field("implicit_memory_turns", &self.implicit_memory_turns)
+            .field("profile_refresh_turns", &self.profile_refresh_turns)
+            .field("profile_node_limit", &self.profile_node_limit)
+            .field("session_compact_recall", &self.session_compact_recall)
+            .field("precheck_enabled", &self.precheck_enabled)
+            .field("memory_writeback_enabled", &self.memory_writeback_enabled)
+            .field("ai_tools_enabled", &self.ai_tools_enabled)
+            .field("injection_tag", &self.injection_tag)
+            .field("injection_description", &self.injection_description)
+            .finish()
+    }
+}
+
 impl VmmConfigLayer {
     /// Returns whether this layer carries no explicit override.
     /// 返回该配置层是否不包含任何显式覆盖。
@@ -362,7 +423,7 @@ pub enum VmmEffectiveConfigSource {
 
 /// Final VMM configuration after global, project, and session layers are resolved.
 /// 解析全局、项目与会话层之后得到的最终 VMM 配置。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmmEffectiveConfig {
     /// Final backend selected by the global configuration.
     /// 由全局配置选择出的最终后端。
@@ -454,6 +515,58 @@ pub struct VmmEffectiveConfig {
     /// Final injection description.
     /// 最终注入说明。
     pub injection_description: String,
+}
+
+impl std::fmt::Debug for VmmEffectiveConfig {
+    /// Formats the resolved configuration while reducing the transport secret to a presence flag.
+    /// 格式化解析后的配置，同时将传输秘密收敛为存在性标记。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VmmEffectiveConfig")
+            .field("backend_mode", &self.backend_mode)
+            .field(
+                "native_project_binding_mode",
+                &self.native_project_binding_mode,
+            )
+            .field(
+                "external_project_binding_mode",
+                &self.external_project_binding_mode,
+            )
+            .field("native_fixed_project_id", &self.native_fixed_project_id)
+            .field("external_project_prefix", &self.external_project_prefix)
+            .field("enabled", &self.enabled)
+            .field("enabled_source", &self.enabled_source)
+            .field("grpc_target", &self.grpc_target)
+            .field("grpc_target_source", &self.grpc_target_source)
+            .field("has_grpc_api_key", &self.grpc_api_key.is_some())
+            .field("handshake_timeout_ms", &self.handshake_timeout_ms)
+            .field("receive_timeout_ms", &self.receive_timeout_ms)
+            .field("max_receive_message_bytes", &self.max_receive_message_bytes)
+            .field("grpc_keepalive_time_ms", &self.grpc_keepalive_time_ms)
+            .field("grpc_keepalive_timeout_ms", &self.grpc_keepalive_timeout_ms)
+            .field(
+                "grpc_keepalive_permit_without_calls",
+                &self.grpc_keepalive_permit_without_calls,
+            )
+            .field("user_id", &self.user_id)
+            .field("project_id", &self.project_id)
+            .field("visible_memory_injection", &self.visible_memory_injection)
+            .field("implicit_memory_turns", &self.implicit_memory_turns)
+            .field("profile_refresh_turns", &self.profile_refresh_turns)
+            .field("profile_node_limit", &self.profile_node_limit)
+            .field("session_compact_recall", &self.session_compact_recall)
+            .field("precheck_enabled", &self.precheck_enabled)
+            .field("precheck_enabled_source", &self.precheck_enabled_source)
+            .field("memory_writeback_enabled", &self.memory_writeback_enabled)
+            .field(
+                "memory_writeback_enabled_source",
+                &self.memory_writeback_enabled_source,
+            )
+            .field("ai_tools_enabled", &self.ai_tools_enabled)
+            .field("injection_tag", &self.injection_tag)
+            .field("injection_description", &self.injection_description)
+            .finish()
+    }
 }
 
 impl Default for VmmEffectiveConfig {

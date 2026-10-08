@@ -33,7 +33,7 @@ use crate::{
 
 /// Creates or replaces one user-defined compatible provider.
 /// 创建或替换一个用户自定义兼容供应商。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// Existing provider identifier when editing.

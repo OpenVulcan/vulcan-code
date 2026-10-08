@@ -28,7 +28,7 @@ pub(super) async fn service_mcp_server_capabilities(
 }
 
 /// WebUI 设置页发送的 MCP 服务器配置保存请求。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct McpServerSaveRequest {
     /// Existing server identifier, or `None` when creating one.

@@ -114,7 +114,6 @@ pub enum ProviderApiTraceReservationOutcome {
 
 /// Borrowed complete payload of one finished physical attempt.
 /// 一次已结束物理 attempt 的借用完整载荷。
-#[derive(Debug)]
 pub struct ProviderApiTracePayload<'a> {
     /// Complete Provider input after final wire lowering.
     /// 最终 wire lowering 后的完整 Provider 输入。

@@ -5139,7 +5139,7 @@ pub struct BrowserDialogPublicRecord {
 
 /// Controller answer to one pending page dialog.
 /// 控制者对一个待处理页面对话框的答复。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserDialogRespondRequest {
     /// Owning Core session identity.
@@ -5410,7 +5410,7 @@ pub async fn service_browser_dialog_respond(
 
 /// Request object for staging one uploaded file.
 /// 暂存一个上传文件的请求对象。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserUploadStageRequest {
     /// Stable session identifier.
@@ -5429,7 +5429,7 @@ pub struct BrowserUploadStageRequest {
 
 /// Request object for placing one staged upload into a page.
 /// 将一个暂存上传放入页面的请求对象。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserUploadAttachRequest {
     /// Stable session identifier.
@@ -5688,7 +5688,7 @@ pub struct BrowserSessionCreateRequest {
 
 /// Closes one Core browser session.
 /// 关闭一个 Core 浏览器会话。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserSessionCloseRequest {
     /// Stable session identifier.
@@ -5701,7 +5701,7 @@ pub struct BrowserSessionCloseRequest {
 
 /// Navigates one Core browser session.
 /// 导航一个 Core 浏览器会话。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserSessionNavigateRequest {
     /// Stable session identifier.
@@ -5743,7 +5743,7 @@ pub struct BrowserLeaseAcquireRequest {
 
 /// Acquired lease response carrying the one-time control secret.
 /// 携带一次性控制凭据的已获取租约响应。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserLeaseAcquireResponse {
     /// Session projection after acquisition.
@@ -5765,7 +5765,7 @@ pub struct BrowserLeaseAcquireResponse {
 
 /// Releases one Core browser control lease.
 /// 释放一个 Core 浏览器控制租约。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserLeaseReleaseRequest {
     /// Stable session identifier.
@@ -5778,7 +5778,7 @@ pub struct BrowserLeaseReleaseRequest {
 
 /// Heartbeats one Core browser control lease.
 /// 为一个 Core 浏览器控制租约发送心跳。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserLeaseHeartbeatRequest {
     /// Stable session identifier.
@@ -5830,7 +5830,7 @@ pub struct BrowserObserveUnsubscribeRequest {
 
 /// Dispatches one Core browser input event.
 /// 派发一个 Core 浏览器输入事件。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserInputDispatchRequest {
     /// Stable session identifier.
@@ -5889,7 +5889,7 @@ pub struct BrowserInputDispatchResponse {
 
 /// Request object for establishing the viewport of one session.
 /// 建立某个会话视口的请求对象。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserViewportSetRequest {
     /// Stable session identifier.
@@ -5941,7 +5941,7 @@ pub struct BrowserLeaseTakeoverRequest {
 
 /// Response carrying the rotated lease credentials.
 /// 携带轮换后租约凭据的响应。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserLeaseTakeoverResponse {
     /// Projection after the takeover.
@@ -5968,7 +5968,7 @@ pub struct BrowserOperationsConfirmRequest {
 
 /// Creates one new page inside a Core browser session.
 /// 在一个 Core 浏览器会话内创建一个新页面。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserPageCreateRequest {
     /// Stable session identifier.
@@ -5984,7 +5984,7 @@ pub struct BrowserPageCreateRequest {
 
 /// Identifies an exact page and the control grant authorizing its closure.
 /// 标识精确页面及授权关闭它的控制凭据。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserPageCloseRequest {
     /// Stable Core browser identity.
@@ -6000,7 +6000,7 @@ pub struct BrowserPageCloseRequest {
 
 /// Hides the local host windows of one Core browser session.
 /// 隐藏某个 Core 浏览器会话的宿主本地窗口。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserSessionHideWindowsRequest {
     /// Stable session identifier.

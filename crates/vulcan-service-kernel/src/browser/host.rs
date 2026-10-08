@@ -41,7 +41,7 @@ pub const BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
 
 /// First message Core sends on the control connection to prove channel ownership.
 /// Core 在控制连接上发送的首条消息，用于证明通道归属。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserHostCoreHello {
     /// Frame discriminator.
@@ -981,7 +981,7 @@ pub fn read_control_discovery(path: &std::path::Path) -> Option<BrowserHostContr
 
 /// One planned browser host process launch.
 /// 一次已规划的浏览器宿主进程启动。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BrowserHostLaunchPlan {
     /// Managed Node executable that hosts the independent Core browser.
     /// 承载独立 Core 浏览器的受管 Node 可执行程序。

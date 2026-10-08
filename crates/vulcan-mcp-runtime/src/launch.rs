@@ -12,7 +12,7 @@ mod resource_tests;
 
 /// Stable host-owned MCP transport launch specification.
 /// 宿主自有 MCP 传输启动规格。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum McpTransportLaunchSpec {
     /// Child-process stdio launch specification.
     /// 子进程 stdio 启动规格。
@@ -74,6 +74,56 @@ pub enum McpTransportLaunchSpec {
         /// 宿主驱动远端授权流程使用的可选 OAuth 配置。
         oauth: Option<McpTransportOAuthSpec>,
     },
+}
+
+impl std::fmt::Debug for McpTransportLaunchSpec {
+    /// Shows the launch shape while reducing tokens, header values and environment values to presence.
+    /// 显示启动形态，同时将令牌、请求头值与环境值缩减为存在性。
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stdio {
+                endpoint,
+                program,
+                args,
+                cwd,
+                env,
+                inherit_environment,
+            } => formatter
+                .debug_struct("Stdio")
+                .field("endpoint", endpoint)
+                .field("program", program)
+                .field("argument_count", &args.len())
+                .field("cwd", cwd)
+                .field("environment_keys", &env.keys().collect::<Vec<_>>())
+                .field("inherit_environment", inherit_environment)
+                .finish(),
+            Self::Http {
+                endpoint,
+                uri,
+                bearer_token,
+                headers,
+                oauth,
+            }
+            | Self::Sse {
+                endpoint,
+                uri,
+                bearer_token,
+                headers,
+                oauth,
+            } => formatter
+                .debug_struct(if matches!(self, Self::Http { .. }) {
+                    "Http"
+                } else {
+                    "Sse"
+                })
+                .field("endpoint", endpoint)
+                .field("uri", uri)
+                .field("has_bearer_token", &bearer_token.is_some())
+                .field("header_keys", &headers.keys().collect::<Vec<_>>())
+                .field("has_oauth", &oauth.is_some())
+                .finish(),
+        }
+    }
 }
 
 impl McpTransportLaunchSpec {
