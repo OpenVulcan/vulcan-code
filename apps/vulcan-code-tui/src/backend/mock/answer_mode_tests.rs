@@ -31,3 +31,21 @@ fn answer_mode_mock_follows_compare_and_set() {
         }
     )));
 }
+
+/// Saving the global default changes only conversations created afterwards.
+/// 保存全局默认只影响之后新建的会话。
+#[test]
+fn new_conversations_copy_the_global_default_once() {
+    let (out, _events) = mpsc::channel();
+    let mut world = World::new(out, Pacing::Immediate);
+    let mode_of = |world: &World, id: &str| world.logs[id].answer_mode.mode.as_ref().unwrap().mode;
+    world.handle(Command::NewConversation { project_id: None });
+    let before = world.conversations[0].id.clone();
+    world.handle(Command::Call(
+        crate::service_api::settings_actions::save_prompt_answer_mode("interactive"),
+    ));
+    world.handle(Command::NewConversation { project_id: None });
+    let after = world.conversations[0].id.clone();
+    assert_eq!(mode_of(&world, &before), AnswerMode::Standard);
+    assert_eq!(mode_of(&world, &after), AnswerMode::Interactive);
+}

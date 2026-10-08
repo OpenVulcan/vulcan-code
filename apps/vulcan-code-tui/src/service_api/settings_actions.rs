@@ -37,6 +37,21 @@ pub fn save_prompt_output_style(style_id: &str) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_save_prompt_answer_mode`.
+/// 构建 `service_save_prompt_answer_mode` 的请求。
+/// `mode` is the global default answer mode that new conversations copy.
+/// `mode` 为新会话复制的全局默认回答模式。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_prompt_answer_mode(mode: &str) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_prompt_answer_mode",
+        "service_save_prompt_answer_mode",
+        json!({ "request": { "mode": mode } }),
+        WORKBENCH,
+    )
+}
+
 /// Builds the request for `service_system_prompt_settings`.
 /// 构建 `service_system_prompt_settings` 的请求。
 /// `project_id` is the exact project whose layer is included, or `None` for the user layer only.

@@ -1036,8 +1036,18 @@ impl World {
                 };
                 self.conversations.insert(0, row.clone());
                 self.ensure_log(&id);
+                // New conversations copy the global default once, as the service does on creation.
+                // 新会话与服务创建时一致，一次性复制全局默认。
+                let default_mode = serde_json::from_value::<AnswerMode>(
+                    self.service.workbench["defaultAnswerMode"].clone(),
+                )
+                .unwrap_or_default();
                 if let Some(log) = self.logs.get_mut(&id) {
                     log.usage.used_tokens = 12_400;
+                    log.answer_mode.mode = Some(AnswerModePreference {
+                        mode: default_mode,
+                        ..AnswerModePreference::default()
+                    });
                 }
                 self.emit(BackendEvent::ConversationSummary(row));
                 self.emit(BackendEvent::Selected(id));

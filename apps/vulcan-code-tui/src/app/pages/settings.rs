@@ -156,6 +156,25 @@ pub(super) fn context(app: &App) -> Vec<Row> {
     // Authoritative workbench.
     // 工作台权威状态。
     let wb = app.slots.value(Slot::Workbench);
+    // The global default is copied into conversations created afterwards; absence means standard.
+    // 全局默认会复制进之后新建的会话；缺省即标准模式。
+    let answer_mode = s(wb, "/defaultAnswerMode");
+    rows.push(choice(
+        tr!("answerMode.globalDefault"),
+        vec![
+            ("standard".into(), tr!("answerMode.standard")),
+            ("interactive".into(), tr!("answerMode.interactive")),
+        ],
+        if answer_mode.is_empty() {
+            "standard".into()
+        } else {
+            answer_mode
+        },
+        Edit::Call(Setter::Build {
+            ctx: Value::Null,
+            build: |_, value| Some(settings::save_prompt_answer_mode(value.as_str())),
+        }),
+    ));
     rows.push(choice(
         tr!("composer.thinkingProcess"),
         vec![

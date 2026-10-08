@@ -42,6 +42,8 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 会话回答模式通过 `service_api/answer_mode.rs` 镜像 WebUI 的 `service_set_session_answer_mode`；
 权威状态从会话 hydration 与 durable 增量取得，草稿会话的选择随首次提交的 `sessionSettings.answerMode`
 一并发送。完整语义见 [`answer-mode-and-components.md`](answer-mode-and-components.md)。
+全局默认通过 `settings_actions::save_prompt_answer_mode` 在设置页保存，设置页从工作台槽位的
+`defaultAnswerMode` 读取当前值；新草稿一次性复制该默认。
 
 | 页面 | 已适配交互 | 状态来源 |
 | --- | --- | --- |
@@ -169,6 +171,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `project_actions::open_external_url` | openExternalUrl | `service_open_external_url` |
 | `settings_actions::load_output_style_catalog` | loadOutputStyleCatalog | `service_output_style_catalog` |
 | `settings_actions::save_prompt_output_style` | savePromptOutputStyle | `service_save_prompt_output_style` |
+| `settings_actions::save_prompt_answer_mode` | savePromptAnswerMode | `service_save_prompt_answer_mode` |
 | `settings_actions::load_system_prompt_settings` | loadSystemPromptSettings | `service_system_prompt_settings` |
 | `settings_actions::save_system_prompt` | saveSystemPrompt | `service_save_system_prompt` |
 | `settings_actions::reset_system_prompt` | resetSystemPrompt | `service_reset_system_prompt` |

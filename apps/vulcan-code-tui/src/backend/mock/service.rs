@@ -913,6 +913,13 @@ impl FakeService {
                 self.loads["service_output_style_catalog"]["selectedId"] =
                     required(params, "/request/styleId")?.clone()
             }
+            // The service returns the saved mode and projects it into the workbench snapshot.
+            // 服务返回已保存的模式，并投影到工作台快照。
+            "service_save_prompt_answer_mode" => {
+                let mode = required(params, "/request/mode")?.clone();
+                self.workbench["defaultAnswerMode"] = mode.clone();
+                return Ok(mode);
+            }
             "service_add_public_ai_connection" => {
                 // Exact protocol request.
                 // 协议请求文档。
