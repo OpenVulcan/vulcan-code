@@ -558,6 +558,84 @@ fn public_tool_abort_becomes_non_executable_tool_call() {
     assert!(live_receiver.try_recv().is_err());
 }
 
+/// Verifies completed arguments that are valid JSON but not an object are rejected like malformed JSON.
+/// 验证为合法 JSON 但非对象的已完成参数与格式错误 JSON 一样被拒绝。
+#[test]
+fn public_tool_completion_with_non_object_arguments_becomes_non_executable_tool_call() {
+    let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut sink = RecordingProviderDeltaSink::default();
+    let mut accumulator = PublicTurnAccumulator::new(
+        "stepfun",
+        "connection-stepfun",
+        "https://stepfun.example/v1/chat/completions",
+        "openai-chat-completions.v1",
+        "step-5-preview",
+        None,
+    );
+    accumulator
+        .apply_event(
+            "stepfun",
+            &live_sender,
+            &mut sink,
+            AiStreamEvent::ToolCallStarted {
+                item_id: String::from("tool-item"),
+                call_id: String::from("call-1"),
+                tool_name: String::from("file"),
+                index: 0,
+            },
+        )
+        .expect("tool draft should start");
+    // A Provider can send the literal arguments text `null`, which parses as JSON null.
+    // Provider 可能发送字面参数文本 `null`，其解析结果为 JSON null。
+    accumulator
+        .apply_event(
+            "stepfun",
+            &live_sender,
+            &mut sink,
+            AiStreamEvent::ToolCallCompleted {
+                item_id: String::from("tool-item"),
+                call: PublicToolCall {
+                    id: String::from("call-1"),
+                    name: String::from("file"),
+                    arguments: Value::Null,
+                    signature: None,
+                },
+            },
+        )
+        .expect("non-object arguments should remain inside the successful turn");
+    accumulator
+        .apply_event(
+            "stepfun",
+            &live_sender,
+            &mut sink,
+            AiStreamEvent::ResponseCompleted,
+        )
+        .expect("response completion should remain valid after the controlled rejection");
+
+    let response = accumulator
+        .finish()
+        .expect("rejected tool call should finish the Provider turn");
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(
+        response.tool_calls[0].tool_call_id.as_deref(),
+        Some("call-1")
+    );
+    assert_eq!(response.tool_calls[0].arguments, Value::Null);
+    assert!(response.tool_calls[0].argument_parse_error.is_some());
+    assert!(matches!(
+        live_receiver.try_recv(),
+        Ok(Ok(ProviderStreamDelta::ToolRequestFragment(
+            ToolRequestFragment::Detected { .. }
+        )))
+    ));
+    assert!(matches!(
+        live_receiver.try_recv(),
+        Ok(Ok(ProviderStreamDelta::ToolRequestFragment(
+            ToolRequestFragment::Invalid { .. }
+        )))
+    ));
+}
+
 /// Verifies partial provider captures cannot replace complete normalized assistant history.
 /// 验证不完整的供应商捕获项无法替代完整的规范助手历史。
 #[test]

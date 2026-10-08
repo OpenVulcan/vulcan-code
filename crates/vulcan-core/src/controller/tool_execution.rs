@@ -348,9 +348,16 @@ impl VulcanCoreController {
         let policy_snapshot = self.snapshot.clone();
         for (request_index, request) in requests.into_iter().enumerate() {
             if let Some(message) = request.argument_parse_error.as_deref() {
-                let rejected_result = build_tool_argument_parse_failure_result(&request, message);
                 // Provider-invalid arguments are terminal before dispatch and therefore cannot enter the host executor.
                 // Provider 无效参数在分派前即为终态，因此不得进入宿主执行器。
+                // The executor still records the terminal so its prepared batch can close.
+                // 执行器仍需记录该终态，使其已准备批次能够封闭。
+                let rejected_result = executor
+                    .settle_undispatched_tool(
+                        &request,
+                        build_tool_argument_parse_failure_result(&request, message),
+                    )
+                    .await?;
                 self.record_tool_finished(&rejected_result);
                 result_slots[request_index] = Some(Ok(rejected_result));
                 continue;
@@ -380,6 +387,9 @@ impl VulcanCoreController {
                 };
                 // Policy-skipped calls already have a final result and must close independently of slower executable siblings.
                 // 被策略跳过的调用已经拥有最终结果，必须独立于较慢的可执行兄弟调用立即封闭。
+                let skipped_result = executor
+                    .settle_undispatched_tool(&request, skipped_result)
+                    .await?;
                 self.record_tool_finished(&skipped_result);
                 result_slots[request_index] = Some(Ok(skipped_result));
             }

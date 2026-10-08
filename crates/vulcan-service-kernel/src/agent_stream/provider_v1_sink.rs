@@ -2394,12 +2394,22 @@ impl ProviderV1StreamSink {
             .zip(request_stream_ids.iter().cloned())
             .map(|(request, request_stream_id)| {
                 let tool_name = request.request.tool_name.clone();
+                // Unparseable Provider arguments have no object to keep; the terminal result records the rejection.
+                // 无法解析的 Provider 参数没有可保留的对象；由终态结果记录该拒绝。
+                let input = if request.request.argument_parse_error.is_some() {
+                    ToolPayload::empty()
+                } else {
+                    ToolPayload::try_new(request.request.arguments.clone()).map_err(|error| {
+                        ProviderV1SinkError::InvalidToolPayload {
+                            tool_name: tool_name.clone(),
+                            error,
+                        }
+                    })?
+                };
                 Ok(ToolPreparation {
                     request_stream_id,
                     tool_name: tool_name.clone(),
-                    input: ToolPayload::try_new(request.request.arguments.clone()).map_err(
-                        |error| ProviderV1SinkError::InvalidToolPayload { tool_name, error },
-                    )?,
+                    input,
                     provider_tool_call_id: Some(request.request.tool_call_id.clone()),
                 })
             })

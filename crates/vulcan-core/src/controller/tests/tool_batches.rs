@@ -351,6 +351,11 @@ fn malformed_provider_arguments_return_tool_error_without_executor_dispatch() {
         assert_eq!(result.provider_turns_executed, 2);
         assert_eq!(result.tool_calls_processed, 1);
         assert!(executor.executed_requests().is_empty());
+        // The executor must still record the terminal so a durable prepared batch can close.
+        // 执行器仍须记录终态，使可靠的已准备批次能够封闭。
+        let settled = executor.settled_requests();
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0].tool_call_id, "call-invalid");
         // builtRequests proves the next Provider turn receives the tool error instead of a transparent replay of the original request.
         // builtRequests 证明下一次 Provider 回合收到的是工具错误，而不是对原始请求进行透明重放。
         let built_requests = adapter.built_requests();

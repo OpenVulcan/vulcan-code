@@ -24,6 +24,20 @@ pub trait VulcanToolExecutor: Send + Sync {
         &self,
         request: &ToolInvocationRequest,
     ) -> Result<ToolInvocationResult, CoreError>;
+
+    /// Records one prepared invocation that Core settled without dispatching its tool body.
+    /// 记录一条由 Core 在未分派工具主体时结算的已准备调用。
+    /// `request` is the prepared invocation and `result` its final non-executed result.
+    /// `request` 为已准备的调用，`result` 为其最终未执行结果。
+    /// Returns the result once recorded, or the executor's recording failure.
+    /// 记录完成后返回该结果，否则返回执行器的记录失败。
+    async fn settle_undispatched_tool(
+        &self,
+        _request: &ToolInvocationRequest,
+        result: ToolInvocationResult,
+    ) -> Result<ToolInvocationResult, CoreError> {
+        Ok(result)
+    }
 }
 
 /// Describes the policy that decides whether the controller should execute a tool call.

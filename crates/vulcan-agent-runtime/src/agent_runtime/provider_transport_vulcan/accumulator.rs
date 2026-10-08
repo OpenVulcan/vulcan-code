@@ -419,6 +419,61 @@ impl PublicTurnAccumulator {
             .collect()
     }
 
+    /// Closes one started tool item as rejected so Core answers it without executing the tool.
+    /// 将一个已开始的工具条目封闭为已拒绝，使 Core 不执行工具即可答复。
+    /// `item_id` is the started item, `message` the model-visible reason, `live_sender` the live channel.
+    /// `item_id` 为已开始的条目，`message` 为模型可见原因，`live_sender` 为实时通道。
+    /// Returns a controlled failure when the item is not a pending tool.
+    /// 条目不是待完成工具时返回受控失败。
+    fn reject_tool_call(
+        &mut self,
+        item_id: String,
+        message: String,
+        live_sender: &ProviderLiveDeltaSender,
+    ) -> Result<(), VulcanCoreError> {
+        // rejectedIdentity is retained from ToolCallStarted because a model-visible tool result requires the original call id and name.
+        // rejectedIdentity 来自 ToolCallStarted，因为模型可见工具结果必须使用原始调用标识与名称。
+        let (call_id, tool_name) = {
+            let replay_state = self.replay_item_state_mut(item_id.as_str())?;
+            let ReplayAccumulatorItemState::PendingTool { call_id, tool_name } = replay_state
+            else {
+                return Err(provider_failure(
+                    self.provider_id.as_str(),
+                    "Public tool abort targeted a non-pending tool item.",
+                ));
+            };
+            (call_id.clone(), tool_name.clone())
+        };
+        // rejectedCall closes canonical replay with valid JSON while the separate parse diagnostic forbids host execution.
+        // rejectedCall 使用有效 JSON 封闭规范重放，同时由独立解析诊断禁止宿主执行。
+        let rejected_call = PublicToolCall {
+            id: call_id.clone(),
+            name: tool_name.clone(),
+            arguments: Value::Null,
+            signature: None,
+        };
+        *self.replay_item_state_mut(item_id.as_str())? =
+            ReplayAccumulatorItemState::Complete(ContentItem::ToolCall {
+                call: rejected_call,
+            });
+        let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
+            ToolRequestFragment::Invalid {
+                request_stream_id: item_id.clone(),
+                reason: message.clone(),
+            },
+        )));
+        self.tool_calls.push(ConversationToolCall {
+            // Invalid calls retain the same item identity so failure replaces the original draft too.
+            // 无效调用同样保留条目标识，使失败结果也能替换原草稿。
+            id: item_id,
+            tool_call_id: Some(call_id),
+            tool_name,
+            arguments: Value::Null,
+            argument_parse_error: Some(message),
+        });
+        Ok(())
+    }
+
     /// Applies one public stream event.
     /// 应用一个公共流事件。
     pub(super) fn apply_event<S>(
@@ -617,6 +672,15 @@ impl PublicTurnAccumulator {
                     },
                 )));
             }
+            // Every tool input schema is an object, so any other JSON value is unusable arguments.
+            // 所有工具输入 Schema 都是对象，因此其他 JSON 值都是不可用参数。
+            AiStreamEvent::ToolCallCompleted { item_id, call } if !call.arguments.is_object() => {
+                self.reject_tool_call(
+                    item_id,
+                    String::from("Provider tool arguments must be a JSON object."),
+                    live_sender,
+                )?;
+            }
             AiStreamEvent::ToolCallCompleted { item_id, call } => {
                 let replay_state = self.replay_item_state_mut(item_id.as_str())?;
                 if !matches!(replay_state, ReplayAccumulatorItemState::PendingTool { .. }) {
@@ -652,47 +716,7 @@ impl PublicTurnAccumulator {
                 });
             }
             AiStreamEvent::ToolCallAborted { item_id, message } => {
-                // rejectedIdentity is retained from ToolCallStarted because a model-visible tool result requires the original call id and name.
-                // rejectedIdentity 来自 ToolCallStarted，因为模型可见工具结果必须使用原始调用标识与名称。
-                let (call_id, tool_name) = {
-                    let replay_state = self.replay_item_state_mut(item_id.as_str())?;
-                    let ReplayAccumulatorItemState::PendingTool { call_id, tool_name } =
-                        replay_state
-                    else {
-                        return Err(provider_failure(
-                            provider_id,
-                            "Public tool abort targeted a non-pending tool item.",
-                        ));
-                    };
-                    (call_id.clone(), tool_name.clone())
-                };
-                // rejectedCall closes canonical replay with valid JSON while the separate parse diagnostic forbids host execution.
-                // rejectedCall 使用有效 JSON 封闭规范重放，同时由独立解析诊断禁止宿主执行。
-                let rejected_call = PublicToolCall {
-                    id: call_id.clone(),
-                    name: tool_name.clone(),
-                    arguments: Value::Null,
-                    signature: None,
-                };
-                *self.replay_item_state_mut(item_id.as_str())? =
-                    ReplayAccumulatorItemState::Complete(ContentItem::ToolCall {
-                        call: rejected_call,
-                    });
-                let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
-                    ToolRequestFragment::Invalid {
-                        request_stream_id: item_id.clone(),
-                        reason: message.clone(),
-                    },
-                )));
-                self.tool_calls.push(ConversationToolCall {
-                    // Invalid calls retain the same item identity so failure replaces the original draft too.
-                    // 无效调用同样保留条目标识，使失败结果也能替换原草稿。
-                    id: item_id,
-                    tool_call_id: Some(call_id),
-                    tool_name,
-                    arguments: Value::Null,
-                    argument_parse_error: Some(message),
-                });
+                self.reject_tool_call(item_id, message, live_sender)?;
             }
             AiStreamEvent::UsageUpdated { usage } => {
                 if let Some(current) = self.usage.as_mut() {

@@ -3077,6 +3077,65 @@ async fn tool_started_without_prepared_predecessor_is_rejected() {
     assert!(matches!(error, ProviderV1SinkError::ToolNotPrepared(_)));
 }
 
+/// Verifies a call whose Provider arguments failed to parse still prepares, runs, and fails durably.
+/// 验证 Provider 参数解析失败的调用仍能可靠地完成准备、运行与失败终态。
+#[tokio::test]
+async fn unparseable_provider_arguments_settle_as_failed_tool() {
+    let handle = published_open_turn();
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    prepare_sink_request(&handle, &mut sink);
+    sink.accept_terminal(terminal_facts(1))
+        .await
+        .expect("defer terminal");
+    let mut request = recovery_request("tool-1", "file", serde_json::Value::Null);
+    request.request.argument_parse_error = Some(String::from("invalid JSON arguments"));
+    sink.apply_tool_boundary(
+        &ToolExecutionRecoveryBoundary::BatchPrepared(vec![request.clone()]),
+        9,
+    )
+    .await
+    .expect("a rejected call must still enter the durable batch");
+    sink.apply_tool_boundary(
+        &ToolExecutionRecoveryBoundary::Started {
+            request: request.request.clone(),
+            binding_fingerprint: request.binding_fingerprint.clone(),
+        },
+        10,
+    )
+    .await
+    .expect("durable Running transition");
+    sink.apply_tool_boundary(
+        &ToolExecutionRecoveryBoundary::Finished(ToolInvocationResult {
+            tool_call_id: String::from("tool-1"),
+            tool_name: String::from("file"),
+            model_output: String::from("not executed"),
+            host_result: Some(json!({"kind": "tool_argument_parse_error", "status": "failed"})),
+            is_error: true,
+        }),
+        11,
+    )
+    .await
+    .expect("the rejection result closes the batch");
+    let tools = handle
+        .read(|document| {
+            document
+                .events()
+                .iter()
+                .filter_map(|event| match &event.event {
+                    EventBody::ToolCall(tool) => Some(tool.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .expect("read settled tool");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].status, ToolCallStatus::Failed);
+    assert_eq!(serde_json::to_value(&tools[0].input).unwrap(), json!({}));
+}
+
 /// Verifies malformed declared ChangeSet data is an explicit ToolFinished boundary error.
 /// 验证畸形已声明 ChangeSet 数据会成为显式 ToolFinished 边界错误。
 #[test]

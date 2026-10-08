@@ -149,41 +149,7 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(
-            RuntimeEvent::new(
-                RuntimeEventKind::ToolStarted,
-                format!(
-                    "工具调用 · {} · {}",
-                    request.tool_call_id, request.tool_name
-                ),
-                format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
-            )
-            .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Started {
-                request: request.clone(),
-                binding_fingerprint: self
-                    .runtime_bridge
-                    .binding_fingerprint_for_request(request)
-                    .map_err(|message| VulcanCoreError::InvalidState { message })?,
-            })
-            .with_metadata(Some(json!({
-                "tool_call_id": request.tool_call_id,
-                "tool_name": request.tool_name,
-                "arguments": request.arguments,
-            }))),
-        )
-        .map_err(|message| VulcanCoreError::InvalidState { message })?;
-        let _ = self
-            .live_sender
-            .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_started_event)));
-        // Wait for the host bridge to project the start card before the real tool body can begin.
-        // 在真实工具主体开始前等待宿主桥接层完成开始卡片投影。
-        wait_runtime_event_projection_barrier(projection_barrier)
-            .await
-            .map_err(|error| VulcanCoreError::ToolDurabilityFailure {
-                tool_name: request.tool_name.clone(),
-                message: error.to_string(),
-                details: None,
-            })?;
+        self.publish_tool_started(request).await?;
         let (result, display_state) =
             if let Some(reason) = self.tool_request_rejection_message(request) {
                 (
@@ -219,6 +185,88 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                     ),
                 }
             };
+        self.publish_tool_finished(request, result, display_state)
+            .await
+    }
+
+    /// Records a Core-settled invocation through the same durable start and finish boundaries.
+    /// 通过相同的可靠开始与完成边界记录一条由 Core 结算的调用。
+    /// Without both boundaries the prepared batch never closes and the turn cannot advance.
+    /// 缺少任一边界时已准备批次无法封闭，回合也无法推进。
+    async fn settle_undispatched_tool(
+        &self,
+        request: &CoreToolInvocationRequest,
+        result: CoreToolInvocationResult,
+    ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
+        self.publish_tool_started(request).await?;
+        let display_state = if result.is_error {
+            "failed"
+        } else {
+            "completed"
+        };
+        self.publish_tool_finished(request, result, display_state)
+            .await
+    }
+}
+
+impl StreamingRuntimeToolExecutor {
+    /// Publishes the durable start boundary and waits until the host has projected it.
+    /// 发布可靠开始边界，并等待宿主完成其投影。
+    /// `request` is the prepared invocation; returns a durability failure when projection is rejected.
+    /// `request` 为已准备的调用；投影被拒绝时返回可靠性失败。
+    async fn publish_tool_started(
+        &self,
+        request: &CoreToolInvocationRequest,
+    ) -> Result<(), VulcanCoreError> {
+        let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(
+            RuntimeEvent::new(
+                RuntimeEventKind::ToolStarted,
+                format!(
+                    "工具调用 · {} · {}",
+                    request.tool_call_id, request.tool_name
+                ),
+                format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
+            )
+            .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Started {
+                request: request.clone(),
+                binding_fingerprint: self
+                    .runtime_bridge
+                    .binding_fingerprint_for_request(request)
+                    .map_err(|message| VulcanCoreError::InvalidState { message })?,
+            })
+            .with_metadata(Some(json!({
+                "tool_call_id": request.tool_call_id,
+                "tool_name": request.tool_name,
+                "arguments": request.arguments,
+            }))),
+        )
+        .map_err(|message| VulcanCoreError::InvalidState { message })?;
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_started_event)));
+        // Wait for the host bridge to project the start card before the real tool body can begin.
+        // 在真实工具主体开始前等待宿主桥接层完成开始卡片投影。
+        wait_runtime_event_projection_barrier(projection_barrier)
+            .await
+            .map_err(|error| VulcanCoreError::ToolDurabilityFailure {
+                tool_name: request.tool_name.clone(),
+                message: error.to_string(),
+                details: None,
+            })
+    }
+
+    /// Publishes the durable terminal boundary and waits until the host has recorded it.
+    /// 发布可靠终态边界，并等待宿主完成记录。
+    /// `request` is the invocation, `result` its terminal result, and `display_state` the card state.
+    /// `request` 为调用，`result` 为其终态结果，`display_state` 为卡片状态。
+    /// Returns the result after it is durable, or a persistence failure that preserves execution facts.
+    /// 结果可靠后返回该结果，否则返回保留执行事实的持久化失败。
+    async fn publish_tool_finished(
+        &self,
+        request: &CoreToolInvocationRequest,
+        result: CoreToolInvocationResult,
+        display_state: &'static str,
+    ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
         let event_metadata = attach_tool_name_to_runtime_metadata(
             Some(build_tool_result_runtime_metadata(
                 &request.tool_call_id,

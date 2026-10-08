@@ -286,6 +286,9 @@ struct MockToolExecutor {
     /// Complete execution batches prepared before any tool body starts.
     /// 在任何工具主体启动前准备的完整执行批次。
     prepared_batches: Arc<Mutex<Vec<Vec<ToolInvocationRequest>>>>,
+    /// Requests that Core settled without dispatching their tool body.
+    /// Core 未分派工具主体即结算的请求。
+    settled_requests: Arc<Mutex<Vec<ToolInvocationRequest>>>,
     /// Optional batch-preparation failure emitted before any tool body starts.
     /// 在任何工具主体启动前发出的可选批次准备失败。
     preparation_failure: Option<String>,
@@ -335,6 +338,15 @@ impl MockToolExecutor {
         self.executed_requests
             .lock()
             .expect("lock executed requests")
+            .clone()
+    }
+
+    /// Returns every request Core settled through the executor without dispatching it.
+    /// 返回 Core 未分派即经执行器结算的每个请求。
+    fn settled_requests(&self) -> Vec<ToolInvocationRequest> {
+        self.settled_requests
+            .lock()
+            .expect("lock settled requests")
             .clone()
     }
 
@@ -396,6 +408,20 @@ impl VulcanToolExecutor for MockToolExecutor {
             host_result,
             is_error,
         })
+    }
+
+    /// Records one request that Core settled without dispatching its tool body.
+    /// 记录一条由 Core 未分派工具主体即结算的请求。
+    async fn settle_undispatched_tool(
+        &self,
+        request: &ToolInvocationRequest,
+        result: ToolInvocationResult,
+    ) -> Result<ToolInvocationResult, CoreError> {
+        self.settled_requests
+            .lock()
+            .expect("lock settled requests")
+            .push(request.clone());
+        Ok(result)
     }
 }
 
