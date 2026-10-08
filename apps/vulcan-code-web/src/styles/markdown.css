@@ -162,18 +162,6 @@
   color: var(--foreground);
 }
 
-.diff-detail {
-  max-width: 100%;
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  background: var(--muted);
-  color: var(--foreground);
-  font-size: var(--vcn-font-size-md);
-  line-height: 1.55;
-}
-
 .markdown-code-block {
   max-width: 100%;
   overflow: hidden;

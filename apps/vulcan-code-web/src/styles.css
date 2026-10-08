@@ -111,8 +111,7 @@ button {
 }
 
 @media (max-width: 1040px) {
-  .chat-grid,
-  .two-columns {
+  .chat-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 

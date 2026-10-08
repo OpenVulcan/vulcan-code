@@ -748,10 +748,6 @@
   text-decoration: line-through;
 }
 
-.two-columns {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.72fr);
-}
-
 .stack {
   min-width: 0;
   min-height: 0;

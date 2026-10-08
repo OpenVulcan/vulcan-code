@@ -1,11 +1,3 @@
-.feature-header-description {
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--vcn-font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .feature-sidebar-row .vcn-sidebar-label {
   min-width: 0;
   display: grid;
@@ -228,11 +220,6 @@
 .feature-content > .area-grid {
   min-height: 0;
   height: 100%;
-}
-
-.compact-stack {
-  min-height: 0;
-  align-content: stretch;
 }
 
 .vcn-sidebar-inset .chat-grid {

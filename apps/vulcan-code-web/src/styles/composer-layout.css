@@ -333,26 +333,6 @@ align-self: center;
   font-weight: 600;
 }
 
-.conversation-loading-error {
-  color: var(--destructive);
-  font-size: var(--vcn-font-size-md);
-  overflow-wrap: anywhere;
-}
-
-.conversation-loading-retry {
-  width: fit-content;
-  padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--vcn-radius-md);
-  color: var(--foreground);
-  background: var(--background);
-  cursor: pointer;
-}
-
-.conversation-loading-retry:hover {
-  background: var(--accent);
-}
-
 .composer-dock {
   position: absolute;
   left: 50%;

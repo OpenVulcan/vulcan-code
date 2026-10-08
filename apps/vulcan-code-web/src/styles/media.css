@@ -96,12 +96,6 @@
   white-space: nowrap;
 }
 
-.generated-media-icon {
-  display: inline-grid;
-  place-items: center;
-  color: var(--muted-foreground);
-}
-
 .generated-media-detail {
   display: grid;
   gap: 12px;
@@ -158,13 +152,6 @@
   max-height: 100%;
   transform-origin: center center;
   transition: transform 140ms ease;
-}
-
-.generated-media-video-preview {
-  width: 100%;
-  max-height: min(62vh, 620px);
-  border-radius: var(--vcn-radius-lg);
-  background: var(--muted);
 }
 
 .generated-media-open-player {

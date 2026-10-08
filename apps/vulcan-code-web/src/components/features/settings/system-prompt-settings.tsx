@@ -125,7 +125,7 @@ export function SystemPromptSettingsCard(props: { projects: ProjectSummary[] }) 
       <label className="flex items-center gap-3 text-sm">
         <span>{t("settings.systemPrompt.scope")}</span>
         <Select value={scopeValue} onValueChange={setScopeValue} disabled={busy}>
-          <SelectTrigger className="w-72"><SelectValue /></SelectTrigger>
+          <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={USER_SCOPE_VALUE}>{t("settings.systemPrompt.scopeUser")}</SelectItem>
             {props.projects.map((project) => (
@@ -141,7 +141,8 @@ export function SystemPromptSettingsCard(props: { projects: ProjectSummary[] }) 
           <p className="text-xs text-muted-foreground" role="status">{t(SOURCE_LABEL_KEYS[snapshot.effectiveSource])}</p>
           <Textarea
             aria-label={t("settings.systemPrompt.textLabel")}
-            className="min-h-64 font-mono text-xs"
+            className="font-mono text-xs"
+            rows={16}
             disabled={busy}
             onChange={(event) => { setDraft(event.currentTarget.value); setSaved(false) }}
             value={draft}
