@@ -10,7 +10,6 @@ use vulcan_service_api::{
 };
 use vulcan_session_core::v1::config::SessionConfig;
 use vulcan_session_core::v1::event::ConversationEvent;
-use vulcan_session_core::v1::html_answers::HtmlAnswerEventProjection;
 use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::ConversationEventWindowBatch;
 use vulcan_workbench_model::SessionId;
@@ -134,17 +133,15 @@ pub(crate) async fn service_session_event_hydration_v1(
         }
         snapshot
     });
-    // Preference visibility follows confirmed storage, even when transcript memory is newer.
-    // 即使转录内存更新，偏好可见性仍跟随已确认存储。
-    let durable_html_answers = persisted.state.config.html_answers.clone();
-    let mut html_answer_projections = project_persisted_html_answers(session_id, &persisted.events);
+    // Answer mode visibility follows confirmed storage, even when transcript memory is newer.
+    // 即使转录内存更新，回答模式可见性仍跟随已确认存储。
+    let durable_answer_mode = persisted.state.config.answer_mode.clone();
     let (window_generation, events, open_turn_id, open_turn_start_seq, mut session_config) =
         merge_persisted_with_resident(persisted.state, persisted.events, resident, "hydration")?;
-    session_config.html_answers = durable_html_answers;
+    session_config.answer_mode = durable_answer_mode;
     let open_turn_id =
         open_turn_id.or_else(|| open_turn_id_from_events(&events, open_turn_start_seq));
-    retain_matching_html_sources(&mut html_answer_projections, &events);
-    let mut response = ConversationEventWindowV1Response::hydration(
+    Ok(ConversationEventWindowV1Response::hydration(
         ConversationEventWindowBatch::from_events(
             session_id.to_string(),
             window_generation,
@@ -155,9 +152,7 @@ pub(crate) async fn service_session_event_hydration_v1(
         open_turn_start_seq,
         ConversationSessionConfigV1::from_session_config(&session_config),
         revision_frontier,
-    );
-    response.html_answer_projections = html_answer_projections;
-    Ok(response)
+    ))
 }
 
 /// Resolves either an indexed live session or one exact embedded TaskSession snapshot locator.
@@ -235,8 +230,7 @@ pub(crate) async fn service_session_event_page_v1(
         .load_event_window_before(before_seq, CONVERSATION_EVENT_WINDOW_V1_TURN_LIMIT)
         .map_err(|error| format!("failed to load V1 event history page: {error}"))?;
     require_window_generation(request.window_generation, page.state.segment_generation)?;
-    let html_answer_projections = project_persisted_html_answers(session_id, &page.events);
-    let mut response = ConversationEventWindowV1Response::historical_page(
+    Ok(ConversationEventWindowV1Response::historical_page(
         ConversationEventWindowBatch::from_events(
             session_id.to_string(),
             page.state.segment_generation,
@@ -244,9 +238,7 @@ pub(crate) async fn service_session_event_page_v1(
         ),
         page.older_before_seq,
         ConversationSessionConfigV1::from_session_config(&page.state.config),
-    );
-    response.html_answer_projections = html_answer_projections;
-    Ok(response)
+    ))
 }
 
 /// Loads a duplicate-safe reconnect delta beginning at the last confirmed seq
@@ -268,20 +260,12 @@ pub(crate) async fn service_session_event_reconnect_v1(
     state: SharedServiceBridgeState,
     request: ConversationEventReconnectV1Request,
 ) -> Result<ConversationEventReconnectV1Response, String> {
-    if let Some(first) = request.html_answers_from_seq {
-        checked_seq(first, "htmlAnswersFromSeq")?;
-        if !request.last_confirmed_seq.is_some_and(|last| first <= last) {
-            return Err(String::from(
-                "HTML annotation cursor must be within the loaded event window.",
-            ));
-        }
-    }
     let (session_id, locator, registry) =
         resolve_exact_locator_and_registry(&state, &request.session_id).await?;
     let persisted_state = locator
         .event_window_state()
         .map_err(|error| format!("failed to read V1 reconnect frontier: {error}"))?;
-    let durable_html_answers = persisted_state.config.html_answers.clone();
+    let durable_answer_mode = persisted_state.config.answer_mode.clone();
     let resident = optional_registered_handle(&registry, session_id)?
         .map(|handle| capture_resident_snapshot(&handle))
         .transpose()?;
@@ -367,27 +351,10 @@ pub(crate) async fn service_session_event_reconnect_v1(
             revision_frontier.durable_revision,
         )
         .map(|mut response| {
-            response.html_answers = Some(durable_html_answers);
+            response.answer_mode = Some(durable_answer_mode);
             response
         });
     };
-    // The normal recovery tail can start after a completed answer whose durable acknowledgement
-    // was missed. Rebuild only annotations for that already-loaded prefix, without resending HTML.
-    // 普通恢复尾段可能晚于一条遗漏可靠确认的已完成回答；仅重建该已加载前缀的标注，不重发 HTML。
-    let mut html_answer_projections = Vec::new();
-    if let (Some(first), Some(latest)) = (request.html_answers_from_seq, persisted_latest)
-        && first < from_value
-        && first <= latest
-    {
-        let prefix = locator
-            .load_event_range(
-                checked_seq(first, "htmlAnswersFromSeq")?,
-                checked_seq(latest.min(from_value - 1), "htmlAnswersPrefixEnd")?,
-            )
-            .map_err(|error| format!("failed to recover HTML annotations: {error}"))?;
-        require_window_generation(request.window_generation, prefix.state.segment_generation)?;
-        html_answer_projections = project_persisted_html_answers(session_id, &prefix.events);
-    }
     let mut persisted_events = Vec::new();
     if let Some(persisted_latest) = persisted_latest
         && from_value <= persisted_latest
@@ -407,11 +374,8 @@ pub(crate) async fn service_session_event_reconnect_v1(
             .retain(|event| event.seq.value() >= from_value);
         snapshot
     });
-    let mut tail_projections = project_persisted_html_answers(session_id, &persisted_events);
     let (_, events, _, _, _) =
         merge_persisted_with_resident(persisted_state, persisted_events, resident, "reconnect")?;
-    retain_matching_html_sources(&mut tail_projections, &events);
-    html_answer_projections.extend(tail_projections);
     ConversationEventReconnectV1Response::recovery(
         ConversationEventWindowBatch::from_events(
             session_id.to_string(),
@@ -424,40 +388,9 @@ pub(crate) async fn service_session_event_reconnect_v1(
         revision_frontier.durable_revision,
     )
     .map(|mut response| {
-        response.html_answers = Some(durable_html_answers);
-        response.html_answer_projections = html_answer_projections;
+        response.answer_mode = Some(durable_answer_mode);
         response
     })
-}
-
-/// Derive annotations exclusively from physically persisted `events`, without copying source bodies.
-/// 仅从物理持久化的 `events` 派生标注，不复制源码正文。
-/// `session_id` supplies exact ownership; callers must not pass resident overlay events.
-/// `session_id` 提供精确归属；调用方不得传入驻留覆盖事件。
-fn project_persisted_html_answers(
-    session_id: SessionId,
-    events: &[ConversationEvent],
-) -> Vec<HtmlAnswerEventProjection> {
-    let owner = session_id.to_string();
-    events
-        .iter()
-        .filter_map(|event| HtmlAnswerEventProjection::from_event(&owner, event, true))
-        .collect()
-}
-
-/// Drop persisted annotations whose source was superseded by a newer resident event revision.
-/// 丢弃源码已被更新驻留事件修订取代的持久标注。
-/// `events` is the canonical sorted merged window; matching never compares event and document counters.
-/// `events` 是合并后的已排序权威窗口；匹配绝不比较事件与文档计数器。
-fn retain_matching_html_sources(
-    projections: &mut Vec<HtmlAnswerEventProjection>,
-    events: &[ConversationEvent],
-) {
-    projections.retain(|projection| {
-        events
-            .binary_search_by_key(&projection.seq, |event| event.seq)
-            .is_ok_and(|index| events[index].event_revision == projection.event_revision)
-    });
 }
 
 /// Reports whether a client cursor is ahead of the authoritative event stream.

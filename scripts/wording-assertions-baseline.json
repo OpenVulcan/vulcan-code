@@ -1,7 +1,6 @@
 {
   "apps/vulcan-code-tui/src/app/selection.rs": 3,
   "apps/vulcan-code-tui/src/app/service_tests.rs": 2,
-  "apps/vulcan-code-tui/src/model/html_answers.rs": 1,
   "apps/vulcan-code-tui/src/ui/text.rs": 3,
   "apps/vulcan-code-web/src/app/render-error-boundary.test.tsx": 5,
   "apps/vulcan-code-web/src/components/ask/ask-question-dialog.test.tsx": 18,
@@ -245,7 +244,6 @@
   "crates/vulcan-service-runtime/src/luaskills_bridge.rs": 4,
   "crates/vulcan-service-runtime/src/luaskills_bridge/local_github_tests.rs": 1,
   "crates/vulcan-session-core/src/v1/document/collaboration/regression_tests.rs": 1,
-  "crates/vulcan-session-core/src/v1/html_answers/templates/tests.rs": 1,
   "crates/vulcan-sqlite-engine/src/tokenizer.rs": 7,
   "crates/vulcan-task-session/src/catalog.rs": 4,
   "crates/vulcan-tools-manager/src/result_markdown.rs": 1,

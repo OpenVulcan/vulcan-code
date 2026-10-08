@@ -150,7 +150,6 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         workspace_watcher: None,
         service_runtime: None,
         webui_service_discovery: None,
-        html_answer_runtime: None,
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,

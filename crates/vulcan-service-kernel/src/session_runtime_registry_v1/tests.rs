@@ -1,6 +1,6 @@
+mod answer_mode;
 mod collaboration_publication;
 mod context_generation;
-mod html_answers;
 mod input_dispatch_authority;
 mod request_preparation;
 use super::*;

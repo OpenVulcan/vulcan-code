@@ -5,10 +5,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use vulcan_session_core::v1::config::{
-    ActiveRequestConfig, HtmlAnswerMode, PendingRequestConfig, SessionConfig,
+    ActiveRequestConfig, AnswerModePreference, PendingRequestConfig, SessionConfig,
 };
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
-use vulcan_session_core::v1::html_answers::HtmlAnswerEventProjection;
 use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::{
     ConversationEventSummary, ConversationEventWindowBatch,
@@ -54,10 +53,6 @@ pub struct ConversationEventPageV1Request {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationEventReconnectV1Request {
-    /// Earliest loaded event needing derived HTML annotations, including previously missed acknowledgements.
-    /// 需要派生 HTML 标注的最早已加载事件，包含之前遗漏的确认。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub html_answers_from_seq: Option<u64>,
     /// Cross-system session identity owning the frontend window.
     /// 拥有前端窗口的跨系统会话身份。
     pub session_id: String,
@@ -153,9 +148,9 @@ impl ConversationRequestConfigV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationSessionConfigV1 {
-    /// Session-owned desired and prepared HTML answer preference.
-    /// 会话自有的 HTML 回答期望与准备偏好。
-    pub html_answers: HtmlAnswerMode,
+    /// Session-owned answer mode and its last prepared snapshot.
+    /// 会话自有的回答模式及其最近准备快照。
+    pub answer_mode: AnswerModePreference,
     /// Request configuration frozen for the current physical API.
     /// 为当前物理 API 锁定的请求配置。
     pub current_request: ConversationRequestConfigV1,
@@ -182,7 +177,7 @@ impl ConversationSessionConfigV1 {
     /// 返回当前/下一请求状态与动态压缩选择。
     pub fn from_session_config(config: &SessionConfig) -> Self {
         Self {
-            html_answers: config.html_answers.clone(),
+            answer_mode: config.answer_mode.clone(),
             current_request: ConversationRequestConfigV1::from_active(&config.active_request),
             next_request: config
                 .pending_request
@@ -200,10 +195,6 @@ impl ConversationSessionConfigV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventWindowV1Response {
-    /// Durable HTML annotations matching exact revisions in this window.
-    /// 匹配此窗口精确修订的可靠 HTML 标注。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub html_answer_projections: Vec<HtmlAnswerEventProjection>,
     /// Ownership-bound event batch consumed directly by the WebUI window store.
     /// 由 WebUI 窗口 store 直接消费的带归属事件批次。
     #[serde(flatten)]
@@ -314,7 +305,6 @@ impl ConversationEventWindowV1Response {
             open_turn_start_seq,
             session_config,
             revision_frontier: Some(revision_frontier),
-            html_answer_projections: Vec::new(),
         }
     }
 
@@ -345,7 +335,6 @@ impl ConversationEventWindowV1Response {
             open_turn_start_seq: None,
             session_config,
             revision_frontier: None,
-            html_answer_projections: Vec::new(),
         }
     }
 }
@@ -368,18 +357,12 @@ pub enum ConversationEventPatchDurabilityV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventLiveDeltaV1 {
-    /// Derived HTML annotations published only after the exact source candidate is durable.
-    /// 仅在精确源码候选可靠保存后发布的派生 HTML 标注。
-    /// Rare durable metadata stays boxed so ordinary streaming outbox entries remain small.
-    /// 低频可靠元数据放在堆上，使普通流式发送队列条目保持小体积。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub html_answer_projections: Option<Box<Vec<HtmlAnswerEventProjection>>>,
-    /// Exact preference in a successfully published candidate; absent on volatile patches.
-    /// 成功发布候选中的精确偏好；内存补丁不携带该字段。
+    /// Exact answer mode in a successfully published candidate; absent on volatile patches.
+    /// 成功发布候选中的精确回答模式；内存补丁不携带该字段。
     /// Boxed so high-frequency volatile outbox entries do not reserve the full preference size.
     /// 使用堆指针，使高频内存发送队列条目不预留完整偏好空间。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub html_answers: Option<Box<HtmlAnswerMode>>,
+    pub answer_mode: Option<Box<AnswerModePreference>>,
     /// Ownership-bound events in ascending seq order. Volatile pushes contain
     /// the exact sparse change set and durable acknowledgements are empty.
     /// 按升序排列的带归属事件。volatile 推送包含精确稀疏变化集，可靠确认为空。
@@ -612,8 +595,7 @@ impl ConversationEventLiveDeltaV1 {
             base_durable_revision: None,
             durability: ConversationEventPatchDurabilityV1::Volatile,
             text_appends: Vec::new(),
-            html_answers: None,
-            html_answer_projections: None,
+            answer_mode: None,
         })
     }
 
@@ -660,8 +642,7 @@ impl ConversationEventLiveDeltaV1 {
             base_durable_revision: Some(base_durable_revision),
             durability: ConversationEventPatchDurabilityV1::Durable,
             text_appends: Vec::new(),
-            html_answers: None,
-            html_answer_projections: None,
+            answer_mode: None,
         })
     }
 
@@ -1068,14 +1049,10 @@ pub enum ConversationEventReconnectDispositionV1 {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEventReconnectV1Response {
-    /// Durable annotations for the client's loaded range, including events outside the recovery tail.
-    /// 客户端已加载范围的可靠标注，包含恢复尾段之外的事件。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub html_answer_projections: Vec<HtmlAnswerEventProjection>,
-    /// Preference read from persisted metadata; absent when a full hydration is required.
-    /// 从持久元数据读取的偏好；要求完整加载时缺省。
+    /// Answer mode read from persisted metadata; absent when a full hydration is required.
+    /// 从持久元数据读取的回答模式；要求完整加载时缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub html_answers: Option<HtmlAnswerMode>,
+    pub answer_mode: Option<AnswerModePreference>,
     /// Complete ownership-bound recovery range, empty when rehydration is required.
     /// 完整的带归属恢复范围；要求重新 hydration 时为空。
     #[serde(flatten)]
@@ -1121,8 +1098,7 @@ impl ConversationEventReconnectV1Response {
             memory_revision,
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::Recovery,
-            html_answers: None,
-            html_answer_projections: Vec::new(),
+            answer_mode: None,
         })
     }
 
@@ -1150,8 +1126,7 @@ impl ConversationEventReconnectV1Response {
             memory_revision,
             durable_revision,
             disposition: ConversationEventReconnectDispositionV1::RehydrateRequired(reason),
-            html_answers: None,
-            html_answer_projections: Vec::new(),
+            answer_mode: None,
         })
     }
 }

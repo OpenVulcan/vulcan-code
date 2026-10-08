@@ -1,0 +1,1 @@
+Answer mode is now standard for this conversation. Stop using `ui-*` answer component fences in subsequent replies; use ordinary Markdown, tables, Mermaid diagrams, images and links. Earlier replies keep their components. This changes answer presentation only: creating or editing HTML files on request still works through the normal file workflow.

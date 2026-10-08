@@ -1365,6 +1365,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             &bridged_media_kinds,
         ),
         output_style_catalog: output_style_catalog_summary(provider_configuration),
+        default_answer_mode: crate::answer_mode::global_answer_mode(provider_configuration),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: pending_prompt_process_mirrors
             .get(&workspace.selected_session)

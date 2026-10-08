@@ -83,17 +83,17 @@ fn web_module() -> String {
                 "Service hard limit on the input events carried by one project terminal batch.",
                 "服务端对单个项目终端批次承载输入事件数的硬限制。",
             ),
-            Constant::Text(
-                "HTML_ANSWER_CLOSE_MESSAGE",
-                vulcan_session_core::v1::html_answers::HTML_ANSWER_CLOSE_MESSAGE,
-                "Parameterless notification a rendered HTML answer posts to close or restore its viewer.",
-                "渲染后的 HTML 回答发送的无参数通知，用于关闭或还原其查看器。",
+            Constant::Number(
+                "ANSWER_COMPONENT_MAX_ROWS",
+                vulcan_session_core::v1::answer_components::ANSWER_COMPONENT_MAX_ROWS as u64,
+                "Most data rows one ui-* answer component renders; larger fences stay code.",
+                "单个 ui-* 回答组件渲染的最多数据行数；更大的围栏保持为代码。",
             ),
-            Constant::Text(
-                "HTML_ANSWER_HEIGHT_MESSAGE",
-                vulcan_session_core::v1::html_answers::HTML_ANSWER_HEIGHT_MESSAGE,
-                "Message type carrying only a rendered HTML answer's content height.",
-                "仅携带渲染后 HTML 回答内容高度的消息类型。",
+            Constant::Number(
+                "ANSWER_CHART_MAX_SERIES",
+                vulcan_session_core::v1::answer_components::ANSWER_CHART_MAX_SERIES as u64,
+                "Most value series one ui-chart carries, equal to the chart palette size.",
+                "单个 ui-chart 承载的最多数值系列数，等于图表配色数量。",
             ),
         ],
     )

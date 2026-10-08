@@ -789,6 +789,28 @@ impl PersistedPromptOutputStyleSelection {
     }
 }
 
+/// Persisted answer mode copied into each new conversation.
+/// 复制到每个新会话的持久化回答模式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersistedAnswerModeSelection {
+    /// Ordinary Markdown answers.
+    /// 普通 Markdown 回答。
+    #[default]
+    Standard,
+    /// Markdown plus native answer components.
+    /// Markdown 加原生回答组件。
+    Interactive,
+}
+
+impl PersistedAnswerModeSelection {
+    /// Returns whether this selection is the persisted default.
+    /// 返回该选择是否为持久化默认值。
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Standard)
+    }
+}
+
 /// Prompt-composer configuration persisted in the shared Vulcan file.
 /// 持久化在共享 Vulcan 文件中的提示词组合配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -808,6 +830,13 @@ pub struct PersistedPromptConfiguration {
         skip_serializing_if = "PersistedPromptOutputStyleSelection::is_default"
     )]
     pub output_style: PersistedPromptOutputStyleSelection,
+    /// Default answer mode applied when a new conversation is materialized.
+    /// 新会话物化时使用的默认回答模式。
+    #[serde(
+        default,
+        skip_serializing_if = "PersistedAnswerModeSelection::is_default"
+    )]
+    pub answer_mode: PersistedAnswerModeSelection,
 }
 
 impl Default for PersistedPromptConfiguration {
@@ -817,6 +846,7 @@ impl Default for PersistedPromptConfiguration {
         Self {
             personality: PersistedPromptPersonalitySelection::Default,
             output_style: PersistedPromptOutputStyleSelection::Balanced,
+            answer_mode: PersistedAnswerModeSelection::Standard,
         }
     }
 }

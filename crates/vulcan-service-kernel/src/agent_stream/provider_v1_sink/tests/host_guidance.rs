@@ -424,8 +424,8 @@ fn host_guidance_upgrade_survives_compaction_and_current_baseline_needs_no_overl
     let (_directory, current) = published_stored_open_turn();
     let candidate = candidate_for(&current);
     install_baseline(&current, baseline_with_text(HOST_MESSAGE_GUIDANCE));
-    // The first preparation may commit metadata (the frozen HTML-answer preference) but no event.
-    // 首次准备可能提交元数据（冻结的 HTML 回答偏好），但不得追加事件。
+    // The first preparation may commit metadata (the frozen answer mode) but no event.
+    // 首次准备可能提交元数据（冻结的回答模式），但不得追加事件。
     let events = current
         .read(|document| serde_json::to_value(document.events()).unwrap())
         .unwrap();

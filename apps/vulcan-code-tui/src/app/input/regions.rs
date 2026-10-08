@@ -51,12 +51,9 @@ pub(super) fn on_transcript_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Activate a selected HTML result, or toggle the fold state of an ordinary block.
-/// 激活选中的 HTML 结果，或翻转普通块的折叠状态。
+/// Toggle the fold state of the selected block.
+/// 翻转选中块的折叠状态。
 pub(super) fn toggle_selected(app: &mut App) {
-    if super::super::html_answers::activate_selected(app) {
-        return;
-    }
     if let Some(session) = app.session_mut()
         && let Some(seq) = session.selected
         && !session.toggled.remove(&seq)

@@ -90,6 +90,7 @@ pub const WEBUI_SERVICE_LOOPBACK_HOST: &str = "127.0.0.1";
 /// 用于覆盖浏览器侧 WebUI 静态目录的环境变量名。
 pub const WEBUI_STATIC_DIR_ENV: &str = "VULCAN_WEBUI_STATIC_DIR";
 
+mod answer_mode;
 mod attachments;
 mod command_events;
 mod conversation;
@@ -97,7 +98,6 @@ mod conversation_events_v1;
 mod conversation_generations_v1;
 mod git_settings;
 mod host_tools;
-mod html_answers;
 mod knowledge_base;
 mod localized_message;
 mod media;
@@ -117,6 +117,7 @@ mod webui_static;
 mod workbench;
 mod workspace_context;
 
+pub use answer_mode::*;
 pub use attachments::*;
 pub use command_events::*;
 pub use conversation::*;
@@ -124,7 +125,6 @@ pub use conversation_events_v1::*;
 pub use conversation_generations_v1::*;
 pub use git_settings::*;
 pub use host_tools::*;
-pub use html_answers::*;
 pub use knowledge_base::*;
 pub use localized_message::*;
 pub use media::*;

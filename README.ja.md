@@ -222,7 +222,7 @@ Vulcan Code は数多くの優れたオープンソースプロジェクトの�
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)：Gemini プロトコルと互換変換の参考
 - [OpenCode](https://github.com/anomalyco/opencode)：プロバイダーカタログとシステムプロンプトの参考
 - [agency-agents](https://github.com/msitarzewski/agency-agents)：サブエージェントのロールテンプレートの出典
-- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html)：HTML 回答、簡潔なコンテンツ原稿とテンプレート部品の設計参考。プロトコル、組み込みレンダラーと隔離ビューアーは独自実装で、同プロジェクトの CLI には依存しません
+- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html)：回答コンポーネント（検出結果・比較・フローなどの構造化ブロック）の設計参考。コンポーネント構文と会話内のネイティブ描画は独自実装で、同プロジェクトの CLI には依存しません
 
 **コミュニティ**
 

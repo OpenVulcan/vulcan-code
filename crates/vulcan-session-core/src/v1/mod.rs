@@ -12,6 +12,7 @@
 //! 轻量元数据文档(`config`)。在垂直切换前这些类型只是构建期 fixture，
 //! 生产调用点在此之前继续使用旧模块。
 
+pub mod answer_components;
 pub mod budget;
 pub mod business_hook;
 pub mod child_execution;
@@ -25,7 +26,6 @@ pub mod dynamic_context;
 pub mod errors;
 pub mod event;
 pub mod goal;
-pub mod html_answers;
 pub mod ids;
 pub mod lifetime_usage;
 pub mod projection;

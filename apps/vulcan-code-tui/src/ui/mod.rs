@@ -24,13 +24,13 @@
 // 终端过窄时面板同样如此。宽度连窄栏都放不下时，侧栏只以抽屉形式出现。
 
 mod activity;
+mod answer_components;
 mod ask;
 pub mod brand;
 mod chrome;
 mod composer;
 mod dialogs;
 mod history;
-mod html_draft;
 pub mod markdown;
 mod mermaid;
 mod notice;

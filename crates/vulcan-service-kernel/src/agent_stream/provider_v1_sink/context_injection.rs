@@ -15,35 +15,18 @@ use vulcan_session_core::v1::event::SystemContextScope;
 /// 路由切换后当前模型身份的稳定生产者。
 pub(super) const MODEL_SELECTION_CONTEXT_KEY: &str = "dynamic.model_selection";
 
-/// Render the authoritative HTML prompt using the unique Core protocol and capacity constants.
-/// 使用唯一 Core 协议和容量常量渲染权威 HTML 提示词。
+/// Render the interactive answer mode prompt with the unique Core component limits.
+/// 使用唯一的 Core 组件上限渲染互动回答模式提示词。
 /// No input; returns one trimmed producer body without independently defined limits.
 /// 无输入；返回已去除首尾空白且没有独立限额定义的一份生产者正文。
-pub(super) fn html_answer_enabled_prompt() -> String {
-    use vulcan_session_core::v1::html_answers::{
-        HTML_ANSWER_DRAFT_VERSION, HTML_ANSWER_MAX_PAGE_BYTES, HTML_ANSWER_MAX_PAGES,
-        HTML_ANSWER_MAX_TITLE_CHARS, HTML_ANSWER_MAX_TOTAL_BYTES, HTML_ANSWER_VERSION,
-        templates::{DRAFT_MAX_BLOCKS, DRAFT_MAX_ITEMS},
+pub(super) fn answer_mode_interactive_prompt() -> String {
+    use vulcan_session_core::v1::answer_components::{
+        ANSWER_CHART_MAX_SERIES, ANSWER_COMPONENT_MAX_ROWS,
     };
-    vulcan_runtime_assets::HTML_ANSWERS_ENABLED_MD
+    vulcan_runtime_assets::ANSWER_MODE_INTERACTIVE_MD
         .trim()
-        .replace("{{version}}", &HTML_ANSWER_VERSION.to_string())
-        .replace("{{draft_version}}", &HTML_ANSWER_DRAFT_VERSION.to_string())
-        .replace("{{max_blocks}}", &DRAFT_MAX_BLOCKS.to_string())
-        .replace("{{max_items}}", &DRAFT_MAX_ITEMS.to_string())
-        .replace("{{max_pages}}", &HTML_ANSWER_MAX_PAGES.to_string())
-        .replace(
-            "{{max_page_bytes}}",
-            &HTML_ANSWER_MAX_PAGE_BYTES.to_string(),
-        )
-        .replace(
-            "{{max_total_bytes}}",
-            &HTML_ANSWER_MAX_TOTAL_BYTES.to_string(),
-        )
-        .replace(
-            "{{max_title_chars}}",
-            &HTML_ANSWER_MAX_TITLE_CHARS.to_string(),
-        )
+        .replace("{{max_rows}}", &ANSWER_COMPONENT_MAX_ROWS.to_string())
+        .replace("{{max_series}}", &ANSWER_CHART_MAX_SERIES.to_string())
 }
 
 /// Builds an append-only identity notice from `document` history and the frozen `request`.
@@ -132,18 +115,13 @@ pub(super) fn synchronize_request_dynamic_context(
                 &candidate.locked_baseline,
             )?);
             inputs.push(model_selection_input(document, &facts.request));
-            // Freeze the preference under the same lock as its request-context publication.
-            // 在请求上下文发布的同一把锁内冻结偏好。
-            let html_guidance = if document.metadata.config.html_answers.enabled {
-                html_answer_enabled_prompt()
-            } else {
-                String::new()
-            };
+            // Freeze the answer mode under the same lock as its request-context publication.
+            // 在请求上下文发布的同一把锁内冻结回答模式。
             document
-                .synchronize_context_with_html_answers(
+                .synchronize_context_with_answer_mode(
                     inputs,
-                    &html_guidance,
-                    vulcan_runtime_assets::HTML_ANSWERS_DISABLED_MD.trim(),
+                    &answer_mode_interactive_prompt(),
+                    vulcan_runtime_assets::ANSWER_MODE_STANDARD_MD.trim(),
                     facts.prepared_at_ms,
                 )
                 .map(|result| match result {

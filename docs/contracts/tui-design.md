@@ -35,11 +35,10 @@ cargo run -p vulcan-code-tui --bin vulcan-tui -- --locale zh-TW
 
 ## 界面
 
-会话 HTML 回答可在输入区、`Alt+H` 或 `/html` 切换。`/html-results` 提供 Core 结果的浏览器打开、
-链接复制与原始源码检查；会话正文将精确 Core 围栏渲染为带默认浏览器按钮的结果块，鼠标点击或
-选中消息后按回车先确认、再签发并打开。多个结果通过选择面板逐个操作。打开后保留真实临时地址，
-兼容缺少浏览器、远程终端或启动器返回成功但无可见窗口的环境。具体授权契约见
-[`session-html-answers.md`](session-html-answers.md)。
+会话回答模式（标准/互动）可在输入区标签、`Alt+H` 或 `/answer-mode` 切换，保存走与 WebUI 相同的
+修订比较交换。会话正文中已闭合的 `ui-*` 围栏由 `ui/answer_components.rs` 改写为终端可读形式
+（符号、列表、表格、Mermaid 图与引导线树）；流式中尚未闭合或语法无效的围栏保持代码显示。
+组件语法与模式语义见 [`answer-mode-and-components.md`](answer-mode-and-components.md)。
 
 - **顶栏**：品牌、分支、连接状态。活动栏放不下时加入“当前区域 ▾ F2”切换按钮，其优先级高于右侧状态。
   标签式活动栏与会话面板同时内联、且状态放得进面板宽度时，顶行只拆成活动栏上方的品牌单元格和面板上方的

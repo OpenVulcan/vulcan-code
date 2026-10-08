@@ -4,24 +4,39 @@
 use super::*;
 use vulcan_session_core::v1::business_hook::BusinessHookBinding;
 use vulcan_session_core::v1::collaboration::*;
-use vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION;
+use vulcan_session_core::v1::config::{
+    AnswerMode, AnswerModePreference, AnswerModePrepared, METADATA_SCHEMA_VERSION,
+};
 
-/// Schema 2 gains only default-off HTML state, with byte-exact backup and repeatable full loading.
-/// 模式 2 仅增加默认关闭的 HTML 状态，保留精确原字节备份并支持重复完整加载。
+/// Replaces the answer mode of `metadata` with a schema-3 HTML preference at `schema`.
+/// 将 `metadata` 的回答模式替换为模式 3 HTML 偏好，并标记为 `schema`。
+/// `html` is the frozen old value, or None for schemas that predate it.
+/// `html` 为冻结的旧值；早于该字段的模式传 None。
+fn legacy_answer_mode(
+    metadata: &MetadataDocument,
+    schema: u32,
+    html: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut raw = serde_json::to_value(metadata).unwrap();
+    raw["schema_version"] = schema.into();
+    let config = raw["config"].as_object_mut().unwrap();
+    config.remove("answer_mode");
+    if let Some(html) = html {
+        config.insert("html_answers".into(), html);
+    }
+    raw
+}
+
+/// Schema 2 reaches the standard default through schema 3, with byte-exact backup and stable rereads.
+/// 模式 2 经模式 3 得到标准默认值，保留精确原字节备份且重读稳定。
 #[test]
-fn metadata_migration_html_answers_v2_to_v3_preserves_original_and_unrelated_state() {
+fn metadata_migration_v2_answer_mode_defaults_to_standard() {
     let (_root, layout, metadata) = fixture(false);
-    let mut raw = serde_json::to_value(&metadata).unwrap();
-    raw["schema_version"] = 2.into();
-    raw["config"]
-        .as_object_mut()
-        .unwrap()
-        .remove("html_answers");
-    let original = serde_json::to_vec_pretty(&raw).unwrap();
+    let original = serde_json::to_vec_pretty(&legacy_answer_mode(&metadata, 2, None)).unwrap();
     std::fs::write(layout.metadata_path(), &original).unwrap();
     let migrated = read_metadata(&layout.metadata_path()).unwrap();
     assert_eq!(migrated, metadata);
-    assert_eq!(migrated.config.html_answers, Default::default());
+    assert_eq!(migrated.config.answer_mode, AnswerModePreference::default());
     assert_eq!(
         std::fs::read(layout.session_dir().join("metadata.schema-2.backup.json")).unwrap(),
         original
@@ -32,31 +47,111 @@ fn metadata_migration_html_answers_v2_to_v3_preserves_original_and_unrelated_sta
     assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), saved);
 }
 
-/// A corrupt current document cannot borrow old defaults, and an old schema cannot smuggle new intent.
-/// 损坏的当前文档不能借用旧版本默认值，旧模式不能夹带新偏好。
+/// Schema 3 HTML choices become answer modes with unchanged revisions and preparations.
+/// 模式 3 HTML 选择变为回答模式，修订号与准备快照保持不变。
 #[test]
-fn metadata_migration_html_answers_rejects_missing_current_or_foreign_old_state() {
-    for current in [false, true] {
+fn metadata_migration_v3_html_preference_becomes_answer_mode() {
+    let cases = [
+        (
+            serde_json::json!({"enabled": true, "revision": 1, "prepared": {"enabled": true, "revision": 1}}),
+            AnswerModePreference {
+                mode: AnswerMode::Interactive,
+                revision: 1,
+                prepared: Some(AnswerModePrepared {
+                    mode: AnswerMode::Interactive,
+                    revision: 1,
+                }),
+            },
+        ),
+        (
+            serde_json::json!({"enabled": false, "revision": 2, "prepared": {"enabled": true, "revision": 1}}),
+            AnswerModePreference {
+                mode: AnswerMode::Standard,
+                revision: 2,
+                prepared: Some(AnswerModePrepared {
+                    mode: AnswerMode::Interactive,
+                    revision: 1,
+                }),
+            },
+        ),
+        (
+            serde_json::json!({"enabled": false, "revision": 0, "prepared": {"enabled": false, "revision": 0}}),
+            AnswerModePreference {
+                mode: AnswerMode::Standard,
+                revision: 0,
+                prepared: Some(AnswerModePrepared {
+                    mode: AnswerMode::Standard,
+                    revision: 0,
+                }),
+            },
+        ),
+    ];
+    for (html, expected) in cases {
+        let (_root, layout, mut metadata) = fixture(false);
+        metadata.config.answer_mode = expected.clone();
+        let original = serde_json::to_vec(&legacy_answer_mode(&metadata, 3, Some(html))).unwrap();
+        std::fs::write(layout.metadata_path(), &original).unwrap();
+        let migrated = read_metadata(&layout.metadata_path()).unwrap();
+        assert_eq!(migrated.config.answer_mode, expected);
+        assert_eq!(migrated, metadata);
+        assert_eq!(
+            std::fs::read(layout.session_dir().join("metadata.schema-3.backup.json")).unwrap(),
+            original
+        );
+        assert_eq!(read_metadata(&layout.metadata_path()).unwrap(), migrated);
+    }
+}
+
+/// A corrupt current document cannot borrow old defaults, and an old schema cannot smuggle new state.
+/// 损坏的当前文档不能借用旧版本默认值，旧模式不能夹带新状态。
+#[test]
+fn metadata_migration_answer_mode_rejects_missing_current_or_foreign_old_state() {
+    let html = serde_json::json!({"enabled": false, "revision": 0, "prepared": null});
+    for case in [
+        "current_missing",
+        "v2_with_html",
+        "v3_with_answer_mode",
+        "v3_missing_html",
+        "v3_malformed",
+    ] {
         let (_root, layout, metadata) = fixture(false);
-        let mut raw = serde_json::to_value(&metadata).unwrap();
-        if current {
-            raw["config"]
-                .as_object_mut()
-                .unwrap()
-                .remove("html_answers");
-        } else {
-            raw["schema_version"] = 2.into();
-            raw["config"]["html_answers"]["enabled"] = true.into();
-        }
+        let (schema, raw) = match case {
+            "current_missing" => (
+                METADATA_SCHEMA_VERSION,
+                legacy_answer_mode(&metadata, METADATA_SCHEMA_VERSION, None),
+            ),
+            "v2_with_html" => (2, legacy_answer_mode(&metadata, 2, Some(html.clone()))),
+            "v3_with_answer_mode" => {
+                let mut raw = serde_json::to_value(&metadata).unwrap();
+                raw["schema_version"] = 3.into();
+                raw["config"]["html_answers"] = html.clone();
+                (3, raw)
+            }
+            "v3_missing_html" => (3, legacy_answer_mode(&metadata, 3, None)),
+            "v3_malformed" => (
+                3,
+                legacy_answer_mode(
+                    &metadata,
+                    3,
+                    Some(serde_json::json!({"enabled": "yes", "revision": 0, "prepared": null})),
+                ),
+            ),
+            _ => unreachable!(),
+        };
         let original = serde_json::to_vec(&raw).unwrap();
         std::fs::write(layout.metadata_path(), &original).unwrap();
-        assert!(read_metadata(&layout.metadata_path()).is_err());
-        assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), original);
+        assert!(read_metadata(&layout.metadata_path()).is_err(), "{case}");
+        assert_eq!(
+            std::fs::read(layout.metadata_path()).unwrap(),
+            original,
+            "{case}"
+        );
         assert!(
             !layout
                 .session_dir()
-                .join("metadata.schema-2.backup.json")
-                .exists()
+                .join(format!("metadata.schema-{schema}.backup.json"))
+                .exists(),
+            "{case}"
         );
     }
 }
@@ -137,10 +232,7 @@ fn write_legacy(
 ) -> Vec<u8> {
     let mut raw = serde_json::to_value(metadata).unwrap();
     raw["schema_version"] = 1.into();
-    raw["config"]
-        .as_object_mut()
-        .unwrap()
-        .remove("html_answers");
+    raw["config"].as_object_mut().unwrap().remove("answer_mode");
     if omit_policy {
         raw["business_hook"]["binding"]
             .as_object_mut()
@@ -344,10 +436,7 @@ fn metadata_migration_runs_through_configuration_read() {
     let mut raw: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     raw["schema_version"] = 1.into();
-    raw["config"]
-        .as_object_mut()
-        .unwrap()
-        .remove("html_answers");
+    raw["config"].as_object_mut().unwrap().remove("answer_mode");
     let original = serde_json::to_vec(&raw).unwrap();
     std::fs::write(&path, &original).unwrap();
     locator.read_request_configuration().unwrap();

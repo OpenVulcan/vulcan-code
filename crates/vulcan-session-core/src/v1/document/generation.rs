@@ -17,7 +17,7 @@ use crate::v1::event::{
 use crate::v1::ids::{ClientActionId, JS_SAFE_INTEGER_MAX, ResourceId, Seq};
 use crate::v1::projection::derive_active_system_state;
 
-use super::{HTML_ANSWER_CONTEXT_KEY, SessionDocument, validate_timestamp, validate_user_input};
+use super::{ANSWER_MODE_CONTEXT_KEY, SessionDocument, validate_timestamp, validate_user_input};
 
 /// Stable Goal state semantic key reset by every rewritten generation.
 /// 每个重写 generation 都会重置的稳定 Goal 状态语义键。
@@ -380,9 +380,9 @@ impl SessionDocument {
         metadata.mode.goal = GoalConfig::default();
         metadata.mode.plan = PlanModeConfig::default();
         metadata.config.pending_request = None;
-        // Preserve the user's HTML preference, but prepare it against the new generation independently.
-        // 保留用户 HTML 偏好，但必须针对新代次独立准备。
-        metadata.config.html_answers.prepared = None;
+        // Preserve the user's answer mode, but prepare it against the new generation independently.
+        // 保留用户回答模式，但必须针对新代次独立准备。
+        metadata.config.answer_mode.prepared = None;
         metadata.input_state = InputState::default();
         // Dynamic request producers are refreshed from the new execution after explicit history invalidation.
         // 动态请求生产者在历史明确失效后由新执行重新生成。
@@ -547,7 +547,7 @@ fn active_generation_context_keys(
         DYNAMIC_CONTEXT_RUNTIME_KEY,
         DYNAMIC_CONTEXT_PERSISTENT_KEY,
         DYNAMIC_CONTEXT_TRANSIENT_KEY,
-        HTML_ANSWER_CONTEXT_KEY,
+        ANSWER_MODE_CONTEXT_KEY,
     ] {
         if active.iter().any(|state| state.context_key == context_key) {
             result.push(context_key);
@@ -569,8 +569,8 @@ fn generation_reset_content(context_key: &str) -> &'static str {
         PLAN_MODE_CONTEXT_KEY => {
             "Plan mode was reset because the conversation history was replaced."
         }
-        HTML_ANSWER_CONTEXT_KEY => {
-            "The previous HTML answer preference context expired with this history generation. Follow the separately supplied preference for new responses."
+        ANSWER_MODE_CONTEXT_KEY => {
+            "The previous answer mode context expired with this history generation. Follow the separately supplied answer mode for new responses."
         }
         DYNAMIC_CONTEXT_SYSTEM_KEY
         | DYNAMIC_CONTEXT_DEVELOPER_KEY
@@ -616,7 +616,7 @@ mod tests {
         CollaborationParticipant, CollaborationQuestionId, CreateQuestionInput,
         ReserveChildTaskInput,
     };
-    use crate::v1::config::{ActiveRequestConfig, PendingRequestConfig};
+    use crate::v1::config::{ActiveRequestConfig, AnswerMode, PendingRequestConfig};
     use crate::v1::document::{ApiCompletion, ClientInputSubmission};
     use crate::v1::dynamic_context::DynamicContextInput;
     use crate::v1::event::{
@@ -1417,17 +1417,19 @@ mod tests {
     /// A fork inherits the current desired preference but invalidates the original prepared context.
     /// 分叉继承当前期望偏好，但使原始准备上下文失效。
     #[test]
-    fn html_answers_fork_inherits_preference_and_reprepares_context() {
-        let mut source = SessionDocument::new("html-parent", "p", "parent", T0);
+    fn answer_mode_fork_inherits_preference_and_reprepares_context() {
+        let mut source = SessionDocument::new("mode-parent", "p", "parent", T0);
         source
             .submit_root_input_fixture("hello", Vec::new(), T0 + 1)
             .unwrap();
-        source.set_html_answer_mode(true, 0, T0 + 2).unwrap();
         source
-            .synchronize_context_with_html_answers(
+            .set_answer_mode(AnswerMode::Interactive, 0, T0 + 2)
+            .unwrap();
+        source
+            .synchronize_context_with_answer_mode(
                 Vec::new(),
-                "HTML enabled",
-                "HTML disabled",
+                "components on",
+                "components off",
                 T0 + 3,
             )
             .unwrap();
@@ -1443,20 +1445,23 @@ mod tests {
             .seq;
         let output = source
             .build_fork_generation(ForkGenerationInput {
-                child_session_id: "html-child".into(),
+                child_session_id: "mode-child".into(),
                 title: "child".into(),
                 source_turn_end_seq: boundary,
                 now_ms: T0 + 5,
             })
             .unwrap();
-        assert!(output.metadata.config.html_answers.enabled);
         assert_eq!(
-            output.metadata.config.html_answers.revision,
-            source.metadata.config.html_answers.revision
+            output.metadata.config.answer_mode.mode,
+            AnswerMode::Interactive
         );
-        assert_eq!(output.metadata.config.html_answers.prepared, None);
+        assert_eq!(
+            output.metadata.config.answer_mode.revision,
+            source.metadata.config.answer_mode.revision
+        );
+        assert_eq!(output.metadata.config.answer_mode.prepared, None);
         assert!(output.events.iter().any(|event| matches!(&event.event,
-            EventBody::SystemContext(context) if context.context_key == HTML_ANSWER_CONTEXT_KEY && context.operation == SystemContextOperation::Remove
+            EventBody::SystemContext(context) if context.context_key == ANSWER_MODE_CONTEXT_KEY && context.operation == SystemContextOperation::Remove
         )));
         let mut restored = SessionDocument::from_parts(
             output.metadata,
@@ -1468,10 +1473,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             restored
-                .synchronize_context_with_html_answers(
+                .synchronize_context_with_answer_mode(
                     Vec::new(),
-                    "HTML enabled",
-                    "HTML disabled",
+                    "components on",
+                    "components off",
                     T0 + 6
                 )
                 .unwrap()
@@ -1479,14 +1484,9 @@ mod tests {
                 .len(),
             1
         );
-        assert!(
-            restored
-                .metadata
-                .config
-                .html_answers
-                .prepared
-                .unwrap()
-                .enabled
+        assert_eq!(
+            restored.metadata.config.answer_mode.prepared.unwrap().mode,
+            AnswerMode::Interactive
         );
     }
 

@@ -1,4 +1,1 @@
-{
-  "tui.htmlAnswers.confirmOpen": "„{title}“ im Standardbrowser öffnen? Das Ergebnis wird auf einer isolierten Seite ausgeführt.",
-  "tui.htmlAnswers.openFallback": "Falls sich kein Browser öffnet, verwenden Sie die folgende Adresse. Der temporäre Link kann innerhalb von {seconds} Sekunden einmal geöffnet werden. Link kopieren erstellt einen neuen Link."
-}
+{}

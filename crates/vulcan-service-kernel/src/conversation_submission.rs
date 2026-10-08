@@ -222,10 +222,10 @@ struct SubmissionProviderToolSettings {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SubmissionSessionSettings {
-    /// Explicit HTML preference captured by the draft; absent preserves the new-session default.
-    /// 草稿捕获的显式 HTML 偏好；缺省时保留新会话默认值。
+    /// Explicit answer mode captured by the draft; absent copies the global default.
+    /// 草稿捕获的显式回答模式；缺省时复制全局默认值。
     #[serde(default)]
-    html_answers_enabled: Option<bool>,
+    answer_mode: Option<vulcan_session_core::v1::config::AnswerMode>,
     /// Optional session output-style identifier captured before the first prompt boundary.
     /// 在首次提示词边界前捕获的可选会话输出风格标识。
     #[serde(default)]
@@ -324,15 +324,20 @@ async fn apply_submission_session_settings(
         ));
     }
     let configuration = runtime.configuration_snapshot()?;
-    let global_output_style_selection = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?
-        .agent_runtime
-        .as_ref()
-        .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
-        .provider_configuration
-        .prompt
-        .output_style;
+    let (global_output_style_selection, global_answer_mode) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let provider_configuration = &guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
+            .provider_configuration;
+        (
+            provider_configuration.prompt.output_style,
+            crate::answer_mode::global_answer_mode(provider_configuration),
+        )
+    };
     let output_style_snapshot = submission_output_style_snapshot(
         settings,
         global_output_style_selection,
@@ -458,7 +463,9 @@ async fn apply_submission_session_settings(
                 knowledge_libraries: knowledge_selection_v1,
                 vmm: vmm_selection_v1,
             },
-            settings.and_then(|settings| settings.html_answers_enabled),
+            settings
+                .and_then(|settings| settings.answer_mode)
+                .unwrap_or(global_answer_mode),
             updated_at_ms,
         )?;
         Some(
@@ -3800,7 +3807,7 @@ mod submission_session_settings_tests {
     #[test]
     fn ordinary_submission_keeps_output_style_snapshot_unchanged() {
         let settings = SubmissionSessionSettings {
-            html_answers_enabled: None,
+            answer_mode: None,
             output_style_id: Some(String::from("rigorous")),
             vmm_policy: None,
             provider_tool_settings: None,

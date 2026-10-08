@@ -10,9 +10,9 @@
 // （蛇形命名）、RPC 方法与参数形状。TUI 不为同一服务定义第二套词汇：页面调用这些函数，服务后端
 // 原样发送得到的 `ServiceCall`，模拟后端响应同样的方法名。WebUI 新增或修改函数时，应先在此处同步。
 
+pub mod answer_mode;
 #[cfg(test)]
 mod contracts_tests;
-pub mod html_answers;
 pub mod knowledge_base;
 pub mod licenses;
 pub mod mcp_settings;

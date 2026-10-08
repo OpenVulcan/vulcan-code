@@ -34,9 +34,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_clear_session_goal",
     "service_update_session_goal_status",
     "service_set_session_plan_mode",
-    "service_set_session_html_answer_mode",
-    "service_create_html_answer_view_link",
-    "service_revoke_html_answer_view_link",
+    "service_set_session_answer_mode",
     "service_set_session_vmm_policy",
     "service_set_session_context_compaction_window",
     "service_set_session_output_style",
@@ -77,21 +75,8 @@ pub(super) async fn dispatch(
     // result preserves service failures inside Handled so the top-level return trace still runs.
     // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
     let result = match method {
-        "service_create_html_answer_view_link" => rpc_json_result(
-            crate::session_html_answers::viewing::service_create_html_answer_view_link(
-                state,
-                rpc_required_param(params, "request")?,
-            )
-            .await,
-        ),
-        "service_revoke_html_answer_view_link" => rpc_json_result(
-            crate::session_html_answers::viewing::service_revoke_html_answer_view_link(
-                state,
-                rpc_required_param(params, "request")?,
-            ),
-        ),
-        "service_set_session_html_answer_mode" => rpc_json_result(
-            crate::session_html_answers::service_set_session_html_answer_mode(
+        "service_set_session_answer_mode" => rpc_json_result(
+            crate::answer_mode::service_set_session_answer_mode(
                 state,
                 rpc_required_param(params, "request")?,
             )

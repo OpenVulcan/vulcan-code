@@ -25,6 +25,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_license_catalog",
     "service_license_body",
     "service_save_prompt_output_style",
+    "service_save_prompt_answer_mode",
     "service_system_prompt_settings",
     "service_save_system_prompt",
     "service_reset_system_prompt",
@@ -197,6 +198,14 @@ pub(super) async fn dispatch(
         "service_save_prompt_output_style" => rpc_json_result(
             service_save_prompt_output_style(app, state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_save_prompt_answer_mode" => rpc_json_result(
+            crate::answer_mode::service_save_prompt_answer_mode(
+                app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
         ),
         "service_system_prompt_settings" => rpc_json_result(
             service_system_prompt_settings(state, rpc_optional_param(params, "projectId")?).await,

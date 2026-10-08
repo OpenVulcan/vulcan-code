@@ -149,6 +149,10 @@ pub struct WorkbenchSnapshot {
     /// 新会话使用的输出风格目录与已持久化全局选择。
     #[serde(default)]
     pub output_style_catalog: OutputStyleCatalogSummary,
+    /// Persisted global answer mode copied into new sessions.
+    /// 复制到新会话的已持久化全局回答模式。
+    #[serde(default)]
+    pub default_answer_mode: vulcan_session_core::v1::config::AnswerMode,
     /// Composer slash commands projected from the shared command catalog.
     /// 从共享指令目录投影出的输入区 slash 指令。
     #[serde(default)]

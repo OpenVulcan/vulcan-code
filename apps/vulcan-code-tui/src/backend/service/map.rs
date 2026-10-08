@@ -542,7 +542,6 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
         CoreEvent::AssistantText(text) => EventBody::AssistantText {
             text: text.text.clone(),
             status: text.status,
-            html_answers_allowed: summary.visibility == core::EventVisibility::Provider,
         },
         CoreEvent::ToolCall(call) => EventBody::ToolCall {
             tool_name: call.tool_name.clone(),

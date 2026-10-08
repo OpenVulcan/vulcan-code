@@ -1,7 +1,6 @@
 //! HTTP and WebSocket host for the Vulcan Core Service.
 //! Vulcan Core Service 的 HTTP 与 WebSocket 宿主层。
 
-pub mod html_answers;
 pub mod instance;
 mod rpc_admission;
 
@@ -285,9 +284,6 @@ pub fn write_webui_service_discovery_snapshot(
 /// 承载浏览器侧 WebUI 服务所需的配置。
 #[derive(Clone)]
 pub struct WebuiServiceHttpConfig {
-    /// Optional Core-owned isolated HTML answer viewer transport.
-    /// 可选的 Core 自有隔离 HTML 回答查看传输层。
-    pub html_answers: Option<Arc<html_answers::HtmlAnswerRuntime>>,
     /// Discovery snapshot returned by `/health`.
     /// `/health` 返回的服务发现快照。
     pub discovery: SharedWebuiServiceDiscoverySnapshot,
@@ -375,22 +371,7 @@ pub async fn serve_webui_service_http_listener(
     listener: TcpListener,
     config: WebuiServiceHttpConfig,
 ) -> Result<(), std::io::Error> {
-    let _html_lifetime = HtmlViewerListenerLifetime(config.html_answers.clone());
     axum::serve(listener, build_webui_service_router(config)).await
-}
-
-/// Ties the render listener to the main HTTP future, including cancellation before normal return.
-/// 将渲染监听器绑定到主 HTTP future，包含正常返回前的取消。
-struct HtmlViewerListenerLifetime(Option<Arc<html_answers::HtmlAnswerRuntime>>);
-
-impl Drop for HtmlViewerListenerLifetime {
-    /// Revoke capabilities and abort the child listener when the main listener leaves scope.
-    /// 主监听器离开作用域时撤销能力并中止子监听器。
-    fn drop(&mut self) {
-        if let Some(runtime) = &self.0 {
-            runtime.stop();
-        }
-    }
 }
 
 /// Builds the browser-facing WebUI service router.
@@ -406,7 +387,6 @@ impl Drop for HtmlViewerListenerLifetime {
 /// An Axum router ready to be served on a loopback listener.
 /// 返回可在回环监听器上提供服务的 Axum 路由。
 pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
-    let html_answers = config.html_answers.clone();
     let service_state = WebuiServiceHttpState {
         discovery: config.discovery,
         service_token: config.service_token,
@@ -434,7 +414,7 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
             AxumMethod::OPTIONS,
         ])
         .allow_headers(Any);
-    let router = Router::new()
+    Router::new()
         .route("/health", get(webui_service_health_http_handler))
         .route("/v1/service/status", get(webui_service_status_http_handler))
         .route(
@@ -473,13 +453,7 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .route("/index.html", get(webui_service_index_http_handler))
         .fallback(get(webui_service_static_http_handler))
         .layer(cors)
-        .with_state(service_state);
-    // Dedicated capability routes intentionally do not inherit the general RPC CORS layer.
-    // 专用能力路由刻意不继承通用 RPC CORS 层。
-    match html_answers {
-        Some(runtime) => router.merge(runtime.viewer_router()),
-        None => router,
-    }
+        .with_state(service_state)
 }
 
 /// Returns discovery only to the service WebUI, the fixed debug Vite WebUI, or a native client.
@@ -2545,7 +2519,6 @@ mod tests {
             status_provider: None,
             browser_stream: None,
             browser_download_resolver: None,
-            html_answers: None,
         })
     }
 
@@ -2987,7 +2960,6 @@ mod tests {
             status_provider: Some(test_status_provider()),
             browser_stream: None,
             browser_download_resolver: None,
-            html_answers: None,
         })
     }
 
@@ -3017,7 +2989,6 @@ mod tests {
             status_provider: None,
             browser_stream: None,
             browser_download_resolver: None,
-            html_answers: None,
         };
         config.browser_stream = Some(WebuiServiceBrowserStream {
             issue_ticket: Arc::new(|session_id, owner_session_id| {

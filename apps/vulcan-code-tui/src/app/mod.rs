@@ -8,6 +8,7 @@
 // `apply` 把 `BackendEvent` 转换为状态。由此模拟后端与未来的服务后端可以互换。
 
 pub mod action;
+pub mod answer_mode;
 pub mod ask;
 #[cfg(test)]
 mod catalog_tests;
@@ -16,7 +17,6 @@ pub mod composer;
 pub mod form;
 pub mod history;
 pub mod hit;
-pub mod html_answers;
 pub mod input;
 pub mod insight;
 pub mod menus;
@@ -209,9 +209,9 @@ pub struct SessionState {
     pub agents: Vec<AgentInfo>,
     pub insight: SessionInsight,
     pub mode: ExecutionMode,
-    /// Last accepted HTML preference and exact durable source annotations.
-    /// 最近接纳的 HTML 偏好与精确可靠源码标注。
-    pub html_answers: HtmlAnswerSession,
+    /// Last accepted answer mode.
+    /// 最近接纳的回答模式。
+    pub answer_mode: AnswerModeSession,
     /// Blocks whose default fold state the user flipped, keyed by event seq.
     /// 用户翻转过默认折叠状态的块，以事件 seq 为键。
     pub toggled: HashSet<u64>,
@@ -242,7 +242,7 @@ impl SessionState {
             agents: Vec::new(),
             insight: SessionInsight::default(),
             mode: ExecutionMode::Build,
-            html_answers: HtmlAnswerSession::default(),
+            answer_mode: AnswerModeSession::default(),
             toggled: HashSet::new(),
             scroll_from_bottom: 0,
             selected: None,
@@ -1126,28 +1126,16 @@ impl App {
     /// 将一条后端事实折叠进状态。
     pub fn apply(&mut self, event: BackendEvent) {
         match event {
-            BackendEvent::HtmlAnswers {
+            BackendEvent::AnswerMode {
                 conversation_id,
                 state,
-            } => self.session_for(&conversation_id).html_answers = state,
-            BackendEvent::HtmlAnswerLink {
-                source,
-                link,
-                delivery,
-            } => action::perform(
-                self,
-                action::UiAction::DeliverHtmlAnswer {
-                    source,
-                    link,
-                    delivery,
-                },
-            ),
+            } => self.session_for(&conversation_id).answer_mode = state,
             BackendEvent::Connection(state) => {
                 self.connection = state;
                 if state != ConnectionState::Connected {
                     self.call_pending = false;
                     for session in self.sessions.values_mut() {
-                        session.html_answers = HtmlAnswerSession::default();
+                        session.answer_mode = AnswerModeSession::default();
                     }
                 }
                 if state == ConnectionState::Connected {
@@ -1223,7 +1211,7 @@ impl App {
             } => {
                 let session = self.session_for(&conversation_id);
                 session.events = events;
-                session.html_answers = HtmlAnswerSession::default();
+                session.answer_mode = AnswerModeSession::default();
                 session.events.sort_by_key(|e| e.seq);
                 session.hydrated = true;
             }

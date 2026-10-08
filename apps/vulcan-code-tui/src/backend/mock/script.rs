@@ -135,7 +135,6 @@ impl Script {
             Action::Upsert {
                 seq,
                 body: EventBody::AssistantText {
-                    html_answers_allowed: true,
                     text: String::new(),
                     status: AssistantSemanticStatus::Streaming,
                 },

@@ -39,9 +39,9 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 
 ## 页面范围
 
-会话 HTML 回答通过 `service_api/html_answers.rs` 镜像 WebUI 的偏好保存、查看链接签发和撤销。
-权威状态从会话 hydration 与 durable 增量取得，执行身份不由 TUI 解析正文产生；完整行为与验收见
-[`session-html-answers.md`](session-html-answers.md)。
+会话回答模式通过 `service_api/answer_mode.rs` 镜像 WebUI 的 `service_set_session_answer_mode`；
+权威状态从会话 hydration 与 durable 增量取得，草稿会话的选择随首次提交的 `sessionSettings.answerMode`
+一并发送。完整语义见 [`answer-mode-and-components.md`](answer-mode-and-components.md)。
 
 | 页面 | 已适配交互 | 状态来源 |
 | --- | --- | --- |

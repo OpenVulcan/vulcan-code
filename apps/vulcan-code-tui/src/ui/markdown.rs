@@ -11,7 +11,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::html_draft;
+use super::answer_components;
 use super::mermaid;
 use super::text::{width_of, wrap};
 use super::theme::{Theme, mix};
@@ -19,31 +19,6 @@ use super::theme::{Theme, mix};
 /// Renders `source` into lines at most `width` columns wide.
 /// 将 `source` 渲染为不超过 `width` 列的行。
 pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
-    render_internal(source, width, theme, None)
-}
-
-/// Replace each dedicated HTML fence by an inert status line, followed by its readable draft for
-/// version two; raw version-one HTML stays collapsed.
-/// 将每个专用 HTML 围栏替换为不可执行的状态行，版本二随后附上可读草稿；版本一原始 HTML 保持折叠。
-/// `status` is display-only; this function never grants a link or parses execution metadata.
-/// `status` 仅用于展示；本函数绝不签发链接或解析执行元信息。
-pub fn render_with_html_status(
-    source: &str,
-    width: usize,
-    theme: &Theme,
-    status: &str,
-) -> Vec<Line<'static>> {
-    render_internal(source, width, theme, Some(status))
-}
-
-/// Render the established Markdown syntax, optionally collapsing HTML candidates for the transcript.
-/// 渲染既有 Markdown 语法，并可为会话区折叠 HTML 候选。
-fn render_internal(
-    source: &str,
-    width: usize,
-    theme: &Theme,
-    html_status: Option<&str>,
-) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code = false;
     // Unified diffs color their added and removed rows.
@@ -60,37 +35,34 @@ fn render_internal(
             in_code = !in_code;
             if in_code {
                 let lang = trimmed.trim_start_matches('`').trim();
-                if let Some(status) =
-                    html_status.filter(|_| lang.split_whitespace().next() == Some("vulcan-html"))
-                {
-                    lines.extend(wrap(
-                        &[Span::styled(status.to_owned(), theme.muted_text())],
-                        width,
-                        &[],
-                        &[],
-                    ));
-                    // Inner component fences must not end the outer result while it is still streaming.
-                    // 仍在流式输出时，内部组件围栏不能结束外层结果块。
+                // A closed answer component renders natively; its closing fence needs at least as
+                // many backticks as the opening one so nested container fences stay inside. While
+                // it is still streaming, or when its syntax is invalid, it shows as code.
+                // 已闭合的回答组件原生渲染；结束围栏的反引号数不得少于开始围栏，使容器内嵌围栏留在内部。
+                // 仍在流式输出或语法无效时显示为代码。
+                if lang.starts_with("ui-") {
                     let opening_ticks = trimmed.bytes().take_while(|byte| *byte == b'`').count();
-                    let end = source[index..]
-                        .iter()
-                        .position(|line| {
-                            let closing = line.trim_start();
-                            let ticks = closing.bytes().take_while(|byte| *byte == b'`').count();
-                            ticks >= opening_ticks && closing[ticks..].trim().is_empty()
-                        })
-                        .map_or(source.len(), |close| index + close);
-                    // A version-two draft is readable text, so it grows here as it streams; raw
-                    // version-one HTML stays collapsed behind the status line.
-                    // 版本二草稿是可读文字，因此在流式输出时于此逐步增长；版本一原始 HTML 仍折叠在状态行之后。
-                    if let Some(preview) =
-                        html_draft::preview(raw, &source[index..end].join("\n"), width, theme)
-                    {
-                        lines.extend(preview);
+                    let close = source[index..].iter().position(|line| {
+                        let closing = line.trim_start();
+                        let ticks = closing.bytes().take_while(|byte| *byte == b'`').count();
+                        ticks >= opening_ticks && closing[ticks..].trim().is_empty()
+                    });
+                    if let Some((close, component)) = close.and_then(|close| {
+                        Some((
+                            close,
+                            answer_components::render(
+                                lang,
+                                &source[index..index + close],
+                                width,
+                                theme,
+                            )?,
+                        ))
+                    }) {
+                        lines.extend(component);
+                        index += close + 1;
+                        in_code = false;
+                        continue;
                     }
-                    index = (end + 1).min(source.len());
-                    in_code = false;
-                    continue;
                 }
                 diff = lang == "diff";
                 let label = if lang.is_empty() {
@@ -634,40 +606,34 @@ A[Plan] --> B[Build]";
         assert!(texts.iter().any(|t| t.contains("A[Plan] --> B[Build]")));
     }
 
-    /// A streaming draft grows as readable text; its inner fences cannot end the outer result.
-    /// 流式草稿以可读文字增长；其内部围栏不能结束外层结果。
+    /// Closed components render natively, nested fences stay inside their container, and an
+    /// unclosed or invalid component shows its source as code.
+    /// 已闭合组件原生渲染，内嵌围栏留在其容器内，未闭合或无效组件以代码显示源码。
     #[test]
-    fn html_draft_streams_readable_text_inside_one_result() {
-        let source = "before\n````vulcan-html {\"version\":2,\"title\":\"x\",\"template\":\"document\"}\n```ui-kv\nkey-marker | value\n```\nmore-draft-content\n";
-        for suffix in ["", "````\nafter"] {
-            let rendered = render_with_html_status(
-                &format!("{source}{suffix}"),
-                60,
-                &Theme::dark(),
-                "pending",
-            )
-            .iter()
-            .map(text_of)
-            .collect::<Vec<_>>()
-            .join("\n");
-            assert!(rendered.contains("before") && rendered.contains("pending"));
-            assert!(rendered.contains("key-marker") && rendered.contains("more-draft-content"));
-            assert!(!rendered.contains("ui-kv") && !rendered.contains("vulcan-html"));
-            assert_eq!(rendered.contains("after"), !suffix.is_empty());
-        }
-    }
+    fn answer_components_render_when_closed_and_stay_code_otherwise() {
+        let theme = Theme::dark();
+        let joined = |source: &str| {
+            render(source, 60, &theme)
+                .iter()
+                .map(text_of)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let checklist = "```ui-checklist\nok | marker-item\n```\nafter";
+        let rendered = joined(checklist);
+        assert!(rendered.contains("marker-item") && rendered.contains("after"));
+        assert!(!rendered.contains("ui-checklist"));
 
-    /// Raw version-one HTML never shows its markup while streaming.
-    /// 版本一原始 HTML 在流式输出时从不显示其标记。
-    #[test]
-    fn html_v1_streaming_stays_collapsed() {
-        let source =
-            "````vulcan-html {\"version\":1,\"title\":\"x\"}\n<button>markup-marker</button>\n";
-        let rendered = render_with_html_status(source, 60, &Theme::dark(), "pending")
-            .iter()
-            .map(text_of)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(rendered.contains("pending") && !rendered.contains("markup-marker"));
+        let streaming = joined("```ui-checklist\nok | marker-item");
+        assert!(streaming.contains("ui-checklist"));
+
+        let invalid = joined("```ui-checklist\nmaybe | marker-item\n```");
+        assert!(invalid.contains("ui-checklist"));
+
+        let nested = "````ui-callout warning Title-marker\nbody\n```ui-kv\nkey-marker | value\n```\ntail-marker\n````\nafter";
+        let rendered = joined(nested);
+        assert!(rendered.contains("Title-marker") && rendered.contains("key-marker"));
+        assert!(rendered.contains("tail-marker") && rendered.contains("after"));
+        assert!(!rendered.contains("ui-kv") && !rendered.contains("ui-callout"));
     }
 }

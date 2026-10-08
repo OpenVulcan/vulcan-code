@@ -46,6 +46,7 @@ use crate::v1::stats::TurnStatBuckets;
 #[cfg(test)]
 use vulcan_change_set::PersistentChangeSet;
 
+mod answer_mode;
 mod api;
 mod business_hook;
 mod child_creation;
@@ -54,7 +55,6 @@ mod collaboration;
 mod compaction;
 mod dynamic_context;
 mod generation;
-mod html_answers;
 mod hydration;
 mod input;
 mod modes;
@@ -69,6 +69,7 @@ mod tools;
 mod turns;
 mod user_prompt;
 
+pub use answer_mode::ANSWER_MODE_CONTEXT_KEY;
 pub use api::{
     ApiCompletion, ApiGroupCompletionReceipt, ApiTransportObservedReceipt,
     ContinuationDispatchResolution, ContinuationTerminalProjection, PrepareAndStartApiInput,
@@ -77,7 +78,6 @@ pub use api::{
 pub use child_execution::ChildContextMaintenanceSource;
 pub use collaboration::ChildTaskNonSuccessInput;
 pub use compaction::CompactionCommitInput;
-pub use html_answers::HTML_ANSWER_CONTEXT_KEY;
 pub use input::{
     ClientInputSubmission, DraftMutationReceipt, EnqueueInputDisposition, EnqueueInputReceipt,
     QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,

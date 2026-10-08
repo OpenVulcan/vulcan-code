@@ -353,7 +353,6 @@ async fn run_browser_acceptance(
         status_provider: None,
         browser_stream: None,
         browser_download_resolver: None,
-        html_answers: None,
     };
     let server = tokio::spawn(vulcan_service_host::serve_webui_service_http_listener(
         listener, config,

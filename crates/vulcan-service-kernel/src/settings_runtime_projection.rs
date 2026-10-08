@@ -509,6 +509,8 @@ pub(crate) fn refresh_settings_projection_locked(
         provider_configuration.provider_error_trace_enabled;
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
+    guard.workbench.default_answer_mode =
+        crate::answer_mode::global_answer_mode(provider_configuration);
     // Settings refreshes use the same session-owned model projection as navigation, never global picker rows.
     // 设置刷新与导航使用同一会话自有模型投影，绝不使用全局选择器行。
     let mut selected_configuration = provider_configuration.clone();

@@ -23,19 +23,9 @@ use crate::model::*;
 /// 系统区域使用 `Call`，其请求由 `crate::service_api` 构建。
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Persist a session preference with the same compare-and-set contract as WebUI.
-    /// 按与 WebUI 相同的比较交换契约持久化会话偏好。
-    SetSessionHtmlAnswerMode(vulcan_service_api::SessionHtmlAnswerModeUpdateRequest),
-    /// Issue only the selected Core-owned source after an explicit open or copy action.
-    /// 仅在明确打开或复制操作后签发选中的 Core 所有源码。
-    CreateHtmlAnswerViewLink {
-        source: vulcan_service_api::HtmlAnswerSourceIdentity,
-        delivery: HtmlAnswerDelivery,
-        locale: String,
-    },
-    /// Revoke an obsolete result or a link whose delivery was abandoned.
-    /// 撤销过期结果或放弃交付的链接。
-    RevokeHtmlAnswerViewLink(uuid::Uuid),
+    /// Persist a session answer mode with the same compare-and-set contract as WebUI.
+    /// 按与 WebUI 相同的比较交换契约持久化会话回答模式。
+    SetSessionAnswerMode(vulcan_service_api::SessionAnswerModeUpdateRequest),
     /// `selectConversation` (`service_select_conversation`), then `markConversationRead`.
     /// 选择会话，随后标记为已读。
     SelectConversation(ConversationId),
@@ -201,18 +191,11 @@ pub enum ConnectionState {
 /// 后端推送的事实；每个对应一种服务事件或 RPC 结果。
 #[derive(Debug, Clone)]
 pub enum BackendEvent {
-    /// Replace HTML authority atomically for the exact owning session.
-    /// 为精确所属会话原子替换 HTML 权威。
-    HtmlAnswers {
+    /// Replace the answer mode atomically for the exact owning session.
+    /// 为精确所属会话原子替换回答模式。
+    AnswerMode {
         conversation_id: ConversationId,
-        state: HtmlAnswerSession,
-    },
-    /// Complete an explicit link action without ever logging its secret-bearing receipt.
-    /// 完成显式链接操作，绝不记录含秘密的回执。
-    HtmlAnswerLink {
-        source: vulcan_service_api::HtmlAnswerSourceIdentity,
-        link: HtmlAnswerLink,
-        delivery: HtmlAnswerDelivery,
+        state: AnswerModeSession,
     },
     Connection(ConnectionState),
     /// `workbench` snapshot.

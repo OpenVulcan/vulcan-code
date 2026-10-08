@@ -3862,19 +3862,9 @@ impl SessionHandle {
         );
         match delta {
             Ok(mut delta) => {
-                // Use the flushed candidate, never a potentially newer in-memory preference.
-                // 使用已落盘候选，绝不使用可能更新的内存偏好。
-                delta.html_answers = Some(Box::new(candidate.metadata.config.html_answers.clone()));
-                // Only changed terminal sources need parsing; metadata-only flushes do no Markdown work.
-                // 只有变化的终态源码需要解析；纯元数据落盘不执行 Markdown 工作。
-                let owner = self.session_id.to_string();
-                let projections: Vec<_> = candidate.tail_events.iter()
-                    .filter(|event| candidate.changed_event_seqs.binary_search(&event.seq).is_ok())
-                    .filter_map(|event| vulcan_session_core::v1::html_answers::HtmlAnswerEventProjection::from_event(
-                        &owner, event, true,
-                    )).collect();
-                delta.html_answer_projections =
-                    (!projections.is_empty()).then(|| Box::new(projections));
+                // Use the flushed candidate, never a potentially newer in-memory answer mode.
+                // 使用已落盘候选，绝不使用可能更新的内存回答模式。
+                delta.answer_mode = Some(Box::new(candidate.metadata.config.answer_mode.clone()));
                 self.publish_live_event_delta_best_effort(delta);
             }
             Err(error) => tracing::warn!(

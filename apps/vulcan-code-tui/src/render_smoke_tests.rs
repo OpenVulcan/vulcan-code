@@ -958,7 +958,6 @@ fn push_reply(h: &mut Harness, text: String) {
         created_at_ms: 0,
         updated_at_ms: 0,
         body: EventBody::AssistantText {
-            html_answers_allowed: false,
             text,
             status: AssistantSemanticStatus::Completed,
         },

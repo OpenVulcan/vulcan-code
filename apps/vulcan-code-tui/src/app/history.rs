@@ -189,7 +189,6 @@ mod tests {
             event(
                 4,
                 EventBody::AssistantText {
-                    html_answers_allowed: false,
                     text: "done".into(),
                     status: AssistantSemanticStatus::Completed,
                 },

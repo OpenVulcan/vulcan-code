@@ -17,9 +17,9 @@ pub const LOCAL_ID_MAX: u64 = 9_007_199_254_740_991;
 /// V1 会话模型内的一条领域级不变量违反。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainError {
-    /// A concurrent HTML preference write advanced the revision observed by the client.
-    /// 并发 HTML 偏好写入推进了客户端观察到的修订号。
-    HtmlAnswerModeConflict {
+    /// A concurrent answer mode write advanced the revision observed by the client.
+    /// 并发回答模式写入推进了客户端观察到的修订号。
+    AnswerModeConflict {
         /// Revision supplied by the client before its requested write.
         /// 客户端请求写入前提供的修订号。
         expected_revision: u64,
@@ -607,12 +607,12 @@ impl fmt::Display for DomainError {
     /// 为诊断格式化领域错误。
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::HtmlAnswerModeConflict {
+            Self::AnswerModeConflict {
                 expected_revision,
                 actual_revision,
             } => write!(
                 formatter,
-                "HTML answer preference revision conflict: expected {expected_revision}, current {actual_revision}"
+                "answer mode revision conflict: expected {expected_revision}, current {actual_revision}"
             ),
             Self::InvalidToolPayload { actual_kind } => write!(
                 formatter,

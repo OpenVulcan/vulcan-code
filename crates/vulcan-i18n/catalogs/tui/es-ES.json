@@ -1,4 +1,1 @@
-{
-  "tui.htmlAnswers.confirmOpen": "¿Abrir «{title}» en el navegador predeterminado? El resultado se ejecutará en una página aislada.",
-  "tui.htmlAnswers.openFallback": "Si no se abre el navegador, utiliza la dirección de abajo. El enlace temporal se puede abrir una vez en {seconds} segundos. Copiar enlace crea un enlace nuevo."
-}
+{}

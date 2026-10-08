@@ -3,7 +3,7 @@
 
 use vulcan_provider_config::config::ReasoningEffortLevel;
 use vulcan_session_core::v1::config::{
-    ActiveRequestConfig, KnowledgeLibrarySelectionConfig, PendingRequestConfig,
+    ActiveRequestConfig, AnswerMode, KnowledgeLibrarySelectionConfig, PendingRequestConfig,
     ProviderToolSelectionConfig, VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::SessionSelectionBundleInput;
@@ -645,8 +645,8 @@ pub(crate) fn set_provider_tool_selection_v1(
 /// `handle` owns the V1 document, `selection` contains all first-turn selections, and `now_ms`
 /// is the semantic mutation time.
 /// `handle` 持有 V1 文档，`selection` 包含全部首轮选择，`now_ms` 是语义修改时间。
-/// `html_answers_enabled` optionally applies the first-turn draft preference in the same transaction.
-/// `html_answers_enabled` 在同一事务中可选地应用首轮草稿偏好。
+/// `answer_mode` is the draft choice or the copied global default, applied in the same transaction.
+/// `answer_mode` 为草稿选择或复制的全局默认值，在同一事务中应用。
 ///
 /// # Returns
 /// 返回值
@@ -655,7 +655,7 @@ pub(crate) fn set_provider_tool_selection_v1(
 pub(crate) fn set_session_selection_bundle_v1(
     handle: &SessionHandle,
     selection: SessionSelectionBundleInput,
-    html_answers_enabled: Option<bool>,
+    answer_mode: AnswerMode,
     now_ms: i64,
 ) -> Result<bool, String> {
     let receipt = handle
@@ -665,10 +665,8 @@ pub(crate) fn set_session_selection_bundle_v1(
             move |document| {
                 document.apply_atomic_transition(|document| {
                     let mut changed = document.set_session_selection_bundle(selection, now_ms)?;
-                    if let Some(enabled) = html_answers_enabled {
-                        let revision = document.metadata.config.html_answers.revision;
-                        changed |= document.set_html_answer_mode(enabled, revision, now_ms)?;
-                    }
+                    let revision = document.metadata.config.answer_mode.revision;
+                    changed |= document.set_answer_mode(answer_mode, revision, now_ms)?;
                     Ok(if changed {
                         SessionMutationChange::Changed(())
                     } else {
@@ -1517,12 +1515,22 @@ mod tests {
         };
 
         assert!(
-            set_session_selection_bundle_v1(handle.as_ref(), input.clone(), None, 2)
-                .expect("new selection bundle should persist")
+            set_session_selection_bundle_v1(
+                handle.as_ref(),
+                input.clone(),
+                AnswerMode::Standard,
+                2
+            )
+            .expect("new selection bundle should persist")
         );
         assert!(
-            !set_session_selection_bundle_v1(handle.as_ref(), input.clone(), None, 3)
-                .expect("same selection bundle should replay idempotently")
+            !set_session_selection_bundle_v1(
+                handle.as_ref(),
+                input.clone(),
+                AnswerMode::Standard,
+                3
+            )
+            .expect("same selection bundle should replay idempotently")
         );
         assert_eq!(
             handle
@@ -1534,10 +1542,10 @@ mod tests {
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
     }
 
-    /// Draft HTML preference commits with the selection bundle once and preserves unrelated settings.
-    /// 草稿 HTML 偏好与选择包一次提交，并保留无关设置。
+    /// Draft answer mode commits with the selection bundle once and preserves unrelated settings.
+    /// 草稿回答模式与选择包一次提交，并保留无关设置。
     #[test]
-    fn html_answers_draft_bundle_is_atomic_and_idempotent() {
+    fn answer_mode_draft_bundle_is_atomic_and_idempotent() {
         let (handle, backend) =
             request_config_handle(SessionId::new_v4(), ActiveRequestConfig::default());
         let selection = SessionSelectionBundleInput {
@@ -1548,19 +1556,24 @@ mod tests {
         };
         let before = handle.read(SessionDocument::memory_revision).unwrap();
         assert!(
-            set_session_selection_bundle_v1(&handle, selection.clone(), Some(true), 2).unwrap()
+            set_session_selection_bundle_v1(&handle, selection.clone(), AnswerMode::Interactive, 2)
+                .unwrap()
         );
         assert_eq!(
             handle.read(SessionDocument::memory_revision).unwrap(),
             before + 1
         );
-        assert!(
+        assert_eq!(
             handle
-                .read(|document| document.metadata.config.html_answers.enabled)
-                .unwrap()
+                .read(|document| document.metadata.config.answer_mode.mode)
+                .unwrap(),
+            AnswerMode::Interactive
         );
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
-        assert!(!set_session_selection_bundle_v1(&handle, selection, Some(true), 3).unwrap());
+        assert!(
+            !set_session_selection_bundle_v1(&handle, selection, AnswerMode::Interactive, 3)
+                .unwrap()
+        );
         assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
     }
 

@@ -32,8 +32,8 @@ use crate::service_api::{
     CallKind, ServiceCall, Slot, scrub_secrets, workbench_snapshot::load_workbench_snapshot,
 };
 
-#[path = "html_answers.rs"]
-mod html_answers;
+#[path = "answer_mode.rs"]
+mod answer_mode;
 
 /// First reconnect delay; it doubles up to `RETRY_MAX`.
 /// 首次重连延迟；逐次翻倍直到 `RETRY_MAX`。
@@ -129,9 +129,9 @@ pub enum Input {
 /// Loaded slice of one conversation's v1 event document.
 /// 单个会话 v1 事件文档的已加载片段。
 struct Window {
-    /// Accepted HTML annotations and preference for this window.
-    /// 当前窗口接纳的 HTML 标注与偏好。
-    html_answers: HtmlAnswerSession,
+    /// Accepted answer mode for this window.
+    /// 当前窗口接纳的回答模式。
+    answer_mode: AnswerModeSession,
     /// Server event-document generation, distinct from the transport generation.
     /// 服务端事件文档代际，与传输代际独立。
     generation: u64,
@@ -149,9 +149,9 @@ struct Window {
 /// A conversation that exists only in the TUI until its first prompt is accepted.
 /// 首条提示被接受前只存在于 TUI 的会话。
 struct Draft {
-    /// Explicit draft preference captured atomically with the first submission.
-    /// 随首次提交原子捕获的显式草稿偏好。
-    html_answers: HtmlAnswerMode,
+    /// Draft answer mode, copied from the global default and sent with the first submission.
+    /// 草稿回答模式，复制自全局默认值并随首次提交发送。
+    answer_mode: AnswerModePreference,
     /// Explicit project selection for the first accepted prompt.
     /// 首条被接受提示所使用的明确项目选择。
     project_id: Option<String>,
@@ -454,7 +454,7 @@ impl Worker {
         self.apply_snapshot(snapshot);
         if let Some(id) = self.selected.clone() {
             if is_draft(&id) {
-                self.emit_html_answers(&id);
+                self.emit_answer_mode(&id);
             } else {
                 self.hydrate(&id);
             }
@@ -1511,10 +1511,8 @@ impl Worker {
         self.windows.insert(
             id.to_string(),
             Window {
-                html_answers: HtmlAnswerSession {
-                    generation: Some(window.batch.window_generation),
-                    mode: Some(window.session_config.html_answers.clone()),
-                    projections: Default::default(),
+                answer_mode: AnswerModeSession {
+                    mode: Some(window.session_config.answer_mode.clone()),
                 },
                 generation: window.batch.window_generation,
                 epoch,
@@ -1522,8 +1520,7 @@ impl Worker {
                 events,
             },
         );
-        self.accept_html_projections(id, window.html_answer_projections);
-        self.emit_html_answers(id);
+        self.emit_answer_mode(id);
         // The next request's route wins over the current one once the user changed it.
         // 用户改过之后，下一次请求的路线优先于当前请求。
         let config = window.session_config;
@@ -1558,17 +1555,10 @@ impl Worker {
                 self.hydrate(&id);
                 return;
             }
-            if let Some(mode) = patch.html_answers {
-                window.html_answers.accept_mode(*mode);
+            if let Some(mode) = patch.answer_mode {
+                window.answer_mode.accept_mode(*mode);
             }
-            self.accept_html_projections(
-                &id,
-                patch
-                    .html_answer_projections
-                    .map(|items| *items)
-                    .unwrap_or_default(),
-            );
-            self.emit_html_answers(&id);
+            self.emit_answer_mode(&id);
             return;
         }
         if patch.revision < window.memory_revision {
@@ -1626,12 +1616,6 @@ impl Worker {
         }
         changed.sort_unstable();
         changed.dedup();
-        // Any semantic update invalidates old offsets before the new source reaches the UI.
-        // 任何语义更新都会在新源码到达界面之前使旧偏移失效。
-        let mut html_changed = false;
-        for seq in &changed {
-            html_changed |= window.html_answers.projections.remove(seq).is_some();
-        }
         let events: Vec<ConversationEvent> = changed
             .iter()
             .filter_map(|seq| window.events.get(seq))
@@ -1643,9 +1627,6 @@ impl Worker {
                 event,
             });
         }
-        if html_changed {
-            self.emit_html_answers(&id);
-        }
     }
 
     // ---- Commands ----
@@ -1656,13 +1637,7 @@ impl Worker {
     /// `command` 为需要执行的界面命令。
     fn handle(&mut self, command: Command) {
         match command {
-            Command::SetSessionHtmlAnswerMode(request) => self.set_html_answer_mode(request),
-            Command::CreateHtmlAnswerViewLink {
-                source,
-                delivery,
-                locale,
-            } => self.create_html_answer_link(source, delivery, locale),
-            Command::RevokeHtmlAnswerViewLink(grant_id) => self.revoke_html_answer_link(grant_id),
+            Command::SetSessionAnswerMode(request) => self.set_answer_mode(request),
             Command::SelectConversation(id) => self.select(id),
             Command::NewConversation { project_id } => {
                 self.draft_serial += 1;
@@ -1676,7 +1651,7 @@ impl Worker {
                 // Draft.
                 // 本地待提交会话草稿。
                 let draft = Draft {
-                    html_answers: HtmlAnswerMode::default(),
+                    answer_mode: self.default_answer_mode(),
                     model_key: self
                         .selected
                         .as_ref()
@@ -1685,7 +1660,7 @@ impl Worker {
                 };
                 self.emit(BackendEvent::ConversationSummary(draft_row(&id, &draft)));
                 self.drafts.insert(id.clone(), draft);
-                self.emit_html_answers(&id);
+                self.emit_answer_mode(&id);
                 self.emit(BackendEvent::Selected(id));
             }
             Command::SubmitConversationPrompt {
@@ -1972,7 +1947,7 @@ impl Worker {
                 conversation_id: id.clone(),
                 events: Vec::new(),
             });
-            self.emit_html_answers(&id);
+            self.emit_answer_mode(&id);
             if let Some(key) = draft.model_key.clone() {
                 self.model_keys.insert(id, key);
             }
@@ -2123,7 +2098,7 @@ impl Worker {
             "executionMode": execution_mode,
             "reasoningEffort": effort_param,
             "modelSelection": model_selection,
-            "sessionSettings": self.drafts.get(&conversation_id).map(|draft| json!({ "htmlAnswersEnabled": draft.html_answers.enabled })),
+            "sessionSettings": self.drafts.get(&conversation_id).map(|draft| json!({ "answerMode": draft.answer_mode.mode })),
         });
         // Local id.
         // 本地会话草稿身份。

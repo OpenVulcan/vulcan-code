@@ -372,7 +372,6 @@ pub(crate) fn test_service_state_with_parent_session(
         workspace_watcher: None,
         service_runtime: None,
         webui_service_discovery: None,
-        html_answer_runtime: None,
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,

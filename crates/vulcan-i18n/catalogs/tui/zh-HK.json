@@ -1,6 +1,4 @@
 {
-  "tui.htmlAnswers.confirmOpen": "是否使用預設瀏覽器開啟「{title}」？結果將在隔離頁面中執行。",
-  "tui.htmlAnswers.openFallback": "如果瀏覽器沒有開啟，請使用下方網址。臨時連結可在 {seconds} 秒內開啟一次。「複製連結」會產生新連結。",
   "tui.agents.activity": "最近活動",
   "tui.agents.task": "任務",
   "tui.area.short": "區域",

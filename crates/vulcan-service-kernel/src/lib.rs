@@ -148,6 +148,7 @@ mod agent_collaboration_execution;
 mod agent_skills_watcher;
 mod agent_stream;
 mod ai_credential_secret_store;
+mod answer_mode;
 mod attachments;
 pub mod browser;
 mod command_sessions;
@@ -199,7 +200,6 @@ mod public_ai_settings;
 mod rpc_dispatch;
 mod runtime_summary_projection;
 mod runtime_workspace_helpers;
-mod system_prompt_settings;
 mod service_bootstrap;
 mod service_bridge_io;
 mod service_diagnostics_paths;
@@ -207,7 +207,6 @@ mod service_state_access;
 mod session_business_hook;
 mod session_goal_lifecycle;
 mod session_goals;
-mod session_html_answers;
 mod session_hydration;
 mod session_media_resources_v1;
 mod session_model_projection_v1;
@@ -224,6 +223,7 @@ mod state;
 mod subagent_event_ingest;
 mod subagent_panels;
 mod subagent_workspace_mutation;
+mod system_prompt_settings;
 mod terminal_settlement_service;
 pub(crate) mod vce;
 mod vmm;
@@ -446,7 +446,6 @@ pub fn create_service_bridge_state(
         vmm_controller_registry: Default::default(),
         service_runtime: None,
         webui_service_discovery: None,
-        html_answer_runtime: None,
         controller_runtime: None,
         knowledge_runtime: None,
         luaskills_runtime: None,

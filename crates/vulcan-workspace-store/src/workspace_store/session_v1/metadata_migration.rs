@@ -5,14 +5,13 @@ use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use vulcan_session_core::v1::business_hook::BusinessHookMetadata;
 use vulcan_session_core::v1::collaboration::{
     CollaborationAfterState, CollaborationTaskMessageEffectKind,
 };
 use vulcan_session_core::v1::config::{
-    HtmlAnswerMode, IdFrontier, METADATA_CONTRACT, METADATA_SCHEMA_VERSION, MetadataDocument,
-    SegmentInfo,
+    IdFrontier, METADATA_CONTRACT, METADATA_SCHEMA_VERSION, MetadataDocument, SegmentInfo,
 };
 use vulcan_session_core::v1::event::{EventBody, SystemContextOperation, UserInputSource};
 
@@ -174,6 +173,7 @@ pub(super) fn upgrade(path: &Path, mut raw: Value) -> Result<MetadataDocument, S
         match version {
             1 => migrate_v1_to_v2(path, &mut raw)?,
             2 => migrate_v2_to_v3(path, &mut raw)?,
+            3 => migrate_v3_to_v4(path, &mut raw)?,
             _ => {
                 return Err(SessionV1Error::unsupported(
                     path,
@@ -261,9 +261,84 @@ fn migrate_v2_to_v3(path: &Path, raw: &mut Value) -> Result<(), SessionV1Error> 
             "schema 2 cannot contain schema 3 HTML preferences",
         ));
     }
-    let html_answers = serde_json::to_value(HtmlAnswerMode::default())
-        .map_err(|error| corrupt(path, format!("encode HTML preference default: {error}")))?;
-    config.insert("html_answers".to_owned(), html_answers);
+    // Schema 3's default shape is frozen here because its Rust type no longer exists.
+    // 模式 3 的默认结构在此冻结，因为对应 Rust 类型已不存在。
+    config.insert(
+        "html_answers".to_owned(),
+        json!({ "enabled": false, "revision": 0, "prepared": null }),
+    );
+    Ok(())
+}
+
+/// Frozen schema-3 HTML preference, read only to derive the schema-4 answer mode.
+/// 冻结的模式 3 HTML 偏好，仅用于推导模式 4 回答模式。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyHtmlAnswers {
+    /// Saved HTML switch.
+    /// 已保存的 HTML 开关。
+    enabled: bool,
+    /// Compare-and-set revision carried over unchanged.
+    /// 原样沿用的比较交换修订号。
+    revision: u64,
+    /// Last preparation snapshot; the field itself is required and may be null.
+    /// 最近准备快照；字段自身必填且可为 null。
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    prepared: Option<LegacyHtmlPrepared>,
+}
+
+/// Frozen schema-3 preparation snapshot.
+/// 冻结的模式 3 准备快照。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyHtmlPrepared {
+    /// Whether the prepared request carried HTML guidance.
+    /// 已准备请求是否携带 HTML 指引。
+    enabled: bool,
+    /// Preference revision captured by that preparation.
+    /// 该次准备捕获的偏好修订号。
+    revision: u64,
+}
+
+/// Decode a present nullable field; a missing field stays a schema error.
+/// 解码存在且可为空的字段；缺失字段仍是模式错误。
+fn deserialize_required_nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    Option::deserialize(deserializer)
+}
+
+/// Replace the schema-3 HTML preference with the schema-4 answer mode, keeping its revision.
+/// 用模式 4 回答模式替换模式 3 HTML 偏好，并保留其修订号。
+/// An enabled switch becomes interactive and a disabled one standard, for both the saved and
+/// the prepared state.
+/// 已保存与已准备状态中，开启的开关变为互动，关闭的变为标准。
+fn migrate_v3_to_v4(path: &Path, raw: &mut Value) -> Result<(), SessionV1Error> {
+    let config = raw
+        .get_mut("config")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| corrupt(path, "schema 3 requires a configuration object"))?;
+    if config.contains_key("answer_mode") {
+        return Err(corrupt(
+            path,
+            "schema 3 cannot contain schema 4 answer mode",
+        ));
+    }
+    let legacy = config
+        .remove("html_answers")
+        .ok_or_else(|| corrupt(path, "schema 3 requires the HTML answer preference"))?;
+    let legacy: LegacyHtmlAnswers = serde_json::from_value(legacy)
+        .map_err(|error| corrupt(path, format!("decode schema 3 HTML preference: {error}")))?;
+    let mode_name = |enabled: bool| if enabled { "interactive" } else { "standard" };
+    let mode = mode_name(legacy.enabled);
+    let prepared = legacy.prepared.map_or(
+        Value::Null,
+        |prepared| json!({ "mode": mode_name(prepared.enabled), "revision": prepared.revision }),
+    );
+    config.insert(
+        "answer_mode".to_owned(),
+        json!({ "mode": mode, "revision": legacy.revision, "prepared": prepared }),
+    );
     Ok(())
 }
 

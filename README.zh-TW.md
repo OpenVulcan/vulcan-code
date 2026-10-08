@@ -222,7 +222,7 @@ Vulcan Code 建立在眾多優秀的開源專案之上，感謝這些專案的�
 - [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)：Gemini 協定與相容轉換參考
 - [OpenCode](https://github.com/anomalyco/opencode)：供應商目錄與系統提示詞參考
 - [agency-agents](https://github.com/msitarzewski/agency-agents)：子代理角色範本來源
-- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html)：會話 HTML 回答、精簡內容草稿與範本元件的設計參考；本專案自行實作協定、內建渲染器和隔離檢視器，不依賴其 CLI
+- [Answer me with HTML](https://github.com/QingYunA/answer-me-with-html)：回答元件（發現、比較、流程等結構化區塊）的設計參考；本專案自行定義元件語法並在會話內原生渲染，不依賴其 CLI
 
 **社群**
 

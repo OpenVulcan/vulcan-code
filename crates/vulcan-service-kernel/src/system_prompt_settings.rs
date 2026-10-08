@@ -93,7 +93,10 @@ fn build_snapshot(
             .map(read_system_prompt_file)
             .transpose()?
             .flatten(),
-        project_path: project_path.as_deref().map(Path::display).map(|path| path.to_string()),
+        project_path: project_path
+            .as_deref()
+            .map(Path::display)
+            .map(|path| path.to_string()),
         effective_source: effective.source.id().to_string(),
     })
 }

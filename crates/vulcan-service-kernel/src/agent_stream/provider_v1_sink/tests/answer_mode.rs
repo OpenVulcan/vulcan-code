@@ -1,51 +1,21 @@
-//! HTML preference coverage through the actual durable request-context publication path.
-//! 通过实际持久请求上下文发布路径覆盖 HTML 偏好行为。
+//! Answer mode coverage through the actual durable request-context publication path.
+//! 通过实际持久请求上下文发布路径覆盖回答模式行为。
 
 use super::super::context_injection::synchronize_request_dynamic_context;
 use super::host_guidance::{candidate_for, install_baseline};
 use super::*;
-use vulcan_session_core::v1::document::HTML_ANSWER_CONTEXT_KEY;
+use vulcan_session_core::v1::config::AnswerMode;
+use vulcan_session_core::v1::document::ANSWER_MODE_CONTEXT_KEY;
 
-/// The actual request guide has resolved limits and a draft example accepted by the production parser.
-/// 实际请求指南具有已解析限额，且草稿示例被生产解析器接受。
+/// The interactive guide resolves every capacity placeholder from Core constants.
+/// 互动指引的全部容量占位符均由 Core 常量解析。
 #[test]
-fn html_answers_enabled_guide_example_is_executable() {
-    let prompt = super::super::context_injection::html_answer_enabled_prompt();
+fn answer_mode_interactive_guide_has_no_unresolved_placeholders() {
+    let guide = super::super::context_injection::answer_mode_interactive_prompt();
     assert!(
-        !prompt.contains("{{"),
-        "Prompt parameters must be resolved before injection"
+        !guide.contains("{{"),
+        "unresolved placeholder in interactive guide"
     );
-    let start = prompt
-        .find("````vulcan-html ")
-        .expect("The guide must provide a protocol example");
-    let end = prompt[start..]
-        .find("\n````\n")
-        .expect("The example must be explicitly closed")
-        + start
-        + "\n````".len();
-    let event = vulcan_session_core::v1::ConversationEvent {
-        seq: vulcan_session_core::v1::Seq::try_new(1).unwrap(),
-        turn_id: None,
-        created_at_ms: 1,
-        updated_at_ms: 1,
-        event_revision: 1,
-        visibility: vulcan_session_core::v1::EventVisibility::Provider,
-        event: vulcan_session_core::v1::EventBody::AssistantText(
-            vulcan_session_core::v1::AssistantTextEvent {
-                api_call_id: vulcan_session_core::v1::ApiCallId::try_new(1).unwrap(),
-                text: prompt[start..end].to_owned(),
-                status: vulcan_session_core::v1::AssistantSemanticStatus::Completed,
-                provider_source: None,
-            },
-        ),
-    };
-    let result =
-        vulcan_session_core::v1::html_answers::project_html_answers("synthetic", &event, true);
-    assert_eq!(result.len(), 1);
-    assert!(matches!(
-        result[0].availability,
-        vulcan_session_core::v1::html_answers::HtmlAnswerAvailability::Ready { .. }
-    ));
 }
 
 /// Render the captured producer through the authoritative host envelope for physical-message assertions.
@@ -55,7 +25,7 @@ fn html_answers_enabled_guide_example_is_executable() {
 fn producer_envelope(state: &vulcan_session_core::v1::DynamicContextState) -> String {
     vulcan_ai_contract::HostMessageEnvelope {
         event_id: format!(
-            "v1-context-update-{}-{HTML_ANSWER_CONTEXT_KEY}",
+            "v1-context-update-{}-{ANSWER_MODE_CONTEXT_KEY}",
             state.source_seq.value()
         ),
         kind: vulcan_ai_contract::HostMessageKind::ContextUpdate,
@@ -70,18 +40,18 @@ fn producer_envelope(state: &vulcan_session_core::v1::DynamicContextState) -> St
     .unwrap()
 }
 
-/// Persist an exact synthetic desired toggle through the production owner, returning no user data.
-/// 通过生产所有者持久化精确的合成期望开关，不返回用户数据。
+/// Persist an exact synthetic answer mode through the production owner, returning no user data.
+/// 通过生产所有者持久化精确的合成回答模式，不返回用户数据。
 /// `handle` owns isolated storage; revision checks and publication failures stay on the real path.
 /// `handle` 拥有隔离存储；修订校验和发布失败均沿真实路径执行。
-fn set_mode(handle: &SessionHandle, enabled: bool, revision: u64, now_ms: i64) {
+fn set_mode(handle: &SessionHandle, mode: AnswerMode, revision: u64, now_ms: i64) {
     handle
         .mutate_durable_if_changed(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
             |document| {
                 document
-                    .set_html_answer_mode(enabled, revision, now_ms)
+                    .set_answer_mode(mode, revision, now_ms)
                     .map(|changed| {
                         if changed {
                             SessionMutationChange::Changed(())
@@ -94,10 +64,10 @@ fn set_mode(handle: &SessionHandle, enabled: bool, revision: u64, now_ms: i64) {
         .unwrap();
 }
 
-/// On/off changes reach physical request messages, survive reload and do not rewrite locked history.
-/// 开关变化到达物理请求消息，重载后保留，且不重写已锁定历史。
+/// Mode changes reach physical request messages, survive reload and do not rewrite locked history.
+/// 模式变化到达物理请求消息，重载后保留，且不重写已锁定历史。
 #[test]
-fn html_answers_request_guidance_is_durable_idempotent_and_compaction_independent() {
+fn answer_mode_request_guidance_is_durable_idempotent_and_compaction_independent() {
     let (_directory, handle) = published_stored_open_turn();
     let candidate = candidate_for(&handle);
     synchronize_request_dynamic_context(&handle, &request_facts(), &candidate).unwrap();
@@ -106,7 +76,7 @@ fn html_answers_request_guidance_is_durable_idempotent_and_compaction_independen
             .read(|document| document
                 .metadata
                 .dynamic_context
-                .contains_key(HTML_ANSWER_CONTEXT_KEY))
+                .contains_key(ANSWER_MODE_CONTEXT_KEY))
             .unwrap()
     );
     install_baseline(
@@ -114,12 +84,12 @@ fn html_answers_request_guidance_is_durable_idempotent_and_compaction_independen
         initial_locked_baseline_with_host_guidance(&candidate.locked_baseline).unwrap(),
     );
     let prefix = candidate_for(&handle).exact_request.messages;
-    set_mode(&handle, true, 0, 5);
+    set_mode(&handle, AnswerMode::Interactive, 0, 5);
     let mut facts = request_facts();
     facts.prepared_at_ms = 6;
     synchronize_request_dynamic_context(&handle, &facts, &candidate).unwrap();
     let enabled_state = handle
-        .read(|document| document.metadata.dynamic_context[HTML_ANSWER_CONTEXT_KEY].clone())
+        .read(|document| document.metadata.dynamic_context[ANSWER_MODE_CONTEXT_KEY].clone())
         .unwrap();
     let messages = candidate_for(&handle).exact_request.messages;
     assert!(messages.starts_with(&prefix));
@@ -146,37 +116,31 @@ fn html_answers_request_guidance_is_durable_idempotent_and_compaction_independen
         cold.read(|document| document.memory_revision()).unwrap(),
         before
     );
-    set_mode(&cold, false, 1, 7);
+    set_mode(&cold, AnswerMode::Standard, 1, 7);
     let desired = cold
-        .read(|document| document.metadata.config.html_answers.clone())
+        .read(|document| document.metadata.config.answer_mode.clone())
         .unwrap();
-    assert!(!desired.enabled);
-    assert!(desired.prepared.unwrap().enabled);
+    assert_eq!(desired.mode, AnswerMode::Standard);
+    assert_eq!(desired.prepared.unwrap().mode, AnswerMode::Interactive);
     facts.purpose = ApiPurposeKind::Compaction;
     facts.prepared_at_ms = 8;
     synchronize_request_dynamic_context(&cold, &facts, &candidate).unwrap();
     assert_eq!(
-        cold.read(|document| document.metadata.config.html_answers.clone())
+        cold.read(|document| document.metadata.config.answer_mode.clone())
             .unwrap(),
         desired
     );
     facts.purpose = ApiPurposeKind::MainGeneration;
     synchronize_request_dynamic_context(&cold, &facts, &candidate).unwrap();
     let disabled_state = cold
-        .read(|document| document.metadata.dynamic_context[HTML_ANSWER_CONTEXT_KEY].clone())
+        .read(|document| document.metadata.dynamic_context[ANSWER_MODE_CONTEXT_KEY].clone())
         .unwrap();
     assert_ne!(disabled_state.source_seq, enabled_state.source_seq);
     assert_ne!(disabled_state.fingerprint, enabled_state.fingerprint);
-    assert!(
-        !cold
-            .read(|document| document
-                .metadata
-                .config
-                .html_answers
-                .prepared
-                .unwrap()
-                .enabled)
-            .unwrap()
+    assert_eq!(
+        cold.read(|document| document.metadata.config.answer_mode.prepared.unwrap().mode)
+            .unwrap(),
+        AnswerMode::Standard
     );
     assert!(
         candidate_for(&cold)

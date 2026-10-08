@@ -182,8 +182,8 @@
   "open_turn_id": 2,
   "open_turn_start_seq": 1,
   "session_config": {
-    "html_answers": {
-      "enabled": false,
+    "answer_mode": {
+      "mode": "standard",
       "revision": 0,
       "prepared": null
     },

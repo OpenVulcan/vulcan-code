@@ -211,38 +211,37 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
     let hint = " ⇧Tab ";
     buf.set_string(x, area.y, hint, Style::new().fg(theme.faint_fg(bg)));
     x += width_of(hint) as u16;
-    // Keep the shared HTML preference visible before optional attachment/model chips.
-    // 在可选附件及模型标签之前保留共享 HTML 偏好。
-    let html_enabled = app
+    // Keep the shared answer mode visible before optional attachment/model chips.
+    // 在可选附件及模型标签之前保留共享回答模式。
+    let interactive = app
         .session()
-        .and_then(|session| session.html_answers.mode.as_ref())
-        .is_some_and(|mode| mode.enabled);
-    let html = format!(
+        .is_some_and(|session| session.answer_mode.interactive());
+    let chip = format!(
         "{} {}{}",
-        if html_enabled { "●" } else { "○" },
-        tr!("htmlAnswers.label"),
+        if interactive { "●" } else { "○" },
+        tr!("answerMode.interactive"),
         if app
             .session()
-            .is_some_and(|session| session.html_answers.awaiting_request())
+            .is_some_and(|session| session.answer_mode.awaiting_request())
         {
             " ◷"
         } else {
             ""
         }
     );
-    if x + width_of(&html) as u16 + 2 <= area.right() {
+    if x + width_of(&chip) as u16 + 2 <= area.right() {
         x += button(
             app,
             buf,
             x,
             area.y,
-            &html,
-            if html_enabled {
+            &chip,
+            if interactive {
                 Style::new().fg(theme.primary_fg).bg(theme.primary)
             } else {
                 button_style(app, ButtonKind::Normal, bg)
             },
-            UiAction::App(AppCommand::ToggleHtmlAnswers),
+            UiAction::App(AppCommand::ToggleAnswerMode),
         );
     }
     let attach = format!("⊕ {}", tr!("composer.attachment.add"));
