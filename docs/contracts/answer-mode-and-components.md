@@ -11,7 +11,9 @@
 ## 模式语义
 
 - 回答模式只有 `standard`（默认）与 `interactive` 两值，与输出风格相互独立：输出风格决定语气与
-  篇幅，回答模式只决定是否允许使用 `ui-*` 组件。
+  篇幅，回答模式决定最终回答的呈现形式：标准模式只用普通 Markdown；互动模式要求最终回答优先以 `ui-*`
+  组件呈现（凡有合适组件即不用 Markdown 列表或表格），散文只用于一两句结论、衔接文字及无结构的极短回答，
+  工作中的进度说明仍用普通 Markdown。是否使用组件不交由模型自行判断。
 - `SessionConfig.answer_mode` 是会话唯一权威，含 `mode`、独立比较交换 `revision` 与可空
   `prepared` 快照。`service_set_session_answer_mode` 接收 `sessionId`、`mode`、`expectedRevision`，
   冲突时返回当前值，不自动覆盖或重试；生成中只保存期望，下一请求生效。
