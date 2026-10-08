@@ -376,23 +376,30 @@ export function resolveCommandExecutionPresentation(
   };
 }
 
-// firstShellCommandDisplay returns the first structured shell_command display found on visible blocks.
-// firstShellCommandDisplay 返回可见块上找到的首个结构化 shell_command 展示。
+// firstShellCommandDisplay combines execution metadata with output from blocks belonging to one tool call.
+// firstShellCommandDisplay 合并同一次工具调用各块中的执行元数据与输出正文。
+// blocks contains the request and result projections; returns null when no command display is available.
+// blocks 包含请求与结果投影；没有可用的命令展示时返回 null。
 function firstShellCommandDisplay(blocks: ToolExecutionConversationBlock[]): ShellCommandDisplay | null {
+  // payload owns execution metadata; command_run intentionally omits the output text.
+  // payload 是执行元数据的权威来源；command_run 有意不携带输出正文。
   const payload = fixedHostPayload(blocks);
-  if (payload) {
-    const display = shellCommandDisplayFromPayload(payload);
-    if (display) {
-      return display;
-    }
-  }
+  // hostDisplay retains authoritative exit status and plugin routing information.
+  // hostDisplay 保留权威退出状态与插件路由信息。
+  const hostDisplay = payload ? shellCommandDisplayFromPayload(payload) : null;
   for (const block of blocks) {
+    // display reads output from the model result body or the existing structured detail format.
+    // display 从模型结果正文或已有结构化详情格式读取输出。
     const display = shellCommandDisplayFromMetadata(block.rawMetadata) ?? parseShellCommandDisplayFromText(block.body);
     if (display) {
-      return display;
+      // Combine the complementary sources instead of letting metadata hide the result body.
+      // 合并两份互补来源，避免元数据遮蔽结果正文。
+      return hostDisplay
+        ? { ...hostDisplay, stdout: display.stdout, stderr: display.stderr }
+        : display;
     }
   }
-  return null;
+  return hostDisplay;
 }
 
 // streamChunksFromText parses `[stdout #n]` and `[stderr #n]` sections from rendered terminal reads.
