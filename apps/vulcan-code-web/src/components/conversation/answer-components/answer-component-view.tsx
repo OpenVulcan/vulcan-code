@@ -1,16 +1,17 @@
 import React from "react";
-import { Check, CircleAlert, CircleCheck, CircleX, Copy, Info, Play, TriangleAlert } from "lucide-react";
+import { Check, CircleAlert, CircleCheck, CircleX, Info, Play, TriangleAlert } from "lucide-react";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media-types";
 import { formatMessage, useI18n } from "@/i18n";
-import { runConversationControlAction } from "../conversation-control-feedback";
+import "@/styles/answer-components.css";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
 import type { AnswerComponent, AnswerSeverity, AnswerTonedText, AnswerTreeNode } from "./answer-component-model";
+import { AnswerFrame, CopyAction, type AnswerCopyHost } from "./answer-frame";
 import { AnswerFlowView, AnswerSequenceView } from "./answer-graphs";
 import { markdownTable } from "./answer-markdown-table";
 
 /** Services the conversation Markdown surface lends to answer components.
  * 会话 Markdown 区域提供给回答组件的服务。 */
-export interface AnswerComponentHost {
+export interface AnswerComponentHost extends AnswerCopyHost {
   /** Render a container body with the same Markdown pipeline as the reply.
    * 用与回答相同的 Markdown 管线渲染容器正文。 */
   renderMarkdown: (body: string) => React.ReactNode;
@@ -20,9 +21,6 @@ export interface AnswerComponentHost {
   /** Link target for a workspace file reference such as `src/a.rs:42`, or null.
    * 工作区文件引用（如 `src/a.rs:42`）的链接目标；否则为 null。 */
   fileHref: (location: string) => string | null;
-  /** Copy text to the clipboard; rejects when the browser denies it.
-   * 将文本复制到剪贴板；浏览器拒绝时抛出。 */
-  copy: (text: string) => Promise<void>;
   /** Optional media viewer for gallery items.
    * 图库条目可选的媒体查看器。 */
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
@@ -359,39 +357,5 @@ function ChartFrame({ chart, host }: { chart: Extract<AnswerComponent, { kind: "
         ) : <AnswerChartView chart={chart} />}
       </div>
     </section>
-  );
-}
-
-/** Framed tabular block whose copy-as-Markdown action appears on hover.
- * 框架型表格区块，悬停时显示「复制为 Markdown」操作。 */
-export function AnswerFrame({ children, copy, host }: { children: React.ReactNode; copy: string; host: Pick<AnswerComponentHost, "copy"> }) {
-  const { t } = useI18n();
-  return (
-    <section className="answer-frame" data-hover-actions="true">
-      <span className="answer-hover-actions"><CopyAction host={host} label={t("answerComponents.copyMarkdown")} text={copy} /></span>
-      {children}
-    </section>
-  );
-}
-
-// Icon button that copies `text` and briefly confirms.
-// 复制 `text` 并短暂确认的图标按钮。
-function CopyAction({ host, label, text }: { host: Pick<AnswerComponentHost, "copy">; label: string; text: string }) {
-  const { t } = useI18n();
-  const [copied, setCopied] = React.useState(false);
-  React.useEffect(() => {
-    if (!copied) return undefined;
-    const timer = window.setTimeout(() => setCopied(false), 1200);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-  const title = copied ? t("markdown.copied") : label;
-  return (
-    <button aria-label={title} className="markdown-code-action" title={title} type="button"
-      onClick={() => {
-        setCopied(false);
-        void runConversationControlAction(() => host.copy(text), t("conversation.control.copyFailed")).then(setCopied);
-      }}>
-      {copied ? <Check size={14} /> : <Copy size={14} />}
-    </button>
   );
 }

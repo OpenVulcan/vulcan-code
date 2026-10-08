@@ -8,7 +8,8 @@ import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/con
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
 import { isAnswerComponentLanguage, parseAnswerComponent } from "@/components/conversation/answer-components/answer-component-model";
-import { AnswerComponentView, AnswerFrame, type AnswerComponentHost } from "@/components/conversation/answer-components/answer-component-view";
+import type { AnswerComponentHost } from "@/components/conversation/answer-components/answer-component-view";
+import { AnswerFrame } from "@/components/conversation/answer-components/answer-frame";
 import { markdownTable, numericCells } from "@/components/conversation/answer-components/answer-markdown-table";
 import { splitStreamingMarkdownBlocks, STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "@/components/conversation/streaming-markdown-blocks";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
@@ -32,6 +33,13 @@ const MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT = 800;
 // MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT caps large code blocks before worker highlighting.
 // MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT 在 Worker 高亮前限制超大代码块体积。
 const MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT = 240_000;
+
+// LazyAnswerComponentView loads the component renderer and its stylesheet only when a reply contains a closed `ui-*` fence.
+// LazyAnswerComponentView 仅在回答含已闭合 `ui-*` 围栏时加载组件渲染器及其样式表。
+const LazyAnswerComponentView = React.lazy(async () => {
+  const module = await import("@/components/conversation/answer-components/answer-component-view");
+  return { default: module.AnswerComponentView };
+});
 
 // markdownPlugins stores the Markdown extension set shared by inline and modal renderers.
 // markdownPlugins 保存内联与弹窗渲染器共享的 Markdown 扩展集合。
@@ -458,7 +466,13 @@ function MarkdownPreBlock(props: {
     onOpenMedia: props.onOpenMedia,
   }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   if (component) {
-    return <AnswerComponentView component={component} host={host} />;
+    // The fence keeps its code presentation until the deferred renderer arrives.
+    // 延迟渲染器到达前，围栏保持代码展示。
+    return (
+      <React.Suspense fallback={<MarkdownCodeBlock defaultCodeWrap={props.defaultCodeWrap}>{props.children}</MarkdownCodeBlock>}>
+        <LazyAnswerComponentView component={component} host={host} />
+      </React.Suspense>
+    );
   }
   if (props.renderDiagrams && (language === "mermaid" || language === "svg")) {
     // source is the complete finalized diagram definition without ReactMarkdown's trailing newline.
