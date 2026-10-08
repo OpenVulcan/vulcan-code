@@ -5432,5 +5432,12 @@
   "answerComponents.severity.medium": "中",
   "answerComponents.severity.low": "低",
   "answerComponents.severity.info": "提示",
-  "answerComponents.fileCount": "{count} 個檔案"
+  "answerComponents.fileCount": "{count} 個檔案",
+  "answerComponents.column.severity": "嚴重度",
+  "answerComponents.column.finding": "問題",
+  "answerComponents.column.location": "位置",
+  "answerComponents.chartView": "圖表",
+  "answerComponents.dataView": "資料",
+  "answerComponents.copyMarkdown": "複製為 Markdown",
+  "answerComponents.copyData": "複製資料"
 }

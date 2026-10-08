@@ -5432,5 +5432,12 @@
   "answerComponents.severity.medium": "Средняя",
   "answerComponents.severity.low": "Низкая",
   "answerComponents.severity.info": "Инфо",
-  "answerComponents.fileCount": "Файлов: {count}"
+  "answerComponents.fileCount": "Файлов: {count}",
+  "answerComponents.column.severity": "Серьёзность",
+  "answerComponents.column.finding": "Проблема",
+  "answerComponents.column.location": "Расположение",
+  "answerComponents.chartView": "Диаграмма",
+  "answerComponents.dataView": "Данные",
+  "answerComponents.copyMarkdown": "Копировать как Markdown",
+  "answerComponents.copyData": "Копировать данные"
 }

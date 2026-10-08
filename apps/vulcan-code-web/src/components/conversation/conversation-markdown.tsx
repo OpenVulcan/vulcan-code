@@ -7,6 +7,9 @@ import { Check, Copy, Globe, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
+import { isAnswerComponentLanguage, parseAnswerComponent } from "@/components/conversation/answer-components/answer-component-model";
+import { AnswerComponentView, AnswerFrame, type AnswerComponentHost } from "@/components/conversation/answer-components/answer-component-view";
+import { markdownTable, numericCells } from "@/components/conversation/answer-components/answer-markdown-table";
 import { splitStreamingMarkdownBlocks, STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "@/components/conversation/streaming-markdown-blocks";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
@@ -262,21 +265,100 @@ function MarkdownContentRenderer(props: {
       );
     },
     pre: ({ children, node }: { children?: React.ReactNode } & ExtraProps) => (
-      <MarkdownPreBlock node={node} defaultCodeWrap={props.defaultCodeWrap} renderDiagrams={props.renderDiagrams}>{children}</MarkdownPreBlock>
+      <MarkdownPreBlock
+        defaultCodeWrap={props.defaultCodeWrap}
+        node={node}
+        onOpenMedia={props.onOpenMedia}
+        renderDiagrams={props.renderDiagrams}
+        workspacePath={props.workspacePath}
+      >
+        {children}
+      </MarkdownPreBlock>
     ),
-    table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
+    table: ({ children, node }: { children?: React.ReactNode } & ExtraProps) => <MarkdownTable node={node}>{children}</MarkdownTable>,
+    td: ({ children, node, style }: { children?: React.ReactNode; style?: React.CSSProperties } & ExtraProps) => (
+      <MarkdownTableCell node={node} style={style} tag="td">{children}</MarkdownTableCell>
+    ),
+    th: ({ children, node, style }: { children?: React.ReactNode; style?: React.CSSProperties } & ExtraProps) => (
+      <MarkdownTableCell node={node} style={style} tag="th">{children}</MarkdownTableCell>
+    ),
   }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
   return (
-    <ReactMarkdown
-      components={components}
-      rehypePlugins={markdownSanitizers}
-      remarkPlugins={markdownPlugins}
-      urlTransform={markdownUrlTransform}
-    >
-      {props.content}
-    </ReactMarkdown>
+    <MarkdownSourceContext.Provider value={props.content}>
+      <ReactMarkdown
+        components={components}
+        rehypePlugins={markdownSanitizers}
+        remarkPlugins={markdownPlugins}
+        urlTransform={markdownUrlTransform}
+      >
+        {props.content}
+      </ReactMarkdown>
+    </MarkdownSourceContext.Provider>
   );
 }
+
+// MarkdownSourceContext carries the exact Markdown text a renderer parsed, so fences can be checked against it.
+// MarkdownSourceContext 携带渲染器解析的准确 Markdown 文本，使围栏可以据此校验。
+const MarkdownSourceContext = React.createContext("");
+
+// MarkdownTableColumnsContext maps each table cell node to whether its column holds only numbers.
+// MarkdownTableColumnsContext 将每个表格单元格节点映射到其所在列是否只含数字。
+const MarkdownTableColumnsContext = React.createContext<WeakMap<object, boolean> | null>(null);
+
+// hastText concatenates the text content of one sanitized HTML AST node.
+// hastText 拼接单个已清理 HTML AST 节点的文本内容。
+function hastText(node: unknown): string {
+  const value = node as { type?: string; value?: string; children?: unknown[] };
+  if (value.type === "text") return value.value ?? "";
+  return (value.children ?? []).map(hastText).join("");
+}
+
+// hastElements returns the element children of one AST node with the given tag names.
+// hastElements 返回单个 AST 节点中具有指定标签名的元素子节点。
+function hastElements(node: unknown, tags: readonly string[]): ExtraProps["node"][] {
+  const children = (node as { children?: unknown[] } | undefined)?.children ?? [];
+  return children.filter((child): child is NonNullable<ExtraProps["node"]> => (
+    (child as { type?: string }).type === "element" && tags.includes((child as { tagName: string }).tagName)
+  ));
+}
+
+// MarkdownTable frames a GFM table, right-aligns numeric columns and copies the table back as Markdown.
+// MarkdownTable 为 GFM 表格加外框，数字列靠右，并可复制回 Markdown。
+function MarkdownTable(props: { children?: React.ReactNode; node?: ExtraProps["node"] }) {
+  const { copy, numeric } = React.useMemo(() => {
+    const rows = hastElements(props.node, ["thead", "tbody"]).flatMap((section) => hastElements(section, ["tr"]));
+    const cells = rows.map((row) => hastElements(row, ["th", "td"]));
+    const text = cells.map((row) => row.map(hastText));
+    const columns = new WeakMap<object, boolean>();
+    const width = Math.max(0, ...text.map((row) => row.length));
+    for (let column = 0; column < width; column += 1) {
+      const isNumeric = numericCells(text.slice(1).map((row) => row[column] ?? ""));
+      for (const row of cells) if (row[column]) columns.set(row[column]!, isNumeric);
+    }
+    const [header = [], ...body] = text;
+    return { copy: markdownTable(header, body), numeric: columns };
+  }, [props.node]);
+  return (
+    <MarkdownTableColumnsContext.Provider value={numeric}>
+      <AnswerFrame copy={copy} host={markdownCopyHost}>
+        <div className="answer-table-scroll"><table className="answer-table">{props.children}</table></div>
+      </AnswerFrame>
+    </MarkdownTableColumnsContext.Provider>
+  );
+}
+
+// MarkdownTableCell marks numeric columns unless the author set an explicit alignment.
+// MarkdownTableCell 标记数字列，作者显式指定对齐时除外。
+function MarkdownTableCell(props: { children?: React.ReactNode; node?: ExtraProps["node"]; style?: React.CSSProperties; tag: "td" | "th" }) {
+  const columns = React.useContext(MarkdownTableColumnsContext);
+  const numeric = !props.style?.textAlign && props.node ? columns?.get(props.node) : undefined;
+  const Tag = props.tag;
+  return <Tag data-numeric={numeric || undefined} style={props.style}>{props.children}</Tag>;
+}
+
+// markdownCopyHost lends the shared clipboard path to framed Markdown blocks.
+// markdownCopyHost 为框架型 Markdown 区块提供共享剪贴板路径。
+const markdownCopyHost = { copy: copyMarkdownCode };
 
 // LazyMarkdownMessage keeps one complete Markdown document mounted for stable layout.
 // LazyMarkdownMessage 保持完整 Markdown 文档挂载以获得稳定布局。
@@ -333,13 +415,51 @@ function MarkdownPreBlock(props: {
   // Whether diagram rendering is allowed for this stable Markdown document.
   // 当前稳定 Markdown 文档是否允许图表渲染。
   renderDiagrams: boolean;
+  // Current project workspace path for component file links and media.
+  // 当前项目工作区路径，用于组件文件链接与媒体。
+  workspacePath: string | null;
+  // Optional media opener used by gallery components.
+  // 图库组件使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  // source is the Markdown text whose AST produced this block.
+  // source 是生成该块 AST 的 Markdown 文本。
+  const source = React.useContext(MarkdownSourceContext);
   // codeElement is the fenced code node emitted by ReactMarkdown.
   // codeElement 是 ReactMarkdown 生成的围栏代码节点。
   const codeElement = markdownCodeElement(props.children);
   // language is the normalized information string attached to the fenced block.
   // language 是围栏代码块携带的规范化信息字符串。
   const language = markdownCodeLanguage(codeElement?.props.className)?.toLowerCase();
+  // component is the parsed answer component of a closed `ui-*` fence; streaming or invalid fences stay code.
+  // component 是已闭合 `ui-*` 围栏解析出的回答组件；流式或无效围栏保持为代码。
+  const component = React.useMemo(() => {
+    if (!isAnswerComponentLanguage(language) || !closedFence(source, props.node)) return null;
+    const code = hastElements(props.node, ["code"])[0];
+    const meta = (code?.data as { meta?: unknown } | undefined)?.meta;
+    const body = markdownCodeText(codeElement?.props.children ?? props.children).replace(/\n$/u, "");
+    return parseAnswerComponent(language!, typeof meta === "string" ? meta : "", body);
+  }, [codeElement, language, props.children, props.node, source]);
+  // host lends nested Markdown, media, file links and the clipboard to the component.
+  // host 为组件提供嵌套 Markdown、媒体、文件链接与剪贴板。
+  const host = React.useMemo<AnswerComponentHost>(() => ({
+    renderMarkdown: (body) => (
+      <MarkdownContentRenderer
+        content={normalizeMarkdownLocalImageLinks(body, props.workspacePath)}
+        defaultCodeWrap={props.defaultCodeWrap}
+        onOpenMedia={props.onOpenMedia}
+        renderDiagrams={props.renderDiagrams}
+        workspacePath={props.workspacePath}
+      />
+    ),
+    mediaSource: (path) => answerMediaSource(path, props.workspacePath),
+    fileHref: (location) => answerFileHref(location, props.workspacePath),
+    copy: copyMarkdownCode,
+    onOpenMedia: props.onOpenMedia,
+  }), [props.defaultCodeWrap, props.onOpenMedia, props.renderDiagrams, props.workspacePath]);
+  if (component) {
+    return <AnswerComponentView component={component} host={host} />;
+  }
   if (props.renderDiagrams && (language === "mermaid" || language === "svg")) {
     // source is the complete finalized diagram definition without ReactMarkdown's trailing newline.
     // source 是移除 ReactMarkdown 尾随换行后的完整最终图表定义。
@@ -837,4 +957,50 @@ function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: string):
   const separator = workspaceRoot.includes("\\") ? "\\" : "/";
   const cleanRoot = workspaceRoot.replace(/[\\/]+$/u, "");
   return `${cleanRoot}${separator}${relativePath.replace(/[\\/]+/gu, separator)}`;
+}
+
+// closedFence reports whether a fenced block's source ends with a closing fence at least as long as its opening.
+// closedFence 判断围栏块源码是否以不短于起始围栏的闭合围栏结束。
+// Unclosed fences (still streaming) end at the end of the document instead. 未闭合（仍在流式输出）的围栏则止于文档末尾。
+function closedFence(source: string, node: ExtraProps["node"]): boolean {
+  const start = node?.position?.start.offset;
+  const end = node?.position?.end.offset;
+  if (start === undefined || end === undefined) return false;
+  // Container prefixes (list indentation, quote markers) precede both fence lines.
+  // 容器前缀（列表缩进、引用标记）位于两条围栏行之前。
+  const lines = source.slice(start, end).split(/\r?\n/u).map((line) => line.replace(/^[\s>]*/u, "").trimEnd());
+  const opening = /^(`{3,}|~{3,})/u.exec(lines[0] ?? "");
+  const closing = lines[lines.length - 1];
+  return lines.length >= 2 && opening !== null && closing.length >= opening[1].length
+    && closing === opening[1][0].repeat(closing.length);
+}
+
+// answerMediaSource resolves a gallery path to a renderable URL; relative paths need the project root.
+// answerMediaSource 将图库路径解析为可渲染 URL；相对路径需要项目根目录。
+function answerMediaSource(path: string, workspacePath: string | null): string | null {
+  const value = path.trim();
+  if (/^(https?:|data:(image|video)\/)/iu.test(value)) return value;
+  if (/^(file:|vulcan-media:)/iu.test(value) || looksLikeAbsoluteLocalFilesystemPath(value)) return mediaSourceUrl(value);
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value) || !workspacePath) return null;
+  const relativePath = normalizeRelativeMarkdownImagePath(value);
+  return relativePath ? mediaSourceUrl(joinWorkspaceRelativePath(workspacePath, relativePath)) : null;
+}
+
+// answerFileHref links a file reference such as `src/a.rs:42` to its file URL; the line suffix is display-only.
+// answerFileHref 将 `src/a.rs:42` 这类文件引用链接到文件 URL；行号后缀仅用于显示。
+function answerFileHref(location: string, workspacePath: string | null): string | null {
+  const path = location.trim().replace(/:\d+(?::\d+)?$/u, "");
+  let absolute: string | null = null;
+  if (looksLikeAbsoluteLocalFilesystemPath(path)) {
+    absolute = path;
+  } else if (workspacePath && !/^[a-z][a-z0-9+.-]*:/iu.test(path)) {
+    const relativePath = normalizeRelativeMarkdownImagePath(path);
+    absolute = relativePath ? joinWorkspaceRelativePath(workspacePath, relativePath) : null;
+  }
+  if (absolute === null) return null;
+  try {
+    return new URL(`file:///${absolute.replace(/\\/gu, "/").replace(/^\/+/u, "")}`).href;
+  } catch {
+    return null;
+  }
 }

@@ -5432,5 +5432,12 @@
   "answerComponents.severity.medium": "Média",
   "answerComponents.severity.low": "Baixa",
   "answerComponents.severity.info": "Info",
-  "answerComponents.fileCount": "{count} arquivos"
+  "answerComponents.fileCount": "{count} arquivos",
+  "answerComponents.column.severity": "Gravidade",
+  "answerComponents.column.finding": "Achado",
+  "answerComponents.column.location": "Local",
+  "answerComponents.chartView": "Gráfico",
+  "answerComponents.dataView": "Dados",
+  "answerComponents.copyMarkdown": "Copiar como Markdown",
+  "answerComponents.copyData": "Copiar dados"
 }

@@ -19,8 +19,7 @@
 .markdown-message ol,
 .markdown-message blockquote,
 .markdown-message figure,
-.markdown-message pre,
-.markdown-message table {
+.markdown-message pre {
   margin: 0 0 11px;
 }
 
@@ -374,27 +373,4 @@
   height: 5px;
   border-radius: var(--vcn-radius-pill);
   background: color-mix(in srgb, var(--muted-foreground) 28%, transparent);
-}
-
-.markdown-table-wrap {
-  max-width: 100%;
-  overflow: auto;
-}
-
-.markdown-message table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--vcn-font-size-md);
-}
-
-.markdown-message th,
-.markdown-message td {
-  border: 1px solid var(--border);
-  padding: 7px 8px;
-  text-align: left;
-}
-
-.markdown-message th {
-  background: var(--muted);
-  color: var(--foreground);
 }

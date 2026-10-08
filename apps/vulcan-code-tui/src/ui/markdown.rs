@@ -635,5 +635,10 @@ A[Plan] --> B[Build]";
         assert!(rendered.contains("Title-marker") && rendered.contains("key-marker"));
         assert!(rendered.contains("tail-marker") && rendered.contains("after"));
         assert!(!rendered.contains("ui-kv") && !rendered.contains("ui-callout"));
+
+        let tabs = joined("```ui-tabs\n### A\none\n### B\ntwo\n```");
+        assert!(!tabs.contains("ui-tabs"));
+        let empty_section = joined("```ui-tabs\n### A\n### B\ntwo\n```");
+        assert!(empty_section.contains("ui-tabs"));
     }
 }

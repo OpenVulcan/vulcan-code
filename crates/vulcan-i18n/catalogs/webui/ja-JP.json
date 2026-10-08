@@ -5432,5 +5432,12 @@
   "answerComponents.severity.medium": "中",
   "answerComponents.severity.low": "低",
   "answerComponents.severity.info": "情報",
-  "answerComponents.fileCount": "{count} 個のファイル"
+  "answerComponents.fileCount": "{count} 個のファイル",
+  "answerComponents.column.severity": "重大度",
+  "answerComponents.column.finding": "指摘",
+  "answerComponents.column.location": "場所",
+  "answerComponents.chartView": "グラフ",
+  "answerComponents.dataView": "データ",
+  "answerComponents.copyMarkdown": "Markdown としてコピー",
+  "answerComponents.copyData": "データをコピー"
 }

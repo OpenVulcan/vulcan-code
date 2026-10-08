@@ -185,11 +185,13 @@ function renderMermaidSvg(
     // mermaid is the cached browser runtime used for the current render.
     // mermaid 是当前渲染使用的缓存浏览器运行时。
     const mermaid = await loadMermaidRuntime();
+    const dark = shikiTheme === DIFF_SHIKI_DARK_THEME;
+    const themeVariables = mermaidThemeVariables(dark);
     mermaid.initialize({
       securityLevel: "strict",
       startOnLoad: false,
       suppressErrorRendering: true,
-      theme: shikiTheme === DIFF_SHIKI_DARK_THEME ? "dark" : "default",
+      ...(themeVariables ? { theme: "base", themeVariables } : { theme: dark ? "dark" : "default" }),
     });
     // result contains the generated SVG and optional interaction bindings disabled by strict mode.
     // result 包含生成的 SVG，以及严格模式下禁用的可选交互绑定。
@@ -201,6 +203,56 @@ function renderMermaidSvg(
     () => undefined,
   );
   return renderTask;
+}
+
+// mermaidThemeVariables maps the workbench color tokens onto Mermaid's `base` theme.
+// mermaidThemeVariables 将工作台色票映射到 Mermaid 的 `base` 主题。
+// The SVG renders as an isolated image, so values must be resolved colors rather than CSS variables.
+// SVG 以隔离图片渲染，因此取值必须是已解析的颜色而不是 CSS 变量。
+// Returns null when a token is not a hex color (for example without the stylesheet), keeping Mermaid's own theme.
+// 当某个色票不是十六进制颜色时（例如未加载样式表）返回 null，沿用 Mermaid 自带主题。
+function mermaidThemeVariables(dark: boolean): Record<string, string | boolean> | null {
+  const style = getComputedStyle(document.documentElement);
+  const names = ["background", "foreground", "card", "muted", "muted-foreground", "border", "chart-4"] as const;
+  const token = Object.fromEntries(names.map((name) => [name, style.getPropertyValue(`--${name}`).trim()])) as Record<typeof names[number], string>;
+  if (!names.every((name) => /^#[0-9a-f]{6}$/iu.test(token[name]))) return null;
+  return {
+    darkMode: dark,
+    fontFamily: getComputedStyle(document.body).fontFamily,
+    fontSize: "13px",
+    background: token.background,
+    primaryColor: token.card,
+    primaryTextColor: token.foreground,
+    primaryBorderColor: mixHexColors(token["muted-foreground"], token.card, 0.6),
+    secondaryColor: token.muted,
+    tertiaryColor: token.muted,
+    lineColor: token["muted-foreground"],
+    textColor: token.foreground,
+    edgeLabelBackground: token.background,
+    clusterBkg: token.muted,
+    clusterBorder: token.border,
+    noteBkgColor: mixHexColors(token["chart-4"], token.card, 0.18),
+    noteBorderColor: token["chart-4"],
+    noteTextColor: token.foreground,
+    actorBkg: token.foreground,
+    actorTextColor: token.background,
+    actorBorder: token.foreground,
+    actorLineColor: token.border,
+    signalColor: token["muted-foreground"],
+    signalTextColor: token.foreground,
+    labelBoxBkgColor: token.muted,
+    labelBoxBorderColor: token.border,
+    labelTextColor: token.foreground,
+    loopTextColor: token.foreground,
+  };
+}
+
+// mixHexColors blends `weight` of hex color `first` with the rest of `second`.
+// mixHexColors 按 `weight` 比例混合十六进制颜色 `first` 与 `second`。
+function mixHexColors(first: string, second: string, weight: number): string {
+  const channels = (hex: string) => [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+  const [a, b] = [channels(first), channels(second)];
+  return `#${a.map((value, index) => Math.round(value * weight + b[index] * (1 - weight)).toString(16).padStart(2, "0")).join("")}`;
 }
 
 // mermaidDiagramRenderId converts a React useId value into a valid Mermaid SVG identifier.

@@ -58,8 +58,15 @@ pub fn render(
         "tabs" | "columns" => {
             let sections = body.iter().filter(|line| line.starts_with("### ")).count();
             let first = body.iter().find(|line| !line.trim().is_empty())?;
+            // Every heading must be followed by content before the next heading or the end.
+            // 每个标题之后、下一个标题或结尾之前必须有内容。
+            let filled = body
+                .split(|line| line.starts_with("### "))
+                .skip(1)
+                .all(|section| section.iter().any(|line| !line.trim().is_empty()));
             (args.is_empty()
                 && first.starts_with("### ")
+                && filled
                 && (2..=ANSWER_COMPONENT_MAX_ROWS).contains(&sections))
             .then(|| markdown::render(&body.join("\n"), width, theme))
         }

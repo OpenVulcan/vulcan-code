@@ -5432,5 +5432,12 @@
   "answerComponents.severity.medium": "Mittel",
   "answerComponents.severity.low": "Niedrig",
   "answerComponents.severity.info": "Info",
-  "answerComponents.fileCount": "{count} Dateien"
+  "answerComponents.fileCount": "{count} Dateien",
+  "answerComponents.column.severity": "Schweregrad",
+  "answerComponents.column.finding": "Befund",
+  "answerComponents.column.location": "Ort",
+  "answerComponents.chartView": "Diagramm",
+  "answerComponents.dataView": "Daten",
+  "answerComponents.copyMarkdown": "Als Markdown kopieren",
+  "answerComponents.copyData": "Daten kopieren"
 }

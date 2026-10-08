@@ -5432,5 +5432,12 @@
   "answerComponents.severity.medium": "중간",
   "answerComponents.severity.low": "낮음",
   "answerComponents.severity.info": "정보",
-  "answerComponents.fileCount": "파일 {count}개"
+  "answerComponents.fileCount": "파일 {count}개",
+  "answerComponents.column.severity": "심각도",
+  "answerComponents.column.finding": "문제",
+  "answerComponents.column.location": "위치",
+  "answerComponents.chartView": "차트",
+  "answerComponents.dataView": "데이터",
+  "answerComponents.copyMarkdown": "Markdown으로 복사",
+  "answerComponents.copyData": "데이터 복사"
 }

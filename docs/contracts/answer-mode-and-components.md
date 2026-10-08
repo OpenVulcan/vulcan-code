@@ -38,6 +38,17 @@
   流式中尚未闭合或语法无效的围栏一律保持代码显示，不猜测修复。
 - 渲染只基于回复原文，不经服务端投影，不执行任何脚本；需要真实交互时由模型写出独立 HTML 文件并以
   链接交给内置浏览器打开。
-- WebUI 原生绘制组件；TUI 由 `apps/vulcan-code-tui/src/ui/answer_components.rs` 改写为终端可读的
-  Markdown（状态词转符号、图形组件转 Mermaid、树形带引导线、容器正文置于着色竖线之后）。
-- 大图仍使用可缩放的 Mermaid；`ui-flow` 与 `ui-sequence` 是嵌入正文的扁平图。
+- WebUI 由 `apps/vulcan-code-web/src/components/conversation/answer-components/` 原生绘制：
+  `answer-component-model.ts` 是纯解析器（与 TUI 解析规则一致），`conversation-markdown.tsx` 的
+  `MarkdownPreBlock` 依据 AST 源码位置确认围栏已闭合后才交给组件。流式回复中已闭合的组件即时渲染；
+  Mermaid 仍只在回复完成后绘制。TUI 由 `apps/vulcan-code-tui/src/ui/answer_components.rs` 改写为
+  终端可读的 Markdown（状态词转符号、图形组件转 Mermaid、树形带引导线、容器正文置于着色竖线之后）。
+- 视觉分两类（样式在 `src/styles/answer-components.css`）：**框架型**承载可复用数据——Markdown
+  表格、`ui-findings`、`ui-compare`（悬停复制为 Markdown）、`ui-chart`（图表与数据切换、复制数据）、
+  `ui-files`（标题条显示文件数与增删合计）、`ui-tree`；**融入型**随正文阅读——其余组件。普通 Markdown
+  表格同样使用框架型外框，纯数字列靠右；Mermaid 使用 `base` 主题并从工作台色票取色。
+- 文件位置（`ui-findings` 位置、`ui-files` 路径）仅在可由项目根解析时成为 `file:` 链接，行号后缀只用于
+  显示；图库路径按 Markdown 图片的同一规则解析为本地媒体地址。
+- 大图仍使用可缩放的 Mermaid；`ui-flow` 与 `ui-sequence` 是嵌入正文的扁平图：`ui-flow` 每行源码
+  平铺为一条链（同名即同一节点，只出现在新增或删除行上的节点带对应标记），`ui-sequence` 以参与者列与
+  生命线排布消息、注释与阶段。
