@@ -77,8 +77,61 @@ async function readClipboardText(): Promise<string> {
   return navigator.clipboard.readText();
 }
 
+// COMPOSER_MENU_ITEM_HOVER_CLASS_NAME highlights items by pointer when they never take focus.
+// COMPOSER_MENU_ITEM_HOVER_CLASS_NAME 在菜单项不获取焦点时以指针悬停高亮。
+const COMPOSER_MENU_ITEM_HOVER_CLASS_NAME = "hover:bg-(--vcn-fill-hover) hover:text-foreground";
+
+// isContextMenuKey reports the keyboard shortcuts that open a context menu on Windows and Linux.
+// isContextMenuKey 判断 Windows 与 Linux 上打开右键菜单的键盘快捷键。
+function isContextMenuKey(event: React.KeyboardEvent): boolean {
+  return event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
+}
+
+// keepPointerFocusInComposer stops Radix from focusing items on hover or the menu on leave.
+// keepPointerFocusInComposer 阻止 Radix 在悬停时聚焦菜单项、离开时聚焦菜单本身。
+function keepPointerFocusInComposer(event: React.PointerEvent<HTMLDivElement>) {
+  event.preventDefault();
+}
+
+// ComposerMenuItemProps describes one action row and who owns focus while the menu is open.
+// ComposerMenuItemProps 描述一行操作项，以及菜单打开期间由谁持有焦点。
+interface ComposerMenuItemProps {
+  // disabled blocks the action for an empty selection or a locked draft.
+  // disabled 在选区为空或草稿被锁定时阻止该操作。
+  disabled: boolean;
+  // keyboard lets Radix move focus between rows for arrow-key navigation.
+  // keyboard 允许 Radix 在菜单行之间移动焦点以支持方向键导航。
+  keyboard: boolean;
+  // onSelect runs the edit action.
+  // onSelect 执行编辑操作。
+  onSelect: () => void;
+  // children is the translated row label.
+  // children 是已翻译的菜单行文字。
+  children: React.ReactNode;
+}
+
+// ComposerMenuItem is one action row; for pointer menus it leaves focus and the selection in the composer.
+// ComposerMenuItem 是一行操作项；指针打开的菜单中焦点与选区始终留在会话输入框。
+function ComposerMenuItem(props: ComposerMenuItemProps) {
+  return (
+    <ContextMenuItem
+      className={props.keyboard ? undefined : COMPOSER_MENU_ITEM_HOVER_CLASS_NAME}
+      disabled={props.disabled}
+      onPointerLeave={props.keyboard ? undefined : keepPointerFocusInComposer}
+      onPointerMove={props.keyboard ? undefined : keepPointerFocusInComposer}
+      onSelect={props.onSelect}
+    >
+      {props.children}
+    </ContextMenuItem>
+  );
+}
+
 // ComposerTextContextMenu provides Copy, Paste, Cut, and Select All for the real composer field.
 // ComposerTextContextMenu 为实际会话输入框提供复制、粘贴、剪切和全选。
+// The menu is non-modal. Opened by pointer it never holds focus, so the textarea keeps its visible
+// selection like the native editing menu; opened by keyboard it takes focus for arrow-key navigation.
+// 菜单为非模态。指针打开时从不持有焦点，输入框如原生编辑菜单一样保留可见选区；键盘打开时由菜单接手
+// 焦点以支持方向键导航。
 export function ComposerTextContextMenu(props: ComposerTextContextMenuProps) {
   // t resolves current-client labels and explicit clipboard failure messages.
   // t 解析当前客户端的菜单文字和明确的剪贴板失败提示。
@@ -92,6 +145,14 @@ export function ComposerTextContextMenu(props: ComposerTextContextMenuProps) {
   // pendingCaret restores the cursor after React commits a controlled draft edit.
   // pendingCaret 在 React 提交受控草稿编辑后恢复光标。
   const pendingCaret = React.useRef<{ ownerKey: string; value: string; offset: number } | null>(null);
+  // keyboardRequest is set by a context-menu key and cleared by any other key or pointer press,
+  // because a pointer-opened menu always receives pointerdown before contextmenu.
+  // keyboardRequest 由右键菜单键设置，任何其他按键或指针按下都会清除；指针打开菜单时 pointerdown 总在
+  // contextmenu 之前到达。
+  const keyboardRequest = React.useRef(false);
+  // keyboardMenu records whether the open menu was requested by keyboard and therefore owns focus.
+  // keyboardMenu 记录当前打开的菜单是否由键盘请求，从而持有焦点。
+  const [keyboardMenu, setKeyboardMenu] = React.useState(false);
 
   React.useLayoutEffect(() => {
     current.current = { ownerKey: props.ownerKey, value: props.value, disabled: props.disabled };
@@ -113,6 +174,8 @@ export function ComposerTextContextMenu(props: ComposerTextContextMenuProps) {
   // captureSelection records the real textarea range before Radix moves focus into the menu.
   // captureSelection 在 Radix 把焦点移入菜单前记录实际输入框选区。
   const captureSelection = React.useCallback(() => {
+    setKeyboardMenu(keyboardRequest.current);
+    keyboardRequest.current = false;
     // field is the only input whose selection may become a composer action.
     // field 是其选区可被转化为会话输入操作的唯一输入框。
     const field = props.textareaRef.current;
@@ -226,28 +289,57 @@ export function ComposerTextContextMenu(props: ComposerTextContextMenuProps) {
   if (!props.enabled) return props.children;
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild onContextMenuCapture={captureSelection}>
+    // modal=false removes the focus trap that would bounce field.focus() back into the menu.
+    // modal=false 移除焦点陷阱，否则 field.focus() 会被弹回菜单。
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger
+        asChild
+        onContextMenuCapture={captureSelection}
+        onKeyDownCapture={(event) => { keyboardRequest.current = isContextMenuKey(event); }}
+        onPointerDownCapture={() => { keyboardRequest.current = false; }}
+      >
         {props.children}
       </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={(event) => {
-        // Restore the composer after menu focus leaves so typing can continue immediately.
-        // 菜单焦点离开后恢复会话输入框，使用户可以立即继续输入。
-        event.preventDefault();
-        props.textareaRef.current?.focus({ preventScroll: true });
-      }}>
-        <ContextMenuItem disabled={props.disabled || !selection || selection.start === selection.end} onSelect={() => void copy()}>
+      <ContextMenuContent
+        onCloseAutoFocus={(event) => {
+          // Restore the composer after the menu closes so typing can continue immediately.
+          // 菜单关闭后恢复会话输入框，使用户可以立即继续输入。
+          event.preventDefault();
+          props.textareaRef.current?.focus({ preventScroll: true });
+        }}
+        onFocus={() => {
+          // Radix focuses the menu when it opens; for pointer menus hand focus back so the selection
+          // stays painted. Keyboard menus keep focus so arrow keys and Enter drive the rows.
+          // Radix 打开菜单时会聚焦菜单；指针菜单把焦点交还输入框，使选区保持可见。键盘菜单保留焦点，
+          // 由方向键与 Enter 操作菜单行。
+          if (!keyboardMenu) props.textareaRef.current?.focus({ preventScroll: true });
+        }}
+        onFocusOutside={(event) => {
+          // Focus returning to the composer is expected and must not dismiss the open menu. The
+          // hand-back above also leaves a stale event targeting the menu, so judge by live focus.
+          // 焦点回到会话输入框属于预期行为，不得关闭已打开的菜单。上面的交还焦点还会留下一个以菜单为
+          // 目标的过期事件，因此按实时焦点判断。
+          const field = props.textareaRef.current;
+          if (field && field.ownerDocument.activeElement === field) event.preventDefault();
+        }}
+        onMouseDown={(event) => {
+          // Clicking a row must not blur the textarea before the action reads its selection.
+          // 点击菜单行不得在操作读取选区前使输入框失焦。
+          event.preventDefault();
+        }}
+      >
+        <ComposerMenuItem disabled={props.disabled || !selection || selection.start === selection.end} keyboard={keyboardMenu} onSelect={() => void copy()}>
           {t("composer.contextMenu.copy")}
-        </ContextMenuItem>
-        <ContextMenuItem disabled={props.disabled} onSelect={() => void paste()}>
+        </ComposerMenuItem>
+        <ComposerMenuItem disabled={props.disabled} keyboard={keyboardMenu} onSelect={() => void paste()}>
           {t("composer.contextMenu.paste")}
-        </ContextMenuItem>
-        <ContextMenuItem disabled={props.disabled || !selection || selection.start === selection.end} onSelect={() => void cut()}>
+        </ComposerMenuItem>
+        <ComposerMenuItem disabled={props.disabled || !selection || selection.start === selection.end} keyboard={keyboardMenu} onSelect={() => void cut()}>
           {t("composer.contextMenu.cut")}
-        </ContextMenuItem>
-        <ContextMenuItem disabled={props.disabled} onSelect={selectAll}>
+        </ComposerMenuItem>
+        <ComposerMenuItem disabled={props.disabled} keyboard={keyboardMenu} onSelect={selectAll}>
           {t("composer.contextMenu.selectAll")}
-        </ContextMenuItem>
+        </ComposerMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

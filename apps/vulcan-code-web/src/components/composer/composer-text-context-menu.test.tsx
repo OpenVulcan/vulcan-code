@@ -120,6 +120,46 @@ it("shows four actions and copies only the selected composer text", async () => 
   expect(document.activeElement).toBe(field);
 });
 
+it("keeps focus and the selection in the composer while the menu is open", async () => {
+  installClipboard("");
+  await act(async () => root.render(<ControlledComposer initial="alpha beta" />));
+  const field = await openMenu(6, 10);
+  expect(document.querySelector('[role="menu"]')).toBeTruthy();
+  expect(document.activeElement).toBe(field);
+  expect([field.selectionStart, field.selectionEnd]).toEqual([6, 10]);
+  // item is hovered by mouse; Radix would normally move focus onto it.
+  // item 被鼠标悬停；Radix 默认会把焦点移到该菜单项上。
+  const item = document.querySelector<HTMLElement>('[role="menuitem"]')!;
+  await act(async () => item.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" })));
+  expect(document.activeElement).toBe(field);
+  expect(document.querySelector('[role="menu"]')).toBeTruthy();
+});
+
+it("hands focus to the menu when opened by keyboard so arrow keys and Enter drive it", async () => {
+  installClipboard("NEW");
+  await act(async () => root.render(<ControlledComposer initial="alpha beta" />));
+  const field = host.querySelector("textarea")!;
+  field.focus();
+  field.setSelectionRange(0, 5);
+  // Shift+F10 precedes the keyboard contextmenu event with no pointer press in between.
+  // Shift+F10 先于键盘触发的 contextmenu 事件到达，其间没有指针按下。
+  await act(async () => {
+    field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "F10", shiftKey: true }));
+    field.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, button: 0, clientX: 20, clientY: 20 }));
+  });
+  // focusedLabel reads the row Radix currently keeps focused.
+  // focusedLabel 读取 Radix 当前保持聚焦的菜单行。
+  const focusedLabel = () => (document.activeElement as HTMLElement | null)?.getAttribute("role") === "menuitem"
+    ? document.activeElement!.textContent
+    : null;
+  await act(async () => { await vi.waitFor(() => expect(focusedLabel()).toBe("composer.contextMenu.copy")); });
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+  await act(async () => { await vi.waitFor(() => expect(focusedLabel()).toBe("composer.contextMenu.paste")); });
+  await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+  await act(async () => { await vi.waitFor(() => expect(field.value).toBe("NEW beta")); });
+  expect(document.activeElement).toBe(field);
+});
+
 it("cuts only after clipboard write succeeds and restores the controlled caret", async () => {
   const clipboard = installClipboard("");
   await act(async () => root.render(<ControlledComposer initial="alpha beta" />));
@@ -145,6 +185,7 @@ it("selects the whole composer field without selecting surrounding page text", a
   await act(async () => root.render(<ControlledComposer initial="alpha beta" />));
   const field = await openMenu(2, 2);
   await choose("composer.contextMenu.selectAll");
+  expect(document.activeElement).toBe(field);
   expect([field.selectionStart, field.selectionEnd]).toEqual([0, 10]);
 });
 
@@ -175,9 +216,15 @@ it("uses the desktop text bridge when native Paste is unavailable", async () => 
 });
 
 it("routes Paste through Electron's page command when available", async () => {
+  // pasteTarget records the focused element when the host command runs; Electron pastes there.
+  // pasteTarget 记录宿主命令执行时的焦点元素；Electron 会粘贴到该元素。
+  let pasteTarget: { element: Element | null; start: number | null; end: number | null } | null = null;
   // nativePaste represents the host command that emits the normal page paste event.
   // nativePaste 代表发出正常页面粘贴事件的宿主命令。
-  const nativePaste = vi.fn(async () => {});
+  const nativePaste = vi.fn(async () => {
+    const focused = document.activeElement as HTMLTextAreaElement | null;
+    pasteTarget = { element: focused, start: focused?.selectionStart ?? null, end: focused?.selectionEnd ?? null };
+  });
   desktopClipboardBridge.current = {
     readClipboardText: vi.fn(async () => "text fallback must not run"),
     writeClipboardText: vi.fn(async (_value: string) => {}),
@@ -187,8 +234,5 @@ it("routes Paste through Electron's page command when available", async () => {
   const field = await openMenu(0, 5);
   await choose("composer.contextMenu.paste");
   expect(nativePaste).toHaveBeenCalledOnce();
-  // Radix restores focus when its closing focus scope unmounts, after the native command resolves.
-  // Radix 在关闭中的焦点作用域卸载时恢复焦点，该动作晚于原生命令完成。
-  await act(async () => { await vi.waitFor(() => expect(document.activeElement).toBe(field)); });
-  expect([field.selectionStart, field.selectionEnd]).toEqual([0, 5]);
+  expect(pasteTarget).toEqual({ element: field, start: 0, end: 5 });
 });
