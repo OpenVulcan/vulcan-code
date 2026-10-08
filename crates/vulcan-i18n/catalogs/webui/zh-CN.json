@@ -3107,6 +3107,8 @@
   "runtime.thinkingTokenCount": "（{count} Token）",
   "runtime.thinkingOverlayDockRight": "切换到右侧紧凑思考面板",
   "runtime.thinkingOverlayRestoreCentered": "恢复底部居中思考面板",
+  "runtime.thinkingOverlayMarkdownEnable": "开启 Markdown 渲染",
+  "runtime.thinkingOverlayMarkdownDisable": "关闭 Markdown 渲染",
   "settings.systemSettings": "系统设置",
   "settings.providers": "模型",
   "settings.diagnostics": "诊断",

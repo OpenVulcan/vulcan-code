@@ -245,7 +245,14 @@ align-self: center;
   transform: translateY(8px);
 }
 
-.streaming-thinking-layout-toggle {
+.streaming-thinking-header-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+:is(.streaming-thinking-layout-toggle, .streaming-thinking-markdown-toggle) {
   width: 28px;
   height: 28px;
   flex: none;
@@ -263,14 +270,26 @@ align-self: center;
     color 160ms ease;
 }
 
-.streaming-thinking-layout-toggle:hover,
-.streaming-thinking-layout-toggle:focus-visible {
+:is(.streaming-thinking-layout-toggle, .streaming-thinking-markdown-toggle):hover,
+:is(.streaming-thinking-layout-toggle, .streaming-thinking-markdown-toggle):focus-visible {
   background: var(--muted);
   color: var(--foreground);
 }
 
-.streaming-thinking-layout-toggle:focus-visible {
+:is(.streaming-thinking-layout-toggle, .streaming-thinking-markdown-toggle):focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 55%, transparent);
+}
+
+.streaming-thinking-markdown-toggle[aria-pressed="true"] {
+  background: var(--muted);
+  color: var(--primary);
+}
+
+.streaming-thinking-plain-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--vcn-font-size-md);
+  user-select: text;
 }
 
 .streaming-thinking-body {

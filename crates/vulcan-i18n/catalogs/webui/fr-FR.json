@@ -3107,6 +3107,8 @@
   "runtime.thinkingTokenCount": " ({count} jetons)",
   "runtime.thinkingOverlayDockRight": "Basculer vers le panneau de réflexion compact à droite",
   "runtime.thinkingOverlayRestoreCentered": "Rétablir le panneau de réflexion centré en bas",
+  "runtime.thinkingOverlayMarkdownEnable": "Activer le rendu Markdown",
+  "runtime.thinkingOverlayMarkdownDisable": "Désactiver le rendu Markdown",
   "settings.systemSettings": "Paramètres système",
   "settings.providers": "Modèles",
   "settings.diagnostics": "Diagnostics",

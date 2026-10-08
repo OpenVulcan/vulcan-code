@@ -17,6 +17,10 @@ import {
   persistStreamingThinkingLayoutMode,
 } from "@/components/conversation/streaming-thinking-layout";
 import { useStreamingThinkingViewport } from "@/components/conversation/use-streaming-thinking-viewport";
+import {
+  loadStreamingThinkingMarkdownEnabled,
+  persistStreamingThinkingMarkdownEnabled,
+} from "@/components/conversation/streaming-thinking-markdown";
 import type { TransientReasoningStatus } from "@/types";
 
 // TransientReasoningStatusLine renders request-local reasoning progress outside the durable event ledger.
@@ -98,6 +102,27 @@ export function StreamingThinkingOverlay(props: {
   // layoutMode stores the globally remembered popup placement selected by the user.
   // layoutMode 保存用户选择并全局记忆的弹窗位置。
   const [layoutMode, setLayoutMode] = React.useState(loadStreamingThinkingLayoutMode);
+  // markdownEnabled remembers only the automatic popup's presentation, leaving manual previews unchanged.
+  // markdownEnabled 仅记忆自动弹窗的显示方式，不影响手动预览。
+  const [markdownEnabled, setMarkdownEnabled] = React.useState(loadStreamingThinkingMarkdownEnabled);
+
+  // handleMarkdownToggle takes no arguments and switches and saves this client's popup rendering preference.
+  // handleMarkdownToggle 无参数，切换并保存当前客户端的弹窗渲染偏好。
+  // Returns nothing; persistence follows only an explicit click, never incoming stream updates.
+  // 无返回值；仅明确点击时持久化，流式内容更新不会写入偏好。
+  const handleMarkdownToggle = React.useCallback(() => {
+    // nextEnabled is the exact selection applied to both the popup and persistent storage.
+    // nextEnabled 是同时应用于弹窗与持久存储的明确选择。
+    const nextEnabled = !markdownEnabled;
+    setMarkdownEnabled(nextEnabled);
+    persistStreamingThinkingMarkdownEnabled(nextEnabled);
+  }, [markdownEnabled]);
+
+  // markdownToggleLabel describes the next rendering action in the current interface language.
+  // markdownToggleLabel 以当前界面语言描述下一次渲染切换动作。
+  const markdownToggleLabel = markdownEnabled
+    ? t("runtime.thinkingOverlayMarkdownDisable")
+    : t("runtime.thinkingOverlayMarkdownEnable");
 
   // handleLayoutToggle switches and persists the popup placement.
   // handleLayoutToggle 切换并持久化弹窗位置。
@@ -129,19 +154,35 @@ export function StreamingThinkingOverlay(props: {
         <span className="streaming-thinking-title">
           <span className="shimmer">{t("runtime.thinking")}</span>
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              aria-label={layoutToggleLabel}
-              className="streaming-thinking-layout-toggle"
-              onClick={handleLayoutToggle}
-              type="button"
-            >
-              {layoutMode === "centered" ? <PanelRightOpen size={16} /> : <Columns2 size={16} />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="left">{layoutToggleLabel}</TooltipContent>
-        </Tooltip>
+        <div className="streaming-thinking-header-actions">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={markdownToggleLabel}
+                aria-pressed={markdownEnabled}
+                className="streaming-thinking-markdown-toggle"
+                onClick={handleMarkdownToggle}
+                type="button"
+              >
+                <span aria-hidden="true">MD</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">{markdownToggleLabel}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={layoutToggleLabel}
+                className="streaming-thinking-layout-toggle"
+                onClick={handleLayoutToggle}
+                type="button"
+              >
+                {layoutMode === "centered" ? <PanelRightOpen size={16} /> : <Columns2 size={16} />}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">{layoutToggleLabel}</TooltipContent>
+          </Tooltip>
+        </div>
       </header>
       <div
         className="streaming-thinking-body"
@@ -151,11 +192,17 @@ export function StreamingThinkingOverlay(props: {
         ref={thinkingViewport.bodyRef}
       >
         <div className="streaming-thinking-content" ref={thinkingViewport.contentRef}>
-          <MarkdownMessage
-            content={props.block.body || t("runtime.thinking")}
-            eager
-            streaming={!props.leaving}
-          />
+          {markdownEnabled ? (
+            <MarkdownMessage
+              content={props.block.body || t("runtime.thinking")}
+              eager
+              streaming={!props.leaving}
+            />
+          ) : (
+            <div className="streaming-thinking-plain-text">
+              {props.block.body || t("runtime.thinking")}
+            </div>
+          )}
         </div>
       </div>
     </section>

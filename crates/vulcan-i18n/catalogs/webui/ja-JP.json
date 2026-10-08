@@ -3107,6 +3107,8 @@
   "runtime.thinkingTokenCount": "（{count} トークン）",
   "runtime.thinkingOverlayDockRight": "右側のコンパクトな思考パネルに切り替え",
   "runtime.thinkingOverlayRestoreCentered": "下部中央の思考パネルに戻す",
+  "runtime.thinkingOverlayMarkdownEnable": "Markdown 表示を有効にする",
+  "runtime.thinkingOverlayMarkdownDisable": "Markdown 表示を無効にする",
   "settings.systemSettings": "システム設定",
   "settings.providers": "モデル",
   "settings.diagnostics": "診断",

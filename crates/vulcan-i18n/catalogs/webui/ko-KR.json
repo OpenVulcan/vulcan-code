@@ -3107,6 +3107,8 @@
   "runtime.thinkingTokenCount": " ({count} 토큰)",
   "runtime.thinkingOverlayDockRight": "오른쪽 간결한 생각 패널로 전환",
   "runtime.thinkingOverlayRestoreCentered": "하단 가운데 생각 패널 복원",
+  "runtime.thinkingOverlayMarkdownEnable": "Markdown 렌더링 켜기",
+  "runtime.thinkingOverlayMarkdownDisable": "Markdown 렌더링 끄기",
   "settings.systemSettings": "시스템 설정",
   "settings.providers": "모델",
   "settings.diagnostics": "진단",

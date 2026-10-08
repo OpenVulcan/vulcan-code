@@ -3107,6 +3107,8 @@
   "runtime.thinkingTokenCount": " (токенов: {count})",
   "runtime.thinkingOverlayDockRight": "Переключиться на компактную панель размышлений справа",
   "runtime.thinkingOverlayRestoreCentered": "Вернуть панель размышлений по центру внизу",
+  "runtime.thinkingOverlayMarkdownEnable": "Включить отображение Markdown",
+  "runtime.thinkingOverlayMarkdownDisable": "Отключить отображение Markdown",
   "settings.systemSettings": "Системные настройки",
   "settings.providers": "Модели",
   "settings.diagnostics": "Диагностика",

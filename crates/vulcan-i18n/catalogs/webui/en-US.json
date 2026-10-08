@@ -3107,6 +3107,8 @@
   "runtime.thinkingTokenCount": " ({count} tokens)",
   "runtime.thinkingOverlayDockRight": "Switch to the compact right thinking panel",
   "runtime.thinkingOverlayRestoreCentered": "Restore the bottom-centered thinking panel",
+  "runtime.thinkingOverlayMarkdownEnable": "Enable Markdown rendering",
+  "runtime.thinkingOverlayMarkdownDisable": "Disable Markdown rendering",
   "settings.systemSettings": "System settings",
   "settings.providers": "Models",
   "settings.diagnostics": "Diagnostics",
