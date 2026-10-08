@@ -30,6 +30,7 @@ mod chrome;
 mod composer;
 mod dialogs;
 mod history;
+mod html_draft;
 pub mod markdown;
 mod mermaid;
 mod notice;

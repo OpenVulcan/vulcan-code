@@ -502,7 +502,16 @@ fn text(
                     &[],
                     &[],
                 ));
-                if matches!(answer.availability, HtmlAnswerAvailability::Ready { .. }) {
+                if let HtmlAnswerAvailability::Ready { source, .. } = &answer.availability {
+                    // A version-two draft is read inline; the browser page stays one action away.
+                    // 版本二草稿在会话内直接阅读；浏览器页面仍只需一次操作即可打开。
+                    let fence = text.get(answer.fence.byte_start..answer.fence.byte_end);
+                    let body = text.get(source.byte_start..source.byte_end);
+                    if let Some(preview) = fence.zip(body).and_then(|(fence, body)| {
+                        super::html_draft::preview(fence, body, ctx.width, ctx.theme)
+                    }) {
+                        lines.extend(preview);
+                    }
                     let start = lines.len();
                     lines.extend(wrap(
                         &[Span::styled(

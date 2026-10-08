@@ -11,6 +11,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::html_draft;
 use super::mermaid;
 use super::text::{width_of, wrap};
 use super::theme::{Theme, mix};
@@ -21,8 +22,9 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     render_internal(source, width, theme, None)
 }
 
-/// Collapse dedicated HTML code while retaining the existing line renderer and inert status.
-/// 保留既有逐行渲染器并将专用 HTML 代码折叠为不可执行状态。
+/// Replace each dedicated HTML fence by an inert status line, followed by its readable draft for
+/// version two; raw version-one HTML stays collapsed.
+/// 将每个专用 HTML 围栏替换为不可执行的状态行，版本二随后附上可读草稿；版本一原始 HTML 保持折叠。
 /// `status` is display-only; this function never grants a link or parses execution metadata.
 /// `status` 仅用于展示；本函数绝不签发链接或解析执行元信息。
 pub fn render_with_html_status(
@@ -44,6 +46,9 @@ fn render_internal(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code = false;
+    // Unified diffs color their added and removed rows.
+    // 统一差异为新增与删除行着色。
+    let mut diff = false;
     let code_bg = mix(theme.muted, theme.bg, 0.7);
     let source: Vec<&str> = source.lines().collect();
     let mut index = 0;
@@ -67,17 +72,27 @@ fn render_internal(
                     // Inner component fences must not end the outer result while it is still streaming.
                     // 仍在流式输出时，内部组件围栏不能结束外层结果块。
                     let opening_ticks = trimmed.bytes().take_while(|byte| *byte == b'`').count();
-                    index = source[index..]
+                    let end = source[index..]
                         .iter()
                         .position(|line| {
                             let closing = line.trim_start();
                             let ticks = closing.bytes().take_while(|byte| *byte == b'`').count();
                             ticks >= opening_ticks && closing[ticks..].trim().is_empty()
                         })
-                        .map_or(source.len(), |close| index + close + 1);
+                        .map_or(source.len(), |close| index + close);
+                    // A version-two draft is readable text, so it grows here as it streams; raw
+                    // version-one HTML stays collapsed behind the status line.
+                    // 版本二草稿是可读文字，因此在流式输出时于此逐步增长；版本一原始 HTML 仍折叠在状态行之后。
+                    if let Some(preview) =
+                        html_draft::preview(raw, &source[index..end].join("\n"), width, theme)
+                    {
+                        lines.extend(preview);
+                    }
+                    index = (end + 1).min(source.len());
                     in_code = false;
                     continue;
                 }
+                diff = lang == "diff";
                 let label = if lang.is_empty() {
                     String::new()
                 } else {
@@ -124,9 +139,15 @@ fn render_internal(
         }
         if in_code {
             let bar = Span::styled("│ ".to_string(), Style::new().fg(theme.border));
+            let color = match raw.as_bytes().first() {
+                Some(b'+') if diff && !raw.starts_with("+++") => theme.success,
+                Some(b'-') if diff && !raw.starts_with("---") => theme.danger,
+                Some(b'@') if diff => theme.info,
+                _ => theme.teal,
+            };
             let body = Span::styled(
                 raw.replace('\t', "    "),
-                Style::new().fg(theme.teal).bg(code_bg),
+                Style::new().fg(color).bg(code_bg),
             );
             lines.extend(wrap(
                 &[body],
@@ -613,11 +634,11 @@ A[Plan] --> B[Build]";
         assert!(texts.iter().any(|t| t.contains("A[Plan] --> B[Build]")));
     }
 
-    /// Draft component fences remain inside one inert placeholder until the outer fence closes.
-    /// 草稿组件围栏在外层围栏闭合之前始终位于同一个不可执行占位中。
+    /// A streaming draft grows as readable text; its inner fences cannot end the outer result.
+    /// 流式草稿以可读文字增长；其内部围栏不能结束外层结果。
     #[test]
-    fn html_draft_streaming_does_not_leak_nested_component_source() {
-        let source = "before\n````vulcan-html {\"version\":2,\"title\":\"x\",\"template\":\"document\"}\n```ui-kv\nsecret-marker | value\n```\nmore-internal-content\n";
+    fn html_draft_streams_readable_text_inside_one_result() {
+        let source = "before\n````vulcan-html {\"version\":2,\"title\":\"x\",\"template\":\"document\"}\n```ui-kv\nkey-marker | value\n```\nmore-draft-content\n";
         for suffix in ["", "````\nafter"] {
             let rendered = render_with_html_status(
                 &format!("{source}{suffix}"),
@@ -630,10 +651,23 @@ A[Plan] --> B[Build]";
             .collect::<Vec<_>>()
             .join("\n");
             assert!(rendered.contains("before") && rendered.contains("pending"));
-            assert!(
-                !rendered.contains("secret-marker") && !rendered.contains("more-internal-content")
-            );
+            assert!(rendered.contains("key-marker") && rendered.contains("more-draft-content"));
+            assert!(!rendered.contains("ui-kv") && !rendered.contains("vulcan-html"));
             assert_eq!(rendered.contains("after"), !suffix.is_empty());
         }
+    }
+
+    /// Raw version-one HTML never shows its markup while streaming.
+    /// 版本一原始 HTML 在流式输出时从不显示其标记。
+    #[test]
+    fn html_v1_streaming_stays_collapsed() {
+        let source =
+            "````vulcan-html {\"version\":1,\"title\":\"x\"}\n<button>markup-marker</button>\n";
+        let rendered = render_with_html_status(source, 60, &Theme::dark(), "pending")
+            .iter()
+            .map(text_of)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("pending") && !rendered.contains("markup-marker"));
     }
 }
