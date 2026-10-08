@@ -353,7 +353,13 @@ pub(super) fn build_manifest_identity_catalog(
     // models is keyed by exact upstream identity to guarantee deterministic merging.
     // models 按精确上游身份索引，以保证确定性合并。
     let mut models = BTreeMap::<String, ConnectionModel>::new();
-    for declared in declared_models {
+    for declared in declared_models.iter().filter(|declared| {
+        declared.credential_profile_ids.is_empty()
+            || declared
+                .credential_profile_ids
+                .iter()
+                .any(|profile_id| profile_id == &connection.credential_profile_id)
+    }) {
         // model starts from the compiled default and each route receives its own cloned projection.
         // model 从编译默认值开始，每条路由接收自己的克隆投影。
         let mut model = ConnectionModel {
@@ -375,11 +381,14 @@ pub(super) fn build_manifest_identity_catalog(
         }
         models.insert(model.id.clone(), model);
     }
+    // hasModels preserves the credential-scoped page-count fact before consuming the map.
+    // hasModels 在消费映射前保留凭据作用域分页计数事实。
+    let has_models = !models.is_empty();
     Ok(ConnectionModelCatalog {
         connection_id: connection.id.clone(),
         models: models.into_values().collect(),
         generation,
-        page_count: u32::from(!declared_models.is_empty()),
+        page_count: u32::from(has_models),
         discovery_schema_revision: String::from(
             crate::client::MANIFEST_STATIC_DISCOVERY_SCHEMA_REVISION,
         ),

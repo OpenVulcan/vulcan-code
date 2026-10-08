@@ -1136,11 +1136,17 @@ fn authoritative_manifest_inventory_replaces_static_catalog_membership() {
         vec![crate::provider_manifest::ManifestCatalogModel {
             model_id: String::from("future-model-from-json"),
             display_name: String::from("Future Model From JSON"),
+            credential_profile_ids: Vec::new(),
         }],
     );
-    let static_catalog =
-        build_manifest_static_catalog(Some(&manifest), "connection", "token-plan-personal-cn", 7)
-            .expect("manifest static catalog must build");
+    let static_catalog = build_manifest_static_catalog(
+        Some(&manifest),
+        "connection",
+        "token-plan-personal-cn",
+        "token-plan-api-key",
+        7,
+    )
+    .expect("manifest static catalog must build");
 
     assert_eq!(static_catalog.models.len(), 1);
     assert_eq!(static_catalog.models[0].id, "future-model-from-json");
@@ -1157,6 +1163,27 @@ fn authoritative_manifest_inventory_replaces_static_catalog_membership() {
         ModelCapabilities::default(),
         "static discovery must not preserve code-owned capability seeds"
     );
+
+    // Narrowing a declared identity excludes other credentials without reading remote discovery.
+    // 缩小声明身份的作用域会排除其他凭据，无需读取远端发现结果。
+    manifest
+        .catalog_models
+        .get_mut("token-plan-personal-cn")
+        .expect("fixture catalog must exist")
+        .iter_mut()
+        .for_each(|model| model.credential_profile_ids = vec![String::from("token-plan-api-key")]);
+    assert!(
+        build_manifest_static_catalog(
+            Some(&manifest),
+            "other-connection",
+            "token-plan-personal-cn",
+            "other-profile",
+            7,
+        )
+        .expect("unmatched credential must produce an empty catalog")
+        .models
+        .is_empty()
+    );
 }
 
 /// Verifies manifest-static discovery fails closed without exact snapshot authority.
@@ -1165,9 +1192,14 @@ fn authoritative_manifest_inventory_replaces_static_catalog_membership() {
 fn manifest_static_catalog_requires_snapshot_and_service_inventory() {
     // missing_manifest_error proves a system static route cannot silently use binary defaults.
     // missing_manifest_error 证明系统静态路由不能静默使用二进制默认值。
-    let missing_manifest_error =
-        build_manifest_static_catalog(None, "connection", "token-plan-personal-cn", 7)
-            .expect_err("missing manifest must fail closed");
+    let missing_manifest_error = build_manifest_static_catalog(
+        None,
+        "connection",
+        "token-plan-personal-cn",
+        "token-plan-api-key",
+        7,
+    )
+    .expect_err("missing manifest must fail closed");
     assert_eq!(
         missing_manifest_error.kind,
         ModelDiscoveryFailureKind::Failed
@@ -1190,6 +1222,7 @@ fn manifest_static_catalog_requires_snapshot_and_service_inventory() {
         Some(&manifest_without_inventory),
         "connection",
         "token-plan-personal-cn",
+        "token-plan-api-key",
         7,
     )
     .expect_err("missing exact service inventory must fail closed");

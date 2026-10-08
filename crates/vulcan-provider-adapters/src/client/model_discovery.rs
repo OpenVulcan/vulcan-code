@@ -151,6 +151,7 @@ impl HttpProviderMetadataClient {
                 manifest,
                 connection.id.as_str(),
                 entry.id.as_str(),
+                connection.credential_profile_id.as_str(),
                 generation,
             )?,
             ModelDiscoveryKind::OpenAi => {
@@ -256,9 +257,10 @@ impl HttpProviderMetadataClient {
 /// # Parameters
 /// 参数
 /// `manifest` is the immutable published snapshot, `connection_id` identifies the credential,
-/// `service_entry_id` selects the exact inventory, and `generation` freezes catalog ownership.
+/// `service_entry_id` selects the exact inventory, `credential_profile_id` selects its declared
+/// identity scope, and `generation` freezes catalog ownership.
 /// `manifest` 是不可变已发布快照，`connection_id` 标识凭据，`service_entry_id` 选择精确
-/// 清单，`generation` 冻结目录归属代数。
+/// 清单，`credential_profile_id` 选择其声明身份作用域，`generation` 冻结目录归属代数。
 ///
 /// # Returns
 /// 返回值
@@ -270,6 +272,7 @@ fn build_manifest_static_catalog(
     manifest: Option<&ResolvedProviderManifest>,
     connection_id: &str,
     service_entry_id: &str,
+    credential_profile_id: &str,
     generation: u64,
 ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     // active_manifest is the sole execution authority for this non-network catalog.
@@ -293,6 +296,13 @@ fn build_manifest_static_catalog(
     // models 刻意以无能力状态开始；随后由精确协议规则进行补全。
     let models = declared_models
         .iter()
+        .filter(|declared| {
+            declared.credential_profile_ids.is_empty()
+                || declared
+                    .credential_profile_ids
+                    .iter()
+                    .any(|profile_id| profile_id == credential_profile_id)
+        })
         .map(|declared| ConnectionModel {
             id: declared.model_id.clone(),
             display_name: declared.display_name.clone(),

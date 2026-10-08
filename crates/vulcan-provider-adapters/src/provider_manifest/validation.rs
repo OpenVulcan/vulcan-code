@@ -2055,7 +2055,12 @@ fn validate_model_catalog(
         && let Some(models) = &catalog.models
     {
         for (model_index, model) in models.iter().enumerate() {
-            for credential in &entry.credential_profiles {
+            for credential in entry.credential_profiles.iter().filter(|credential| {
+                model.credential_profile_ids.is_empty()
+                    || model
+                        .credential_profile_ids
+                        .contains(&credential.credential_profile_id)
+            }) {
                 // covered proves every declared Manifest identity is executable for this exact
                 // service and credential scope under declared_rule_required.
                 // covered 证明在 declared_rule_required 下，每个已声明 Manifest 身份都可在
@@ -2132,6 +2137,34 @@ fn validate_model_catalog(
                         "catalog model display name must be non-empty and at most {MAX_STRING_LEN} characters"
                     ),
                 ));
+            }
+            // Validate every declared credential scope against the owning service entry.
+            // 对照所属服务入口校验每个声明的凭据作用域。
+            let mut credential_profile_ids = BTreeSet::new();
+            for credential_profile_id in &model.credential_profile_ids {
+                if !credential_profile_ids.insert(credential_profile_id.as_str()) {
+                    errors.push(ManifestValidationError::new(
+                        "duplicate_catalog_model_credential_profile_id",
+                        format!("{model_path}.credential_profile_ids"),
+                        format!(
+                            "catalog model credential profile `{credential_profile_id}` is duplicated"
+                        ),
+                    ));
+                }
+                if !entry
+                    .credential_profiles
+                    .iter()
+                    .any(|profile| profile.credential_profile_id == *credential_profile_id)
+                {
+                    errors.push(ManifestValidationError::new(
+                        "catalog_model_references_unknown_credential_profile",
+                        format!("{model_path}.credential_profile_ids"),
+                        format!(
+                            "catalog model references credential profile `{credential_profile_id}` that service entry `{}` does not declare",
+                            entry.service_entry_id
+                        ),
+                    ));
+                }
             }
         }
     }

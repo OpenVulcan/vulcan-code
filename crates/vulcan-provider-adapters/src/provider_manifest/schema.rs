@@ -365,6 +365,10 @@ pub struct ManifestCatalogModel {
     /// User-visible model name.
     /// 用户可见模型名称。
     pub display_name: String,
+    /// Credential profiles that receive this declared identity; empty means every profile.
+    /// 接收此声明身份的凭据配置档；为空表示全部配置档。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credential_profile_ids: Vec<String>,
 }
 
 /// Selects the model-catalog source policy for one service entry.

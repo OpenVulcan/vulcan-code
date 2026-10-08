@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 27,
-  "published_at": "2026-09-27T07:06:38Z",
+  "revision": 30,
+  "published_at": "2026-10-08T10:25:36Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -87,7 +87,17 @@
       "request_projector": "compatible",
       "model_catalog": {
         "source_policy": "manifest_and_discovery",
-        "discovery_kind": "anthropic_compatible"
+        "discovery_kind": "anthropic_compatible",
+        "models": [
+          {
+            "model_id": "MiniMax-M3.1-Flash-Preview",
+            "display_name": "M3.1-Flash-Preview",
+            "credential_profile_ids": [
+              "token-plan-key",
+              "token-plan-oauth"
+            ]
+          }
+        ]
       },
       "protocol_routes": [
         {
@@ -220,7 +230,17 @@
       "request_projector": "compatible",
       "model_catalog": {
         "source_policy": "manifest_and_discovery",
-        "discovery_kind": "anthropic_compatible"
+        "discovery_kind": "anthropic_compatible",
+        "models": [
+          {
+            "model_id": "MiniMax-M3.1-Flash-Preview",
+            "display_name": "M3.1-Flash-Preview",
+            "credential_profile_ids": [
+              "token-plan-key",
+              "token-plan-oauth"
+            ]
+          }
+        ]
       },
       "protocol_routes": [
         {

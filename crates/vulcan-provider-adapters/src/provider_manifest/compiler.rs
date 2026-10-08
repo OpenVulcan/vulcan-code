@@ -316,7 +316,18 @@ impl ResolvedProviderManifest {
     ) -> bool {
         self.catalog_models
             .get(service_entry_id)
-            .is_some_and(|models| models.iter().any(|model| model.model_id == model_id))
+            .is_some_and(|models| {
+                models.iter().any(|model| {
+                    model.model_id == model_id
+                        && (model.credential_profile_ids.is_empty()
+                            || credential_profile_id.is_some_and(|profile_id| {
+                                model
+                                    .credential_profile_ids
+                                    .iter()
+                                    .any(|declared| declared == profile_id)
+                            }))
+                })
+            })
             || self
                 .rule_for_model(service_entry_id, credential_profile_id, model_id)
                 .is_some()

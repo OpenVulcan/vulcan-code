@@ -270,9 +270,16 @@ RPC 也必须在凭据校验和网络请求之前拒绝，以防旧客户端或�
 其他远程/手工发现类别可以在没有 Manifest 身份清单时省略 `models`；一旦提供非空或空数组，
 其 presence 语义仍分别表示“显式身份清单”或“显式没有 Manifest 身份”，不能靠宿主猜测补齐。
 
+同一服务入口包含多个凭据档、但某个声明身份只属于其中一部分产品套餐时，在该
+`model_catalog.models[]` 项上声明 `credential_profile_ids`。省略或传空数组表示该服务入口的全部
+凭据档；非空数组中的每个 ID 必须由同一服务入口声明。运行时只把该身份合并进匹配凭据档的目录，
+并仍要求模型规则覆盖相同的服务入口和凭据档。此作用域用于表达 MiniMax Code 一类由远端托管目录
+下发、但标准 `/models` 暂未返回的套餐模型；不得据此把未验证模型扩展到其他凭据档。
+
 新增普通模型且不升级软件的标准步骤：
 
-1. 在目标入口的 `model_catalog.models` 添加精确 `model_id` 和 `display_name`；
+1. 在目标入口的 `model_catalog.models` 添加精确 `model_id` 和 `display_name`；若身份仅属于部分
+   凭据档，同时声明精确 `credential_profile_ids`；
 2. 添加 Exact `model_rules`，声明可用协议和唯一 `selected_protocol`；
 3. 只写已有证据支持的 capabilities/Profile/operation 引用；
 4. 提升供应商 `revision` 和 `published_at`；

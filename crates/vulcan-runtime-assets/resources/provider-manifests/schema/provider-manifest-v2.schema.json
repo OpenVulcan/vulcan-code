@@ -694,6 +694,15 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 2048
+                    },
+                    "credential_profile_ids": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      }
                     }
                   }
                 }

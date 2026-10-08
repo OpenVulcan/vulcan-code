@@ -2773,6 +2773,7 @@ mod tests {
                 vulcan_provider_adapters::provider_manifest::ManifestCatalogModel {
                     model_id: String::from("qwen-trust-ceiling-hot-add"),
                     display_name: String::from("Qwen Trust Ceiling Hot Add"),
+                    credential_profile_ids: Vec::new(),
                 },
             );
         // reviewed_conversation_rule supplies the exact static-catalog capability and protocol

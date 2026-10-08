@@ -382,6 +382,7 @@ fn non_static_manifest_identity_requires_rule_coverage() {
         models: Some(vec![crate::provider_manifest::ManifestCatalogModel {
             model_id: String::from("declared-model"),
             display_name: String::from("Declared Model"),
+            credential_profile_ids: Vec::new(),
         }]),
     });
     let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
@@ -390,6 +391,34 @@ fn non_static_manifest_identity_requires_rule_coverage() {
         errors
             .iter()
             .any(|error| error.code == "manifest_model_requires_rule")
+    );
+}
+
+/// Rejects catalog identity scopes that reference undeclared credentials.
+/// 拒绝引用未声明凭据的目录身份作用域。
+#[test]
+fn catalog_model_scope_requires_declared_credential_profile() {
+    // The synthetic identity isolates credential scope validation from actual model inventories.
+    // 合成身份将凭据作用域校验与实际模型清单隔离。
+    let mut manifest = minimal_manifest();
+    manifest.services[0].model_catalog = Some(ManifestModelCatalog {
+        source_policy: ModelSourcePolicy::ManifestAndDiscovery,
+        discovery_kind: Some(ModelDiscoveryKind::OpenAi),
+        path: Some(String::from("/models")),
+        models: Some(vec![ManifestCatalogModel {
+            model_id: String::from("declared-model"),
+            display_name: String::from("Declared Model"),
+            credential_profile_ids: vec![String::from("missing-profile")],
+        }]),
+    });
+    // Missing credential references must fail before catalog publication.
+    // 缺失的凭据引用必须在目录发布之前失败。
+    let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
+        .expect_err("unknown catalog credential profile must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| { error.code == "catalog_model_references_unknown_credential_profile" })
     );
 }
 
@@ -430,6 +459,7 @@ fn manifest_static_discovery_requires_inventory_and_rule_coverage() {
         .models = Some(vec![ManifestCatalogModel {
         model_id: String::from("future-model"),
         display_name: String::from("Future Model"),
+        credential_profile_ids: Vec::new(),
     }]);
     // missing_rule_errors proves binary/common defaults cannot authorize a static identity.
     // missing_rule_errors 证明二进制/公共默认不能授权静态身份。
@@ -2429,6 +2459,7 @@ fn model_source_policy_validation_fails_closed() {
     catalog.models = Some(vec![ManifestCatalogModel {
         model_id: String::from("manifest-model"),
         display_name: String::from("Manifest Model"),
+        credential_profile_ids: Vec::new(),
     }]);
     let errors = validate_manifest(&discovery_catalog, ManifestOwnership::System, &registry())
         .expect_err("discovery-only source with Manifest inventory must fail");
