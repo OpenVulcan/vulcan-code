@@ -41,6 +41,8 @@ import type {
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
   OutputStyleCatalogSummary,
+  SystemPromptScope,
+  SystemPromptSettingsSnapshot,
   WorkbenchSnapshot,
   VceEmbeddingSaveConfirmation,
 } from "@/types";
@@ -67,6 +69,37 @@ export async function savePromptOutputStyle(styleId: string): Promise<OutputStyl
   }
   return serviceClient.request<OutputStyleCatalogSummary>("service_save_prompt_output_style", {
     request: { styleId },
+  });
+}
+
+// loadSystemPromptSettings reads the built-in, user, and optional project base system prompt layers.
+// loadSystemPromptSettings 读取内置、用户与可选项目的基础系统提示词层级。
+export async function loadSystemPromptSettings(projectId: string | null): Promise<SystemPromptSettingsSnapshot> {
+  return serviceClient.request<SystemPromptSettingsSnapshot>("service_system_prompt_settings", {
+    projectId,
+  });
+}
+
+// saveSystemPrompt persists one user or project override; the next model request uses it.
+// saveSystemPrompt 持久化一个用户或项目覆盖；下一次模型请求即使用它。
+export async function saveSystemPrompt(
+  scope: SystemPromptScope,
+  projectId: string | null,
+  text: string,
+): Promise<SystemPromptSettingsSnapshot> {
+  return serviceClient.request<SystemPromptSettingsSnapshot>("service_save_system_prompt", {
+    request: { scope, projectId, text },
+  });
+}
+
+// resetSystemPrompt removes one user or project override so the next lower layer takes effect.
+// resetSystemPrompt 移除一个用户或项目覆盖，使下一较低层级生效。
+export async function resetSystemPrompt(
+  scope: SystemPromptScope,
+  projectId: string | null,
+): Promise<SystemPromptSettingsSnapshot> {
+  return serviceClient.request<SystemPromptSettingsSnapshot>("service_reset_system_prompt", {
+    request: { scope, projectId },
   });
 }
 

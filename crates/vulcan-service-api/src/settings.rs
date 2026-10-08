@@ -42,6 +42,78 @@ pub struct OutputStyleCatalogSummary {
     pub entries: Vec<OutputStyleCatalogEntry>,
 }
 
+/// Editable layer of the base system prompt.
+/// 基础系统提示词的可编辑层级。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum SystemPromptScope {
+    /// User-level override applied to every project without its own override.
+    /// 应用于所有未设置自身覆盖之项目的用户级覆盖。
+    User,
+    /// Project-level override that replaces the user and built-in prompts for one project.
+    /// 为单个项目替换用户与内置提示词的项目级覆盖。
+    Project,
+}
+
+/// Carries every base system prompt layer visible to one settings scope.
+/// 携带单个设置作用域可见的全部基础系统提示词层级。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptSettingsSnapshot {
+    /// Built-in product default text.
+    /// 内置产品默认正文。
+    pub built_in_text: String,
+    /// User-level override path.
+    /// 用户级覆盖文件路径。
+    pub user_path: String,
+    /// User-level override text, absent when no override exists.
+    /// 用户级覆盖正文；不存在覆盖时为空。
+    pub user_text: Option<String>,
+    /// Project identifier the project fields belong to.
+    /// 项目字段所属的项目标识。
+    pub project_id: Option<String>,
+    /// Project-level override path, absent when no project was requested.
+    /// 项目级覆盖文件路径；未请求项目时为空。
+    pub project_path: Option<String>,
+    /// Project-level override text, absent when no override exists.
+    /// 项目级覆盖正文；不存在覆盖时为空。
+    pub project_text: Option<String>,
+    /// Layer that supplies the effective prompt: `builtIn`, `user`, or `project`.
+    /// 提供生效提示词的层级：`builtIn`、`user` 或 `project`。
+    pub effective_source: String,
+}
+
+/// Requests saving one base system prompt override.
+/// 请求保存一个基础系统提示词覆盖。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptSaveRequest {
+    /// Target override layer.
+    /// 目标覆盖层级。
+    pub scope: SystemPromptScope,
+    /// Exact project identifier, required for the project scope.
+    /// 精确项目标识；项目作用域必填。
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Complete non-blank prompt body.
+    /// 完整的非空提示词正文。
+    pub text: String,
+}
+
+/// Requests removing one base system prompt override so the next layer takes effect.
+/// 请求移除一个基础系统提示词覆盖，使下一层生效。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptResetRequest {
+    /// Target override layer.
+    /// 目标覆盖层级。
+    pub scope: SystemPromptScope,
+    /// Exact project identifier, required for the project scope.
+    /// 精确项目标识；项目作用域必填。
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
 /// Requests a global output-style selection change.
 /// 请求修改全局输出风格选择。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

@@ -9,10 +9,7 @@ use crate::agent_runtime::prompt_composer_runtime::{
     record_runtime_prompt_composer_report, runtime_prompt_composer_engine,
 };
 use crate::agent_runtime::provider_prompt_loader::{
-    load_provider_base_system_prompt, load_provider_base_system_prompt_with_source,
-};
-use crate::provider_config::{
-    PersistedPromptConfiguration, load_project_configuration_file, project_configuration_file_path,
+    capability_guide_prompt, load_effective_system_prompt,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -31,11 +28,10 @@ use vulcan_core::types::{
 use vulcan_hooks::{SystemPromptHookBaselineKind, SystemPromptHookBlock};
 use vulcan_prompt_composer::{
     AdditionalPromptSegment, AgentPromptSnapshot, DEFAULT_PROJECT_RULES_FILE_NAME,
-    EnvironmentContextSnapshot, ModelDescriptor, ProjectPromptFileCache, ProjectPromptSnapshot,
-    ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput, PromptAssemblyMode,
-    PromptAssemblyOutput, PromptBaselineKind, PromptBaselineProvenance, PromptSegment,
-    PromptTarget, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot, ToolDescriptor,
-    build_context_compaction_developer_segment,
+    EnvironmentContextSnapshot, ModelDescriptor, ProjectRulesFileCache, ProjectRulesSnapshot,
+    PromptAssemblyInput, PromptAssemblyMode, PromptAssemblyOutput, PromptBaselineKind,
+    PromptSegment, PromptTarget, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot,
+    ToolDescriptor, build_context_compaction_developer_segment,
 };
 use vulcan_session_core::v1::context::{
     LockedBaselineProjection, LockedBaselineSegmentInput, LockedPromptTarget, LockedSourceKind,
@@ -44,9 +40,6 @@ use vulcan_session_core::v1::context::{
 /// Process-wide project-rules source cache shared by provider runtime requests.
 /// Provider 运行时请求共享的进程级项目规则来源缓存。
 static PROJECT_RULES_FILE_CACHE: OnceLock<Mutex<ProjectRulesFileCache>> = OnceLock::new();
-/// Process-wide project-prompt source cache shared by provider runtime requests.
-/// Provider 运行时请求共享的进程级项目提示词来源缓存。
-static PROJECT_PROMPT_FILE_CACHE: OnceLock<Mutex<ProjectPromptFileCache>> = OnceLock::new();
 
 /// Builds the effective layered runtime prompt sent to the real provider agent.
 /// 构建发送给真实 Provider 代理的生效分层运行时提示词。
@@ -659,9 +652,10 @@ fn build_runtime_prompt_assembly_input(
     preparation: &ExecutionPreparation,
     active_agent: Option<&RuntimeAgentDefinition>,
 ) -> Result<PromptAssemblyInput, String> {
-    // provider_prompt is loaded from the single effective model-mapped resource file.
-    // provider_prompt 从唯一生效的模型映射资源文件加载。
-    let provider_prompt = load_provider_base_system_prompt_with_source()?;
+    // provider_prompt is the first non-blank layer of project override, user override, and built-in default.
+    // provider_prompt 是项目覆盖、用户覆盖与内置默认中第一个非空层级。
+    let provider_prompt =
+        load_effective_system_prompt(resolve_workspace_directory(&preparation.workspace_path)?)?;
     let agent_prompt = build_request_agent_prompt_snapshot(preparation)
         .or_else(|| active_agent.and_then(build_agent_prompt_snapshot));
     let environment_context = EnvironmentContextSnapshot::new(format!(
@@ -724,9 +718,7 @@ fn build_runtime_prompt_assembly_input(
             functional_system_prompt: context.functional_system_prompt.clone(),
         }),
         custom_developer_segments,
-        custom_user_segments: load_workspace_project_user_prompt(preparation)?
-            .into_iter()
-            .collect(),
+        custom_user_segments: Vec::new(),
     })
 }
 
@@ -760,7 +752,15 @@ fn build_prompt_purpose_developer_segments(
         | ExecutionPromptPurpose::AgentTask
         | ExecutionPromptPurpose::ExecutionRetry
         | ExecutionPromptPurpose::QuestionExecution
-        | ExecutionPromptPurpose::ContextCompactionCachePreserving => Vec::new(),
+        | ExecutionPromptPurpose::ContextCompactionCachePreserving => {
+            // Conversational purposes, including cache-preserving compaction, keep one shared prefix.
+            // 会话类用途（含保留缓存的压缩）保持同一共享前缀。
+            vec![AdditionalPromptSegment::dynamic(
+                "Product Capability Guide",
+                capability_guide_prompt(),
+                "Built-in product capability guide",
+            )]
+        }
         ExecutionPromptPurpose::ContextCompaction => vec![AdditionalPromptSegment::dynamic(
             "Context Compaction Contract",
             build_context_compaction_developer_segment(),
@@ -1018,7 +1018,6 @@ fn push_locked_prompt_segment(
     let kind = match provenance.kind {
         PromptBaselineKind::MemoryProfile => LockedSourceKind::MemoryProfile,
         PromptBaselineKind::AgentsMd => LockedSourceKind::AgentsMd,
-        PromptBaselineKind::VulcanMd => LockedSourceKind::VulcanMd,
         PromptBaselineKind::AgentPersona => LockedSourceKind::AgentPersona,
         PromptBaselineKind::OutputStyle => LockedSourceKind::OutputStyle,
         PromptBaselineKind::PromptSkillInjection => LockedSourceKind::PromptSkillInjection,
@@ -1232,142 +1231,26 @@ fn resolve_workspace_directory(workspace_path: &str) -> Result<Option<&Path>, St
     Ok(Some(workspace))
 }
 
-/// Loads the workspace-local user prompt configured for prompt composition.
-/// 加载为提示词组合配置的工作区本地用户提示词。
-///
-/// # Parameters
-/// # 参数
-/// - `preparation`: Execution preparation containing the workspace and global prompt defaults.
-/// - `preparation`：包含工作区与全局提示默认值的执行准备。
-///
-/// # Returns
-/// # 返回值
-/// Returns the formatted project prompt when enabled and nonblank, `None` when intentionally absent, or an exact load failure.
-/// 启用且非空时返回格式化项目提示词；有意缺失时返回 `None`；加载失败时返回精确错误。
-fn load_workspace_project_user_prompt(
-    preparation: &ExecutionPreparation,
-) -> Result<Option<AdditionalPromptSegment>, String> {
-    // project_prompt_configuration is the validated effective project prompt selection.
-    // project_prompt_configuration 是经过验证的生效项目提示词选择。
-    let project_prompt_configuration = resolve_project_prompt_configuration(preparation)?;
-    if !project_prompt_configuration.project_prompt_enabled {
-        return Ok(None);
-    }
-    let Some(workspace) = resolve_workspace_directory(&preparation.workspace_path)? else {
-        return Ok(None);
-    };
-    // relative_path is the configured workspace-local prompt path after separator normalization.
-    // relative_path 是经过分隔符规范化的工作区本地提示词配置路径。
-    let relative_path = project_prompt_configuration
-        .project_prompt_path
-        .trim()
-        .trim_start_matches(['/', '\\']);
-    if relative_path.is_empty() {
-        return Ok(None);
-    }
-    // prompt_path is the exact configured source below the validated workspace directory.
-    // prompt_path 是经过验证的工作区目录下精确配置的来源路径。
-    let prompt_path = workspace.join(relative_path);
-    let cache = PROJECT_PROMPT_FILE_CACHE.get_or_init(|| Mutex::new(ProjectPromptFileCache::new()));
-    let mut cache = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    cache
-        .load_file(&prompt_path)
-        .map_err(|error| {
-            format!(
-                "Failed to load workspace project prompt from `{}`: {error}",
-                prompt_path.display()
-            )
-        })
-        .map(|snapshot| {
-            snapshot.map(|snapshot: ProjectPromptSnapshot| {
-                let source = snapshot.source;
-                let text = snapshot.text.trim();
-                AdditionalPromptSegment::locked(
-                    "Project User Prompt",
-                    format!("# Project User Prompt\nSource: {source}\n\n{text}"),
-                    format!("Project prompt `{source}`"),
-                    PromptBaselineProvenance::new(PromptBaselineKind::VulcanMd, source),
-                )
-            })
-        })
-}
-
-/// Resolve the effective project-prompt configuration for one workspace.
-/// 解析单个工作区的生效项目提示词配置。
-///
-/// # Parameters
-/// # 参数
-/// - `preparation`: Execution preparation supplying global defaults and the workspace path.
-/// - `preparation`：提供全局默认值与工作区路径的执行准备。
-///
-/// # Returns
-/// # 返回值
-/// Returns global defaults with explicit project overrides, or the project configuration load failure.
-/// 返回叠加明确项目覆盖后的全局默认值，或项目配置加载失败。
-fn resolve_project_prompt_configuration(
-    preparation: &ExecutionPreparation,
-) -> Result<PersistedPromptConfiguration, String> {
-    let Some(workspace) = resolve_workspace_directory(&preparation.workspace_path)? else {
-        return Ok(preparation.prompt_configuration.clone());
-    };
-    // effective starts from the request snapshot and receives only explicit project overrides.
-    // effective 从请求快照开始，仅接收明确的项目级覆盖。
-    let mut effective = preparation.prompt_configuration.clone();
-    if let Some(project_configuration) = load_workspace_project_prompt_configuration(workspace)? {
-        effective.project_prompt_enabled = project_configuration.project_prompt_enabled;
-        effective.project_prompt_path = project_configuration.project_prompt_path;
-    }
-    Ok(effective)
-}
-
-/// Load one workspace-local prompt configuration override when present.
-/// 当存在时加载一个工作区本地提示词配置覆盖。
-///
-/// # Parameters
-/// # 参数
-/// - `workspace`: Validated workspace directory owning `.vulcan/code/config.json`.
-/// - `workspace`：拥有 `.vulcan/code/config.json` 的已验证工作区目录。
-///
-/// # Returns
-/// # 返回值
-/// Returns the optional prompt subsection and preserves configuration I/O or JSON parsing failures.
-/// 返回可选提示配置段，并保留配置 I/O 或 JSON 解析失败。
-fn load_workspace_project_prompt_configuration(
-    workspace: &Path,
-) -> Result<Option<PersistedPromptConfiguration>, String> {
-    // configuration_path is the exact project-local file consumed by the shared configuration loader.
-    // configuration_path 是共享配置加载器消费的精确项目本地文件。
-    let configuration_path = project_configuration_file_path(workspace);
-    load_project_configuration_file(workspace)
-        .map_err(|error| {
-            format!(
-                "Failed to load workspace project prompt configuration from `{}`: {error}",
-                configuration_path.display()
-            )
-        })
-        .map(|configuration| configuration.prompt)
-}
-
 /// Builds legacy transport text only when successful composition yields no structured layers.
 /// 仅在成功组合未生成任何结构化提示层时构建旧传输文本。
 ///
 /// # Parameters
 /// # 参数
-/// - `preparation`: Validated execution preparation selecting the exact provider prompt resource.
-/// - `preparation`：选择精确 Provider 提示词资源的已验证执行准备。
+/// - `preparation`: Validated execution preparation whose workspace selects the base prompt layer.
+/// - `preparation`：其工作区决定基础提示词层级的已验证执行准备。
 ///
 /// # Returns
 /// # 返回值
 /// Returns rendered legacy transport text, or the exact provider prompt resource failure.
 /// 返回渲染后的旧传输文本，或精确的 Provider 提示词资源失败。
 fn build_legacy_runtime_system_preamble(
-    _preparation: &ExecutionPreparation,
+    preparation: &ExecutionPreparation,
 ) -> Result<String, String> {
     // provider_prompt comes from the same unique resource contract as structured composition.
     // provider_prompt 来自与结构化组合相同的唯一资源契约。
-    let provider_prompt = load_provider_base_system_prompt()?;
+    let provider_prompt =
+        load_effective_system_prompt(resolve_workspace_directory(&preparation.workspace_path)?)?
+            .text;
     // The legacy fallback is kept stable; workspace, mode, and dynamic hooks are User events.
     // 旧版回退文本保持稳定；工作区、模式和动态 Hook 均作为 User 事件发送。
     Ok([provider_prompt, HOST_MESSAGE_GUIDANCE.to_string()].join("\n\n"))
@@ -1391,11 +1274,12 @@ mod tests {
     use crate::agent_runtime::execution_models::{
         ExecutionAgentPromptSnapshot, ExecutionSubagentPromptContext,
     };
+    use crate::agent_runtime::provider_prompt_loader::built_in_system_prompt;
     use crate::context_budget::ContextBudgetSnapshot;
     use crate::model::SessionId;
     use crate::provider_config::{
-        PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
-        ProjectVulcanCodeConfigurationFile, ReasoningEffortLevel, save_project_configuration_file,
+        PersistedPromptConfiguration, PersistedPromptPersonalitySelection, ReasoningEffortLevel,
+        project_system_prompt_file_path, save_system_prompt_file,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -2250,15 +2134,16 @@ mod tests {
         fs::remove_dir_all(root).expect("remove invalid-rules workspace");
     }
 
-    /// Verifies workspace project prompts enter the runtime user-context layer.
-    /// 验证工作区项目提示词会进入运行时用户上下文层。
+    /// Verifies a project system prompt override replaces the built-in base prompt in the system layer.
+    /// 验证项目系统提示词覆盖会在系统层中替换内置基础提示词。
     #[test]
-    fn runtime_prompt_layers_include_workspace_project_prompt() {
-        let root = unique_temp_dir("vulcan-project-user-prompt");
-        let prompt_dir = root.join(".vulcan").join("code");
-        fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
-        fs::write(prompt_dir.join("prompt.md"), "Project user instruction")
-            .expect("write project prompt");
+    fn runtime_prompt_layers_use_project_system_prompt_override() {
+        let root = unique_temp_dir("vulcan-project-system-prompt");
+        save_system_prompt_file(
+            &project_system_prompt_file_path(&root),
+            "Project base system prompt",
+        )
+        .expect("write project system prompt");
 
         let preparation = build_test_preparation(
             root.display().to_string(),
@@ -2268,189 +2153,75 @@ mod tests {
             .expect("runtime prompt layers should build");
 
         assert!(
-            layers
-                .provider_layers
-                .runtime_context
-                .contains("Project user instruction")
-        );
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// Verifies workspace-local prompt configuration can override the global project prompt path.
-    /// 验证工作区本地提示词配置可以覆盖全局项目提示词路径。
-    #[test]
-    fn runtime_prompt_layers_use_workspace_project_prompt_configuration() {
-        let root = unique_temp_dir("vulcan-project-prompt-config");
-        let prompt_dir = root.join(".vulcan").join("code");
-        fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
-        fs::write(
-            prompt_dir.join("custom-prompt.md"),
-            "Project override instruction",
-        )
-        .expect("write project override prompt");
-        fs::write(
-            prompt_dir.join("config.json"),
-            r#"{"prompt":{"projectPromptEnabled":true,"projectPromptPath":".vulcan/code/custom-prompt.md"}}"#,
-        )
-        .expect("write project prompt config");
-
-        let preparation = build_test_preparation(
-            root.display().to_string(),
-            PersistedPromptConfiguration {
-                project_prompt_enabled: false,
-                ..PersistedPromptConfiguration::default()
-            },
-        );
-        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
-            .expect("runtime prompt layers should build");
-
-        assert!(
-            layers
-                .provider_layers
-                .runtime_context
-                .contains("Project override instruction")
-        );
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    /// Verifies malformed project configuration aborts prompt assembly before provider launch.
-    /// 验证格式错误的项目配置会在 Provider 启动前中止提示装配。
-    ///
-    /// # Parameters
-    /// # 参数
-    /// This test has no parameters.
-    /// 此测试没有参数。
-    ///
-    /// # Returns
-    /// # 返回值
-    /// This test returns no value and fails if invalid JSON falls back to global prompt defaults.
-    /// 此测试无返回值；若无效 JSON 降级为全局提示默认值则失败。
-    #[test]
-    fn runtime_prompt_layers_propagate_project_configuration_parse_failure() {
-        // root isolates the malformed project configuration from other runtime tests.
-        // root 将格式错误的项目配置与其他运行时测试隔离。
-        let root = unique_temp_dir("vulcan-project-prompt-invalid-config");
-        // configuration_path is the exact project configuration consumed by the shared loader.
-        // configuration_path 是共享加载器消费的精确项目配置路径。
-        let configuration_path = root.join(".vulcan").join("code").join("config.json");
-        fs::create_dir_all(
-            configuration_path
-                .parent()
-                .expect("project configuration should have a parent"),
-        )
-        .expect("create project configuration directory");
-        fs::write(&configuration_path, b"{invalid-json")
-            .expect("write invalid project configuration");
-        // preparation binds prompt assembly to the malformed workspace configuration.
-        // preparation 将提示装配绑定到格式错误的工作区配置。
-        let preparation = build_test_preparation(
-            root.display().to_string(),
-            PersistedPromptConfiguration::default(),
-        );
-
-        // error must retain both the source category and workspace identity.
-        // error 必须同时保留来源类别与工作区身份。
-        let error = build_runtime_prompt_layers_for_agent(&preparation, None)
-            .expect_err("invalid project configuration should abort prompt assembly");
-
-        assert!(error.contains("project prompt configuration"));
-        assert!(error.contains(&configuration_path.display().to_string()));
-        fs::remove_dir_all(root).expect("remove invalid-config workspace");
-    }
-
-    /// Verifies unreadable configured project-prompt content aborts prompt assembly.
-    /// 验证无法读取的已配置项目提示词内容会中止提示装配。
-    ///
-    /// # Parameters
-    /// # 参数
-    /// This test has no parameters.
-    /// 此测试没有参数。
-    ///
-    /// # Returns
-    /// # 返回值
-    /// This test returns no value and fails if invalid UTF-8 prompt content is treated as absent.
-    /// 此测试无返回值；若无效 UTF-8 提示词内容被视为不存在则失败。
-    #[test]
-    fn runtime_prompt_layers_propagate_project_prompt_read_failure() {
-        // root isolates the invalid project-prompt source from every other cache entry.
-        // root 将无效项目提示词来源与其他所有缓存条目隔离。
-        let root = unique_temp_dir("vulcan-project-prompt-invalid-utf8");
-        // prompt_path is the default enabled project-prompt source selected by the test preparation.
-        // prompt_path 是测试执行准备选择的默认已启用项目提示词来源。
-        let prompt_path = root.join(".vulcan").join("code").join("prompt.md");
-        fs::create_dir_all(
-            prompt_path
-                .parent()
-                .expect("project prompt should have a parent"),
-        )
-        .expect("create project prompt directory");
-        fs::write(&prompt_path, [0xff, 0xfe, 0xfd]).expect("write invalid project prompt");
-        // preparation enables the default project prompt path for this workspace.
-        // preparation 为当前工作区启用默认项目提示词路径。
-        let preparation = build_test_preparation(
-            root.display().to_string(),
-            PersistedPromptConfiguration::default(),
-        );
-
-        // error must retain both the source category and exact file path.
-        // error 必须同时保留来源类别与精确文件路径。
-        let error = build_runtime_prompt_layers_for_agent(&preparation, None)
-            .expect_err("invalid project prompt should abort prompt assembly");
-
-        assert!(error.contains("workspace project prompt"));
-        assert!(error.contains(&prompt_path.display().to_string()));
-        fs::remove_dir_all(root).expect("remove invalid-prompt workspace");
-    }
-
-    /// Verifies workspace-local prompt configuration does not override the global personality choice.
-    /// 验证工作区本地提示词配置不会覆盖全局人格选择。
-    #[test]
-    fn runtime_prompt_layers_keep_global_personality_when_project_prompt_overrides() {
-        let root = unique_temp_dir("vulcan-project-prompt-personality");
-        let prompt_dir = root.join(".vulcan").join("code");
-        fs::create_dir_all(&prompt_dir).expect("create project prompt directory");
-        fs::write(prompt_dir.join("prompt.md"), "Project prompt").expect("write project prompt");
-        let project_config = ProjectVulcanCodeConfigurationFile {
-            prompt_skills: Default::default(),
-            prompt: Some(PersistedPromptConfiguration {
-                personality: PersistedPromptPersonalitySelection::Default,
-                output_style: Default::default(),
-                project_prompt_enabled: true,
-                project_prompt_path: String::from(".vulcan/code/prompt.md"),
-            }),
-            vmm: Default::default(),
-        };
-        save_project_configuration_file(&root, &project_config)
-            .expect("write project prompt config");
-
-        let preparation = build_test_preparation(
-            root.display().to_string(),
-            PersistedPromptConfiguration {
-                personality: PersistedPromptPersonalitySelection::Disabled,
-                ..PersistedPromptConfiguration::default()
-            },
-        );
-        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
-            .expect("runtime prompt layers should build");
-
-        assert_eq!(
             layers
                 .provider_layers
                 .system
-                .matches("You optimize for team morale")
-                .count(),
-            0
+                .contains("Project base system prompt")
         );
         assert!(
-            layers
+            !layers
                 .provider_layers
-                .runtime_context
-                .contains("Project prompt")
+                .system
+                .contains(built_in_system_prompt())
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies the product capability guide stays attached when the base prompt is overridden.
+    /// 验证基础提示词被覆盖时产品功能说明仍会附加。
+    #[test]
+    fn runtime_prompt_layers_attach_capability_guide_outside_editable_prompt() {
+        let root = unique_temp_dir("vulcan-capability-guide");
+        save_system_prompt_file(&project_system_prompt_file_path(&root), "Minimal base")
+            .expect("write project system prompt");
+
+        let preparation = build_test_preparation(
+            root.display().to_string(),
+            PersistedPromptConfiguration::default(),
+        );
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None)
+            .expect("runtime prompt layers should build");
+
+        assert!(
+            layers
+                .provider_layers
+                .developer
+                .contains(capability_guide_prompt())
+        );
+        assert!(
+            !layers
+                .provider_layers
+                .system
+                .contains(capability_guide_prompt())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies an unreadable project system prompt aborts prompt assembly with its exact path.
+    /// 验证无法读取的项目系统提示词会以精确路径中止提示装配。
+    #[test]
+    fn runtime_prompt_layers_propagate_project_system_prompt_read_failure() {
+        let root = unique_temp_dir("vulcan-project-system-prompt-invalid-utf8");
+        let prompt_path = project_system_prompt_file_path(&root);
+        fs::create_dir_all(
+            prompt_path
+                .parent()
+                .expect("project system prompt should have a parent"),
+        )
+        .expect("create project system prompt directory");
+        fs::write(&prompt_path, [0xff, 0xfe, 0xfd]).expect("write invalid project system prompt");
+        let preparation = build_test_preparation(
+            root.display().to_string(),
+            PersistedPromptConfiguration::default(),
+        );
+
+        let error = build_runtime_prompt_layers_for_agent(&preparation, None)
+            .expect_err("invalid project system prompt should abort prompt assembly");
+
+        assert!(error.contains(&prompt_path.display().to_string()));
+        fs::remove_dir_all(root).expect("remove invalid-prompt workspace");
     }
 
     /// Verifies persisted personality settings can disable personality injection.
@@ -2867,10 +2638,12 @@ mod tests {
                     "same-looking body",
                 )
                 .with_source_label("D:/repo/AGENTS.md")
-                .with_baseline_provenance(PromptBaselineProvenance::new(
-                    PromptBaselineKind::AgentsMd,
-                    "D:/repo/AGENTS.md",
-                )),
+                .with_baseline_provenance(
+                    vulcan_prompt_composer::PromptBaselineProvenance::new(
+                        PromptBaselineKind::AgentsMd,
+                        "D:/repo/AGENTS.md",
+                    ),
+                ),
             ],
             ..PromptAssemblyOutput::default()
         };

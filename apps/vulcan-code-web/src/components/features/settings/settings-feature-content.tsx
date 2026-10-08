@@ -26,6 +26,7 @@ import { NotificationSettingsArea } from "@/components/features/settings/notific
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
+import { SystemPromptSettingsCard } from "./system-prompt-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
   normalizeSettingsSubArea,
@@ -134,6 +135,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
           <ThinkingPopupSettingsSection />
           <ConversationLinkSettingsSection />
         </>}
+        systemPromptSettings={<SystemPromptSettingsCard projects={props.workbench.projects} />}
       />
     );
   }

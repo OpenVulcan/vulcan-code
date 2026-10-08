@@ -47,9 +47,6 @@ pub enum PromptBaselineKind {
     /// One participating `AGENTS.md` layer.
     /// 一层实际参与组合的 `AGENTS.md`。
     AgentsMd,
-    /// One participating `Vulcan.md` project prompt layer.
-    /// 一层实际参与组合的 `Vulcan.md` 项目提示词。
-    VulcanMd,
     /// Active agent persona.
     /// 当前代理人格。
     AgentPersona,
@@ -74,7 +71,6 @@ impl PromptBaselineKind {
         match self {
             Self::MemoryProfile => "memory-profile",
             Self::AgentsMd => "agents-md",
-            Self::VulcanMd => "vulcan-md",
             Self::AgentPersona => "agent-persona",
             Self::OutputStyle => "output-style",
             Self::PromptSkillInjection => "prompt-skill-injection",

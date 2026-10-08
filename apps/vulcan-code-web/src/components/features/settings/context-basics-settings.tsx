@@ -396,6 +396,9 @@ export function ContextBasicsSettingsArea(props: {
   // Conversation-default editor supplied by the settings composition root.
   // 由设置组合入口提供的会话默认编辑器。
   outputStyleSettings?: React.ReactNode
+  // Base system prompt editor supplied by the settings composition root.
+  // 由设置组合入口提供的基础系统提示词编辑器。
+  systemPromptSettings?: React.ReactNode
   // Opens an actually installed statistics mount; absence leaves the optional link hidden.
   // 打开实际安装的统计挂载；缺少挂载时不显示可选链接。
   onOpenUsageStatistics?: () => void
@@ -410,6 +413,7 @@ export function ContextBasicsSettingsArea(props: {
   // 本地化分类保持现有功能可用性及保存归属。
   const sections = [
     ...(props.outputStyleSettings ? [{ id: "conversation", label: t("settings.modelExperience.conversation") }] : []),
+    ...(props.systemPromptSettings ? [{ id: "system-prompt", label: t("settings.modelExperience.systemPrompt") }] : []),
     { id: "context", label: t("settings.modelExperience.context") },
     { id: "nodes", label: t("settings.modelExperience.nodes") },
     { id: "retry", label: t("settings.modelExperience.retry") },
@@ -446,6 +450,7 @@ export function ContextBasicsSettingsArea(props: {
       {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
       <div className="context-basics-tabs">
         {props.outputStyleSettings ? <section hidden={activeSection !== "conversation"}>{props.outputStyleSettings}</section> : null}
+        {props.systemPromptSettings ? <section hidden={activeSection !== "system-prompt"}>{props.systemPromptSettings}</section> : null}
         {snapshot ? (
           <>
             {/* Adopt only the saved section so late full snapshots cannot regress another independent editor. */}

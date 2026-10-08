@@ -540,6 +540,15 @@ fn current_executable_directory() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Built-in base system prompt used when neither the user nor the project supplies one.
+/// 用户与项目都未提供时使用的内置基础系统提示词。
+pub const DEFAULT_SYSTEM_PROMPT_MD: &str = include_str!("../resources/system-prompts/default.md");
+
+/// Product-owned conversation rendering guide attached after the editable base prompt.
+/// 附加在可编辑基础提示词之后、由产品维护的会话渲染说明。
+pub const CAPABILITY_GUIDE_MD: &str =
+    include_str!("../resources/system-prompts/capability-guide.md");
+
 /// Canonical compile-time usage guide for implicit LuaSkills dispatch.
 /// 隐式 LuaSkills 调度使用的规范编译期指引。
 pub const CALL_LUASKILL_USAGE_MD: &str = include_str!("../resources/tool-guides/call-luaskill.md");

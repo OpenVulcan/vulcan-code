@@ -3,20 +3,13 @@
 
 use std::sync::{Arc, OnceLock, RwLock};
 
+use crate::provider_config::user_prompt_resource_directory;
 use vulcan_prompt_composer::{
     PromptAssemblyOutput, PromptCacheEvent, PromptCacheReport, PromptComposerEngine,
     PromptComposerError, PromptComposerResourceConfig, PromptInvalidationEvent,
     PromptInvalidationReason, PromptSegment, session::fingerprint::compute_assembly_fingerprint,
 };
-use vulcan_runtime_assets::user_vulcan_code_root_for_home;
 
-/// User-level Vulcan root directory name.
-/// 用户级 Vulcan 根目录名。
-/// User-level Vulcan Code namespace directory name.
-/// 用户级 Vulcan Code 命名空间目录名。
-/// Prompt-composer resource directory name.
-/// 提示词组合资源目录名。
-const PROMPT_RESOURCE_DIR_NAME: &str = "prompt";
 /// Custom personality resource directory name.
 /// 自定义人格资源目录名。
 const PROMPT_PERSONALITY_DIR_NAME: &str = "personalities";
@@ -195,8 +188,10 @@ fn build_default_runtime_prompt_composer_engine() -> PromptComposerEngine {
 /// Return default user-level prompt-composer resource directories.
 /// 返回默认用户级提示词组合资源目录。
 fn default_prompt_composer_resource_config() -> Option<PromptComposerResourceConfig> {
-    let home = dirs::home_dir()?;
-    let prompt_root = user_vulcan_code_root_for_home(&home).join(PROMPT_RESOURCE_DIR_NAME);
+    // Without a home directory there is no user-level resource root to override built-ins.
+    // 没有主目录时不存在可覆盖内置资源的用户级资源根目录。
+    dirs::home_dir()?;
+    let prompt_root = user_prompt_resource_directory();
     Some(PromptComposerResourceConfig {
         personality_directory: Some(prompt_root.join(PROMPT_PERSONALITY_DIR_NAME)),
         tool_help_directory: Some(prompt_root.join(PROMPT_TOOL_HELP_DIR_NAME)),

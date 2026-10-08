@@ -90,6 +90,40 @@ export interface OutputStyleCatalogSummary {
   entries: OutputStyleCatalogEntry[];
 }
 
+// SystemPromptScope names one editable base system prompt layer.
+// SystemPromptScope 指定一个可编辑的基础系统提示词层级。
+export type SystemPromptScope = "user" | "project";
+
+// SystemPromptSource names the layer that supplies the effective base system prompt.
+// SystemPromptSource 指定提供生效基础系统提示词的层级。
+export type SystemPromptSource = "builtIn" | SystemPromptScope;
+
+// SystemPromptSettingsSnapshot carries every base system prompt layer visible to one scope.
+// SystemPromptSettingsSnapshot 携带单个作用域可见的全部基础系统提示词层级。
+export interface SystemPromptSettingsSnapshot {
+  // Built-in product default text.
+  // 内置产品默认正文。
+  builtInText: string;
+  // User-level override path.
+  // 用户级覆盖文件路径。
+  userPath: string;
+  // User-level override text, null when absent.
+  // 用户级覆盖正文；不存在时为 null。
+  userText: string | null;
+  // Project identifier the project fields belong to.
+  // 项目字段所属的项目标识。
+  projectId: string | null;
+  // Project-level override path, null when no project was requested.
+  // 项目级覆盖文件路径；未请求项目时为 null。
+  projectPath: string | null;
+  // Project-level override text, null when absent.
+  // 项目级覆盖正文；不存在时为 null。
+  projectText: string | null;
+  // Layer that supplies the effective prompt.
+  // 提供生效提示词的层级。
+  effectiveSource: SystemPromptSource;
+}
+
 // ProjectSettingsRevision stores independent invalidation revisions for reloadable settings domains.
 // ProjectSettingsRevision 保存可重载设置领域各自独立的失效版本。
 export interface ProjectSettingsRevision {

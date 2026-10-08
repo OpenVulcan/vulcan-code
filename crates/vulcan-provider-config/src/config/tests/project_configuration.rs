@@ -1,5 +1,5 @@
 use super::super::{
-    PersistedPromptConfiguration, ProjectVulcanCodeConfigurationFile,
+    ProjectVulcanCodeConfigurationFile,
     load_project_configuration_file, project_configuration_file_path,
     save_project_configuration_file,
 };
@@ -73,17 +73,9 @@ fn invalid_project_configuration_reports_exact_path() {
 /// Verifies project-local configuration files round-trip through the shared provider config helpers.
 /// 验证项目本地配置文件可以通过共享 Provider 配置辅助函数完成读写往返。
 #[test]
-fn project_configuration_file_roundtrips_prompt_settings() {
+fn project_configuration_file_roundtrips_default_settings() {
     let root = unique_temp_dir("vulcan-project-config-roundtrip");
-    let config = ProjectVulcanCodeConfigurationFile {
-        prompt: Some(PersistedPromptConfiguration {
-            project_prompt_enabled: false,
-            project_prompt_path: String::from(".vulcan/code/local-prompt.md"),
-            ..PersistedPromptConfiguration::default()
-        }),
-        prompt_skills: Default::default(),
-        vmm: Default::default(),
-    };
+    let config = ProjectVulcanCodeConfigurationFile::default();
 
     save_project_configuration_file(&root, &config).expect("save project config");
     let loaded = load_project_configuration_file(&root).expect("load project config");
@@ -107,7 +99,6 @@ fn project_configuration_file_roundtrips_prompt_settings() {
 fn project_configuration_file_roundtrips_vmm_settings() {
     let root = unique_temp_dir("vulcan-project-vmm-config-roundtrip");
     let config = ProjectVulcanCodeConfigurationFile {
-        prompt: None,
         prompt_skills: Default::default(),
         vmm: VmmConfigLayer {
             enabled: Some(false),

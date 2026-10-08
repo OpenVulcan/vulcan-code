@@ -808,14 +808,6 @@ pub struct PersistedPromptConfiguration {
         skip_serializing_if = "PersistedPromptOutputStyleSelection::is_default"
     )]
     pub output_style: PersistedPromptOutputStyleSelection,
-    /// Whether workspace-local `.vulcan/code/prompt.md` should be injected.
-    /// 是否注入工作区本地 `.vulcan/code/prompt.md`。
-    #[serde(default = "default_true")]
-    pub project_prompt_enabled: bool,
-    /// Workspace-relative project prompt file path.
-    /// 工作区相对项目提示词文件路径。
-    #[serde(default = "default_project_prompt_path")]
-    pub project_prompt_path: String,
 }
 
 impl Default for PersistedPromptConfiguration {
@@ -825,8 +817,6 @@ impl Default for PersistedPromptConfiguration {
         Self {
             personality: PersistedPromptPersonalitySelection::Default,
             output_style: PersistedPromptOutputStyleSelection::Balanced,
-            project_prompt_enabled: true,
-            project_prompt_path: default_project_prompt_path(),
         }
     }
 }
@@ -899,10 +889,6 @@ impl PersistedPromptConfiguration {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectVulcanCodeConfigurationFile {
-    /// Optional project-local prompt settings overriding only project prompt injection fields.
-    /// 可选的项目级提示词设置，仅覆盖项目提示词注入相关字段。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<PersistedPromptConfiguration>,
     /// Optional project-local prompt skills overrides.
     /// 可选的项目级提示词技能覆盖配置。
     #[serde(
@@ -914,10 +900,4 @@ pub struct ProjectVulcanCodeConfigurationFile {
     /// 可选的项目级 VMM 记忆集成覆盖配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
-}
-
-/// Returns the default workspace-relative project prompt path.
-/// 返回默认的工作区相对项目提示词路径。
-fn default_project_prompt_path() -> String {
-    String::from(".vulcan/code/prompt.md")
 }

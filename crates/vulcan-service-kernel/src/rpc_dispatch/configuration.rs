@@ -2,6 +2,9 @@
 //! 配置 RPC 路由。
 
 use super::*;
+use crate::system_prompt_settings::{
+    service_reset_system_prompt, service_save_system_prompt, service_system_prompt_settings,
+};
 use crate::workbench_model_routes::service_save_tool_collapse_default;
 
 /// Exact public RPC wire names owned by this domain router.
@@ -22,6 +25,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_license_catalog",
     "service_license_body",
     "service_save_prompt_output_style",
+    "service_system_prompt_settings",
+    "service_save_system_prompt",
+    "service_reset_system_prompt",
     "service_public_ai_settings_snapshot",
     "service_provider_usage_dashboard",
     "service_start_public_ai_oauth",
@@ -191,6 +197,15 @@ pub(super) async fn dispatch(
         "service_save_prompt_output_style" => rpc_json_result(
             service_save_prompt_output_style(app, state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_system_prompt_settings" => rpc_json_result(
+            service_system_prompt_settings(state, rpc_optional_param(params, "projectId")?).await,
+        ),
+        "service_save_system_prompt" => rpc_json_result(
+            service_save_system_prompt(state, rpc_required_param(params, "request")?).await,
+        ),
+        "service_reset_system_prompt" => rpc_json_result(
+            service_reset_system_prompt(state, rpc_required_param(params, "request")?).await,
         ),
         "service_public_ai_settings_snapshot" => {
             rpc_json_result(service_public_ai_settings_snapshot(state).await)

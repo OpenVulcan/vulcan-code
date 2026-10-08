@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use crate::adapters::project_rules::{
     DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesWatchTarget, default_project_rules_route,
 };
-use crate::adapters::prompt_resources::{PromptResourcesWatchKind, PromptResourcesWatchTarget};
 use crate::adapters::routing::{FileWatchRoute, FileWatchRouter};
 use crate::event::{FileWatchEvent, FileWatchEventKind};
 use crate::fs::polling::PollingFileWatcher;
@@ -139,60 +138,6 @@ fn default_project_rules_route_matches_only_agents_file() {
     assert_eq!(matched.len(), 1);
     assert!(matched[0].route_id.starts_with("project-rules:"));
     assert!(unmatched.is_empty());
-}
-
-/// Verifies prompt-resource targets build user, project prompt, and project config watch paths.
-/// 验证提示词资源目标会构建用户、项目提示词和项目配置监听路径。
-#[test]
-fn prompt_resources_watch_target_builds_expected_live_paths() {
-    let target = PromptResourcesWatchTarget::new(
-        PathBuf::from("D:/repo"),
-        ".vulcan/code/prompt.md",
-        true,
-        Some(PathBuf::from("C:/Users/me/.vulcan/code/prompt")),
-    );
-
-    let paths = target.to_live_watch_paths();
-
-    assert_eq!(paths.len(), 3);
-    assert!(paths[0].recursive);
-    assert_eq!(
-        paths[1].path,
-        PathBuf::from("D:/repo/.vulcan/code/prompt.md")
-    );
-    assert!(!paths[1].recursive);
-    assert_eq!(
-        paths[2].path,
-        PathBuf::from("D:/repo/.vulcan/code/config.json")
-    );
-    assert!(!paths[2].recursive);
-}
-
-/// Verifies prompt-resource targets classify project prompt and project configuration changes narrowly.
-/// 验证提示词资源目标会将项目提示词与项目配置变更分类到最窄类别。
-#[test]
-fn prompt_resources_watch_target_classifies_changed_paths() {
-    let target = PromptResourcesWatchTarget::new(
-        PathBuf::from("D:/repo"),
-        ".vulcan/code/prompt.md",
-        true,
-        Some(PathBuf::from("C:/Users/me/.vulcan/code/prompt")),
-    );
-
-    assert_eq!(
-        target.classify_paths(&[PathBuf::from("D:/repo/.vulcan/code/prompt.md")]),
-        PromptResourcesWatchKind::ProjectPrompt
-    );
-    assert_eq!(
-        target.classify_paths(&[PathBuf::from("D:/repo/.vulcan/code/config.json")]),
-        PromptResourcesWatchKind::ProjectConfiguration
-    );
-    assert_eq!(
-        target.classify_paths(&[PathBuf::from(
-            "C:/Users/me/.vulcan/code/prompt/personalities/a.md"
-        )]),
-        PromptResourcesWatchKind::UserPromptResources
-    );
 }
 
 /// Build one unique temporary directory for tests.

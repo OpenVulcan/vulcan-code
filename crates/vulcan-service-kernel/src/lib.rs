@@ -199,6 +199,7 @@ mod public_ai_settings;
 mod rpc_dispatch;
 mod runtime_summary_projection;
 mod runtime_workspace_helpers;
+mod system_prompt_settings;
 mod service_bootstrap;
 mod service_bridge_io;
 mod service_diagnostics_paths;
