@@ -72,6 +72,32 @@ mod tests {
         assert!(!parse_failure(&error).contains(secret));
     }
 
+    /// Catalog-backed failures render in the active locale and unknown keys keep the service text.
+    /// 目录形式的失败按当前语言渲染，未知键保留服务文本。
+    #[test]
+    fn localized_service_errors_render_from_the_catalog() {
+        let _locale = crate::i18n::lock_locale("en-US");
+        let server = RpcServer::start(2, |request| {
+            let key = if request.body["method"] == "known_test" {
+                "serviceError.gitCommit.branchExists"
+            } else {
+                "serviceError.notInThisBuild"
+            };
+            json!({"ok":false,"error":{"code":"service_rpc_error","message":"service default text",
+                "localized":{"key":key,"params":{"branch":"feature/x"}}}})
+        });
+        let known = server.client.call("known_test", Value::Null).unwrap_err();
+        assert_eq!(
+            Some(known.message),
+            crate::i18n::format_known(
+                "serviceError.gitCommit.branchExists",
+                &[("branch", "feature/x")]
+            )
+        );
+        let unknown = server.client.call("unknown_test", Value::Null).unwrap_err();
+        assert_eq!(unknown.message, "service default text");
+    }
+
     /// Checks the production POST envelope and removes credentials echoed by a service error.
     /// 检查实际 POST 信封，并移除服务错误回显的凭据。
     #[test]
@@ -352,9 +378,29 @@ impl RpcClient {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         };
+        // Catalog-backed failures render in the active locale; unknown keys keep the service text.
+        // 目录形式的失败按当前语言渲染；未知键保留服务文本。
+        let localized = error
+            .and_then(|e| e.get("localized"))
+            .and_then(|localized| {
+                let key = localized.get("key")?.as_str()?;
+                let values: Vec<(&str, &str)> = localized
+                    .get("params")
+                    .and_then(Value::as_object)
+                    .map(|params| {
+                        params
+                            .iter()
+                            .filter_map(|(name, value)| Some((name.as_str(), value.as_str()?)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                crate::i18n::format_known(key, &values)
+            });
         Err(RpcError {
             message: redacted_message(
-                field("message").unwrap_or_else(|| format!("{method}: HTTP {status}")),
+                localized
+                    .or_else(|| field("message"))
+                    .unwrap_or_else(|| format!("{method}: HTTP {status}")),
                 &secrets,
             ),
             transport: false,

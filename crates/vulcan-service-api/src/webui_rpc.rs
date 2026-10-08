@@ -192,6 +192,10 @@ pub struct WebuiServiceRpcHttpError {
     /// Human-readable error message.
     /// 人类可读错误消息。
     pub message: String,
+    /// Catalog-backed form of `message` that clients render in their own language.
+    /// `message` 的目录形式，供客户端按自身语言渲染。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localized: Option<WebuiLocalizedMessage>,
 }
 
 /// Dispatch failures retain their category until the HTTP envelope is built.
@@ -207,6 +211,9 @@ pub enum WebuiServiceRpcError {
     /// An existing service returned its diagnostic text.
     /// 现有服务返回诊断文本。
     Service(String),
+    /// A service rejected the request with a catalog-backed user-facing message.
+    /// 服务以目录形式的面向用户消息拒绝请求。
+    Localized(WebuiLocalizedMessage),
     /// A service result could not be serialized.
     /// 服务结果无法序列化。
     Serialization(String),
@@ -219,9 +226,34 @@ impl WebuiServiceRpcError {
         match self {
             Self::InvalidParams(_) => "invalid_params",
             Self::UnknownMethod(_) => "method_not_found",
-            Self::Service(_) => "service_rpc_error",
+            Self::Service(_) | Self::Localized(_) => "service_rpc_error",
             Self::Serialization(_) => "response_serialization_failed",
         }
+    }
+
+    /// Returns the catalog-backed message when the failure carries one.
+    /// 当失败携带目录消息时返回该消息。
+    pub fn localized(&self) -> Option<&WebuiLocalizedMessage> {
+        match self {
+            Self::Localized(message) => Some(message),
+            _ => None,
+        }
+    }
+}
+
+impl From<String> for WebuiServiceRpcError {
+    /// Treats a plain service diagnostic as a service failure; returns the wrapped error.
+    /// 将普通服务诊断视为服务失败；返回包装后的错误。
+    fn from(message: String) -> Self {
+        Self::Service(message)
+    }
+}
+
+impl From<WebuiLocalizedMessage> for WebuiServiceRpcError {
+    /// Wraps a catalog-backed rejection; returns the wrapped error.
+    /// 包装目录形式的拒绝消息；返回包装后的错误。
+    fn from(message: WebuiLocalizedMessage) -> Self {
+        Self::Localized(message)
     }
 }
 
@@ -236,6 +268,7 @@ impl std::fmt::Display for WebuiServiceRpcError {
             Self::UnknownMethod(method) => {
                 write!(formatter, "unknown service RPC method: {method}")
             }
+            Self::Localized(message) => std::fmt::Display::fmt(message, formatter),
         }
     }
 }
@@ -287,6 +320,33 @@ pub fn webui_service_rpc_error_envelope(
         error: Some(WebuiServiceRpcHttpError {
             code: code.into(),
             message: message.into(),
+            localized: None,
+        }),
+    }
+}
+
+/// Builds one failed browser-facing RPC envelope from a dispatch failure.
+/// 根据分发失败构建单个失败的浏览器侧 RPC 信封。
+///
+/// # Parameters
+/// 参数
+/// `error` is the categorized failure; a catalog-backed failure also carries its key and values.
+/// `error` 是已分类的失败；目录形式的失败同时携带其键与取值。
+///
+/// # Returns
+/// 返回值
+/// A normalized failed RPC envelope whose message is the default-language text.
+/// 返回标准化失败 RPC 信封，其消息为默认语言文本。
+pub fn webui_service_rpc_failure_envelope(
+    error: &WebuiServiceRpcError,
+) -> WebuiServiceRpcHttpResponse {
+    WebuiServiceRpcHttpResponse {
+        ok: false,
+        result: None,
+        error: Some(WebuiServiceRpcHttpError {
+            code: error.code().to_string(),
+            message: error.to_string(),
+            localized: error.localized().cloned(),
         }),
     }
 }

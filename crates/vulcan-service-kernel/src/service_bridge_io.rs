@@ -129,21 +129,23 @@ pub(crate) fn shell_host_from_state(
         .map_err(|error| format!("failed to lock service shell host: {error}"))
 }
 
-/// Dispatches one normalized service RPC request to the concrete local service implementation.
-/// 将单个标准化服务 RPC 请求分发到具体本地服务实现。
-pub(crate) fn rpc_json_result<T>(result: Result<T, String>) -> Result<Value, WebuiServiceRpcError>
+/// Converts one service result into the RPC JSON result, keeping catalog-backed failures intact.
+/// 将单个服务结果转换为 RPC JSON 结果，并保留目录形式的失败。
+///
+/// `result` fails with either a plain diagnostic `String` or a categorized `WebuiServiceRpcError`.
+/// `result` 以普通诊断 `String` 或已分类的 `WebuiServiceRpcError` 失败。
+pub(crate) fn rpc_json_result<T, E>(result: Result<T, E>) -> Result<Value, WebuiServiceRpcError>
 where
     T: Serialize,
+    E: Into<WebuiServiceRpcError>,
 {
-    result
-        .map_err(WebuiServiceRpcError::Service)
-        .and_then(|value| {
-            serde_json::to_value(value).map_err(|error| {
-                WebuiServiceRpcError::Serialization(format!(
-                    "failed to serialize service RPC response: {error}"
-                ))
-            })
+    result.map_err(Into::into).and_then(|value| {
+        serde_json::to_value(value).map_err(|error| {
+            WebuiServiceRpcError::Serialization(format!(
+                "failed to serialize service RPC response: {error}"
+            ))
         })
+    })
 }
 
 /// Reads a required typed value from one RPC parameter object.
@@ -1280,11 +1282,23 @@ mod tests {
     #[test]
     fn rpc_result_preserves_service_and_serialization_categories() {
         let service =
-            rpc_json_result::<Value>(Err("invalid params, unknown method".into())).unwrap_err();
+            rpc_json_result::<Value, String>(Err("invalid params, unknown method".into()))
+                .unwrap_err();
         assert_eq!(service.code(), "service_rpc_error");
+        assert!(service.localized().is_none());
+        // Catalog-backed rejections keep the service category and their key.
+        // 目录形式的拒绝保留服务类别与其键。
+        let message = vulcan_service_api::WebuiLocalizedMessage::new(
+            "serviceError.gitCommit.noStagedChanges",
+        );
+        let localized = rpc_json_result::<Value, WebuiServiceRpcError>(Err(message.clone().into()))
+            .unwrap_err();
+        assert_eq!(localized.code(), "service_rpc_error");
+        assert_eq!(localized.localized(), Some(&message));
         // Array keys cannot be represented as JSON object keys.
         // 数组键无法表示为 JSON 对象键。
-        let serialization = rpc_json_result(Ok(BTreeMap::from([(vec![1_u8], 1_u8)]))).unwrap_err();
+        let serialization =
+            rpc_json_result::<_, String>(Ok(BTreeMap::from([(vec![1_u8], 1_u8)]))).unwrap_err();
         assert_eq!(serialization.code(), "response_serialization_failed");
     }
 

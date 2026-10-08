@@ -12,6 +12,8 @@ import type {
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
+import enUSTranslations from "@catalogs/webui/en-US.json";
+import { formatMessage, translateActive, type TranslationKey } from "@/i18n";
 import type { ConversationEventLiveDeltaV1 } from "@/service/conversation-event-window-client";
 import type {
   ServiceEventHandler,
@@ -52,10 +54,43 @@ interface BrowserServiceRpcResponse<T = unknown> {
     // code is a stable machine-readable error code.
     // code 是稳定的机器可读错误码。
     code: string;
-    // message is the human-readable error text.
-    // message 是人类可读错误文本。
+    // message is the human-readable error text in the service's default language.
+    // message 是服务默认语言的人类可读错误文本。
     message: string;
+    // localized is the catalog-backed form of message, rendered in the active language when present.
+    // localized 是 message 的目录形式，存在时按当前语言渲染。
+    localized?: BrowserServiceLocalizedMessage;
   };
+}
+
+// BrowserServiceLocalizedMessage names one webui catalog key and its placeholder values.
+// BrowserServiceLocalizedMessage 指定一个 webui 目录键及其占位符取值。
+export interface BrowserServiceLocalizedMessage {
+  // key is the stable webui catalog key.
+  // key 是稳定的 webui 目录键。
+  key: string;
+  // params maps placeholder names to their values; omitted when the text has no placeholders.
+  // params 将占位符名称映射到取值；文案没有占位符时省略。
+  params?: Record<string, string>;
+}
+
+// renderServiceErrorMessage chooses the displayed text of one failed RPC envelope.
+// renderServiceErrorMessage 选择单个失败 RPC 信封的展示文本。
+//
+// # Parameters
+// 参数
+// `message` is the service's default-language text and `localized` its optional catalog form.
+// `message` 是服务默认语言文本，`localized` 是其可选目录形式。
+//
+// # Returns
+// 返回值
+// The catalog text in the active language, or `message` when this build does not know the key.
+// 返回当前语言的目录文案；本构建不认识该键时返回 `message`。
+export function renderServiceErrorMessage(message: string, localized?: BrowserServiceLocalizedMessage): string {
+  if (!localized || !Object.hasOwn(enUSTranslations, localized.key)) {
+    return message;
+  }
+  return formatMessage(translateActive(localized.key as TranslationKey), localized.params ?? {});
 }
 
 // BrowserServiceRpcError preserves the server code for control flow and the message for display.
@@ -246,7 +281,10 @@ export class BrowserServiceTransport implements ServiceTransport {
       if (!payload.error) {
         throw new BrowserServiceRpcError("invalid_rpc_response", "Browser service RPC failure is missing its error envelope.");
       }
-      throw new BrowserServiceRpcError(payload.error.code, payload.error.message);
+      throw new BrowserServiceRpcError(
+        payload.error.code,
+        renderServiceErrorMessage(payload.error.message, payload.error.localized),
+      );
     }
     return payload.result as T;
   }

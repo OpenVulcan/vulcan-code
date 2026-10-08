@@ -69,6 +69,16 @@ pub fn format(key: &str, values: &[(&str, String)]) -> String {
     vulcan_i18n::format_template(&text(key), &values)
 }
 
+/// Renders a service-supplied catalog key when this build knows it; `None` for unknown keys.
+/// 本构建认识服务提供的目录键时渲染该键；未知键返回 `None`。
+pub fn format_known(key: &str, values: &[(&str, &str)]) -> Option<String> {
+    translator()
+        .read()
+        .expect("i18n lock poisoned")
+        .text(key)
+        .map(|template| vulcan_i18n::format_template(template, values))
+}
+
 /// Resolves the startup locale: explicit flag, then service `uiLocale`, then the OS, then default.
 /// 解析启动语言：显式参数优先，其次服务 `uiLocale`，再次操作系统，最后默认语言。
 ///

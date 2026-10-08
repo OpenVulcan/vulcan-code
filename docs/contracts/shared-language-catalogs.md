@@ -36,10 +36,26 @@
 5. **查找语义**：当前语言逐层查找，再默认语言逐层查找；无取值的 `{name}` 占位符保持原样。语言检测结果不得写回
    用户配置。
 
+## 服务错误消息
+
+服务向用户报告可自行修正的拒绝原因时，不再返回固定语言文本，而是返回 `webui` 目录键及占位符取值：
+
+1. **构造**：服务端以 `vulcan_service_api::WebuiLocalizedMessage::new("<key>").with("<name>", value)` 构造消息，
+   通过 `WebuiServiceRpcError::Localized` 返回；错误类别码仍为 `service_rpc_error`。键必须是字符串字面量。
+2. **线协议**：RPC 失败信封的 `error` 在 `code` 与 `message` 之外携带可选 `localized: { key, params? }`；
+   `message` 是默认语言渲染结果，供日志和无法翻译的客户端使用。
+3. **客户端**：WebUI（`browserTransport.ts`）与 TUI（`backend/service/rpc.rs`）认识该键时按当前语言渲染，
+   不认识时显示 `message`；客户端不得依据错误文本做流程判断。
+4. **校验**：`vulcan-service-api` 的 `localized_messages_match_the_webui_catalog` 扫描 `crates/` 与 `apps/`
+   中的构造调用，要求键存在于默认语言目录且填充的占位符与目录声明一致。
+5. **迁移状态**：目前只有 Git 提交动作（`git/commit_action.rs`）的请求冲突使用该机制；其余服务错误仍为
+   固定文本，按区域逐步迁移。Git、存储等底层诊断保持原文，不进入目录。
+
 ## 验证
 
 ```bash
 cargo nextest run -p vulcan-i18n
+cargo nextest run -p vulcan-service-api localized_message
 ```
 
 WebUI 侧执行 `pnpm run typecheck` 与 `vitest run src/i18n-locales.test.ts`。

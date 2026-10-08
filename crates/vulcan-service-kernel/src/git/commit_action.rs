@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use vulcan_service_api::{WebuiLocalizedMessage, WebuiServiceRpcError};
 use vulcan_workbench_model::SessionId;
 
 use super::command::{
@@ -20,14 +21,21 @@ use crate::{SharedServiceBridgeState, workspace_root};
 
 /// Runs the requested Git commit and optional push operation.
 /// 执行请求的 Git 提交与可选推送操作。
+///
+/// Request conflicts the user can fix fail with catalog-backed messages; Git and storage failures keep
+/// their diagnostic text.
+/// 用户可自行修正的请求冲突以目录消息失败；Git 与存储失败保留其诊断文本。
 pub(crate) async fn service_run_git_commit_action(
     state: SharedServiceBridgeState,
     request: GitCommitActionRequest,
-) -> Result<GitCommitActionResponse, String> {
+) -> Result<GitCommitActionResponse, WebuiServiceRpcError> {
     let session_id = request
         .conversation_id
         .parse::<SessionId>()
-        .map_err(|error| format!("会话标识无效，无法执行提交：{error}"))?;
+        .map_err(|error| {
+            WebuiLocalizedMessage::new("serviceError.gitCommit.invalidSession")
+                .with("detail", error.to_string())
+        })?;
     validate_git_commit_action_session_exists(&state, session_id)?;
     let resolved_workspace_path = crate::webui_diff_workspace_path_from_state(
         &state,
@@ -55,13 +63,17 @@ pub(crate) async fn service_run_git_commit_action(
     let commit_message = request.message.trim();
     if commit_message.is_empty() {
         if request.include_unstaged {
-            return Err(String::from("只推送时不能暂存工作区变更。"));
+            return Err(
+                WebuiLocalizedMessage::new("serviceError.gitCommit.stageWithoutCommit").into(),
+            );
         }
         if matches!(request.target, GitCommitActionTargetRequest::New { .. }) {
-            return Err(String::from("创建新分支需要同时创建提交。"));
+            return Err(
+                WebuiLocalizedMessage::new("serviceError.gitCommit.newBranchNeedsCommit").into(),
+            );
         }
         if request.push && load_webui_current_branch_unpushed_commit_count(&repository_root)? == 0 {
-            return Err(String::from("当前分支没有已提交但未推送的内容。"));
+            return Err(WebuiLocalizedMessage::new("serviceError.gitCommit.nothingToPush").into());
         }
     }
     let mut committed = false;
@@ -102,7 +114,7 @@ pub(crate) async fn service_run_git_commit_action(
 
     if request.push {
         let branch_name = load_webui_current_git_branch(&repository_root)?
-            .ok_or_else(|| String::from("当前处于 detached HEAD，无法推送分支。"))?;
+            .ok_or_else(|| WebuiLocalizedMessage::new("serviceError.gitCommit.detachedHead"))?;
         let push_args = if webui_current_branch_has_upstream(&repository_root) {
             vec!["push"]
         } else {
@@ -154,7 +166,7 @@ fn ensure_git_commit_action_command_succeeded(
 fn validate_git_commit_action_session_exists(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
-) -> Result<(), String> {
+) -> Result<(), WebuiServiceRpcError> {
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -167,7 +179,7 @@ fn validate_git_commit_action_session_exists(
     {
         Ok(())
     } else {
-        Err(String::from("无法找到提交动作所属会话。"))
+        Err(WebuiLocalizedMessage::new("serviceError.gitCommit.sessionNotFound").into())
     }
 }
 
@@ -189,22 +201,28 @@ fn normalize_git_commit_action_branch_name(branch_name: &str) -> Result<String, 
 fn ensure_git_commit_action_new_branch_available(
     repository_root: &Path,
     branch_name: &str,
-) -> Result<(), String> {
+) -> Result<(), WebuiServiceRpcError> {
     if webui_git_ref_exists(repository_root, &format!("refs/heads/{branch_name}"))? {
-        return Err(format!("本地分支 `{branch_name}` 已存在。"));
+        return Err(
+            WebuiLocalizedMessage::new("serviceError.gitCommit.branchExists")
+                .with("branch", branch_name)
+                .into(),
+        );
     }
     Ok(())
 }
 
 /// Ensures the Git index contains staged changes before committing.
 /// 在提交前确保 Git 索引中存在已暂存变更。
-fn ensure_git_commit_action_has_staged_changes(repository_root: &Path) -> Result<(), String> {
+fn ensure_git_commit_action_has_staged_changes(
+    repository_root: &Path,
+) -> Result<(), WebuiServiceRpcError> {
     let output = run_webui_git_command(repository_root, &["diff", "--cached", "--quiet"])?;
     if output.status.success() {
-        return Err(String::from("当前没有已暂存变更，无法提交。"));
+        return Err(WebuiLocalizedMessage::new("serviceError.gitCommit.noStagedChanges").into());
     }
     match output.status.code() {
         Some(1) => Ok(()),
-        _ => Err(format_webui_git_error("git diff --cached --quiet", &output)),
+        _ => Err(format_webui_git_error("git diff --cached --quiet", &output).into()),
     }
 }

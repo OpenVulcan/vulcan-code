@@ -42,7 +42,8 @@ use vulcan_service_api::{
     service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
     webui_service_http_bind_ports_from_override, webui_service_origin_text_is_allowed,
     webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
-    webui_service_rpc_error_envelope, webui_service_rpc_success_envelope,
+    webui_service_rpc_error_envelope, webui_service_rpc_failure_envelope,
+    webui_service_rpc_success_envelope,
 };
 
 /// Boxed asynchronous result returned by a browser-facing RPC dispatcher.
@@ -1086,7 +1087,7 @@ async fn webui_service_rpc_http_handler(
     let result = (server_state.rpc_dispatcher)(request.method, request.params).await;
     Json(match result {
         Ok(result) => webui_service_rpc_success_envelope(result),
-        Err(error) => webui_service_rpc_error_envelope(error.code(), error.to_string()),
+        Err(error) => webui_service_rpc_failure_envelope(&error),
     })
     .into_response()
 }

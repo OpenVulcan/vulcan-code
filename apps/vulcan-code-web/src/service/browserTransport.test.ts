@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import type { VceJobSummary, VceProjectChangedEvent } from "@/types";
+import { formatMessage, translateActive } from "@/i18n";
 
 import {
   closeWebSocketWhenReady,
@@ -28,6 +29,43 @@ it.each(["invalid_params", "method_not_found", "service_rpc_error", "response_se
     }
   },
 );
+
+describe("localized RPC failures", () => {
+  // requestFailure returns the error thrown for one failed envelope carrying `error`.
+  // requestFailure 返回携带 `error` 的失败信封所抛出的错误。
+  async function requestFailure(error: Record<string, unknown>): Promise<unknown> {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: false, error }), { status: 200 })));
+    try {
+      const transport = new BrowserServiceTransport("http://127.0.0.1:17921");
+      return await transport.request("fixture").catch((failure: unknown) => failure);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it("renders a known catalog key with its placeholder values", async () => {
+    const key = "serviceError.gitCommit.branchExists";
+    const error = await requestFailure({
+      code: "service_rpc_error",
+      message: "service default text",
+      localized: { key, params: { branch: "feature/x" } },
+    });
+    expect(error).toMatchObject({
+      code: "service_rpc_error",
+      message: formatMessage(translateActive(key), { branch: "feature/x" }),
+    });
+    expect((error as Error).message).toContain("feature/x");
+  });
+
+  it("keeps the service text when this build does not know the key", async () => {
+    const error = await requestFailure({
+      code: "service_rpc_error",
+      message: "service default text",
+      localized: { key: "serviceError.notInThisBuild" },
+    });
+    expect(error).toMatchObject({ code: "service_rpc_error", message: "service default text" });
+  });
+});
 
 // BrowserSocketFixture models the WebSocket states required by close lifecycle tests.
 // BrowserSocketFixture 模拟关闭生命周期测试所需的 WebSocket 状态。
