@@ -115,4 +115,14 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-sequence", "User talks to API")).toBeNull();
     expect(parse("ui-sequence", "note User")).toBeNull();
   });
+
+  it("accepts the row-component pipe in place of the colon before message, note and flow labels", () => {
+    expect(parse("ui-sequence", "User -> API | request\nnote User, API | cached")).toMatchObject({
+      actors: ["User", "API"], steps: [
+        { kind: "message", from: 0, to: 1, text: "request" },
+        { kind: "note", first: 0, last: 1, text: "cached" },
+      ],
+    });
+    expect(parse("ui-flow", "Build -> Test | on push")).toMatchObject({ chains: [{ groups: [[0], [1]], label: "on push" }] });
+  });
 });

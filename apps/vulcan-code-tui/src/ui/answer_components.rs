@@ -477,10 +477,11 @@ fn change(line: &str) -> (Option<char>, &str) {
     (None, line)
 }
 
-/// Split at the first ASCII or full-width colon into a trimmed head and optional tail.
-/// 在第一个 ASCII 或全角冒号处拆分为去空白的前段和可选后段。
+/// Split at the first ASCII or full-width colon, or a `|` as in row components, into a trimmed
+/// head and optional tail.
+/// 在第一个 ASCII 或全角冒号，或与行组件相同的 `|` 处拆分为去空白的前段和可选后段。
 fn label(text: &str) -> (&str, Option<&str>) {
-    match text.find([':', '：']) {
+    match text.find([':', '：', '|']) {
         Some(index) => {
             let colon = text[index..].chars().next().map_or(1, char::len_utf8);
             (text[..index].trim(), Some(text[index + colon..].trim()))

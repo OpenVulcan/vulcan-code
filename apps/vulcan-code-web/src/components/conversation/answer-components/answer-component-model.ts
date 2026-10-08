@@ -393,10 +393,10 @@ function chart(args: string, body: string): AnswerComponent | null {
   return { kind: "chart", chart: { kind: kind as AnswerChartKind, title: title.join(" ") || undefined, categoryLabel: header[0], series: header.slice(1), rows } };
 }
 
-// Split at the first ASCII or full-width colon into a trimmed head and an optional tail.
-// 在第一个 ASCII 或全角冒号处拆分为去空白的前段和可选后段。
+// Split at the first ASCII or full-width colon, or a `|` as in row components, into a trimmed head and an optional tail.
+// 在第一个 ASCII 或全角冒号，或与行组件相同的 `|` 处拆分为去空白的前段和可选后段。
 function labelled(text: string): { head: string; tail?: string } {
-  const index = text.search(/[:：]/u);
+  const index = text.search(/[:：|]/u);
   return index < 0 ? { head: text.trim() } : { head: text.slice(0, index).trim(), tail: text.slice(index + 1).trim() };
 }
 

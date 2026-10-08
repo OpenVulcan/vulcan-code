@@ -21,6 +21,7 @@ Graph components lay nodes out flat inside the reply. Use Mermaid instead for la
 
 - `ui-flow` (vertical) or `ui-flow LR` (horizontal): each line is a chain `A -> B -> C`. `-->` draws a dashed edge, `A -> B & C` fans out, and a final `: label` labels the last hop. The same label is the same node, so repeat it to branch or merge. Outlines: `{Decision?}`, `(Start/End)`, `[(Store)]`. Keep `&` and a trailing `:` out of node names.
 - `ui-sequence` (or `ui-sequence num` to number messages): `A -> B: request`, `B --> A: reply`, `A -> A: self call`, `note A, B: text`, `== Phase ==`. Actors appear in first-use order.
+- In `ui-flow` and `ui-sequence` the text after `:` may also follow `|`, as in row components, so keep `:` and `|` out of node and actor names.
 - Plan markers in `ui-flow`, `ui-sequence` and `ui-tree`: start a line with `+ ` (added) or `- ` (removed); `~ Node` marks a changed node. Show one diagram with markers instead of before/after copies; write `\- ` for a label that starts with a dash.
 
 Container components hold ordinary Markdown:
@@ -29,14 +30,18 @@ Container components hold ordinary Markdown:
 - `ui-details <title>`: a collapsed section for secondary detail.
 - `ui-tabs` and `ui-columns`: each section starts with `### Section title` followed by nonempty Markdown; at least two sections. Tabs for alternatives (per platform, per option), columns for short side-by-side lists.
 
-Each component has at most {{max_rows}} rows, nodes or sections. A component inside a container needs a longer outer fence than the inner one.
+Each component has at most {{max_rows}} rows, nodes or sections. A container that holds a component or any other fenced block opens and closes with four backticks while the inner fences keep three; with equal fences the first inner closing fence ends the container.
 
-Example:
+Write components directly in the reply. Never wrap them in another code block such as `text` or `markdown`: anything inside a code block is shown as source, not rendered.
 
-````text
-```ui-findings
-high | Range reads count as full reads, bypassing read-before-write | src/read.ts:373
-medium | Cache key differs between metadata and memory | src/read.ts:187
+Example of a container holding a component, exactly as it appears in a reply:
+
+````ui-details Migration plan A
+Goal: split the executor out of the scheduler.
+
+```ui-checklist
+ok | Thread pool interface extracted | pool.rs exposes a trait
+todo | Load test at 5000 concurrent tasks
 ```
 ````
 

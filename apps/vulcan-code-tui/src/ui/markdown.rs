@@ -640,5 +640,11 @@ A[Plan] --> B[Build]";
         assert!(!tabs.contains("ui-tabs"));
         let empty_section = joined("```ui-tabs\n### A\n### B\ntwo\n```");
         assert!(empty_section.contains("ui-tabs"));
+
+        // The row-component pipe works in place of the colon before a message or note label.
+        // 消息或注释标签前可用行组件的竖线代替冒号。
+        let piped = joined("```ui-sequence\nA -> B | msg-marker\nnote A, B | note-marker\n```");
+        assert!(!piped.contains("ui-sequence"));
+        assert!(piped.contains("msg-marker") && piped.contains("note-marker"));
     }
 }
