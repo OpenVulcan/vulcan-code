@@ -438,6 +438,33 @@ export function LuaSkillConfigDialog(props: {
     return true;
   }, [loadDescriptor, t]);
 
+  // runExclusive runs one manual operation under the shared duplicate guard, busy state and error report.
+  // runExclusive 在共享的防重复守卫、忙碌状态与错误报告下运行一个手动操作。
+  //
+  // Parameters: operation is the work to run; recoverConflict first offers failures to revision-conflict recovery.
+  // 参数：operation 是要运行的工作；recoverConflict 为真时先把失败交给修订冲突恢复处理。
+  // Returns: a promise that settles after the operation and its cleanup; a concurrent call does nothing.
+  // 返回值：操作及清理完成后结束的 Promise；并发调用不执行任何操作。
+  const runExclusive = React.useCallback(async (
+    operation: () => Promise<void>,
+    recoverConflict: boolean,
+  ): Promise<void> => {
+    if (mutationRef.current) return;
+    mutationRef.current = true;
+    setBusy(true);
+    setErrorMessage(null);
+    try {
+      await operation();
+    } catch (error: unknown) {
+      if (!recoverConflict || !(await handleRevisionConflict(error))) {
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      mutationRef.current = false;
+      setBusy(false);
+    }
+  }, [handleRevisionConflict]);
+
   // reloadDescriptor reloads the package's store from disk, then refreshes the snapshot with
   // consistent busy and error handling, so a change the file watcher missed still becomes visible.
   // reloadDescriptor 先从磁盘重新载入技能包所在存储，再以一致的忙碌状态与错误处理刷新快照，
@@ -445,32 +472,18 @@ export function LuaSkillConfigDialog(props: {
   //
   // Returns: a promise that settles after the manual refresh completes.
   // 返回值：手动刷新完成后结束的 Promise。
-  const reloadDescriptor = React.useCallback(async (): Promise<void> => {
-    if (mutationRef.current) return;
-    mutationRef.current = true;
-    setBusy(true);
-    setErrorMessage(null);
-    try {
-      await props.actions.onRefreshLuaSkillConfig(descriptor?.storeScope ?? null);
-      await loadDescriptor(true);
-    } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      mutationRef.current = false;
-      setBusy(false);
-    }
-  }, [descriptor?.storeScope, loadDescriptor, props.actions]);
+  const reloadDescriptor = React.useCallback(() => runExclusive(async () => {
+    await props.actions.onRefreshLuaSkillConfig(descriptor?.storeScope ?? null);
+    await loadDescriptor(true);
+  }, false), [descriptor?.storeScope, loadDescriptor, props.actions, runExclusive]);
 
   // submitChangedValues sends one non-empty typed CAS batch and clears sensitive inputs afterward.
   // submitChangedValues 发送一组非空类型化 CAS 批次，并在完成后清空敏感输入。
   const submitChangedValues = React.useCallback(async () => {
-    if (mutationRef.current || !descriptor || changedKeys.length === 0) {
+    if (!descriptor || changedKeys.length === 0) {
       return;
     }
-    mutationRef.current = true;
-    setBusy(true);
-    setErrorMessage(null);
-    try {
+    await runExclusive(async () => {
       // values contains only fields explicitly changed by the user.
       // values 仅包含用户明确修改的字段。
       const values: Record<string, string | number | boolean> = {};
@@ -502,26 +515,16 @@ export function LuaSkillConfigDialog(props: {
       setConflictMessage(null);
       setValidation(null);
       setValidation(await props.actions.onValidateLuaSkillConfig(updated.skillId));
-    } catch (error: unknown) {
-      if (!(await handleRevisionConflict(error))) {
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      mutationRef.current = false;
-      setBusy(false);
-    }
-  }, [changedKeys, descriptor, draft, handleRevisionConflict, props.actions]);
+    }, true);
+  }, [changedKeys, descriptor, draft, props.actions, runExclusive]);
 
   // deleteValue removes one explicit or orphaned key with the currently observed revision.
   // deleteValue 使用当前观察到的修订号删除单个显式或遗留键。
   const deleteValue = React.useCallback(async (key: string) => {
-    if (mutationRef.current || !descriptor) {
+    if (!descriptor) {
       return;
     }
-    mutationRef.current = true;
-    setBusy(true);
-    setErrorMessage(null);
-    try {
+    await runExclusive(async () => {
       // mutation is the host-safe result of the completed CAS deletion.
       // mutation 是已完成 CAS 删除的宿主安全结果。
       const mutation = await props.actions.onDeleteLuaSkillConfig({
@@ -545,15 +548,8 @@ export function LuaSkillConfigDialog(props: {
       setConflictMessage(null);
       setValidation(null);
       setValidation(await props.actions.onValidateLuaSkillConfig(updated.skillId));
-    } catch (error: unknown) {
-      if (!(await handleRevisionConflict(error))) {
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      mutationRef.current = false;
-      setBusy(false);
-    }
-  }, [descriptor, handleRevisionConflict, props.actions]);
+    }, true);
+  }, [descriptor, props.actions, runExclusive]);
 
   // orderedItems is the stable author-directed declaration order.
   // orderedItems 是稳定的作者指定声明顺序。
