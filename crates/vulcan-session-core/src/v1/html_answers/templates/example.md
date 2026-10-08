@@ -13,13 +13,43 @@ Completed checks | 8 | 10 | checks
 
 ## Comparison
 
-| Pool | Strength | Use |
+| Pool | Low memory | Isolation |
 | --- | --- | --- |
-| Shared | Lower memory | Light plugins |
-| Dedicated | Scheduling isolation | Heavy plugins |
+| Shared | ok | no |
+| Dedicated | warn higher idle cost | ok |
 
 ```ui-flow
-Call -> Read configuration -> Acquire VM -> Execute -> Release
+(Call) -> Read configuration -> {Heavy?}
+{Heavy?} -> Dedicated pool: yes
+{Heavy?} --> Shared pool: no
+Dedicated pool & Shared pool -> [(VM)] -> (Release)
+```
+
+## Request path
+
+```ui-sequence num
+Client -> Core: invoke plugin
+Core -> Pool: acquire VM
+Pool --> Core: VM handle
+note Core, Pool: bounded wait
+== Execute ==
+Core -> Core: run plugin
+Core --> Client: result
+```
+
+```ui-tree
+plugins/
+  pool.rs | scheduling
+  + dedicated.rs | new pool kind
+  ~ config.rs
+  - legacy/
+```
+
+```diff
+@@ -1,2 +1,2 @@
+-pool = shared
++pool = dedicated
+ timeout = 30
 ```
 
 ```ui-timeline

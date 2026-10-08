@@ -131,65 +131,85 @@ fn escape(text: &str) -> String {
 /// 渲染 Markdown 和根级组件围栏；`components` 禁止递归的可执行语法。
 /// Links/images remain readable text, raw HTML is escaped, and code remains ordinary code.
 /// 链接和图片保留可读文字，原始 HTML 转义，代码保持普通代码。
+/// The outer draft becomes panels: text before the first `##` is the lead, each `##` opens a
+/// lettered panel with a head bar.
+/// 外层草稿转为面板：首个 `##` 之前的文字是导语，每个 `##` 打开一个带字母标识及标题栏的面板。
 fn render_blocks(
     source: &str,
     budget: &mut RenderBudget,
     components: bool,
 ) -> Result<String, HtmlAnswerUnavailableReason> {
     let mut parser = Parser::new_ext(source, options()).into_offset_iter();
-    let mut output = if components {
-        String::from("<section class=panel>")
-    } else {
-        String::new()
-    };
+    let mut output = String::new();
     let mut pending = Vec::new();
     let mut depth = 0;
     // Only the outer draft creates layout panels; component Markdown stays inside its own container.
     // 仅外层草稿创建布局面板；组件 Markdown 保持在自身容器内。
-    let mut sections = 1;
-    let mut has_content = false;
+    let mut sections = 0;
+    let mut lead = false;
+    let mut section_open = false;
+    let mut heading_head = false;
+    // A table cell's first text may be a status word rendered as a badge.
+    // 表格单元格的首段文字可以是渲染为徽标的状态词。
+    let mut cell_start = false;
+    let mut labeled_code = false;
     while let Some((event, range)) = parser.next() {
         budget.events += 1;
         if budget.events > DRAFT_MAX_EVENTS {
             return invalid();
         }
-        if components
-            && depth == 0
-            && has_content
-            && matches!(
+        if components && depth == 0 {
+            let heading = matches!(
                 event,
                 Event::Start(Tag::Heading {
                     level: HeadingLevel::H2,
                     ..
                 })
-            )
-        {
-            sections += 1;
-            if sections > DRAFT_MAX_BLOCKS {
-                return invalid();
+            );
+            if heading || !section_open {
+                sections += 1;
+                if sections > DRAFT_MAX_BLOCKS {
+                    return invalid();
+                }
+                html::push_html(&mut output, pending.drain(..));
+                if section_open {
+                    output.push_str("</div></section>");
+                }
+                section_open = true;
+                if heading {
+                    heading_head = true;
+                    output.push_str(&format!(
+                        "<section class=panel><header class=panel-head><span class=panel-id aria-hidden=true>{}</span>",
+                        panel_letter(sections - usize::from(lead))
+                    ));
+                } else {
+                    lead = true;
+                    output.push_str("<section class=\"panel lead\"><div class=panel-body>");
+                }
             }
-            html::push_html(&mut output, pending.drain(..));
-            output.push_str("</section><section class=panel>");
         }
-        has_content = true;
         if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = &event
-            && info.starts_with("ui-")
+            && (info.starts_with("ui-") || info.as_ref() == "diff")
         {
-            if !components || depth != 0 {
+            let component = info.starts_with("ui-");
+            if component && (!components || depth != 0) {
                 return invalid();
             }
-            budget.components += 1;
-            if budget.components > DRAFT_MAX_BLOCKS {
-                return invalid();
+            if component {
+                budget.components += 1;
+                if budget.components > DRAFT_MAX_BLOCKS {
+                    return invalid();
+                }
             }
             // CommonMark implicitly closes at EOF; a component requires a physical matching closer.
             // CommonMark 会在文件末尾隐式闭合；组件要求物理匹配的闭合行。
-            if source.as_bytes()[range.start] != b'`'
-                || super::closed_source_range(source, &range).is_none()
+            if component
+                && (source.as_bytes()[range.start] != b'`'
+                    || super::closed_source_range(source, &range).is_none())
             {
                 return invalid();
             }
-            let mut component = String::new();
+            let mut body = String::new();
             for (part, _) in parser.by_ref() {
                 budget.events += 1;
                 if budget.events > DRAFT_MAX_EVENTS {
@@ -197,12 +217,16 @@ fn render_blocks(
                 }
                 match part {
                     Event::End(TagEnd::CodeBlock) => break,
-                    Event::Text(text) => component.push_str(&text),
+                    Event::Text(text) => body.push_str(&text),
                     _ => return invalid(),
                 }
             }
             html::push_html(&mut output, pending.drain(..));
-            output.push_str(&render_component(info, &component, budget)?);
+            output.push_str(&if component {
+                render_component(info, &body, budget)?
+            } else {
+                render_diff(&body)
+            });
             check_output(&output)?;
             continue;
         }
@@ -211,25 +235,121 @@ fn render_blocks(
             Event::End(_) => depth -= 1,
             _ => {}
         }
-        pending.push(match event {
+        let closes_head =
+            heading_head && depth == 0 && matches!(event, Event::End(TagEnd::Heading(_)));
+        let first_in_cell = std::mem::take(&mut cell_start);
+        let event = match event {
+            Event::Start(Tag::TableCell) => {
+                cell_start = true;
+                Event::Start(Tag::TableCell)
+            }
+            Event::Text(text) if first_in_cell => {
+                status_badge(&text).map_or(Event::Text(text), |badge| Event::Html(badge.into()))
+            }
             Event::Html(value) | Event::InlineHtml(value) => Event::Text(value),
             Event::Start(Tag::Link { dest_url, .. })
             | Event::Start(Tag::Image { dest_url, .. }) => Event::Html(
                 format!("<span class=reference title=\"{}\">", escape(&dest_url)).into(),
             ),
             Event::End(TagEnd::Link | TagEnd::Image) => Event::Html("</span>".into()),
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                let language = info.split_whitespace().next().unwrap_or("");
+                labeled_code = !language.is_empty();
+                if labeled_code {
+                    pending.push(Event::Html(
+                        format!(
+                            "<figure class=code><figcaption>{}</figcaption>",
+                            escape(language)
+                        )
+                        .into(),
+                    ));
+                }
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+            }
             other => other,
-        });
+        };
+        let code_end = matches!(event, Event::End(TagEnd::CodeBlock));
+        pending.push(event);
+        if code_end && labeled_code {
+            labeled_code = false;
+            pending.push(Event::Html("</figure>".into()));
+        }
+        if closes_head {
+            heading_head = false;
+            html::push_html(&mut output, pending.drain(..));
+            output.push_str("</header><div class=panel-body>");
+        }
     }
     html::push_html(&mut output, pending.into_iter());
-    if components {
-        output.push_str("</section>");
+    if section_open {
+        output.push_str("</div></section>");
     }
     check_output(&output)?;
     Ok(output)
 }
 
-/// Parse nonempty pipe-delimited rows with an exact column count and bounded item count.
+/// Return the panel identifier for the one-based `index`: A…Z, then AA, AB and so on.
+/// 返回从一开始的 `index` 对应的面板标识：A…Z，之后为 AA、AB 等。
+fn panel_letter(index: usize) -> String {
+    let mut value = index;
+    let mut letters = Vec::new();
+    while value > 0 {
+        value -= 1;
+        letters.push(char::from(b'A' + (value % 26) as u8));
+        value /= 26;
+    }
+    letters.iter().rev().collect()
+}
+
+/// Map a leading table status word (`ok`, `no`, `warn`, optionally followed by text) to a badge.
+/// 将表格开头的状态词（`ok`、`no`、`warn`，可跟随文字）映射为徽标。
+/// Returns escaped markup, or None for ordinary text.
+/// 返回已转义标记；普通文字返回 None。
+fn status_badge(text: &str) -> Option<String> {
+    let (word, rest) = text
+        .trim_start()
+        .split_once(' ')
+        .unwrap_or((text.trim(), ""));
+    let (class, symbol) = match word {
+        "ok" => ("ok", "✓"),
+        "no" => ("no", "✗"),
+        "warn" => ("warn", "!"),
+        _ => return None,
+    };
+    Some(format!(
+        "<span class=\"status {class}\" aria-label={class}>{symbol}</span>{}",
+        if rest.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" {}", escape(rest.trim()))
+        }
+    ))
+}
+
+/// Render a unified diff with added, removed, hunk and context rows; content stays escaped text.
+/// 渲染统一差异，区分新增、删除、区块头与上下文行；内容保持转义文字。
+fn render_diff(source: &str) -> String {
+    let mut output =
+        String::from("<figure class=\"code diff\"><figcaption>diff</figcaption><pre><code>");
+    for line in source.lines() {
+        let class = if line.starts_with("@@") {
+            "hunk"
+        } else if line.starts_with("+++") || line.starts_with("---") {
+            "file"
+        } else if line.starts_with('+') {
+            "add"
+        } else if line.starts_with('-') {
+            "del"
+        } else {
+            "ctx"
+        };
+        output.push_str(&format!("<span class={class}>{}</span>", escape(line)));
+    }
+    output.push_str("</code></pre></figure>");
+    output
+}
+
+// Parse nonempty pipe-delimited rows with an exact column count and bounded item count.
 /// 解析列数精确且条目数量有界的非空竖线分隔行。
 fn rows(source: &str, columns: usize) -> Result<Vec<Vec<&str>>, HtmlAnswerUnavailableReason> {
     let parsed: Vec<_> = source
@@ -310,31 +430,9 @@ fn render_component(
             output.push_str("</ol>");
             Ok(output)
         }
-        "ui-flow" if args.is_empty() => {
-            let mut output = String::from("<div class=flows>");
-            let mut count = 0;
-            for line in source.lines().filter(|line| !line.trim().is_empty()) {
-                let steps: Vec<_> = line
-                    .split("->")
-                    .take(DRAFT_MAX_ITEMS + 1)
-                    .map(str::trim)
-                    .collect();
-                count += steps.len();
-                if steps.len() < 2
-                    || count > DRAFT_MAX_ITEMS
-                    || steps.iter().any(|step| step.is_empty())
-                {
-                    return invalid();
-                }
-                output.push_str("<ol class=flow>");
-                for step in steps {
-                    output.push_str(&format!("<li dir=auto>{}</li>", escape(step)));
-                }
-                output.push_str("</ol>");
-            }
-            output.push_str("</div>");
-            Ok(output)
-        }
+        "ui-flow" => diagrams::render_flow(source, args, budget.components),
+        "ui-sequence" => diagrams::render_sequence(source, args),
+        "ui-tree" if args.is_empty() => diagrams::render_tree(source),
         "ui-callout" => {
             let (kind, title) = args
                 .split_once(char::is_whitespace)
@@ -430,3 +528,5 @@ fn render_tabs(
 
 #[cfg(test)]
 mod tests;
+
+mod diagrams;
