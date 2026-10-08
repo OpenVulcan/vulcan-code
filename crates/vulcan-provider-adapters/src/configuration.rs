@@ -1286,15 +1286,14 @@ impl PersistedAiConfiguration {
         projection
     }
 
-    /// Migrates the exact supported historical schema to the current version.
-    /// 将精确支持的历史 Schema 迁移到当前版本。
+    /// Normalizes a current-schema document; every other schema version is rejected unchanged.
+    /// 规范化当前 Schema 文档；其他任何 Schema 版本均原样拒绝。
     ///
     /// # Returns
     /// 返回值
     /// Whether the configuration changed, or an explicit unsupported-version error.
     /// 返回配置是否变化，或明确的不支持版本错误。
     pub fn migrate_to_current_schema(&mut self) -> Result<bool, String> {
-        let source_schema_version = self.schema_version;
         let mut changed = match self.schema_version {
             PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION => {
                 // normalized records whether a current-version file still carried ignored legacy output fields.
@@ -1311,139 +1310,10 @@ impl PersistedAiConfiguration {
                 };
                 Ok(normalized || inserted_vmm)
             }
-            10..=18 => {
-                self.normalize_direct_provider_model_settings();
-                self.inference_profiles
-                    .entry(String::from("vmm"))
-                    .or_default();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            9 => {
-                self.normalize_direct_provider_model_settings();
-                self.inference_profiles
-                    .entry(String::from("vmm"))
-                    .or_default();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            8 => {
-                self.normalize_direct_provider_model_settings();
-                self.inference_profiles
-                    .entry(String::from("vmm"))
-                    .or_default();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            7 => {
-                self.normalize_direct_provider_model_settings();
-                self.inference_profiles
-                    .entry(String::from("vmm"))
-                    .or_default();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            6 => {
-                self.normalize_direct_provider_model_settings();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            3..=5 => {
-                self.migrate_legacy_custom_model_capabilities();
-                self.normalize_direct_provider_model_settings();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            2 => {
-                self.migrate_legacy_custom_model_capabilities();
-                self.normalize_direct_provider_model_settings();
-                self.inference_profiles
-                    .entry(String::from("vmm"))
-                    .or_default();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
-            0 | 1 => {
-                if self.schema_version == 0 {
-                    self.provider_tool_selections
-                        .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
-                    self.provider_tool_selections
-                        .remove(&ProviderToolCapabilityKind::RerankDocuments);
-                    self.provider_tool_disabled_targets
-                        .remove(&ProviderToolCapabilityKind::EmbeddingCreate);
-                    self.provider_tool_disabled_targets
-                        .remove(&ProviderToolCapabilityKind::RerankDocuments);
-                }
-                self.provider_tool_enabled_capabilities = self
-                    .provider_tool_selections
-                    .iter()
-                    .filter(|(capability, selection)| {
-                        !self
-                            .provider_tool_disabled_targets
-                            .get(capability)
-                            .is_some_and(|disabled| disabled.contains(selection))
-                    })
-                    .map(|(capability, _)| *capability)
-                    .collect();
-                self.provider_tool_disabled_targets.clear();
-                self.migrate_legacy_custom_model_capabilities();
-                self.normalize_direct_provider_model_settings();
-                self.inference_profiles
-                    .entry(String::from("vmm"))
-                    .or_default();
-                self.schema_version = PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION;
-                Ok(true)
-            }
             unsupported => Err(format!(
                 "Unsupported persisted AI configuration schema version {unsupported}; supported version is {PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION}."
             )),
         }?;
-        if source_schema_version < 14 {
-            // Provider-tool selection semantics changed incompatibly in schema 14. Old scalar and
-            // mixed-media selections are intentionally discarded instead of being guessed into
-            // the new direct-selection and model-extension stores.
-            // Provider Tool 选择语义在 Schema 14 中发生不兼容变化。旧标量与混合媒体选择会被
-            // 有意丢弃，而不是猜测转换到新的指定直连与模型扩展存储。
-            self.provider_tool_selections.clear();
-            self.provider_tool_enabled_capabilities.clear();
-            self.provider_extension_target_sets.clear();
-            self.provider_tool_disabled_targets.clear();
-        }
-        if source_schema_version < 15 {
-            // Schema 15 replaces operation-scoped truthy-only internal model keys with explicit
-            // provider/model booleans. Historical keys are intentionally discarded because an
-            // absent false state cannot be reconstructed without guessing user intent.
-            // Schema 15 使用显式供应商/模型布尔值取代按操作且仅保存 true 的内部模型键。
-            // 旧结构无法还原缺失的 false 状态，因此有意丢弃，避免猜测用户意图。
-            self.internal_model_enabled_overrides.clear();
-        }
-        if source_schema_version < 18 {
-            // Schema 18 separates media-understanding backend selection from direct search/extract
-            // targets. Only the historical image-understanding target has an unambiguous migration;
-            // video and audio remain unconfigured instead of being inferred from adjacent state.
-            // Schema 18 将媒体理解后端选择从搜索/抓取直连目标中分离。只有历史图片理解目标
-            // 具备无歧义迁移；视频与音频保持未配置，不从相邻状态推断。
-            if let Some(selection) = self
-                .provider_tool_selections
-                .remove(&ProviderToolCapabilityKind::ImageUnderstand)
-            {
-                self.media_understanding_selections.insert(
-                    ProviderToolCapabilityKind::ImageUnderstand,
-                    MediaUnderstandingBackendSelection::ProviderTool { selection },
-                );
-            } else {
-                self.provider_tool_enabled_capabilities
-                    .remove(&ProviderToolCapabilityKind::ImageUnderstand);
-            }
-            self.provider_tool_selections
-                .remove(&ProviderToolCapabilityKind::VideoUnderstand);
-            self.provider_tool_selections
-                .remove(&ProviderToolCapabilityKind::AudioUnderstand);
-            self.provider_tool_enabled_capabilities
-                .remove(&ProviderToolCapabilityKind::VideoUnderstand);
-            self.provider_tool_enabled_capabilities
-                .remove(&ProviderToolCapabilityKind::AudioUnderstand);
-        }
         // insertedVceProfile ensures every supported schema exposes the system VCE consumer
         // without copying or guessing another consumer's user-owned routes.
         // insertedVceProfile 确保每个受支持 Schema 都暴露系统 VCE consumer，且不会复制或猜测
@@ -1632,62 +1502,6 @@ impl PersistedAiConfiguration {
             changed = true;
         }
         changed
-    }
-
-    /// Migrates legacy complete custom-model capabilities into explicit field differences.
-    /// 将旧版完整自定义模型能力迁移为显式字段差异。
-    fn migrate_legacy_custom_model_capabilities(&mut self) {
-        let provider_ids = self.custom_models.keys().cloned().collect::<Vec<_>>();
-        for provider_id in provider_ids {
-            let defaults = self
-                .custom_provider_model_defaults
-                .entry(provider_id.clone())
-                .or_default()
-                .clone();
-            let migrated_differences = self
-                .custom_models
-                .get_mut(provider_id.as_str())
-                .into_iter()
-                .flat_map(|models| models.values_mut())
-                .filter_map(|model| {
-                    let differences = ModelCapabilityOverrides {
-                        context_limit: model
-                            .capabilities
-                            .context_limit
-                            .filter(|value| *value != defaults.context_limit),
-                        output_limit: model
-                            .capabilities
-                            .output_limit
-                            .filter(|value| *value != defaults.output_limit),
-                        input_resources: (model.capabilities.input_resources
-                            != defaults.input_resources)
-                            .then(|| model.capabilities.input_resources.clone()),
-                        output_resources: None,
-                        ..ModelCapabilityOverrides::default()
-                    };
-                    // Supported historical schemas stored resolved basic capabilities inside each
-                    // model. Clear those fields after extracting differences so later
-                    // provider-default edits are not shadowed by a duplicate historical snapshot.
-                    // 受支持的历史 Schema 将解析后的基础能力存入每个模型。提取差异后清除这些字段，
-                    // 避免后续供应商默认值变更被重复的历史快照遮蔽。
-                    model.capabilities.context_limit = None;
-                    model.capabilities.output_limit = None;
-                    model.capabilities.input_resources.clear();
-                    model.capabilities.output_resources.clear();
-                    (!differences.is_empty()).then(|| {
-                        (
-                            Self::provider_model_key(provider_id.as_str(), model.id.as_str()),
-                            differences,
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            for (key, differences) in migrated_differences {
-                self.model_capability_overrides
-                    .entry(key)
-                    .or_insert(differences);
-            }
-        }
     }
 
     /// Builds a stable key for one provider-model-protocol scoped setting.

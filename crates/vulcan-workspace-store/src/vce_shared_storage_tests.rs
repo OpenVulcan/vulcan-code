@@ -1,5 +1,5 @@
-//! Isolated migration, reuse and bounded-retention regression fixtures.
-//! 隔离的迁移、复用与有界保留回归夹具。
+//! Isolated reuse and bounded-retention regression fixtures.
+//! 隔离的复用与有界保留回归夹具。
 
 use super::{artifact_retention, shared_artifacts, shared_manifest_store, shared_result_store};
 use rusqlite::{Connection, params};
@@ -241,8 +241,8 @@ fn run(
 
 /// Build one large source snapshot whose bytes stay unchanged across run generations.
 /// 构建一个正文跨运行代次不变的大型源码快照。
-/// Generation is execution-local; returns a source-only migration fixture.
-/// 代次局限于执行；返回仅源码的迁移夹具。
+/// Generation is execution-local; returns a source-only node fixture.
+/// 代次局限于执行；返回仅源码的节点夹具。
 fn node(generation: u64) -> VceCodeNodeSnapshot {
     let body = "中文 source body\n".repeat(5000);
     VceCodeNodeSnapshot {
@@ -393,78 +393,6 @@ fn shared_storage_retries_are_bounded_and_results_are_reusable() {
     );
 }
 
-/// Migration is lossless, resumable and rejects inconsistent historical ownership.
-/// 迁移无损、可恢复，并拒绝不一致的历史归属。
-#[test]
-fn shared_storage_migration_preserves_sources_and_results() {
-    let mut connection = database();
-    let contract = contract();
-    run(&connection, "old", 1, "failed", &contract);
-    connection.execute_batch("CREATE TABLE vce_embedding_run_node_chunks(namespace_id TEXT,run_id TEXT,node_index INTEGER,chunk_index INTEGER,blob_name TEXT,node_json_chunk TEXT,PRIMARY KEY(namespace_id,run_id,node_index,chunk_index)); CREATE TABLE vce_embedding_batch_results(namespace_id TEXT,run_id TEXT,batch_id TEXT,result_json TEXT,updated_at_unix_ms INTEGER,PRIMARY KEY(namespace_id,run_id,batch_id));").unwrap();
-    let source = node(1);
-    connection
-        .execute(
-            "INSERT INTO vce_embedding_run_node_chunks VALUES ('n','old',0,0,'blob',?)",
-            [serde_json::to_string(&source).unwrap()],
-        )
-        .unwrap();
-    let batch = batch("old-batch");
-    connection
-        .execute(
-            "INSERT INTO vce_embedding_run_batches VALUES ('n','old',0,?,?,?,1)",
-            params![
-                batch.batch_id,
-                batch.identity_fingerprint().unwrap(),
-                serde_json::to_string(&batch).unwrap()
-            ],
-        )
-        .unwrap();
-    let result = VceEmbeddingBatchResult {
-        batch_id: batch.batch_id.clone(),
-        vectors: vec![VceEmbeddingVectorResult {
-            input_id: batch.input_ids[0].clone(),
-            values: vec![1.0, 0.0, 0.0],
-        }],
-    };
-    connection
-        .execute(
-            "INSERT INTO vce_embedding_batch_results VALUES ('n','old',?,?,1)",
-            params![batch.batch_id, serde_json::to_string(&result).unwrap()],
-        )
-        .unwrap();
-    shared_manifest_store::migrate_nodes(&mut connection).unwrap();
-    shared_result_store::migrate(&mut connection).unwrap();
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT count(*) FROM vce_embedding_result_cache",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0,
-        "legacy envelopes cannot prove the actual producer after an approved override"
-    );
-    let hash: String = connection
-        .query_row(
-            "SELECT artifact_hash FROM vce_embedding_run_nodes",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(
-        shared_manifest_store::restore_node(&connection, &hash, "blob", 1).unwrap(),
-        source
-    );
-    assert_eq!(
-        shared_result_store::load(&connection, "n", "old", &batch.batch_id).unwrap(),
-        Some(result)
-    );
-    shared_manifest_store::migrate_nodes(&mut connection).unwrap();
-    shared_result_store::migrate(&mut connection).unwrap();
-    assert_eq!(connection.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('vce_embedding_run_node_chunks','vce_embedding_batch_results')",[],|row|row.get::<_,i64>(0)).unwrap(),0);
-}
-
 /// Unknown remote ownership remains a root while old settled attempts are reclaimed.
 /// 回收已结束的旧尝试时，未知远端归属仍然作为根引用保留。
 #[test]
@@ -533,127 +461,5 @@ fn shared_storage_retention_pins_unknown_remote_work() {
                 .get::<_, i64>(0))
             .unwrap(),
         0
-    );
-}
-
-/// An invalid old node rolls back conversion, while incomplete unpublished bytes can be discarded.
-/// 非法旧节点回滚转换，而未完整发布的字节可丢弃。
-#[test]
-fn shared_storage_migration_rejects_owner_mismatch_atomically() {
-    let mut connection = database();
-    run(&connection, "bad", 1, "failed", &contract());
-    connection.execute_batch("CREATE TABLE vce_embedding_run_node_chunks(namespace_id TEXT,run_id TEXT,node_index INTEGER,chunk_index INTEGER,blob_name TEXT,node_json_chunk TEXT,PRIMARY KEY(namespace_id,run_id,node_index,chunk_index));").unwrap();
-    connection
-        .execute(
-            "INSERT INTO vce_embedding_run_node_chunks VALUES ('n','bad',0,0,'wrong',?)",
-            [serde_json::to_string(&node(1)).unwrap()],
-        )
-        .unwrap();
-    assert!(
-        shared_manifest_store::migrate_nodes(&mut connection)
-            .unwrap_err()
-            .contains("owner")
-    );
-    assert_eq!(
-        connection
-            .query_row("SELECT count(*) FROM vce_shared_artifacts", [], |row| row
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT count(*) FROM vce_embedding_run_node_chunks",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
-    );
-    connection.execute_batch("UPDATE vce_embedding_runs SET manifest_complete=0,manifest_json='{}'; UPDATE vce_embedding_run_node_chunks SET node_json_chunk='incomplete';").unwrap();
-    shared_manifest_store::migrate_nodes(&mut connection).unwrap();
-    assert_eq!(
-        connection
-            .query_row("SELECT count(*) FROM vce_shared_artifacts", [], |row| row
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-        0
-    );
-}
-
-/// Symbol migration shares exact chunk content and rolls back when any historical body differs.
-/// 符号迁移共享精确代码块正文；任一历史正文不同时回滚。
-#[test]
-fn shared_storage_symbol_body_migration_verifies_before_removal() {
-    let mut connection = database();
-    connection.execute_batch("INSERT INTO vce_generations VALUES ('n','r',1,'staging','operation',NULL,1,1);
-      INSERT INTO vce_staged_blobs VALUES ('n','r',1,'blob','a.rs',NULL,NULL,NULL,NULL,'not_applicable',NULL,'not_applicable',NULL,'ready',NULL,1,0,1);
-      INSERT INTO vce_staged_chunks VALUES ('n','r',1,'blob','chunk','hash','a.rs','correct body',1,1,0,'recursive',0);
-      ALTER TABLE vce_staged_symbols ADD COLUMN content TEXT NOT NULL DEFAULT '';
-      INSERT INTO vce_staged_symbols(namespace_id,refresh_id,generation,blob_name,occurrence_id,identifier,path,start_line,end_line,start_char_offset,chunk_id,kind,content) VALUES ('n','r',1,'blob','symbol','correct','a.rs',1,1,0,'chunk','definition','incorrect body');").unwrap();
-    assert!(
-        super::read_generations::migrate_symbol_bodies(&mut connection)
-            .unwrap_err()
-            .contains("different")
-    );
-    assert_eq!(
-        connection
-            .query_row("SELECT content FROM vce_staged_symbols", [], |row| row
-                .get::<_, String>(
-                0
-            ))
-            .unwrap(),
-        "incorrect body"
-    );
-    connection
-        .execute("UPDATE vce_staged_symbols SET content='correct body'", [])
-        .unwrap();
-    // Published symbols and a live checkpoint lease must survive the same one-way migration.
-    // 已发布符号和活动检查点租约必须在同一单向迁移中保留。
-    connection
-        .execute_batch(
-            "INSERT INTO vce_blob_versions SELECT b.*,NULL FROM vce_staged_blobs b;
-        INSERT INTO vce_chunk_versions SELECT * FROM vce_staged_chunks;
-        ALTER TABLE vce_symbol_versions ADD COLUMN content TEXT NOT NULL DEFAULT '';
-        INSERT INTO vce_symbol_versions SELECT * FROM vce_staged_symbols;
-        INSERT INTO vce_read_checkpoints VALUES ('n',1,1,'r','{}',NULL,1);
-        INSERT INTO vce_active_checkpoints VALUES ('n',1);
-        INSERT INTO vce_read_members VALUES ('n',1,'blob','r',1);
-        INSERT INTO vce_read_leases VALUES ('n','reader','host',1,1);",
-        )
-        .unwrap();
-    super::read_generations::migrate_symbol_bodies(&mut connection).unwrap();
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT count(*) FROM pragma_table_info('vce_staged_symbols') WHERE name='content'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
-    assert_eq!(connection.query_row("SELECT c.content FROM vce_staged_symbols s JOIN vce_staged_chunks c USING(namespace_id,refresh_id,generation,blob_name,chunk_id)",[],|row|row.get::<_,String>(0)).unwrap(),"correct body");
-    assert_eq!(
-        connection
-            .query_row("SELECT content FROM vce_symbols", [], |row| row
-                .get::<_, String>(0))
-            .unwrap(),
-        "correct body"
-    );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT count(*) FROM vce_read_leases WHERE lease_id='reader'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
     );
 }

@@ -1,8 +1,8 @@
-//! Shared preparation artifacts and one-way migration of run-local source copies.
-//! 共享准备产物及运行范围源码副本的单向迁移。
+//! Shared preparation artifacts referenced by run-local manifests.
+//! 运行范围清单引用的共享准备产物。
 
 use super::shared_artifacts::{content_identity, load_artifact, store_artifact};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use serde::Deserialize;
 use vulcan_context_engine::{VceCodeNodeSnapshot, VceEmbeddingRunContract};
 
@@ -155,109 +155,4 @@ pub(super) fn restore_node(
     }
     node.generation = generation;
     Ok(node)
-}
-
-/// Migrate each old node in a separate atomic transaction and remove the legacy table only after completion.
-/// 每个旧节点使用独立原子事务迁移，仅在全部完成后移除旧表。
-/// The caller owns the database gate; interruption resumes from remaining legacy rows without duplicating bodies.
-/// 调用者持有数据库闸门；中断后从剩余旧记录恢复，不重复保存正文。返回成功或明确错误。
-pub(super) fn migrate_nodes(connection: &mut Connection) -> Result<(), String> {
-    // An absent legacy table is the completed migration state, not a second runtime read format.
-    // 旧表不存在表示迁移完成，并非第二种运行时读取格式。
-    let legacy = connection.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vce_embedding_run_node_chunks'", [], |_| Ok(()),
-    ).optional().map_err(|error| error.to_string())?;
-    if legacy.is_none() {
-        return Ok(());
-    }
-    loop {
-        // Seek the next remaining owner directly through the legacy primary key.
-        // 通过旧主键直接定位下一个剩余归属。
-        let owner = connection.query_row(
-            "SELECT namespace_id,run_id,node_index FROM vce_embedding_run_node_chunks ORDER BY namespace_id,run_id,node_index,chunk_index LIMIT 1",
-            [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
-        ).optional().map_err(|error| error.to_string())?;
-        let Some((namespace, run, index)) = owner else {
-            break;
-        };
-        // Atomic publication includes descriptor, text dependencies, owner and legacy removal.
-        // 原子发布包含描述、文本依赖、归属及旧记录移除。
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        // An unpublished partial node never admitted provider work and can be discarded without decoding.
-        // 未发布的部分节点从未准入供应商工作，可直接丢弃而无需解码。
-        let (complete,generation): (i64,i64) = transaction.query_row("SELECT manifest_complete,generation FROM vce_embedding_runs WHERE namespace_id=? AND run_id=?",params![namespace,run],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|error.to_string())?;
-        if complete == 0 {
-            transaction.execute("DELETE FROM vce_embedding_run_node_chunks WHERE namespace_id=? AND run_id=? AND node_index=?",params![namespace,run,index]).map_err(|error|error.to_string())?;
-            transaction.commit().map_err(|error| error.to_string())?;
-            continue;
-        }
-        // Frozen compatibility is retained from this historical run, never today's configuration.
-        // 冻结兼容信息取自本次历史运行，绝不使用当前配置。
-        let contract = run_contract(&transaction, &namespace, &run)?;
-        // Assemble only one historical file at a time.
-        // 每次仅组装一个历史文件。
-        let (json, blob) = {
-            // Ordered fragments include exact Blob ownership and contiguous ordinals.
-            // 有序分片包含精确 Blob 归属和连续序号。
-            let mut statement = transaction.prepare(
-                "SELECT chunk_index,node_json_chunk,blob_name FROM vce_embedding_run_node_chunks WHERE namespace_id=? AND run_id=? AND node_index=? ORDER BY chunk_index",
-            ).map_err(|error| error.to_string())?;
-            // Borrowed rows remain inside the transaction's read scope.
-            // 借用记录保持在事务读取范围内。
-            let rows = statement
-                .query_map(params![namespace, run, index], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })
-                .map_err(|error| error.to_string())?;
-            // Unverified row counts do not control allocation.
-            // 未验证的记录数量不控制内存分配。
-            let mut json = String::new();
-            let mut blob = String::new();
-            for (expected, row) in rows.enumerate() {
-                let (ordinal, fragment, fragment_blob) = row.map_err(|error| error.to_string())?;
-                if ordinal != expected as i64 {
-                    return Err(String::from("Legacy VCE node fragments are incomplete"));
-                }
-                if expected == 0 {
-                    blob = fragment_blob;
-                } else if blob != fragment_blob {
-                    return Err(String::from("Legacy VCE fragment Blob owner changed"));
-                }
-                json.push_str(&fragment);
-            }
-            (json, blob)
-        };
-        // Partial unpublished plans can have an interrupted final node; they admitted no provider requests.
-        // 未发布的部分计划可能包含中断的末尾节点；其尚未准入供应商请求。
-        if complete == 1 {
-            // Deserialization and read-back prove a lossless conversion before deleting old bytes.
-            // 在删除旧字节前通过反序列化及回读证明转换无损。
-            let node: VceCodeNodeSnapshot =
-                serde_json::from_str(&json).map_err(|error| error.to_string())?;
-            if node.blob_name != blob || i64::try_from(node.generation).ok() != Some(generation) {
-                return Err(String::from("Legacy VCE node does not match its run owner"));
-            }
-            store_node(&transaction, &namespace, &run, index, &node, &contract, 0)?;
-            // Use the actual persisted reference to verify the new representation.
-            // 使用实际持久引用校验新表示。
-            let artifact: String = transaction.query_row("SELECT artifact_hash FROM vce_embedding_run_nodes WHERE namespace_id=? AND run_id=? AND node_index=?", params![namespace,run,index], |row| row.get(0)).map_err(|error| error.to_string())?;
-            if restore_node(&transaction, &artifact, &node.blob_name, node.generation)? != node {
-                return Err(String::from(
-                    "VCE node migration failed lossless verification",
-                ));
-            }
-        }
-        transaction.execute("DELETE FROM vce_embedding_run_node_chunks WHERE namespace_id=? AND run_id=? AND node_index=?", params![namespace, run, index])
-            .map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-    }
-    connection
-        .execute_batch("DROP TABLE vce_embedding_run_node_chunks;")
-        .map_err(|error| error.to_string())
 }

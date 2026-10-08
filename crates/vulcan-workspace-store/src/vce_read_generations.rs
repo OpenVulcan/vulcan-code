@@ -11,63 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
-/// Remove duplicated symbol bodies only after proving every body equals its exact immutable chunk.
-/// 仅在证明每个符号正文等于其精确不可变代码块后移除重复正文。
-/// The migration is transactional and preserves checkpoint leases; returns explicit corruption errors.
-/// 迁移为事务性且保留检查点租约；返回明确的损坏错误。
-pub(super) fn migrate_symbol_bodies(connection: &mut rusqlite::Connection) -> Result<(), String> {
-    use rusqlite::OptionalExtension;
-    // Recovery opens may skip base-schema creation; upgrade their cascade lookups before any cleanup.
-    // 恢复打开可能跳过基础结构创建；任何清理前也必须升级其级联定位索引。
-    connection.execute_batch("CREATE INDEX IF NOT EXISTS idx_vce_staged_chunk_blob ON vce_staged_chunks(namespace_id,refresh_id,generation,blob_name);
-        CREATE INDEX IF NOT EXISTS idx_vce_staged_symbol_blob ON vce_staged_symbols(namespace_id,refresh_id,generation,blob_name);
-        CREATE INDEX IF NOT EXISTS idx_vce_version_chunk_blob ON vce_chunk_versions(namespace_id,refresh_id,generation,blob_name);
-        CREATE INDEX IF NOT EXISTS idx_vce_version_symbol_blob ON vce_symbol_versions(namespace_id,refresh_id,generation,blob_name);").map_err(|error|error.to_string())?;
-    // These are schema-owned table names, never externally supplied identifiers.
-    // 这些是结构持有的表名，绝非外部传入标识符。
-    for (symbols, chunks) in [
-        ("vce_staged_symbols", "vce_staged_chunks"),
-        ("vce_symbol_versions", "vce_chunk_versions"),
-    ] {
-        let legacy = connection
-            .query_row(
-                "SELECT 1 FROM pragma_table_info(?) WHERE name='content'",
-                [symbols],
-                |_| Ok(()),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?
-            .is_some();
-        if !legacy {
-            continue;
-        }
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        // Chunk primary keys bound each verification lookup; no full scan is repeated per symbol.
-        // 代码块主键限定每次校验查询；不会为每个符号重复全表扫描。
-        let invalid: bool = transaction.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {symbols} s LEFT JOIN {chunks} c ON c.namespace_id=s.namespace_id AND c.refresh_id=s.refresh_id AND c.generation=s.generation AND c.chunk_id=s.chunk_id AND c.blob_name=s.blob_name WHERE c.chunk_id IS NULL OR s.content != c.content)"),[],|row|row.get(0)).map_err(|error|error.to_string())?;
-        if invalid {
-            return Err(format!(
-                "{symbols} contains a symbol whose exact chunk body is missing or different"
-            ));
-        }
-        if symbols == "vce_symbol_versions" {
-            transaction
-                .execute_batch("DROP VIEW IF EXISTS vce_symbols")
-                .map_err(|error| error.to_string())?;
-        }
-        transaction
-            .execute_batch(&format!("ALTER TABLE {symbols} DROP COLUMN content"))
-            .map_err(|error| error.to_string())?;
-        if symbols == "vce_symbol_versions" {
-            transaction.execute_batch("CREATE VIEW vce_symbols AS SELECT s.*,c.content FROM vce_symbol_versions s JOIN vce_blobs b ON b.namespace_id=s.namespace_id AND b.refresh_id=s.refresh_id AND b.generation=s.generation AND b.blob_name=s.blob_name JOIN vce_chunk_versions c ON c.namespace_id=s.namespace_id AND c.refresh_id=s.refresh_id AND c.generation=s.generation AND c.chunk_id=s.chunk_id AND c.blob_name=s.blob_name").map_err(|error|error.to_string())?;
-        }
-        transaction.commit().map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 /// Exact immutable producer identity for one member of a committed checkpoint.
 /// 已提交检查点中一个成员的精确不可变生产身份。
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

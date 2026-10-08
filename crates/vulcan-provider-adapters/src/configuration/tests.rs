@@ -300,215 +300,6 @@ fn isolated_custom_provider_reference_can_be_explicitly_removed() {
     assert!(!configuration.custom_provider_manifest_failures_truncated);
 }
 
-/// Verifies schema thirteen provider-tool state is discarded without compatibility mapping.
-/// 验证 Schema 十三的 Provider Tool 状态会在不做兼容映射的情况下被丢弃。
-#[test]
-fn schema_thirteen_discards_pre_extension_provider_tool_state() {
-    // historical carries every old scalar selection store plus a forged extension entry.
-    // historical 携带全部旧标量选择存储以及一条伪造扩展记录。
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 13,
-        ..PersistedAiConfiguration::default()
-    };
-    historical.provider_tool_selections.insert(
-        ProviderToolCapabilityKind::MediaAnalyze,
-        ProviderToolTargetSelection {
-            connection_id: String::from("old-connection"),
-            target_id: String::from("old-mixed-media"),
-        },
-    );
-    historical
-        .provider_tool_enabled_capabilities
-        .insert(ProviderToolCapabilityKind::MediaAnalyze);
-    historical.provider_extension_target_sets.insert(
-        ProviderToolCapabilityKind::ImageGenerate,
-        BTreeSet::from([ProviderToolTargetSelection {
-            connection_id: String::from("old-connection"),
-            target_id: String::from("old-image-generator"),
-        }]),
-    );
-    historical.provider_tool_disabled_targets.insert(
-        ProviderToolCapabilityKind::ImageGenerate,
-        BTreeSet::from([ProviderToolTargetSelection {
-            connection_id: String::from("old-connection"),
-            target_id: String::from("old-disabled-generator"),
-        }]),
-    );
-
-    assert!(historical.migrate_to_current_schema().expect("migration"));
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(historical.provider_tool_selections.is_empty());
-    assert!(historical.provider_tool_enabled_capabilities.is_empty());
-    assert!(historical.provider_extension_target_sets.is_empty());
-    assert!(historical.provider_tool_disabled_targets.is_empty());
-}
-
-/// Verifies migration from schema fourteen discards old operation switches while preserving provider tools.
-/// 验证从 Schema 十四迁移时丢弃旧按操作开关，同时保留 Provider Tool 设置。
-#[test]
-fn schema_fourteen_replaces_internal_switches_without_erasing_provider_tools() {
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 14,
-        ..PersistedAiConfiguration::default()
-    };
-    historical.internal_model_enabled_overrides.insert(
-        PersistedAiConfiguration::internal_model_operation_key(
-            "opencode-go",
-            "deepseek-v4-flash",
-            AiOperation::ConversationRespond,
-        ),
-        true,
-    );
-    let target = ProviderToolTargetSelection {
-        connection_id: String::from("search-connection"),
-        target_id: String::from("search-target"),
-    };
-    historical
-        .provider_tool_selections
-        .insert(ProviderToolCapabilityKind::WebSearch, target.clone());
-    historical
-        .provider_tool_enabled_capabilities
-        .insert(ProviderToolCapabilityKind::WebSearch);
-
-    assert!(historical.migrate_to_current_schema().expect("migration"));
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(historical.internal_model_enabled_overrides.is_empty());
-    assert_eq!(
-        historical
-            .provider_tool_selections
-            .get(&ProviderToolCapabilityKind::WebSearch),
-        Some(&target),
-    );
-    assert!(
-        historical
-            .provider_tool_enabled_capabilities
-            .contains(&ProviderToolCapabilityKind::WebSearch)
-    );
-}
-
-/// Verifies schema fifteen price configuration is ignored and never serialized into the current schema.
-/// 验证 Schema 十五价格配置会被忽略，且绝不会序列化到当前 Schema。
-#[test]
-fn schema_fifteen_discards_legacy_billing_configuration() {
-    let mut historical = serde_json::to_value(PersistedAiConfiguration::default())
-        .expect("default configuration should serialize");
-    historical["schema_version"] = serde_json::json!(15);
-    historical["billing"] = serde_json::json!({
-        "catalog_path": "legacy-model-pricing.json",
-        "model_overrides": {
-            "gpt-5": {
-                "input_per_million": "1.25",
-                "output_per_million": "10"
-            }
-        }
-    });
-
-    let mut configuration: PersistedAiConfiguration =
-        serde_json::from_value(historical).expect("legacy unknown billing field should be ignored");
-    assert!(
-        configuration
-            .migrate_to_current_schema()
-            .expect("migration")
-    );
-    assert_eq!(
-        configuration.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    let serialized =
-        serde_json::to_value(configuration).expect("migrated configuration should serialize");
-    assert!(serialized.get("billing").is_none());
-}
-
-/// Verifies schema sixteen receives the complete default fixed-node configuration.
-/// 验证 Schema 十六会获得完整的默认固定节点配置。
-#[test]
-fn schema_sixteen_migration_adds_default_context_compaction_window_nodes() {
-    let mut historical = serde_json::to_value(PersistedAiConfiguration::default())
-        .expect("default configuration should serialize");
-    historical["schema_version"] = serde_json::json!(16);
-    historical
-        .as_object_mut()
-        .expect("configuration should be an object")
-        .remove("context_compaction_window_nodes");
-
-    let mut configuration: PersistedAiConfiguration = serde_json::from_value(historical)
-        .expect("schema sixteen should deserialize with default nodes");
-
-    assert!(
-        configuration
-            .migrate_to_current_schema()
-            .expect("migration")
-    );
-    assert_eq!(
-        configuration.context_compaction_window_nodes,
-        ContextCompactionWindowConfiguration::default()
-    );
-    assert_eq!(
-        configuration.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-}
-
-/// Verifies schema seventeen migrates only the unambiguous image backend and disables inferred media.
-/// 验证 Schema 十七只迁移无歧义图片后端，并禁用推断式媒体配置。
-#[test]
-fn schema_seventeen_migrates_only_explicit_image_understanding_backend() {
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 17,
-        ..PersistedAiConfiguration::default()
-    };
-    let image_selection = ProviderToolTargetSelection {
-        connection_id: String::from("vision-account"),
-        target_id: String::from("vision-target"),
-    };
-    historical.provider_tool_selections.insert(
-        ProviderToolCapabilityKind::ImageUnderstand,
-        image_selection.clone(),
-    );
-    historical.provider_tool_selections.insert(
-        ProviderToolCapabilityKind::VideoUnderstand,
-        ProviderToolTargetSelection {
-            connection_id: String::from("legacy-video-account"),
-            target_id: String::from("legacy-video-target"),
-        },
-    );
-    historical.provider_tool_enabled_capabilities.extend([
-        ProviderToolCapabilityKind::ImageUnderstand,
-        ProviderToolCapabilityKind::VideoUnderstand,
-    ]);
-
-    assert!(historical.migrate_to_current_schema().expect("migration"));
-    assert_eq!(
-        historical
-            .media_understanding_selections
-            .get(&ProviderToolCapabilityKind::ImageUnderstand),
-        Some(&MediaUnderstandingBackendSelection::ProviderTool {
-            selection: image_selection,
-        })
-    );
-    assert!(
-        historical
-            .provider_tool_enabled_capabilities
-            .contains(&ProviderToolCapabilityKind::ImageUnderstand)
-    );
-    assert!(
-        !historical
-            .provider_tool_enabled_capabilities
-            .contains(&ProviderToolCapabilityKind::VideoUnderstand)
-    );
-    assert!(
-        !historical
-            .provider_tool_selections
-            .contains_key(&ProviderToolCapabilityKind::VideoUnderstand)
-    );
-}
-
 /// Verifies provider and replacement routes remain independently reusable when the active mode changes.
 /// 验证切换当前模式时供应商专用与模型代替路由仍可独立复用。
 #[test]
@@ -1082,72 +873,6 @@ fn connection_enabled_state_is_sparse_reversible_and_removes_routing_preferences
     );
 }
 
-/// Verifies schema eighteen upgrades with every existing credential enabled by default.
-/// 验证 Schema 18 升级时全部既有凭据默认启用。
-#[test]
-fn schema_eighteen_migration_initializes_disabled_connection_state() {
-    // historical omits the new sparse field exactly as a version-eighteen file does.
-    // historical 与 Schema 18 文件一致，省略新增的稀疏字段。
-    let mut historical: PersistedAiConfiguration = serde_json::from_str(r#"{"schema_version":18}"#)
-        .expect("schema eighteen fixture must deserialize");
-    assert!(historical.disabled_connection_ids.is_empty());
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema eighteen must migrate")
-    );
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(historical.disabled_connection_ids.is_empty());
-}
-
-/// Verifies schema six loads without account policy data and migrates to the current schema exactly.
-/// 验证 Schema 6 在没有账号策略数据时可加载，并精确迁移到当前 Schema。
-#[test]
-fn schema_six_migration_initializes_connection_model_access_policies() {
-    let mut historical: PersistedAiConfiguration = serde_json::from_str(r#"{"schema_version":6}"#)
-        .expect("schema six fixture must deserialize");
-    assert!(historical.connection_model_access_policies.is_empty());
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema six must migrate")
-    );
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(historical.connection_model_access_policies.is_empty());
-}
-
-/// Verifies schema seven preserves the required VMM profile repair while upgrading direct settings.
-/// 验证 Schema 7 在升级直接设置时仍会修复必需的 VMM 配置档。
-#[test]
-fn schema_seven_migration_repairs_missing_vmm_profile() {
-    // historical represents a valid schema-seven file whose required profile was lost before persistence.
-    // historical 表示一份持久化前丢失必需配置档的有效 Schema 7 文件。
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 7,
-        ..PersistedAiConfiguration::default()
-    };
-    historical.inference_profiles.remove("vmm");
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema seven must migrate")
-    );
-
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(historical.inference_profiles.contains_key("vmm"));
-    assert!(historical.inference_profiles.contains_key("vce"));
-}
-
 /// Verifies explicit consumer dimensions survive serialization without changing peer profiles.
 /// 验证消费者的明确维度在序列化后保留，且不会改变其他配置档。
 ///
@@ -1210,14 +935,11 @@ fn current_schema_repairs_missing_vce_profile_without_copying_vmm_routes() {
     );
 }
 
-/// Verifies schema-seven protocol limits become one conservative direct model setting.
-/// 验证 Schema 7 协议限制会转化为一份保守的直接模型设置。
+/// Verifies protocol-scoped limits in a current document become one conservative direct model setting.
+/// 验证当前文档中的协议作用域限制会转化为一份保守的直接模型设置。
 #[test]
-fn schema_seven_migrates_protocol_limits_to_direct_model_settings() {
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 7,
-        ..PersistedAiConfiguration::default()
-    };
+fn protocol_limits_normalize_to_direct_model_settings() {
+    let mut historical = PersistedAiConfiguration::default();
     let first_key = PersistedAiConfiguration::provider_model_protocol_key(
         "custom:迁移",
         "model:alpha",
@@ -1249,7 +971,7 @@ fn schema_seven_migrates_protocol_limits_to_direct_model_settings() {
     assert!(
         historical
             .migrate_to_current_schema()
-            .expect("schema seven must migrate")
+            .expect("current schema must load")
     );
 
     let model_key = PersistedAiConfiguration::provider_model_key("custom:迁移", "model:alpha");
@@ -1272,16 +994,13 @@ fn schema_seven_migrates_protocol_limits_to_direct_model_settings() {
     assert!(!historical.model_overrides.contains_key(second_key.as_str()));
 }
 
-/// Verifies schema-seven user-owned non-text output declarations are removed during migration.
-/// 验证 Schema 7 中用户持有的非文本输出声明会在迁移时移除。
+/// Verifies user-owned non-text output declarations in a current document are removed on load.
+/// 验证当前文档中用户持有的非文本输出声明会在加载时移除。
 #[test]
-fn schema_seven_removes_custom_non_text_output_declarations() {
+fn custom_non_text_output_declarations_are_removed_on_load() {
     let provider_id = "custom:legacy-output";
     let model_id = "legacy-image-model";
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 7,
-        ..PersistedAiConfiguration::default()
-    };
+    let mut historical = PersistedAiConfiguration::default();
     historical.custom_provider_model_defaults.insert(
         String::from(provider_id),
         CustomProviderModelDefaults {
@@ -1326,7 +1045,7 @@ fn schema_seven_removes_custom_non_text_output_declarations() {
     assert!(
         historical
             .migrate_to_current_schema()
-            .expect("schema seven must migrate")
+            .expect("current schema must load")
     );
 
     assert!(
@@ -2152,23 +1871,14 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
     assert!(configuration.provider_has_model_customizations(retained_provider));
 }
 
-/// Verifies schema two upgrades without inventing model overlays and new fields round-trip exactly.
-/// 验证 Schema 2 升级时不会虚构模型覆盖，并且新增字段能够精确往返。
+/// Verifies loading invents no model overlays and custom-model overlays round-trip exactly.
+/// 验证加载时不会虚构模型覆盖，并且自定义模型覆盖能够精确往返。
 #[test]
-fn schema_two_migration_and_model_overlay_round_trip_are_exact() {
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 2,
-        ..PersistedAiConfiguration::default()
-    };
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema two must migrate")
-    );
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
+fn model_overlay_round_trip_is_exact() {
+    let mut historical = PersistedAiConfiguration::default();
+    historical
+        .migrate_to_current_schema()
+        .expect("current schema must load");
     assert!(historical.custom_models.is_empty());
     assert!(historical.model_capability_overrides.is_empty());
 
@@ -2210,295 +1920,6 @@ fn schema_two_migration_and_model_overlay_round_trip_are_exact() {
     );
 }
 
-/// R12/必测 1：从旧 schema 升级一次与重复升级两次结果相同。
-///
-/// Every supported legacy schema (0..=12) must migrate idempotently: applying the
-/// migration a second time to an already-current configuration produces the identical
-/// snapshot and returns `Ok(false)` (no further change) (plan §R12).
-/// 每个受支持的旧 schema（0..=12）必须幂等迁移：对已是当前版本的配置再次执行迁移，
-/// 产生完全相同的快照并返回 `Ok(false)`（不再变化）（方案 §R12）。
-#[test]
-fn legacy_schema_migration_is_idempotent_across_all_supported_versions() {
-    for legacy_schema in 0..=12 {
-        let mut once = PersistedAiConfiguration {
-            schema_version: legacy_schema,
-            ..PersistedAiConfiguration::default()
-        };
-        assert!(
-            once.migrate_to_current_schema()
-                .expect("legacy schema must migrate"),
-            "schema {legacy_schema} must change on first migration"
-        );
-        let once_encoded = serde_json::to_vec(&once).expect("configuration must serialize");
-
-        let mut twice = PersistedAiConfiguration {
-            schema_version: legacy_schema,
-            ..PersistedAiConfiguration::default()
-        };
-        twice
-            .migrate_to_current_schema()
-            .expect("first migration must succeed");
-        let second_changed = twice
-            .migrate_to_current_schema()
-            .expect("second migration must succeed");
-        assert!(
-            !second_changed,
-            "schema {legacy_schema} second migration must be a no-op"
-        );
-        let twice_encoded = serde_json::to_vec(&twice).expect("configuration must serialize");
-        assert_eq!(
-            once_encoded, twice_encoded,
-            "schema {legacy_schema} one-time and repeated migration must be identical"
-        );
-    }
-}
-
-/// Verifies schema two migrates legacy resolved custom capabilities into explicit differences.
-/// 验证 Schema 2 会把旧版自定义模型已解析能力迁移为显式差异。
-#[test]
-fn schema_two_migrates_legacy_custom_model_capabilities() {
-    let provider_id = "custom:provider";
-    let model_id = "private-model";
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 2,
-        custom_models: BTreeMap::from([(
-            String::from(provider_id),
-            BTreeMap::from([(
-                String::from(model_id),
-                CustomModelDefinition {
-                    id: String::from(model_id),
-                    display_name: String::from("Private Model"),
-                    enabled: true,
-                    capabilities: ModelCapabilities {
-                        context_limit: Some(64_000),
-                        output_limit: Some(4_096),
-                        input_resources: vec![ResourceKind::Image],
-                        ..ModelCapabilities::default()
-                    },
-                    request_projection: Default::default(),
-                    tool_schema_projection: Default::default(),
-                    system_binding: None,
-                },
-            )]),
-        )]),
-        ..PersistedAiConfiguration::default()
-    };
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema two must migrate")
-    );
-
-    let migrated_model = historical
-        .custom_model(provider_id, model_id)
-        .expect("custom model identity and advanced contract should remain");
-    assert_eq!(migrated_model.capabilities.context_limit, None);
-    assert_eq!(migrated_model.capabilities.output_limit, None);
-    assert!(migrated_model.capabilities.input_resources.is_empty());
-    let differences = historical
-        .model_capability_overrides(provider_id, model_id)
-        .expect("legacy basic fields should become explicit differences");
-    assert_eq!(differences.context_limit, Some(64_000));
-    assert_eq!(differences.output_limit, Some(4_096));
-    assert_eq!(differences.input_resources, Some(vec![ResourceKind::Image]));
-}
-
-/// Verifies schema four upgrades without inventing pending credential state.
-/// 验证 Schema 4 升级时不会凭空创建待验证凭据状态。
-#[test]
-fn schema_four_migration_initializes_pending_validation_state() {
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 4,
-        ..PersistedAiConfiguration::default()
-    };
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema four must migrate")
-    );
-    assert_eq!(
-        historical.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(historical.pending_validation_connection_ids.is_empty());
-}
-
-/// Verifies schema-five files produced by the earlier migration are normalized without replacing newer explicit differences.
-/// 验证早期迁移生成的 Schema 5 文件会被规范化，且不会覆盖更新的显式差异。
-#[test]
-fn schema_five_migration_repairs_duplicated_basic_capabilities() {
-    let provider_id = "custom:provider";
-    let model_id = "private-model";
-    let provider_model_key = PersistedAiConfiguration::provider_model_key(provider_id, model_id);
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 5,
-        custom_models: BTreeMap::from([(
-            String::from(provider_id),
-            BTreeMap::from([(
-                String::from(model_id),
-                CustomModelDefinition {
-                    id: String::from(model_id),
-                    display_name: String::from("Private Model"),
-                    enabled: true,
-                    capabilities: ModelCapabilities {
-                        context_limit: Some(64_000),
-                        output_limit: Some(4_096),
-                        input_resources: vec![ResourceKind::Image],
-                        ..ModelCapabilities::default()
-                    },
-                    request_projection: Default::default(),
-                    tool_schema_projection: Default::default(),
-                    system_binding: None,
-                },
-            )]),
-        )]),
-        model_capability_overrides: BTreeMap::from([(
-            provider_model_key.clone(),
-            ModelCapabilityOverrides {
-                context_limit: Some(128_000),
-                output_limit: Some(8_192),
-                input_resources: Some(Vec::new()),
-                output_resources: None,
-                ..ModelCapabilityOverrides::default()
-            },
-        )]),
-        ..PersistedAiConfiguration::default()
-    };
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema five must migrate")
-    );
-
-    let migrated_model = historical
-        .custom_model(provider_id, model_id)
-        .expect("migrated custom model should remain configured");
-    assert_eq!(migrated_model.capabilities.context_limit, None);
-    assert_eq!(migrated_model.capabilities.output_limit, None);
-    assert!(migrated_model.capabilities.input_resources.is_empty());
-    assert_eq!(
-        historical
-            .model_capability_overrides
-            .get(provider_model_key.as_str()),
-        Some(&ModelCapabilityOverrides {
-            context_limit: Some(128_000),
-            output_limit: Some(8_192),
-            input_resources: Some(Vec::new()),
-            output_resources: None,
-            ..ModelCapabilityOverrides::default()
-        })
-    );
-}
-
-/// Verifies schema-three complete custom-model capabilities become explicit user differences.
-/// 验证 Schema 3 的完整自定义模型能力会迁移为显式用户差异。
-#[test]
-fn schema_three_migration_preserves_custom_model_capability_differences() {
-    let provider_id = "custom:provider";
-    let model_id = "private-model";
-    let model = CustomModelDefinition {
-        id: String::from(model_id),
-        display_name: String::from("Private Model"),
-        enabled: true,
-        capabilities: ModelCapabilities {
-            context_limit: Some(64_000),
-            output_limit: Some(4_096),
-            input_resources: vec![ResourceKind::Image],
-            evidence_revision: String::from("legacy.advanced.v1"),
-            ..ModelCapabilities::default()
-        },
-        request_projection: Default::default(),
-        tool_schema_projection: Default::default(),
-        system_binding: None,
-    };
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 3,
-        custom_models: BTreeMap::from([(
-            String::from(provider_id),
-            BTreeMap::from([(String::from(model_id), model)]),
-        )]),
-        ..PersistedAiConfiguration::default()
-    };
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("schema three must migrate")
-    );
-
-    assert_eq!(
-        historical
-            .model_capability_overrides
-            .get(PersistedAiConfiguration::provider_model_key(provider_id, model_id).as_str()),
-        Some(&ModelCapabilityOverrides {
-            context_limit: Some(64_000),
-            output_limit: Some(4_096),
-            input_resources: Some(vec![ResourceKind::Image]),
-            output_resources: None,
-            ..ModelCapabilityOverrides::default()
-        })
-    );
-    let migrated_model = historical
-        .custom_model(provider_id, model_id)
-        .expect("migrated custom model should remain configured");
-    assert_eq!(migrated_model.capabilities.context_limit, None);
-    assert_eq!(migrated_model.capabilities.output_limit, None);
-    assert!(migrated_model.capabilities.input_resources.is_empty());
-    assert!(migrated_model.capabilities.output_resources.is_empty());
-    assert_eq!(
-        migrated_model.capabilities.evidence_revision,
-        "legacy.advanced.v1"
-    );
-}
-
-/// Verifies schema-three values equal to the new defaults do not create redundant overlays.
-/// 验证 Schema 3 中等于新默认值的能力不会生成冗余覆盖。
-#[test]
-fn schema_three_migration_skips_values_equal_to_provider_defaults() {
-    let provider_id = "custom-provider";
-    let model_id = "default-model";
-    let defaults = CustomProviderModelDefaults::default();
-    let model = CustomModelDefinition {
-        id: String::from(model_id),
-        display_name: String::from("Default Model"),
-        enabled: true,
-        capabilities: ModelCapabilities {
-            context_limit: Some(defaults.context_limit),
-            output_limit: Some(defaults.output_limit),
-            input_resources: defaults.input_resources.clone(),
-            output_resources: defaults.output_resources,
-            ..ModelCapabilities::default()
-        },
-        request_projection: Default::default(),
-        tool_schema_projection: Default::default(),
-        system_binding: None,
-    };
-    let mut historical = PersistedAiConfiguration {
-        schema_version: 3,
-        custom_models: BTreeMap::from([(
-            String::from(provider_id),
-            BTreeMap::from([(String::from(model_id), model)]),
-        )]),
-        ..PersistedAiConfiguration::default()
-    };
-
-    historical
-        .migrate_to_current_schema()
-        .expect("schema three must migrate");
-
-    assert!(historical.model_capability_overrides.is_empty());
-    let migrated_model = historical
-        .custom_model(provider_id, model_id)
-        .expect("migrated custom model should remain configured");
-    assert_eq!(migrated_model.capabilities.context_limit, None);
-    assert_eq!(migrated_model.capabilities.output_limit, None);
-    assert!(migrated_model.capabilities.input_resources.is_empty());
-    assert!(migrated_model.capabilities.output_resources.is_empty());
-}
-
 /// Verifies template selections preserve their exact text modality decisions through JSON.
 /// 验证模板选择通过 JSON 往返时会精确保留文本模态决策。
 #[test]
@@ -2529,155 +1950,6 @@ fn custom_model_template_text_capabilities_round_trip_exactly() {
         configuration
             .custom_model_template_decisions
             .get(key.as_str())
-    );
-}
-
-/// Verifies historical schemas discard every incompatible provider-tool selection.
-/// 验证历史 Schema 会丢弃全部不兼容的 Provider Tool 选择。
-#[test]
-fn historical_configuration_migration_discards_incompatible_provider_tool_state() {
-    let mut configuration = PersistedAiConfiguration {
-        schema_version: 0,
-        ..PersistedAiConfiguration::default()
-    };
-    configuration.provider_tool_selections.insert(
-        ProviderToolCapabilityKind::WebSearch,
-        ProviderToolTargetSelection {
-            connection_id: String::from("search-connection"),
-            target_id: String::from("search-target"),
-        },
-    );
-    configuration.provider_tool_selections.insert(
-        ProviderToolCapabilityKind::EmbeddingCreate,
-        ProviderToolTargetSelection {
-            connection_id: String::from("embedding-connection"),
-            target_id: String::from("embedding-target"),
-        },
-    );
-    configuration.provider_tool_disabled_targets.insert(
-        ProviderToolCapabilityKind::RerankDocuments,
-        BTreeSet::from([ProviderToolTargetSelection {
-            connection_id: String::from("rerank-connection"),
-            target_id: String::from("rerank-target"),
-        }]),
-    );
-
-    assert!(
-        configuration
-            .migrate_to_current_schema()
-            .expect("schema zero must migrate")
-    );
-    assert_eq!(
-        configuration.schema_version,
-        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION
-    );
-    assert!(configuration.provider_tool_selections.is_empty());
-    assert!(configuration.provider_tool_enabled_capabilities.is_empty());
-    assert!(configuration.provider_tool_disabled_targets.is_empty());
-    assert!(configuration.provider_extension_target_sets.is_empty());
-    assert!(configuration.inference_profiles.contains_key("vmm"));
-    assert!(configuration.inference_profiles.contains_key("vce"));
-}
-
-/// Verifies schema one discards every incompatible provider-tool activation field.
-/// 验证 Schema 一会丢弃全部不兼容的 Provider Tool 启用字段。
-#[test]
-fn schema_one_discards_incompatible_provider_tool_activation() {
-    let enabled_target = ProviderToolTargetSelection {
-        connection_id: String::from("enabled-account"),
-        target_id: String::from("enabled-target"),
-    };
-    let disabled_target = ProviderToolTargetSelection {
-        connection_id: String::from("disabled-account"),
-        target_id: String::from("disabled-target"),
-    };
-    let mut configuration = PersistedAiConfiguration {
-        schema_version: 1,
-        ..PersistedAiConfiguration::default()
-    };
-    configuration
-        .provider_tool_selections
-        .insert(ProviderToolCapabilityKind::WebSearch, enabled_target);
-    configuration.provider_tool_selections.insert(
-        ProviderToolCapabilityKind::WebExtract,
-        disabled_target.clone(),
-    );
-    configuration.provider_tool_disabled_targets.insert(
-        ProviderToolCapabilityKind::WebExtract,
-        BTreeSet::from([disabled_target]),
-    );
-
-    assert!(
-        configuration
-            .migrate_to_current_schema()
-            .expect("schema one migration")
-    );
-
-    assert!(configuration.provider_tool_selections.is_empty());
-    assert!(configuration.provider_tool_enabled_capabilities.is_empty());
-    assert!(configuration.provider_tool_disabled_targets.is_empty());
-    assert!(configuration.provider_extension_target_sets.is_empty());
-}
-
-/// Verifies schema one migration preserves every configured VMM inference route.
-/// 验证 Schema 一迁移会保留全部已配置的 VMM 推理路由。
-#[test]
-fn schema_one_migration_preserves_configured_vmm_inference_profile() {
-    let llm_route = InferenceRouteConfiguration {
-        provider_id: String::from("llm-provider"),
-        service_entry_id: String::from("llm-entry"),
-        connection_id: String::from("llm-connection"),
-        model_id: String::from("llm-model"),
-        binding: InferenceRouteBinding::Protocol {
-            protocol_profile_id: String::from("llm-protocol"),
-        },
-        operation: AiOperation::ConversationRespond,
-        usage_scope: InferenceUsageScope::ExternalService,
-    };
-    let embedding_route = InferenceRouteConfiguration {
-        provider_id: String::from("embedding-provider"),
-        service_entry_id: String::from("embedding-entry"),
-        connection_id: String::from("embedding-connection"),
-        model_id: String::from("embedding-model"),
-        binding: InferenceRouteBinding::Action {
-            action_binding_id: String::from("embedding-action"),
-        },
-        operation: AiOperation::EmbeddingCreate,
-        usage_scope: InferenceUsageScope::ExternalService,
-    };
-    let rerank_route = InferenceRouteConfiguration {
-        provider_id: String::from("rerank-provider"),
-        service_entry_id: String::from("rerank-entry"),
-        connection_id: String::from("rerank-connection"),
-        model_id: String::from("rerank-model"),
-        binding: InferenceRouteBinding::Action {
-            action_binding_id: String::from("rerank-action"),
-        },
-        operation: AiOperation::RerankDocuments,
-        usage_scope: InferenceUsageScope::ExternalService,
-    };
-    let expected_profile = InferenceProfile {
-        llm_routes: BTreeMap::from([(String::from("precheck_l1"), llm_route)]),
-        llm_reasoning_efforts: BTreeMap::new(),
-        embedding: Some(embedding_route),
-        embedding_dimensions: None,
-        rerank: Some(rerank_route),
-    };
-    let mut configuration = PersistedAiConfiguration {
-        schema_version: 1,
-        inference_profiles: BTreeMap::from([(String::from("vmm"), expected_profile.clone())]),
-        ..PersistedAiConfiguration::default()
-    };
-
-    assert!(
-        configuration
-            .migrate_to_current_schema()
-            .expect("schema one migration")
-    );
-
-    assert_eq!(
-        configuration.inference_profiles.get("vmm"),
-        Some(&expected_profile)
     );
 }
 
@@ -2885,20 +2157,25 @@ fn context_window_policy_rejects_invalid_global_ordering() {
     );
 }
 
-/// Verifies unknown persisted schema generations are rejected without mutation.
-/// 验证未知持久化 Schema 代次被拒绝且不会发生变更。
+/// Verifies every non-current persisted schema generation, older or newer, is rejected without mutation.
+/// 验证任何非当前持久化 Schema 代次（无论更旧或更新）均被拒绝且不会发生变更。
 #[test]
-fn unknown_configuration_schema_is_rejected() {
-    let mut configuration = PersistedAiConfiguration {
-        schema_version: PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION + 1,
-        ..PersistedAiConfiguration::default()
-    };
-    let before = configuration.clone();
+fn non_current_configuration_schema_is_rejected() {
+    for schema_version in [
+        0,
+        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION - 1,
+        PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION + 1,
+    ] {
+        let mut configuration = PersistedAiConfiguration {
+            schema_version,
+            ..PersistedAiConfiguration::default()
+        };
+        let before = configuration.clone();
 
-    let error = configuration
-        .migrate_to_current_schema()
-        .expect_err("unknown version must fail");
+        configuration
+            .migrate_to_current_schema()
+            .expect_err("a non-current version must fail");
 
-    assert!(error.contains("Unsupported persisted AI configuration schema version"));
-    assert_eq!(configuration, before);
+        assert_eq!(configuration, before, "schema {schema_version}");
+    }
 }

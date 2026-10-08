@@ -2536,37 +2536,6 @@ impl VceDataPlaneHandle {
             .await
             .map_err(|error| format!("初始化 VCE 数据结构失败：{error}"))?;
         }
-        // Migrate old source copies before any manifest reader can observe mixed storage layouts.
-        // 在任何清单读取者观察到混合存储布局之前迁移旧源码副本。
-        local_sql::with_connection_async(&self.local_runtime, &self.sqlite_binding, |connection| {
-            // Existing databases receive the same additive structures before one-way conversion.
-            // 已有数据库在单向转换前获得相同的增量结构。
-            connection
-                .execute_batch(&format!(
-                    "{}{}{}",
-                    shared_artifacts::SCHEMA,
-                    shared_manifest_store::SCHEMA,
-                    shared_result_store::SCHEMA
-                ))
-                .map_err(|error| error.to_string())?;
-            shared_manifest_store::migrate_nodes(connection)
-        })
-        .await
-        .map_err(|error| format!("迁移 VCE 共享准备材料失败：{error}"))?;
-        local_sql::with_connection_async(
-            &self.local_runtime,
-            &self.sqlite_binding,
-            shared_result_store::migrate,
-        )
-        .await
-        .map_err(|error| format!("迁移 VCE 共享向量结果失败：{error}"))?;
-        local_sql::with_connection_async(
-            &self.local_runtime,
-            &self.sqlite_binding,
-            read_generations::migrate_symbol_bodies,
-        )
-        .await
-        .map_err(|error| format!("迁移 VCE 符号正文引用失败：{error}"))?;
         self.reconcile_publication_intents().await?;
         // Reopening also reclaims settled historical work; unknown remote tasks and active jobs stay pinned.
         // 重新打开时也回收已结束历史工作；未知远端任务和活动作业仍被固定保留。

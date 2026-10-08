@@ -179,26 +179,10 @@ pub(super) fn store(
     result: &VceEmbeddingBatchResult,
     now: i64,
 ) -> Result<(), String> {
-    store_owned_result(transaction, namespace, run, batch, result, now, true)
-}
-
-/// Store exact ownership and optionally publish a cache key proven by the current producer contract.
-/// 保存精确归属，并可选择发布由当前生产方契约证明的缓存键。
-/// Legacy results remain replayable in their own runs; their historical envelopes did not prove overrides.
-/// 旧结果仍可在原运行重放；其历史概要未证明授权切换后的生产方。返回持久化结果。
-fn store_owned_result(
-    transaction: &Transaction<'_>,
-    namespace: &str,
-    run: &str,
-    batch: &VceEmbeddingBatchRecord,
-    result: &VceEmbeddingBatchResult,
-    now: i64,
-    publish_cache: bool,
-) -> Result<(), String> {
     result.validate()?;
     batch.validate()?;
-    // Migration and direct persistence obey the same exact request coverage and dimensionality.
-    // 迁移和直接持久化遵循相同的精确请求覆盖及维度约束。
+    // Persistence obeys the exact request coverage and dimensionality of the run contract.
+    // 持久化遵循运行契约的精确请求覆盖及维度约束。
     let contract = shared_manifest_store::run_contract(transaction, namespace, run)?;
     let expected = batch
         .input_ids
@@ -247,9 +231,7 @@ fn store_owned_result(
             params![namespace, run, result.batch_id, artifact, now],
         )
         .map_err(|error| error.to_string())?;
-    if let Some(key) =
-        request_identity(transaction, namespace, run, batch)?.filter(|_| publish_cache)
-    {
+    if let Some(key) = request_identity(transaction, namespace, run, batch)? {
         transaction.execute("INSERT INTO vce_embedding_result_cache VALUES (?,?,?) ON CONFLICT(request_hash) DO UPDATE SET artifact_hash=excluded.artifact_hash,last_used_unix_ms=excluded.last_used_unix_ms", params![key,artifact,now]).map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -314,61 +296,4 @@ pub(super) fn reuse(
         )
         .map_err(|error| error.to_string())?;
     Ok(Some(result))
-}
-
-/// Convert one historical result per transaction, verifying read-back before removing old bytes.
-/// 每个历史结果独立事务转换，回读校验后才删除旧字节。
-/// Interrupted migration resumes through remaining legacy rows; returns exact data errors.
-/// 中断迁移从剩余旧记录恢复；返回明确数据错误。
-pub(super) fn migrate(connection: &mut Connection) -> Result<(), String> {
-    // Absence is the completed migration marker; runtime reads use only references.
-    // 不存在即迁移完成标记；运行时仅通过引用读取。
-    let legacy = connection
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vce_embedding_batch_results'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(|error| error.to_string())?;
-    if legacy.is_none() {
-        return Ok(());
-    }
-    loop {
-        // One result is the bounded migration unit.
-        // 单个结果是有界迁移单元。
-        let row = connection.query_row("SELECT namespace_id,run_id,batch_id,result_json,updated_at_unix_ms FROM vce_embedding_batch_results LIMIT 1", [], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,i64>(4)?))).optional().map_err(|error| error.to_string())?;
-        let Some((namespace, run, batch_id, json, now)) = row else {
-            break;
-        };
-        // Parent and batch metadata must already exist for every historical durable result.
-        // 每份历史持久结果必须已存在父运行和批次元数据。
-        let transaction = connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        // Decode public records with their existing validation contract.
-        // 按已有校验契约解码公共记录。
-        let batch_json: String = transaction.query_row("SELECT batch_json FROM vce_embedding_run_batches WHERE namespace_id=? AND run_id=? AND batch_id=?", params![namespace,run,batch_id], |row| row.get(0)).map_err(|error| error.to_string())?;
-        let batch: VceEmbeddingBatchRecord =
-            serde_json::from_str(&batch_json).map_err(|error| error.to_string())?;
-        let result: VceEmbeddingBatchResult =
-            serde_json::from_str(&json).map_err(|error| error.to_string())?;
-        result.validate()?;
-        if result.batch_id != batch_id {
-            return Err(String::from("Legacy embedding result owner mismatch"));
-        }
-        // Old envelopes can name the original binding after an approved producer switch.
-        // 旧概要在批准切换生产方后仍可能记录原始绑定。
-        // Preserve exact owned replay, but never assert cross-run producer compatibility from that field.
-        // 保留精确归属重放，但绝不根据该字段断言跨运行生产方兼容。
-        store_owned_result(&transaction, &namespace, &run, &batch, &result, now, false)?;
-        if load(&transaction, &namespace, &run, &batch_id)?.as_ref() != Some(&result) {
-            return Err(String::from("Embedding result migration failed read-back"));
-        }
-        transaction.execute("DELETE FROM vce_embedding_batch_results WHERE namespace_id=? AND run_id=? AND batch_id=?", params![namespace,run,batch_id]).map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())?;
-    }
-    connection
-        .execute_batch("DROP TABLE vce_embedding_batch_results")
-        .map_err(|error| error.to_string())
 }
