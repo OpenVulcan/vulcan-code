@@ -19,11 +19,11 @@ const PROJECT_TERMINAL_DISPLAY_EVENT_MAX_CHUNKS: usize = 512;
 
 /// Bounds one acknowledged browser input batch before it reaches the host protocol pipe.
 /// 限制单个已确认浏览器输入批次在进入宿主协议管道前的大小。
-const PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES: usize = 64 * 1024;
+pub(crate) const PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES: usize = 64 * 1024;
 
 /// Bounds input event metadata carried by one browser batch.
 /// 限制单个浏览器批次承载的输入事件元数据数量。
-const PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS: usize = 256;
+pub(crate) const PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS: usize = 256;
 
 /// Stores cancellation and ownership for one visible project terminal display.
 /// 保存一个可见项目终端显示层的取消句柄与归属信息。

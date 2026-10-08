@@ -1,5 +1,9 @@
 import React from "react";
 import {
+  PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES as SERVICE_PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES,
+  PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS,
+} from "@/generated/protocol-limits";
+import {
   Check,
   Maximize2,
   Minus,
@@ -65,13 +69,9 @@ import type {
   TerminalDisplayChunk,
 } from "@/types";
 
-// PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES stays below the service hard limit for predictable batching.
-// PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES 低于服务硬限制，以实现可预测的输入批处理。
-const PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES = 60 * 1024;
-
-// PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS mirrors the service metadata bound.
-// PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS 对齐服务端元数据上限。
-const PROJECT_TERMINAL_INPUT_BATCH_MAX_EVENTS = 256;
+// PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES keeps 4 KiB below the service hard limit for predictable batching.
+// PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES 比服务硬限制低 4 KiB，以实现可预测的输入批处理。
+const PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES = SERVICE_PROJECT_TERMINAL_INPUT_BATCH_MAX_BYTES - 4 * 1024;
 
 // PROJECT_TERMINAL_PENDING_INPUT_MAX_BYTES bounds retained unacknowledged browser input.
 // PROJECT_TERMINAL_PENDING_INPUT_MAX_BYTES 限制浏览器保留的未确认输入大小。

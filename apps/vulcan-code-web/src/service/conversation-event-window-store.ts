@@ -2,6 +2,7 @@
 // carry consecutive windows, while live delivery carries sparse patches of the same event shape.
 // V1 服务 DTO 镜像完整事件 envelope。hydration 与分页承载连续窗口，实时投递则承载
 // 相同事件形态的稀疏 patch。
+import { CLIENT_ACTION_ID_MAX_BYTES } from "@/generated/protocol-limits";
 import type { HtmlAnswerMode } from "@/service/html-answer-mode";
 import type { HtmlAnswerEventProjection } from "@/service/html-answer-projections";
 
@@ -26,10 +27,6 @@ export type ConversationEventVisibility = "provider" | "ui_only" | "host_only";
 /** Largest integer that JavaScript can represent exactly.
  * JavaScript 可以精确表示的最大整数。 */
 export const JS_SAFE_INTEGER_MAX = 9_007_199_254_740_991;
-
-/** Maximum UTF-8 byte length frozen by the Core ClientActionId contract.
- * Core ClientActionId 契约冻结的最大 UTF-8 字节长度。 */
-const CLIENT_ACTION_ID_MAX_BYTES = 256;
 
 /** Nominal marker that prevents unrelated strings from becoming V1 client action identities.
  * 防止无关字符串成为 V1 客户端动作身份的名义类型标记。 */

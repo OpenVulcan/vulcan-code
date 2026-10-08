@@ -14,13 +14,14 @@ import { rename, writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-/** Discovery file name written below the host's own user-data directory. */
-/** 写入宿主自有用户数据目录下的发现文件名。 */
-export const BROWSER_HOST_CONTROL_DISCOVERY_FILENAME = 'browser-host-control.json';
+// The discovery file name and schema version are generated from the Core definitions.
+// 发现文件名与架构版本由 Core 定义生成。
+import {
+  BROWSER_HOST_CONTROL_DISCOVERY_FILENAME,
+  BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION,
+} from './protocol-constants.generated.js';
 
-/** Schema version of the control discovery document. */
-/** 控制发现文档的架构版本。 */
-export const BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION = 1;
+export { BROWSER_HOST_CONTROL_DISCOVERY_FILENAME, BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION };
 
 /** One published control endpoint document. */
 /** 一份已发布的控制端点文档。 */

@@ -189,6 +189,8 @@ mod plugin_ui_events;
 mod plugin_vldb;
 mod project_conversation_services;
 mod project_directories;
+#[cfg(test)]
+mod generated_ts_constants;
 mod project_terminals;
 mod provider_manifest_sync;
 mod provider_settings;

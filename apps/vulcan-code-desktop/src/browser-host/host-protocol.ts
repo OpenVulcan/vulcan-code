@@ -4,17 +4,15 @@
 // Frame layout is a 4-byte big-endian unsigned length followed by one UTF-8 JSON document.
 // 帧结构为 4 字节大端无符号长度，后接一段 UTF-8 JSON 文档。
 
-/** Control protocol version understood by this host build. */
-/** 本宿主构建理解的控制协议版本。 */
-export const BROWSER_HOST_PROTOCOL_VERSION = 2;
+// Protocol bounds are generated from the Core definitions so both ends share one source.
+// 协议边界值由 Core 定义生成，使两端共用同一来源。
+import {
+  BROWSER_HOST_LENGTH_PREFIX_BYTES,
+  BROWSER_HOST_MAX_FRAME_BYTES,
+  BROWSER_HOST_PROTOCOL_VERSION,
+} from './protocol-constants.generated.js';
 
-/** Maximum bytes accepted for one control frame. */
-/** 单个控制帧接受的最大字节数。 */
-export const BROWSER_HOST_MAX_FRAME_BYTES = 4 * 1024 * 1024;
-
-/** Four-byte big-endian length prefix size. */
-/** 4 字节大端长度前缀的字节数。 */
-export const BROWSER_HOST_LENGTH_PREFIX_BYTES = 4;
+export { BROWSER_HOST_LENGTH_PREFIX_BYTES, BROWSER_HOST_MAX_FRAME_BYTES, BROWSER_HOST_PROTOCOL_VERSION };
 
 /** First message written to standard output so Core can reach the host control listener. */
 /** 写入标准输出的首条消息，使 Core 能够连接宿主控制监听器。 */

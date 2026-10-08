@@ -1,3 +1,4 @@
+import { SESSION_RESOURCE_LIST_V1_MAX_ITEMS } from "@/generated/protocol-limits";
 import type { ServiceClient } from "@/service/client";
 import {
   resolveBrowserServiceAccessToken,
@@ -8,10 +9,6 @@ import {
   resourceId,
   type ResourceId,
 } from "@/service/conversation-event-window-store";
-
-/** Maximum resource references accepted by the Rust V1 list contract.
- * Rust V1 列表契约允许的最大资源引用数。 */
-const SESSION_RESOURCE_LIST_V1_MAX_ITEMS = 256;
 
 /** Browser-safe metadata for one available project resource.
  * 单个可用项目资源的浏览器安全元数据。 */
