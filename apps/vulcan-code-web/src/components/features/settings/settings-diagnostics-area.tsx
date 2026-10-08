@@ -25,6 +25,9 @@ export function LogsArea(props: {
   // Whether bounded wire-request tracing is currently enabled.
   // 当前是否启用有界线上请求追踪。
   providerRequestTraceEnabled: boolean;
+  // Whether failed session requests are also retained in a separate bounded ring.
+  // 是否同时将失败会话请求保留到独立有界环中。
+  providerErrorTraceEnabled: boolean;
   // Startup snapshot shown in diagnostics.
   // 诊断中展示的启动快照。
   startup: StartupSnapshot;
@@ -56,13 +59,13 @@ export function LogsArea(props: {
 
   // handleTraceSettingChange persists one explicit diagnostic switch selection.
   // handleTraceSettingChange 持久化一次显式诊断开关选择。
-  async function handleTraceSettingChange(enabled: boolean): Promise<void> {
+  async function handleTraceSettingChange(enabled: boolean, errorsEnabled?: boolean): Promise<void> {
     if (traceSettingRunningRef.current) return;
     traceSettingRunningRef.current = true;
     setSavingTraceSetting(true);
     setTraceSettingError(null);
     try {
-      await props.actions.onSaveProviderRequestTraceSettings(enabled);
+      await props.actions.onSaveProviderRequestTraceSettings(enabled, errorsEnabled);
     } catch (error) {
       setTraceSettingError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -155,6 +158,23 @@ export function LogsArea(props: {
                 disabled={savingTraceSetting}
                 onCheckedChange={(enabled) => void handleTraceSettingChange(enabled)}
               />
+              </label>
+            </header>
+            <header className="provider-trace-header">
+              <div>
+                <h2>{t("settings.diagnostics.providerRequestTrace.errorsSwitch")}</h2>
+                <p>{t("settings.diagnostics.providerRequestTrace.errorsHelp")}</p>
+              </div>
+              <label className="provider-trace-toggle">
+                <span>{props.providerErrorTraceEnabled
+                  ? t("settings.diagnostics.providerRequestTrace.enabled")
+                  : t("settings.diagnostics.providerRequestTrace.disabled")}</span>
+                <Switch
+                  aria-label={t("settings.diagnostics.providerRequestTrace.errorsSwitch")}
+                  checked={props.providerErrorTraceEnabled}
+                  disabled={savingTraceSetting}
+                  onCheckedChange={(enabled) => void handleTraceSettingChange(props.providerRequestTraceEnabled, enabled)}
+                />
               </label>
             </header>
             <dl className="provider-trace-information">

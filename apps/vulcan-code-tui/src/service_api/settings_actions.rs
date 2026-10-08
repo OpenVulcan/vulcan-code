@@ -451,13 +451,18 @@ pub fn save_provider_retry_settings(request: Value) -> ServiceCall {
 /// 构建 `service_save_provider_request_trace_settings` 的请求。
 /// `enabled` is the explicit requested enabled state.
 /// `enabled` 为明确请求的启用状态。
+/// `errors_enabled` changes independent session-error recording when present.
+/// 传入 `errors_enabled` 时更改独立会话错误记录。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
-pub fn save_provider_request_trace_settings(enabled: bool) -> ServiceCall {
+pub fn save_provider_request_trace_settings(
+    enabled: bool,
+    errors_enabled: Option<bool>,
+) -> ServiceCall {
     ServiceCall::mutate(
         "save_provider_request_trace_settings",
         "service_save_provider_request_trace_settings",
-        json!({ "request": { "enabled": enabled } }),
+        json!({ "request": { "enabled": enabled, "errorsEnabled": errors_enabled } }),
         WORKBENCH,
     )
 }

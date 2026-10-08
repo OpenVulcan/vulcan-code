@@ -481,6 +481,8 @@ async fn native_compaction_request_publishes_the_reused_provider_api_trace_artif
         Some(trace_store.clone()),
         api_call_id,
         ProviderApiTraceRenderIdentity {
+            record_all: true,
+            record_errors: false,
             provider_id: String::from(COMPACTION_TRACE_PROVIDER_ID),
             session_scope_id: String::from("compaction-trace-session"),
             model_id: String::from(COMPACTION_TRACE_MODEL_ID),
@@ -605,6 +607,8 @@ async fn native_compaction_trace_requires_the_frozen_opt_in_decision() {
         Some(trace_store.clone()),
         api_call_id,
         ProviderApiTraceRenderIdentity {
+            record_all: true,
+            record_errors: false,
             provider_id: String::from(COMPACTION_TRACE_PROVIDER_ID),
             session_scope_id: String::from("compaction-trace-session"),
             model_id: String::from(COMPACTION_TRACE_MODEL_ID),
@@ -629,6 +633,8 @@ async fn native_compaction_trace_requires_the_frozen_opt_in_decision() {
         Some(trace_store),
         api_call_id,
         ProviderApiTraceRenderIdentity {
+            record_all: true,
+            record_errors: false,
             provider_id: String::from(COMPACTION_TRACE_PROVIDER_ID),
             session_scope_id: String::from("compaction-trace-session"),
             model_id: String::from(COMPACTION_TRACE_MODEL_ID),
@@ -721,6 +727,8 @@ async fn ordinary_provider_request_trace_shape_is_unchanged() {
 
     persist_provider_api_trace_snapshot(
         ProviderApiTraceRenderIdentity {
+            record_all: true,
+            record_errors: false,
             provider_id: String::from(COMPACTION_TRACE_PROVIDER_ID),
             session_scope_id: String::from("ordinary-trace-session"),
             model_id: String::from(COMPACTION_TRACE_MODEL_ID),

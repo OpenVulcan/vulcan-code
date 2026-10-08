@@ -857,6 +857,7 @@ async fn try_remote_responses_compaction(
             // opt-in; the permit's session trace owner never substitutes for it.
             // 逐分派冻结的系统设置决策是原生压缩追踪的唯一开关；许可中的会话追踪 owner 绝不替代它。
             provider_configuration.provider_request_trace_enabled,
+            provider_configuration.provider_error_trace_enabled,
             ownership,
         )
         .await

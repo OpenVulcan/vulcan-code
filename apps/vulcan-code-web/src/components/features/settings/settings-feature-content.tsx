@@ -105,6 +105,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
       <LogsArea
         actions={props.actions}
         providerRequestTraceEnabled={props.workbench.providerRequestTraceEnabled === true}
+        providerErrorTraceEnabled={props.workbench.providerErrorTraceEnabled === true}
         startup={props.startup}
         logs={props.workbench.logs}
       />

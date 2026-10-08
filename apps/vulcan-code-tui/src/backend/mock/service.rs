@@ -771,7 +771,15 @@ impl FakeService {
             }
             "service_save_provider_request_trace_settings" => {
                 self.workbench["providerRequestTraceEnabled"] =
-                    required(params, "/request/enabled")?.clone()
+                    required(params, "/request/enabled")?.clone();
+                // The optional field preserves the other preference for older clients.
+                // 可选字段为旧客户端保留另一项偏好。
+                if let Some(enabled) = params
+                    .pointer("/request/errorsEnabled")
+                    .and_then(Value::as_bool)
+                {
+                    self.workbench["providerErrorTraceEnabled"] = json!(enabled);
+                }
             }
             "service_select_workbench_thinking_display_mode" => {
                 self.workbench["thinkingDisplayMode"] = required(params, "/mode")?.clone()

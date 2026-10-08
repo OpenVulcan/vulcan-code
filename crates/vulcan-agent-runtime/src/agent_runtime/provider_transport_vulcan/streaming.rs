@@ -265,7 +265,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     }
                 }
             } else {
-                if self.provider_request_trace_enabled {
+                if self.provider_trace_enabled() {
                     eprintln!(
                         "[provider-api-trace] session={} skipped=no_session_v1_trace_owner",
                         self.cache_scope_id
@@ -488,7 +488,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                 response.apply_event(self.provider_id(), &self.live_sender, sink, event);
             if let Err(error) = apply_result {
                 trace_processing_failure.observe_failure(processing_stage, &error);
-                if self.provider_request_trace_enabled {
+                if self.provider_trace_enabled() {
                     drain_provider_stream_for_trace(stream);
                 }
                 return Err(error);
@@ -506,7 +506,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     )));
             }
             if terminal_event {
-                if self.provider_request_trace_enabled {
+                if self.provider_trace_enabled() {
                     // terminalTraceDrain preserves transport bytes that follow the semantic terminal event
                     // without delaying tool execution or projecting any later semantic event.
                     // terminalTraceDrain 会保留语义终态事件之后的传输字节，且不会延迟工具执行或投影任何

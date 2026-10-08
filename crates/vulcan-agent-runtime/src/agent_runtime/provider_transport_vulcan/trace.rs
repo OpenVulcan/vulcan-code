@@ -189,6 +189,12 @@ fn select_provider_api_trace_failure(
 /// 渲染进一份持久化会话追踪制品的 Provider 所有权身份。
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderApiTraceRenderIdentity {
+    /// Retains every physical attempt in the ordinary trace ring when enabled.
+    /// 启用时在普通追踪环中保留每次真实尝试。
+    pub(crate) record_all: bool,
+    /// Additionally retains failed attempts in the independent error ring when enabled.
+    /// 启用时将失败尝试额外保存在独立错误环中。
+    pub(crate) record_errors: bool,
     /// Stable provider identifier.
     /// 稳定供应商标识。
     pub(crate) provider_id: String,
@@ -383,7 +389,7 @@ impl VulcanPublicContractAdapter {
         trace_store: &ProviderApiTraceStore,
     ) -> Result<Option<ProviderApiTraceAttemptReservation>, String> {
         claim_provider_api_trace_attempt(
-            self.provider_request_trace_enabled,
+            self.provider_trace_enabled(),
             &self.provider_api_trace_attempt_state,
             api_call_id,
             trace_store,
@@ -420,6 +426,8 @@ impl VulcanPublicContractAdapter {
     ) -> Result<(), VulcanCoreError> {
         persist_provider_api_trace_snapshot(
             ProviderApiTraceRenderIdentity {
+                record_all: self.provider_request_trace_enabled,
+                record_errors: self.provider_error_trace_enabled,
                 provider_id: self.provider_id().to_string(),
                 session_scope_id: self.cache_scope_id.clone(),
                 model_id: self.model_id.clone(),
@@ -454,8 +462,8 @@ impl VulcanPublicContractAdapter {
 ///
 /// # Returns
 /// 返回值
-/// Success only after the trace has been atomically published in the owning session directory.
-/// 仅在追踪已原子发布到所属会话目录后返回成功。
+/// Success when policy excludes this attempt or all selected trace destinations have been published.
+/// 策略排除此尝试或已向所有选定追踪目标发布后返回成功。
 pub(crate) async fn persist_provider_api_trace_snapshot(
     identity: ProviderApiTraceRenderIdentity,
     trace_store: ProviderApiTraceStore,
@@ -466,6 +474,27 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
     response_state: ProviderApiTraceResponseState,
     processing_failure: Option<ProviderApiTraceProcessingFailure>,
 ) -> Result<(), VulcanCoreError> {
+    // Decide before base64/JSON serialization: successful error-only captures never reach disk.
+    // 在 base64/JSON 序列化前决定：仅错误模式下的成功捕获不会写入磁盘。
+    let failed = processing_failure.is_some()
+        || match &response_state {
+            ProviderApiTraceResponseState::CaptureChannelClosed => true,
+            ProviderApiTraceResponseState::Captured(captured) => {
+                captured.outcome == "response_failed"
+                    || captured.http_status.is_some_and(|status| status >= 400)
+                    || captured
+                        .failure_stage
+                        .as_deref()
+                        .is_some_and(|stage| stage != "cancelled")
+                    || captured.normalized_tool_call_abort.is_some()
+            }
+        };
+    // Failed attempts alone advance the independent error ring.
+    // 仅失败尝试会推进独立错误环。
+    let record_error = identity.record_errors && failed;
+    if !identity.record_all && !record_error {
+        return Ok(());
+    }
     let captured_at_unix_ms = provider_request_trace_timestamp_ms()
         .map_err(|error| provider_failure(identity.provider_id.as_str(), &error))?;
     let headers = provider_request_trace_headers(&captured_request.headers);
@@ -475,7 +504,7 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
     let processing_failure_message = processing_failure
         .as_ref()
         .map(|failure| failure.message.clone());
-    let output = match response_state {
+    let mut output = match response_state {
         ProviderApiTraceResponseState::CaptureChannelClosed => json!({
             "schema_version": 1,
             "trace_sequence": reservation.trace_sequence,
@@ -580,7 +609,7 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
             })
         }
     };
-    let input = json!({
+    let mut input = json!({
         "schema_version": 1,
         "trace_sequence": reservation.trace_sequence,
         "api_call_id": reservation.api_call_id,
@@ -615,30 +644,55 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
             "body": captured_request.body,
         },
     });
-    let input = serde_json::to_string_pretty(&input).map_err(|error| {
-        provider_failure(
-            identity.provider_id.as_str(),
-            &format!("Provider API trace input serialization failed: {error}"),
-        )
-    })?;
-    let output = serde_json::to_string_pretty(&output).map_err(|error| {
-        provider_failure(
-            identity.provider_id.as_str(),
-            &format!("Provider API trace output serialization failed: {error}"),
-        )
-    })?;
-    let trace_sequence = reservation.trace_sequence;
-    let api_call_id = reservation.api_call_id;
-    let attempt_index = reservation.attempt_index;
-    let write_outcome = tokio::task::spawn_blocking(move || {
-        trace_store.publish_attempt(
-            &reservation,
-            ProviderApiTracePayload {
-                input: input.as_str(),
-                output: output.as_str(),
-                secrets: &[],
-            },
-        )
+    // Serialize on the blocking writer and reuse the same values for both rings without copying bodies.
+    // 在阻塞写入线程中序列化，两个环复用同一份值，避免复制响应正文。
+    let record_all = identity.record_all;
+    tokio::task::spawn_blocking(move || {
+        // Keep full-recording policy independent from error-only retention.
+        // 将完整记录策略与仅错误保留分开处理。
+        let normal_result = if record_all {
+            publish_provider_api_trace_values(
+                &trace_store,
+                &reservation,
+                identity.session_scope_id.as_str(),
+                &mut input,
+                &mut output,
+            )
+        } else {
+            Ok(())
+        };
+        // Error retention is attempted even when the ordinary ring failed to publish.
+        // 即使普通环发布失败，也尝试独立保留错误证据。
+        let error_result =
+            if record_error {
+                trace_store
+                    .with_error_trace_store(|error_store| {
+                        match error_store
+                            .reserve_attempt(reservation.api_call_id, reservation.attempt_index)
+                        {
+                            ProviderApiTraceReservationOutcome::Reserved(error_reservation) => {
+                                publish_provider_api_trace_values(
+                                    error_store,
+                                    &error_reservation,
+                                    identity.session_scope_id.as_str(),
+                                    &mut input,
+                                    &mut output,
+                                )
+                            }
+                            ProviderApiTraceReservationOutcome::Disabled => Ok(()),
+                            ProviderApiTraceReservationOutcome::Diagnostic(diagnostic) => Err(
+                                format!("{}: {}", diagnostic.code.as_str(), diagnostic.detail),
+                            ),
+                        }
+                    })
+                    .map_err(|diagnostic| {
+                        format!("{}: {}", diagnostic.code.as_str(), diagnostic.detail)
+                    })
+                    .and_then(|result| result)
+            } else {
+                Ok(())
+            };
+        normal_result.and(error_result)
     })
     .await
     .map_err(|error| {
@@ -646,23 +700,57 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
             identity.provider_id.as_str(),
             &format!("Provider API trace writer task failed: {error}"),
         )
-    })?;
-    match write_outcome {
+    })?
+    .map_err(|error| provider_failure(identity.provider_id.as_str(), &error))
+}
+
+/// Serializes and atomically publishes one pair using the destination ring's own reservation.
+/// 使用目标环自身的预留身份序列化并原子发布一对记录。
+/// store and reservation identify the destination; session_id scopes diagnostics; input/output are reused.
+/// store 与 reservation 标识目标；session_id 限定诊断作用域；input/output 在目标之间复用。
+/// Returns a controlled persistence error without exposing request or response bodies.
+/// 返回不泄露请求或响应正文的受控持久化错误。
+fn publish_provider_api_trace_values(
+    store: &ProviderApiTraceStore,
+    reservation: &ProviderApiTraceAttemptReservation,
+    session_id: &str,
+    input: &mut Value,
+    output: &mut Value,
+) -> Result<(), String> {
+    input["trace_sequence"] = json!(reservation.trace_sequence);
+    output["trace_sequence"] = json!(reservation.trace_sequence);
+    // Serialize the envelope after assigning the destination-specific sequence.
+    // 分配目标专用序号后再序列化信封。
+    let input = serde_json::to_string_pretty(input)
+        .map_err(|error| format!("Provider API trace input serialization failed: {error}"))?;
+    // The response retains the same destination identity as its request.
+    // 响应与其请求保留相同的目标身份。
+    let output = serde_json::to_string_pretty(output)
+        .map_err(|error| format!("Provider API trace output serialization failed: {error}"))?;
+    match store.publish_attempt(
+        reservation,
+        ProviderApiTracePayload {
+            input: &input,
+            output: &output,
+            secrets: &[],
+        },
+    ) {
         ProviderApiTraceWriteOutcome::Disabled => Ok(()),
         ProviderApiTraceWriteOutcome::Written { slot } => {
             eprintln!(
                 "[provider-api-trace] session={} api_call_id={} attempt={} trace_sequence={} slot={}",
-                identity.session_scope_id,
-                api_call_id.value(),
-                attempt_index,
-                trace_sequence,
+                session_id,
+                reservation.api_call_id.value(),
+                reservation.attempt_index,
+                reservation.trace_sequence,
                 slot
             );
             Ok(())
         }
-        ProviderApiTraceWriteOutcome::Diagnostic(diagnostic) => Err(provider_failure(
-            identity.provider_id.as_str(),
-            &format!("{}: {}", diagnostic.code.as_str(), diagnostic.detail),
+        ProviderApiTraceWriteOutcome::Diagnostic(diagnostic) => Err(format!(
+            "{}: {}",
+            diagnostic.code.as_str(),
+            diagnostic.detail
         )),
     }
 }

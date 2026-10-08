@@ -1172,7 +1172,7 @@ export function WorkbenchLayout(props: {
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
-              onSaveProviderRequestTraceSettings: (enabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled)) ?? workbenchStateRef.current),
+              onSaveProviderRequestTraceSettings: (enabled, errorsEnabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled, errorsEnabled)) ?? workbenchStateRef.current),
               onOpenSelectedProviderApiTraceDirectory: async () => {
                 await openSelectedProviderApiTraceDirectory();
               },

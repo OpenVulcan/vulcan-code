@@ -44,6 +44,7 @@ describe("runtime diagnostics provider request trace setting", () => {
           actions={SETTINGS_ACTIONS}
           logs={[]}
           providerRequestTraceEnabled={false}
+          providerErrorTraceEnabled={false}
           startup={STARTUP_SNAPSHOT}
         />
       </I18nProvider>,

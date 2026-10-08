@@ -53,6 +53,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "is_false"
     )]
     pub provider_request_trace_enabled: bool,
+    /// Retains failed session requests and raw responses in a separate bounded trace ring.
+    /// 将失败的会话请求与原始响应保存在独立的有界追踪环中。
+    #[serde(
+        default,
+        rename = "providerErrorTraceEnabled",
+        skip_serializing_if = "is_false"
+    )]
+    pub provider_error_trace_enabled: bool,
     /// Remembered workbench reasoning preference selected by the user before any model-specific capability downgrade is applied.
     /// 在应用任意模型级能力回退前，由用户选定并记忆的工作台思考偏好。
     #[serde(

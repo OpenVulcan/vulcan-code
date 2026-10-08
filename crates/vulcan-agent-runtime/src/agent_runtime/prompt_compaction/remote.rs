@@ -284,6 +284,7 @@ pub(super) async fn execute_durable(
     plan: &CompactionPlan,
     events: &UnboundedSender<PromptCompactionStreamEvent>,
     provider_request_trace_enabled: bool,
+    provider_error_trace_enabled: bool,
     ownership: PromptCompactionOwnership,
 ) -> Result<PromptCompactionExecution, String> {
     // The tracker retains a distinct request identity and independent usage for each admitted attempt.
@@ -348,11 +349,13 @@ pub(super) async fn execute_durable(
                 // its own physical permit; it never infers the frozen opt-in decision from it.
                 // 原生压缩尝试复用自身物理许可携带的普通会话追踪 owner；绝不据此推断冻结开关决策。
                 let trace_capture = ProviderApiTraceAttemptCapture::start(
-                    provider_request_trace_enabled,
+                    provider_request_trace_enabled || provider_error_trace_enabled,
                     &trace_attempt_state,
                     provider_api_trace_store,
                     core_start.api_call_id,
                     ProviderApiTraceRenderIdentity {
+                        record_all: provider_request_trace_enabled,
+                        record_errors: provider_error_trace_enabled,
                         provider_id: execution.route.provider.id.clone(),
                         session_scope_id: preparation.session_id.to_string(),
                         model_id: execution.model.id.clone(),

@@ -907,14 +907,16 @@ export async function saveProviderRetrySettings(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_save_provider_retry_settings", { request });
 }
 
-// saveProviderRequestTraceSettings persists the global bounded wire-request trace switch.
-// saveProviderRequestTraceSettings 持久化全局有界线上请求追踪开关。
-export async function saveProviderRequestTraceSettings(enabled: boolean): Promise<WorkbenchSnapshot | null> {
+// Persists full recording and optionally independent session-error recording; omitted errorsEnabled preserves its state.
+// 持久化完整记录及可选的独立会话错误记录；省略 errorsEnabled 会保留原状态。
+// Returns the refreshed workbench, or null when no service runtime is available.
+// 返回刷新后的工作台；没有服务运行时时返回 null。
+export async function saveProviderRequestTraceSettings(enabled: boolean, errorsEnabled?: boolean): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
   return serviceClient.request<WorkbenchSnapshot>("service_save_provider_request_trace_settings", {
-    request: { enabled },
+    request: { enabled, errorsEnabled },
   });
 }
 

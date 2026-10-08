@@ -28,6 +28,15 @@
 工作台快照读取失败或格式错误时同样清空可编辑槽位，并禁止其他局部增量重新发布旧设置；只有完整权威快照恢复后才重新发布。
 完整文档写入串行等待权威刷新；重连会重送当前页面加载器。
 
+追踪设置继续使用 `service_save_provider_request_trace_settings`：
+`enabled` 控制完整记录，可选 `errorsEnabled` 控制会话错误独立记录，省略或空值保留原设置。
+工作台对应字段是 `providerRequestTraceEnabled` 与 `providerErrorTraceEnabled`。
+错误开关从下一次会话运行生效，覆盖普通会话请求与远端上下文压缩；成功请求不保存正文，
+失败请求和已收到的原始响应进入会话 `temp/provider-api-trace/errors/` 独立轮转。
+HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响应投影失败均属于错误；
+没有其他失败证据的手动停止不进入错误目录。打开和清理动作仍作用于整个追踪根目录。
+记忆与索引后台推理继续沿用各自现有诊断策略。
+
 ## 页面范围
 
 会话 HTML 回答通过 `service_api/html_answers.rs` 镜像 WebUI 的偏好保存、查看链接签发和撤销。
@@ -45,7 +54,7 @@
 | AI 能力 | 选择服务公开的能力目标、启用能力；供应商异步任务列表与取消，仍有未终结任务时每 5 秒重读 | PublicAiSettings、ProviderTasks |
 | MCP | stdio/http/sse 配置表单（含 OAuth 开关）、移除、运行态与能力检查；启用 OAuth 或等待授权的服务器可登录、打开授权页、手动完成、取消与退出，流程进行中每 2 秒重读 | Workbench.mcpServers、McpRuntime、McpCapabilities、McpOAuth |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
-| 诊断 | 重试配置、请求追踪开关、打开及清理追踪目录、模块与日志 | Workbench |
+| 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
 | 关于 | 应用版本、许可证目录与按哈希读取正文 | Workbench、Licenses、LicenseBody |
 | 代理技能 | 真实分类导航与生效数量、状态/来源/覆盖/跨语言搜索筛选、查看正文、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.agentSkills.categories/records/errors |
 | 子代理定义 | 真实分类导航与数量、状态及跨语言搜索筛选、查看定义、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.subagentCatalog.categories/definitions |

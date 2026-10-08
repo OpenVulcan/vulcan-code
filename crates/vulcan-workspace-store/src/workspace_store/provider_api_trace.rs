@@ -261,6 +261,28 @@ impl ProviderApiTraceStore {
         }
     }
 
+    /// Runs one complete error-record operation under the parent lock and returns its result.
+    /// 在父级锁内运行一次完整错误记录操作，并返回其结果。
+    /// The operation must reserve and publish synchronously, without retaining the child store.
+    /// operation 必须同步预留与发布，不得保留子存储。
+    /// This serializes error writers with ordinary writes and directory cleanup; the child
+    /// reloads its independent durable counter so successful calls never evict failed calls.
+    /// 此处将错误写入与普通写入及目录清理串行化；子存储重读独立持久计数器，
+    /// 从而保证成功调用不会淘汰失败调用。
+    pub fn with_error_trace_store<T>(
+        &self,
+        operation: impl FnOnce(&ProviderApiTraceStore) -> T,
+    ) -> Result<T, ProviderApiTraceDiagnostic> {
+        let _owner = self.lock_owner()?;
+        if self.enabled {
+            ensure_trace_root(&self.root)?;
+        }
+        // Rehydrate the child frontier while the parent excludes writers and cleanup.
+        // 父级排除其他写入与清理期间，重新载入子级前沿。
+        let error_store = Self::new(self.root.join("errors"), self.enabled);
+        Ok(operation(&error_store))
+    }
+
     /// Creates the exact trace root for the user-facing open-directory action.
     /// 为面向用户的打开目录操作创建精确追踪根目录。
     pub fn prepare_directory(&self) -> Result<PathBuf, ProviderApiTraceDiagnostic> {

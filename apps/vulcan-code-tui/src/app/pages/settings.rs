@@ -971,6 +971,20 @@ pub(super) fn diagnostics(app: &App) -> Vec<Row> {
                 build: |_, value| {
                     Some(settings::save_provider_request_trace_settings(
                         value.as_bool(),
+                        None,
+                    ))
+                },
+            }),
+        ),
+        toggle(
+            tr!("settings.diagnostics.providerRequestTrace.errorsSwitch"),
+            b(wb, "/providerErrorTraceEnabled"),
+            Edit::Call(Setter::Build {
+                ctx: json!({"enabled": b(wb, "/providerRequestTraceEnabled")}),
+                build: |ctx, value| {
+                    Some(settings::save_provider_request_trace_settings(
+                        b(ctx, "/enabled"),
+                        Some(value.as_bool()),
                     ))
                 },
             }),

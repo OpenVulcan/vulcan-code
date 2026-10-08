@@ -45,7 +45,7 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 /// state stays in the typed events; this subset is what settings, plugins and skills pages need.
 /// 系统区域读取的工作台字段，即工作台槽位携带的内容。会话状态仍走类型化事件；该子集是设置、
 /// 插件与技能页面所需的部分。
-const WORKBENCH_SLOT_KEYS: [&str; 23] = [
+const WORKBENCH_SLOT_KEYS: [&str; 24] = [
     "appVersion",
     "uiLocale",
     "modules",
@@ -63,6 +63,7 @@ const WORKBENCH_SLOT_KEYS: [&str; 23] = [
     "gitCommit",
     "providerRetry",
     "providerRequestTraceEnabled",
+    "providerErrorTraceEnabled",
     "hostTools",
     "outputStyleCatalog",
     "contextCompactionWindowNodes",

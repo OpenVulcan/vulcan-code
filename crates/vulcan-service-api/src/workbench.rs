@@ -133,6 +133,10 @@ pub struct WorkbenchSnapshot {
     /// 是否为真实分派启用有界 Provider 线上请求追踪。
     #[serde(default)]
     pub provider_request_trace_enabled: bool,
+    /// Whether failed session attempts are retained separately from complete request tracing.
+    /// 是否将失败会话尝试与完整请求追踪分开保留。
+    #[serde(default)]
+    pub provider_error_trace_enabled: bool,
     /// Host-owned tool settings resolved from the shared configuration file.
     /// 从共享配置文件解析出的宿主自有工具设置。
     #[serde(default)]

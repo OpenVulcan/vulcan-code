@@ -253,6 +253,7 @@ pub(crate) fn execute_provider_prompt_stream(
 
     let mut transport_request = build_provider_transport_execution_request(
         config.provider_request_trace_enabled,
+        config.provider_error_trace_enabled,
         preparation.model_blueprint.provider_id.clone(),
         model_id,
         preparation.workspace_path.as_str(),

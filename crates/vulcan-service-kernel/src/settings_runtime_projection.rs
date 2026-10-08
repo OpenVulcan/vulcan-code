@@ -505,6 +505,8 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.provider_request_trace_enabled =
         provider_configuration.provider_request_trace_enabled;
+    guard.workbench.provider_error_trace_enabled =
+        provider_configuration.provider_error_trace_enabled;
     guard.workbench.host_tools = host_tools_settings(provider_configuration);
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
     // Settings refreshes use the same session-owned model projection as navigation, never global picker rows.

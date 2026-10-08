@@ -94,6 +94,9 @@ pub(crate) fn execute_vulcan_public_stream(
     // 与V1准备共享同一已解析执行，不重建第二条路线或策略。
     let resolved = std::sync::Arc::new(resolved);
     let provider_request_trace_enabled = request.provider_request_trace_enabled;
+    // Freeze the independent error-recording decision before moving the launch request.
+    // 在移动启动请求前冻结独立错误记录决策。
+    let provider_error_trace_enabled = request.provider_error_trace_enabled;
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
     let output_token_limit = resolved_public_output_token_limit(
@@ -132,6 +135,7 @@ pub(crate) fn execute_vulcan_public_stream(
                 locked_baseline.clone(),
                 std::sync::Arc::clone(&resolved),
             )
+            .with_provider_error_trace_enabled(provider_error_trace_enabled)
         },
         "Vulcan 公共契约",
         prompt_intervention,
@@ -148,6 +152,9 @@ pub(crate) struct VulcanPublicContractAdapter {
     /// Frozen system-setting decision for grouped request and raw-response tracing.
     /// 当前控制器运行期间冻结的分组请求与原始返回追踪系统设置决策。
     provider_request_trace_enabled: bool,
+    /// Frozen preference for keeping failed requests in the independent error ring.
+    /// 将失败请求保存在独立错误环中的冻结偏好。
+    provider_error_trace_enabled: bool,
     /// Shared physical-attempt index state keyed by the durable V1 API identity.
     /// 按可靠 V1 API 身份索引的共享物理尝试下标状态。
     provider_api_trace_attempt_state:
@@ -206,6 +213,21 @@ pub(crate) struct VulcanPublicContractAdapter {
 }
 
 impl VulcanPublicContractAdapter {
+    /// Freezes the independent error-capture preference and returns the configured adapter.
+    /// 冻结独立错误捕获偏好，并返回配置后的适配器。
+    /// The enabled flag applies to subsequent physical attempts in this run.
+    /// enabled 开关应用于本次运行的后续真实尝试。
+    fn with_provider_error_trace_enabled(mut self, enabled: bool) -> Self {
+        self.provider_error_trace_enabled = enabled;
+        self
+    }
+
+    /// Returns whether either explicit diagnostic preference requires bounded wire capture.
+    /// 返回任一显式诊断偏好是否要求进行有界线上捕获。
+    fn provider_trace_enabled(&self) -> bool {
+        self.provider_request_trace_enabled || self.provider_error_trace_enabled
+    }
+
     /// Creates one immutable public-contract controller adapter.
     /// 创建一个不可变公共契约控制器适配器。
     ///
@@ -257,6 +279,7 @@ impl VulcanPublicContractAdapter {
         Self {
             media_execution,
             provider_request_trace_enabled,
+            provider_error_trace_enabled: false,
             provider_api_trace_attempt_state: std::sync::Arc::new(std::sync::Mutex::new(
                 ProviderApiTraceAttemptState::default(),
             )),

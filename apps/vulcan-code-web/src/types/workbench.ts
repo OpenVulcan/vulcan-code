@@ -200,6 +200,9 @@ export interface WorkbenchSnapshot {
   // Whether grouped Provider request and raw-response tracing is enabled for real dispatches.
   // 是否为真实分派启用分组 Provider 请求与原始返回追踪。
   providerRequestTraceEnabled?: boolean;
+  // Whether failed session requests are retained in an independent bounded trace ring.
+  // 是否在独立有界追踪环中保留失败会话请求。
+  providerErrorTraceEnabled?: boolean;
   // Host-owned tool settings resolved from the shared service configuration.
   // 从共享服务配置解析出的宿主自有工具设置。
   hostTools?: HostToolsSettingsSummary;

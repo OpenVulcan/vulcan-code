@@ -77,6 +77,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Whether this real dispatch writes complete session-local request traces.
     /// 本次真实分派是否写入完整的会话本地请求追踪。
     pub(crate) provider_request_trace_enabled: bool,
+    /// Frozen opt-in for retaining failed session requests independently.
+    /// 独立保留失败会话请求的冻结开关。
+    pub(crate) provider_error_trace_enabled: bool,
     /// Canonical provider API family used to group transport routing and shared protocol behavior.
     /// 用于归并传输路由与共享协议行为的规范 Provider 接口族。
     /// Runtime family used to select the concrete transport adapter implementation.
@@ -170,6 +173,8 @@ pub(crate) struct ProviderTransportExecutionRequest {
 /// 参数
 /// `provider_request_trace_enabled` is the persisted system-setting decision frozen for this dispatch; the remaining values are the already resolved route, prompt, controller, tool, retry, and session inputs.
 /// `provider_request_trace_enabled` 是为本次分派冻结的持久化系统设置决策；其余值是已经解析的路由、提示词、控制器、工具、重试与会话输入。
+/// `provider_error_trace_enabled` independently retains failed attempts in the session error ring.
+/// `provider_error_trace_enabled` 独立保留会话错误环中的失败尝试。
 ///
 /// # Returns
 /// 返回值
@@ -177,6 +182,7 @@ pub(crate) struct ProviderTransportExecutionRequest {
 /// 返回一份可直接进入协议专用流准备阶段的完整自有请求。
 pub(crate) fn build_provider_transport_execution_request(
     provider_request_trace_enabled: bool,
+    provider_error_trace_enabled: bool,
     provider_id: String,
     model_id: &str,
     workspace_path: &str,
@@ -204,6 +210,7 @@ pub(crate) fn build_provider_transport_execution_request(
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         provider_request_trace_enabled,
+        provider_error_trace_enabled,
         provider_id,
         model_id: model_id.to_string(),
         workspace_path: workspace_path.to_string(),

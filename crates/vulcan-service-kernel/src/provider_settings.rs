@@ -84,6 +84,10 @@ pub(super) struct ProviderRequestTraceSettingsSaveRequest {
     /// Whether real Provider dispatches write bounded wire-request traces into session temp directories.
     /// 真实 Provider 分派是否将有界线上请求追踪写入会话临时目录。
     enabled: bool,
+    /// Updates error-only capture when supplied; older clients preserve the existing preference.
+    /// 传入时更新仅错误捕获；旧客户端保留原有偏好。
+    #[serde(default)]
+    errors_enabled: Option<bool>,
 }
 
 /// Saves Provider retry settings from the WebUI settings page.
@@ -156,6 +160,9 @@ pub(super) async fn service_save_provider_request_trace_settings(
         "保存 Provider 请求追踪设置失败",
         |configuration| {
             configuration.provider_request_trace_enabled = request.enabled;
+            if let Some(enabled) = request.errors_enabled {
+                configuration.provider_error_trace_enabled = enabled;
+            }
             Ok(())
         },
         |guard, configuration| {
