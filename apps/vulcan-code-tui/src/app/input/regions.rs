@@ -455,6 +455,18 @@ pub(super) fn on_ask_key(app: &mut App, key: KeyEvent) {
         }
         return;
     }
+    // Approvals take explicit letter keys only; Enter never runs a gated call.
+    // 审批只接受显式字母键；Enter 从不执行受管控调用。
+    if pending.approval.is_some() {
+        match key.code {
+            KeyCode::Char('a') => ask_step(app, AskStep::Allow),
+            KeyCode::Char('d') => ask_step(app, AskStep::Deny),
+            KeyCode::Char('x') | KeyCode::Delete => ask.confirm_reject = true,
+            KeyCode::Esc => app.focus = Focus::Composer,
+            _ => {}
+        }
+        return;
+    }
     if ask.editing_other {
         match key.code {
             KeyCode::Esc => ask.editing_other = false,
@@ -530,7 +542,37 @@ pub fn ask_step(app: &mut App, step: AskStep) {
     app.focus = Focus::Ask;
     let total = pending.questions.len();
     let ask = &mut app.ask;
+    if let Some(approval) = &pending.approval {
+        let label = match step {
+            AskStep::Allow => &approval.allow_label,
+            AskStep::Deny => &approval.deny_label,
+            AskStep::Reject => {
+                ask.confirm_reject = true;
+                return;
+            }
+            AskStep::RejectCancel => {
+                ask.confirm_reject = false;
+                return;
+            }
+            AskStep::RejectConfirm => {
+                ask.confirm_reject = false;
+                app.backend.send(Command::RejectPendingQuestion {
+                    request_id: pending.id.clone(),
+                });
+                return;
+            }
+            // Question navigation and free-form answers do not apply to approvals.
+            // 问题导航与自由回答不适用于审批。
+            AskStep::Prev | AskStep::Next | AskStep::Submit | AskStep::EditOther => return,
+        };
+        app.backend.send(Command::ReplyPendingQuestion {
+            request_id: pending.id.clone(),
+            answers: vec![vec![label.clone()]],
+        });
+        return;
+    }
     match step {
+        AskStep::Allow | AskStep::Deny => {}
         AskStep::Prev => {
             let prev = ask.index.saturating_sub(1);
             ask.go_to(prev, total);

@@ -14,6 +14,7 @@ pub mod insight;
 pub mod system;
 
 use serde_json::Value;
+pub use vulcan_session_core::v1::config::PermissionMode;
 
 pub use answer_mode::*;
 pub use insight::*;
@@ -257,6 +258,36 @@ pub struct Question {
 pub struct PendingQuestion {
     pub id: String,
     pub questions: Vec<Question>,
+    /// Permission facts when the request is a tool-call approval instead of an ask.
+    /// 当请求是工具调用审批而非提问时的权限事实。
+    pub approval: Option<PendingApproval>,
+}
+
+/// Permission facts of one gated tool call (`PendingApprovalSnapshot`).
+/// 一次受管控工具调用的权限事实（`PendingApprovalSnapshot`）。
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    pub tool_name: String,
+    pub permission_mode: PermissionMode,
+    pub subject: ApprovalSubject,
+    /// Backend high-risk category key, when any.
+    /// 后端高风险类别键（如有）。
+    pub high_risk: Option<String>,
+    /// Canonical answers that run or refuse the call.
+    /// 执行或拒绝调用的规范回答。
+    pub allow_label: String,
+    pub deny_label: String,
+}
+
+/// What a gated call would affect.
+/// 受管控调用会影响的对象。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalSubject {
+    /// A shell command; empty text starts an interactive shell.
+    /// shell 命令；空文本表示启动交互式终端。
+    Command(String),
+    FileWrite(Vec<String>),
+    Opaque,
 }
 
 #[derive(Debug, Clone)]

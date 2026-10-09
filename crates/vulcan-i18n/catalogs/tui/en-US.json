@@ -294,6 +294,7 @@
   "tui.help.short": "Help",
   "tui.help.title": "Keyboard shortcuts",
   "tui.hint.ask": "↑↓ choose · Space toggle · Enter confirm · ←→ question · x stop · Esc back",
+  "tui.hint.approval": "a allow once · d deny · x stop · Esc back",
   "tui.hint.composer": "Enter send · Alt/Ctrl+Enter or \\+Enter new line · Alt+V paste · / commands · Tab focus · Ctrl+P palette",
   "tui.hint.nav": "↑↓ page · Enter open · / search · Esc chat",
   "tui.hint.page": "↑↓ row · Enter/Space change · ←→ adjust · / search · Esc back",

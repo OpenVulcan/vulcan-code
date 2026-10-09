@@ -21,7 +21,7 @@ use super::theme::mix;
 use crate::app::action::{AskStep, UiAction};
 use crate::app::hit::Target;
 use crate::app::{App, Focus};
-use crate::model::PendingQuestion;
+use crate::model::{ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode};
 use crate::tr;
 
 /// One body row and what clicking it (or parts of it) does.
@@ -108,7 +108,92 @@ fn stepper(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {
     rows
 }
 
+/// Translated label of one permission mode.
+/// 单个权限模式的翻译标签。
+fn mode_label(mode: PermissionMode) -> String {
+    match mode {
+        PermissionMode::ReadOnly => tr!("permissionMode.readOnly"),
+        PermissionMode::WorkspaceWrite => tr!("permissionMode.workspaceWrite"),
+        PermissionMode::FullAccess => tr!("permissionMode.fullAccess"),
+    }
+}
+
+/// Translated label of one backend high-risk key; unknown keys show as sent.
+/// 单个后端高风险键的翻译标签；未知键按原样显示。
+fn risk_label(key: &str) -> String {
+    match key {
+        "recursive_delete" => tr!("ask.approval.risk.recursiveDelete"),
+        "destructive_git" => tr!("ask.approval.risk.destructiveGit"),
+        "disk_format" => tr!("ask.approval.risk.diskFormat"),
+        "system_configuration" => tr!("ask.approval.risk.systemConfiguration"),
+        "opaque_script" => tr!("ask.approval.risk.opaqueScript"),
+        "database_drop" => tr!("ask.approval.risk.databaseDrop"),
+        "permission_change" => tr!("ask.approval.risk.permissionChange"),
+        "publish" => tr!("ask.approval.risk.publish"),
+        "infrastructure_destroy" => tr!("ask.approval.risk.infrastructureDestroy"),
+        other => other.to_string(),
+    }
+}
+
+/// Body rows of a tool-call approval: what would run, the mode, and any high risk.
+/// 工具调用审批的正文行：将执行的内容、模式及高风险（如有）。
+fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row> {
+    let theme = &app.theme;
+    let mut rows = Vec::new();
+    let push_wrapped = |rows: &mut Vec<Row>, text: String, style: Style| {
+        for line in wrap(&[Span::styled(text, style)], width, &[], &[]) {
+            rows.push(Row::plain(line));
+        }
+    };
+    if app.ask.confirm_reject {
+        push_wrapped(
+            &mut rows,
+            tr!("ask.confirm.rejectTitle"),
+            Style::new().fg(theme.danger).add_modifier(Modifier::BOLD),
+        );
+        push_wrapped(&mut rows, tr!("ask.approval.stopBody"), theme.muted_text());
+        return rows;
+    }
+    let tool = approval.tool_name.clone();
+    let (headline, lines) = match &approval.subject {
+        ApprovalSubject::Command(text) if text.trim().is_empty() => {
+            (tr!("ask.approval.shell", tool = tool), Vec::new())
+        }
+        ApprovalSubject::Command(text) => (
+            tr!("ask.approval.command", tool = tool),
+            text.lines().map(str::to_string).collect(),
+        ),
+        ApprovalSubject::FileWrite(paths) => {
+            (tr!("ask.approval.fileWrite", tool = tool), paths.clone())
+        }
+        ApprovalSubject::Opaque => (tr!("ask.approval.opaque", tool = tool), Vec::new()),
+    };
+    push_wrapped(&mut rows, headline, theme.strong());
+    for line in lines {
+        push_wrapped(&mut rows, format!("  {line}"), theme.primary_text());
+    }
+    push_wrapped(
+        &mut rows,
+        tr!(
+            "ask.approval.mode",
+            mode = mode_label(approval.permission_mode)
+        ),
+        theme.muted_text(),
+    );
+    if let Some(key) = &approval.high_risk {
+        push_wrapped(
+            &mut rows,
+            tr!("ask.approval.highRisk", category = risk_label(key)),
+            Style::new().fg(theme.danger).add_modifier(Modifier::BOLD),
+        );
+    }
+    rows
+}
+
 fn body_rows(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {
+    if let Some(approval) = &pending.approval {
+        return approval_rows(app, approval, width);
+    }
     let theme = &app.theme;
     let ask = &app.ask;
     let focused = app.focus == Focus::Ask;
@@ -261,7 +346,26 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
     } else {
         mix(theme.warning, theme.border, 0.4)
     };
-    let hints = if app.ask.editing_other {
+    let approval = pending.approval.as_ref();
+    let title = if approval.is_some() {
+        tr!("ask.approval.title")
+    } else {
+        tr!("ask.title")
+    };
+    let hints = if approval.is_some() && focused && app.ask.confirm_reject {
+        format!(
+            " Enter {} · Esc {} ",
+            tr!("ask.action.confirmReject"),
+            tr!("ask.approval.back")
+        )
+    } else if approval.is_some() && focused {
+        format!(
+            " a {} · d {} · x {} ",
+            tr!("ask.approval.allow"),
+            tr!("ask.approval.deny"),
+            tr!("ask.approval.stop")
+        )
+    } else if app.ask.editing_other {
         format!(" Enter {} · Esc ", tr!("ask.action.continue"))
     } else if focused {
         format!(
@@ -269,7 +373,7 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
             tr!("ask.action.ignore")
         )
     } else {
-        format!(" Tab → {} ", tr!("ask.title"))
+        format!(" Tab → {} ", title)
     };
     let block = Block::new()
         .borders(Borders::ALL)
@@ -285,7 +389,7 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" {} ", tr!("ask.title")),
+                format!(" {} ", title),
                 Style::new().fg(theme.warning).add_modifier(Modifier::BOLD),
             ),
         ]))
@@ -374,10 +478,56 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
             buf,
             bx,
             y,
-            &format!("{} Esc", tr!("ask.action.backToEdit")),
+            &format!(
+                "{} Esc",
+                if approval.is_some() {
+                    tr!("ask.approval.back")
+                } else {
+                    tr!("ask.action.backToEdit")
+                }
+            ),
             button_style(app, ButtonKind::Normal, bg),
             UiAction::Ask(AskStep::RejectCancel),
         );
+        return;
+    }
+    if approval.is_some() {
+        // Allow once and Deny on the left, Stop session on the right; none is bound to Enter.
+        // 左侧为允许本次与拒绝，右侧为停止会话；均不绑定 Enter。
+        let mut bx = x;
+        bx += button(
+            app,
+            buf,
+            bx,
+            y,
+            &format!("{} a", tr!("ask.approval.allow")),
+            button_style(app, ButtonKind::Primary, bg),
+            UiAction::Ask(AskStep::Allow),
+        ) + 1;
+        bx += button(
+            app,
+            buf,
+            bx,
+            y,
+            &format!("{} d", tr!("ask.approval.deny")),
+            button_style(app, ButtonKind::Normal, bg),
+            UiAction::Ask(AskStep::Deny),
+        ) + 1;
+        let stop = format!(" {} ", tr!("ask.approval.stop"));
+        let sw = width_of(&stop) as u16 + 2;
+        if inner.right() > bx + sw {
+            button(
+                app,
+                buf,
+                inner.right() - sw,
+                y,
+                &tr!("ask.approval.stop"),
+                Style::new()
+                    .fg(theme.danger)
+                    .bg(mix(theme.danger, bg, 0.12)),
+                UiAction::Ask(AskStep::Reject),
+            );
+        }
         return;
     }
     let total = pending.questions.len();

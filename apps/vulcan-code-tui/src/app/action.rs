@@ -98,6 +98,12 @@ pub enum AskStep {
     RejectConfirm,
     RejectCancel,
     EditOther,
+    /// Runs the gated tool call once (approvals only).
+    /// 执行一次受管控工具调用（仅审批）。
+    Allow,
+    /// Refuses the gated tool call (approvals only).
+    /// 拒绝受管控工具调用（仅审批）。
+    Deny,
 }
 
 #[derive(Debug, Clone)]

@@ -131,6 +131,7 @@ mod tests {
                     multiple: true,
                 },
             ],
+            approval: None,
         }
     }
 

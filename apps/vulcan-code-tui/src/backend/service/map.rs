@@ -212,6 +212,26 @@ pub fn pending_question(question: &api::PendingQuestionSnapshot) -> PendingQuest
                 multiple: q.multiple,
             })
             .collect(),
+        approval: question.approval.as_ref().map(pending_approval),
+    }
+}
+
+/// Maps the permission facts of one tool-call approval.
+/// 映射一次工具调用审批的权限事实。
+fn pending_approval(approval: &api::PendingApprovalSnapshot) -> PendingApproval {
+    PendingApproval {
+        tool_name: approval.tool_name.clone(),
+        permission_mode: approval.permission_mode,
+        subject: match &approval.subject {
+            api::PendingApprovalSubject::Command { text } => ApprovalSubject::Command(text.clone()),
+            api::PendingApprovalSubject::FileWrite { paths } => {
+                ApprovalSubject::FileWrite(paths.clone())
+            }
+            api::PendingApprovalSubject::Opaque => ApprovalSubject::Opaque,
+        },
+        high_risk: approval.high_risk.clone(),
+        allow_label: approval.allow_label.clone(),
+        deny_label: approval.deny_label.clone(),
     }
 }
 

@@ -1284,3 +1284,124 @@ fn top_row_holds_the_sidebar_when_the_side_columns_carry_the_header() {
     narrow.draw(|frame| ui::draw(frame, &mut h.app)).unwrap();
     assert!(top(&h.app, &new_conversation).is_some_and(|y| y > 0));
 }
+
+/// A tool-call approval renders in place of the ask form, ignores Enter, answers with the
+/// snapshot labels from keys and clicks, and stops only after an explicit confirmation.
+/// 工具调用审批取代提问表单渲染，忽略 Enter，经按键与点击以快照标签回答，且只在显式确认后停止。
+#[test]
+fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
+    use crate::app::Focus;
+    use crate::app::action::AskStep;
+    use crate::backend::BackendEvent;
+    use crate::model::{
+        ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode, Question, QuestionOption,
+    };
+    use std::sync::mpsc;
+
+    let _locale = i18n::lock_locale("zh-TW");
+    let mut h = Harness::connected();
+    // Requests are observed here instead of reaching the mock.
+    // 请求在此被观察，不会到达模拟后端。
+    let (commands, observer) = mpsc::channel();
+    h.app.backend.commands = commands;
+    let conversation_id = h.app.selected.clone().expect("a selected conversation");
+    let approval = |id: &str, subject: ApprovalSubject, high_risk: Option<&str>| PendingQuestion {
+        id: id.into(),
+        questions: vec![Question {
+            header: "Permission".into(),
+            question: "fallback".into(),
+            options: vec![
+                QuestionOption {
+                    label: "allow-label".into(),
+                    description: String::new(),
+                },
+                QuestionOption {
+                    label: "deny-label".into(),
+                    description: String::new(),
+                },
+            ],
+            multiple: false,
+        }],
+        approval: Some(PendingApproval {
+            tool_name: "shell_command".into(),
+            permission_mode: PermissionMode::WorkspaceWrite,
+            subject,
+            high_risk: high_risk.map(str::to_string),
+            allow_label: "allow-label".into(),
+            deny_label: "deny-label".into(),
+        }),
+    };
+    let show = |h: &mut Harness, question: PendingQuestion| {
+        h.app.apply(BackendEvent::PendingQuestion {
+            conversation_id: conversation_id.clone(),
+            question: Some(question),
+        });
+        h.app.focus = Focus::Ask;
+        h.frame();
+    };
+    let replies = |observer: &mpsc::Receiver<Command>| -> Vec<(String, Option<Vec<Vec<String>>>)> {
+        observer
+            .try_iter()
+            .filter_map(|command| match command {
+                Command::ReplyPendingQuestion {
+                    request_id,
+                    answers,
+                } => Some((request_id, Some(answers))),
+                Command::RejectPendingQuestion { request_id } => Some((request_id, None)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    show(
+        &mut h,
+        approval(
+            "approve",
+            ApprovalSubject::Command("rm -rf build".into()),
+            Some("recursive_delete"),
+        ),
+    );
+    assert!(buffer_text(h.wide.backend().buffer()).contains("rm -rf build"));
+    snapshot(&mut h.app, "tool-approval");
+    input::handle_event(&mut h.app, key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        replies(&observer).is_empty(),
+        "Enter must not answer an approval"
+    );
+    input::handle_event(&mut h.app, key(KeyCode::Char('a'), KeyModifiers::NONE));
+    assert_eq!(
+        replies(&observer),
+        vec![("approve".into(), Some(vec![vec!["allow-label".into()]]))]
+    );
+
+    show(
+        &mut h,
+        approval(
+            "deny",
+            ApprovalSubject::FileWrite(vec!["../outside.txt".into()]),
+            Some("future_category"),
+        ),
+    );
+    assert!(buffer_text(h.wide.backend().buffer()).contains("future_category"));
+    click(&mut h.app, "the deny button", |target| {
+        matches!(target, Target::Do(UiAction::Ask(AskStep::Deny)))
+    });
+    assert_eq!(
+        replies(&observer),
+        vec![("deny".into(), Some(vec![vec!["deny-label".into()]]))]
+    );
+
+    show(&mut h, approval("stop", ApprovalSubject::Opaque, None));
+    input::handle_event(&mut h.app, key(KeyCode::Char('x'), KeyModifiers::NONE));
+    h.frame();
+    assert!(
+        h.app
+            .hits
+            .find(|target| matches!(target, Target::Do(UiAction::Ask(AskStep::Allow))))
+            .is_none(),
+        "the stop confirmation replaces the decision buttons"
+    );
+    snapshot(&mut h.app, "tool-approval-stop");
+    input::handle_event(&mut h.app, key(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(replies(&observer), vec![("stop".into(), None)]);
+}

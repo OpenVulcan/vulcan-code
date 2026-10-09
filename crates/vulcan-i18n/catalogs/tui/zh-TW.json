@@ -294,6 +294,7 @@
   "tui.help.short": "幫助",
   "tui.help.title": "快捷鍵",
   "tui.hint.ask": "↑↓ 選擇 · Space 切換 · Enter 確認 · ←→ 切換問題 · x 停止 · Esc 返回",
+  "tui.hint.approval": "a 允許本次 · d 拒絕 · x 停止 · Esc 返回",
   "tui.hint.composer": "Enter 傳送 · Alt/Ctrl+Enter 或 \\+Enter 換行 · Alt+V 貼上內容 · / 命令 · Tab 焦點 · Ctrl+P 命令面板",
   "tui.hint.nav": "↑↓ 頁面 · Enter 開啟 · / 搜尋 · Esc 返回對話",
   "tui.hint.page": "↑↓ 行 · Enter/Space 修改 · ←→ 調整 · / 搜尋 · Esc 返回",

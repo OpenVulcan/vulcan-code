@@ -46,6 +46,20 @@
 - 面板是会话内非模态对话框，不向辅助技术声明全局模态。选项获得实际键盘焦点后，同步其高亮项；文本题和其他回答保留可访问名称。
 - 提交和终止以请求标识隔离，同步防重；失败保留草稿及明确错误并允许重试，成功确认后等待权威待处理请求移除。旧请求回包不得修改新请求。
 
+## 三之一、工具调用审批
+
+权限闸门升级的工具调用经 [`question_runtime/approval.rs`](../../crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs)
+复用同一 `QuestionRuntime` 与 Ask 面板，待处理请求带 `approval` 权限事实（工具、权限模式、命令或路径、
+高风险类别键、规范允许/拒绝标签）。
+
+- 回复只接受快照携带的 `allowLabel` 或 `denyLabel`；回复使工具恢复执行或返回拒绝，不完成工具，也不中断会话。
+- 放弃（拒绝请求）取消该调用并中断会话，与 Ask 相同，必须先进入停止确认。
+- 客户端按自身语言渲染权限事实，问题文本只是英文后备；未知高风险键按原样显示。
+- `Enter` 从不批准。WebUI 只经按钮允许或拒绝，`Esc` 进入停止确认，确认阶段 `Enter` 停止；
+  TUI 用 `a` 允许、`d` 拒绝、`x` 进入停止确认，`Esc` 把焦点交回输入框。
+- 实现入口：[`tool-approval-bar.tsx`](../../apps/vulcan-code-web/src/components/ask/tool-approval-bar.tsx)、
+  [`ui/ask.rs`](../../apps/vulcan-code-tui/src/ui/ask.rs)。
+
 ## 四、Markdown
 
 - 网页快捷链接使用普通 Markdown：`[打开网页](https://host/path)`、`[打开本地网页](file:///C:/path/page.html)`；路径空格应百分号编码。`file://` 只放行超链接，不放宽脚本、嵌入内容或图片 URL 策略。

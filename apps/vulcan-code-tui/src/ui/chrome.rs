@@ -234,6 +234,14 @@ fn focus_hint(app: &App) -> String {
         Focus::Transcript => tr!("tui.hint.transcript"),
         Focus::Sidebar => tr!("tui.hint.sidebar"),
         Focus::Panel => tr!("tui.hint.panel"),
+        Focus::Ask
+            if app
+                .session()
+                .and_then(|s| s.pending_question.as_ref())
+                .is_some_and(|q| q.approval.is_some()) =>
+        {
+            tr!("tui.hint.approval")
+        }
         Focus::Ask => tr!("tui.hint.ask"),
         Focus::AreaNav => tr!("tui.hint.nav"),
         Focus::AreaPage => tr!("tui.hint.page"),
