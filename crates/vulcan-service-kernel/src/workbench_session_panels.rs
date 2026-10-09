@@ -6,11 +6,11 @@ use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegi
 use vulcan_agent_runtime::agent_runtime::question_runtime::{
     APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, QuestionRequest, ToolApprovalPrompt,
 };
-use vulcan_agent_runtime::agent_runtime::tool_permission::PermissionSubject;
+use vulcan_agent_runtime::agent_runtime::tool_permission::{JudgeFinding, PermissionSubject};
 use vulcan_service_api::{
     ConversationAttentionSummary, ConversationSummary, SessionProviderUsageSummary,
 };
-use vulcan_service_api::{PendingApprovalSnapshot, PendingApprovalSubject};
+use vulcan_service_api::{PendingApprovalJudge, PendingApprovalSnapshot, PendingApprovalSubject};
 /// Projects the resident aggregate without scanning Turns or reading files.
 /// 直接投影常驻累计，不扫描回合或读取文件。
 /// The handle identifies the owner; failures remain an explicit UI availability message.
@@ -434,6 +434,14 @@ fn pending_approval_snapshot(
             }
         },
         high_risk: prompt.high_risk.map(|category| category.key().to_string()),
+        judge: prompt.judge.as_ref().map(|finding| match finding {
+            JudgeFinding::Scored(label) => PendingApprovalJudge::Scored {
+                label: label.key().to_string(),
+            },
+            JudgeFinding::Unavailable(reason) => PendingApprovalJudge::Unavailable {
+                reason: reason.clone(),
+            },
+        }),
         allow_label: String::from(APPROVAL_ALLOW_LABEL),
         deny_label: String::from(APPROVAL_DENY_LABEL),
     }

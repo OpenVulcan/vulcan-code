@@ -12,7 +12,9 @@ use std::sync::Mutex;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard};
 use tokio::time::{Duration, timeout};
 use vulcan_host_tools::judge_host_client::JudgeHostClient;
-use vulcan_permission_judge::protocol::{BenchmarkReport, HostStatus, LoadReport};
+use vulcan_permission_judge::protocol::{
+    BenchmarkReport, HostStatus, JudgeInput, JudgeOutcome, LoadReport,
+};
 use vulcan_service_api::{PermissionJudgeWorkerPhase, PermissionJudgeWorkerStatus};
 
 use super::environment::LoadSpec;
@@ -20,6 +22,10 @@ use super::environment::LoadSpec;
 /// Longest a status poll waits for the worker, which may be busy judging.
 /// 状态轮询等待 worker 的最长时间；worker 可能正在判定。
 const STATUS_POLL_WAIT: Duration = Duration::from_millis(200);
+
+/// Longest a gated call waits for a warm-up in progress before going to the user.
+/// 受管控调用在交给用户前等待进行中预热的最长时间。
+const JUDGE_WARMUP_WAIT: Duration = Duration::from_secs(30);
 
 /// A started worker and the model it holds.
 /// 已启动的 worker 及其持有的模型。
@@ -232,6 +238,32 @@ impl JudgeWorker {
                 ..PhaseState::default()
             }
         });
+    }
+
+    /// Judges `items` with the loaded worker when it holds `model_id`, waiting at most
+    /// [`JUDGE_WARMUP_WAIT`] for a warm-up in progress. It never starts or retries a load, so a
+    /// missing or failed worker sends the call to the user instead.
+    /// 当已加载 worker 持有 `model_id` 时用它判定 `items`，对进行中的预热最多等待
+    /// [`JUDGE_WARMUP_WAIT`]。它从不启动或重试加载，因此缺失或失败的 worker 会让调用交给用户。
+    pub(crate) async fn evaluate(
+        &self,
+        model_id: &str,
+        items: Vec<JudgeInput>,
+    ) -> Result<Vec<JudgeOutcome>, String> {
+        let mut slot = timeout(JUDGE_WARMUP_WAIT, self.slot.lock())
+            .await
+            .map_err(|_| String::from("The local judge is still warming up."))?;
+        let loaded = slot
+            .as_mut()
+            .filter(|loaded| loaded.spec.model_id == model_id && loaded.client.is_usable())
+            .ok_or_else(|| {
+                self.phase
+                    .lock()
+                    .ok()
+                    .and_then(|phase| phase.error.clone())
+                    .unwrap_or_else(|| String::from("The local judge is not loaded."))
+            })?;
+        loaded.client.evaluate(items).await
     }
 
     /// Times `batch_size` self-check inputs on the model of `spec`.

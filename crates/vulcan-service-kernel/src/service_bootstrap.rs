@@ -1597,6 +1597,7 @@ fn run_service_bootstrap(
             crate::tool_permission_host::KernelToolPermissionHost::new(
                 permission_registry,
                 Arc::clone(&agent_runtime.question_runtime),
+                Arc::downgrade(state),
             ),
         ));
     logs.push(String::from(

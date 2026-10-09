@@ -1,15 +1,18 @@
 //! Service-kernel side of the tool permission gate.
 //! 工具权限闸门的服务内核侧实现。
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use serde_json::Value;
 use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionRuntime, ToolApprovalPrompt};
-use vulcan_agent_runtime::agent_runtime::tool_permission::ToolPermissionHost;
+use vulcan_agent_runtime::agent_runtime::tool_permission::{
+    JudgeCall, JudgeLabel, ToolPermissionHost,
+};
 use vulcan_agent_runtime::model::SessionId;
 use vulcan_session_core::v1::config::PermissionMode;
 use vulcan_tools_manager::VulcanToolInvocationContext;
 
+use crate::ServiceBridgeState;
 use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
 
 /// Reads each session's live permission mode from its registered V1 document and asks the user
@@ -22,6 +25,10 @@ pub(crate) struct KernelToolPermissionHost {
     /// Shared question runtime whose Ask panel presents approvals.
     /// 以 Ask 面板展示审批的共享问题运行时。
     question_runtime: Arc<QuestionRuntime>,
+    /// Service state holding the judge settings and worker; weak, because the state owns the
+    /// runtime that owns this host.
+    /// 持有判定设置与 worker 的服务状态；使用弱引用，因为该状态拥有持有本宿主的运行时。
+    state: Weak<Mutex<ServiceBridgeState>>,
 }
 
 impl KernelToolPermissionHost {
@@ -30,10 +37,12 @@ impl KernelToolPermissionHost {
     pub(crate) fn new(
         registry: Arc<SessionRuntimeRegistry>,
         question_runtime: Arc<QuestionRuntime>,
+        state: Weak<Mutex<ServiceBridgeState>>,
     ) -> Self {
         Self {
             registry,
             question_runtime,
+            state,
         }
     }
 }
@@ -73,6 +82,14 @@ impl ToolPermissionHost for KernelToolPermissionHost {
         self.question_runtime
             .request_approval(session_id, context, tool_name, arguments, prompt)
             .await
+    }
+
+    async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| String::from("The service is shutting down."))?;
+        crate::permission_judge::judge_call(&state, call).await
     }
 }
 

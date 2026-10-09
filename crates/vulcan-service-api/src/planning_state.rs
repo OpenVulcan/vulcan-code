@@ -42,12 +42,37 @@ pub struct PendingApprovalSnapshot {
     /// 命中的高风险类别键，例如 `recursive_delete`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub high_risk: Option<String>,
+    /// Permission judge finding, when a judge is configured for the call.
+    /// 权限判定结论（当调用配置了判定器时）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<PendingApprovalJudge>,
     /// Reply label that runs the call once.
     /// 执行一次调用的回复标签。
     pub allow_label: String,
     /// Reply label that refuses the call.
     /// 拒绝调用的回复标签。
     pub deny_label: String,
+}
+
+/// What the permission judge found for a call it did not clear.
+/// 权限判定对未放行调用的结论。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingApprovalJudge {
+    /// The judge scored the call; `allow` appears when a high-risk rule still needs the user.
+    /// 判定器已评分；高风险规则仍需用户确认时会出现 `allow`。
+    Scored {
+        /// Label key: `allow`, `review` or `block`.
+        /// 标签键：`allow`、`review` 或 `block`。
+        label: String,
+    },
+    /// The judge is configured but could not score the call.
+    /// 判定器已配置但无法为调用评分。
+    Unavailable {
+        /// English reason.
+        /// 英文原因。
+        reason: String,
+    },
 }
 
 /// What one gated tool call would affect.

@@ -9,8 +9,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use vulcan_permission_judge::protocol::JudgeDevice;
-use vulcan_permission_judge::{JudgePackage, JudgePolicy, find_known_package, known_packages};
+use vulcan_agent_runtime::agent_runtime::tool_permission::JudgeCall;
+use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
+use vulcan_permission_judge::{
+    JudgeLabel, JudgePackage, JudgePolicy, find_known_package, known_packages, render_call,
+};
 use vulcan_provider_config::provider_config::{
     JudgeBackend, JudgeState, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
     load_project_configuration_file, save_project_configuration_file,
@@ -783,6 +786,58 @@ pub(crate) async fn service_save_project_permission_judge_policy(
         &policy,
         &configuration.permission_judge.options,
     ))
+}
+
+/// Scores one escalated call with the local judge; `Ok(None)` when the local judge is off.
+/// 用本机判定器为一次升级调用评分；本机判定器关闭时返回 `Ok(None)`。
+///
+/// The workspace's project choices select the policy modes, and the call is rendered from the
+/// argument text exactly as the model streamed it. Any failure sends the call to the user.
+/// 工作区的项目选择决定策略档位，调用按模型流式发出的原样参数文本渲染。任何失败都会把调用交给用户。
+pub(crate) async fn judge_call(
+    state: &SharedServiceBridgeState,
+    call: JudgeCall,
+) -> Result<Option<JudgeLabel>, String> {
+    let (runtime, settings) = read_state(state)?;
+    if !local_enabled(&settings) {
+        return Ok(None);
+    }
+    let model = settings
+        .active_model()
+        .ok_or_else(|| String::from("No judge model is in use."))?;
+    let raw_arguments = call.raw_arguments.ok_or_else(|| {
+        String::from("The original argument text of this call is no longer available.")
+    })?;
+    let policy = open_package(&runtime, PathBuf::from(&model.path))
+        .await
+        .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))?
+        .policy;
+    let chosen = match &call.workspace_root {
+        Some(root) => {
+            load_project_configuration_file(root)?
+                .permission_judge
+                .options
+        }
+        None => BTreeMap::new(),
+    };
+    let modes = policy
+        .resolve_settings(&chosen)
+        .map_err(|error| error.to_string())?;
+    let root = call
+        .workspace_root
+        .as_ref()
+        .map(|root| root.display().to_string());
+    let input = JudgeInput {
+        settings: modes.to_map(),
+        rendered: render_call(root.as_deref(), &call.tool_name, &raw_arguments),
+    };
+    match runtime.worker.evaluate(&model.id, vec![input]).await?.pop() {
+        Some(JudgeOutcome::Evaluated { label, .. }) => Ok(Some(label)),
+        Some(JudgeOutcome::InputTokenLimit { input_tokens }) => Err(format!(
+            "The call is too long for the judge model ({input_tokens} tokens)."
+        )),
+        None => Err(String::from("The local judge returned no result.")),
+    }
 }
 
 #[cfg(test)]
