@@ -77,7 +77,44 @@ export interface PendingQuestionSnapshot {
   // Ordered prompts shown in the ask modal.
   // ask 弹窗中按顺序展示的问题提示。
   questions: PendingQuestionPromptSummary[];
+  // Permission facts when this request is a tool-call approval instead of an ask.
+  // 当该请求是工具调用审批而非提问时的权限事实。
+  approval?: PendingApprovalSnapshot | null;
 }
+
+// PendingApprovalSnapshot describes the permission facts of one gated tool call.
+// PendingApprovalSnapshot 描述一次受管控工具调用的权限事实。
+export interface PendingApprovalSnapshot {
+  // Stable id of the gated tool.
+  // 受管控工具的稳定标识。
+  toolName: string;
+  // Session permission mode that escalated the call.
+  // 使调用升级的会话权限模式。
+  permissionMode: PermissionModeKey;
+  // What the call would affect.
+  // 调用会影响的对象。
+  subject: PendingApprovalSubject;
+  // Matched high-risk category key, when any.
+  // 命中的高风险类别键（如有）。
+  highRisk?: string | null;
+  // Canonical answer that runs the call once.
+  // 执行一次调用的规范回答。
+  allowLabel: string;
+  // Canonical answer that refuses the call.
+  // 拒绝调用的规范回答。
+  denyLabel: string;
+}
+
+// PermissionModeKey is the canonical session permission mode key.
+// PermissionModeKey 是规范的会话权限模式键。
+export type PermissionModeKey = "read_only" | "workspace_write" | "full_access";
+
+// PendingApprovalSubject describes what one gated call would affect.
+// PendingApprovalSubject 描述一次受管控调用会影响的对象。
+export type PendingApprovalSubject =
+  | { kind: "command"; text: string }
+  | { kind: "file_write"; paths: string[] }
+  | { kind: "opaque" };
 
 // PendingQuestionPromptSummary describes one prompt inside a pending ask request.
 // PendingQuestionPromptSummary 描述待处理 ask 请求中的单条问题提示。
