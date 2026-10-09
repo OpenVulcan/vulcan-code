@@ -1294,8 +1294,8 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
     use crate::app::action::AskStep;
     use crate::backend::BackendEvent;
     use crate::model::{
-        ApprovalJudge, ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode, Question,
-        QuestionOption,
+        ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval, PendingQuestion,
+        PermissionMode, Question, QuestionOption,
     };
     use std::sync::mpsc;
 
@@ -1329,6 +1329,7 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
             subject,
             high_risk: high_risk.map(str::to_string),
             judge: None,
+            review: None,
             allow_label: "allow-label".into(),
             deny_label: "deny-label".into(),
         }),
@@ -1399,6 +1400,16 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
     }
     show(&mut h, judged);
     assert!(buffer_text(h.wide.backend().buffer()).contains("not loaded"));
+
+    let mut reviewed = approval("reviewed", ApprovalSubject::Opaque, None);
+    if let Some(facts) = reviewed.approval.as_mut() {
+        facts.review = Some(ApprovalReview::Reviewed {
+            verdict: "ask_user".into(),
+            reason: "outside the project".into(),
+        });
+    }
+    show(&mut h, reviewed);
+    assert!(buffer_text(h.wide.backend().buffer()).contains("outside the project"));
 
     show(&mut h, approval("stop", ApprovalSubject::Opaque, None));
     input::handle_event(&mut h.app, key(KeyCode::Char('x'), KeyModifiers::NONE));

@@ -57,6 +57,14 @@ const JUDGE_LABEL_KEYS: Record<string, TranslationKey> = {
   block: "ask.approval.judge.block",
 };
 
+// REVIEW_VERDICT_KEYS maps permission reviewer verdicts to their catalog labels.
+// REVIEW_VERDICT_KEYS 将权限复核决定映射到目录标签。
+const REVIEW_VERDICT_KEYS: Record<string, TranslationKey> = {
+  allow: "ask.approval.review.allow",
+  ask_user: "ask.approval.review.askUser",
+  deny: "ask.approval.review.deny",
+};
+
 // ToolApprovalRequest renders one tool-call approval in the session Ask bar.
 // ToolApprovalRequest 在会话 Ask 面板中渲染一条工具调用审批。
 // Enter never approves; approving or denying needs an explicit click, and Esc opens the stop confirmation.
@@ -177,7 +185,11 @@ export function ToolApprovalRequest(props: ToolApprovalRequestProps) {
               </span>
             ) : null}
             {approval.judge ? <ToolApprovalJudgeChip judge={approval.judge} t={t} /> : null}
+            {approval.review ? <ToolApprovalReviewChip review={approval.review} t={t} /> : null}
           </div>
+          {approval.review?.kind === "reviewed" && approval.review.reason ? (
+            <p className="text-xs leading-5 text-muted-foreground" data-review-reason>{approval.review.reason}</p>
+          ) : null}
           {error ? (
             <div role="alert" className="max-h-24 overflow-y-auto break-words rounded-lg border border-destructive/25 bg-destructive/10 px-2.5 py-1.5 text-xs leading-5 text-destructive">
               {error}
@@ -305,6 +317,32 @@ function ToolApprovalJudgeChip(props: {
       data-judge={judge.label}
     >
       {key ? t(key) : judge.label}
+    </span>
+  );
+}
+
+// ToolApprovalReviewChip shows the permission reviewer verdict; an unavailable reviewer shows its reason on hover.
+// ToolApprovalReviewChip 展示权限复核决定；复核不可用时悬停显示原因。
+function ToolApprovalReviewChip(props: {
+  // Finding to show.
+  // 要展示的结论。
+  review: NonNullable<PendingApprovalSnapshot["review"]>;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: Translate;
+}) {
+  const { review, t } = props;
+  if (review.kind === "unavailable") {
+    return (
+      <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-review="unavailable" title={review.reason}>
+        {t("ask.approval.review.unavailable")}
+      </span>
+    );
+  }
+  const key = Object.hasOwn(REVIEW_VERDICT_KEYS, review.verdict) ? REVIEW_VERDICT_KEYS[review.verdict] : undefined;
+  return (
+    <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-review={review.verdict}>
+      {key ? t(key) : review.verdict}
     </span>
   );
 }

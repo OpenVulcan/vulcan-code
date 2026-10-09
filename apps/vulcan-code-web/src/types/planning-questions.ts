@@ -100,6 +100,9 @@ export interface PendingApprovalSnapshot {
   // Permission judge finding, when a judge is configured for the call.
   // 权限判定结论（当调用配置了判定器时）。
   judge?: PendingApprovalJudge | null;
+  // Permission reviewer finding, when a reviewing LLM is configured for the call.
+  // 权限复核结论（当调用配置了复核 LLM 时）。
+  review?: PendingApprovalReview | null;
   // Canonical answer that runs the call once.
   // 执行一次调用的规范回答。
   allowLabel: string;
@@ -112,6 +115,12 @@ export interface PendingApprovalSnapshot {
 // PendingApprovalJudge 是权限判定对未放行调用的结论。
 export type PendingApprovalJudge =
   | { kind: "scored"; label: string }
+  | { kind: "unavailable"; reason: string };
+
+// PendingApprovalReview is what the reviewing LLM found for a call it did not decide.
+// PendingApprovalReview 是复核 LLM 对未决定调用的结论。
+export type PendingApprovalReview =
+  | { kind: "reviewed"; verdict: string; reason: string }
   | { kind: "unavailable"; reason: string };
 
 // PermissionModeKey is the canonical session permission mode key.

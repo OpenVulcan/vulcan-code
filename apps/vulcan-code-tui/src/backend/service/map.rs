@@ -236,6 +236,15 @@ fn pending_approval(approval: &api::PendingApprovalSnapshot) -> PendingApproval 
                 ApprovalJudge::Unavailable(reason.clone())
             }
         }),
+        review: approval.review.as_ref().map(|review| match review {
+            api::PendingApprovalReview::Reviewed { verdict, reason } => ApprovalReview::Reviewed {
+                verdict: verdict.clone(),
+                reason: reason.clone(),
+            },
+            api::PendingApprovalReview::Unavailable { reason } => {
+                ApprovalReview::Unavailable(reason.clone())
+            }
+        }),
         allow_label: approval.allow_label.clone(),
         deny_label: approval.deny_label.clone(),
     }

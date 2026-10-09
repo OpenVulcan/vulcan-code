@@ -110,3 +110,13 @@ it("shows the judge finding and keeps an unavailable judge's reason on hover", a
   await mount(approvalRequest("plain"));
   expect(host.querySelector("[data-judge]")).toBeNull();
 });
+
+it("shows the reviewer verdict with its reason and keeps an unavailable reviewer's reason on hover", async () => {
+  await mount(approvalRequest("reviewed", { review: { kind: "reviewed", verdict: "ask_user", reason: "outside the project" } }));
+  expect(host.querySelector("[data-review]")?.getAttribute("data-review")).toBe("ask_user");
+  expect(host.querySelector("[data-review-reason]")?.textContent).toBe("outside the project");
+
+  await mount(approvalRequest("unreviewed", { review: { kind: "unavailable", reason: "offline" } }));
+  expect(host.querySelector("[data-review]")?.getAttribute("title")).toBe("offline");
+  expect(host.querySelector("[data-review-reason]")).toBeNull();
+});

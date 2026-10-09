@@ -29,6 +29,12 @@ const service = vi.hoisted(() => ({
 }));
 vi.mock("@/service/permission-judge-service", () => service);
 vi.mock("@/service/project-actions-service", () => ({ openExternalUrl: vi.fn() }));
+// The review route section keeps loading; its behavior has its own test.
+// 复核路由区块保持加载中；其行为有独立测试。
+vi.mock("@/service/settings-actions-service", () => ({
+  loadPublicAiSettings: vi.fn(() => new Promise(() => undefined)),
+  savePublicAiInferenceRoute: vi.fn(),
+}));
 
 const { PermissionJudgeSettingsArea } = await import("./permission-judge-settings-area");
 

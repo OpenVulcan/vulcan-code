@@ -11,6 +11,7 @@ import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Switch } from "@/components/ui/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
+import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import {
   activatePermissionJudgeModel,
@@ -268,6 +269,8 @@ export function PermissionJudgeSettingsArea() {
     </section>
 
     {failure ? <SettingsErrorNotice className="settings-save-error" detail={failure.detail} message={failure.message} /> : null}
+
+    <PermissionReviewRouteSection />
 
     <WorkerStatusSection busy={busy} run={run} snapshot={snapshot} status={status} t={t}
       onReloaded={(next) => setStatus(next)} />

@@ -22,7 +22,8 @@ use crate::app::action::{AskStep, UiAction};
 use crate::app::hit::Target;
 use crate::app::{App, Focus};
 use crate::model::{
-    ApprovalJudge, ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode,
+    ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval, PendingQuestion,
+    PermissionMode,
 };
 use crate::tr;
 
@@ -206,6 +207,28 @@ fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row
             push_wrapped(
                 &mut rows,
                 format!("{} · {reason}", tr!("ask.approval.judge.unavailable")),
+                theme.muted_text(),
+            );
+        }
+        None => {}
+    }
+    match &approval.review {
+        Some(ApprovalReview::Reviewed { verdict, reason }) => {
+            let label = match verdict.as_str() {
+                "allow" => tr!("ask.approval.review.allow"),
+                "ask_user" => tr!("ask.approval.review.askUser"),
+                "deny" => tr!("ask.approval.review.deny"),
+                other => other.to_string(),
+            };
+            push_wrapped(&mut rows, label, theme.muted_text());
+            if !reason.is_empty() {
+                push_wrapped(&mut rows, reason.clone(), theme.muted_text());
+            }
+        }
+        Some(ApprovalReview::Unavailable(reason)) => {
+            push_wrapped(
+                &mut rows,
+                format!("{} · {reason}", tr!("ask.approval.review.unavailable")),
                 theme.muted_text(),
             );
         }

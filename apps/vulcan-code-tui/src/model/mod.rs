@@ -276,6 +276,9 @@ pub struct PendingApproval {
     /// Permission judge finding, when a judge is configured for the call.
     /// 权限判定结论（当调用配置了判定器时）。
     pub judge: Option<ApprovalJudge>,
+    /// Permission reviewer finding, when a reviewing LLM is configured for the call.
+    /// 权限复核结论（当调用配置了复核 LLM 时）。
+    pub review: Option<ApprovalReview>,
     /// Canonical answers that run or refuse the call.
     /// 执行或拒绝调用的规范回答。
     pub allow_label: String,
@@ -302,6 +305,18 @@ pub enum ApprovalJudge {
     Scored(String),
     /// The judge could not score the call, with its English reason.
     /// 判定器无法为调用评分，附英文原因。
+    Unavailable(String),
+}
+
+/// What the reviewing LLM found for a call it did not decide.
+/// 复核 LLM 对未决定调用的结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalReview {
+    /// Verdict key (`allow`, `ask_user` or `deny`) and the reason in the user's language.
+    /// 决定键（`allow`、`ask_user` 或 `deny`）与以用户语言写出的理由。
+    Reviewed { verdict: String, reason: String },
+    /// The reviewer could not review the call, with its English reason.
+    /// 复核器无法复核调用，附英文原因。
     Unavailable(String),
 }
 
