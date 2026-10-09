@@ -5,6 +5,7 @@ import type {
 } from "@/service/protocol";
 import type { ServiceClient } from "@/service/client";
 import type { AnswerModePreference } from "@/service/answer-mode";
+import type { PermissionMode } from "@/service/permission-mode";
 import type {
   ConversationEventPatchDurability,
   ConversationEventLivePatch,
@@ -47,6 +48,9 @@ export interface ConversationSessionConfigV1 {
   /** Persisted answer mode from Core metadata.
    * 来自 Core 元数据的持久回答模式。 */
   answer_mode: AnswerModePreference;
+  /** Persisted session permission mode from Core metadata.
+   * 来自 Core 元数据的持久会话权限模式。 */
+  permission_mode: PermissionMode;
   current_request: ConversationRequestConfigV1;
   next_request: ConversationRequestConfigV1 | null;
   context_compaction_window_node_id: string | null;

@@ -20,9 +20,11 @@ use crate::v1::ids::{ApiCallId, ClientActionId, PendingInputId, ResourceId, Seq,
 /// V1 会话元数据文档的文件契约。
 pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 
-/// Current metadata schema; storage migrations are required whenever this version increases.
-/// 当前元数据模式版本；每次递增都必须提供存储迁移。
-pub const METADATA_SCHEMA_VERSION: u32 = 4;
+/// Current metadata schema. Pre-release builds (V0.1.x) reject every other version instead of
+/// migrating it; per-version migrations become mandatory from V0.2 (AGENTS.md section 1 rule 12).
+/// 当前元数据模式版本。发布前版本（V0.1.x）拒绝其他任何版本而不迁移；自 V0.2 起才必须提供逐版本迁移
+/// （AGENTS.md 第一节第 12 条）。
+pub const METADATA_SCHEMA_VERSION: u32 = 5;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
@@ -129,14 +131,36 @@ pub struct PlanModeConfig {
     pub enabled: bool,
 }
 
-/// Future session-level access authorizations.
-/// 未来会话级授权选择。
+/// Session permission mode governing which effects run without user approval.
+/// 决定哪些效果无需用户批准即可执行的会话权限模式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    /// Every write needs one explicit user approval.
+    /// 每次写入都需要用户明确批准一次。
+    ReadOnly,
+    /// Workspace writes run directly; other effects go through the approval pipeline.
+    /// 工作区内写入直接执行；其他效果经过审批管线。
+    #[default]
+    WorkspaceWrite,
+    /// No judging and no approval prompts.
+    /// 不判定、不询问。
+    FullAccess,
+}
+
+/// Session-level access selections.
+/// 会话级授权选择。
 ///
 /// Only real implemented fields may be added; no speculative configuration is
 /// created ahead of the product feature.
 /// 只允许加入真实已实现的字段；不为尚未到来的产品功能提前创造配置。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccessConfig {}
+#[serde(deny_unknown_fields)]
+pub struct AccessConfig {
+    /// Current permission mode; new sessions start from the runtime default.
+    /// 当前权限模式；新会话从运行时默认值开始。
+    pub permission: PermissionMode,
+}
 
 /// Session mode switches.
 /// 会话模式开关。

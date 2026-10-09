@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 mod fingerprints;
-mod metadata_migration;
+mod metadata_access;
 mod user_prompt;
 
 use vulcan_session_core::v1::config::{MetadataDocument, PendingRequestConfig};

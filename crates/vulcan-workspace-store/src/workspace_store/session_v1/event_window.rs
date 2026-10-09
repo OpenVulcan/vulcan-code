@@ -52,6 +52,9 @@ pub struct EventWindowState {
     /// Session request and compaction configuration captured from the same metadata.
     /// 从同一份 metadata 捕获的会话请求与压缩配置。
     pub config: SessionConfig,
+    /// Session permission mode captured from the same metadata.
+    /// 从同一份 metadata 捕获的会话权限模式。
+    pub permission_mode: vulcan_session_core::v1::config::PermissionMode,
 }
 
 /// One complete, seq-contiguous turn window.
@@ -270,6 +273,7 @@ fn event_window_state(
         next_seq: metadata.id_frontier.next_seq,
         open_turn_start_seq: metadata.open_turn_start_seq,
         config: metadata.config.clone(),
+        permission_mode: metadata.mode.access.permission,
     }
 }
 

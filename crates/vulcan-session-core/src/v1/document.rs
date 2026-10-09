@@ -58,6 +58,7 @@ mod generation;
 mod hydration;
 mod input;
 mod modes;
+mod permission_mode;
 mod persistence;
 mod provider_source;
 mod recovery;

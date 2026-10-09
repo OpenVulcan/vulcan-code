@@ -183,6 +183,7 @@ mod native_vmm;
 mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
+mod permission_mode;
 mod plugin_environment_install_tasks;
 mod plugin_mcp_secret_store;
 mod plugin_runtime_services;

@@ -183,10 +183,11 @@
   "open_turn_start_seq": 1,
   "session_config": {
     "answer_mode": {
-      "mode": "standard",
+      "mode": "interactive",
       "revision": 0,
       "prepared": null
     },
+    "permission_mode": "workspace_write",
     "current_request": {
       "provider": "anthropic",
       "connection_id": "conn-2",

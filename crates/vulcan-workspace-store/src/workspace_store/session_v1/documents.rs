@@ -1,8 +1,8 @@
 //! Typed read/write of the V1 metadata, runtime, and compactions documents.
 //! V1 metadata、runtime、compactions 文档的类型化读写。
 //!
-//! Metadata uses explicit version migrations; runtime and compaction contracts stay independent.
-//! 元数据使用明确的版本迁移；运行时和压缩契约保持独立。
+//! Metadata requires the exact current schema; runtime and compaction contracts stay independent.
+//! 元数据要求精确的当前模式；运行时和压缩契约保持独立。
 
 use std::path::Path;
 
@@ -32,8 +32,8 @@ pub fn write_json_document<T: Serialize>(
             format!("serialize {artifact_kind}: {error}"),
         )
     })?;
-    // Metadata migration and all normal publishers share the same stable file lock.
-    // 元数据迁移和所有正常发布者共用同一个稳定文件锁。
+    // Capability rebuilds and all normal publishers share the same stable file lock.
+    // 能力重建和所有正常发布者共用同一个稳定文件锁。
     let _metadata_guard = if path
         .file_name()
         .is_some_and(|name| name == super::layout::METADATA_FILE)
@@ -43,7 +43,7 @@ pub fn write_json_document<T: Serialize>(
                 SessionV1Error::io(parent, format!("create metadata parent: {error}"))
             })?;
         }
-        Some(super::metadata_migration::publication_lock(path)?)
+        Some(super::metadata_access::publication_lock(path)?)
     } else {
         None
     };
@@ -70,10 +70,10 @@ fn read_json_document<T: DeserializeOwned + std::fmt::Debug>(
     })
 }
 
-/// Reads metadata through explicit, backed-up schema migrations before returning the current type.
-/// 通过明确且有备份的模式迁移读取元数据，再返回当前类型。
+/// Reads metadata of the exact current schema; older or future versions are rejected unchanged.
+/// 读取精确当前模式的元数据；旧版本或未来版本原样拒绝。
 pub fn read_metadata(path: &Path) -> Result<MetadataDocument, SessionV1Error> {
-    super::metadata_migration::read_metadata(path)
+    super::metadata_access::read_metadata(path)
 }
 
 /// Reads `path` for an explicit capability rebuild, replacing only the known capability subtree.
@@ -86,9 +86,11 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
 ) -> Result<MetadataDocument, SessionV1Error> {
     // Decode just enough structure to replace a malformed optional addon, never the conversation.
     // 仅解码替换损坏可选附加项所需的结构，绝不替换会话本身。
-    let _guard = super::metadata_migration::publication_lock(path)?;
-    let original = std::fs::read(path)
-        .map_err(|error| SessionV1Error::io(path, format!("read rebuild metadata: {error}")))?;
+    let _guard = super::metadata_access::publication_lock(path)?;
+    let original = super::metadata_access::read_bytes(path)?;
+    // Only the current schema can be rebuilt; older sessions stay rejected like ordinary reads.
+    // 只能重建当前模式；旧会话与普通读取一样保持被拒绝。
+    super::metadata_access::require_current_schema(path, &original)?;
     let mut raw: serde_json::Value = serde_json::from_slice(&original).map_err(|error| {
         SessionV1Error::corrupt(
             ErrorCode::MetadataCorrupt,
@@ -96,7 +98,6 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
             format!("parse rebuild metadata: {error}"),
         )
     })?;
-    let original_version = super::metadata_migration::read_schema_version(path, &original)?;
     let selections = raw
         .pointer_mut("/config/selection")
         .and_then(serde_json::Value::as_object_mut)
@@ -117,13 +118,15 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
             )
         })?,
     );
-    // Reuse the same detached upgrade engine; the explicit rebuild owns publication.
-    // 复用同一独立升级引擎；显式重建负责发布。
-    let document = super::metadata_migration::upgrade(path, raw)?;
-    // Upgrade has validated the exact u32 header; a rebuild must preserve the same original bytes.
-    // 升级已校验精确 u32 头部；重建必须保留同样的原始字节。
-    super::metadata_migration::preserve_original(path, &original, original_version)?;
-    Ok(document)
+    // The candidate must still satisfy the complete typed shape; the explicit rebuild owns publication.
+    // 候选必须仍满足完整强类型结构；显式重建负责发布。
+    serde_json::from_value(raw).map_err(|error| {
+        SessionV1Error::corrupt(
+            ErrorCode::MetadataCorrupt,
+            path,
+            format!("validate rebuilt metadata: {error}"),
+        )
+    })
 }
 
 /// Reads the runtime document and validates its frozen contract.

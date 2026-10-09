@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use vulcan_session_core::v1::config::{
-    ActiveRequestConfig, AnswerModePreference, PendingRequestConfig, SessionConfig,
+    ActiveRequestConfig, AnswerModePreference, PendingRequestConfig, PermissionMode, SessionConfig,
 };
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
 use vulcan_session_core::v1::ids::{Seq, TurnId};
@@ -151,6 +151,9 @@ pub struct ConversationSessionConfigV1 {
     /// Session-owned answer mode and its last prepared snapshot.
     /// 会话自有的回答模式及其最近准备快照。
     pub answer_mode: AnswerModePreference,
+    /// Session permission mode read from `metadata.mode.access`.
+    /// 从 `metadata.mode.access` 读取的会话权限模式。
+    pub permission_mode: PermissionMode,
     /// Request configuration frozen for the current physical API.
     /// 为当前物理 API 锁定的请求配置。
     pub current_request: ConversationRequestConfigV1,
@@ -168,16 +171,18 @@ impl ConversationSessionConfigV1 {
     ///
     /// # Parameters
     /// 参数
-    /// `config` is the exact session config captured with the event window.
-    /// `config` 是与事件窗口一同捕获的精确会话配置。
+    /// `config` is the exact session config captured with the event window;
+    /// `permission_mode` comes from the same metadata snapshot.
+    /// `config` 是与事件窗口一同捕获的精确会话配置；`permission_mode` 来自同一份元数据快照。
     ///
     /// # Returns
     /// 返回值
     /// Returns current/next request state and the dynamic compaction selection.
     /// 返回当前/下一请求状态与动态压缩选择。
-    pub fn from_session_config(config: &SessionConfig) -> Self {
+    pub fn from_session_config(config: &SessionConfig, permission_mode: PermissionMode) -> Self {
         Self {
             answer_mode: config.answer_mode.clone(),
+            permission_mode,
             current_request: ConversationRequestConfigV1::from_active(&config.active_request),
             next_request: config
                 .pending_request
@@ -1356,7 +1361,10 @@ mod tests {
             None,
             document.active_turn().map(|turn| turn.turn_id),
             document.active_turn().map(|turn| turn.start_seq),
-            ConversationSessionConfigV1::from_session_config(&document.metadata.config),
+            ConversationSessionConfigV1::from_session_config(
+                &document.metadata.config,
+                document.metadata.mode.access.permission,
+            ),
             ConversationEventRevisionFrontierV1::try_new(
                 "test-service-epoch",
                 document.memory_revision(),
@@ -1392,7 +1400,8 @@ mod tests {
             ..SessionConfig::default()
         };
 
-        let projected = ConversationSessionConfigV1::from_session_config(&config);
+        let projected =
+            ConversationSessionConfigV1::from_session_config(&config, PermissionMode::ReadOnly);
 
         assert_eq!(
             projected.current_request.model.as_deref(),
@@ -1420,6 +1429,7 @@ mod tests {
             projected.context_compaction_window_node_id.as_deref(),
             Some(ContextCompactionWindowNodeId::CompressionWindow4.as_str())
         );
+        assert_eq!(projected.permission_mode, PermissionMode::ReadOnly);
     }
 
     /// Verifies the shared Rust service contract matches the checked-in JSON
@@ -1600,7 +1610,10 @@ mod tests {
                 events: Vec::new(),
             },
             None,
-            ConversationSessionConfigV1::from_session_config(&SessionConfig::default()),
+            ConversationSessionConfigV1::from_session_config(
+                &SessionConfig::default(),
+                PermissionMode::default(),
+            ),
         );
         let value = serde_json::to_value(response).expect("serialize historical page");
         assert!(value.get("memory_revision").is_none());

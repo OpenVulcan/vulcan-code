@@ -64,7 +64,6 @@ cargo nextest run --locked --lib -p <crate> --run-ignored only --test-threads=1 
 | vulcan-agent-runtime | `session_owner_hooks_reach_two_real_mcp_processes` | `VULCAN_W14_NODE_EXE` |
 | vulcan-workspace-store | `in_process_session_v1_lifecycle_and_failures` | 受管 Python，用于外部 SQLite 锁持有者 |
 | vulcan-workspace-store | `real_goal_failure_snapshot_recovers_without_losing_events` | `VULCAN_GOAL_RECOVERY_METADATA` 指定失败快照 |
-| vulcan-workspace-store | `metadata_migration_external_session_copy` | `VULCAN_METADATA_MIGRATION_FIXTURE` 指定会话夹具 |
 | vulcan-service-kernel | `real_hidden_node_retains_diagnostics_without_console_handles` | 打包的 Node 运行时 |
 | vulcan-service-kernel | `real_core_host_plugin_mcp_browser_switch_revokes_old_grant` | 打包 Chromium、编译宿主和注册表安装的 Playwright MCP |
 | vulcan-service-kernel | `real_startup_and_restart_leave_uninitialized_projects_cold` | 插件、LuaSkills 运行时以及两个服务子进程 |

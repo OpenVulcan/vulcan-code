@@ -35,6 +35,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_update_session_goal_status",
     "service_set_session_plan_mode",
     "service_set_session_answer_mode",
+    "service_set_session_permission_mode",
     "service_set_session_vmm_policy",
     "service_set_session_context_compaction_window",
     "service_set_session_output_style",
@@ -77,6 +78,13 @@ pub(super) async fn dispatch(
     let result = match method {
         "service_set_session_answer_mode" => rpc_json_result(
             crate::answer_mode::service_set_session_answer_mode(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_set_session_permission_mode" => rpc_json_result(
+            crate::permission_mode::service_set_session_permission_mode(
                 state,
                 rpc_required_param(params, "request")?,
             )

@@ -25,8 +25,8 @@
   `defaultAnswerMode` 中投影。子代理会话固定为 `standard`，其回复由父模型而非用户阅读。
 - **快照语义**：新会话在首次提交物化时一次性取得草稿显式选择（`sessionSettings.answerMode`），
   缺省时复制当时的全局默认。之后修改全局默认不影响任何已有会话；明确分叉继承期望并重置准备快照。
-- 元数据模式 3 → 4 将旧 `html_answers.enabled` 映射为 `interactive`/`standard`，见
-  [元数据迁移](session-metadata-migrations.md)。
+- 回答模式自元数据模式 4 起持久化；发布前版本不迁移旧会话，见
+  [会话元数据版本](session-metadata-migrations.md)。
 
 ## 提示词注入
 
