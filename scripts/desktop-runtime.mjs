@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { browserPackageInputs, browserVersions, verifyBrowserDependencies } from './browser-runtime.mjs';
+import { JUDGE_RUNTIME_MANIFEST, resolveToolPlatform } from './install-locked-tools.mjs';
 
 // The repository is resolved from this script rather than the caller's working directory.
 // 仓库由脚本位置确定，不依赖调用方工作目录。
@@ -164,6 +165,7 @@ async function verifyReleaseAssets(layout, distributionRoot) {
   }
   await verifyManagedRuntime(distributionRoot, layout, 'node');
   await verifyManagedRuntime(distributionRoot, layout, 'python');
+  await verifyJudgeRuntimePackage(distributionRoot, layout);
 
   const hasChromium = layout.chromiumExecutable !== null && layout.chromiumExecutable !== undefined;
   const capabilities = Array.isArray(layout.capabilities) ? layout.capabilities : [];
@@ -241,6 +243,17 @@ async function verifyManagedRuntime(distributionRoot, layout, runtime) {
     return;
   }
   throw new Error(`Missing managed ${label} runtime for platform ${expectedPlatform}.`);
+}
+
+// Verify the judge runtime libraries the build-input lock declares for the layout host; undeclared hosts ship none.
+// 验证构建输入锁文件为布局宿主声明的判定执行库；未声明的宿主不随包提供。
+async function verifyJudgeRuntimePackage(distributionRoot, layout) {
+  const lock = JSON.parse(await readFile(path.join(repository, 'scripts', 'build-inputs.lock.json'), 'utf8'));
+  const target = lock.judge_runtime.targets[resolveToolPlatform(layout.platform, layout.architecture).target];
+  if (!target) return;
+  for (const relative of [JUDGE_RUNTIME_MANIFEST, target.core_library, target.webgpu_library]) {
+    await verifyPackageEntry('judgeRuntime', path.posix.join('judge-runtime', relative), 'file', distributionRoot);
+  }
 }
 
 // Verify the generated Chromium inventory, version evidence, and every copied component file.
@@ -392,6 +405,7 @@ async function main() {
     const runtimeLayout = { platform: process.platform, architecture: process.arch };
     await verifyManagedRuntime(output, runtimeLayout, 'node');
     await verifyManagedRuntime(output, runtimeLayout, 'python');
+    await verifyJudgeRuntimePackage(output, runtimeLayout);
   }
   // Require the adapted browser and synced plugin before modifying any existing distribution.
   // 修改已有发行物前，必须具备已适配浏览器与已同步插件。

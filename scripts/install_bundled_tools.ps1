@@ -15,3 +15,8 @@ $InstallerArguments = @((Join-Path $PSScriptRoot 'install-locked-tools.mjs'), 'b
 if ($Offline) { $InstallerArguments += '--offline' }
 & node @InstallerArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# The bundled judge runtime (ONNX Runtime core plus the WebGPU plugin) ships with the same tools step.
+# 随包判定执行库（ONNX Runtime 核心与 WebGPU 插件）随同一工具步骤安装。
+$InstallerArguments[1] = 'judge-runtime'
+& node @InstallerArguments
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -167,6 +167,8 @@ cargo test --doc
 
 scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平台归档摘要及许可证摘要的唯一来源。安装入口共用 install-locked-tools.mjs，不查询最新发行版；升级必须评审清单差异并验证对应平台。此清单不替代 Cargo、pnpm 及已有受管 Node 的锁定机制。
 
+同一清单的 `judge_runtime` 段锁定本机权限判定器的随包执行库：官方 ONNX Runtime CPU 核心库与 WebGPU 执行提供器插件（通用 GPU 路径，适配任意支持 WebGPU 的显卡）。`make init-system` 与 `make deps tools` 经 `install_bundled_tools` 依次安装 `bundled` 与 `judge-runtime` 两组；后者只把各归档中声明的成员复制到 `third_party/judge-runtime/<target>/`，并写入记录每个文件摘要的 `judge-runtime.json`。清单未声明的宿主（目前为没有官方构建的 macOS x64）只输出说明，不安装。`make sync` 通过 `install-locked-tools.mjs verify-judge-runtime` 按锁文件复核清单与全部摘要后复制到 `output/judge-runtime/`；已声明宿主缺失或文件被改动时同步失败并提示执行 `make deps tools`。发布布局校验要求已声明宿主的发行物包含该清单与两个库。CUDA 执行库因显卡与驱动差异不随包提供。
+
 已验证归档和许可证按摘要缓存在 target/build-input-cache/。联网初始化填充缓存后，可以运行 pwsh -File scripts/install_bundled_tools.ps1 -Offline 和 pwsh -File scripts/install_protoc.ps1 -Offline 重建对应安装。缺失缓存或摘要损坏直接失败，不联网、不换版本。离线能力只覆盖这些输入；完整项目离线构建还需预先准备 Cargo、pnpm 等各自的依赖缓存。
 
 安装使用独立暂存目录，先验证工具、许可证和 protoc 头文件，再替换目标。并发安装同一目标会明确拒绝；异常退出遗留的 .installing 目录需要确认旧安装进程已退出后清理，.previous 保存待恢复的旧安装，不可直接删除。常规替换失败会恢复旧目录。

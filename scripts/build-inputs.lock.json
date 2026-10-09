@@ -132,5 +132,149 @@
         "sha256": "70381b116ab0d71cb6a5177d9b17c7c13415866603a0fd40d513dafe32d56c35"
       }
     ]
+  },
+  "judge_runtime": {
+    "onnxruntime": "1.30.0",
+    "webgpu_plugin": "0.4.0",
+    "targets": {
+      "aarch64-apple-darwin": {
+        "core_library": "onnxruntime/libonnxruntime.1.30.0.dylib",
+        "webgpu_library": "webgpu/libonnxruntime_providers_webgpu.dylib",
+        "archives": [
+          {
+            "name": "onnxruntime-osx-arm64-1.30.0.tgz",
+            "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-osx-arm64-1.30.0.tgz",
+            "sha256": "6ebb5062a934537c352937821f9fe9718e7de1a2db1122a93dd363ffd53a7012",
+            "files": {
+              "onnxruntime-osx-arm64-1.30.0/LICENSE": "licenses/onnxruntime/LICENSE",
+              "onnxruntime-osx-arm64-1.30.0/ThirdPartyNotices.txt": "licenses/onnxruntime/ThirdPartyNotices.txt",
+              "onnxruntime-osx-arm64-1.30.0/lib/libonnxruntime.1.30.0.dylib": "onnxruntime/libonnxruntime.1.30.0.dylib"
+            }
+          },
+          {
+            "name": "onnxruntime_ep_webgpu-0.4.0-py3-none-macosx_14_0_universal2.whl",
+            "url": "https://files.pythonhosted.org/packages/c3/9f/1e09865bbe4c9202ff1334545535be32dfdbeffc46e7d4c36c5de67ffafe/onnxruntime_ep_webgpu-0.4.0-py3-none-macosx_14_0_universal2.whl",
+            "sha256": "8d0a91d44b43d931c3068b9134aed9770f27803e353c2b58c93e1700bb68bcca",
+            "files": {
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/LICENSE": "licenses/onnxruntime-ep-webgpu/LICENSE",
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/ThirdPartyNotices.txt": "licenses/onnxruntime-ep-webgpu/ThirdPartyNotices.txt",
+              "onnxruntime_ep_webgpu/libonnxruntime_providers_webgpu.dylib": "webgpu/libonnxruntime_providers_webgpu.dylib"
+            }
+          }
+        ]
+      },
+      "aarch64-pc-windows-msvc": {
+        "core_library": "onnxruntime/onnxruntime.dll",
+        "webgpu_library": "webgpu/onnxruntime_providers_webgpu.dll",
+        "archives": [
+          {
+            "name": "onnxruntime-win-arm64-1.30.0.zip",
+            "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-arm64-1.30.0.zip",
+            "sha256": "e53db8a50b23ae35be901cc93428baf997dc8d420333b097b2eae53d3ea9f2d3",
+            "files": {
+              "onnxruntime-win-arm64-1.30.0/LICENSE": "licenses/onnxruntime/LICENSE",
+              "onnxruntime-win-arm64-1.30.0/ThirdPartyNotices.txt": "licenses/onnxruntime/ThirdPartyNotices.txt",
+              "onnxruntime-win-arm64-1.30.0/lib/onnxruntime.dll": "onnxruntime/onnxruntime.dll",
+              "onnxruntime-win-arm64-1.30.0/lib/onnxruntime_providers_shared.dll": "onnxruntime/onnxruntime_providers_shared.dll"
+            }
+          },
+          {
+            "name": "onnxruntime_ep_webgpu-0.4.0-py3-none-win_arm64.whl",
+            "url": "https://files.pythonhosted.org/packages/cd/35/e1b1b12e596354d05af43cea09cd9fbd8a24b6df3853c527307b5cfb8d4b/onnxruntime_ep_webgpu-0.4.0-py3-none-win_arm64.whl",
+            "sha256": "a9586f6744370776059edd794c11bca2f563258a5bd2707864aefff31d3af39f",
+            "files": {
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/LICENSE": "licenses/onnxruntime-ep-webgpu/LICENSE",
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/ThirdPartyNotices.txt": "licenses/onnxruntime-ep-webgpu/ThirdPartyNotices.txt",
+              "onnxruntime_ep_webgpu/dxcompiler.dll": "webgpu/dxcompiler.dll",
+              "onnxruntime_ep_webgpu/dxil.dll": "webgpu/dxil.dll",
+              "onnxruntime_ep_webgpu/onnxruntime_providers_webgpu.dll": "webgpu/onnxruntime_providers_webgpu.dll"
+            }
+          }
+        ]
+      },
+      "aarch64-unknown-linux-gnu": {
+        "core_library": "onnxruntime/libonnxruntime.so.1.30.0",
+        "webgpu_library": "webgpu/libonnxruntime_providers_webgpu.so",
+        "archives": [
+          {
+            "name": "onnxruntime-linux-aarch64-1.30.0.tgz",
+            "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-aarch64-1.30.0.tgz",
+            "sha256": "e16a27a8ed330bbc698df7330b0cf56e722f354e3bcc92118682c74ef3c3e3da",
+            "files": {
+              "onnxruntime-linux-aarch64-1.30.0/LICENSE": "licenses/onnxruntime/LICENSE",
+              "onnxruntime-linux-aarch64-1.30.0/ThirdPartyNotices.txt": "licenses/onnxruntime/ThirdPartyNotices.txt",
+              "onnxruntime-linux-aarch64-1.30.0/lib/libonnxruntime.so.1.30.0": "onnxruntime/libonnxruntime.so.1.30.0",
+              "onnxruntime-linux-aarch64-1.30.0/lib/libonnxruntime_providers_shared.so": "onnxruntime/libonnxruntime_providers_shared.so"
+            }
+          },
+          {
+            "name": "onnxruntime_ep_webgpu-0.4.0-py3-none-manylinux_2_28_aarch64.whl",
+            "url": "https://files.pythonhosted.org/packages/4e/ca/00c70322c19913c81a6bb2239aca83781b97a818b55c2ec3d25cec72dc4c/onnxruntime_ep_webgpu-0.4.0-py3-none-manylinux_2_28_aarch64.whl",
+            "sha256": "17f660db53b1a509c63e721ac6784a2daa1c4e91a968523ee9986505ee5b0a55",
+            "files": {
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/LICENSE": "licenses/onnxruntime-ep-webgpu/LICENSE",
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/ThirdPartyNotices.txt": "licenses/onnxruntime-ep-webgpu/ThirdPartyNotices.txt",
+              "onnxruntime_ep_webgpu/libonnxruntime_providers_webgpu.so": "webgpu/libonnxruntime_providers_webgpu.so"
+            }
+          }
+        ]
+      },
+      "x86_64-pc-windows-msvc": {
+        "core_library": "onnxruntime/onnxruntime.dll",
+        "webgpu_library": "webgpu/onnxruntime_providers_webgpu.dll",
+        "archives": [
+          {
+            "name": "onnxruntime-win-x64-1.30.0.zip",
+            "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-1.30.0.zip",
+            "sha256": "c6ba983baf5681af108599675d2a89c2d145512d02de28aed0bff177cd0ba949",
+            "files": {
+              "onnxruntime-win-x64-1.30.0/LICENSE": "licenses/onnxruntime/LICENSE",
+              "onnxruntime-win-x64-1.30.0/ThirdPartyNotices.txt": "licenses/onnxruntime/ThirdPartyNotices.txt",
+              "onnxruntime-win-x64-1.30.0/lib/onnxruntime.dll": "onnxruntime/onnxruntime.dll",
+              "onnxruntime-win-x64-1.30.0/lib/onnxruntime_providers_shared.dll": "onnxruntime/onnxruntime_providers_shared.dll"
+            }
+          },
+          {
+            "name": "onnxruntime_ep_webgpu-0.4.0-py3-none-win_amd64.whl",
+            "url": "https://files.pythonhosted.org/packages/d7/a4/c98a9e9433b3eeb576977b26c5c1cd0364f15ba9d198bb16101e7563ab06/onnxruntime_ep_webgpu-0.4.0-py3-none-win_amd64.whl",
+            "sha256": "7db646669d1a2390551da675115ea125e68cb3d4d2c3a2d6e463372bf8d6ea87",
+            "files": {
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/LICENSE": "licenses/onnxruntime-ep-webgpu/LICENSE",
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/ThirdPartyNotices.txt": "licenses/onnxruntime-ep-webgpu/ThirdPartyNotices.txt",
+              "onnxruntime_ep_webgpu/dxcompiler.dll": "webgpu/dxcompiler.dll",
+              "onnxruntime_ep_webgpu/dxil.dll": "webgpu/dxil.dll",
+              "onnxruntime_ep_webgpu/onnxruntime_providers_webgpu.dll": "webgpu/onnxruntime_providers_webgpu.dll"
+            }
+          }
+        ]
+      },
+      "x86_64-unknown-linux-gnu": {
+        "core_library": "onnxruntime/libonnxruntime.so.1.30.0",
+        "webgpu_library": "webgpu/libonnxruntime_providers_webgpu.so",
+        "archives": [
+          {
+            "name": "onnxruntime-linux-x64-1.30.0.tgz",
+            "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz",
+            "sha256": "a5ed5a3cac51fbb2e90da632ae43d19212faaa20e76484e62bcb7c23ddb3b3fd",
+            "files": {
+              "onnxruntime-linux-x64-1.30.0/LICENSE": "licenses/onnxruntime/LICENSE",
+              "onnxruntime-linux-x64-1.30.0/ThirdPartyNotices.txt": "licenses/onnxruntime/ThirdPartyNotices.txt",
+              "onnxruntime-linux-x64-1.30.0/lib/libonnxruntime.so.1.30.0": "onnxruntime/libonnxruntime.so.1.30.0",
+              "onnxruntime-linux-x64-1.30.0/lib/libonnxruntime_providers_shared.so": "onnxruntime/libonnxruntime_providers_shared.so"
+            }
+          },
+          {
+            "name": "onnxruntime_ep_webgpu-0.4.0-py3-none-manylinux_2_28_x86_64.whl",
+            "url": "https://files.pythonhosted.org/packages/c1/96/2a18a45079250afcd825687aef2895de266d5abc1cff9f52d2dede7598f2/onnxruntime_ep_webgpu-0.4.0-py3-none-manylinux_2_28_x86_64.whl",
+            "sha256": "5d8c961eda91a88961cad1fb7621f389f006b18497d6ea9ecf96f729f066cbfb",
+            "files": {
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/LICENSE": "licenses/onnxruntime-ep-webgpu/LICENSE",
+              "onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/ThirdPartyNotices.txt": "licenses/onnxruntime-ep-webgpu/ThirdPartyNotices.txt",
+              "onnxruntime_ep_webgpu/libonnxruntime_providers_webgpu.so": "webgpu/libonnxruntime_providers_webgpu.so"
+            }
+          }
+        ]
+      }
+    }
   }
 }

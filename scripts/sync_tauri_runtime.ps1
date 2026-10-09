@@ -400,6 +400,21 @@ foreach ($BundledToolName in @("sg", "rg")) {
 Write-Host "==> Syncing bundled sg and rg tools..."
 Copy-DirectoryContents -SourceDirectory $SourceBundledToolsDir -DestinationDirectory $OutputBundledToolsDir -Clean
 
+# SourceJudgeRuntimeDir is the lock-verified judge runtime of this host, or empty when the lock declares none.
+# SourceJudgeRuntimeDir 是按锁文件校验过的本宿主判定执行库；锁文件未声明时为空。
+$SourceJudgeRuntimeDir = (& node (Join-Path $ProjectDir "scripts/install-locked-tools.mjs") verify-judge-runtime | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Judge runtime verification failed." }
+# OutputJudgeRuntimeDir is the runtime-owned ONNX Runtime and WebGPU plugin root.
+# OutputJudgeRuntimeDir 是运行时持有的 ONNX Runtime 与 WebGPU 插件根目录。
+$OutputJudgeRuntimeDir = Join-Path $OutputRootDir "judge-runtime"
+if ($SourceJudgeRuntimeDir) {
+    Write-Host "==> Syncing bundled judge runtime..."
+    Copy-DirectoryContents -SourceDirectory $SourceJudgeRuntimeDir -DestinationDirectory $OutputJudgeRuntimeDir -Clean
+}
+elseif (Test-Path -LiteralPath $OutputJudgeRuntimeDir) {
+    $null = Remove-ItemAllowLocked -LiteralPath $OutputJudgeRuntimeDir -Recurse
+}
+
 if (Test-Path -LiteralPath $LegacyManagedRuntimeDistributionDir) {
     Write-Host "==> Removing obsolete LuaSkills-private managed runtimes..."
     $null = Remove-ItemAllowLocked -LiteralPath $LegacyManagedRuntimeDistributionDir -Recurse

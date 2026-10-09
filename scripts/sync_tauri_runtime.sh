@@ -187,6 +187,19 @@ done
 echo "==> Syncing bundled sg and rg tools..."
 copy_directory_contents "$SourceBundledToolsDir" "$OutputBundledToolsDir" 1
 
+# SourceJudgeRuntimeDir is the lock-verified judge runtime of this host, or empty when the lock declares none.
+# SourceJudgeRuntimeDir 是按锁文件校验过的本宿主判定执行库；锁文件未声明时为空。
+SourceJudgeRuntimeDir=$(node "$ProjectDir/scripts/install-locked-tools.mjs" verify-judge-runtime)
+# OutputJudgeRuntimeDir is the runtime-owned ONNX Runtime and WebGPU plugin root.
+# OutputJudgeRuntimeDir 是运行时持有的 ONNX Runtime 与 WebGPU 插件根目录。
+OutputJudgeRuntimeDir="$OutputRootDir/judge-runtime"
+if [ -n "$SourceJudgeRuntimeDir" ]; then
+    echo "==> Syncing bundled judge runtime..."
+    copy_directory_contents "$SourceJudgeRuntimeDir" "$OutputJudgeRuntimeDir" 1
+elif [ -d "$OutputJudgeRuntimeDir" ]; then
+    remove_output_directory "$OutputJudgeRuntimeDir"
+fi
+
 if [ -d "$LegacyManagedRuntimeDistributionDir" ]; then
     echo "==> Removing obsolete LuaSkills-private managed runtimes..."
     remove_output_directory "$LegacyManagedRuntimeDistributionDir"

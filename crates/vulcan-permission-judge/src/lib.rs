@@ -12,6 +12,7 @@ pub mod package;
 pub mod policy;
 pub mod protocol;
 pub mod render;
+pub mod runtime;
 
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
 pub use package::{
@@ -19,3 +20,4 @@ pub use package::{
 };
 pub use policy::{JudgePolicy, JudgeSettings, PolicyOption, SettingsError};
 pub use render::render_call;
+pub use runtime::{BundledRuntime, RuntimeError};

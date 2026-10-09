@@ -2,7 +2,7 @@
 // 针对 desktop-runtime.mjs 使用的打包输入检查编写定向测试。
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import os from 'node:os';
 import path from 'node:path';
@@ -171,6 +171,14 @@ async function createReleaseFixture({ chromium = true } = {}) {
   await writeFile(path.join(nodeRoot, 'runtime-manifest.json'), JSON.stringify({
     schema_version: 1, runtime: 'node', version: '24.18.0', platform: 'windows-x64', executable: 'node.exe',
   }));
+  // judgeTarget is the lock's Windows x64 runtime, matching the fixture host.
+  // judgeTarget 是锁文件中与夹具宿主一致的 Windows x64 执行库。
+  const lock = JSON.parse(await readFile(new URL('./build-inputs.lock.json', import.meta.url), 'utf8'));
+  const judgeTarget = lock.judge_runtime.targets['x86_64-pc-windows-msvc'];
+  for (const relative of ['judge-runtime.json', judgeTarget.core_library, judgeTarget.webgpu_library]) {
+    await mkdir(path.dirname(path.join(root, 'judge-runtime', relative)), { recursive: true });
+    await writeFile(path.join(root, 'judge-runtime', relative), 'judge');
+  }
   const pythonRoot = path.join(root, 'dependencies/runtimes/python/cpython-3.14.6-windows-x64');
   await mkdir(pythonRoot, { recursive: true });
   await writeFile(path.join(pythonRoot, 'python.exe'), 'python');
@@ -257,6 +265,13 @@ for (const relative of ['resources', 'plugins', 'lua_runtime', 'tools']) {
     await assert.rejects(verifyPackagedLayout(releaseLayout(), root), new RegExp(`Missing package input ${relative}`));
   });
 }
+
+test('rejects a release package without the declared judge runtime', async (t) => {
+  const root = await createReleaseFixture();
+  t.after(() => removeFixture(root));
+  await rm(path.join(root, 'judge-runtime'), { recursive: true, force: true });
+  await assert.rejects(verifyPackagedLayout(releaseLayout(), root), /Missing package input judgeRuntime/);
+});
 
 test('rejects a release package without the matching managed Node runtime', async (t) => {
   const root = await createReleaseFixture();

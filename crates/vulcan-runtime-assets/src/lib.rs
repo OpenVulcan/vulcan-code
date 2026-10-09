@@ -243,6 +243,10 @@ const PLUGINS_DIR_NAME: &str = "plugins";
 /// 包含宿主自有内建命令行工具的相对目录。
 const TOOLS_DIR_NAME: &str = "tools";
 
+/// Relative directory containing the bundled ONNX Runtime of the local permission judge.
+/// 包含本机权限判定器随包 ONNX Runtime 的相对目录。
+const JUDGE_RUNTIME_DIR_NAME: &str = "judge-runtime";
+
 /// Relative executable directory nested below the bundled-tools root.
 /// 位于内建工具根目录下的相对可执行文件目录。
 const TOOLS_BIN_DIR_NAME: &str = "bin";
@@ -440,6 +444,30 @@ pub fn resolve_bundled_tool_bin_directory() -> Option<PathBuf> {
         repository_output_root
             .join(TOOLS_DIR_NAME)
             .join(TOOLS_BIN_DIR_NAME),
+    );
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
+/// Returns the bundled judge runtime directory below the active output root.
+/// 返回当前 output 根目录下的随包判定执行库目录。
+///
+/// # Returns
+/// 返回值
+/// The exact existing `<VULCAN_CODE_ROOT>/judge-runtime` directory, or `None` when this host ships none.
+/// 返回精确且已存在的 `<VULCAN_CODE_ROOT>/judge-runtime` 目录；本宿主未随包提供时返回 `None`。
+pub fn resolve_bundled_judge_runtime_root() -> Option<PathBuf> {
+    // candidates preserves packaged-output precedence before the repository development output.
+    // candidates 保持打包 output 优先于仓库开发 output 的顺序。
+    let mut candidates = Vec::new();
+    if let Some(output_root) = resolve_output_root() {
+        candidates.push(output_root.join(JUDGE_RUNTIME_DIR_NAME));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("output")
+            .join(JUDGE_RUNTIME_DIR_NAME),
     );
     candidates.into_iter().find(|path| path.is_dir())
 }
