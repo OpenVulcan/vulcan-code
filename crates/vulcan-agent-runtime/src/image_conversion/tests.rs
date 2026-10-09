@@ -248,3 +248,113 @@ async fn image_conversion_provider_understanding_rewrites_verified_source_only()
     );
     assert!(path.exists());
 }
+
+/// Saves `image` encoded as `format` under `directory` and returns its canonical staged attachment.
+/// 将按`format`编码的`image`保存到`directory`，并返回其规范暂存附件。
+fn staged_image(
+    directory: &Path,
+    name: &str,
+    mime: &str,
+    image: DynamicImage,
+    format: ImageFormat,
+) -> ConversationAttachment {
+    let path = directory.join(name);
+    image.save_with_format(&path, format).unwrap();
+    ConversationAttachment {
+        kind: ConversationAttachmentKind::Image,
+        file_name: name.into(),
+        local_path: path.to_string_lossy().into_owned(),
+        mime_type: mime.into(),
+        byte_len: Some(std::fs::metadata(&path).unwrap().len()),
+        source_sha256: Some(crate::attachment_assets::streaming_file_sha256(&path).unwrap()),
+        asset_id: Some(format!("asset-{name}")),
+        resource_path: None,
+        source_path: None,
+        delivery_mode: None,
+        preview_local_path: None,
+    }
+}
+
+/// Compression downscales once, keeps transparency lossless, leaves small natives alone and always converts unsupported formats.
+/// 压缩只缩小一次、无损保留透明度、不改动小型原生图片，并始终转换不受支持的格式。
+#[tokio::test]
+async fn compression_downscales_once_and_keeps_transparency() {
+    let directory = tempfile::tempdir().unwrap();
+    let all = CompressionTargets {
+        original: true,
+        jpeg: true,
+        png: true,
+    };
+    // Deterministic noise keeps PNG large, so a smaller derivative proves real compression.
+    // 确定性噪声使PNG保持较大，从而以更小的派生产物证明真实压缩。
+    let wide = |alpha| {
+        DynamicImage::ImageRgba8(image::RgbaImage::from_fn(
+            COMPRESSION_MAX_EDGE_PX + 52,
+            40,
+            |x, y| {
+                let noise = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)).to_le_bytes();
+                image::Rgba([noise[0], noise[1], noise[2], alpha])
+            },
+        ))
+    };
+    let opaque = staged_image(
+        directory.path(),
+        "opaque.png",
+        "image/png",
+        wide(u8::MAX),
+        ImageFormat::Png,
+    );
+    let compressed = compress_attachment(&opaque, all).await.unwrap().unwrap();
+    assert_eq!(compressed.attachment.mime_type, "image/jpeg");
+    assert_eq!(compressed.attachment.asset_id, None);
+    let (width, height) = image::image_dimensions(&compressed.attachment.local_path).unwrap();
+    assert_eq!(width.max(height), COMPRESSION_MAX_EDGE_PX);
+    // Planning the derivative again must not produce another replacement.
+    // 再次规划派生产物不得产生新的替换。
+    assert!(
+        compress_attachment(&compressed.attachment, all)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let clear = staged_image(
+        directory.path(),
+        "clear.png",
+        "image/png",
+        wide(100),
+        ImageFormat::Png,
+    );
+    let compressed = compress_attachment(&clear, all).await.unwrap().unwrap();
+    assert_eq!(compressed.attachment.mime_type, "image/png");
+
+    let small = staged_image(
+        directory.path(),
+        "small.png",
+        "image/png",
+        DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            4,
+            4,
+            image::Rgba([1, 2, 3, 255]),
+        )),
+        ImageFormat::Png,
+    );
+    assert!(compress_attachment(&small, all).await.unwrap().is_none());
+
+    let tiff = staged_image(
+        directory.path(),
+        "small.tiff",
+        "image/tiff",
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3]))),
+        ImageFormat::Tiff,
+    );
+    let unsupported = CompressionTargets {
+        original: false,
+        ..all
+    };
+    let converted = compress_attachment(&tiff, unsupported)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(converted.attachment.mime_type, "image/jpeg");
+}

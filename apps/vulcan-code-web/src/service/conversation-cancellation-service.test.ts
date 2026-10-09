@@ -30,9 +30,12 @@ describe("cancellation settlement service boundary", () => {
     // selection 使用一条精确夹具路线；不读取或修改真实配置。
     const selection = { providerId: "provider-a", modelId: "model-a", connectionId: "connection-a" };
     runtime.request.mockResolvedValue([]);
-    await planComposerAttachments("project-a", null, "draft-a", 1, selection, []);
-    await planComposerAttachments("project-a", null, "draft-a", 2, selection, [], true);
+    await planComposerAttachments("project-a", null, "draft-a", 1, selection, [], true);
+    await planComposerAttachments("project-a", null, "draft-a", 2, selection, [], false, true);
     expect(runtime.request.mock.calls.map(([, params]) => params.retryUploads)).toEqual([false, true]);
+    // The compression choice is always explicit so the service never guesses the viewer preference.
+    // 压缩选择始终显式传递，服务绝不猜测查看者偏好。
+    expect(runtime.request.mock.calls.map(([, params]) => params.compressImages)).toEqual([true, false]);
   });
   // Idempotent lease responses preserve the backend's changed flag without inventing a failure.
   // 幂等租约响应保留后端的变化标志，不虚构失败。

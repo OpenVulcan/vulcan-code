@@ -431,10 +431,9 @@ impl ComposerMediaDeliveryPlanner {
                 ComposerAttachmentDeliveryPlan::UploadReference,
                 "original_upload_reference_restored",
             ),
-            MediaDeliveryDecision::Attachment { reason } => (
-                ComposerAttachmentDeliveryPlan::MetadataOnly,
-                reason.explanation(),
-            ),
+            MediaDeliveryDecision::Attachment { reason } => {
+                (ComposerAttachmentDeliveryPlan::MetadataOnly, reason.code())
+            }
             MediaDeliveryDecision::Reject { .. } => {
                 return Err(String::from(
                     "Explicit conversation attachment returned a non-conversation or historical action.",

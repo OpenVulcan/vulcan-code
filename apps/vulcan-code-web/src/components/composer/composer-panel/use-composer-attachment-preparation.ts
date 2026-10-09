@@ -1,6 +1,10 @@
 import React from "react";
 import { composerAttachmentIdentity as attachmentIdentity } from "@/service/composer-attachment-reference";
 import type { ComposerModelSelectionSnapshot } from "@/components/composer/composer-model";
+import {
+  readComposerImageCompressionPreference,
+  saveComposerImageCompressionPreference,
+} from "@/components/composer/composer-image-compression-preference";
 import { useComposerMediaUploadProgresses } from "@/components/composer/composer-media-upload-context";
 import {
   cancelConversationSubmission,
@@ -47,6 +51,9 @@ export interface ComposerAttachmentPreparationController {
   // Number of canonical attachments currently covered by the submission barrier.
   // 当前被发送屏障覆盖的规范附件数量。
   blockingCount: number;
+  // Viewer's image-compression choice and whether planning is compressing unplanned images now.
+  // 查看者的图片压缩选择，以及规划当前是否正在压缩尚未规划的图片。
+  compression: ComposerImageCompressionState;
   // Projects transient delivery decisions onto the exact submission copy of canonical attachments.
   // 将临时传输决策投影到规范附件的精确提交副本。
   projectForSubmission: (attachments: ComposerAttachmentSummary[]) => ComposerAttachmentSummary[];
@@ -59,6 +66,20 @@ export interface ComposerAttachmentPreparationController {
   // Reconciles the exact draft owner before a local attachment-set replacement is published.
   // 在发布本地附件集合替换前协调精确草稿所有者。
   reconcileDraft: (attachments: ComposerAttachmentSummary[]) => Promise<void>;
+}
+
+// ComposerImageCompressionState exposes the remembered compression choice to the attachment strip.
+// ComposerImageCompressionState 向附件条暴露已记住的压缩选择。
+export interface ComposerImageCompressionState {
+  // Whether new images are compressed to a suitable size during planning.
+  // 规划期间是否将新图片压缩到合适尺寸。
+  enabled: boolean;
+  // Applies and remembers a new choice; the current draft is planned again.
+  // 应用并记住新选择；当前草稿会重新规划。
+  onChange: (enabled: boolean) => void;
+  // Whether route planning is compressing images right now.
+  // 路线规划当前是否正在压缩图片。
+  active: boolean;
 }
 
 // composerAttachmentRouteReadyForPlanning closes every optimistic or unresolved route window.
@@ -222,6 +243,13 @@ export function useComposerAttachmentPreparation(options: {
   // cancellationScope freezes the exact owner, without treating model switches as new owners.
   // cancellationScope 冻结精确所有者，不将切模型视为更换所有者。
   const cancellationScope = JSON.stringify([options.draftSlotKey, options.projectId, options.conversationId]);
+  // compressImages is the viewer's remembered choice for compressing newly attached images.
+  // compressImages 是查看者记住的新附件图片压缩选择。
+  const [compressImages, setCompressImages] = React.useState(readComposerImageCompressionPreference);
+  const changeCompressImages = React.useCallback((enabled: boolean) => {
+    setCompressImages(enabled);
+    saveComposerImageCompressionPreference(enabled);
+  }, []);
   // planningPending exposes the plan interval as an explicit send barrier.
   // planningPending 把规划区间作为显式发送屏障暴露。
   const [planningPending, setPlanningPending] = React.useState(false);
@@ -547,6 +575,7 @@ export function useComposerAttachmentPreparation(options: {
         generation,
         modelSelectionSnapshot,
         canonicalAttachments,
+        compressImages,
       ))
       .then(async (planned) => {
         if (disposed || planningGeneration.current !== generation) {
@@ -631,6 +660,7 @@ export function useComposerAttachmentPreparation(options: {
     options.routePlanningRevision,
     options.routeSelectionPending,
     options.onConvertedAttachments,
+    compressImages,
     expectedLeaseSignature,
     leaseCommittedSignature,
     cancel,
@@ -764,6 +794,9 @@ export function useComposerAttachmentPreparation(options: {
         generation,
         modelSelectionSnapshot,
         [attachment],
+        // The first plan already converted or compressed this attachment; a retry only restarts its upload.
+        // 首次规划已转换或压缩此附件；重试只重新启动其上传。
+        false,
         true,
       );
       if (
@@ -907,6 +940,7 @@ export function useComposerAttachmentPreparation(options: {
     progresses,
     blocksSubmission,
     blockingCount,
+    compression: { enabled: compressImages, onChange: changeCompressImages, active: compressImages && planningPending },
     projectForSubmission,
     retry,
     cancel,

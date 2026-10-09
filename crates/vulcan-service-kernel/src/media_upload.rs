@@ -774,6 +774,7 @@ pub(crate) async fn service_plan_composer_attachments(
     model_selection: SubmissionModelSelection,
     attachments: Vec<ComposerAttachmentSummary>,
     retry_uploads: bool,
+    compress_images: bool,
 ) -> Result<Vec<ComposerAttachmentPreparationSummary>, String> {
     // The frontend's lease barrier precedes planning; the host verifies the exact live scope again for each asset.
     // 前端租约屏障先于规划；宿主仍为每个资产重新核对精确活动作用域。
@@ -807,6 +808,7 @@ pub(crate) async fn service_plan_composer_attachments(
         generation,
         &execution,
         &attachments,
+        compress_images,
     )
     .await?
     {

@@ -20,6 +20,9 @@ const retry = vi.fn();
 // emptyFocus records the explicit handoff to the owner after its last attachment disappears.
 // emptyFocus 记录最后一个附件消失后显式交回所属输入区的焦点请求。
 const emptyFocus = vi.fn();
+// compressionChange records the viewer's explicit compression choice.
+// compressionChange 记录查看者明确的压缩选择。
+const compressionChange = vi.fn();
 // resolve records the precise local path requested for an image thumbnail.
 // resolve 记录图片缩略图请求的精确本地路径。
 const resolve = vi.fn((path: string) => `https://synthetic.invalid/${path}`);
@@ -32,10 +35,11 @@ const image: ComposerAttachmentSummary = { assetId: "preview-image", kind: "imag
  * Parameters: attachments are staged files and preparations are keyed by their stable IDs; returns after committing effects.
  * 参数：attachments 是暂存文件，preparations 按稳定标识索引；提交副作用后返回。
  */
-async function render(attachments: ComposerAttachmentSummary[], preparations: React.ComponentProps<typeof ComposerPanelAttachmentPreviewStrip>["preparations"] = {}, owner = "owner-a") {
+async function render(attachments: ComposerAttachmentSummary[], preparations: React.ComponentProps<typeof ComposerPanelAttachmentPreviewStrip>["preparations"] = {}, owner = "owner-a", compressing = false) {
   await act(async () => root.render(<TooltipProvider delayDuration={0}>
     <ComposerPanelAttachmentPreviewStrip key={owner} attachments={attachments} preparations={preparations} progresses={{}}
-      resolveMediaSourceUrl={resolve} onOpenMedia={open} onRemove={remove} onRetry={retry} onEmptyAfterRemoval={emptyFocus} />
+      resolveMediaSourceUrl={resolve} onOpenMedia={open} onRemove={remove} onRetry={retry} onEmptyAfterRemoval={emptyFocus}
+      compression={{ enabled: true, onChange: compressionChange, active: compressing }} />
   </TooltipProvider>));
 }
 
@@ -56,6 +60,28 @@ it("loads the declared lightweight preview while opening the unchanged canonical
   expect(host.querySelector("img")?.getAttribute("src")).toBe("https://synthetic.invalid/previews/original.jpg");
   await act(async () => host.querySelector<HTMLButtonElement>(".composer-attachment-open")!.click());
   expect(open).toHaveBeenCalledWith({ kind: "image", fileName: "original.png", localPath: "canonical/original.png", previewLocalPath: "previews/original.jpg", mimeType: "image/png" });
+});
+
+it("offers the compression choice only for images and sweeps unplanned images while compressing", async () => {
+  // video is never compressed, so a video-only draft shows no compression choice.
+  // 视频从不压缩，因此只有视频的草稿不显示压缩选择。
+  const video: ComposerAttachmentSummary = { assetId: "preview-video", kind: "video", fileName: "clip.mp4", mimeType: "video/mp4", localPath: "canonical/clip.mp4" };
+  await render([video], {}, "owner-a", true);
+  expect(host.querySelector("[role='checkbox']")).toBeNull();
+  expect(host.querySelector("[aria-label='composer.attachment.compressing']")).toBeNull();
+  await render([image, video], {}, "owner-a", true);
+  expect(host.querySelectorAll("[aria-label='composer.attachment.compressing']")).toHaveLength(1);
+  const checkbox = host.querySelector<HTMLButtonElement>("[role='checkbox']")!;
+  expect(checkbox.getAttribute("aria-checked")).toBe("true");
+  await act(async () => checkbox.click());
+  expect(compressionChange).toHaveBeenCalledWith(false);
+  // A planned image is no longer compressing even while another plan is pending.
+  // 已规划图片即使在其他规划等待时也不再处于压缩中。
+  await render([image], { "preview-image": {
+    attachmentId: "preview-image", blocksSubmission: false, deliveryPlan: "inline_original", error: null,
+    generation: 1, phase: "local_ready", reason: "inline", transferId: "synthetic-transfer",
+  } }, "owner-a", true);
+  expect(host.querySelector("[aria-label='composer.attachment.compressing']")).toBeNull();
 });
 
 it("uses the canonical image only when staging did not produce a preview path", async () => {

@@ -565,6 +565,9 @@ export async function planComposerAttachments(
   generation: number,
   modelSelection: ComposerModelSelectionSnapshot,
   attachments: ComposerAttachmentSummary[],
+  // Whether new images are downscaled and re-encoded before planning; unsupported formats are converted either way.
+  // 是否在规划前缩小并重新编码新图片；不受支持的格式无论如何都会转换。
+  compressImages: boolean,
   // Explicit user retry is the only way to restart an original upload without a live plan or operation.
   // 对没有活动计划或操作的原上传，只有用户显式重试才允许再次启动。
   retryUploads = false,
@@ -584,7 +587,7 @@ export async function planComposerAttachments(
   }
   return serviceClient.request<ComposerAttachmentPreparationSummary[]>(
     "service_plan_composer_attachments",
-    { projectId, conversationId, draftSlotKey, generation, modelSelection, attachments, retryUploads },
+    { projectId, conversationId, draftSlotKey, generation, modelSelection, attachments, retryUploads, compressImages },
   );
 }
 

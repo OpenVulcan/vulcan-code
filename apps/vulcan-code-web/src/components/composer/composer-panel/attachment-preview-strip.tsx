@@ -4,6 +4,7 @@ import {
 } from "@/components/composer/composer-controls";
 import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
+import type { ComposerImageCompressionState } from "./use-composer-attachment-preparation";
 import type {
   ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
@@ -37,6 +38,9 @@ export interface ComposerPanelAttachmentPreviewStripProps {
   // Handler that retries one failed provider upload.
   // 重试单个失败供应商上传的处理器。
   onRetry: (attachmentId: string) => void;
+  // Current image-compression choice, its change handler and live compression state.
+  // 当前图片压缩选择、其变更处理器及实时压缩状态。
+  compression: ComposerImageCompressionState;
 }
 
 // ComposerPanelAttachmentPreviewStrip renders staged attachments with media preview support.
@@ -68,6 +72,8 @@ export function ComposerPanelAttachmentPreviewStrip(props: ComposerPanelAttachme
       onRemove={props.onRemove}
       onEmptyAfterRemoval={props.onEmptyAfterRemoval}
       onRetry={props.onRetry}
+      imageCompression={props.compression}
+      compressing={props.compression.active}
     />
   );
 }

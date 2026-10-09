@@ -71,6 +71,7 @@ import { useComposerSessionSettings } from "@/components/composer/composer-panel
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
 import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
+import { useComposerAttachmentSubmissionGate } from "@/components/composer/composer-panel/attachment-submission-gate";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
@@ -597,6 +598,9 @@ export function ComposerPanel(props: {
     onStopConversationRun: props.onStopConversationRun,
     onTrace: props.onTrace,
   });
+  // The attachment gate owns the preparation barrier and the explicit over-budget confirmation.
+  // 附件闸门负责准备屏障及明确的超预算确认。
+  const { admit: admitAttachments, dialog: attachmentOverflowDialog } = useComposerAttachmentSubmissionGate(attachmentPreparation, sendDraft);
   // handleComposerSend routes the visible stop action before applying barriers shared by button and keyboard submission.
   // handleComposerSend 先路由界面显示的停止操作，再应用按钮和键盘提交共同遵守的屏障。
   // Parameters: none; returns after stopping the current run or validating and submitting the current draft.
@@ -614,18 +618,11 @@ export function ComposerPanel(props: {
       return;
     }
     if (providerToolSettingsBlocked) return;
-    if (attachmentPreparation.blocksSubmission) {
-      toast.info(t("composer.attachment.preparationBlocked").replace(
-        "{count}",
-        String(attachmentPreparation.blockingCount),
-      ));
-      return;
-    }
+    if (!admitAttachments()) return;
     await sendDraft();
   }, [
     attachments.length,
-    attachmentPreparation.blockingCount,
-    attachmentPreparation.blocksSubmission,
+    admitAttachments,
     draftInput,
     props.isConversationRunning,
     providerToolSettingsBlocked,
@@ -887,6 +884,7 @@ export function ComposerPanel(props: {
           onEmptyAfterRemoval={() => composerTextareaRef.current?.focus({ preventScroll: true })}
           onRetry={handleAttachmentRetry}
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+          compression={attachmentPreparation.compression}
         />
         {slashPanelVisible && !isPendingPromptEditing ? (
           <ComposerSlashCommandPanel
@@ -1035,6 +1033,7 @@ export function ComposerPanel(props: {
         saving={goalSaving}
         tokenBudget={goalTokenBudgetDraft}
       />
+      {attachmentOverflowDialog}
     </TooltipProvider>
   );
 }

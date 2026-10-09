@@ -131,6 +131,7 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "modelSelection")?,
                 rpc_required_param(params, "attachments")?,
                 rpc_optional_param(params, "retryUploads")?.unwrap_or(false),
+                rpc_required_param(params, "compressImages")?,
             )
             .await,
         ),

@@ -5,6 +5,8 @@ use super::*;
 
 /// Converts new images in `attachments` for frozen `execution`, using the exact `workspace_path` and live `draft_scope`.
 /// 使用精确`workspace_path`及活动`draft_scope`，为冻结`execution`转换`attachments`中的新图片。
+/// With `compress`, every new image is also downscaled and re-encoded when that helps; otherwise only unsupported formats change.
+/// 启用`compress`时，每张新图片在有益时同时缩小并重新编码；否则只转换不受支持的格式。
 /// Returns replacement/error rows at caller `generation`, or none when ordinary planning can proceed unchanged.
 /// 返回调用方`generation`的替换或错误记录；可以保持原样继续普通规划时返回空。
 pub(super) async fn prepare_image_conversions(
@@ -13,6 +15,7 @@ pub(super) async fn prepare_image_conversions(
     generation: u64,
     execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
     attachments: &[ComposerAttachmentSummary],
+    compress: bool,
 ) -> Result<Option<Vec<ComposerAttachmentPreparationSummary>>, String> {
     if !execution
         .model
@@ -76,15 +79,53 @@ pub(super) async fn prepare_image_conversions(
                     &attachment,
                     draft_scope,
                 )?;
+            let accepted = accepts(&attachment.mime_type);
             if original.is_none()
                 && attachment.kind == ConversationAttachmentKind::Image
-                && !accepts(&attachment.mime_type)
+                && (compress || !accepted)
             {
-                attempted = true;
-                match stage_converted_image(workspace_path, &attachment, accepts("image/png")).await
-                {
-                    Ok(converted) => row.converted_attachment = Some(converted),
+                let derived = if compress {
+                    vulcan_agent_runtime::image_conversion::compress_attachment(
+                        &attachment,
+                        vulcan_agent_runtime::image_conversion::CompressionTargets {
+                            original: accepted,
+                            jpeg: accepts("image/jpeg"),
+                            png: accepts("image/png"),
+                        },
+                    )
+                    .await
+                } else {
+                    vulcan_agent_runtime::image_conversion::convert_attachment_if_needed(
+                        &attachment,
+                        false,
+                        accepts("image/png"),
+                    )
+                    .await
+                };
+                // A compression that keeps the original leaves this occurrence on the ordinary planning path.
+                // 保留原图的压缩使此出现继续走普通规划路径。
+                match derived {
+                    Ok(None) if accepted => {}
+                    Ok(None) => {
+                        attempted = true;
+                        row.phase = ComposerAttachmentPreparationPhase::Failed;
+                        row.reason = "image_conversion_failed".into();
+                        row.error =
+                            Some("Rejected image did not produce a converted image.".into());
+                    }
+                    Ok(Some(converted)) => {
+                        attempted = true;
+                        match stage_derived_image(workspace_path, converted) {
+                            Ok(converted) => row.converted_attachment = Some(converted),
+                            Err(error) => {
+                                row.phase = ComposerAttachmentPreparationPhase::Failed;
+                                row.reason = "image_conversion_failed".into();
+                                row.error = Some(error);
+                            }
+                        }
+                    }
                     Err(error) => {
+                        attempted = true;
                         row.phase = ComposerAttachmentPreparationPhase::Failed;
                         row.reason = "image_conversion_failed".into();
                         row.error = Some(error);
@@ -97,34 +138,24 @@ pub(super) async fn prepare_image_conversions(
     Ok(attempted.then_some(rows))
 }
 
-/// Converts rejected `attachment` for a destination that may `accepts_png`, then stages its canonical derivative.
-/// 为可能`accepts_png`的目标转换已拒绝的`attachment`，再暂存规范派生产物。
-/// `workspace_path` owns the new asset; returns its summary or the concrete conversion/staging failure.
-/// `workspace_path`持有新资产；返回其摘要或具体转换及暂存失败。
-async fn stage_converted_image(
+/// Stages converted or compressed `converted` as a new canonical asset owned by `workspace_path`.
+/// 将已转换或压缩的`converted`暂存为`workspace_path`持有的新规范资产。
+/// Returns its summary or the concrete read/staging failure; the temporary owner is dropped afterwards.
+/// 返回其摘要或具体读取及暂存失败；之后释放临时所有者。
+fn stage_derived_image(
     workspace_path: &str,
-    attachment: &ConversationAttachment,
-    accepts_png: bool,
+    converted: vulcan_agent_runtime::image_conversion::ConvertedAttachment,
 ) -> Result<ComposerAttachmentSummary, String> {
-    // Temporary ownership protects the derivative until the canonical store has copied it.
-    // 临时所有权保护派生文件，直到规范存储复制完成。
-    let converted = vulcan_agent_runtime::image_conversion::convert_attachment_if_needed(
-        attachment,
-        false,
-        accepts_png,
-    )
-    .await?
-    .ok_or("Rejected image did not produce a PNG conversion.")?;
     // The converter has already bounded and closed this private output file.
     // 转换器已经限制并完成此私有输出文件。
-    let bytes = tokio::fs::read(&converted.attachment.local_path)
-        .await
-        .map_err(|error| error.to_string())?;
-    // Canonical PNG descriptor is shared with ordinary pasted PNG attachments.
-    // 规范PNG描述符与普通粘贴PNG附件共享。
-    let descriptor =
-        vulcan_agent_runtime::attachment_assets::attachment_descriptor_from_mime_type("image/png")
-            .expect("registered PNG descriptor");
+    let bytes =
+        std::fs::read(&converted.attachment.local_path).map_err(|error| error.to_string())?;
+    // The derivative's canonical descriptor is shared with ordinary pasted attachments of its MIME.
+    // 派生产物的规范描述符与同MIME的普通粘贴附件共享。
+    let descriptor = vulcan_agent_runtime::attachment_assets::attachment_descriptor_from_mime_type(
+        &converted.attachment.mime_type,
+    )
+    .ok_or("Converted image MIME has no registered attachment descriptor.")?;
     // Publish a distinct content-addressed asset while preserving the user's readable filename.
     // 发布独立的内容寻址资产，同时保留用户可读文件名。
     let staged = vulcan_agent_runtime::attachment_assets::stage_project_attachment_bytes(
@@ -185,7 +216,7 @@ pub(crate) async fn exercise_composer_image_conversion(
     let summaries = vec![composer_attachment_summary_from_core(&original)];
     // The first plan must request replacement before publishing any upload intention.
     // 首次规划必须在发布任何上传意图前请求替换。
-    let rows = prepare_image_conversions(workspace_path, scope, 7, execution, &summaries)
+    let rows = prepare_image_conversions(workspace_path, scope, 7, execution, &summaries, false)
         .await?
         .expect("TIFF must be converted for default native image formats");
     // This fixture contains exactly one requested occurrence.
@@ -222,7 +253,8 @@ pub(crate) async fn exercise_composer_image_conversion(
             scope,
             8,
             execution,
-            std::slice::from_ref(converted)
+            std::slice::from_ref(converted),
+            true,
         )
         .await?
         .is_none()
@@ -249,6 +281,7 @@ pub(crate) async fn exercise_composer_image_conversion(
         9,
         execution,
         &[composer_attachment_summary_from_core(&corrupt)],
+        false,
     )
     .await?
     .unwrap();

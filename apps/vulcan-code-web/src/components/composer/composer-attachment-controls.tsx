@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
@@ -507,6 +508,12 @@ export function ComposerAttachmentStrip(props: {
   // Retries one failed provider upload by stable attachment identity.
   // 按稳定附件身份重试单个失败供应商上传。
   onRetry?: (attachmentId: string) => void;
+  // Editable image-compression choice; omitted for read-only strips such as sent messages.
+  // 可编辑的图片压缩选择；已发送消息等只读附件条省略此项。
+  imageCompression?: { enabled: boolean; onChange: (enabled: boolean) => void };
+  // Whether image tiles without a plan are currently being compressed by route planning.
+  // 尚无规划的图片块当前是否正由路线规划压缩。
+  compressing?: boolean;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -587,6 +594,9 @@ export function ComposerAttachmentStrip(props: {
               <X size={12} />
             </button>
           ) : null}
+          {props.compressing && attachment.kind === "image" && !preparation ? (
+            <ComposerAttachmentCooldown label={t("composer.attachment.compressing")} />
+          ) : null}
           {typeof progressPercent === "number" || pendingProgress ? (
             <span
               aria-label={typeof progressPercent === "number" ? `${progressPercent}%` : t("composer.attachment.processing")}
@@ -636,7 +646,68 @@ export function ComposerAttachmentStrip(props: {
         </div>
         );
       })}
+      {props.imageCompression && props.attachments.some((attachment) => attachment.kind === "image") ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 self-end pb-1 text-xs whitespace-nowrap text-muted-foreground">
+              <Checkbox
+                checked={props.imageCompression.enabled}
+                onCheckedChange={(checked) => props.imageCompression?.onChange(checked === true)}
+              />
+              {t("composer.attachment.compressImages")}
+            </label>
+          </TooltipTrigger>
+          <TooltipContent className="composer-control-tooltip" side="top">{t("composer.attachment.compressImagesHint")}</TooltipContent>
+        </Tooltip>
+      ) : null}
     </div>
+  );
+}
+
+// COOLDOWN_TURN_MS is one full sweep of the compression overlay.
+// COOLDOWN_TURN_MS 是压缩遮罩完整转一圈的时长。
+const COOLDOWN_TURN_MS = 1200;
+
+/** Shows a game-style cooldown sweep over an image while it is being compressed.
+ * 在图片压缩期间显示类似游戏技能冷却的扫描遮罩。
+ * Parameters: label is the accessible status text; returns a non-interactive overlay that reveals the image in one turn.
+ * 参数：label 是无障碍状态文本；返回一个不可交互遮罩，转一圈后完全露出图片。
+ */
+function ComposerAttachmentCooldown(props: { label: string }) {
+  // wedge is the shrinking dark sector; the Web Animations API keeps this feature out of the eager stylesheet.
+  // wedge 是逐渐缩小的暗色扇区；Web Animations API 让此功能不进入首屏样式表。
+  const wedge = React.useRef<SVGCircleElement>(null);
+  React.useEffect(() => {
+    const element = wedge.current;
+    if (!element || typeof element.animate !== "function") return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const animation = element.animate(
+      [{ strokeDashoffset: 0 }, { strokeDashoffset: -100 }],
+      { duration: COOLDOWN_TURN_MS, easing: "linear", iterations: Infinity },
+    );
+    return () => animation.cancel();
+  }, []);
+  return (
+    <span aria-label={props.label} className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]" role="status">
+      <svg aria-hidden="true" className="size-full" preserveAspectRatio="xMidYMid slice" viewBox="0 0 100 100">
+        {/* A radius-40 circle with stroke width 80 paints a disc that also covers the corners, so its dash is the remaining sector. */}
+        {/* 半径 40、描边宽 80 的圆会画出覆盖四角的圆盘，因此虚线就是剩余扇区。 */}
+        <circle
+          cx="50"
+          cy="50"
+          fill="none"
+          pathLength="100"
+          r="40"
+          ref={wedge}
+          stroke="var(--foreground)"
+          strokeDasharray="100 100"
+          strokeOpacity="0.45"
+          strokeWidth="80"
+          transform="rotate(-90 50 50)"
+        />
+      </svg>
+      <span className="sr-only">{props.label}</span>
+    </span>
   );
 }
 

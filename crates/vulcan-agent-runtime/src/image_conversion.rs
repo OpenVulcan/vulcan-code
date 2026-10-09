@@ -76,15 +76,28 @@ pub async fn convert_attachment_if_needed(
             attachment.mime_type
         )
     })?;
+    derived_attachment(attachment, file, "image/png", "png").map(Some)
+}
+
+/// Builds the derivative of `attachment` stored in `file` as `mime` with filename `extension`.
+/// 以`mime`及文件扩展名`extension`构建存于`file`的`attachment`派生附件。
+/// Returns the owned derivative with fresh size and digest, or the metadata/digest error.
+/// 返回带新大小及摘要的自有派生附件，或元数据及摘要错误。
+fn derived_attachment(
+    attachment: &ConversationAttachment,
+    file: tempfile::NamedTempFile,
+    mime: &str,
+    extension: &str,
+) -> Result<ConvertedAttachment, String> {
     // Converted content is a new source, so clear immutable asset and original delivery identities.
     // 转换内容是新来源，因此清除不可变资产身份及原交付身份。
     let mut derived = attachment.clone();
     derived.file_name = Path::new(&attachment.file_name)
-        .with_extension("png")
+        .with_extension(extension)
         .to_string_lossy()
         .into_owned();
     derived.local_path = vulcan_runtime_assets::native_host_path_text_from_path(file.path());
-    derived.mime_type = "image/png".into();
+    derived.mime_type = mime.into();
     derived.byte_len = Some(
         file.as_file()
             .metadata()
@@ -98,9 +111,195 @@ pub async fn convert_attachment_if_needed(
     derived.resource_path = None;
     derived.delivery_mode = None;
     derived.preview_local_path = None;
-    Ok(Some(ConvertedAttachment {
+    Ok(ConvertedAttachment {
         attachment: derived,
         _file: file,
+    })
+}
+
+/// Longest image edge in pixels kept by composer compression; larger images are downscaled to it.
+/// 输入区图片压缩保留的最长边像素；更大的图片缩小到此尺寸。
+pub const COMPRESSION_MAX_EDGE_PX: u32 = 2048;
+
+/// Native originals at or below this size that need no downscale are kept without decoding pixels.
+/// 不超过此大小且无需缩小的原生原图保持不变，不解码像素。
+pub const COMPRESSION_MIN_SOURCE_BYTES: u64 = 256 * 1024;
+
+/// JPEG quality of compressed opaque images.
+/// 压缩后不透明图片的JPEG质量。
+const COMPRESSION_JPEG_QUALITY: u8 = 85;
+
+/// A native original is replaced only when its same-size derivative keeps at most this percentage of its bytes.
+/// 仅当同尺寸派生产物最多保留原字节的此百分比时才替换原生原图。
+const COMPRESSION_MAX_KEPT_PERCENT: u64 = 90;
+
+/// Image formats the frozen destination accepts natively, resolved by the caller before compression.
+/// 冻结目标原生接受的图片格式，由调用方在压缩前解析。
+#[derive(Debug, Clone, Copy)]
+pub struct CompressionTargets {
+    /// Whether the original MIME is accepted unchanged.
+    /// 原MIME是否可原样接受。
+    pub original: bool,
+    /// Whether image/jpeg is accepted.
+    /// 是否接受image/jpeg。
+    pub jpeg: bool,
+    /// Whether image/png is accepted.
+    /// 是否接受image/png。
+    pub png: bool,
+}
+
+/// Downscales image `attachment` to `COMPRESSION_MAX_EDGE_PX` and re-encodes it, converting unsupported formats too.
+/// 将图片`attachment`缩小到`COMPRESSION_MAX_EDGE_PX`并重新编码，同时转换不受支持的格式。
+/// Opaque images become JPEG and transparent ones PNG within `targets`; animated or multipage natives stay unchanged.
+/// 在`targets`范围内不透明图片转为JPEG、透明图片转为PNG；动画或多页原生图片保持不变。
+/// Returns a derivative only when the format must change, the image was downscaled, or bytes shrink enough;
+/// otherwise none, so planning a compressed derivative again is a no-op. Errors are concrete read/decode/encode failures.
+/// 仅在必须转换格式、已缩小尺寸或字节明显减少时返回派生产物，否则返回空，使再次规划压缩产物不产生变化；
+/// 错误为具体的读取、解码或编码失败。
+pub async fn compress_attachment(
+    attachment: &ConversationAttachment,
+    targets: CompressionTargets,
+) -> Result<Option<ConvertedAttachment>, String> {
+    if attachment.kind != ConversationAttachmentKind::Image {
+        return Ok(None);
+    }
+    // PNG is native everywhere and therefore absent from the conversion-only codec registry.
+    // PNG处处原生支持，因此不在仅转换用的编解码注册表中。
+    let format = if attachment.mime_type == "image/png" {
+        Some(ImageFormat::Png)
+    } else {
+        codec_for_mime(&attachment.mime_type).map(|codec| codec.format)
+    };
+    let Some(format) = format else {
+        return if targets.original {
+            Ok(None)
+        } else {
+            Err(format!(
+                "No automatic image converter supports image MIME `{}`.",
+                attachment.mime_type
+            ))
+        };
+    };
+    let identity = PreparedMediaSourceIdentity {
+        byte_len: attachment
+            .byte_len
+            .ok_or("Image source has no canonical byte length.")?,
+        content_sha256: attachment
+            .source_sha256
+            .clone()
+            .ok_or("Image source has no canonical content digest.")?,
+    };
+    let bytes = read_source_snapshot(
+        Path::new(&attachment.local_path),
+        identity.byte_len,
+        Some(&identity),
+    )
+    .await?;
+    let byte_len = identity.byte_len;
+    let compressed =
+        tokio::task::spawn_blocking(move || compress_bytes(&bytes, format, byte_len, targets))
+            .await
+            .map_err(|error| format!("image compression worker failed: {error}"))?
+            .map_err(|error| {
+                format!(
+                    "Image compression of {} failed: {error}",
+                    attachment.mime_type
+                )
+            })?;
+    match compressed {
+        Some((file, mime, extension)) => {
+            derived_attachment(attachment, file, mime, extension).map(Some)
+        }
+        None => Ok(None),
+    }
+}
+
+/// Compresses bounded `bytes` of exact `format` and original size `byte_len` for `targets`.
+/// 为`targets`压缩精确`format`、原大小`byte_len`的有界`bytes`。
+/// Returns the derivative file with its MIME and extension, none when the original should stay, or an error.
+/// 返回派生文件及其MIME和扩展名；原图应保留时返回空；否则返回错误。
+fn compress_bytes(
+    bytes: &[u8],
+    format: ImageFormat,
+    byte_len: u64,
+    targets: CompressionTargets,
+) -> Result<Option<(tempfile::NamedTempFile, &'static str, &'static str)>, String> {
+    // Small native images within the edge bound are kept after reading only their header.
+    // 尺寸在上限内的小型原生图片只读取文件头后即保留。
+    if targets.original && byte_len <= COMPRESSION_MIN_SOURCE_BYTES {
+        let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+        reader.limits(decoder_limits());
+        let (width, height) = reader
+            .into_dimensions()
+            .map_err(|error| error.to_string())?;
+        if width.max(height) <= COMPRESSION_MAX_EDGE_PX {
+            return Ok(None);
+        }
+    }
+    let decoded = match decode_static(bytes, format) {
+        Ok(decoded) => decoded,
+        // Animated or multipage natives keep every frame rather than collapsing to one still.
+        // 动画或多页原生图片保留全部帧，不压成单张静态图。
+        Err(_) if targets.original => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let downscaled = decoded.width().max(decoded.height()) > COMPRESSION_MAX_EDGE_PX;
+    let image = if downscaled {
+        decoded.resize(
+            COMPRESSION_MAX_EDGE_PX,
+            COMPRESSION_MAX_EDGE_PX,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        decoded
+    };
+    // Transparency needs PNG; JPEG would flatten it.
+    // 透明度需要PNG；JPEG会将其压平。
+    let opaque =
+        !image.color().has_alpha() || image.to_rgba8().pixels().all(|pixel| pixel[3] == u8::MAX);
+    let jpeg = if (opaque || !targets.png) && targets.jpeg {
+        true
+    } else if targets.png {
+        false
+    } else {
+        return Err("the target accepts neither image/jpeg nor image/png".into());
+    };
+    let mut file = tempfile::Builder::new()
+        .prefix("vulcan-compressed-image-")
+        .suffix(if jpeg { ".jpg" } else { ".png" })
+        .tempfile()
+        .map_err(|error| error.to_string())?;
+    let writer = BoundedOutputWriter {
+        file: file.as_file_mut(),
+        written: 0,
+    };
+    if jpeg {
+        DynamicImage::ImageRgb8(image.to_rgb8()).write_with_encoder(
+            image::codecs::jpeg::JpegEncoder::new_with_quality(writer, COMPRESSION_JPEG_QUALITY),
+        )
+    } else {
+        image.write_with_encoder(image::codecs::png::PngEncoder::new(writer))
+    }
+    .map_err(|error| error.to_string())?;
+    let written = file
+        .as_file()
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .len();
+    // A native original stays unless downscaling happened or re-encoding saves enough bytes.
+    // 原生原图保持不变，除非已缩小尺寸或重新编码节省足够字节。
+    if targets.original
+        && (written >= byte_len
+            || (!downscaled
+                && written.saturating_mul(100)
+                    > byte_len.saturating_mul(COMPRESSION_MAX_KEPT_PERCENT)))
+    {
+        return Ok(None);
+    }
+    Ok(Some(if jpeg {
+        (file, "image/jpeg", "jpg")
+    } else {
+        (file, "image/png", "png")
     }))
 }
 
@@ -361,6 +560,21 @@ pub async fn convert(
     identity: Option<&PreparedMediaSourceIdentity>,
     codec: &'static ImageCodec,
 ) -> Result<tempfile::NamedTempFile, String> {
+    let bytes = read_source_snapshot(path, byte_len, identity).await?;
+    tokio::task::spawn_blocking(move || encode_png(&bytes, codec.format))
+        .await
+        .map_err(|error| format!("image conversion worker failed: {error}"))?
+}
+
+/// Reads `path` as an immutable snapshot of exactly `byte_len` bytes and verifies optional managed `identity`.
+/// 以恰好`byte_len`字节的不可变快照读取`path`，并校验可选托管`identity`。
+/// Returns the bytes, or a size, read or identity error.
+/// 返回字节，或大小、读取及身份错误。
+async fn read_source_snapshot(
+    path: &Path,
+    byte_len: u64,
+    identity: Option<&PreparedMediaSourceIdentity>,
+) -> Result<Vec<u8>, String> {
     if byte_len == 0 || byte_len > BUFFER_LIMIT_BYTES {
         return Err(format!(
             "source size {byte_len} is outside 1..={BUFFER_LIMIT_BYTES} bytes"
@@ -388,9 +602,7 @@ pub async fn convert(
     {
         return Err("media source changed from its registered identity".into());
     }
-    tokio::task::spawn_blocking(move || encode_png(&bytes, codec.format))
-        .await
-        .map_err(|error| format!("image conversion worker failed: {error}"))?
+    Ok(bytes)
 }
 
 /// Returns decoder allocation limits derived from the single conversion buffer bound.
@@ -500,9 +712,9 @@ fn decode_static(bytes: &[u8], format: ImageFormat) -> Result<DynamicImage, Stri
     Ok(decoded)
 }
 
-/// PNG output writer enforcing the shared conversion bound during encoding, before disk growth.
-/// PNG输出写入器，在编码及磁盘增长前执行共享转换上限。
-struct BoundedPngWriter<'a> {
+/// Image output writer enforcing the shared conversion bound during encoding, before disk growth.
+/// 图片输出写入器，在编码及磁盘增长前执行共享转换上限。
+struct BoundedOutputWriter<'a> {
     /// Owned temporary file borrowed only for encoding.
     /// 仅编码期间借用的自有临时文件。
     file: &'a mut std::fs::File,
@@ -511,13 +723,13 @@ struct BoundedPngWriter<'a> {
     written: u64,
 }
 
-impl Write for BoundedPngWriter<'_> {
+impl Write for BoundedOutputWriter<'_> {
     /// Writes `bytes` within the remaining bound, returning actual count or an explicit output-size error.
     /// 在剩余上限内写入`bytes`，返回实际数量或明确输出大小错误。
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() as u64 > BUFFER_LIMIT_BYTES - self.written {
             return Err(std::io::Error::other(format!(
-                "converted PNG exceeds {BUFFER_LIMIT_BYTES} bytes"
+                "converted image exceeds {BUFFER_LIMIT_BYTES} bytes"
             )));
         }
         // Account for the actual write, including short writes from the underlying file.
@@ -548,7 +760,7 @@ fn encode_png(bytes: &[u8], format: ImageFormat) -> Result<tempfile::NamedTempFi
         .tempfile()
         .map_err(|error| error.to_string())?;
     decoded
-        .write_with_encoder(image::codecs::png::PngEncoder::new(BoundedPngWriter {
+        .write_with_encoder(image::codecs::png::PngEncoder::new(BoundedOutputWriter {
             file: file.as_file_mut(),
             written: 0,
         }))
