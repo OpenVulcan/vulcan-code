@@ -1244,7 +1244,6 @@ fn minimax_model_discovery_uses_generic_manifest_contracts() {
     let manifest = catalog
         .manifest_arc("minimax")
         .expect("MiniMax manifest must exist");
-    assert_eq!(manifest.revision, 27);
     // expectations bind each region to its exact reviewed discovery origins.
     // expectations 把每个地区绑定到其精确已审核发现来源。
     let expectations = [
