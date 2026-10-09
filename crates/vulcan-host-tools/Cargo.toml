@@ -25,6 +25,7 @@ uuid.workspace = true
 vt100.workspace = true
 vulcan-apply-patch.workspace = true
 vulcan-change-set.workspace = true
+vulcan-permission-judge.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-terminal-host-protocol.workspace = true
 vulcan-workbench-model.workspace = true

@@ -1,6 +1,7 @@
 //! Parent-side client for one isolated `vulcan-terminal-host` process.
 //! 单个隔离 `vulcan-terminal-host` 进程的父端客户端。
 
+use crate::native_host_binary::resolve_native_host_binary;
 use crate::process_creation::{apply_child_path_prefixes, new_background_tokio_command};
 use crate::terminal_host_protocol::{
     TERMINAL_HOST_CONTRACT, TERMINAL_HOST_MAX_COLS, TERMINAL_HOST_MAX_ROWS, TerminalHostErrorEvent,
@@ -222,73 +223,10 @@ impl TerminalHostRequestWriter {
 /// Resolves the exact cross-platform terminal-host executable for this build.
 /// 解析当前构建使用的精确跨平台终端宿主可执行文件。
 ///
-/// Resolution is strict: an explicit environment path must exist; otherwise the binary
-/// beside the current executable is preferred, followed by the matching Cargo target profile.
-/// 解析过程是严格的：显式环境变量路径必须存在；否则优先使用当前可执行文件旁的二进制，
-/// 最后检查匹配的 Cargo target 构建配置目录。
-///
-/// # Returns / 返回值
-/// Returns one existing executable path or a diagnostic listing every checked location.
-/// 返回一个已存在的可执行文件路径，或列出所有检查位置的诊断信息。
+/// See [`resolve_native_host_binary`] for the lookup order; `VULCAN_TERMINAL_HOST` overrides it.
+/// 查找顺序见 [`resolve_native_host_binary`]；`VULCAN_TERMINAL_HOST` 可覆盖。
 pub fn resolve_terminal_host_path() -> Result<PathBuf, String> {
-    if let Ok(explicit_path) = env::var("VULCAN_TERMINAL_HOST") {
-        let explicit_path = PathBuf::from(explicit_path);
-        if explicit_path.is_file() {
-            return Ok(explicit_path);
-        }
-        return Err(format!(
-            "VULCAN_TERMINAL_HOST points to `{}`, but that file does not exist.",
-            explicit_path.display()
-        ));
-    }
-    let current_exe = env::current_exe()
-        .map_err(|error| format!("Failed to resolve the current executable path: {error}"))?;
-    let host_name = if cfg!(windows) {
-        "vulcan-terminal-host.exe"
-    } else {
-        "vulcan-terminal-host"
-    };
-    let beside_current = current_exe.with_file_name(host_name);
-    if beside_current.is_file() {
-        return Ok(beside_current);
-    }
-    // Cargo integration tests run from `<profile>/deps`; the host remains one directory above.
-    // Cargo 集成测试从 `<profile>/deps` 运行，而宿主仍位于其上一级目录。
-    let beside_cargo_test_profile = current_exe.parent().and_then(|current_parent| {
-        (current_parent.file_name().and_then(|name| name.to_str()) == Some("deps"))
-            .then(|| {
-                current_parent
-                    .parent()
-                    .map(|profile| profile.join(host_name))
-            })
-            .flatten()
-    });
-    if let Some(candidate) = beside_cargo_test_profile.as_ref()
-        && candidate.is_file()
-    {
-        return Ok(candidate.clone());
-    }
-    let cargo_target = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("target")
-        .join(if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        })
-        .join(host_name);
-    if cargo_target.is_file() {
-        return Ok(cargo_target);
-    }
-    let cargo_test_profile_diagnostic = beside_cargo_test_profile
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| String::from("<not a Cargo deps executable>"));
-    Err(format!(
-        "Terminal host `{host_name}` was not found beside `{}`, beside its Cargo test profile at `{cargo_test_profile_diagnostic}`, or at `{}`. Build it with `cargo build -p vulcan-terminal-host`.",
-        current_exe.display(),
-        cargo_target.display()
-    ))
+    resolve_native_host_binary("vulcan-terminal-host", "VULCAN_TERMINAL_HOST")
 }
 
 /// Spawns one isolated terminal host and completes its strict start handshake.

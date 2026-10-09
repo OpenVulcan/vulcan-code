@@ -10030,6 +10030,7 @@ dependencies = [
  "vt100",
  "vulcan-apply-patch",
  "vulcan-change-set",
+ "vulcan-permission-judge",
  "vulcan-runtime-assets",
  "vulcan-terminal-host-protocol",
  "vulcan-workbench-model",

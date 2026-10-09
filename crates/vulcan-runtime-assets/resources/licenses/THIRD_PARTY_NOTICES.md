@@ -5,8 +5,8 @@ This file is generated from Cargo dependency metadata by `cargo-about`.
 
 ## License Overview
 
-- Apache License 2.0 (495)
-- MIT License (265)
+- Apache License 2.0 (496)
+- MIT License (268)
 - Unicode License v3 (23)
 - BSD 3-Clause "New" or "Revised" License (13)
 - ISC License (9)
@@ -697,6 +697,7 @@ Used by:
 - include-flate 0.3.4 - https://github.com/SOF3/include-flate.git
 - libsais-rs 0.2.2 - https://github.com/henriksson-lab/libsais-rs
 - sse-stream 0.2.5 - https://github.com/4t145/sse-stream/
+- static_assertions 1.1.0 - https://github.com/nvzqz/static-assertions-rs
 - tinyvec 1.12.0 - https://github.com/Lokathor/tinyvec
 - utf8_iter 1.0.4 - https://github.com/hsivonen/utf8_iter
 - zeroize 1.9.0 - https://github.com/RustCrypto/utils
@@ -15183,12 +15184,72 @@ SOFTWARE.
 ### MIT License
 
 Used by:
+- compact_str 0.9.1 - https://github.com/ParkMyCar/compact_str
+
+```text
+MIT License
+
+Copyright (c) 2021 Parker Timmerman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
 - async_cell 0.2.3 - https://gitlab.com/samsartor/async_cell
 
 ```text
 MIT License
 
 Copyright (c) 2021 Sam Sartor
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
+- castaway 0.2.4 - https://github.com/sagebind/castaway
+
+```text
+MIT License
+
+Copyright (c) 2021 Stephen M. Coakley
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -15416,6 +15477,7 @@ Used by:
 - vulcan-memorymesh-core-contracts 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-contracts
 - vulcan-memorymesh-core-engine 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-engine
 - vulcan-memorymesh-core-storage 0.1.0 - https://crates.io/crates/vulcan-memorymesh-core-storage
+- vulcan-permission-judge 0.1.0 - https://crates.io/crates/vulcan-permission-judge
 - vulcan-plugin-runtime 0.1.0 - https://crates.io/crates/vulcan-plugin-runtime
 - vulcan-process-lifecycle 0.1.0 - https://crates.io/crates/vulcan-process-lifecycle
 - vulcan-prompt-composer 0.1.0 - https://crates.io/crates/vulcan-prompt-composer

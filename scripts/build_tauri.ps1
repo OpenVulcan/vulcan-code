@@ -81,12 +81,12 @@ if ($Release) {
 
     # CargoBuildArguments selects the release shell, terminal host and terminal client from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳、终端宿主与终端客户端。
-    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-code-tui', '--release')
+    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-judge-host', '-p', 'vulcan-code-tui', '--release')
 }
 else {
     # CargoBuildArguments selects the debug shell, terminal host and terminal client from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图选择 debug 桌面壳、终端宿主与终端客户端。
-    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-code-tui')
+    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-judge-host', '-p', 'vulcan-code-tui')
 }
 
 # BuildProfileName names the selected artifact profile in diagnostics.
@@ -140,6 +140,17 @@ if ($IsWindowsPlatform) {
 # BuiltTerminalHostPath 保存与桌面壳 Cargo profile 一致的终端宿主制品路径。
 $BuiltTerminalHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-terminal-host' -and $_.target.kind -contains 'bin' }).executable
 
+# JudgeHostFileName stores the platform-specific isolated permission-judge worker name.
+# JudgeHostFileName 保存平台相关的隔离权限判定 worker 名称。
+$JudgeHostFileName = "vulcan-judge-host"
+if ($IsWindowsPlatform) {
+    $JudgeHostFileName = "vulcan-judge-host.exe"
+}
+
+# BuiltJudgeHostPath stores the judge worker built for the shell's Cargo profile.
+# BuiltJudgeHostPath 保存与桌面壳 Cargo profile 一致的判定 worker 制品路径。
+$BuiltJudgeHostPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-judge-host' -and $_.target.kind -contains 'bin' }).executable
+
 # TuiFileName stores the platform-specific terminal client binary name.
 # TuiFileName 保存平台相关的终端客户端二进制名称。
 $TuiFileName = "vulcan-tui"
@@ -169,6 +180,10 @@ $OutputBinaryPath = Join-Path $OutputBinDir $BinaryFileName
 # OutputTerminalHostPath 保存复制到桌面壳旁边的隔离终端宿主路径。
 $OutputTerminalHostPath = Join-Path $OutputBinDir $TerminalHostFileName
 
+# OutputJudgeHostPath stores the isolated judge worker beside the shell binary.
+# OutputJudgeHostPath 保存复制到桌面壳旁边的隔离判定 worker 路径。
+$OutputJudgeHostPath = Join-Path $OutputBinDir $JudgeHostFileName
+
 # OutputTuiPath stores the terminal client the tray opens, beside the shell binary.
 # OutputTuiPath 保存托盘打开的终端客户端路径，位于桌面壳旁边。
 $OutputTuiPath = Join-Path $OutputBinDir $TuiFileName
@@ -178,6 +193,9 @@ if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
 }
 if (-not (Test-Path -LiteralPath $BuiltTerminalHostPath)) {
     throw "Built terminal host was not found: $BuiltTerminalHostPath"
+}
+if (-not (Test-Path -LiteralPath $BuiltJudgeHostPath)) {
+    throw "Built judge host was not found: $BuiltJudgeHostPath"
 }
 if (-not (Test-Path -LiteralPath $BuiltTuiPath)) {
     throw "Built terminal client was not found: $BuiltTuiPath"
@@ -201,6 +219,7 @@ if (Test-Path -LiteralPath $ObsoleteWindowsConsoleHelperPath) {
 # 复制失败时立即终止发布。
 Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTerminalHostPath -Destination $OutputTerminalHostPath -Force -ErrorAction Stop
+Copy-Item -LiteralPath $BuiltJudgeHostPath -Destination $OutputJudgeHostPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTuiPath -Destination $OutputTuiPath -Force -ErrorAction Stop
 & node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

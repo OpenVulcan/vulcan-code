@@ -7,6 +7,8 @@
 
 pub mod command_session_runtime;
 pub mod file_runtime;
+pub mod judge_host_client;
+pub mod native_host_binary;
 pub mod output_decode;
 pub mod process_creation;
 pub mod process_tree;
