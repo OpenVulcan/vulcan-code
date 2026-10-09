@@ -18,6 +18,9 @@ ignore = [
     # GTK3's glib-macros and gtk3-macros still require this proc macro on Linux native tray builds.
     # Linux 原生托盘的 GTK3 所用 glib-macros 和 gtk3-macros 仍依赖此过程宏。
     { id = "RUSTSEC-2024-0370", reason = "Linux native tray GTK3 macros still depend on proc-macro-error 1; review when upgrading tray-icon or Tao" },
+    # The permission-judge tokenizer still uses this compile-time macro; it is unmaintained, not vulnerable.
+    # 权限判定分词器仍使用此编译期宏；它只是停止维护，并无漏洞。
+    { id = "RUSTSEC-2024-0436", reason = "tokenizers 0.23 still depends on paste; review when upgrading tokenizers" },
 ]
 
 # Keep the allowlist intentionally conservative and extend it only after legal review.

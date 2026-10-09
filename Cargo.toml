@@ -18,6 +18,8 @@ members = [
     "crates/vulcan-process-lifecycle",
     "crates/vulcan-terminal-host-protocol",
     "crates/vulcan-terminal-host",
+    "crates/vulcan-permission-judge",
+    "crates/vulcan-judge-host",
     "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
     "crates/vulcan-workbench-model",
@@ -85,6 +87,7 @@ vulcan-host-tools = { path = "crates/vulcan-host-tools" }
 vulcan-i18n = { path = "crates/vulcan-i18n" }
 vulcan-process-lifecycle = { path = "crates/vulcan-process-lifecycle" }
 vulcan-terminal-host-protocol = { path = "crates/vulcan-terminal-host-protocol" }
+vulcan-permission-judge = { path = "crates/vulcan-permission-judge" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
@@ -149,6 +152,9 @@ chardetng = "1.0.0"
 chrono = { version = "0.4.42", default-features = false, features = ["std"] }
 chrono-tz = "=0.10.4"
 iana-time-zone = "=0.1.65"
+# Keeps permission-judge policy entries in their trained order; the workspace serde_json map stays sorted.
+# 保持权限判定策略条目的训练顺序；工作区 serde_json 映射仍保持排序。
+indexmap = { version = "2.14.0", features = ["serde"] }
 dirs = "6.0.0"
 ed25519-dalek = "3"
 encoding_rs = "0.8.35"
@@ -234,6 +240,11 @@ url = "2.5.8"
 # Opens validated viewer URLs through platform handlers without an interpolated shell command.
 # 通过平台处理器打开已校验的查看地址，不插值构造 shell 命令。
 open = "=5.4.4"
+# Local permission-judge runtime: ONNX Runtime is loaded from a user-supplied library at run time,
+# never downloaded at build time; the tokenizer uses the pure-Rust regex backend.
+# 本机权限判定运行时：ONNX Runtime 在运行时从用户提供的库加载，构建时绝不下载；分词器使用纯 Rust 正则后端。
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27", "cuda"] }
+tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy-regex"] }
 vt100 = "0.16.2"
 windows-sys = "0.61.2"
 windows = "=0.62.2"

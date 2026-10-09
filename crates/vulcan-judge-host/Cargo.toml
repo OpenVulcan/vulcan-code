@@ -1,0 +1,31 @@
+[package]
+name = "vulcan-judge-host"
+description = "Isolated worker process that runs the local permission-judge model with ONNX Runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[dependencies]
+ort.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokenizers.workspace = true
+vulcan-permission-judge.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }

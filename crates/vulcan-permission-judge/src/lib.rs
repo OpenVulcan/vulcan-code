@@ -1,0 +1,21 @@
+//! Permission judge contract shared by the service and the local judge host process.
+//! 服务与本机判定宿主进程共享的权限判定契约。
+//!
+//! The judge scores one gated tool call as allow, review or block. This crate owns everything both
+//! sides must agree on without loading a model: package verification, the policy text, the
+//! rendered call, the decision rule and the worker protocol. Inference lives in `vulcan-judge-host`.
+//! 判定器把一次受管控工具调用评为 allow、review 或 block。本 crate 持有双方无需加载模型即须一致的
+//! 全部内容：模型包验证、策略文本、调用渲染、判定规则与 worker 协议。推理位于 `vulcan-judge-host`。
+
+pub mod decision;
+pub mod package;
+pub mod policy;
+pub mod protocol;
+pub mod render;
+
+pub use decision::{JudgeLabel, NonFiniteLogits, decide};
+pub use package::{
+    DigestCache, JudgePackage, MemoryDigestCache, PackageError, PackageSummary, RuntimeConfig,
+};
+pub use policy::{JudgePolicy, JudgeSettings, PolicyOption, SettingsError};
+pub use render::render_call;
