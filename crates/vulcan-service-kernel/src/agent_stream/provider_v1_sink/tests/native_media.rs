@@ -3,17 +3,26 @@
 
 use super::*;
 
-/// Rebuilds a durable native read through production V1 preparation, retaining binary input and bounded accounting.
-/// 通过生产V1准备重建持久原生读取，保留二进制输入及有界记账。
-#[tokio::test]
-async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_json()
--> Result<(), Box<dyn std::error::Error>> {
+/// Native read fixture: frozen media `context`, request `facts`, route-aligned `candidate`, its V1 `snapshot` and Base64 body.
+/// 原生读取夹具：冻结媒体`context`、请求`facts`、路线对齐`candidate`、其V1`snapshot`及Base64正文。
+type NativeReadFixture = (
+    vulcan_agent_runtime::agent_runtime::events::ProviderRequestMediaContext,
+    ProviderV1RequestFacts,
+    ProviderRequestPreparationCandidate,
+    SessionProviderProjectionSnapshot,
+    String,
+    tempfile::TempDir,
+);
+
+/// Builds one completed `read_media` call and result over the real isolated route; no endpoint is called.
+/// 在真实隔离路线上构建一次已完成的`read_media`调用及结果；不调用任何端点。
+async fn native_read_fixture() -> Result<NativeReadFixture, Box<dyn std::error::Error>> {
     // Reuse the real isolated route and credential fixture; no inference endpoint is called.
     // 复用真实隔离路线及凭据夹具；不调用推理端点。
     let context = media::tests::native_input_context().await?;
     // The canonical baseline comes from the established production reconstruction fixture.
     // 规范基线来自既有生产重建夹具。
-    let (_directory, handle) = published_stored_open_turn();
+    let (directory, handle) = published_stored_open_turn();
     // Replace all route facts together so V1 validates one exact frozen execution.
     // 一起替换全部路线事实，使V1校验同一精确冻结执行。
     let mut candidate = host_guidance::candidate_for(&handle);
@@ -73,6 +82,7 @@ async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_jso
         open_turn_id: None,
         child_business_execution_id: None,
         preparing_user_prompt_media_seqs: vec![],
+        compaction_frontier_seq: None,
         segment_generation: 1,
         document_revision: 1,
         retained_from_seq: Seq::try_new(1)?,
@@ -104,6 +114,15 @@ async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_jso
         provider_usage_budget_anchor: None,
         initialized_locked_baseline: None,
     };
+    Ok((context, facts, candidate, snapshot, base64, directory))
+}
+
+/// Rebuilds a durable native read through production V1 preparation, retaining binary input and bounded accounting.
+/// 通过生产V1准备重建持久原生读取，保留二进制输入及有界记账。
+#[tokio::test]
+async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_json()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, facts, candidate, snapshot, base64, _directory) = native_read_fixture().await?;
     // Execute the actual rebuild and budget finalization used before production provider dispatch.
     // 执行生产供应商分派前使用的实际重建及预算完成逻辑。
     let prepared =
@@ -133,5 +152,44 @@ async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_jso
     assert!(body.contains("input_image"));
     assert!(body.contains(&base64));
     assert!(!body.contains("$vulcan_native_media_input"));
+    Ok(())
+}
+
+/// A read at or before the compaction frontier is replayed as its address only, never as media.
+/// 压缩前沿及之前的读取只以地址重放，绝不作为媒体重放。
+#[tokio::test]
+async fn native_media_before_compaction_frontier_keeps_only_its_address()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (_context, facts, candidate, mut snapshot, base64, _directory) =
+        native_read_fixture().await?;
+    // Both items come from seqs 1 and 2; the frontier at 2 covers the whole read.
+    // 两项分别来自seq 1与2；前沿位于2覆盖整个读取。
+    snapshot.sourced_items = snapshot
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let seq = Seq::try_new(index as u64 + 1)?;
+            Ok(vulcan_session_core::v1::projection::SourcedProjectedItem {
+                user_prompt_parameters: None,
+                source_from_seq: seq,
+                source_to_seq: seq,
+                item: item.clone(),
+            })
+        })
+        .collect::<Result<_, Box<dyn std::error::Error>>>()?;
+    snapshot.compaction_frontier_seq = Some(Seq::try_new(2)?);
+    let prepared =
+        rebuild_provider_transport_candidate(snapshot, &facts, candidate, Default::default())?;
+    let messages = &prepared.transport.exact_request.messages;
+    assert!(
+        !messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|item| matches!(item, ContentItem::Resource { .. }))
+    );
+    let body = serde_json::to_string(messages)?;
+    assert!(!body.contains(&base64));
+    assert!(body.contains("image.png"));
     Ok(())
 }

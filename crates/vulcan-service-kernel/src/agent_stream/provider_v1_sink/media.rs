@@ -490,6 +490,11 @@ fn plan_prompts(
             && snapshot
                 .preparing_user_prompt_media_seqs
                 .contains(&sourced.source_from_seq);
+        // Compaction retires every earlier media payload; those occurrences keep only their addresses.
+        // 压缩使更早的全部媒体载荷失效；这些出现仅保留地址。
+        let compacted = snapshot
+            .compaction_frontier_seq
+            .is_some_and(|frontier| sourced.source_from_seq <= frontier);
         // Native counts reset per message while encoded budget remains request-wide.
         // 原生数量按消息重置，编码预算仍覆盖整个请求。
         let mut counts = BTreeMap::<ResourceKind, u64>::new();
@@ -548,7 +553,8 @@ fn plan_prompts(
             ) && prior_route.is_some_and(|original| *original != route);
             // Already-address-only occurrences do not need source inspection or a new target's upload contract.
             // 已为仅地址的出现不需要来源检查或新目标上传契约。
-            let attachment_only = target_changed
+            let attachment_only = compacted
+                || target_changed
                 || unproven
                 || matches!(
                     prior_delivery,
@@ -623,7 +629,11 @@ fn plan_prompts(
             let mut admission_origin = None;
             // Ownership and preparation eligibility precede soft delivery preferences.
             // 归属及准备资格先于软投递偏好。
-            let decision = if unproven {
+            let decision = if compacted {
+                MediaDeliveryDecision::Attachment {
+                    reason: MediaDeliveryRejection::CompactedHistory,
+                }
+            } else if unproven {
                 MediaDeliveryDecision::Attachment {
                     reason: MediaDeliveryRejection::HistoricalOriginUnknown,
                 }

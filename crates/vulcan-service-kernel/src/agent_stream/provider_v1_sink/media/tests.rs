@@ -647,6 +647,7 @@ fn snapshot(
         open_turn_id: None,
         child_business_execution_id: None,
         preparing_user_prompt_media_seqs: preparing,
+        compaction_frontier_seq: None,
         segment_generation: 1,
         document_revision: 1,
         retained_from_seq: Seq::try_new(1).map_err(|error| error.to_string())?,
@@ -1190,5 +1191,41 @@ async fn v1_failed_new_upload_keeps_explicit_safe_attachment()
         prepared.bindings[0].origin.resources[0].delivery,
         UserPromptResourceDeliveryKind::UploadPending { .. }
     ));
+    Ok(())
+}
+
+/// Keeps prompt media at or before the compaction frontier as an address only while later media stays native.
+/// 压缩前沿及之前的提示词媒体仅保留地址，之后的媒体保持原生。
+#[tokio::test]
+async fn v1_media_before_compaction_frontier_keeps_only_its_address()
+-> Result<(), Box<dyn std::error::Error>> {
+    let project = tempfile::tempdir()?;
+    let registry = Arc::new(ProjectResourceCatalogRegistry::default());
+    let entry = register(project.path(), &registry, b"abc")?;
+    let (first, _first_secrets) = context(false, false).await?;
+    let pending = snapshot(
+        project.path(),
+        entry.resource_id,
+        vec![
+            UserPromptParameters::for_new_resources(&[entry.resource_id]),
+            UserPromptParameters::for_new_resources(&[entry.resource_id]),
+        ],
+    )?;
+    let prepared = prepare_v1_user_media(&pending, Some(&first), registry.clone()).await?;
+    let origins = prepared
+        .bindings
+        .iter()
+        .map(|binding| frozen(binding.origin.clone()))
+        .collect();
+    let mut history = snapshot(project.path(), entry.resource_id, origins)?;
+    history.compaction_frontier_seq = Some(Seq::try_new(1)?);
+    let replayed = prepare_v1_user_media(&history, Some(&first), registry).await?;
+    // The earlier prompt keeps attachment text instead of a resource object.
+    // 较早提示词保留附件文字而非资源对象。
+    assert!(!metadata(&replayed, 0).is_empty());
+    assert_eq!(
+        native(&replayed, 1).source_kind,
+        ResourceSourceKind::InlineData
+    );
     Ok(())
 }

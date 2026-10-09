@@ -460,6 +460,7 @@ mod tests {
             open_turn_id: None,
             child_business_execution_id: None,
             preparing_user_prompt_media_seqs: Vec::new(),
+            compaction_frontier_seq: None,
             segment_generation: 1,
             document_revision: 1,
             retained_from_seq: Seq::try_new(1).expect("retained sequence"),

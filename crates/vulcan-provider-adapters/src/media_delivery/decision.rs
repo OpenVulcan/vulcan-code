@@ -88,9 +88,33 @@ pub enum MediaDeliveryRejection {
     /// The original intent explicitly retained only an attachment address.
     /// 原意图明确仅保留附件地址。
     OriginalAttachmentOnly,
+    /// The conversation was compacted after this media; earlier media keeps only its address.
+    /// 此媒体之后会话已被压缩；更早的媒体仅保留地址。
+    CompactedHistory,
 }
 
 impl MediaDeliveryRejection {
+    /// Returns the stable snake_case code that clients match instead of the explanation text.
+    /// 返回客户端用于匹配的稳定 snake_case 代码，而非说明文本。
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SourceUnavailable => "source_unavailable",
+            Self::TargetUnsupported => "target_unsupported",
+            Self::TargetSizeLimit => "target_size_limit",
+            Self::UploadSizeLimit => "upload_size_limit",
+            Self::UploadContractInvalid => "upload_contract_invalid",
+            Self::UploadPreparationFailed => "upload_preparation_failed",
+            Self::InlineUnsupported => "inline_unsupported",
+            Self::InlineThreshold => "inline_threshold",
+            Self::EncodedBudget => "encoded_budget",
+            Self::HistoricalTargetChanged => "historical_target_changed",
+            Self::OriginalReferenceUnavailable => "original_reference_unavailable",
+            Self::HistoricalOriginUnknown => "historical_origin_unknown",
+            Self::OriginalAttachmentOnly => "original_attachment_only",
+            Self::CompactedHistory => "compacted_history",
+        }
+    }
+
     /// Describes this rejection for AI-facing errors and unsent attachment metadata.
     /// 为面向 AI 的错误与未发送附件元数据描述此拒绝原因。
     /// Returns a stable English explanation without source paths, credentials or provider URLs.
@@ -125,6 +149,9 @@ impl MediaDeliveryRejection {
             }
             Self::OriginalAttachmentOnly => {
                 "the original intent retained this resource as an address-only attachment"
+            }
+            Self::CompactedHistory => {
+                "the conversation was compacted after this file, so earlier media is kept as an address only"
             }
         }
     }

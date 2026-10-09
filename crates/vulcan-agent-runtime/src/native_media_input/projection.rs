@@ -119,6 +119,19 @@ pub fn project_native_media_messages(
     Ok(())
 }
 
+/// Explains why `resource` was not attached for `reason`, keeping only its source address.
+/// 说明`resource`因`reason`未被附加，仅保留其来源地址。
+pub(super) fn unattached_media_text(
+    reason: vulcan_provider_adapters::MediaDeliveryRejection,
+    resource: &ResourceReference,
+) -> String {
+    format!(
+        "Media content was not attached: {}. Source: {}. Use an available understanding tool or read the source again only when the current model supports it.",
+        reason.explanation(),
+        resource.resource_path.as_deref().unwrap_or("unknown")
+    )
+}
+
 /// Flushes `pending` media into `messages` after its complete tool batch; empty batches add no message.
 /// 在完整工具批次之后将`pending`媒体写入`messages`；空批次不添加消息。
 fn flush_media(messages: &mut Vec<AiMessage>, pending: &mut Vec<ContentItem>) {
@@ -277,11 +290,7 @@ fn project_envelope(
         }
         MediaDeliveryDecision::Attachment { reason } | MediaDeliveryDecision::Reject { reason } => {
             Ok(ContentItem::Text {
-                text: format!(
-                    "Media content was not attached: {}. Source: {}. Use an available understanding tool or read the source again only when the current model supports it.",
-                    reason.explanation(),
-                    resource.resource_path.as_deref().unwrap_or("unknown")
-                ),
+                text: unattached_media_text(reason, resource),
             })
         }
         MediaDeliveryDecision::Upload => {

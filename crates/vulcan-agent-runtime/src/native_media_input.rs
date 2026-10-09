@@ -142,6 +142,22 @@ pub fn v1_native_media_content(output: &Value) -> Result<Option<Value>, String> 
     Ok(parse_envelope(text)?.map(|_| Value::String(text.to_string())))
 }
 
+/// Retires marked native media `output` recorded before a compaction to its address-only text.
+/// 将压缩之前记录的已标记原生媒体`output`退役为仅地址文字。
+/// Returns none for ordinary tool output and errors for malformed marked envelopes.
+/// 普通工具输出返回空，畸形标记信封返回错误。
+pub fn compacted_native_media_content(output: &Value) -> Result<Option<Value>, String> {
+    let Some(text) = output.as_str() else {
+        return Ok(None);
+    };
+    Ok(parse_envelope(text)?.map(|envelope| {
+        Value::String(projection::unattached_media_text(
+            vulcan_provider_adapters::MediaDeliveryRejection::CompactedHistory,
+            &envelope.resource,
+        ))
+    }))
+}
+
 /// Maps supported host `kind` to the provider-neutral resource kind; generic files have no media reader.
 /// 将支持的宿主`kind`映射为供应商无关资源类型；通用文件不属于媒体读取器。
 fn resource_kind(kind: ConversationAttachmentKind) -> Option<ResourceKind> {

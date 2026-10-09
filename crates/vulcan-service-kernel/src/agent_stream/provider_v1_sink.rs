@@ -1416,6 +1416,32 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     vulcan_agent_runtime::native_media_input::v1_native_media_content(&output)
                         .map_err(provider_projection_runtime_error)?
                         .unwrap_or(output);
+                // Media read before the compaction frontier keeps only its address after compaction.
+                // 压缩前沿及之前读取的媒体在压缩后仅保留地址。
+                let compacted = match snapshot.compaction_frontier_seq {
+                    Some(frontier) => {
+                        snapshot
+                            .sourced_items
+                            .get(index)
+                            .ok_or_else(|| {
+                                provider_projection_runtime_error(
+                                    "V1 tool result has no exact source projection.",
+                                )
+                            })?
+                            .source_from_seq
+                            <= frontier
+                    }
+                    None => false,
+                };
+                let output = if compacted {
+                    vulcan_agent_runtime::native_media_input::compacted_native_media_content(
+                        &output,
+                    )
+                    .map_err(provider_projection_runtime_error)?
+                    .unwrap_or(output)
+                } else {
+                    output
+                };
                 request_messages.push(AiMessage {
                     role: MessageRole::Tool,
                     content: vec![ContentItem::ToolResult {

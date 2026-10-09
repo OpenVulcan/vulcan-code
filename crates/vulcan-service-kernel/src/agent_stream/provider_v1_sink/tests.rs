@@ -268,6 +268,7 @@ fn interrupted_tool_result_projects_in_complete_controller_state()
     // snapshot 包含 Continue 所观察到的一条可靠失败工具结果。
     let snapshot = SessionProviderProjectionSnapshot {
         preparing_user_prompt_media_seqs: Vec::new(),
+        compaction_frontier_seq: None,
         segment_generation: 3,
         open_turn_id: None,
         child_business_execution_id: None,
@@ -345,6 +346,7 @@ fn complete_v1_history_projects_attachment_only_tail_without_transport_state()
     // snapshot 在最终仅附件输入前覆盖先前用户、助手与工具结果历史。
     let snapshot = SessionProviderProjectionSnapshot {
         preparing_user_prompt_media_seqs: Vec::new(),
+        compaction_frontier_seq: None,
         segment_generation: 7,
         open_turn_id: None,
         child_business_execution_id: None,
@@ -443,6 +445,7 @@ fn prompt_media_frontier_rejects_non_exact_source_before_io()
     let mut snapshot = SessionProviderProjectionSnapshot {
         current_compaction_id: None,
         preparing_user_prompt_media_seqs: vec![seq],
+        compaction_frontier_seq: None,
         open_turn_id: None,
         child_business_execution_id: None,
         segment_generation: 1,
@@ -495,6 +498,7 @@ fn user_input_source_resolves_exact_projected_controller_message_id()
     };
     let snapshot = SessionProviderProjectionSnapshot {
         preparing_user_prompt_media_seqs: Vec::new(),
+        compaction_frontier_seq: None,
         segment_generation: 1,
         current_compaction_id: None,
         document_revision: 2,
@@ -719,6 +723,7 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
     let resource_id = resource_ids[0];
     let snapshot = SessionProviderProjectionSnapshot {
         preparing_user_prompt_media_seqs: Vec::new(),
+        compaction_frontier_seq: None,
         segment_generation: 4,
         open_turn_id: None,
         child_business_execution_id: None,
@@ -3600,6 +3605,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
     let envelope = durable_reasoning_envelope();
     let snapshot = SessionProviderProjectionSnapshot {
         preparing_user_prompt_media_seqs: Vec::new(),
+        compaction_frontier_seq: None,
         segment_generation: 1,
         current_compaction_id: None,
         document_revision: 1,

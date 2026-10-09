@@ -227,6 +227,9 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     /// Exact pending prompt sequences admitted by Core before their first physical API.
     /// 在首次物理API前由Core准入的精确待准备提示词序号。
     pub(crate) preparing_user_prompt_media_seqs: Vec<Seq>,
+    /// Committed frontier of the current compaction; user media at or before it is delivered as an address only.
+    /// 当前压缩的已提交前沿；该前沿及之前的用户媒体仅以地址投递。
+    pub(crate) compaction_frontier_seq: Option<Seq>,
     /// Persisted segment generation that owns the exact event range.
     /// 拥有精确事件区间的持久化分片代次。
     pub(crate) segment_generation: u64,
@@ -2108,6 +2111,7 @@ impl SessionHandle {
             child_business_execution_id,
             current_compaction_id,
             preparing_user_prompt_media_seqs,
+            compaction_frontier_seq: context_frozen_at,
             segment_generation,
             document_revision,
             retained_from_seq,
