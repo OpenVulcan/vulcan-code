@@ -164,15 +164,7 @@ where
     let assets = PlatformAssets::for_platform(request.platform, request.node_version)?;
     // client owns TLS, redirects, and bounded request timeouts for all official downloads.
     // client 持有所有官方下载使用的 TLS、重定向与有界请求超时。
-    let client = Client::builder()
-        .connect_timeout(HTTP_CONNECT_TIMEOUT)
-        .timeout(HTTP_REQUEST_TIMEOUT)
-        .user_agent(format!(
-            "Vulcan-Code/{} managed-runtime",
-            env!("CARGO_PKG_VERSION")
-        ))
-        .build()
-        .map_err(|error| format!("failed to create managed runtime HTTP client: {error}"))?;
+    let client = official_download_client("managed-runtime")?;
     fs::create_dir_all(request.distribution_root).map_err(|error| {
         format!(
             "failed to create managed runtime distribution root {}: {error}",
@@ -193,6 +185,20 @@ where
         install_pnpm_runtime(&client, request, &assets, progress)?;
     }
     Ok(())
+}
+
+/// Builds the HTTP client shared by every official runtime download, tagged with `purpose`.
+/// 构建所有官方运行时下载共用的 HTTP 客户端，并以 `purpose` 标记。
+pub(crate) fn official_download_client(purpose: &str) -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .timeout(HTTP_REQUEST_TIMEOUT)
+        .user_agent(format!(
+            "Vulcan-Code/{} {purpose}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()
+        .map_err(|error| format!("failed to create {purpose} HTTP client: {error}"))
 }
 
 impl PlatformAssets {
@@ -919,7 +925,7 @@ where
 /// Download one HTTP resource to a partial file and atomically publish it with throttled progress.
 /// 把一个 HTTP 资源下载到临时文件，并在节流进度更新下原子发布。
 #[allow(clippy::too_many_arguments)]
-fn download_file<F>(
+pub(crate) fn download_file<F>(
     client: &Client,
     url: &str,
     destination: &Path,
@@ -1088,7 +1094,7 @@ fn emit_download_progress<F>(
 /// Emit one immutable managed-runtime progress event.
 /// 发出一个不可变受管运行时进度事件。
 #[allow(clippy::too_many_arguments)]
-fn emit_progress<F>(
+pub(crate) fn emit_progress<F>(
     progress: &mut F,
     phase: &str,
     component: Option<&str>,
@@ -1154,7 +1160,7 @@ fn validate_sha256_text(digest: &str) -> Result<(), String> {
 
 /// Verify one file against an expected lowercase SHA-256 digest.
 /// 使用期望的小写 SHA-256 摘要校验一个文件。
-fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
     // actual is the digest calculated from the complete downloaded file.
     // actual 是从完整下载文件计算出的摘要。
     let actual = digest_file::<Sha256>(path)?;
@@ -1168,6 +1174,12 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Returns the lowercase SHA-256 digest of one file.
+/// 返回一个文件的小写 SHA-256 摘要。
+pub(crate) fn sha256_file_hex(path: &Path) -> Result<String, String> {
+    Ok(hex_text(&digest_file::<Sha256>(path)?))
 }
 
 /// Verify one file against an expected npm SHA-512 Base64 digest.
@@ -1386,7 +1398,7 @@ fn write_runtime_manifest(directory: &Path, manifest: RuntimeManifest<'_>) -> Re
 
 /// Commit one same-volume staging directory with rollback of an invalid previous target.
 /// 提交一个同卷暂存目录，并在失败时回滚旧的无效目标。
-fn commit_staging_directory(staging: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn commit_staging_directory(staging: &Path, target: &Path) -> Result<(), String> {
     // backup is a same-volume rollback location for the previous invalid target.
     // backup 是旧无效目标使用的同卷回滚位置。
     let backup = sibling_work_path(target, "previous")?;
@@ -1419,7 +1431,7 @@ fn commit_staging_directory(staging: &Path, target: &Path) -> Result<(), String>
 
 /// Build a deterministic same-volume work directory beside one final target.
 /// 在一个最终目标旁构建确定性的同卷工作目录。
-fn sibling_work_path(target: &Path, suffix: &str) -> Result<PathBuf, String> {
+pub(crate) fn sibling_work_path(target: &Path, suffix: &str) -> Result<PathBuf, String> {
     // parent is the exact distribution directory that guarantees same-volume rename.
     // parent 是保证同卷重命名的精确发行目录。
     let parent = target
@@ -1441,7 +1453,7 @@ fn sibling_work_path(target: &Path, suffix: &str) -> Result<PathBuf, String> {
 
 /// Recreate one empty working directory.
 /// 重新创建一个空工作目录。
-fn prepare_clean_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn prepare_clean_directory(path: &Path) -> Result<(), String> {
     remove_path_if_exists(path)?;
     fs::create_dir_all(path)
         .map_err(|error| format!("failed to create directory {}: {error}", path.display()))
@@ -1449,7 +1461,7 @@ fn prepare_clean_directory(path: &Path) -> Result<(), String> {
 
 /// Remove one file, symlink, or directory when it exists.
 /// 在文件、符号链接或目录存在时将其删除。
-fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+pub(crate) fn remove_path_if_exists(path: &Path) -> Result<(), String> {
     // metadata inspects the link itself so cleanup never follows a stale symlink.
     // metadata 检查链接自身，使清理过程永不跟随陈旧符号链接。
     let metadata = match fs::symlink_metadata(path) {

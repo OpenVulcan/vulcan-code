@@ -10462,6 +10462,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.11.0",
  "tar",
+ "tempfile",
  "toml 1.1.4+spec-1.1.0",
  "vulcan-agent-runtime",
  "vulcan-host-tools",

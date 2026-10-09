@@ -23,7 +23,7 @@ use vulcan_permission_judge::protocol::{
 };
 
 use crate::native_host_binary::resolve_native_host_binary;
-use crate::process_creation::{apply_child_path_prefixes, new_background_tokio_command};
+use crate::process_creation::new_background_tokio_command;
 
 /// Waiting limit for the worker's `Ready` line.
 /// 等待 worker `Ready` 行的上限。
@@ -57,6 +57,41 @@ const JUDGE_HOST_MAX_LINE_BYTES: usize = 4 << 20;
 /// 为错误信息保留的 worker 诊断尾部字节数。
 const JUDGE_HOST_STDERR_TAIL_BYTES: usize = 8 << 10;
 
+/// Variable the platform dynamic loader searches for dependent libraries.
+/// 平台动态加载器搜索依赖库所用的变量。
+const LIBRARY_SEARCH_VARIABLE: &str = if cfg!(windows) {
+    "PATH"
+} else if cfg!(target_os = "macos") {
+    "DYLD_LIBRARY_PATH"
+} else {
+    "LD_LIBRARY_PATH"
+};
+
+/// Prepends `library_dirs` to the worker's library search variable without touching the parent.
+/// 将 `library_dirs` 前置到 worker 的库搜索变量，不修改父进程环境。
+fn apply_library_search_path(
+    command: &mut tokio::process::Command,
+    library_dirs: &[PathBuf],
+) -> Result<(), String> {
+    if library_dirs.is_empty() {
+        return Ok(());
+    }
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for directory in library_dirs {
+        if !paths.contains(directory) {
+            paths.push(directory.clone());
+        }
+    }
+    if let Some(inherited) = std::env::var_os(LIBRARY_SEARCH_VARIABLE) {
+        paths.extend(std::env::split_paths(&inherited));
+    }
+    let joined = std::env::join_paths(paths).map_err(|error| {
+        format!("Failed to build the judge host {LIBRARY_SEARCH_VARIABLE}: {error}")
+    })?;
+    command.env(LIBRARY_SEARCH_VARIABLE, joined);
+    Ok(())
+}
+
 /// Owns one worker process and its pipes.
 /// 持有一个 worker 进程及其管道。
 pub struct JudgeHostClient {
@@ -73,8 +108,8 @@ impl JudgeHostClient {
     /// 启动 worker 并等待其带预期契约的 `Ready` 行。
     ///
     /// # Parameters / 参数
-    /// - `library_dirs`: Directories prepended to the worker `PATH`, such as the CUDA runtime.
-    /// - `library_dirs`：前置到 worker `PATH` 的目录，例如 CUDA 运行库目录。
+    /// - `library_dirs`: Directories prepended to the worker's library search path, such as the CUDA runtime.
+    /// - `library_dirs`：前置到 worker 库搜索路径的目录，例如 CUDA 运行库目录。
     pub async fn spawn(library_dirs: &[PathBuf]) -> Result<Self, String> {
         let host_path = resolve_native_host_binary("vulcan-judge-host", "VULCAN_JUDGE_HOST")?;
         let mut command =
@@ -84,7 +119,7 @@ impl JudgeHostClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        apply_child_path_prefixes(&mut command, library_dirs)?;
+        apply_library_search_path(&mut command, library_dirs)?;
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "Failed to start judge host `{}`: {error}",

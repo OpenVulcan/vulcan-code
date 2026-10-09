@@ -35,3 +35,6 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 semver.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
