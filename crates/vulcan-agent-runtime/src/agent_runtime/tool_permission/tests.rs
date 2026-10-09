@@ -47,17 +47,31 @@ fn native(id: &str) -> ResolvedToolDefinition {
 struct FixedHost {
     mode: Result<PermissionMode, String>,
     approval: Result<bool, String>,
+    judge: Result<Option<JudgeLabel>, String>,
     prompts: std::sync::Mutex<Vec<(String, ToolApprovalPrompt)>>,
+    judged: std::sync::Mutex<Vec<JudgeCall>>,
 }
 
 impl FixedHost {
     /// Builds a host with `mode` that answers every approval with `approval`.
     /// 构建一个模式为 `mode`、对每次审批都回答 `approval` 的宿主。
     fn new(mode: Result<PermissionMode, String>, approval: Result<bool, String>) -> Arc<Self> {
+        Self::judging(mode, approval, Ok(None))
+    }
+
+    /// Builds a host whose judge answers every call with `judge`.
+    /// 构建一个判定器对每次调用都回答 `judge` 的宿主。
+    fn judging(
+        mode: Result<PermissionMode, String>,
+        approval: Result<bool, String>,
+        judge: Result<Option<JudgeLabel>, String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             mode,
             approval,
+            judge,
             prompts: std::sync::Mutex::new(Vec::new()),
+            judged: std::sync::Mutex::new(Vec::new()),
         })
     }
 }
@@ -78,6 +92,11 @@ impl ToolPermissionHost for FixedHost {
     ) -> Result<bool, String> {
         self.prompts.lock().unwrap().push((tool_name, prompt));
         self.approval.clone()
+    }
+
+    async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
+        self.judged.lock().unwrap().push(call);
+        self.judge.clone()
     }
 }
 
@@ -369,7 +388,16 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
         let root = root.clone();
         async move {
             let host: Arc<dyn ToolPermissionHost> = host;
-            admit_tool_call(Some(&host), session, &edit, &args, &context(), Some(&root)).await
+            admit_tool_call(
+                Some(&host),
+                session,
+                &edit,
+                &args,
+                None,
+                &context(),
+                Some(&root),
+            )
+            .await
         }
     };
 
@@ -391,6 +419,7 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
                     paths: vec![String::from("src/x.rs")]
                 },
                 high_risk: None,
+                judge: None,
             }
         )]
     );
@@ -434,10 +463,116 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
             session,
             &edit,
             &args,
+            None,
             &context(),
             Some(workspace.path())
         )
         .await,
         ToolPermissionVerdict::Proceed
     );
+}
+
+#[tokio::test]
+async fn judge_clears_only_workspace_write_calls_without_high_risk() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().to_path_buf();
+    let shell = native(SHELL_COMMAND_TOOL_ID);
+    let session = SessionId::nil();
+    let admit = |host: Arc<FixedHost>, command: &'static str| {
+        let shell = shell.clone();
+        let root = root.clone();
+        async move {
+            let host: Arc<dyn ToolPermissionHost> = host;
+            let raw = format!(r#"{{"command": "{command}"}}"#);
+            let args: Value = serde_json::from_str(&raw).unwrap();
+            admit_tool_call(
+                Some(&host),
+                session,
+                &shell,
+                &args,
+                Some(&raw),
+                &context(),
+                Some(&root),
+            )
+            .await
+        }
+    };
+    let judge_of = |host: &FixedHost| {
+        host.prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, prompt)| prompt.judge.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // An allow clears an ordinary escalated call without asking; the judge reads the raw text.
+    // allow 会不经询问放行普通升级调用；判定器读取原样文本。
+    let clearing = FixedHost::judging(
+        Ok(PermissionMode::WorkspaceWrite),
+        Ok(false),
+        Ok(Some(JudgeLabel::Allow)),
+    );
+    assert_eq!(
+        admit(Arc::clone(&clearing), "cargo build").await,
+        ToolPermissionVerdict::Proceed
+    );
+    assert!(clearing.prompts.lock().unwrap().is_empty());
+    assert_eq!(
+        clearing.judged.lock().unwrap().clone(),
+        vec![JudgeCall {
+            workspace_root: Some(root.clone()),
+            tool_name: String::from(SHELL_COMMAND_TOOL_ID),
+            raw_arguments: Some(String::from(r#"{"command": "cargo build"}"#)),
+        }]
+    );
+
+    // A high-risk rule still asks, carrying the judge's allow to the user.
+    // 高风险规则仍需询问，并把判定器的 allow 带给用户。
+    assert_eq!(
+        admit(Arc::clone(&clearing), "rm -rf build").await,
+        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+    );
+    assert_eq!(
+        judge_of(&clearing),
+        vec![Some(JudgeFinding::Scored(JudgeLabel::Allow))]
+    );
+
+    // Review, block and judge failures all go to the user with the finding.
+    // review、block 与判定失败都会带着结论交给用户。
+    for (judge, finding) in [
+        (
+            Ok(Some(JudgeLabel::Review)),
+            JudgeFinding::Scored(JudgeLabel::Review),
+        ),
+        (
+            Ok(Some(JudgeLabel::Block)),
+            JudgeFinding::Scored(JudgeLabel::Block),
+        ),
+        (
+            Err(String::from("not loaded")),
+            JudgeFinding::Unavailable(String::from("not loaded")),
+        ),
+    ] {
+        let host = FixedHost::judging(Ok(PermissionMode::WorkspaceWrite), Ok(true), judge);
+        assert_eq!(
+            admit(Arc::clone(&host), "cargo build").await,
+            ToolPermissionVerdict::Proceed
+        );
+        assert_eq!(judge_of(&host), vec![Some(finding)]);
+    }
+
+    // Read-only never consults the judge.
+    // 只读模式从不咨询判定器。
+    let read_only = FixedHost::judging(
+        Ok(PermissionMode::ReadOnly),
+        Ok(false),
+        Ok(Some(JudgeLabel::Allow)),
+    );
+    assert_eq!(
+        admit(Arc::clone(&read_only), "cargo build").await,
+        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+    );
+    assert!(read_only.judged.lock().unwrap().is_empty());
+    assert_eq!(judge_of(&read_only), vec![None]);
 }

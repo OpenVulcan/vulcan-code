@@ -19,6 +19,7 @@ use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationToolCall, CoreError as VulcanCoreError, ProviderContinuation, ProviderTurnBoundary,
     ProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
+    TransientRawArguments,
 };
 use vulcan_provider_adapters::{ResponseProjectionProfile, TransientReasoningStatusMode};
 
@@ -91,6 +92,9 @@ pub(super) struct PublicTurnAccumulator {
     /// Complete tool calls.
     /// 完整工具调用。
     tool_calls: Vec<ConversationToolCall>,
+    /// Argument text streamed so far, keyed by tool item, for the permission judge.
+    /// 按工具条目索引的已流式参数文本，供权限判定使用。
+    raw_tool_arguments: BTreeMap<String, String>,
     /// Last public usage update.
     /// 最后一个公共用量更新。
     pub(super) usage: Option<RequestUsage>,
@@ -280,6 +284,7 @@ impl PublicTurnAccumulator {
             reasoning: String::new(),
             provider_message_id: None,
             tool_calls: Vec::new(),
+            raw_tool_arguments: BTreeMap::new(),
             usage: None,
             replay_item_indices: BTreeMap::new(),
             replay_items: Vec::new(),
@@ -462,6 +467,9 @@ impl PublicTurnAccumulator {
                 reason: message.clone(),
             },
         )));
+        // Invalid calls never run, so they are never judged.
+        // 无效调用从不执行，因此从不判定。
+        self.raw_tool_arguments.remove(item_id.as_str());
         self.tool_calls.push(ConversationToolCall {
             // Invalid calls retain the same item identity so failure replaces the original draft too.
             // 无效调用同样保留条目标识，使失败结果也能替换原草稿。
@@ -470,6 +478,7 @@ impl PublicTurnAccumulator {
             tool_name,
             arguments: Value::Null,
             argument_parse_error: Some(message),
+            raw_arguments: Default::default(),
         });
         Ok(())
     }
@@ -665,6 +674,10 @@ impl PublicTurnAccumulator {
                 )));
             }
             AiStreamEvent::ToolCallArgumentsDelta { item_id, delta, .. } => {
+                self.raw_tool_arguments
+                    .entry(item_id.clone())
+                    .or_default()
+                    .push_str(&delta);
                 let _ = live_sender.send(Ok(ProviderStreamDelta::ToolRequestFragment(
                     ToolRequestFragment::ArgumentsDelta {
                         request_stream_id: item_id,
@@ -692,6 +705,7 @@ impl PublicTurnAccumulator {
                 *replay_state = ReplayAccumulatorItemState::Complete(ContentItem::ToolCall {
                     call: call.clone(),
                 });
+                let raw_arguments = self.raw_tool_arguments.remove(item_id.as_str());
                 let final_arguments = serde_json::to_string(&call.arguments).map_err(|error| {
                     provider_failure(
                         provider_id,
@@ -713,6 +727,9 @@ impl PublicTurnAccumulator {
                     tool_name: call.name,
                     arguments: call.arguments,
                     argument_parse_error: None,
+                    raw_arguments: raw_arguments
+                        .map(TransientRawArguments::new)
+                        .unwrap_or_default(),
                 });
             }
             AiStreamEvent::ToolCallAborted { item_id, message } => {

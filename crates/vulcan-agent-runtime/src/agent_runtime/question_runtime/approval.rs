@@ -10,7 +10,7 @@
 //! 权限事实。
 
 use super::*;
-use crate::agent_runtime::tool_permission::{HighRiskCategory, PermissionSubject};
+use crate::agent_runtime::tool_permission::{HighRiskCategory, JudgeFinding, PermissionSubject};
 use vulcan_session_core::v1::config::PermissionMode;
 
 /// Canonical label of the option that runs the gated call once.
@@ -34,6 +34,9 @@ pub struct ToolApprovalPrompt {
     /// Matched high-risk category, when any.
     /// 命中的高风险类别（如有）。
     pub high_risk: Option<HighRiskCategory>,
+    /// Judge layer finding, when a judge is configured for the call.
+    /// 判定层结论（当调用配置了判定器时）。
+    pub judge: Option<JudgeFinding>,
 }
 
 impl QuestionRuntime {
@@ -105,6 +108,15 @@ fn approval_question(tool_name: &str, prompt: &ToolApprovalPrompt) -> QuestionPr
     if let Some(category) = prompt.high_risk {
         question.push_str(&format!("\n\nHigh risk: {}", category.key()));
     }
+    match &prompt.judge {
+        Some(JudgeFinding::Scored(label)) => {
+            question.push_str(&format!("\n\nPermission judge: {}", label.key()));
+        }
+        Some(JudgeFinding::Unavailable(reason)) => {
+            question.push_str(&format!("\n\nPermission judge unavailable: {reason}"));
+        }
+        None => {}
+    }
     QuestionPrompt {
         question,
         header: String::from("Permission"),
@@ -125,6 +137,7 @@ fn approval_question(tool_name: &str, prompt: &ToolApprovalPrompt) -> QuestionPr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_runtime::tool_permission::JudgeLabel;
     use std::sync::Mutex;
     use vulcan_session_core::v1::ids::Seq;
 
@@ -181,6 +194,7 @@ mod tests {
                             text: String::from("rm -rf build"),
                         },
                         high_risk: Some(HighRiskCategory::RecursiveDelete),
+                        judge: Some(JudgeFinding::Scored(JudgeLabel::Block)),
                     },
                 )
                 .await

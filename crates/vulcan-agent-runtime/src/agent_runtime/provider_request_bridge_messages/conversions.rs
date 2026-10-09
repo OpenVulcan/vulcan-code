@@ -144,6 +144,7 @@ fn session_tool_call_to_core_tool_call(
         tool_name: tool_call.tool_name.clone(),
         arguments: tool_call.arguments.clone(),
         argument_parse_error: tool_call.argument_parse_error.clone(),
+        raw_arguments: Default::default(),
     }
 }
 

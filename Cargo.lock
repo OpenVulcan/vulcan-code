@@ -9820,6 +9820,7 @@ dependencies = [
  "vulcan-llm-core",
  "vulcan-luaskills-prompt",
  "vulcan-mcp-runtime",
+ "vulcan-permission-judge",
  "vulcan-plugin-runtime",
  "vulcan-prompt-composer",
  "vulcan-prompt-skills",

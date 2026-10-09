@@ -687,7 +687,43 @@ pub struct ConversationToolCall {
     /// 可选的受控诊断，用于证明 Provider 发出的参数不是可执行 JSON。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_parse_error: Option<String>,
+    /// Argument text exactly as the Provider streamed it, kept only in memory for the permission
+    /// judge; replayed and restored calls have none.
+    /// Provider 流式发出的原样参数文本，仅为权限判定保留在内存中；回放与恢复的调用没有该文本。
+    #[serde(skip)]
+    pub raw_arguments: TransientRawArguments,
 }
+
+/// Raw argument text that never persists and never takes part in equality.
+/// 从不持久化、也从不参与相等比较的原始参数文本。
+///
+/// Two calls with the same structured arguments are the same call whether or not the original
+/// text is still at hand, so recovery and replay comparisons ignore it.
+/// 结构化参数相同的两次调用就是同一次调用，与是否仍持有原文无关，因此恢复与回放比较忽略它。
+#[derive(Debug, Clone, Default)]
+pub struct TransientRawArguments(Option<String>);
+
+impl TransientRawArguments {
+    /// Wraps the streamed argument text.
+    /// 包装流式参数文本。
+    pub fn new(text: String) -> Self {
+        Self(Some(text))
+    }
+
+    /// Returns the streamed argument text when this call still has it.
+    /// 当本次调用仍持有流式参数文本时返回它。
+    pub fn text(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
+
+impl PartialEq for TransientRawArguments {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for TransientRawArguments {}
 
 /// Represents one canonical user attachment retained for future request replays.
 /// 表示一条为后续请求回放保留的规范用户附件。
@@ -1019,6 +1055,10 @@ pub struct ToolInvocationRequest {
     /// 可选的执行前参数解析失败；存在时禁止分派工具主体。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_parse_error: Option<String>,
+    /// Argument text exactly as the Provider streamed it, for the permission judge only.
+    /// Provider 流式发出的原样参数文本，仅供权限判定使用。
+    #[serde(skip)]
+    pub raw_arguments: TransientRawArguments,
 }
 
 /// Represents one tool execution result returned by the host runtime.

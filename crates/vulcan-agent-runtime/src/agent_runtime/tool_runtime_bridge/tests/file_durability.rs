@@ -107,6 +107,7 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
             tool_name: String::from("file"),
             arguments: json!({"action":"write", "path":"receipt.txt", "content":"after\n"}),
             argument_parse_error: None,
+            raw_arguments: Default::default(),
         }],
         continuation: None,
         usage: None,

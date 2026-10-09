@@ -56,6 +56,7 @@ vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true
 vulcan-luaskills-prompt.workspace = true
 vulcan-mcp-runtime.workspace = true
+vulcan-permission-judge.workspace = true
 vulcan-plugin-runtime.workspace = true
 vulcan-prompt-composer.workspace = true
 vulcan-prompt-skills.workspace = true

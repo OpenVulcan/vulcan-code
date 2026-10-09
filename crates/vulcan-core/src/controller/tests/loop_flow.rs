@@ -18,6 +18,7 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
                     tool_name: String::from("read_file"),
                     arguments: json!({"path":"src/main.rs"}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
                 continuation: Some(ProviderContinuation {
                     provider_id: Some(String::from("mock-openai")),
@@ -385,6 +386,7 @@ fn run_seeded_turn_streaming_resumes_from_tool_result() {
                 tool_name: String::from("read_file"),
                 arguments: json!({"path":"src/lib.rs"}),
                 argument_parse_error: None,
+                raw_arguments: Default::default(),
             }],
             continuation: None,
             usage: None,
@@ -570,6 +572,7 @@ fn run_restored_provider_loop_rejects_invalid_retained_boundaries() {
             tool_name: "read_file".into(),
             arguments: json!({"path":"src/lib.rs"}),
             argument_parse_error: None,
+            raw_arguments: Default::default(),
         });
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -621,6 +624,7 @@ fn run_user_turn_fails_when_provider_turn_budget_is_exhausted() {
                 tool_name: String::from("read_file"),
                 arguments: json!({"path":"src/lib.rs"}),
                 argument_parse_error: None,
+                raw_arguments: Default::default(),
             }],
             continuation: None,
             usage: None,

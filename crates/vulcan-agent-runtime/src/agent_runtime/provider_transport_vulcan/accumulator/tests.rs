@@ -942,3 +942,46 @@ fn durable_reasoning_supersedes_transient_fallbacks() {
         "完整思考"
     );
 }
+
+/// The completed call keeps the streamed argument text verbatim for the permission judge.
+/// 完成的调用为权限判定原样保留流式参数文本。
+#[test]
+fn completed_tool_call_keeps_streamed_argument_text() {
+    let streamed = [r#"{"path": "b.txt","#, r#" "action": "read"}"#];
+    let delta = |text: &str| AiStreamEvent::ToolCallArgumentsDelta {
+        item_id: String::from("tool-item"),
+        delta: text.to_string(),
+        progress: vulcan_ai_contract::ToolCallProgress {
+            call_id: None,
+            tool_name: None,
+            bytes_received: 0,
+            characters_received: 0,
+            complete: false,
+        },
+    };
+    let accumulator = accumulated_public_turn(vec![
+        AiStreamEvent::ToolCallStarted {
+            item_id: String::from("tool-item"),
+            call_id: String::from("provider-call"),
+            tool_name: String::from("file"),
+            index: 0,
+        },
+        delta(streamed[0]),
+        delta(streamed[1]),
+        AiStreamEvent::ToolCallCompleted {
+            item_id: String::from("tool-item"),
+            call: PublicToolCall {
+                id: String::from("provider-call"),
+                name: String::from("file"),
+                arguments: json!({"path": "b.txt", "action": "read"}),
+                signature: None,
+            },
+        },
+        AiStreamEvent::ResponseCompleted,
+    ]);
+    let response = accumulator.finish().expect("finish tools");
+    assert_eq!(
+        response.tool_calls[0].raw_arguments.text(),
+        Some(streamed.concat().as_str())
+    );
+}

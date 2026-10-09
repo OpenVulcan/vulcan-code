@@ -103,6 +103,7 @@ fn run_user_turn_streaming_retains_executor_failure_as_tool_result() {
                             tool_name: String::from("first_tool"),
                             arguments: json!({"step": 1}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                         ConversationToolCall {
                             id: String::from("tool-item-2"),
@@ -110,6 +111,7 @@ fn run_user_turn_streaming_retains_executor_failure_as_tool_result() {
                             tool_name: String::from("second_tool"),
                             arguments: json!({"step": 2}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                     ],
                     continuation: Some(ProviderContinuation {
@@ -246,6 +248,7 @@ fn run_user_turn_streaming_retains_batch_preparation_failure_as_tool_results() {
                         tool_name: String::from("prepared_tool"),
                         arguments: json!({"step": 1}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     }],
                     continuation: None,
                     usage: None,
@@ -310,6 +313,7 @@ fn run_user_turn_streaming_checkpoints_complete_tool_batch_once() {
                             tool_name: String::from("first_tool"),
                             arguments: json!({}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                         ConversationToolCall {
                             id: String::from("item-2"),
@@ -317,6 +321,7 @@ fn run_user_turn_streaming_checkpoints_complete_tool_batch_once() {
                             tool_name: String::from("second_tool"),
                             arguments: json!({}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                     ],
                     continuation: None,

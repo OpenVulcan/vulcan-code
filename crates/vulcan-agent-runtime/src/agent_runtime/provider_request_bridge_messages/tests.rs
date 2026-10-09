@@ -156,6 +156,7 @@ fn provider_visible_history_moves_system_update_after_tool_result_gap() {
                     tool_name: String::from("read_file"),
                     arguments: serde_json::json!({ "path": "Cargo.toml" }),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
             },
         },
@@ -210,6 +211,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
                         tool_name: String::from("read_file"),
                         arguments: serde_json::json!({ "path": "Cargo.toml" }),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     },
                     CoreConversationToolCall {
                         id: String::from("local-call-2"),
@@ -217,6 +219,7 @@ fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
                         tool_name: String::from("list_files"),
                         arguments: serde_json::json!({}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     },
                 ],
             },
@@ -323,6 +326,7 @@ fn provider_visible_history_preserves_matched_tool_result() {
                     tool_name: String::from("read_file"),
                     arguments: serde_json::json!({"path": "Cargo.toml"}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
             },
         },
@@ -369,6 +373,7 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
                         tool_name: String::from("first_tool"),
                         arguments: serde_json::json!({}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     },
                     CoreConversationToolCall {
                         id: String::from("local-call-2"),
@@ -376,6 +381,7 @@ fn provider_visible_history_passes_canonical_tool_topology_validator() {
                         tool_name: String::from("second_tool"),
                         arguments: serde_json::json!({}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     },
                 ],
             },
@@ -438,6 +444,7 @@ fn provider_visible_tool_topology_validator_rejects_interrupted_batch() {
                     tool_name: String::from("ask"),
                     arguments: serde_json::json!({}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
             },
         },
@@ -521,6 +528,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
                         tool_name: String::from("first_tool"),
                         arguments: serde_json::json!({"step": 1}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     },
                     CoreConversationToolCall {
                         id: String::from("local-call-2"),
@@ -528,6 +536,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
                         tool_name: String::from("second_tool"),
                         arguments: serde_json::json!({"step": 2}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     },
                 ],
             },
@@ -584,6 +593,7 @@ fn provider_visible_history_downgrades_unanswered_tool_batch() {
                     }]
                 }),
                 argument_parse_error: None,
+                raw_arguments: Default::default(),
             }],
         },
     }];
@@ -681,6 +691,7 @@ fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
                     tool_name: String::from("read_file"),
                     arguments: serde_json::json!({ "path": "Cargo.toml" }),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
             },
         },
@@ -743,6 +754,7 @@ fn canonical_fixture_provider_switch_downgrades_stale_tool_state() {
                     tool_name: String::from("image_generation"),
                     arguments: serde_json::json!({ "prompt": "demo" }),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
             },
         },
@@ -887,6 +899,7 @@ fn canonical_tool_call(
         tool_name: tool_name.to_string(),
         arguments: serde_json::json!({ "path": "Cargo.toml" }),
         argument_parse_error: None,
+        raw_arguments: Default::default(),
     }
 }
 

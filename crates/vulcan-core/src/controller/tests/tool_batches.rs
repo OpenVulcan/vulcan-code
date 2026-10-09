@@ -88,6 +88,7 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
                             tool_name: String::from("slow_a"),
                             arguments: json!({"step": "a"}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                         ConversationToolCall {
                             id: String::from("tool-item-b"),
@@ -95,6 +96,7 @@ fn run_user_turn_streaming_executes_tool_batch_concurrently() {
                             tool_name: String::from("fast_b"),
                             arguments: json!({"step": "b"}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                     ],
                     continuation: None,
@@ -177,6 +179,7 @@ fn fatal_tool_durability_failure_stops_provider_loop_after_sibling_settlement() 
                             tool_name: String::from("fatal"),
                             arguments: json!({}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                         ConversationToolCall {
                             id: String::from("sibling-item"),
@@ -184,6 +187,7 @@ fn fatal_tool_durability_failure_stops_provider_loop_after_sibling_settlement() 
                             tool_name: String::from("sibling"),
                             arguments: json!({}),
                             argument_parse_error: None,
+                            raw_arguments: Default::default(),
                         },
                     ],
                     continuation: None,
@@ -252,6 +256,7 @@ fn fatal_batch_preparation_failure_stops_before_tool_execution() {
                     tool_name: String::from("sibling"),
                     arguments: json!({}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
                 continuation: None,
                 usage: None,
@@ -315,6 +320,7 @@ fn malformed_provider_arguments_return_tool_error_without_executor_dispatch() {
                         tool_name: String::from("file_edit"),
                         arguments: Value::Null,
                         argument_parse_error: Some(decoder_message.to_string()),
+                        raw_arguments: Default::default(),
                     }],
                     continuation: None,
                     usage: None,
@@ -437,6 +443,7 @@ fn malformed_provider_arguments_allow_only_one_model_correction_round() {
                 tool_name: String::from("file_edit"),
                 arguments: Value::Null,
                 argument_parse_error: Some(format!("invalid JSON {suffix}")),
+                raw_arguments: Default::default(),
             }],
             continuation: None,
             usage: None,
@@ -525,6 +532,7 @@ fn malformed_provider_arguments_fail_non_streaming_turn_with_typed_protocol_fail
                 tool_name: String::from("file_edit"),
                 arguments: Value::Null,
                 argument_parse_error: Some(format!("invalid JSON {suffix}")),
+                raw_arguments: Default::default(),
             }],
             continuation: None,
             usage: None,
@@ -587,6 +595,7 @@ fn mixed_malformed_batch_preserves_order_without_replaying_tool_calls() {
                     tool_name: String::from("file_read"),
                     arguments: json!({"path": "src/main.rs"}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 },
                 ConversationToolCall {
                     id: format!("item-invalid-{suffix}"),
@@ -594,6 +603,7 @@ fn mixed_malformed_batch_preserves_order_without_replaying_tool_calls() {
                     tool_name: String::from("file_edit"),
                     arguments: Value::Null,
                     argument_parse_error: Some(format!("invalid JSON {suffix}")),
+                    raw_arguments: Default::default(),
                 },
             ],
             continuation: None,
@@ -614,6 +624,7 @@ fn mixed_malformed_batch_preserves_order_without_replaying_tool_calls() {
                         tool_name: String::from("file_edit"),
                         arguments: json!({"path": "src/main.rs"}),
                         argument_parse_error: None,
+                        raw_arguments: Default::default(),
                     }],
                     continuation: None,
                     usage: None,
@@ -702,6 +713,7 @@ fn restored_malformed_provider_arguments_never_dispatch_executor() {
             tool_name: String::from("file_edit"),
             arguments: Value::Null,
             argument_parse_error: Some(decoder_message.to_string()),
+            raw_arguments: Default::default(),
         };
         // snapshot retains the authoritative assistant call at the recovery boundary.
         // snapshot 在恢复边界保留权威助手工具调用。
@@ -720,6 +732,7 @@ fn restored_malformed_provider_arguments_never_dispatch_executor() {
                         tool_name: request.tool_name.clone(),
                         arguments: request.arguments.clone(),
                         argument_parse_error: request.argument_parse_error.clone(),
+                        raw_arguments: Default::default(),
                     }],
                 },
             }],
@@ -809,6 +822,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                 tool_name: String::from("fresh_tool"),
                 arguments: json!({"index": 1}),
                 argument_parse_error: None,
+                raw_arguments: Default::default(),
             },
             ConversationToolCall {
                 id: String::from("item-reuse"),
@@ -816,6 +830,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                 tool_name: String::from("retained_tool"),
                 arguments: json!({"index": 2}),
                 argument_parse_error: None,
+                raw_arguments: Default::default(),
             },
             ConversationToolCall {
                 id: String::from("item-unknown"),
@@ -823,6 +838,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                 tool_name: String::from("uncertain_tool"),
                 arguments: json!({"index": 3}),
                 argument_parse_error: None,
+                raw_arguments: Default::default(),
             },
         ];
         // snapshot ends at the exact assistant tool batch that recovery must reconcile.
@@ -851,6 +867,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     tool_name: String::from("fresh_tool"),
                     arguments: json!({"index": 1}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::Execute,
             },
@@ -861,6 +878,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     tool_name: String::from("retained_tool"),
                     arguments: json!({"index": 2}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::ReuseResult {
                     result: ToolInvocationResult {
@@ -879,6 +897,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     tool_name: String::from("uncertain_tool"),
                     arguments: json!({"index": 3}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::OutcomeUnknown,
             },
@@ -974,6 +993,7 @@ fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary()
             tool_name: String::from("uncertain_tool"),
             arguments: json!({"index": 1}),
             argument_parse_error: None,
+            raw_arguments: Default::default(),
         };
         // snapshot ends at the assistant call that must receive one synthetic result without re-execution.
         // snapshot 结束于必须在不重新执行的情况下接收一条合成结果的助手调用。
@@ -992,6 +1012,7 @@ fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary()
                         tool_name: request.tool_name.clone(),
                         arguments: request.arguments.clone(),
                         argument_parse_error: request.argument_parse_error.clone(),
+                        raw_arguments: Default::default(),
                     }],
                 },
             }],
@@ -1103,6 +1124,7 @@ fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
             tool_name: String::from("write_file"),
             arguments: json!({"path": "safe.txt"}),
             argument_parse_error: None,
+            raw_arguments: Default::default(),
         };
         // snapshot ends at the unmatched assistant tool call.
         // snapshot 结束于尚未配对的助手工具调用。
@@ -1121,6 +1143,7 @@ fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
                         tool_name: request.tool_name.clone(),
                         arguments: request.arguments.clone(),
                         argument_parse_error: request.argument_parse_error.clone(),
+                        raw_arguments: Default::default(),
                     }],
                 },
             }],
@@ -1305,6 +1328,7 @@ fn run_user_turn_synthesizes_skipped_tool_result_when_policy_blocks_tool() {
                     tool_name: String::from("blocked_tool"),
                     arguments: json!({"id":"42"}),
                     argument_parse_error: None,
+                    raw_arguments: Default::default(),
                 }],
                 continuation: None,
                 usage: None,
@@ -1355,6 +1379,7 @@ fn resolved_tool_call_id_falls_back_when_provider_visible_id_is_empty() {
         tool_name: String::from("read_file"),
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
+        raw_arguments: Default::default(),
     };
 
     assert_eq!(resolved_tool_call_id(&tool_call), "local-call-1");

@@ -12,11 +12,12 @@ pub mod command_rules;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
 use vulcan_host_tools::file_runtime::{apply_patch_write_paths, path_resolves_inside_workspace};
+pub use vulcan_permission_judge::JudgeLabel;
 use vulcan_session_core::v1::config::PermissionMode;
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolInvocationContext, VulcanToolSourceKind,
@@ -63,6 +64,41 @@ pub trait ToolPermissionHost: Send + Sync {
         arguments: Value,
         prompt: ToolApprovalPrompt,
     ) -> Result<bool, String>;
+
+    /// Scores one escalated call with the configured judge model; `Ok(None)` means no judge is
+    /// configured. An error means the judge is configured but could not score this call.
+    /// 用已配置的判定模型为一次升级调用评分；`Ok(None)` 表示未配置判定器。错误表示已配置判定器
+    /// 但无法为本次调用评分。
+    async fn judge(&self, _call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
+        Ok(None)
+    }
+}
+
+/// One escalated call as the judge model reads it.
+/// 判定模型所读取的一次升级调用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JudgeCall {
+    /// Workspace the call runs in; its project policy choices apply.
+    /// 调用运行的工作区；适用其项目策略选择。
+    pub workspace_root: Option<PathBuf>,
+    /// Model-visible tool name.
+    /// 模型可见的工具名称。
+    pub tool_name: String,
+    /// Argument text exactly as the model streamed it; restored calls have none.
+    /// 模型流式发出的原样参数文本；恢复的调用没有该文本。
+    pub raw_arguments: Option<String>,
+}
+
+/// What the judge layer found for a call it did not clear.
+/// 判定层对未放行调用的结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JudgeFinding {
+    /// The judge scored the call; `Allow` appears when a high-risk rule still needs the user.
+    /// 判定器已评分；高风险规则仍需用户确认时会出现 `Allow`。
+    Scored(JudgeLabel),
+    /// The judge is configured but could not score the call.
+    /// 判定器已配置但无法为调用评分。
+    Unavailable(String),
 }
 
 /// What one tool call would affect, as far as permissions are concerned.
@@ -266,10 +302,32 @@ pub fn evaluate_rules(
     }
 }
 
+/// Asks the judge about one escalated call; `None` when no judge is configured.
+/// 就一次升级调用询问判定器；未配置判定器时返回 `None`。
+async fn judge_layer(
+    host: &Arc<dyn ToolPermissionHost>,
+    definition: &ResolvedToolDefinition,
+    raw_arguments: Option<&str>,
+    workspace_root: Option<&Path>,
+) -> Option<JudgeFinding> {
+    let call = JudgeCall {
+        workspace_root: workspace_root.map(Path::to_path_buf),
+        tool_name: definition.descriptor.id.clone(),
+        raw_arguments: raw_arguments.map(str::to_string),
+    };
+    match host.judge(call).await {
+        Ok(label) => label.map(JudgeFinding::Scored),
+        Err(reason) => Some(JudgeFinding::Unavailable(reason)),
+    }
+}
+
 /// Decides whether one tool call proceeds, reading the session's live permission mode.
 /// 读取会话实时权限模式，决定一次工具调用是否执行。
-/// Escalated calls go to the user in every gated mode; read-only escalates every write.
-/// 在所有受管控模式下升级调用都交给用户；只读模式会升级所有写入。
+/// In workspace-write mode an escalated call is first scored by the judge, which may clear it
+/// unless a high-risk rule matched; everything else goes to the user. Read-only escalates every
+/// write straight to the user.
+/// 在工作区写入模式下，升级调用先由判定器评分；除非命中高风险规则，判定器可放行；其余全部交给
+/// 用户。只读模式会把所有写入直接交给用户。
 /// Without a host (embedded or test runtimes) no permission policy is configured and calls proceed.
 /// 没有宿主时（嵌入式或测试运行时）未配置权限策略，调用直接执行。
 pub async fn admit_tool_call(
@@ -277,6 +335,7 @@ pub async fn admit_tool_call(
     session_id: SessionId,
     definition: &ResolvedToolDefinition,
     args: &Value,
+    raw_arguments: Option<&str>,
     context: &VulcanToolInvocationContext,
     workspace_root: Option<&Path>,
 ) -> ToolPermissionVerdict {
@@ -291,10 +350,19 @@ pub async fn admit_tool_call(
     let RuleOutcome::Escalate { high_risk } = evaluate_rules(mode, &subject, workspace_root) else {
         return ToolPermissionVerdict::Proceed;
     };
+    let judge = if mode == PermissionMode::WorkspaceWrite {
+        judge_layer(host, definition, raw_arguments, workspace_root).await
+    } else {
+        None
+    };
+    if high_risk.is_none() && judge == Some(JudgeFinding::Scored(JudgeLabel::Allow)) {
+        return ToolPermissionVerdict::Proceed;
+    }
     let prompt = ToolApprovalPrompt {
         mode,
         subject,
         high_risk,
+        judge,
     };
     match host
         .request_approval(

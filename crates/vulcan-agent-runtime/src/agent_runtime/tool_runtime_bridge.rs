@@ -334,10 +334,13 @@ impl VulcanManagedToolRuntimeBridge {
 
     /// Dispatches one resolved host-managed tool definition through the shared tools manager.
     /// 通过共享工具管理器调度一条已解析宿主管理工具定义。
+    /// `raw_arguments` is the streamed argument text the permission judge reads, when still known.
+    /// `raw_arguments` 是权限判定读取的流式参数文本（仍可得时）。
     pub async fn invoke_definition(
         &self,
         definition: &ResolvedToolDefinition,
         args: Value,
+        raw_arguments: Option<&str>,
         context: VulcanToolInvocationContext,
     ) -> Result<VulcanToolInvocationResult, String> {
         // Plan mode answers first; only calls it lets through reach the permission gate.
@@ -348,6 +351,7 @@ impl VulcanManagedToolRuntimeBridge {
                 self.session_id,
                 definition,
                 &args,
+                raw_arguments,
                 &context,
                 self.manager.workspace_root(),
             )
@@ -1187,7 +1191,12 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             provider_tool_call_id: Some(request.tool_call_id.clone()),
         };
         let result = match self
-            .invoke_definition(definition, request.arguments.clone(), context)
+            .invoke_definition(
+                definition,
+                request.arguments.clone(),
+                request.raw_arguments.text(),
+                context,
+            )
             .await
         {
             Ok(result) => result,
@@ -1224,6 +1233,7 @@ pub(crate) fn assert_result_payload_cost(
         tool_name: tool.into(),
         arguments: json!({}),
         argument_parse_error: None,
+        raw_arguments: Default::default(),
     };
     let before = canonicalize_tool_invocation_result(&request, before);
     let after = canonicalize_tool_invocation_result(&request, after);

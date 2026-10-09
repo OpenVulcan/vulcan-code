@@ -367,6 +367,7 @@ impl VulcanCoreController {
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
                     argument_parse_error: tool_call.argument_parse_error.clone(),
+                    raw_arguments: tool_call.raw_arguments.clone(),
                 })
                 .collect::<Vec<_>>();
             // malformedArgumentsObserved is decided from the authoritative completed Provider response.
@@ -682,6 +683,7 @@ impl VulcanCoreController {
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
                     argument_parse_error: tool_call.argument_parse_error.clone(),
+                    raw_arguments: tool_call.raw_arguments.clone(),
                 })
                 .collect::<Vec<_>>();
             // malformedArgumentsObserved is true when any call in this authoritative batch is non-executable JSON.
