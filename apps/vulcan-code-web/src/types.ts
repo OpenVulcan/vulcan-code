@@ -12,3 +12,4 @@ export * from "./types/knowledge-base";
 export * from "./types/public-ai";
 export * from "./types/service-events";
 export * from "./types/terminal";
+export * from "./types/permission-judge";

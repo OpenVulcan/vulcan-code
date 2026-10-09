@@ -33,6 +33,7 @@ export type SettingsSubAreaId =
   | "visual-lab"
   | "notifications"
   | "git-commit"
+  | "permission-judge"
   | "prompt-composer"
   | "about-licenses"
   | "archived-restore";

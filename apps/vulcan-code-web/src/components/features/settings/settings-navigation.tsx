@@ -11,6 +11,7 @@ import {
   Palette,
   ScrollText,
   ServerCog,
+  ShieldCheck,
   Settings,
   SlidersHorizontal,
   Stethoscope,
@@ -135,6 +136,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
         { id: "context-basics", label: t("settings.modelBasics"), icon: <SlidersHorizontal size={16} />, description: t("settings.modelBasics.description") },
         { id: "notifications", label: t("settings.notifications"), icon: <Bell size={16} />, description: t("settings.notifications.description") },
         { id: "git-commit", label: t("settings.gitCommit"), icon: <GitCommitHorizontal size={16} />, description: t("settings.gitCommit.description") },
+        { id: "permission-judge", label: t("settings.permissionJudge"), icon: <ShieldCheck size={16} />, description: t("settings.permissionJudge.description") },
       ],
     },
     {

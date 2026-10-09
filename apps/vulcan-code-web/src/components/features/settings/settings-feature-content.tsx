@@ -24,6 +24,7 @@ import { ContextBasicsSettingsArea } from "@/components/features/settings/contex
 import { AiCapabilitiesSettingsArea } from "@/components/features/settings/ai-capabilities-settings";
 import { SettingsPage } from "@/components/features/settings/settings-layout";
 import { NotificationSettingsArea } from "@/components/features/settings/notification-settings-area";
+import { PermissionJudgeSettingsArea } from "@/components/features/settings/permission-judge-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
@@ -121,6 +122,9 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "git-commit") {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
+  }
+  if (props.activeSettingsSubArea === "permission-judge") {
+    return <PermissionJudgeSettingsArea />;
   }
   // The retired composer page resolves to basics while preserving its useful default setting.
   // 已移除的输入组合页跳转到基础设置，并保留有用的默认设置。
