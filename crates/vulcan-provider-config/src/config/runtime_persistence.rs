@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use vulcan_vmm::VmmConfigLayer;
 
+use super::ProjectPermissionJudgeConfiguration;
+
 /// Returns the default enabled state used by persisted runtime entries.
 /// 返回持久化运行时条目使用的默认启用状态。
 fn default_true() -> bool {
@@ -921,4 +923,11 @@ pub struct ProjectVulcanCodeConfigurationFile {
     /// 可选的项目级 VMM 记忆集成覆盖配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
+    /// Project-level permission judge policy choices.
+    /// 项目级权限判定策略选择。
+    #[serde(
+        default,
+        skip_serializing_if = "ProjectPermissionJudgeConfiguration::is_empty"
+    )]
+    pub permission_judge: ProjectPermissionJudgeConfiguration,
 }

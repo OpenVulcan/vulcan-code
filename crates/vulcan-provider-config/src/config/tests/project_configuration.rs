@@ -107,6 +107,7 @@ fn project_configuration_file_roundtrips_vmm_settings() {
             implicit_memory_turns: Some(5),
             ..VmmConfigLayer::default()
         },
+        permission_judge: Default::default(),
     };
 
     save_project_configuration_file(&root, &config).expect("save project config");

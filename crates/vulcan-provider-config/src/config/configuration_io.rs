@@ -162,6 +162,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedPromptConfiguration::is_default"
     )]
     pub prompt: PersistedPromptConfiguration,
+    /// System-level permission judge settings and model registry.
+    /// 系统级权限判定设置与模型登记表。
+    #[serde(
+        default,
+        rename = "permissionJudge",
+        skip_serializing_if = "PersistedPermissionJudgeConfiguration::is_default"
+    )]
+    pub permission_judge: PersistedPermissionJudgeConfiguration,
 }
 
 /// Versioned standalone public AI connection configuration.

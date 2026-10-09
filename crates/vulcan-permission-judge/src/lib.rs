@@ -8,6 +8,7 @@
 //! 全部内容：模型包验证、策略文本、调用渲染、判定规则与 worker 协议。推理位于 `vulcan-judge-host`。
 
 pub mod decision;
+pub mod known;
 pub mod package;
 pub mod policy;
 pub mod protocol;
@@ -15,6 +16,7 @@ pub mod render;
 pub mod runtime;
 
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
+pub use known::{KnownPackage, find_known_package, known_packages};
 pub use package::{
     DigestCache, JudgePackage, MemoryDigestCache, PackageError, PackageSummary, RuntimeConfig,
 };
