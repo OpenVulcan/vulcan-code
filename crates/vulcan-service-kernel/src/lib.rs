@@ -183,6 +183,7 @@ mod native_vmm;
 mod output_style;
 mod pending_prompt_services;
 mod pending_prompts;
+mod permission_judge;
 mod permission_mode;
 mod plugin_environment_install_tasks;
 mod plugin_mcp_secret_store;
@@ -479,6 +480,7 @@ pub fn create_service_bridge_state(
         // Actual original removal resources survive executor failures.
         // 实际原移除资源跨执行器失败存续。
         pending_local_plugin_uninstalls: Arc::new(Default::default()),
+        permission_judge: Arc::new(Default::default()),
         project_resource_catalog_registry: Arc::new(Default::default()),
         session_turn_admission_reservations: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),

@@ -1881,6 +1881,9 @@ fn run_service_bootstrap(
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
     // runtime_guard 在生成 notify 循环期间使保留的服务运行时成为当前运行时。
     let _runtime_guard = runtime.enter();
+    // An enabled local judge warms in the background; failures appear on its settings page.
+    // 已启用的本机判定器在后台预热；失败显示在其设置页。
+    crate::permission_judge::start_permission_judge(state);
     match crate::provider_manifest_sync::start_provider_manifest_sync_monitor(
         state.clone(),
         event_emitter.clone(),

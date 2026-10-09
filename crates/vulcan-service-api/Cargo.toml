@@ -19,6 +19,7 @@ uuid.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
 vulcan-i18n.workspace = true
 vulcan-luaskills-config.workspace = true
+vulcan-permission-judge.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-session-core.workspace = true
 vulcan-vmm.workspace = true

@@ -472,6 +472,17 @@ pub fn resolve_bundled_judge_runtime_root() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_dir())
 }
 
+/// Returns the user-owned root of the judge's managed CUDA runtime, which survives app upgrades.
+/// 返回判定器受管 CUDA 执行库的用户级根目录，应用升级后仍保留。
+///
+/// # Returns
+/// 返回值
+/// The exact `<user-vulcan-root>/code/judge-cuda` directory, or `None` when home is unavailable.
+/// 返回精确的 `<user-vulcan-root>/code/judge-cuda` 目录；无法取得用户主目录时返回 `None`。
+pub fn resolve_judge_cuda_runtime_root() -> Option<PathBuf> {
+    resolve_user_vulcan_code_root().map(|root| root.join("judge-cuda"))
+}
+
 /// Returns the current user's Vulcan plugin installation root.
 /// 返回当前用户的 Vulcan 插件安装根目录。
 ///

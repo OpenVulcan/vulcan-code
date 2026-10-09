@@ -2,6 +2,7 @@
 //! 配置 RPC 路由。
 
 use super::*;
+use crate::permission_judge;
 use crate::system_prompt_settings::{
     service_reset_system_prompt, service_save_system_prompt, service_system_prompt_settings,
 };
@@ -102,6 +103,18 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_finish_mcp_oauth",
     "service_cancel_mcp_oauth",
     "service_remove_mcp_oauth",
+    "service_permission_judge_settings",
+    "service_permission_judge_status",
+    "service_save_permission_judge_settings",
+    "service_register_permission_judge_model",
+    "service_activate_permission_judge_model",
+    "service_rollback_permission_judge_model",
+    "service_remove_permission_judge_model",
+    "service_reload_permission_judge",
+    "service_benchmark_permission_judge",
+    "service_install_permission_judge_cuda",
+    "service_project_permission_judge_policy",
+    "service_save_project_permission_judge_policy",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -685,6 +698,74 @@ pub(super) async fn dispatch(
             crate::mcp_oauth::service_remove_mcp_oauth(
                 state,
                 rpc_required_param(params, "serverId")?,
+            )
+            .await,
+        ),
+        "service_permission_judge_settings" => {
+            rpc_json_result(permission_judge::service_permission_judge_settings(state).await)
+        }
+        "service_permission_judge_status" => {
+            rpc_json_result(permission_judge::service_permission_judge_status(state).await)
+        }
+        "service_save_permission_judge_settings" => rpc_json_result(
+            permission_judge::service_save_permission_judge_settings(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_register_permission_judge_model" => rpc_json_result(
+            permission_judge::service_register_permission_judge_model(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_activate_permission_judge_model" => rpc_json_result(
+            permission_judge::service_activate_permission_judge_model(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_rollback_permission_judge_model" => {
+            rpc_json_result(permission_judge::service_rollback_permission_judge_model(state).await)
+        }
+        "service_remove_permission_judge_model" => rpc_json_result(
+            permission_judge::service_remove_permission_judge_model(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_reload_permission_judge" => {
+            rpc_json_result(permission_judge::service_reload_permission_judge(state).await)
+        }
+        "service_benchmark_permission_judge" => rpc_json_result(
+            permission_judge::service_benchmark_permission_judge(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_install_permission_judge_cuda" => rpc_json_result(
+            permission_judge::service_install_permission_judge_cuda(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_project_permission_judge_policy" => rpc_json_result(
+            permission_judge::service_project_permission_judge_policy(
+                state,
+                rpc_required_param(params, "projectId")?,
+            )
+            .await,
+        ),
+        "service_save_project_permission_judge_policy" => rpc_json_result(
+            permission_judge::service_save_project_permission_judge_policy(
+                state,
+                rpc_required_param(params, "request")?,
             )
             .await,
         ),

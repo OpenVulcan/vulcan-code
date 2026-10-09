@@ -53,6 +53,7 @@ vulcan-i18n.workspace = true
 # 在无控制器进程的情况下服务插件与 VMM 向量存储的进程内 LanceDB 引擎。
 vulcan-lancedb-engine.workspace = true
 vulcan-luaskills-config.workspace = true
+vulcan-permission-judge.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-plugin-runtime.workspace = true
 vulcan-prompt-skills.workspace = true

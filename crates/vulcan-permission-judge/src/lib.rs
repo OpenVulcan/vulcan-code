@@ -14,6 +14,7 @@ pub mod policy;
 pub mod protocol;
 pub mod render;
 pub mod runtime;
+pub mod system;
 
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
 pub use known::{KnownPackage, find_known_package, known_packages};
@@ -23,3 +24,4 @@ pub use package::{
 pub use policy::{JudgePolicy, JudgeSettings, PolicyOption, SettingsError};
 pub use render::render_call;
 pub use runtime::{BundledRuntime, RuntimeError};
+pub use system::{JudgeBackend, JudgeState};

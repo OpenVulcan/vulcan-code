@@ -939,6 +939,9 @@ pub struct ServiceBridgeState {
     /// 相同物理移除原实例跨回调、发布失败及执行器取消存续。
     pub(crate) pending_local_plugin_uninstalls:
         Arc<crate::skills_services::PendingLocalPluginUninstallRegistry>,
+    /// Permission judge settings commands, local worker and CUDA installation.
+    /// 权限判定设置命令、本机 worker 与 CUDA 安装。
+    pub(crate) permission_judge: Arc<crate::permission_judge::PermissionJudgeRuntime>,
     /// Unique project-level resource catalog owners keyed by exact storage partition path.
     /// 按精确存储分区路径索引的唯一项目级资源目录 owner。
     pub(crate) project_resource_catalog_registry:

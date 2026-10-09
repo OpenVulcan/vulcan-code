@@ -176,6 +176,13 @@ impl JudgeHostClient {
         self.child.id()
     }
 
+    /// Whether requests can still reach the worker; false after a transport failure, protocol
+    /// violation or timeout.
+    /// 请求是否仍能到达 worker；传输失败、协议违规或超时后为 false。
+    pub fn is_usable(&self) -> bool {
+        self.broken.is_none()
+    }
+
     /// Verifies and loads a package on exactly `device`; a worker accepts one load.
     /// 在指定 `device` 上验证并加载模型包；一个 worker 只接受一次加载。
     pub async fn load(

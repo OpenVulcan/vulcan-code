@@ -6,35 +6,13 @@
 //! 只有用户保存时才写入；缺省块表示判定器尚未设置，与已关闭不同。
 
 use super::*;
-use vulcan_permission_judge::protocol::JudgeDevice;
+pub use vulcan_permission_judge::protocol::JudgeDevice;
+pub use vulcan_permission_judge::system::{JudgeBackend, JudgeState};
 
 /// Returns whether a persisted boolean is false so the default stays out of JSON.
 /// 判断持久化布尔值是否为 false，使默认值不写入 JSON。
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-/// Whether the user switched the judge off or on; absence means not configured yet.
-/// 用户关闭或启用了判定器；缺省表示尚未设置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionJudgeState {
-    /// The judge layer is not used and its options stay hidden.
-    /// 不使用判定层，且其选项保持隐藏。
-    Off,
-    /// The judge layer runs with the configured backend.
-    /// 判定层使用已设置的后端运行。
-    Enabled,
-}
-
-/// Where calls are judged.
-/// 判定调用的位置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionJudgeBackend {
-    /// The active registered model in a local worker process.
-    /// 在本机 worker 进程中运行的使用中登记模型。
-    Local,
 }
 
 /// One registered local model package; the files stay where the user keeps them.
@@ -80,11 +58,11 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// Off or enabled; absent until the user decides.
     /// 关闭或启用；用户决定前缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<PermissionJudgeState>,
+    pub state: Option<JudgeState>,
     /// Backend used while enabled.
     /// 启用时使用的后端。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend: Option<PermissionJudgeBackend>,
+    pub backend: Option<JudgeBackend>,
     /// Device chosen by the user; absent means the recommended device at load time.
     /// 用户选择的设备；缺省表示加载时使用推荐设备。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,8 +266,8 @@ mod tests {
     #[test]
     fn settings_round_trip_with_wire_names() {
         let mut settings = PersistedPermissionJudgeConfiguration {
-            state: Some(PermissionJudgeState::Enabled),
-            backend: Some(PermissionJudgeBackend::Local),
+            state: Some(JudgeState::Enabled),
+            backend: Some(JudgeBackend::Local),
             device: Some(JudgeDevice::WebGpu),
             ..Default::default()
         };
