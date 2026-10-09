@@ -8,3 +8,7 @@
 # Keep the dependency patch hash stable on Windows and Unix checkouts.
 # 保证依赖补丁摘要在 Windows 与 Unix 检出后保持一致。
 /apps/vulcan-code-web/patches/*.patch text eol=lf
+
+# Bundled provider manifests are verified by SHA-256 over their exact bytes; keep LF on every platform.
+# 内置供应商清单按精确字节做 SHA-256 校验；在所有平台保持 LF。
+/crates/vulcan-runtime-assets/resources/provider-manifests/**/*.json text eol=lf
