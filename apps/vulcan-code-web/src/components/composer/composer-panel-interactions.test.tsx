@@ -43,7 +43,7 @@ let host: HTMLDivElement;
 function composerProps(overrides: Partial<React.ComponentProps<typeof ComposerPanel>> = {}): React.ComponentProps<typeof ComposerPanel> {
   return {
     attachmentCapabilities: [{ kind: "file", label: "Files", enabled: true, native: false, bridged: true, accept: "*/*" }],
-    projectId: "panel-test-project", conversationId: "panel-test-session", contextUsage: null,
+    projectId: "panel-test-project", conversationId: "panel-test-session", contextUsage: null, defaultAnswerMode: "standard",
     slashCommands: [], pendingPrompts: [], sessionGoal: null, sessionTodolist: null, sessionReviewSummary: null,
     sessionPlanMode: null, sessionVmmPolicy: null, sessionOutputStyle: null,
     outputStyleCatalog: { defaultId: "default", selectedId: "default", entries: [] },

@@ -17,12 +17,14 @@ use vulcan_service_api::{
 };
 use vulcan_session_core::v1::config::AnswerMode;
 
-/// Returns the persisted global answer mode copied into new sessions.
-/// 返回复制到新会话的已持久化全局回答模式。
+/// Returns the global answer mode copied into new sessions: the user's explicit choice, or the
+/// session contract's system default when none was made.
+/// 返回复制到新会话的全局回答模式：用户的显式选择；未选择时采用会话契约的系统默认值。
 pub(crate) fn global_answer_mode(configuration: &ProviderConfigurationFile) -> AnswerMode {
     match configuration.prompt.answer_mode {
-        PersistedAnswerModeSelection::Standard => AnswerMode::Standard,
-        PersistedAnswerModeSelection::Interactive => AnswerMode::Interactive,
+        Some(PersistedAnswerModeSelection::Standard) => AnswerMode::Standard,
+        Some(PersistedAnswerModeSelection::Interactive) => AnswerMode::Interactive,
+        None => AnswerMode::default(),
     }
 }
 
@@ -41,7 +43,7 @@ pub(crate) async fn service_save_prompt_answer_mode(
         &state,
         "保存回答模式设置失败",
         |configuration| {
-            configuration.prompt.answer_mode = selection;
+            configuration.prompt.answer_mode = Some(selection);
             Ok(())
         },
         |guard, configuration| {

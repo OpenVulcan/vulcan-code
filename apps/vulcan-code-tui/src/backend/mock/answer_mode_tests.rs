@@ -10,7 +10,14 @@ fn answer_mode_mock_follows_compare_and_set() {
     let (out, events) = mpsc::channel();
     let mut world = World::new(out, Pacing::Immediate);
     let id = uuid::Uuid::new_v4().to_string();
-    world.logs.insert(id.clone(), ConversationLog::default());
+    // An explicit starting mode keeps the test about compare-and-set, not the system default.
+    // 显式起始模式使测试只关注比较交换，而非系统默认值。
+    let mut log = ConversationLog::default();
+    log.answer_mode.mode = Some(AnswerModePreference {
+        mode: AnswerMode::Standard,
+        ..AnswerModePreference::default()
+    });
+    world.logs.insert(id.clone(), log);
     for mode in [AnswerMode::Interactive, AnswerMode::Standard] {
         world.handle(Command::SetSessionAnswerMode(
             vulcan_service_api::SessionAnswerModeUpdateRequest {
@@ -42,10 +49,10 @@ fn new_conversations_copy_the_global_default_once() {
     world.handle(Command::NewConversation { project_id: None });
     let before = world.conversations[0].id.clone();
     world.handle(Command::Call(
-        crate::service_api::settings_actions::save_prompt_answer_mode("interactive"),
+        crate::service_api::settings_actions::save_prompt_answer_mode("standard"),
     ));
     world.handle(Command::NewConversation { project_id: None });
     let after = world.conversations[0].id.clone();
-    assert_eq!(mode_of(&world, &before), AnswerMode::Standard);
-    assert_eq!(mode_of(&world, &after), AnswerMode::Interactive);
+    assert_eq!(mode_of(&world, &before), AnswerMode::default());
+    assert_eq!(mode_of(&world, &after), AnswerMode::Standard);
 }

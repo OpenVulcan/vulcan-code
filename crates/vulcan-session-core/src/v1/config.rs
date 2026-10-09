@@ -589,17 +589,30 @@ pub struct SessionConfig {
 }
 
 /// How assistant replies are presented: plain Markdown, or Markdown plus `ui-*` answer components.
+/// The default is the system default for users who never chose a mode; this is its only definition.
 /// 助手回复的呈现方式：普通 Markdown，或 Markdown 加 `ui-*` 回答组件。
+/// 默认值即从未选择模式的用户所用的系统默认值，此处是其唯一定义。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerMode {
     /// Ordinary Markdown with the always-available diagrams, images and links.
     /// 普通 Markdown，以及始终可用的图表、图片与链接。
-    #[default]
     Standard,
     /// Adds the `ui-*` component guidance and interactive-page workflow.
     /// 追加 `ui-*` 组件指引与交互页面流程。
+    #[default]
     Interactive,
+}
+
+impl AnswerMode {
+    /// Returns the serialized wire name, for generated client constants.
+    /// 返回序列化的传输名称，供生成的客户端常量使用。
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Interactive => "interactive",
+        }
+    }
 }
 
 /// Effective answer mode captured at a business request's preparation boundary.
@@ -1074,6 +1087,15 @@ impl MetadataDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every answer mode's wire name equals its serde form.
+    /// 每个回答模式的传输名称等于其 serde 形式。
+    #[test]
+    fn answer_mode_wire_name_matches_serde() {
+        for mode in [AnswerMode::Standard, AnswerMode::Interactive] {
+            assert_eq!(serde_json::to_value(mode).unwrap(), mode.wire_name());
+        }
+    }
 
     /// The metadata document serializes with the exact frozen contract values.
     /// 元数据文档使用精确冻结的契约值序列化。

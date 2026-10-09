@@ -249,7 +249,7 @@ export interface WorkbenchSnapshot {
   outputStyleCatalog: OutputStyleCatalogSummary;
   // Persisted global answer mode copied into new conversations.
   // 复制到新会话的已持久化全局回答模式。
-  defaultAnswerMode?: AnswerMode;
+  defaultAnswerMode: AnswerMode;
   // Composer slash commands projected by the shared service command catalog.
   // 共享服务指令目录投影出的输入区 slash 指令。
   composerSlashCommands?: ComposerSlashCommandSummary[];

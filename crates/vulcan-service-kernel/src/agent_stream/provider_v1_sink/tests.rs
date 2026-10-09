@@ -158,9 +158,13 @@ fn published_stored_open_turn() -> (tempfile::TempDir, Arc<SessionHandle>) {
         1,
     )
     .unwrap();
-    let document = vulcan_workspace_store::workspace_store::load_session_v1_full(&locator)
+    let mut document = vulcan_workspace_store::workspace_store::load_session_v1_full(&locator)
         .unwrap()
         .document;
+    // Request-message assertions assume no component guidance unless a test switches modes.
+    // 请求消息断言假定没有组件指引，除非测试主动切换模式。
+    document.metadata.config.answer_mode.mode =
+        vulcan_session_core::v1::config::AnswerMode::Standard;
     let handle = SessionHandle::new(id, locator, document);
     handle.initialize_root_usage(false, 1);
     handle

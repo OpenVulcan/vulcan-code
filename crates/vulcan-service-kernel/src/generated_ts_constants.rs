@@ -95,6 +95,12 @@ fn web_module() -> String {
                 "Most value series one ui-chart carries, equal to the chart palette size.",
                 "单个 ui-chart 承载的最多数值系列数，等于图表配色数量。",
             ),
+            Constant::Text(
+                "DEFAULT_ANSWER_MODE",
+                vulcan_session_core::v1::config::AnswerMode::default().wire_name(),
+                "System default answer mode for users who never chose one.",
+                "从未选择回答模式的用户所用的系统默认回答模式。",
+            ),
         ],
     )
 }

@@ -82,7 +82,7 @@ export function ComposerPanel(props: {
   answerModeState?: AnswerModeOwner | null;
   // Global answer mode a new conversation copies unless its draft chooses one.
   // 新会话在草稿未选择时复制的全局回答模式。
-  defaultAnswerMode?: AnswerMode;
+  defaultAnswerMode: AnswerMode;
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -348,7 +348,7 @@ export function ComposerPanel(props: {
   // draftSessionSettings owns overrides that cannot be persisted until a new conversation materializes.
   // draftSessionSettings 持有新会话物化前无法持久化的覆盖项。
   const { draftSessionSettings, answerMode } = useComposerSessionSettings(
-    draftSlotKey, props.conversationId, props.answerModeState ?? null, props.defaultAnswerMode ?? "standard",
+    draftSlotKey, props.conversationId, props.answerModeState ?? null, props.defaultAnswerMode,
   );
   // providerToolSettingsBlocked mirrors explicit session conflicts into the send boundary.
   // providerToolSettingsBlocked 将显式会话冲突映射到发送边界。

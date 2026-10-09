@@ -22,6 +22,9 @@ fn answer_mode_live_preference_waits_for_actual_durable_publication() {
         SessionMutationAdmission::MetadataOnly,
         SessionFlushReason::MetadataChanged,
         |document| {
+            // Start from an explicit standard mode so the switch is a real change.
+            // 从显式标准模式开始，使切换成为真实变化。
+            document.metadata.config.answer_mode.mode = AnswerMode::Standard;
             assert!(document.set_answer_mode(AnswerMode::Interactive, 0, 2)?);
             Ok(SessionMutationChange::Changed(()))
         },

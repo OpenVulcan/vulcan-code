@@ -10,15 +10,17 @@
 
 ## 模式语义
 
-- 回答模式只有 `standard`（默认）与 `interactive` 两值，与输出风格相互独立：输出风格决定语气与
+- 回答模式只有 `standard` 与 `interactive`（系统默认）两值，与输出风格相互独立：输出风格决定语气与
   篇幅，回答模式决定最终回答的呈现形式：标准模式只用普通 Markdown；互动模式要求最终回答优先以 `ui-*`
   组件呈现（凡有合适组件即不用 Markdown 列表或表格），散文只用于一两句结论、衔接文字及无结构的极短回答，
   工作中的进度说明仍用普通 Markdown。是否使用组件不交由模型自行判断。
 - `SessionConfig.answer_mode` 是会话唯一权威，含 `mode`、独立比较交换 `revision` 与可空
   `prepared` 快照。`service_set_session_answer_mode` 接收 `sessionId`、`mode`、`expectedRevision`，
   冲突时返回当前值，不自动覆盖或重试；生成中只保存期望，下一请求生效。
-- 全局默认存于提示词配置 `answerMode`（缺省即 `standard`，不回写），通过
-  `service_save_prompt_answer_mode` 保存，并在工作台快照 `defaultAnswerMode` 中投影。
+- 系统默认只定义于 `AnswerMode` 的 `Default`（`interactive`），WebUI 浏览器回退快照经生成常量
+  `DEFAULT_ANSWER_MODE` 派生，TUI 直接引用该类型。提示词配置 `answerMode` 只记录用户的明确选择：缺省表示
+  从未手动设置，读取时采用系统默认且不回写；通过 `service_save_prompt_answer_mode` 保存，并在工作台快照
+  `defaultAnswerMode` 中投影。子代理会话固定为 `standard`，其回复由父模型而非用户阅读。
 - **快照语义**：新会话在首次提交物化时一次性取得草稿显式选择（`sessionSettings.answerMode`），
   缺省时复制当时的全局默认。之后修改全局默认不影响任何已有会话；明确分叉继承期望并重置准备快照。
 - 元数据模式 3 → 4 将旧 `html_answers.enabled` 映射为 `interactive`/`standard`，见

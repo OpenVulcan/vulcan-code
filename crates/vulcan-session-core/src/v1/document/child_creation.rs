@@ -29,6 +29,9 @@ fn initial_child_document(
     // Allocate through production transitions; no numeric turn or generation is guessed.
     // 通过生产转换分配，不猜测数字回合或代次。
     let mut document = SessionDocument::new(session_id, project_tag, title, created_at_ms);
+    // A child's replies are read by its parent model, so it never takes the user-facing default.
+    // 子任务的回复由父模型读取，因此不采用面向用户的默认回答模式。
+    document.metadata.config.answer_mode.mode = crate::v1::config::AnswerMode::Standard;
     document.submit_root_input(
         ClientInputSubmission::new(ClientActionId::try_new(execution_id)?, prompt, vec![]),
         created_at_ms,

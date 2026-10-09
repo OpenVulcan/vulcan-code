@@ -156,17 +156,25 @@ pub(super) fn context(app: &App) -> Vec<Row> {
     // Authoritative workbench.
     // 工作台权威状态。
     let wb = app.slots.value(Slot::Workbench);
-    // The global default is copied into conversations created afterwards; absence means standard.
-    // 全局默认会复制进之后新建的会话；缺省即标准模式。
+    // The global default is copied into conversations created afterwards; before the workbench
+    // loads, the row shows the session contract's system default.
+    // 全局默认会复制进之后新建的会话；工作台载入前，该行显示会话契约的系统默认值。
+    use vulcan_session_core::v1::config::AnswerMode;
     let answer_mode = s(wb, "/defaultAnswerMode");
     rows.push(choice(
         tr!("answerMode.globalDefault"),
         vec![
-            ("standard".into(), tr!("answerMode.standard")),
-            ("interactive".into(), tr!("answerMode.interactive")),
+            (
+                AnswerMode::Standard.wire_name().into(),
+                tr!("answerMode.standard"),
+            ),
+            (
+                AnswerMode::Interactive.wire_name().into(),
+                tr!("answerMode.interactive"),
+            ),
         ],
         if answer_mode.is_empty() {
-            "standard".into()
+            AnswerMode::default().wire_name().into()
         } else {
             answer_mode
         },

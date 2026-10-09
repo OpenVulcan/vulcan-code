@@ -132,7 +132,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         onOpenUsageStatistics={props.onOpenUsageStatistics}
         outputStyleSettings={<>
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
-          <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode ?? "standard"} />
+          <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode} />
           <ToolCollapseSettingsSection />
           <ThinkingPopupSettingsSection />
           <ConversationLinkSettingsSection />

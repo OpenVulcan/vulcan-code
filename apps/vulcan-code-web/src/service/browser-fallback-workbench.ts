@@ -3,6 +3,7 @@ import type {
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
+import { DEFAULT_ANSWER_MODE } from "@/generated/protocol-limits";
 
 // BROWSER_PREVIEW_USER_VULCAN_ROOT is the build-profile-specific user root shown by browser fallback data.
 // BROWSER_PREVIEW_USER_VULCAN_ROOT 是浏览器回退数据展示的按构建配置区分的用户根目录。
@@ -69,6 +70,7 @@ const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
 const browserFallbackWorkbench: WorkbenchSnapshot = {
   revision: 0,
   appVersion: "0.1.0",
+  defaultAnswerMode: DEFAULT_ANSWER_MODE,
   modules: [
     { id: "core", label: "Core Service", status: "warning", message: "Browser preview mode" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "Waiting for live status" },

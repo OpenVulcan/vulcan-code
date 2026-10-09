@@ -789,26 +789,18 @@ impl PersistedPromptOutputStyleSelection {
     }
 }
 
-/// Persisted answer mode copied into each new conversation.
-/// 复制到每个新会话的持久化回答模式。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Persisted answer mode the user explicitly chose for new conversations. It has no default of its
+/// own: the system default lives in the session contract.
+/// 用户为新会话显式选择的持久化回答模式。它没有自身的默认值：系统默认值由会话契约持有。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PersistedAnswerModeSelection {
     /// Ordinary Markdown answers.
     /// 普通 Markdown 回答。
-    #[default]
     Standard,
     /// Markdown plus native answer components.
     /// Markdown 加原生回答组件。
     Interactive,
-}
-
-impl PersistedAnswerModeSelection {
-    /// Returns whether this selection is the persisted default.
-    /// 返回该选择是否为持久化默认值。
-    pub const fn is_default(&self) -> bool {
-        matches!(self, Self::Standard)
-    }
 }
 
 /// Prompt-composer configuration persisted in the shared Vulcan file.
@@ -830,13 +822,12 @@ pub struct PersistedPromptConfiguration {
         skip_serializing_if = "PersistedPromptOutputStyleSelection::is_default"
     )]
     pub output_style: PersistedPromptOutputStyleSelection,
-    /// Default answer mode applied when a new conversation is materialized.
-    /// 新会话物化时使用的默认回答模式。
-    #[serde(
-        default,
-        skip_serializing_if = "PersistedAnswerModeSelection::is_default"
-    )]
-    pub answer_mode: PersistedAnswerModeSelection,
+    /// Answer mode the user chose for new conversations; absent means no manual choice, so the
+    /// system default owned by the session contract applies. An explicit choice is always written.
+    /// 用户为新会话选择的回答模式；缺省表示未手动设置，此时采用会话契约持有的系统默认值。
+    /// 显式选择一律写入。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_mode: Option<PersistedAnswerModeSelection>,
 }
 
 impl Default for PersistedPromptConfiguration {
@@ -846,7 +837,7 @@ impl Default for PersistedPromptConfiguration {
         Self {
             personality: PersistedPromptPersonalitySelection::Default,
             output_style: PersistedPromptOutputStyleSelection::Balanced,
-            answer_mode: PersistedAnswerModeSelection::Standard,
+            answer_mode: None,
         }
     }
 }

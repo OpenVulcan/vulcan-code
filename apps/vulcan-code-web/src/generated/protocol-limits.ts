@@ -24,3 +24,7 @@ export const ANSWER_COMPONENT_MAX_ROWS = 128;
 /** Most value series one ui-chart carries, equal to the chart palette size.
  * 单个 ui-chart 承载的最多数值系列数，等于图表配色数量。 */
 export const ANSWER_CHART_MAX_SERIES = 8;
+
+/** System default answer mode for users who never chose one.
+ * 从未选择回答模式的用户所用的系统默认回答模式。 */
+export const DEFAULT_ANSWER_MODE = "interactive";

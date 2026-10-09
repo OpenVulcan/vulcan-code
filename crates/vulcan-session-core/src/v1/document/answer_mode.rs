@@ -154,6 +154,9 @@ mod tests {
     #[test]
     fn answer_mode_save_is_independent_and_revision_checked() {
         let mut document = SessionDocument::new("mode", "p", "t", 1);
+        // Start from an explicit standard mode so the test does not depend on the system default.
+        // 从显式标准模式开始，使测试不依赖系统默认值。
+        document.metadata.config.answer_mode.mode = STANDARD;
         document
             .submit_root_input_fixture("hello", Vec::new(), 2)
             .unwrap();
@@ -196,6 +199,9 @@ mod tests {
     #[test]
     fn answer_mode_preparation_only_emits_observed_changes() {
         let mut document = SessionDocument::new("mode", "p", "t", 1);
+        // Start from an explicit standard mode so the test does not depend on the system default.
+        // 从显式标准模式开始，使测试不依赖系统默认值。
+        document.metadata.config.answer_mode.mode = STANDARD;
         document
             .submit_root_input_fixture("hello", Vec::new(), 2)
             .unwrap();
