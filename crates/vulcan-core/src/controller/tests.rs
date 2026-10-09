@@ -485,9 +485,32 @@ fn build_test_config(max_turns: usize) -> ControllerConfig {
 /// 验证仅附件用户出现是播种回合的有效 Provider 可见输入。
 #[test]
 fn attachment_only_user_input_is_valid_seed() {
-    // snapshot models the canonical V1 attachment-only prompt after logical resource projection.
-    // snapshot 模拟逻辑资源投影后的规范 V1 仅附件提示词。
-    let snapshot = ConversationSnapshot {
+    assert!(conversation_snapshot_has_seeded_provider_input(
+        &attachment_only_snapshot()
+    ));
+}
+
+/// A blank prompt reuses a seeded attachment-only message and is rejected without one.
+/// 空白提示词复用已播种的仅附件消息，没有该消息时被拒绝。
+#[test]
+fn blank_prompt_opens_only_a_seeded_attachment_turn() {
+    let mut seeded = VulcanCoreController::new(build_test_config(4), attachment_only_snapshot())
+        .expect("valid core conversation snapshot");
+    seeded
+        .open_user_turn("")
+        .expect("seeded attachments open the turn");
+    assert_eq!(seeded.snapshot().messages.len(), 1);
+
+    let mut empty =
+        VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default())
+            .expect("valid core conversation snapshot");
+    assert!(empty.open_user_turn("").is_err());
+}
+
+/// Builds the canonical V1 attachment-only prompt after logical resource projection.
+/// 构建逻辑资源投影后的规范 V1 仅附件提示词。
+fn attachment_only_snapshot() -> ConversationSnapshot {
+    ConversationSnapshot {
         messages: vec![ConversationMessage {
             id: String::from("attachment-only-user"),
             payload: ConversationPayload::UserText {
@@ -508,9 +531,7 @@ fn attachment_only_user_input_is_valid_seed() {
             },
         }],
         ..ConversationSnapshot::default()
-    };
-
-    assert!(conversation_snapshot_has_seeded_provider_input(&snapshot));
+    }
 }
 
 /// Verifies inter-agent injections stay provider-visible but transcript-hidden.

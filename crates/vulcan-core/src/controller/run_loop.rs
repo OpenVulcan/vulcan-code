@@ -258,6 +258,34 @@ impl VulcanCoreController {
         })
     }
 
+    /// Opens a user turn from `trimmed_prompt`, reusing a host-preseeded user message when it already matches.
+    /// 以 `trimmed_prompt` 打开用户回合；宿主已预播种的匹配用户消息会被复用。
+    /// A blank prompt is valid only when the host seeded an attachment-only user message, which is then reused.
+    /// 空白提示词仅在宿主已播种仅附件用户消息时有效，此时直接复用该消息。
+    /// Returns an error, after marking the controller failed, for a blank prompt without seeded attachments.
+    /// 对没有已播种附件的空白提示词，标记控制器失败后返回错误。
+    pub(super) fn open_user_turn(&mut self, trimmed_prompt: &str) -> Result<(), CoreError> {
+        if trimmed_prompt.is_empty() {
+            let seeded_attachments = matches!(
+                self.snapshot.messages.last().map(|message| &message.payload),
+                Some(ConversationPayload::UserText { text, attachments })
+                    if text.trim().is_empty() && !attachments.is_empty()
+            );
+            if seeded_attachments {
+                return Ok(());
+            }
+            let error = CoreError::InvalidState {
+                message: String::from("控制器无法执行空白用户输入。"),
+            };
+            self.mark_failed(error.to_string());
+            return Err(error);
+        }
+        if self.should_append_user_turn(trimmed_prompt)? {
+            self.append_user_turn(trimmed_prompt, Vec::new());
+        }
+        Ok(())
+    }
+
     /// Runs one complete user-authored turn through the host-owned provider and tool loop until the assistant settles.
     /// 运行一次完整的用户输入回合，并由宿主自有 Provider 与工具循环持续推进直到助手稳定结束。
     pub async fn run_user_turn<A, E, P>(
@@ -273,18 +301,7 @@ impl VulcanCoreController {
         P: VulcanToolPolicy,
     {
         let user_prompt = user_prompt.into();
-        let trimmed_prompt = user_prompt.trim();
-        if trimmed_prompt.is_empty() {
-            let error = CoreError::InvalidState {
-                message: String::from("控制器无法执行空白用户输入。"),
-            };
-            self.mark_failed(error.to_string());
-            return Err(error);
-        }
-
-        if self.should_append_user_turn(trimmed_prompt)? {
-            self.append_user_turn(trimmed_prompt, Vec::new());
-        }
+        self.open_user_turn(user_prompt.trim())?;
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
         // malformedToolCorrectionUsed limits malformed Provider arguments to one model correction round.
@@ -461,18 +478,7 @@ impl VulcanCoreController {
         I: FnMut(&mut Self) -> Result<bool, CoreError> + Send,
     {
         let user_prompt = user_prompt.into();
-        let trimmed_prompt = user_prompt.trim();
-        if trimmed_prompt.is_empty() {
-            let error = CoreError::InvalidState {
-                message: String::from("控制器无法执行空白用户输入。"),
-            };
-            self.mark_failed(error.to_string());
-            return Err(error);
-        }
-
-        if self.should_append_user_turn(trimmed_prompt)? {
-            self.append_user_turn(trimmed_prompt, Vec::new());
-        }
+        self.open_user_turn(user_prompt.trim())?;
         self.run_provider_tool_streaming_loop(
             adapter,
             executor,
