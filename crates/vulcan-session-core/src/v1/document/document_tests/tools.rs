@@ -428,6 +428,14 @@ fn tool_progress_transitions_are_idempotent() -> Result<(), DomainError> {
     let waiting_revision = doc.memory_revision();
     assert!(!doc.mark_tool_waiting_user(api, tool, T0 + 50)?);
     assert_eq!(doc.memory_revision(), waiting_revision);
+
+    // An approved or denied permission request returns the tool to Running exactly once.
+    // 已批准或已拒绝的权限请求把工具恰好一次恢复为 Running。
+    assert!(doc.resume_waiting_tool(api, tool, T0 + 6)?);
+    assert_eq!(doc.tool_status(api, tool)?, ToolCallStatus::Running);
+    let resumed_revision = doc.memory_revision();
+    assert!(!doc.resume_waiting_tool(api, tool, T0 + 60)?);
+    assert_eq!(doc.memory_revision(), resumed_revision);
     Ok(())
 }
 

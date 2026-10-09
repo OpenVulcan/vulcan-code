@@ -24,6 +24,9 @@ use crate::agent_runtime::tool_runtime_bridge::{
     build_tool_failure_invocation_result, canonicalize_tool_invocation_result,
 };
 
+mod approval;
+pub use approval::{APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, ToolApprovalPrompt};
+
 /// Fallible callback invoked whenever pending-question visibility changes.
 /// 待回答问题可见性变化时触发的可失败回调。
 pub type PendingQuestionChangeCallback =
@@ -54,6 +57,14 @@ pub enum PendingQuestionDurabilityAction {
         /// Canonical controller result that the running tool will return unchanged.
         /// 运行中工具随后将原样返回的规范控制器结果。
         result: CoreToolInvocationResult,
+    },
+    /// An approved or denied permission request returns its tool to Running before the future
+    /// resumes; the tool body, or the denial, completes it afterwards.
+    /// 已批准或已拒绝的权限请求在 future 恢复前把工具恢复为 Running；之后由工具主体或拒绝结果完成它。
+    Resumed {
+        /// Canonical pending approval request and exact local invocation identity.
+        /// 规范待审批请求与精确本地调用身份。
+        request: QuestionRequest,
     },
     /// The exact cancellation result must become durable before the future resumes with rejection.
     /// 精确取消结果必须在 future 以拒绝恢复前可靠落盘。
@@ -162,6 +173,9 @@ pub struct QuestionRequest {
     /// Ordered structured prompts that still need user answers.
     /// 仍然需要用户作答的有序结构化提示集合。
     pub questions: Vec<QuestionPrompt>,
+    /// Permission facts when this request approves a gated tool call instead of asking questions.
+    /// 当该请求审批受闸门管控的工具调用而非提问时，携带的权限事实。
+    pub approval: Option<ToolApprovalPrompt>,
 }
 
 /// Canonical reply payload returned to the model once the user has answered every pending question.
@@ -331,6 +345,38 @@ impl QuestionRuntime {
         questions: Vec<QuestionPrompt>,
     ) -> Result<QuestionReply, String> {
         validate_question_prompts(&questions)?;
+        self.suspend(
+            session_id,
+            request_stream_id,
+            api_call_id,
+            tool_call_id,
+            controller_tool_call_id,
+            provider_tool_call_id,
+            tool_name,
+            tool_arguments,
+            questions,
+            None,
+        )
+        .await
+    }
+
+    /// Registers one pending request, commits it as WaitingUser, and waits for the user.
+    /// 注册一条待处理请求，可靠提交为 WaitingUser，并等待用户处理。
+    /// Shared by Ask and permission approvals; `approval` selects how replies are committed.
+    /// 由 Ask 与权限审批共用；`approval` 决定回复的提交方式。
+    async fn suspend(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        request_stream_id: RequestStreamId,
+        api_call_id: ApiCallId,
+        tool_call_id: ToolCallId,
+        controller_tool_call_id: String,
+        provider_tool_call_id: Option<String>,
+        tool_name: String,
+        tool_arguments: Value,
+        questions: Vec<QuestionPrompt>,
+        approval: Option<ToolApprovalPrompt>,
+    ) -> Result<QuestionReply, String> {
         if tool_name.trim().is_empty() || tool_name.trim() != tool_name {
             return Err(String::from(
                 "The Ask tool name must be exact, non-empty, and free of surrounding whitespace.",
@@ -392,6 +438,7 @@ impl QuestionRuntime {
                 tool_arguments,
                 sequence,
                 questions,
+                approval,
             };
             pending.insert(request_id.clone(), PendingQuestionEntry { request, sender });
         }
@@ -474,11 +521,14 @@ impl QuestionRuntime {
             let Some(request) = pending.get(request_id).map(|entry| entry.request.clone()) else {
                 return Ok(false);
             };
-            let result = build_question_core_result(&request, &reply)?;
-            Self::commit_question_durability(
-                durability_callback.as_ref(),
-                PendingQuestionDurabilityAction::Answered { request, result },
-            )?;
+            let action = if request.approval.is_some() {
+                approval::validate_approval_answers(&reply.answers)?;
+                PendingQuestionDurabilityAction::Resumed { request }
+            } else {
+                let result = build_question_core_result(&request, &reply)?;
+                PendingQuestionDurabilityAction::Answered { request, result }
+            };
+            Self::commit_question_durability(durability_callback.as_ref(), action)?;
             pending.remove(request_id).ok_or_else(|| {
                 format!(
                     "The pending question request `{request_id}` disappeared during reply commit."
@@ -1271,8 +1321,9 @@ mod tests {
                     Err(String::from("simulated answer persistence failure"))
                 }
                 PendingQuestionDurabilityAction::Answered { .. } => Ok(()),
-                PendingQuestionDurabilityAction::Cancelled { .. } => {
-                    panic!("answer retry test must not cancel the Ask")
+                PendingQuestionDurabilityAction::Cancelled { .. }
+                | PendingQuestionDurabilityAction::Resumed { .. } => {
+                    panic!("answer retry test must not cancel or resume the Ask")
                 }
             })))
             .expect("conditional durability callback should install");
@@ -1337,8 +1388,9 @@ mod tests {
                     Err(String::from("simulated cancellation persistence failure"))
                 }
                 PendingQuestionDurabilityAction::Cancelled { .. } => Ok(()),
-                PendingQuestionDurabilityAction::Answered { .. } => {
-                    panic!("cancellation retry test must not answer the Ask")
+                PendingQuestionDurabilityAction::Answered { .. }
+                | PendingQuestionDurabilityAction::Resumed { .. } => {
+                    panic!("cancellation retry test must not answer or resume the Ask")
                 }
             })))
             .expect("conditional durability callback should install");
@@ -1804,6 +1856,7 @@ mod tests {
                         tool_arguments: test_tool_arguments(),
                         sequence: 1,
                         questions: Vec::new(),
+                        approval: None,
                     },
                     sender: reply_sender,
                 },
@@ -1823,6 +1876,7 @@ mod tests {
                         tool_arguments: test_tool_arguments(),
                         sequence: 2,
                         questions: Vec::new(),
+                        approval: None,
                     },
                     sender: reject_sender,
                 },
@@ -1912,6 +1966,7 @@ mod tests {
                         tool_arguments: test_tool_arguments(),
                         sequence: 1,
                         questions: Vec::new(),
+                        approval: None,
                     },
                     sender: reply_sender,
                 },
@@ -1931,6 +1986,7 @@ mod tests {
                         tool_arguments: test_tool_arguments(),
                         sequence: 2,
                         questions: Vec::new(),
+                        approval: None,
                     },
                     sender: reject_sender,
                 },

@@ -42,13 +42,57 @@ fn native(id: &str) -> ResolvedToolDefinition {
     )
 }
 
-/// Fixed-mode host used to drive the gate.
-/// 用于驱动闸门的固定模式宿主。
-struct FixedHost(Result<PermissionMode, String>);
+/// Fixed host used to drive the gate: a mode, an approval answer, and the prompts it received.
+/// 用于驱动闸门的固定宿主：一个模式、一个审批回答以及它收到的提示。
+struct FixedHost {
+    mode: Result<PermissionMode, String>,
+    approval: Result<bool, String>,
+    prompts: std::sync::Mutex<Vec<(String, ToolApprovalPrompt)>>,
+}
 
+impl FixedHost {
+    /// Builds a host with `mode` that answers every approval with `approval`.
+    /// 构建一个模式为 `mode`、对每次审批都回答 `approval` 的宿主。
+    fn new(mode: Result<PermissionMode, String>, approval: Result<bool, String>) -> Arc<Self> {
+        Arc::new(Self {
+            mode,
+            approval,
+            prompts: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait::async_trait]
 impl ToolPermissionHost for FixedHost {
     fn permission_mode(&self, _session_id: SessionId) -> Result<PermissionMode, String> {
-        self.0.clone()
+        self.mode.clone()
+    }
+
+    async fn request_approval(
+        &self,
+        _session_id: SessionId,
+        _context: VulcanToolInvocationContext,
+        tool_name: String,
+        _arguments: Value,
+        prompt: ToolApprovalPrompt,
+    ) -> Result<bool, String> {
+        self.prompts.lock().unwrap().push((tool_name, prompt));
+        self.approval.clone()
+    }
+}
+
+/// Exact coordinates of one synthetic tool call.
+/// 一次合成工具调用的精确坐标。
+fn context() -> VulcanToolInvocationContext {
+    use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
+    VulcanToolInvocationContext {
+        session_id: SessionId::nil().to_string(),
+        request_stream_id: RequestStreamId::try_new("gate-stream").unwrap(),
+        api_call_id: ApiCallId::try_new(1).unwrap(),
+        tool_call_id: ToolCallId::try_new(1).unwrap(),
+        tool_seq: Seq::try_new(3).unwrap(),
+        controller_tool_call_id: String::from("gate-call"),
+        provider_tool_call_id: None,
     }
 }
 
@@ -314,32 +358,86 @@ fn rules_follow_the_mode_table() {
 }
 
 #[tokio::test]
-async fn gate_denies_writes_in_read_only_mode_and_fails_closed() {
+async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
     let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().to_path_buf();
     let edit = native(FILE_EDIT_TOOL_ID);
     let args = json!({"path": "src/x.rs"});
     let session = SessionId::nil();
-    let verdict = |host: Arc<dyn ToolPermissionHost>| {
+    let admit = |host: Arc<FixedHost>, args: Value| {
         let edit = edit.clone();
-        let args = args.clone();
-        let root = workspace.path().to_path_buf();
-        async move { admit_tool_call(Some(&host), session, &edit, &args, Some(&root)).await }
+        let root = root.clone();
+        async move {
+            let host: Arc<dyn ToolPermissionHost> = host;
+            admit_tool_call(Some(&host), session, &edit, &args, &context(), Some(&root)).await
+        }
     };
 
+    // Read-only escalates even in-workspace writes; the user's answer decides.
+    // 只读模式连工作区内写入也会升级；由用户的回答决定。
+    let approving = FixedHost::new(Ok(PermissionMode::ReadOnly), Ok(true));
     assert_eq!(
-        verdict(Arc::new(FixedHost(Ok(PermissionMode::ReadOnly)))).await,
-        ToolPermissionVerdict::Deny(String::from(READ_ONLY_DENIAL))
-    );
-    assert_eq!(
-        verdict(Arc::new(FixedHost(Err(String::from("gone"))))).await,
-        ToolPermissionVerdict::Deny(String::from(MODE_UNAVAILABLE_DENIAL))
-    );
-    assert_eq!(
-        verdict(Arc::new(FixedHost(Ok(PermissionMode::WorkspaceWrite)))).await,
+        admit(Arc::clone(&approving), args.clone()).await,
         ToolPermissionVerdict::Proceed
     );
+    let prompts = approving.prompts.lock().unwrap().clone();
     assert_eq!(
-        admit_tool_call(None, session, &edit, &args, Some(workspace.path())).await,
+        prompts,
+        vec![(
+            String::from(FILE_EDIT_TOOL_ID),
+            ToolApprovalPrompt {
+                mode: PermissionMode::ReadOnly,
+                subject: PermissionSubject::FileWrite {
+                    paths: vec![String::from("src/x.rs")]
+                },
+                high_risk: None,
+            }
+        )]
+    );
+    assert_eq!(
+        admit(
+            FixedHost::new(Ok(PermissionMode::ReadOnly), Ok(false)),
+            args.clone()
+        )
+        .await,
+        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+    );
+    assert_eq!(
+        admit(
+            FixedHost::new(
+                Ok(PermissionMode::WorkspaceWrite),
+                Err(String::from("closed"))
+            ),
+            json!({"path": "../outside.rs"})
+        )
+        .await,
+        ToolPermissionVerdict::Fail(String::from("closed"))
+    );
+
+    // Allowed calls never reach the user; an unreadable mode denies without asking.
+    // 已放行调用不会打扰用户；无法读取模式时不询问直接拒绝。
+    let silent = FixedHost::new(Ok(PermissionMode::WorkspaceWrite), Ok(false));
+    assert_eq!(
+        admit(Arc::clone(&silent), args.clone()).await,
+        ToolPermissionVerdict::Proceed
+    );
+    let unreadable = FixedHost::new(Err(String::from("gone")), Ok(true));
+    assert_eq!(
+        admit(Arc::clone(&unreadable), args.clone()).await,
+        ToolPermissionVerdict::Deny(String::from(MODE_UNAVAILABLE_DENIAL))
+    );
+    assert!(silent.prompts.lock().unwrap().is_empty());
+    assert!(unreadable.prompts.lock().unwrap().is_empty());
+    assert_eq!(
+        admit_tool_call(
+            None,
+            session,
+            &edit,
+            &args,
+            &context(),
+            Some(workspace.path())
+        )
+        .await,
         ToolPermissionVerdict::Proceed
     );
 }

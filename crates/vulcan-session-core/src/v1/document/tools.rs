@@ -681,6 +681,36 @@ impl SessionDocument {
         }
     }
 
+    /// Returns one tool to Running after the user resolved its permission approval.
+    /// 用户处理完权限审批后，把单个工具恢复为 Running。
+    /// Approval, unlike Ask, does not finish the tool: the body (or its denial) completes it later.
+    /// 与 Ask 不同，审批不会完成工具：之后由工具主体（或其拒绝结果）完成它。
+    pub fn resume_waiting_tool(
+        &mut self,
+        api_call_id: ApiCallId,
+        tool_call_id: ToolCallId,
+        now_ms: i64,
+    ) -> Result<bool, DomainError> {
+        let current = self
+            .require_tool_for_api(api_call_id, tool_call_id)?
+            .1
+            .status;
+        match current {
+            ToolCallStatus::WaitingUser => {
+                self.update_tool_in_place(api_call_id, tool_call_id, now_ms, |tool| {
+                    tool.status = ToolCallStatus::Running;
+                })?;
+                Ok(true)
+            }
+            ToolCallStatus::Running => Ok(false),
+            actual => Err(DomainError::ToolStatusMismatch {
+                tool_call_id: tool_call_id.value(),
+                expected: "waiting_user_or_running",
+                actual: tool_status_name(actual),
+            }),
+        }
+    }
+
     /// Replaces the observable output of one running tool on its fixed seq.
     /// 在固定 seq 上替换一个运行中工具的可观察输出。
     ///

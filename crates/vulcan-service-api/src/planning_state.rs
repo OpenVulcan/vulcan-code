@@ -17,6 +17,61 @@ pub struct PendingQuestionSnapshot {
     /// Ordered prompts shown in the modal.
     /// 在弹窗中按顺序展示的问题提示。
     pub questions: Vec<PendingQuestionPromptSummary>,
+    /// Permission facts when the request approves a gated tool call; the prompts are then a
+    /// default-language fallback and replies use the canonical approval labels.
+    /// 请求审批受管控工具调用时的权限事实；此时问题提示只是默认语言后备，回复使用规范审批标签。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<PendingApprovalSnapshot>,
+}
+
+/// Permission facts of one pending tool-call approval, rendered by clients in their own language.
+/// 一条待处理工具调用审批的权限事实，由客户端以自身语言渲染。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingApprovalSnapshot {
+    /// Public name of the gated tool.
+    /// 受管控工具的公开名称。
+    pub tool_name: String,
+    /// Session permission mode that escalated the call.
+    /// 使调用升级的会话权限模式。
+    pub permission_mode: vulcan_session_core::v1::config::PermissionMode,
+    /// What the call would affect.
+    /// 调用会影响的对象。
+    pub subject: PendingApprovalSubject,
+    /// Matched high-risk category key, such as `recursive_delete`.
+    /// 命中的高风险类别键，例如 `recursive_delete`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high_risk: Option<String>,
+    /// Reply label that runs the call once.
+    /// 执行一次调用的回复标签。
+    pub allow_label: String,
+    /// Reply label that refuses the call.
+    /// 拒绝调用的回复标签。
+    pub deny_label: String,
+}
+
+/// What one gated tool call would affect.
+/// 一次受管控工具调用会影响的对象。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingApprovalSubject {
+    /// Shell text; empty starts an interactive shell.
+    /// shell 文本；为空表示启动交互式 shell。
+    Command {
+        /// Command text exactly as the model wrote it.
+        /// 与模型书写完全一致的命令文本。
+        text: String,
+    },
+    /// File writes to these raw paths.
+    /// 写入这些原始路径。
+    FileWrite {
+        /// Raw paths exactly as the model wrote them.
+        /// 与模型书写完全一致的原始路径。
+        paths: Vec<String>,
+    },
+    /// An extension tool not known to be read-only.
+    /// 未知是否只读的扩展工具。
+    Opaque,
 }
 
 /// Describes one prompt inside a pending ask-tool request.

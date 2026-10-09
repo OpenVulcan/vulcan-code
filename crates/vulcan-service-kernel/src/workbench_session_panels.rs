@@ -3,10 +3,14 @@
 
 use super::*;
 use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
-use vulcan_agent_runtime::agent_runtime::question_runtime::QuestionRequest;
+use vulcan_agent_runtime::agent_runtime::question_runtime::{
+    APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, QuestionRequest, ToolApprovalPrompt,
+};
+use vulcan_agent_runtime::agent_runtime::tool_permission::PermissionSubject;
 use vulcan_service_api::{
     ConversationAttentionSummary, ConversationSummary, SessionProviderUsageSummary,
 };
+use vulcan_service_api::{PendingApprovalSnapshot, PendingApprovalSubject};
 /// Projects the resident aggregate without scanning Turns or reading files.
 /// 直接投影常驻累计，不扫描回合或读取文件。
 /// The handle identifies the owner; failures remain an explicit UI availability message.
@@ -376,6 +380,10 @@ fn project_pending_question_requests(
         .map_err(|error| format!("failed to project pending ask requests: {error}"))?
         .into_iter()
         .map(|request| PendingQuestionSnapshot {
+            approval: request
+                .approval
+                .as_ref()
+                .map(|prompt| pending_approval_snapshot(&request.tool_name, prompt)),
             id: request.id,
             session_id: request.session_id.to_string(),
             sequence: request.sequence,
@@ -403,6 +411,32 @@ fn project_pending_question_requests(
         .collect::<Vec<_>>();
     snapshots.sort_by_key(|snapshot| snapshot.sequence);
     Ok(snapshots)
+}
+
+/// Projects the permission facts of one pending approval for client rendering.
+/// 投影一条待处理审批的权限事实，供客户端渲染。
+fn pending_approval_snapshot(
+    tool_name: &str,
+    prompt: &ToolApprovalPrompt,
+) -> PendingApprovalSnapshot {
+    PendingApprovalSnapshot {
+        tool_name: tool_name.to_string(),
+        permission_mode: prompt.mode,
+        subject: match &prompt.subject {
+            PermissionSubject::Command { text } => {
+                PendingApprovalSubject::Command { text: text.clone() }
+            }
+            PermissionSubject::FileWrite { paths } => PendingApprovalSubject::FileWrite {
+                paths: paths.clone(),
+            },
+            PermissionSubject::Opaque | PermissionSubject::Ungoverned => {
+                PendingApprovalSubject::Opaque
+            }
+        },
+        high_risk: prompt.high_risk.map(|category| category.key().to_string()),
+        allow_label: String::from(APPROVAL_ALLOW_LABEL),
+        deny_label: String::from(APPROVAL_DENY_LABEL),
+    }
 }
 
 /// Builds the highest-priority sidebar attention marker for one conversation.
@@ -807,6 +841,7 @@ mod tests {
             session_id: session_id.to_string(),
             sequence: 1,
             questions: Vec::new(),
+            approval: None,
         }
     }
 

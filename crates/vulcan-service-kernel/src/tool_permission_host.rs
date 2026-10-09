@@ -3,28 +3,42 @@
 
 use std::sync::Arc;
 
+use serde_json::Value;
+use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionRuntime, ToolApprovalPrompt};
 use vulcan_agent_runtime::agent_runtime::tool_permission::ToolPermissionHost;
 use vulcan_agent_runtime::model::SessionId;
 use vulcan_session_core::v1::config::PermissionMode;
+use vulcan_tools_manager::VulcanToolInvocationContext;
 
 use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
 
-/// Reads each session's live permission mode from its registered V1 document.
-/// 从已注册的 V1 文档读取每个会话的实时权限模式。
+/// Reads each session's live permission mode from its registered V1 document and asks the user
+/// through the shared question runtime.
+/// 从已注册的 V1 文档读取每个会话的实时权限模式，并通过共享问题运行时询问用户。
 pub(crate) struct KernelToolPermissionHost {
     /// Process session registry; every session that runs tools is registered here.
     /// 进程会话注册表；所有运行工具的会话都在此注册。
     registry: Arc<SessionRuntimeRegistry>,
+    /// Shared question runtime whose Ask panel presents approvals.
+    /// 以 Ask 面板展示审批的共享问题运行时。
+    question_runtime: Arc<QuestionRuntime>,
 }
 
 impl KernelToolPermissionHost {
-    /// Builds the host over the process session registry.
-    /// 基于进程会话注册表构建宿主。
-    pub(crate) fn new(registry: Arc<SessionRuntimeRegistry>) -> Self {
-        Self { registry }
+    /// Builds the host over the process session registry and question runtime.
+    /// 基于进程会话注册表与问题运行时构建宿主。
+    pub(crate) fn new(
+        registry: Arc<SessionRuntimeRegistry>,
+        question_runtime: Arc<QuestionRuntime>,
+    ) -> Self {
+        Self {
+            registry,
+            question_runtime,
+        }
     }
 }
 
+#[async_trait::async_trait]
 impl ToolPermissionHost for KernelToolPermissionHost {
     /// Child agent sessions follow their root user session, so a child can never run with more
     /// permission than the session the user controls; a missing root fails closed.
@@ -46,6 +60,19 @@ impl ToolPermissionHost for KernelToolPermissionHost {
         let root_id = SessionId::parse_str(&root)
             .map_err(|error| format!("invalid root session `{root}`: {error}"))?;
         self.read(root_id, |document| document.metadata.mode.access.permission)
+    }
+
+    async fn request_approval(
+        &self,
+        session_id: SessionId,
+        context: VulcanToolInvocationContext,
+        tool_name: String,
+        arguments: Value,
+        prompt: ToolApprovalPrompt,
+    ) -> Result<bool, String> {
+        self.question_runtime
+            .request_approval(session_id, context, tool_name, arguments, prompt)
+            .await
     }
 }
 

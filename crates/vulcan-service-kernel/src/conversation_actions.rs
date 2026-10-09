@@ -245,6 +245,7 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
         let session_id = match &action {
             PendingQuestionDurabilityAction::Waiting { request }
             | PendingQuestionDurabilityAction::Answered { request, .. }
+            | PendingQuestionDurabilityAction::Resumed { request }
             | PendingQuestionDurabilityAction::Cancelled { request, .. } => request.session_id,
         };
         let handle =
@@ -255,13 +256,25 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
                 handle
                     .mark_tool_waiting_user(request.api_call_id, request.tool_call_id, now_ms)
                     .map_err(|error| error.to_string())?;
-                // Registration commits outside the pending lock, so the hook lock nests under nothing.
-                // 注册在 pending 锁之外提交，因此 hook 锁不嵌套在任何锁之下。
-                record_question_lifecycle_hook(&hook_runtime, |hooks| {
-                    hooks.record_question_asked(request.session_id, &request.id, &request.questions)
-                });
+                // Permission approvals are not model questions, so they never reach question hooks.
+                // 权限审批不是模型提问，因此不会进入提问 hook。
+                if request.approval.is_none() {
+                    // Registration commits outside the pending lock, so the hook lock nests under nothing.
+                    // 注册在 pending 锁之外提交，因此 hook 锁不嵌套在任何锁之下。
+                    record_question_lifecycle_hook(&hook_runtime, |hooks| {
+                        hooks.record_question_asked(
+                            request.session_id,
+                            &request.id,
+                            &request.questions,
+                        )
+                    });
+                }
                 Ok(())
             }
+            PendingQuestionDurabilityAction::Resumed { request } => handle
+                .resume_waiting_tool(request.api_call_id, request.tool_call_id, now_ms)
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
             PendingQuestionDurabilityAction::Answered { request, result } => {
                 let output = persistent_tool_output_from_result(&result)
                     .map_err(|error| error.to_string())?;

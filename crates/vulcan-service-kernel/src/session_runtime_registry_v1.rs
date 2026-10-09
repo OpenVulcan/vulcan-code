@@ -2712,6 +2712,31 @@ impl SessionHandle {
         )
     }
 
+    /// Publishes the durable return of one approval-gated tool from WaitingUser to Running.
+    /// 发布一个受审批管控的工具从 WaitingUser 可靠恢复为 Running。
+    pub(crate) fn resume_waiting_tool(
+        &self,
+        api_call_id: ApiCallId,
+        tool_call_id: ToolCallId,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<()>, SessionRuntimeError> {
+        self.mutate_durable_if_changed(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::ToolBoundary,
+            move |document| {
+                document
+                    .resume_waiting_tool(api_call_id, tool_call_id, now_ms)
+                    .map(|changed| {
+                        if changed {
+                            SessionMutationChange::Changed(())
+                        } else {
+                            SessionMutationChange::Unchanged(())
+                        }
+                    })
+            },
+        )
+    }
+
     /// Durably completes one exact WaitingUser Ask with the user's typed answer result.
     /// 使用用户的强类型回答结果可靠完成一条精确的 WaitingUser Ask。
     ///

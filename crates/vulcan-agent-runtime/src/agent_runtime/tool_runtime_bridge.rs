@@ -348,13 +348,18 @@ impl VulcanManagedToolRuntimeBridge {
                 self.session_id,
                 definition,
                 &args,
+                &context,
                 self.manager.workspace_root(),
             )
             .await;
-            if let ToolPermissionVerdict::Deny(message) = verdict {
-                return Ok(VulcanToolInvocationResult::from_model_output(
-                    Value::String(message),
-                ));
+            match verdict {
+                ToolPermissionVerdict::Proceed => {}
+                ToolPermissionVerdict::Deny(message) => {
+                    return Ok(VulcanToolInvocationResult::from_model_output(
+                        Value::String(message),
+                    ));
+                }
+                ToolPermissionVerdict::Fail(error) => return Err(error),
             }
         }
         self.manager

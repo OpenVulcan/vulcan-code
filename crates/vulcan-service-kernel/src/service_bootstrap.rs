@@ -1594,7 +1594,10 @@ fn run_service_bootstrap(
     agent_runtime
         .task_runtime
         .set_tool_permission_host(Arc::new(
-            crate::tool_permission_host::KernelToolPermissionHost::new(permission_registry),
+            crate::tool_permission_host::KernelToolPermissionHost::new(
+                permission_registry,
+                Arc::clone(&agent_runtime.question_runtime),
+            ),
         ));
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
