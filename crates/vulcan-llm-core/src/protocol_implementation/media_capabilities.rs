@@ -72,10 +72,7 @@ pub fn protocol_profile_supports_media_source(
             match kind {
                 ResourceKind::Image => {
                     source == ResourceSourceKind::RemoteUrl
-                        || matches!(
-                            mime.as_str(),
-                            "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-                        )
+                        || anthropic::anthropic_image_media_type_supported(&mime)
                 }
                 ResourceKind::File => true,
                 ResourceKind::Video => {

@@ -1150,6 +1150,25 @@ fn encode_content_items(
         })
 }
 
+/// Checks whether one normalized image MIME type is registered for Anthropic inline or file images.
+/// 检查一个已规范化图片 MIME 类型是否已为 Anthropic 内联或文件图片注册。
+///
+/// # Parameters
+/// 参数
+/// `media_type` is a trimmed, lowercase MIME label.
+/// `media_type` 是已去除空白并转为小写的 MIME 标签。
+///
+/// # Returns
+/// 返回值
+/// Returns true only for the image MIME types the Anthropic image block accepts.
+/// 仅对 Anthropic 图片块接受的图片 MIME 类型返回 true。
+pub(crate) fn anthropic_image_media_type_supported(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+    )
+}
+
 /// Encodes one host-resolved image as an Anthropic image content block.
 /// 将一个宿主已解析图片编码为 Anthropic 图片内容块。
 ///
@@ -1181,6 +1200,16 @@ pub(crate) fn encode_anthropic_image(
             return Err(ProtocolConversionError::new(
                 "Anthropic file image requires a non-empty provider file id and no URL.",
             ));
+        }
+        let media_type = resource
+            .media_type
+            .as_deref()
+            .map(|media_type| media_type.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !anthropic_image_media_type_supported(&media_type) {
+            return Err(ProtocolConversionError::new(format!(
+                "Anthropic file image MIME type `{media_type}` is not registered."
+            )));
         }
         return Ok(json!({
             "type": "image",
@@ -1214,10 +1243,7 @@ pub(crate) fn encode_anthropic_image(
     let media_type = metadata.strip_suffix(";base64").ok_or_else(|| {
         ProtocolConversionError::new("Anthropic image data URL must use Base64 encoding.")
     })?;
-    if !matches!(
-        media_type,
-        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-    ) {
+    if !anthropic_image_media_type_supported(media_type) {
         return Err(ProtocolConversionError::new(format!(
             "Anthropic image MIME type `{media_type}` is not registered."
         )));
