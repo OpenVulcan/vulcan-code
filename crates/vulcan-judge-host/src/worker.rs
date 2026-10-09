@@ -16,6 +16,7 @@ use vulcan_permission_judge::protocol::{
 use vulcan_permission_judge::{JudgeLabel, JudgePackage, JudgeSettings, MemoryDigestCache};
 
 use crate::engine::{Engine, initialize_runtime};
+use crate::gpu::GpuCounters;
 use crate::sequence::Encoder;
 use crate::status::{percentile, process_memory};
 
@@ -86,6 +87,7 @@ enum State {
 pub struct Worker {
     state: State,
     cache: MemoryDigestCache,
+    gpu: Option<GpuCounters>,
 }
 
 impl Default for Worker {
@@ -93,6 +95,7 @@ impl Default for Worker {
         Self {
             state: State::Fresh,
             cache: MemoryDigestCache::default(),
+            gpu: GpuCounters::open(std::process::id()),
         }
     }
 }
@@ -132,7 +135,7 @@ impl Worker {
                 id,
                 Ok(JudgeHostResponse::Status {
                     id,
-                    status: self.status(),
+                    status: Box::new(self.status()),
                 }),
             ),
         };
@@ -300,8 +303,9 @@ impl Worker {
 
     /// Reports the loaded model and resource use.
     /// 报告已加载模型与资源占用。
-    fn status(&self) -> HostStatus {
+    fn status(&mut self) -> HostStatus {
         let memory = process_memory();
+        let gpu = self.gpu.as_mut().map(GpuCounters::read).unwrap_or_default();
         let (model, evaluations, latencies) = match &self.state {
             State::Loaded(loaded) => (
                 Some(loaded.model.clone()),
@@ -314,6 +318,9 @@ impl Worker {
             model,
             working_set_bytes: memory.working_set_bytes,
             private_bytes: memory.private_bytes,
+            gpu_dedicated_bytes: gpu.dedicated_bytes,
+            gpu_shared_bytes: gpu.shared_bytes,
+            gpu_utilization_percent: gpu.utilization_percent,
             evaluations,
             recent_p50_ms: percentile(&latencies, 0.5),
             recent_p95_ms: percentile(&latencies, 0.95),

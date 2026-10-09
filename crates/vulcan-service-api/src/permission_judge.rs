@@ -329,6 +329,15 @@ pub struct PermissionJudgeWorkerStatus {
     /// Private committed memory of the worker process.
     /// worker 进程的私有提交内存。
     pub private_bytes: Option<u64>,
+    /// Dedicated video memory committed by the worker process.
+    /// worker 进程提交的专用显存。
+    pub gpu_dedicated_bytes: Option<u64>,
+    /// Shared system memory the worker process uses for the GPU.
+    /// worker 进程为 GPU 使用的共享系统内存。
+    pub gpu_shared_bytes: Option<u64>,
+    /// Busiest GPU engine type of the worker process since the previous poll, in percent.
+    /// 自上次轮询以来 worker 进程最繁忙 GPU 引擎类型的百分比。
+    pub gpu_utilization_percent: Option<f64>,
     /// Evaluations since load.
     /// 加载以来的评估次数。
     pub evaluations: u64,

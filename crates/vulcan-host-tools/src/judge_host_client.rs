@@ -247,7 +247,7 @@ impl JudgeHostClient {
             })
             .await?;
         match response {
-            JudgeHostResponse::Status { status, .. } => Ok(status),
+            JudgeHostResponse::Status { status, .. } => Ok(*status),
             other => Err(self.unexpected(&other)),
         }
     }

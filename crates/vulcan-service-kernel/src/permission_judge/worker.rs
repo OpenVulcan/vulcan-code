@@ -283,6 +283,9 @@ impl JudgeWorker {
             warmup_ms: phase.report.as_ref().map(|report| report.warmup_ms),
             working_set_bytes: status.and_then(|status| status.working_set_bytes),
             private_bytes: status.and_then(|status| status.private_bytes),
+            gpu_dedicated_bytes: status.and_then(|status| status.gpu_dedicated_bytes),
+            gpu_shared_bytes: status.and_then(|status| status.gpu_shared_bytes),
+            gpu_utilization_percent: status.and_then(|status| status.gpu_utilization_percent),
             evaluations: status.map_or(0, |status| status.evaluations),
             recent_p50_ms: status.and_then(|status| status.recent_p50_ms),
             recent_p95_ms: status.and_then(|status| status.recent_p95_ms),
@@ -338,6 +341,14 @@ mod tests {
                 let report = worker.benchmark(&spec, batch_size).await.unwrap();
                 assert_eq!((report.device, report.batch_size), (device, batch_size));
                 eprintln!("{device:?} x{batch_size}: p50 {:.1} ms", report.p50_ms);
+            }
+            let status = worker.status().await;
+            eprintln!(
+                "{device:?}: dedicated {:?} shared {:?} utilization {:?}",
+                status.gpu_dedicated_bytes, status.gpu_shared_bytes, status.gpu_utilization_percent
+            );
+            if cfg!(windows) && device == JudgeDevice::WebGpu {
+                assert!(status.gpu_dedicated_bytes.is_some_and(|bytes| bytes > 0));
             }
             last = Some(spec);
         }

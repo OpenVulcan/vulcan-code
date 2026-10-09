@@ -9,6 +9,7 @@
 //! 视为判定失败。
 
 mod engine;
+mod gpu;
 mod sequence;
 mod status;
 mod worker;
