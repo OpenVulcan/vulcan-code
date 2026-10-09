@@ -46,7 +46,8 @@ pub(crate) fn prepare_host_tool_runtime_context(
                 session_id,
                 execution_mode,
             )
-            .with_sensitive_tool_output_values(task_runtime.sensitive_tool_output_values()),
+            .with_sensitive_tool_output_values(task_runtime.sensitive_tool_output_values())
+            .with_tool_permission_host(task_runtime.tool_permission_host()),
         ),
         task_runtime,
         provider_tool_definitions: resolved_tools

@@ -11,6 +11,10 @@ use vulcan_host_tools::process_tree::{
     terminate_child_process_tree,
 };
 
+/// Stable identifier of the one-shot shell-command native tool.
+/// 一次性 shell 命令原生工具的稳定标识。
+pub const SHELL_COMMAND_TOOL_ID: &str = "shell_command";
+
 /// Builds the one-shot shell-command host-owned native tool.
 /// 构建一次性 shell 命令宿主自有原生工具。
 pub(crate) fn build_shell_command_tool(
@@ -18,8 +22,8 @@ pub(crate) fn build_shell_command_tool(
     plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
-        id: String::from("shell_command"),
-        name: String::from("shell_command"),
+        id: String::from(SHELL_COMMAND_TOOL_ID),
+        name: String::from(SHELL_COMMAND_TOOL_ID),
         description: shell_command_tool_description(),
         help_text: None,
         ai_visible: true,

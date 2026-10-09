@@ -8,6 +8,7 @@ impl TaskRuntime {
         let (wait_agent_parent_interruption_tx, _) = watch::channel(0_u64);
         Self {
             sensitive_tool_output_values: Arc::new(RwLock::new(Vec::new())),
+            tool_permission_host: RwLock::new(None),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
@@ -53,6 +54,31 @@ impl TaskRuntime {
     /// 与当前运行世代的宿主工具桥共享实时遮蔽注册表。
     pub(crate) fn sensitive_tool_output_values(&self) -> Arc<RwLock<Vec<String>>> {
         Arc::clone(&self.sensitive_tool_output_values)
+    }
+
+    /// Installs the service kernel's permission host; later tool bridges consult it per call.
+    /// 安装服务内核的权限宿主；之后构建的工具桥在每次调用时咨询它。
+    pub fn set_tool_permission_host(
+        &self,
+        host: Arc<dyn crate::agent_runtime::tool_permission::ToolPermissionHost>,
+    ) {
+        // The slot only holds an `Arc`, so a poisoned lock still carries a consistent value.
+        // 该槽位只保存 `Arc`，因此锁中毒后其值仍然一致。
+        *self
+            .tool_permission_host
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Returns the installed permission host, or `None` when no policy is configured.
+    /// 返回已安装的权限宿主；未配置策略时返回 `None`。
+    pub(crate) fn tool_permission_host(
+        &self,
+    ) -> Option<Arc<dyn crate::agent_runtime::tool_permission::ToolPermissionHost>> {
+        self.tool_permission_host
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Returns the maximum supported nested task depth.

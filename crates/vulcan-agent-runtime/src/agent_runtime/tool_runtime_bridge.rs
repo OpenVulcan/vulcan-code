@@ -2,6 +2,9 @@
 //! 供宿主执行器与 `vulcan-core` 控制器共享的宿主管理工具运行时桥接层。
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
+use crate::agent_runtime::tool_permission::{
+    ToolPermissionHost, ToolPermissionVerdict, admit_tool_call,
+};
 use crate::model::SessionId;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -48,6 +51,9 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// 等待精确工具主体执行的可靠 V1 身份，仅以请求流身份为键。
     prepared_invocation_identities:
         Arc<Mutex<HashMap<RequestStreamId, PreparedToolInvocationIdentity>>>,
+    /// Permission host consulted before every dispatch; `None` when no policy is configured.
+    /// 每次调度前咨询的权限宿主；未配置策略时为 `None`。
+    permission_host: Option<Arc<dyn ToolPermissionHost>>,
 }
 
 /// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
@@ -180,7 +186,18 @@ impl VulcanManagedToolRuntimeBridge {
             sensitive_tool_output_values: None,
             execution_mode: execution_mode.into(),
             prepared_invocation_identities: Arc::new(Mutex::new(HashMap::new())),
+            permission_host: None,
         }
+    }
+
+    /// Installs the permission host that admits or denies each call before dispatch.
+    /// 安装在调度前放行或拒绝每次调用的权限宿主。
+    pub(crate) fn with_tool_permission_host(
+        mut self,
+        host: Option<Arc<dyn ToolPermissionHost>>,
+    ) -> Self {
+        self.permission_host = host;
+        self
     }
 
     /// Installs the current runtime's live host-credential filter on this invocation bridge.
@@ -323,6 +340,23 @@ impl VulcanManagedToolRuntimeBridge {
         args: Value,
         context: VulcanToolInvocationContext,
     ) -> Result<VulcanToolInvocationResult, String> {
+        // Plan mode answers first; only calls it lets through reach the permission gate.
+        // 计划模式优先作答；只有它放行的调用才进入权限闸门。
+        if !VulcanToolsManager::plan_mode_blocks(definition, &args, &self.execution_mode) {
+            let verdict = admit_tool_call(
+                self.permission_host.as_ref(),
+                self.session_id,
+                definition,
+                &args,
+                self.manager.workspace_root(),
+            )
+            .await;
+            if let ToolPermissionVerdict::Deny(message) = verdict {
+                return Ok(VulcanToolInvocationResult::from_model_output(
+                    Value::String(message),
+                ));
+            }
+        }
         self.manager
             .invoke_tool(definition, args, context, &self.execution_mode)
             .await

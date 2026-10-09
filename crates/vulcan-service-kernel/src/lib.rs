@@ -226,6 +226,7 @@ mod subagent_panels;
 mod subagent_workspace_mutation;
 mod system_prompt_settings;
 mod terminal_settlement_service;
+mod tool_permission_host;
 pub(crate) mod vce;
 mod vmm;
 mod vmm_hooks;

@@ -461,7 +461,10 @@ pub fn build_vulcan_tools_manager(
         });
     }
 
-    let candidates =
-        prepare_vulcan_plugin_tool_candidates(vulcan_plugin_runtime, candidates, workspace_root);
-    VulcanToolsManager::new(candidates)
+    let candidates = prepare_vulcan_plugin_tool_candidates(
+        vulcan_plugin_runtime,
+        candidates,
+        workspace_root.clone(),
+    );
+    VulcanToolsManager::new(candidates).with_workspace_root(workspace_root)
 }

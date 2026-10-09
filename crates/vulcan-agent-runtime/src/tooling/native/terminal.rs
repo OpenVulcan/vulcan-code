@@ -19,13 +19,17 @@ pub(crate) use render::*;
 pub(crate) use shell::*;
 pub(crate) use wait::*;
 
+/// Stable identifier of the interactive terminal-session native tool.
+/// 交互式终端会话原生工具的稳定标识。
+pub const TERMINAL_SESSION_TOOL_ID: &str = "terminal_session";
+
 pub(crate) fn build_terminal_session_tool(
     command_session_runtime: Arc<CommandSessionRuntime>,
     shell_support: HostCommandShellSupport,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
-        id: String::from("terminal_session"),
-        name: String::from("terminal_session"),
+        id: String::from(TERMINAL_SESSION_TOOL_ID),
+        name: String::from(TERMINAL_SESSION_TOOL_ID),
         description: terminal_session_tool_description(),
         help_text: None,
         ai_visible: true,

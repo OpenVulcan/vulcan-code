@@ -4487,6 +4487,26 @@ fn required_text(object: &Map<String, Value>, field: &str) -> Result<String, Fil
 /// Resolves a local path and validates workspace containment only when the path belongs to it.
 /// 解析本地路径，并且仅在路径归属于工作区时校验工作区包含关系。
 fn resolve_path(workspace_root: &Path, raw_path: &str) -> Result<PathBuf, FileToolError> {
+    let (workspace_path, path) = resolve_lexical_path(workspace_root, raw_path)?;
+    // Workspace containment protects only paths that actually belong to the workspace. External
+    // absolute or parent-relative paths are ordinary local paths; the permission gate decides
+    // whether writing them needs approval.
+    // 工作区包含校验仅保护实际属于工作区的路径；外部绝对或父级相对路径按普通本地路径处理，
+    // 是否需要批准写入由权限闸门决定。
+    if path.starts_with(&workspace_path) {
+        ensure_path_within_workspace(&workspace_path, &path)?;
+    }
+    Ok(path)
+}
+
+/// Expands placeholders and lexically normalizes one tool path against the workspace root.
+/// 展开占位符，并相对工作区根目录对一个工具路径做词法规范化。
+/// Returns `(absolute workspace root, absolute candidate path)`; nothing needs to exist.
+/// 返回 `(绝对工作区根目录, 绝对候选路径)`；两者都不要求存在。
+fn resolve_lexical_path(
+    workspace_root: &Path,
+    raw_path: &str,
+) -> Result<(PathBuf, PathBuf), FileToolError> {
     let expanded_path = expand_environment_path(raw_path)?;
     let candidate = PathBuf::from(expanded_path);
     let workspace_path = if workspace_root.is_absolute() {
@@ -4503,14 +4523,49 @@ fn resolve_path(workspace_root: &Path, raw_path: &str) -> Result<PathBuf, FileTo
     } else {
         workspace_path.join(candidate)
     };
-    let path = lexical_normalize(&path);
-    // Workspace containment protects only paths that actually belong to the workspace. External
-    // absolute or parent-relative paths are ordinary local paths until host authorization exists.
-    // 工作区包含校验仅保护实际属于工作区的路径；外部绝对或父级相对路径在宿主授权接入前按普通本地路径处理。
-    if path.starts_with(&workspace_path) {
-        ensure_path_within_workspace(&workspace_path, &path)?;
+    Ok((workspace_path, lexical_normalize(&path)))
+}
+
+/// Reports whether one raw tool path resolves inside the workspace after placeholder expansion,
+/// lexical normalization, and canonicalization of its nearest existing ancestor.
+/// 报告一个原始工具路径在展开占位符、词法规范化并规范化最近已存在祖先后是否位于工作区内。
+/// Symbolic links and junctions are followed, so an in-workspace alias of an outside directory
+/// is outside. Errors mean the path cannot be resolved; callers must treat them as outside.
+/// 会跟随符号链接与目录联接，因此指向外部目录的工作区内别名视为外部；错误表示路径无法解析，
+/// 调用方必须按外部处理。
+pub fn path_resolves_inside_workspace(
+    workspace_root: &Path,
+    raw_path: &str,
+) -> Result<bool, FileToolError> {
+    let (workspace_path, path) = resolve_lexical_path(workspace_root, raw_path)?;
+    let canonical_workspace = fs::canonicalize(&workspace_path)
+        .map_err(|error| io_error("path_not_found", &workspace_path, error))?;
+    let Some(existing_ancestor) = nearest_existing_ancestor(&path)? else {
+        return Ok(false);
+    };
+    let canonical_ancestor = fs::canonicalize(&existing_ancestor)
+        .map_err(|error| io_error("path_not_found", &existing_ancestor, error))?;
+    Ok(canonical_ancestor.starts_with(&canonical_workspace))
+}
+
+/// Lists every path an `apply_patch` body would write, including move destinations.
+/// 列出 `apply_patch` 正文将写入的全部路径，包括移动目标。
+/// Paths are returned raw, as written in the patch; syntax errors are returned unchanged.
+/// 路径按补丁原文返回；语法错误原样返回。
+pub fn apply_patch_write_paths(patch: &str) -> Result<Vec<String>, FileToolError> {
+    let mut paths = Vec::new();
+    for operation in parse_apply_patch(patch)? {
+        match operation {
+            ParsedPatchFile::Add { path, .. } | ParsedPatchFile::Delete { path } => {
+                paths.push(path);
+            }
+            ParsedPatchFile::Update { path, move_to, .. } => {
+                paths.push(path);
+                paths.extend(move_to);
+            }
+        }
     }
-    Ok(path)
+    Ok(paths)
 }
 
 /// Verifies the nearest existing path resolves under the canonical workspace root.
@@ -4521,23 +4576,12 @@ fn ensure_path_within_workspace(
 ) -> Result<(), FileToolError> {
     let canonical_workspace = fs::canonicalize(workspace_root)
         .map_err(|error| io_error("path_not_found", workspace_root, error))?;
-    let mut existing_ancestor = candidate.to_path_buf();
-    loop {
-        match fs::symlink_metadata(&existing_ancestor) {
-            Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if !existing_ancestor.pop() {
-                    return Err(FileToolError::new(
-                        "path_outside_workspace",
-                        "A path addressed through the current workspace must resolve inside that workspace.",
-                    ));
-                }
-            }
-            Err(error) => {
-                return Err(io_error("path_not_found", &existing_ancestor, error));
-            }
-        }
-    }
+    let Some(existing_ancestor) = nearest_existing_ancestor(candidate)? else {
+        return Err(FileToolError::new(
+            "path_outside_workspace",
+            "A path addressed through the current workspace must resolve inside that workspace.",
+        ));
+    };
     let canonical_ancestor = fs::canonicalize(&existing_ancestor)
         .map_err(|error| io_error("path_not_found", &existing_ancestor, error))?;
     if !canonical_ancestor.starts_with(&canonical_workspace) {
@@ -4547,6 +4591,27 @@ fn ensure_path_within_workspace(
         ));
     }
     Ok(())
+}
+
+/// Returns the nearest ancestor of `candidate` (itself included) that exists, without following it.
+/// 返回 `candidate`（含自身）最近的已存在祖先，不跟随该路径。
+/// `None` means no component exists, which only happens for unrooted or unreachable paths.
+/// `None` 表示没有任何组件存在，仅发生于无根或不可达路径。
+fn nearest_existing_ancestor(candidate: &Path) -> Result<Option<PathBuf>, FileToolError> {
+    let mut existing_ancestor = candidate.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&existing_ancestor) {
+            Ok(_) => return Ok(Some(existing_ancestor)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !existing_ancestor.pop() {
+                    return Ok(None);
+                }
+            }
+            Err(error) => {
+                return Err(io_error("path_not_found", &existing_ancestor, error));
+            }
+        }
+    }
 }
 
 /// Expands the established `${env:NAME}` path placeholders exactly once.

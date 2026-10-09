@@ -65,6 +65,7 @@ pub mod runtime_stream_preparation_resources;
 pub mod runtime_stream_setup;
 pub mod session_goal_prompt;
 pub mod task_runtime;
+pub mod tool_permission;
 pub(crate) mod tool_request_argument_assembler;
 pub mod tool_request_stream;
 pub(crate) mod tool_result_media;

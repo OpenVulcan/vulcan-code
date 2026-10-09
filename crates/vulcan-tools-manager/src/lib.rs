@@ -37,5 +37,6 @@ pub use types::{
 };
 
 #[cfg(test)]
-use manager::{tool_is_allowed_in_plan, tool_is_allowed_in_plan_with_args};
+use manager::tool_is_allowed_in_plan;
+pub use manager::tool_is_allowed_in_plan_with_args;
 use public_names::normalize_candidate_public_tool_names;

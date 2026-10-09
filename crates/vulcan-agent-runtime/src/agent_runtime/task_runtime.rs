@@ -1080,6 +1080,10 @@ pub struct TaskRuntime {
     /// Exact host credentials that must be removed before any tool result reaches a model or durable history.
     /// 工具结果到达模型或可靠历史前必须移除的精确宿主凭据。
     sensitive_tool_output_values: Arc<RwLock<Vec<String>>>,
+    /// Permission host installed once by the service kernel; absent in embedded runtimes.
+    /// 由服务内核安装一次的权限宿主；嵌入式运行时中缺省。
+    tool_permission_host:
+        RwLock<Option<Arc<dyn crate::agent_runtime::tool_permission::ToolPermissionHost>>>,
     /// V1-backed executions awaiting durable return publication; completed entries retain exact feedback.
     /// 等待可靠回流发布的 V1 执行；已完成条目保留精确反馈。
     durable_return_mailboxes: RwLock<HashMap<SessionId, (String, Option<SubagentMailboxEvent>)>>,

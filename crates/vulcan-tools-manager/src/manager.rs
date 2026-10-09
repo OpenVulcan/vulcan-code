@@ -7,6 +7,9 @@ pub struct VulcanToolsManager {
     /// Candidate tools aggregated from host-owned native, LuaSkills, MCP, or future expert sources.
     /// 从宿主自有原生、LuaSkills、MCP 或未来专家来源聚合得到的候选工具集合。
     candidates: Vec<VulcanToolCandidate>,
+    /// Workspace root that relative tool paths resolve against, when the execution has one.
+    /// 相对工具路径解析所依据的工作区根目录（执行存在工作区时）。
+    workspace_root: Option<std::path::PathBuf>,
 }
 
 impl VulcanToolsManager {
@@ -15,7 +18,21 @@ impl VulcanToolsManager {
     pub fn new(candidates: Vec<VulcanToolCandidate>) -> Self {
         Self {
             candidates: normalize_candidate_public_tool_names(candidates),
+            workspace_root: None,
         }
+    }
+
+    /// Records the workspace root that the candidates' tools resolve relative paths against.
+    /// 记录候选工具解析相对路径所依据的工作区根目录。
+    pub fn with_workspace_root(mut self, workspace_root: Option<std::path::PathBuf>) -> Self {
+        self.workspace_root = workspace_root;
+        self
+    }
+
+    /// Returns the workspace root shared by this manager's tools, when any.
+    /// 返回本管理器工具共享的工作区根目录（如有）。
+    pub fn workspace_root(&self) -> Option<&std::path::Path> {
+        self.workspace_root.as_deref()
     }
 
     /// Resolves the final AI-visible tool set for one execution-mode label.
@@ -54,8 +71,7 @@ impl VulcanToolsManager {
         context: VulcanToolInvocationContext,
         execution_mode_label: &str,
     ) -> Result<VulcanToolInvocationResult, String> {
-        let mode = VulcanToolMode::from_execution_mode_label(execution_mode_label);
-        if matches!(mode, VulcanToolMode::Plan) && !tool_is_allowed_in_plan_with_args(tool, &args) {
+        if Self::plan_mode_blocks(tool, &args, execution_mode_label) {
             return Ok(VulcanToolInvocationResult::from_model_output(
                 Value::String(String::from(
                     "Plan Mode is active. This tool call is not allowed because it may mutate workspace, repository, Git, or external state. Continue by refining the plan and wait for the user to leave Plan Mode before implementing changes.",
@@ -63,6 +79,19 @@ impl VulcanToolsManager {
             ));
         }
         (tool.invoke)(args, context).await
+    }
+
+    /// Returns whether Plan mode blocks this exact call; such calls never reach permission checks.
+    /// 返回计划模式是否拦截这次精确调用；被拦截的调用不会进入权限检查。
+    pub fn plan_mode_blocks(
+        tool: &ResolvedToolDefinition,
+        args: &Value,
+        execution_mode_label: &str,
+    ) -> bool {
+        matches!(
+            VulcanToolMode::from_execution_mode_label(execution_mode_label),
+            VulcanToolMode::Plan
+        ) && !tool_is_allowed_in_plan_with_args(tool, args)
     }
 }
 /// Returns whether one resolved tool may execute while Plan mode is active.
@@ -74,10 +103,9 @@ pub(super) fn tool_is_allowed_in_plan(tool: &ResolvedToolDefinition) -> bool {
 
 /// Returns whether one resolved tool and its exact arguments may execute in Plan mode.
 /// 返回单个已解析工具及其精确参数是否允许在计划模式中执行。
-pub(super) fn tool_is_allowed_in_plan_with_args(
-    tool: &ResolvedToolDefinition,
-    args: &Value,
-) -> bool {
+/// The permission gate reuses this as the read-only classification of opaque extension tools.
+/// 权限闸门复用此判断作为不透明扩展工具的只读分类。
+pub fn tool_is_allowed_in_plan_with_args(tool: &ResolvedToolDefinition, args: &Value) -> bool {
     match &tool.plan_policy {
         VulcanPlanToolPolicy::Hidden => false,
         VulcanPlanToolPolicy::Visible => true,

@@ -1,9 +1,9 @@
 use super::{
     MAX_EDIT_LINES_PER_ARRAY, MAX_INLINE_LIFECYCLE_BYTES, MAX_READ_LINES, MAX_READ_RESPONSE_BYTES,
-    PreparedChange, build_patch_delete_change, commit_changes, commit_validated_changes,
-    display_path, execute_apply_patch, execute_file, execute_file_edit, path_key,
-    persistent_change_set_from_host_result, read_raw_snapshot, resolve_path, verify_preconditions,
-    whole_file_modify_payload,
+    PreparedChange, apply_patch_write_paths, build_patch_delete_change, commit_changes,
+    commit_validated_changes, display_path, execute_apply_patch, execute_file, execute_file_edit,
+    path_key, path_resolves_inside_workspace, persistent_change_set_from_host_result,
+    read_raw_snapshot, resolve_path, verify_preconditions, whole_file_modify_payload,
 };
 use crate::text_document::parse_document_lines;
 use serde_json::{Value, json};
@@ -2440,4 +2440,67 @@ fn rollback_failure_reports_disk_state_uncertain() {
     assert_eq!(error.details["rollback_state"], json!("failed"));
     assert_eq!(error.as_value()["commit_scope"], json!("unknown"));
     assert!(!destination.exists());
+}
+
+/// Verifies the permission boundary: relative, new, and absolute in-workspace paths are inside;
+/// parent escapes, outside absolute paths, and symbolic-link escapes are outside.
+/// 验证权限边界：相对、新建及工作区内绝对路径在内；父级逃逸、外部绝对路径及符号链接逃逸在外。
+#[test]
+fn permission_boundary_follows_canonical_ancestors() {
+    let parent = tempdir().expect("create shared parent directory");
+    let workspace = parent.path().join("workspace");
+    fs::create_dir_all(workspace.join("src")).expect("create workspace");
+    let outside = parent.path().join("outside");
+    fs::create_dir_all(&outside).expect("create outside directory");
+
+    for inside in [
+        "src/main.rs",
+        "new/dir/file.txt",
+        ".vulcan/temp/x.txt",
+        &display_path(&workspace.join("src/lib.rs")),
+    ] {
+        assert!(
+            path_resolves_inside_workspace(&workspace, inside).unwrap(),
+            "{inside}"
+        );
+    }
+    for outside_path in [
+        "../outside/file.txt",
+        "src/../../outside/file.txt",
+        &display_path(&outside.join("file.txt")),
+    ] {
+        assert!(
+            !path_resolves_inside_workspace(&workspace, outside_path).unwrap(),
+            "{outside_path}"
+        );
+    }
+
+    let link = workspace.join("outside-link");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, &link).expect("create directory symlink");
+    #[cfg(windows)]
+    if let Err(error) = std::os::windows::fs::symlink_dir(&outside, &link) {
+        if error.kind() == std::io::ErrorKind::PermissionDenied
+            || error.raw_os_error() == Some(1314)
+        {
+            return;
+        }
+        panic!("create directory symlink: {error}");
+    }
+    assert!(!path_resolves_inside_workspace(&workspace, "outside-link/new.txt").unwrap());
+}
+
+/// Verifies patch write targets include every operation path and move destination.
+/// 验证补丁写入目标包含每个操作路径及移动目标。
+#[test]
+fn apply_patch_write_paths_include_move_destinations() {
+    let patch = "*** Begin Patch\n*** Add File: a.txt\n+a\n*** Delete File: b.txt\n*** Update File: c.txt\n*** Move to: ../d.txt\n@@\n-old\n+new\n*** End Patch";
+    assert_eq!(
+        apply_patch_write_paths(patch).unwrap(),
+        ["a.txt", "b.txt", "c.txt", "../d.txt"]
+    );
+    assert_eq!(
+        apply_patch_write_paths("not a patch").unwrap_err().code,
+        "patch_syntax_error"
+    );
 }

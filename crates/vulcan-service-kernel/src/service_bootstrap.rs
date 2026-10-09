@@ -1579,6 +1579,23 @@ fn run_service_bootstrap(
             )
         },
     )?;
+    // Every tool bridge built from now on reads session permission modes through this host.
+    // 此后构建的每个工具桥都通过此宿主读取会话权限模式。
+    let permission_registry = state
+        .lock()
+        .map(|guard| Arc::clone(&guard.session_runtime_registry))
+        .map_err(|error| {
+            ServiceBootstrapError::new(
+                "service-process",
+                "Core Service",
+                format!("安装工具权限宿主失败：{error}"),
+            )
+        })?;
+    agent_runtime
+        .task_runtime
+        .set_tool_permission_host(Arc::new(
+            crate::tool_permission_host::KernelToolPermissionHost::new(permission_registry),
+        ));
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));
