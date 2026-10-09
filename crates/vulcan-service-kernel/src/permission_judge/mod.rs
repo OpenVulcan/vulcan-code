@@ -2,6 +2,7 @@
 //! 权限判定服务：系统设置、模型登记表、本机 worker 与 CUDA 执行库。
 
 mod environment;
+mod review;
 mod services;
 mod worker;
 
@@ -10,6 +11,9 @@ use std::sync::{Arc, Mutex};
 use vulcan_permission_judge::MemoryDigestCache;
 use vulcan_service_api::PermissionJudgeCudaInstall;
 
+pub(crate) use review::{
+    PERMISSION_REVIEW_CONSUMER_PROFILE_ID, PERMISSION_REVIEW_PURPOSE_ID, review_call,
+};
 pub(crate) use services::*;
 
 /// Process-wide judge state shared by settings commands and the tool permission gate.

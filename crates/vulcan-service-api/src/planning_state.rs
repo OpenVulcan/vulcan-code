@@ -46,6 +46,10 @@ pub struct PendingApprovalSnapshot {
     /// 权限判定结论（当调用配置了判定器时）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<PendingApprovalJudge>,
+    /// Permission reviewer finding, when a reviewing LLM is configured for the call.
+    /// 权限复核结论（当调用配置了复核 LLM 时）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<PendingApprovalReview>,
     /// Reply label that runs the call once.
     /// 执行一次调用的回复标签。
     pub allow_label: String,
@@ -68,6 +72,30 @@ pub enum PendingApprovalJudge {
     },
     /// The judge is configured but could not score the call.
     /// 判定器已配置但无法为调用评分。
+    Unavailable {
+        /// English reason.
+        /// 英文原因。
+        reason: String,
+    },
+}
+
+/// What the permission reviewer found for a call it did not decide.
+/// 权限复核对未决定调用的结论。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingApprovalReview {
+    /// The reviewer answered; `allow` appears when it may not clear a blocked or high-risk call.
+    /// 复核器已回答；不允许其放行被拦截或高风险的调用时会出现 `allow`。
+    Reviewed {
+        /// Verdict key: `allow`, `ask_user` or `deny`.
+        /// 决定键：`allow`、`ask_user` 或 `deny`。
+        verdict: String,
+        /// Reason in the user's language.
+        /// 以用户语言写出的理由。
+        reason: String,
+    },
+    /// The reviewer is configured but could not review the call.
+    /// 复核器已配置但无法复核调用。
     Unavailable {
         /// English reason.
         /// 英文原因。

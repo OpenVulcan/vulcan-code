@@ -5,6 +5,7 @@ use crate::configured_inference::{
     VMM_CONSUMER_PROFILE_ID, model_route_supports_json_schema_contract,
     model_supports_disabled_reasoning, vmm_purpose_requires_disabled_reasoning,
 };
+use crate::permission_judge::PERMISSION_REVIEW_CONSUMER_PROFILE_ID;
 use vulcan_ai_contract::{AiOperation, ModelCapabilities, ReasoningControlMode, ReasoningEffort};
 use vulcan_provider_adapters::{
     InferenceRouteBinding, InferenceRouteConfiguration, InternalModelOverrides,
@@ -156,9 +157,21 @@ pub(super) fn validate_vmm_llm_reasoning_policy(
     capabilities: &ModelCapabilities,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), String> {
-    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID
-        || operation != AiOperation::ConversationRespond
-    {
+    if operation != AiOperation::ConversationRespond {
+        return Ok(());
+    }
+    // The permission reviewer may think; an explicit effort must exist in the model contract.
+    // 权限复核器可以思考；显式档位必须存在于模型契约中。
+    if consumer_profile_id == PERMISSION_REVIEW_CONSUMER_PROFILE_ID {
+        return match reasoning_effort {
+            Some(effort) if !reasoning_effort_supported(capabilities, effort) => Err(format!(
+                "The permission reviewer cannot use reasoning effort `{}` with the selected model contract.",
+                effort.as_str()
+            )),
+            _ => Ok(()),
+        };
+    }
+    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
         return Ok(());
     }
     let purpose_id = purpose_id
@@ -181,8 +194,8 @@ pub(super) fn validate_vmm_llm_reasoning_policy(
     ))
 }
 
-/// Enforces the provider JSON contract required by every native VMM LLM route.
-/// 对每条原生 VMM LLM 路由强制执行提供方 JSON 契约。
+/// Enforces the provider JSON contract required by every native VMM and permission-review LLM route.
+/// 对每条原生 VMM 与权限复核 LLM 路由强制执行提供方 JSON 契约。
 ///
 /// # Parameters
 /// 参数
@@ -201,7 +214,10 @@ pub(super) fn validate_vmm_llm_structured_output_policy(
     route: &InferenceRouteConfiguration,
     capabilities: &ModelCapabilities,
 ) -> Result<(), String> {
-    if consumer_profile_id != VMM_CONSUMER_PROFILE_ID
+    // The permission reviewer answers through the same validated JSON Schema path as VMM.
+    // 权限复核器与 VMM 一样通过已校验的 JSON Schema 路径作答。
+    if (consumer_profile_id != VMM_CONSUMER_PROFILE_ID
+        && consumer_profile_id != PERMISSION_REVIEW_CONSUMER_PROFILE_ID)
         || operation != AiOperation::ConversationRespond
     {
         return Ok(());
@@ -211,14 +227,14 @@ pub(super) fn validate_vmm_llm_structured_output_policy(
     } = &route.binding
     else {
         return Err(String::from(
-            "VMM LLM routes require one exact protocol binding for structured output.",
+            "Structured-output LLM routes require one exact protocol binding.",
         ));
     };
     if model_route_supports_json_schema_contract(protocol_profile_id, capabilities) {
         return Ok(());
     }
     Err(String::from(
-        "VMM LLM routes require a model and protocol that preserve provider-side JSON output and host-side Schema validation.",
+        "Structured-output LLM routes require a model and protocol that preserve provider-side JSON output and host-side Schema validation.",
     ))
 }
 

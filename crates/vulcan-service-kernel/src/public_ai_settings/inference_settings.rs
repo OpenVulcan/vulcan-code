@@ -179,10 +179,21 @@ fn vmm_saved_reasoning_effort(
     route: Option<&InferenceRouteConfiguration>,
     requested: Option<ReasoningEffort>,
 ) -> Result<Option<ReasoningEffort>, String> {
+    // The permission reviewer keeps an explicit effort only with its route; absence means the
+    // provider default.
+    // 权限复核器只在有路由时保留显式档位；缺省表示供应商默认值。
+    if consumer_profile_id == crate::permission_judge::PERMISSION_REVIEW_CONSUMER_PROFILE_ID {
+        if route.is_none() && requested.is_some() {
+            return Err(String::from(
+                "A cleared permission reviewer route cannot retain a reasoning effort.",
+            ));
+        }
+        return Ok(requested);
+    }
     if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
         if requested.is_some() {
             return Err(String::from(
-                "Purpose-scoped reasoning settings are currently defined only for the VMM profile.",
+                "Purpose-scoped reasoning settings are currently defined only for the VMM and permission reviewer profiles.",
             ));
         }
         return Ok(None);
@@ -354,8 +365,16 @@ pub(crate) async fn service_save_public_ai_internal_model_overrides(
     Ok(snapshot)
 }
 
-/// Reports whether a LuaSkills clear must skip creating its consumer profile.
-/// 返回某次 LuaSkills 清除是否必须跳过创建其消费者 Profile。
+/// Reports whether a consumer profile exists only while the user keeps a saved route in it
+/// (LuaSkills and the permission reviewer).
+/// 判断某消费者 Profile 是否只在用户保留其已保存路由时存在（LuaSkills 与权限复核器）。
+fn optional_consumer_profile(consumer_profile_id: &str) -> bool {
+    consumer_profile_id == crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID
+        || consumer_profile_id == crate::permission_judge::PERMISSION_REVIEW_CONSUMER_PROFILE_ID
+}
+
+/// Reports whether an optional consumer's clear must skip creating its consumer profile.
+/// 返回某次可选消费者清除是否必须跳过创建其消费者 Profile。
 ///
 /// LuaSkills is optional: its profile exists only because the user explicitly saved a
 /// real route. Clearing a route that was never saved must therefore be a no-op rather
@@ -369,9 +388,39 @@ fn luaskills_clear_skips_profile_creation(
     consumer_profile_id: &str,
     clears_route: bool,
 ) -> bool {
-    consumer_profile_id == crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID
+    optional_consumer_profile(consumer_profile_id)
         && clears_route
         && !profiles.contains_key(consumer_profile_id)
+}
+
+/// Validates the single route the permission reviewer owns.
+/// 验证权限复核器拥有的唯一路由。
+fn validate_permission_review_inference_route_request(
+    request: &PublicAiInferenceRouteSaveRequest,
+) -> Result<(), String> {
+    if request.consumer_profile_id != crate::permission_judge::PERMISSION_REVIEW_CONSUMER_PROFILE_ID
+    {
+        return Ok(());
+    }
+    if request.operation != AiOperation::ConversationRespond
+        || request.purpose_id.as_deref()
+            != Some(crate::permission_judge::PERMISSION_REVIEW_PURPOSE_ID)
+    {
+        return Err(format!(
+            "The permission reviewer accepts only the `conversation_respond/{}` inference route.",
+            crate::permission_judge::PERMISSION_REVIEW_PURPOSE_ID
+        ));
+    }
+    if request
+        .route
+        .as_ref()
+        .is_some_and(|route| route.usage_scope != InferenceUsageScope::InternalBackground)
+    {
+        return Err(String::from(
+            "The permission reviewer route must use the `internal_background` usage scope.",
+        ));
+    }
+    Ok(())
 }
 
 /// Validates the exact route surface owned by the optional LuaSkills consumer.
@@ -428,7 +477,7 @@ fn remove_emptied_luaskills_profile(
     profiles: &mut BTreeMap<String, InferenceProfile>,
     consumer_profile_id: &str,
 ) {
-    if consumer_profile_id != crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID {
+    if !optional_consumer_profile(consumer_profile_id) {
         return;
     }
     let emptied = profiles.get(consumer_profile_id).is_some_and(|profile| {
@@ -483,6 +532,7 @@ pub(crate) async fn service_save_public_ai_inference_route(
         }
     }
     validate_luaskills_inference_route_request(&request)?;
+    validate_permission_review_inference_route_request(&request)?;
     // transaction serializes validation, activation, and Workbench publication.
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;

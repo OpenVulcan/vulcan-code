@@ -6,11 +6,15 @@ use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegi
 use vulcan_agent_runtime::agent_runtime::question_runtime::{
     APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, QuestionRequest, ToolApprovalPrompt,
 };
-use vulcan_agent_runtime::agent_runtime::tool_permission::{JudgeFinding, PermissionSubject};
+use vulcan_agent_runtime::agent_runtime::tool_permission::{
+    JudgeFinding, PermissionSubject, ReviewFinding,
+};
 use vulcan_service_api::{
     ConversationAttentionSummary, ConversationSummary, SessionProviderUsageSummary,
 };
-use vulcan_service_api::{PendingApprovalJudge, PendingApprovalSnapshot, PendingApprovalSubject};
+use vulcan_service_api::{
+    PendingApprovalJudge, PendingApprovalReview, PendingApprovalSnapshot, PendingApprovalSubject,
+};
 /// Projects the resident aggregate without scanning Turns or reading files.
 /// 直接投影常驻累计，不扫描回合或读取文件。
 /// The handle identifies the owner; failures remain an explicit UI availability message.
@@ -439,6 +443,15 @@ fn pending_approval_snapshot(
                 label: label.key().to_string(),
             },
             JudgeFinding::Unavailable(reason) => PendingApprovalJudge::Unavailable {
+                reason: reason.clone(),
+            },
+        }),
+        review: prompt.review.as_ref().map(|finding| match finding {
+            ReviewFinding::Reviewed(review) => PendingApprovalReview::Reviewed {
+                verdict: review.verdict.key().to_string(),
+                reason: review.reason.clone(),
+            },
+            ReviewFinding::Unavailable(reason) => PendingApprovalReview::Unavailable {
                 reason: reason.clone(),
             },
         }),

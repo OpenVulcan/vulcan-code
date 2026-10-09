@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 use serde_json::Value;
 use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionRuntime, ToolApprovalPrompt};
 use vulcan_agent_runtime::agent_runtime::tool_permission::{
-    JudgeCall, JudgeLabel, ToolPermissionHost,
+    JudgeCall, JudgeLabel, LlmReview, ReviewCall, ToolPermissionHost,
 };
 use vulcan_agent_runtime::model::SessionId;
 use vulcan_session_core::v1::config::PermissionMode;
@@ -90,6 +90,14 @@ impl ToolPermissionHost for KernelToolPermissionHost {
             .upgrade()
             .ok_or_else(|| String::from("The service is shutting down."))?;
         crate::permission_judge::judge_call(&state, call).await
+    }
+
+    async fn review(&self, call: ReviewCall) -> Result<Option<LlmReview>, String> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| String::from("The service is shutting down."))?;
+        crate::permission_judge::review_call(&state, call).await
     }
 }
 

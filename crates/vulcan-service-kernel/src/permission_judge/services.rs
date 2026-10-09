@@ -44,7 +44,7 @@ const BENCHMARK_BATCH_SIZES: [u32; 2] = [1, 10];
 
 /// Reads the runtime and the saved judge settings.
 /// 读取运行时与已保存的判定设置。
-fn read_state(
+pub(super) fn read_state(
     state: &SharedServiceBridgeState,
 ) -> Result<
     (
@@ -93,13 +93,13 @@ async fn blocking<T: Send + 'static>(
 
 /// Whether the saved settings run the local judge.
 /// 已保存设置是否运行本机判定器。
-fn local_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
+pub(super) fn local_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
     settings.state == Some(JudgeState::Enabled) && settings.backend == Some(JudgeBackend::Local)
 }
 
 /// Opens and verifies a package directory with the shared digest cache.
 /// 使用共享摘要缓存打开并验证模型包目录。
-async fn open_package(
+pub(super) async fn open_package(
     runtime: &Arc<PermissionJudgeRuntime>,
     path: PathBuf,
 ) -> Result<JudgePackage, PermissionJudgeIssue> {
@@ -788,6 +788,14 @@ pub(crate) async fn service_save_project_permission_judge_policy(
     ))
 }
 
+/// Reads the policy choices a workspace's project configuration makes.
+/// 读取工作区项目配置所作的策略选择。
+pub(super) fn load_project_options(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    Ok(load_project_configuration_file(root)?
+        .permission_judge
+        .options)
+}
+
 /// Scores one escalated call with the local judge; `Ok(None)` when the local judge is off.
 /// 用本机判定器为一次升级调用评分；本机判定器关闭时返回 `Ok(None)`。
 ///
@@ -813,11 +821,7 @@ pub(crate) async fn judge_call(
         .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))?
         .policy;
     let chosen = match &call.workspace_root {
-        Some(root) => {
-            load_project_configuration_file(root)?
-                .permission_judge
-                .options
-        }
+        Some(root) => load_project_options(root)?,
         None => BTreeMap::new(),
     };
     let modes = policy

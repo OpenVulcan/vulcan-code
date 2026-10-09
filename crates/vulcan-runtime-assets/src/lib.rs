@@ -602,6 +602,11 @@ pub const ANSWER_MODE_INTERACTIVE_MD: &str =
 pub const ANSWER_MODE_STANDARD_MD: &str =
     include_str!("../resources/agent-prompts/answer-mode-standard.md");
 
+/// System prompt of the reviewing LLM that decides escalated tool calls.
+/// 决定升级工具调用的复核 LLM 系统提示词。
+pub const PERMISSION_REVIEW_MD: &str =
+    include_str!("../resources/agent-prompts/permission-review.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;
