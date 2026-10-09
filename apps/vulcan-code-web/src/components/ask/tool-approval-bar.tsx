@@ -49,6 +49,14 @@ const HIGH_RISK_KEYS: Record<string, TranslationKey> = {
   infrastructure_destroy: "ask.approval.risk.infrastructureDestroy",
 };
 
+// JUDGE_LABEL_KEYS maps permission judge labels to their catalog labels.
+// JUDGE_LABEL_KEYS 将权限判定标签映射到目录标签。
+const JUDGE_LABEL_KEYS: Record<string, TranslationKey> = {
+  allow: "ask.approval.judge.allow",
+  review: "ask.approval.judge.review",
+  block: "ask.approval.judge.block",
+};
+
 // ToolApprovalRequest renders one tool-call approval in the session Ask bar.
 // ToolApprovalRequest 在会话 Ask 面板中渲染一条工具调用审批。
 // Enter never approves; approving or denying needs an explicit click, and Esc opens the stop confirmation.
@@ -168,6 +176,7 @@ export function ToolApprovalRequest(props: ToolApprovalRequestProps) {
                 {formatMessage(t("ask.approval.highRisk"), { category: riskLabel })}
               </span>
             ) : null}
+            {approval.judge ? <ToolApprovalJudgeChip judge={approval.judge} t={t} /> : null}
           </div>
           {error ? (
             <div role="alert" className="max-h-24 overflow-y-auto break-words rounded-lg border border-destructive/25 bg-destructive/10 px-2.5 py-1.5 text-xs leading-5 text-destructive">
@@ -268,6 +277,35 @@ function ToolApprovalSubjectBody(props: {
     <pre className="max-h-40 min-h-0 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/60 px-2.5 py-1.5 font-mono text-xs leading-5">
       {lines.join("\n")}
     </pre>
+  );
+}
+
+// ToolApprovalJudgeChip shows the permission judge finding; an unavailable judge shows its reason on hover.
+// ToolApprovalJudgeChip 展示权限判定结论；判定不可用时悬停显示原因。
+function ToolApprovalJudgeChip(props: {
+  // Finding to show.
+  // 要展示的结论。
+  judge: NonNullable<PendingApprovalSnapshot["judge"]>;
+  // Translates stable UI copy keys.
+  // 翻译稳定 UI 文案键。
+  t: Translate;
+}) {
+  const { judge, t } = props;
+  if (judge.kind === "unavailable") {
+    return (
+      <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground" data-judge="unavailable" title={judge.reason}>
+        {t("ask.approval.judge.unavailable")}
+      </span>
+    );
+  }
+  const key = Object.hasOwn(JUDGE_LABEL_KEYS, judge.label) ? JUDGE_LABEL_KEYS[judge.label] : undefined;
+  return (
+    <span
+      className={cn("rounded-md px-1.5 py-0.5", judge.label === "block" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}
+      data-judge={judge.label}
+    >
+      {key ? t(key) : judge.label}
+    </span>
   );
 }
 

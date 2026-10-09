@@ -273,6 +273,9 @@ pub struct PendingApproval {
     /// Backend high-risk category key, when any.
     /// 后端高风险类别键（如有）。
     pub high_risk: Option<String>,
+    /// Permission judge finding, when a judge is configured for the call.
+    /// 权限判定结论（当调用配置了判定器时）。
+    pub judge: Option<ApprovalJudge>,
     /// Canonical answers that run or refuse the call.
     /// 执行或拒绝调用的规范回答。
     pub allow_label: String,
@@ -288,6 +291,18 @@ pub enum ApprovalSubject {
     Command(String),
     FileWrite(Vec<String>),
     Opaque,
+}
+
+/// What the permission judge found for a call it did not clear.
+/// 权限判定对未放行调用的结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalJudge {
+    /// Label key: `allow`, `review` or `block`.
+    /// 标签键：`allow`、`review` 或 `block`。
+    Scored(String),
+    /// The judge could not score the call, with its English reason.
+    /// 判定器无法为调用评分，附英文原因。
+    Unavailable(String),
 }
 
 #[derive(Debug, Clone)]

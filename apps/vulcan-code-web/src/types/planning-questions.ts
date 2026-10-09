@@ -97,6 +97,9 @@ export interface PendingApprovalSnapshot {
   // Matched high-risk category key, when any.
   // 命中的高风险类别键（如有）。
   highRisk?: string | null;
+  // Permission judge finding, when a judge is configured for the call.
+  // 权限判定结论（当调用配置了判定器时）。
+  judge?: PendingApprovalJudge | null;
   // Canonical answer that runs the call once.
   // 执行一次调用的规范回答。
   allowLabel: string;
@@ -104,6 +107,12 @@ export interface PendingApprovalSnapshot {
   // 拒绝调用的规范回答。
   denyLabel: string;
 }
+
+// PendingApprovalJudge is what the permission judge found for a call it did not clear.
+// PendingApprovalJudge 是权限判定对未放行调用的结论。
+export type PendingApprovalJudge =
+  | { kind: "scored"; label: string }
+  | { kind: "unavailable"; reason: string };
 
 // PermissionModeKey is the canonical session permission mode key.
 // PermissionModeKey 是规范的会话权限模式键。

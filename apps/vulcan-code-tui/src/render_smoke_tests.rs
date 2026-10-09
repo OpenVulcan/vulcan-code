@@ -1294,7 +1294,8 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
     use crate::app::action::AskStep;
     use crate::backend::BackendEvent;
     use crate::model::{
-        ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode, Question, QuestionOption,
+        ApprovalJudge, ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode, Question,
+        QuestionOption,
     };
     use std::sync::mpsc;
 
@@ -1327,6 +1328,7 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
             permission_mode: PermissionMode::WorkspaceWrite,
             subject,
             high_risk: high_risk.map(str::to_string),
+            judge: None,
             allow_label: "allow-label".into(),
             deny_label: "deny-label".into(),
         }),
@@ -1390,6 +1392,13 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
         replies(&observer),
         vec![("deny".into(), Some(vec![vec!["deny-label".into()]]))]
     );
+
+    let mut judged = approval("judged", ApprovalSubject::Opaque, None);
+    if let Some(facts) = judged.approval.as_mut() {
+        facts.judge = Some(ApprovalJudge::Unavailable("not loaded".into()));
+    }
+    show(&mut h, judged);
+    assert!(buffer_text(h.wide.backend().buffer()).contains("not loaded"));
 
     show(&mut h, approval("stop", ApprovalSubject::Opaque, None));
     input::handle_event(&mut h.app, key(KeyCode::Char('x'), KeyModifiers::NONE));

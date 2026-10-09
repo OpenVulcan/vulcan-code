@@ -230,6 +230,12 @@ fn pending_approval(approval: &api::PendingApprovalSnapshot) -> PendingApproval 
             api::PendingApprovalSubject::Opaque => ApprovalSubject::Opaque,
         },
         high_risk: approval.high_risk.clone(),
+        judge: approval.judge.as_ref().map(|judge| match judge {
+            api::PendingApprovalJudge::Scored { label } => ApprovalJudge::Scored(label.clone()),
+            api::PendingApprovalJudge::Unavailable { reason } => {
+                ApprovalJudge::Unavailable(reason.clone())
+            }
+        }),
         allow_label: approval.allow_label.clone(),
         deny_label: approval.deny_label.clone(),
     }

@@ -21,7 +21,9 @@ use super::theme::mix;
 use crate::app::action::{AskStep, UiAction};
 use crate::app::hit::Target;
 use crate::app::{App, Focus};
-use crate::model::{ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode};
+use crate::model::{
+    ApprovalJudge, ApprovalSubject, PendingApproval, PendingQuestion, PermissionMode,
+};
 use crate::tr;
 
 /// One body row and what clicking it (or parts of it) does.
@@ -186,6 +188,28 @@ fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row
             tr!("ask.approval.highRisk", category = risk_label(key)),
             Style::new().fg(theme.danger).add_modifier(Modifier::BOLD),
         );
+    }
+    match &approval.judge {
+        Some(ApprovalJudge::Scored(label)) => {
+            let (text, style) = match label.as_str() {
+                "allow" => (tr!("ask.approval.judge.allow"), theme.muted_text()),
+                "review" => (tr!("ask.approval.judge.review"), theme.muted_text()),
+                "block" => (
+                    tr!("ask.approval.judge.block"),
+                    Style::new().fg(theme.danger),
+                ),
+                other => (other.to_string(), theme.muted_text()),
+            };
+            push_wrapped(&mut rows, text, style);
+        }
+        Some(ApprovalJudge::Unavailable(reason)) => {
+            push_wrapped(
+                &mut rows,
+                format!("{} · {reason}", tr!("ask.approval.judge.unavailable")),
+                theme.muted_text(),
+            );
+        }
+        None => {}
     }
     rows
 }

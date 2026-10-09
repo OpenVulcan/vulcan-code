@@ -98,3 +98,15 @@ it("shows the affected paths and falls back to the raw key for unknown risk cate
   expect(host.querySelector("pre")).toBeNull();
   expect(host.querySelector("[data-high-risk]")).toBeNull();
 });
+
+it("shows the judge finding and keeps an unavailable judge's reason on hover", async () => {
+  await mount(approvalRequest("judged", { judge: { kind: "scored", label: "block" } }));
+  expect(host.querySelector("[data-judge]")?.getAttribute("data-judge")).toBe("block");
+
+  await mount(approvalRequest("unjudged", { judge: { kind: "unavailable", reason: "not loaded" } }));
+  expect(host.querySelector("[data-judge]")?.getAttribute("data-judge")).toBe("unavailable");
+  expect(host.querySelector("[data-judge]")?.getAttribute("title")).toBe("not loaded");
+
+  await mount(approvalRequest("plain"));
+  expect(host.querySelector("[data-judge]")).toBeNull();
+});
