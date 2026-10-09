@@ -57,6 +57,11 @@ describe("answer components in conversation Markdown", () => {
     expect((await render(fence)).querySelector("code.answer-path")?.textContent).toBe("src/read.ts:373");
   });
 
+  it("does not link prose written in a finding location", async () => {
+    const fence = "```ui-findings\nmedium | Claim is unproven | 保湿剂，咖啡因是抗氧化剂\nlow | Note | see the readme\n```";
+    expect((await render(fence, { workspace: "D:\\repo" })).querySelector("a.answer-path")).toBeNull();
+  });
+
   it("frames Markdown tables and right-aligns numeric columns only", async () => {
     const host = await render("| Stage | ms | Note |\n| --- | --- | --- |\n| Acquire | 12.4 | lock |\n| Execute | 1,204 | — |");
     expect(host.querySelector(".answer-frame table.answer-table")).not.toBeNull();
