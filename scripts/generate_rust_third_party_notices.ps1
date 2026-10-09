@@ -71,13 +71,71 @@ $CargoAboutConfigFile = Join-Path $ProjectDir "about.toml"
 # CargoAboutTemplateFile 指向用于 Markdown 输出的 cargo-about Handlebars 模板。
 $CargoAboutTemplateFile = Join-Path $ProjectDir "about.hbs"
 
-# TauriManifestPath points at the service-host manifest used as the dependency graph root.
-# TauriManifestPath 指向作为依赖图根节点的服务宿主清单文件。
-$TauriManifestPath = Join-Path $ProjectDir "apps/vulcan-code-service/Cargo.toml"
+# WorkspaceManifestPath points at the workspace manifest so every shipped binary's graph is scanned together.
+# WorkspaceManifestPath 指向工作区清单，使全部分发二进制的依赖图一并扫描。
+$WorkspaceManifestPath = Join-Path $ProjectDir "Cargo.toml"
 
 # Load the shared deterministic indexer used by generation and fixture validation.
 # 加载生成流程与样例验证共用的确定性索引器。
 . (Join-Path $PSScriptRoot "rust_third_party_notices_index.ps1")
+
+# Load the shipped package list shared with the distribution build.
+# 加载与发行构建共用的分发包列表。
+. (Join-Path $PSScriptRoot "shipped_rust_packages.ps1")
+
+# Assert-RustThirdPartyNoticeScope rejects notice entries outside the shipped packages' non-dev dependency graph.
+# Assert-RustThirdPartyNoticeScope 拒绝落在分发包非开发依赖图之外的声明条目。
+function Assert-RustThirdPartyNoticeScope {
+    param(
+        # SectionIndex is the generated index whose dependencies are checked.
+        # SectionIndex 是待检查依赖的生成索引。
+        [Parameter(Mandatory = $true)]$SectionIndex,
+        # RtkPath is the repository command proxy used for Cargo execution.
+        # RtkPath 是 Cargo 执行所用的仓库命令代理。
+        [Parameter(Mandatory = $true)][string]$RtkPath
+    )
+
+    # The workspace scan also sees non-shipped members; any crate only they or dev edges reach must not appear.
+    # Build edges stay allowed to match about.toml, and the allowed set spans all targets because cargo-about
+    # filters targets per edge, which keeps it a superset of the generated output.
+    # 工作区扫描也会看到非分发成员；仅由它们或开发依赖边引入的 crate 不得出现。
+    # 构建依赖边与 about.toml 一致保持允许；cargo-about 逐边过滤目标平台，因此允许集合覆盖全部目标，以保持为生成输出的超集。
+    $TreeArguments = @('cargo', 'tree', '--locked', '-e', 'normal,build', '--target', 'all', '--prefix', 'none', '--format', '{p}') + @(Get-ShippedRustPackageArguments)
+    $TreeOutput = & $RtkPath @TreeArguments
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    # ShippedCrates stores `name@version` keys reachable from shipped packages through normal and build edges.
+    # ShippedCrates 保存经普通与构建依赖边可从分发包到达的 `name@version` 键。
+    $ShippedCrates = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($Line in $TreeOutput) {
+        if ($Line -match '^(\S+) v(\S+)') {
+            [void]$ShippedCrates.Add("$($Matches[1])@$($Matches[2])")
+        }
+    }
+    foreach ($PackageName in $ShippedRustPackages) {
+        if (-not ($ShippedCrates | Where-Object { $_.StartsWith("$PackageName@") })) {
+            throw "cargo tree output does not list shipped package $PackageName; the scope check cannot run."
+        }
+    }
+
+    # OutsideCrates lists notice dependencies that no shipped package reaches.
+    # OutsideCrates 列出任何分发包都不会到达的声明依赖。
+    $OutsideCrates = @(
+        foreach ($License in $SectionIndex.licenses) {
+            foreach ($Section in $License.sections) {
+                foreach ($Dependency in $Section.dependencies) {
+                    $Key = "$($Dependency.name)@$($Dependency.version)"
+                    if (-not $ShippedCrates.Contains($Key)) { $Key }
+                }
+            }
+        }
+    ) | Sort-Object -Unique
+    if ($OutsideCrates.Count -gt 0) {
+        throw "Rust third-party notices include crates outside the shipped binaries' dependency graph: $($OutsideCrates -join ', '). Mark non-shipped workspace members ``publish = false`` or update scripts/shipped_rust_packages.ps1."
+    }
+}
 
 # Invoke-GenerateRustThirdPartyNotices generates the Markdown notice file and its lightweight section index.
 # Invoke-GenerateRustThirdPartyNotices 用于生成 Markdown 声明文件及其轻量分段索引。
@@ -104,11 +162,13 @@ function Invoke-GenerateRustThirdPartyNotices {
     if (-not (Test-Path -LiteralPath $CargoAboutTemplateFile)) {
         throw "Missing cargo-about template: $CargoAboutTemplateFile"
     }
-    if (-not (Test-Path -LiteralPath $TauriManifestPath)) {
-        throw "Missing service manifest: $TauriManifestPath"
+    if (-not (Test-Path -LiteralPath $WorkspaceManifestPath)) {
+        throw "Missing workspace manifest: $WorkspaceManifestPath"
     }
 
-    & $RtkCommand.Source cargo about generate $CargoAboutTemplateFile --manifest-path $TauriManifestPath --config $CargoAboutConfigFile --output-file $GeneratedThirdPartyNoticesFile --locked --fail
+    # Private members (`publish = false`) are omitted by about.toml, but their non-dev dependencies stay in scope.
+    # 私有成员（`publish = false`）由 about.toml 省略，但其非开发依赖仍在扫描范围内。
+    & $RtkCommand.Source cargo about generate $CargoAboutTemplateFile --workspace --manifest-path $WorkspaceManifestPath --config $CargoAboutConfigFile --output-file $GeneratedThirdPartyNoticesFile --locked --fail
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -140,6 +200,7 @@ function Invoke-GenerateRustThirdPartyNotices {
     if ($SectionIndex.licenses.Count -eq 0) {
         throw "Generated Rust third-party notice index does not contain any license sections."
     }
+    Assert-RustThirdPartyNoticeScope -SectionIndex $SectionIndex -RtkPath $RtkCommand.Source
 
     if ($CheckOnly) {
         if (-not (Test-Path -LiteralPath $SourceThirdPartyNoticesFile)) {

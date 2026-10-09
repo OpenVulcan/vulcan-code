@@ -44,6 +44,7 @@ $ProjectDir = Split-Path $PSScriptRoot -Parent
 # 加载两个 Cargo 模式共用的成功构建制品跟踪器。
 . (Join-Path $PSScriptRoot 'cargo_artifact_cleanup.ps1')
 . (Join-Path $PSScriptRoot 'distribution_processes.ps1')
+. (Join-Path $PSScriptRoot 'shipped_rust_packages.ps1')
 
 # WebAppDir points at the Vite React WebUI project.
 # WebAppDir 指向 Vite React WebUI 工程。
@@ -79,14 +80,14 @@ if ($Release) {
         exit $LASTEXITCODE
     }
 
-    # CargoBuildArguments selects the release shell, terminal host and terminal client from the locked registry graph.
-    # CargoBuildArguments 从锁定的注册表依赖图选择 release 桌面壳、终端宿主与终端客户端。
-    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-judge-host', '-p', 'vulcan-code-tui', '--release')
+    # CargoBuildArguments selects every shipped Rust package in release mode from the locked registry graph.
+    # CargoBuildArguments 从锁定的注册表依赖图以 release 模式选择全部分发 Rust 包。
+    $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments) + @('--release')
 }
 else {
-    # CargoBuildArguments selects the debug shell, terminal host and terminal client from the locked registry graph.
-    # CargoBuildArguments 从锁定的注册表依赖图选择 debug 桌面壳、终端宿主与终端客户端。
-    $CargoBuildArguments = @('build', '--locked', '-p', 'vulcan-code-service', '-p', 'vulcan-terminal-host', '-p', 'vulcan-judge-host', '-p', 'vulcan-code-tui')
+    # CargoBuildArguments selects every shipped Rust package in debug mode from the locked registry graph.
+    # CargoBuildArguments 从锁定的注册表依赖图以 debug 模式选择全部分发 Rust 包。
+    $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments)
 }
 
 # BuildProfileName names the selected artifact profile in diagnostics.

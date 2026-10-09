@@ -8,6 +8,12 @@ targets = [
 
 private = { ignore = true }
 
+# Test-only dependencies never reach a distributed binary, so notices skip them.
+# Build dependencies stay in scope: crates such as lua-src and luajit-src compile vendored C sources into it.
+# 仅测试使用的依赖不会进入分发二进制，因此声明跳过它们。
+# 构建依赖保留在范围内：lua-src、luajit-src 等 crate 会把内置 C 源码编译进二进制。
+ignore-dev-dependencies = true
+
 accepted = [
     "0BSD",
     "Apache-2.0",
