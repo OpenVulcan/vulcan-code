@@ -3,7 +3,8 @@
 
 use std::path::Path;
 
-use ort::ep::{ArenaExtendStrategy, CUDA};
+use ort::environment::Environment;
+use ort::ep::{ArenaExtendStrategy, CUDA, ExecutionProviderLibrary};
 use ort::session::builder::{GraphOptimizationLevel, SessionBuilder};
 use ort::session::{RunOptions, Session};
 use ort::value::Tensor;
@@ -16,6 +17,10 @@ use crate::sequence::{EncodeOutcome, Encoded, Encoder};
 /// 会话的算子内线程数。
 const INTRA_OP_THREADS: usize = 4;
 
+/// Execution-provider name the WebGPU plugin library registers.
+/// WebGPU 插件库注册的执行提供程序名称。
+const WEBGPU_EP_NAME: &str = "WebGpuExecutionProvider";
+
 /// One loaded model session.
 /// 一个已加载的模型会话。
 pub struct Engine {
@@ -27,14 +32,36 @@ pub struct Engine {
     /// Releases temporary GPU arenas after long sequences.
     /// 在长序列之后释放临时显存池。
     trim: Option<RunOptions>,
+    /// Declared after `session` so the plugin is unregistered only after the session is released.
+    /// 声明在 `session` 之后，使插件只在会话释放后才注销。
+    _plugin: PluginRegistration,
+}
+
+/// Unregisters a plugin execution-provider library when dropped.
+/// 析构时注销插件执行提供程序库。
+struct PluginRegistration(Option<ExecutionProviderLibrary>);
+
+impl Drop for PluginRegistration {
+    fn drop(&mut self) {
+        if let Some(library) = self.0.take() {
+            // The process is releasing the engine; a failed unregistration has no caller to inform.
+            // 进程正在释放引擎；注销失败时没有可通知的调用方。
+            let _ = library.unregister();
+        }
+    }
 }
 
 impl Engine {
     /// Creates the session on exactly the requested device; an unavailable device is an error.
     /// 在请求的设备上创建会话；设备不可用即报错。
-    /// The ONNX Runtime library must already be initialized for this process.
-    /// 本进程必须已经初始化 ONNX Runtime 库。
-    pub fn load(package: &JudgePackage, device: JudgeDevice) -> Result<Self, String> {
+    /// The ONNX Runtime library must already be initialized for this process; a plugin device
+    /// takes its execution-provider library, which no other device accepts.
+    /// 本进程必须已经初始化 ONNX Runtime 库；插件设备需要其执行提供程序库，其他设备不接受该库。
+    pub fn load(
+        package: &JudgePackage,
+        device: JudgeDevice,
+        execution_provider_library: Option<&Path>,
+    ) -> Result<Self, String> {
         let fail =
             |error: ort::Error<SessionBuilder>| format!("Failed to build the session: {error}");
         let mut builder = Session::builder()
@@ -46,25 +73,56 @@ impl Engine {
             .with_config_entry("session.use_device_allocator_for_initializers", "1")
             .map_err(fail)?;
         let mut trim = None;
-        if device == JudgeDevice::Cuda {
-            let limit = usize::try_from(package.config.gpu_memory_limit_mib)
-                .ok()
-                .and_then(|mib| mib.checked_mul(1 << 20))
-                .ok_or("The GPU memory limit does not fit this platform.")?;
-            builder = builder
-                .with_execution_providers([CUDA::default()
-                    .with_tf32(false)
-                    .with_arena_extend_strategy(ArenaExtendStrategy::NextPowerOfTwo)
-                    .with_memory_limit(limit)
-                    .build()
-                    .error_on_failure()])
-                .map_err(fail)?;
-            let mut options = RunOptions::new()
-                .map_err(|error| format!("Failed to create run options: {error}"))?;
-            options
-                .set("memory.enable_memory_arena_shrinkage", "gpu:0")
-                .map_err(|error| format!("Failed to configure arena shrinkage: {error}"))?;
-            trim = Some(options);
+        let mut plugin = PluginRegistration(None);
+        match (device, execution_provider_library) {
+            (JudgeDevice::Cpu, None) => {}
+            (JudgeDevice::Cuda, None) => {
+                let limit = usize::try_from(package.config.gpu_memory_limit_mib)
+                    .ok()
+                    .and_then(|mib| mib.checked_mul(1 << 20))
+                    .ok_or("The GPU memory limit does not fit this platform.")?;
+                builder = builder
+                    .with_execution_providers([CUDA::default()
+                        .with_tf32(false)
+                        .with_arena_extend_strategy(ArenaExtendStrategy::NextPowerOfTwo)
+                        .with_memory_limit(limit)
+                        .build()
+                        .error_on_failure()])
+                    .map_err(fail)?;
+                let mut options = RunOptions::new()
+                    .map_err(|error| format!("Failed to create run options: {error}"))?;
+                options
+                    .set("memory.enable_memory_arena_shrinkage", "gpu:0")
+                    .map_err(|error| format!("Failed to configure arena shrinkage: {error}"))?;
+                trim = Some(options);
+            }
+            (JudgeDevice::WebGpu, Some(library)) => {
+                let environment = Environment::current().map_err(|error| {
+                    format!("Failed to access the runtime environment: {error}")
+                })?;
+                plugin.0 = Some(
+                    environment
+                        .register_ep_library("webgpu", existing_file(library)?)
+                        .map_err(|error| {
+                            format!("Failed to register the WebGPU library: {error}")
+                        })?,
+                );
+                let gpu = environment
+                    .devices()
+                    .find(|candidate| candidate.ep().is_ok_and(|name| name == WEBGPU_EP_NAME))
+                    .ok_or("The WebGPU library found no usable GPU.")?;
+                builder = builder.with_devices([gpu], None).map_err(fail)?;
+            }
+            (JudgeDevice::WebGpu, None) => {
+                return Err(String::from(
+                    "The WebGPU device requires its execution-provider library.",
+                ));
+            }
+            (JudgeDevice::Cpu | JudgeDevice::Cuda, Some(_)) => {
+                return Err(String::from(
+                    "Only a plugin device accepts an execution-provider library.",
+                ));
+            }
         }
         let session = builder
             .commit_from_file(package.file(&package.config.model_file))
@@ -74,6 +132,7 @@ impl Engine {
             config: package.config.clone(),
             device,
             trim,
+            _plugin: plugin,
         })
     }
 
@@ -169,13 +228,7 @@ impl Engine {
 /// Initializes ONNX Runtime from a shared library; a process can do this only once.
 /// 从共享库初始化 ONNX Runtime；每个进程只能执行一次。
 pub fn initialize_runtime(library: &Path) -> Result<(), String> {
-    if !library.is_absolute() || !library.is_file() {
-        return Err(format!(
-            "ONNX Runtime library `{}` must be an existing absolute file path.",
-            library.display()
-        ));
-    }
-    ort::init_from(library)
+    ort::init_from(existing_file(library)?)
         .map_err(|error| {
             format!(
                 "Failed to load ONNX Runtime from `{}`: {error}",
@@ -184,6 +237,19 @@ pub fn initialize_runtime(library: &Path) -> Result<(), String> {
         })?
         .commit();
     Ok(())
+}
+
+/// Accepts only an existing file given by an absolute path.
+/// 只接受以绝对路径给出的已存在文件。
+fn existing_file(path: &Path) -> Result<&Path, String> {
+    if path.is_absolute() && path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "Runtime library `{}` must be an existing absolute file path.",
+            path.display()
+        ))
+    }
 }
 
 /// Groups encoded rows by length into batches bounded by row count and padded token budget.

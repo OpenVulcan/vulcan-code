@@ -147,6 +147,7 @@ impl JudgeHostClient {
         &mut self,
         package_dir: PathBuf,
         runtime_library: PathBuf,
+        execution_provider_library: Option<PathBuf>,
         device: JudgeDevice,
     ) -> Result<LoadReport, String> {
         let response = self
@@ -154,6 +155,7 @@ impl JudgeHostClient {
                 id,
                 package_dir,
                 runtime_library,
+                execution_provider_library,
                 device,
             })
             .await?;
@@ -353,6 +355,7 @@ mod tests {
             .load(
                 PathBuf::from("relative/package"),
                 PathBuf::from("relative/onnxruntime.dll"),
+                None,
                 JudgeDevice::Cpu,
             )
             .await;

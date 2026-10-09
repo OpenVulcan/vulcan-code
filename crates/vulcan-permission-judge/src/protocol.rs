@@ -32,6 +32,11 @@ pub enum JudgeDevice {
     /// NVIDIA GPU through the CUDA execution provider.
     /// 通过 CUDA 执行提供程序使用 NVIDIA GPU。
     Cuda,
+    /// Any GPU with a WebGPU backend (Direct3D 12, Vulkan or Metal) through the WebGPU plugin
+    /// execution provider.
+    /// 通过 WebGPU 插件执行提供程序使用任何具备 WebGPU 后端（Direct3D 12、Vulkan 或 Metal）的 GPU。
+    #[serde(rename = "webgpu")]
+    WebGpu,
     /// CPU execution provider.
     /// CPU 执行提供程序。
     Cpu,
@@ -67,6 +72,10 @@ pub enum JudgeHostRequest {
         /// ONNX Runtime shared library to load.
         /// 要加载的 ONNX Runtime 共享库。
         runtime_library: PathBuf,
+        /// Plugin execution-provider library; required for, and only accepted with, a plugin
+        /// device such as WebGPU.
+        /// 插件执行提供程序库；插件设备（如 WebGPU）必需，其他设备不接受。
+        execution_provider_library: Option<PathBuf>,
         /// Device to use; a device that fails is reported, never replaced.
         /// 使用的设备；失败时如实报告，绝不替换。
         device: JudgeDevice,

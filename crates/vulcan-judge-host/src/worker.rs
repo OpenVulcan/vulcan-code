@@ -106,11 +106,17 @@ impl Worker {
                 id,
                 package_dir,
                 runtime_library,
+                execution_provider_library,
                 device,
             } => (
                 id,
-                self.load(&package_dir, &runtime_library, device)
-                    .map(|report| JudgeHostResponse::Loaded { id, report }),
+                self.load(
+                    &package_dir,
+                    &runtime_library,
+                    execution_provider_library.as_deref(),
+                    device,
+                )
+                .map(|report| JudgeHostResponse::Loaded { id, report }),
             ),
             JudgeHostRequest::Evaluate { id, items } => (
                 id,
@@ -143,6 +149,7 @@ impl Worker {
         &mut self,
         package_dir: &Path,
         runtime_library: &Path,
+        execution_provider_library: Option<&Path>,
         device: JudgeDevice,
     ) -> Result<LoadReport, String> {
         match self.state {
@@ -169,7 +176,7 @@ impl Worker {
         let started = Instant::now();
         self.state = State::Spent;
         initialize_runtime(runtime_library)?;
-        let mut engine = Engine::load(&package, device)?;
+        let mut engine = Engine::load(&package, device, execution_provider_library)?;
         let load_ms = elapsed_ms(started);
 
         let started = Instant::now();
@@ -457,6 +464,7 @@ mod tests {
             id,
             package_dir: PathBuf::from("relative/package"),
             runtime_library: PathBuf::from("relative/onnxruntime.dll"),
+            execution_provider_library: None,
             device: JudgeDevice::Cpu,
         };
         assert!(matches!(
@@ -489,6 +497,7 @@ mod tests {
             id: 1,
             package_dir: path("VULCAN_JUDGE_TEST_PACKAGE"),
             runtime_library: path("VULCAN_JUDGE_TEST_ORT"),
+            execution_provider_library: None,
             device: JudgeDevice::Cpu,
         });
         let JudgeHostResponse::Loaded { report, .. } = response else {
