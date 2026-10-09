@@ -907,6 +907,7 @@ fn recovery_request(
             arguments,
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         },
         binding_fingerprint: format!("binding-{tool_call_id}"),
     }

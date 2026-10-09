@@ -48,8 +48,10 @@ struct FixedHost {
     mode: Result<PermissionMode, String>,
     approval: Result<bool, String>,
     judge: Result<Option<JudgeLabel>, String>,
+    review: Result<Option<LlmReview>, String>,
     prompts: std::sync::Mutex<Vec<(String, ToolApprovalPrompt)>>,
     judged: std::sync::Mutex<Vec<JudgeCall>>,
+    reviewed: std::sync::Mutex<Vec<ReviewCall>>,
 }
 
 impl FixedHost {
@@ -66,12 +68,25 @@ impl FixedHost {
         approval: Result<bool, String>,
         judge: Result<Option<JudgeLabel>, String>,
     ) -> Arc<Self> {
+        Self::reviewing(mode, approval, judge, Ok(None))
+    }
+
+    /// Builds a host whose judge and reviewer answer every call with fixed results.
+    /// 构建一个判定器与复核器对每次调用给出固定结果的宿主。
+    fn reviewing(
+        mode: Result<PermissionMode, String>,
+        approval: Result<bool, String>,
+        judge: Result<Option<JudgeLabel>, String>,
+        review: Result<Option<LlmReview>, String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             mode,
             approval,
             judge,
+            review,
             prompts: std::sync::Mutex::new(Vec::new()),
             judged: std::sync::Mutex::new(Vec::new()),
+            reviewed: std::sync::Mutex::new(Vec::new()),
         })
     }
 }
@@ -97,6 +112,11 @@ impl ToolPermissionHost for FixedHost {
     async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
         self.judged.lock().unwrap().push(call);
         self.judge.clone()
+    }
+
+    async fn review(&self, call: ReviewCall) -> Result<Option<LlmReview>, String> {
+        self.reviewed.lock().unwrap().push(call);
+        self.review.clone()
     }
 }
 
@@ -393,7 +413,7 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
                 session,
                 &edit,
                 &args,
-                None,
+                PermissionTexts::default(),
                 &context(),
                 Some(&root),
             )
@@ -420,6 +440,7 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
                 },
                 high_risk: None,
                 judge: None,
+                review: None,
             }
         )]
     );
@@ -463,7 +484,7 @@ async fn gate_asks_the_user_for_escalated_calls_and_fails_closed() {
             session,
             &edit,
             &args,
-            None,
+            PermissionTexts::default(),
             &context(),
             Some(workspace.path())
         )
@@ -490,7 +511,10 @@ async fn judge_clears_only_workspace_write_calls_without_high_risk() {
                 session,
                 &shell,
                 &args,
-                Some(&raw),
+                PermissionTexts {
+                    raw_arguments: Some(&raw),
+                    user_request: None,
+                },
                 &context(),
                 Some(&root),
             )
@@ -575,4 +599,168 @@ async fn judge_clears_only_workspace_write_calls_without_high_risk() {
     );
     assert!(read_only.judged.lock().unwrap().is_empty());
     assert_eq!(judge_of(&read_only), vec![None]);
+}
+
+#[tokio::test]
+async fn reviewer_decides_within_the_judge_and_high_risk_boundary() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().to_path_buf();
+    let shell = native(SHELL_COMMAND_TOOL_ID);
+    let session = SessionId::nil();
+    let admit = |host: Arc<FixedHost>, command: &'static str| {
+        let shell = shell.clone();
+        let root = root.clone();
+        async move {
+            let host: Arc<dyn ToolPermissionHost> = host;
+            let args = json!({"command": command});
+            admit_tool_call(
+                Some(&host),
+                session,
+                &shell,
+                &args,
+                PermissionTexts {
+                    raw_arguments: None,
+                    user_request: Some("clean the build"),
+                },
+                &context(),
+                Some(&root),
+            )
+            .await
+        }
+    };
+    let review = |verdict, may_allow_blocked| {
+        Ok(Some(LlmReview {
+            verdict,
+            reason: String::from("because"),
+            may_allow_blocked,
+        }))
+    };
+    let host = |judge: Option<JudgeLabel>, review| {
+        FixedHost::reviewing(
+            Ok(PermissionMode::WorkspaceWrite),
+            Ok(false),
+            Ok(judge),
+            review,
+        )
+    };
+
+    // A reviewer allow clears a judge review without asking; it reads the call and the intent.
+    // 复核器的 allow 会不经询问放行判定为 review 的调用；它读取调用与意图。
+    let clearing = host(
+        Some(JudgeLabel::Review),
+        review(ReviewVerdict::Allow, false),
+    );
+    assert_eq!(
+        admit(Arc::clone(&clearing), "cargo build").await,
+        ToolPermissionVerdict::Proceed
+    );
+    assert!(clearing.prompts.lock().unwrap().is_empty());
+    assert_eq!(
+        clearing.reviewed.lock().unwrap().clone(),
+        vec![ReviewCall {
+            workspace_root: Some(root.clone()),
+            tool_name: String::from(SHELL_COMMAND_TOOL_ID),
+            arguments: String::from(r#"{"command":"cargo build"}"#),
+            user_request: Some(String::from("clean the build")),
+            high_risk: None,
+            judge: Some(JudgeFinding::Scored(JudgeLabel::Review)),
+        }]
+    );
+
+    // Without a judge the reviewer may clear too; a judge allow never reaches it.
+    // 没有判定器时复核器同样可以放行；判定器的 allow 不会到达复核器。
+    let unjudged = host(None, review(ReviewVerdict::Allow, false));
+    assert_eq!(
+        admit(Arc::clone(&unjudged), "cargo build").await,
+        ToolPermissionVerdict::Proceed
+    );
+    let judged_allow = host(Some(JudgeLabel::Allow), review(ReviewVerdict::Deny, false));
+    assert_eq!(
+        admit(Arc::clone(&judged_allow), "cargo build").await,
+        ToolPermissionVerdict::Proceed
+    );
+    assert!(judged_allow.reviewed.lock().unwrap().is_empty());
+
+    // Blocked or high-risk calls reach the user with the reviewer's allow, unless the user lets
+    // the reviewer clear them.
+    // 被拦截或高风险的调用会带着复核器的 allow 交给用户，除非用户允许复核器放行它们。
+    for (judge, command) in [
+        (Some(JudgeLabel::Block), "cargo build"),
+        (Some(JudgeLabel::Review), "rm -rf build"),
+    ] {
+        let guarded = host(judge, review(ReviewVerdict::Allow, false));
+        assert_eq!(
+            admit(Arc::clone(&guarded), command).await,
+            ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+        );
+        let verdicts: Vec<_> = guarded
+            .prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, prompt)| match &prompt.review {
+                Some(ReviewFinding::Reviewed(review)) => Some(review.verdict),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verdicts, vec![Some(ReviewVerdict::Allow)]);
+        let trusted = host(judge, review(ReviewVerdict::Allow, true));
+        assert_eq!(
+            admit(Arc::clone(&trusted), command).await,
+            ToolPermissionVerdict::Proceed
+        );
+    }
+
+    // A deny returns the reason to the model; ask_user and failures reach the user.
+    // deny 把理由返回给模型；ask_user 与失败交给用户。
+    assert_eq!(
+        admit(
+            host(None, review(ReviewVerdict::Deny, false)),
+            "cargo build"
+        )
+        .await,
+        ToolPermissionVerdict::Deny(format!("{REVIEW_DENIAL_PREFIX}because"))
+    );
+    for (answer, finding) in [
+        (
+            review(ReviewVerdict::AskUser, true),
+            ReviewFinding::Reviewed(LlmReview {
+                verdict: ReviewVerdict::AskUser,
+                reason: String::from("because"),
+                may_allow_blocked: true,
+            }),
+        ),
+        (
+            Err(String::from("offline")),
+            ReviewFinding::Unavailable(String::from("offline")),
+        ),
+    ] {
+        let asking = host(None, answer);
+        assert_eq!(
+            admit(Arc::clone(&asking), "cargo build").await,
+            ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+        );
+        let reviews: Vec<_> = asking
+            .prompts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, prompt)| prompt.review.clone())
+            .collect();
+        assert_eq!(reviews, vec![Some(finding)]);
+    }
+
+    // Read-only never consults the reviewer.
+    // 只读模式从不咨询复核器。
+    let read_only = FixedHost::reviewing(
+        Ok(PermissionMode::ReadOnly),
+        Ok(false),
+        Ok(None),
+        review(ReviewVerdict::Allow, true),
+    );
+    assert_eq!(
+        admit(Arc::clone(&read_only), "cargo build").await,
+        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+    );
+    assert!(read_only.reviewed.lock().unwrap().is_empty());
 }

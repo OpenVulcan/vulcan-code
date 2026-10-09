@@ -19,7 +19,7 @@ use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationToolCall, CoreError as VulcanCoreError, ProviderContinuation, ProviderTurnBoundary,
     ProviderTurnDelta, ProviderTurnResponse as CoreProviderTurnResponse, ProviderUsageSnapshot,
-    TransientRawArguments,
+    TransientText,
 };
 use vulcan_provider_adapters::{ResponseProjectionProfile, TransientReasoningStatusMode};
 
@@ -727,9 +727,7 @@ impl PublicTurnAccumulator {
                     tool_name: call.name,
                     arguments: call.arguments,
                     argument_parse_error: None,
-                    raw_arguments: raw_arguments
-                        .map(TransientRawArguments::new)
-                        .unwrap_or_default(),
+                    raw_arguments: raw_arguments.map(TransientText::new).unwrap_or_default(),
                 });
             }
             AiStreamEvent::ToolCallAborted { item_id, message } => {

@@ -225,6 +225,7 @@ async fn native_file_read_persists_one_markdown_body() {
         arguments,
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let canonical = canonicalize_tool_invocation_result(&request, result);
     assert!(canonical.model_output.starts_with("# File: sample.txt\n"));
@@ -493,6 +494,7 @@ async fn native_file_errors_share_flat_diagnostics_after_projection() {
             arguments,
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         };
         let canonical = canonicalize_tool_invocation_result(&request, result);
         assert!(canonical.is_error);

@@ -36,6 +36,10 @@ pub use command_rules::HighRiskCategory;
 /// 用户拒绝升级调用时返回给模型的说明。
 pub const USER_DENIAL: &str = "The user denied permission for this call, so it was not executed. Do not retry it or work around the denial. Continue with other work, or stop and explain what you intended to do.";
 
+/// Model-visible prefix of the explanation returned when the reviewing LLM denies a call.
+/// 复核 LLM 拒绝调用时返回给模型的说明前缀。
+pub const REVIEW_DENIAL_PREFIX: &str = "The permission reviewer denied this call, so it was not executed. Do not retry it or work around the denial. Reviewer's reason: ";
+
 /// Model-visible explanation returned when the session permission mode cannot be read.
 /// 无法读取会话权限模式时返回给模型的说明。
 pub const MODE_UNAVAILABLE_DENIAL: &str = "The session permission mode could not be read, so this call was not executed. Tell the user that tool permissions are unavailable.";
@@ -72,6 +76,104 @@ pub trait ToolPermissionHost: Send + Sync {
     async fn judge(&self, _call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
         Ok(None)
     }
+
+    /// Reviews one escalated call with the configured reviewing LLM; `Ok(None)` means no reviewer
+    /// is configured. An error means the reviewer is configured but could not review this call.
+    /// 用已配置的复核 LLM 复核一次升级调用；`Ok(None)` 表示未配置复核器。错误表示已配置复核器
+    /// 但无法复核本次调用。
+    async fn review(&self, _call: ReviewCall) -> Result<Option<LlmReview>, String> {
+        Ok(None)
+    }
+}
+
+/// Permission-only text carried with one call; neither persists.
+/// 随一次调用携带、仅供权限使用的文本；两者都不持久化。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PermissionTexts<'a> {
+    /// Argument text exactly as the model streamed it; restored calls have none.
+    /// 模型流式发出的原样参数文本；恢复的调用没有该文本。
+    pub raw_arguments: Option<&'a str>,
+    /// Latest user-authored request of the conversation, when known.
+    /// 会话中最近一条用户请求（已知时）。
+    pub user_request: Option<&'a str>,
+}
+
+/// One escalated call as the reviewing LLM reads it.
+/// 复核 LLM 所读取的一次升级调用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewCall {
+    /// Workspace the call runs in; its project policy choices apply.
+    /// 调用运行的工作区；适用其项目策略选择。
+    pub workspace_root: Option<PathBuf>,
+    /// Model-visible tool name.
+    /// 模型可见的工具名称。
+    pub tool_name: String,
+    /// Streamed argument text, or the structured arguments as JSON for restored calls.
+    /// 流式参数文本；恢复的调用使用结构化参数的 JSON。
+    pub arguments: String,
+    /// Latest user-authored request of the conversation, when known.
+    /// 会话中最近一条用户请求（已知时）。
+    pub user_request: Option<String>,
+    /// Matched high-risk category, when any.
+    /// 命中的高风险类别（如有）。
+    pub high_risk: Option<HighRiskCategory>,
+    /// Judge layer finding, when a judge is configured.
+    /// 判定层结论（配置判定器时）。
+    pub judge: Option<JudgeFinding>,
+}
+
+/// Decision of the reviewing LLM.
+/// 复核 LLM 的决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewVerdict {
+    /// The call may run once.
+    /// 调用可以执行一次。
+    Allow,
+    /// The user decides.
+    /// 由用户决定。
+    AskUser,
+    /// The call must not run; the reason goes back to the model.
+    /// 调用不得执行；原因返回给模型。
+    Deny,
+}
+
+impl ReviewVerdict {
+    /// Stable key shared by the structured output, projections, and clients.
+    /// 结构化输出、投影与客户端共用的稳定键。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::AskUser => "ask_user",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+/// What the reviewing LLM returned for one call.
+/// 复核 LLM 对一次调用的返回。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmReview {
+    /// Reviewer decision.
+    /// 复核决定。
+    pub verdict: ReviewVerdict,
+    /// Reason in the user's language, shown on the approval card.
+    /// 以用户语言写出的理由，显示在审批卡片上。
+    pub reason: String,
+    /// Whether the user lets the reviewer clear calls the judge blocked or a high-risk rule matched.
+    /// 用户是否允许复核器放行判定器拦截或命中高风险规则的调用。
+    pub may_allow_blocked: bool,
+}
+
+/// What the review layer found for a call it did not decide.
+/// 复核层对未决定调用的结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewFinding {
+    /// The reviewer answered; an `Allow` appears when it was not permitted to clear the call.
+    /// 复核器已回答；不允许其放行该调用时会出现 `Allow`。
+    Reviewed(LlmReview),
+    /// The reviewer is configured but could not review the call.
+    /// 复核器已配置但无法复核调用。
+    Unavailable(String),
 }
 
 /// One escalated call as the judge model reads it.
@@ -321,13 +423,28 @@ async fn judge_layer(
     }
 }
 
+/// Asks the host's reviewing LLM about one call; `None` when no reviewer is configured.
+/// 请宿主的复核 LLM 复核一次调用；未配置复核器时返回 `None`。
+async fn review_layer(
+    host: &Arc<dyn ToolPermissionHost>,
+    call: ReviewCall,
+) -> Option<ReviewFinding> {
+    match host.review(call).await {
+        Ok(review) => review.map(ReviewFinding::Reviewed),
+        Err(reason) => Some(ReviewFinding::Unavailable(reason)),
+    }
+}
+
 /// Decides whether one tool call proceeds, reading the session's live permission mode.
 /// 读取会话实时权限模式，决定一次工具调用是否执行。
 /// In workspace-write mode an escalated call is first scored by the judge, which may clear it
-/// unless a high-risk rule matched; everything else goes to the user. Read-only escalates every
-/// write straight to the user.
-/// 在工作区写入模式下，升级调用先由判定器评分；除非命中高风险规则，判定器可放行；其余全部交给
-/// 用户。只读模式会把所有写入直接交给用户。
+/// unless a high-risk rule matched. The reviewing LLM then sees what the judge did not clear: it
+/// may deny, or clear calls that are neither judge-blocked nor high-risk (those only when the user
+/// allows it). Everything else goes to the user. Read-only escalates every write straight to the
+/// user.
+/// 在工作区写入模式下，升级调用先由判定器评分；除非命中高风险规则，判定器可放行。复核 LLM 随后
+/// 查看判定器未放行的调用：它可以拒绝，也可以放行既未被判定器拦截也未命中高风险的调用（这两类
+/// 仅在用户允许时可放行）。其余全部交给用户。只读模式会把所有写入直接交给用户。
 /// Without a host (embedded or test runtimes) no permission policy is configured and calls proceed.
 /// 没有宿主时（嵌入式或测试运行时）未配置权限策略，调用直接执行。
 pub async fn admit_tool_call(
@@ -335,7 +452,7 @@ pub async fn admit_tool_call(
     session_id: SessionId,
     definition: &ResolvedToolDefinition,
     args: &Value,
-    raw_arguments: Option<&str>,
+    texts: PermissionTexts<'_>,
     context: &VulcanToolInvocationContext,
     workspace_root: Option<&Path>,
 ) -> ToolPermissionVerdict {
@@ -351,18 +468,49 @@ pub async fn admit_tool_call(
         return ToolPermissionVerdict::Proceed;
     };
     let judge = if mode == PermissionMode::WorkspaceWrite {
-        judge_layer(host, definition, raw_arguments, workspace_root).await
+        judge_layer(host, definition, texts.raw_arguments, workspace_root).await
     } else {
         None
     };
     if high_risk.is_none() && judge == Some(JudgeFinding::Scored(JudgeLabel::Allow)) {
         return ToolPermissionVerdict::Proceed;
     }
+    let review = if mode == PermissionMode::WorkspaceWrite {
+        let call = ReviewCall {
+            workspace_root: workspace_root.map(Path::to_path_buf),
+            tool_name: definition.descriptor.id.clone(),
+            arguments: texts
+                .raw_arguments
+                .map_or_else(|| args.to_string(), str::to_string),
+            user_request: texts.user_request.map(str::to_string),
+            high_risk,
+            judge: judge.clone(),
+        };
+        review_layer(host, call).await
+    } else {
+        None
+    };
+    if let Some(ReviewFinding::Reviewed(review)) = &review {
+        let blocked = high_risk.is_some() || judge == Some(JudgeFinding::Scored(JudgeLabel::Block));
+        match review.verdict {
+            ReviewVerdict::Allow if !blocked || review.may_allow_blocked => {
+                return ToolPermissionVerdict::Proceed;
+            }
+            ReviewVerdict::Deny => {
+                return ToolPermissionVerdict::Deny(format!(
+                    "{REVIEW_DENIAL_PREFIX}{}",
+                    review.reason
+                ));
+            }
+            ReviewVerdict::Allow | ReviewVerdict::AskUser => {}
+        }
+    }
     let prompt = ToolApprovalPrompt {
         mode,
         subject,
         high_risk,
         judge,
+        review,
     };
     match host
         .request_approval(

@@ -588,6 +588,7 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -636,6 +637,7 @@ fn parallel_managed_tools_receive_exact_invocation_identity() {
         arguments: json!({ "path": "a.txt" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let second = ToolInvocationRequest {
         request_stream_id: String::from("request-stream-parallel-call-b"),
@@ -644,6 +646,7 @@ fn parallel_managed_tools_receive_exact_invocation_identity() {
         arguments: json!({ "path": "b.txt" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -726,6 +729,7 @@ fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
             arguments: json!({ "path": "prepared-a.txt" }),
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         },
         ToolInvocationRequest {
             request_stream_id: String::from("request-stream-prepared-b"),
@@ -734,6 +738,7 @@ fn prepared_tool_batch_barrier_installs_exact_parallel_invocation_identities() {
             arguments: json!({ "path": "prepared-b.txt" }),
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         },
     ];
     let identities = vec![
@@ -830,6 +835,7 @@ fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
         arguments: json!({ "query": "README" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let same_binding_request = ToolInvocationRequest {
         request_stream_id: String::from("request-stream-call-unknown-2"),
@@ -838,6 +844,7 @@ fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
         arguments: json!({ "query": "Cargo.toml" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let other_binding_request = ToolInvocationRequest {
         request_stream_id: String::from("request-stream-call-unknown-3"),
@@ -846,6 +853,7 @@ fn managed_tool_runtime_bridge_preserves_unregistered_tool_error_path() {
         arguments: json!({}),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
 
     let fingerprint = runtime_bridge
@@ -891,6 +899,7 @@ fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
         arguments: json!({ "query": "README" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -939,6 +948,7 @@ fn managed_tool_runtime_bridge_preserves_structured_tool_error_results() {
         arguments: json!({}),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -989,6 +999,7 @@ fn managed_tool_runtime_bridge_rejects_structured_error_without_error_text() {
         arguments: json!({}),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1039,6 +1050,7 @@ fn managed_tool_runtime_bridge_blocks_disallowed_plan_tool_invocation() {
         arguments: json!({ "query": "README" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1119,6 +1131,7 @@ fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(&runtime_bridge, &prepared_request, 801, 802, 803);
 
@@ -1210,6 +1223,7 @@ fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() 
         arguments: json!({ "query": "README" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(&runtime_bridge, &prepared_request, 901, 902, 903);
 
@@ -1270,6 +1284,7 @@ fn streaming_tool_executor_converts_tool_panics_into_error_results() {
         arguments: json!({ "query": "山姆零食" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1001, 1002, 1003);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1342,6 +1357,7 @@ fn streaming_tool_executor_marks_controller_error_results_failed() {
         arguments: json!({ "query": "演示错误" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1101, 1102, 1103);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1406,6 +1422,7 @@ fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
         arguments: json!({ "query": "must not run" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1201, 1202, 1203);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1498,6 +1515,7 @@ fn streaming_tool_executor_does_not_reject_when_scope_is_empty() {
         arguments: json!({ "query": "scope empty should still run" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1301, 1302, 1303);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1550,6 +1568,7 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
         arguments: json!({ "query": "must be rejected before the failing body runs" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let allowed_request = ToolInvocationRequest {
         request_stream_id: String::from("request-stream-scoped-allowed-call-1"),
@@ -1558,6 +1577,7 @@ fn streaming_tool_executor_rejects_only_scoped_tool_ids() {
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     runtime_bridge
         .install_prepared_invocation_identities(
@@ -1698,6 +1718,7 @@ fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
         arguments: json!({ "query": "先显示工具调用" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1501, 1502, 1503);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1802,6 +1823,7 @@ fn streaming_tool_executor_rejects_tool_body_when_safety_barrier_fails() {
         arguments: json!({ "query": "拒绝不安全工具边界" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1601, 1602, 1603);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1876,6 +1898,7 @@ fn streaming_tool_executor_waits_for_tool_finished_projection_before_returning()
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1701, 1702, 1703);
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1969,6 +1992,7 @@ fn streaming_tool_executor_propagates_tool_finished_rejection_reason() {
         arguments: json!({ "path": "src/main.rs" }),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     install_test_invocation_identity(runtime_bridge.as_ref(), &request, 1801, 1802, 1803);
     // runtime keeps event receipt and task completion ordering deterministic.

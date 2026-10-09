@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::tool_permission::{
-    ToolPermissionHost, ToolPermissionVerdict, admit_tool_call,
+    PermissionTexts, ToolPermissionHost, ToolPermissionVerdict, admit_tool_call,
 };
 use crate::model::SessionId;
 use serde_json::{Map, Value, json};
@@ -334,13 +334,13 @@ impl VulcanManagedToolRuntimeBridge {
 
     /// Dispatches one resolved host-managed tool definition through the shared tools manager.
     /// 通过共享工具管理器调度一条已解析宿主管理工具定义。
-    /// `raw_arguments` is the streamed argument text the permission judge reads, when still known.
-    /// `raw_arguments` 是权限判定读取的流式参数文本（仍可得时）。
+    /// `texts` carries the permission-only call text (streamed arguments, latest user request).
+    /// `texts` 携带仅供权限使用的调用文本（流式参数、最近用户请求）。
     pub async fn invoke_definition(
         &self,
         definition: &ResolvedToolDefinition,
         args: Value,
-        raw_arguments: Option<&str>,
+        texts: PermissionTexts<'_>,
         context: VulcanToolInvocationContext,
     ) -> Result<VulcanToolInvocationResult, String> {
         // Plan mode answers first; only calls it lets through reach the permission gate.
@@ -351,7 +351,7 @@ impl VulcanManagedToolRuntimeBridge {
                 self.session_id,
                 definition,
                 &args,
-                raw_arguments,
+                texts,
                 &context,
                 self.manager.workspace_root(),
             )
@@ -1194,7 +1194,10 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             .invoke_definition(
                 definition,
                 request.arguments.clone(),
-                request.raw_arguments.text(),
+                PermissionTexts {
+                    raw_arguments: request.raw_arguments.text(),
+                    user_request: request.user_request.text(),
+                },
                 context,
             )
             .await
@@ -1234,6 +1237,7 @@ pub(crate) fn assert_result_payload_cost(
         arguments: json!({}),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     };
     let before = canonicalize_tool_invocation_result(&request, before);
     let after = canonicalize_tool_invocation_result(&request, after);

@@ -714,6 +714,7 @@ fn restored_malformed_provider_arguments_never_dispatch_executor() {
             arguments: Value::Null,
             argument_parse_error: Some(decoder_message.to_string()),
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         };
         // snapshot retains the authoritative assistant call at the recovery boundary.
         // snapshot 在恢复边界保留权威助手工具调用。
@@ -868,6 +869,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     arguments: json!({"index": 1}),
                     argument_parse_error: None,
                     raw_arguments: Default::default(),
+                    user_request: Default::default(),
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::Execute,
             },
@@ -879,6 +881,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     arguments: json!({"index": 2}),
                     argument_parse_error: None,
                     raw_arguments: Default::default(),
+                    user_request: Default::default(),
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::ReuseResult {
                     result: ToolInvocationResult {
@@ -898,6 +901,7 @@ fn restored_tool_batch_reuses_results_and_synthesizes_unknown_outcomes_in_order(
                     arguments: json!({"index": 3}),
                     argument_parse_error: None,
                     raw_arguments: Default::default(),
+                    user_request: Default::default(),
                 },
                 disposition: crate::types::RestoredToolInvocationDisposition::OutcomeUnknown,
             },
@@ -994,6 +998,7 @@ fn restored_tool_batch_without_executable_calls_skips_empty_execution_boundary()
             arguments: json!({"index": 1}),
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         };
         // snapshot ends at the assistant call that must receive one synthetic result without re-execution.
         // snapshot 结束于必须在不重新执行的情况下接收一条合成结果的助手调用。
@@ -1125,6 +1130,7 @@ fn restored_user_followup_pairs_not_started_tool_before_real_user_text() {
             arguments: json!({"path": "safe.txt"}),
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         };
         // snapshot ends at the unmatched assistant tool call.
         // snapshot 结束于尚未配对的助手工具调用。

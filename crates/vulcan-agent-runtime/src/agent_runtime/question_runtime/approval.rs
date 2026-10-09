@@ -10,7 +10,9 @@
 //! 权限事实。
 
 use super::*;
-use crate::agent_runtime::tool_permission::{HighRiskCategory, JudgeFinding, PermissionSubject};
+use crate::agent_runtime::tool_permission::{
+    HighRiskCategory, JudgeFinding, PermissionSubject, ReviewFinding,
+};
 use vulcan_session_core::v1::config::PermissionMode;
 
 /// Canonical label of the option that runs the gated call once.
@@ -37,6 +39,9 @@ pub struct ToolApprovalPrompt {
     /// Judge layer finding, when a judge is configured for the call.
     /// 判定层结论（当调用配置了判定器时）。
     pub judge: Option<JudgeFinding>,
+    /// Review layer finding, when a reviewing LLM is configured for the call.
+    /// 复核层结论（当调用配置了复核 LLM 时）。
+    pub review: Option<ReviewFinding>,
 }
 
 impl QuestionRuntime {
@@ -114,6 +119,19 @@ fn approval_question(tool_name: &str, prompt: &ToolApprovalPrompt) -> QuestionPr
         }
         Some(JudgeFinding::Unavailable(reason)) => {
             question.push_str(&format!("\n\nPermission judge unavailable: {reason}"));
+        }
+        None => {}
+    }
+    match &prompt.review {
+        Some(ReviewFinding::Reviewed(review)) => {
+            question.push_str(&format!(
+                "\n\nPermission reviewer ({}): {}",
+                review.verdict.key(),
+                review.reason
+            ));
+        }
+        Some(ReviewFinding::Unavailable(reason)) => {
+            question.push_str(&format!("\n\nPermission reviewer unavailable: {reason}"));
         }
         None => {}
     }
@@ -195,6 +213,7 @@ mod tests {
                         },
                         high_risk: Some(HighRiskCategory::RecursiveDelete),
                         judge: Some(JudgeFinding::Scored(JudgeLabel::Block)),
+                        review: None,
                     },
                 )
                 .await

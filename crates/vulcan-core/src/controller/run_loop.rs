@@ -1,5 +1,6 @@
 use super::tool_execution::TOOL_ARGUMENT_PARSE_FAILURE_PREFIX;
 use super::*;
+use crate::types::TransientText;
 
 /// Returns whether the active user turn already consumed its one malformed-tool correction attempt.
 /// 返回当前用户回合是否已经消耗唯一一次工具参数纠错机会。
@@ -358,6 +359,7 @@ impl VulcanCoreController {
                 });
             }
 
+            let user_request = latest_user_request(&self.snapshot);
             let requests = response
                 .tool_calls
                 .iter()
@@ -368,6 +370,7 @@ impl VulcanCoreController {
                     arguments: tool_call.arguments.clone(),
                     argument_parse_error: tool_call.argument_parse_error.clone(),
                     raw_arguments: tool_call.raw_arguments.clone(),
+                    user_request: user_request.clone(),
                 })
                 .collect::<Vec<_>>();
             // malformedArgumentsObserved is decided from the authoritative completed Provider response.
@@ -674,6 +677,7 @@ impl VulcanCoreController {
                 continue;
             }
 
+            let user_request = latest_user_request(&self.snapshot);
             let requests = response
                 .tool_calls
                 .iter()
@@ -684,6 +688,7 @@ impl VulcanCoreController {
                     arguments: tool_call.arguments.clone(),
                     argument_parse_error: tool_call.argument_parse_error.clone(),
                     raw_arguments: tool_call.raw_arguments.clone(),
+                    user_request: user_request.clone(),
                 })
                 .collect::<Vec<_>>();
             // malformedArgumentsObserved is true when any call in this authoritative batch is non-executable JSON.
@@ -747,4 +752,18 @@ impl VulcanCoreController {
             }
         }
     }
+}
+
+/// Returns the latest user-authored text of the active window for the permission reviewer.
+/// 返回活动窗口中最近一条用户文本，供权限复核使用。
+fn latest_user_request(snapshot: &ConversationSnapshot) -> TransientText {
+    snapshot
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match &message.payload {
+            ConversationPayload::UserText { text, .. } => Some(TransientText::new(text.clone())),
+            _ => None,
+        })
+        .unwrap_or_default()
 }

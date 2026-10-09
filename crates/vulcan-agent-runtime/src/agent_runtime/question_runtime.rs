@@ -1001,6 +1001,7 @@ fn core_tool_request_from_question(
         arguments: request.tool_arguments.clone(),
         argument_parse_error: None,
         raw_arguments: Default::default(),
+        user_request: Default::default(),
     })
 }
 
@@ -1117,6 +1118,7 @@ mod tests {
             arguments: test_tool_arguments(),
             argument_parse_error: None,
             raw_arguments: Default::default(),
+            user_request: Default::default(),
         };
         let canonical = canonicalize_tool_invocation_result(&request, result);
         let stored = serde_json::to_string(&canonical).expect("serialized result");
