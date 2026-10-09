@@ -1155,8 +1155,9 @@ fn encode_content_items(
 ///
 /// # Parameters
 /// 参数
-/// `resource` contains either a remote URL or a Base64 data URL.
-/// `resource` 包含远程 URL 或 Base64 Data URL。
+/// `resource` contains a remote URL, a Base64 data URL, or a provider file id returned by the
+/// frozen route's own upload channel.
+/// `resource` 包含远程 URL、Base64 Data URL，或冻结路由自身上传通道返回的供应商文件 ID。
 ///
 /// # Returns
 /// 返回值
@@ -1170,6 +1171,24 @@ pub(crate) fn encode_anthropic_image(
             "Anthropic Messages cannot preserve image detail for resource `{}`.",
             resource.id
         )));
+    }
+    if resource.source_kind == vulcan_ai_contract::ResourceSourceKind::ProviderFileId {
+        // The standard Anthropic Files source carries only the opaque id; the route declares the
+        // Files beta request header, so this encoder never adds transport metadata itself.
+        // 标准 Anthropic Files 来源只携带不透明 ID；Files beta 请求头由路由声明，
+        // 因此此编码器不自行添加传输元数据。
+        if resource.id.trim().is_empty() || resource.url.is_some() {
+            return Err(ProtocolConversionError::new(
+                "Anthropic file image requires a non-empty provider file id and no URL.",
+            ));
+        }
+        return Ok(json!({
+            "type": "image",
+            "source": {
+                "type": "file",
+                "file_id": resource.id,
+            },
+        }));
     }
     let url = resource.url.as_deref().ok_or_else(|| {
         ProtocolConversionError::new(format!(

@@ -126,9 +126,15 @@ impl<'a> InternalMediaProjector<'a> {
             ANTHROPIC_MESSAGES_PROFILE_ID
             | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
             | CLAUDE_CODE_MESSAGES_PROFILE_ID => {
-                if resource.source_kind == ResourceSourceKind::ProviderFileId {
+                // Only the standard image file source is registered; documents and videos keep
+                // rejecting provider file ids because no Anthropic route consumes them yet.
+                // 仅注册了标准图片文件来源；文档与视频仍拒绝供应商文件 ID，因为尚无 Anthropic
+                // 路由消费它们。
+                if resource.source_kind == ResourceSourceKind::ProviderFileId
+                    && resource.kind != ResourceKind::Image
+                {
                     return Err(LlmCoreError::new(
-                        "Anthropic media cannot consume a bare provider file id.",
+                        "Anthropic media cannot consume a bare provider file id for this resource kind.",
                     ));
                 }
                 match resource.kind {

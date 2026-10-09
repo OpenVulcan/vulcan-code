@@ -227,3 +227,82 @@ fn final_media_guard_checks_only_real_content_positions() {
         crate::validate_target_media_projection(OPENAI_RESPONSES_PROFILE_ID, &tool_data).is_ok()
     );
 }
+
+/// Builds a typed request whose only content is one uploaded image referenced by provider file id.
+/// 构建仅包含一张以供应商文件 ID 引用的已上传图片的强类型请求。
+fn uploaded_image_request() -> AiExecutionRequest {
+    let mut request = request();
+    request.messages[0].content = vec![ContentItem::Resource {
+        resource: ResourceReference {
+            id: String::from("file-fixture-1"),
+            kind: ResourceKind::Image,
+            media_type: Some(String::from("image/png")),
+            source_kind: ResourceSourceKind::ProviderFileId,
+            file_name: Some(String::from("image.png")),
+            image_detail: None,
+            resource_path: None,
+            local_path: None,
+            url: None,
+        },
+    }];
+    request
+}
+
+/// Verifies an uploaded image id uses each protocol's standard file-reference block, and that a
+/// protocol without a registered image file-reference shape fails before dispatch.
+/// 验证已上传图片 ID 使用各协议标准文件引用块，且未注册图片文件引用形态的协议在分派前失败。
+#[test]
+fn uploaded_image_ids_use_standard_protocol_file_blocks() {
+    for (protocol, profile, pointer, expected) in [
+        (
+            UpstreamProtocol::OpenAiResponses,
+            OPENAI_RESPONSES_PROFILE_ID,
+            "/input/0/content/0",
+            json!({"type":"input_image","file_id":"file-fixture-1"}),
+        ),
+        (
+            UpstreamProtocol::AnthropicMessages,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            "/messages/0/content/0",
+            json!({"type":"image","source":{"type":"file","file_id":"file-fixture-1"}}),
+        ),
+    ] {
+        let internal = encode_internal_responses_request(&uploaded_image_request())
+            .expect("typed internal request");
+        let encoded = project_internal_request_for_provider(internal, &context(protocol), profile)
+            .expect("uploaded image projection");
+        assert_eq!(encoded.body.pointer(pointer), Some(&expected), "{profile}");
+        assert!(crate::protocol_profile_supports_media_source(
+            profile,
+            ResourceKind::Image,
+            "image/png",
+            ResourceSourceKind::ProviderFileId
+        ));
+    }
+    // OpenAI Chat image parts only carry URLs, so an id must never be smuggled into one.
+    // OpenAI Chat 图片部件只携带 URL，因此 ID 绝不能被塞入其中。
+    let internal =
+        encode_internal_responses_request(&uploaded_image_request()).expect("typed request");
+    assert!(
+        project_internal_request_for_provider(
+            internal,
+            &context(UpstreamProtocol::OpenAiChatCompletions),
+            OPENAI_CHAT_PROFILE_ID
+        )
+        .is_err()
+    );
+    assert!(!crate::protocol_profile_supports_media_source(
+        OPENAI_CHAT_PROFILE_ID,
+        ResourceKind::Image,
+        "image/png",
+        ResourceSourceKind::ProviderFileId
+    ));
+    // Anthropic file sources stay image-only until another kind has a registered shape.
+    // Anthropic 文件来源在其他类型注册结构之前仅限图片。
+    assert!(!crate::protocol_profile_supports_media_source(
+        ANTHROPIC_MESSAGES_PROFILE_ID,
+        ResourceKind::File,
+        "application/pdf",
+        ResourceSourceKind::ProviderFileId
+    ));
+}
