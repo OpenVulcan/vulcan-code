@@ -3,6 +3,7 @@ mod context_usage;
 mod host_guidance;
 mod model_selection;
 mod native_media;
+mod permission_mode;
 mod remote_checkpoint;
 use super::*;
 

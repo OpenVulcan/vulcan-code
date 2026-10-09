@@ -15,6 +15,10 @@ use vulcan_session_core::v1::event::SystemContextScope;
 /// 路由切换后当前模型身份的稳定生产者。
 pub(super) const MODEL_SELECTION_CONTEXT_KEY: &str = "dynamic.model_selection";
 
+/// Stable producer describing the session permission mode the tool gate enforces.
+/// 描述工具闸门所执行会话权限模式的稳定生产者。
+pub(super) const PERMISSION_MODE_CONTEXT_KEY: &str = "dynamic.permission_mode";
+
 /// Render the interactive answer mode prompt with the unique Core component limits.
 /// 使用唯一的 Core 组件上限渲染互动回答模式提示词。
 /// No input; returns one trimmed producer body without independently defined limits.
@@ -86,6 +90,46 @@ fn model_selection_input(
     )
 }
 
+/// Builds the permission mode notice from the session's own persisted mode.
+/// 根据会话自身持久化的模式构建权限模式通知。
+/// The default mode needs no notice until another mode was observed; child sessions follow their
+/// root, whose mode the gate enforces, so they receive no notice of their own.
+/// 默认模式在观察到其他模式之前无需通知；子会话跟随根会话由闸门执行，因此不单独收到通知。
+fn permission_mode_input(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+) -> DynamicContextInput {
+    use vulcan_session_core::v1::config::PermissionMode;
+    let mode = document.metadata.mode.access.permission;
+    let retained = document
+        .metadata
+        .dynamic_context
+        .contains_key(PERMISSION_MODE_CONTEXT_KEY);
+    let notice = match mode {
+        PermissionMode::ReadOnly => {
+            "Permission mode: read-only. Reading files and running known read-only commands proceed; file writes, state-changing commands, and extension tools that may change state are denied before they run, and the denial explains why. When a task needs a change, say what you would change so the user can switch modes."
+        }
+        PermissionMode::WorkspaceWrite => {
+            "Permission mode: workspace write. Edits inside the workspace and known read-only commands run directly; other actions may need the user's approval. Attempt the task normally and let the host decide each call."
+        }
+        PermissionMode::FullAccess => {
+            "Permission mode: full access. Tool calls run without permission checks. Still avoid destructive actions the user did not ask for."
+        }
+    };
+    let body = (document.metadata.child_execution_profile.is_none()
+        && (mode != PermissionMode::default() || retained))
+        .then(|| {
+            format!(
+                "{notice} Continue the existing task without acknowledging this context update."
+            )
+        });
+    DynamicContextInput::new(
+        PERMISSION_MODE_CONTEXT_KEY,
+        body,
+        SystemContextScope::Session,
+        None,
+    )
+}
+
 /// Publishes business producer changes; compaction has no authority to withdraw or replace them.
 /// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
 /// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
@@ -115,6 +159,7 @@ pub(super) fn synchronize_request_dynamic_context(
                 &candidate.locked_baseline,
             )?);
             inputs.push(model_selection_input(document, &facts.request));
+            inputs.push(permission_mode_input(document));
             // Freeze the answer mode under the same lock as its request-context publication.
             // 在请求上下文发布的同一把锁内冻结回答模式。
             document
