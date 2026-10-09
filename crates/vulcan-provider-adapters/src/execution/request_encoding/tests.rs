@@ -1773,3 +1773,91 @@ fn required_disabled_reasoning_validation_rejects_dropped_or_contradictory_proje
             .contains("does not preserve")
     );
 }
+
+/// Verifies the bundled DeepSeek manifest closes the conversation upload chain only on routes
+/// whose protocol owns a standard image file-id block, and that those routes encode the id.
+/// 验证随包 DeepSeek 清单仅在协议拥有标准图片文件 ID 块的路由上闭合会话上传链，且这些路由
+/// 会编码该 ID。
+#[test]
+fn deepseek_conversation_images_upload_only_on_file_id_capable_routes() {
+    use vulcan_ai_contract::ResourceKind;
+    let client = encoding_client();
+    for (protocol_id, block_pointer) in [
+        (OPENAI_RESPONSES_PROFILE_ID, "/input/0/content/1"),
+        (ANTHROPIC_MESSAGES_PROFILE_ID, "/messages/0/content/1"),
+    ] {
+        let route = deepseek_route(protocol_id);
+        let contract = client
+            .conversation_media_upload_contract(&route, ResourceKind::Image, "image/png")
+            .expect("upload contract resolution")
+            .unwrap_or_else(|| panic!("{protocol_id} must resolve a real image upload"));
+        assert_eq!(
+            contract.reference_encoding,
+            crate::UploadReferenceEncoding::ProviderFileId,
+            "{protocol_id}"
+        );
+        let facts = crate::MediaDeliveryTarget {
+            profile_id: protocol_id,
+            model_inputs: &[ResourceKind::Image],
+            constraint: None,
+            upload: Some(&contract),
+        }
+        .facts(
+            ResourceKind::Image,
+            "image/png",
+            1024,
+            crate::MediaDeliveryOrigin::NewIntent,
+            1,
+        );
+        assert!(
+            matches!(
+                facts.upload,
+                crate::MediaUploadAvailability::Available { .. }
+            ),
+            "{protocol_id}: {:?}",
+            facts.upload
+        );
+        // The uploaded id reaches the wire through the protocol's own file-reference block.
+        // 已上传 ID 通过协议自身的文件引用块进入线路。
+        let mut request = minimal_request();
+        request.model_id = String::from("deepseek-flash");
+        request.messages[0].content.push(ContentItem::Resource {
+            resource: vulcan_ai_contract::ResourceReference {
+                id: String::from("file-api-fixture"),
+                kind: ResourceKind::Image,
+                media_type: Some(String::from("image/png")),
+                source_kind: vulcan_ai_contract::ResourceSourceKind::ProviderFileId,
+                file_name: Some(String::from("image.png")),
+                image_detail: None,
+                resource_path: None,
+                local_path: None,
+                url: None,
+            },
+        });
+        let encoded = client
+            .encode_request(&route, &request)
+            .unwrap_or_else(|error| panic!("{protocol_id} must encode the file id: {error:?}"));
+        let block = encoded
+            .body
+            .pointer(block_pointer)
+            .unwrap_or_else(|| panic!("{protocol_id} image block"));
+        assert!(
+            block
+                .to_string()
+                .contains("\"file_id\":\"file-api-fixture\""),
+            "{protocol_id}: {block}"
+        );
+    }
+    // OpenAI Chat has no standard image file-id block, so the Chat route keeps inline delivery.
+    // OpenAI Chat 没有标准图片文件 ID 块，因此 Chat 路由保持内联投递。
+    assert!(
+        client
+            .conversation_media_upload_contract(
+                &deepseek_route(OPENAI_CHAT_PROFILE_ID),
+                ResourceKind::Image,
+                "image/png"
+            )
+            .expect("upload contract resolution")
+            .is_none()
+    );
+}

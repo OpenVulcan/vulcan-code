@@ -1201,6 +1201,9 @@
           "cache_duration_ms": {"type": "integer", "minimum": 1},
           "reference_encoding": {
             "enum": ["provider_file_id", "response_url", "template"]
+          },
+          "reference_scope": {
+            "enum": ["provider_protocol", "credential", "session"]
           }
         }
       }

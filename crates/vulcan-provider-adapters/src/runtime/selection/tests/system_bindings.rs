@@ -517,7 +517,14 @@ fn deepseek_manifest_identity_supplies_current_protocol_variants() {
         image_constraint.reference_policy,
         crate::ResourceReferencePolicy::LocalOnly
     );
-    assert!(image_constraint.upload_channel_refs.is_empty());
+    // The Responses route consumes uploaded file ids, so its image constraint must reference an
+    // upload channel; the inline-only Chat route is covered by request encoding tests.
+    // Responses 路由可消费已上传文件 ID，因此其图片约束必须引用上传通道；
+    // 仅内联的 Chat 路由由请求编码测试覆盖。
+    assert!(
+        !image_constraint.upload_channel_refs.is_empty(),
+        "the Flash Responses route must upload conversation images before referencing them"
+    );
 }
 
 /// Verifies a staged system manifest affects new bindings only after explicit activation.

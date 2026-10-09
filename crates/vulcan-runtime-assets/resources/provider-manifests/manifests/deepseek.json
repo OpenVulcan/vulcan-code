@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
-  "revision": 15,
-  "published_at": "2026-09-22T00:00:00Z",
+  "revision": 16,
+  "published_at": "2026-10-09T00:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -15,7 +15,9 @@
       "deepseek_chat_reasoning_content_v1",
       "deepseek_anthropic_thinking_v1"
     ],
-    "required_upload_primitives": [],
+    "required_upload_primitives": [
+      "multipart_file"
+    ],
     "required_transformers": [
       "copy_request_field",
       "delete_if_equals",
@@ -81,8 +83,17 @@
           "endpoint_path": "/anthropic/v1/messages",
           "authentication": "x_api_key",
           "request_headers": {
+            "anthropic-beta": "files-api-2025-04-14",
             "anthropic-version": "2023-06-01"
           },
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "upload_channel_refs": [
+                "official-api.image-file"
+              ]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "deepseek.anthropic.thinking.v1"
@@ -95,6 +106,14 @@
         {
           "protocol_profile_id": "openai-responses.v1",
           "endpoint_path": "/responses",
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "upload_channel_refs": [
+                "official-api.image-file"
+              ]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
             "deepseek.responses.docs.v1"
@@ -565,7 +584,35 @@
     }
   ],
   "response_profiles": [],
-  "upload_channels": [],
+  "upload_channels": [
+    {
+      "upload_channel_id": "official-api.image-file",
+      "description": "Upload one local conversation image through the DeepSeek Files API and reference it by file_id.",
+      "primitive": "multipart_file",
+      "endpoint_host": "api.deepseek.com",
+      "endpoint_path": "/files",
+      "method": "POST",
+      "file_field": "file",
+      "accepted_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp"
+      ],
+      "max_bytes": 67108864,
+      "max_count": 1,
+      "timeout_ms": 600000,
+      "response_id_pointer": "/id",
+      "response_id_encoding": "string",
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "fixed_fields": {
+        "purpose": "user_data"
+      },
+      "reference_encoding": "provider_file_id",
+      "reference_scope": "credential"
+    }
+  ],
   "operations": [],
   "tool_targets": [],
   "provenance": {
@@ -573,7 +620,15 @@
     "sources": [
       {
         "url": "https://api-docs.deepseek.com/zh-cn/guides/vision",
-        "note": "Official Chat/Anthropic/Responses image-input formats, MIME types, and limits for deepseek-flash. Vulcan activates only host-local Base64 image materialization; remote URL and Files API file_id inputs remain undeclared."
+        "note": "Official Chat/Anthropic/Responses image-input formats, MIME types, and limits for deepseek-flash. The 32 MiB constraint is the Base64/URL per-image limit; remote URL passthrough remains undeclared."
+      },
+      {
+        "url": "https://api-docs.deepseek.com/guides/files_api",
+        "note": "Official POST /files multipart contract (file, purpose=user_data), 64 MiB per file, 10 minute upload window, string id at /id, API-key ownership, and the anthropic-beta files-api-2025-04-14 requirement for Anthropic file references. Files are kept permanently when expires_after is omitted."
+      },
+      {
+        "url": "https://api-docs.deepseek.com/guides/responses_api",
+        "note": "Responses input_image accepts file_id. Verified 2026-10-09 with real requests: Responses input_image.file_id and Anthropic image source.type=file with the beta header succeed; Chat accepts only the non-standard flat {type: file, file_id} part and rejects the OpenAI nested file.file_id part, so the Chat route keeps inline delivery without an upload channel."
       }
     ]
   }

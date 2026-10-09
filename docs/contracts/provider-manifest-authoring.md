@@ -604,6 +604,21 @@ Upload 在任何网络副作用之前完成全部资源预检。网络通道必�
 `cancellation_supported=true`。宿主以实际读取或发送字节发布 Preparing、Uploading、Completed、
 Failed、Cancelled 终态；上传 Future 被取消或所属运行结束时也必须产生终态，不能留下永久活动的进度条。
 
+`reference_encoding: provider_file_id` 的会话上传通道只能被“协议本身拥有标准文件 ID 内容块”的路线
+引用，矩阵以 `vulcan_llm_core::protocol_profile_supports_media_source` 为唯一权威：
+
+| 协议 | 文件 ID 内容块 | 路线额外要求 |
+| --- | --- | --- |
+| OpenAI Responses | 图片 `input_image.file_id`，文件 `input_file.file_id` | 无 |
+| Anthropic Messages（含视频与 Claude Code 变体） | 仅图片：`image.source = {type: file, file_id}` | 供应商要求 Files beta 时，在路线 `request_headers` 声明精确值（如 `anthropic-beta: files-api-2025-04-14`）；宿主不会按内容自动补头 |
+| OpenAI Chat | 图片部件只有 `image_url`，没有标准文件 ID 形态 | 不得为图片引用此类通道；否则运行时判定 `UploadContractInvalid` 并降级为附件清单 |
+
+供应商私有的非标准内容块（例如 DeepSeek Chat 只接受扁平 `{type: file, file_id}`、拒绝 OpenAI 嵌套
+`file.file_id`）在资源投影 Profile 落地之前不可声明，该路线保持内联。上传对象归属 API Key 时声明
+`reference_scope: credential`，避免跨凭据复用。路线只需追加上传引用并沿用模型规则的大小、数量和 MIME
+时，可声明仅含 `resource_kind` 与 `upload_channel_refs` 的路线约束：模型规则约束覆盖路线约束，并在
+自身未声明上传引用时继承路线引用，边界值仍只在模型规则中定义一次。
+
 ### 7.1 会话附件兼容层如何消费 Manifest
 
 Manifest 的媒体声明不控制用户能否挂载文件，只控制请求副本能否直接携带资源。宿主先保存规范附件
