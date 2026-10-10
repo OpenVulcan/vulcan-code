@@ -1,4 +1,4 @@
-import { BookMarked, Bot, BrainCircuit, Database, FolderCog, Network, ShieldCheck } from "lucide-react";
+import { BookMarked, Bot, BrainCircuit, Database, FolderCog, Network, ShieldCheck, ShieldQuestion } from "lucide-react";
 import type { TranslationKey } from "@/i18n";
 import type { ProjectSummary, WorkbenchSnapshot } from "@/types";
 import type {
@@ -67,6 +67,16 @@ export function projectSettingsSections(
         ? t("projectSettings.codeContext.enabled")
         : t("projectSettings.codeContext.disabled"),
   });
+  // The permission strategy exists only while the judge is enabled.
+  // 权限策略仅在判定启用时存在。
+  if (workbench.permissionJudgeState === "enabled") {
+    sections.push({
+      id: "permission-judge",
+      icon: <ShieldQuestion size={16} />,
+      label: t("projectSettings.permissionJudge.title"),
+      detail: t("projectSettings.permissionJudge.detail"),
+    });
+  }
   return sections;
 }
 

@@ -22,6 +22,18 @@ export const PHASE_KEYS: Record<string, TranslationKey> = {
   ready: "settings.permissionJudge.phase.ready",
   failed: "settings.permissionJudge.phase.failed",
 };
+// Policy categories and modes come from the model in use; codes outside these lists show as is.
+// 策略类别与档位来自使用中的模型；不在这些清单中的代码按原样显示。
+export const OPTION_KEYS: Record<string, TranslationKey> = {
+  cross_project_writes: "projectSettings.permissionJudge.option.crossProjectWrites",
+  database_reset: "projectSettings.permissionJudge.option.databaseReset",
+  project_reset: "projectSettings.permissionJudge.option.projectReset",
+};
+export const MODE_KEYS: Record<string, TranslationKey> = {
+  allow: "projectSettings.permissionJudge.mode.allow",
+  review: "projectSettings.permissionJudge.mode.review",
+  confirm: "projectSettings.permissionJudge.mode.confirm",
+};
 
 // label translates a known code, or shows the code itself.
 // label 翻译已知代码，否则显示代码本身。

@@ -27,6 +27,7 @@ import {
 } from "./project-settings-sections";
 import { ProjectKnowledgeBasesSection } from "./project-knowledge-bases-section";
 import { ProjectCollaborationGrantsSection } from "./project-collaboration-grants-section";
+import { ProjectPermissionJudgeSection } from "./project-permission-judge-section";
 import type {
   ProjectAgentSkillState,
   ProjectAttachmentCleanupKinds,
@@ -836,13 +837,11 @@ export function ProjectSettingsDialog(props: {
               />
             ) : null}
 
-            {activeSection === "knowledge-bases" ? (
-              <ProjectKnowledgeBasesSection projectId={project.id} />
-            ) : null}
+            {activeSection === "knowledge-bases" ? <ProjectKnowledgeBasesSection projectId={project.id} /> : null}
 
-            {activeSection === "collaboration-grants" ? (
-              <ProjectCollaborationGrantsSection projectId={project.id} workbench={props.workbench} />
-            ) : null}
+            {activeSection === "collaboration-grants" ? <ProjectCollaborationGrantsSection projectId={project.id} workbench={props.workbench} /> : null}
+
+            {activeSection === "permission-judge" && props.workbench.permissionJudgeState === "enabled" ? <ProjectPermissionJudgeSection projectId={project.id} /> : null}
 
             {activeSection === "attachments" ? (
               <ProjectAttachmentCleanupSection
