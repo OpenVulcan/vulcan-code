@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 30,
-  "published_at": "2026-10-08T10:25:36Z",
+  "revision": 31,
+  "published_at": "2026-10-10T05:13:10Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -850,9 +850,19 @@
         "revision": 1,
         "steps": [
           {
-            "op": "copy_request_field",
+            "op": "enum_map",
             "path": "/output_config/effort",
-            "field": "reasoning_effort"
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "unmatched": "error",
+            "default": "default"
           },
           {
             "op": "delete_json_pointer",

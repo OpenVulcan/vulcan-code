@@ -418,17 +418,17 @@ fn minimax_m3_1_flash_preview_projects_token_plan_efforts() {
         assert!(encoded.body.get("thinking").is_none());
     }
 
-    // defaultRequest represents the user-visible default option and must omit an explicit effort.
-    // defaultRequest 表示用户可见的默认选项，必须省略显式档位。
+    // defaultRequest represents the user-visible default option and must project MiniMax's literal label.
+    // defaultRequest 表示用户可见的默认选项，必须投影 MiniMax 的字面档位标签。
     let mut default_request = minimal_request();
     default_request.model_id = String::from("MiniMax-M3.1-Flash-Preview");
-    // defaultEncoded delegates effort selection to MiniMax without leaving empty objects.
-    // defaultEncoded 将档位选择交给 MiniMax，且不会遗留空对象。
+    // defaultEncoded matches MiniMax Code's managed forced-on payload for the default selection.
+    // defaultEncoded 对齐 MiniMax Code 托管强制思考模式下默认选择的请求载荷。
     let default_encoded = client
         .encode_request(&route, &default_request)
         .expect("M3.1 Flash provider default should encode");
     assert!(default_encoded.body.get("thinking").is_none());
-    assert!(default_encoded.body.get("output_config").is_none());
+    assert_eq!(default_encoded.body["output_config"]["effort"], "default");
 }
 
 /// Verifies the projection executor rejects an unsupported MiniMax effort like the legacy fn.
