@@ -16,10 +16,10 @@ use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 /// Current native provider-usage schema revision.
 /// 当前原生供应商用量 Schema 修订号。
-pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 8;
+pub const PROVIDER_USAGE_SCHEMA_REVISION: i64 = 9;
 
-/// Serializes additive schema upgrades independently of usage writes.
-/// 独立于用量写入串行化增量结构升级。
+/// Serializes schema initialization independently of usage writes.
+/// 独立于用量写入串行化结构初始化。
 static PROVIDER_USAGE_SCHEMA_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// Process-local serialization lock for attempt insertion followed by daily rebuild.
@@ -119,15 +119,12 @@ pub struct ProviderUsageAttemptRecord {
     /// Whether the physical request was dispatched.
     /// 物理请求是否已分派。
     pub dispatched: bool,
-    /// Whether the dispatched flag is known rather than a legacy placeholder.
-    /// dispatched 标记是否为已知事实而非历史占位值。
+    /// Whether the dispatched flag is a proven fact rather than an unknown delivery outcome.
+    /// dispatched 标记是否为已证明事实而非未知送达结果。
     pub dispatched_known: bool,
     /// Whether semantic output was observed.
     /// 是否观察到语义输出。
     pub semantic_output_observed: bool,
-    /// Whether semantic-output observation is known rather than a legacy placeholder.
-    /// 语义输出观察标记是否为已知事实而非历史占位值。
-    pub semantic_output_observed_known: bool,
     /// Whether automatic replay remained safe at terminal time.
     /// 终态时是否仍可安全自动重放。
     pub replay_safe: Option<bool>,
@@ -458,14 +455,14 @@ pub async fn ensure_provider_usage_schema(host_runtime: &HostRuntimeHandle) -> R
 ///
 /// # Returns
 /// 返回值
-/// Returns unit after creation or the nullable first-token upgrade; historical timestamps are never fabricated.
-/// 创建或完成可空首 Token 字段升级后返回空值；绝不编造历史时间戳。
+/// Returns unit after the tables, indexes and revision marker exist.
+/// 表、索引与修订标记存在后返回空值。
 async fn ensure_provider_usage_schema_at(
     host_runtime: &HostRuntimeHandle,
     logical: LogicalDatabase,
 ) -> Result<(), String> {
-    // Prevent concurrent initialization from racing the nullable column upgrade.
-    // 防止并发初始化竞争可空字段升级。
+    // Prevent concurrent initialization from racing the revision marker update.
+    // 防止并发初始化竞争修订标记更新。
     let _schema_guard = PROVIDER_USAGE_SCHEMA_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
@@ -500,9 +497,8 @@ CREATE TABLE IF NOT EXISTS provider_usage_attempts_v3 (
     terminal_at_ms INTEGER NOT NULL,
     status TEXT NOT NULL,
     dispatched INTEGER NOT NULL,
-    dispatched_known INTEGER NOT NULL DEFAULT 1,
+    dispatched_known INTEGER NOT NULL,
     semantic_output_observed INTEGER NOT NULL,
-    semantic_output_observed_known INTEGER NOT NULL DEFAULT 1,
     replay_safe INTEGER,
     http_status INTEGER,
     websocket_close_code INTEGER,
@@ -596,30 +592,6 @@ VALUES ('health_status', 'ready', 0);
     )
     .await
     .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
-    // Existing revision-seven databases retain every row with unknown first-token timing.
-    // 已有第七版数据库保留全部记录，其首 Token 时间保持未知。
-    let columns = local_sql::query_json_async(
-        &host_runtime.local,
-        logical,
-        "PRAGMA table_info(provider_usage_attempts_v3);",
-        vec![],
-    )
-    .await
-    .map_err(|error| format!("读取供应商用量字段失败：{error}"))?;
-    let columns = decode_query_rows::<serde_json::Value>(&columns.json_data)?;
-    if !columns
-        .iter()
-        .any(|column| column["name"].as_str() == Some("first_token_at_ms"))
-    {
-        local_sql::execute_script_async(
-            &host_runtime.local,
-            logical,
-            "ALTER TABLE provider_usage_attempts_v3 ADD COLUMN first_token_at_ms INTEGER;",
-            vec![],
-        )
-        .await
-        .map_err(|error| format!("升级供应商首 Token 时间字段失败：{error}"))?;
-    }
     write_provider_usage_schema_revision(host_runtime, logical).await?;
     Ok(())
 }
@@ -627,12 +599,11 @@ VALUES ('health_status', 'ready', 0);
 /// Writes the current provider-usage schema revision into the metadata table.
 /// 将当前供应商用量结构修订号写入元数据表。
 ///
-/// This is the only part of the former additive-migration function that is not legacy machinery.
 /// The `CREATE` statement seeds `schema_revision` as `'0'`, and this advances it to
 /// [`PROVIDER_USAGE_SCHEMA_REVISION`], so the two are not redundant.
 ///
-/// 这是原追加式迁移函数中唯一不属于遗留机械的部分。`CREATE` 把 `schema_revision` 初始化为 `'0'`，而
-/// 本函数将其推进到 [`PROVIDER_USAGE_SCHEMA_REVISION`]，因此二者并不重复。
+/// `CREATE` 把 `schema_revision` 初始化为 `'0'`，而本函数将其推进到
+/// [`PROVIDER_USAGE_SCHEMA_REVISION`]，因此二者并不重复。
 async fn write_provider_usage_schema_revision(
     host_runtime: &HostRuntimeHandle,
     logical: LogicalDatabase,
@@ -988,8 +959,7 @@ INSERT OR IGNORE INTO provider_usage_attempts_v3 (
     operation, provider_id, service_entry_id, connection_id, route_id,
     protocol_profile_id, route_revision, transport, requested_model, mapped_model,
     response_model, response_id, provider_request_id, dispatched_at_ms, headers_at_ms, first_semantic_at_ms,
-    terminal_at_ms, status, dispatched, dispatched_known, semantic_output_observed,
-    semantic_output_observed_known, replay_safe,
+    terminal_at_ms, status, dispatched, dispatched_known, semantic_output_observed, replay_safe,
     http_status, websocket_close_code, error_category, error_code, usage_availability,
     input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens,
     output_tokens, reasoning_tokens, audio_input_tokens, audio_output_tokens, total_tokens,
@@ -999,7 +969,7 @@ INSERT OR IGNORE INTO provider_usage_attempts_v3 (
     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
     ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44,
-    ?45, ?46, ?47, ?48, ?49
+    ?45, ?46, ?47, ?48
 WHERE NOT EXISTS (
     SELECT 1
     FROM provider_usage_attempts_v3 AS existing
@@ -1035,7 +1005,6 @@ WHERE NOT EXISTS (
                 boolean(record.dispatched),
                 boolean(record.dispatched_known),
                 boolean(record.semantic_output_observed),
-                boolean(record.semantic_output_observed_known),
                 optional_boolean(record.replay_safe),
                 optional_integer(record.http_status),
                 optional_integer(record.websocket_close_code),
@@ -1608,7 +1577,6 @@ mod tests {
             dispatched: true,
             dispatched_known: true,
             semantic_output_observed: false,
-            semantic_output_observed_known: true,
             replay_safe: Some(true),
             http_status: Some(200),
             websocket_close_code: None,

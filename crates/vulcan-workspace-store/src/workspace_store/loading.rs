@@ -320,9 +320,9 @@ pub async fn load_workspace_index_report(
             return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
         }
     }
-    // Session-index bootstrap is non-essential to the desktop shell: an old profile without the
-    // V1 table must start with an empty V1 index instead of failing the whole application.
-    // 会话索引初始化并不是桌面壳启动的必要条件：缺少 V1 表的旧配置必须以空 V1 索引启动，不能让整个应用失败。
+    // Session-index bootstrap is non-essential to the desktop shell: a schema failure starts with an
+    // empty V1 index and a recorded issue instead of failing the whole application.
+    // 会话索引初始化并不是桌面壳启动的必要条件：结构失败时以空 V1 索引启动并记录问题，不能让整个应用失败。
     let session_index_available = match ensure_session_v1_storage_schema(&host_runtime).await {
         Ok(()) => true,
         Err(error) => {
@@ -348,9 +348,6 @@ pub async fn load_workspace_index_report(
                 // 保留可用的启动记录，同时保存全部解码问题供严格刷新判定。
                 issues.extend(report.issues);
                 for row in report.rows {
-                    if row.storage_partition == "code/sessions" {
-                        continue;
-                    }
                     let Some(project) = project_by_id.get(row.project_id.as_str()) else {
                         continue;
                     };

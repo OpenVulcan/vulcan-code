@@ -1059,19 +1059,14 @@ pub async fn list_archived_sessions_v1(
     current_partition_list_entries(&host_runtime.data_root, rows)
 }
 
-/// Projects supported locators without silently hiding corrupt current-partition records.
-/// 投影受支持定位器，不再静默隐藏当前分区的损坏记录。
-/// Only the explicitly retired duplicate-root partition remains omitted, as documented.
-/// 仅按文档约定继续排除明确退役的重复根分区。
+/// Projects supported locators without silently hiding unsupported or corrupt records.
+/// 投影受支持定位器，不静默隐藏不受支持或损坏的记录。
 fn current_partition_list_entries(
     data_root: &Path,
     rows: Vec<SessionIndexV1Row>,
 ) -> Result<Vec<SessionV1ListEntry>, SessionV1StoreError> {
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
-        if row.storage_partition == "code/sessions" {
-            continue;
-        }
         storage_locator_from_row(data_root, row.clone())?;
         entries.push(SessionV1ListEntry::from(row));
     }
@@ -2572,10 +2567,10 @@ connection.close()
         );
     }
 
-    /// Obsolete locators that prepend `code` a second time are unsupported and omitted from lists.
-    /// 会再次前置 `code` 的过时定位信息不受支持，并从列表中忽略。
+    /// Locators that prepend `code` a second time are unsupported and fail list projection.
+    /// 会再次前置 `code` 的定位信息不受支持，并使列表投影失败。
     #[test]
-    fn legacy_duplicate_code_partition_is_rejected_and_omitted_from_lists() {
+    fn duplicate_code_partition_is_rejected_by_locators_and_lists() {
         let data_root = tempfile::tempdir().expect("temporary application data root");
         let row = SessionIndexV1Row {
             session_id: "session-legacy-root".to_string(),
@@ -2594,11 +2589,7 @@ connection.close()
             .expect_err("duplicate code partition must be unsupported");
 
         assert!(matches!(error, SessionIndexV1Error::InvalidLocator { .. }));
-        assert!(
-            current_partition_list_entries(data_root.path(), vec![row])
-                .expect("retired partition is deliberately omitted")
-                .is_empty()
-        );
+        assert!(current_partition_list_entries(data_root.path(), vec![row]).is_err());
     }
 
     /// Missing metadata is reported as absence and never triggers a sibling scan.

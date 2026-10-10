@@ -173,7 +173,6 @@ pub(crate) async fn persist_native_provider_usage_attempt(
         dispatched,
         dispatched_known,
         semantic_output_observed,
-        semantic_output_observed_known: true,
         replay_safe: telemetry_optional_bool(event, "replay_safe"),
         http_status: telemetry_i64(event, "http_status"),
         websocket_close_code: telemetry_i64(event, "websocket_close_code"),
