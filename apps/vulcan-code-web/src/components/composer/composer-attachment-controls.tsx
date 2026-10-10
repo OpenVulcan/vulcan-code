@@ -19,7 +19,6 @@ import {
   Plus,
   RotateCcw,
   Settings,
-  ShieldCheck,
   Sparkles,
   Target,
   Video,
@@ -67,8 +66,6 @@ import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
 import type { ComposerKnowledgeSelectionSnapshot } from "./composer-model";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
 import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
-import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
-import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
 
 // ComposerAttachmentMenu renders the plus button and attachment submenu.
 // ComposerAttachmentMenu 渲染加号按钮与附件子菜单。
@@ -78,9 +75,6 @@ export function ComposerAttachmentMenu(props: {
   // Owner-scoped answer mode for the current conversation or draft.
   // 当前会话或草稿的按归属限定回答模式。
   answerMode: ComposerAnswerModeController;
-  // Owner-scoped permission mode for the current conversation or draft.
-  // 当前会话或草稿的按归属限定权限模式。
-  permissionMode: ComposerPermissionModeController;
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
   capabilities: ComposerAttachmentCapabilitySummary[];
@@ -250,7 +244,6 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
           sessionOutputStyle={props.sessionOutputStyle}
         />
         <AnswerModeSubMenu controller={props.answerMode} />
-        <PermissionModeSubMenu controller={props.permissionMode} />
         <ComposerKnowledgeControl
           conversationId={props.conversationId}
           draftSelection={props.draftKnowledgeSelection}
@@ -408,48 +401,6 @@ function AnswerModeSubMenu(props: { controller: ComposerAnswerModeController }) 
         {awaitingRequest ? <p role="status" className="px-2 py-1.5 text-xs text-muted-foreground">
           {t("answerMode.pending")}
         </p> : null}
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
-// PermissionModeSubMenu chooses which effects run without asking and links the judge settings.
-// PermissionModeSubMenu 选择哪些效果无需询问即可执行，并链接判定设置。
-// The judge entry needs setup while unset, is hidden when off and shows its state when enabled.
-// 判定入口在未设定时提示需要设定，关闭时隐藏，启用时显示其状态。
-function PermissionModeSubMenu(props: { controller: ComposerPermissionModeController }) {
-  const { t } = useI18n();
-  const judge = React.useContext(PermissionJudgeEntryContext);
-  const { mode, saving, available, select } = props.controller;
-  const options = [
-    { value: "read_only", label: "permissionMode.readOnly", hint: "permissionMode.readOnlyHint" },
-    { value: "workspace_write", label: "permissionMode.workspaceWrite", hint: "permissionMode.workspaceWriteHint" },
-    { value: "full_access", label: "permissionMode.fullAccess", hint: "permissionMode.fullAccessHint" },
-  ] as const;
-  const judgeLabel = judge === null ? null : judge.state === null ? "permissionMode.judgeNeedsSetup"
-    : judge.state === "enabled" ? "permissionMode.judgeEnabled" : null;
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger data-menu="permission-mode" disabled={!available}>
-        <ShieldCheck size={15} />
-        <span>{t("permissionMode.label")}</span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-thinking-menu" aria-busy={saving}>
-        <DropdownMenuRadioGroup value={mode ?? ""}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} data-permission-mode={option.value} disabled={saving} onSelect={() => select(option.value)}>
-              <span className="composer-thinking-mode-label">
-                <span>{t(option.label)}</span>
-                <small>{t(option.hint)}</small>
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        {judge !== null && judgeLabel !== null ? (
-          <DropdownMenuItem data-judge-state={judge.state ?? "unset"} onSelect={judge.openSettings}>
-            {t(judgeLabel)}
-          </DropdownMenuItem>
-        ) : null}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );

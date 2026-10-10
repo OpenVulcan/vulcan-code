@@ -70,6 +70,7 @@ import { useComposerPlanMode } from "@/components/composer/composer-panel/use-co
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
 import type { PermissionModeOwner } from "@/components/composer/composer-panel/use-composer-permission-mode";
+import { ComposerPermissionModeControl } from "@/components/composer/composer-permission-mode-control";
 import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
 import { useComposerAttachmentSubmissionGate } from "@/components/composer/composer-panel/attachment-submission-gate";
@@ -924,7 +925,6 @@ export function ComposerPanel(props: {
           <div className="composer-toolbar-left">
             <ComposerAttachmentMenu
               answerMode={answerMode}
-              permissionMode={permissionMode}
               capabilities={enabledAttachmentCapabilities}
               conversationId={props.conversationId}
               draftOutputStyleId={draftSessionSettings.outputStyleId}
@@ -957,6 +957,7 @@ export function ComposerPanel(props: {
                 }
               }}
             />
+            <ComposerPermissionModeControl controller={permissionMode} />
             {planModeEnabled ? (
               <ComposerPlanModeChip
                 artifactName={props.sessionPlanMode?.artifact?.name ?? null}
