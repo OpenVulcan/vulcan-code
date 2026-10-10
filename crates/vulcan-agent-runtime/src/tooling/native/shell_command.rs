@@ -1340,6 +1340,7 @@ mod process_option_tests {
             timeout_ms: Some(60_000),
             stdin: Some(stdin_text.clone()),
             shell: Some(String::from("sh")),
+            _purpose: None,
         };
         let report = execute_shell_command_process(
             &parsed_args,
@@ -1366,6 +1367,7 @@ mod process_option_tests {
             timeout_ms: Some(60_000),
             stdin: None,
             shell: Some(String::from("sh")),
+            _purpose: None,
         };
         let report = execute_shell_command_process(
             &parsed_args,
@@ -1390,6 +1392,7 @@ mod process_option_tests {
             timeout_ms: Some(500),
             stdin: None,
             shell: Some(String::from("sh")),
+            _purpose: None,
         };
         let report = tokio::time::timeout(
             Duration::from_secs(30),
@@ -1417,6 +1420,7 @@ mod process_option_tests {
             timeout_ms: None,
             stdin: None,
             shell: Some(String::from("sh")),
+            _purpose: None,
         };
         tokio::time::timeout(
             Duration::from_secs(60),
@@ -1517,6 +1521,7 @@ mod process_option_tests {
             timeout_ms: None,
             stdin: None,
             shell: Some(String::from("sh")),
+            _purpose: None,
         };
         let report = tokio::time::timeout(
             Duration::from_secs(20),
