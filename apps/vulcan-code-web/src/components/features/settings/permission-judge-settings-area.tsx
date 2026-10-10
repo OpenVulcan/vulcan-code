@@ -229,7 +229,7 @@ export function PermissionJudgeSettingsArea() {
   const savedCloud = snapshot.state === "enabled" && snapshot.backend === "cloud";
   const benchmarkReady = savedCloud
     ? !dirty
-    : snapshot.backend === "local" && status.worker.phase === "ready";
+    : snapshot.backend !== "cloud" && status.worker.phase === "ready";
   const save = () => run("save", "settings.permissionJudge.saveFailed", async () => {
     const directory = draft.cudaLibraryDirectory.trim();
     applySnapshot(await savePermissionJudgeSettings({

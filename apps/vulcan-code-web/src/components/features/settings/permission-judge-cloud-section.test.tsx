@@ -48,7 +48,7 @@ function candidate(modelId: string, operation: string, bindingKind: "action" | "
     route: {
       provider_id: "p", service_entry_id: "s", connection_id: "c", model_id: modelId,
       binding: bindingKind === "action"
-        ? { kind: "action", action_id: "system_one" }
+        ? { kind: "action", action_binding_id: "system_one" }
         : { kind: "protocol", protocol_profile_id: "chat" },
       operation, usage_scope: "internal_background",
     },

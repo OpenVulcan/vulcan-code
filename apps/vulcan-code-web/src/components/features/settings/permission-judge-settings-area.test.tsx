@@ -155,3 +155,13 @@ it("benchmarks a saved cloud judge without the local model", async () => {
   await act(async () => buttonByKey("settings.permissionJudge.benchmarkSingle")!.click());
   expect(service.benchmarkPermissionJudge).toHaveBeenCalledExactlyOnceWith(1);
 });
+
+// A backend that was never saved is the local one, so a ready local model can be tested.
+// 从未保存的后端即为本机后端，因此就绪的本机模型可以测速。
+it("tests a ready model before any backend is saved", async () => {
+  const unset = { ...snapshot("ready"), backend: null };
+  service.loadPermissionJudgeSettings.mockResolvedValue(unset);
+  service.loadPermissionJudgeStatus.mockResolvedValue(unset.status);
+  await act(async () => root.render(<PermissionJudgeSettingsArea />));
+  expect(buttonByKey("settings.permissionJudge.benchmarkSingle")?.disabled).toBe(false);
+});
