@@ -683,7 +683,9 @@ connection: close
         }
     }
     drop(stream);
-    client_done.send(()).expect("mock server is still listening");
+    client_done
+        .send(())
+        .expect("mock server is still listening");
     server.await.expect("mock server should finish");
 
     assert!(
