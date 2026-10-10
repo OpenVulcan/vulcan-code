@@ -62,6 +62,7 @@ import { useProjectLifecycleConfirmation } from "@/components/workspace/workbenc
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { useConversationSelectionNavigation } from "@/components/workspace/workbench-layout/use-conversation-selection-navigation";
 import { PermissionJudgeEntryContext, type PermissionJudgeEntry } from "@/components/composer/permission-judge-entry-context";
+import { useSetupGuide } from "@/components/features/onboarding/use-setup-guide";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
@@ -153,6 +154,7 @@ import { toast } from "sonner";
 // WorkbenchDialogs 仅在项目或提问对话框真正打开后加载其界面。
 const WorkbenchDialogs = React.lazy(() => import("@/components/workspace/workbench-dialogs")
   .then((module) => ({ default: module.WorkbenchDialogs })));
+const SetupGuideDialog = React.lazy(() => import("@/components/features/onboarding/setup-guide-dialog"));
 
 // MediaUploadProgressPanel loads only for an active transfer while preserving the stream-owned progress row.
 // MediaUploadProgressPanel 仅在传输进行时加载，同时保留由事件流管理的进度行。
@@ -503,10 +505,12 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("permission-judge");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
+  const setupGuide = useSetupGuide(workbenchState.permissionJudgeState, props.startup.ready);
   const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
     state: workbenchState.permissionJudgeState ?? null,
     openSettings: handleOpenPermissionJudgeSettings,
-  }), [handleOpenPermissionJudgeSettings, workbenchState.permissionJudgeState]);
+    openGuide: setupGuide.show,
+  }), [handleOpenPermissionJudgeSettings, setupGuide.show, workbenchState.permissionJudgeState]);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
   const handleOpenWorkspaceChat = React.useCallback(() => {
@@ -1215,6 +1219,12 @@ export function WorkbenchLayout(props: {
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
       </PermissionJudgeEntryContext.Provider>
+      {setupGuide.open ? <React.Suspense fallback={null}><SetupGuideDialog open onOpenChange={setupGuide.setOpen}
+        onOpenProviderSettings={() => {
+          setupGuide.setOpen(false);
+          setActiveSettingsSubArea("model-providers");
+          handleSelectTopFeatureArea("settings");
+        }} /></React.Suspense> : null}
       {dialogsActivated ? <React.Suspense fallback={null}><WorkbenchDialogs
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}

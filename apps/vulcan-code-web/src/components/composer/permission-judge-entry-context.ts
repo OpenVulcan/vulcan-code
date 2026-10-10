@@ -10,6 +10,9 @@ export interface PermissionJudgeEntry {
   /** Opens the permission judge settings page without changing saved settings.
    * 打开权限判定设置页，不改变已保存的设置。 */
   openSettings: () => void;
+  /** Re-enters the setup guide whose first step is the permission judge.
+   * 重新进入以权限判定为第一步的初始化引导。 */
+  openGuide: () => void;
 }
 
 // The workbench layout owns both the saved switch and settings navigation; absent outside it.

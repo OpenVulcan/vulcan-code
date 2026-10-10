@@ -12,6 +12,8 @@ import { Switch } from "@/components/ui/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
+import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import {
@@ -46,25 +48,6 @@ const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
   local: "settings.permissionJudge.backend.local",
   cloud: "settings.permissionJudge.backend.cloud",
 };
-const DEVICE_KEYS: Record<JudgeDevice, TranslationKey> = {
-  cuda: "settings.permissionJudge.device.cuda",
-  webgpu: "settings.permissionJudge.device.webgpu",
-  cpu: "settings.permissionJudge.device.cpu",
-};
-const REASON_KEYS: Record<string, TranslationKey> = {
-  runtime_missing: "settings.permissionJudge.reason.runtimeMissing",
-  unsupported_platform: "settings.permissionJudge.reason.unsupportedPlatform",
-  driver_missing: "settings.permissionJudge.reason.driverMissing",
-  driver_too_old: "settings.permissionJudge.reason.driverTooOld",
-  onnxruntime_missing: "settings.permissionJudge.reason.onnxruntimeMissing",
-  cuda_libraries_missing: "settings.permissionJudge.reason.cudaLibrariesMissing",
-};
-const PHASE_KEYS: Record<string, TranslationKey> = {
-  not_loaded: "settings.permissionJudge.phase.notLoaded",
-  warming: "settings.permissionJudge.phase.warming",
-  ready: "settings.permissionJudge.phase.ready",
-  failed: "settings.permissionJudge.phase.failed",
-};
 const INSTALL_PHASE_KEYS: Record<string, TranslationKey> = {
   downloading: "settings.permissionJudge.cuda.phase.downloading",
   verifying: "settings.permissionJudge.cuda.phase.verifying",
@@ -88,12 +71,6 @@ const COMPONENT_KEYS: Record<PermissionJudgeCudaComponent, TranslationKey> = {
   onnxruntime: "settings.permissionJudge.cuda.onnxruntime",
   cuda_libraries: "settings.permissionJudge.cuda.libraries",
 };
-
-// label translates a known code, or shows the code itself.
-// label 翻译已知代码，否则显示代码本身。
-function label(t: Translate, keys: Record<string, TranslationKey>, code: string): string {
-  return Object.hasOwn(keys, code) ? t(keys[code]) : code;
-}
 
 // formatMs renders a duration, or a dash when the reading is absent.
 // formatMs 渲染时长；读数缺失时显示破折号。
@@ -146,6 +123,9 @@ interface Failure {
 // 参数：无。返回设置页。
 export function PermissionJudgeSettingsArea() {
   const { t } = useI18n();
+  // openGuide re-enters the setup guide; absent outside the workbench layout.
+  // openGuide 重新进入初始化引导；在工作台布局之外为空。
+  const openGuide = React.useContext(PermissionJudgeEntryContext)?.openGuide;
   // snapshot is the last full read; status is refreshed separately by polling.
   // snapshot 是最近一次完整读取；status 由轮询单独刷新。
   const [snapshot, setSnapshot] = React.useState<PermissionJudgeSettingsSnapshot | null>(null);
@@ -243,6 +223,9 @@ export function PermissionJudgeSettingsArea() {
   });
 
   return <section className="settings-preferences-page settings-detail-panel">
+    {openGuide ? <div className="settings-card-actions">
+      <Button type="button" size="sm" variant="outline" onClick={openGuide}>{t("setupGuide.open")}</Button>
+    </div> : null}
     <section className="settings-preferences-section">
       <label className="settings-preference-row">
         <div>

@@ -46,7 +46,7 @@ it.each<[JudgeState | null, string | null]>([
   document.body.append(container)
   try {
     await act(async () => root.render(<I18nProvider initialLocale="en-US"><TooltipProvider>
-      <PermissionJudgeEntryContext.Provider value={{ state: judgeState, openSettings: openJudge }}><ComposerSettingsMenu
+      <PermissionJudgeEntryContext.Provider value={{ state: judgeState, openSettings: openJudge, openGuide: () => {} }}><ComposerSettingsMenu
       answerMode={{ mode: "standard", saving: false, awaitingRequest: false, available: true, select: () => {}, flush: async () => true }}
       permissionMode={{ mode: "workspace_write", saving: false, available: true, select, flush: async () => true }}
       capabilities={[]} thinkingDisplayMode="popup_only" planModeEnabled={false}
