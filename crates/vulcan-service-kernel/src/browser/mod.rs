@@ -2,7 +2,9 @@
 //! Core 浏览器归属：会话、租约、观察、输入与自动化。
 
 mod ai_tools;
-#[cfg(test)]
+// The real-browser acceptance suite runs only on Windows, where the bundled runtimes exist.
+// 真实浏览器验收套件只在具备随包运行时的 Windows 上运行。
+#[cfg(all(test, target_os = "windows"))]
 mod ai_tools_acceptance;
 mod automation_grant;
 pub mod host;

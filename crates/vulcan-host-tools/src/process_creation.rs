@@ -65,12 +65,16 @@ where
         clippy::disallowed_methods,
         reason = "the shared factory is the single sanctioned process constructor"
     )]
-    let mut command = StdCommand::new(program);
+    let command = StdCommand::new(program);
+    // Only Windows needs mutation, so the binding becomes mutable there alone.
+    // 只有 Windows 需要修改命令，因此仅在该平台重新绑定为可变。
     #[cfg(windows)]
-    {
+    let command = {
         use std::os::windows::process::CommandExt;
+        let mut command = command;
         command.creation_flags(WINDOWS_CREATE_NO_WINDOW);
-    }
+        command
+    };
     command
 }
 

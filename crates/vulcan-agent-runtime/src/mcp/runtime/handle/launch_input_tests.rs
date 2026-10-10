@@ -61,6 +61,10 @@ fn actual_server(
 ) -> McpServerConfig {
     // The optional business value is independent from the platform inputs needed by this real executable.
     // 可选业务值独立于此真实可执行文件需要的平台输入。
+    #[cfg_attr(
+        not(windows),
+        allow(unused_mut, reason = "only the Windows fixture inserts SystemRoot")
+    )]
     let mut env = token
         .map(|value| BTreeMap::from([("VULCAN_CAPTURE_TOKEN".into(), value.into())]))
         .unwrap_or_default();

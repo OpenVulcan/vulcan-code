@@ -6,7 +6,7 @@
 // 服务运行在本机，附件由 TUI 自行读取字节后暂存，因此选择器直接列出真实本地文件系统而不询问服务。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::model::{DirEntry, DirectoryListing};
 
@@ -91,7 +91,7 @@ fn home() -> Option<PathBuf> {
 fn roots() -> Vec<String> {
     (b'A'..=b'Z')
         .map(|letter| format!("{}:\\", letter as char))
-        .filter(|root| Path::new(root).exists())
+        .filter(|root| std::path::Path::new(root).exists())
         .collect()
 }
 

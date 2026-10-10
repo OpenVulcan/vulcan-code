@@ -714,17 +714,15 @@ fn runtime_executable_is_usable(path: &Path) -> bool {
         return false;
     }
     #[cfg(unix)]
-    {
+    let usable = {
         use std::os::unix::fs::PermissionsExt;
-        return path
-            .metadata()
+        path.metadata()
             .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
-    }
+            .unwrap_or(false)
+    };
     #[cfg(not(unix))]
-    {
-        true
-    }
+    let usable = true;
+    usable
 }
 
 /// Acquire the cross-process bootstrap lock with a bounded wait.

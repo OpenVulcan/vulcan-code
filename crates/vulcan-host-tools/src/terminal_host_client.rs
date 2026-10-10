@@ -338,10 +338,14 @@ pub async fn spawn_terminal_host(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        resolve_terminal_host_path, spawn_terminal_host, wait_for_terminal_host_stop_deadline,
-    };
+    use super::{resolve_terminal_host_path, wait_for_terminal_host_stop_deadline};
+    // The PATH inheritance probe below runs only on Windows.
+    // 下方 PATH 继承探针只在 Windows 上运行。
+    #[cfg(target_os = "windows")]
+    use super::spawn_terminal_host;
+    #[cfg(target_os = "windows")]
     use crate::terminal_host_protocol::{TerminalHostFrameKind, TerminalHostStartRequest};
+    #[cfg(target_os = "windows")]
     use std::fs;
     use tokio::time::{Duration, Instant, timeout};
 
