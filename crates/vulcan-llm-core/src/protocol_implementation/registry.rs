@@ -183,6 +183,7 @@ impl ProtocolRegistry {
         registry.register(Arc::new(crate::GeminiInteractionsProfile))?;
         registry.register(Arc::new(crate::GoogleCodeAssistProfile))?;
         registry.register(Arc::new(crate::CohereChatProfile))?;
+        registry.register(Arc::new(crate::TypeSafeSystemOneProfile))?;
         Ok(registry)
     }
 

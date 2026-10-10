@@ -1,0 +1,145 @@
+{
+  "schema_version": "vulcan.provider-manifest.v2",
+  "provider_id": "typesafe",
+  "revision": 1,
+  "published_at": "2026-10-10T00:00:00Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "typesafe-systemone.v1"
+    ],
+    "required_execution_primitives": [],
+    "required_upload_primitives": [],
+    "required_transformers": []
+  },
+  "display": {
+    "name": "TypeSafe",
+    "category": "official",
+    "credential_directory_visibility": "configured_only"
+  },
+  "services": [
+    {
+      "service_entry_id": "public-api",
+      "display_name": "TypeSafe API",
+      "kind": "conversation",
+      "base_url": "https://api.typesafe.ai/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "default_usage_scopes": [
+            "internal_background"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "direct",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "jev-1.13.0",
+            "display_name": "Jev 1.13"
+          }
+        ]
+      },
+      "native_inference_bindings": [
+        {
+          "operation": "decision_evaluate",
+          "binding_id": "typesafe.systemone.v1",
+          "endpoint_path": "/systemone",
+          "projection": "system_one"
+        }
+      ],
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "typesafe-systemone.v1",
+          "endpoint_path": "/systemone",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": [
+      "typesafe-systemone.v1"
+    ],
+    "selected_protocol": "typesafe-systemone.v1",
+    "default_usage_profile_refs": [],
+    "default_request_profile_refs": [],
+    "default_response_profile_refs": [],
+    "default_operation_refs": []
+  },
+  "model_rules": [
+    {
+      "rule_id": "typesafe-jev-1-13-0",
+      "display_name": "Jev 1.13",
+      "scope": {
+        "service_entry_ids": [],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "jev-1.13.0"
+      },
+      "supported_protocols": [
+        "typesafe-systemone.v1"
+      ],
+      "selected_protocol": "typesafe-systemone.v1",
+      "capabilities": {
+        "operations": [
+          "decision_evaluate"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 32768,
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "typesafe.systemone.2026-10-10",
+        "output_limit": null,
+        "embedding": null,
+        "rerank": null
+      },
+      "model_parameters": [],
+      "provenance_ref": "https://openrouter.ai/typesafe/jev-latest"
+    }
+  ],
+  "usage_profiles": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "upload_channels": [],
+  "operations": [],
+  "tool_targets": [],
+  "provenance": {
+    "status": "verified",
+    "verified_at": "2026-10-10T00:00:00Z",
+    "sources": [
+      {
+        "url": "https://openrouter.ai/typesafe/jev-latest",
+        "note": "Context length is listed as 32K on one page and 64K on another; the smaller 32768 is declared."
+      },
+      {
+        "url": "https://api.typesafe.ai/v1/systemone",
+        "note": "Verified 2026-10-10 with a real request: POST with Bearer authorization and {model, state, questions} returns 200 application/json with {model, answers: {id: {type: choice, choice, probabilities, confidence}}, usage: {input_tokens, output_tokens}}; the response model echoes jev-1.13.0. Errors observed in documentation: 401, 422, 429, 529; only 429 and 529 are retryable."
+      }
+    ]
+  }
+}

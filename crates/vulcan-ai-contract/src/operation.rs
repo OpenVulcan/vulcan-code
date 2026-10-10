@@ -68,6 +68,9 @@ pub enum AiOperation {
     /// Extracts structured content.
     /// 抽取结构化内容。
     WebExtract,
+    /// Answers closed questions about a stated situation.
+    /// 就所陈述情境回答封闭问题。
+    DecisionEvaluate,
 }
 
 impl AiOperation {
@@ -100,6 +103,7 @@ impl AiOperation {
             Self::RerankDocuments => "rerank_documents",
             Self::WebSearch => "web_search",
             Self::WebExtract => "web_extract",
+            Self::DecisionEvaluate => "decision_evaluate",
         }
     }
 }

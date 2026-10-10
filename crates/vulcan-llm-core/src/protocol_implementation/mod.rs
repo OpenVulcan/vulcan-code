@@ -13,6 +13,7 @@ pub mod openai;
 pub(crate) mod openai_stream;
 pub mod registry;
 pub mod shared;
+pub mod systemone;
 
 pub use anthropic::*;
 pub use cohere::*;
@@ -22,6 +23,7 @@ pub use media_capabilities::protocol_profile_supports_media_source;
 pub use openai::*;
 pub use registry::*;
 pub use shared::*;
+pub use systemone::*;
 
 /// Stable provider family for Anthropic-native continuation signatures.
 /// Anthropic 原生延续签名的稳定供应商族。

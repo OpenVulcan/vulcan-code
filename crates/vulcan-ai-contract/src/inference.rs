@@ -28,6 +28,9 @@ pub enum InferencePermission {
     /// Permits document reranking.
     /// 允许文档重排。
     Rerank,
+    /// Permits decision evaluation.
+    /// 允许决策评估。
+    Decision,
     /// Permits status and capability inspection.
     /// 允许查询状态与能力。
     Status,

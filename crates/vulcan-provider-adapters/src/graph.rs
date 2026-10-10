@@ -333,8 +333,8 @@ pub struct ServiceOriginOverridePolicy {
     pub example_origin: String,
 }
 
-/// Declares one manifest-selected native embedding or rerank execution binding.
-/// 声明一个由 Manifest 选择的原生向量或重排执行绑定。
+/// Declares one manifest-selected native embedding, rerank or decision execution binding.
+/// 声明一个由 Manifest 选择的原生向量、重排或决策执行绑定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeInferenceBinding {
@@ -622,6 +622,9 @@ pub enum NativeInferenceProjectionKind {
     /// Alibaba Model Studio's nested text-rerank wire format.
     /// 阿里云百炼文本重排接口的嵌套 Wire 格式。
     AlibabaTextRerank,
+    /// System One decision questions and answers.
+    /// System One 决策问题与回答。
+    SystemOne,
 }
 
 /// Identifies one closed provider request projector implementation.

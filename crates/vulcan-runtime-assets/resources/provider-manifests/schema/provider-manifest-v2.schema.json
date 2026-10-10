@@ -542,7 +542,7 @@
               "additionalProperties": false,
               "required": ["operation", "binding_id", "endpoint_path", "projection"],
               "properties": {
-                "operation": {"enum": ["embedding_create", "rerank_documents"]},
+                "operation": {"enum": ["embedding_create", "rerank_documents", "decision_evaluate"]},
                 "model_ids": {
                   "type": "array",
                   "maxItems": 64,
@@ -551,7 +551,7 @@
                 },
                 "binding_id": {"type": "string", "minLength": 1, "maxLength": 128},
                 "endpoint_path": {"type": "string", "minLength": 1, "maxLength": 256},
-                "projection": {"enum": ["compatible", "routed_compatible", "alibaba_text_rerank"]},
+                "projection": {"enum": ["compatible", "routed_compatible", "alibaba_text_rerank", "system_one"]},
                 "service_origin_base_path": {"type": "string", "minLength": 1, "maxLength": 256},
                 "requires_service_origin_override": {"type": "boolean"},
                 "rerank_truncation": {"enum": ["provider_default", "disabled", "start", "end"]},

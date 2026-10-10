@@ -18,6 +18,21 @@ use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
+/// Keeps only conversation protocol routes on one entry used by manifest-free discovery tests.
+/// 仅保留无 Manifest 发现测试所用入口上的对话协议路由。
+///
+/// Without a Manifest every verified route authorizes every model, so a transport-only route
+/// such as the decision route would attach to chat models; these tests cover conversation
+/// protocol merging only.
+/// 没有 Manifest 时每条已验证路由都会授权所有模型，判定等仅传输路由会挂到对话模型上；
+/// 这些测试只覆盖对话协议合并。
+fn retain_conversation_routes(entry: &mut crate::ServiceEntry) {
+    entry.protocol_routes.retain(|route| {
+        crate::execution::upstream_protocol_for_profile_id(route.protocol_profile_id.as_str())
+            .is_some()
+    });
+}
+
 /// Starts one local HTTP fixture that captures the request and returns one JSON response.
 /// 启动一个本地 HTTP 夹具，捕获请求并返回一项 JSON 响应。
 ///
@@ -812,6 +827,7 @@ async fn multi_protocol_discovery_merges_shared_signature_into_per_protocol_vari
         .find(|entry| entry.id == "public-api")
         .expect("openrouter public-api entry must exist")
         .clone();
+    retain_conversation_routes(&mut entry);
     // routes captures every Manifest-authorized discovery protocol for variant assertions.
     // routes 捕获每个经 Manifest 授权的发现协议，用于变体断言。
     let routes = entry
@@ -922,6 +938,7 @@ async fn discovery_projects_all_manifest_verified_protocol_variants() {
         .find(|entry| entry.id == "public-api")
         .expect("openrouter public-api entry must exist")
         .clone();
+    retain_conversation_routes(&mut entry);
     // modelJson is the one credential-visible model returned by both required catalog calls.
     // modelJson 是所需目录调用共同返回的唯一凭据可见模型。
     let model_json = r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"OpenAI: GPT-5.6 Sol","context_length":1050000,"supported_parameters":["tools"],"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":128000}}]}"#;
@@ -1051,6 +1068,7 @@ async fn multi_protocol_discovery_merges_distinct_signatures_separately() {
         .find(|entry| entry.id == "public-api")
         .expect("openrouter public-api entry must exist")
         .clone();
+    retain_conversation_routes(&mut entry);
     // Split one route onto a distinct discovery signature (OpenAI kind, separate origin).
     // 把一条路由拆分为不同发现签名（OpenAI 契约、独立源地址）。
     let model_json = r#"{"data":[{"id":"openai/gpt-5.6-sol","name":"OpenAI: GPT-5.6 Sol","context_length":1050000,"supported_parameters":["tools"],"architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"top_provider":{"max_completion_tokens":128000}}]}"#;

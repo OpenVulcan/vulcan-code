@@ -1,5 +1,5 @@
-//! Provider-native non-streaming embedding and rerank execution.
-//! 供应商原生非流式向量与重排执行。
+//! Provider-native non-streaming embedding, rerank and decision execution.
+//! 供应商原生非流式向量、重排与决策执行。
 
 use crate::{
     ConnectionModel, CredentialExecutionSecret, ProviderExecutionClient, ProviderExecutionFailure,
@@ -18,12 +18,13 @@ use std::{
 };
 use tokio::sync::oneshot;
 use vulcan_ai_contract::{
-    AiOperation, EmbeddingEncoding, EmbeddingInputContent, EmbeddingOutputKind, EmbeddingPayload,
-    EmbeddingRequest, EmbeddingResponse, EmbeddingResult, EmbeddingSpaceFingerprint, EmbeddingTask,
-    ExecutionRouteSnapshot, InferenceUsageScope, RequestUsage, RerankProfileFingerprint,
-    RerankRequest, RerankResponse, RerankResult, UsageUpdateKind, UsageValue, UsageValueSource,
+    AiOperation, DecisionRequest, DecisionResponse, EmbeddingEncoding, EmbeddingInputContent,
+    EmbeddingOutputKind, EmbeddingPayload, EmbeddingRequest, EmbeddingResponse, EmbeddingResult,
+    EmbeddingSpaceFingerprint, EmbeddingTask, ExecutionRouteSnapshot, InferenceUsageScope,
+    RequestUsage, RerankProfileFingerprint, RerankRequest, RerankResponse, RerankResult,
+    UsageUpdateKind, UsageValue, UsageValueSource,
 };
-use vulcan_llm_core::EncodedWireRequest;
+use vulcan_llm_core::{EncodedWireRequest, SystemOneWireRequest, decode_systemone_response};
 
 /// Maximum successful native inference response size retained in memory.
 /// 原生推理成功响应允许保留在内存中的最大字节数。
@@ -325,6 +326,7 @@ pub(crate) fn validate_native_action_binding(
     let (_, _, expected_binding_id) = match operation {
         AiOperation::EmbeddingCreate => NativeInferenceRoute::embedding(route, model_id)?,
         AiOperation::RerankDocuments => NativeInferenceRoute::rerank(route, model_id)?,
+        AiOperation::DecisionEvaluate => NativeInferenceRoute::decision(route, model_id)?,
         _ => {
             return Err(pre_dispatch_failure(format!(
                 "Operation `{}` is not a native inference action.",
@@ -388,6 +390,28 @@ impl<'a> NativeInferenceRoute<'a> {
         model_id: &str,
     ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
         Self::for_operation(route, AiOperation::RerankDocuments, model_id)
+    }
+
+    /// Resolves one decision endpoint from an immutable provider route; only the System One
+    /// projection can carry it.
+    /// 从不可变供应商路由解析一个决策端点；只有 System One 投影可以承载它。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The wire route, relative endpoint, and stable binding identifier.
+    /// 返回 Wire 路由、相对端点与稳定绑定标识。
+    fn decision(
+        route: &'a ProviderExecutionRoute,
+        model_id: &str,
+    ) -> Result<(Self, &'a str, &'a str), ProviderExecutionFailure> {
+        let resolved = Self::for_operation(route, AiOperation::DecisionEvaluate, model_id)?;
+        if resolved.0.binding.projection != crate::NativeInferenceProjectionKind::SystemOne {
+            return Err(pre_dispatch_failure(format!(
+                "Decision action `{}` does not use the System One projection.",
+                resolved.2
+            )));
+        }
+        Ok(resolved)
     }
 
     /// Resolves one operation binding from the frozen service entry.
@@ -904,6 +928,81 @@ impl ProviderExecutionClient {
         })
     }
 
+    /// Executes one frozen System One decision route and checks every answer against its question.
+    /// 执行一条冻结的 System One 决策路由，并按问题核对每个回答。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `route`, `model`, and `revisions` are immutable resolution facts; `request`, `usage_scope`,
+    /// and `secret` are authorized execution inputs.
+    /// `route`、`model` 与 `revisions` 是不可变解析事实；`request`、`usage_scope` 与 `secret`
+    /// 是已授权执行输入。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated decision response or a structured provider/contract failure.
+    /// 返回已校验决策响应或结构化供应商与契约失败。
+    pub(crate) async fn execute_decision(
+        &self,
+        route: &ProviderExecutionRoute,
+        model: &ConnectionModel,
+        request: &DecisionRequest,
+        usage_scope: InferenceUsageScope,
+        revisions: ExecutionRevisionRefs<'_>,
+        secret: &CredentialExecutionSecret,
+    ) -> Result<DecisionResponse, ProviderExecutionFailure> {
+        let started_at = Instant::now();
+        request.validate().map_err(pre_dispatch_failure)?;
+        if !model
+            .capabilities
+            .operations
+            .contains(&AiOperation::DecisionEvaluate)
+        {
+            return Err(pre_dispatch_failure(format!(
+                "Model `{}` does not declare decision_evaluate.",
+                model.id
+            )));
+        }
+        let (native_route, endpoint, binding_id) =
+            NativeInferenceRoute::decision(route, model.id.as_str())?;
+        let wire_request = SystemOneWireRequest {
+            model: model.id.as_str(),
+            request,
+        };
+        let response = self
+            .send_native_json(native_route, route, endpoint, &wire_request, secret, None)
+            .await?;
+        let wire = decode_systemone_response(response.as_str())
+            .map_err(|error| response_headers_protocol_failure(error.message))?;
+        validate_response_model(native_route, model.id.as_str(), wire.model.as_deref())?;
+        let decision = DecisionResponse {
+            request_id: request.request_id.clone(),
+            route: execution_route_snapshot(
+                route,
+                model,
+                usage_scope,
+                revisions.catalog,
+                revisions.route,
+                Some(binding_id),
+            ),
+            answers: wire.answers,
+            usage: RequestUsage {
+                update_kind: UsageUpdateKind::Final,
+                input_tokens: reported_usage_value(wire.usage.input_tokens),
+                uncached_input_tokens: reported_usage_value(wire.usage.input_tokens),
+                output_tokens: reported_usage_value(wire.usage.output_tokens),
+                response_model: wire.model,
+                response_id: wire.response_id,
+                ..RequestUsage::default()
+            },
+            duration_ms: elapsed_milliseconds(started_at),
+        };
+        decision
+            .validate_for_request(request)
+            .map_err(response_headers_protocol_failure)?;
+        Ok(decision)
+    }
+
     /// Sends one bounded provider-native JSON request with existing credential projection.
     /// 使用现有凭据投影发送一次有界供应商原生 JSON 请求。
     ///
@@ -1208,6 +1307,9 @@ fn project_rerank_request(
                     .then(|| routed_provider_policy(secondary_route)),
             }))
         }
+        crate::NativeInferenceProjectionKind::SystemOne => Err(pre_dispatch_failure(
+            "The System One projection carries only decision_evaluate.",
+        )),
     }
 }
 
@@ -1246,6 +1348,9 @@ fn parse_rerank_response(
             })?;
             Ok((wire.results, wire.model, wire.usage))
         }
+        crate::NativeInferenceProjectionKind::SystemOne => Err(response_headers_protocol_failure(
+            "The System One projection carries only decision_evaluate.",
+        )),
     }
 }
 
@@ -1992,5 +2097,167 @@ mod tests {
                 .contains("requires a credential-scoped service origin"),
             "{error}"
         );
+    }
+
+    /// Serves one canned HTTP response on loopback and returns the raw request it received.
+    /// 在回环地址上返回一份预置 HTTP 响应，并返回收到的原始请求。
+    async fn serve_once(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let reply = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+        (format!("http://{address}/v1"), server)
+    }
+
+    /// Runs one decision against the bundled TypeSafe route redirected to `base_url`.
+    /// 针对重定向到 `base_url` 的随包 TypeSafe 路由执行一次决策。
+    async fn run_decision(base_url: String) -> Result<DecisionResponse, ProviderExecutionFailure> {
+        let mut route = crate::execution::test_support::bundled_manifest_route(
+            "typesafe",
+            "public-api",
+            vulcan_llm_core::TYPESAFE_SYSTEMONE_PROFILE_ID,
+        );
+        route.entry.base_url = base_url;
+        route.protocol_route.base_url_override = None;
+        let model = ConnectionModel {
+            id: String::from("jev-1.13.0"),
+            display_name: String::from("Jev"),
+            capabilities: vulcan_ai_contract::ModelCapabilities {
+                operations: vec![AiOperation::DecisionEvaluate],
+                ..vulcan_ai_contract::ModelCapabilities::default()
+            },
+            capability_evidence: crate::ModelCapabilityEvidence::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-key"))
+            .unwrap()
+            .execution_secret()
+            .unwrap();
+        let client = ProviderExecutionClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            std::sync::Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().unwrap()),
+        );
+        client
+            .execute_decision(
+                &route,
+                &model,
+                &decision_request(),
+                InferenceUsageScope::InternalBackground,
+                ExecutionRevisionRefs {
+                    catalog: "catalog",
+                    route: "route",
+                },
+                &secret,
+            )
+            .await
+    }
+
+    /// Builds the three-option decision the permission judge asks.
+    /// 构建权限判定所问的三选项决策。
+    fn decision_request() -> DecisionRequest {
+        DecisionRequest {
+            contract_version: INFERENCE_CONTRACT_VERSION,
+            request_id: String::from("decision-1"),
+            idempotency_key: None,
+            consumer_profile_id: String::from("permission_judge"),
+            state: serde_json::json!({"call": {"tool": "shell_command"}}),
+            questions: vec![vulcan_ai_contract::DecisionQuestion {
+                id: String::from("decision"),
+                kind: vulcan_ai_contract::DecisionQuestionKind::Choice {
+                    instructions: String::from("Judge."),
+                    criteria: ["allow", "review", "block"]
+                        .into_iter()
+                        .map(|option| vulcan_ai_contract::DecisionCriterion {
+                            option: option.to_string(),
+                            criterion: format!("{option}."),
+                        })
+                        .collect(),
+                },
+            }],
+        }
+    }
+
+    /// Verifies a decision posts the System One body to the manifest endpoint and keeps the answer.
+    /// 验证决策把 System One 正文发送到 Manifest 端点并保留回答。
+    #[tokio::test]
+    async fn decision_posts_system_one_and_validates_the_answer() {
+        let (base_url, server) = serve_once(
+            "200 OK",
+            r#"{"model":"jev-1.13.0","answers":{"decision":{"type":"choice","choice":"review","confidence":0.52,"probabilities":{"allow":0.02,"review":0.68,"block":0.3}}},"usage":{"input_tokens":404,"output_tokens":38}}"#,
+        )
+        .await;
+        let response = run_decision(base_url).await.expect("decision");
+        let request = server.await.unwrap();
+        assert!(request.starts_with("POST /v1/systemone "), "{request}");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer fixture-key")
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(&request[request.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(body["model"], "jev-1.13.0");
+        assert_eq!(body["questions"]["decision"]["type"], "choice");
+        assert_eq!(
+            response.route.action_binding_id.as_deref(),
+            Some("typesafe.systemone.v1")
+        );
+        assert_eq!(
+            response.usage.input_tokens,
+            UsageValue::Known {
+                value: 404,
+                source: UsageValueSource::Reported
+            }
+        );
+        let vulcan_ai_contract::DecisionAnswer::Choice { choice, .. } =
+            &response.answers["decision"];
+        assert_eq!(choice, "review");
+    }
+
+    /// Verifies answers outside the declared options and other models are refused.
+    /// 验证超出声明选项的回答与其他模型的回答都会被拒绝。
+    #[tokio::test]
+    async fn decision_refuses_undeclared_choices_and_other_models() {
+        for body in [
+            r#"{"model":"jev-1.13.0","answers":{"decision":{"type":"choice","choice":"maybe","confidence":0.5,"probabilities":{"allow":0.2,"review":0.3,"block":0.5}}}}"#,
+            r#"{"model":"jev-latest","answers":{"decision":{"type":"choice","choice":"allow","confidence":0.5,"probabilities":{"allow":0.9,"review":0.05,"block":0.05}}}}"#,
+        ] {
+            let (base_url, server) = serve_once("200 OK", body).await;
+            assert!(run_decision(base_url).await.is_err(), "{body}");
+            server.await.unwrap();
+        }
     }
 }

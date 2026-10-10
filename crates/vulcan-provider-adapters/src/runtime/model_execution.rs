@@ -8,11 +8,11 @@ use crate::{
     ProviderExecutionRoute, ProviderExecutionStream, ProviderWireRequestCapture,
 };
 use vulcan_ai_contract::{
-    AiExecutionRequest, AiMessage, AiOperation, ContentItem, EmbeddingBatchCollectedResult,
-    EmbeddingBatchPlan, EmbeddingBatchSnapshot, EmbeddingBatchSubmission, EmbeddingBatchTaskPlan,
-    EmbeddingBatchUploadedInput, EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot,
-    InferenceUsageScope, MessageRole, PromptCachePolicy, ReasoningControlMode, ReasoningEffort,
-    RerankRequest, RerankResponse,
+    AiExecutionRequest, AiMessage, AiOperation, ContentItem, DecisionRequest, DecisionResponse,
+    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
+    EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
+    EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot, InferenceUsageScope, MessageRole,
+    PromptCachePolicy, ReasoningControlMode, ReasoningEffort, RerankRequest, RerankResponse,
 };
 
 /// Carries one successful remote Responses compaction result with its owning route identity.
@@ -644,6 +644,46 @@ impl PublicAiRuntime {
             .map_err(crate::execution::pre_dispatch_failure)?;
         self.execution_client
             .execute_rerank(
+                &selection.route,
+                &selection.model,
+                request,
+                usage_scope,
+                crate::native_inference::ExecutionRevisionRefs {
+                    catalog: selection.catalog_revision.as_str(),
+                    route: selection.route_revision.as_str(),
+                },
+                &secret,
+            )
+            .await
+    }
+
+    /// Executes one resolved internal decision selection with fresh credential material.
+    /// 使用新鲜凭据材料执行一项已解析内部决策选择。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `selection`, `request`, and `usage_scope` are already authorized immutable facts.
+    /// `selection`、`request` 与 `usage_scope` 是已授权不可变事实。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A validated decision response or a structured execution failure.
+    /// 返回已校验决策响应或结构化执行失败。
+    pub async fn execute_internal_decision(
+        &self,
+        selection: &ResolvedPublicAiSelection,
+        request: &DecisionRequest,
+        usage_scope: InferenceUsageScope,
+    ) -> Result<DecisionResponse, ProviderExecutionFailure> {
+        let secret = self
+            .resolve_fresh_execution_secret(
+                selection.route.connection.id.as_str(),
+                selection.route.connection.secret_reference.as_str(),
+            )
+            .await
+            .map_err(crate::execution::pre_dispatch_failure)?;
+        self.execution_client
+            .execute_decision(
                 &selection.route,
                 &selection.model,
                 request,

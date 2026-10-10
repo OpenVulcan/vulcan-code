@@ -7,6 +7,10 @@ use crate::ProviderRegistry;
 
 /// Verifies every executable built-in provider protocol is owned by the Responses conversion core.
 /// 验证每个可执行的内置供应商协议都由 Responses 转换核心负责。
+///
+/// A route outside the core is accepted only as the transport of a native inference binding at
+/// the same endpoint, such as the decision route.
+/// 核心之外的路由仅在作为同一端点原生推理绑定的传输时被接受，例如判定路由。
 #[test]
 fn every_builtin_provider_protocol_routes_through_responses_core() {
     let registry = ProviderRegistry::first_batch().expect("provider registry should build");
@@ -21,6 +25,11 @@ fn every_builtin_provider_protocol_routes_through_responses_core() {
                     .filter(|route| {
                         upstream_protocol_for_profile_id(route.protocol_profile_id.as_str())
                             .is_none()
+                    })
+                    .filter(|route| {
+                        !entry.native_inference_bindings.iter().any(|binding| {
+                            route.endpoint_path.as_deref() == Some(binding.endpoint_path.as_str())
+                        })
                     })
                     .map(move |route| {
                         format!("{}/{}/{}", provider.id, entry.id, route.protocol_profile_id)

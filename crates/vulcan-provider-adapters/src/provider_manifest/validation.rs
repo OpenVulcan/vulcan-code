@@ -1087,11 +1087,23 @@ fn validate_service_entry(
             binding.operation,
             vulcan_ai_contract::AiOperation::EmbeddingCreate
                 | vulcan_ai_contract::AiOperation::RerankDocuments
+                | vulcan_ai_contract::AiOperation::DecisionEvaluate
         ) {
             errors.push(ManifestValidationError::new(
                 "unsupported_native_inference_operation",
                 format!("{binding_path}.operation"),
-                "native inference binding supports only embedding_create or rerank_documents",
+                "native inference binding supports only embedding_create, rerank_documents or decision_evaluate",
+            ));
+        }
+        // The System One projection is the only decision wire format, and it carries nothing else.
+        // System One 投影是唯一的决策 Wire 格式，且不承载其他操作。
+        if (binding.projection == crate::NativeInferenceProjectionKind::SystemOne)
+            != (binding.operation == vulcan_ai_contract::AiOperation::DecisionEvaluate)
+        {
+            errors.push(ManifestValidationError::new(
+                "invalid_native_inference_projection",
+                format!("{binding_path}.projection"),
+                "decision_evaluate requires the system_one projection, which is valid only for decision_evaluate",
             ));
         }
         if binding.model_ids.is_empty() {
@@ -1234,12 +1246,13 @@ fn validate_service_entry(
         }
         match binding.operation {
             vulcan_ai_contract::AiOperation::EmbeddingCreate
+            | vulcan_ai_contract::AiOperation::DecisionEvaluate
                 if binding.rerank_truncation.is_some() =>
             {
                 errors.push(ManifestValidationError::new(
                     "embedding_binding_declares_rerank_truncation",
                     format!("{binding_path}.rerank_truncation"),
-                    "embedding binding cannot declare rerank truncation",
+                    "only a rerank binding may declare rerank truncation",
                 ));
             }
             vulcan_ai_contract::AiOperation::RerankDocuments

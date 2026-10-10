@@ -955,6 +955,19 @@
                                              ]
                    },
                    {
+                       "key":  "jev-1.13.0",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  32768,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+
+                                             ]
+                   },
+                   {
                        "key":  "k3",
                        "aliases":  [
 
@@ -2200,6 +2213,19 @@
                                             ],
                        "output_modalities":  [
                                                  "text"
+                                             ]
+                   },
+                   {
+                       "key":  "typesafe/jev-1.13-20260917",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  32768,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+
                                              ]
                    },
                    {

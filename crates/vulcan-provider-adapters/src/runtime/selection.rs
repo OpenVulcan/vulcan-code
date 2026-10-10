@@ -295,7 +295,9 @@ impl PublicAiRuntime {
             ) if protocol_profile_id == &selection.route.protocol_route.protocol_profile_id => {}
             (
                 InferenceRouteBinding::Action { action_binding_id },
-                AiOperation::EmbeddingCreate | AiOperation::RerankDocuments,
+                AiOperation::EmbeddingCreate
+                | AiOperation::RerankDocuments
+                | AiOperation::DecisionEvaluate,
             ) => validate_native_action_binding(
                 &selection.route,
                 inference_route.operation,
