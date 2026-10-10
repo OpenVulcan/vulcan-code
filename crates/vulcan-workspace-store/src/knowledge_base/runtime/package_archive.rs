@@ -442,7 +442,7 @@ fn validate_knowledge_package_metadata(
     if package.index_status != "ready" {
         return Err(String::from("知识库包不包含 ready 状态的可直接使用索引。"));
     }
-    let mut settings = package.settings.clone().unwrap_or_default();
+    let mut settings = package.settings.clone();
     settings.normalize_derived_compatibility();
     settings.validate()?;
     if package.package_version == 1
@@ -650,7 +650,7 @@ pub(super) fn export_knowledge_package_files(
         source_library_id: library.id.clone(),
         name: library.name.clone(),
         description: library.description.clone(),
-        settings: Some(library.settings.clone()),
+        settings: library.settings.clone(),
         schema_version: KNOWLEDGE_SCHEMA_VERSION,
         document_count: library.document_count,
         chunk_count: library.chunk_count,

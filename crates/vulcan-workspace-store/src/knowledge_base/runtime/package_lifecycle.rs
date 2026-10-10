@@ -547,7 +547,7 @@ impl KnowledgeBaseRuntime {
             id: library_id,
             name: normalized_name,
             description: prepared.package.description.clone(),
-            settings: prepared.package.settings.clone().unwrap_or_default(),
+            settings: prepared.package.settings.clone(),
             lifecycle_state: String::from("active"),
             document_count: prepared.package.document_count,
             chunk_count: prepared.package.chunk_count,
@@ -1056,7 +1056,7 @@ impl KnowledgeBaseRuntime {
         package: &KnowledgePackageManifest,
         now: i64,
     ) -> Result<(), String> {
-        let mut settings = package.settings.clone().unwrap_or_default();
+        let mut settings = package.settings.clone();
         settings.normalize_derived_compatibility();
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
@@ -1107,7 +1107,7 @@ impl KnowledgeBaseRuntime {
         package: &KnowledgePackageManifest,
     ) -> Result<(), String> {
         let now = unix_epoch_millis()?;
-        let mut settings = package.settings.clone().unwrap_or_default();
+        let mut settings = package.settings.clone();
         settings.normalize_derived_compatibility();
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)

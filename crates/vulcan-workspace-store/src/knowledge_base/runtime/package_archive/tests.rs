@@ -55,7 +55,7 @@ fn package_fixture_metadata(database: &[u8]) -> (KnowledgePackageManifest, Knowl
         source_library_id: source_library_id.clone(),
         name: String::from("测试知识库"),
         description: String::from("fixture"),
-        settings: Some(KnowledgeLibrarySettings::default()),
+        settings: KnowledgeLibrarySettings::default(),
         schema_version: KNOWLEDGE_SCHEMA_VERSION,
         document_count: 0,
         chunk_count: 0,

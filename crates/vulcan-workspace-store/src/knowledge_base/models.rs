@@ -32,8 +32,8 @@ pub enum KnowledgeRetrievalMode {
 }
 
 impl Default for KnowledgeRetrievalMode {
-    /// Returns the zero-cost, backwards-compatible retrieval mode.
-    /// 返回零成本且兼容旧库的检索模式。
+    /// Returns the zero-cost retrieval mode used by new libraries.
+    /// 返回新资料库使用的零成本检索模式。
     fn default() -> Self {
         Self::RawBm25
     }
@@ -74,8 +74,8 @@ pub enum KnowledgeRouteBindingKind {
 }
 
 impl Default for KnowledgeRouteBindingKind {
-    /// Preserves the legacy protocol interpretation for old settings snapshots.
-    /// 为旧配置快照保留协议路由解释。
+    /// Returns the protocol interpretation used by newly built references.
+    /// 返回新建引用使用的协议路由解释。
     fn default() -> Self {
         Self::Protocol
     }
@@ -110,7 +110,6 @@ pub struct KnowledgeRouteReference {
     pub protocol: String,
     /// Exact binding kind used to interpret `protocol`.
     /// 用于解释 `protocol` 的精确绑定类型。
-    #[serde(default)]
     pub binding_kind: KnowledgeRouteBindingKind,
     /// Normalized service-entry identifier.
     /// 规范化服务端点标识。
@@ -120,18 +119,11 @@ pub struct KnowledgeRouteReference {
     pub model_id: String,
     /// Usage scope authorized for the background knowledge operation.
     /// 知识库后台操作获授权的使用范围。
-    #[serde(default = "default_knowledge_route_usage_scope")]
     pub usage_scope: String,
     /// Optional connection identifier used by the host configuration.
     /// 宿主配置中可选的连接标识。
     #[serde(default)]
     pub connection_id: Option<String>,
-}
-
-/// Returns the only usage scope accepted by detached knowledge processing.
-/// 返回分离式知识库处理唯一接受的使用范围。
-fn default_knowledge_route_usage_scope() -> String {
-    String::from("internal_background")
 }
 
 /// Immutable model metadata captured at configuration or successful indexing time.
@@ -227,7 +219,6 @@ pub struct KnowledgeEmbeddingSettings {
     pub indexed_dimension: Option<u32>,
     /// Effective batch size used by the next or current build.
     /// 下一次或当前构建使用的有效批量大小。
-    #[serde(default = "default_knowledge_embedding_batch_size")]
     pub embedding_batch_size: u32,
     /// Maximum input count declared by the selected model capability.
     /// 所选模型能力配置声明的最大输入数量。
@@ -235,7 +226,6 @@ pub struct KnowledgeEmbeddingSettings {
     pub model_max_batch_size: Option<u32>,
     /// Source of the effective batch size.
     /// 有效批量大小的来源。
-    #[serde(default = "default_knowledge_batch_size_source")]
     pub batch_size_source: KnowledgeBatchSizeSource,
     /// Snapshot captured when vector indexing was first configured.
     /// 首次配置向量索引时捕获的模型快照。
@@ -283,21 +273,9 @@ pub enum KnowledgeBatchSizeSource {
     UserOverride,
 }
 
-/// Returns the fallback batch-size source used by legacy settings snapshots.
-/// 返回旧配置快照使用的回退批量来源。
-fn default_knowledge_batch_size_source() -> KnowledgeBatchSizeSource {
-    KnowledgeBatchSizeSource::FallbackDefault
-}
-
 /// Fallback batch size used only when official capability data is absent.
 /// 仅在官方能力数据缺失时使用的回退批量大小。
 pub const KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE: u32 = 10;
-
-/// Returns the documented fallback batch size for legacy or incomplete settings.
-/// 返回旧配置或不完整配置使用的文档化回退批量大小。
-fn default_knowledge_embedding_batch_size() -> u32 {
-    KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE
-}
 
 /// Describes the lifecycle and compatibility state of the vector index.
 /// 描述向量索引的生命周期与兼容状态。
@@ -364,9 +342,8 @@ use super::selection::{KnowledgeFileDisposition, KnowledgeIgnoredFile};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeDisplaySkippedDocument {
-    /// Explicit exclusion reason; legacy records represent oversized sources.
-    /// 明确忽略原因，旧记录代表超大来源。
-    #[serde(default)]
+    /// Explicit exclusion reason.
+    /// 明确忽略原因。
     pub reason: KnowledgeFileDisposition,
     /// Stable source identity used when the source is imported again.
     /// 再次导入来源时使用的稳定文档标识。
@@ -512,8 +489,8 @@ pub struct KnowledgeLibrarySettings {
 }
 
 impl Default for KnowledgeLibrarySettings {
-    /// Returns the raw-BM25 policy used by legacy libraries.
-    /// 返回旧资料库兼容的原始 BM25 策略。
+    /// Returns the raw-BM25 policy used by new libraries.
+    /// 返回新资料库使用的原始 BM25 策略。
     fn default() -> Self {
         Self {
             ignored_files: Vec::new(),
@@ -739,25 +716,13 @@ mod settings_tests {
         assert!(error.contains("超过模型能力上限"));
     }
 
-    /// Verifies the raw-BM25 default remains valid for legacy libraries.
-    /// 验证旧资料库的原始 BM25 默认配置仍然有效。
+    /// Verifies the raw-BM25 default used by new libraries is valid.
+    /// 验证新资料库使用的原始 BM25 默认配置有效。
     #[test]
-    fn raw_settings_are_backward_compatible() {
+    fn raw_default_settings_are_valid() {
         let settings = KnowledgeLibrarySettings::default();
         assert_eq!(settings.retrieval_mode, KnowledgeRetrievalMode::RawBm25);
         settings.validate().expect("raw defaults are valid");
-    }
-
-    /// Verifies incomplete persisted settings are upgraded through serde defaults.
-    /// 验证字段不完整的持久化配置可以通过 serde 默认值升级。
-    #[test]
-    fn incomplete_settings_are_backward_compatible() {
-        let settings: KnowledgeLibrarySettings =
-            serde_json::from_str(r#"{"retrievalMode":"raw_bm25"}"#)
-                .expect("legacy settings should deserialize");
-        assert_eq!(settings.retrieval_mode, KnowledgeRetrievalMode::RawBm25);
-        assert_eq!(settings.embedding.embedding_batch_size, 10);
-        settings.validate().expect("legacy raw settings are valid");
     }
 
     /// Verifies a persisted dimension mismatch closes vector retrieval before exposure.
@@ -894,10 +859,9 @@ pub struct KnowledgePackageManifest {
     /// Original user-visible library description.
     /// 原始用户可见知识库说明。
     pub description: String,
-    /// Optional per-library settings snapshot retained for portable migration.
-    /// 可选的按资料库配置快照，用于可移植迁移。
-    #[serde(default)]
-    pub settings: Option<KnowledgeLibrarySettings>,
+    /// Per-library settings snapshot carried by the portable package.
+    /// 可移植包携带的按资料库配置快照。
+    pub settings: KnowledgeLibrarySettings,
     /// Authoritative per-library SQLite schema version.
     /// 权威单库 SQLite 结构版本。
     pub schema_version: i64,
@@ -921,7 +885,6 @@ pub struct KnowledgePackageManifest {
     pub content_bytes: u64,
     /// Checksummed derived files retained so imports do not need to rebuild them.
     /// 保存派生文件校验摘要，使导入无需重建派生索引。
-    #[serde(default)]
     pub derived_artifacts: Vec<KnowledgePackageArtifact>,
 }
 
@@ -1722,8 +1685,8 @@ mod tests {
         assert!(value.get("total_files").is_none());
     }
 
-    /// Verifies legacy empty observability payloads migrate through serde defaults.
-    /// 验证旧版本空的可观测载荷可以通过 serde 默认值完成迁移。
+    /// Verifies the column default `{}` observability payload yields empty counters.
+    /// 验证列默认值 `{}` 的可观测载荷产生空计数。
     #[test]
     fn empty_observability_payload_uses_safe_defaults() {
         let snapshot: super::KnowledgeOperationObservability =
