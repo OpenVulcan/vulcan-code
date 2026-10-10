@@ -48,6 +48,9 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 会话权限模式通过 `service_api/permission_mode.rs` 镜像 WebUI 的 `service_set_session_permission_mode`；
 权威状态从会话 hydration 的 `session_config.permission_mode` 取得，只在服务回执确认后改变显示。草稿会话的
 显式选择随首次提交的 `sessionSettings.permissionMode` 一并发送，未选择时不发送值、保留会话默认。
+选择器中的无人值守入口镜像 WebUI 的 `setSessionUnattended` 与 `loadSessionUnattendedDefault`：权威状态取自
+hydration 的 `session_config.unattended`，草稿不可用；关闭时先读取分层预填值再打开文本输入框，确认后才发送，
+开启时直接编辑当前策略或关闭，显示只在服务回执确认后改变。
 选择器中的权限判定入口读取工作台的 `permissionJudgeState`：未设定时提示需要设定，启用时显示状态，
 关闭时隐藏；入口只跳转到权限判定页面，不改写判定设置。
 
@@ -59,6 +62,7 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 | 权限判定 | 开关、后端、设备与放行开关以完整保存请求立即保存；云端判定路由（计费测试先确认）；LLM 复核路由与思考档位（换模型时仅保留新模型声明的档位）；本机模型状态按状态中服务发布的 `pollIntervalMs` 重读；1 条与 10 条测速（云端先确认，结果只留本页）；模型登记、切换、回退、移除；CUDA 文件夹锁定、一键安装与官方链接，安装结束后重读设置；判定记录开关随完整保存请求保存，记录按判定结果、工作区与只看已标记筛选，翻页以记录 ID 为游标并可回到最新，有判定轨迹的记录可标记或取消标记，清除先确认。样本导出（`exportPermissionJudgeRecords`）结果是浏览器下载文件，只在 WebUI 提供 | PermissionJudgeSettings、PermissionJudgeStatus、PermissionJudgeBenchmark、PermissionJudgeRecords、PublicAiSettings |
 | 初始化引导 | 第一步权限判定：本机（设备、模型就地切换与登记，需使用中模型才能确认）、云端（复用云端判定路由区块与提供方入口，需已保存路由才能确认）、暂不启用；只有确认按钮写入设置，离开页面不写入；登记后不自动切换，由用户在列表中切换 | PermissionJudgeSettings、PermissionJudgeStatus、PublicAiSettings |
 | 权限策略 | 仅在判定启用时列出；按项目选择显示使用中判定模型的类别，每个类别可选默认或模型声明的档位，修改立即保存完整选择映射；保留的旧类别选择只注明不编辑 | ProjectPermissionJudgePolicy |
+| 无人值守默认值 | 系统默认拒绝策略编辑；按项目选择（与权限策略页共用项目选择）切换“使用项目策略”，开启时以系统文本为起点并可编辑，关闭时显示所跟随的系统文本 | UnattendedSystemDefault、ProjectUnattendedDefault |
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
 | 凭据 | 添加、启用、同步、设默认、移除；默认移除时原子选择同提供方替代连接 | PublicAiSettings |
 | 模型 | 镜像 WebUI 模型清单：供应商分组与优先级、仅列有可用账号的模型、搜索及用途/输出筛选；每个模型的对话使用、多模态理解、内部使用与签名扩展开关；接入路由与账号详情；失效准入关闭及受阻路由诊断 | PublicAiSettings |
@@ -182,6 +186,8 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `settings_actions::save_prompt_output_style` | savePromptOutputStyle | `service_save_prompt_output_style` |
 | `settings_actions::save_prompt_answer_mode` | savePromptAnswerMode | `service_save_prompt_answer_mode` |
 | `permission_mode::set_session_permission_mode` | setSessionPermissionMode | `service_set_session_permission_mode` |
+| `permission_mode::set_session_unattended` | setSessionUnattended | `service_set_session_unattended` |
+| `permission_mode::load_session_unattended_default` | loadSessionUnattendedDefault | `service_session_unattended_default` |
 | `settings_actions::load_system_prompt_settings` | loadSystemPromptSettings | `service_system_prompt_settings` |
 | `settings_actions::save_system_prompt` | saveSystemPrompt | `service_save_system_prompt` |
 | `settings_actions::reset_system_prompt` | resetSystemPrompt | `service_reset_system_prompt` |
@@ -216,6 +222,10 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::clear_permission_judge_records` | clearPermissionJudgeRecords | `service_clear_permission_judge_records` |
 | `permission_judge::load_project_permission_judge_policy` | loadProjectPermissionJudgePolicy | `service_project_permission_judge_policy` |
 | `permission_judge::save_project_permission_judge_policy` | saveProjectPermissionJudgePolicy | `service_save_project_permission_judge_policy` |
+| `permission_judge::load_unattended_system_default` | loadUnattendedSystemDefault | `service_unattended_system_default` |
+| `permission_judge::save_unattended_system_default` | saveUnattendedSystemDefault | `service_save_unattended_system_default` |
+| `permission_judge::load_project_unattended_default` | loadProjectUnattendedDefault | `service_project_unattended_default` |
+| `permission_judge::save_project_unattended_default` | saveProjectUnattendedDefault | `service_save_project_unattended_default` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |
 | `settings_actions::save_public_ai_provider_tool_capability_enabled` | savePublicAiProviderToolCapabilityEnabled | `service_save_public_ai_provider_tool_capability_enabled` |
 | `settings_actions::list_provider_tasks` | listProviderTasks | `service_list_provider_tasks` |

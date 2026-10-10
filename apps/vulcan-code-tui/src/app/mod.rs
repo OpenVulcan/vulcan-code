@@ -216,6 +216,9 @@ pub struct SessionState {
     /// Last saved permission mode; `None` until the session or draft loads.
     /// 最近保存的权限模式；会话或草稿加载前为 `None`。
     pub permission_mode: Option<PermissionMode>,
+    /// Last saved unattended mode; unavailable for drafts and before the session loads.
+    /// 最近保存的无人值守模式；草稿及会话加载前不可用。
+    pub unattended: Unattended,
     /// Blocks whose default fold state the user flipped, keyed by event seq.
     /// 用户翻转过默认折叠状态的块，以事件 seq 为键。
     pub toggled: HashSet<u64>,
@@ -248,6 +251,7 @@ impl SessionState {
             mode: ExecutionMode::Build,
             answer_mode: AnswerModeSession::default(),
             permission_mode: None,
+            unattended: Unattended::Unavailable,
             toggled: HashSet::new(),
             scroll_from_bottom: 0,
             selected: None,
@@ -967,6 +971,7 @@ impl App {
                     changed |= next != self.judge_policy_project;
                     self.judge_policy_project = next;
                     self.slots.clear(Slot::ProjectPermissionJudgePolicy);
+                    self.slots.clear(Slot::ProjectUnattendedDefault);
                 }
             }
             _ => {}
@@ -1163,7 +1168,16 @@ impl App {
             BackendEvent::PermissionMode {
                 conversation_id,
                 mode,
-            } => self.session_for(&conversation_id).permission_mode = Some(mode),
+                unattended,
+            } => {
+                let session = self.session_for(&conversation_id);
+                session.permission_mode = Some(mode);
+                session.unattended = unattended;
+            }
+            BackendEvent::UnattendedDefault {
+                conversation_id,
+                default,
+            } => permission_mode::open_unattended_prompt(self, &conversation_id, default),
             BackendEvent::Connection(state) => {
                 self.connection = state;
                 if state != ConnectionState::Connected {
@@ -1171,6 +1185,7 @@ impl App {
                     for session in self.sessions.values_mut() {
                         session.answer_mode = AnswerModeSession::default();
                         session.permission_mode = None;
+                        session.unattended = Unattended::Unavailable;
                     }
                 }
                 if state == ConnectionState::Connected {
@@ -1249,6 +1264,7 @@ impl App {
                 session.events = events;
                 session.answer_mode = AnswerModeSession::default();
                 session.permission_mode = None;
+                session.unattended = Unattended::Unavailable;
                 session.events.sort_by_key(|e| e.seq);
                 session.hydrated = true;
             }
@@ -1537,7 +1553,7 @@ impl App {
             Slot::VceOverview | Slot::VceJob => {
                 call.param("/request/projectId").as_str() == self.vce_project.as_deref()
             }
-            Slot::ProjectPermissionJudgePolicy => {
+            Slot::ProjectPermissionJudgePolicy | Slot::ProjectUnattendedDefault => {
                 call.param("/projectId").as_str() == self.judge_policy_project.as_deref()
             }
             Slot::VmmRecords => {

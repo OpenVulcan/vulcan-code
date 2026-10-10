@@ -91,6 +91,12 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// 保存含原始调用文本的本机判定记录；用户开启前保持关闭。
     #[serde(default, skip_serializing_if = "is_false")]
     pub record_decisions: bool,
+    /// System default deny policy offered when a session turns unattended mode on; empty means
+    /// none. Projects may replace it, and a session keeps only the text the user confirmed.
+    /// 会话开启无人值守模式时提供的系统默认拒绝策略；为空表示没有。项目可以替换它，会话只保存用户
+    /// 确认的文本。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unattended_deny_policy: String,
 }
 
 /// Why a registry change was refused.
@@ -229,13 +235,18 @@ pub struct ProjectPermissionJudgeConfiguration {
     /// 每个选项键的已选档位。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub options: BTreeMap<String, String>,
+    /// Project default deny policy for unattended mode; absent means the system default applies,
+    /// and an empty text means this project offers none.
+    /// 无人值守模式的项目默认拒绝策略；缺省表示采用系统默认值，空文本表示本项目不提供策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended_deny_policy: Option<String>,
 }
 
 impl ProjectPermissionJudgeConfiguration {
     /// Returns whether the project chose nothing.
     /// 返回项目是否没有任何选择。
     pub fn is_empty(&self) -> bool {
-        self.options.is_empty()
+        self.options.is_empty() && self.unattended_deny_policy.is_none()
     }
 }
 

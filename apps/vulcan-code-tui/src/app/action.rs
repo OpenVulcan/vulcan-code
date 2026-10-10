@@ -138,6 +138,9 @@ pub enum PromptThen {
     /// 按显示名称或模型标识筛选模型清单。
     ModelSearch,
     SetGoal(ConversationId),
+    /// The deny policy that turns unattended mode on, or updates it, for this exact session.
+    /// 为此精确会话开启或更新无人值守模式的拒绝策略。
+    Unattended(ConversationId),
     /// A typed number, validated against the row's range before it is applied.
     /// 输入的数字，在应用前按该行的范围校验。
     Number {
@@ -167,6 +170,7 @@ impl PromptThen {
                 | PromptThen::ModelSearch
                 | PromptThen::Edit(_)
                 | PromptThen::ResourceWrite(_)
+                | PromptThen::Unattended(_)
         ) || matches!(self, PromptThen::Form(form) if form.fields[form.index].optional)
     }
 }
@@ -218,6 +222,7 @@ impl PromptDialog {
                 | PromptThen::ResourceWrite(_)
                 | PromptThen::Edit(_)
                 | PromptThen::SetGoal(_)
+                | PromptThen::Unattended(_)
         )
     }
 
@@ -871,6 +876,8 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     app.judge_policy_project = Some(value.as_str().to_string());
                     app.slots
                         .clear(crate::service_api::Slot::ProjectPermissionJudgePolicy);
+                    app.slots
+                        .clear(crate::service_api::Slot::ProjectUnattendedDefault);
                 }
                 LocalSetting::ProfileTarget => {
                     app.profile_target = value.as_str().to_string();
@@ -1043,6 +1050,15 @@ fn accept_prompt(app: &mut App) {
             app.pages.remove(&PageId::SkillList);
         }
         PromptThen::ModelSearch => app.model_query = value,
+        PromptThen::Unattended(conversation_id) => perform(
+            app,
+            UiAction::Send(Command::SetSessionUnattended(
+                vulcan_service_api::SessionUnattendedUpdateRequest {
+                    session_id: conversation_id,
+                    unattended: Some(UnattendedConfig { deny_policy: value }),
+                },
+            )),
+        ),
         PromptThen::SetGoal(conversation_id) => {
             // Editing the objective retains the service-projected token budget.
             // 编辑目标内容时保留服务投影的令牌预算。
@@ -1209,6 +1225,8 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
         PickerAction::Area(area) => app.set_area(area),
         PickerAction::Choice(edit, id) => apply_edit(app, edit, SettingValue::Choice(id)),
         PickerAction::PermissionMode(mode) => super::permission_mode::select(app, mode),
+        PickerAction::Unattended => super::permission_mode::edit_unattended(app),
+        PickerAction::UnattendedOff => super::permission_mode::apply_unattended(app, None),
         PickerAction::Page(page) => perform(app, UiAction::GoPage(page)),
     }
 }

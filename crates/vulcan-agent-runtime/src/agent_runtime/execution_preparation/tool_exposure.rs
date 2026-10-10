@@ -6,7 +6,8 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::mcp::McpRuntimeToolBinding;
 use crate::tooling::native::{
     BROWSER_CLOSE_TOOL_ID, BROWSER_LIST_TOOL_ID, BROWSER_OPEN_TOOL_ID, BROWSER_SELECT_TOOL_ID,
-    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
+    CREATE_GOAL_TOOL_ID, DECLARE_INTENT_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID,
+    UPDATE_GOAL_TOOL_ID,
 };
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::Value;
@@ -616,7 +617,11 @@ pub(crate) fn vulcan_tool_descriptor_is_visible(
 fn native_tool_id_is_universal(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        TODOLIST_TOOL_ID | GET_GOAL_TOOL_ID | CREATE_GOAL_TOOL_ID | UPDATE_GOAL_TOOL_ID
+        TODOLIST_TOOL_ID
+            | GET_GOAL_TOOL_ID
+            | CREATE_GOAL_TOOL_ID
+            | UPDATE_GOAL_TOOL_ID
+            | DECLARE_INTENT_TOOL_ID
     )
 }
 

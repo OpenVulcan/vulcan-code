@@ -138,6 +138,9 @@ struct Window {
     /// Saved permission mode of this window.
     /// 当前窗口已保存的权限模式。
     permission_mode: PermissionMode,
+    /// Saved unattended mode of this window; `None` while it is off.
+    /// 当前窗口已保存的无人值守模式；关闭时为 `None`。
+    unattended: Option<UnattendedConfig>,
     /// Server event-document generation, distinct from the transport generation.
     /// 服务端事件文档代际，与传输代际独立。
     generation: u64,
@@ -1526,6 +1529,7 @@ impl Worker {
                     mode: Some(window.session_config.answer_mode.clone()),
                 },
                 permission_mode: window.session_config.permission_mode,
+                unattended: window.session_config.unattended.clone(),
                 generation: window.batch.window_generation,
                 epoch,
                 memory_revision,
@@ -1652,6 +1656,8 @@ impl Worker {
         match command {
             Command::SetSessionAnswerMode(request) => self.set_answer_mode(request),
             Command::SetSessionPermissionMode(request) => self.set_permission_mode(request),
+            Command::SetSessionUnattended(request) => self.set_unattended(request),
+            Command::LoadSessionUnattendedDefault(request) => self.load_unattended_default(request),
             Command::SelectConversation(id) => self.select(id),
             Command::NewConversation { project_id } => {
                 self.draft_serial += 1;

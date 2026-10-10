@@ -26,6 +26,12 @@ pub enum PickerAction {
     /// Requests one session permission mode.
     /// 请求一个会话权限模式。
     PermissionMode(crate::model::PermissionMode),
+    /// Opens the unattended policy prompt of the selected session.
+    /// 打开所选会话的无人值守策略输入框。
+    Unattended,
+    /// Turns unattended mode off for the selected session.
+    /// 关闭所选会话的无人值守模式。
+    UnattendedOff,
     /// Opens one system page.
     /// 打开一个系统页面。
     Page(super::pages::PageId),

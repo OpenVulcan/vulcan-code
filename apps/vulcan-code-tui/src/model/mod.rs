@@ -15,13 +15,29 @@ pub mod system;
 
 use serde_json::Value;
 pub use vulcan_service_api::JudgeState;
-pub use vulcan_session_core::v1::config::PermissionMode;
+pub use vulcan_session_core::v1::config::{PermissionMode, UnattendedConfig};
 
 pub use answer_mode::*;
 pub use insight::*;
 pub use system::*;
 
 pub type ConversationId = String;
+
+/// Unattended mode of one session as the conversation settings show it.
+/// 会话设置所显示的单个会话无人值守模式。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Unattended {
+    /// A draft or a session that has not loaded; the mode exists only for saved sessions.
+    /// 草稿或尚未加载的会话；该模式只适用于已保存的会话。
+    #[default]
+    Unavailable,
+    /// Approval prompts are shown as usual.
+    /// 照常显示批准提示。
+    Off,
+    /// No approval prompt is shown; the text is the deny policy the user confirmed.
+    /// 不显示任何批准提示；文本为用户确认的拒绝策略。
+    On(String),
+}
 
 /// Conversation run phase (`idle|running|queued|completed|failed`).
 /// 会话运行阶段。

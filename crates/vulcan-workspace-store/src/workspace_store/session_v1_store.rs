@@ -490,7 +490,7 @@ impl SessionV1StorageLocator {
             document_revision: metadata.document_revision,
             next_seq: metadata.id_frontier.next_seq,
             open_turn_start_seq: metadata.open_turn_start_seq,
-            permission_mode: metadata.mode.access.permission,
+            access: metadata.mode.access,
             dedicated: metadata.dedicated,
             config: metadata.config,
         })
@@ -597,9 +597,9 @@ pub struct SessionV1EventWindowState {
     /// Session request and compaction configuration from the same validated metadata.
     /// 来自同一份已校验 metadata 的会话请求与压缩配置。
     pub config: SessionConfig,
-    /// Session permission mode from the same validated metadata.
-    /// 来自同一份已校验 metadata 的会话权限模式。
-    pub permission_mode: vulcan_session_core::v1::config::PermissionMode,
+    /// Session access selections from the same validated metadata.
+    /// 来自同一份已校验 metadata 的会话授权选择。
+    pub access: vulcan_session_core::v1::config::AccessConfig,
     /// Dedicated-session profile from the same validated metadata.
     /// 来自同一份已校验 metadata 的专职会话配置。
     pub dedicated: Option<vulcan_session_core::v1::DedicatedSessionProfile>,
@@ -616,7 +616,7 @@ impl From<super::session_v1::event_window::EventWindowState> for SessionV1EventW
             next_seq: state.next_seq,
             open_turn_start_seq: state.open_turn_start_seq,
             config: state.config,
-            permission_mode: state.permission_mode,
+            access: state.access,
             dedicated: state.dedicated,
         }
     }

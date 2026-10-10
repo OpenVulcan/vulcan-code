@@ -12,6 +12,8 @@ import type {
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
   ProjectPermissionJudgePolicySnapshot,
+  ProjectUnattendedDefaultSnapshot,
+  UnattendedSystemDefaultSnapshot,
 } from "@/types";
 
 // loadPermissionJudgeSettings reads the settings page snapshot, including device and CUDA probing.
@@ -143,4 +145,35 @@ export async function exportPermissionJudgeRecords(): Promise<PermissionJudgeRec
 // clearPermissionJudgeRecords 删除判定记录中的全部记录。
 export async function clearPermissionJudgeRecords(): Promise<void> {
   await serviceClient.request<null>("service_clear_permission_judge_records", {});
+}
+
+// loadUnattendedSystemDefault reads the system default deny policy for unattended mode.
+// loadUnattendedSystemDefault 读取无人值守模式的系统默认拒绝策略。
+export async function loadUnattendedSystemDefault(): Promise<UnattendedSystemDefaultSnapshot> {
+  return serviceClient.request<UnattendedSystemDefaultSnapshot>("service_unattended_system_default", {});
+}
+
+// saveUnattendedSystemDefault saves the system default; running sessions keep what they confirmed.
+// saveUnattendedSystemDefault 保存系统默认值；运行中的会话保留其已确认的内容。
+export async function saveUnattendedSystemDefault(denyPolicy: string): Promise<UnattendedSystemDefaultSnapshot> {
+  return serviceClient.request<UnattendedSystemDefaultSnapshot>("service_save_unattended_system_default", {
+    request: { denyPolicy },
+  });
+}
+
+// loadProjectUnattendedDefault reads one project's default deny policy.
+// loadProjectUnattendedDefault 读取一个项目的默认拒绝策略。
+export async function loadProjectUnattendedDefault(projectId: string): Promise<ProjectUnattendedDefaultSnapshot> {
+  return serviceClient.request<ProjectUnattendedDefaultSnapshot>("service_project_unattended_default", { projectId });
+}
+
+// saveProjectUnattendedDefault saves one project's default; null returns it to the system default.
+// saveProjectUnattendedDefault 保存一个项目的默认值；null 使其恢复采用系统默认值。
+export async function saveProjectUnattendedDefault(
+  projectId: string,
+  denyPolicy: string | null,
+): Promise<ProjectUnattendedDefaultSnapshot> {
+  return serviceClient.request<ProjectUnattendedDefaultSnapshot>("service_save_project_unattended_default", {
+    request: { projectId, denyPolicy },
+  });
 }

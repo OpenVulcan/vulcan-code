@@ -83,7 +83,7 @@ pub(super) fn read_state(
 
 /// Saves a judge settings mutation and returns the saved settings.
 /// 保存一次判定设置变更并返回已保存的设置。
-async fn save_settings(
+pub(super) async fn save_settings(
     state: &SharedServiceBridgeState,
     mutate: impl FnOnce(&mut PersistedPermissionJudgeConfiguration) -> Result<(), String>,
 ) -> Result<PersistedPermissionJudgeConfiguration, String> {
@@ -783,7 +783,7 @@ pub(crate) async fn service_install_permission_judge_cuda(
 
 /// Resolves a project identity to its directory.
 /// 将项目标识解析为其目录。
-fn project_directory(
+pub(super) fn project_directory(
     state: &SharedServiceBridgeState,
     project_id: &str,
 ) -> Result<PathBuf, String> {

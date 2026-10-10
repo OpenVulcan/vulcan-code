@@ -63,6 +63,10 @@ pub(crate) struct ShellCommandToolArgs {
     /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
     /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
     shell: Option<String>,
+    /// Optional reason read only by the permission gate; never passed to the command.
+    /// 仅由权限闸门读取的可选理由；从不传给命令。
+    #[serde(default, rename = "purpose")]
+    _purpose: Option<String>,
 }
 
 /// Process execution options derived from generic plugin hooks and host policy.
@@ -260,6 +264,11 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             "stdin": {
                 "type": "string",
                 "description": "Optional stdin text written once to the process; stdin is closed afterwards. When omitted, stdin is empty. No newline is added automatically."
+            },
+            "purpose": {
+                "type": "string",
+                "maxLength": MAX_PERMISSION_REASON_CHARS,
+                "description": PURPOSE_ARGUMENT_DESCRIPTION
             },
             "shell": {
                 "type": "string",
@@ -1551,6 +1560,7 @@ mod process_option_tests {
             timeout_ms: Some(5_000),
             stdin: None,
             shell: Some(String::from("cmd")),
+            _purpose: None,
         };
         // processOptions models the canonical directory resolved from registration_id plus binary_id.
         // processOptions 模拟通过 registration_id 与 binary_id 解析出的规范目录。

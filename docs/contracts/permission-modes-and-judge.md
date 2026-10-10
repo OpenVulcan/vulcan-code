@@ -14,6 +14,11 @@
 - **高风险与判定拦截不能由单层放行。** 命中高风险规则时判定模型的 allow 不生效；判定为 block 或命中
   高风险的调用，复核 LLM 只有在用户开启“允许 LLM 放行判定器拦截项”时才能放行，否则交给用户。
 - **仅可查看不使用判定层与复核层。** 该模式的语义就是写入必须由人批准。
+- **无人值守永不询问用户。** 开启无人值守的会话（含其子代理）不调用用户审批，用户层的结果恒为拒绝并把
+  指引写回代理；复核 LLM 放行（仍受“允许 LLM 放行判定器拦截项”约束）才执行。同一调用在同一用户请求下
+  连续被拒 `UNATTENDED_REVIEWED_REPEATS` 次后不再复核、直接拒绝，避免代理反复改写理由绕过。
+- **代理理由只是复核材料。** `purpose` 参数与 `declare_intent` 只进入复核 LLM 输入的 `<agent_reason>` 区段，
+  不改变任何确定性规则、判定档位或放行条件；理由长度上限只在 `MAX_PERMISSION_REASON_CHARS` 定义。
 - **模型是系统级，策略是项目级。** 后端、设备、模型登记表与复核路由只存在于用户全局配置；项目配置
   只保存各类别档位，Schema 中没有模型或后端字段，不允许不同项目使用不同模型或后端。
 - **策略文本与权重一致。** 本机模型的策略只来自已登记模型包；云端判定读取随构建发布的副本。类别与
@@ -37,6 +42,41 @@
 - 子代理会话使用其根会话的模式；读不到模式时拒绝调用。
 - 草稿会话的显式选择随首次提交的 `sessionSettings.permissionMode` 发送并在首个提示边界写入；未选择时
   不发送值。已存在会话通过 `service_set_session_permission_mode` 修改，只影响下一次工具调用。
+
+## 无人值守模式
+
+- **范围**：按会话开启，保存在会话配置 `AccessConfig.unattended`（`UnattendedConfig { deny_policy }`）；子代理
+  跟随根会话。只有已保存的会话可以开启，草稿入口不可用并说明原因。修改通过
+  `service_set_session_unattended`，只影响下一次工具调用。
+- **拒绝策略**：用户确认的文本写入会话，并以 `<deny_policy>` 区段交给复核 LLM；策略涵盖的调用必须拒绝。长度
+  上限只在 `MAX_UNATTENDED_DENY_POLICY_CHARS` 定义。开启对话框的预填值按项目默认 → 系统默认 → 空白分层读取
+  （`service_session_unattended_default`，返回来源 `project`/`system`/`none`）；预填只是默认值，用户确认后才写入，
+  之后修改默认值不影响已开启的会话。
+- **默认值存储**：系统默认为用户全局判定设置的 `unattended_deny_policy`
+  （`service_unattended_system_default` / `service_save_unattended_system_default`）；项目默认为项目配置
+  `permission_judge.unattended_deny_policy`，缺省表示跟随系统默认
+  （`service_project_unattended_default` / `service_save_project_unattended_default`，`null` 恢复跟随）。
+- **管线行为**：需要用户批准的调用交给复核 LLM，答案只能是 `allow` 或 `deny`；放行才执行，其余拒绝，判定记录
+  结果为 `unattended_denied`。未配置复核 LLM 时全部拒绝。仅可查看模式下的写入直接拒绝；完全权限没有需要批准
+  的调用，策略不起作用。
+- **拒绝回馈**：拒绝文本包含复核理由。只有理由可能改变结论时（调用未说明理由、复核器已实际复核、且复核器可以
+  放行该调用）才邀请代理补充 `purpose` 或调用 `declare_intent` 后重试一次；其余情况（已说明理由、复核器不可用
+  或未配置、高风险或判定拦截且不允许 LLM 放行）告知不要重试，改用其他方式，或跳过该步骤留待用户后续指示，
+  继续完成其余部分。拒绝文字与是否邀请由同一判断决定，不能分别演化。
+- **连续拒绝上限**：按会话在内存中记录最近一次被拒调用的指纹（工具与参数，不含 `purpose`）与所属用户请求；
+  只有进入审批的调用计数。放行清零，换成另一次被拒调用时重新计数，新的用户请求重置；不进入审批的调用与
+  `declare_intent` 不影响计数。上限为连续次数，不阻止之后的同一调用。
+
+## 代理理由
+
+- `shell_command` 与 `terminal_session` 提供可选的 `purpose` 参数，说明该命令的目的；执行时忽略，只在升级到
+  复核时作为 `<agent_reason>` 的 `purpose` 交给复核 LLM。
+- `declare_intent` 是始终可见、计划模式可用的原生工具，只用于说明被拒调用的重试理由，不是备注工具。权限闸门
+  只在“最近一次受管控调用被拒、且拒绝文字邀请了 `declare_intent`”时准入，并要求仍在同一用户请求下；其他任何
+  时候直接拒绝且不记录（`DECLARE_INTENT_UNINVITED`）。一次邀请只允许一次声明；下一次受管控调用（无论结果）
+  也会结束邀请。目前只有无人值守拒绝会发出邀请；有人值守的拒绝要求不重试，因此不邀请。
+- 已接受的意图只由下一次（任意）工具调用消费，作为 `declared_intent` 交给复核 LLM，之后失效；该次重试视为
+  已说明理由，再被拒时不再邀请。
 
 ## 判定设置
 
@@ -83,7 +123,10 @@
 
 ## 界面
 
-- 输入区权限模式选择器（WebUI 为输入区工具栏中加号右侧的权限标签按钮，切换到完全权限前须勾选风险确认；TUI `⛨` 标签、`Alt+P`、`/permissions`）附带判定入口。
+- 输入区权限模式选择器（WebUI 为输入区工具栏中加号右侧的权限标签按钮，切换到完全权限前须勾选风险确认；TUI `⛨` 标签、`Alt+P`、`/permissions`）附带判定入口与无人值守入口；开启后标签显示“无人值守”。
+  无人值守对话框（TUI 为文本输入框）预填分层默认值并注明来源，确认后才写入；开启中可编辑或关闭。
+- 无人值守默认值：WebUI 位于权限判定设置页工具区的“无人值守模式”子页面，TUI 为设置区的同名页面；系统默认与
+  项目默认分开编辑，项目可切换“使用项目策略”，关闭时显示所跟随的系统文本。
 - “权限判定”设置页：总览依次为开关与后端选择、所选后端的设置（本机为使用中模型、设备、CUDA 摘要与运行
   状态；云端为判定路由）、启用时的类别授权摘要、复核路由（含“允许 LLM 放行判定器拦截项”）与工具入口；模型管理与登记、CUDA
   环境（组件安装、库文件夹、手动下载）、类别授权（选择项目后编辑类别档位）、诊断（模型状态表、速度测试）和判定记录（筛选、标记、导出、清除）是带返回按钮的子页面。状态按服务发布的
@@ -102,10 +145,12 @@
 | 已知只读与高风险命令规则 | `crates/vulcan-agent-runtime/src/agent_runtime/tool_permission/command_rules.rs` |
 | 模式读取、判定与复核宿主 | `crates/vulcan-service-kernel/src/tool_permission_host.rs` |
 | 会话模式修改与草稿首次提交 | `crates/vulcan-service-kernel/src/permission_mode.rs`、`conversation_submission.rs` |
+| 无人值守、连续拒绝记忆与代理理由 | `tool_permission.rs` 中的 `PermissionMemory`、`UNATTENDED_REVIEWED_REPEATS`；`tooling/native/declare_intent.rs` |
+| 无人值守默认值服务 | `crates/vulcan-service-kernel/src/permission_judge/unattended.rs` |
 | 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs` |
 | 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
 | 策略、模型包、官方清单、云端副本与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,decision}.rs` |
 | WebUI 界面 | `apps/vulcan-code-web/src/components/features/settings/permission-judge-*`、`components/features/onboarding/`、`components/project/project-permission-judge-section.tsx`、`components/composer/` |
-| TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge}.rs`、`app/permission_mode.rs` |
+| TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge,unattended}.rs`、`app/permission_mode.rs` |

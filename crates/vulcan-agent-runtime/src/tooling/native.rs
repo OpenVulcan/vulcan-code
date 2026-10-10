@@ -63,6 +63,19 @@ pub const CREATE_GOAL_TOOL_ID: &str = "create_goal";
 /// 当前线程目标状态更新工具的稳定标识。
 pub const UPDATE_GOAL_TOOL_ID: &str = "update_goal";
 
+/// Stable identifier for the tool that explains the next tool call to the permission reviewer.
+/// 向权限复核器说明下一次工具调用的工具的稳定标识。
+pub const DECLARE_INTENT_TOOL_ID: &str = "declare_intent";
+
+/// Longest reason the permission reviewer reads, whether a command `purpose` or a declared
+/// intent, in Unicode scalar values.
+/// 权限复核器读取的最长理由（命令 `purpose` 或已声明意图），按 Unicode 标量值计。
+pub const MAX_PERMISSION_REASON_CHARS: usize = 2_000;
+
+/// Model-facing description of the optional `purpose` argument of the command tools.
+/// 命令工具可选 `purpose` 参数面向模型的说明。
+const PURPOSE_ARGUMENT_DESCRIPTION: &str = "Optional; usually omit it. Why this call is needed, read only by the permission reviewer when the call needs approval, such as in an unattended session. Give it when the reviewer denied the same call before or the reason is not obvious from the call itself. It is never passed to the command.";
+
 /// Stable lifecycle state exposed by the native Goal domain port.
 /// 原生 Goal 领域端口暴露的稳定生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -240,12 +253,14 @@ pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
 pub(crate) use shell_command::*;
 mod browser;
+mod declare_intent;
 mod goal;
 mod runtime_config;
 mod submit_plan;
 mod todolist;
 
 pub use browser::*;
+pub(crate) use declare_intent::*;
 pub(crate) use goal::*;
 pub(crate) use runtime_config::*;
 pub(crate) use submit_plan::*;
@@ -500,6 +515,7 @@ pub fn build_native_tool_catalog(
         build_get_goal_tool(),
         build_create_goal_tool(),
         build_update_goal_tool(),
+        build_declare_intent_tool(),
         build_knowledge_search_tool(),
         build_knowledge_browse_tool(),
         build_knowledge_read_tool(),

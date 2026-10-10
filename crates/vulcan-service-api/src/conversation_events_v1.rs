@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use vulcan_session_core::v1::config::{
-    ActiveRequestConfig, AnswerModePreference, PendingRequestConfig, PermissionMode, SessionConfig,
+    AccessConfig, ActiveRequestConfig, AnswerModePreference, PendingRequestConfig, PermissionMode,
+    SessionConfig, UnattendedConfig,
 };
 use vulcan_session_core::v1::dedicated::DedicatedSessionProfile;
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
@@ -155,6 +156,10 @@ pub struct ConversationSessionConfigV1 {
     /// Session permission mode read from `metadata.mode.access`.
     /// 从 `metadata.mode.access` 读取的会话权限模式。
     pub permission_mode: PermissionMode,
+    /// Unattended mode read from the same access selections; absent while it is off.
+    /// 从同一份授权选择读取的无人值守模式；关闭时缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<UnattendedConfig>,
     /// Request configuration frozen for the current physical API.
     /// 为当前物理 API 锁定的请求配置。
     pub current_request: ConversationRequestConfigV1,
@@ -176,8 +181,8 @@ impl ConversationSessionConfigV1 {
     /// # Parameters
     /// 参数
     /// `config` is the exact session config captured with the event window;
-    /// `permission_mode` and `dedicated` come from the same metadata snapshot.
-    /// `config` 是与事件窗口一同捕获的精确会话配置；`permission_mode` 与 `dedicated` 来自同一份元数据快照。
+    /// `access` and `dedicated` come from the same metadata snapshot.
+    /// `config` 是与事件窗口一同捕获的精确会话配置；`access` 与 `dedicated` 来自同一份元数据快照。
     ///
     /// # Returns
     /// 返回值
@@ -185,12 +190,13 @@ impl ConversationSessionConfigV1 {
     /// 返回当前/下一请求状态与动态压缩选择。
     pub fn from_session_config(
         config: &SessionConfig,
-        permission_mode: PermissionMode,
+        access: &AccessConfig,
         dedicated: Option<&DedicatedSessionProfile>,
     ) -> Self {
         Self {
             answer_mode: config.answer_mode.clone(),
-            permission_mode,
+            permission_mode: access.permission,
+            unattended: access.unattended.clone(),
             current_request: ConversationRequestConfigV1::from_active(&config.active_request),
             next_request: config
                 .pending_request
@@ -1372,7 +1378,7 @@ mod tests {
             document.active_turn().map(|turn| turn.start_seq),
             ConversationSessionConfigV1::from_session_config(
                 &document.metadata.config,
-                document.metadata.mode.access.permission,
+                &document.metadata.mode.access,
                 document.metadata.dedicated.as_ref(),
             ),
             ConversationEventRevisionFrontierV1::try_new(
@@ -1412,7 +1418,10 @@ mod tests {
 
         let projected = ConversationSessionConfigV1::from_session_config(
             &config,
-            PermissionMode::ReadOnly,
+            &AccessConfig {
+                permission: PermissionMode::ReadOnly,
+                unattended: None,
+            },
             None,
         );
 
@@ -1625,7 +1634,7 @@ mod tests {
             None,
             ConversationSessionConfigV1::from_session_config(
                 &SessionConfig::default(),
-                PermissionMode::default(),
+                &AccessConfig::default(),
                 None,
             ),
         );

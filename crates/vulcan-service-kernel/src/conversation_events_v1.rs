@@ -136,7 +136,7 @@ pub(crate) async fn service_session_event_hydration_v1(
     // Answer mode visibility follows confirmed storage, even when transcript memory is newer.
     // 即使转录内存更新，回答模式可见性仍跟随已确认存储。
     let durable_answer_mode = persisted.state.config.answer_mode.clone();
-    let durable_permission_mode = persisted.state.permission_mode;
+    let durable_access = persisted.state.access.clone();
     let durable_dedicated = persisted.state.dedicated.clone();
     let (window_generation, events, open_turn_id, open_turn_start_seq, mut session_config) =
         merge_persisted_with_resident(persisted.state, persisted.events, resident, "hydration")?;
@@ -154,7 +154,7 @@ pub(crate) async fn service_session_event_hydration_v1(
         open_turn_start_seq,
         ConversationSessionConfigV1::from_session_config(
             &session_config,
-            durable_permission_mode,
+            &durable_access,
             durable_dedicated.as_ref(),
         ),
         revision_frontier,
@@ -245,7 +245,7 @@ pub(crate) async fn service_session_event_page_v1(
         page.older_before_seq,
         ConversationSessionConfigV1::from_session_config(
             &page.state.config,
-            page.state.permission_mode,
+            &page.state.access,
             page.state.dedicated.as_ref(),
         ),
     ))
@@ -763,7 +763,7 @@ mod tests {
                 next_seq: 2,
                 open_turn_start_seq: Some(persisted[0].seq),
                 config: SessionConfig::default(),
-                permission_mode: Default::default(),
+                access: Default::default(),
                 dedicated: None,
             },
             persisted,
@@ -790,7 +790,7 @@ mod tests {
                 next_seq: 2,
                 open_turn_start_seq: Some(persisted[0].seq),
                 config: SessionConfig::default(),
-                permission_mode: Default::default(),
+                access: Default::default(),
                 dedicated: None,
             },
             persisted,
@@ -819,7 +819,7 @@ mod tests {
             next_seq: 2,
             open_turn_start_seq: None,
             config: SessionConfig::default(),
-            permission_mode: Default::default(),
+            access: Default::default(),
             dedicated: None,
         };
         let frontier =
@@ -840,7 +840,7 @@ mod tests {
             next_seq: 2,
             open_turn_start_seq: None,
             config: SessionConfig::default(),
-            permission_mode: Default::default(),
+            access: Default::default(),
             dedicated: None,
         };
         let resident = ResidentEventSnapshot {
@@ -872,7 +872,7 @@ mod tests {
             next_seq: 2,
             open_turn_start_seq: None,
             config: SessionConfig::default(),
-            permission_mode: Default::default(),
+            access: Default::default(),
             dedicated: None,
         };
         let resident = ResidentEventSnapshot {

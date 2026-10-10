@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, CircleAlert, Hand, ShieldCheck, Sparkles } from "lucide-react";
+import { Bot, ChevronDown, CircleAlert, Hand, ShieldCheck, Sparkles } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { PermissionMode } from "@/service/permission-mode";
 import {
@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
+import { ComposerUnattendedDialog } from "./composer-unattended-dialog";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
 import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
 
@@ -57,6 +58,11 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
   // confirmingFullAccess 控制确认框开启；acknowledged 控制其确认按钮可用。
   const [confirmingFullAccess, setConfirmingFullAccess] = React.useState(false);
   const [acknowledged, setAcknowledged] = React.useState(false);
+  // editingUnattended holds the unattended dialog open.
+  // editingUnattended 控制无人值守对话框开启。
+  const [editingUnattended, setEditingUnattended] = React.useState(false);
+  const unattended = props.controller.unattended;
+  const unattendedOn = unattended.value !== null;
   const current = PERMISSION_MODE_OPTIONS.find((option) => option.value === mode) ?? null;
   const CurrentIcon = current?.icon ?? ShieldCheck;
   const fullAccess = mode === "full_access";
@@ -86,6 +92,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
             aria-label={t("permissionMode.label")}
             className="composer-select-trigger capability inline-flex items-center"
             data-permission-mode-trigger={mode ?? "loading"}
+            data-unattended={unattendedOn ? "" : undefined}
             type="button"
           >
             <span className="composer-select-icon" data-tone={fullAccess ? "warning" : undefined}>
@@ -94,6 +101,9 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
             <span className={fullAccess ? "text-xs text-(--vcn-content-warning)" : "text-xs"}>
               {current ? t(current.label) : t("permissionMode.label")}
             </span>
+            {unattendedOn ? <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground" data-unattended-chip="">
+              <Bot aria-hidden="true" size={13} />{t("permissionMode.unattended.chip")}
+            </span> : null}
             <ChevronDown aria-hidden="true" className="composer-select-chevron" />
           </button>
         </DropdownMenuTrigger>
@@ -122,6 +132,21 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
               );
             })}
           </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="items-start text-xs"
+            data-unattended-entry={unattendedOn ? "on" : "off"}
+            disabled={!unattended.available || unattended.saving}
+            onSelect={() => setEditingUnattended(true)}
+          >
+            <span className="composer-select-icon mt-0.5"><Bot size={14} /></span>
+            <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+              <span>{t(unattendedOn ? "permissionMode.unattended.menuOn" : "permissionMode.unattended.menuOff")}</span>
+              <span className="text-[11px] leading-snug font-normal text-muted-foreground">
+                {t(unattended.available ? "permissionMode.unattended.menuHint" : "permissionMode.unattended.draftHint")}
+              </span>
+            </span>
+          </DropdownMenuItem>
           {judge !== null && judgeLabel !== null ? (
             <>
               <DropdownMenuSeparator />
@@ -135,6 +160,7 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      <ComposerUnattendedDialog open={editingUnattended} onOpenChange={setEditingUnattended} controller={unattended} mode={mode} />
       <AlertDialog open={confirmingFullAccess} onOpenChange={setConfirmingFullAccess}>
         <AlertDialogContent>
           <AlertDialogHeader>

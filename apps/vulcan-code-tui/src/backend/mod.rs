@@ -29,6 +29,12 @@ pub enum Command {
     /// `setSessionPermissionMode`; a draft keeps the choice for its first submission.
     /// 设置会话权限模式；草稿保留该选择供首次提交使用。
     SetSessionPermissionMode(vulcan_service_api::SessionPermissionModeUpdateRequest),
+    /// `setSessionUnattended`; only saved sessions accept it.
+    /// 设置会话无人值守模式；只有已保存的会话接受。
+    SetSessionUnattended(vulcan_service_api::SessionUnattendedUpdateRequest),
+    /// `loadSessionUnattendedDefault`, the prefill of the dialog that turns unattended mode on.
+    /// 读取开启无人值守模式对话框的预填值。
+    LoadSessionUnattendedDefault(vulcan_service_api::UnattendedDefaultRequest),
     /// `selectConversation` (`service_select_conversation`), then `markConversationRead`.
     /// 选择会话，随后标记为已读。
     SelectConversation(ConversationId),
@@ -205,6 +211,13 @@ pub enum BackendEvent {
     PermissionMode {
         conversation_id: ConversationId,
         mode: PermissionMode,
+        unattended: Unattended,
+    },
+    /// The prefill for turning unattended mode on; `None` when it could not be read.
+    /// 开启无人值守模式的预填值；无法读取时为 `None`。
+    UnattendedDefault {
+        conversation_id: ConversationId,
+        default: Option<vulcan_service_api::UnattendedDefaultResponse>,
     },
     Connection(ConnectionState),
     /// `workbench` snapshot.
