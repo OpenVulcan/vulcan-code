@@ -23,6 +23,7 @@ import {
   DedicatedRequirementStep,
   DedicatedWizardOptions,
 } from "./dedicated-wizard-steps";
+import "@/components/composer/dedicated/dedicated-session-wizard.css";
 
 // STEP_TITLE_KEYS names each wizard step.
 // STEP_TITLE_KEYS 为每个向导步骤命名。

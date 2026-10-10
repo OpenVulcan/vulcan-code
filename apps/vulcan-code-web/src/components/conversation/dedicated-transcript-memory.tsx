@@ -44,7 +44,7 @@ export function DedicatedUserMessageMarks(props: { metadata: unknown; body: stri
   const forgotten = dedicatedTurnForgotten(memory.lockedSpans, seq, turnId !== null && turnId === memory.openTurnId);
   if (!basePrompt && !forgotten) return null;
   return (
-    <span className="dedicated-message-marks">
+    <span className="inline-flex items-center gap-1">
       {basePrompt ? (
         <Badge title={t("conversation.dedicated.basePromptHint")} variant="secondary">
           {t("conversation.dedicated.basePrompt")}

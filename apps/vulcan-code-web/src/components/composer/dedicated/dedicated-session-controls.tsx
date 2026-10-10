@@ -42,13 +42,13 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
   };
   const Icon = locked ? Lock : LockOpen;
   return (
-    <div className="dedicated-lock-bar">
-      <span className="dedicated-lock-bar-status" data-locked={locked} role="status">
+    <div className="dedicated-lock-bar flex w-full items-center gap-2 px-1 pb-2">
+      <span className="dedicated-lock-bar-status inline-flex min-w-0 items-center gap-1.5" data-locked={locked} role="status">
         <Icon size={14} aria-hidden="true" />
         {locked ? t("composer.dedicated.lockedStatus") : t("composer.dedicated.unlockedStatus")}
       </span>
       <Button
-        className="dedicated-lock-bar-action"
+        className="ml-auto"
         disabled={pending || props.running}
         onClick={() => void toggle()}
         size="sm"

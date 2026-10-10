@@ -320,7 +320,7 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
         ) : null}
         <SidebarGroup>
             {renderProjectGroupLabel(t("sidebar.projects"), <Boxes size={15} />, (
-              <span className="project-group-label-actions">
+              <span className="inline-flex items-center gap-0.5">
               {globalDraftProject ? (
                 <Button
                   aria-label={t("sidebar.newSession")}

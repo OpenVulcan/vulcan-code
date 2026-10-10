@@ -29,9 +29,9 @@ export function DedicatedDraftStrip(props: {
 }) {
   const { t } = useI18n();
   return (
-    <div className="dedicated-draft-strip">
+    <div className="flex w-full flex-wrap items-center gap-2 px-1 pb-2">
       <Select disabled={props.disabled} onValueChange={props.draft.onChangeProject} value={props.draft.projectId}>
-        <SelectTrigger aria-label={t("composer.draft.project")} className="dedicated-draft-strip-project" size="sm">
+        <SelectTrigger aria-label={t("composer.draft.project")} className="dedicated-draft-project min-w-36" size="sm">
           <Folder size={14} aria-hidden="true" />
           <SelectValue />
         </SelectTrigger>

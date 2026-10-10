@@ -51,8 +51,13 @@ import { selectDedicatedMemory } from "@/service/dedicated-memory";
 import { DraftComposerContext } from "@/components/composer/dedicated/draft-composer-context";
 import { useDedicatedDraft } from "@/components/composer/dedicated/dedicated-draft-store";
 import { DedicatedDraftStrip } from "@/components/composer/dedicated/dedicated-draft-strip";
-import { DedicatedSessionWizard } from "@/components/composer/dedicated/dedicated-session-wizard";
 import { DedicatedComposerContext, DedicatedMemoryLockBar } from "@/components/composer/dedicated/dedicated-session-controls";
+
+// LazyDedicatedSessionWizard keeps the creation wizard and its styles outside the workbench startup chunk.
+// LazyDedicatedSessionWizard 将创建向导及其样式保留在工作台启动分块之外。
+const LazyDedicatedSessionWizard = React.lazy(() => import("@/components/composer/dedicated/dedicated-session-wizard").then((module) => ({
+  default: module.DedicatedSessionWizard,
+})));
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 
@@ -330,7 +335,8 @@ export function ComposerDock(props: {
       ) : null}
       {persistedDedicated ? <DedicatedMemoryLockBar memory={persistedDedicated} running={props.isConversationRunning} /> : null}
       {draftOwner && draftState.kind === "dedicated" ? (
-        <DedicatedSessionWizard
+        <React.Suspense fallback={null}>
+        <LazyDedicatedSessionWizard
           draft={draftOwner}
           onBusyChange={setDedicatedCreating}
           onChange={updateDraftState}
@@ -340,6 +346,7 @@ export function ComposerDock(props: {
           providers={props.providers}
           state={draftState}
         />
+        </React.Suspense>
       ) : (
       <DedicatedComposerContext.Provider value={persistedDedicated}>
       <ComposerPanel
