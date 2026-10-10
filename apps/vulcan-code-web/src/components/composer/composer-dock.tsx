@@ -67,7 +67,12 @@ function selectAnswerMode(snapshot: ConversationEventWindowControllerSnapshot): 
  * 仅选择权限模式归属与配置，使流式 Token 不触发输入区浮层重绘。 */
 function selectPermissionMode(snapshot: ConversationEventWindowControllerSnapshot): PermissionModeOwner | null {
   if (snapshot.owner === null || snapshot.session_config === null) return null;
-  return { sessionId: snapshot.owner.session_id, generation: snapshot.owner.window_generation, mode: snapshot.session_config.permission_mode };
+  return {
+    sessionId: snapshot.owner.session_id,
+    generation: snapshot.owner.window_generation,
+    mode: snapshot.session_config.permission_mode,
+    unattended: snapshot.session_config.unattended ?? null,
+  };
 }
 
 // ComposerDock renders composer-related floating controls.

@@ -4,13 +4,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import type { PermissionMode } from "@/service/permission-mode";
-import { setSessionPermissionMode, type SessionPermissionModeUpdateResponse } from "@/service/permission-mode-service";
+import { setSessionPermissionMode, setSessionUnattended, type SessionPermissionModeUpdateResponse } from "@/service/permission-mode-service";
 import { useComposerSessionSettings } from "./use-composer-answer-mode";
 import type { PermissionModeOwner } from "./use-composer-permission-mode";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
-vi.mock("@/service/permission-mode-service", () => ({ setSessionPermissionMode: vi.fn() }));
+vi.mock("@/service/permission-mode-service", () => ({ setSessionPermissionMode: vi.fn(), setSessionUnattended: vi.fn() }));
 
 // root/host isolate actual hook lifetimes; only RPC and text catalogs are synthetic.
 // root/host 隔离真实钩子生命周期；仅 RPC 与文案目录使用合成边界。
@@ -18,6 +18,7 @@ let root: Root;
 let host: HTMLDivElement;
 let settings: ReturnType<typeof useComposerSessionSettings>;
 const save = vi.mocked(setSessionPermissionMode);
+const saveUnattended = vi.mocked(setSessionUnattended);
 
 /** Render the actual session settings hooks for one exact permission owner.
  * 为一个精确权限归属渲染真实会话设置钩子。 */
@@ -31,7 +32,7 @@ function Harness({ sessionId = null, authority = null, slot = "draft:a" }: {
 /** Build a persisted owner from a synthetic session and mode.
  * 从合成会话与模式构建持久归属。 */
 function authority(mode: PermissionMode = "workspace_write", sessionId = "session-a"): PermissionModeOwner {
-  return { sessionId, generation: 1, mode };
+  return { sessionId, generation: 1, mode, unattended: null };
 }
 
 /** Build a durable service receipt for one session.
@@ -78,6 +79,24 @@ it("keeps the saved mode and reports a failed write", async () => {
   await act(async () => { settings.permissionMode.select("read_only"); expect(await settings.permissionMode.flush()).toBe(false); });
   expect(settings.permissionMode.mode).toBe("workspace_write");
   expect(toast.error).toHaveBeenCalledTimes(1);
+});
+
+it("saves the confirmed unattended policy and keeps it until the projection changes", async () => {
+  saveUnattended.mockResolvedValueOnce({ session_id: "session-a", revision: 2, unattended: { deny_policy: "no push" } });
+  await act(async () => root.render(<Harness sessionId="session-a" authority={authority()} />));
+  expect(settings.permissionMode.unattended.value).toBeNull();
+  await act(async () => { expect(await settings.permissionMode.unattended.apply({ deny_policy: "no push" })).toBe(true); });
+  expect(saveUnattended).toHaveBeenCalledExactlyOnceWith("session-a", { deny_policy: "no push" });
+  expect(settings.permissionMode.unattended.value).toEqual({ deny_policy: "no push" });
+  await act(async () => root.render(<Harness sessionId="session-a" authority={{ ...authority(), unattended: { deny_policy: "x" } }} />));
+  expect(settings.permissionMode.unattended.value).toEqual({ deny_policy: "x" });
+});
+
+it("offers unattended mode only to saved sessions", async () => {
+  await act(async () => root.render(<Harness />));
+  expect(settings.permissionMode.unattended.available).toBe(false);
+  await act(async () => { expect(await settings.permissionMode.unattended.apply({ deny_policy: "" })).toBe(false); });
+  expect(saveUnattended).not.toHaveBeenCalled();
 });
 
 it("is unavailable until the session owner loads", async () => {

@@ -1,8 +1,13 @@
 import React from "react";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
-import type { PermissionMode } from "@/service/permission-mode";
-import { setSessionPermissionMode } from "@/service/permission-mode-service";
+import type { PermissionMode, UnattendedConfig } from "@/service/permission-mode";
+import {
+  loadSessionUnattendedDefault,
+  setSessionPermissionMode,
+  setSessionUnattended,
+  type UnattendedDefault,
+} from "@/service/permission-mode-service";
 
 /** Session default every new conversation starts with unless its draft chooses another mode.
  * 新会话在草稿未选择其他模式时使用的会话默认值。 */
@@ -20,6 +25,9 @@ export interface PermissionModeOwner {
   /** Authoritative persisted mode.
    * 权威持久模式。 */
   mode: PermissionMode;
+  /** Authoritative unattended mode; null while it is off.
+   * 权威无人值守模式；关闭时为 null。 */
+  unattended: UnattendedConfig | null;
 }
 
 /** Inputs bind the selector and asynchronous receipts to the exact visible draft or session.
@@ -108,7 +116,52 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
     const write = pending.current;
     return write?.owner === owner ? await write.promise : true;
   }, [owner]);
-  return { mode, saving, available: mode !== null, select, flush };
+
+  // Unattended mode exists only for a saved session; a receipt stays shown until the projection
+  // moves past the state it replaced.
+  // 无人值守模式只适用于已保存的会话；回执会一直显示，直到投影越过它所替换的状态。
+  const [acceptedUnattended, setAcceptedUnattended] = React.useState<{
+    key: string; base: string | null; value: UnattendedConfig | null;
+  } | null>(null);
+  const [savingUnattended, setSavingUnattended] = React.useState<typeof owner | null>(null);
+  const baseUnattended = authority?.unattended?.deny_policy ?? null;
+  const unattended = authority === null ? null
+    : acceptedUnattended?.key === ownerKey && acceptedUnattended.base === baseUnattended
+      ? acceptedUnattended.value : authority.unattended;
+  // applyUnattended saves the confirmed policy, or turns the mode off with null.
+  // applyUnattended 保存确认的策略，或以 null 关闭该模式。
+  const applyUnattended = React.useCallback(async (next: UnattendedConfig | null) => {
+    if (options.sessionId === null || authority === null) return false;
+    const sessionId = options.sessionId;
+    setSavingUnattended(owner);
+    try {
+      const response = await setSessionUnattended(sessionId, next);
+      if (!mounted.current || activeOwner.current !== owner) return false;
+      if (response.session_id !== sessionId) throw new Error("Unattended mode response owner changed.");
+      setAcceptedUnattended({ key: ownerKey, base: baseUnattended, value: response.unattended });
+      return true;
+    } catch {
+      if (mounted.current && activeOwner.current === owner) toast.error(t("permissionMode.unattended.saveFailed"));
+      return false;
+    } finally {
+      if (mounted.current && activeOwner.current === owner) setSavingUnattended(null);
+    }
+  }, [authority, baseUnattended, options.sessionId, owner, ownerKey, t]);
+  // loadUnattendedDefault reads the prefill for the enable dialog; it applies nothing.
+  // loadUnattendedDefault 读取开启对话框的预填值；不会应用任何内容。
+  const loadUnattendedDefault = React.useCallback(async (): Promise<UnattendedDefault | null> => {
+    return options.sessionId === null ? null : await loadSessionUnattendedDefault(options.sessionId);
+  }, [options.sessionId]);
+  return {
+    mode, saving, available: mode !== null, select, flush,
+    unattended: {
+      value: unattended,
+      available: options.sessionId !== null && authority !== null,
+      saving: savingUnattended === owner,
+      apply: applyUnattended,
+      loadDefault: loadUnattendedDefault,
+    },
+  };
 }
 
 /** Controller shape consumed by the conversation settings menu.

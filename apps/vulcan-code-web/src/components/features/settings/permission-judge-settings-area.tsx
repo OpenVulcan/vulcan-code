@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Activity, Box, ChevronLeft, History, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
+import { Activity, Bot, Box, ChevronLeft, History, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   PageBody, PageEmptyState, PageFacts, PageHint, PageItem, PageNotice, PageRow, PageSection, PageToolbar, type PageFact,
@@ -21,6 +21,7 @@ import { DEVICE_KEYS, MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, PHASE_KEYS, REAS
 import { PermissionJudgePolicyPage } from "@/components/features/settings/permission-judge-policy-page";
 import { PermissionJudgeRecordsPage } from "@/components/features/settings/permission-judge-records-page";
 import { PermissionJudgeRegisterForm } from "@/components/features/settings/permission-judge-register-form";
+import { PermissionJudgeUnattendedPage } from "@/components/features/settings/permission-judge-unattended-page";
 import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
 import {
@@ -89,7 +90,7 @@ function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
 
 // View is the page shown inside the settings frame: the overview or one of its sub-pages.
 // View 是设置框架内显示的页面：总览或其子页面之一。
-type View = "overview" | "models" | "cuda" | "diagnostics" | "records" | "policy";
+type View = "overview" | "models" | "cuda" | "diagnostics" | "records" | "policy" | "unattended";
 
 // Failure is one failed action: a readable outcome plus the raw service error.
 // Failure 是一次失败的操作：可读结果加原始服务错误。
@@ -268,6 +269,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   }
   if (view === "policy") {
     return subPage(t("settings.permissionJudge.policy.title"), <PermissionJudgePolicyPage projects={props.projects ?? []} />);
+  }
+  if (view === "unattended") {
+    return subPage(t("settings.permissionJudge.unattended.title"), <PermissionJudgeUnattendedPage projects={props.projects ?? []} />);
   }
   if (view === "records") {
     return subPage(t("settings.permissionJudge.records.title"), <>
@@ -450,6 +454,8 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     </PermissionReviewRouteSection>
 
     <PageSection layout="rows" data-judge-tools="" title={t("settings.permissionJudge.tools")}>
+      <PageItem icon={<Bot />} title={t("settings.permissionJudge.unattended.title")}
+        description={t("settings.permissionJudge.unattended.entryHint")} actions={open("unattended")} />
       <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
         description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />
       <PageItem icon={<History />} title={t("settings.permissionJudge.records.title")}

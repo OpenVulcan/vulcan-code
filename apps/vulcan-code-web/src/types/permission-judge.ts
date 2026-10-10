@@ -287,3 +287,21 @@ export interface PermissionJudgeRecordExport {
   content: string;
   count: number;
 }
+
+// UnattendedSystemDefaultSnapshot holds the system default deny policy for unattended mode.
+// UnattendedSystemDefaultSnapshot 保存无人值守模式的系统默认拒绝策略。
+export interface UnattendedSystemDefaultSnapshot {
+  denyPolicy: string;
+  maxChars: number;
+}
+
+// ProjectUnattendedDefaultSnapshot holds one project's default next to the system default it inherits.
+// ProjectUnattendedDefaultSnapshot 保存一个项目的默认值及其继承的系统默认值。
+export interface ProjectUnattendedDefaultSnapshot {
+  projectId: string;
+  // null follows the system default.
+  // null 表示采用系统默认值。
+  denyPolicy: string | null;
+  systemDenyPolicy: string;
+  maxChars: number;
+}
