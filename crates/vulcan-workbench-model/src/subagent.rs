@@ -24,6 +24,6 @@ use vulcan_context::{
     SessionMessageRecordKind,
 };
 use vulcan_subagent_core::{
-    CLOSE_AGENT_TOOL, LEGACY_TASK_SESSION_ID_KEY, SEND_MESSAGE_TOOL, STOPPED_SUBAGENT_TASK_IDS_KEY,
-    SUBAGENT_TASK_ID_KEY, SUBAGENT_TASK_KIND, is_readable_subagent_task_kind,
+    CLOSE_AGENT_TOOL, SEND_MESSAGE_TOOL, STOPPED_SUBAGENT_TASK_IDS_KEY, SUBAGENT_TASK_ID_KEY,
+    SUBAGENT_TASK_KIND, is_readable_subagent_task_kind,
 };

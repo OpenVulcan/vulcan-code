@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
-};
+use crate::{SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus};
 use vulcan_context::SessionMessageKind;
 
 /// Canonical host-result kind for child-agent control operations.
@@ -272,23 +270,8 @@ pub fn subagent_feedback_execution_id_from_tool_metadata(
     Ok(execution_id.to_string())
 }
 
-/// Parses child-agent usage segments from one delegate-finished metadata payload.
-/// 从单条委派完成元数据载荷中解析智能体用量分段。
-fn subagent_feedback_usage_segments_from_tool_metadata(
-    metadata: &Value,
-) -> Result<Vec<SessionTurnUsageSegment>, String> {
-    let Some(payload) = task_session_payload_from_tool_metadata(metadata) else {
-        return Ok(Vec::new());
-    };
-    let Some(usage_segments) = payload.get("usage_segments") else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value::<Vec<SessionTurnUsageSegment>>(usage_segments.clone())
-        .map_err(|error| format!("failed to parse subagent feedback usage segments: {error}"))
-}
-
-/// Reads the strongly typed child statistic, with legacy segment reconstruction for old sessions.
-/// 读取强类型子统计，并仅为旧会话保留分段重建兼容。
+/// Reads the strongly typed child statistic attached to one feedback payload.
+/// 读取单条反馈载荷附带的强类型子统计。
 ///
 /// # Parameters
 /// 参数
@@ -299,8 +282,8 @@ fn subagent_feedback_usage_segments_from_tool_metadata(
 ///
 /// # Returns
 /// 返回值
-/// Returns the ledger-derived inclusive statistic when present, otherwise a legacy reconstruction.
-/// 存在时返回账本派生的包容性统计，否则返回旧版重建结果。
+/// Returns the ledger-derived inclusive statistic when present, otherwise an empty statistic.
+/// 存在时返回账本派生的包容性统计，否则返回空统计。
 fn subagent_feedback_turn_stats_from_tool_metadata(
     metadata: &Value,
     status: SessionTurnStatsStatus,
@@ -314,10 +297,11 @@ fn subagent_feedback_turn_stats_from_tool_metadata(
         turn_stats.turn_kind = SessionTurnStatsKind::SubagentFeedback;
         return Ok(turn_stats);
     }
-    Ok(subagent_feedback_turn_stats(
+    Ok(SessionTurnStats {
         status,
-        subagent_feedback_usage_segments_from_tool_metadata(metadata)?,
-    ))
+        turn_kind: SessionTurnStatsKind::SubagentFeedback,
+        ..SessionTurnStats::default()
+    })
 }
 
 /// Maps one child-agent panel state into the terminal status used by display-only statistics.
@@ -330,24 +314,6 @@ fn subagent_feedback_stats_status(run_state: SubagentTaskRunState) -> SessionTur
         | SubagentTaskRunState::Completed
         | SubagentTaskRunState::Closed => SessionTurnStatsStatus::Completed,
     }
-}
-
-/// Builds one display-only statistics object from child-agent usage segments.
-/// 根据智能体用量分段构建一份仅显示的统计对象。
-fn subagent_feedback_turn_stats(
-    status: SessionTurnStatsStatus,
-    usage_segments: Vec<SessionTurnUsageSegment>,
-) -> SessionTurnStats {
-    let mut stats = SessionTurnStats {
-        status,
-        turn_kind: SessionTurnStatsKind::SubagentFeedback,
-        ..SessionTurnStats::default()
-    };
-    for segment in usage_segments {
-        stats.merge_usage_segment(&segment);
-        stats.usage_segments.push(segment);
-    }
-    stats
 }
 
 /// Returns the structured task-session payload attached to one direct or host-result tool metadata object when the result belongs to the host-managed subagent surface.
@@ -690,7 +656,6 @@ pub fn task_session_display_title_from_payload(payload: &Value) -> Option<&str> 
 pub fn task_session_internal_id_from_payload(payload: &Value) -> Option<SessionId> {
     payload
         .get(SUBAGENT_TASK_ID_KEY)
-        .or_else(|| payload.get(LEGACY_TASK_SESSION_ID_KEY))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

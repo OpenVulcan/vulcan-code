@@ -39,17 +39,9 @@ pub const CLOSE_AGENT_TOOL: &str = "close_agent";
 /// Vulcan 子代理任务的规范宿主结果类型。
 pub const SUBAGENT_TASK_KIND: &str = "subagent_task";
 
-/// Legacy host-result kind accepted only for reading older records.
-/// 仅用于读取旧记录的历史宿主结果类型。
-pub const LEGACY_TASK_SESSION_KIND: &str = "task_session";
-
 /// Canonical payload key for the internal child-agent task identifier.
 /// 内部子代理任务标识的规范载荷字段。
 pub const SUBAGENT_TASK_ID_KEY: &str = "subagent_task_id";
-
-/// Legacy payload key accepted only for reading older records.
-/// 仅用于读取旧记录的历史载荷字段。
-pub const LEGACY_TASK_SESSION_ID_KEY: &str = "task_session_id";
 
 /// Canonical payload key for stopped child-agent identifiers.
 /// 已停止子代理标识列表的规范载荷字段。
@@ -133,8 +125,8 @@ impl WaitAgentActivityResult {
 ///
 /// # Returns
 /// 返回值
-/// `true` for canonical `subagent_task` and legacy `task_session` records.
-/// 对规范 `subagent_task` 与历史 `task_session` 记录返回 `true`。
+/// `true` only for canonical `subagent_task` records.
+/// 仅对规范 `subagent_task` 记录返回 `true`。
 pub fn is_readable_subagent_task_kind(kind: &str) -> bool {
-    kind == SUBAGENT_TASK_KIND || kind == LEGACY_TASK_SESSION_KIND
+    kind == SUBAGENT_TASK_KIND
 }

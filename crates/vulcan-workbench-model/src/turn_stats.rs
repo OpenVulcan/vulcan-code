@@ -20,8 +20,8 @@ pub enum SessionTurnStatsKind {
 }
 
 impl Default for SessionTurnStatsKind {
-    /// Returns the legacy-compatible default turn kind.
-    /// 返回兼容旧数据的默认轮次类型。
+    /// Returns the default turn kind for newly built statistics.
+    /// 返回新建统计使用的默认轮次类型。
     fn default() -> Self {
         Self::UserTurn
     }
@@ -114,39 +114,30 @@ pub struct SessionTurnUsageSegment {
     pub model_name_snapshot: Option<String>,
     /// Provider call count represented by this segment.
     /// 该分段代表的 Provider 调用次数。
-    #[serde(default)]
     pub provider_call_count: usize,
     /// Tool call count represented by this segment.
     /// 该分段代表的工具调用次数。
-    #[serde(default)]
     pub tool_call_count: usize,
     /// Provider-reported input token count.
     /// Provider 报告的输入 Token 数。
-    #[serde(default)]
     pub input_tokens: usize,
     /// Protocol-normalized non-cached input token count.
     /// 经过协议归一化的无缓存输入 Token 数。
-    #[serde(default)]
     pub uncached_input_tokens: Option<usize>,
     /// Provider-reported output token count.
     /// Provider 报告的输出 Token 数。
-    #[serde(default)]
     pub output_tokens: usize,
     /// Provider-reported reasoning token count.
     /// Provider 报告的推理 Token 数。
-    #[serde(default)]
     pub reasoning_tokens: usize,
     /// Provider-reported total token count.
     /// Provider 报告的总 Token 数。
-    #[serde(default)]
     pub total_tokens: usize,
     /// Optional provider-reported cache-hit input token count.
     /// Provider 报告的可选缓存命中输入 Token 数。
-    #[serde(default)]
     pub cached_input_tokens: Option<usize>,
     /// Optional provider-reported cache-creation input token count.
     /// Provider 报告的可选缓存写入输入 Token 数。
-    #[serde(default)]
     pub cache_creation_input_tokens: Option<usize>,
 }
 
@@ -198,39 +189,30 @@ pub struct SessionTurnUsageGroup {
     pub kind: SessionTurnUsageGroupKind,
     /// Provider call count represented by this group.
     /// 该分组代表的 Provider 调用次数。
-    #[serde(default)]
     pub provider_call_count: usize,
     /// Tool call count represented by this group.
     /// 该分组代表的工具调用次数。
-    #[serde(default)]
     pub tool_call_count: usize,
     /// Provider-reported input token count for this group.
     /// 该分组内 Provider 报告的输入 Token 数。
-    #[serde(default)]
     pub input_tokens: usize,
     /// Protocol-normalized non-cached input token count for this group.
     /// 该分组内经过协议归一化的无缓存输入 Token 数。
-    #[serde(default)]
     pub uncached_input_tokens: Option<usize>,
     /// Provider-reported output token count for this group.
     /// 该分组内 Provider 报告的输出 Token 数。
-    #[serde(default)]
     pub output_tokens: usize,
     /// Provider-reported reasoning token count for this group.
     /// 该分组内 Provider 报告的推理 Token 数。
-    #[serde(default)]
     pub reasoning_tokens: usize,
     /// Provider-reported total token count for this group.
     /// 该分组内 Provider 报告的总 Token 数。
-    #[serde(default)]
     pub total_tokens: usize,
     /// Optional provider-reported cache-hit input token count for this group.
     /// 该分组内 Provider 报告的可选缓存命中输入 Token 数。
-    #[serde(default)]
     pub cached_input_tokens: Option<usize>,
     /// Optional provider-reported cache-creation input token count for this group.
     /// 该分组内 Provider 报告的可选缓存写入输入 Token 数。
-    #[serde(default)]
     pub cache_creation_input_tokens: Option<usize>,
 }
 
@@ -334,7 +316,7 @@ impl SessionTurnStatsStatus {
 }
 
 impl Default for SessionTurnStatsStatus {
-    /// Returns the default turn status used by legacy deserialization fallbacks.
+    /// Returns the default turn status for newly built statistics.
     /// 返回旧版本反序列化回退时使用的默认轮次状态。
     fn default() -> Self {
         Self::Completed
@@ -350,7 +332,6 @@ pub struct SessionTurnStats {
     pub status: SessionTurnStatsStatus,
     /// Logical kind describing the owner of this statistics row.
     /// 描述该统计行归属方的逻辑类型。
-    #[serde(default)]
     pub turn_kind: SessionTurnStatsKind,
     /// Provider usage breakdowns that compose the aggregate fields.
     /// 组成聚合字段的 Provider 用量分段明细。
@@ -362,63 +343,48 @@ pub struct SessionTurnStats {
     pub usage_groups: Vec<SessionTurnUsageGroup>,
     /// Number of provider calls aggregated inside the whole turn.
     /// 在整个轮次内聚合得到的 Provider 调用次数。
-    #[serde(default)]
     pub provider_call_count: usize,
     /// Provider calls whose response contained no usable Provider Usage.
     /// 响应中没有可用 Provider Usage 的 Provider 调用数量。
-    #[serde(default)]
     pub unknown_usage_call_count: usize,
     /// Provider-call ledger revision used to materialize this view.
     /// 物化当前视图时使用的 Provider 调用账本修订号。
-    #[serde(default)]
     pub source_ledger_revision: u64,
     /// Highest child-contribution revision used to materialize this view.
     /// 物化当前视图时使用的最高子代理贡献修订号。
-    #[serde(default)]
     pub child_contribution_revision: u64,
     /// Whether budget-only estimates were observed but excluded from Provider Usage totals.
     /// 是否观测到已排除在 Provider Usage 汇总之外的预算估算。
-    #[serde(default)]
     pub contains_estimated_budget: bool,
     /// Number of tool-call records aggregated inside the whole turn.
     /// 在整个轮次内聚合得到的工具调用记录数量。
-    #[serde(default)]
     pub tool_call_count: usize,
     /// Provider-reported total input tokens aggregated across the turn.
     /// 跨整个轮次聚合得到的 Provider 报告输入 Token 总数。
-    #[serde(default)]
     pub input_tokens: usize,
     /// Protocol-normalized non-cached input tokens aggregated across the turn.
     /// 跨整个轮次聚合得到的协议归一化无缓存输入 Token 数。
-    #[serde(default)]
     pub uncached_input_tokens: Option<usize>,
     /// Provider-reported total output tokens aggregated across the turn.
     /// 跨整个轮次聚合得到的 Provider 报告输出 Token 总数。
-    #[serde(default)]
     pub output_tokens: usize,
     /// Provider-reported total reasoning tokens aggregated across the turn.
     /// 跨整个轮次聚合得到的 Provider 报告推理 Token 总数。
-    #[serde(default)]
     pub reasoning_tokens: usize,
     /// Provider-reported total tokens aggregated across the turn.
     /// 跨整个轮次聚合得到的 Provider 报告总 Token 数。
-    #[serde(default)]
     pub total_tokens: usize,
     /// Optional provider cache-hit token count when one official field is available.
     /// 当官方字段可用时记录的可选 Provider 缓存命中 Token 数。
-    #[serde(default)]
     pub cached_input_tokens: Option<usize>,
     /// Optional provider cache-write token count when one official field is available.
     /// 当官方字段可用时记录的可选 Provider 缓存写入 Token 数。
-    #[serde(default)]
     pub cache_creation_input_tokens: Option<usize>,
     /// Best-effort duration of the whole turn in milliseconds.
     /// 整个轮次的最佳努力持续时长，单位毫秒。
-    #[serde(default)]
     pub duration_ms: Option<u64>,
     /// Best-effort output-token speed derived from official output tokens and turn duration.
     /// 根据官方输出 Token 与轮次耗时推导出的最佳努力输出速度。
-    #[serde(default)]
     pub output_tokens_per_second: Option<f64>,
 }
 
@@ -548,33 +514,7 @@ impl SessionTurnStats {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
-
-    /// Verifies legacy serialized turn stats without segmented fields remain readable.
-    /// 验证缺少分段字段的旧版序列化轮次统计仍可读取。
-    #[test]
-    fn session_turn_stats_deserialize_legacy_payload_with_default_segments() {
-        let payload = json!({
-            "status": "completed",
-            "provider_call_count": 1,
-            "tool_call_count": 0,
-            "input_tokens": 10,
-            "output_tokens": 4,
-            "total_tokens": 14
-        });
-
-        let stats: SessionTurnStats =
-            serde_json::from_value(payload).expect("legacy stats should deserialize");
-
-        assert_eq!(stats.turn_kind, SessionTurnStatsKind::UserTurn);
-        assert!(stats.usage_segments.is_empty());
-        assert!(stats.usage_groups.is_empty());
-        assert_eq!(stats.provider_call_count, 1);
-        assert_eq!(stats.total_tokens, 14);
-        assert_eq!(stats.uncached_input_tokens, None);
-    }
 
     /// Verifies usage segments are grouped as regular and child-agent accounting.
     /// 验证用量分段会被分组成常规与智能体统计。

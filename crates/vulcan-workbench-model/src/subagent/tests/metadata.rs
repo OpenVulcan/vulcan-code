@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegmentKind,
-};
+use crate::{SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus};
 
 #[test]
 fn parses_task_session_payload_into_subagent_state() {
@@ -837,17 +835,15 @@ fn subagent_feedback_display_records_builds_visible_rows_and_stats() {
             "description": "生成图片",
             "subagent": "image-worker",
             "result": "生成完成：a.jpg",
-            "usage_segments": [{
-                "kind": "subagent_task",
-                "trigger": "image-worker",
-                "provider_call_count": 1,
-                "tool_call_count": 0,
-                "input_tokens": 100,
-                "output_tokens": 25,
-                "reasoning_tokens": 5,
-                "total_tokens": 130,
-                "cached_input_tokens": 40
-            }]
+            "turn_stats": SessionTurnStats {
+                provider_call_count: 1,
+                input_tokens: 100,
+                output_tokens: 25,
+                reasoning_tokens: 5,
+                total_tokens: 130,
+                cached_input_tokens: Some(40),
+                ..SessionTurnStats::default()
+            }
         }
     });
 
@@ -898,17 +894,12 @@ fn subagent_feedback_display_records_builds_visible_rows_and_stats() {
     assert_eq!(stats.reasoning_tokens, 5);
     assert_eq!(stats.total_tokens, 130);
     assert_eq!(stats.cached_input_tokens, Some(40));
-    assert_eq!(
-        stats.usage_segments[0].kind,
-        SessionTurnUsageSegmentKind::SubagentTask
-    );
-    assert_eq!(stats.usage_groups.len(), 1);
 }
 
-/// Verifies new feedback prefers the typed inclusive statistic and preserves its source identity.
-/// 验证新反馈优先使用强类型包容性统计并保留其来源身份。
+/// Verifies feedback uses the typed inclusive statistic and preserves its source identity.
+/// 验证反馈使用强类型包容性统计并保留其来源身份。
 #[test]
-fn subagent_feedback_prefers_typed_turn_stats_over_legacy_segments() {
+fn subagent_feedback_uses_typed_turn_stats() {
     let parent_session_id = SessionId::new_v4();
     let task_id = SessionId::new_v4();
     let state = test_subagent_state(parent_session_id, task_id, SubagentTaskRunState::Completed);
@@ -932,15 +923,7 @@ fn subagent_feedback_prefers_typed_turn_stats_over_legacy_segments() {
             (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
             "execution_id": "typed-worker-run-1",
             "turn_stats": typed_turn_stats,
-            "source_turn_stats_record_id": "task-turn-stats-9",
-            "usage_segments": [{
-                "kind": "subagent_task",
-                "provider_call_count": 99,
-                "input_tokens": 999,
-                "output_tokens": 999,
-                "reasoning_tokens": 0,
-                "total_tokens": 1998
-            }]
+            "source_turn_stats_record_id": "task-turn-stats-9"
         }
     });
 
@@ -991,35 +974,6 @@ fn subagent_feedback_record_matches_task_and_execution_id() {
     ));
 }
 
-/// Verifies malformed child-agent usage data is rejected instead of producing zero-token stats.
-/// 验证格式错误的智能体用量数据会被拒绝，而不是产出 0-token 统计。
-#[test]
-fn subagent_feedback_display_records_rejects_malformed_usage_segments() {
-    let parent_session_id = SessionId::new_v4();
-    let task_id = SessionId::new_v4();
-    let state = test_subagent_state(parent_session_id, task_id, SubagentTaskRunState::Completed);
-    let metadata = json!({
-        "kind": SUBAGENT_TASK_KIND,
-        "payload": {
-            "task_id": "bad-usage-worker",
-            (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
-            "execution_id": "bad-usage-run-1",
-            "execution_status": "completed",
-            "result": "完成但统计坏了",
-            "usage_segments": {
-                "kind": "subagent_task",
-                "input_tokens": 100
-            }
-        }
-    });
-
-    let error =
-        subagent_feedback_display_records_from_tool_metadata(parent_session_id, &metadata, &state)
-            .expect_err("malformed usage segments must be rejected");
-
-    assert!(error.contains("failed to parse subagent feedback usage segments"));
-}
-
 /// Verifies empty child-agent result text stays empty in the feedback metadata payload.
 /// 验证空智能体结果文本会在反馈元数据载荷中保持为空。
 #[test]
@@ -1034,8 +988,7 @@ fn subagent_feedback_display_records_uses_empty_result_body() {
             (SUBAGENT_TASK_ID_KEY): task_id.to_string(),
             "execution_id": "empty-worker-run-1",
             "execution_status": "completed",
-            "result": "",
-            "usage_segments": []
+            "result": ""
         }
     });
 
