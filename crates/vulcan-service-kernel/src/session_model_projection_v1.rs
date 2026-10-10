@@ -237,7 +237,6 @@ pub(crate) fn apply_request_model_projection_v1(
         .and_then(|selection| selection.thinking_level.as_deref())
         .or(active.thinking_level.as_deref())
         .and_then(crate::parse_reasoning_effort);
-    state.active_reasoning_effort_explicit = state.active_reasoning_effort.is_some();
     state.active_temperature = active
         .temperature
         .and_then(|value| value.to_string().parse::<f32>().ok())

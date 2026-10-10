@@ -146,10 +146,6 @@ pub struct PersistedLuaSkillsConfiguration {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_registration_by_skill:
         BTreeMap<String, BTreeMap<String, PersistedLuaSkillToolRegistrationState>>,
-    /// Legacy hidden LuaSkills local tool names grouped by stable skill identifier.
-    /// 按稳定技能标识分组保存的旧版隐藏 LuaSkills 本地工具名称集合。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub disabled_tools_by_skill: BTreeMap<String, Vec<String>>,
     /// Host-owned Vulcan Plugin identifiers explicitly disabled by the user.
     /// 用户显式停用的宿主自有 Vulcan Plugin 标识集合。
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -167,36 +163,10 @@ impl PersistedLuaSkillsConfiguration {
         self == &Self::default()
     }
 
-    /// Normalizes the persisted LuaSkills registration map and migrates legacy hidden tools to implicit registration.
-    /// 归一化持久化的 LuaSkills 注册映射，并将旧版隐藏工具迁移为隐式注册。
+    /// Normalizes the persisted LuaSkills registration map and plugin overrides.
+    /// 归一化持久化的 LuaSkills 注册映射与插件覆盖。
     pub fn normalize(&mut self) -> bool {
-        let legacy_implicit_map = self
-            .disabled_tools_by_skill
-            .iter()
-            .filter_map(|(skill_id, local_names)| {
-                let stable_skill_id = skill_id.trim();
-                if stable_skill_id.is_empty() {
-                    return None;
-                }
-
-                let normalized_local_names = local_names
-                    .iter()
-                    .map(|local_name| local_name.trim())
-                    .filter(|local_name| !local_name.is_empty())
-                    .map(String::from)
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
-                if normalized_local_names.is_empty() {
-                    None
-                } else {
-                    Some((stable_skill_id.to_string(), normalized_local_names))
-                }
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        let mut normalized_registration = self
+        let normalized_registration = self
             .tool_registration_by_skill
             .iter()
             .filter_map(|(skill_id, local_states)| {
@@ -227,16 +197,6 @@ impl PersistedLuaSkillsConfiguration {
             })
             .collect::<BTreeMap<_, _>>();
 
-        for (skill_id, local_names) in legacy_implicit_map {
-            let registration_entry = normalized_registration.entry(skill_id).or_default();
-            for local_name in local_names {
-                registration_entry
-                    .entry(local_name)
-                    .or_insert(PersistedLuaSkillToolRegistrationState::Implicit);
-            }
-        }
-
-        normalized_registration.retain(|_, local_states| !local_states.is_empty());
         let normalized_disabled_vulcan_plugins = self
             .disabled_vulcan_plugins
             .iter()
@@ -256,11 +216,9 @@ impl PersistedLuaSkillsConfiguration {
             .cloned()
             .collect::<BTreeSet<_>>();
         let changed = normalized_registration != self.tool_registration_by_skill
-            || !self.disabled_tools_by_skill.is_empty()
             || normalized_disabled_vulcan_plugins != self.disabled_vulcan_plugins
             || normalized_enabled_vulcan_plugins != self.enabled_vulcan_plugins;
         self.tool_registration_by_skill = normalized_registration;
-        self.disabled_tools_by_skill.clear();
         self.disabled_vulcan_plugins = normalized_disabled_vulcan_plugins;
         self.enabled_vulcan_plugins = normalized_enabled_vulcan_plugins;
         changed
@@ -324,24 +282,11 @@ impl PersistedLuaSkillsConfiguration {
             return PersistedLuaSkillToolRegistrationState::Explicit;
         }
 
-        if let Some(state) = self
-            .tool_registration_by_skill
+        self.tool_registration_by_skill
             .get(stable_skill_id)
             .and_then(|local_states| local_states.get(stable_local_name))
             .copied()
-        {
-            return state;
-        }
-
-        if self
-            .disabled_tools_by_skill
-            .get(stable_skill_id)
-            .is_some_and(|local_names| local_names.iter().any(|name| name == stable_local_name))
-        {
-            return PersistedLuaSkillToolRegistrationState::Implicit;
-        }
-
-        PersistedLuaSkillToolRegistrationState::Explicit
+            .unwrap_or(PersistedLuaSkillToolRegistrationState::Explicit)
     }
 
     /// Returns whether one LuaSkills local tool should be registered as a provider-visible function tool.
@@ -380,26 +325,8 @@ impl PersistedLuaSkillsConfiguration {
                 .insert(stable_local_name.to_string(), state);
         }
 
-        if let Some(entry) = self.disabled_tools_by_skill.get_mut(stable_skill_id) {
-            entry.retain(|name| name != stable_local_name);
-            if entry.is_empty() {
-                self.disabled_tools_by_skill.remove(stable_skill_id);
-            }
-        }
-
         let changed = previous != state;
         changed | self.normalize()
-    }
-
-    /// Updates one legacy LuaSkills hidden-tool entry, mapping hidden to implicit registration for compatibility.
-    /// 更新单个旧版 LuaSkills 隐藏工具条目，并为了兼容将隐藏映射为隐式注册。
-    pub fn set_tool_disabled(&mut self, skill_id: &str, local_name: &str, disabled: bool) -> bool {
-        let state = if disabled {
-            PersistedLuaSkillToolRegistrationState::Implicit
-        } else {
-            PersistedLuaSkillToolRegistrationState::Explicit
-        };
-        self.set_tool_registration_state(skill_id, local_name, state)
     }
 }
 

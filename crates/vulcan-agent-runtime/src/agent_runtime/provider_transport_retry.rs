@@ -747,7 +747,8 @@ mod tests {
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
     use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use crate::provider_config::{
-        PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
+        PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES, PersistedProviderRateLimitRetryConfiguration,
+        PersistedProviderRetryConfiguration,
     };
     use std::time::Duration;
     use vulcan_ai_contract::{
@@ -770,7 +771,7 @@ mod tests {
             respect_retry_after: true,
             retry_429: true,
             rate_limit: PersistedProviderRateLimitRetryConfiguration {
-                max_retries: 0,
+                max_retries: PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
                 initial_delay_ms: 100,
                 max_delay_ms: 1_800_000,
                 backoff_factor: 2.0,

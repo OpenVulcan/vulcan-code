@@ -225,7 +225,11 @@ fn luaskills_registration_filters_only_explicit_tools() {
         build_test_luaskills_entry("skill-b", "tool-a"),
     ];
     let mut registration = PersistedLuaSkillsConfiguration::default();
-    assert!(registration.set_tool_disabled("skill-a", "tool-a", true));
+    assert!(registration.set_tool_registration_state(
+        "skill-a",
+        "tool-a",
+        crate::provider_config::PersistedLuaSkillToolRegistrationState::Implicit,
+    ));
 
     let filtered = filter_luaskills_entries_by_explicit_registration(entries, &registration);
     let remaining = filtered

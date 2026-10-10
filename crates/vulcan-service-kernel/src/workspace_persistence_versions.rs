@@ -132,10 +132,7 @@ pub(crate) fn workbench_thinking_display_mode(
 pub(crate) fn active_reasoning_selection_effort(
     provider_configuration: &ProviderConfigurationFile,
 ) -> Option<ReasoningEffortLevel> {
-    provider_configuration
-        .workbench_reasoning_effort_explicit
-        .then_some(provider_configuration.workbench_reasoning_effort)
-        .flatten()
+    provider_configuration.workbench_reasoning_effort
 }
 
 /// Builds the WebUI reasoning selector snapshot from the shared provider configuration.
@@ -221,10 +218,7 @@ pub(crate) fn reasoning_selection(
             }
         })
         .collect::<Vec<_>>();
-    let configured = provider_configuration
-        .workbench_reasoning_effort_explicit
-        .then_some(provider_configuration.workbench_reasoning_effort)
-        .flatten();
+    let configured = provider_configuration.workbench_reasoning_effort;
     // effectiveEffort shares the exact execution-time resolver so the displayed default cannot diverge from dispatch.
     // effectiveEffort 复用精确的执行期解析器，确保展示默认值不会与分发行为分叉。
     let effective_effort =
@@ -660,7 +654,6 @@ mod tests {
     fn reasoning_selector_uses_active_model_capabilities() {
         let configuration = ProviderConfigurationFile {
             workbench_reasoning_effort: Some(ReasoningEffortLevel::Ultra),
-            workbench_reasoning_effort_explicit: true,
             ..ProviderConfigurationFile::default()
         };
         let capabilities = vulcan_ai_contract::ModelCapabilities {
@@ -685,35 +678,12 @@ mod tests {
         assert!(selection.note.is_some());
     }
 
-    /// Verifies legacy persisted `none` values are treated as stale defaults and re-enable reasoning.
-    /// 验证旧版持久化的 `none` 会被视为过期默认值并重新启用思考。
-    #[test]
-    fn reasoning_selector_ignores_legacy_none_without_explicit_provenance() {
-        let configuration = ProviderConfigurationFile {
-            workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
-            ..ProviderConfigurationFile::default()
-        };
-        let capabilities = vulcan_ai_contract::ModelCapabilities {
-            reasoning_efforts: vec![
-                vulcan_ai_contract::ReasoningEffort::None,
-                vulcan_ai_contract::ReasoningEffort::Medium,
-            ],
-            ..vulcan_ai_contract::ModelCapabilities::default()
-        };
-
-        let selection = reasoning_selection(&configuration, Some(&capabilities))
-            .expect("legacy reasoning preference should still expose a selector");
-
-        assert_eq!(selection.selected_effort, "medium");
-    }
-
     /// Verifies an explicitly selected `none` value still disables reasoning.
     /// 验证用户明确选择的 `none` 仍然能够关闭思考。
     #[test]
     fn reasoning_selector_preserves_explicit_none() {
         let configuration = ProviderConfigurationFile {
             workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
-            workbench_reasoning_effort_explicit: true,
             ..ProviderConfigurationFile::default()
         };
         let capabilities = vulcan_ai_contract::ModelCapabilities {

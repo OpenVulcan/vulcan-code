@@ -668,12 +668,8 @@ pub(crate) fn restore_webui_runtime_controls_for_session(
     let Some(runtime_state) = runtime_state else {
         return;
     };
-    if runtime_state.active_reasoning_effort_explicit {
-        let Some(reasoning_effort) = runtime_state.active_reasoning_effort else {
-            return;
-        };
+    if let Some(reasoning_effort) = runtime_state.active_reasoning_effort {
         provider_configuration.workbench_reasoning_effort = Some(reasoning_effort);
-        provider_configuration.workbench_reasoning_effort_explicit = true;
     }
 }
 

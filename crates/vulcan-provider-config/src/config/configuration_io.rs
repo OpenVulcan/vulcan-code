@@ -68,14 +68,6 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub workbench_reasoning_effort: Option<ReasoningEffortLevel>,
-    /// Records whether the workbench reasoning preference was explicitly chosen by the user.
-    /// 记录工作台思考偏好是否由用户明确选择，用于区分旧版默认值与显式关闭。
-    #[serde(
-        default,
-        rename = "workbenchReasoningEffortExplicit",
-        skip_serializing_if = "is_false"
-    )]
-    pub workbench_reasoning_effort_explicit: bool,
     /// Remembered workbench thinking-output display mode selected by the user.
     /// 由用户选择并记忆的工作台思考输出展示模式。
     #[serde(
@@ -893,34 +885,22 @@ mod public_ai_connections_tests {
         );
     }
 
-    /// Verifies legacy reasoning values remain non-explicit while a new user choice round-trips with provenance.
-    /// 验证旧版思考值保持非显式状态，而新的用户选择会连同来源标记完成往返。
+    /// Verifies a stored workbench reasoning choice, including `none`, round-trips.
+    /// 验证已存工作台思考选择（包括 `none`）可完成往返。
     #[test]
-    fn workbench_reasoning_choice_round_trips_with_explicit_provenance() {
-        let legacy: ProviderConfigurationFile =
-            serde_json::from_str(r#"{"workbenchReasoningEffort":"none"}"#)
-                .expect("legacy provider configuration should parse");
-        assert_eq!(
-            legacy.workbench_reasoning_effort,
-            Some(ReasoningEffortLevel::None)
-        );
-        assert!(!legacy.workbench_reasoning_effort_explicit);
-
+    fn workbench_reasoning_choice_round_trips() {
         let explicit = ProviderConfigurationFile {
-            workbench_reasoning_effort: Some(ReasoningEffortLevel::Max),
-            workbench_reasoning_effort_explicit: true,
+            workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
             ..ProviderConfigurationFile::default()
         };
         let serialized = serde_json::to_string(&explicit)
-            .expect("explicit provider configuration should serialize");
-        assert!(serialized.contains("\"workbenchReasoningEffortExplicit\":true"));
-        let restored: ProviderConfigurationFile = serde_json::from_str(serialized.as_str())
-            .expect("explicit provider configuration should restore");
+            .expect("provider configuration should serialize");
+        let restored: ProviderConfigurationFile = serde_json::from_str(&serialized)
+            .expect("serialized provider configuration should parse");
         assert_eq!(
             restored.workbench_reasoning_effort,
-            Some(ReasoningEffortLevel::Max)
+            Some(ReasoningEffortLevel::None)
         );
-        assert!(restored.workbench_reasoning_effort_explicit);
     }
 
     /// Verifies bounded Provider wire tracing defaults off and persists only after explicit enablement.

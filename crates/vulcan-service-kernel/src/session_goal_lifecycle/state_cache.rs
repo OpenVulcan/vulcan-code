@@ -190,7 +190,6 @@ fn apply_session_v1_runtime_projection(
         .pending_model_selection
         .clone_from(&projection.pending_model_selection);
     runtime_state.active_reasoning_effort = projection.selected_reasoning_effort;
-    runtime_state.active_reasoning_effort_explicit = projection.selected_reasoning_effort.is_some();
     runtime_state.active_temperature = projection.active_temperature;
     crate::session_request_config_v1::apply_provider_tool_selection_v1(
         runtime_state,
@@ -1051,7 +1050,6 @@ mod tests {
             runtime_state.active_reasoning_effort,
             Some(vulcan_provider_config::config::ReasoningEffortLevel::High)
         );
-        assert!(runtime_state.active_reasoning_effort_explicit);
         assert_eq!(runtime_state.active_temperature, Some(0.5));
         assert_eq!(runtime_state.provider_tool_selections.len(), 1);
         assert_eq!(

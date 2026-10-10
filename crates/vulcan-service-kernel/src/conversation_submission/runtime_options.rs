@@ -169,7 +169,6 @@ fn apply_submission_reasoning_effort(
             ..SessionRuntimeStateEntry::default()
         });
     runtime_state.active_reasoning_effort = Some(reasoning_effort);
-    runtime_state.active_reasoning_effort_explicit = true;
     runtime_state.updated_at = updated_at;
 }
 
@@ -475,7 +474,6 @@ mod tests {
                 active_connection_id: Some(String::from("connection-a")),
                 active_model_id: Some(String::from("model-a")),
                 active_reasoning_effort: Some(ReasoningEffortLevel::High),
-                active_reasoning_effort_explicit: true,
                 active_temperature: Some(0.25),
                 ..SessionRuntimeStateEntry::default()
             },

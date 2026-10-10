@@ -108,9 +108,7 @@ pub(super) async fn service_save_provider_retry_settings(
         respect_retry_after: request.respect_retry_after,
         retry_429: request.retry_429,
         rate_limit: PersistedProviderRateLimitRetryConfiguration {
-            max_retries: normalize_provider_rate_limit_retry_max_retries(
-                request.rate_limit.max_retries,
-            ),
+            max_retries: request.rate_limit.max_retries,
             initial_delay_ms: request.rate_limit.initial_delay_ms,
             max_delay_ms: request.rate_limit.max_delay_ms,
             backoff_factor: request.rate_limit.backoff_factor_milli as f64 / 1_000.0,
@@ -318,9 +316,9 @@ fn validate_provider_retry_settings_request(
     if request.jitter_percent > 80 {
         return Err(String::from("普通重试抖动百分比必须位于 0 到 80 之间。"));
     }
-    if request.rate_limit.max_retries > PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES {
+    if !(1..=PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES).contains(&request.rate_limit.max_retries) {
         return Err(format!(
-            "限流重试最大次数必须位于 0 到 {PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES} 之间。"
+            "限流重试最大次数必须位于 1 到 {PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES} 之间。"
         ));
     }
     validate_retry_delay_range(
@@ -416,21 +414,6 @@ mod tests {
         assert_eq!(summary.rate_limit.initial_delay_ms, 9_000);
         assert_eq!(summary.rate_limit.max_delay_ms, 60_000);
         assert_eq!(summary.rate_limit.backoff_factor_milli, 1_000);
-    }
-
-    /// Verifies a legacy zero retry sentinel is projected as the finite host ceiling.
-    /// 验证旧版零重试哨兵会被投影为有限宿主上限。
-    #[test]
-    fn retry_settings_summary_normalizes_legacy_zero_retry_sentinel() {
-        let mut configuration = ProviderConfigurationFile::default();
-        configuration.retry.rate_limit.max_retries = 0;
-
-        let summary = provider_retry_settings(&configuration);
-
-        assert_eq!(
-            summary.rate_limit.max_retries,
-            PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
-        );
     }
 
     /// Verifies validation accepts a finite fixed schedule and rejects an inverted delay range.

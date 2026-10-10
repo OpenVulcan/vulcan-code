@@ -375,9 +375,6 @@ pub struct SessionRuntimeStateEntry {
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     pub active_reasoning_effort: Option<ReasoningEffortLevel>,
-    /// Records whether the session reasoning preference was explicitly chosen by the user.
-    /// 记录会话思考偏好是否由用户明确选择，用于区分旧版默认值与显式关闭。
-    pub active_reasoning_effort_explicit: bool,
     /// Last optional temperature override selected while this session was active.
     /// 最近一次该会话激活时选择的可选温度覆盖。
     pub active_temperature: Option<f32>,

@@ -269,7 +269,6 @@ pub(super) async fn service_select_workbench_reasoning_effort(
             // next-request authority is committed separately through the V1 document below.
             // Provider 配置保留进程级默认值；会话级下一请求权威在下方通过 V1 文档独立提交。
             configuration.workbench_reasoning_effort = Some(selected_effort);
-            configuration.workbench_reasoning_effort_explicit = true;
             Ok(())
         },
         |guard, configuration| -> Result<WorkbenchSnapshot, String> {
@@ -294,7 +293,6 @@ pub(super) async fn service_select_workbench_reasoning_effort(
             // Legacy runtime controls remain an in-memory WebUI adapter only and are not persisted.
             // 旧运行控制项仅保留为内存 WebUI 适配器，不再持久化。
             runtime_state.active_reasoning_effort = Some(selected_effort);
-            runtime_state.active_reasoning_effort_explicit = true;
             runtime_state.updated_at = current_unix_millis_text();
             refresh_workbench_runtime_controls_locked(guard, configuration);
             Ok(guard.workbench.clone())
