@@ -104,7 +104,6 @@ pub struct RequestUsage {
     pub input_tokens: UsageValue,
     /// Input tokens not served from a provider cache.
     /// 未由供应商缓存提供的输入 Token。
-    #[serde(default)]
     pub uncached_input_tokens: UsageValue,
     /// Output tokens.
     /// 输出 Token。
@@ -452,27 +451,6 @@ mod tests {
         });
 
         assert_eq!(usage.output_tokens, UsageValue::Unknown);
-    }
-
-    /// Verifies historical usage JSON without uncached input remains readable.
-    /// 验证缺少非缓存输入字段的历史用量 JSON 仍可读取。
-    #[test]
-    fn historical_usage_without_uncached_input_defaults_to_unknown() {
-        let usage = serde_json::from_value::<RequestUsage>(serde_json::json!({
-            "input_tokens": {"state": "known", "value": 10, "source": "reported"},
-            "output_tokens": {"state": "known", "value": 2, "source": "reported"},
-            "reasoning_tokens": {"state": "unknown"},
-            "cache_read_tokens": {"state": "unknown"},
-            "cache_write_tokens": {"state": "unknown"},
-            "cache_write_5m_tokens": {"state": "unknown"},
-            "cache_write_1h_tokens": {"state": "unknown"},
-            "audio_input_tokens": {"state": "unknown"},
-            "audio_output_tokens": {"state": "unknown"},
-            "total_tokens": {"state": "known", "value": 12, "source": "reported"}
-        }))
-        .expect("historical usage should deserialize");
-
-        assert_eq!(usage.uncached_input_tokens, UsageValue::Unknown);
     }
 
     /// Verifies uncached derivation preserves explicit zero and rejects inconsistent totals.

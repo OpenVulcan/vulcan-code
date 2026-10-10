@@ -260,11 +260,9 @@ pub struct ProviderReplayEnvelope {
     pub provider_id: String,
     /// Credential connection identifier that produced the content.
     /// 产生内容的凭据连接标识。
-    #[serde(default)]
     pub connection_id: String,
     /// Non-secret resolved request URL that produced the content.
     /// 产生内容的不含秘密的已解析请求 URL。
-    #[serde(default)]
     pub route_fingerprint: String,
     /// Protocol profile identifier that produced provider-specific signatures.
     /// 产生供应商专属签名的协议 Profile 标识。
@@ -800,32 +798,6 @@ mod tests {
             "custom:test",
             "connection-a",
             "https://proxy.example/changed/responses",
-            "openai-codex-responses.v1",
-            "gpt-5.6-luna",
-        ));
-    }
-
-    /// Verifies version-one envelopes remain readable but cannot replay without route evidence.
-    /// 验证第一版封套仍可读取，但缺少路由证据时不得重放。
-    #[test]
-    fn legacy_provider_replay_envelope_falls_back_safely() {
-        // legacy is the exact previously persisted shape without credential or URL identity.
-        // legacy 是之前持久化且不含凭据与 URL 身份的精确结构。
-        let legacy: ProviderReplayEnvelope = serde_json::from_value(json!({
-            "version": 1,
-            "provider_id": "custom:test",
-            "protocol_profile_id": "openai-codex-responses.v1",
-            "model_id": "gpt-5.6-luna",
-            "content": []
-        }))
-        .expect("legacy replay envelope should remain readable");
-
-        assert!(legacy.connection_id.is_empty());
-        assert!(legacy.route_fingerprint.is_empty());
-        assert!(!legacy.matches_route(
-            "custom:test",
-            "connection-a",
-            "https://proxy.example/v1/responses",
             "openai-codex-responses.v1",
             "gpt-5.6-luna",
         ));
