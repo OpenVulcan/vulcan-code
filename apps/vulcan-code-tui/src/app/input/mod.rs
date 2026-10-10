@@ -545,6 +545,7 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
         AppCommand::Skills => app.set_area(Area::AgentSkills),
         AppCommand::Plugins => app.set_area(Area::Plugins),
         AppCommand::ContextIndex => action::perform(app, UiAction::GoPage(PageId::IndexProjects)),
+        AppCommand::SetupGuide => action::perform(app, UiAction::GoPage(PageId::SetupGuide)),
         AppCommand::AreaPicker => action::open_area_picker(app),
         AppCommand::History => action::open_history(app),
         AppCommand::Attach => {

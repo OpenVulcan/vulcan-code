@@ -13,6 +13,9 @@ pub enum AppCommand {
     /// Choose the session permission mode or open the permission judge settings.
     /// 选择会话权限模式或打开权限判定设置。
     PermissionMode,
+    /// Opens the setup guide page, whose first step is the permission judge.
+    /// 打开初始化引导页，其第一步是权限判定。
+    SetupGuide,
     SelectModel,
     CycleReasoning,
     ToggleTheme,
@@ -45,7 +48,7 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
-    pub const ALL: [AppCommand; 30] = [
+    pub const ALL: [AppCommand; 31] = [
         AppCommand::NewConversation,
         AppCommand::AddProject,
         AppCommand::Attach,
@@ -53,6 +56,7 @@ impl AppCommand {
         AppCommand::TogglePlan,
         AppCommand::ToggleAnswerMode,
         AppCommand::PermissionMode,
+        AppCommand::SetupGuide,
         AppCommand::SelectModel,
         AppCommand::CycleReasoning,
         AppCommand::OpenDiff,
@@ -86,6 +90,7 @@ impl AppCommand {
             AppCommand::TogglePlan => "plan",
             AppCommand::ToggleAnswerMode => "answer-mode",
             AppCommand::PermissionMode => "permissions",
+            AppCommand::SetupGuide => "setup",
             AppCommand::SelectModel => "model",
             AppCommand::CycleReasoning => "effort",
             AppCommand::ToggleTheme => "theme",
@@ -146,6 +151,7 @@ impl AppCommand {
             AppCommand::TogglePlan => tr!("composer.planMode"),
             AppCommand::ToggleAnswerMode => tr!("answerMode.label"),
             AppCommand::PermissionMode => tr!("permissionMode.label"),
+            AppCommand::SetupGuide => tr!("setupGuide.title"),
             AppCommand::SelectModel => tr!("composer.modelPicker.tooltipTitle"),
             AppCommand::CycleReasoning => tr!("composer.reasoning.subtitle"),
             AppCommand::ToggleTheme => tr!("appChrome.theme"),

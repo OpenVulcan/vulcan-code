@@ -9,7 +9,7 @@ use crate::service_api::{permission_judge as judge, settings_actions as settings
 
 // Consumer profiles and the review purpose owned by the service kernel.
 // 服务内核持有的消费者配置档与复核用途。
-const JUDGE_PROFILE: &str = "permission_judge";
+pub(super) const JUDGE_PROFILE: &str = "permission_judge";
 const REVIEW_PROFILE: &str = "permission_review";
 const REVIEW_PURPOSE: &str = "tool_call_review";
 // Choice value that saves no explicit reasoning effort.
@@ -18,7 +18,7 @@ const MODEL_DEFAULT_EFFORT: &str = "model-default";
 
 /// Labels a device code; unknown codes render as themselves.
 /// 为设备代码生成标签；未知代码按原样显示。
-fn device_label(code: &str) -> String {
+pub(super) fn device_label(code: &str) -> String {
     match code {
         "cuda" => tr!("settings.permissionJudge.device.cuda"),
         "webgpu" => tr!("settings.permissionJudge.device.webgpu"),
@@ -29,7 +29,7 @@ fn device_label(code: &str) -> String {
 
 /// Labels a device's unavailable reason code.
 /// 为设备不可用原因代码生成标签。
-fn reason_label(code: &str) -> String {
+pub(super) fn reason_label(code: &str) -> String {
     match code {
         "runtime_missing" => tr!("settings.permissionJudge.reason.runtimeMissing"),
         "unsupported_platform" => tr!("settings.permissionJudge.reason.unsupportedPlatform"),
@@ -43,7 +43,7 @@ fn reason_label(code: &str) -> String {
 
 /// Labels a worker phase and picks its tone.
 /// 为 worker 阶段生成标签并选择色调。
-fn phase_label(code: &str) -> (String, Tone) {
+pub(super) fn phase_label(code: &str) -> (String, Tone) {
     match code {
         "not_loaded" => (tr!("settings.permissionJudge.phase.notLoaded"), Tone::Muted),
         "warming" => (tr!("settings.permissionJudge.phase.warming"), Tone::Warn),
@@ -322,7 +322,11 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         !cloud_route.is_null()
     };
 
-    let mut rows = Vec::new();
+    let mut rows = vec![button(
+        tr!("setupGuide.open"),
+        UiAction::GoPage(PageId::SetupGuide),
+        Tone::Normal,
+    )];
     if enabled || ready {
         rows.push(toggle(
             tr!("settings.permissionJudge.enabled"),
@@ -551,7 +555,7 @@ fn status_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
 
 /// The cloud decision route, what leaves the machine, and a billed connection test.
 /// 云端判定路由、离开本机的数据说明，以及一次计费的连接测试。
-fn cloud_rows(rows: &mut Vec<Row>, ai: &Value, saved: &Value) {
+pub(super) fn cloud_rows(rows: &mut Vec<Row>, ai: &Value, saved: &Value) {
     rows.push(section(tr!("settings.permissionJudge.cloud.title")));
     rows.push(note(
         tr!("settings.permissionJudge.cloud.description"),
@@ -820,6 +824,12 @@ fn model_rows(rows: &mut Vec<Row>, snapshot: &Value) {
             Tone::Normal,
         ));
     }
+    register_rows(rows);
+}
+
+/// The two registration forms: an official package folder, or a custom model folder.
+/// 两个登记表单：官方模型包文件夹或自定义模型文件夹。
+pub(super) fn register_rows(rows: &mut Vec<Row>) {
     for custom in [false, true] {
         let label = if custom {
             format!(

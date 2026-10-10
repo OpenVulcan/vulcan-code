@@ -19,6 +19,7 @@ mod permission_judge;
 mod plugin_settings;
 mod plugins;
 mod settings;
+mod setup_guide;
 
 use std::collections::HashSet;
 
@@ -152,7 +153,7 @@ impl Area {
             Area::Settings => vec![
                 (
                     Some(tr!("settings.group.general")),
-                    vec![Appearance, Context, GitCommit, PermissionJudge],
+                    vec![Appearance, Context, GitCommit, PermissionJudge, SetupGuide],
                 ),
                 (
                     Some(tr!("settings.group.models")),
@@ -182,6 +183,9 @@ pub enum PageId {
     /// The permission judge: backend, cloud or local model, LLM review and speed tests.
     /// 权限判定：后端、云端或本机模型、LLM 复核与速度测试。
     PermissionJudge,
+    /// The re-entrant setup guide; its first step is the permission judge.
+    /// 可重入的初始化引导；第一步是权限判定。
+    SetupGuide,
     Providers,
     Credentials,
     Models,
@@ -239,6 +243,7 @@ impl PageId {
             PageId::Context => tr!("tui.settings.context"),
             PageId::GitCommit => tr!("settings.gitCommit"),
             PageId::PermissionJudge => tr!("settings.permissionJudge"),
+            PageId::SetupGuide => tr!("setupGuide.title"),
             PageId::Providers => tr!("tui.settings.providers"),
             PageId::Credentials => tr!("tui.settings.credentials"),
             PageId::Models => tr!("tui.settings.modelList"),
@@ -359,7 +364,7 @@ impl PageId {
                 }
             }
             Self::About => calls.push(api::licenses::load_license_catalog()),
-            Self::PermissionJudge => calls.extend([
+            Self::PermissionJudge | Self::SetupGuide => calls.extend([
                 settings::load_public_ai_settings(),
                 api::permission_judge::load_permission_judge_settings(),
                 api::permission_judge::load_permission_judge_status(),
@@ -466,7 +471,7 @@ impl PageId {
         match self {
             Self::Capabilities => &[Slot::ProviderTasks],
             Self::Mcp => &[Slot::McpOAuth],
-            Self::PermissionJudge => &[Slot::PermissionJudgeStatus],
+            Self::PermissionJudge | Self::SetupGuide => &[Slot::PermissionJudgeStatus],
             _ => &[],
         }
     }
@@ -1037,6 +1042,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::Context => settings::context(app),
         PageId::GitCommit => settings::git_commit(app),
         PageId::PermissionJudge => permission_judge::rows(app),
+        PageId::SetupGuide => setup_guide::rows(app),
         PageId::Providers => settings::providers(app),
         PageId::Credentials => settings::credentials(app),
         PageId::Models => models::models(app),
