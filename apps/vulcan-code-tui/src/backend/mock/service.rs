@@ -732,6 +732,11 @@ impl FakeService {
                 "service_system_prompt_settings" => {
                     return self.system_prompt_snapshot(required(&call.params, "/projectId")?);
                 }
+                "service_project_permission_judge_policy" => {
+                    let mut policy = self.loads[call.method].clone();
+                    policy["projectId"] = required(&call.params, "/projectId")?.clone();
+                    return Ok(policy);
+                }
                 "service_mcp_oauth_status" => {
                     let mut status = self.loads["service_mcp_oauth_status"].clone();
                     status["serverId"] = required(&call.params, "/serverId")?.clone();
@@ -1168,6 +1173,20 @@ impl FakeService {
                 }
                 snapshot["cuda"]["lockedDirectory"] =
                     required(request, "/cudaLibraryDirectory")?.clone();
+            }
+            "service_save_project_permission_judge_policy" => {
+                // Saved choices; omitted categories follow the default.
+                // 已保存的选择；未列出的类别跟随默认值。
+                let chosen = required(params, "/request/options")?.clone();
+                for option in self.loads["service_project_permission_judge_policy"]["options"]
+                    .as_array_mut()
+                    .ok_or("policy fixture")?
+                {
+                    option["chosenMode"] = chosen
+                        .get(option["key"].as_str().ok_or("policy key")?)
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                }
             }
             "service_save_luaskills_runtime_settings" => {
                 self.workbench["luaSkills"]["runtimeSettings"] =

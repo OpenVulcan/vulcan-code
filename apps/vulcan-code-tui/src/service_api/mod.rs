@@ -190,6 +190,9 @@ pub enum Slot {
     /// The latest `benchmarkPermissionJudge` result of this page; never saved.
     /// 本页最近一次 `benchmarkPermissionJudge` 结果；不会持久化。
     PermissionJudgeBenchmark,
+    /// `loadProjectPermissionJudgePolicy` of the project chosen on the permission strategy page.
+    /// 权限策略页所选项目的 `loadProjectPermissionJudgePolicy`。
+    ProjectPermissionJudgePolicy,
 }
 
 impl Slot {

@@ -58,6 +58,7 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 | Git 提交设置 | 分支前缀、补充提示、摘要模型，完整配置保存 | Workbench、PublicAiSettings |
 | 权限判定 | 开关、后端、设备与放行开关以完整保存请求立即保存；云端判定路由（计费测试先确认）；LLM 复核路由与思考档位（换模型时仅保留新模型声明的档位）；本机模型状态每 2 秒重读；1 条与 10 条测速（云端先确认，结果只留本页）；模型登记、切换、回退、移除；CUDA 文件夹锁定、一键安装与官方链接，安装结束后重读设置 | PermissionJudgeSettings、PermissionJudgeStatus、PermissionJudgeBenchmark、PublicAiSettings |
 | 初始化引导 | 第一步权限判定：本机（设备、模型就地切换与登记，需使用中模型才能确认）、云端（复用云端判定路由区块与提供方入口，需已保存路由才能确认）、暂不启用；只有确认按钮写入设置，离开页面不写入；登记后不自动切换，由用户在列表中切换 | PermissionJudgeSettings、PermissionJudgeStatus、PublicAiSettings |
+| 权限策略 | 仅在判定启用时列出；按项目选择显示使用中判定模型的类别，每个类别可选默认或模型声明的档位，修改立即保存完整选择映射；保留的旧类别选择只注明不编辑 | ProjectPermissionJudgePolicy |
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
 | 凭据 | 添加、启用、同步、设默认、移除；默认移除时原子选择同提供方替代连接 | PublicAiSettings |
 | 模型 | 镜像 WebUI 模型清单：供应商分组与优先级、仅列有可用账号的模型、搜索及用途/输出筛选；每个模型的对话使用、多模态理解、内部使用与签名扩展开关；接入路由与账号详情；失效准入关闭及受阻路由诊断 | PublicAiSettings |
@@ -209,6 +210,8 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::reload_permission_judge` | reloadPermissionJudge | `service_reload_permission_judge` |
 | `permission_judge::benchmark_permission_judge` | benchmarkPermissionJudge | `service_benchmark_permission_judge` |
 | `permission_judge::install_permission_judge_cuda` | installPermissionJudgeCuda | `service_install_permission_judge_cuda` |
+| `permission_judge::load_project_permission_judge_policy` | loadProjectPermissionJudgePolicy | `service_project_permission_judge_policy` |
+| `permission_judge::save_project_permission_judge_policy` | saveProjectPermissionJudgePolicy | `service_save_project_permission_judge_policy` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |
 | `settings_actions::save_public_ai_provider_tool_capability_enabled` | savePublicAiProviderToolCapabilityEnabled | `service_save_public_ai_provider_tool_capability_enabled` |
 | `settings_actions::list_provider_tasks` | listProviderTasks | `service_list_provider_tasks` |

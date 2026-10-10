@@ -1347,6 +1347,15 @@
         "cudaInstall": null
       }
     },
+    "service_project_permission_judge_policy": {
+      "projectId": "",
+      "options": [
+        { "key": "cross_project_writes", "defaultMode": "allow", "modes": ["allow", "review"], "chosenMode": null },
+        { "key": "database_reset", "defaultMode": "confirm", "modes": ["confirm", "allow"], "chosenMode": "allow" }
+      ],
+      "unsupportedOptions": {},
+      "issue": null
+    },
     "service_permission_judge_status": {
       "worker": {
         "phase": "ready",

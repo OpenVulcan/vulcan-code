@@ -190,6 +190,13 @@ pub fn navigation(app: &App) -> Vec<(Option<String>, Vec<NavigationEntry>)> {
                         if page == PageId::PluginMount {
                             return super::plugin_settings::navigation(app);
                         }
+                        // The permission strategy exists only while the judge is enabled.
+                        // 权限策略仅在判定启用时存在。
+                        if page == PageId::ProjectPermissionJudge
+                            && app.permission_judge_state != Some(JudgeState::Enabled)
+                        {
+                            return Vec::new();
+                        }
                         vec![NavigationEntry {
                             label: page.label(),
                             badge: page.badge(app),

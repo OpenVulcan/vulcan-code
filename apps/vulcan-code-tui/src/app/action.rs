@@ -58,6 +58,9 @@ pub enum LocalSetting {
     /// Selected host project for the VCE overview.
     /// VCE 概览选中的宿主项目。
     VceProject,
+    /// Project shown on the permission strategy page.
+    /// 权限策略页显示的项目。
+    JudgePolicyProject,
     /// Native profile target, as defined by `native_profile_records`.
     /// 原生画像目标，由 `native_profile_records` 定义。
     ProfileTarget,
@@ -863,6 +866,11 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                     app.vce_project = Some(value.as_str().to_string());
                     app.slots.clear(crate::service_api::Slot::VceOverview);
                     app.slots.clear(crate::service_api::Slot::VceJob);
+                }
+                LocalSetting::JudgePolicyProject => {
+                    app.judge_policy_project = Some(value.as_str().to_string());
+                    app.slots
+                        .clear(crate::service_api::Slot::ProjectPermissionJudgePolicy);
                 }
                 LocalSetting::ProfileTarget => {
                     app.profile_target = value.as_str().to_string();

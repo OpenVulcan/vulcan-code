@@ -606,6 +606,9 @@ pub struct App {
     /// Host project whose VCE overview is currently loaded.
     /// 当前已加载 VCE 概览所属的宿主项目。
     pub vce_project: Option<String>,
+    /// Project whose permission strategy is shown.
+    /// 显示其权限策略的项目。
+    pub judge_policy_project: Option<String>,
     /// Local record filter and service-backed knowledge query.
     /// 本地记录筛选与服务端知识库检索条件。
     pub memory_query: String,
@@ -762,6 +765,7 @@ impl App {
             vmm_project: None,
             profile_target: "user".into(),
             vce_project: None,
+            judge_policy_project: None,
             memory_query: String::new(),
             knowledge_query: String::new(),
             library: None,
@@ -956,6 +960,16 @@ impl App {
                     for slot in [Slot::VceOverview, Slot::VceJob] {
                         self.slots.clear(slot);
                     }
+                }
+                if !self
+                    .projects
+                    .iter()
+                    .any(|project| Some(&project.id) == self.judge_policy_project.as_ref())
+                {
+                    let next = self.projects.first().map(|project| project.id.clone());
+                    changed |= next != self.judge_policy_project;
+                    self.judge_policy_project = next;
+                    self.slots.clear(Slot::ProjectPermissionJudgePolicy);
                 }
             }
             _ => {}
@@ -1521,6 +1535,9 @@ impl App {
             }
             Slot::VceOverview | Slot::VceJob => {
                 call.param("/request/projectId").as_str() == self.vce_project.as_deref()
+            }
+            Slot::ProjectPermissionJudgePolicy => {
+                call.param("/projectId").as_str() == self.judge_policy_project.as_deref()
             }
             Slot::VmmRecords => {
                 call.param("/request/payload/vmmProjectId").as_i64() == self.vmm_project

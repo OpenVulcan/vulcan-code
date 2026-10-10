@@ -151,3 +151,33 @@ pub fn install_permission_judge_cuda(component: &str) -> ServiceCall {
         &[Slot::PermissionJudgeStatus],
     )
 }
+
+/// Builds the request for `service_project_permission_judge_policy`.
+/// 构建 `service_project_permission_judge_policy` 的请求。
+/// `project_id` is the project whose choices for the model in use are read.
+/// `project_id` 为读取其针对使用中模型之选择的项目。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_project_permission_judge_policy(project_id: &str) -> ServiceCall {
+    ServiceCall::load(
+        "load_project_permission_judge_policy",
+        "service_project_permission_judge_policy",
+        json!({ "projectId": project_id }),
+        Slot::ProjectPermissionJudgePolicy,
+    )
+}
+
+/// Builds the request for `service_save_project_permission_judge_policy`.
+/// 构建 `service_save_project_permission_judge_policy` 的请求。
+/// `options` is the complete choice map; omitted options follow the default.
+/// `options` 为完整选择映射；未列出的选项跟随默认值。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_project_permission_judge_policy(project_id: &str, options: Value) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_project_permission_judge_policy",
+        "service_save_project_permission_judge_policy",
+        json!({ "request": { "projectId": project_id, "options": options } }),
+        &[Slot::ProjectPermissionJudgePolicy],
+    )
+}

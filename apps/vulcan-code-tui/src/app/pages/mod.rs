@@ -18,6 +18,7 @@ mod navigation;
 mod permission_judge;
 mod plugin_settings;
 mod plugins;
+mod project_permission_judge;
 mod settings;
 mod setup_guide;
 
@@ -153,7 +154,14 @@ impl Area {
             Area::Settings => vec![
                 (
                     Some(tr!("settings.group.general")),
-                    vec![Appearance, Context, GitCommit, PermissionJudge, SetupGuide],
+                    vec![
+                        Appearance,
+                        Context,
+                        GitCommit,
+                        PermissionJudge,
+                        SetupGuide,
+                        ProjectPermissionJudge,
+                    ],
                 ),
                 (
                     Some(tr!("settings.group.models")),
@@ -186,6 +194,9 @@ pub enum PageId {
     /// The re-entrant setup guide; its first step is the permission judge.
     /// 可重入的初始化引导；第一步是权限判定。
     SetupGuide,
+    /// One project's permission strategy; listed only while the judge is enabled.
+    /// 单个项目的权限策略；仅在判定启用时列出。
+    ProjectPermissionJudge,
     Providers,
     Credentials,
     Models,
@@ -244,6 +255,7 @@ impl PageId {
             PageId::GitCommit => tr!("settings.gitCommit"),
             PageId::PermissionJudge => tr!("settings.permissionJudge"),
             PageId::SetupGuide => tr!("setupGuide.title"),
+            PageId::ProjectPermissionJudge => tr!("projectSettings.permissionJudge.title"),
             PageId::Providers => tr!("tui.settings.providers"),
             PageId::Credentials => tr!("tui.settings.credentials"),
             PageId::Models => tr!("tui.settings.modelList"),
@@ -364,6 +376,13 @@ impl PageId {
                 }
             }
             Self::About => calls.push(api::licenses::load_license_catalog()),
+            Self::ProjectPermissionJudge => {
+                if let Some(project) = &app.judge_policy_project {
+                    calls.push(api::permission_judge::load_project_permission_judge_policy(
+                        project,
+                    ));
+                }
+            }
             Self::PermissionJudge | Self::SetupGuide => calls.extend([
                 settings::load_public_ai_settings(),
                 api::permission_judge::load_permission_judge_settings(),
@@ -1043,6 +1062,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::GitCommit => settings::git_commit(app),
         PageId::PermissionJudge => permission_judge::rows(app),
         PageId::SetupGuide => setup_guide::rows(app),
+        PageId::ProjectPermissionJudge => project_permission_judge::rows(app),
         PageId::Providers => settings::providers(app),
         PageId::Credentials => settings::credentials(app),
         PageId::Models => models::models(app),
