@@ -893,8 +893,8 @@ mod public_ai_connections_tests {
             workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
             ..ProviderConfigurationFile::default()
         };
-        let serialized = serde_json::to_string(&explicit)
-            .expect("provider configuration should serialize");
+        let serialized =
+            serde_json::to_string(&explicit).expect("provider configuration should serialize");
         let restored: ProviderConfigurationFile = serde_json::from_str(&serialized)
             .expect("serialized provider configuration should parse");
         assert_eq!(
