@@ -593,11 +593,11 @@ struct FrozenContextProjection {
 /// 仅控制部分 assistant 的纳入；指纹调用方显式选择冻结契约。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PartialAssistantPolicy {
-    /// Preserve immutable facts for the original and versioned fingerprint format.
-    /// 为原始及带版本指纹格式保留不可变事实。
+    /// Preserve immutable facts for the versioned fingerprint format.
+    /// 为带版本指纹格式保留不可变事实。
     Preserve,
-    /// Omit partial content for outbound requests and the known intermediate legacy format.
-    /// 为出站请求及已知过渡历史格式排除部分内容。
+    /// Omit partial content for outbound requests.
+    /// 为出站请求排除部分内容。
     Omit,
 }
 

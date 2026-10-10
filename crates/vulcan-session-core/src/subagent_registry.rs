@@ -125,7 +125,6 @@ pub struct SubagentRegistryEntry {
     pub updated_at_ms: u64,
     /// Most recent task or follow-up instruction delivered to this child agent.
     /// 最近一次投递给该子代理的任务或后续指令。
-    #[serde(default)]
     pub last_task_message: Option<String>,
     /// Optional terminal result summary.
     /// 可选终态结果摘要。
@@ -1868,26 +1867,5 @@ mod tests {
         insert_registry_entry(&mut registry, running);
 
         assert_eq!(registry.running_count_for_parent(parent_id), 1);
-    }
-
-    /// Verifies older persisted entries without last_task_message still deserialize.
-    /// 验证缺少 last_task_message 的旧持久化条目仍可反序列化。
-    #[test]
-    fn registry_entry_deserializes_without_last_task_message() {
-        let parent_id = SessionNodeId::new_v4();
-        let child_id = SessionNodeId::new_v4();
-        let entry =
-            SubagentRegistryEntry::new("legacy", child_id, parent_id, SubagentKind::Clone, 10);
-        let mut value = serde_json::to_value(entry).expect("entry should serialize");
-        value
-            .as_object_mut()
-            .expect("entry should be a JSON object")
-            .remove("last_task_message");
-
-        let restored: SubagentRegistryEntry =
-            serde_json::from_value(value).expect("legacy entry should deserialize");
-
-        assert_eq!(restored.agent_id, "legacy");
-        assert!(restored.last_task_message.is_none());
     }
 }

@@ -84,8 +84,8 @@ pub fn goal_work_time(document: &SessionDocument) -> Option<GoalWorkTime> {
             }
         }
     }
-    // A stopped metadata state never extrapolates an unfinished interval, including legacy origins rewritten while paused.
-    // 已停止的元数据状态绝不外推未闭合区间，包括旧版暂停期间曾被改写的目标起点。
+    // A stopped metadata state never extrapolates an unfinished interval.
+    // 已停止的元数据状态绝不外推未闭合区间。
     if goal.state == GoalState::Active
         && let Some(start) = running_since
     {
