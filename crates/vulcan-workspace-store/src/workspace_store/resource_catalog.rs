@@ -50,15 +50,13 @@ pub struct ProviderBinding {
     pub provider: String,
     /// Non-secret connection id used for the upload.
     /// 上传使用的非秘密连接 id。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connection_id: Option<String>,
+    pub connection_id: String,
     /// External media id returned by the Provider.
     /// Provider 返回的外部媒体 id。
     pub media_id: String,
-    /// Verified upload facts; absence marks a legacy binding that cannot prove historical delivery.
-    /// 已验证上传事实；缺失表示无法证明历史投递的旧绑定。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upload_receipt: Option<ProjectResourceUploadReceipt>,
+    /// Verified upload facts proving the delivery of this binding.
+    /// 证明本绑定投递的已验证上传事实。
+    pub upload_receipt: ProjectResourceUploadReceipt,
 }
 
 /// One catalog entry of a reusable project resource.
@@ -813,8 +811,8 @@ fn validate_project_resource_catalog(
             binding.validate_upload_receipt()?;
             // Optional catalog MIME uses the same octet-stream default as the canonical V1 resource resolver.
             // 可选目录MIME使用与规范V1资源解析器相同的二进制流默认值。
-            if let Some(receipt) = &binding.upload_receipt
-                && receipt.mime_type != entry.mime.as_deref().unwrap_or("application/octet-stream")
+            if binding.upload_receipt.mime_type
+                != entry.mime.as_deref().unwrap_or("application/octet-stream")
             {
                 return Err(ProjectResourceCatalogError::InvalidCatalog {
                     detail: "upload receipt MIME differs from its project resource".to_string(),

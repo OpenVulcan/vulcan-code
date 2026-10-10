@@ -635,8 +635,6 @@ async fn final_admission_rechecks_exact_original_receipt_validity()
         .as_mut()
         .expect("captured receipt")
         .upload_receipt
-        .as_mut()
-        .expect("typed receipt")
         .expires_at_unix_millis = 2;
     // Final admission may inspect this exact receipt, but cannot refresh it through credentials or another binding.
     // 最终准入可检查此精确回执，但不能通过凭据或另一个绑定刷新它。

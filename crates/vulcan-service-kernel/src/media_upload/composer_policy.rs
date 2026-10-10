@@ -459,16 +459,12 @@ pub(crate) fn media_receipt_is_usable(
     contract: &vulcan_provider_adapters::ConversationMediaUploadContract,
     session_id: Option<&str>,
 ) -> bool {
-    // Legacy untyped bindings cannot prove source representation or scope.
-    // 旧无类型绑定不能证明来源表示或作用域。
-    let Some(receipt) = &binding.upload_receipt else {
-        return false;
-    };
+    let receipt = &binding.upload_receipt;
     // The original expiry is compared directly and never refreshed on read.
     // 直接比较原过期时间，读取时绝不刷新。
     let now = super::current_unix_millis_u64();
     binding.provider == execution.route.provider.id
-        && binding.connection_id.as_deref() == Some(execution.route.connection.id.as_str())
+        && binding.connection_id == execution.route.connection.id
         && receipt.service_entry_id == execution.route.entry.id
         && receipt.upload_channel_id == contract.upload_channel_id
         && receipt.upload_contract_fingerprint == contract.contract_fingerprint

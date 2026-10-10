@@ -1847,9 +1847,9 @@ mod tests {
         // 后续出现持有在B选择的一份私有不可变上传回执。
         let binding = ProviderBinding {
             provider: "provider".into(),
-            connection_id: Some("connection".into()),
+            connection_id: "connection".into(),
             media_id: "file-original-private".into(),
-            upload_receipt: Some(ProjectResourceUploadReceipt {
+            upload_receipt: ProjectResourceUploadReceipt {
                 draft_intent_id: None,
                 version: 1,
                 service_entry_id: "entry".into(),
@@ -1861,7 +1861,7 @@ mod tests {
                 session_scope_id: None,
                 created_at_unix_millis: 1,
                 expires_at_unix_millis: u64::MAX,
-            }),
+            },
         };
         // Only model identity differs; shared provider and connection must not merge the occurrences.
         // 只有模型身份不同；共享供应商及连接不能合并两次出现。

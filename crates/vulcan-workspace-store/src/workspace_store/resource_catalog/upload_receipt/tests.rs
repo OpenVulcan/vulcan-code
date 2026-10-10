@@ -16,11 +16,7 @@ fn draft_receipt_identity_is_write_once_and_never_latest_cache()
     let source = register(&registry, project.path())?;
     let intent = uuid::Uuid::new_v4().to_string();
     let mut first = binding("file-original", 10);
-    first
-        .upload_receipt
-        .as_mut()
-        .expect("typed receipt")
-        .draft_intent_id = Some(intent.clone());
+    first.upload_receipt.draft_intent_id = Some(intent.clone());
     let pending = UserPromptResourceDeliveryKind::UploadPending {
         draft_intent_id: Some(intent.into_boxed_str()),
         upload_channel_id: "files".into(),
@@ -60,14 +56,10 @@ fn draft_receipt_identity_is_write_once_and_never_latest_cache()
     assert!(validate_project_resource_catalog(&catalog).is_err());
     // Legacy omission remains byte-shape compatible and cannot masquerade as this linked draft.
     // 旧字段缺省保持字节形态兼容，且不能冒充本关联草稿。
-    let legacy = binding("file-legacy", 1);
-    assert!(!serde_json::to_string(&legacy)?.contains("draft_intent_id"));
-    let mut invalid = legacy;
-    invalid
-        .upload_receipt
-        .as_mut()
-        .expect("typed receipt")
-        .draft_intent_id = Some("not-an-intent".into());
+    let unbound = binding("file-unbound", 1);
+    assert!(!serde_json::to_string(&unbound)?.contains("draft_intent_id"));
+    let mut invalid = unbound;
+    invalid.upload_receipt.draft_intent_id = Some("not-an-intent".into());
     assert!(invalid.validate_upload_receipt().is_err());
     Ok(())
 }
@@ -77,9 +69,9 @@ fn draft_receipt_identity_is_write_once_and_never_latest_cache()
 fn binding(reference: &str, created: u64) -> ProviderBinding {
     ProviderBinding {
         provider: "provider".into(),
-        connection_id: Some("connection".into()),
+        connection_id: "connection".into(),
         media_id: reference.into(),
-        upload_receipt: Some(ProjectResourceUploadReceipt {
+        upload_receipt: ProjectResourceUploadReceipt {
             draft_intent_id: None,
             version: 1,
             service_entry_id: "service".into(),
@@ -91,7 +83,7 @@ fn binding(reference: &str, created: u64) -> ProviderBinding {
             session_scope_id: Some("session".into()),
             created_at_unix_millis: created,
             expires_at_unix_millis: created + 1000,
-        }),
+        },
     }
 }
 
@@ -206,11 +198,7 @@ fn receipt_rejection_preserves_catalog_and_hides_private_reference()
     // This malformed receipt deliberately contains a private reference that errors must not expose.
     // 此无效回执故意包含错误不得暴露的私有引用。
     let mut invalid = binding("https://private.example/secret?token=secret", 10);
-    invalid
-        .upload_receipt
-        .as_mut()
-        .ok_or("fixture receipt missing")?
-        .upload_contract_fingerprint = "a".repeat(64);
+    invalid.upload_receipt.upload_contract_fingerprint = "a".repeat(64);
     // The failure remains inspectable without publishing the rejected receipt.
     // 失败可以检查，而被拒回执不会发布。
     let error = registry
@@ -227,11 +215,7 @@ fn receipt_rejection_preserves_catalog_and_hides_private_reference()
     // Different MIME cannot bind even when source bytes and route otherwise match.
     // 即使源字节和路线匹配，不同MIME也不能绑定。
     let mut different_mime = binding("file-secret", 10);
-    different_mime
-        .upload_receipt
-        .as_mut()
-        .ok_or("fixture receipt missing")?
-        .mime_type = "video/webm".into();
+    different_mime.upload_receipt.mime_type = "video/webm".into();
     assert!(
         registry
             .record_provider_upload_receipt(
@@ -250,10 +234,10 @@ fn receipt_rejection_preserves_catalog_and_hides_private_reference()
     Ok(())
 }
 
-/// Verifies fingerprint ownership covers every source identity and original lifetime, while legacy receipts cannot claim proof.
-/// 验证指纹归属覆盖所有源身份和原生命周期，旧回执不能伪称已有证明。
+/// Verifies fingerprint ownership covers every source identity and original lifetime, while bindings without receipts are rejected.
+/// 验证指纹归属覆盖所有源身份和原生命周期，并拒绝缺少回执的绑定。
 #[test]
-fn fingerprint_covers_source_and_lifetime_and_rejects_legacy()
+fn fingerprint_covers_source_and_lifetime_and_rejects_missing_receipt()
 -> Result<(), Box<dyn std::error::Error>> {
     // The earlier receipt remains the immutable reference for its original prompt.
     // 更早回执保持为原提示词的不可变引用。
@@ -273,12 +257,12 @@ fn fingerprint_covers_source_and_lifetime_and_rejects_legacy()
         fingerprint,
         binding("file", 11).upload_receipt_fingerprint(&source, 4)?
     );
-    // A legacy record remains readable without claiming verified upload provenance.
-    // 旧记录仍可读取，但不能声称具有已验证上传来源。
-    let legacy: ProviderBinding =
-        serde_json::from_str(r#"{"provider":"provider","media_id":"old-file"}"#)?;
-    legacy.validate_upload_receipt()?;
-    assert!(legacy.upload_receipt_fingerprint(&source, 4).is_err());
+    // A binding without connection and receipt facts is not a readable shape.
+    // 缺少连接及回执事实的绑定不是可读形态。
+    assert!(
+        serde_json::from_str::<ProviderBinding>(r#"{"provider":"provider","media_id":"old-file"}"#)
+            .is_err()
+    );
     Ok(())
 }
 

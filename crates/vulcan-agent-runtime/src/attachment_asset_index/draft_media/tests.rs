@@ -30,28 +30,10 @@ fn draft_media_validates_complete_handoff_proof_before_any_write()
         let mut changed = receipt(&attachment, "private-reference-must-not-leak");
         match variant {
             0 => changed.provider = "another-provider".into(),
-            1 => changed.connection_id = Some("another-connection".into()),
-            2 => {
-                changed
-                    .upload_receipt
-                    .as_mut()
-                    .expect("typed receipt")
-                    .service_entry_id = "another-entry".into()
-            }
-            3 => {
-                changed
-                    .upload_receipt
-                    .as_mut()
-                    .expect("typed receipt")
-                    .upload_channel_id = "another-channel".into()
-            }
-            _ => {
-                changed
-                    .upload_receipt
-                    .as_mut()
-                    .expect("typed receipt")
-                    .resource_kind = ResourceKind::Image
-            }
+            1 => changed.connection_id = "another-connection".into(),
+            2 => changed.upload_receipt.service_entry_id = "another-entry".into(),
+            3 => changed.upload_receipt.upload_channel_id = "another-channel".into(),
+            _ => changed.upload_receipt.resource_kind = ResourceKind::Image,
         }
         // A failed receipt must not become the original upload nor leak its opaque provider value.
         // 失败回执不能成为原上传，也不能泄漏其不透明供应商值。
@@ -144,9 +126,9 @@ fn upload_origin(
 fn receipt(attachment: &ConversationAttachment, reference: &str) -> ProviderBinding {
     ProviderBinding {
         provider: "provider".into(),
-        connection_id: Some("connection".into()),
+        connection_id: "connection".into(),
         media_id: reference.into(),
-        upload_receipt: Some(ProjectResourceUploadReceipt {
+        upload_receipt: ProjectResourceUploadReceipt {
             draft_intent_id: None,
             version: 1,
             service_entry_id: "entry".into(),
@@ -158,7 +140,7 @@ fn receipt(attachment: &ConversationAttachment, reference: &str) -> ProviderBind
             session_scope_id: None,
             created_at_unix_millis: 1,
             expires_at_unix_millis: 1000,
-        }),
+        },
     }
 }
 

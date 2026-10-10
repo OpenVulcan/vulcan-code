@@ -612,25 +612,23 @@ fn draft_upload_binding(
     // 私有供应商值保留在资源存储；提示词参数只接收其指纹。
     let binding = vulcan_workspace_store::workspace_store::ProviderBinding {
         provider: reference.provider_id.clone(),
-        connection_id: Some(execution.route.connection.id.clone()),
+        connection_id: execution.route.connection.id.clone(),
         media_id: reference.provider_reference.clone(),
-        upload_receipt: Some(
-            vulcan_workspace_store::workspace_store::ProjectResourceUploadReceipt {
-                draft_intent_id: None,
-                version: 1,
-                service_entry_id: reference.service_entry_id.clone(),
-                upload_channel_id: reference.upload_channel_id.clone(),
-                upload_contract_fingerprint: reference.upload_contract_fingerprint.clone(),
-                resource_kind: kind,
-                mime_type: reference.mime_type.clone(),
-                source_kind: vulcan_provider_adapters::media_upload_source_kind(
-                    contract.reference_encoding,
-                ),
-                session_scope_id: reference.session_id.clone(),
-                created_at_unix_millis: reference.created_at_unix_millis,
-                expires_at_unix_millis: reference.expires_at_unix_millis,
-            },
-        ),
+        upload_receipt: vulcan_workspace_store::workspace_store::ProjectResourceUploadReceipt {
+            draft_intent_id: None,
+            version: 1,
+            service_entry_id: reference.service_entry_id.clone(),
+            upload_channel_id: reference.upload_channel_id.clone(),
+            upload_contract_fingerprint: reference.upload_contract_fingerprint.clone(),
+            resource_kind: kind,
+            mime_type: reference.mime_type.clone(),
+            source_kind: vulcan_provider_adapters::media_upload_source_kind(
+                contract.reference_encoding,
+            ),
+            session_scope_id: reference.session_id.clone(),
+            created_at_unix_millis: reference.created_at_unix_millis,
+            expires_at_unix_millis: reference.expires_at_unix_millis,
+        },
     };
     binding
         .upload_receipt_fingerprint(&reference.source_sha256, reference.source_byte_len)

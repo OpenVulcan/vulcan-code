@@ -47,16 +47,12 @@ pub struct ProjectResourceUploadReceipt {
 }
 
 impl ProviderBinding {
-    /// Validates typed receipt fields without leaking private references in errors; legacy bindings remain readable.
-    /// 校验强类型回执字段且错误不泄漏私有引用；旧绑定仍可读取。
-    /// Returns a catalog error for malformed new receipts and succeeds for valid or legacy bindings.
-    /// 新回执损坏时返回目录错误，有效或旧绑定则成功。
+    /// Validates typed receipt fields without leaking private references in errors.
+    /// 校验强类型回执字段且错误不泄漏私有引用。
+    /// Returns a catalog error for malformed receipts.
+    /// 回执损坏时返回目录错误。
     pub(super) fn validate_upload_receipt(&self) -> Result<(), ProjectResourceCatalogError> {
-        // Old records remain readable, but fingerprint generation separately requires typed proof.
-        // 旧记录仍可读取，但生成指纹另外要求强类型证明。
-        let Some(receipt) = &self.upload_receipt else {
-            return Ok(());
-        };
+        let receipt = &self.upload_receipt;
         // Exact field validation prevents a URL or malformed version from becoming an opaque receipt identity.
         // 精确字段校验防止URL或错误版本成为不透明回执身份。
         if receipt.version != 1
@@ -75,7 +71,7 @@ impl ProviderBinding {
                 .strip_prefix("sha256:")
                 .is_some_and(is_lowercase_sha256)
             || !valid_identity(&self.provider)
-            || !self.connection_id.as_deref().is_some_and(valid_identity)
+            || !valid_identity(&self.connection_id)
             || !valid_identity(&receipt.service_entry_id)
             || !valid_identity(&receipt.upload_channel_id)
             || receipt
@@ -95,15 +91,15 @@ impl ProviderBinding {
 
     /// Computes a stable private-receipt digest bound to exact source `sha256` and `size`.
     /// 计算绑定精确源`sha256`和`size`的稳定私有回执摘要。
-    /// Returns a lowercase SHA-256 for a verified receipt; old unproven bindings are rejected.
-    /// 为已验证回执返回小写SHA-256；拒绝未经证明的旧绑定。
+    /// Returns a lowercase SHA-256 for a verified receipt.
+    /// 为已验证回执返回小写SHA-256。
     pub fn upload_receipt_fingerprint(
         &self,
         sha256: &str,
         size: u64,
     ) -> Result<String, ProjectResourceCatalogError> {
         self.validate_upload_receipt()?;
-        if self.upload_receipt.is_none() || !is_lowercase_sha256(sha256) {
+        if !is_lowercase_sha256(sha256) {
             return Err(invalid_receipt(
                 "upload receipt fingerprint requires verified source and receipt",
             ));
@@ -131,11 +127,7 @@ impl ProviderBinding {
         let Ok(fingerprint) = self.upload_receipt_fingerprint(sha256, size) else {
             return false;
         };
-        // Fingerprint validation above requires a typed receipt, without any legacy field fallback.
-        // 上述指纹校验要求强类型回执，不进行任何旧字段回退。
-        let Some(receipt) = &self.upload_receipt else {
-            return false;
-        };
+        let receipt = &self.upload_receipt;
         match original {
             UserPromptResourceDeliveryKind::Uploaded {
                 upload_channel_id,
@@ -245,10 +237,7 @@ pub(super) fn validate_draft_intent_receipts(
     // 首次绑定而非插入新旧顺序持有每个精确意图。
     let mut intents = std::collections::BTreeMap::new();
     for binding in bindings {
-        if let Some(intent) = binding
-            .upload_receipt
-            .as_ref()
-            .and_then(|receipt| receipt.draft_intent_id.as_deref())
+        if let Some(intent) = binding.upload_receipt.draft_intent_id.as_deref()
             && intents
                 .insert(intent, binding)
                 .is_some_and(|first| first != binding)

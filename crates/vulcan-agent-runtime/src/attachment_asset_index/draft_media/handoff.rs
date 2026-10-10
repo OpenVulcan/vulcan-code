@@ -104,10 +104,7 @@ pub fn complete_attachment_draft_upload(
 ) -> Result<(), String> {
     // Stamp correlation before calculating any durable fingerprint; an already foreign intent is an explicit error.
     // 计算任何可靠指纹之前写入关联；已有其他意图时明确报错。
-    let receipt = binding
-        .upload_receipt
-        .as_mut()
-        .ok_or_else(|| String::from("Draft upload has no typed receipt."))?;
+    let receipt = &mut binding.upload_receipt;
     if receipt
         .draft_intent_id
         .as_ref()

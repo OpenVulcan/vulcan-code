@@ -103,9 +103,9 @@ async fn project_prompt_pending_draft_handoff_uses_actual_project_owner() {
     .expect("release submitted draft");
     let binding = ProviderBinding {
         provider: "provider".into(),
-        connection_id: Some("connection".into()),
+        connection_id: "connection".into(),
         media_id: "file-exact-original".into(),
-        upload_receipt: Some(ProjectResourceUploadReceipt {
+        upload_receipt: ProjectResourceUploadReceipt {
             draft_intent_id: None,
             version: 1,
             service_entry_id: "entry".into(),
@@ -117,7 +117,7 @@ async fn project_prompt_pending_draft_handoff_uses_actual_project_owner() {
             session_scope_id: None,
             created_at_unix_millis: 1,
             expires_at_unix_millis: u64::MAX,
-        }),
+        },
     };
     complete_attachment_draft_upload(&attachment, scope, &original, binding, &resources)
         .expect("late original completion");

@@ -956,11 +956,7 @@ async fn materialize_resource(
                     })?;
                     // Only typed receipt metadata proves original reference representation.
                     // 只有强类型回执元数据证明原引用表示。
-                    let receipt = binding.upload_receipt.as_ref().ok_or_else(|| {
-                        provider_projection_runtime_error(
-                            "Original upload restoration has no typed receipt",
-                        )
-                    })?;
+                    let receipt = &binding.upload_receipt;
                     native = Some((receipt.source_kind, binding.media_id.clone()));
                     delivery = uploaded_origin(binding, &source.entry)?;
                 }
@@ -1322,9 +1318,9 @@ async fn prepare_upload(
     // 将精确私有回执及其作用域与模型可见文本分离。
     let binding = ProviderBinding {
         provider: execution.route.provider.id.clone(),
-        connection_id: Some(execution.route.connection.id.clone()),
+        connection_id: execution.route.connection.id.clone(),
         media_id: reference.provider_reference,
-        upload_receipt: Some(ProjectResourceUploadReceipt {
+        upload_receipt: ProjectResourceUploadReceipt {
             draft_intent_id: None,
             version: 1,
             service_entry_id: execution.route.entry.id.clone(),
@@ -1337,7 +1333,7 @@ async fn prepare_upload(
                 .then(|| context.session_scope_id.clone()),
             created_at_unix_millis: reference.created_at_unix_millis,
             expires_at_unix_millis: reference.expires_at_unix_millis,
-        }),
+        },
     };
     if !receipt_matches(&binding, &source.entry, context, contract) {
         return Err(MediaUploadFailure::InvalidReference);
@@ -1368,9 +1364,7 @@ fn uploaded_origin(
 ) -> Result<UserPromptResourceDeliveryKind, SessionRuntimeError> {
     // Only typed receipt metadata proves original reference representation.
     // 只有强类型回执元数据证明原引用表示。
-    let receipt = binding.upload_receipt.as_ref().ok_or_else(|| {
-        provider_projection_runtime_error("Prompt upload origin has no typed receipt")
-    })?;
+    let receipt = &binding.upload_receipt;
     Ok(UserPromptResourceDeliveryKind::Uploaded {
         upload_channel_id: receipt.upload_channel_id.clone(),
         upload_contract_fingerprint: receipt.upload_contract_fingerprint.clone(),

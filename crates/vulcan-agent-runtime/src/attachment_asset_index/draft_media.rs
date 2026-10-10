@@ -207,10 +207,7 @@ impl AttachmentDraftMediaOrigin {
                     .map_err(|error| error.to_string())?;
                 // The private receipt must belong to the exact original route and source type.
                 // 私有回执必须属于精确原路线及来源类型。
-                let receipt = binding
-                    .upload_receipt
-                    .as_ref()
-                    .ok_or_else(|| String::from("Draft upload has no typed receipt."))?;
+                let receipt = &binding.upload_receipt;
                 // PDF is a file capability; all other kinds preserve their exact canonical modality.
                 // PDF属于文件能力；其他类型保留精确规范模态。
                 let resource_kind = match kind {
@@ -226,8 +223,7 @@ impl AttachmentDraftMediaOrigin {
                         .draft_intent_id
                         .as_ref()
                         .is_some_and(|intent| intent != &self.intent_id)
-                    || binding.connection_id.as_deref()
-                        != Some(self.original_route.connection_id.as_str())
+                    || binding.connection_id != self.original_route.connection_id
                     || receipt.service_entry_id != self.original_route.service_entry_id
                     || receipt.upload_channel_id != *upload_channel_id
                     || receipt.upload_contract_fingerprint != *upload_contract_fingerprint

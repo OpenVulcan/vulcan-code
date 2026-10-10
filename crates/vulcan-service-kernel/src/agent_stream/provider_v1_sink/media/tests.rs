@@ -301,7 +301,7 @@ async fn composer_draft_routes_preserve_upload_and_inline_intentions()
         load_project_resource_catalog(project.path())?.entries[0].provider_bindings[0].clone();
     // The channel and contract remain those selected on A before the switch.
     // 通道及契约保持切换之前A所选值。
-    let receipt = binding.upload_receipt.as_ref().ok_or("fixture receipt")?;
+    let receipt = &binding.upload_receipt;
     // An admitted unfinished original upload can still complete on A, but never on B.
     // 已准入未完成原上传仍可在A完成，但绝不能在B完成。
     let pending = AttachmentDraftMediaOrigin::new(
@@ -507,11 +507,7 @@ async fn composer_draft_routes_preserve_upload_and_inline_intentions()
         ..
     } = &mut uploaded.delivery
     {
-        binding
-            .upload_receipt
-            .as_mut()
-            .ok_or("typed receipt")?
-            .expires_at_unix_millis = 2;
+        binding.upload_receipt.expires_at_unix_millis = 2;
     }
     assert_eq!(
         test_composer_draft_decision(
@@ -782,9 +778,9 @@ fn seed_receipt(
         .ok_or("test upload contract missing")?;
     let binding = ProviderBinding {
         provider: execution.route.provider.id.clone(),
-        connection_id: Some(execution.route.connection.id.clone()),
+        connection_id: execution.route.connection.id.clone(),
         media_id: reference.into(),
-        upload_receipt: Some(ProjectResourceUploadReceipt {
+        upload_receipt: ProjectResourceUploadReceipt {
             draft_intent_id: None,
             version: 1,
             service_entry_id: execution.route.entry.id.clone(),
@@ -796,7 +792,7 @@ fn seed_receipt(
             session_scope_id: Some(context.session_scope_id.clone()),
             created_at_unix_millis: 1,
             expires_at_unix_millis: if expired { 2 } else { u64::MAX },
-        }),
+        },
     };
     registry
         .record_provider_upload_receipt(
