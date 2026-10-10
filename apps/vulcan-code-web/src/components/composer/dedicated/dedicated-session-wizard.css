@@ -3,6 +3,7 @@
 
 .dedicated-wizard {
   width: 100%;
+  pointer-events: auto;
   display: grid;
   gap: 12px;
   padding: 14px 16px;

@@ -1,22 +1,22 @@
-/* Dedicated sessions (专职助手): memory markers, draft project chip and lock bar; layout uses utilities. */
-/* 专职会话（专职助手）：记忆标记、草稿项目标签与锁定栏；布局使用工具类。 */
-/* The creation wizard styles load with its lazy chunk (dedicated-session-wizard.css). */
-/* 创建向导样式随其懒加载分块载入（dedicated-session-wizard.css）。 */
+/* Dedicated sessions (专职助手): memory markers, the draft chip tab and the lock tab above the composer. */
+/* 专职会话（专职助手）：记忆标记、输入框上方的草稿标签页与锁定标签页。 */
+/* The tab frame is shared with .composer-goal-strip; the creation wizard styles load with its lazy chunk. */
+/* 标签页外框与 .composer-goal-strip 共用；创建向导样式随其懒加载分块载入。 */
 
-.dedicated-memory-marker-hint,
-.dedicated-lock-bar {
+.dedicated-memory-marker-hint {
+  display: block;
   color: var(--muted-foreground);
   font-size: var(--vcn-font-size-sm);
 }
 
-.dedicated-memory-marker-hint {
-  display: block;
+.dedicated-composer-tab {
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--vcn-font-size-sm);
 }
 
-.dedicated-draft-project {
-  max-width: 240px;
-}
-
-.dedicated-lock-bar-status[data-locked="true"] {
-  color: var(--foreground);
+.dedicated-composer-tab [data-slot="segmented-control-item"] {
+  height: 22px;
+  padding: 0 8px;
+  font-size: var(--vcn-font-size-xs);
 }

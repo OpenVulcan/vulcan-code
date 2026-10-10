@@ -131,7 +131,8 @@
   background: color-mix(in srgb, var(--muted) 64%, transparent);
 }
 
-.composer-goal-strip {
+.composer-goal-strip,
+.dedicated-composer-tab {
   width: 90%;
   min-height: 30px;
   align-self: center;
@@ -149,7 +150,9 @@
   pointer-events: auto;
 }
 
-.pending-prompt-strip + .composer-goal-strip {
+.pending-prompt-strip + .composer-goal-strip,
+.dedicated-composer-tab + .pending-prompt-strip,
+.dedicated-composer-tab + .composer-goal-strip {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }

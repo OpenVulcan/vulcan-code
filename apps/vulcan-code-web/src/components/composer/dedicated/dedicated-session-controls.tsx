@@ -42,8 +42,8 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
   };
   const Icon = locked ? Lock : LockOpen;
   return (
-    <div className="dedicated-lock-bar flex w-full items-center gap-2 px-1 pb-2">
-      <span className="dedicated-lock-bar-status inline-flex min-w-0 items-center gap-1.5" data-locked={locked} role="status">
+    <div className="dedicated-composer-tab">
+      <span className={locked ? "inline-flex min-w-0 items-center gap-1.5 text-primary" : "inline-flex min-w-0 items-center gap-1.5"} role="status">
         <Icon size={14} aria-hidden="true" />
         {locked ? t("composer.dedicated.lockedStatus") : t("composer.dedicated.unlockedStatus")}
       </span>
@@ -51,10 +51,10 @@ export function DedicatedMemoryLockBar(props: { memory: DedicatedMemorySelection
         className="ml-auto"
         disabled={pending || props.running}
         onClick={() => void toggle()}
-        size="sm"
+        size="xs"
         title={props.running ? t("composer.dedicated.lockWaitTurn") : undefined}
         type="button"
-        variant={locked ? "outline" : "secondary"}
+        variant="ghost"
       >
         {locked ? t("composer.dedicated.unlock") : t("composer.dedicated.lock")}
       </Button>
