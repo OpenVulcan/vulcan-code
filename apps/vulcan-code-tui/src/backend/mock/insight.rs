@@ -282,7 +282,6 @@ pub fn seeded(used: u64) -> SessionInsight {
     insight.lifetime = LifetimeUsage {
         main: usage(14, 37, 612_000, 18_400),
         children: Vec::new(),
-        history_incomplete: true,
     };
     insight.goal = Some(Goal {
         objective: "完成 TUI 展示 demo：記憶、統計、代理面板與系統頁全部可操作".into(),

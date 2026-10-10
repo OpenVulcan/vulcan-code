@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} 件のリクエストが使用量を報告していないため、合計は不完全です",
   "conversation.usage.mainSessionUsage": "メインセッションの使用量",
   "conversation.usage.subagentUsageAgents": "サブエージェントの使用量 · {childCount} 件",
-  "conversation.usage.someHistoryIsUnavailable": "一部の履歴が利用できないため、合計は不完全です。",
   "conversation.usage.childLifetimeUsage": "子セッションの累計使用量",
   "conversation.usage.lifetimeReferenceTotalsAcross": "作成以降の参考合計です。モデルをまたいで合算しています。",
   "conversation.turnStats.cacheHitRate": "キャッシュヒット率",

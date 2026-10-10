@@ -397,7 +397,6 @@ pub fn lifetime(usage: &api::SessionProviderUsageSummary) -> LifetimeUsage {
             .iter()
             .map(|(id, child)| (id.clone(), usage_bucket(&child.usage)))
             .collect(),
-        history_incomplete: lifetime.legacy_incomplete,
     }
 }
 

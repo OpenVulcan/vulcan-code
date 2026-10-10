@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} requêtes n’ont pas signalé leur consommation ; les totaux sont incomplets",
   "conversation.usage.mainSessionUsage": "Consommation de la session principale",
   "conversation.usage.subagentUsageAgents": "Consommation des sous-agents · {childCount} agents",
-  "conversation.usage.someHistoryIsUnavailable": "Une partie de l’historique est indisponible ; les totaux sont incomplets.",
   "conversation.usage.childLifetimeUsage": "Consommation cumulée de la session enfant",
   "conversation.usage.lifetimeReferenceTotalsAcross": "Totaux cumulés indicatifs, tous modèles confondus.",
   "conversation.turnStats.cacheHitRate": "Taux de réussite du cache",

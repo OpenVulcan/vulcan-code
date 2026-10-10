@@ -7,10 +7,8 @@ use std::sync::OnceLock;
 use vulcan_session_core::v1::lifetime_usage::{
     ChildSessionUsage, SessionLifetimeUsage, SessionUsageBucket,
 };
-#[cfg(test)]
-use vulcan_workspace_store::workspace_store::load_session_lifetime_usage;
 use vulcan_workspace_store::workspace_store::{
-    load_session_lifetime_usage_with_goal_baseline, save_session_lifetime_usage,
+    load_session_lifetime_usage, save_session_lifetime_usage,
 };
 
 /// One serialized aggregate owner; persistence never acquires a session document lock.
@@ -68,28 +66,7 @@ impl SessionHandle {
                 save_session_lifetime_usage(&locator, &document)?;
                 document
             } else {
-                let (document, baseline) =
-                    load_session_lifetime_usage_with_goal_baseline(&locator)?;
-                if let Some(baseline) = baseline
-                    && let Err(error) = self.mutate_durable_if_changed(
-                        SessionMutationAdmission::MetadataOnly,
-                        SessionFlushReason::MetadataChanged,
-                        |session| {
-                            Ok(
-                                if session
-                                    .restore_goal_usage_baseline(baseline, document.updated_at_ms)
-                                {
-                                    SessionMutationChange::Changed(())
-                                } else {
-                                    SessionMutationChange::Unchanged(())
-                                },
-                            )
-                        },
-                    )
-                {
-                    tracing::warn!("[session-usage] legacy Goal baseline: {error}");
-                }
-                document
+                load_session_lifetime_usage(&locator)?
             };
             Ok(Arc::new(SessionUsageOwner {
                 root_session_id: self.session_id,
@@ -110,23 +87,19 @@ impl SessionHandle {
             let id = self.session_id.to_string();
             let parent = parent_id.to_string();
             let registered = owner.update(|usage| {
-                if let Some(child) = usage.children_by_session_id.get_mut(&id) {
-                    if child.parent_session_id.as_ref() == Some(&parent) {
+                if let Some(child) = usage.children_by_session_id.get(&id) {
+                    if child.parent_session_id == parent {
                         return Ok(false);
                     }
-                    if child.parent_session_id.is_some() {
-                        return Err("Session usage child parent mismatch".to_owned());
-                    }
-                    child.parent_session_id = Some(parent);
-                } else {
-                    usage.children_by_session_id.insert(
-                        id,
-                        ChildSessionUsage {
-                            parent_session_id: Some(parent),
-                            usage: SessionUsageBucket::default(),
-                        },
-                    );
+                    return Err("Session usage child parent mismatch".to_owned());
                 }
+                usage.children_by_session_id.insert(
+                    id,
+                    ChildSessionUsage {
+                        parent_session_id: parent,
+                        usage: SessionUsageBucket::default(),
+                    },
+                );
                 usage.revision = usage
                     .revision
                     .checked_add(1)
@@ -161,8 +134,6 @@ impl SessionHandle {
 
     /// Reads this Goal owner's own and descendant counters, excluding ancestors and siblings.
     /// 读取当前 Goal 所有者自身与后代计数，排除祖先及兄弟会话。
-    /// Returns unknown when legacy parent identities cannot prove the child scope.
-    /// 旧父级身份无法证明子范围时返回未知错误。
     pub(crate) fn goal_usage_snapshot(
         &self,
     ) -> Result<vulcan_session_core::v1::lifetime_usage::GoalUsageSnapshot, String> {
@@ -177,21 +148,12 @@ impl SessionHandle {
             .ok_or("Goal usage child is not registered")?
             .usage
             .clone();
-        if usage
-            .children_by_session_id
-            .values()
-            .any(|child| child.parent_session_id.is_none())
-        {
-            return Err("Legacy child Goal ancestry is unknown".to_owned());
-        }
         let mut children = SessionUsageBucket::default();
         let mut visited = std::collections::BTreeSet::from([id.clone()]);
         let mut pending = vec![id];
         while let Some(parent) = pending.pop() {
             for (child_id, child) in &usage.children_by_session_id {
-                if child.parent_session_id.as_ref() == Some(&parent)
-                    && visited.insert(child_id.clone())
-                {
+                if child.parent_session_id == parent && visited.insert(child_id.clone()) {
                     children.merge(&child.usage)?;
                     pending.push(child_id.clone());
                 }
@@ -254,7 +216,7 @@ mod tests {
             locator.clone(),
             load_session_v1_full(&locator).unwrap().document,
         ));
-        root.initialize_root_usage(false, 1);
+        root.initialize_root_usage(true, 1);
         let mut children = Vec::new();
         for index in 1..=4 {
             let child_id = SessionId::from_u128(index);
@@ -360,7 +322,7 @@ mod tests {
             locator.clone(),
             load_session_v1_full(&locator).unwrap().document,
         );
-        handle.initialize_root_usage(false, 1);
+        handle.initialize_root_usage(true, 1);
         std::fs::write(
             locator.session_directory().join("usage.json"),
             "invalid external content",

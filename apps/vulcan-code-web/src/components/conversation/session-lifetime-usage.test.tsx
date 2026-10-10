@@ -23,7 +23,7 @@ describe("session lifetime usage", () => {
   it("keeps scopes separate and counts stable child sessions without an overall total", () => {
     const usage: SessionLifetimeUsage = {
       version: 1, rootSessionId: "root", revision: 3, updatedAtMs: 1,
-      main: bucket(111), childrenTotal: bucket(222), legacyIncomplete: false,
+      main: bucket(111), childrenTotal: bucket(222),
       childrenBySessionId: { child: { parentSessionId: "root", usage: bucket(222) } },
     };
     const markup = renderToStaticMarkup(<I18nProvider initialLocale="en-US"><SessionLifetimeUsagePanel usage={usage} /></I18nProvider>);

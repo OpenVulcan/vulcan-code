@@ -172,7 +172,7 @@ pub(crate) async fn release_closed_child_handle(
     let parent_id = usage
         .children_by_session_id
         .get(&task_id.to_string())
-        .and_then(|child| child.parent_session_id.as_deref())
+        .map(|child| child.parent_session_id.as_str())
         .ok_or_else(|| String::from("closed child has no verified parent ownership"))?
         .parse::<Uuid>()
         .map_err(|error| error.to_string())?;
@@ -256,7 +256,7 @@ fn seal_exact_child_target(
     let usage_parent = usage
         .children_by_session_id
         .get(&task_id.to_string())
-        .and_then(|child| child.parent_session_id.as_deref());
+        .map(|child| child.parent_session_id.as_str());
     if !parent_owned || usage_parent != Some(parent_id.to_string().as_str()) {
         return Err(String::from(
             "close child V1 ownership does not match the runtime entry",

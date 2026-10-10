@@ -75,81 +75,65 @@ fn history(session_id: &str) -> SessionDocument {
     document
 }
 
-/// Legacy wire records keep their exact source envelopes across full/tail loading and a durable draft update.
-/// 旧线协议记录经完整、尾段加载与可靠草稿更新后保持精确来源封套。
+/// Versioned source envelopes stay exact across full/tail loading and a durable draft update.
+/// 带版本来源封套经完整、尾段加载与可靠草稿更新后保持精确。
 #[test]
-fn legacy_fingerprint_disk_reload_draft_save_and_next_api() {
-    for intermediate in [false, true] {
-        let (_root, layout) = fresh_layout("fingerprint-reload");
-        let document = history(&layout.session_id);
-        let mut events = document.events().to_vec();
-        // Pin the known intermediate bytes without using the production fingerprint function.
-        // 固定已知过渡格式的字节，不使用生产指纹函数生成它。
-        let intermediate_digest =
-            "9a7a47bd1f8efa338e70263b9e37d34473ed098e7dd5f1c81d9f375940d90af8";
-        for event in &mut events {
-            if let EventBody::AssistantText(text) = &mut event.event
-                && let Some(source) = &mut text.provider_source
-            {
-                source.fingerprint_version = None;
-                if intermediate {
-                    source.fingerprint_sha256 = intermediate_digest.into();
-                }
-            }
+fn fingerprint_disk_reload_draft_save_and_next_api() {
+    let (_root, layout) = fresh_layout("fingerprint-reload");
+    let document = history(&layout.session_id);
+    let events = document.events().to_vec();
+    let original_events = serde_json::to_vec(&events).unwrap();
+    let document = SessionDocument::from_parts(
+        document.metadata.clone(),
+        RuntimeLock {
+            initialization_state: RuntimeInitializationState::Initialized,
+            ..RuntimeLock::default()
+        },
+        vec![],
+        vec![],
+        events,
+    )
+    .unwrap();
+    publish_initial(&layout, &document);
+    assert_eq!(
+        serde_json::to_vec(load_session(&layout).unwrap().document.events()).unwrap(),
+        original_events
+    );
+    let (loaded, _) = super::super::loader::load_session_tail_for_runtime(&layout).unwrap();
+    let mut loaded = loaded.document;
+    assert_eq!(loaded.memory_revision(), loaded.durable_revision());
+    loaded.set_draft("next question", vec![], 11).unwrap();
+    flush_candidate(&mut loaded, &layout, 11);
+    let (reloaded, _) = load_session_tail_only(&layout).unwrap();
+    let mut reloaded = reloaded.document;
+    assert_eq!(reloaded.metadata.input_state.draft.text, "next question");
+    assert_eq!(
+        serde_json::to_vec(reloaded.events()).unwrap(),
+        original_events
+    );
+    submit_test_root(&mut reloaded, "next", "next question", 12);
+    let projection = project_document(&reloaded, None, &[]).unwrap();
+    assert!(!projection.iter().any(|item| matches!(
+        item,
+        ProjectedItem::AssistantText {
+            reasoning: Some(_),
+            ..
         }
-        let original_events = serde_json::to_vec(&events).unwrap();
-        let document = SessionDocument::from_parts(
-            document.metadata.clone(),
-            RuntimeLock {
-                initialization_state: RuntimeInitializationState::Initialized,
-                ..RuntimeLock::default()
-            },
-            vec![],
-            vec![],
-            events,
-        )
-        .unwrap();
-        publish_initial(&layout, &document);
-        assert_eq!(
-            serde_json::to_vec(load_session(&layout).unwrap().document.events()).unwrap(),
-            original_events
-        );
-        let (loaded, _) = super::super::loader::load_session_tail_for_runtime(&layout).unwrap();
-        let mut loaded = loaded.document;
-        assert_eq!(loaded.memory_revision(), loaded.durable_revision());
-        loaded.set_draft("next question", vec![], 11).unwrap();
-        flush_candidate(&mut loaded, &layout, 11);
-        let (reloaded, _) = load_session_tail_only(&layout).unwrap();
-        let mut reloaded = reloaded.document;
-        assert_eq!(reloaded.metadata.input_state.draft.text, "next question");
-        assert_eq!(
-            serde_json::to_vec(reloaded.events()).unwrap(),
-            original_events
-        );
-        submit_test_root(&mut reloaded, "next", "next question", 12);
-        let projection = project_document(&reloaded, None, &[]).unwrap();
-        assert!(!projection.iter().any(|item| matches!(
-            item,
-            ProjectedItem::AssistantText {
-                reasoning: Some(_),
-                ..
-            }
-        )));
-        prepare_api(
-            &mut reloaded,
-            ApiPurposeKind::MainGeneration,
-            ApiRequestSnapshot::new("openai", "gpt-5"),
-            13,
-        );
-        flush_candidate(&mut reloaded, &layout, 13);
-        assert!(
-            load_session(&layout)
-                .unwrap()
-                .document
-                .active_api()
-                .is_some()
-        );
-    }
+    )));
+    prepare_api(
+        &mut reloaded,
+        ApiPurposeKind::MainGeneration,
+        ApiRequestSnapshot::new("openai", "gpt-5"),
+        13,
+    );
+    flush_candidate(&mut reloaded, &layout, 13);
+    assert!(
+        load_session(&layout)
+            .unwrap()
+            .document
+            .active_api()
+            .is_some()
+    );
 }
 
 /// Fingerprint failures retain exact checkpoints and digests instead of masquerading as immutable writes.

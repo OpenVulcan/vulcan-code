@@ -90,9 +90,6 @@ pub struct LifetimeUsage {
     /// `(agent name, usage)` per subagent.
     /// 每个子代理的 `(代理名, 用量)`。
     pub children: Vec<(String, UsageBucket)>,
-    /// Some history predates usage recording.
-    /// 部分历史早于用量记录。
-    pub history_incomplete: bool,
 }
 
 impl LifetimeUsage {

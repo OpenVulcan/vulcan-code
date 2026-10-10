@@ -82,7 +82,7 @@ pub(super) async fn load_participant_handle(
         let parent = usage
             .children_by_session_id
             .get(&identity.session_id)
-            .and_then(|child| child.parent_session_id.as_ref())
+            .map(|child| child.parent_session_id.as_str())
             .ok_or_else(|| String::from("persisted participant has no verified parent locator"))?;
         let parent_id = Uuid::parse_str(parent).map_err(|error| error.to_string())?;
         child.bind_child_usage(&root, parent_id, now_ms()?);
@@ -208,8 +208,7 @@ pub(super) async fn verified_direct_parent(
         .get(&source_id)
         .ok_or_else(|| String::from("ask_parent requires an embedded child session"))?
         .parent_session_id
-        .as_ref()
-        .ok_or_else(|| String::from("child session has no verified direct parent identity"))?;
+        .as_str();
     let parent_session_id = Uuid::parse_str(parent_id).map_err(|error| error.to_string())?;
     let root_session_id =
         Uuid::parse_str(&usage.root_session_id).map_err(|error| error.to_string())?;

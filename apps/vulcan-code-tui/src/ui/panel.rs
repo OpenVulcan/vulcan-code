@@ -1444,18 +1444,6 @@ fn stats(app: &App, width: usize) -> Vec<Row> {
         ))));
         usage_block(theme, &lifetime.children_total(), width, &mut out);
     }
-    if lifetime.history_incomplete {
-        out.push(Row::new(Line::default()));
-        out.extend(rows(wrap(
-            &[Span::styled(
-                tr!("conversation.usage.someHistoryIsUnavailable"),
-                theme.muted_text(),
-            )],
-            width,
-            &[Span::raw("ⓘ ")],
-            &[Span::raw("  ")],
-        )));
-    }
     out
 }
 

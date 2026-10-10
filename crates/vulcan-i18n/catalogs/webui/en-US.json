@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} requests did not report usage; totals are incomplete",
   "conversation.usage.mainSessionUsage": "Main session usage",
   "conversation.usage.subagentUsageAgents": "Subagent usage · {childCount} agents",
-  "conversation.usage.someHistoryIsUnavailable": "Some history is unavailable; totals are incomplete.",
   "conversation.usage.childLifetimeUsage": "Child lifetime usage",
   "conversation.usage.lifetimeReferenceTotalsAcross": "Lifetime reference totals across models.",
   "conversation.turnStats.cacheHitRate": "Cache hit rate",

@@ -61,7 +61,6 @@ pub use resource_catalog::{
     project_resource_catalog_path, project_resource_locator, resolve_project_resource,
     resolve_project_resource_source,
 };
-pub use session_usage::load_session_lifetime_usage_with_goal_baseline;
 pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage};
 #[cfg(feature = "test-support")]
 pub use session_v1_store::create_session_v1_storage_fixture;

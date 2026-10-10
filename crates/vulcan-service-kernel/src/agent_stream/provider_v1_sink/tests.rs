@@ -167,7 +167,7 @@ fn published_stored_open_turn() -> (tempfile::TempDir, Arc<SessionHandle>) {
     document.metadata.config.answer_mode.mode =
         vulcan_session_core::v1::config::AnswerMode::Standard;
     let handle = SessionHandle::new(id, locator, document);
-    handle.initialize_root_usage(false, 1);
+    handle.initialize_root_usage(true, 1);
     handle
         .submit_root_input(
             ClientInputSubmission::new(

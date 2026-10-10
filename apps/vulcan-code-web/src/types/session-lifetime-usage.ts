@@ -89,14 +89,11 @@ export interface SessionLifetimeUsage {
   /** Stable child records, retained after completion or closure.
    * 完成或关闭后仍保留的稳定子会话记录。 */
   childrenBySessionId: Record<string, {
-    /** Verified parent, absent for unverifiable legacy history.
-     * 已验证父级，无法核实的旧历史为空。 */
-    parentSessionId: string | null;
+    /** Verified direct parent session.
+     * 经验证的直接父会话。 */
+    parentSessionId: string;
     /** This child's own counters.
      * 当前子会话自身计数。 */
     usage: SessionUsageBucket;
   }>;
-  /** Whether legacy backfill lacks some facts.
-   * 旧历史补建是否缺少部分事实。 */
-  legacyIncomplete: boolean;
 }

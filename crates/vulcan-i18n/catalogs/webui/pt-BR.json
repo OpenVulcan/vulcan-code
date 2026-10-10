@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} solicitações não informaram o uso; os totais estão incompletos",
   "conversation.usage.mainSessionUsage": "Uso da sessão principal",
   "conversation.usage.subagentUsageAgents": "Uso de subagentes · {childCount} agentes",
-  "conversation.usage.someHistoryIsUnavailable": "Parte do histórico não está disponível; os totais estão incompletos.",
   "conversation.usage.childLifetimeUsage": "Uso acumulado da sessão filha",
   "conversation.usage.lifetimeReferenceTotalsAcross": "Totais acumulados de referência entre modelos.",
   "conversation.turnStats.cacheHitRate": "Taxa de acerto do cache",

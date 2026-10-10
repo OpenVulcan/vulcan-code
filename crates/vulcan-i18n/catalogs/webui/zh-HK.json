@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} 次請求未回報用量，累計值不完整",
   "conversation.usage.mainSessionUsage": "工作階段累計",
   "conversation.usage.subagentUsageAgents": "子代理累計 · {childCount} 個",
-  "conversation.usage.someHistoryIsUnavailable": "部分歷史用量缺失，累計值不完整。",
   "conversation.usage.childLifetimeUsage": "子工作階段累計用量",
   "conversation.usage.lifetimeReferenceTotalsAcross": "自建立起累計，僅供參考；不同模型合併計算。",
   "conversation.turnStats.cacheHitRate": "快取命中率",

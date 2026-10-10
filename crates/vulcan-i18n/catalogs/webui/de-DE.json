@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} Anfragen haben keinen Verbrauch gemeldet; die Summen sind unvollständig",
   "conversation.usage.mainSessionUsage": "Verbrauch der Hauptsitzung",
   "conversation.usage.subagentUsageAgents": "Verbrauch der Subagenten · {childCount} Agenten",
-  "conversation.usage.someHistoryIsUnavailable": "Ein Teil des Verlaufs ist nicht verfügbar; die Summen sind unvollständig.",
   "conversation.usage.childLifetimeUsage": "Gesamtverbrauch der untergeordneten Sitzung",
   "conversation.usage.lifetimeReferenceTotalsAcross": "Kumulierte Referenzsummen über alle Modelle.",
   "conversation.turnStats.cacheHitRate": "Cache-Trefferquote",

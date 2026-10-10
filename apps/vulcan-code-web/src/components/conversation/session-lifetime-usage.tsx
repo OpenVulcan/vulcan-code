@@ -111,7 +111,6 @@ export function SessionLifetimeUsagePanel(props: { usage?: SessionLifetimeUsage 
   return <div className="session-lifetime-usage">
     {hasMain ? <LifetimeUsageBucket title={t("conversation.usage.mainSessionUsage")} bucket={usage.main} /> : null}
     {hasChildren ? <LifetimeUsageBucket title={formatMessage(t("conversation.usage.subagentUsageAgents"), { childCount })} bucket={usage.childrenTotal} /> : null}
-    {usage.legacyIncomplete ? <p className="lifetime-usage-note">{t("conversation.usage.someHistoryIsUnavailable")}</p> : null}
   </div>;
 }
 

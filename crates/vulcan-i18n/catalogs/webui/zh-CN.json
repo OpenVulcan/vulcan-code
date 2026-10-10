@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount} 次请求未上报用量，累计值不完整",
   "conversation.usage.mainSessionUsage": "会话累计",
   "conversation.usage.subagentUsageAgents": "子代理累计 · {childCount} 个",
-  "conversation.usage.someHistoryIsUnavailable": "部分历史用量缺失，累计值不完整。",
   "conversation.usage.childLifetimeUsage": "子会话累计用量",
   "conversation.usage.lifetimeReferenceTotalsAcross": "自创建起累计，仅供参考；不同模型合并计算。",
   "conversation.turnStats.cacheHitRate": "缓存命中率",

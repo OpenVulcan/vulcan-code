@@ -119,23 +119,6 @@ const fn goal_state_name(state: GoalState) -> &'static str {
 // Keep all mutations on the single authoritative document instance.
 // 所有修改仍作用于唯一权威文档实例。
 impl SessionDocument {
-    /// Installs a proven legacy baseline once and marks metadata dirty for durable publication.
-    /// 仅安装一次已证明旧基线，并标记元数据等待持久化。
-    /// Returns whether metadata changed; active and stopped Goal generations keep their identity.
-    /// 返回元数据是否变化；活动与停止的 Goal 代际均保持身份。
-    pub fn restore_goal_usage_baseline(
-        &mut self,
-        baseline: crate::v1::lifetime_usage::GoalUsageSnapshot,
-        now_ms: i64,
-    ) -> bool {
-        if !self.metadata.mode.goal.enabled || self.metadata.mode.goal.usage_baseline.is_some() {
-            return false;
-        }
-        self.metadata.mode.goal.usage_baseline = Some(baseline);
-        self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
-        true
-    }
-
     /// Starts a Goal auto-continue turn from a persisted goal-continuation
     /// system semantic, asserting exactly-once creation.
     /// 从持久化的 goal-continuation 系统语义启动 Goal 自动续跑回合，并保证

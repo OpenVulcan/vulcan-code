@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "{unknownUsageCount}개 요청이 사용량을 보고하지 않아 합계가 불완전합니다",
   "conversation.usage.mainSessionUsage": "메인 세션 사용량",
   "conversation.usage.subagentUsageAgents": "하위 에이전트 사용량 · {childCount}개",
-  "conversation.usage.someHistoryIsUnavailable": "일부 기록을 사용할 수 없어 합계가 불완전합니다.",
   "conversation.usage.childLifetimeUsage": "하위 세션 누적 사용량",
   "conversation.usage.lifetimeReferenceTotalsAcross": "생성 이후 참고용 누적 합계이며, 여러 모델을 합산합니다.",
   "conversation.turnStats.cacheHitRate": "캐시 적중률",

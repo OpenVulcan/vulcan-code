@@ -104,7 +104,7 @@ describe("applySessionAddonsChangedResponse context window", () => {
     const usage: SessionProviderUsageSummary = {
       providerCallCount: 0, inFlightCallCount: 0, unknownUsageCallCount: 0, usageRevision: 8,
       lifetime: { version: 1, rootSessionId: "root", revision: 8, updatedAtMs: 1,
-        main: empty, childrenTotal: empty, childrenBySessionId: {}, legacyIncomplete: false },
+        main: empty, childrenTotal: empty, childrenBySessionId: {} },
     };
     const current = applySessionAddonsChangedResponse(browserFallbackSnapshot(), {
       conversationId: "root", revision: 100, sessionProviderUsage: usage,

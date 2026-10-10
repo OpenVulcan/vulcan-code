@@ -276,14 +276,18 @@ impl GoalUsageSnapshot {
     }
 }
 
+/// On-disk schema version of the root-owned usage.json document.
+/// 根会话 usage.json 文档的磁盘结构版本。
+pub const SESSION_LIFETIME_USAGE_VERSION: u32 = 2;
+
 /// One stable child session and its own lifetime counters.
 /// 一个稳定子会话及其自身生命周期计数。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChildSessionUsage {
-    /// Verified direct parent; absent only when legacy history cannot prove it.
-    /// 经验证的直接父级；仅旧历史无法证明时缺失。
-    pub parent_session_id: Option<String>,
+    /// Verified direct parent session.
+    /// 经验证的直接父会话。
+    pub parent_session_id: String,
     /// Only this child's own work.
     /// 仅该子会话自身工作。
     pub usage: SessionUsageBucket,
@@ -315,9 +319,6 @@ pub struct SessionLifetimeUsage {
     /// Stable child IDs, including completed and closed children.
     /// 稳定子会话 ID，包含已完成和已关闭子会话。
     pub children_by_session_id: BTreeMap<String, ChildSessionUsage>,
-    /// Whether historical facts were incomplete during the single initial backfill.
-    /// 首次补建时历史事实是否不完整。
-    pub legacy_incomplete: bool,
 }
 
 impl SessionLifetimeUsage {
@@ -325,14 +326,13 @@ impl SessionLifetimeUsage {
     /// 初始化新建根会话；不导入历史请求。
     pub fn new(root_session_id: String, now_ms: i64) -> Self {
         Self {
-            version: 1,
+            version: SESSION_LIFETIME_USAGE_VERSION,
             root_session_id,
             revision: 0,
             updated_at_ms: now_ms,
             main: SessionUsageBucket::default(),
             children_total: SessionUsageBucket::default(),
             children_by_session_id: BTreeMap::new(),
-            legacy_incomplete: false,
         }
     }
 
@@ -517,7 +517,7 @@ mod tests {
             ledger.children_by_session_id.insert(
                 id.into(),
                 ChildSessionUsage {
-                    parent_session_id: Some(parent.into()),
+                    parent_session_id: parent.into(),
                     usage: Default::default(),
                 },
             );

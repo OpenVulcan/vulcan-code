@@ -5377,7 +5377,6 @@
   "conversation.usage.requestsDidNotReport": "Запросов без данных об использовании: {unknownUsageCount}; итоги неполные",
   "conversation.usage.mainSessionUsage": "Использование основного сеанса",
   "conversation.usage.subagentUsageAgents": "Использование субагентов · агентов: {childCount}",
-  "conversation.usage.someHistoryIsUnavailable": "Часть истории недоступна; итоги неполные.",
   "conversation.usage.childLifetimeUsage": "Суммарное использование дочернего сеанса",
   "conversation.usage.lifetimeReferenceTotalsAcross": "Справочные итоги за всё время по всем моделям.",
   "conversation.turnStats.cacheHitRate": "Доля попаданий в кэш",
