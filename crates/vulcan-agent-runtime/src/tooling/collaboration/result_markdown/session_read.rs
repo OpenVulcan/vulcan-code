@@ -158,7 +158,6 @@ pub(super) fn project(output: Value) -> Result<VulcanToolInvocationResult, Strin
             | EventBody::ApiStarted(_)
             | EventBody::ApiStats(_)
             | EventBody::TurnStats(_)
-            | EventBody::SubagentReturnStats(_)
             | EventBody::ContextMaintenance(_)
             | EventBody::RequestConfigChanged(_)
             | EventBody::QueuedInputResolution(_) => continue,

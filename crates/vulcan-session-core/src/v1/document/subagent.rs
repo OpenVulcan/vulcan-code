@@ -1,5 +1,5 @@
-//! Durable content returns, legacy statistics pairing, and idempotent delivery receipts.
-//! 可靠正文回流、旧版统计配对与幂等投递回执。
+//! Durable content returns and idempotent delivery receipts.
+//! 可靠正文回流与幂等投递回执。
 
 use super::persistence::DirtyFile;
 use super::{
@@ -9,8 +9,8 @@ use super::{
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ApiCallStatus, ApiPurposeKind, AssistantSemanticStatus, ConversationEvent, EventBody,
-    EventVisibility, SubagentReturnEvent, SubagentReturnStatsEvent, SubagentReturnStatus,
-    SystemContextScope, TurnBoundaryPurpose, TurnOutcome, TurnStatsEvent,
+    EventVisibility, SubagentReturnEvent, SystemContextScope, TurnBoundaryPurpose, TurnOutcome,
+    TurnStatsEvent,
 };
 use crate::v1::ids::{ClientActionId, JS_SAFE_INTEGER_MAX, Seq, SubagentTaskId, TurnId};
 use crate::v1::stats::{StatBucket, TurnStatBuckets};
@@ -114,107 +114,42 @@ pub(super) fn validate_turn_stat_buckets(buckets: &TurnStatBuckets) -> Result<()
     Ok(())
 }
 
-/// Validates the two adjacent events of one atomic final subagent return.
-/// 校验一次原子最终子代理回流的两条相邻事件。
-fn validate_subagent_return_pair(
-    returned: &SubagentReturnEvent,
-    stats: &SubagentReturnStatsEvent,
-) -> Result<(), DomainError> {
-    validate_exact_external_identity("child_session_id", &returned.child_session_id)?;
-    validate_exact_external_identity("child_session_id", &stats.child_session_id)?;
-    validate_stat_bucket(&stats.totals)?;
-    if returned.child_session_id != stats.child_session_id
-        || returned.child_task_id != stats.child_task_id
-        || returned.child_turn_stats_seq != stats.child_turn_stats_seq
-    {
-        return Err(DomainError::InvalidStatistics {
-            field: "subagent_return.identity",
-        });
-    }
-    if returned.source_from_seq.value() > returned.source_to_seq.value()
-        || returned.source_to_seq != returned.child_turn_stats_seq
-        || returned.source_assistant_text_seq.value() < returned.source_from_seq.value()
-        || returned.source_assistant_text_seq.value() > returned.source_to_seq.value()
-    {
-        return Err(DomainError::InvalidStatistics {
-            field: "subagent_return.source_range",
-        });
-    }
-    if stats.status != SubagentReturnStatus::Final {
-        return Err(DomainError::InvalidStatistics {
-            field: "subagent_return.status",
-        });
-    }
-    Ok(())
-}
-
-/// Validates that every persisted final subagent return is one adjacent atomic pair.
-/// 校验每个持久化最终子代理回流都是一组相邻原子事件。
+/// Validates the identity, visibility and source range of every persisted subagent return.
+/// 校验每个持久化子代理回流的身份、可见性与来源范围。
 pub(super) fn validate_subagent_return_history(
     events: &[ConversationEvent],
 ) -> Result<(), DomainError> {
     let mut identities = BTreeSet::new();
-    for (index, event) in events.iter().enumerate() {
-        match &event.event {
-            EventBody::SubagentReturn(returned) => {
-                validate_exact_external_identity("child_session_id", &returned.child_session_id)?;
-                if event.visibility != EventVisibility::Provider {
-                    return Err(DomainError::InvalidStatistics {
-                        field: "subagent_return.visibility",
-                    });
-                }
-                if event.turn_id.is_none()
-                    || !(1..=JS_SAFE_INTEGER_MAX).contains(&returned.child_segment_generation)
-                    || returned.source_from_seq > returned.source_to_seq
-                    || returned.source_to_seq != returned.child_turn_stats_seq
-                    || returned.source_assistant_text_seq < returned.source_from_seq
-                    || returned.source_assistant_text_seq > returned.source_to_seq
-                {
-                    return Err(DomainError::InvalidStatistics {
-                        field: "subagent_return.source_range",
-                    });
-                }
-                // Old returns still require the exact adjacent statistics pair.
-                // 旧回流仍要求精确相邻统计事件对。
-                if !returned.content_only {
-                    let next = events
-                        .get(index + 1)
-                        .ok_or(DomainError::InvalidStatistics {
-                            field: "subagent_return_stats_pair",
-                        })?;
-                    let EventBody::SubagentReturnStats(stats) = &next.event else {
-                        return Err(DomainError::InvalidStatistics {
-                            field: "subagent_return_stats_pair",
-                        });
-                    };
-                    if next.turn_id != event.turn_id || next.visibility != EventVisibility::UiOnly {
-                        return Err(DomainError::InvalidStatistics {
-                            field: "subagent_return.parent_turn",
-                        });
-                    }
-                    validate_subagent_return_pair(returned, stats)?;
-                }
-                if !identities.insert((
-                    returned.child_session_id.clone(),
-                    returned.child_segment_generation,
-                    returned.child_task_id.clone(),
-                    returned.child_turn_stats_seq,
-                )) {
-                    return Err(DomainError::InvalidStatistics {
-                        field: "subagent_return.identity_unique",
-                    });
-                }
-            }
-            EventBody::SubagentReturnStats(_)
-                if index > 0
-                    && matches!(&events[index - 1].event, EventBody::SubagentReturn(returned) if !returned.content_only) =>
-                {}
-            EventBody::SubagentReturnStats(_) => {
-                return Err(DomainError::InvalidStatistics {
-                    field: "subagent_return_stats_pair",
-                });
-            }
-            _ => {}
+    for event in events {
+        let EventBody::SubagentReturn(returned) = &event.event else {
+            continue;
+        };
+        validate_exact_external_identity("child_session_id", &returned.child_session_id)?;
+        if event.visibility != EventVisibility::Provider {
+            return Err(DomainError::InvalidStatistics {
+                field: "subagent_return.visibility",
+            });
+        }
+        if event.turn_id.is_none()
+            || !(1..=JS_SAFE_INTEGER_MAX).contains(&returned.child_segment_generation)
+            || returned.source_from_seq > returned.source_to_seq
+            || returned.source_to_seq != returned.child_turn_stats_seq
+            || returned.source_assistant_text_seq < returned.source_from_seq
+            || returned.source_assistant_text_seq > returned.source_to_seq
+        {
+            return Err(DomainError::InvalidStatistics {
+                field: "subagent_return.source_range",
+            });
+        }
+        if !identities.insert((
+            returned.child_session_id.clone(),
+            returned.child_segment_generation,
+            returned.child_task_id.clone(),
+            returned.child_turn_stats_seq,
+        )) {
+            return Err(DomainError::InvalidStatistics {
+                field: "subagent_return.identity_unique",
+            });
         }
     }
     Ok(())
@@ -658,7 +593,6 @@ impl SessionDocument {
             source_from_seq: input.source_from_seq,
             source_to_seq: input.source_to_seq,
             child_turn_stats_seq: input.child_turn_stats_seq,
-            content_only: true,
         };
         let mut staged_allocator = self.id_allocator;
         let parent_turn_id = if needs_turn {

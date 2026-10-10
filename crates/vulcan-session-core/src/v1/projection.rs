@@ -642,21 +642,6 @@ fn project_items_with_policy(
     // 在 API 组开放期间观察到的事件必须等待该组终态边界。
     let mut deferred_items: Vec<SourcedProjectedItem> = Vec::new();
 
-    // New immutable return pairs carry timing; legacy pairs keep their existing wire projection.
-    // 新的不可变回流事件对携带计时；旧事件对保持既有线协议投影。
-    let return_statistics: BTreeMap<_, _> = events
-        .iter()
-        .filter_map(|record| match &record.event {
-            EventBody::SubagentReturnStats(stats) if stats.totals.output_timing.is_some() => {
-                Some((
-                    (stats.child_session_id.as_str(), stats.child_turn_stats_seq),
-                    (record.seq, &stats.totals),
-                ))
-            }
-            _ => None,
-        })
-        .collect();
-
     for event in events {
         let seq_value = event.seq().value();
         if seq_value < boundary {
@@ -785,44 +770,16 @@ fn project_items_with_policy(
                 }
             }
             EventBody::SubagentReturn(return_event) => {
-                // Join only the atomic statistics pair with this exact child and source frontier.
-                // 仅关联当前精确子代理与源前沿对应的原子统计事件对。
-                let (text, source_to_seq) = match return_statistics.get(&(
-                    return_event.child_session_id.as_str(),
-                    return_event.child_turn_stats_seq,
-                )) {
-                    Some((stats_seq, statistics)) => {
-                        // Include coverage identity so repeated automatic feedback can be deduplicated.
-                        // 包含覆盖身份，使重复自动反馈可去重。
-                        let encoded = serde_json::to_string(&serde_json::json!({
-                            "child_session_id": return_event.child_session_id,
-                            "source_from_seq": return_event.source_from_seq,
-                            "source_to_seq": return_event.source_to_seq,
-                            "statistics": statistics,
-                        }))
-                        .map_err(|_| {
-                            DomainError::reference("subagent_statistics", event.seq.value())
-                        })?;
-                        (
-                            format!(
-                                "{}\n\nSubagent statistics for this returned source range (do not count the same range twice):\n{encoded}",
-                                return_event.content
-                            ),
-                            *stats_seq,
-                        )
-                    }
-                    None => (return_event.content.clone(), event.seq),
-                };
                 let text = render_subagent_result_message(
                     event.seq,
                     &return_event.child_session_id,
                     &return_event.parent_session_id,
                     return_event.child_task_id.as_str(),
-                    &text,
+                    &return_event.content,
                 )?;
                 let projected = SourcedProjectedItem {
                     source_from_seq: event.seq,
-                    source_to_seq,
+                    source_to_seq: event.seq,
                     item: ProjectedItem::SubagentReturnText { text },
                     user_prompt_parameters: None,
                 };
@@ -838,7 +795,6 @@ fn project_items_with_policy(
             | EventBody::QueuedInputResolution(_)
             | EventBody::TurnBoundary(_)
             | EventBody::TurnStats(_)
-            | EventBody::SubagentReturnStats(_)
             | EventBody::DisplayNote(_)
             | EventBody::RequestConfigChanged(_)
             | EventBody::ExecutionControl(_)
@@ -998,8 +954,8 @@ pub fn provider_visible_fingerprint(
     fingerprint_with_policy(events, coverage_until_seq, PartialAssistantPolicy::Preserve)
 }
 
-/// Verifies a checkpoint without rewriting it; only unversioned records admit the two historical formats.
-/// 校验检查点而不重写它；仅无版本记录接受两种历史格式。
+/// Verifies a checkpoint against its declared fingerprint format without rewriting it.
+/// 按检查点声明的指纹格式校验而不重写它。
 /// `events` is the resident ledger and `source` supplies coverage, version and digest; mismatches are errors.
 /// `events` 为常驻账本，`source` 提供覆盖、版本及摘要；不匹配时返回错误。
 pub(crate) fn validate_provider_fingerprint(
@@ -1008,27 +964,14 @@ pub(crate) fn validate_provider_fingerprint(
 ) -> Result<(), DomainError> {
     // Exhaustive dispatch forces any future format to define its verification behavior.
     // 穷尽分派强制未来格式定义自身的校验行为。
-    let accepts_legacy = match source.fingerprint_version {
-        None => true,
-        Some(ProviderFingerprintVersion::ImmutableProjectionV1) => false,
-    };
     // This stable contract must not change when request eligibility changes.
     // 请求资格变化时，不得改变此稳定契约。
-    let expected = provider_visible_fingerprint(events, source.covered_until_seq)?;
+    let expected = match source.fingerprint_version {
+        ProviderFingerprintVersion::ImmutableProjectionV1 => {
+            provider_visible_fingerprint(events, source.covered_until_seq)?
+        }
+    };
     if source.fingerprint_sha256 == expected {
-        return Ok(());
-    }
-    // A previous unversioned writer used terminal filtering. Admit exactly that known format,
-    // never a best-effort rehash or a fallback for explicitly versioned checkpoints.
-    // 曾有无版本写入者使用终态过滤。只接受该已知格式，绝不尽力重算或为显式版本检查点兜底。
-    if accepts_legacy
-        && source.fingerprint_sha256
-            == fingerprint_with_policy(
-                events,
-                source.covered_until_seq,
-                PartialAssistantPolicy::Omit,
-            )?
-    {
         return Ok(());
     }
     Err(DomainError::ProviderSourceFingerprintMismatch {

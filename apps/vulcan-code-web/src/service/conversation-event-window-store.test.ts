@@ -176,25 +176,6 @@ function apiStats(apiCallId: number, status: ApiStatStatus): ConversationEventBo
   };
 }
 
-/** Builds one immutable final subagent-return-stat body.
- * 构建一条不可变的终态子代理回流统计事件体。 */
-function subagentStats(apiCallCount = 1): ConversationEventBody {
-  return {
-    kind: "subagent_return_stats",
-    child_session_id: "child-session",
-    child_task_id: "child-task",
-    child_turn_stats_seq: 7,
-    status: "final",
-    totals: {
-      api_call_count: apiCallCount,
-      unknown_usage_api_call_count: 0,
-      tool_call_count: 2,
-      subagent_return_count: 1,
-      usage: {},
-    },
-  };
-}
-
 describe("conversation-event-window-store V1 ownership and boundaries", () => {
   it("requires one shared branded ClientActionId on every user_input body", () => {
     expect(USER_INPUT_HAS_REQUIRED_STRONG_CLIENT_ACTION_ID).toBe(true);
@@ -512,16 +493,6 @@ describe("conversation-event-window-store V1 same-seq evolution", () => {
       /illegal api_stats evolution/,
     );
     expect(store.render()[0].event).toMatchObject({ status: "completed" });
-  });
-
-  it("rejects any rewrite of immutable final subagent totals", () => {
-    const store = new ConversationEventWindowStore();
-    store.hydrate(batch([summary(1, subagentStats(), 10)]));
-
-    expect(() =>
-      store.applyLive(livePatch([summary(1, subagentStats(2), 20, 2)])),
-    ).toThrow(/immutable.*changed/);
-    expect(store.render()[0].event).toEqual(subagentStats());
   });
 
   it("rejects child result generation and execution changes without delimiter collisions", () => {

@@ -358,8 +358,8 @@ fn subagent_return_builder_requires_durable_exact_terminal_child() -> Result<(),
     Ok(())
 }
 
-/// Identity drift, broken atomic pairs, and allocator-frontier failure never partially commit.
-/// 身份漂移、破损原子事件对与分配器前沿失败绝不会产生部分提交。
+/// Identity drift, wrong visibility, and allocator-frontier failure never partially commit.
+/// 身份漂移、错误可见性与分配器前沿失败绝不会产生部分提交。
 #[test]
 fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<(), DomainError> {
     let (child, child_turn_id, source_assistant_text_seq) = durable_child_return_fixture()?;
@@ -383,27 +383,6 @@ fn subagent_return_conflict_and_failure_paths_are_strict_and_atomic() -> Result<
         })
     ));
     assert_eq!(parent, before_drift);
-
-    let mut broken_events = parent.events.to_vec();
-    // A historical paired return must still reject its missing statistics partner.
-    // 历史成对回流仍须拒绝缺失的统计配对。
-    if let EventBody::SubagentReturn(returned) = &mut broken_events.last_mut().unwrap().event {
-        returned.content_only = false;
-    } else {
-        panic!("content return expected");
-    }
-    assert!(matches!(
-        SessionDocument::from_parts(
-            parent.metadata.clone(),
-            parent.runtime_lock.clone(),
-            parent.compactions.clone(),
-            parent.segment_catalog.clone(),
-            broken_events,
-        ),
-        Err(DomainError::InvalidStatistics {
-            field: "subagent_return_stats_pair"
-        })
-    ));
 
     let mut wrong_visibility = parent.events.to_vec();
     let stats_event = wrong_visibility

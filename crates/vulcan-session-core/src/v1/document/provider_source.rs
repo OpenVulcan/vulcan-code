@@ -77,7 +77,7 @@ pub(super) fn build_provider_source(
         response_id: source_input.response_id.clone(),
         replay: source_input.replay.clone(),
         covered_until_seq,
-        fingerprint_version: Some(ProviderFingerprintVersion::ImmutableProjectionV1),
+        fingerprint_version: ProviderFingerprintVersion::ImmutableProjectionV1,
         fingerprint_sha256,
     })
 }

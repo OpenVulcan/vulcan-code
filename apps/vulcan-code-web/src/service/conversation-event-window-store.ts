@@ -1038,14 +1038,6 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       child_turn_stats_seq: number;
     }
   | {
-      kind: "subagent_return_stats";
-      child_session_id: string;
-      child_task_id: string;
-      child_turn_stats_seq: number;
-      status: "final";
-      totals: StatBucket;
-    }
-  | {
       kind: "display_note";
       notice_kind:
         | "provider_error"
@@ -2191,8 +2183,6 @@ function eventIdentity(summary: ConversationEventSummary): EventIdentity {
       // Root action and task strings may contain separators; preserve tuple boundaries exactly.
       // 根动作及任务字符串可包含分隔符；精确保留元组边界。
       return JSON.stringify([event.kind, event.child_session_id, event.child_segment_generation, event.child_root_action_id, event.child_task_id, event.source_assistant_text_seq, event.child_turn_stats_seq]);
-    case "subagent_return_stats":
-      return `${event.kind}:${event.child_session_id}:${event.child_task_id}:${event.child_turn_stats_seq}`;
     case "display_note":
       return `${event.kind}:${event.notice_kind}:${event.reason_code}:${event.api_call_id ?? "none"}`;
     case "request_config_changed":

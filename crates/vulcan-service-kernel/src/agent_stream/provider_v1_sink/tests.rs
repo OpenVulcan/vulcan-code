@@ -3621,7 +3621,8 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
             reasoning: Some(String::from("durable-reasoning")),
             tool_calls: Vec::new(),
             provider_source: Some(Box::new(vulcan_session_core::v1::event::ProviderSource {
-                fingerprint_version: None,
+                fingerprint_version:
+                    vulcan_session_core::v1::event::ProviderFingerprintVersion::ImmutableProjectionV1,
                 provider: String::from("provider-1"),
                 profile: Some(String::from("profile-1")),
                 model: String::from("model-1"),

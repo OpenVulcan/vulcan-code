@@ -15,7 +15,7 @@ use crate::v1::ids::{
     ApiCallId, ClientActionId, CompactionId, PendingInputId, RequestStreamId, Seq, SubagentTaskId,
     ToolCallId, TurnId,
 };
-use crate::v1::stats::{AggregatedUsage, StatBucket, TurnStatBuckets, UsageSnapshot};
+use crate::v1::stats::{StatBucket, TurnStatBuckets, UsageSnapshot};
 use serde_json::{Value, json};
 use vulcan_change_set::{
     ChangeSetFileChangeKind, ChangeSetMode, PersistentChangeSet, PersistentChangeSetFile,
@@ -180,7 +180,8 @@ fn golden_assistant_text_with_provider_source() {
             text: "hello".to_string(),
             status: AssistantSemanticStatus::Completed,
             provider_source: Some(ProviderSource {
-                fingerprint_version: None,
+                fingerprint_version:
+                    crate::v1::event::ProviderFingerprintVersion::ImmutableProjectionV1,
                 provider: "openai".to_string(),
                 profile: Some("responses".to_string()),
                 model: "gpt-5".to_string(),
@@ -195,7 +196,7 @@ fn golden_assistant_text_with_provider_source() {
     );
     assert_golden(
         &event,
-        r#"{"seq":4,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"provider","event":{"kind":"assistant_text","api_call_id":4,"text":"hello","status":"completed","provider_source":{"provider":"openai","profile":"responses","model":"gpt-5","message_id":"msg_1","covered_until_seq":4,"fingerprint_sha256":"abc123"}}}"#,
+        r#"{"seq":4,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"provider","event":{"kind":"assistant_text","api_call_id":4,"text":"hello","status":"completed","provider_source":{"provider":"openai","profile":"responses","model":"gpt-5","message_id":"msg_1","covered_until_seq":4,"fingerprint_version":"immutable_projection_v1","fingerprint_sha256":"abc123"}}}"#,
     );
 }
 
@@ -361,7 +362,6 @@ fn golden_subagent_return() {
         EventBody::SubagentReturn(SubagentReturnEvent {
             child_segment_generation: 1,
             child_root_action_id: ClientActionId::try_new("child-execution-9").unwrap(),
-            content_only: false,
             parent_session_id: "parent-1".to_string(),
             child_session_id: "child-1".to_string(),
             child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
@@ -378,49 +378,16 @@ fn golden_subagent_return() {
     );
 }
 
-/// Subagent-return-statistics golden line.
-/// 子代理回流统计 golden 行。
+/// Subagent return reload requires every exact identity/source fact.
+/// 子代理回流重载要求全部精确身份/来源事实。
 #[test]
-fn golden_subagent_return_stats() {
-    let event = ui_turn(
-        10,
-        1,
-        EventBody::SubagentReturnStats(SubagentReturnStatsEvent {
-            child_session_id: "child-1".to_string(),
-            child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
-            child_turn_stats_seq: Seq::try_new(12).unwrap(),
-            status: SubagentReturnStatus::Final,
-            totals: StatBucket {
-                output_timing: None,
-                api_call_count: 3,
-                unknown_usage_api_call_count: 1,
-                tool_call_count: 2,
-                subagent_return_count: 1,
-                usage: AggregatedUsage {
-                    input_tokens: Some(7),
-                    output_tokens: Some(3),
-                    ..AggregatedUsage::default()
-                },
-            },
-        }),
-    );
-    assert_golden(
-        &event,
-        r#"{"seq":10,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"ui_only","event":{"kind":"subagent_return_stats","child_session_id":"child-1","child_task_id":"task-9","child_turn_stats_seq":12,"status":"final","totals":{"api_call_count":3,"unknown_usage_api_call_count":1,"tool_call_count":2,"subagent_return_count":1,"usage":{"input_tokens":7,"output_tokens":3}}}}"#,
-    );
-}
-
-/// Subagent return reload requires every exact identity/source fact and Final status.
-/// 子代理回流重载要求全部精确身份/来源事实以及 Final 状态。
-#[test]
-fn subagent_return_reload_rejects_missing_identity_source_and_non_final_status() {
+fn subagent_return_reload_rejects_missing_identity_and_source() {
     let event = turn(
         9,
         1,
         EventBody::SubagentReturn(SubagentReturnEvent {
             child_segment_generation: 1,
             child_root_action_id: ClientActionId::try_new("child-execution-9").unwrap(),
-            content_only: false,
             parent_session_id: "parent-1".to_string(),
             child_session_id: "child-1".to_string(),
             child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
@@ -448,21 +415,6 @@ fn subagent_return_reload_rejects_missing_identity_source_and_non_final_status()
             "missing {field} must fail"
         );
     }
-
-    let stats = ui_turn(
-        10,
-        1,
-        EventBody::SubagentReturnStats(SubagentReturnStatsEvent {
-            child_session_id: "child-1".to_string(),
-            child_task_id: SubagentTaskId::try_new("task-9").unwrap(),
-            child_turn_stats_seq: Seq::try_new(12).unwrap(),
-            status: SubagentReturnStatus::Final,
-            totals: StatBucket::default(),
-        }),
-    );
-    let mut non_final = serde_json::to_value(stats).expect("subagent stats JSON");
-    non_final["event"]["status"] = Value::String("in_progress".to_string());
-    assert!(serde_json::from_value::<ConversationEvent>(non_final).is_err());
 }
 
 /// Display-note golden line (ui_only visibility).
@@ -778,7 +730,8 @@ fn tool_call_with_provider_source_round_trips() {
             external_refs: Vec::new(),
             generated_resources: Vec::new(),
             provider_source: Some(ProviderSource {
-                fingerprint_version: None,
+                fingerprint_version:
+                    crate::v1::event::ProviderFingerprintVersion::ImmutableProjectionV1,
                 provider: "openai".to_string(),
                 profile: None,
                 model: "gpt-5".to_string(),

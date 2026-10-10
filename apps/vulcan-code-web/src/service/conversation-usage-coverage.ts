@@ -132,11 +132,11 @@ function finalizeCoverage(coverage: UsageCoverage, bucket: StatBucket): UsageCov
  * 从规范事件投影部分用量，以终态 Turn 统计 seq 为键。
  * `events` may contain a partial window; persisted bucket counts remain the denominator, and source records are never mutated.
  * `events` 可以是局部窗口；分母始终使用持久化统计桶请求数，绝不修改源记录。
- * Returns direct/subagent/total evidence with API-ID deduplication and Rust-equivalent child-return deduplication.
- * 返回直接/子代理/总计证据，按 API ID 去重，并按 Rust 相同规则去重子代理回流。 */
+ * Returns direct/subagent/total evidence with API-ID deduplication; child evidence comes from persisted buckets.
+ * 返回直接/子代理/总计证据，按 API ID 去重；子代理证据来自持久化统计桶。 */
 export function projectTurnUsageCoverage(events: readonly UsageEvent[]): ReadonlyMap<number, TurnUsageCoverage> {
-  // byTurn limits each closed Turn to its own canonical API and child-return facts.
-  // byTurn 将闭合 Turn 限制在自己的规范 API 与子代理回流事实内。
+  // byTurn limits each closed Turn to its own canonical API facts.
+  // byTurn 将闭合 Turn 限制在自己的规范 API 事实内。
   const byTurn = new Map<number, UsageEvent[]>();
   for (const event of events) {
     if (event.turn_id === null) continue;
@@ -169,9 +169,6 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
     // Accumulate tokens and output intervals from the same measured physical request set.
     // 从同一组已测物理请求累计 Token 和输出区间。
     const outputTiming: ProviderOutputTiming = { requestCount: 0, requestDurationMs: 0, firstTokenLatencyMs: 0, outputDurationMs: 0, outputTokens: 0 };
-    // Child terminal identity matches the durable core's return deduplication key.
-    // 子代理终态身份与可靠核心的回流去重键一致。
-    const children = new Map<string, UsageEvent>();
     for (const sample of byTurn.get(terminal.turn_id) ?? []) {
       if (sample.seq < start_seq || sample.seq > end_seq) continue;
       if (sample.event.kind === "api_stats") {
@@ -181,14 +178,6 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
         if (!previous || sample.seq > previous.seq || (sample.seq === previous.seq && sample.event_revision >= previous.event_revision)) {
           apis.set(sample.event.api_call_id, sample);
         }
-      } else if (sample.event.kind === "subagent_return_stats" && sample.event.status === "final") {
-        // The durable core deduplicates by child session and child turn-stats seq, not the parent tool-call count.
-        // 可靠核心按子会话和子回合统计 seq 去重，不按父工具调用次数计数。
-        const key = JSON.stringify([sample.event.child_session_id, sample.event.child_turn_stats_seq]);
-        // First durable return wins; only revisions of that same record may replace it.
-        // 首条可靠回流生效；只有同一条记录的修订可替换它。
-        const previous = children.get(key);
-        if (!previous || sample.seq < previous.seq || (sample.seq === previous.seq && sample.event_revision >= previous.event_revision)) children.set(key, sample);
       }
     }
     for (const sample of apis.values()) {
@@ -204,10 +193,6 @@ export function projectTurnUsageCoverage(events: readonly UsageEvent[]): Readonl
         outputTiming.outputDurationMs += timing.outputDurationMs;
         outputTiming.outputTokens += timing.outputTokens;
       }
-    }
-    for (const sample of children.values()) {
-      if (sample.event.kind !== "subagent_return_stats") continue;
-      addUsage(subagent, sample.event.totals.usage, sample.event.totals.api_call_count);
     }
     // The canonical own bucket covers local timing outside the currently loaded window.
     // 规范自身统计桶覆盖当前已加载窗口之外的本地计时。

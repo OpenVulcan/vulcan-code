@@ -21,7 +21,7 @@ use crate::v1::ids::{
     ToolCallId, TurnId,
 };
 use crate::v1::ids::{JS_SAFE_INTEGER_MAX, LOCAL_ID_MIN};
-use crate::v1::stats::{StatBucket, TurnStatBuckets, UsageSnapshot};
+use crate::v1::stats::{TurnStatBuckets, UsageSnapshot};
 use vulcan_change_set::PersistentChangeSet;
 
 /// Initial revision assigned to every newly appended event.
@@ -112,8 +112,7 @@ impl ConversationEvent {
             EventBody::SystemContext(_)
             | EventBody::TurnBoundary(_)
             | EventBody::TurnStats(_)
-            | EventBody::SubagentReturn(_)
-            | EventBody::SubagentReturnStats(_) => 0,
+            | EventBody::SubagentReturn(_) => 0,
         };
         turn_id.max(body_id)
     }
@@ -189,9 +188,6 @@ pub enum EventBody {
     /// Content actually returned to the parent model with its source range.
     /// 实际回流给父模型的内容及其来源范围。
     SubagentReturn(SubagentReturnEvent),
-    /// Inclusive subagent statistics counted into the parent turn.
-    /// 计入父回合的子代理包容性统计。
-    SubagentReturnStats(SubagentReturnStatsEvent),
     /// Permanent UI timeline fact: errors, interruptions, retries, resume.
     /// 永久 UI 时间线事实：错误、中断、重试、恢复等。
     DisplayNote(DisplayNoteEvent),
@@ -225,7 +221,6 @@ impl EventBody {
             Self::TurnBoundary(_) => "turn_boundary",
             Self::TurnStats(_) => "turn_stats",
             Self::SubagentReturn(_) => "subagent_return",
-            Self::SubagentReturnStats(_) => "subagent_return_stats",
             Self::DisplayNote(_) => "display_note",
             Self::RequestConfigChanged(_) => "request_config_changed",
             Self::ExecutionControl(_) => "execution_control",
@@ -1210,10 +1205,6 @@ pub struct SubagentReturnEvent {
     /// Original root action identifying the returned child execution.
     /// 标识回流子执行的原根动作。
     pub child_root_action_id: ClientActionId,
-    /// True for new content-only returns; absent legacy values require a statistics pair.
-    /// 新正文回流为真；旧数据缺失该值时要求统计事件对。
-    #[serde(default, skip_serializing_if = "subagent_content_only_is_false")]
-    pub content_only: bool,
     /// Parent session identity that owns this returned result.
     /// 拥有本次回流结果的父会话身份。
     pub parent_session_id: String,
@@ -1238,44 +1229,6 @@ pub struct SubagentReturnEvent {
     /// Terminal TurnStats seq inside the child session.
     /// 子会话内终态 TurnStats 的 seq。
     pub child_turn_stats_seq: Seq,
-}
-
-/// Preserves the legacy serialized shape when the content-only marker is absent.
-/// 正文回流标记未设置时保留旧序列化结构。
-fn subagent_content_only_is_false(value: &bool) -> bool {
-    !*value
-}
-
-/// Flow status of one subagent return into the parent turn.
-/// 一次子代理向父回合回流的流动状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubagentReturnStatus {
-    /// Final return counted into the parent turn totals once.
-    /// 计入父回合总量的最终回流(仅一次)。
-    Final,
-}
-
-/// Inclusive subagent statistics counted into the parent turn.
-/// 计入父回合的子代理包容性统计。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SubagentReturnStatsEvent {
-    /// Subagent session id that produced the totals.
-    /// 产出该统计的子代理会话 id。
-    pub child_session_id: String,
-    /// Stable subagent task identity.
-    /// 稳定的子代理任务身份。
-    pub child_task_id: SubagentTaskId,
-    /// Terminal turn-stats seq inside the child session.
-    /// 子会话内终态回合统计的 seq。
-    pub child_turn_stats_seq: Seq,
-    /// Flow status of this return.
-    /// 本次回流的流动状态。
-    pub status: SubagentReturnStatus,
-    /// Inclusive totals including the subagent and all its descendants.
-    /// 包含子代理及其全部后代的包容性总量。
-    pub totals: StatBucket,
 }
 
 /// Stable notice kind of one permanent UI timeline fact.
@@ -1524,10 +1477,9 @@ pub struct ProviderSource {
     /// Local main-event seq covered by this replay checkpoint.
     /// 该重放检查点覆盖到的本地主事件 seq。
     pub covered_until_seq: Seq,
-    /// Explicit hash contract; absent only on legacy checkpoints with either known unversioned format.
-    /// 显式哈希契约；仅两种已知无版本历史格式的检查点缺省此字段。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fingerprint_version: Option<ProviderFingerprintVersion>,
+    /// Explicit hash contract required on every checkpoint.
+    /// 每个检查点都必须携带的显式哈希契约。
+    pub fingerprint_version: ProviderFingerprintVersion,
     /// Real SHA-256 hex digest of the immutable Provider-visible projection.
     /// 不可变 Provider 可见投影的真实 SHA-256 十六进制摘要。
     pub fingerprint_sha256: String,

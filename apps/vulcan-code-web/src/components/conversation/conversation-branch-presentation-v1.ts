@@ -467,7 +467,6 @@ function conversationMessagesForV1Event(
     case "system_context":
     case "api_started":
     case "turn_boundary":
-    case "subagent_return_stats":
     case "execution_control":
       return [];
   }
