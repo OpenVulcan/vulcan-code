@@ -147,6 +147,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
         Some(AppCommand::Attach)
     } else if alt(&key, 'h') && in_chat {
         Some(AppCommand::ToggleAnswerMode)
+    } else if alt(&key, 'p') && in_chat {
+        Some(AppCommand::PermissionMode)
     } else if alt(&key, 'd') {
         Some(AppCommand::OpenDiff)
     } else if alt(&key, 'c') {
@@ -414,6 +416,7 @@ pub fn execute(app: &mut App, command: AppCommand, arg: Option<&str>) {
             }
         }
         AppCommand::ToggleAnswerMode => super::answer_mode::toggle(app),
+        AppCommand::PermissionMode => super::permission_mode::open(app),
         AppCommand::SelectModel => {
             let items = app
                 .models

@@ -23,6 +23,12 @@ pub enum PickerAction {
     /// Sets a page choice row to the option id.
     /// 将页面选项行设为该选项 ID。
     Choice(Edit, String),
+    /// Requests one session permission mode.
+    /// 请求一个会话权限模式。
+    PermissionMode(crate::model::PermissionMode),
+    /// Opens one system page.
+    /// 打开一个系统页面。
+    Page(super::pages::PageId),
 }
 
 #[derive(Debug, Clone)]

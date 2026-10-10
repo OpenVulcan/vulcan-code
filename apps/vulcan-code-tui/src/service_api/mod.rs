@@ -18,6 +18,7 @@ pub mod licenses;
 pub mod mcp_settings;
 pub mod memory_actions;
 pub mod permission_judge;
+pub mod permission_mode;
 pub mod project_actions;
 pub mod setter;
 pub mod settings_actions;

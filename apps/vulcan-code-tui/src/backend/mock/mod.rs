@@ -147,6 +147,9 @@ struct ConversationLog {
     /// Simulated session-owned answer mode, independent from the plan mode.
     /// 模拟的会话所有回答模式，独立于计划模式。
     answer_mode: AnswerModeSession,
+    /// Simulated saved permission mode.
+    /// 模拟的已保存权限模式。
+    permission_mode: PermissionMode,
     events: Vec<ConversationEvent>,
     next_seq: u64,
     pending_question: Option<PendingQuestion>,
@@ -884,6 +887,10 @@ impl World {
             conversation_id: id.clone(),
             state: answer_mode,
         });
+        self.emit(BackendEvent::PermissionMode {
+            conversation_id: id.clone(),
+            mode: log.permission_mode,
+        });
         self.emit(BackendEvent::PendingQuestion {
             conversation_id: id.clone(),
             question: log.pending_question.clone(),
@@ -912,6 +919,7 @@ impl World {
                     models: fixtures::models(),
                     selected_model_id: "claude-opus-5-5".into(),
                     ui_locale: None,
+                    permission_judge_state: None,
                     base_url: fixtures::BASE_URL.into(),
                 }));
                 self.emit(BackendEvent::Connection(ConnectionState::Connected));
@@ -993,6 +1001,16 @@ impl World {
 
     fn handle(&mut self, command: Command) {
         match command {
+            Command::SetSessionPermissionMode(request) => {
+                let Some(log) = self.logs.get_mut(&request.session_id) else {
+                    return;
+                };
+                log.permission_mode = request.mode;
+                self.emit(BackendEvent::PermissionMode {
+                    conversation_id: request.session_id,
+                    mode: request.mode,
+                });
+            }
             Command::SetSessionAnswerMode(request) => {
                 let Some(log) = self.logs.get_mut(&request.session_id) else {
                     return;

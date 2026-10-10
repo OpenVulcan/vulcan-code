@@ -34,6 +34,8 @@ use crate::service_api::{
 
 #[path = "answer_mode.rs"]
 mod answer_mode;
+#[path = "permission_mode.rs"]
+mod permission_mode;
 
 /// First reconnect delay; it doubles up to `RETRY_MAX`.
 /// 首次重连延迟；逐次翻倍直到 `RETRY_MAX`。
@@ -133,6 +135,9 @@ struct Window {
     /// Accepted answer mode for this window.
     /// 当前窗口接纳的回答模式。
     answer_mode: AnswerModeSession,
+    /// Saved permission mode of this window.
+    /// 当前窗口已保存的权限模式。
+    permission_mode: PermissionMode,
     /// Server event-document generation, distinct from the transport generation.
     /// 服务端事件文档代际，与传输代际独立。
     generation: u64,
@@ -153,6 +158,9 @@ struct Draft {
     /// Draft answer mode, copied from the global default and sent with the first submission.
     /// 草稿回答模式，复制自全局默认值并随首次提交发送。
     answer_mode: AnswerModePreference,
+    /// Explicit permission mode for the first submission; absent keeps the session default.
+    /// 首次提交的显式权限模式；缺省时保留会话默认值。
+    permission_mode: Option<PermissionMode>,
     /// Explicit project selection for the first accepted prompt.
     /// 首条被接受提示所使用的明确项目选择。
     project_id: Option<String>,
@@ -456,6 +464,7 @@ impl Worker {
         if let Some(id) = self.selected.clone() {
             if is_draft(&id) {
                 self.emit_answer_mode(&id);
+                self.emit_permission_mode(&id);
             } else {
                 self.hydrate(&id);
             }
@@ -803,6 +812,7 @@ impl Worker {
             models,
             selected_model_id,
             ui_locale: wb.ui_locale.clone(),
+            permission_judge_state: wb.permission_judge_state,
             base_url: self
                 .client
                 .as_ref()
@@ -1515,6 +1525,7 @@ impl Worker {
                 answer_mode: AnswerModeSession {
                     mode: Some(window.session_config.answer_mode.clone()),
                 },
+                permission_mode: window.session_config.permission_mode,
                 generation: window.batch.window_generation,
                 epoch,
                 memory_revision,
@@ -1522,6 +1533,7 @@ impl Worker {
             },
         );
         self.emit_answer_mode(id);
+        self.emit_permission_mode(id);
         // The next request's route wins over the current one once the user changed it.
         // 用户改过之后，下一次请求的路线优先于当前请求。
         let config = window.session_config;
@@ -1639,6 +1651,7 @@ impl Worker {
     fn handle(&mut self, command: Command) {
         match command {
             Command::SetSessionAnswerMode(request) => self.set_answer_mode(request),
+            Command::SetSessionPermissionMode(request) => self.set_permission_mode(request),
             Command::SelectConversation(id) => self.select(id),
             Command::NewConversation { project_id } => {
                 self.draft_serial += 1;
@@ -1653,6 +1666,7 @@ impl Worker {
                 // 本地待提交会话草稿。
                 let draft = Draft {
                     answer_mode: self.default_answer_mode(),
+                    permission_mode: None,
                     model_key: self
                         .selected
                         .as_ref()
@@ -1662,6 +1676,7 @@ impl Worker {
                 self.emit(BackendEvent::ConversationSummary(draft_row(&id, &draft)));
                 self.drafts.insert(id.clone(), draft);
                 self.emit_answer_mode(&id);
+                self.emit_permission_mode(&id);
                 self.emit(BackendEvent::Selected(id));
             }
             Command::SubmitConversationPrompt {
@@ -1949,6 +1964,7 @@ impl Worker {
                 events: Vec::new(),
             });
             self.emit_answer_mode(&id);
+            self.emit_permission_mode(&id);
             if let Some(key) = draft.model_key.clone() {
                 self.model_keys.insert(id, key);
             }
@@ -2099,7 +2115,10 @@ impl Worker {
             "executionMode": execution_mode,
             "reasoningEffort": effort_param,
             "modelSelection": model_selection,
-            "sessionSettings": self.drafts.get(&conversation_id).map(|draft| json!({ "answerMode": draft.answer_mode.mode })),
+            "sessionSettings": self.drafts.get(&conversation_id).map(|draft| json!({
+                "answerMode": draft.answer_mode.mode,
+                "permissionMode": draft.permission_mode,
+            })),
         });
         // Local id.
         // 本地会话草稿身份。

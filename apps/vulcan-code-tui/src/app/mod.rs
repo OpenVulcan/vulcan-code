@@ -25,6 +25,7 @@ mod model_list_tests;
 pub mod notice;
 pub mod overlay;
 pub mod pages;
+pub mod permission_mode;
 #[cfg(test)]
 mod plugin_settings_tests;
 mod preview;
@@ -215,6 +216,9 @@ pub struct SessionState {
     /// Last accepted answer mode.
     /// 最近接纳的回答模式。
     pub answer_mode: AnswerModeSession,
+    /// Last saved permission mode; `None` until the session or draft loads.
+    /// 最近保存的权限模式；会话或草稿加载前为 `None`。
+    pub permission_mode: Option<PermissionMode>,
     /// Blocks whose default fold state the user flipped, keyed by event seq.
     /// 用户翻转过默认折叠状态的块，以事件 seq 为键。
     pub toggled: HashSet<u64>,
@@ -246,6 +250,7 @@ impl SessionState {
             insight: SessionInsight::default(),
             mode: ExecutionMode::Build,
             answer_mode: AnswerModeSession::default(),
+            permission_mode: None,
             toggled: HashSet::new(),
             scroll_from_bottom: 0,
             selected: None,
@@ -535,6 +540,9 @@ pub struct App {
     pub conversations: Vec<ConversationSummary>,
     pub models: Vec<ModelInfo>,
     pub model_id: String,
+    /// Saved permission judge switch from the workbench; `None` needs setup.
+    /// 来自工作台的已保存权限判定开关；`None` 表示需要设定。
+    pub permission_judge_state: Option<JudgeState>,
     pub effort: ReasoningEffort,
     /// Efforts the current model accepts; `CycleReasoning` stays within them.
     /// 当前模型接受的推理强度；`CycleReasoning` 只在其中循环。
@@ -716,6 +724,7 @@ impl App {
             conversations: Vec::new(),
             models: Vec::new(),
             model_id: String::new(),
+            permission_judge_state: None,
             effort: ReasoningEffort::High,
             efforts: ReasoningEffort::ALL.to_vec(),
             base_url: String::new(),
@@ -1136,12 +1145,17 @@ impl App {
                 conversation_id,
                 state,
             } => self.session_for(&conversation_id).answer_mode = state,
+            BackendEvent::PermissionMode {
+                conversation_id,
+                mode,
+            } => self.session_for(&conversation_id).permission_mode = Some(mode),
             BackendEvent::Connection(state) => {
                 self.connection = state;
                 if state != ConnectionState::Connected {
                     self.call_pending = false;
                     for session in self.sessions.values_mut() {
                         session.answer_mode = AnswerModeSession::default();
+                        session.permission_mode = None;
                     }
                 }
                 if state == ConnectionState::Connected {
@@ -1153,6 +1167,7 @@ impl App {
                 self.conversations = snapshot.conversations;
                 self.models = snapshot.models;
                 self.model_id = snapshot.selected_model_id;
+                self.permission_judge_state = snapshot.permission_judge_state;
                 self.base_url = snapshot.base_url;
                 if !self.backend.is_mock && !self.base_url.is_empty() {
                     self.backend.label = self.base_url.clone();
@@ -1218,6 +1233,7 @@ impl App {
                 let session = self.session_for(&conversation_id);
                 session.events = events;
                 session.answer_mode = AnswerModeSession::default();
+                session.permission_mode = None;
                 session.events.sort_by_key(|e| e.seq);
                 session.hydrated = true;
             }

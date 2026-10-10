@@ -1200,6 +1200,8 @@ pub fn confirm_picker(app: &mut App, kind: PickerKind, action: PickerAction, fil
         }
         PickerAction::Area(area) => app.set_area(area),
         PickerAction::Choice(edit, id) => apply_edit(app, edit, SettingValue::Choice(id)),
+        PickerAction::PermissionMode(mode) => super::permission_mode::select(app, mode),
+        PickerAction::Page(page) => perform(app, UiAction::GoPage(page)),
     }
 }
 

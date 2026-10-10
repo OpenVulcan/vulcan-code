@@ -26,6 +26,9 @@ pub enum Command {
     /// Persist a session answer mode with the same compare-and-set contract as WebUI.
     /// 按与 WebUI 相同的比较交换契约持久化会话回答模式。
     SetSessionAnswerMode(vulcan_service_api::SessionAnswerModeUpdateRequest),
+    /// `setSessionPermissionMode`; a draft keeps the choice for its first submission.
+    /// 设置会话权限模式；草稿保留该选择供首次提交使用。
+    SetSessionPermissionMode(vulcan_service_api::SessionPermissionModeUpdateRequest),
     /// `selectConversation` (`service_select_conversation`), then `markConversationRead`.
     /// 选择会话，随后标记为已读。
     SelectConversation(ConversationId),
@@ -196,6 +199,12 @@ pub enum BackendEvent {
     AnswerMode {
         conversation_id: ConversationId,
         state: AnswerModeSession,
+    },
+    /// Replace the saved permission mode for the exact owning session or draft.
+    /// 为精确所属会话或草稿替换已保存的权限模式。
+    PermissionMode {
+        conversation_id: ConversationId,
+        mode: PermissionMode,
     },
     Connection(ConnectionState),
     /// `workbench` snapshot.

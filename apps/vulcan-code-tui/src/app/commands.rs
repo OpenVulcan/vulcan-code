@@ -10,6 +10,9 @@ pub enum AppCommand {
     /// Toggle the session-owned answer mode between standard and interactive.
     /// 在标准与互动之间切换会话所有的回答模式。
     ToggleAnswerMode,
+    /// Choose the session permission mode or open the permission judge settings.
+    /// 选择会话权限模式或打开权限判定设置。
+    PermissionMode,
     SelectModel,
     CycleReasoning,
     ToggleTheme,
@@ -42,13 +45,14 @@ pub enum AppCommand {
 }
 
 impl AppCommand {
-    pub const ALL: [AppCommand; 29] = [
+    pub const ALL: [AppCommand; 30] = [
         AppCommand::NewConversation,
         AppCommand::AddProject,
         AppCommand::Attach,
         AppCommand::History,
         AppCommand::TogglePlan,
         AppCommand::ToggleAnswerMode,
+        AppCommand::PermissionMode,
         AppCommand::SelectModel,
         AppCommand::CycleReasoning,
         AppCommand::OpenDiff,
@@ -81,6 +85,7 @@ impl AppCommand {
             AppCommand::NewConversation => "new",
             AppCommand::TogglePlan => "plan",
             AppCommand::ToggleAnswerMode => "answer-mode",
+            AppCommand::PermissionMode => "permissions",
             AppCommand::SelectModel => "model",
             AppCommand::CycleReasoning => "effort",
             AppCommand::ToggleTheme => "theme",
@@ -116,6 +121,7 @@ impl AppCommand {
             AppCommand::NewConversation => "Ctrl+N",
             AppCommand::TogglePlan => "Shift+Tab",
             AppCommand::ToggleAnswerMode => "Alt+H",
+            AppCommand::PermissionMode => "Alt+P",
             AppCommand::SelectModel => "Ctrl+O",
             AppCommand::CycleReasoning => "Ctrl+R",
             AppCommand::ToggleSidebar => "Ctrl+B",
@@ -139,6 +145,7 @@ impl AppCommand {
             AppCommand::NewConversation => tr!("projectMenu.newConversation"),
             AppCommand::TogglePlan => tr!("composer.planMode"),
             AppCommand::ToggleAnswerMode => tr!("answerMode.label"),
+            AppCommand::PermissionMode => tr!("permissionMode.label"),
             AppCommand::SelectModel => tr!("composer.modelPicker.tooltipTitle"),
             AppCommand::CycleReasoning => tr!("composer.reasoning.subtitle"),
             AppCommand::ToggleTheme => tr!("appChrome.theme"),

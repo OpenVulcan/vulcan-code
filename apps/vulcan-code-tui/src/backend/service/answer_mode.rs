@@ -116,6 +116,7 @@ mod tests {
                 generation: 8,
                 epoch: "synthetic".into(),
                 memory_revision: 20,
+                permission_mode: PermissionMode::WorkspaceWrite,
                 answer_mode: AnswerModeSession {
                     mode: Some(AnswerModePreference::default()),
                 },
@@ -162,6 +163,7 @@ mod tests {
             id.clone(),
             Draft {
                 answer_mode: AnswerModePreference::default(),
+                permission_mode: None,
                 project_id: None,
                 model_key: None,
             },

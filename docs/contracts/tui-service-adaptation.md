@@ -45,6 +45,12 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 全局默认通过 `settings_actions::save_prompt_answer_mode` 在设置页保存，设置页从工作台槽位的
 `defaultAnswerMode` 读取当前值；新草稿一次性复制该默认。
 
+会话权限模式通过 `service_api/permission_mode.rs` 镜像 WebUI 的 `service_set_session_permission_mode`；
+权威状态从会话 hydration 的 `session_config.permission_mode` 取得，只在服务回执确认后改变显示。草稿会话的
+显式选择随首次提交的 `sessionSettings.permissionMode` 一并发送，未选择时不发送值、保留会话默认。
+选择器中的权限判定入口读取工作台的 `permissionJudgeState`：未设定时提示需要设定，启用时显示状态，
+关闭时隐藏；入口只跳转到权限判定页面，不改写判定设置。
+
 | 页面 | 已适配交互 | 状态来源 |
 | --- | --- | --- |
 | 外观 | TUI 主题、侧栏、思考浮层；语言同步到服务 | 本地状态、Workbench |
@@ -173,6 +179,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `settings_actions::load_output_style_catalog` | loadOutputStyleCatalog | `service_output_style_catalog` |
 | `settings_actions::save_prompt_output_style` | savePromptOutputStyle | `service_save_prompt_output_style` |
 | `settings_actions::save_prompt_answer_mode` | savePromptAnswerMode | `service_save_prompt_answer_mode` |
+| `permission_mode::set_session_permission_mode` | setSessionPermissionMode | `service_set_session_permission_mode` |
 | `settings_actions::load_system_prompt_settings` | loadSystemPromptSettings | `service_system_prompt_settings` |
 | `settings_actions::save_system_prompt` | saveSystemPrompt | `service_save_system_prompt` |
 | `settings_actions::reset_system_prompt` | resetSystemPrompt | `service_reset_system_prompt` |

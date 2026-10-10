@@ -244,6 +244,22 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
             UiAction::App(AppCommand::ToggleAnswerMode),
         );
     }
+    // The saved permission mode opens the same choices as the WebUI settings menu.
+    // 已保存的权限模式打开与 WebUI 设置菜单相同的选项。
+    if let Some(mode) = app.session().and_then(|session| session.permission_mode) {
+        let chip = format!("⛨ {}", crate::app::permission_mode::label(mode));
+        if x + width_of(&chip) as u16 + 2 <= area.right() {
+            x += button(
+                app,
+                buf,
+                x,
+                area.y,
+                &chip,
+                button_style(app, ButtonKind::Normal, bg),
+                UiAction::App(AppCommand::PermissionMode),
+            );
+        }
+    }
     let attach = format!("⊕ {}", tr!("composer.attachment.add"));
     if x + width_of(&attach) as u16 + 24 < area.right() {
         x += button(

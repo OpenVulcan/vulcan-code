@@ -43,6 +43,7 @@ fn workbench(ids: &[&str], selected: Option<&str>) -> BackendEvent {
             .collect(),
         selected_conversation_id: selected.map(Into::into),
         models: Vec::new(),
+        permission_judge_state: None,
         selected_model_id: String::new(),
         ui_locale: None,
         base_url: String::new(),

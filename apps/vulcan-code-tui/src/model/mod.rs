@@ -14,6 +14,7 @@ pub mod insight;
 pub mod system;
 
 use serde_json::Value;
+pub use vulcan_service_api::JudgeState;
 pub use vulcan_session_core::v1::config::PermissionMode;
 
 pub use answer_mode::*;
@@ -146,6 +147,9 @@ pub struct WorkbenchSnapshot {
     pub models: Vec<ModelInfo>,
     pub selected_model_id: String,
     pub ui_locale: Option<String>,
+    /// Saved permission judge switch; `None` until the user decides.
+    /// 已保存的权限判定开关；用户决定前为 `None`。
+    pub permission_judge_state: Option<JudgeState>,
     /// Service base URL; `/web` opens the WebUI here.
     /// 服务基础 URL；`/web` 在此打开 WebUI。
     pub base_url: String,

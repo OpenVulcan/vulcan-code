@@ -23,7 +23,6 @@ use crate::app::hit::Target;
 use crate::app::{App, Focus};
 use crate::model::{
     ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval, PendingQuestion,
-    PermissionMode,
 };
 use crate::tr;
 
@@ -111,16 +110,6 @@ fn stepper(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {
     rows
 }
 
-/// Translated label of one permission mode.
-/// 单个权限模式的翻译标签。
-fn mode_label(mode: PermissionMode) -> String {
-    match mode {
-        PermissionMode::ReadOnly => tr!("permissionMode.readOnly"),
-        PermissionMode::WorkspaceWrite => tr!("permissionMode.workspaceWrite"),
-        PermissionMode::FullAccess => tr!("permissionMode.fullAccess"),
-    }
-}
-
 /// Translated label of one backend high-risk key; unknown keys show as sent.
 /// 单个后端高风险键的翻译标签；未知键按原样显示。
 fn risk_label(key: &str) -> String {
@@ -179,7 +168,7 @@ fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row
         &mut rows,
         tr!(
             "ask.approval.mode",
-            mode = mode_label(approval.permission_mode)
+            mode = crate::app::permission_mode::label(approval.permission_mode)
         ),
         theme.muted_text(),
     );
