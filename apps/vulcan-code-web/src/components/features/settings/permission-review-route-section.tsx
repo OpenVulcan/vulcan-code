@@ -57,7 +57,9 @@ export function permissionReviewCandidates(
 
 // PermissionReviewRouteSection selects the reviewing LLM route and its reasoning effort.
 // PermissionReviewRouteSection 选择复核 LLM 路由及其思考档位。
-export function PermissionReviewRouteSection() {
+// Parameters: `children` holds further review rows owned by the caller, shown after the route rows.
+// 参数：`children` 是调用方持有的其他复核行，显示在路由行之后。
+export function PermissionReviewRouteSection(props: { children?: React.ReactNode }) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [loadError, setLoadError] = React.useState("");
@@ -86,6 +88,7 @@ export function PermissionReviewRouteSection() {
           {t("settings.permissionJudge.review.loadFailed")}
         </PageNotice>
         : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={2} />}
+      {props.children}
     </PageSection>;
   }
 
@@ -160,6 +163,7 @@ export function PermissionReviewRouteSection() {
         </SelectContent>
       </Select>
     </PageRow> : null}
+    {props.children}
     {saveError
       ? <PageNotice tone="error" details={saveError} detailsLabel={t("settings.errors.showErrorDetails")}>
         {t("settings.permissionJudge.review.saveFailed")}
