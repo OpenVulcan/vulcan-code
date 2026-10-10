@@ -319,6 +319,7 @@ async fn snapshot(
             })
             .collect(),
         llm_may_allow_blocked: settings.llm_may_allow_blocked,
+        record_decisions: settings.record_decisions,
         models: settings
             .models
             .iter()
@@ -482,6 +483,7 @@ pub(crate) async fn service_save_permission_judge_settings(
         settings.device = request.device;
         settings.cuda_library_directory = cuda_library_directory;
         settings.llm_may_allow_blocked = request.llm_may_allow_blocked;
+        settings.record_decisions = request.record_decisions;
         Ok(())
     })
     .await?;
@@ -1031,7 +1033,19 @@ pub(crate) async fn judge_call(
 /// 在不阻塞闸门的情况下把一次已完成的闸门决定保存到判定记录；保存失败只写日志。
 pub(crate) fn record_decision(state: &SharedServiceBridgeState, decision: PermissionRecord) {
     let store = match state.lock() {
-        Ok(guard) => Arc::clone(&guard.permission_judge.records),
+        // Only the saved switch lets a decision reach the disk.
+        // 只有已保存的开关允许决定写入磁盘。
+        Ok(guard)
+            if guard.agent_runtime.as_ref().is_some_and(|runtime| {
+                runtime
+                    .provider_configuration
+                    .permission_judge
+                    .record_decisions
+            }) =>
+        {
+            Arc::clone(&guard.permission_judge.records)
+        }
+        Ok(_) => return,
         Err(error) => {
             tracing::warn!("failed to lock service state for the decision log: {error}");
             return;

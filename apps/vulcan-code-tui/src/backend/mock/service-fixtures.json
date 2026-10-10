@@ -1257,6 +1257,7 @@
         }
       ],
       "llmMayAllowBlocked": false,
+      "recordDecisions": true,
       "models": [
         {
           "id": "demo-judge-official",

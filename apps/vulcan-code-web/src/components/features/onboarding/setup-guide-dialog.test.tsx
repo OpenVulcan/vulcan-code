@@ -57,6 +57,7 @@ function snapshot(activeModelId: string | null, models = activeModelId ? [active
     state: null, backend: null, device: null, recommendedDevice: "cpu",
     devices: [{ device: "cpu", unavailableReason: null }],
     llmMayAllowBlocked: false,
+    recordDecisions: false,
     models: models.map((id) => ({ id, name: id, path: `D:/models/${id}`, knownPackageId: null, policyVersion: "1", precision: "fp16", totalBytes: 1, registeredAtMs: 1 })),
     activeModelId, previousModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
     cuda: {
@@ -109,7 +110,7 @@ it("saves the judge off for not now", async () => {
   await choose("off");
   await act(async () => buttonByKey("setupGuide.off.confirm")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "off", backend: null, device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false,
+    state: "off", backend: null, device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false,
   });
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
@@ -139,7 +140,7 @@ it("enables the local judge only after a registered model warms up", async () =>
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("model-a"), state: "enabled" });
   await act(async () => buttonByKey("setupGuide.local.confirm")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false,
+    state: "enabled", backend: "local", device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false,
   });
 });
 

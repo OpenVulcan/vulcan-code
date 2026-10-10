@@ -157,6 +157,7 @@ export interface PermissionJudgeSettingsSnapshot {
   recommendedDevice: JudgeDevice | null;
   devices: PermissionJudgeDeviceSummary[];
   llmMayAllowBlocked: boolean;
+  recordDecisions: boolean;
   models: PermissionJudgeModelSummary[];
   activeModelId: string | null;
   previousModelId: string | null;
@@ -175,6 +176,7 @@ export interface PermissionJudgeSettingsSaveRequest {
   device: JudgeDevice | null;
   cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
+  recordDecisions: boolean;
 }
 
 // PermissionJudgeBenchmarkResult is one speed test, kept only on the page that ran it.
