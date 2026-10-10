@@ -354,6 +354,8 @@ pub fn save_public_ai_provider_extension_target_set(
 /// `operation` 为准确声明的推理操作。
 /// `route` is the catalog route object; Null explicitly removes the route.
 /// `route` 为目录路由对象；Null 明确移除路由。
+/// `reasoning_effort` is the explicit LLM reasoning effort; None follows the model default.
+/// `reasoning_effort` 为明确的 LLM 思考档位；None 跟随模型默认值。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
 pub fn save_public_ai_inference_route(
@@ -361,6 +363,7 @@ pub fn save_public_ai_inference_route(
     purpose_id: Option<&str>,
     operation: &str,
     route: Value,
+    reasoning_effort: Option<&str>,
 ) -> ServiceCall {
     // Exact protocol request.
     // 协议请求文档。
@@ -371,6 +374,9 @@ pub fn save_public_ai_inference_route(
     });
     if let Some(purpose) = purpose_id {
         request["purposeId"] = json!(purpose);
+    }
+    if let Some(effort) = reasoning_effort {
+        request["reasoningEffort"] = json!(effort);
     }
     ServiceCall::mutate(
         "save_public_ai_inference_route",

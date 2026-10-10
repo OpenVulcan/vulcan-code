@@ -654,6 +654,30 @@
             }
           },
           "catalogGeneration": 1
+        },
+        {
+          "providerDisplayName": "Demo Provider",
+          "serviceEntryDisplayName": "Demo API",
+          "connectionDisplayName": "Demo Account",
+          "modelDisplayName": "demo-decision",
+          "route": {
+            "provider_id": "demo-provider",
+            "service_entry_id": "demo-api",
+            "connection_id": "demo-connection",
+            "binding": {
+              "kind": "action",
+              "action_binding_id": "system_one"
+            },
+            "usage_scope": "internal_background",
+            "model_id": "demo-decision",
+            "operation": "decision_evaluate"
+          },
+          "enabled": true,
+          "usageScopes": [
+            "internal_background"
+          ],
+          "capabilities": {},
+          "catalogGeneration": 1
         }
       ],
       "inferenceProfiles": {
@@ -1213,6 +1237,146 @@
       "authStatus": "not_authenticated",
       "statusError": null,
       "flow": null
+    },
+    "service_permission_judge_settings": {
+      "state": "enabled",
+      "backend": "local",
+      "device": "webgpu",
+      "recommendedDevice": "webgpu",
+      "devices": [
+        {
+          "device": "cuda",
+          "unavailableReason": "driver_missing"
+        },
+        {
+          "device": "webgpu",
+          "unavailableReason": null
+        },
+        {
+          "device": "cpu",
+          "unavailableReason": null
+        }
+      ],
+      "llmMayAllowBlocked": false,
+      "models": [
+        {
+          "id": "demo-judge-official",
+          "name": "Demo Judge",
+          "path": "D:/demo/models/judge-fp16",
+          "knownPackageId": "demo-judge",
+          "policyVersion": "fixed-options-no-intent-v2-critical-writes",
+          "precision": "fp16",
+          "totalBytes": 1288490188,
+          "registeredAtMs": 1760000000000
+        },
+        {
+          "id": "demo-judge-custom",
+          "name": "Custom Judge",
+          "path": "D:/demo/models/judge-custom",
+          "knownPackageId": null,
+          "policyVersion": "fixed-options-no-intent-v2-critical-writes",
+          "precision": "int8",
+          "totalBytes": 402653184,
+          "registeredAtMs": 1760000100000
+        }
+      ],
+      "activeModelId": "demo-judge-official",
+      "previousModelId": "demo-judge-custom",
+      "knownPackages": [
+        {
+          "id": "demo-judge",
+          "displayName": "Demo Judge"
+        }
+      ],
+      "policyOptions": [],
+      "activeModelIssue": null,
+      "cuda": {
+        "platform": "windows",
+        "supported": true,
+        "cudaMajor": 12,
+        "minimumDriverMajor": 525,
+        "driver": null,
+        "driverError": "driver not found",
+        "requiredLibraries": [
+          "cudart64_12.dll",
+          "cublas64_12.dll"
+        ],
+        "onnxruntimeDirectory": null,
+        "detectedDirectories": [
+          {
+            "source": "toolkit",
+            "directory": "C:/demo/cuda/bin"
+          }
+        ],
+        "lockedDirectory": null,
+        "lockedDirectoryMissing": [],
+        "archives": [
+          {
+            "component": "onnxruntime",
+            "name": "onnxruntime-gpu-demo.zip",
+            "url": "https://example.invalid/onnxruntime-gpu-demo.zip",
+            "size": 251658240
+          }
+        ],
+        "links": [
+          {
+            "id": "nvidia_driver",
+            "url": "https://example.invalid/driver"
+          }
+        ]
+      },
+      "status": {
+        "worker": {
+          "phase": "ready",
+          "modelId": "demo-judge-official",
+          "device": "webgpu",
+          "error": null,
+          "processId": 4242,
+          "verifyMs": 120.5,
+          "loadMs": 840.0,
+          "warmupMs": 310.2,
+          "workingSetBytes": 734003200,
+          "privateBytes": 612368384,
+          "gpuDedicatedBytes": 1288490188,
+          "gpuSharedBytes": 104857600,
+          "gpuUtilizationPercent": 12.0,
+          "evaluations": 37,
+          "recentP50Ms": 18.4,
+          "recentP95Ms": 31.9
+        },
+        "cudaInstall": null
+      }
+    },
+    "service_permission_judge_status": {
+      "worker": {
+        "phase": "ready",
+        "modelId": "demo-judge-official",
+        "device": "webgpu",
+        "error": null,
+        "processId": 4242,
+        "verifyMs": 120.5,
+        "loadMs": 840.0,
+        "warmupMs": 310.2,
+        "workingSetBytes": 734003200,
+        "privateBytes": 612368384,
+        "gpuDedicatedBytes": 1288490188,
+        "gpuSharedBytes": 104857600,
+        "gpuUtilizationPercent": 12.0,
+        "evaluations": 37,
+        "recentP50Ms": 18.4,
+        "recentP95Ms": 31.9
+      },
+      "cudaInstall": null
+    },
+    "service_benchmark_permission_judge": {
+      "device": "webgpu",
+      "modelId": "demo-judge-official",
+      "batchSize": 10,
+      "rounds": 5,
+      "p50Ms": 42.0,
+      "p95Ms": 47.5,
+      "perItemMs": 4.2,
+      "itemsPerSecond": 238.1
     }
   },
   "memory": {

@@ -62,6 +62,9 @@ const PROVIDER_TASK_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Re-read an MCP sign-in while its flow waits for the browser or exchanges the code.
 /// MCP 登录流程等待浏览器或交换授权码期间重新读取其状态。
 const MCP_OAUTH_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// How often the permission judge's live status refreshes while its page is open.
+/// 权限判定页打开期间实时状态的刷新间隔。
+const PERMISSION_JUDGE_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -1110,6 +1113,9 @@ impl App {
                 Some("awaiting_callback" | "exchanging")
             )
             .then_some(MCP_OAUTH_POLL_INTERVAL),
+            // Memory, GPU use and latency keep changing, so the status is read while shown.
+            // 内存、GPU 占用与延迟持续变化，因此状态在显示期间持续读取。
+            Slot::PermissionJudgeStatus => Some(PERMISSION_JUDGE_STATUS_POLL_INTERVAL),
             _ => return,
         };
         match interval {
@@ -1398,8 +1404,23 @@ impl App {
                         self.slots.at(slot, "/state").as_str(),
                         Some("queued" | "running")
                     );
+                // A finished CUDA installation changes detection, so the settings are re-read.
+                // CUDA 安装结束会改变探测结果，因此重新读取设置。
+                let was_installing = slot == crate::service_api::Slot::PermissionJudgeStatus
+                    && self.slots.at(slot, "/cudaInstall/running")
+                        == &serde_json::Value::Bool(true);
                 self.slot_errors.remove(&slot);
                 self.slots.set(slot, call, value);
+                if was_installing
+                    && self.slots.at(slot, "/cudaInstall/running") != &serde_json::Value::Bool(true)
+                {
+                    action::perform(
+                        self,
+                        action::UiAction::Send(Command::Call(
+                            crate::service_api::permission_judge::load_permission_judge_settings(),
+                        )),
+                    );
+                }
                 match slot {
                     crate::service_api::Slot::PluginData(index) => {
                         self.plugin_loaded_at

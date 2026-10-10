@@ -17,6 +17,7 @@ pub mod knowledge_base;
 pub mod licenses;
 pub mod mcp_settings;
 pub mod memory_actions;
+pub mod permission_judge;
 pub mod project_actions;
 pub mod setter;
 pub mod settings_actions;
@@ -179,6 +180,15 @@ pub enum Slot {
     /// `readPluginTextAsset` of the open header document.
     /// 当前打开的标题区文档的 `readPluginTextAsset`。
     PluginAsset,
+    /// `loadPermissionJudgeSettings`
+    /// 权限判定设置页快照。
+    PermissionJudgeSettings,
+    /// `loadPermissionJudgeStatus`, polled while the permission judge page is open.
+    /// 权限判定页打开期间轮询的实时状态。
+    PermissionJudgeStatus,
+    /// The latest `benchmarkPermissionJudge` result of this page; never saved.
+    /// 本页最近一次 `benchmarkPermissionJudge` 结果；不会持久化。
+    PermissionJudgeBenchmark,
 }
 
 impl Slot {

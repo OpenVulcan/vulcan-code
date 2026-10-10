@@ -145,7 +145,7 @@ fn select_route(context: &Value, value: &SettingValue) -> Option<ServiceCall> {
     // 准确背景推理用途。
     let purpose = context.get("purpose")?.as_str();
     Some(settings::save_public_ai_inference_route(
-        consumer, purpose, operation, selected,
+        consumer, purpose, operation, selected, None,
     ))
 }
 

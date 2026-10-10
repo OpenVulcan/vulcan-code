@@ -1134,8 +1134,17 @@ impl FakeService {
                     [string(request, "/consumerProfileId")?];
                 match string(request, "/operation")? {
                     "conversation_respond" => {
-                        profile["llm_routes"][string(request, "/purposeId")?] =
-                            required(request, "/route")?.clone()
+                        // Purpose.
+                        // 准确背景推理用途。
+                        let purpose = string(request, "/purposeId")?;
+                        profile["llm_routes"][purpose] = required(request, "/route")?.clone();
+                        profile["llm_reasoning_efforts"][purpose] = request
+                            .get("reasoningEffort")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                    }
+                    "decision_evaluate" => {
+                        profile["decision"] = required(request, "/route")?.clone()
                     }
                     "embedding_create" => {
                         profile["embedding"] = required(request, "/route")?.clone();
@@ -1146,6 +1155,19 @@ impl FakeService {
                     "rerank_documents" => profile["rerank"] = required(request, "/route")?.clone(),
                     _ => return Err("Unknown inference operation".into()),
                 }
+            }
+            "service_save_permission_judge_settings" => {
+                // Exact protocol request.
+                // 协议请求文档。
+                let request = required(params, "/request")?;
+                // Settings snapshot fixture.
+                // 设置快照夹具。
+                let snapshot = &mut self.loads["service_permission_judge_settings"];
+                for field in ["state", "backend", "device", "llmMayAllowBlocked"] {
+                    snapshot[field] = required(request, &format!("/{field}"))?.clone();
+                }
+                snapshot["cuda"]["lockedDirectory"] =
+                    required(request, "/cudaLibraryDirectory")?.clone();
             }
             "service_save_luaskills_runtime_settings" => {
                 self.workbench["luaSkills"]["runtimeSettings"] =
