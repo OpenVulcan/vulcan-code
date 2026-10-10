@@ -31,8 +31,8 @@ async fn binding_action(
     .expect("actual management binding action");
 }
 
-/// Reject an enable plan after a real management action makes a previously covered host unbound.
-/// 真实管理动作使此前已覆盖宿主变为未绑定后，拒绝旧启用计划。
+/// Reject a reviewed enable plan after a real management action unbinds another host.
+/// 真实管理动作解绑另一个宿主后，拒绝已审查的旧启用计划。
 /// Takes the actual service, private configuration path, real data plane and exact existing host/owner IDs.
 /// 接收实际服务、私有配置路径、真实数据面以及准确已有宿主与所有者标识。
 /// Returns after verifying rejection has no save side effects and a fresh explicit binding succeeds.
@@ -53,15 +53,56 @@ pub(super) async fn verify(
     // All current host projects have actual bindings when this scenario starts.
     // 此场景开始时，全部当前宿主项目已有实际绑定。
     let before = crate::provider_configuration_from_state(state).expect("binding review before");
-    // Activation, not ordinary tuning, requires complete unbound-project coverage.
-    // 启用而非普通调参要求完整覆盖未绑定项目。
+    // An explicit plan requires complete unbound-project coverage even when resuming the same backend.
+    // 即使恢复同一后端，显式计划也要求完整覆盖未绑定项目。
     let mut disable = request(&before.vmm);
     disable.draft.enabled = false;
     save(state, &app, path, disable)
         .await
         .expect("disable before binding review");
-    // The old empty plan genuinely passed the actual native catalog preflight.
-    // 旧空计划确实通过实际原生目录预检。
+    binding_action(
+        state,
+        &app,
+        "native_project_unbind",
+        serde_json::json!({ "vulcanProjectId": host_id }),
+    )
+    .await;
+    // The second host is another fixture project bound to the same owner, resolved from the live catalog.
+    // 第二个宿主取自活动目录中另一个绑定到同一所有者的夹具项目。
+    let host_ids = state
+        .lock()
+        .expect("lock native binding review fixture")
+        .workspace_snapshot
+        .as_ref()
+        .expect("native binding review fixture value")
+        .task_projects
+        .iter()
+        .map(|project| project.id.clone())
+        .filter(|id| id != host_id)
+        .collect::<Vec<_>>();
+    let mut other_host_id = None;
+    for id in host_ids {
+        // Only a host already owned by the fixture owner can be restored by the same plan target.
+        // 只有已归属夹具所有者的宿主才能由同一计划目标恢复。
+        if data_plane
+            .resolve_project_access(&id)
+            .await
+            .is_ok_and(|access| access.owner.id == project_id)
+        {
+            other_host_id = Some(id);
+            break;
+        }
+    }
+    let other_host_id = other_host_id.expect("fixture has another bound host project");
+    // The reviewed plan covers exactly the one unbound host and genuinely passes native preflight.
+    // 已审查计划恰好覆盖唯一未绑定宿主，并确实通过原生预检。
+    let mut reviewed = request(&before.vmm);
+    reviewed.binding_plan = vec![VmmProjectBindingPlanEntry {
+        vulcan_project_id: host_id.to_owned(),
+        action: "bind_existing".to_owned(),
+        project_name: None,
+        target_project_id: Some(project_id),
+    }];
     let pause = Arc::new(GlobalSavePause::default());
     // Own the paused request so assertion failures cannot leave a detached writer behind.
     // 持有暂停请求，避免断言失败后遗留脱离管理的写入器。
@@ -70,20 +111,25 @@ pub(super) async fn verify(
         path.to_owned(),
         GLOBAL_SAVE_PREFLIGHT_PAUSE.scope(
             pause.clone(),
-            crate::service_save_vmm_memory_config(app.clone(), state.clone(), request(&before.vmm)),
+            crate::service_save_vmm_memory_config(app.clone(), state.clone(), reviewed),
         ),
     ));
     tokio::time::timeout(std::time::Duration::from_secs(30), pause.entered.notified())
         .await
-        .expect("old plan passed actual preflight");
+        .expect("reviewed plan passed actual preflight");
     binding_action(
         state,
         &app,
         "native_project_unbind",
-        serde_json::json!({ "vulcanProjectId": host_id }),
+        serde_json::json!({ "vulcanProjectId": other_host_id }),
     )
     .await;
-    assert!(data_plane.resolve_project_access(host_id).await.is_err());
+    assert!(
+        data_plane
+            .resolve_project_access(&other_host_id)
+            .await
+            .is_err()
+    );
     // Capture only after the independent management operation has completed its legitimate projections.
     // 仅在独立管理操作完成其合法投影后捕获状态。
     let disabled = crate::provider_configuration_from_state(state).expect("disabled after unbind");
@@ -118,7 +164,7 @@ pub(super) async fn verify(
             .vmm
             .enabled,
         Some(false),
-        "an old empty plan must not enable VMM after a reviewed host becomes unbound"
+        "a reviewed plan must not enable VMM after another host becomes unbound"
     );
     assert!(
         stale
@@ -146,28 +192,33 @@ pub(super) async fn verify(
         event_count
     );
     assert_configuration(path, state, &disabled);
-    // The new user decision covers the newly unbound host by its exact stable identity.
-    // 新用户决定按准确稳定身份覆盖刚变为未绑定的宿主。
+    // The new user decision covers both unbound hosts by their exact stable identities.
+    // 新用户决定按准确稳定身份覆盖两个未绑定宿主。
     let mut enable = request(&disabled.vmm);
     enable.draft.enabled = true;
-    enable.binding_plan = vec![VmmProjectBindingPlanEntry {
-        vulcan_project_id: host_id.to_owned(),
-        action: "bind_existing".to_owned(),
-        project_name: None,
-        target_project_id: Some(project_id),
-    }];
+    enable.binding_plan = [host_id, other_host_id.as_str()]
+        .into_iter()
+        .map(|id| VmmProjectBindingPlanEntry {
+            vulcan_project_id: id.to_owned(),
+            action: "bind_existing".to_owned(),
+            project_name: None,
+            target_project_id: Some(project_id),
+        })
+        .collect();
     save(state, &app, path, enable)
         .await
         .expect("fresh explicit binding review");
-    assert_eq!(
-        data_plane
-            .resolve_project_access(host_id)
-            .await
-            .expect("native binding review fixture value")
-            .owner
-            .id,
-        project_id
-    );
+    for id in [host_id, other_host_id.as_str()] {
+        assert_eq!(
+            data_plane
+                .resolve_project_access(id)
+                .await
+                .expect("native binding review fixture value")
+                .owner
+                .id,
+            project_id
+        );
+    }
     assert_configuration(path, state, &before);
     verify_concurrent_binding_is_preserved(state, &app, path, data_plane, host_id, project_id)
         .await;

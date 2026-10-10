@@ -506,8 +506,8 @@ pub(super) async fn verify(
                 .await
                 .is_err()
         );
-        // Remove one binding explicitly so enablement must validate an actual required decision.
-        // 明确移除一个绑定，使启用必须校验一项真实必需决定。
+        // Remove one binding explicitly so resume and explicit reconciliation observe an unbound project.
+        // 明确移除一个绑定，使恢复与显式对账都面对一个未绑定项目。
         maintenance
             .unbind_project(&host_id)
             .await
@@ -529,13 +529,20 @@ pub(super) async fn verify(
             .lock()
             .expect("lock global VMM save fixture")
             .len();
-        // The canonical enable request intentionally omits the mandatory unbound-project decision.
-        // 规范启用请求有意省略必需的未绑定项目决定。
+        // An explicit plan that does not exactly cover the unbound projects is rejected before persistence.
+        // 未准确覆盖未绑定项目的显式计划会在持久化前被拒绝。
         let mut enabled = request(&original.vmm);
+        let mut mismatched = enabled.clone();
+        mismatched.binding_plan = vec![VmmProjectBindingPlanEntry {
+            vulcan_project_id: String::from("project-not-in-workspace"),
+            action: "bind_existing".to_owned(),
+            project_name: None,
+            target_project_id: Some(project_id),
+        }];
         assert!(
-            save(&state, &app, &path, enabled.clone())
+            save(&state, &app, &path, mismatched)
                 .await
-                .expect_err("missing plan")
+                .expect_err("mismatched plan")
                 .contains("准确覆盖")
         );
         assert_eq!(
@@ -563,6 +570,23 @@ pub(super) async fn verify(
                 .expect("global VMM save fixture value"),
             None
         );
+        // Resuming the same configured backend needs no plan and leaves the unbound project unbound.
+        // 恢复同一已配置后端无需计划，且保持未绑定项目不被绑定。
+        save(&state, &app, &path, enabled.clone())
+            .await
+            .expect("resume without plan");
+        assert_configuration(&path, &state, &original);
+        assert_eq!(
+            hook.global_memory_mode()
+                .expect("global VMM save fixture value"),
+            Some(vulcan_vmm::VmmBackendMode::Native)
+        );
+        assert!(
+            data_plane.resolve_project_access(&host_id).await.is_err(),
+            "resume must not rebind an explicitly unbound project"
+        );
+        // An explicit plan on the same backend reconciles the unbound project.
+        // 同一后端上的显式计划会对账未绑定项目。
         enabled.binding_plan = vec![VmmProjectBindingPlanEntry {
             vulcan_project_id: host_id.clone(),
             action: "bind_existing".to_owned(),
@@ -571,7 +595,7 @@ pub(super) async fn verify(
         }];
         save(&state, &app, &path, enabled)
             .await
-            .expect("explicit real enable");
+            .expect("explicit binding plan");
         assert_configuration(&path, &state, &original);
         assert_eq!(
             hook.global_memory_mode()
@@ -593,7 +617,7 @@ pub(super) async fn verify(
                 .expect("global VMM save fixture value")
                 .active_leases
                 .is_empty(),
-            "enable must not resurrect old recall"
+            "resume must not resurrect old recall"
         );
         drop(
             maintenance
@@ -627,13 +651,13 @@ pub(super) async fn verify(
                 .iter()
                 .filter(|event| matches!(event, ServiceEvent::Workbench(_)))
                 .count(),
-            7
+            8
         );
         assert_eq!(captured.iter().filter(|event| matches!(event,
             ServiceEvent::WorkbenchDelta(envelope) if matches!(&envelope.delta,
                 WorkbenchDelta::ProjectSettingsChanged(changed)
                 if changed.project_id.is_none() && changed.domain == ProjectSettingsDomain::Vmm)
-        )).count(), 7);
+        )).count(), 8);
     })
     .catch_unwind()
     .await;
