@@ -49,3 +49,25 @@
 
 - 不记忆回合照常显示并标注“不记忆”；锁定、解锁通知显示为时间线标记。
 - 基础提示词在时间线开头以用户消息样式显示，并标注其实际作为系统提示词发送。
+
+### WebUI
+
+- **新建入口**：侧栏项目分组提供全局“新建对话”按钮；草稿输入区上方的标签行选择项目、会话种类（工作模式 /
+  专职助手）与工具开放方式（无工具 / 有工具）。种类与工具开放方式只在首次提交前可改，提交挂起时全部冻结。
+- **创建向导**：选择专职助手后输入区替换为顺序向导（`components/composer/dedicated/`）：知识库、回答模式、
+  输出风格、需求描述、基础提示词、记忆方式。向导状态按本地草稿身份保存，更换项目时保留进度，但会剔除不属于
+  新项目的知识库选择。起草与优化使用输入区当前选中的精确模型；最后一步选择“立即锁定”或“先对话几轮再锁定”，
+  以基础提示词作为首轮输入提交 `sessionSettings.dedicated`。基础提示词长度只由服务端校验，WebUI 不复制上限。
+- **已创建会话**：输入区上方显示记忆锁定条，回合进行中禁用切换。创建时冻结的设置在菜单中直接隐藏（Goal、
+  Plan、回答模式、输出风格、知识库、VMM、供应商工具与 AI 能力开关），`none` 另隐藏权限模式，不提供会被服务
+  拒绝的操作。
+- **实时锁定状态**：事件窗口的 `session_config` 只在加载时更新，因此生效区间由加载时的
+  `session_config.dedicated.locked_spans` 加上其最后端点之后到达的 `memory_locked` / `memory_unlocked` 通知
+  派生（`service/dedicated-memory.ts`）；判定规则与上文“不记忆回合”一致，当前开放回合从不标注。
+- 错误按稳定错误码本地化，文案位于共享目录 `crates/vulcan-i18n/catalogs/webui/` 的 `composer.draft.*`、
+  `composer.dedicated.*` 与 `conversation.dedicated*` 键。
+
+### TUI
+
+- TUI 不提供创建或锁定入口；锁定、解锁通知以共享键 `conversation.dedicatedNotice.locked` / `.unlocked`
+  显示在记录区（`backend/service/map.rs`），不显示原始 `reason_code`。

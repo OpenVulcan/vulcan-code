@@ -588,10 +588,7 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
         },
         CoreEvent::DisplayNote(note) => EventBody::DisplayNote {
             severity: note.severity,
-            message: note
-                .redacted_detail
-                .clone()
-                .unwrap_or_else(|| note.reason_code.clone()),
+            message: display_note_message(note),
         },
         CoreEvent::TurnStats(stats) => EventBody::TurnStats {
             outcome: stats.outcome,
@@ -608,6 +605,21 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
         updated_at_ms: millis(summary.updated_at_ms),
         body,
     })
+}
+
+/// Text of one display note; dedicated memory lock changes use the shared timeline wording.
+/// 一条展示通知的文本；专职记忆锁定变化使用共享时间线文案。
+fn display_note_message(note: &core::DisplayNoteEvent) -> String {
+    match note.notice_kind {
+        core::DisplayNoticeKind::MemoryLocked => crate::tr!("conversation.dedicatedNotice.locked"),
+        core::DisplayNoticeKind::MemoryUnlocked => {
+            crate::tr!("conversation.dedicatedNotice.unlocked")
+        }
+        _ => note
+            .redacted_detail
+            .clone()
+            .unwrap_or_else(|| note.reason_code.clone()),
+    }
 }
 
 // ---- Git ----
