@@ -34,8 +34,8 @@ use crate::v1::projection::validate_system_context_event;
 use crate::v1::budget::ProviderRequestBudgetEvidence;
 #[cfg(test)]
 use crate::v1::config::{
-    DraftState, GoalConfig, GoalState, KnowledgeLibrarySelectionConfig,
-    KnowledgeLibrarySelectionMode, VmmSessionPolicyConfig,
+    DraftState, GoalConfig, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode,
+    VmmSessionPolicyConfig,
 };
 #[cfg(test)]
 use crate::v1::context::{LockedBaselineProjection, RuntimeInitializationState};

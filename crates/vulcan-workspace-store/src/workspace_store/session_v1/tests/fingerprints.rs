@@ -99,7 +99,7 @@ fn fingerprint_disk_reload_draft_save_and_next_api() {
         serde_json::to_vec(load_session(&layout).unwrap().document.events()).unwrap(),
         original_events
     );
-    let (loaded, _) = super::super::loader::load_session_tail_for_runtime(&layout).unwrap();
+    let (loaded, _) = load_session_tail_only(&layout).unwrap();
     let mut loaded = loaded.document;
     assert_eq!(loaded.memory_revision(), loaded.durable_revision());
     loaded.set_draft("next question", vec![], 11).unwrap();

@@ -409,12 +409,12 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
         media_understanding_selections: vec![ProviderMediaUnderstandingSelection {
             capability: "image_understanding".to_string(),
             mode: ProviderMediaUnderstandingMode::ProviderTool,
-            selection: Some(ProviderMediaUnderstandingRouteConfig::ProviderTool(
+            selection: ProviderMediaUnderstandingRouteConfig::ProviderTool(
                 ProviderToolTargetConfig {
                     connection_id: "connection-c".to_string(),
                     target_id: "image-understand-a".to_string(),
                 },
-            )),
+            ),
             reasoning_effort: None,
         }],
         extension_target_sets: vec![ProviderExtensionTargetSetConfig {

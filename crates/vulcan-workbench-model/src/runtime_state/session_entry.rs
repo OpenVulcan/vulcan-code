@@ -25,7 +25,7 @@ pub enum SessionMediaUnderstandingReasoningEffort {
     High,
     /// Uses an extra-high reasoning effort.
     /// 使用超高推理档位。
-    #[serde(rename = "xhigh", alias = "x_high", alias = "x-high")]
+    #[serde(rename = "xhigh", alias = "x-high")]
     XHigh,
     /// Uses the provider-declared maximum reasoning effort.
     /// 使用供应商声明的最大推理档位。

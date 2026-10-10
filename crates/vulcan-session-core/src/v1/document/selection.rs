@@ -110,7 +110,7 @@ fn validate_provider_media_understanding_selections(
         match (&selection.mode, &selection.selection) {
             (
                 ProviderMediaUnderstandingMode::ProviderTool,
-                Some(ProviderMediaUnderstandingRouteConfig::ProviderTool(target)),
+                ProviderMediaUnderstandingRouteConfig::ProviderTool(target),
             ) => {
                 validate_required_selection_component(
                     "provider_tools.media_understanding_selections.selection.connection_id",
@@ -123,7 +123,7 @@ fn validate_provider_media_understanding_selections(
             }
             (
                 ProviderMediaUnderstandingMode::ModelReplacement,
-                Some(ProviderMediaUnderstandingRouteConfig::ModelReplacement(target)),
+                ProviderMediaUnderstandingRouteConfig::ModelReplacement(target),
             ) => {
                 validate_required_selection_component(
                     "provider_tools.media_understanding_selections.selection.provider_id",
@@ -137,10 +137,6 @@ fn validate_provider_media_understanding_selections(
                     "provider_tools.media_understanding_selections.selection.connection_id",
                     &target.connection_id,
                 )?;
-            }
-            (_, None) => {
-                // Mode-only entries remain readable solely as a migration boundary and are ignored by runtime projection.
-                // 只含模式的条目仅作为迁移边界保持可读，并会被运行时投影忽略。
             }
             _ => {
                 return Err(DomainError::InvalidSelectionConfiguration {

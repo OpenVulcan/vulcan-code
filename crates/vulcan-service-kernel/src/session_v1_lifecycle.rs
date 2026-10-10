@@ -1124,18 +1124,10 @@ pub(crate) async fn get_or_load_session_v1(
             // its interrupted projection must become durable before publication.
             // document 在重启后可能包含一个已持久化的在途 API；其中断投影必须在发布前落盘。
             let mut document = loaded.document;
-            // A corrected legacy tail must be durable even when no running API needs interruption.
-            // 即使没有运行中的 API 需要中断，纠正后的旧尾段也必须可靠落盘。
-            let recovered_goal_owners = document.memory_revision() != document.durable_revision();
             let projected = document.project_persisted_interruptions()?;
             let handle = SessionHandle::new(session_id, loaded.locator, document);
-            if projected > 0 || recovered_goal_owners {
+            if projected > 0 {
                 handle.flush_all()?;
-            }
-            if recovered_goal_owners {
-                tracing::info!(
-                    "[webui-service] recovered persisted Goal event ownership: session={session_id}"
-                );
             }
             handle.initialize_root_usage(false, 0);
             Ok(handle)

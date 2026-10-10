@@ -1,5 +1,5 @@
-//! Narrow recovery of proven Goal ownership defects and pre-API terminal failures.
-//! 对已证实的目标归属缺陷和 API 前终态失败进行窄范围恢复。
+//! Recovery of unowned executions and pre-API terminal failures.
+//! 无所有者执行与 API 前终态失败的恢复。
 
 use super::*;
 use crate::v1::collaboration::{
@@ -107,94 +107,6 @@ impl SessionDocument {
             )?;
             document.submit_root_input(submission, now_ms)
         })
-    }
-
-    /// Restores loaded parts, correcting only paired legacy goal edits in the mutable tail.
-    /// 恢复已加载部件，仅纠正可写尾段内成对的旧目标编辑事件。
-    /// Inputs are the same exact parts as `from_parts`; returns a strictly validated dirty candidate.
-    /// 输入与 `from_parts` 相同；返回经过严格校验的待持久化候选。
-    /// No event is deleted or resequenced; the caller must flush before publishing the owner.
-    /// 不删除事件或重排序号；调用方必须在发布 owner 前完成 flush。
-    pub fn from_parts_with_goal_owner_recovery(
-        metadata: MetadataDocument,
-        runtime_lock: RuntimeLock,
-        compactions: Vec<CompactionNode>,
-        segment_catalog: Vec<SegmentInfo>,
-        mut events: Vec<ConversationEvent>,
-    ) -> Result<Self, DomainError> {
-        // Sealed history is immutable; automatic correction is limited to the published active tail.
-        // 封口历史不可变；自动纠正仅限已发布的活动尾段。
-        let tail_start = segment_catalog
-            .last()
-            .filter(|segment| segment.end_seq.is_none())
-            .map(|segment| segment.start_seq);
-        // closed tracks terminal facts, not guessed ownership from numeric IDs.
-        // closed 跟踪终态事实，不从数字 ID 猜测归属。
-        let mut closed = BTreeSet::new();
-        // corrected is the exact event patch that the writer must publish atomically.
-        // corrected 是写入器必须原子发布的精确事件补丁。
-        let mut corrected = Vec::new();
-        for index in 0..events.len() {
-            let event = &events[index];
-            if matches!(event.event, EventBody::TurnStats(_)) {
-                if let Some(turn_id) = event.turn_id {
-                    closed.insert(turn_id);
-                }
-                continue;
-            }
-            let Some(turn_id) = event.turn_id.filter(|turn| closed.contains(turn)) else {
-                continue;
-            };
-            if !tail_start.is_some_and(|start| event.seq >= start) {
-                continue;
-            }
-            // This exact pair came from update_goal_definition using a closed active_turn.
-            // 此精确事件对来自 update_goal_definition 使用已结束的 active_turn。
-            let is_goal_edit = matches!(&event.event, EventBody::SystemContext(context)
-                if context.context_key == "goal_state" && context.scope == SystemContextScope::Session
-                    && context.operation == SystemContextOperation::Upsert && context.ttl_turns.is_none()
-                    && context.provider_role_hint == Some(SystemRoleHint::Developer))
-                && event.visibility == EventVisibility::Provider;
-            let paired_notice = events.get(index + 1).is_some_and(|next|
-                next.turn_id == Some(turn_id) && next.created_at_ms == event.created_at_ms
-                    && next.visibility == EventVisibility::UiOnly
-                    && matches!(&next.event, EventBody::DisplayNote(note)
-                        if note.notice_kind == DisplayNoticeKind::GoalStatus && note.reason_code == "goal_saved"
-                            && note.severity == NoticeSeverity::Info && note.api_call_id.is_none()
-                            && note.redacted_detail.is_none() && note.retry_count.is_none() && note.retry_limit.is_none()));
-            if is_goal_edit && paired_notice {
-                for changed in &mut events[index..index + 2] {
-                    changed.turn_id = None;
-                    changed.event_revision = changed
-                        .event_revision
-                        .checked_add(1)
-                        .ok_or(DomainError::invalid_id("event_revision", u64::MAX))?;
-                    corrected.push(changed.seq);
-                }
-            }
-        }
-        // Keep every original validator: any unrelated corruption rejects the entire candidate.
-        // 保留全部原始校验：任何无关损坏都会拒绝整个候选。
-        let mut document =
-            Self::from_parts(metadata, runtime_lock, compactions, segment_catalog, events)?;
-        if !corrected.is_empty() {
-            // Corrupt revision frontiers must fail before staging a durable recovery, never overflow.
-            // 损坏的修订边界必须在暂存可靠恢复前失败，绝不能溢出。
-            document
-                .memory_revision
-                .checked_add(1)
-                .ok_or(DomainError::invalid_id(
-                    "document_revision",
-                    document.memory_revision,
-                ))?;
-            document.ensure_transition_capacity(0, 0)?;
-            document.bump_revision(
-                &[DirtyFile::ActiveTail],
-                document.metadata.updated_at_ms,
-                &corrected,
-            );
-        }
-        Ok(document)
     }
 
     /// Atomically fails an active execution boundary, forbids Continue, and closes its Turn.
@@ -758,33 +670,5 @@ mod tests {
                 .is_err()
         );
         assert_eq!(document, before);
-    }
-
-    /// A blocked goal's persisted pre-API failure must not survive restart as an open Turn.
-    /// 受阻目标的持久化 API 前失败不能在重启后继续占用开放回合。
-    #[test]
-    fn blocked_pre_api_failure_is_recovered_without_resuming_goal() {
-        let mut document = SessionDocument::new("legacy-pre-api", "project", "failure", 1);
-        document.create_goal("work", None, "work", 1).unwrap();
-        document.block_goal("goal_blocked", 2).unwrap();
-        let turn = document.active_turn().unwrap().turn_id;
-        document
-            .append_display_note(
-                Some(turn),
-                DisplayNoticeKind::SystemError,
-                NoticeSeverity::Error,
-                "stream_finished_without_v1_api_terminal",
-                None,
-                None,
-                None,
-                None,
-                3,
-            )
-            .unwrap();
-        assert_eq!(document.project_persisted_interruptions().unwrap(), 2);
-        assert_eq!(document.project_persisted_interruptions().unwrap(), 0);
-        assert!(document.active_turn().unwrap().closed);
-        assert_eq!(document.metadata.mode.goal.state, GoalState::Blocked);
-        document.rebuild_derived_state().unwrap();
     }
 }

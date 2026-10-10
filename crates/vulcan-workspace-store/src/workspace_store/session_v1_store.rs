@@ -1232,15 +1232,14 @@ pub fn load_session_v1_tail(
     })
 }
 
-/// Reads a runtime candidate from `locator`, allowing only proven active-tail Goal ownership recovery.
-/// 从 `locator` 读取运行时候选，仅允许已证实的活动尾段目标归属恢复。
-/// Returns an unpublished document; the unique owner must flush dirty recovery before registration.
-/// 返回尚未发布的文档；唯一 owner 必须在注册前 flush 待写恢复。
+/// Reads a runtime candidate from `locator` with the strict tail loader.
+/// 使用严格尾段加载器从 `locator` 读取运行时候选。
+/// Returns an unpublished document; the unique owner projects interruptions before registration.
+/// 返回尚未发布的文档；唯一 owner 在注册前投影中断事实。
 pub fn load_session_v1_for_runtime(
     locator: &SessionV1StorageLocator,
 ) -> Result<LoadedSessionV1, SessionV1StoreError> {
-    let (loaded, report) =
-        super::session_v1::loader::load_session_tail_for_runtime(&locator.layout)?;
+    let (loaded, report) = super::session_v1::loader::load_session_tail_only(&locator.layout)?;
     Ok(LoadedSessionV1 {
         locator: locator.clone(),
         metadata: loaded.metadata,

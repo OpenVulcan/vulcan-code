@@ -968,14 +968,12 @@ mod tests {
                             vulcan_session_core::v1::config::ProviderMediaUnderstandingSelection {
                                 capability: String::from("image_understanding"),
                                 mode: vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ProviderTool,
-                                selection: Some(
-                                    vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(
+                                selection: vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(
                                         vulcan_session_core::v1::config::ProviderToolTargetConfig {
                                             connection_id: String::from("connection-image"),
                                             target_id: String::from("target-image"),
                                         },
                                     ),
-                                ),
                                 reasoning_effort: None,
                             },
                         ],

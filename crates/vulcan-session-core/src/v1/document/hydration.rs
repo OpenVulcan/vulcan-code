@@ -27,7 +27,7 @@ use crate::v1::collaboration::{
 use crate::v1::config::{ForkOrigin, GoalState};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
-    ApiEndReason, ApiPurposeKind, DisplayNoticeKind, EventBody, SystemContextOperation, TurnOutcome,
+    ApiEndReason, ApiPurposeKind, EventBody, SystemContextOperation, TurnOutcome,
 };
 use crate::v1::ids::{ApiCallId, IdAllocator, JS_SAFE_INTEGER_MAX, Seq, TurnId};
 use crate::v1::projection::{validate_provider_fingerprint, validate_system_context_event};
@@ -843,26 +843,6 @@ impl SessionDocument {
         } else {
             0
         };
-        // Legacy pre-API failure notes left an open Turn even when the goal was already blocked.
-        // 旧 API 前失败提示曾遗留开放回合，即便目标已经受阻。
-        let orphaned_pre_api_failure = self.active_turn.as_ref().filter(|turn| !turn.closed)
-            .is_some_and(|turn| {
-                self.active_api.is_none()
-                    && !self.events.iter().any(|event| event.turn_id == Some(turn.turn_id)
-                        && matches!(event.event, EventBody::ApiStarted(_)))
-                    && self.events.iter().any(|event| event.turn_id == Some(turn.turn_id)
-                        && matches!(&event.event, EventBody::DisplayNote(note)
-                            if note.notice_kind == DisplayNoticeKind::SystemError && note.api_call_id.is_none()
-                                && note.reason_code == "stream_finished_without_v1_api_terminal"))
-            });
-        if orphaned_pre_api_failure && !pause_restarted_goal {
-            self.fail_turn_without_active_api(
-                "stream_finished_without_v1_api_terminal",
-                None,
-                now_ms,
-            )?;
-            projected += 2;
-        }
         if pause_restarted_goal {
             // Pausing automatic Goal work cannot close a distinct user, agent-task or reply owner.
             // 暂停自动 Goal 工作不能关闭独立的用户、代理任务或回流所有者。

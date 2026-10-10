@@ -1055,7 +1055,7 @@ fn parse_knowledge_reasoning_effort(
         "low" => ReasoningEffort::Low,
         "medium" => ReasoningEffort::Medium,
         "high" => ReasoningEffort::High,
-        "xhigh" | "x_high" => ReasoningEffort::XHigh,
+        "xhigh" => ReasoningEffort::XHigh,
         "max" => ReasoningEffort::Max,
         "ultra" => ReasoningEffort::Ultra,
         _ => {
@@ -4050,7 +4050,7 @@ mod tests {
         assert_eq!(configured.reasoning_output, ReasoningOutputPolicy::Hidden);
         assert_eq!(configured.reasoning_effort, Some(ReasoningEffort::High));
 
-        configured_settings.curation.reasoning_effort = Some(String::from("x_high"));
+        configured_settings.curation.reasoning_effort = Some(String::from("xhigh"));
         let xhigh = knowledge_display_request(
             &configured_settings,
             "source-document-id",
@@ -4058,7 +4058,7 @@ mod tests {
             "XHigh",
             "content",
         )
-        .expect("historical x_high alias should build a request");
+        .expect("xhigh label should build a request");
         assert_eq!(xhigh.reasoning_effort, Some(ReasoningEffort::XHigh));
         assert_eq!(
             knowledge_reasoning_effort_storage_value(ReasoningEffort::XHigh),

@@ -159,8 +159,8 @@ pub(crate) fn apply_provider_tool_selection_v1(
     runtime_state.media_understanding_selections = selection
         .media_understanding_selections
         .iter()
-        .filter_map(|entry| {
-            let route = match entry.selection.as_ref()? {
+        .map(|entry| {
+            let route = match &entry.selection {
                 vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(
                     target,
                 ) => vulcan_workbench_model::SessionMediaUnderstandingSelection::ProviderTool {
@@ -180,7 +180,7 @@ pub(crate) fn apply_provider_tool_selection_v1(
                     reasoning_effort: entry.reasoning_effort.map(Into::into),
                 },
             };
-            Some((entry.capability.clone(), route))
+            (entry.capability.clone(), route)
         })
         .collect();
     runtime_state.provider_extension_target_sets = selection
@@ -1432,15 +1432,13 @@ mod tests {
                 vulcan_session_core::v1::config::ProviderMediaUnderstandingSelection {
                     capability: String::from("video_understand"),
                     mode: vulcan_session_core::v1::config::ProviderMediaUnderstandingMode::ModelReplacement,
-                    selection: Some(
-                        vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(
+                    selection: vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(
                             vulcan_session_core::v1::config::ProviderMediaUnderstandingModelTargetConfig {
                                 provider_id: String::from("provider-video"),
                                 model_id: String::from("model-video"),
                                 connection_id: String::from("connection-video"),
                             },
                         ),
-                    ),
                     reasoning_effort: Some(
                         vulcan_session_core::v1::config::ProviderMediaUnderstandingReasoningEffort::Adaptive,
                     ),

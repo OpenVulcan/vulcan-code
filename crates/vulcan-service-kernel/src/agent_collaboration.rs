@@ -1480,10 +1480,9 @@ fn load_embedded_canonical_handle(
                 });
             }
             let mut document = loaded.document;
-            let recovered_goal_owners = document.memory_revision() != document.durable_revision();
             let projected = document.project_persisted_interruptions()?;
             let handle = SessionHandle::new(session_id, loaded.locator, document);
-            if projected > 0 || recovered_goal_owners {
+            if projected > 0 {
                 handle.flush_all()?;
             }
             Ok(handle)

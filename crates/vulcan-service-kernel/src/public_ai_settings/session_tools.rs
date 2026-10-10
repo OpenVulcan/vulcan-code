@@ -173,7 +173,7 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
                             ProviderMediaUnderstandingMode::ModelReplacement
                         }
                     },
-                    selection: Some(match selection {
+                    selection: match selection {
                         MediaUnderstandingBackendSelection::ProviderTool { selection } => {
                             ProviderMediaUnderstandingRouteConfig::ProviderTool(
                                 provider_tool_target_config_v1(selection),
@@ -188,7 +188,7 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
                                 connection_id: selection.connection_id.clone(),
                             },
                         ),
-                    }),
+                    },
                     reasoning_effort: match selection {
                         MediaUnderstandingBackendSelection::ModelReplacement {
                             reasoning_effort,

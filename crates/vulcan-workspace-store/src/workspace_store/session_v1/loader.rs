@@ -150,27 +150,6 @@ pub fn load_session(layout: &SessionV1Layout) -> Result<LoadedV1Session, Session
 pub fn load_session_tail_only(
     layout: &SessionV1Layout,
 ) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
-    load_session_tail_with_recovery(layout, false)
-}
-
-/// Loads `layout` for a runtime owner, staging proven tail-only Goal corrections without writing files.
-/// 为运行时 owner 加载 `layout`，暂存已证实的仅尾段目标纠正，不写文件。
-/// Returns the validated candidate and metrics; the owner must persist dirty recovery before publication.
-/// 返回已校验候选与指标；owner 必须在发布前持久化待写恢复内容。
-pub(crate) fn load_session_tail_for_runtime(
-    layout: &SessionV1Layout,
-) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
-    load_session_tail_with_recovery(layout, true)
-}
-
-/// Reads exact session parts; `recover_goal_owners` selects strict or narrowly recoverable construction.
-/// 读取精确会话部件；`recover_goal_owners` 选择严格构建或限定可恢复构建。
-/// Returns no partial document on validation failure and performs no persistence.
-/// 校验失败不返回部分文档，也不执行持久化。
-fn load_session_tail_with_recovery(
-    layout: &SessionV1Layout,
-    recover_goal_owners: bool,
-) -> Result<(LoadedV1Session, LoadReport), SessionV1Error> {
     let SmallDocuments {
         metadata,
         runtime_document,
@@ -232,14 +211,7 @@ fn load_session_tail_with_recovery(
         locked_sources: runtime_document.locked_sources,
     };
     let compactions = compactions_document.nodes;
-    // Both constructors run the same strict validators; runtime recovery corrects only its proven pair.
-    // 两种构建器都执行相同严格校验；运行时恢复仅纠正已证实的事件对。
-    let restore = if recover_goal_owners {
-        SessionDocument::from_parts_with_goal_owner_recovery
-    } else {
-        SessionDocument::from_parts
-    };
-    let document = restore(
+    let document = SessionDocument::from_parts(
         metadata.clone(),
         runtime_lock,
         compactions,

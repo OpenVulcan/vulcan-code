@@ -178,13 +178,11 @@ fn provider_tool_selection_v1_orders_final_persisted_keys() {
     );
     assert!(matches!(
         selection.media_understanding_selections[0].selection,
-        Some(vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(_))
+        vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ModelReplacement(_)
     ));
     assert!(matches!(
         selection.media_understanding_selections[1].selection,
-        Some(
-            vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(_)
-        )
+        vulcan_session_core::v1::config::ProviderMediaUnderstandingRouteConfig::ProviderTool(_)
     ));
     assert_eq!(
         selection

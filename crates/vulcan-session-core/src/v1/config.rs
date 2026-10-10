@@ -213,8 +213,8 @@ pub struct ActiveRequestConfig {
 
 /// Returns the canonical comparison key for the reasoning encodings emitted by session settings and API facts.
 /// 返回会话设置与 API 事实已使用的思考编码对应的规范比较键。
-/// `level` is the optional persisted key; `off` equals absence and legacy `xhigh` equals `x-high`.
-/// `level` 为可选持久化键；`off` 等价于缺省，旧 `xhigh` 等价于 `x-high`。
+/// `level` is the optional persisted key; `off` equals absence and the public `xhigh` label equals `x-high`.
+/// `level` 为可选持久化键；`off` 等价于缺省，公共 `xhigh` 标签等价于 `x-high`。
 /// All other keys retain their exact identity; this does not rewrite persisted request facts.
 /// 其他键保持精确身份；该函数不会改写持久化请求事实。
 pub fn canonical_request_thinking_level(level: Option<&str>) -> Option<&str> {
@@ -361,7 +361,7 @@ pub enum ProviderMediaUnderstandingReasoningEffort {
     High,
     /// Use an extra-high reasoning effort.
     /// 使用超高推理档位。
-    #[serde(rename = "xhigh", alias = "x_high", alias = "x-high")]
+    #[serde(rename = "xhigh", alias = "x-high")]
     XHigh,
     /// Use the provider-declared maximum reasoning effort.
     /// 使用供应商声明的最大推理档位。
@@ -382,10 +382,9 @@ pub struct ProviderMediaUnderstandingSelection {
     /// Exact backend family selected for the capability.
     /// 为该能力选择的精确后端类型。
     pub mode: ProviderMediaUnderstandingMode,
-    /// Exact route owned by this session; absent only for legacy mode-only metadata.
-    /// 当前会话持有的精确路由；仅旧版只含模式的元数据可以缺省。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection: Option<ProviderMediaUnderstandingRouteConfig>,
+    /// Exact route owned by this session.
+    /// 当前会话持有的精确路由。
+    pub selection: ProviderMediaUnderstandingRouteConfig,
     /// Optional session override for the selected replacement model's reasoning effort.
     /// 所选替代模型的可选会话级推理档位覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
