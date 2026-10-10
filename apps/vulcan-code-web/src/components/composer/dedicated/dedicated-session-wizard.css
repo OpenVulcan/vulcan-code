@@ -1,16 +1,35 @@
 /* Dedicated assistant creation wizard; loaded only with the lazy wizard chunk. */
 /* 专职助手创建向导；只随懒加载向导分块载入。 */
 
+/* While the wizard is shown the dock spans the conversation height instead of floating above an
+   offset, so a tall step scrolls inside the wizard rather than overflowing the page. */
+/* 向导显示期间输入区停靠层占满会话高度而不是按偏移悬浮，较高的步骤在向导内滚动而不越出页面。 */
+.composer-dock.dedicated-wizard-mode {
+  top: 16px;
+  bottom: 16px;
+  justify-content: center;
+}
+
 .dedicated-wizard {
   width: 100%;
+  min-height: 0;
   pointer-events: auto;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: var(--vcn-radius-lg);
   background: var(--card);
   box-shadow: var(--vcn-shadow-raised);
+}
+
+.dedicated-wizard-body {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .dedicated-wizard-header {
@@ -33,11 +52,13 @@
 
 .dedicated-wizard-options {
   display: grid;
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
 }
 
 .dedicated-wizard-option {
   display: grid;
+  align-content: start;
   gap: 2px;
   width: 100%;
   padding: 8px 10px;
@@ -81,4 +102,36 @@
 .dedicated-wizard-error {
   color: var(--destructive);
   font-size: var(--vcn-font-size-sm);
+}
+
+.dedicated-wizard-thinking {
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+  background: var(--background);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.dedicated-wizard-thinking summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.dedicated-wizard-thinking-body {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  padding: 0 10px 8px;
+  overflow-y: auto;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dedicated-wizard-thinking-body strong {
+  color: var(--foreground);
+  font-weight: 600;
 }

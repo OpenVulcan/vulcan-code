@@ -5,13 +5,16 @@ use crate::session_runtime_registry_v1::{
     SessionFlushReason, SessionMutationAdmission, SessionMutationChange, SessionRuntimeError,
 };
 use crate::{SharedServiceBridgeState, current_v1_unix_millis, parse_session_id};
+use vulcan_agent_runtime::agent_runtime::provider_reasoning::{
+    resolve_effective_public_reasoning_effort, validate_exact_wire_reasoning_effort,
+};
 use vulcan_ai_contract::{
     AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole, ParallelToolCallPolicy,
     ReasoningOutputPolicy, StructuredOutputPolicy, ToolChoicePolicy,
 };
 use vulcan_service_api::{
-    DedicatedMemoryLockRequest, DedicatedMemoryLockResponse, DedicatedPromptDraftRequest,
-    DedicatedPromptDraftResponse,
+    DedicatedMemoryLockRequest, DedicatedMemoryLockResponse, DedicatedPromptDraftProgressEvent,
+    DedicatedPromptDraftRequest, DedicatedPromptDraftResponse, ServiceEvent, ServiceEventEmitter,
 };
 use vulcan_session_core::v1::{DEDICATED_BASE_PROMPT_MAX_CHARS, DomainError};
 
@@ -114,10 +117,12 @@ fn dedicated_lock_error_code(error: &SessionRuntimeError) -> String {
 /// output exceeds the base prompt limit. The route is never substituted.
 /// 返回去除首尾空白的提示词；输入为空或过长、输出超过基础提示词上限时返回稳定错误码。绝不替换路由。
 pub(crate) async fn service_draft_dedicated_prompt(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: DedicatedPromptDraftRequest,
 ) -> Result<DedicatedPromptDraftResponse, String> {
     let user_message = dedicated_prompt_draft_message(&request)?;
+    let progress_id = dedicated_prompt_draft_progress_id(request.progress_id.as_deref())?;
     let (runtime, configuration) =
         crate::public_ai_settings::public_ai_runtime_and_configuration(&state)?;
     let selection = runtime.resolve_connection_model_selection(
@@ -125,6 +130,10 @@ pub(crate) async fn service_draft_dedicated_prompt(
         request.connection_id.as_str(),
         request.provider_id.as_str(),
         request.model_id.as_str(),
+    )?;
+    let reasoning_effort = dedicated_prompt_draft_reasoning_effort(
+        &selection.model.capabilities,
+        request.reasoning_effort.as_deref(),
     )?;
     let service = state
         .lock()
@@ -152,7 +161,7 @@ pub(crate) async fn service_draft_dedicated_prompt(
         structured_output: StructuredOutputPolicy::None,
         stop_sequences: Vec::new(),
         prompt_cache: selection.overrides.prompt_cache.clone().unwrap_or_default(),
-        reasoning_effort: None,
+        reasoning_effort,
         reasoning_output: ReasoningOutputPolicy::ProviderDefault,
         model_parameters: selection.overrides.model_parameters.clone(),
         resources: Vec::new(),
@@ -160,15 +169,25 @@ pub(crate) async fn service_draft_dedicated_prompt(
             crate::configured_inference::DEDICATED_PROMPT_DRAFT_OUTPUT_TOKEN_LIMIT,
         ),
     };
-    let prompt = service
+    let progress = progress_id.map(|progress_id| DraftProgressEmitter::new(app, progress_id));
+    let report = progress.as_ref().map(|progress| {
+        move |reasoning: &str, output: &str| progress.observe(reasoning, output, false)
+    });
+    let result = service
         .execute_exact_selection_text(
             crate::configured_inference::ExactSelectionTextPurpose::DedicatedPromptDraft,
             &selection,
             execution_request,
             uuid::Uuid::new_v4().to_string(),
+            report.as_ref().map(|report| {
+                report as &crate::configured_inference::ExactSelectionTextProgress<'_>
+            }),
         )
-        .await
-        .map_err(|error| format!("ERR_DEDICATED_PROMPT_DRAFT_FAILED: {error}"))?;
+        .await;
+    if let Some(progress) = &progress {
+        progress.flush();
+    }
+    let prompt = result.map_err(|error| format!("ERR_DEDICATED_PROMPT_DRAFT_FAILED: {error}"))?;
     if prompt.chars().count() > DEDICATED_BASE_PROMPT_MAX_CHARS {
         return Err(String::from("ERR_DEDICATED_PROMPT_DRAFT_TOO_LONG"));
     }
@@ -177,6 +196,141 @@ pub(crate) async fn service_draft_dedicated_prompt(
         provider_id: request.provider_id,
         model_id: request.model_id,
     })
+}
+
+/// Longest accepted client progress id.
+/// 可接受的客户端进度 id 最大长度。
+const DEDICATED_PROMPT_DRAFT_PROGRESS_ID_MAX_CHARS: usize = 128;
+
+/// Minimum spacing between two progress events of one draft request.
+/// 同一起草请求两次进度事件之间的最小间隔。
+const DEDICATED_PROMPT_DRAFT_PROGRESS_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(150);
+
+/// Validates the optional client progress id; absent or blank disables progress events.
+/// 校验可选的客户端进度 id；为空或空白时不推送进度事件。
+fn dedicated_prompt_draft_progress_id(value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.chars().count() > DEDICATED_PROMPT_DRAFT_PROGRESS_ID_MAX_CHARS
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err(String::from(
+            "ERR_DEDICATED_PROMPT_DRAFT_PROGRESS_ID_INVALID",
+        ));
+    }
+    Ok(Some(value.to_string()))
+}
+
+/// Resolves the drafting thinking level: an explicit level must be one the model declares,
+/// and an absent level uses the model's own default, exactly as a conversation turn would.
+/// 解析起草所用思考档位：显式档位必须是模型声明的档位；未指定时与会话回合一样使用模型自身默认档位。
+fn dedicated_prompt_draft_reasoning_effort(
+    capabilities: &vulcan_ai_contract::ModelCapabilities,
+    requested: Option<&str>,
+) -> Result<Option<vulcan_ai_contract::ReasoningEffort>, String> {
+    let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(resolve_effective_public_reasoning_effort(
+            capabilities,
+            None,
+        ));
+    };
+    let level = crate::workspace_persistence_versions::parse_reasoning_effort(requested)
+        .ok_or_else(|| format!("ERR_DEDICATED_PROMPT_DRAFT_REASONING_INVALID: {requested}"))?;
+    validate_exact_wire_reasoning_effort(capabilities, level)
+        .map_err(|error| format!("ERR_DEDICATED_PROMPT_DRAFT_REASONING_INVALID: {error}"))
+}
+
+/// Turns accumulated draft text into throttled progress deltas for one client request.
+/// 将累计的起草文本转换为单个客户端请求的节流进度增量。
+struct DraftProgressEmitter {
+    app: ServiceEventEmitter,
+    progress_id: String,
+    state: std::sync::Mutex<DraftProgressState>,
+}
+
+/// Byte offsets already sent and the time of the last event.
+/// 已发送的字节偏移与上次事件时间。
+struct DraftProgressState {
+    reasoning_sent: usize,
+    output_sent: usize,
+    last_emit: Option<std::time::Instant>,
+    reasoning: String,
+    output: String,
+}
+
+impl DraftProgressEmitter {
+    fn new(app: ServiceEventEmitter, progress_id: String) -> Self {
+        Self {
+            app,
+            progress_id,
+            state: std::sync::Mutex::new(DraftProgressState {
+                reasoning_sent: 0,
+                output_sent: 0,
+                last_emit: None,
+                reasoning: String::new(),
+                output: String::new(),
+            }),
+        }
+    }
+
+    /// Records the accumulated text and emits the unsent tail when due or when `force` is set.
+    /// 记录累计文本；到期或 `force` 为真时发送尚未发送的尾部。
+    fn observe(&self, reasoning: &str, output: &str, force: bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.reasoning.len() != reasoning.len() {
+            state.reasoning = reasoning.to_string();
+        }
+        if state.output.len() != output.len() {
+            state.output = output.to_string();
+        }
+        self.emit_due(&mut state, force);
+    }
+
+    /// Sends whatever has not been sent yet.
+    /// 发送全部尚未发送的内容。
+    fn flush(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            self.emit_due(&mut state, true);
+        }
+    }
+
+    fn emit_due(&self, state: &mut DraftProgressState, force: bool) {
+        let pending =
+            state.reasoning.len() > state.reasoning_sent || state.output.len() > state.output_sent;
+        let due = state
+            .last_emit
+            .is_none_or(|last| last.elapsed() >= DEDICATED_PROMPT_DRAFT_PROGRESS_INTERVAL);
+        if !pending || !(force || due) {
+            return;
+        }
+        let reasoning_delta = state
+            .reasoning
+            .get(state.reasoning_sent..)
+            .unwrap_or_default()
+            .to_string();
+        let output_delta = state
+            .output
+            .get(state.output_sent..)
+            .unwrap_or_default()
+            .to_string();
+        state.reasoning_sent = state.reasoning.len();
+        state.output_sent = state.output.len();
+        state.last_emit = Some(std::time::Instant::now());
+        self.app
+            .emit(ServiceEvent::DedicatedPromptDraftProgress(Box::new(
+                DedicatedPromptDraftProgressEvent {
+                    progress_id: self.progress_id.clone(),
+                    reasoning_delta,
+                    output_delta,
+                },
+            )));
+    }
 }
 
 /// Wraps the user's material in the data tags the generator prompt names.
@@ -247,6 +401,8 @@ mod tests {
             requirement: requirement.to_string(),
             current_prompt: current_prompt.map(str::to_string),
             revision_request: revision_request.map(str::to_string),
+            reasoning_effort: None,
+            progress_id: None,
         }
     }
 
@@ -275,5 +431,27 @@ mod tests {
             dedicated_prompt_draft_message(&draft_request(&oversized, None, None)).unwrap_err(),
             "ERR_DEDICATED_PROMPT_DRAFT_INPUT_TOO_LONG"
         );
+    }
+
+    /// Verifies progress ids are optional and only accept short identifier characters.
+    /// 验证进度 id 可省略，且只接受短标识符字符。
+    #[test]
+    fn draft_progress_id_accepts_only_identifier_characters() {
+        assert_eq!(dedicated_prompt_draft_progress_id(None), Ok(None));
+        assert_eq!(dedicated_prompt_draft_progress_id(Some("  ")), Ok(None));
+        assert_eq!(
+            dedicated_prompt_draft_progress_id(Some("draft-1_a")),
+            Ok(Some(String::from("draft-1_a")))
+        );
+        for invalid in ["draft 1", "draft/1"] {
+            assert_eq!(
+                dedicated_prompt_draft_progress_id(Some(invalid)),
+                Err(String::from(
+                    "ERR_DEDICATED_PROMPT_DRAFT_PROGRESS_ID_INVALID"
+                ))
+            );
+        }
+        let oversized = "a".repeat(DEDICATED_PROMPT_DRAFT_PROGRESS_ID_MAX_CHARS + 1);
+        assert!(dedicated_prompt_draft_progress_id(Some(&oversized)).is_err());
     }
 }

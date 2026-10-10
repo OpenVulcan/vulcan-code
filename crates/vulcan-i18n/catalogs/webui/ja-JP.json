@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "次へ",
   "composer.dedicated.writeOwn": "自分で書く",
   "composer.dedicated.generate": "プロンプトを生成",
+  "composer.dedicated.thinkingLevel": "思考レベル",
+  "composer.dedicated.thinking": "思考",
+  "composer.dedicated.thinkingLive": "思考中…",
+  "composer.dedicated.thinkingWaiting": "モデルを待っています…",
+  "composer.dedicated.draftPreview": "下書き",
   "composer.dedicated.lockedStatus": "記憶ロック中 · 新しいターンは記憶されません",
   "composer.dedicated.unlockedStatus": "記憶ロック解除中 · ターンは記憶されます",
   "composer.dedicated.lockWaitTurn": "現在のターンが終わるまでお待ちください。",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "説明または修正の指示が長すぎます。{detail}",
   "composer.dedicated.error.draftTooLong": "生成されたプロンプトが長すぎます。{detail}",
   "composer.dedicated.error.draftFailed": "プロンプトを生成できませんでした。{detail}",
+  "composer.dedicated.error.draftReasoning": "このモデルは選択した思考レベルに対応していません。{detail}",
   "composer.dedicated.error.lockTurnOpen": "記憶はターンの合間にのみ切り替えられます。{detail}",
   "composer.dedicated.error.lockFailed": "記憶のロックを切り替えられませんでした。{detail}"
 }

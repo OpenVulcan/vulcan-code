@@ -390,6 +390,9 @@ pub enum ServiceEvent {
     /// Lightweight project-terminal running-count event without terminal content.
     /// 不包含终端内容的轻量项目终端运行数量事件。
     ProjectTerminalRunningCountChanged(Box<ProjectTerminalRunningCountChangedEvent>),
+    /// Streamed progress of one dedicated base prompt draft request.
+    /// 单次专职基础提示词起草请求的流式进度。
+    DedicatedPromptDraftProgress(Box<DedicatedPromptDraftProgressEvent>),
 }
 
 /// Receives one service event emitted by the Core Service boundary.

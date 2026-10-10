@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "Next",
   "composer.dedicated.writeOwn": "Write it myself",
   "composer.dedicated.generate": "Generate prompt",
+  "composer.dedicated.thinkingLevel": "Thinking level",
+  "composer.dedicated.thinking": "Thinking",
+  "composer.dedicated.thinkingLive": "Thinking…",
+  "composer.dedicated.thinkingWaiting": "Waiting for the model…",
+  "composer.dedicated.draftPreview": "Draft",
   "composer.dedicated.lockedStatus": "Memory locked · new turns are not remembered",
   "composer.dedicated.unlockedStatus": "Memory unlocked · turns are remembered",
   "composer.dedicated.lockWaitTurn": "Wait for the current turn to finish.",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "The description or revision request is too long. {detail}",
   "composer.dedicated.error.draftTooLong": "The generated prompt is too long. {detail}",
   "composer.dedicated.error.draftFailed": "Could not generate the prompt. {detail}",
+  "composer.dedicated.error.draftReasoning": "This model does not support the selected thinking level. {detail}",
   "composer.dedicated.error.lockTurnOpen": "Memory can only change between turns. {detail}",
   "composer.dedicated.error.lockFailed": "Could not change the memory lock. {detail}"
 }

@@ -6,7 +6,7 @@ import { composerSessionDraftKey } from "@/components/composer/composer-panel/he
 import { modelPickerChoicesFromProviders, type ModelPickerChoice } from "@/components/composer/model-picker-control";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { AnswerMode } from "@/service/answer-mode";
-import { draftDedicatedPrompt } from "@/service/dedicated-session-service";
+import { draftDedicatedPrompt, subscribeDedicatedPromptDraftProgress } from "@/service/dedicated-session-service";
 import type { OutputStyleCatalogSummary, ProviderSummary } from "@/types";
 import { dedicatedErrorMessage } from "./dedicated-errors";
 import {
@@ -21,7 +21,10 @@ import {
   DedicatedOutputStyleStep,
   DedicatedPromptStep,
   DedicatedRequirementStep,
+  DedicatedThinkingLevelControl,
+  DedicatedThinkingPanel,
   DedicatedWizardOptions,
+  useProjectKnowledgeLibraries,
 } from "./dedicated-wizard-steps";
 import "@/components/composer/dedicated/dedicated-session-wizard.css";
 
@@ -63,21 +66,59 @@ export function DedicatedSessionWizard(props: {
     () => modelPickerChoicesFromProviders(props.providers).find((choice) => choice.active) ?? null,
     [props.providers],
   );
-  const stepIndex = DEDICATED_WIZARD_STEPS.indexOf(state.step);
-  const goTo = (step: DedicatedWizardStep) => {
-    setError(null);
-    onChange((current) => ({ ...current, step }));
-  };
+  // levelOptions are the thinking levels the exact drafting route declares.
+  // levelOptions 为精确起草路由声明的思考档位。
+  const reasoning = React.useMemo(() => {
+    if (!activeChoice) return null;
+    const provider = props.providers.find((candidate) => candidate.connectionId === activeChoice.connectionId);
+    return provider?.models?.find((model) => model.id === activeChoice.modelId)?.reasoningSelection ?? null;
+  }, [activeChoice, props.providers]);
+  const levelOptions = React.useMemo(() => reasoning?.options ?? [], [reasoning]);
+  const [chosenLevel, setChosenLevel] = React.useState<string | null>(null);
+  // level is the user's choice when the model still declares it, else the model's own default level.
+  // level 为用户的选择（模型仍声明该档位时），否则为模型自身的默认档位。
+  const declared = (value: string | null | undefined): value is string =>
+    Boolean(value) && levelOptions.some((option) => option.value === value);
+  const level = [chosenLevel, reasoning?.defaultEffort, reasoning?.selectedEffort].find(declared)
+    ?? levelOptions[0]?.value ?? "";
+  // submittedLevel is sent only for an adjustable scale; fixed states let the service resolve the model default.
+  // submittedLevel 仅在档位可调时发送；固定状态交由服务解析模型默认值。
+  const submittedLevel = levelOptions.length >= 2 && level !== "fixed-on" && level !== "fixed-off" ? level : undefined;
+  const [thinking, setThinking] = React.useState({ reasoning: "", output: "" });
   const setKnowledge = React.useCallback(
     (knowledgeLibraryIds: string[]) => onChange((current) => ({ ...current, knowledgeLibraryIds })),
     [onChange],
   );
+  const knowledge = useProjectKnowledgeLibraries(props.draft.projectId, state.knowledgeLibraryIds, setKnowledge);
+  // steps omits the knowledge step once the project is known to have no library to choose.
+  // steps 在确认项目没有可选知识库后省略知识库步骤。
+  const steps: readonly DedicatedWizardStep[] = knowledge.libraries?.length === 0
+    ? DEDICATED_WIZARD_STEPS.filter((step) => step !== "knowledge")
+    : DEDICATED_WIZARD_STEPS;
+  // step is the stored step, or the first remaining one when the stored step was omitted.
+  // step 为已保存的步骤；该步骤被省略时取剩余的第一步。
+  const step = steps.includes(state.step) ? state.step : steps[0];
+  const stepIndex = steps.indexOf(step);
+  const goTo = (target: DedicatedWizardStep) => {
+    setError(null);
+    onChange((current) => ({ ...current, step: target }));
+  };
 
   const generate = async (revise: boolean) => {
     if (!activeChoice || busy) return;
     setBusy("draft");
     setError(null);
+    setThinking({ reasoning: "", output: "" });
+    const progressId = crypto.randomUUID();
+    let unsubscribe: (() => void) | null = null;
     try {
+      unsubscribe = await subscribeDedicatedPromptDraftProgress((event) => {
+        if (event.progressId !== progressId) return;
+        setThinking((current) => ({
+          reasoning: current.reasoning + event.reasoningDelta,
+          output: current.output + event.outputDelta,
+        }));
+      });
       const response = await draftDedicatedPrompt({
         providerId: activeChoice.providerId,
         connectionId: activeChoice.connectionId,
@@ -85,11 +126,14 @@ export function DedicatedSessionWizard(props: {
         requirement: state.requirement,
         currentPrompt: revise ? state.prompt : undefined,
         revisionRequest: revise ? state.revisionRequest : undefined,
+        reasoningEffort: submittedLevel,
+        progressId,
       });
       onChange((current) => ({ ...current, prompt: response.prompt, revisionRequest: "", step: "prompt" }));
     } catch (reason) {
       setError(dedicatedErrorMessage(reason, t));
     } finally {
+      unsubscribe?.();
       setBusy(null);
     }
   };
@@ -127,63 +171,73 @@ export function DedicatedSessionWizard(props: {
     { value: "standard", label: t("answerMode.standard"), hint: t("answerMode.standardHint") },
     { value: "interactive", label: t("answerMode.interactive"), hint: t("answerMode.interactiveHint") },
   ];
-  const canAdvance = state.step !== "prompt" || state.prompt.trim().length > 0;
-  const next = DEDICATED_WIZARD_STEPS[stepIndex + 1];
-  const previous = DEDICATED_WIZARD_STEPS[stepIndex - 1];
+  const canAdvance = step !== "prompt" || state.prompt.trim().length > 0;
+  const next = steps[stepIndex + 1];
+  const thinkingLevel = (
+    <DedicatedThinkingLevelControl disabled={busy !== null} onChange={setChosenLevel} options={levelOptions} value={level} />
+  );
+  const previous = steps[stepIndex - 1];
 
   return (
     <section aria-busy={busy !== null} aria-label={t("composer.draft.kindDedicated")} className="dedicated-wizard">
       <header className="dedicated-wizard-header">
-        <strong>{t(STEP_TITLE_KEYS[state.step])}</strong>
-        <small>{formatMessage(t("composer.dedicated.stepCount"), { current: stepIndex + 1, total: DEDICATED_WIZARD_STEPS.length })}</small>
+        <strong>{t(STEP_TITLE_KEYS[step])}</strong>
+        <small>{formatMessage(t("composer.dedicated.stepCount"), { current: stepIndex + 1, total: steps.length })}</small>
       </header>
-      {state.step === "knowledge" ? (
-        <DedicatedKnowledgeStep libraryIds={state.knowledgeLibraryIds} onChange={setKnowledge} projectId={props.draft.projectId} />
-      ) : null}
-      {state.step === "answerMode" ? (
-        <DedicatedWizardOptions
-          isSelected={(value) => value === state.answerMode}
-          onSelect={(answerMode) => onChange((current) => ({ ...current, answerMode }))}
-          options={answerModeOptions}
-        />
-      ) : null}
-      {state.step === "outputStyle" ? (
-        <DedicatedOutputStyleStep
-          catalog={props.outputStyleCatalog}
-          onChange={(outputStyleId) => onChange((current) => ({ ...current, outputStyleId }))}
-          styleId={state.outputStyleId}
-        />
-      ) : null}
-      {state.step === "requirement" ? (
-        <DedicatedRequirementStep
-          busy={busy !== null}
-          onRequirementChange={(requirement) => onChange((current) => ({ ...current, requirement }))}
-          onSelectModel={(choice) => void props.onSelectWorkbenchModel(choice)}
-          providers={props.providers}
-          state={state}
-        />
-      ) : null}
-      {state.step === "prompt" ? (
-        <DedicatedPromptStep
-          busy={busy !== null}
-          canGenerate={activeChoice !== null}
-          onPromptChange={(prompt) => onChange((current) => ({ ...current, prompt }))}
-          onRevise={() => void generate(true)}
-          onRevisionChange={(revisionRequest) => onChange((current) => ({ ...current, revisionRequest }))}
-          state={state}
-        />
-      ) : null}
-      {state.step === "memory" ? (
-        <DedicatedWizardOptions
-          disabled={busy !== null}
-          isSelected={() => false}
-          onSelect={(lockImmediately) => void create(lockImmediately)}
-          options={[
-            { value: true, label: t("composer.dedicated.lockNow"), hint: t("composer.dedicated.lockNowHint") },
-            { value: false, label: t("composer.dedicated.lockLater"), hint: t("composer.dedicated.lockLaterHint") },
-          ]}
-        />
-      ) : null}
+      <div className="dedicated-wizard-body">
+        {step === "knowledge" ? (
+          <DedicatedKnowledgeStep knowledge={knowledge} libraryIds={state.knowledgeLibraryIds} onChange={setKnowledge} />
+        ) : null}
+        {step === "answerMode" ? (
+          <DedicatedWizardOptions
+            isSelected={(value) => value === state.answerMode}
+            onSelect={(answerMode) => onChange((current) => ({ ...current, answerMode }))}
+            options={answerModeOptions}
+          />
+        ) : null}
+        {step === "outputStyle" ? (
+          <DedicatedOutputStyleStep
+            catalog={props.outputStyleCatalog}
+            onChange={(outputStyleId) => onChange((current) => ({ ...current, outputStyleId }))}
+            styleId={state.outputStyleId}
+          />
+        ) : null}
+        {step === "requirement" ? (
+          <DedicatedRequirementStep
+            busy={busy !== null}
+            onRequirementChange={(requirement) => onChange((current) => ({ ...current, requirement }))}
+            onSelectModel={(choice) => void props.onSelectWorkbenchModel(choice)}
+            providers={props.providers}
+            state={state}
+            thinkingLevel={thinkingLevel}
+          />
+        ) : null}
+        {step === "prompt" ? (
+          <DedicatedPromptStep
+            busy={busy !== null}
+            canGenerate={activeChoice !== null}
+            onPromptChange={(prompt) => onChange((current) => ({ ...current, prompt }))}
+            onRevise={() => void generate(true)}
+            onRevisionChange={(revisionRequest) => onChange((current) => ({ ...current, revisionRequest }))}
+            state={state}
+            thinkingLevel={thinkingLevel}
+          />
+        ) : null}
+        {step === "requirement" || step === "prompt" ? (
+          <DedicatedThinkingPanel output={thinking.output} reasoning={thinking.reasoning} streaming={busy === "draft"} />
+        ) : null}
+        {step === "memory" ? (
+          <DedicatedWizardOptions
+            disabled={busy !== null}
+            isSelected={() => false}
+            onSelect={(lockImmediately) => void create(lockImmediately)}
+            options={[
+              { value: true, label: t("composer.dedicated.lockNow"), hint: t("composer.dedicated.lockNowHint") },
+              { value: false, label: t("composer.dedicated.lockLater"), hint: t("composer.dedicated.lockLaterHint") },
+            ]}
+          />
+        ) : null}
+      </div>
       {error ? <p className="dedicated-wizard-error" role="alert">{error}</p> : null}
       {busy === "submit" ? <p className="dedicated-wizard-hint" role="status">{t("composer.dedicated.creating")}</p> : null}
       <div className="dedicated-wizard-actions">
@@ -194,7 +248,7 @@ export function DedicatedSessionWizard(props: {
           </Button>
         ) : null}
         <span className="dedicated-wizard-actions-end">
-          {state.step === "requirement" ? (
+          {step === "requirement" ? (
             <>
               <Button disabled={busy !== null} onClick={() => goTo("prompt")} size="sm" type="button" variant="outline">
                 <PenLine size={14} />

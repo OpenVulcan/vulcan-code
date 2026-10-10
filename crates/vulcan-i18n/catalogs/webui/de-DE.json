@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "Weiter",
   "composer.dedicated.writeOwn": "Selbst schreiben",
   "composer.dedicated.generate": "Prompt erzeugen",
+  "composer.dedicated.thinkingLevel": "Denkstufe",
+  "composer.dedicated.thinking": "Denkprozess",
+  "composer.dedicated.thinkingLive": "Denkt nach…",
+  "composer.dedicated.thinkingWaiting": "Warte auf das Modell…",
+  "composer.dedicated.draftPreview": "Entwurf",
   "composer.dedicated.lockedStatus": "Gedächtnis gesperrt · neue Runden werden nicht gemerkt",
   "composer.dedicated.unlockedStatus": "Gedächtnis entsperrt · Runden werden gemerkt",
   "composer.dedicated.lockWaitTurn": "Warte, bis die aktuelle Runde beendet ist.",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "Beschreibung oder Überarbeitungswunsch ist zu lang. {detail}",
   "composer.dedicated.error.draftTooLong": "Der erzeugte Prompt ist zu lang. {detail}",
   "composer.dedicated.error.draftFailed": "Der Prompt konnte nicht erzeugt werden. {detail}",
+  "composer.dedicated.error.draftReasoning": "Dieses Modell unterstützt die gewählte Denkstufe nicht. {detail}",
   "composer.dedicated.error.lockTurnOpen": "Das Gedächtnis kann nur zwischen Runden umgeschaltet werden. {detail}",
   "composer.dedicated.error.lockFailed": "Die Gedächtnissperre konnte nicht geändert werden. {detail}"
 }

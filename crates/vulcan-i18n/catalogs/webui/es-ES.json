@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "Siguiente",
   "composer.dedicated.writeOwn": "Escribirlo yo",
   "composer.dedicated.generate": "Generar prompt",
+  "composer.dedicated.thinkingLevel": "Nivel de razonamiento",
+  "composer.dedicated.thinking": "Razonamiento",
+  "composer.dedicated.thinkingLive": "Razonando…",
+  "composer.dedicated.thinkingWaiting": "Esperando al modelo…",
+  "composer.dedicated.draftPreview": "Borrador",
   "composer.dedicated.lockedStatus": "Memoria bloqueada · los turnos nuevos no se recuerdan",
   "composer.dedicated.unlockedStatus": "Memoria desbloqueada · los turnos se recuerdan",
   "composer.dedicated.lockWaitTurn": "Espera a que termine el turno actual.",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "La descripción o la solicitud de revisión es demasiado larga. {detail}",
   "composer.dedicated.error.draftTooLong": "El prompt generado es demasiado largo. {detail}",
   "composer.dedicated.error.draftFailed": "No se pudo generar el prompt. {detail}",
+  "composer.dedicated.error.draftReasoning": "Este modelo no admite el nivel de razonamiento seleccionado. {detail}",
   "composer.dedicated.error.lockTurnOpen": "La memoria solo puede cambiarse entre turnos. {detail}",
   "composer.dedicated.error.lockFailed": "No se pudo cambiar el bloqueo de memoria. {detail}"
 }

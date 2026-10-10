@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "Suivant",
   "composer.dedicated.writeOwn": "Le rédiger moi-même",
   "composer.dedicated.generate": "Générer le prompt",
+  "composer.dedicated.thinkingLevel": "Niveau de réflexion",
+  "composer.dedicated.thinking": "Réflexion",
+  "composer.dedicated.thinkingLive": "Réflexion en cours…",
+  "composer.dedicated.thinkingWaiting": "En attente du modèle…",
+  "composer.dedicated.draftPreview": "Brouillon",
   "composer.dedicated.lockedStatus": "Mémoire verrouillée · les nouveaux tours ne sont pas mémorisés",
   "composer.dedicated.unlockedStatus": "Mémoire déverrouillée · les tours sont mémorisés",
   "composer.dedicated.lockWaitTurn": "Attendez la fin du tour en cours.",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "La description ou la demande de révision est trop longue. {detail}",
   "composer.dedicated.error.draftTooLong": "Le prompt généré est trop long. {detail}",
   "composer.dedicated.error.draftFailed": "Impossible de générer le prompt. {detail}",
+  "composer.dedicated.error.draftReasoning": "Ce modèle ne prend pas en charge le niveau de réflexion choisi. {detail}",
   "composer.dedicated.error.lockTurnOpen": "La mémoire ne peut changer qu'entre deux tours. {detail}",
   "composer.dedicated.error.lockFailed": "Impossible de modifier le verrouillage de la mémoire. {detail}"
 }

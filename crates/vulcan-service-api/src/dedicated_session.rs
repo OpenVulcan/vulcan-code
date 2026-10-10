@@ -65,6 +65,14 @@ pub struct DedicatedPromptDraftRequest {
     /// 修订时的补充说明。
     #[serde(default)]
     pub revision_request: Option<String>,
+    /// Exact thinking level from the model's declared options; absent uses the model default.
+    /// 来自模型声明选项的精确思考档位；为空时使用模型默认档位。
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    /// Client-chosen id that tags streamed progress events; absent streams nothing.
+    /// 客户端选择、用于标记流式进度事件的 id；为空时不推送进度。
+    #[serde(default)]
+    pub progress_id: Option<String>,
 }
 
 /// Generated base prompt; the client shows it for review before creating the session.
@@ -81,4 +89,20 @@ pub struct DedicatedPromptDraftResponse {
     /// Model that produced the prompt.
     /// 生成提示词的模型。
     pub model_id: String,
+}
+
+/// Streamed thinking and output appended since the previous event of the same draft request.
+/// 同一起草请求自上一事件以来追加的流式思考与输出。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DedicatedPromptDraftProgressEvent {
+    /// The request's `progressId`.
+    /// 请求的 `progressId`。
+    pub progress_id: String,
+    /// Newly streamed thinking text.
+    /// 新流出的思考文本。
+    pub reasoning_delta: String,
+    /// Newly streamed prompt text.
+    /// 新流出的提示词文本。
+    pub output_delta: String,
 }

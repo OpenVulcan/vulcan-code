@@ -10,6 +10,8 @@ import { ModelPickerControl, modelPickerChoicesFromProviders, type ModelPickerCh
 import { ModelReasoningPickerControl, describeReasoningSelection } from "./model-reasoning-picker-control";
 import { ComposerAiCapabilityControl, ComposerSelectControl, ContextUsageOrb } from "./composer-capability-controls";
 import { PendingPromptQueueStrip } from "./composer-prompt-controls";
+import { DedicatedComposerContext } from "./dedicated/dedicated-session-controls";
+import type { DedicatedMemorySelection } from "@/service/dedicated-memory";
 import { useComposerPlanMode } from "./composer-panel/use-composer-plan-mode";
 import { ComposerPanelToolbarRight } from "./composer-panel/toolbar-right";
 import { loadPublicAiSettings, loadPublicAiSessionProviderToolSelections, queryPublicAiConnectionUsage, savePublicAiSessionProviderToolSelections } from "@/service/settings-actions-service";
@@ -509,6 +511,27 @@ it("shows one intent tab at a time and restores the capability last viewed in a 
   await selectCapabilityTab("settings.aiCapabilities.tab.understand");
   expect(document.querySelector('.composer-capability-kind-select[aria-pressed="true"]')?.textContent)
     .toContain("settings.aiUnderstandImage");
+});
+
+it("releases a pending send block when the composer learns the session is dedicated", async () => {
+  vi.mocked(loadPublicAiSettings).mockReturnValue(new Promise(() => {}));
+  vi.mocked(loadPublicAiSessionProviderToolSelections).mockReturnValue(new Promise(() => {}));
+  // onConflictChange records every send-boundary report in order.
+  // onConflictChange 按顺序记录每一次发送边界报告。
+  const onConflictChange = vi.fn<(blocked: boolean) => void>();
+  // dedicated models the event window revealing the profile after the composer mounted.
+  // dedicated 模拟输入区挂载后事件窗口才揭示专职配置。
+  const dedicated: DedicatedMemorySelection = { sessionId: "c", generation: 1, toolAccess: "none", basePrompt: "p", lockedSpans: [], openTurnId: null };
+  const control = (value: DedicatedMemorySelection | null) => (
+    <DedicatedComposerContext.Provider value={value}>
+      <ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" onConflictChange={onConflictChange} />
+    </DedicatedComposerContext.Provider>
+  );
+  await render(control(null));
+  expect(onConflictChange).toHaveBeenLastCalledWith(true);
+  await render(control(dedicated));
+  expect(onConflictChange).toHaveBeenLastCalledWith(false);
+  expect(document.querySelector('[aria-label="Capabilities"]')).toBeNull();
 });
 
 it("opens the capability dialog from the hover summary footer action", async () => {

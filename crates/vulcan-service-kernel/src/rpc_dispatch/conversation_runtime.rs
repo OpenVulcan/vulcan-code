@@ -96,6 +96,7 @@ pub(super) async fn dispatch(
         ),
         "service_draft_dedicated_prompt" => rpc_json_result(
             crate::dedicated_session::service_draft_dedicated_prompt(
+                app.clone(),
                 state,
                 rpc_required_param(params, "request")?,
             )

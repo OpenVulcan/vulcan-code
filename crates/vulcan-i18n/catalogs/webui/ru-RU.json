@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "Далее",
   "composer.dedicated.writeOwn": "Написать самому",
   "composer.dedicated.generate": "Сгенерировать промпт",
+  "composer.dedicated.thinkingLevel": "Уровень размышления",
+  "composer.dedicated.thinking": "Размышление",
+  "composer.dedicated.thinkingLive": "Размышляет…",
+  "composer.dedicated.thinkingWaiting": "Ожидание модели…",
+  "composer.dedicated.draftPreview": "Черновик",
   "composer.dedicated.lockedStatus": "Память заблокирована · новые ходы не запоминаются",
   "composer.dedicated.unlockedStatus": "Память разблокирована · ходы запоминаются",
   "composer.dedicated.lockWaitTurn": "Дождитесь окончания текущего хода.",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "Описание или запрос на доработку слишком длинные. {detail}",
   "composer.dedicated.error.draftTooLong": "Сгенерированный промпт слишком длинный. {detail}",
   "composer.dedicated.error.draftFailed": "Не удалось сгенерировать промпт. {detail}",
+  "composer.dedicated.error.draftReasoning": "Эта модель не поддерживает выбранный уровень размышления. {detail}",
   "composer.dedicated.error.lockTurnOpen": "Память можно переключать только между ходами. {detail}",
   "composer.dedicated.error.lockFailed": "Не удалось изменить блокировку памяти. {detail}"
 }

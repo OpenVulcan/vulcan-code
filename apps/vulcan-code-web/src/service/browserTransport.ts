@@ -15,6 +15,10 @@ import type {
 import enUSTranslations from "@catalogs/webui/en-US.json";
 import { formatMessage, translateActive, type TranslationKey } from "@/i18n";
 import type { ConversationEventLiveDeltaV1 } from "@/service/conversation-event-window-client";
+import {
+  DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
+  type DedicatedPromptDraftProgressEvent,
+} from "@/service/dedicated-prompt-draft-events";
 import type {
   ServiceEventHandler,
   ServiceParams,
@@ -124,7 +128,8 @@ type BrowserServiceEvent =
   | { kind: "vceJobChanged"; payload: VceJobSummary }
   | { kind: "commandSessionDisplayChanged"; payload: CommandSessionDisplayChangedEvent }
   | { kind: "projectTerminalDisplayChanged"; payload: ProjectTerminalDisplayChangedEvent }
-  | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent };
+  | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent }
+  | { kind: "dedicatedPromptDraftProgress"; payload: DedicatedPromptDraftProgressEvent };
 
 // EVENT_KIND_TO_TOPIC maps service event kinds to protocol topics.
 // EVENT_KIND_TO_TOPIC 将服务事件类型映射为协议主题。
@@ -142,6 +147,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   commandSessionDisplayChanged: "command.session.display.changed",
   projectTerminalDisplayChanged: "project.terminal.display.changed",
   projectTerminalRunningCountChanged: "project.terminal.running-count.changed",
+  dedicatedPromptDraftProgress: DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
 };
 
 // closeWebSocketWhenReady closes one socket without aborting its opening handshake.

@@ -151,6 +151,10 @@ const DEDICATED_PROMPT_DRAFT_CONSUMER_ID: &str = "vulcan-code-dedicated-prompt-d
 /// 单次专职提示词起草的输出 Token 上限，由其调用方预算与请求共用。
 pub(crate) const DEDICATED_PROMPT_DRAFT_OUTPUT_TOKEN_LIMIT: u64 = 16_384;
 
+/// Observer of the accumulated thinking and output text of one exact-selection text request.
+/// 单个精确选择文本请求累计思考与输出文本的观察者。
+pub(crate) type ExactSelectionTextProgress<'a> = dyn Fn(&str, &str) + Send + Sync + 'a;
+
 /// One-shot text consumers that run against an exact user-selected route without fallback.
 /// 在用户选择的精确路由上执行、不回退的一次性文本消费者。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1741,6 +1745,8 @@ impl ConfiguredInferenceService {
     /// request, and `execution_id` is the stable logical request identity.
     /// `selection` 冻结用户选择的供应商路由，`request` 是最小验证请求，`execution_id`
     /// 是稳定逻辑请求标识。
+    /// `progress`, when present, receives the accumulated thinking and output after each event.
+    /// `progress` 存在时，在每个事件后接收累计的思考与输出。
     ///
     /// # Returns
     /// 返回值
@@ -1753,6 +1759,7 @@ impl ConfiguredInferenceService {
         selection: &ResolvedPublicAiSelection,
         request: AiExecutionRequest,
         execution_id: String,
+        progress: Option<&ExactSelectionTextProgress<'_>>,
     ) -> Result<String, ConfiguredInferenceError> {
         let caller = exact_selection_text_caller(purpose);
         let started_at_unix_ms = current_unix_millis();
@@ -1872,7 +1879,11 @@ impl ConfiguredInferenceService {
                     );
                     return Ok(output_text);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    if let Some(progress) = progress {
+                        progress(reasoning_text.as_str(), output_text.as_str());
+                    }
+                }
                 Err(error) => {
                     self.emit_exact_selection_terminal(
                         purpose,

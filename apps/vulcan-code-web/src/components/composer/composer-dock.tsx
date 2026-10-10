@@ -277,6 +277,7 @@ export function ComposerDock(props: {
   const draftContext = React.useContext(DraftComposerContext);
   const draftOwner = props.conversationId === null ? draftContext : null;
   const [draftState, updateDraftState] = useDedicatedDraft(draftOwner?.draftId ?? null);
+  const dedicatedWizardShown = draftOwner !== null && draftState.kind === "dedicated";
   const [dedicatedCreating, setDedicatedCreating] = React.useState(false);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
@@ -303,7 +304,15 @@ export function ComposerDock(props: {
   }, [onComposerDockHeightChange]);
 
   return (
-    <div className={cn("composer-dock", props.emptyMode && "empty-mode")} ref={dockRef}>
+    <div
+      className={cn(
+        "composer-dock",
+        // The wizard spans the conversation height instead of floating like the composer.
+        // 向导占满会话高度，而不像输入区那样悬浮。
+        dedicatedWizardShown ? "dedicated-wizard-mode" : props.emptyMode && "empty-mode",
+      )}
+      ref={dockRef}
+    >
       {props.showScrollToBottom ? (
         <div className="composer-floating-status-stack">
           <div className="scroll-to-bottom-layer">
@@ -334,7 +343,7 @@ export function ComposerDock(props: {
         />
       ) : null}
       {persistedDedicated ? <DedicatedMemoryLockBar memory={persistedDedicated} running={props.isConversationRunning} /> : null}
-      {draftOwner && draftState.kind === "dedicated" ? (
+      {draftOwner && dedicatedWizardShown ? (
         <React.Suspense fallback={null}>
         <LazyDedicatedSessionWizard
           draft={draftOwner}

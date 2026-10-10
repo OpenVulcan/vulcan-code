@@ -321,6 +321,7 @@ pub(crate) async fn service_validate_public_ai_custom_model(
             &selection,
             execution_request,
             execution_id,
+            None,
         )
         .await
         .map_err(|error| error.to_string())?;

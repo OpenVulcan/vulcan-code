@@ -1,5 +1,11 @@
 import { serviceClient } from "@/service/webui-service-runtime";
 import type { DedicatedSessionProfileV1 } from "@/service/conversation-event-window-client";
+import {
+  DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
+  type DedicatedPromptDraftProgressEvent,
+} from "@/service/dedicated-prompt-draft-events";
+
+export type { DedicatedPromptDraftProgressEvent };
 
 /** Durable memory-lock receipt of one dedicated session.
  * 单个专职会话的可靠记忆锁定回执。 */
@@ -46,6 +52,12 @@ export interface DedicatedPromptDraftRequest {
   /** Additional instructions for the revision.
    * 修订时的补充说明。 */
   revisionRequest?: string;
+  /** Thinking level the model declares; omitted to use the model's own default.
+   * 模型声明的思考档位；省略时使用模型自身默认档位。 */
+  reasoningEffort?: string;
+  /** Client id that tags streamed progress events of this request.
+   * 标记本次请求流式进度事件的客户端 id。 */
+  progressId?: string;
 }
 
 /** Generated prompt shown for review before the session is created.
@@ -62,4 +74,12 @@ export function draftDedicatedPrompt(
   request: DedicatedPromptDraftRequest,
 ): Promise<DedicatedPromptDraftResponse> {
   return serviceClient.request("service_draft_dedicated_prompt", { request });
+}
+
+/** Observes streamed prompt-draft progress; returns an unsubscribe function.
+ * 观察提示词起草的流式进度；返回取消订阅函数。 */
+export function subscribeDedicatedPromptDraftProgress(
+  listener: (event: DedicatedPromptDraftProgressEvent) => void,
+): Promise<() => void> {
+  return serviceClient.subscribe<DedicatedPromptDraftProgressEvent>(DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC, listener);
 }

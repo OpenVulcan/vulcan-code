@@ -440,6 +440,13 @@ export function ComposerAiCapabilityControl(props: ComposerAiCapabilityControlPr
   // Provider tools are frozen with a dedicated session, so the editor is not offered.
   // 供应商工具随专职会话冻结，因此不提供编辑器。
   const dedicated = useDedicatedComposer();
+  const { onConflictChange } = props;
+  // The editor may have reported "not ready" before the session was known to be dedicated; hiding it must
+  // release that block, or the first composer after creation could never send.
+  // 编辑器可能在得知会话为专职之前已报告“未就绪”；隐藏编辑器时必须解除该阻塞，否则创建后的首个输入区将无法发送。
+  React.useEffect(() => {
+    if (dedicated) onConflictChange?.(false);
+  }, [dedicated, onConflictChange]);
   if (dedicated) return null;
   return <AiCapabilityControlEditor {...props} />;
 }

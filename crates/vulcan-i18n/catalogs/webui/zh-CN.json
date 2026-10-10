@@ -5867,6 +5867,11 @@
   "composer.dedicated.next": "下一步",
   "composer.dedicated.writeOwn": "自己撰写",
   "composer.dedicated.generate": "生成提示词",
+  "composer.dedicated.thinkingLevel": "思考档位",
+  "composer.dedicated.thinking": "思考过程",
+  "composer.dedicated.thinkingLive": "正在思考…",
+  "composer.dedicated.thinkingWaiting": "正在等待模型…",
+  "composer.dedicated.draftPreview": "草稿",
   "composer.dedicated.lockedStatus": "记忆已锁定 · 新回合不会被记住",
   "composer.dedicated.unlockedStatus": "记忆未锁定 · 回合会被记住",
   "composer.dedicated.lockWaitTurn": "请等待当前回合结束。",
@@ -5876,6 +5881,7 @@
   "composer.dedicated.error.draftInputTooLong": "描述或修订要求过长。{detail}",
   "composer.dedicated.error.draftTooLong": "生成的提示词过长。{detail}",
   "composer.dedicated.error.draftFailed": "无法生成提示词。{detail}",
+  "composer.dedicated.error.draftReasoning": "该模型不支持所选的思考档位。{detail}",
   "composer.dedicated.error.lockTurnOpen": "记忆只能在回合之间切换。{detail}",
   "composer.dedicated.error.lockFailed": "无法切换记忆锁定。{detail}"
 }
