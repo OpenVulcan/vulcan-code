@@ -142,6 +142,15 @@ impl Pacing {
     }
 }
 
+/// Projects a simulated saved unattended mode the way the service worker does.
+/// 以服务工作线程的方式投影模拟的已保存无人值守模式。
+fn unattended_state(saved: &Option<UnattendedConfig>) -> Unattended {
+    match saved {
+        Some(config) => Unattended::On(config.deny_policy.clone()),
+        None => Unattended::Off,
+    }
+}
+
 #[derive(Default)]
 struct ConversationLog {
     /// Simulated session-owned answer mode, independent from the plan mode.
@@ -150,6 +159,9 @@ struct ConversationLog {
     /// Simulated saved permission mode.
     /// 模拟的已保存权限模式。
     permission_mode: PermissionMode,
+    /// Simulated saved unattended mode; `None` while it is off.
+    /// 模拟的已保存无人值守模式；关闭时为 `None`。
+    unattended: Option<UnattendedConfig>,
     events: Vec<ConversationEvent>,
     next_seq: u64,
     pending_question: Option<PendingQuestion>,
@@ -890,6 +902,7 @@ impl World {
         self.emit(BackendEvent::PermissionMode {
             conversation_id: id.clone(),
             mode: log.permission_mode,
+            unattended: unattended_state(&log.unattended),
         });
         self.emit(BackendEvent::PendingQuestion {
             conversation_id: id.clone(),
@@ -1006,9 +1019,36 @@ impl World {
                     return;
                 };
                 log.permission_mode = request.mode;
+                let unattended = unattended_state(&log.unattended);
                 self.emit(BackendEvent::PermissionMode {
                     conversation_id: request.session_id,
                     mode: request.mode,
+                    unattended,
+                });
+            }
+            Command::SetSessionUnattended(request) => {
+                let Some(log) = self.logs.get_mut(&request.session_id) else {
+                    return;
+                };
+                log.unattended = request.unattended;
+                let (mode, unattended) = (log.permission_mode, unattended_state(&log.unattended));
+                self.emit(BackendEvent::PermissionMode {
+                    conversation_id: request.session_id,
+                    mode,
+                    unattended,
+                });
+            }
+            // The demo has no saved defaults, so the dialog starts empty.
+            // 演示没有已保存的默认值，因此对话框从空白开始。
+            Command::LoadSessionUnattendedDefault(request) => {
+                self.emit(BackendEvent::UnattendedDefault {
+                    conversation_id: request.session_id,
+                    default: Some(vulcan_service_api::UnattendedDefaultResponse {
+                        deny_policy: String::new(),
+                        source: "none".into(),
+                        max_chars:
+                            vulcan_session_core::v1::config::MAX_UNATTENDED_DENY_POLICY_CHARS,
+                    }),
                 });
             }
             Command::SetSessionAnswerMode(request) => {

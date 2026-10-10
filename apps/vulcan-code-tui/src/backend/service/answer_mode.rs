@@ -117,6 +117,7 @@ mod tests {
                 epoch: "synthetic".into(),
                 memory_revision: 20,
                 permission_mode: PermissionMode::WorkspaceWrite,
+                unattended: None,
                 answer_mode: AnswerModeSession {
                     mode: Some(AnswerModePreference::default()),
                 },

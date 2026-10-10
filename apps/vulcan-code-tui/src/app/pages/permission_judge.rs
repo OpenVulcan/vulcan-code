@@ -1254,6 +1254,7 @@ fn record_outcome_label(code: &str) -> String {
         "user_allowed" => tr!("settings.permissionJudge.records.outcome.userAllowed"),
         "user_denied" => tr!("settings.permissionJudge.records.outcome.userDenied"),
         "failed" => tr!("settings.permissionJudge.records.outcome.failed"),
+        "unattended_denied" => tr!("settings.permissionJudge.records.outcome.unattendedDenied"),
         other => other.to_string(),
     }
 }

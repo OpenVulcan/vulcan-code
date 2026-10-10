@@ -21,6 +21,7 @@ mod plugins;
 mod project_permission_judge;
 mod settings;
 mod setup_guide;
+mod unattended;
 
 use std::collections::HashSet;
 
@@ -161,6 +162,7 @@ impl Area {
                         PermissionJudge,
                         SetupGuide,
                         ProjectPermissionJudge,
+                        Unattended,
                     ],
                 ),
                 (
@@ -197,6 +199,9 @@ pub enum PageId {
     /// One project's permission strategy; listed only while the judge is enabled.
     /// 单个项目的权限策略；仅在判定启用时列出。
     ProjectPermissionJudge,
+    /// Default deny policies offered when a session turns unattended mode on.
+    /// 会话开启无人值守模式时预填的默认拒绝策略。
+    Unattended,
     Providers,
     Credentials,
     Models,
@@ -256,6 +261,7 @@ impl PageId {
             PageId::PermissionJudge => tr!("settings.permissionJudge"),
             PageId::SetupGuide => tr!("setupGuide.title"),
             PageId::ProjectPermissionJudge => tr!("projectSettings.permissionJudge.title"),
+            PageId::Unattended => tr!("settings.permissionJudge.unattended.title"),
             PageId::Providers => tr!("tui.settings.providers"),
             PageId::Credentials => tr!("tui.settings.credentials"),
             PageId::Models => tr!("tui.settings.modelList"),
@@ -379,6 +385,14 @@ impl PageId {
             Self::ProjectPermissionJudge => {
                 if let Some(project) = &app.judge_policy_project {
                     calls.push(api::permission_judge::load_project_permission_judge_policy(
+                        project,
+                    ));
+                }
+            }
+            Self::Unattended => {
+                calls.push(api::permission_judge::load_unattended_system_default());
+                if let Some(project) = &app.judge_policy_project {
+                    calls.push(api::permission_judge::load_project_unattended_default(
                         project,
                     ));
                 }
@@ -1071,6 +1085,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::PermissionJudge => permission_judge::rows(app),
         PageId::SetupGuide => setup_guide::rows(app),
         PageId::ProjectPermissionJudge => project_permission_judge::rows(app),
+        PageId::Unattended => unattended::rows(app),
         PageId::Providers => settings::providers(app),
         PageId::Credentials => settings::credentials(app),
         PageId::Models => models::models(app),

@@ -732,6 +732,11 @@ impl FakeService {
                 "service_system_prompt_settings" => {
                     return self.system_prompt_snapshot(required(&call.params, "/projectId")?);
                 }
+                "service_project_unattended_default" => {
+                    let mut policy = self.loads[call.method].clone();
+                    policy["projectId"] = required(&call.params, "/projectId")?.clone();
+                    return Ok(policy);
+                }
                 "service_project_permission_judge_policy" => {
                     let mut policy = self.loads[call.method].clone();
                     policy["projectId"] = required(&call.params, "/projectId")?.clone();
@@ -1179,6 +1184,19 @@ impl FakeService {
                 }
                 snapshot["cuda"]["lockedDirectory"] =
                     required(request, "/cudaLibraryDirectory")?.clone();
+            }
+            "service_save_unattended_system_default" => {
+                // The demo keeps one system text; a project that follows it shows the new text.
+                // 演示保留一份系统文本；跟随它的项目显示新文本。
+                let text = required(params, "/request/denyPolicy")?.clone();
+                self.loads["service_unattended_system_default"]["denyPolicy"] = text.clone();
+                self.loads["service_project_unattended_default"]["systemDenyPolicy"] = text;
+            }
+            "service_save_project_unattended_default" => {
+                // The demo keeps one project text; null follows the system default.
+                // 演示保留一份项目文本；null 表示跟随系统默认值。
+                self.loads["service_project_unattended_default"]["denyPolicy"] =
+                    required(params, "/request/denyPolicy")?.clone();
             }
             "service_save_project_permission_judge_policy" => {
                 // Saved choices; omitted categories follow the default.

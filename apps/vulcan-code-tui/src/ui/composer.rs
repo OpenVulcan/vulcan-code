@@ -18,7 +18,7 @@ use crate::app::commands::AppCommand;
 use crate::app::hit::Target;
 use crate::app::{App, Focus, input};
 use crate::backend::Command;
-use crate::model::ExecutionMode;
+use crate::model::{ExecutionMode, Unattended};
 use crate::tr;
 
 /// Text rows the composer may grow to, as a share of the conversation column's height.
@@ -246,8 +246,15 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
     }
     // The saved permission mode opens the same choices as the WebUI settings menu.
     // 已保存的权限模式打开与 WebUI 设置菜单相同的选项。
-    if let Some(mode) = app.session().and_then(|session| session.permission_mode) {
-        let chip = format!("⛨ {}", crate::app::permission_mode::label(mode));
+    // An unattended session names the mode inside the same chip.
+    // 无人值守会话在同一标签内标出该模式。
+    if let Some(session) = app.session()
+        && let Some(mode) = session.permission_mode
+    {
+        let mut chip = format!("⛨ {}", crate::app::permission_mode::label(mode));
+        if matches!(session.unattended, Unattended::On(_)) {
+            chip.push_str(&format!(" · {}", tr!("permissionMode.unattended.chip")));
+        }
         if x + width_of(&chip) as u16 + 2 <= area.right() {
             x += button(
                 app,

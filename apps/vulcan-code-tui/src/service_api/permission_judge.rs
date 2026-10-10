@@ -240,3 +240,67 @@ pub fn save_project_permission_judge_policy(project_id: &str, options: Value) ->
         &[Slot::ProjectPermissionJudgePolicy],
     )
 }
+
+// A system default change also changes what a project that follows it shows.
+// 系统默认值变化也会改变跟随它的项目所显示的内容。
+const UNATTENDED: &[Slot] = &[
+    Slot::UnattendedSystemDefault,
+    Slot::ProjectUnattendedDefault,
+];
+
+/// Builds the request for `service_unattended_system_default`.
+/// 构建 `service_unattended_system_default` 的请求。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_unattended_system_default() -> ServiceCall {
+    ServiceCall::load(
+        "load_unattended_system_default",
+        "service_unattended_system_default",
+        json!({}),
+        Slot::UnattendedSystemDefault,
+    )
+}
+
+/// Builds the request for `service_save_unattended_system_default`; sessions that are already
+/// unattended keep the text they confirmed.
+/// 构建 `service_save_unattended_system_default` 的请求；已处于无人值守的会话保留其确认的文本。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_unattended_system_default(deny_policy: &str) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_unattended_system_default",
+        "service_save_unattended_system_default",
+        json!({ "request": { "denyPolicy": deny_policy } }),
+        UNATTENDED,
+    )
+}
+
+/// Builds the request for `service_project_unattended_default`.
+/// 构建 `service_project_unattended_default` 的请求。
+/// `project_id` is the project whose default deny policy is read.
+/// `project_id` 为读取其默认拒绝策略的项目。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_project_unattended_default(project_id: &str) -> ServiceCall {
+    ServiceCall::load(
+        "load_project_unattended_default",
+        "service_project_unattended_default",
+        json!({ "projectId": project_id }),
+        Slot::ProjectUnattendedDefault,
+    )
+}
+
+/// Builds the request for `service_save_project_unattended_default`.
+/// 构建 `service_save_project_unattended_default` 的请求。
+/// `deny_policy` is the project's own text, or `None` to follow the system default.
+/// `deny_policy` 为项目自有文本；为 `None` 时跟随系统默认值。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_project_unattended_default(project_id: &str, deny_policy: Option<&str>) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_project_unattended_default",
+        "service_save_project_unattended_default",
+        json!({ "request": { "projectId": project_id, "denyPolicy": deny_policy } }),
+        &[Slot::ProjectUnattendedDefault],
+    )
+}

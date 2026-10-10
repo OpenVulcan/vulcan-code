@@ -199,6 +199,12 @@ pub enum Slot {
     /// The shown page of `loadPermissionJudgeRecords`; its loader carries the filters.
     /// `loadPermissionJudgeRecords` 当前显示的一页；其加载器携带筛选条件。
     PermissionJudgeRecords,
+    /// `loadUnattendedSystemDefault` of the unattended defaults page.
+    /// 无人值守默认值页的 `loadUnattendedSystemDefault`。
+    UnattendedSystemDefault,
+    /// `loadProjectUnattendedDefault` of the project chosen on the unattended defaults page.
+    /// 无人值守默认值页所选项目的 `loadProjectUnattendedDefault`。
+    ProjectUnattendedDefault,
 }
 
 impl Slot {

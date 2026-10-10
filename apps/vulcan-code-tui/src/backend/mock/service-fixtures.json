@@ -1348,6 +1348,16 @@
         "pollIntervalMs": 2000
       }
     },
+    "service_unattended_system_default": {
+      "denyPolicy": "Never push to a remote.\nNever delete or reset a database.",
+      "maxChars": 4000
+    },
+    "service_project_unattended_default": {
+      "projectId": "",
+      "denyPolicy": null,
+      "systemDenyPolicy": "Never push to a remote.\nNever delete or reset a database.",
+      "maxChars": 4000
+    },
     "service_project_permission_judge_policy": {
       "projectId": "",
       "options": [
