@@ -22,6 +22,23 @@ fn option_label(code: &str) -> String {
     }
 }
 
+/// What a known policy category covers; unknown categories have no hint.
+/// 已知策略类别涵盖的内容；未知类别没有说明。
+fn option_hint(code: &str) -> Option<String> {
+    match code {
+        "cross_project_writes" => Some(tr!(
+            "projectSettings.permissionJudge.optionHint.crossProjectWrites"
+        )),
+        "database_reset" => Some(tr!(
+            "projectSettings.permissionJudge.optionHint.databaseReset"
+        )),
+        "project_reset" => Some(tr!(
+            "projectSettings.permissionJudge.optionHint.projectReset"
+        )),
+        _ => None,
+    }
+}
+
 /// Labels a policy mode; unknown modes show as is.
 /// 为策略档位生成标签；未知档位按原样显示。
 fn mode_label(code: &str) -> String {
@@ -112,7 +129,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
                 .filter_map(Value::as_str)
                 .map(|mode| (mode.to_string(), mode_label(mode))),
         );
-        rows.push(choice(
+        let row = choice(
             option_label(&key),
             choices,
             v(option, "/chosenMode")
@@ -123,7 +140,11 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
                 ctx: json!({ "snapshot": snapshot, "key": key }),
                 build: select_mode,
             }),
-        ));
+        );
+        rows.push(match option_hint(&key) {
+            Some(hint) => row.detail(hint),
+            None => row,
+        });
     }
     let unsupported: Vec<String> = v(snapshot, "/unsupportedOptions")
         .as_object()

@@ -17,7 +17,8 @@ import { PermissionJudgeCloudSection } from "@/components/features/settings/perm
 import {
   PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
 } from "@/components/features/settings/permission-judge-cuda-page";
-import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { DEVICE_KEYS, MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { PermissionJudgePolicyPage } from "@/components/features/settings/permission-judge-policy-page";
 import { PermissionJudgeRecordsPage } from "@/components/features/settings/permission-judge-records-page";
 import { PermissionJudgeRegisterForm } from "@/components/features/settings/permission-judge-register-form";
 import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
@@ -41,6 +42,7 @@ import type {
   PermissionJudgeBenchmarkResult,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
+  ProjectSummary,
 } from "@/types";
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
@@ -85,7 +87,7 @@ function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
 
 // View is the page shown inside the settings frame: the overview or one of its sub-pages.
 // View 是设置框架内显示的页面：总览或其子页面之一。
-type View = "overview" | "models" | "cuda" | "diagnostics" | "records";
+type View = "overview" | "models" | "cuda" | "diagnostics" | "records" | "policy";
 
 // Failure is one failed action: a readable outcome plus the raw service error.
 // Failure 是一次失败的操作：可读结果加原始服务错误。
@@ -108,7 +110,7 @@ type RunAction = (name: string, failureKey: TranslationKey, action: () => Promis
 // 选择会等到开启时才一并保存，因此在该显式选择之前不写入任何内容。
 // Parameters: none. Returns the settings page.
 // 参数：无。返回设置页。
-export function PermissionJudgeSettingsArea() {
+export function PermissionJudgeSettingsArea(props: { projects?: readonly ProjectSummary[] }) {
   const { locale, t } = useI18n();
   // openGuide re-enters the setup guide; absent outside the workbench layout.
   // openGuide 重新进入初始化引导；在工作台布局之外为空。
@@ -262,6 +264,9 @@ export function PermissionJudgeSettingsArea() {
           async () => setStatus(await installPermissionJudgeCuda(component)))}
         onSelectDirectory={(cudaLibraryDirectory) => persist({ cudaLibraryDirectory })} />);
   }
+  if (view === "policy") {
+    return subPage(t("settings.permissionJudge.policy.title"), <PermissionJudgePolicyPage projects={props.projects ?? []} />);
+  }
   if (view === "records") {
     return subPage(t("settings.permissionJudge.records.title"), <PermissionJudgeRecordsPage />);
   }
@@ -314,8 +319,8 @@ export function PermissionJudgeSettingsArea() {
   const worker = status.worker;
   const phaseTone = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
   const cudaMissing = snapshot.cuda.supported ? cudaMissingLabels(t, cudaReadiness(snapshot.cuda)) : [];
-  const open = (next: View) => <Button type="button" size="sm" variant="outline" data-judge-open={next} onClick={() => setView(next)}>
-    {t("settings.permissionJudge.open")}<ChevronRight size={14} />
+  const open = (next: View, text = t("settings.permissionJudge.open")) => <Button type="button" size="sm" variant="outline" data-judge-open={next} onClick={() => setView(next)}>
+    {text}<ChevronRight size={14} />
   </Button>;
 
   return <PageBody data-permission-judge-page="" data-judge-view="overview">
@@ -413,6 +418,19 @@ export function PermissionJudgeSettingsArea() {
         {formatMessage(t("settings.permissionJudge.activeModelIssue"), { code: snapshot.activeModelIssue.code })}
       </PageNotice> : null}
     </PageSection> : <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />}
+
+    {enabled && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
+      title={t("settings.permissionJudge.policy.title")} description={t("settings.permissionJudge.policy.description")}
+      actions={open("policy", t("settings.permissionJudge.policy.manage"))}>
+      {snapshot.policyOptions.map((option) => (
+        <PageRow key={option.key} label={label(t, OPTION_KEYS, option.key)}
+          description={Object.hasOwn(OPTION_HINT_KEYS, option.key) ? t(OPTION_HINT_KEYS[option.key]) : undefined}>
+          <span className="text-sm text-muted-foreground">
+            {formatMessage(t("settings.permissionJudge.policy.default"), { mode: label(t, MODE_KEYS, option.defaultMode) })}
+          </span>
+        </PageRow>
+      ))}
+    </PageSection> : null}
 
     <PermissionReviewRouteSection>
       <PageRow label={t("settings.permissionJudge.llmMayAllowBlocked")} description={t("settings.permissionJudge.llmMayAllowBlockedHint")}>

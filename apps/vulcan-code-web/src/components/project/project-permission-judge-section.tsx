@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
-import { MODE_KEYS, OPTION_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import { loadProjectPermissionJudgePolicy, saveProjectPermissionJudgePolicy } from "@/service/permission-judge-service";
@@ -27,17 +27,26 @@ export function nextPolicyOptions(snapshot: ProjectPermissionJudgePolicySnapshot
   return options;
 }
 
-// ProjectPermissionJudgeSection edits how the permission judge treats each category of the model
-// in use for one project. Each change saves at once; choices for categories the model no longer
-// has are kept by the service.
-// ProjectPermissionJudgeSection 编辑权限判定在单个项目中如何处理使用中模型的各个类别。每次修改立即
-// 保存；模型已不再有的类别的选择由服务保留。
-export function ProjectPermissionJudgeSection(props: { projectId: string }) {
+// ProjectPermissionJudgePolicy is the loaded state of one project's category choices.
+// ProjectPermissionJudgePolicy 是单个项目类别选择的加载状态。
+export interface ProjectPermissionJudgePolicy {
+  snapshot: ProjectPermissionJudgePolicySnapshot | null;
+  loadError: string | null;
+  // saving is the category key being saved.
+  // saving 是正在保存的类别键。
+  saving: string | null;
+  load: () => Promise<void>;
+  save: (key: string, mode: string) => Promise<void>;
+}
+
+// useProjectPermissionJudgePolicy reads one project's choices for the model in use and saves each
+// change at once; responses of an older project or read are dropped.
+// useProjectPermissionJudgePolicy 读取单个项目针对使用中模型的选择，并立即保存每次修改；旧项目或旧读取的响应会被丢弃。
+export function useProjectPermissionJudgePolicy(projectId: string | null): ProjectPermissionJudgePolicy {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<ProjectPermissionJudgePolicySnapshot | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState<string | null>(null);
-  const labelId = React.useId();
   // sequenceRef drops responses of an older project or an older read.
   // sequenceRef 丢弃旧项目或旧读取的响应。
   const sequenceRef = React.useRef(0);
@@ -46,13 +55,14 @@ export function ProjectPermissionJudgeSection(props: { projectId: string }) {
     const sequence = ++sequenceRef.current;
     setSnapshot(null);
     setLoadError(null);
+    if (projectId === null) return;
     try {
-      const next = await loadProjectPermissionJudgePolicy(props.projectId);
+      const next = await loadProjectPermissionJudgePolicy(projectId);
       if (sequenceRef.current === sequence) setSnapshot(next);
     } catch (cause) {
       if (sequenceRef.current === sequence) setLoadError(errorMessage(cause));
     }
-  }, [props.projectId]);
+  }, [projectId]);
 
   React.useEffect(() => {
     void load();
@@ -66,7 +76,7 @@ export function ProjectPermissionJudgeSection(props: { projectId: string }) {
     const sequence = sequenceRef.current;
     setSaving(key);
     try {
-      const next = await saveProjectPermissionJudgePolicy(props.projectId, nextPolicyOptions(snapshot, key, mode));
+      const next = await saveProjectPermissionJudgePolicy(snapshot.projectId, nextPolicyOptions(snapshot, key, mode));
       if (sequenceRef.current === sequence) {
         setSnapshot(next);
         toast.success(t("projectSettings.permissionJudge.saved"));
@@ -77,6 +87,19 @@ export function ProjectPermissionJudgeSection(props: { projectId: string }) {
       if (sequenceRef.current === sequence) setSaving(null);
     }
   };
+
+  return { snapshot, loadError, saving, load, save };
+}
+
+// ProjectPermissionJudgeSection edits how the permission judge treats each category of the model
+// in use for one project. Each change saves at once; choices for categories the model no longer
+// has are kept by the service.
+// ProjectPermissionJudgeSection 编辑权限判定在单个项目中如何处理使用中模型的各个类别。每次修改立即
+// 保存；模型已不再有的类别的选择由服务保留。
+export function ProjectPermissionJudgeSection(props: { projectId: string }) {
+  const { t } = useI18n();
+  const { snapshot, loadError, saving, load, save } = useProjectPermissionJudgePolicy(props.projectId);
+  const labelId = React.useId();
 
   const unsupported = snapshot ? Object.keys(snapshot.unsupportedOptions) : [];
   return (
@@ -107,6 +130,7 @@ export function ProjectPermissionJudgeSection(props: { projectId: string }) {
           ) : snapshot.options.map((option) => (
             <div className="space-y-1.5" data-judge-option={option.key} key={option.key}>
               <span className="block text-xs font-medium" id={`${labelId}-${option.key}`}>{label(t, OPTION_KEYS, option.key)}</span>
+              {Object.hasOwn(OPTION_HINT_KEYS, option.key) ? <span className="block text-xs text-muted-foreground">{t(OPTION_HINT_KEYS[option.key])}</span> : null}
               <Select
                 disabled={saving !== null}
                 onValueChange={(mode) => void save(option.key, mode)}

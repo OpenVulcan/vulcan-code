@@ -26,6 +26,8 @@ const service = vi.hoisted(() => ({
   removePermissionJudgeModel: vi.fn(),
   rollbackPermissionJudgeModel: vi.fn(),
   installPermissionJudgeCuda: vi.fn(),
+  loadProjectPermissionJudgePolicy: vi.fn(),
+  saveProjectPermissionJudgePolicy: vi.fn(),
 }));
 vi.mock("@/service/permission-judge-service", () => service);
 vi.mock("@/service/project-actions-service", () => ({ browseProjectDirectories: vi.fn(), openExternalUrl: vi.fn() }));
@@ -222,4 +224,21 @@ it("polls the status at the interval it publishes", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+// The categories of the model in use are listed on the overview and open per project.
+// 使用中模型的类别列在总览上，并按项目打开。
+it("lists the model's categories and opens them for the first project", async () => {
+  const withOptions = { ...snapshot("ready"), policyOptions: [{ key: "database_reset", defaultMode: "confirm", modes: ["confirm", "allow"] }] };
+  service.loadPermissionJudgeSettings.mockResolvedValue(withOptions);
+  service.loadPermissionJudgeStatus.mockResolvedValue(withOptions.status);
+  service.loadProjectPermissionJudgePolicy.mockResolvedValue({
+    projectId: "p1", options: [{ ...withOptions.policyOptions[0], chosenMode: null }], unsupportedOptions: {}, issue: null,
+  });
+  const projects = [{ id: "p1", name: "One", path: "D:/one" }, { id: "p2", name: "Two", path: "D:/two" }] as never;
+  await act(async () => root.render(<PermissionJudgeSettingsArea projects={projects} />));
+  expect(host.querySelector("[data-judge-policy-summary]")?.textContent).toContain("projectSettings.permissionJudge.option.databaseReset");
+  await openView("policy");
+  expect(service.loadProjectPermissionJudgePolicy).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(host.querySelector('[data-judge-policy] [data-judge-option="database_reset"]')).not.toBeNull();
 });
