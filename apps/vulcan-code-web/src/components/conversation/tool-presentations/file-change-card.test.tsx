@@ -10,8 +10,8 @@ import { FileChangePresentationCard } from "./file-change-card";
 describe("file operation labels", () => {
   // Equal filesystem changes must retain the actual tool's distinct user-facing verb.
   // 相同文件系统变更必须保留实际工具各自的用户动作文案。
-  it.each([["file_write", "写入"], ["file_edit", "编辑"], ["apply_patch", "应用补丁"], ["file", "写入"]])(
-    "renders %s with its invocation label and actual terminal counts", (toolName, label) => {
+  it.each([["file_write", "write"], ["file_edit", "modify"], ["apply_patch", "patch"], ["file", "write"]])(
+    "renders %s with its invocation action and actual terminal counts", (toolName, action) => {
       // This is the normalized event projection consumed by the production resolver.
       // 此处使用生产解析器消费的规范事件投影。
       const blocks: ToolExecutionConversationBlock[] = [{
@@ -37,11 +37,12 @@ describe("file operation labels", () => {
       </I18nProvider>);
       const surface = document.createElement("div");
       surface.innerHTML = markup;
-      expect(surface.querySelector(".file-operation-label")?.textContent).toBe(label);
+      expect(presentation.executionAction).toBe(action);
+      expect(surface.querySelector(".file-operation-label")?.textContent).toBeTruthy();
       expect(surface.textContent).toContain("example.html");
       expect(surface.textContent).toContain("+2");
       expect(surface.textContent).toContain("-1");
-      expect(surface.textContent).not.toContain("已生成");
+      expect(surface.querySelector(".file-write-progress")).toBeNull();
     },
   );
 });

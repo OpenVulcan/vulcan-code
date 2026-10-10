@@ -256,7 +256,7 @@
   "crates/vulcan-workspace-store/src/vce_data_plane/tests.rs": 2,
   "crates/vulcan-workspace-store/src/vmm_data_plane.rs": 2,
   "crates/vulcan-workspace-store/src/vmm_data_plane/lexical_tests.rs": 13,
-  "crates/vulcan-workspace-store/src/workspace_store/loading.rs": 8,
+  "crates/vulcan-workspace-store/src/workspace_store/loading.rs": 7,
   "crates/vulcan-workspace-store/src/workspace_store/persistence/projects.rs": 12,
   "crates/vulcan-workspace-store/src/workspace_store/provider_usage.rs": 1
 }
