@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "Confirmar limpieza",
   "settings.gitCommit.description": "Cómo se nombran las nuevas ramas y qué modelo redacta los mensajes de commit.",
   "settings.permissionJudge": "Evaluación de permisos",
-  "settings.permissionJudge.description": "Un modelo local puntúa las llamadas a herramientas arriesgadas antes de que lleguen a ti.",
+  "settings.permissionJudge.description": "Un modelo de juez local o en la nube puntúa las llamadas a herramientas arriesgadas antes de que lleguen a ti.",
   "settings.permissionJudge.loadFailed": "No se pudo leer la configuración de la evaluación de permisos.",
   "settings.permissionJudge.enabled": "Usar la evaluación de permisos",
   "settings.permissionJudge.enabledHint": "Las llamadas que escriben en el espacio de trabajo se puntúan primero. Lo que la evaluación no apruebe sigue llegando a ti.",

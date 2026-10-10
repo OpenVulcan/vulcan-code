@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "クリーンアップを確認",
   "settings.gitCommit.description": "新しいブランチの命名方法と、コミットメッセージを書くモデル。",
   "settings.permissionJudge": "権限判定",
-  "settings.permissionJudge.description": "ローカルモデルがリスクのあるツール呼び出しを先に採点し、確認が必要かを判断します。",
+  "settings.permissionJudge.description": "ローカルまたはクラウドの判定モデルがリスクのあるツール呼び出しを先に採点し、確認が必要かを判断します。",
   "settings.permissionJudge.loadFailed": "権限判定の設定を読み込めませんでした。",
   "settings.permissionJudge.enabled": "権限判定を使う",
   "settings.permissionJudge.enabledHint": "ワークスペースへの書き込み呼び出しを先に採点します。判定で許可されなかった呼び出しはこれまでどおり確認を求めます。",

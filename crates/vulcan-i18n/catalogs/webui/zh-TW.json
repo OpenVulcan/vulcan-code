@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "確認清除",
   "settings.gitCommit.description": "提交程式碼時新分支如何命名、用哪個模型撰寫提交說明。",
   "settings.permissionJudge": "權限判定",
-  "settings.permissionJudge.description": "由本機模型先為有風險的工具呼叫評分，再決定是否需要你確認。",
+  "settings.permissionJudge.description": "由本機或雲端判定模型先為有風險的工具呼叫評分，再決定是否需要你確認。",
   "settings.permissionJudge.loadFailed": "無法讀取權限判定設定。",
   "settings.permissionJudge.enabled": "使用權限判定",
   "settings.permissionJudge.enabledHint": "會先為寫入工作區的呼叫評分；判定未放行的呼叫仍會交給你。",

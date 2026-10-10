@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "Confirmer le nettoyage",
   "settings.gitCommit.description": "Comment nommer les nouvelles branches et quel modèle rédige les messages de commit.",
   "settings.permissionJudge": "Évaluation des autorisations",
-  "settings.permissionJudge.description": "Un modèle local note les appels d'outils risqués avant qu'ils ne vous parviennent.",
+  "settings.permissionJudge.description": "Un modèle de juge local ou cloud note les appels d'outils risqués avant qu'ils ne vous parviennent.",
   "settings.permissionJudge.loadFailed": "Impossible de lire les paramètres de l'évaluation des autorisations.",
   "settings.permissionJudge.enabled": "Utiliser l'évaluation des autorisations",
   "settings.permissionJudge.enabledHint": "Les appels qui écrivent dans l'espace de travail sont d'abord notés. Ce que l'évaluation n'approuve pas vous parvient toujours.",

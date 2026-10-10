@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "Подтвердить очистку",
   "settings.gitCommit.description": "Как называть новые ветки и какая модель пишет сообщения коммитов.",
   "settings.permissionJudge": "Оценка разрешений",
-  "settings.permissionJudge.description": "Локальная модель оценивает рискованные вызовы инструментов до того, как они дойдут до вас.",
+  "settings.permissionJudge.description": "Локальная или облачная модель проверки оценивает рискованные вызовы инструментов до того, как они дойдут до вас.",
   "settings.permissionJudge.loadFailed": "Не удалось прочитать настройки оценки разрешений.",
   "settings.permissionJudge.enabled": "Использовать оценку разрешений",
   "settings.permissionJudge.enabledHint": "Сначала оцениваются вызовы, записывающие в рабочее пространство. То, что оценка не пропустила, по-прежнему приходит к вам.",

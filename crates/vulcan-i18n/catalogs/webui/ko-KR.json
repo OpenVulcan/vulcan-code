@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "정리 확인",
   "settings.gitCommit.description": "새 브랜치 이름을 정하는 방식과 커밋 메시지를 작성할 모델.",
   "settings.permissionJudge": "권한 판정",
-  "settings.permissionJudge.description": "로컬 모델이 위험한 도구 호출을 먼저 채점해 확인이 필요한지 판단합니다.",
+  "settings.permissionJudge.description": "로컬 또는 클라우드 판정 모델이 위험한 도구 호출을 먼저 채점해 확인이 필요한지 판단합니다.",
   "settings.permissionJudge.loadFailed": "권한 판정 설정을 읽지 못했습니다.",
   "settings.permissionJudge.enabled": "권한 판정 사용",
   "settings.permissionJudge.enabledHint": "작업 공간 쓰기 호출을 먼저 채점합니다. 판정이 허용하지 않은 호출은 계속 확인을 요청합니다.",

@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "Confirm cleanup",
   "settings.gitCommit.description": "How new branches are named and which model writes commit messages.",
   "settings.permissionJudge": "Permission judge",
-  "settings.permissionJudge.description": "A local model scores risky tool calls before they reach you.",
+  "settings.permissionJudge.description": "A local or cloud judge model scores risky tool calls before they reach you.",
   "settings.permissionJudge.loadFailed": "Couldn't read the permission judge settings.",
   "settings.permissionJudge.enabled": "Use the permission judge",
   "settings.permissionJudge.enabledHint": "Workspace-write calls are scored first. Anything the judge doesn't clear still comes to you.",

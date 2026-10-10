@@ -3306,7 +3306,7 @@
   "settings.diagnostics.confirmCleanup": "Bereinigung bestätigen",
   "settings.gitCommit.description": "Wie neue Branches benannt werden und welches Modell Commit-Nachrichten schreibt.",
   "settings.permissionJudge": "Berechtigungsprüfung",
-  "settings.permissionJudge.description": "Ein lokales Modell bewertet riskante Tool-Aufrufe, bevor sie dich erreichen.",
+  "settings.permissionJudge.description": "Ein lokales oder Cloud-Prüfmodell bewertet riskante Tool-Aufrufe, bevor sie dich erreichen.",
   "settings.permissionJudge.loadFailed": "Die Einstellungen der Berechtigungsprüfung konnten nicht gelesen werden.",
   "settings.permissionJudge.enabled": "Berechtigungsprüfung verwenden",
   "settings.permissionJudge.enabledHint": "Schreibzugriffe auf den Arbeitsbereich werden zuerst bewertet. Was die Prüfung nicht freigibt, kommt weiterhin zu dir.",
