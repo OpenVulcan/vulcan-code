@@ -63,9 +63,6 @@ const PROVIDER_TASK_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Re-read an MCP sign-in while its flow waits for the browser or exchanges the code.
 /// MCP 登录流程等待浏览器或交换授权码期间重新读取其状态。
 const MCP_OAUTH_POLL_INTERVAL: Duration = Duration::from_secs(2);
-/// How often the permission judge's live status refreshes while its page is open.
-/// 权限判定页打开期间实时状态的刷新间隔。
-const PERMISSION_JUDGE_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -1136,9 +1133,13 @@ impl App {
                 Some("awaiting_callback" | "exchanging")
             )
             .then_some(MCP_OAUTH_POLL_INTERVAL),
-            // Memory, GPU use and latency keep changing, so the status is read while shown.
-            // 内存、GPU 占用与延迟持续变化，因此状态在显示期间持续读取。
-            Slot::PermissionJudgeStatus => Some(PERMISSION_JUDGE_STATUS_POLL_INTERVAL),
+            // Memory, GPU use and latency keep changing, so the status is read while shown, at
+            // the interval the service publishes in it.
+            // 内存、GPU 占用与延迟持续变化，因此状态在显示期间按服务在其中发布的间隔持续读取。
+            Slot::PermissionJudgeStatus => value
+                .pointer("/pollIntervalMs")
+                .and_then(|interval| interval.as_u64())
+                .map(Duration::from_millis),
             _ => return,
         };
         match interval {

@@ -273,6 +273,9 @@ pub struct PermissionJudgeStatus {
     /// Latest CUDA installation, while running or until the next one starts.
     /// 最近一次 CUDA 安装，运行中或直到下次开始前保留。
     pub cuda_install: Option<PermissionJudgeCudaInstall>,
+    /// How often clients re-read this status while the settings page is open, in milliseconds.
+    /// 设置页打开期间客户端重新读取本状态的间隔（毫秒）。
+    pub poll_interval_ms: u64,
 }
 
 /// Local worker lifecycle phase.

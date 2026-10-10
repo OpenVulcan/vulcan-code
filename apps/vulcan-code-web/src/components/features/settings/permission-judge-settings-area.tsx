@@ -38,10 +38,6 @@ import type {
   PermissionJudgeStatus,
 } from "@/types";
 
-// STATUS_POLL_MS is how often the live status refreshes while this page is open.
-// STATUS_POLL_MS 是本页打开期间实时状态的刷新间隔。
-const STATUS_POLL_MS = 2000;
-
 // Labels of stable codes sent by the service; unknown codes render as themselves.
 // 服务发送的稳定代码对应的标签；未知代码按原样显示。
 const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
@@ -162,17 +158,19 @@ export function PermissionJudgeSettingsArea() {
 
   React.useEffect(() => { void reload(); }, [reload]);
 
-  // Poll the live status; a finished CUDA installation re-reads detection.
-  // 轮询实时状态；CUDA 安装结束后重新读取探测结果。
+  // Poll the live status at the interval it publishes; a finished CUDA installation re-reads detection.
+  // 按实时状态发布的间隔轮询；CUDA 安装结束后重新读取探测结果。
   const installRunning = status?.cudaInstall?.running ?? false;
+  const pollIntervalMs = status?.pollIntervalMs;
   const wasInstalling = React.useRef(false);
   React.useEffect(() => {
+    if (pollIntervalMs === undefined) return;
     let cancelled = false;
     const timer = window.setInterval(() => {
       void loadPermissionJudgeStatus().then((next) => { if (!cancelled) setStatus(next); }).catch(() => undefined);
-    }, STATUS_POLL_MS);
+    }, pollIntervalMs);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, []);
+  }, [pollIntervalMs]);
   React.useEffect(() => {
     if (wasInstalling.current && !installRunning) void reload();
     wasInstalling.current = installRunning;

@@ -80,7 +80,7 @@ function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeS
       requiredLibraries: [], onnxruntimeDirectory: null, detectedDirectories: [], lockedDirectory: null,
       lockedDirectoryMissing: [], archives: [], links: [],
     },
-    status: { worker: worker(phase), cudaInstall: null },
+    status: { worker: worker(phase), cudaInstall: null, pollIntervalMs: 2000 },
   };
 }
 
@@ -164,4 +164,21 @@ it("tests a ready model before any backend is saved", async () => {
   service.loadPermissionJudgeStatus.mockResolvedValue(unset.status);
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
   expect(buttonByKey("settings.permissionJudge.benchmarkSingle")?.disabled).toBe(false);
+});
+
+// The live status is re-read at the interval the service publishes in it.
+// 实时状态按服务在其中发布的间隔重新读取。
+it("polls the status at the interval it publishes", async () => {
+  vi.useFakeTimers();
+  try {
+    const initial = snapshot("ready");
+    service.loadPermissionJudgeSettings.mockResolvedValue({ ...initial, status: { ...initial.status, pollIntervalMs: 500 } });
+    service.loadPermissionJudgeStatus.mockResolvedValue({ ...initial.status, pollIntervalMs: 500 });
+    await act(async () => root.render(<PermissionJudgeSettingsArea />));
+    expect(service.loadPermissionJudgeStatus).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(service.loadPermissionJudgeStatus).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });

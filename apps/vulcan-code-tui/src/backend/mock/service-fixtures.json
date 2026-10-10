@@ -1344,7 +1344,8 @@
           "recentP50Ms": 18.4,
           "recentP95Ms": 31.9
         },
-        "cudaInstall": null
+        "cudaInstall": null,
+        "pollIntervalMs": 2000
       }
     },
     "service_project_permission_judge_policy": {
@@ -1357,6 +1358,7 @@
       "issue": null
     },
     "service_permission_judge_status": {
+      "pollIntervalMs": 2000,
       "worker": {
         "phase": "ready",
         "modelId": "demo-judge-official",

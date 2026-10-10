@@ -48,6 +48,11 @@ use crate::{
 /// 速度测试可计时的行数：一条调用或十条批次。
 const BENCHMARK_BATCH_SIZES: [u32; 2] = [1, 10];
 
+/// How often clients re-read the live status while the settings page is open; the only definition,
+/// published in every status read.
+/// 设置页打开期间客户端重新读取实时状态的间隔；唯一定义，随每次状态读取发布。
+const STATUS_POLL_INTERVAL_MS: u64 = 2_000;
+
 /// Reads the runtime and the saved judge settings.
 /// 读取运行时与已保存的判定设置。
 pub(super) fn read_state(
@@ -276,6 +281,7 @@ async fn status_of(runtime: &PermissionJudgeRuntime) -> PermissionJudgeStatus {
             .lock()
             .ok()
             .and_then(|install| install.clone()),
+        poll_interval_ms: STATUS_POLL_INTERVAL_MS,
     }
 }
 

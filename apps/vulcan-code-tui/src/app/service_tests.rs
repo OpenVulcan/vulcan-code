@@ -136,6 +136,23 @@ fn provider_tasks_are_polled_only_while_live() {
     }
 }
 
+/// The permission judge status is re-read at the interval the service publishes in it.
+/// 权限判定状态按服务在其中发布的间隔重读。
+#[test]
+fn judge_status_is_polled_at_its_published_interval() {
+    let (mut app, _commands) = isolated_app();
+    app.slots.set(
+        Slot::PermissionJudgeStatus,
+        crate::service_api::permission_judge::load_permission_judge_status(),
+        json!({"worker": {}, "cudaInstall": null, "pollIntervalMs": 500}),
+    );
+    app.arm_live_poll(Slot::PermissionJudgeStatus);
+    assert_eq!(
+        app.live_poll_due.get(&Slot::PermissionJudgeStatus),
+        Some(&(app.now + Duration::from_millis(500)))
+    );
+}
+
 /// Resource input preserves pasted line breaks, indentation and explicit newline keys through confirmation.
 /// 资源输入通过确认保留粘贴换行、缩进及明确换行按键。
 #[test]

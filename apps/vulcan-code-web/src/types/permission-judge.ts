@@ -124,6 +124,9 @@ export interface PermissionJudgeCudaInstall {
 export interface PermissionJudgeStatus {
   worker: PermissionJudgeWorkerStatus;
   cudaInstall: PermissionJudgeCudaInstall | null;
+  // How often this status is re-read while the settings page is open, set by the service.
+  // 设置页打开期间重新读取本状态的间隔，由服务设定。
+  pollIntervalMs: number;
 }
 
 // PermissionJudgeSettingsSnapshot is everything the "Permission judge" settings page shows.
