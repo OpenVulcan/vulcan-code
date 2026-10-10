@@ -1168,7 +1168,13 @@ impl FakeService {
                 // Settings snapshot fixture.
                 // 设置快照夹具。
                 let snapshot = &mut self.loads["service_permission_judge_settings"];
-                for field in ["state", "backend", "device", "llmMayAllowBlocked"] {
+                for field in [
+                    "state",
+                    "backend",
+                    "device",
+                    "llmMayAllowBlocked",
+                    "recordDecisions",
+                ] {
                     snapshot[field] = required(request, &format!("/{field}"))?.clone();
                 }
                 snapshot["cuda"]["lockedDirectory"] =

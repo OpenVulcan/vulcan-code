@@ -31,6 +31,9 @@ pub struct PermissionJudgeSettingsSnapshot {
     /// Whether the review LLM may allow calls the judge blocked.
     /// 复核 LLM 是否可以放行判定器拦截的调用。
     pub llm_may_allow_blocked: bool,
+    /// Whether decisions are kept in the local decision log.
+    /// 是否在本机判定记录中保存决定。
+    pub record_decisions: bool,
     /// Registered local model packages.
     /// 已登记的本机模型包。
     pub models: Vec<PermissionJudgeModelSummary>,
@@ -406,6 +409,10 @@ pub struct PermissionJudgeSettingsSaveRequest {
     /// 复核 LLM 是否可以放行判定器拦截的调用。
     #[serde(default)]
     pub llm_may_allow_blocked: bool,
+    /// Whether decisions are kept in the local decision log; required so that no save turns it
+    /// off by omission.
+    /// 是否在本机判定记录中保存决定；必填，避免任何保存因遗漏而将其关闭。
+    pub record_decisions: bool,
 }
 
 /// Registers a local model package after full verification.

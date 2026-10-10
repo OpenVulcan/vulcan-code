@@ -71,6 +71,7 @@ interface Choices {
   device: JudgeDevice | null;
   cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
+  recordDecisions: boolean;
 }
 
 // savedChoices reads the saved choices; an unset backend is local and an unset device follows the
@@ -82,6 +83,7 @@ function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
     device: snapshot.device ?? snapshot.recommendedDevice,
     cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
     llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
+    recordDecisions: snapshot.recordDecisions,
   };
 }
 
@@ -268,7 +270,15 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     return subPage(t("settings.permissionJudge.policy.title"), <PermissionJudgePolicyPage projects={props.projects ?? []} />);
   }
   if (view === "records") {
-    return subPage(t("settings.permissionJudge.records.title"), <PermissionJudgeRecordsPage />);
+    return subPage(t("settings.permissionJudge.records.title"), <>
+      <PageSection layout="rows" data-records-switch="" title={t("settings.permissionJudge.records.recording")}>
+        <PageRow label={t("settings.permissionJudge.records.enabled")} description={t("settings.permissionJudge.records.enabledHint")}>
+          <Switch aria-label={t("settings.permissionJudge.records.enabled")} checked={choices.recordDecisions}
+            disabled={busy !== null} onCheckedChange={(recordDecisions) => persist({ recordDecisions })} />
+        </PageRow>
+      </PageSection>
+      <PermissionJudgeRecordsPage />
+    </>);
   }
   if (view === "diagnostics") {
     const savedCloud = enabled && snapshot.backend === "cloud";
@@ -443,6 +453,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
         description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />
       <PageItem icon={<History />} title={t("settings.permissionJudge.records.title")}
+        meta={<Badge variant="outline" data-records-state={choices.recordDecisions ? "on" : "off"}>
+          {t(choices.recordDecisions ? "settings.permissionJudge.records.on" : "settings.permissionJudge.records.off")}
+        </Badge>}
         description={t("settings.permissionJudge.records.entryHint")} actions={open("records")} />
     </PageSection>
   </PageBody>;

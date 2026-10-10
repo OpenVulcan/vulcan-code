@@ -87,6 +87,10 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// 允许复核 LLM 放行判定器拦截的调用；用户开启前保持关闭。
     #[serde(default, skip_serializing_if = "is_false")]
     pub llm_may_allow_blocked: bool,
+    /// Keeps a local decision log with the original call text; off unless the user turns it on.
+    /// 保存含原始调用文本的本机判定记录；用户开启前保持关闭。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub record_decisions: bool,
 }
 
 /// Why a registry change was refused.

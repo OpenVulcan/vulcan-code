@@ -178,6 +178,7 @@ fn save_request(snapshot: &Value) -> Value {
         "device": device,
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
+        "recordDecisions": b(snapshot, "/recordDecisions"),
     })
 }
 
@@ -400,7 +401,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         model_rows(&mut rows, app, snapshot);
         cuda_rows(&mut rows, snapshot, status, &base);
     }
-    records_rows(&mut rows, app);
+    records_rows(&mut rows, app, &base);
     rows
 }
 
@@ -1274,8 +1275,20 @@ fn record_summary(record: &Value) -> String {
 /// The decision log: filters, one page of records with marks, paging and clearing, mirroring the
 /// WebUI decision log page. Sample export downloads a file and stays in the WebUI.
 /// 判定记录：筛选、一页带标记的记录、翻页与清除，镜像 WebUI 判定记录页。样本导出会下载文件，仅在 WebUI 提供。
-fn records_rows(rows: &mut Vec<Row>, app: &App) {
+fn records_rows(rows: &mut Vec<Row>, app: &App, base: &Value) {
     rows.push(section(tr!("settings.permissionJudge.records.title")));
+    rows.push(
+        toggle(
+            tr!("settings.permissionJudge.records.enabled"),
+            b(base, "/recordDecisions"),
+            dto(
+                base.clone(),
+                "/recordDecisions",
+                judge::save_permission_judge_settings,
+            ),
+        )
+        .detail(tr!("settings.permissionJudge.records.enabledHint")),
+    );
     let page = app.slots.value(Slot::PermissionJudgeRecords);
     if let Some(error) = app.slot_errors.get(&Slot::PermissionJudgeRecords) {
         rows.push(note(
@@ -1554,14 +1567,14 @@ mod tests {
     fn edits_send_the_complete_save_request() {
         let snapshot = json!({
             "state": null, "backend": null, "device": null, "recommendedDevice": "webgpu",
-            "llmMayAllowBlocked": true, "cuda": {"lockedDirectory": "D:/cuda"},
+            "llmMayAllowBlocked": true, "recordDecisions": true, "cuda": {"lockedDirectory": "D:/cuda"},
         });
         let base = save_request(&snapshot);
         let on = set_state(&base, &SettingValue::Bool(true)).unwrap();
         assert_eq!(
             on.params,
             json!({"request": {"state": "enabled", "backend": "local", "device": "webgpu",
-                "cudaLibraryDirectory": "D:/cuda", "llmMayAllowBlocked": true}})
+                "cudaLibraryDirectory": "D:/cuda", "llmMayAllowBlocked": true, "recordDecisions": true}})
         );
         let cleared = set_cuda_directory(&base, &SettingValue::Text("  ".into())).unwrap();
         assert!(cleared.param("/request/cudaLibraryDirectory").is_null());

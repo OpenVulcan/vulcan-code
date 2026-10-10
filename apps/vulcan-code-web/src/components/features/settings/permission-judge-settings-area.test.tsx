@@ -28,6 +28,10 @@ const service = vi.hoisted(() => ({
   installPermissionJudgeCuda: vi.fn(),
   loadProjectPermissionJudgePolicy: vi.fn(),
   saveProjectPermissionJudgePolicy: vi.fn(),
+  loadPermissionJudgeRecords: vi.fn(),
+  markPermissionJudgeRecord: vi.fn(),
+  exportPermissionJudgeRecords: vi.fn(),
+  clearPermissionJudgeRecords: vi.fn(),
 }));
 vi.mock("@/service/permission-judge-service", () => service);
 vi.mock("@/service/project-actions-service", () => ({ browseProjectDirectories: vi.fn(), openExternalUrl: vi.fn() }));
@@ -75,6 +79,7 @@ function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeS
     state: "enabled", backend: "local", device: "webgpu", recommendedDevice: "webgpu",
     devices: [{ device: "webgpu", unavailableReason: null }, { device: "cpu", unavailableReason: null }],
     llmMayAllowBlocked: false,
+    recordDecisions: false,
     models: [{ id: "model-a", name: "A", path: "D:/models/a", knownPackageId: null, policyVersion: "1", precision: "fp16", totalBytes: 1, registeredAtMs: 1 }],
     activeModelId: "model-a", previousModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
     cuda: {
@@ -118,7 +123,7 @@ it("saves a changed choice at once with every system choice", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true,
+    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
   });
 });
 
@@ -135,7 +140,7 @@ it("holds choices until a never set up judge is turned on", async () => {
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
   await act(async () => switchByKey("settings.permissionJudge.enabled").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true,
+    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true, recordDecisions: false,
   });
 });
 
@@ -241,4 +246,20 @@ it("lists the model's categories and opens them for the first project", async ()
   await openView("policy");
   expect(service.loadProjectPermissionJudgePolicy).toHaveBeenCalledExactlyOnceWith("p1");
   expect(host.querySelector('[data-judge-policy] [data-judge-option="database_reset"]')).not.toBeNull();
+});
+
+// The decision log switch saves at once with every system choice.
+// 判定记录开关会立即保存，并携带全部系统选择。
+it("turns the decision log on from its page", async () => {
+  await mount("ready");
+  service.loadPermissionJudgeRecords.mockResolvedValue({
+    records: [], hasMore: false, total: 0, marked: 0, workspaces: [], retentionRecords: 5000, retentionDays: 30,
+  });
+  expect(host.querySelector('[data-records-state="off"]')).not.toBeNull();
+  await openView("records");
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), recordDecisions: true });
+  await act(async () => switchByKey("settings.permissionJudge.records.enabled").click());
+  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
+    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: true,
+  });
 });
