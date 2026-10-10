@@ -26,6 +26,7 @@ import { decodeAgentQuestionInput } from "@/service/conversation-agent-question-
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
+import { dedicatedMemoryNoticeTitle, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import { parseSystemProviderError } from "./conversation-system-error-card";
 import { nativeMediaInputPreview } from "./tool-presentations/native-media-input-preview";
 
@@ -797,7 +798,7 @@ function displayNoteMessage(
     role: "assistant",
     recordKind: "display-note",
     title: event.notice_kind,
-    body: event.notice_kind === "goal_status" ? goalNoticeTitle(event.reason_code, t) : event.redacted_detail ?? event.reason_code,
+    body: displayNoteTitle(event, t),
     metadata: {
       ...presentationMetadata(summary, rootInput),
       notice_kind: event.notice_kind === "retry_started" || event.notice_kind === "retry_exhausted"
@@ -809,10 +810,18 @@ function displayNoteMessage(
       retry_count: event.retry_count,
       retry_limit: event.retry_limit,
       reason_code: event.reason_code,
-      summary: event.notice_kind === "goal_status" ? goalNoticeTitle(event.reason_code, t) : event.redacted_detail ?? event.reason_code,
+      summary: displayNoteTitle(event, t),
       status: event.severity,
     },
   };
+}
+
+// displayNoteTitle localizes host-owned notice kinds and keeps producer detail for the rest.
+// displayNoteTitle 本地化宿主自有通知种类，其余保留生产端细节。
+function displayNoteTitle(event: Extract<ConversationEventBody, { kind: "display_note" }>, t: Translation): string {
+  if (event.notice_kind === "goal_status") return goalNoticeTitle(event.reason_code, t);
+  if (isDedicatedMemoryNoticeKind(event.notice_kind)) return dedicatedMemoryNoticeTitle(event.notice_kind, t);
+  return event.redacted_detail ?? event.reason_code;
 }
 
 // turnStatsMetadata maps one typed bucket set to the branch tooltip's established field contract.

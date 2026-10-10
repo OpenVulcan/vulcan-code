@@ -1,5 +1,6 @@
 import type { AnswerMode } from "@/service/answer-mode";
 import type { PermissionMode } from "@/service/permission-mode";
+import type { DedicatedToolAccess } from "@/service/conversation-event-window-client";
 import type { LocaleCode } from "@/i18n";
 import { pickBilingualText } from "@/i18n-locales";
 import type {
@@ -105,6 +106,23 @@ export interface ComposerSessionSettingsSnapshot {
   // Optional initial goal.
   // 可选初始目标。
   initialGoal?: ComposerInitialGoalSnapshot;
+  // Present only when the draft creates a dedicated session; it cannot be combined with a goal or Plan mode.
+  // 仅当草稿创建专职会话时存在；不能与目标或计划模式同时使用。
+  dedicated?: ComposerDedicatedSessionSnapshot;
+}
+
+// ComposerDedicatedSessionSnapshot freezes the dedicated-session choices of the creation wizard.
+// ComposerDedicatedSessionSnapshot 固定创建向导的专职会话选择。
+export interface ComposerDedicatedSessionSnapshot {
+  // General tool access fixed at creation.
+  // 创建时固定的通用工具开放方式。
+  toolAccess: DedicatedToolAccess;
+  // User-confirmed base prompt, sent as the session's system instruction and never changed later.
+  // 用户确认的基础提示词，作为会话系统指令发送且之后不再修改。
+  basePrompt: string;
+  // Whether memory is locked before the first user input.
+  // 是否在首条用户输入之前锁定记忆。
+  lockImmediately: boolean;
 }
 
 // ComposerSubmission contains the user prompt and runtime quick-control values.

@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
+import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
 
 // PERMISSION_MODE_OPTIONS lists the modes from most to least supervised with their icon and copy keys.
 // PERMISSION_MODE_OPTIONS 按监督程度从高到低列出各模式及其图标与文案键。
@@ -39,6 +40,16 @@ const PERMISSION_MODE_OPTIONS = [
  * `controller` owns persistence; switching to full access needs an acknowledged confirmation first.
  * `controller` 负责持久化；切换到完全权限前必须先勾选确认。 */
 export function ComposerPermissionModeControl(props: { controller: ComposerPermissionModeController }) {
+  // A dedicated session without tools never asks for permissions, so the chip has nothing to switch.
+  // 无工具的专职会话从不请求权限，因此该标签没有可切换的内容。
+  const dedicated = useDedicatedComposer();
+  if (dedicated?.toolAccess === "none") return null;
+  return <PermissionModeChip controller={props.controller} />;
+}
+
+/** Permission-mode chip body for sessions that can call tools.
+ * 可调用工具的会话所用的权限模式标签主体。 */
+function PermissionModeChip(props: { controller: ComposerPermissionModeController }) {
   const { t } = useI18n();
   const judge = React.useContext(PermissionJudgeEntryContext);
   const { mode, saving, available, select } = props.controller;

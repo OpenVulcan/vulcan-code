@@ -1,5 +1,6 @@
 import React from "react";
 import { ComposerSettingsHostContext } from "@/components/composer/composer-settings-host";
+import { DraftComposerContext, type DraftComposerContextValue } from "@/components/composer/dedicated/draft-composer-context";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { ThinkingDisplaySystemContext } from "@/components/conversation/thinking-display-preferences";
 import { VceProjectSurfaceProvider } from "@/components/features/code-context/vce-project-surface";
@@ -548,6 +549,25 @@ export function WorkbenchLayout(props: {
   // actionDraftConversation ends draft-only commands as soon as the durable conversation summary exists.
   // actionDraftConversation 在持久会话摘要出现后立即结束仅草稿命令。
   const actionDraftConversation = selectedConversation ? null : selectedDraftConversation;
+  // handleChangeDraftProject moves an unsent draft to another project chosen from the composer chip.
+  // handleChangeDraftProject 将未发送草稿移动到输入区标签选择的另一个项目。
+  const handleChangeDraftProject = React.useCallback((projectId: string) => {
+    const project = workbenchStateRef.current.projects.find((candidate) => candidate.id === projectId);
+    if (!project) return;
+    setDraftConversation((current) => current && !current.pendingSubmission
+      ? { ...current, projectId: project.id, projectName: project.name }
+      : current);
+    setActiveProjectId(project.id);
+  }, []);
+  // draftComposerContext lets the composer pick the draft's project and session kind without prop threading.
+  // draftComposerContext 让输入区无需逐层传参即可选择草稿的项目与会话种类。
+  const draftComposerContext = React.useMemo<DraftComposerContextValue | null>(() => actionDraftConversation ? {
+    draftId: actionDraftConversation.id,
+    projectId: actionDraftConversation.projectId,
+    projects: workbenchState.projects.map((project) => ({ id: project.id, name: project.name })),
+    submissionPending: Boolean(actionDraftConversation.pendingSubmission),
+    onChangeProject: handleChangeDraftProject,
+  } : null, [actionDraftConversation, handleChangeDraftProject, workbenchState.projects]);
   // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
   // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
   const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
@@ -1026,6 +1046,7 @@ export function WorkbenchLayout(props: {
       saveDefault: handleSaveToolCollapseDefault,
     }}>
     <ComposerSettingsHostContext.Provider value={settingsHost}>
+    <DraftComposerContext.Provider value={draftComposerContext}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
       <VceJobObserverProvider serviceEpoch={props.serviceInstanceEpoch}>
       <VceProjectSurfaceProvider
@@ -1286,6 +1307,7 @@ export function WorkbenchLayout(props: {
       </VceProjectSurfaceProvider>
       </VceJobObserverProvider>
     </ComposerMediaUploadProgressContext.Provider>
+    </DraftComposerContext.Provider>
     </ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>

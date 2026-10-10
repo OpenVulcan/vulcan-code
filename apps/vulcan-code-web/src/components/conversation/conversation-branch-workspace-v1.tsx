@@ -14,6 +14,7 @@ import {
 } from "@/components/conversation/conversation-branch-presentation-v1";
 import { createConversationRenderItemsProjector } from "@/components/conversation/conversation-transcript";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
+import { DedicatedTranscriptMemoryProvider } from "@/components/conversation/dedicated-transcript-memory";
 import type { ConversationSurfaceExpandedState } from "@/components/conversation/conversation-layout-restore";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
@@ -25,6 +26,8 @@ import {
 import type { ToolDetailPayload } from "@/components/conversation/conversation-detail";
 import { useI18n } from "@/i18n";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
+import { selectDedicatedMemory } from "@/service/dedicated-memory";
+import { conversationSelectionEqual } from "@/state/conversation-event-window-react";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
 import type {
   ConversationEventSummary,
@@ -184,6 +187,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // events preserves the exact controller order and never falls back to legacy messages.
   // events 保留控制器精确顺序，并且绝不回退到旧消息。
   const events = ownerReady ? props.snapshot.events : [];
+  // dedicatedMemory keeps its identity while streaming deltas leave the memory facts unchanged.
+  // dedicatedMemory 在流式增量未改变记忆事实时保持身份。
+  const dedicatedMemory = useEqualValue(ownerReady ? selectDedicatedMemory(props.snapshot) : null, conversationSelectionEqual);
   // collaborationRoutes only enables participants present in the current host navigation snapshot.
   // collaborationRoutes 仅启用当前宿主导航快照中存在的参与会话。
   const collaborationRoutes = React.useMemo(
@@ -335,6 +341,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>
     <ConversationAgentInteractionActionsContext.Provider value={collaborationActions}>
     <ConversationCollaborationStateContext.Provider value={collaborationState}>
+    <DedicatedTranscriptMemoryProvider memory={dedicatedMemory}>
     <ConversationWorkspace
       autoExpandStreamingThinking={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "inline_output"}
       commandSessions={props.commandSessions}
@@ -372,6 +379,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       transientReasoningStatus={props.transientReasoningStatus}
       workspacePath={props.workspacePath}
     />
+    </DedicatedTranscriptMemoryProvider>
     </ConversationCollaborationStateContext.Provider>
     </ConversationAgentInteractionActionsContext.Provider>
     </ThinkingPopupContext.Provider>

@@ -47,6 +47,13 @@ import type {
   OutputStyleCatalogSummary,
 } from "@/types";
 
+import { selectDedicatedMemory } from "@/service/dedicated-memory";
+import { DraftComposerContext } from "@/components/composer/dedicated/draft-composer-context";
+import { useDedicatedDraft } from "@/components/composer/dedicated/dedicated-draft-store";
+import { DedicatedDraftStrip } from "@/components/composer/dedicated/dedicated-draft-strip";
+import { DedicatedSessionWizard } from "@/components/composer/dedicated/dedicated-session-wizard";
+import { DedicatedComposerContext, DedicatedMemoryLockBar } from "@/components/composer/dedicated/dedicated-session-controls";
+
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 
 /** Select only answer-mode ownership/config so streaming tokens do not rerender the composer dock.
@@ -249,6 +256,18 @@ export function ComposerDock(props: {
   // answerModeState 在选择转换期间始终绑定精确已加载归属。
   const answerModeState = useSelectedConversationEventWindowSelector(selectAnswerMode, conversationSelectionEqual);
   const permissionModeState = useSelectedConversationEventWindowSelector(selectPermissionMode, conversationSelectionEqual);
+  const dedicatedMemory = useSelectedConversationEventWindowSelector(selectDedicatedMemory, conversationSelectionEqual);
+  // Only the exact selected persisted session may expose its dedicated controls.
+  // 只有精确选中的持久会话才能显示其专职控件。
+  const persistedDedicated = props.conversationId !== null && dedicatedMemory?.sessionId === props.conversationId
+    ? dedicatedMemory
+    : null;
+  // draftOwner exists only while an unsent draft is selected; its kind and wizard progress are local.
+  // draftOwner 仅在选中未发送草稿时存在；其种类与向导进度保存在本地。
+  const draftContext = React.useContext(DraftComposerContext);
+  const draftOwner = props.conversationId === null ? draftContext : null;
+  const [draftState, updateDraftState] = useDedicatedDraft(draftOwner?.draftId ?? null);
+  const [dedicatedCreating, setDedicatedCreating] = React.useState(false);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
@@ -296,6 +315,28 @@ export function ComposerDock(props: {
           </div>
         </div>
       ) : null}
+      {draftOwner ? (
+        <DedicatedDraftStrip
+          disabled={dedicatedCreating || draftOwner.submissionPending}
+          draft={draftOwner}
+          onChange={updateDraftState}
+          state={draftState}
+        />
+      ) : null}
+      {persistedDedicated ? <DedicatedMemoryLockBar memory={persistedDedicated} running={props.isConversationRunning} /> : null}
+      {draftOwner && draftState.kind === "dedicated" ? (
+        <DedicatedSessionWizard
+          draft={draftOwner}
+          onBusyChange={setDedicatedCreating}
+          onChange={updateDraftState}
+          onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+          onSubmitPrompt={props.onSubmitPrompt}
+          outputStyleCatalog={props.outputStyleCatalog}
+          providers={props.providers}
+          state={draftState}
+        />
+      ) : (
+      <DedicatedComposerContext.Provider value={persistedDedicated}>
       <ComposerPanel
         answerModeState={answerModeState}
         defaultAnswerMode={props.defaultAnswerMode}
@@ -348,6 +389,8 @@ export function ComposerDock(props: {
         vmmStatus={props.vmmStatus}
         onOpenMemorySettings={props.onOpenMemorySettings}
       />
+      </DedicatedComposerContext.Provider>
+      )}
       {props.todolistStatusHost && visibleSessionTodolist
         ? createPortal(
           <ComposerSessionProgressCapsule

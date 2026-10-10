@@ -78,6 +78,7 @@ import type {
   SessionProviderUsageSummary,
 } from "@/types";
 import { errorMessage } from "@/lib/display-format";
+import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
 
 // Settings model helpers remain importable from this module for existing callers and tests.
 // 设置模型辅助函数仍可从本模块导入，供现有调用方与测试使用。
@@ -435,7 +436,17 @@ function formatBasisPoints(value: number): string {
 // ComposerAiCapabilityControl 持有一份将开关、模型与账号分离的已物化会话快照。
 // Parameters: props identifies the conversation and capability configuration; returns the session editor with exact targets, local mode state and guarded saves.
 // 参数：props 标识会话与能力配置；返回包含精确目标、本地模式状态和受保护保存的会话编辑器。
-export function ComposerAiCapabilityControl(props: {
+export function ComposerAiCapabilityControl(props: ComposerAiCapabilityControlProps) {
+  // Provider tools are frozen with a dedicated session, so the editor is not offered.
+  // 供应商工具随专职会话冻结，因此不提供编辑器。
+  const dedicated = useDedicatedComposer();
+  if (dedicated) return null;
+  return <AiCapabilityControlEditor {...props} />;
+}
+
+/** Inputs of the composer AI capability control.
+ * 输入区 AI 能力控件的输入。 */
+type ComposerAiCapabilityControlProps = {
   // Current persisted conversation, or null for a new conversation draft.
   // 当前持久化会话；新会话草稿时为空。
   conversationId: string | null;
@@ -451,7 +462,11 @@ export function ComposerAiCapabilityControl(props: {
   // Reports whether unresolved session choices must block sending.
   // 报告未解决的会话选择是否必须阻止发送。
   onConflictChange?: (blocked: boolean) => void;
-}) {
+};
+
+/** Capability editor body for ordinary sessions and drafts.
+ * 普通会话与草稿使用的能力编辑器主体。 */
+function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
   // summaryOpen controls the read-only hover summary; it never opens while the editor dialog is open.

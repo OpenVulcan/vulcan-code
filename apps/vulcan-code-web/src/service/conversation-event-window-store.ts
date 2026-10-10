@@ -1050,7 +1050,9 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
         | "compaction_completed"
         | "goal_status"
         | "interrupted"
-        | "stopped";
+        | "stopped"
+        | "memory_locked"
+        | "memory_unlocked";
       severity: "info" | "warning" | "error";
       reason_code: string;
       redacted_detail?: string;

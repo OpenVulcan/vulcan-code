@@ -19,6 +19,7 @@ import {
   Folder,
   FolderPlus,
   Pin,
+  SquarePen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -236,6 +237,11 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
   }, []);
   // renderProjectGroupLabel renders the pinned/project heading with optional actions.
   // renderProjectGroupLabel 渲染置顶/项目标题，并按需显示操作入口。
+  // globalDraftProject opens a project-agnostic draft whose owner is then chosen from the composer chip.
+  // globalDraftProject 打开与项目无关的草稿，其归属随后由输入区标签选择。
+  const globalDraftProject = props.projects.find((project) => project.id === props.activeProjectId)
+    ?? props.projects[0]
+    ?? null;
   const renderProjectGroupLabel = (label: string, icon: React.ReactNode, action?: React.ReactNode) => (
     <SidebarGroupLabel className="project-group-label">
       <span className="project-group-label-main">{icon}<span className="project-group-label-text">{label}</span></span>
@@ -314,6 +320,20 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
         ) : null}
         <SidebarGroup>
             {renderProjectGroupLabel(t("sidebar.projects"), <Boxes size={15} />, (
+              <span className="project-group-label-actions">
+              {globalDraftProject ? (
+                <Button
+                  aria-label={t("sidebar.newSession")}
+                  className="project-add-button"
+                  onClick={() => props.onCreateConversation(globalDraftProject)}
+                  size="icon-sm"
+                  title={t("sidebar.newSession")}
+                  type="button"
+                  variant="ghost"
+                >
+                  <SquarePen size={15} />
+                </Button>
+              ) : null}
               <Button
                 aria-label={t("sidebar.addProject")}
                 className="project-add-button"
@@ -325,6 +345,7 @@ export function ProjectSessionTree(props: ProjectSessionTreeProps) {
               >
                 <FolderPlus size={15} />
               </Button>
+              </span>
             ))}
             <SidebarMenu>
               {renderSortableProjectSection(props.projects)}

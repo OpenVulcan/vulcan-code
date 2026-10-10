@@ -65,6 +65,7 @@ import type {
 import type { ComposerAttachmentPreviewMedia } from "./composer-control-types";
 import type { ComposerKnowledgeSelectionSnapshot } from "./composer-model";
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
+import { useDedicatedComposer } from "./dedicated/dedicated-session-controls";
 import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
 
 // ComposerAttachmentMenu renders the plus button and attachment submenu.
@@ -148,6 +149,9 @@ export function ComposerAttachmentMenu(props: {
   // settingsHost is the actual footer node; the composer retains all session and draft ownership.
   // settingsHost 是实际底栏节点；输入区继续持有全部会话与草稿状态。
   const settingsHost = React.useContext(ComposerSettingsHostContext);
+  // Dedicated sessions freeze Plan mode and goals at creation, so their entries are not offered.
+  // 专职会话在创建时冻结计划模式与目标，因此不提供这些入口。
+  const dedicated = useDedicatedComposer();
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf", "file"].includes(capability.kind));
   return (
     <>
@@ -197,6 +201,7 @@ export function ComposerAttachmentMenu(props: {
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        {dedicated ? null : <>
         <DropdownMenuCheckboxItem
           checked={props.planModeEnabled}
           onCheckedChange={(checked) => props.onPlanModeChange(Boolean(checked))}
@@ -209,6 +214,7 @@ export function ComposerAttachmentMenu(props: {
           <Target size={15} />
           <span>{t("composer.goal")}</span>
         </DropdownMenuItem>
+        </>}
       </DropdownMenuContent>
     </DropdownMenu>
     {settingsHost ? createPortal(<ComposerSettingsMenu key={props.conversationId ?? props.projectId ?? "new"} {...props} />, settingsHost) : null}
@@ -231,11 +237,15 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
   // Explicit selection stays distinct from the effective global value.
   // 明确选择始终与实际生效的全局值区分。
   const thinkingPreference = useThinkingDisplayPreference(toolCollapse.scope, props.thinkingDisplayMode);
+  // Settings frozen with a dedicated session (style, answer mode, knowledge, semantic engine, memory) are hidden.
+  // 随专职会话冻结的设置（风格、回答模式、知识库、语意引擎、记忆）不再显示。
+  const dedicated = useDedicatedComposer();
   return <DropdownMenu>
     <DropdownMenuTrigger asChild>
       <Button aria-label={t("composer.sessionSettings")} className="workspace-settings-button" size="sm" type="button" variant="ghost"><Settings size={14} /><span>{t("composer.sessionSettings")}</span></Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="composer-settings-menu" side="top" sideOffset={8}>
+        {dedicated ? null : <>
         <OutputStyleSubMenu
           catalog={props.outputStyleCatalog}
           conversationId={props.conversationId}
@@ -252,6 +262,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
           projectId={props.projectId}
         />
         <VceComposerMenu />
+        </>}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger><Workflow size={15} /><span>{t("composer.collapseTools")}</span></DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
@@ -290,7 +301,7 @@ export function ComposerSettingsMenu(props: React.ComponentProps<typeof Composer
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        {props.vmmAvailable || props.onOpenMemorySettings ? (
+        {!dedicated && (props.vmmAvailable || props.onOpenMemorySettings) ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               {/* Same brain as the memory area in the activity rail. */}

@@ -55,6 +55,7 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
+import { DedicatedUserMessageMarks } from "./dedicated-transcript-memory";
 
 
 // conversationPresentationMessageIsStreaming reads the explicit V1 adapter lifecycle marker.
@@ -778,6 +779,7 @@ export function ConversationRenderItemView(props: {
           ) : null}
         </div>
         <div className="user-message-meta">
+          <DedicatedUserMessageMarks body={userBody} metadata={props.item.userMessage?.metadata} />
           {userTimestamp && userTimestampMs ? (
             <time dateTime={new Date(userTimestampMs).toISOString()}>{userTimestamp}</time>
           ) : null}

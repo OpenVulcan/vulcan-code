@@ -1,0 +1,134 @@
+/* Dedicated sessions (专职助手): memory markers, message marks, draft mode strip, wizard and lock bar. */
+/* 专职会话（专职助手）：记忆标记、消息标注、草稿模式条、向导与锁定栏。 */
+
+.dedicated-memory-marker .dedicated-memory-marker-hint {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.dedicated-message-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dedicated-draft-strip {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 8px;
+}
+
+.dedicated-draft-strip-project {
+  min-width: 140px;
+  max-width: 240px;
+}
+
+.dedicated-wizard {
+  width: 100%;
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-lg);
+  background: var(--card);
+  box-shadow: var(--vcn-shadow-raised);
+}
+
+.dedicated-wizard-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dedicated-wizard-header strong {
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-md);
+}
+
+.dedicated-wizard-header small,
+.dedicated-wizard-hint {
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.dedicated-wizard-options {
+  display: grid;
+  gap: 6px;
+}
+
+.dedicated-wizard-option {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--vcn-radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: var(--vcn-font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dedicated-wizard-option:hover {
+  background: var(--vcn-fill-hover);
+}
+
+.dedicated-wizard-option[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  background: var(--vcn-fill-selected);
+}
+
+.dedicated-wizard-option small {
+  color: var(--muted-foreground);
+}
+
+.dedicated-wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dedicated-wizard-actions-end {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.dedicated-wizard-error {
+  color: var(--destructive);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.dedicated-lock-bar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 8px;
+  color: var(--muted-foreground);
+  font-size: var(--vcn-font-size-sm);
+}
+
+.dedicated-lock-bar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dedicated-lock-bar-status[data-locked="true"] {
+  color: var(--foreground);
+}
+
+.dedicated-lock-bar .dedicated-lock-bar-action {
+  margin-left: auto;
+}

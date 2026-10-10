@@ -1,3 +1,4 @@
+import { isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import type { ConversationMessage } from "@/types";
 import { blockTitle } from "@/components/conversation/conversation-classifiers";
 import { generatedMediaAttachmentsFromMetadata } from "@/components/conversation/conversation-generated-media";
@@ -147,6 +148,7 @@ function structuredMessageBlockKind(message: ConversationMessage): ConversationB
       || noticeKind === "goal_status"
       || noticeKind === "model_switch"
       || noticeKind === "reasoning_effort_switch"
+      || isDedicatedMemoryNoticeKind(noticeKind)
     ) return "notice";
     if (isSubagentFeedbackMetadata(message.metadata)) return "tool-result";
   }

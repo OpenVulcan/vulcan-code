@@ -12,6 +12,7 @@ import {
 import { StatusPill } from "@/components/shared/status";
 import { ModelSwitchNotice } from "./conversation-model-switch";
 import { GoalStatusNotice } from "./conversation-goal-notice";
+import { DedicatedMemoryNotice, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import { metadataString } from "./conversation-metadata";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
@@ -308,6 +309,10 @@ function SpecialConversationBlock(props: {
   if (props.block.kind === "notice"
     && ["model_switch", "reasoning_effort_switch"].includes(metadataString(props.block.rawMetadata, ["notice_kind"]) ?? "")) {
     return <ModelSwitchNotice summary={props.block.summary} />;
+  }
+  const dedicatedMemoryKind = props.block.kind === "notice" ? metadataString(props.block.rawMetadata, ["notice_kind"]) : null;
+  if (isDedicatedMemoryNoticeKind(dedicatedMemoryKind)) {
+    return <DedicatedMemoryNotice kind={dedicatedMemoryKind} />;
   }
   if (props.block.kind === "notice" && metadataString(props.block.rawMetadata, ["notice_kind"]) === "goal_status") {
     return <GoalStatusNotice reasonCode={metadataString(props.block.rawMetadata, ["reason_code"]) ?? ""} />;
