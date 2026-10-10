@@ -34,6 +34,7 @@ vi.mock("@/service/project-actions-service", () => ({ openExternalUrl: vi.fn() }
 vi.mock("@/service/settings-actions-service", () => ({
   loadPublicAiSettings: vi.fn(() => new Promise(() => undefined)),
   savePublicAiInferenceRoute: vi.fn(),
+  testPublicAiInferenceRoute: vi.fn(),
 }));
 
 const { PermissionJudgeSettingsArea } = await import("./permission-judge-settings-area");
@@ -137,4 +138,20 @@ it("offers a retry only after a failed load", async () => {
   service.reloadPermissionJudge.mockResolvedValue(snapshot("ready").status);
   await act(async () => buttonByKey("settings.permissionJudge.reload")!.click());
   expect(service.reloadPermissionJudge).toHaveBeenCalledOnce();
+});
+
+// A saved cloud judge runs speed tests without a local worker and hides the local-model controls.
+// 已保存的云端判定无需本机 worker 即可执行速度测试，并隐藏本机模型控件。
+it("benchmarks a saved cloud judge without the local model", async () => {
+  const cloud = { ...snapshot("not_loaded"), backend: "cloud" as const };
+  service.loadPermissionJudgeSettings.mockResolvedValue(cloud);
+  service.loadPermissionJudgeStatus.mockResolvedValue(cloud.status);
+  await act(async () => root.render(<PermissionJudgeSettingsArea />));
+  expect(host.querySelector('[aria-label="settings.permissionJudge.device"]')).toBeNull();
+  expect(host.querySelector('[aria-label="settings.permissionJudge.registerPath"]')).toBeNull();
+  service.benchmarkPermissionJudge.mockResolvedValue({
+    device: null, modelId: "jev", batchSize: 1, rounds: 1, p50Ms: 300, p95Ms: 300, perItemMs: 300, itemsPerSecond: 3.3,
+  });
+  await act(async () => buttonByKey("settings.permissionJudge.benchmarkSingle")!.click());
+  expect(service.benchmarkPermissionJudge).toHaveBeenCalledExactlyOnceWith(1);
 });

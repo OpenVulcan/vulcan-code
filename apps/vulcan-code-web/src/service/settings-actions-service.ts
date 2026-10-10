@@ -562,11 +562,12 @@ export async function savePublicAiInferenceRoute(request: {
   );
 }
 
-// testPublicAiInferenceRoute executes one real embedding or rerank request through its saved route.
-// testPublicAiInferenceRoute 通过已保存路由执行一次真实向量或重排请求。
+// testPublicAiInferenceRoute executes one real embedding, rerank or decision request through its
+// saved route.
+// testPublicAiInferenceRoute 通过已保存路由执行一次真实向量、重排或判定请求。
 export async function testPublicAiInferenceRoute(request: {
   consumerProfileId: string;
-  operation: "embedding_create" | "rerank_documents";
+  operation: "embedding_create" | "rerank_documents" | "decision_evaluate";
 }): Promise<PublicAiInferenceTestResult> {
   return serviceClient.request<PublicAiInferenceTestResult>(
     "service_test_public_ai_inference_route",

@@ -840,6 +840,8 @@ function internalOperationLabel(
       return t("settings.inference.embedding")
     case "rerank_documents":
       return t("settings.inference.rerank")
+    case "decision_evaluate":
+      return t("settings.inference.decision")
   }
 }
 

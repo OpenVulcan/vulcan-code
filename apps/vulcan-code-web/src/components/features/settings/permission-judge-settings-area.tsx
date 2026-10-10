@@ -11,6 +11,7 @@ import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Switch } from "@/components/ui/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
+import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import {
@@ -27,6 +28,7 @@ import {
 } from "@/service/permission-judge-service";
 import { openExternalUrl } from "@/service/project-actions-service";
 import type {
+  JudgeBackend,
   JudgeDevice,
   PermissionJudgeBenchmarkResult,
   PermissionJudgeCudaComponent,
@@ -40,6 +42,10 @@ const STATUS_POLL_MS = 2000;
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
 // 服务发送的稳定代码对应的标签；未知代码按原样显示。
+const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
+  local: "settings.permissionJudge.backend.local",
+  cloud: "settings.permissionJudge.backend.cloud",
+};
 const DEVICE_KEYS: Record<JudgeDevice, TranslationKey> = {
   cuda: "settings.permissionJudge.device.cuda",
   webgpu: "settings.permissionJudge.device.webgpu",
@@ -105,16 +111,19 @@ function formatOptionalBytes(value: number | null | undefined): string {
 // Draft 在用户保存前保存系统级选择。
 interface Draft {
   enabled: boolean;
+  backend: JudgeBackend;
   device: JudgeDevice | null;
   cudaLibraryDirectory: string;
   llmMayAllowBlocked: boolean;
 }
 
-// draftOf reads the saved choices; an unset device follows the recommendation.
-// draftOf 读取已保存的选择；未设置的设备跟随推荐值。
+// draftOf reads the saved choices; an unset backend is local and an unset device follows the
+// recommendation.
+// draftOf 读取已保存的选择；未设置的后端为本机，未设置的设备跟随推荐值。
 function draftOf(snapshot: PermissionJudgeSettingsSnapshot): Draft {
   return {
     enabled: snapshot.state === "enabled",
+    backend: snapshot.backend ?? "local",
     device: snapshot.device ?? snapshot.recommendedDevice,
     cudaLibraryDirectory: snapshot.cuda.lockedDirectory ?? "",
     llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
@@ -128,10 +137,11 @@ interface Failure {
   detail: string;
 }
 
-// PermissionJudgeSettingsArea manages the local permission judge: switch, device, models, live status,
-// speed tests and the CUDA runtime. Nothing persists until the user saves or acts.
-// PermissionJudgeSettingsArea 管理本机权限判定：开关、设备、模型、实时状态、速度测试与 CUDA 执行库。
-// 用户保存或操作前不持久化任何内容。
+// PermissionJudgeSettingsArea manages the permission judge: switch and backend, then the cloud
+// decision route or the local device, models, live status and CUDA runtime, plus speed tests.
+// Nothing persists until the user saves or acts.
+// PermissionJudgeSettingsArea 管理权限判定：开关与后端，其后是云端判定路由或本机设备、模型、实时状态与
+// CUDA 执行库，以及速度测试。用户保存或操作前不持久化任何内容。
 // Parameters: none. Returns the settings page.
 // 参数：无。返回设置页。
 export function PermissionJudgeSettingsArea() {
@@ -149,6 +159,9 @@ export function PermissionJudgeSettingsArea() {
   // benchmarks keeps this page's speed test results, newest first; they are never saved.
   // benchmarks 保存本页速度测试结果（最新在前），不会持久化。
   const [benchmarks, setBenchmarks] = React.useState<PermissionJudgeBenchmarkResult[]>([]);
+  // cloudConfigured tells whether a cloud decision route is saved, as reported by its section.
+  // cloudConfigured 表示是否已保存云端判定路由，由其区块报告。
+  const [cloudConfigured, setCloudConfigured] = React.useState(false);
 
   // applySnapshot replaces the page state with a fresh service read.
   // applySnapshot 用最新服务读取结果替换页面状态。
@@ -211,11 +224,17 @@ export function PermissionJudgeSettingsArea() {
   const saved = draftOf(snapshot);
   const dirty = JSON.stringify(saved) !== JSON.stringify(draft);
   const activeModel = snapshot.models.find((model) => model.id === snapshot.activeModelId) ?? null;
+  const local = draft.backend === "local";
+  const backendReady = local ? activeModel !== null : cloudConfigured;
+  const savedCloud = snapshot.state === "enabled" && snapshot.backend === "cloud";
+  const benchmarkReady = savedCloud
+    ? !dirty
+    : snapshot.backend === "local" && status.worker.phase === "ready";
   const save = () => run("save", "settings.permissionJudge.saveFailed", async () => {
     const directory = draft.cudaLibraryDirectory.trim();
     applySnapshot(await savePermissionJudgeSettings({
       state: draft.enabled ? "enabled" : "off",
-      backend: draft.enabled ? "local" : snapshot.backend,
+      backend: draft.backend,
       device: draft.device,
       cudaLibraryDirectory: directory === "" ? null : directory,
       llmMayAllowBlocked: draft.llmMayAllowBlocked,
@@ -230,11 +249,28 @@ export function PermissionJudgeSettingsArea() {
           <h2>{t("settings.permissionJudge.enabled")}</h2>
           <p className="settings-muted-line">{t("settings.permissionJudge.enabledHint")}</p>
         </div>
-        <Switch checked={draft.enabled} disabled={busy !== null || (!draft.enabled && !activeModel)}
+        <Switch checked={draft.enabled} disabled={busy !== null || (!draft.enabled && !backendReady)}
           onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
       </label>
-      {!activeModel ? <p className="settings-muted-line">{t("settings.permissionJudge.needsModel")}</p> : null}
+      {!backendReady ? <p className="settings-muted-line">
+        {t(local ? "settings.permissionJudge.needsModel" : "settings.permissionJudge.needsCloudRoute")}
+      </p> : null}
       <div className="settings-preference-row">
+        <div>
+          <span>{t("settings.permissionJudge.backend")}</span>
+          <p className="settings-muted-line">{t("settings.permissionJudge.backendHint")}</p>
+        </div>
+        <Select disabled={busy !== null} value={draft.backend}
+          onValueChange={(backend) => setDraft({ ...draft, backend: backend as JudgeBackend })}>
+          <SelectTrigger aria-label={t("settings.permissionJudge.backend")} className="w-64"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {(Object.keys(BACKEND_KEYS) as JudgeBackend[]).map((backend) => (
+              <SelectItem key={backend} value={backend}>{t(BACKEND_KEYS[backend])}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {local ? <div className="settings-preference-row">
         <div>
           <span>{t("settings.permissionJudge.device")}</span>
           {snapshot.recommendedDevice ? <p className="settings-muted-line">
@@ -253,7 +289,7 @@ export function PermissionJudgeSettingsArea() {
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </div> : null}
       <label className="settings-preference-row">
         <div>
           <span>{t("settings.permissionJudge.llmMayAllowBlocked")}</span>
@@ -270,18 +306,22 @@ export function PermissionJudgeSettingsArea() {
 
     {failure ? <SettingsErrorNotice className="settings-save-error" detail={failure.detail} message={failure.message} /> : null}
 
-    <PermissionReviewRouteSection />
+    {local
+      ? <WorkerStatusSection busy={busy} run={run} snapshot={snapshot} status={status} t={t}
+        onReloaded={(next) => setStatus(next)} />
+      : <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />}
 
-    <WorkerStatusSection busy={busy} run={run} snapshot={snapshot} status={status} t={t}
-      onReloaded={(next) => setStatus(next)} />
+    <PermissionReviewRouteSection />
 
     <section className="settings-preferences-section">
       <h2>{t("settings.permissionJudge.benchmark")}</h2>
-      <p className="settings-muted-line">{t("settings.permissionJudge.benchmarkHint")}</p>
+      <p className="settings-muted-line">
+        {t(savedCloud ? "settings.permissionJudge.benchmarkCloudHint" : "settings.permissionJudge.benchmarkHint")}
+      </p>
       <div className="settings-card-actions">
         {([1, 10] as const).map((batchSize) => (
           <Button key={batchSize} type="button" variant="outline" size="sm"
-            disabled={busy !== null || status.worker.phase !== "ready"}
+            disabled={busy !== null || !benchmarkReady}
             onClick={() => void run(`benchmark-${batchSize}`, "settings.permissionJudge.benchmarkFailed", async () => {
               const result = await benchmarkPermissionJudge(batchSize);
               setBenchmarks((previous) => [result, ...previous].slice(0, 6));
@@ -292,22 +332,32 @@ export function PermissionJudgeSettingsArea() {
       </div>
       {benchmarks.map((result, index) => (
         <p className="settings-muted-line" key={index}>
-          {formatMessage(t("settings.permissionJudge.benchmarkResult"), {
-            batch: result.batchSize,
-            device: t(DEVICE_KEYS[result.device]),
-            p50: formatMs(t, result.p50Ms),
-            p95: formatMs(t, result.p95Ms),
-            perItem: formatMs(t, result.perItemMs),
-            rate: result.itemsPerSecond.toFixed(1),
-          })}
+          {result.device
+            ? formatMessage(t("settings.permissionJudge.benchmarkResult"), {
+              batch: result.batchSize,
+              device: t(DEVICE_KEYS[result.device]),
+              p50: formatMs(t, result.p50Ms),
+              p95: formatMs(t, result.p95Ms),
+              perItem: formatMs(t, result.perItemMs),
+              rate: result.itemsPerSecond.toFixed(1),
+            })
+            : formatMessage(t("settings.permissionJudge.benchmarkCloudResult"), {
+              batch: result.batchSize,
+              model: result.modelId,
+              total: formatMs(t, result.p50Ms),
+              perItem: formatMs(t, result.perItemMs),
+              rate: result.itemsPerSecond.toFixed(1),
+            })}
         </p>
       ))}
     </section>
 
-    <ModelsSection applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} t={t} />
+    {local ? <>
+      <ModelsSection applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} t={t} />
 
-    <CudaSection busy={busy} draft={draft} run={run} setDraft={setDraft} snapshot={snapshot} status={status} t={t}
-      onStatus={(next) => setStatus(next)} />
+      <CudaSection busy={busy} draft={draft} run={run} setDraft={setDraft} snapshot={snapshot} status={status} t={t}
+        onStatus={(next) => setStatus(next)} />
+    </> : null}
   </section>;
 }
 

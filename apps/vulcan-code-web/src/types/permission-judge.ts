@@ -6,9 +6,9 @@
 // JudgeState 为关闭或启用；null 表示尚未设置。
 export type JudgeState = "off" | "enabled";
 
-// JudgeBackend names where calls are judged.
-// JudgeBackend 指定判定调用的位置。
-export type JudgeBackend = "local";
+// JudgeBackend names where calls are judged: the local model, or the saved cloud decision route.
+// JudgeBackend 指定判定调用的位置：本机模型，或已保存的云端判定路由。
+export type JudgeBackend = "local" | "cloud";
 
 // JudgeDevice is the execution device of the local model.
 // JudgeDevice 是本机模型的执行设备。
@@ -158,7 +158,9 @@ export interface PermissionJudgeSettingsSaveRequest {
 // PermissionJudgeBenchmarkResult is one speed test, kept only on the page that ran it.
 // PermissionJudgeBenchmarkResult 是一次速度测试，只保留在执行它的页面上。
 export interface PermissionJudgeBenchmarkResult {
-  device: JudgeDevice;
+  // Device of the local model; null for the cloud judge.
+  // 本机模型的设备；云端判定时为 null。
+  device: JudgeDevice | null;
   modelId: string;
   batchSize: number;
   rounds: number;

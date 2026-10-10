@@ -866,7 +866,8 @@ export interface PublicAiProviderToolExtensionProfile {
 export type PublicAiOperation =
   | "conversation_respond"
   | "embedding_create"
-  | "rerank_documents";
+  | "rerank_documents"
+  | "decision_evaluate";
 
 // PublicAiInferenceUsageScope identifies one host-authorized usage context.
 // PublicAiInferenceUsageScope 标识一种由宿主授权的用途上下文。
@@ -926,6 +927,7 @@ export interface PublicAiInferenceProfile {
   llm_reasoning_efforts?: Record<string, PublicAiReasoningEffort>;
   embedding?: PublicAiInferenceRoute;
   rerank?: PublicAiInferenceRoute;
+  decision?: PublicAiInferenceRoute;
 }
 
 // PublicAiInternalModelOverrides stores operation-scoped defaults.
