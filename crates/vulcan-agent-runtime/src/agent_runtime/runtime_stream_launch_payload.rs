@@ -303,6 +303,7 @@ mod tests {
             agent_name: String::from("默认代理"),
             agent_kind: String::from("内置"),
             agent_prompt_snapshot: None,
+            dedicated_session: None,
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
@@ -380,6 +381,7 @@ mod tests {
             provider_request_continuation: None,
             execution_agent_id: None,
             agent_prompt_snapshot: None,
+            dedicated_session: None,
             provider_id_override: None,
             model_id_override: None,
             connection_id_override: None,

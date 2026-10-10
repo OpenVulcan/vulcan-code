@@ -88,6 +88,17 @@ async fn maybe_auto_compact_webui_session_with_mode(
     if request.prompt_purpose != ExecutionPromptPurpose::UserTurn {
         return Ok(None);
     }
+    // Dedicated sessions keep their locked memory verbatim and are never compacted.
+    // 专职会话按原样保留锁定记忆，从不压缩。
+    if request.dedicated_session.is_some() {
+        return if force_compaction {
+            Err(String::from(
+                "专职助手会话不支持上下文压缩；当前上下文已超出模型窗口，请选择容量更大的模型或新建会话。",
+            ))
+        } else {
+            Ok(None)
+        };
+    }
     let Some(context_budget) = preparation.context_budget.as_ref() else {
         return if force_compaction {
             Err(String::from(

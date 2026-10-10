@@ -591,6 +591,45 @@ fn subagent_functional_mode_adds_specialist_system_prompt() {
     );
 }
 
+/// Verifies the minimal dedicated mode sends only the base prompt, while tooling mode adds workspace context.
+/// 验证极简专职模式只发送基础提示词，带工具模式才附加工作区上下文。
+#[test]
+fn dedicated_modes_scope_workspace_context() {
+    let engine = PromptComposerEngine::with_builtins();
+    let minimal = engine
+        .compose(&subagent_prompt_input(
+            PromptAssemblyMode::DedicatedMinimal,
+            None,
+        ))
+        .expect("compose should succeed");
+    assert_eq!(minimal.diagnostics.strategy_id, "dedicated_minimal");
+    assert!(minimal.render_system_text().contains("Agent base"));
+    assert!(!minimal.render_system_text().contains("Provider base"));
+    let minimal_text = format!(
+        "{}{}",
+        minimal.render_developer_text(),
+        minimal.render_user_text()
+    );
+    assert!(!minimal_text.contains("cwd=D:/repo"));
+
+    let tooling = engine
+        .compose(&subagent_prompt_input(
+            PromptAssemblyMode::DedicatedTooling,
+            None,
+        ))
+        .expect("compose should succeed");
+    assert_eq!(tooling.diagnostics.strategy_id, "dedicated_tooling");
+    let tooling_text = format!(
+        "{}{}{}",
+        tooling.render_system_text(),
+        tooling.render_developer_text(),
+        tooling.render_user_text()
+    );
+    assert!(tooling_text.contains("Agent base"));
+    assert!(tooling_text.contains("cwd=D:/repo"));
+    assert!(!tooling_text.contains("Subagent identity"));
+}
+
 /// Verifies project-rule delta tracking distinguishes unchanged and changed snapshots.
 /// 验证项目规则增量跟踪能区分未变化与已变化快照。
 #[test]

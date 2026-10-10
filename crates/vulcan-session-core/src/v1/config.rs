@@ -24,7 +24,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// migrating it; per-version migrations become mandatory from V0.2 (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。发布前版本（V0.1.x）拒绝其他任何版本而不迁移；自 V0.2 起才必须提供逐版本迁移
 /// （AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 5;
+pub const METADATA_SCHEMA_VERSION: u32 = 6;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
@@ -1052,6 +1052,9 @@ pub struct MetadataDocument {
     /// Resolved child execution profile, absent for ordinary sessions and unprepared children.
     /// 已解析子执行配置；普通会话及尚未准备的子代理没有此记录。
     pub child_execution_profile: Option<super::child_execution::ChildExecutionProfile>,
+    /// Creation-frozen dedicated-session profile; `None` for every ordinary session.
+    /// 创建时冻结的专职会话配置；所有普通会话为 `None`。
+    pub dedicated: Option<super::dedicated::DedicatedSessionProfile>,
     /// Latest auxiliary maintenance ownership; business completion remains independent.
     /// 最近辅助维护归属；业务完成保持独立。
     pub context_maintenance: Option<super::context_maintenance::ContextMaintenanceExecution>,
@@ -1100,6 +1103,7 @@ impl MetadataDocument {
             collaboration: CollaborationMetadata::new(),
             dynamic_context: BTreeMap::new(),
             child_execution_profile: None,
+            dedicated: None,
             context_maintenance: None,
             child_creation_intents: BTreeMap::new(),
             business_hook: super::business_hook::BusinessHookMetadata::default(),

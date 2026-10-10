@@ -35,6 +35,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_update_session_goal_status",
     "service_set_session_plan_mode",
     "service_set_session_answer_mode",
+    "service_set_dedicated_memory_lock",
+    "service_draft_dedicated_prompt",
     "service_set_session_permission_mode",
     "service_set_session_vmm_policy",
     "service_set_session_context_compaction_window",
@@ -78,6 +80,20 @@ pub(super) async fn dispatch(
     let result = match method {
         "service_set_session_answer_mode" => rpc_json_result(
             crate::answer_mode::service_set_session_answer_mode(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_set_dedicated_memory_lock" => rpc_json_result(
+            crate::dedicated_session::service_set_dedicated_memory_lock(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_draft_dedicated_prompt" => rpc_json_result(
+            crate::dedicated_session::service_draft_dedicated_prompt(
                 state,
                 rpc_required_param(params, "request")?,
             )

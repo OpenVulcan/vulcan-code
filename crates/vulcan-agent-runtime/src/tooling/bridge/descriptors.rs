@@ -23,7 +23,7 @@ pub(super) fn native_descriptor_to_vulcan(
 
 /// Returns whether a native tool id belongs to the VMM memory tool family.
 /// 返回单个原生工具标识是否属于 VMM 记忆工具族。
-pub(super) fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
+pub(crate) fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
         "vmm_memory_search" | "vmm_turn_details" | "vmm_memory_write" | "vmm_memory_delete"
@@ -32,7 +32,7 @@ pub(super) fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
 
 /// Returns whether a native tool belongs to the project knowledge family.
 /// 返回原生工具是否属于项目知识库工具族。
-pub(super) fn native_tool_id_is_knowledge_tool(tool_id: &str) -> bool {
+pub(crate) fn native_tool_id_is_knowledge_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
         "knowledge_search" | "knowledge_browse" | "knowledge_read"

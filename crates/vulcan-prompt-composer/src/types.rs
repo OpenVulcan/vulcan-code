@@ -119,6 +119,12 @@ pub enum PromptAssemblyMode {
     /// Subagent functional composition.
     /// 子代理功能组合模式。
     SubagentFunctional,
+    /// Dedicated-session composition without general tools.
+    /// 不开放通用工具的专职会话组合模式。
+    DedicatedMinimal,
+    /// Dedicated-session composition with general tools.
+    /// 开放通用工具的专职会话组合模式。
+    DedicatedTooling,
 }
 
 /// Personality selection requested by the caller.

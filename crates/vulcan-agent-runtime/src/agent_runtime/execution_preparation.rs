@@ -43,6 +43,7 @@ use vulcan_tools_manager::{
 pub(crate) mod captured_child_tool_admission;
 #[path = "execution_preparation/codebase_tool_routing_prompt.rs"]
 mod codebase_tool_routing_prompt;
+mod dedicated_session;
 #[path = "execution_preparation/tool_exposure.rs"]
 mod tool_exposure;
 
@@ -257,6 +258,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             &request.prompt_skill_policy_override,
         )
     });
+    if request.dedicated_session.as_ref().is_some_and(|profile| {
+        profile.tool_access == vulcan_session_core::v1::DedicatedToolAccess::None
+    }) {
+        // Without general tools, prompt skills have no invocation route and are not described.
+        // 未开放通用工具时，提示词技能没有调用途径，因此不作描述。
+        prompt_skills.clear();
+    }
     let implicit_luaskills = tool_exposure.luaskills_dispatch_tools.clone();
     let mut additional_developer_segments = Vec::new();
     if let Some(segment) = build_skill_developer_segment(request.prompt_purpose, &prompt_skills) {
@@ -381,6 +389,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         &mut resolved_tools,
         request.captured_child_tool_admission.as_ref(),
     );
+    dedicated_session::filter_tools(&mut resolved_tools, request.dedicated_session.as_ref());
     let prompt_skill_tool_available = request.prompt_purpose.supports_user_turn_tooling()
         && render_prompt_skills_instructions(&prompt_skills).is_some();
     if !prompt_skill_tool_available {
@@ -459,6 +468,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         agent_name: active_agent.name.clone(),
         agent_kind: active_agent.kind.label().to_string(),
         agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
+        dedicated_session: request.dedicated_session.clone(),
         subagent_prompt_context: request.subagent_prompt_context.clone(),
         model_blueprint,
         prompt_preview: execution_prompt_preview(request),

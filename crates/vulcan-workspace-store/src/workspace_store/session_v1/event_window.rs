@@ -55,6 +55,9 @@ pub struct EventWindowState {
     /// Session permission mode captured from the same metadata.
     /// 从同一份 metadata 捕获的会话权限模式。
     pub permission_mode: vulcan_session_core::v1::config::PermissionMode,
+    /// Dedicated-session profile captured from the same metadata.
+    /// 从同一份 metadata 捕获的专职会话配置。
+    pub dedicated: Option<vulcan_session_core::v1::DedicatedSessionProfile>,
 }
 
 /// One complete, seq-contiguous turn window.
@@ -274,6 +277,7 @@ fn event_window_state(
         open_turn_start_seq: metadata.open_turn_start_seq,
         config: metadata.config.clone(),
         permission_mode: metadata.mode.access.permission,
+        dedicated: metadata.dedicated.clone(),
     }
 }
 

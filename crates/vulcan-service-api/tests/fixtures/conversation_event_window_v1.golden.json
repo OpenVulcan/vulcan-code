@@ -197,7 +197,8 @@
       "set_at_ms": null
     },
     "next_request": null,
-    "context_compaction_window_node_id": null
+    "context_compaction_window_node_id": null,
+    "dedicated": null
   },
   "service_epoch": "test-service-epoch",
   "memory_revision": 11,

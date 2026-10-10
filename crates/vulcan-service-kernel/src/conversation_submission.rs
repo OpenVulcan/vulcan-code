@@ -246,6 +246,56 @@ pub(super) struct SubmissionSessionSettings {
     /// Optional initial goal created before the first turn starts.
     /// 首轮开始前创建的可选初始目标。
     initial_goal: Option<SubmissionInitialGoal>,
+    /// Dedicated-session choices; present only when the draft creates a dedicated session.
+    /// 专职会话选择；仅当草稿创建专职会话时存在。
+    #[serde(default)]
+    dedicated: Option<SubmissionDedicatedSettings>,
+}
+
+/// Dedicated-session choices captured by the creation wizard.
+/// 创建向导捕获的专职会话选择。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubmissionDedicatedSettings {
+    /// General tool access fixed at creation.
+    /// 创建时固定的通用工具开放方式。
+    tool_access: vulcan_session_core::v1::DedicatedToolAccess,
+    /// User-confirmed base prompt sent as the session's system instruction.
+    /// 用户确认、作为会话系统指令发送的基础提示词。
+    base_prompt: String,
+    /// Whether memory is locked before the first user input.
+    /// 是否在首条用户输入之前锁定记忆。
+    lock_immediately: bool,
+}
+
+/// Validates dedicated choices and returns the creation request, or `None` for ordinary drafts.
+/// 校验专职选择并返回创建请求；普通草稿返回 `None`。
+fn submission_dedicated_creation(
+    settings: Option<&SubmissionSessionSettings>,
+    execution_mode: Option<&str>,
+) -> Result<Option<crate::session_v1_lifecycle::DedicatedSessionCreation>, String> {
+    let Some(settings) = settings else {
+        return Ok(None);
+    };
+    let Some(dedicated) = settings.dedicated.as_ref() else {
+        return Ok(None);
+    };
+    if settings.initial_goal.is_some()
+        || execution_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("plan"))
+    {
+        return Err(String::from("ERR_DEDICATED_SESSION_MODE_UNSUPPORTED"));
+    }
+    let profile = vulcan_session_core::v1::DedicatedSessionProfile::new(
+        dedicated.tool_access,
+        dedicated.base_prompt.trim(),
+    )
+    .map_err(|error| format!("ERR_DEDICATED_SESSION_INVALID: {error}"))?;
+    Ok(Some(
+        crate::session_v1_lifecycle::DedicatedSessionCreation {
+            profile,
+            lock_immediately: dedicated.lock_immediately,
+        },
+    ))
 }
 
 /// Reports whether an absent per-turn snapshot must preserve initialized session-owned settings.
@@ -430,9 +480,14 @@ async fn apply_submission_session_settings(
     } else {
         KnowledgeLibrarySelectionConfigV1::default()
     };
-    let vmm_selection_v1 = if let Some(policy) =
-        settings.and_then(|settings| settings.vmm_policy.as_ref())
-    {
+    let vmm_selection_v1 = if settings.is_some_and(|settings| settings.dedicated.is_some()) {
+        // Dedicated sessions never use VMM memory; the choice is frozen with the session.
+        // 专职会话从不使用 VMM 记忆；该选择随会话冻结。
+        VmmSessionPolicyConfig {
+            precheck_enabled: Some(false),
+            memory_writeback_enabled: Some(false),
+        }
+    } else if let Some(policy) = settings.and_then(|settings| settings.vmm_policy.as_ref()) {
         VmmSessionPolicyConfig {
             precheck_enabled: submission_vmm_policy_value(&policy.precheck_mode)?,
             memory_writeback_enabled: submission_vmm_policy_value(&policy.memory_writeback_mode)?,
@@ -2256,6 +2311,7 @@ async fn materialize_submission_session_v1(
     turn_admission: &SubmissionTurnAdmission,
     bound_request_config: Option<&ActiveRequestConfig>,
     new_session_context_window_node_id: Option<ContextCompactionWindowNodeId>,
+    dedicated: Option<crate::session_v1_lifecycle::DedicatedSessionCreation>,
     now_ms: i64,
 ) -> Result<Option<vulcan_session_core::v1::document::ContinueTurnReceipt>, String> {
     // clientActionId preserves the browser-owned durable idempotency identity
@@ -2306,6 +2362,7 @@ async fn materialize_submission_session_v1(
                 controller_runtime,
                 session_registry.as_ref(),
                 CreateRootSessionV1Request {
+                    dedicated,
                     session_id: materialized_session.session_id,
                     project_id: project_id.to_string(),
                     title: materialized_session.session_title.clone(),
@@ -2903,6 +2960,15 @@ async fn service_start_conversation_execution(
         },
     )?;
     project_admission.validate_materialized_session(&materialized_session)?;
+    // Dedicated choices are validated before the root publication that installs them.
+    // 专职选择在安装它们的根发布之前完成校验。
+    let dedicated_creation =
+        submission_dedicated_creation(session_settings.as_ref(), execution_mode.as_deref())?;
+    if dedicated_creation.is_some()
+        && materialized_session.kind != PromptSessionMaterializationKind::Created
+    {
+        return Err(String::from("ERR_DEDICATED_SESSION_NOT_CONVERTIBLE"));
+    }
     // Resolve the new-session default against the actual selected model before publishing the root.
     // 在发布根输入前，按实际所选模型解析新会话默认窗口。
     let new_session_context_window_node_id =
@@ -2944,6 +3010,7 @@ async fn service_start_conversation_execution(
         &turn_admission,
         existing_bound_request_config.as_ref(),
         new_session_context_window_node_id,
+        dedicated_creation,
         i64::try_from(materialize_started_at).unwrap_or(i64::MAX),
     )
     .await?;
@@ -3839,6 +3906,7 @@ mod submission_session_settings_tests {
             provider_tool_settings: None,
             knowledge_selection: None,
             initial_goal: None,
+            dedicated: None,
         };
         assert!(
             submission_output_style_snapshot(

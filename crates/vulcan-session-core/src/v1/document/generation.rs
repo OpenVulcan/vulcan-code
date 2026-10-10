@@ -150,6 +150,7 @@ impl SessionDocument {
         &self,
         input: EditGenerationInput,
     ) -> Result<GenerationBuildOutput, DomainError> {
+        self.reject_dedicated_change("generation")?;
         self.ensure_generation_source_ready()?;
         // Replacing source history cannot abandon an accepted question or child obligation.
         // 替换来源历史不能遗弃已接纳问题或子任务义务。
@@ -214,6 +215,7 @@ impl SessionDocument {
         &self,
         input: ForkGenerationInput,
     ) -> Result<GenerationBuildOutput, DomainError> {
+        self.reject_dedicated_change("generation")?;
         self.ensure_generation_source_ready()?;
         validate_timestamp("generation.now_ms", input.now_ms)?;
         validate_generation_identity("child_session_id", &input.child_session_id)?;

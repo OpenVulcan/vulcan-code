@@ -1940,6 +1940,7 @@ mod standalone_compaction_tests {
             agent_name: String::from("Default Agent"),
             agent_kind: String::from("builtin"),
             agent_prompt_snapshot: None,
+            dedicated_session: None,
             subagent_prompt_context: None,
             model_blueprint: crate::agent_runtime::provider::ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),

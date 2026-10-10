@@ -20,7 +20,8 @@ V0.1.x 是发布前版本，不保留任何元数据迁移：
 4. 损坏 JSON、缺失必填字段属于损坏，不能被当成空会话。
 
 版本历史（仅说明，不再提供迁移代码）：4 引入 `config.answer_mode`，5 引入 `mode.access.permission`
-（`read_only` / `workspace_write` / `full_access`，新会话默认 `workspace_write`）。更新到新版本后，
+（`read_only` / `workspace_write` / `full_access`，新会话默认 `workspace_write`），6 引入必填可空的
+`dedicated`（专职会话配置：工具开放、基础提示词与记忆锁定区间，见[专职会话](dedicated-sessions.md)）。更新到新版本后，
 旧版本的本地会话将无法打开。
 
 发布锁是协作式锁，进程退出会自动释放；锁文件本身永久保留，不能因“看起来为空”而删除。

@@ -192,6 +192,7 @@ impl SessionDocument {
         provider_context: impl Into<String>,
         now_ms: i64,
     ) -> Result<GoalModeTransition, DomainError> {
+        self.reject_dedicated_change("goal")?;
         let (objective, provider_context) =
             validate_goal_definition(objective.into(), budget_tokens, provider_context.into())?;
         if self.metadata.mode.plan.enabled {
@@ -843,6 +844,7 @@ impl SessionDocument {
         if self.metadata.mode.plan.enabled == input.enabled {
             return Ok(false);
         }
+        self.reject_dedicated_change("plan_mode")?;
         self.require_no_active_api_for_mode_transition()?;
         self.ensure_transition_capacity(1, 0)?;
         let mut staged_allocator = self.id_allocator;

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use vulcan_session_core::v1::config::{
     ActiveRequestConfig, AnswerModePreference, PendingRequestConfig, PermissionMode, SessionConfig,
 };
+use vulcan_session_core::v1::dedicated::DedicatedSessionProfile;
 use vulcan_session_core::v1::event::{AssistantSemanticStatus, EventBody};
 use vulcan_session_core::v1::ids::{Seq, TurnId};
 use vulcan_session_core::v1::service_dto::{
@@ -163,6 +164,9 @@ pub struct ConversationSessionConfigV1 {
     /// Stable compaction-window node selected for the next boundary.
     /// 为下一边界选择的稳定压缩窗口节点。
     pub context_compaction_window_node_id: Option<String>,
+    /// Dedicated-session profile read from `metadata.dedicated`; `None` for regular sessions.
+    /// 从 `metadata.dedicated` 读取的专职会话配置；普通会话为 `None`。
+    pub dedicated: Option<DedicatedSessionProfile>,
 }
 
 impl ConversationSessionConfigV1 {
@@ -172,14 +176,18 @@ impl ConversationSessionConfigV1 {
     /// # Parameters
     /// 参数
     /// `config` is the exact session config captured with the event window;
-    /// `permission_mode` comes from the same metadata snapshot.
-    /// `config` 是与事件窗口一同捕获的精确会话配置；`permission_mode` 来自同一份元数据快照。
+    /// `permission_mode` and `dedicated` come from the same metadata snapshot.
+    /// `config` 是与事件窗口一同捕获的精确会话配置；`permission_mode` 与 `dedicated` 来自同一份元数据快照。
     ///
     /// # Returns
     /// 返回值
     /// Returns current/next request state and the dynamic compaction selection.
     /// 返回当前/下一请求状态与动态压缩选择。
-    pub fn from_session_config(config: &SessionConfig, permission_mode: PermissionMode) -> Self {
+    pub fn from_session_config(
+        config: &SessionConfig,
+        permission_mode: PermissionMode,
+        dedicated: Option<&DedicatedSessionProfile>,
+    ) -> Self {
         Self {
             answer_mode: config.answer_mode.clone(),
             permission_mode,
@@ -191,6 +199,7 @@ impl ConversationSessionConfigV1 {
             context_compaction_window_node_id: config
                 .context_compaction_window_node_id
                 .map(|node_id| node_id.as_str().to_string()),
+            dedicated: dedicated.cloned(),
         }
     }
 }
@@ -1364,6 +1373,7 @@ mod tests {
             ConversationSessionConfigV1::from_session_config(
                 &document.metadata.config,
                 document.metadata.mode.access.permission,
+                document.metadata.dedicated.as_ref(),
             ),
             ConversationEventRevisionFrontierV1::try_new(
                 "test-service-epoch",
@@ -1400,8 +1410,11 @@ mod tests {
             ..SessionConfig::default()
         };
 
-        let projected =
-            ConversationSessionConfigV1::from_session_config(&config, PermissionMode::ReadOnly);
+        let projected = ConversationSessionConfigV1::from_session_config(
+            &config,
+            PermissionMode::ReadOnly,
+            None,
+        );
 
         assert_eq!(
             projected.current_request.model.as_deref(),
@@ -1613,6 +1626,7 @@ mod tests {
             ConversationSessionConfigV1::from_session_config(
                 &SessionConfig::default(),
                 PermissionMode::default(),
+                None,
             ),
         );
         let value = serde_json::to_value(response).expect("serialize historical page");

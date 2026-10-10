@@ -42,6 +42,7 @@ impl SessionDocument {
         if current.mode == mode {
             return Ok(false);
         }
+        self.reject_dedicated_change("answer_mode")?;
         if current.revision >= JS_SAFE_INTEGER_MAX {
             return Err(DomainError::InvalidSelectionConfiguration {
                 field: "answer_mode.revision",

@@ -581,6 +581,30 @@ pub enum DomainError {
         /// 稳定字段或转换名称。
         field: &'static str,
     },
+    /// A dedicated-session profile violates its prompt bound or span ordering.
+    /// 专职会话配置违反提示词边界或区间顺序。
+    InvalidDedicatedProfile {
+        /// Stable violated field name.
+        /// 被违反的稳定字段名。
+        field: &'static str,
+    },
+    /// A dedicated-only operation was requested on an ordinary session.
+    /// 在普通会话上请求了仅限专职会话的操作。
+    NotDedicatedSession,
+    /// A creation-frozen dedicated-session setting was asked to change.
+    /// 请求修改专职会话创建时冻结的设置。
+    DedicatedSettingFrozen {
+        /// Stable setting name.
+        /// 稳定设置名。
+        setting: &'static str,
+    },
+    /// The dedicated memory lock can change only between turns.
+    /// 专职会话的记忆锁定只能在回合之间切换。
+    DedicatedMemoryLockWhileTurnOpen {
+        /// Open turn identity.
+        /// 开放回合身份。
+        turn_id: u64,
+    },
 }
 
 impl DomainError {
@@ -803,6 +827,23 @@ impl fmt::Display for DomainError {
             Self::GoalStateTransition { current, requested } => write!(
                 formatter,
                 "goal cannot transition from {current} to {requested}"
+            ),
+            Self::InvalidDedicatedProfile { field } => {
+                write!(
+                    formatter,
+                    "dedicated session profile field {field} is invalid"
+                )
+            }
+            Self::NotDedicatedSession => {
+                formatter.write_str("operation requires a dedicated session")
+            }
+            Self::DedicatedSettingFrozen { setting } => write!(
+                formatter,
+                "dedicated session setting {setting} is fixed at creation"
+            ),
+            Self::DedicatedMemoryLockWhileTurnOpen { turn_id } => write!(
+                formatter,
+                "dedicated memory lock cannot change while turn {turn_id} is open"
             ),
             Self::ModeConflict { requested, active } => write!(
                 formatter,

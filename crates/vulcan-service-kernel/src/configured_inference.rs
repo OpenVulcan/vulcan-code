@@ -143,6 +143,46 @@ pub(crate) const VMM_CONSUMER_PROFILE_ID: &str = "vmm";
 /// 标识原生用量账本中的可计费供应商/模型验证请求。
 const PROVIDER_MODEL_VALIDATION_CONSUMER_ID: &str = "vulcan-code-provider-validation";
 
+/// Identifies billable dedicated-session prompt drafting requests in the native usage ledger.
+/// 标识原生用量账本中的可计费专职会话提示词起草请求。
+const DEDICATED_PROMPT_DRAFT_CONSUMER_ID: &str = "vulcan-code-dedicated-prompt-draft";
+
+/// Output token ceiling of one dedicated prompt draft, shared by its caller budget and request.
+/// 单次专职提示词起草的输出 Token 上限，由其调用方预算与请求共用。
+pub(crate) const DEDICATED_PROMPT_DRAFT_OUTPUT_TOKEN_LIMIT: u64 = 16_384;
+
+/// One-shot text consumers that run against an exact user-selected route without fallback.
+/// 在用户选择的精确路由上执行、不回退的一次性文本消费者。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExactSelectionTextPurpose {
+    /// Settings-owned minimal model validation.
+    /// 设置页持有的最小模型验证。
+    ModelValidation,
+    /// Drafting or revising the base prompt of a dedicated session.
+    /// 起草或修订专职会话的基础提示词。
+    DedicatedPromptDraft,
+}
+
+impl ExactSelectionTextPurpose {
+    /// Returns the stable usage-ledger consumer identity.
+    /// 返回稳定的用量账本消费者身份。
+    fn consumer_id(self) -> &'static str {
+        match self {
+            Self::ModelValidation => PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+            Self::DedicatedPromptDraft => DEDICATED_PROMPT_DRAFT_CONSUMER_ID,
+        }
+    }
+
+    /// Returns the subject used in terminal error messages.
+    /// 返回终态错误消息中使用的主语。
+    fn subject(self) -> &'static str {
+        match self {
+            Self::ModelValidation => "Custom model validation",
+            Self::DedicatedPromptDraft => "Dedicated prompt drafting",
+        }
+    }
+}
+
 /// Retains terminal LLM status briefly for polling and reconnect diagnostics.
 /// 短暂保留 LLM 终态，供轮询与重连诊断使用。
 const LLM_TERMINAL_RETENTION: Duration = Duration::from_secs(15 * 60);
@@ -1707,18 +1747,19 @@ impl ConfiguredInferenceService {
     /// Returns visible terminal response text, or a normalized failure after persisting the exact
     /// physical attempt and any partial usage.
     /// 返回可见终态响应文本；失败时先持久化精确真实尝试及可能存在的部分用量，再返回规范错误。
-    pub(crate) async fn execute_model_validation(
+    pub(crate) async fn execute_exact_selection_text(
         &self,
+        purpose: ExactSelectionTextPurpose,
         selection: &ResolvedPublicAiSelection,
         request: AiExecutionRequest,
         execution_id: String,
     ) -> Result<String, ConfiguredInferenceError> {
-        let caller = provider_model_validation_caller();
+        let caller = exact_selection_text_caller(purpose);
         let started_at_unix_ms = current_unix_millis();
         let input_item_count = u64::try_from(request.messages.len()).unwrap_or(u64::MAX);
         let mut active_facts = InternalInferenceTelemetryFacts::from_selection(
             &caller,
-            PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+            purpose.consumer_id(),
             execution_id.as_str(),
             execution_id.as_str(),
             "internal_llm",
@@ -1740,7 +1781,8 @@ impl ConfiguredInferenceService {
             Ok(stream) => stream,
             Err(failure) => {
                 let error = ConfiguredInferenceError::from_provider_failure(failure);
-                self.emit_model_validation_terminal(
+                self.emit_exact_selection_terminal(
+                    purpose,
                     &caller,
                     selection,
                     execution_id.as_str(),
@@ -1765,7 +1807,8 @@ impl ConfiguredInferenceService {
                 Ok(event) => event,
                 Err(failure) => {
                     let error = ConfiguredInferenceError::from_provider_failure(failure);
-                    self.emit_model_validation_terminal(
+                    self.emit_exact_selection_terminal(
+                        purpose,
                         &caller,
                         selection,
                         execution_id.as_str(),
@@ -1796,9 +1839,13 @@ impl ConfiguredInferenceService {
                     if output_text.is_empty() {
                         let error = ConfiguredInferenceError::new(
                             ConfiguredInferenceErrorCategory::Execution,
-                            "Custom model validation completed without visible text output.",
+                            format!(
+                                "{} completed without visible text output.",
+                                purpose.subject()
+                            ),
                         );
-                        self.emit_model_validation_terminal(
+                        self.emit_exact_selection_terminal(
+                            purpose,
                             &caller,
                             selection,
                             execution_id.as_str(),
@@ -1811,7 +1858,8 @@ impl ConfiguredInferenceService {
                         );
                         return Err(error);
                     }
-                    self.emit_model_validation_terminal(
+                    self.emit_exact_selection_terminal(
+                        purpose,
                         &caller,
                         selection,
                         execution_id.as_str(),
@@ -1826,7 +1874,8 @@ impl ConfiguredInferenceService {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    self.emit_model_validation_terminal(
+                    self.emit_exact_selection_terminal(
+                        purpose,
                         &caller,
                         selection,
                         execution_id.as_str(),
@@ -1843,9 +1892,13 @@ impl ConfiguredInferenceService {
         }
         let error = ConfiguredInferenceError::new(
             ConfiguredInferenceErrorCategory::Execution,
-            "Custom model validation stream ended before a terminal completion event.",
+            format!(
+                "{} stream ended before a terminal completion event.",
+                purpose.subject()
+            ),
         );
-        self.emit_model_validation_terminal(
+        self.emit_exact_selection_terminal(
+            purpose,
             &caller,
             selection,
             execution_id.as_str(),
@@ -1859,11 +1912,12 @@ impl ConfiguredInferenceService {
         Err(error)
     }
 
-    /// Persists one settings-owned model-validation terminal attempt.
-    /// 持久化一次由设置页持有的模型验证终态尝试。
+    /// Persists one exact-selection text terminal attempt.
+    /// 持久化一次精确选择文本执行的终态尝试。
     #[allow(clippy::too_many_arguments)]
-    fn emit_model_validation_terminal(
+    fn emit_exact_selection_terminal(
         &self,
+        purpose: ExactSelectionTextPurpose,
         caller: &InferenceCallerContext,
         selection: &ResolvedPublicAiSelection,
         execution_id: &str,
@@ -1889,7 +1943,7 @@ impl ConfiguredInferenceService {
         };
         let facts = InternalInferenceTelemetryFacts::from_selection(
             caller,
-            PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
+            purpose.consumer_id(),
             execution_id,
             execution_id,
             "internal_llm",
@@ -4748,20 +4802,9 @@ fn authorize_caller(
 /// 返回值
 /// A bounded internal-background caller whose identity becomes the native ledger consumer.
 /// 返回一个有界后台调用方，其身份会成为原生账本消费者。
-fn provider_model_validation_caller() -> InferenceCallerContext {
-    InferenceCallerContext {
-        // Model validation keeps its existing scheduling behavior.
-        // 模型验证保留既有调度行为。
-        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
-        caller_id: PROVIDER_MODEL_VALIDATION_CONSUMER_ID.to_string(),
-        allowed_consumer_profile_ids: BTreeSet::from([String::from(
-            PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
-        )]),
-        permissions: BTreeSet::from([InferencePermission::Llm]),
-        usage_scope: InferenceUsageScope::InternalBackground,
-        interactive_session_id: None,
-        deadline_unix_ms: None,
-        budget: vulcan_ai_contract::InferenceCallerBudget {
+fn exact_selection_text_caller(purpose: ExactSelectionTextPurpose) -> InferenceCallerContext {
+    let budget = match purpose {
+        ExactSelectionTextPurpose::ModelValidation => vulcan_ai_contract::InferenceCallerBudget {
             max_concurrent_executions: 1,
             max_input_units_per_request: Some(16 * 1024),
             max_output_tokens_per_request: Some(256),
@@ -4769,6 +4812,30 @@ fn provider_model_validation_caller() -> InferenceCallerContext {
             max_input_units_per_minute: Some(64 * 1024),
             max_execution_duration_ms: Some(60_000),
         },
+        // Drafting reads at most one existing prompt plus the user's notes and writes one prompt.
+        // 起草最多读取一份现有提示词与用户说明，并写出一份提示词。
+        ExactSelectionTextPurpose::DedicatedPromptDraft => {
+            vulcan_ai_contract::InferenceCallerBudget {
+                max_concurrent_executions: 1,
+                max_input_units_per_request: Some(64 * 1024),
+                max_output_tokens_per_request: Some(DEDICATED_PROMPT_DRAFT_OUTPUT_TOKEN_LIMIT),
+                max_requests_per_minute: Some(10),
+                max_input_units_per_minute: Some(256 * 1024),
+                max_execution_duration_ms: Some(300_000),
+            }
+        }
+    };
+    InferenceCallerContext {
+        // Exact-selection text keeps the model-validation scheduling behavior.
+        // 精确选择文本沿用模型验证的调度行为。
+        scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
+        caller_id: purpose.consumer_id().to_string(),
+        allowed_consumer_profile_ids: BTreeSet::from([String::from(purpose.consumer_id())]),
+        permissions: BTreeSet::from([InferencePermission::Llm]),
+        usage_scope: InferenceUsageScope::InternalBackground,
+        interactive_session_id: None,
+        deadline_unix_ms: None,
+        budget,
     }
 }
 

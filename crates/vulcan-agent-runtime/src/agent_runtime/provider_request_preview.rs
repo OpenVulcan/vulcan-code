@@ -617,6 +617,7 @@ mod tests {
             agent_name: String::from("Main Agent"),
             agent_kind: String::from("analysis"),
             agent_prompt_snapshot: None,
+            dedicated_session: None,
             subagent_prompt_context: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("anthropic"),

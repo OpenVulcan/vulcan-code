@@ -21,6 +21,7 @@ use vulcan_session_core::v1::collaboration::{
 };
 use vulcan_session_core::v1::config::QueuedInputIdentity;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
+use vulcan_session_core::v1::dedicated::dedicated_provider_events;
 use vulcan_session_core::v1::document::{
     ApiTransportObservedReceipt, ClientInputSubmission, CompactionCommitInput,
     ContinuationDispatchResolution, ContinuationRequest, ContinuationTerminalProjection,
@@ -2003,6 +2004,7 @@ impl SessionHandle {
             current_compaction_id,
             open_turn_id,
             child_business_execution_id,
+            dedicated_profile,
         ) = {
             let document = self
                 .document
@@ -2075,6 +2077,7 @@ impl SessionHandle {
                     .child_execution_profile
                     .as_ref()
                     .map(|profile| profile.business_execution_id.clone()),
+                document.dedicated_profile().cloned(),
             )
         };
         let range = locator.load_event_range(Seq::try_new(1)?, through_seq)?;
@@ -2092,8 +2095,13 @@ impl SessionHandle {
             SessionProjectionPurpose::ProviderRequest => context_frozen_at,
             SessionProjectionPurpose::CompactionContext => Some(through_seq),
         };
+        // A dedicated session forgets closed turns started while its memory was locked.
+        // 专职会话遗忘在记忆锁定期间开始且已闭合的回合。
+        let dedicated_events = dedicated_profile
+            .as_ref()
+            .map(|profile| dedicated_provider_events(profile, &range.events, open_turn_id));
         let mut sourced_items = project_context_generation_items_with_sources(
-            &range.events,
+            dedicated_events.as_deref().unwrap_or(&range.events),
             retained_from_seq,
             instruction_frontier,
         )?;

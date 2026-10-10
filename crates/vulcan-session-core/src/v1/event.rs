@@ -1269,6 +1269,12 @@ pub enum DisplayNoticeKind {
     /// User manually stopped at a point in time.
     /// 用户在某个时间点手动停止。
     Stopped,
+    /// A dedicated session locked its memory at this point.
+    /// 专职会话在此处锁定了记忆。
+    MemoryLocked,
+    /// A dedicated session unlocked its memory at this point.
+    /// 专职会话在此处解除了记忆锁定。
+    MemoryUnlocked,
 }
 
 /// Severity of one permanent UI notice.

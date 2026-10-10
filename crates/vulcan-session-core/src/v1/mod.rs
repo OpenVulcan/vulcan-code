@@ -21,6 +21,7 @@ pub mod compaction_frontier;
 pub mod config;
 pub mod context;
 pub mod context_maintenance;
+pub mod dedicated;
 pub mod document;
 pub mod dynamic_context;
 pub mod errors;
@@ -49,6 +50,10 @@ pub use context::{
     CompactionNode, CompactionsDocument, LockedBaselineProjection, LockedBaselineSegmentInput,
     LockedPromptTarget, LockedSource, LockedSourceKind, RuntimeDocument,
     RuntimeInitializationState, RuntimeLock,
+};
+pub use dedicated::{
+    DEDICATED_BASE_PROMPT_MAX_CHARS, DedicatedLockedSpan, DedicatedSessionProfile,
+    DedicatedToolAccess, dedicated_provider_events,
 };
 pub use document::{
     ActiveApiState, ActiveTurnState, ApiCompletion, ApiGroupCompletionReceipt,

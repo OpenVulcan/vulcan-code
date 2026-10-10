@@ -4,6 +4,9 @@
 /// Context compaction strategy.
 /// 上下文压缩策略。
 pub mod compaction;
+/// Dedicated-session strategies.
+/// 专职会话策略。
+pub mod dedicated;
 /// Primary agent strategy.
 /// 主代理策略。
 pub mod primary;

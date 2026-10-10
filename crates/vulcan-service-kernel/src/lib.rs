@@ -161,6 +161,7 @@ mod conversation_generations_v1;
 mod conversation_resources_v1;
 mod conversation_run_services;
 mod conversation_submission;
+mod dedicated_session;
 mod execution_report_memory;
 mod fallback_workbench_projection;
 #[cfg(test)]

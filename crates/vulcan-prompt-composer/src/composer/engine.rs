@@ -8,6 +8,7 @@ use crate::node::render_node;
 use crate::personality::catalog::PersonalityCatalog;
 use crate::source::hashing::stable_text_hash;
 use crate::strategy::compaction::MinimalContextCompactionStrategy;
+use crate::strategy::dedicated::{DedicatedMinimalStrategy, DedicatedToolingStrategy};
 use crate::strategy::primary::PrimaryAgentStrategy;
 use crate::strategy::subagent_clone::SubagentCloneStrategy;
 use crate::strategy::subagent_functional::SubagentFunctionalStrategy;
@@ -190,6 +191,8 @@ impl PromptComposerEngine {
             }
             PromptAssemblyMode::SubagentClone => Box::new(SubagentCloneStrategy),
             PromptAssemblyMode::SubagentFunctional => Box::new(SubagentFunctionalStrategy),
+            PromptAssemblyMode::DedicatedMinimal => Box::new(DedicatedMinimalStrategy),
+            PromptAssemblyMode::DedicatedTooling => Box::new(DedicatedToolingStrategy),
         }
     }
 }

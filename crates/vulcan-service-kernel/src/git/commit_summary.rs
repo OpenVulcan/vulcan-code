@@ -581,6 +581,7 @@ fn build_git_commit_summary_execution_request(
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        dedicated_session: None,
         provider_id_override: Some(provider_id.to_string()),
         model_id_override: Some(model_id.to_string()),
         connection_id_override: None,

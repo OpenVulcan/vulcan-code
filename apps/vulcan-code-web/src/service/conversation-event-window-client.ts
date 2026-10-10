@@ -54,6 +54,28 @@ export interface ConversationSessionConfigV1 {
   current_request: ConversationRequestConfigV1;
   next_request: ConversationRequestConfigV1 | null;
   context_compaction_window_node_id: string | null;
+  /** Dedicated-session profile from Core metadata; null for regular sessions.
+   * 来自 Core 元数据的专职会话配置；普通会话为 null。 */
+  dedicated: DedicatedSessionProfileV1 | null;
+}
+
+/** Tool access fixed when a dedicated session is created.
+ * 专职会话创建时固定的工具访问级别。 */
+export type DedicatedToolAccess = "none" | "standard";
+
+/** One memory-lock span; both endpoints are the seq of the lock/unlock notes.
+ * 一段记忆锁定区间；端点是锁定/解锁通知的 seq。 */
+export interface DedicatedLockedSpanV1 {
+  locked_at_seq: number;
+  unlocked_at_seq: number | null;
+}
+
+/** Immutable dedicated-session profile plus its memory-lock history.
+ * 不可变的专职会话配置及其记忆锁定历史。 */
+export interface DedicatedSessionProfileV1 {
+  tool_access: DedicatedToolAccess;
+  base_prompt: string;
+  locked_spans: DedicatedLockedSpanV1[];
 }
 
 /** Common V1 response fields shared by authoritative hydration and historical paging.

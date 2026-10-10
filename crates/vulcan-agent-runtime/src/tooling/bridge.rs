@@ -50,8 +50,8 @@ mod luaskills_dispatch;
 use descriptors::{
     entry_declares_luaskill_sid, entry_declares_pwd, luaskills_descriptor_to_vulcan,
     mcp_tool_binding_to_vulcan, native_descriptor_to_vulcan, native_plan_policy,
-    native_tool_id_is_knowledge_tool, native_tool_id_is_vmm_memory_tool,
 };
+pub(crate) use descriptors::{native_tool_id_is_knowledge_tool, native_tool_id_is_vmm_memory_tool};
 #[cfg(test)]
 use luaskills_dispatch::luaskills_entry_to_call_view;
 use luaskills_dispatch::{

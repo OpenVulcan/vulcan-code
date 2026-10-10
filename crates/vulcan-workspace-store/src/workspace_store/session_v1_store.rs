@@ -491,6 +491,7 @@ impl SessionV1StorageLocator {
             next_seq: metadata.id_frontier.next_seq,
             open_turn_start_seq: metadata.open_turn_start_seq,
             permission_mode: metadata.mode.access.permission,
+            dedicated: metadata.dedicated,
             config: metadata.config,
         })
     }
@@ -599,6 +600,9 @@ pub struct SessionV1EventWindowState {
     /// Session permission mode from the same validated metadata.
     /// 来自同一份已校验 metadata 的会话权限模式。
     pub permission_mode: vulcan_session_core::v1::config::PermissionMode,
+    /// Dedicated-session profile from the same validated metadata.
+    /// 来自同一份已校验 metadata 的专职会话配置。
+    pub dedicated: Option<vulcan_session_core::v1::DedicatedSessionProfile>,
 }
 
 impl From<super::session_v1::event_window::EventWindowState> for SessionV1EventWindowState {
@@ -613,6 +617,7 @@ impl From<super::session_v1::event_window::EventWindowState> for SessionV1EventW
             open_turn_start_seq: state.open_turn_start_seq,
             config: state.config,
             permission_mode: state.permission_mode,
+            dedicated: state.dedicated,
         }
     }
 }

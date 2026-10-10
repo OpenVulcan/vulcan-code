@@ -78,6 +78,7 @@ async fn project_prompt_pending_draft_handoff_uses_actual_project_owner() {
         &fixture.controller,
         &registry,
         CreateRootSessionV1Request {
+            dedicated: None,
             session_id,
             project_id: "actual-prompt-owner".into(),
             title: "Late upload".into(),

@@ -76,9 +76,9 @@ pub mod vulcan_plugin_hooks;
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::{ExecutionStreamEvent, TransientReasoningStatus, TransientReasoningStatusKind};
 pub use execution_models::{
-    ExecutionKnowledgeAccessContext, ExecutionPreparation, ExecutionPreparationRequest,
-    ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage, ExecutionRunReport,
-    ExecutionSessionGoalContext, KnowledgeSearchHandler, VceRetrievalHandler,
+    DedicatedExecutionProfile, ExecutionKnowledgeAccessContext, ExecutionPreparation,
+    ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionProviderVisibleAgentMessage,
+    ExecutionRunReport, ExecutionSessionGoalContext, KnowledgeSearchHandler, VceRetrievalHandler,
 };
 pub use extension_generation::ExtensionGeneration;
 pub use runtime::RuntimeFoundation;

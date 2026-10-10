@@ -222,6 +222,7 @@ fn build_child_base_request(
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        dedicated_session: None,
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,

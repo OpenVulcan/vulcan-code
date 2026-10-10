@@ -98,6 +98,21 @@ pub(crate) struct CreateRootSessionV1Request {
     /// Authoritative creation and root-input Unix time in milliseconds.
     /// 权威创建与根输入 Unix 毫秒时间。
     pub(crate) now_ms: i64,
+    /// Dedicated-session profile installed before the root input, when creating a dedicated session.
+    /// 创建专职会话时在根输入之前安装的专职配置。
+    pub(crate) dedicated: Option<DedicatedSessionCreation>,
+}
+
+/// Dedicated-session choices fixed by the creating submission.
+/// 由创建提交固定的专职会话选择。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DedicatedSessionCreation {
+    /// Validated creation-frozen profile without lock spans.
+    /// 已校验、不含锁定区间的创建冻结配置。
+    pub(crate) profile: vulcan_session_core::v1::DedicatedSessionProfile,
+    /// Whether memory is locked before the first user input.
+    /// 是否在首条用户输入之前锁定记忆。
+    pub(crate) lock_immediately: bool,
 }
 
 /// Complete immutable request for creating or replaying one forked V1 session.
@@ -720,6 +735,7 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
         title,
         root_submission,
         now_ms,
+        dedicated,
     } = request;
     // reservation closes the same-session overwrite window before any document
     // or file publication begins and is automatically released on every error.
@@ -736,6 +752,11 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
         now_ms,
     );
     document.set_context_compaction_window_node_id(node_id, now_ms);
+    // The dedicated profile and an immediate lock note precede the root input in the stream.
+    // 专职配置与立即锁定通知在事件流中位于根输入之前。
+    if let Some(creation) = dedicated {
+        document.install_dedicated_profile(creation.profile, creation.lock_immediately, now_ms)?;
+    }
     let client_action_id = root_submission.client_action_id.clone();
     match document.submit_root_input(root_submission, now_ms)? {
         IdempotentMutation::Committed(_) => {}
@@ -1565,6 +1586,7 @@ mod tests {
             &fixture.controller,
             registry,
             CreateRootSessionV1Request {
+                dedicated: None,
                 session_id,
                 project_id: String::from("project-explicit"),
                 title: String::from("Lifecycle title"),
@@ -1980,6 +2002,7 @@ mod tests {
             &fixture.controller,
             &registry,
             CreateRootSessionV1Request {
+                dedicated: None,
                 session_id,
                 project_id: "prompt-provenance".into(),
                 title: "Original proof".into(),
@@ -2321,6 +2344,7 @@ mod tests {
             &fixture.controller,
             &registry,
             CreateRootSessionV1Request {
+                dedicated: None,
                 session_id,
                 project_id: String::from("project-explicit"),
                 title: String::from("Window default"),
@@ -2440,6 +2464,7 @@ mod tests {
                 &fixture.controller,
                 &registry,
                 CreateRootSessionV1Request {
+                    dedicated: None,
                     session_id,
                     project_id: String::from("project-explicit"),
                     title: String::from("duplicate"),
@@ -2853,6 +2878,7 @@ mod tests {
             &fixture.controller,
             &failing_registry,
             CreateRootSessionV1Request {
+                dedicated: None,
                 session_id,
                 project_id: String::from("project-explicit"),
                 title: String::from("conflict"),
@@ -2901,6 +2927,7 @@ mod tests {
                     &controller,
                     &registry,
                     CreateRootSessionV1Request {
+                        dedicated: None,
                         session_id,
                         project_id: String::from("project-explicit"),
                         title: title.to_string(),

@@ -33,6 +33,7 @@ use vulcan_prompt_composer::{
     PromptSegment, PromptTarget, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot,
     ToolDescriptor, build_context_compaction_developer_segment,
 };
+use vulcan_session_core::v1::DedicatedToolAccess;
 use vulcan_session_core::v1::context::{
     LockedBaselineProjection, LockedBaselineSegmentInput, LockedPromptTarget, LockedSourceKind,
 };
@@ -656,14 +657,27 @@ fn build_runtime_prompt_assembly_input(
     // provider_prompt 是项目覆盖、用户覆盖与内置默认中第一个非空层级。
     let provider_prompt =
         load_effective_system_prompt(resolve_workspace_directory(&preparation.workspace_path)?)?;
-    let agent_prompt = build_request_agent_prompt_snapshot(preparation)
-        .or_else(|| active_agent.and_then(build_agent_prompt_snapshot));
+    // A dedicated session's base prompt replaces every agent prompt source.
+    // 专职会话的基础提示词取代所有代理提示词来源。
+    let agent_prompt = match preparation.dedicated_session.as_ref() {
+        Some(profile) => Some(
+            AgentPromptSnapshot::new(profile.base_prompt.clone())
+                .with_source_label("Dedicated session base prompt"),
+        ),
+        None => build_request_agent_prompt_snapshot(preparation)
+            .or_else(|| active_agent.and_then(build_agent_prompt_snapshot)),
+    };
     let environment_context = EnvironmentContextSnapshot::new(format!(
         "Current workspace: {}\nCurrent execution mode: {}",
         preparation.workspace_path, preparation.execution_mode
     ));
-    let mut custom_developer_segments =
-        build_prompt_purpose_developer_segments(preparation.prompt_purpose);
+    // Dedicated sessions do not describe the general product; only their own tool contracts remain.
+    // 专职会话不介绍通用产品能力，只保留其自身工具契约。
+    let mut custom_developer_segments = if preparation.dedicated_session.is_some() {
+        Vec::new()
+    } else {
+        build_prompt_purpose_developer_segments(preparation.prompt_purpose)
+    };
     if let Some(segment) = preparation.session_plan_context.clone() {
         custom_developer_segments.push(AdditionalPromptSegment::dynamic(
             "Session Plan Context",
@@ -730,6 +744,14 @@ fn prompt_assembly_mode_for_preparation(preparation: &ExecutionPreparation) -> P
             return PromptAssemblyMode::SubagentFunctional;
         }
         return PromptAssemblyMode::SubagentClone;
+    }
+    if let Some(profile) = preparation.dedicated_session.as_ref()
+        && preparation.prompt_purpose.supports_user_turn_tooling()
+    {
+        return match profile.tool_access {
+            DedicatedToolAccess::None => PromptAssemblyMode::DedicatedMinimal,
+            DedicatedToolAccess::Standard => PromptAssemblyMode::DedicatedTooling,
+        };
     }
     match preparation.prompt_purpose {
         ExecutionPromptPurpose::UserTurn
@@ -2738,6 +2760,7 @@ mod tests {
             agent_name: String::from("Default"),
             agent_kind: String::from("Primary"),
             agent_prompt_snapshot: None,
+            dedicated_session: None,
             subagent_prompt_context: None,
             model_blueprint: sample_model_blueprint(),
             prompt_preview: String::new(),

@@ -137,6 +137,7 @@ pub(crate) async fn service_session_event_hydration_v1(
     // 即使转录内存更新，回答模式可见性仍跟随已确认存储。
     let durable_answer_mode = persisted.state.config.answer_mode.clone();
     let durable_permission_mode = persisted.state.permission_mode;
+    let durable_dedicated = persisted.state.dedicated.clone();
     let (window_generation, events, open_turn_id, open_turn_start_seq, mut session_config) =
         merge_persisted_with_resident(persisted.state, persisted.events, resident, "hydration")?;
     session_config.answer_mode = durable_answer_mode;
@@ -151,7 +152,11 @@ pub(crate) async fn service_session_event_hydration_v1(
         older_before_seq,
         open_turn_id,
         open_turn_start_seq,
-        ConversationSessionConfigV1::from_session_config(&session_config, durable_permission_mode),
+        ConversationSessionConfigV1::from_session_config(
+            &session_config,
+            durable_permission_mode,
+            durable_dedicated.as_ref(),
+        ),
         revision_frontier,
     ))
 }
@@ -241,6 +246,7 @@ pub(crate) async fn service_session_event_page_v1(
         ConversationSessionConfigV1::from_session_config(
             &page.state.config,
             page.state.permission_mode,
+            page.state.dedicated.as_ref(),
         ),
     ))
 }
@@ -758,6 +764,7 @@ mod tests {
                 open_turn_start_seq: Some(persisted[0].seq),
                 config: SessionConfig::default(),
                 permission_mode: Default::default(),
+                dedicated: None,
             },
             persisted,
             Some(resident),
@@ -784,6 +791,7 @@ mod tests {
                 open_turn_start_seq: Some(persisted[0].seq),
                 config: SessionConfig::default(),
                 permission_mode: Default::default(),
+                dedicated: None,
             },
             persisted,
             Some(ResidentEventSnapshot {
@@ -812,6 +820,7 @@ mod tests {
             open_turn_start_seq: None,
             config: SessionConfig::default(),
             permission_mode: Default::default(),
+            dedicated: None,
         };
         let frontier =
             authoritative_revision_frontier("test-service-epoch", &persisted_state, None)
@@ -832,6 +841,7 @@ mod tests {
             open_turn_start_seq: None,
             config: SessionConfig::default(),
             permission_mode: Default::default(),
+            dedicated: None,
         };
         let resident = ResidentEventSnapshot {
             window_generation: 1,
@@ -863,6 +873,7 @@ mod tests {
             open_turn_start_seq: None,
             config: SessionConfig::default(),
             permission_mode: Default::default(),
+            dedicated: None,
         };
         let resident = ResidentEventSnapshot {
             window_generation: 1,

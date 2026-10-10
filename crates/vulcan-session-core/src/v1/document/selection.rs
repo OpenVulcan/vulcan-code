@@ -507,6 +507,7 @@ impl SessionDocument {
         if self.metadata.config.selection.output_style == style_id {
             return Ok(false);
         }
+        self.reject_dedicated_change("output_style")?;
         self.metadata.config.selection.output_style = style_id;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         Ok(true)
@@ -543,6 +544,7 @@ impl SessionDocument {
         if self.metadata.config.selection == selection {
             return Ok(false);
         }
+        self.reject_dedicated_change("selection_bundle")?;
 
         self.metadata.config.selection = selection;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
@@ -600,6 +602,7 @@ impl SessionDocument {
         if self.metadata.config.selection.knowledge_libraries == config {
             return Ok(false);
         }
+        self.reject_dedicated_change("knowledge_libraries")?;
         self.metadata.config.selection.knowledge_libraries = config;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         Ok(true)
@@ -627,6 +630,7 @@ impl SessionDocument {
         if self.metadata.config.selection.vmm == config {
             return Ok(false);
         }
+        self.reject_dedicated_change("vmm")?;
         self.metadata.config.selection.vmm = config;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         Ok(true)

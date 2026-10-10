@@ -316,7 +316,12 @@ pub(crate) async fn service_validate_public_ai_custom_model(
     };
     let configured_inference_service = configured_inference_service_for_settings(&state)?;
     let response_text = configured_inference_service
-        .execute_model_validation(&selection, execution_request, execution_id)
+        .execute_exact_selection_text(
+            crate::configured_inference::ExactSelectionTextPurpose::ModelValidation,
+            &selection,
+            execution_request,
+            execution_id,
+        )
         .await
         .map_err(|error| error.to_string())?;
 

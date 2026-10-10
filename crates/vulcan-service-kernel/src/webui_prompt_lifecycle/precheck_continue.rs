@@ -835,6 +835,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
             current_unix_millis_value().saturating_sub(plan_context_started_at)
         ),
     );
+    apply_dedicated_session_shaping(handle.as_ref(), &mut request)?;
     let session_locator_started_at = current_unix_millis_value();
     // sessionRegistry is cloned without retaining the service-state lock across registry access.
     // sessionRegistry 在不让服务状态锁跨越注册表访问的前提下完成克隆。
@@ -1744,4 +1745,39 @@ mod readiness_tests {
         assert!(!readiness.service_ready);
         assert!(!readiness.precheck_ready);
     }
+}
+
+/// Shapes one main-session request from the creation-frozen dedicated profile, if any.
+/// 依据创建时冻结的专职配置塑形主会话请求（如有）。
+///
+/// Dedicated sessions never use collaboration, subagents, goals, plans, VMM memory or the
+/// semantic engine; tool admission and prompt composition read `dedicated_session`.
+/// 专职会话从不使用协作、子代理、目标、计划、VMM 记忆或语意引擎；工具准入与提示词组合读取
+/// `dedicated_session`。
+fn apply_dedicated_session_shaping(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    request: &mut ExecutionPreparationRequest,
+) -> Result<(), String> {
+    let profile = handle
+        .read(|document| document.dedicated_profile().cloned())
+        .map_err(|error| format!("Read dedicated session profile failed: {error}"))?;
+    let Some(profile) = profile else {
+        return Ok(());
+    };
+    request.dedicated_session = Some(
+        vulcan_agent_runtime::agent_runtime::DedicatedExecutionProfile {
+            tool_access: profile.tool_access,
+            base_prompt: profile.base_prompt,
+        },
+    );
+    request.native_agent_collaboration_runtime = None;
+    request.native_goal_runtime = None;
+    request.session_goal_context = None;
+    request.session_plan_context = None;
+    request.vce_retrieval_handler = None;
+    request.vmm_runtime_ready = false;
+    request.runtime_policy.vmm_enabled = false;
+    request.runtime_policy.memory_recall_enabled = false;
+    request.runtime_policy.memory_writeback_enabled = false;
+    Ok(())
 }

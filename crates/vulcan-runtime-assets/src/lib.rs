@@ -607,6 +607,11 @@ pub const ANSWER_MODE_STANDARD_MD: &str =
 pub const PERMISSION_REVIEW_MD: &str =
     include_str!("../resources/agent-prompts/permission-review.md");
 
+/// System prompt that drafts or revises the base prompt of a dedicated session.
+/// 起草或修订专职会话基础提示词的系统提示词。
+pub const DEDICATED_PROMPT_GENERATOR_MD: &str =
+    include_str!("../resources/agent-prompts/dedicated-prompt-generator.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;

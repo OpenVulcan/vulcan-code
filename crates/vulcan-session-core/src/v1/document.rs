@@ -53,6 +53,7 @@ mod child_creation;
 mod child_execution;
 mod collaboration;
 mod compaction;
+mod dedicated;
 mod dynamic_context;
 mod generation;
 mod hydration;
@@ -79,6 +80,7 @@ pub use api::{
 pub use child_execution::ChildContextMaintenanceSource;
 pub use collaboration::ChildTaskNonSuccessInput;
 pub use compaction::CompactionCommitInput;
+pub use dedicated::{DEDICATED_MEMORY_LOCKED_REASON, DEDICATED_MEMORY_UNLOCKED_REASON};
 pub use input::{
     ClientInputSubmission, DraftMutationReceipt, EnqueueInputDisposition, EnqueueInputReceipt,
     QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,

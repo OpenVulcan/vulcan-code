@@ -963,6 +963,7 @@ async fn history_edit_refuses_an_unsettled_embedded_child_and_names_it() {
         &invocation.controller_runtime,
         &invocation.registry,
         crate::session_v1_lifecycle::CreateRootSessionV1Request {
+            dedicated: None,
             session_id: Uuid::new_v4(),
             project_id,
             title: String::from("edit-admission-root"),

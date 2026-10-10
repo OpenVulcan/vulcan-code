@@ -93,8 +93,10 @@ fn model_selection_input(
 /// Builds the permission mode notice from the session's own persisted mode.
 /// 根据会话自身持久化的模式构建权限模式通知。
 /// The default mode needs no notice until another mode was observed; child sessions follow their
-/// root, whose mode the gate enforces, so they receive no notice of their own.
-/// 默认模式在观察到其他模式之前无需通知；子会话跟随根会话由闸门执行，因此不单独收到通知。
+/// root, whose mode the gate enforces, so they receive no notice of their own; tool-free dedicated
+/// sessions never receive one.
+/// 默认模式在观察到其他模式之前无需通知；子会话跟随根会话由闸门执行，因此不单独收到通知；
+/// 无工具专职会话从不收到通知。
 fn permission_mode_input(
     document: &vulcan_session_core::v1::document::SessionDocument,
 ) -> DynamicContextInput {
@@ -115,7 +117,13 @@ fn permission_mode_input(
             "Permission mode: full access. Tool calls run without permission checks. Still avoid destructive actions the user did not ask for."
         }
     };
+    // A dedicated session without general tools has nothing a permission mode could govern.
+    // 未开放通用工具的专职会话没有可受权限模式约束的操作。
+    let tool_free = document.dedicated_profile().is_some_and(|profile| {
+        profile.tool_access == vulcan_session_core::v1::DedicatedToolAccess::None
+    });
     let body = (document.metadata.child_execution_profile.is_none()
+        && !tool_free
         && (mode != PermissionMode::default() || retained))
         .then(|| {
             format!(

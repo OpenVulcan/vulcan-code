@@ -136,6 +136,7 @@ function sessionConfig(
     },
     next_request: null,
     context_compaction_window_node_id: null,
+    dedicated: null,
     permission_mode: "workspace_write",
     ...overrides,
   };

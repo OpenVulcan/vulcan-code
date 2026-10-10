@@ -32,6 +32,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         provider_request_continuation: None,
         execution_agent_id: Some(String::from("main")),
         agent_prompt_snapshot: None,
+        dedicated_session: None,
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,

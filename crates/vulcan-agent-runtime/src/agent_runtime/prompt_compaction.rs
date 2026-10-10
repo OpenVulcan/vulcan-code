@@ -1740,6 +1740,7 @@ fn build_prompt_compaction_launch_request(
         provider_request_continuation: None,
         execution_agent_id: execution_agent_id.map(str::to_string),
         agent_prompt_snapshot: launch_context.agent_prompt_snapshot.clone(),
+        dedicated_session: None,
         provider_id_override: model_target.map(|target| target.provider_id.clone()),
         model_id_override: model_target.map(|target| target.model_id.clone()),
         connection_id_override: model_target.map(|target| target.connection_id.clone()),

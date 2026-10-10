@@ -1285,6 +1285,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         provider_request_continuation: None,
         execution_agent_id: None,
         agent_prompt_snapshot: None,
+        dedicated_session: None,
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,

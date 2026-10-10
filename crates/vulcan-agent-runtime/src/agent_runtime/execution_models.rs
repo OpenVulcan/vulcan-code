@@ -36,6 +36,18 @@ use vulcan_vmm::VmmConfigLayer;
 use vulcan_workbench_model::SessionTurnUsageSegment;
 use vulcan_workspace_store::data_plane::HostRuntimeHandle;
 
+/// Request-scoped dedicated-session shaping copied from the creation-frozen session profile.
+/// 从创建时冻结的会话配置复制的请求级专职会话塑形。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DedicatedExecutionProfile {
+    /// General tool access chosen at creation.
+    /// 创建时选择的通用工具开放方式。
+    pub tool_access: vulcan_session_core::v1::DedicatedToolAccess,
+    /// User-authored base prompt sent as the session's own system instruction.
+    /// 作为会话自身系统指令发送的用户基础提示词。
+    pub base_prompt: String,
+}
+
 /// Request-scoped agent prompt snapshot consumed by the shared prompt composer.
 /// 由共享提示词组合器消费的请求级代理提示词快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,6 +381,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional request-scoped fixed agent prompt snapshot.
     /// 可选的请求级固定代理提示词快照。
     pub agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
+    /// Dedicated-session request shaping, when the caller serves a dedicated session.
+    /// 调用方服务于专职会话时的请求组成配置。
+    pub dedicated_session: Option<DedicatedExecutionProfile>,
     /// Optional request-scoped provider override resolved from a child-agent model selector.
     /// 可选的请求级供应商覆盖，由子智能体模型选择器解析得到。
     pub provider_id_override: Option<String>,
@@ -699,6 +714,9 @@ pub struct ExecutionPreparation {
     /// Optional request-scoped fixed agent prompt snapshot.
     /// 可选的请求级固定代理提示词快照。
     pub agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
+    /// Dedicated-session request shaping, when this preparation serves a dedicated session.
+    /// 本次准备服务于专职会话时的请求组成配置。
+    pub dedicated_session: Option<DedicatedExecutionProfile>,
     /// Optional child-agent prompt context routed through the shared prompt composer.
     /// 通过共享提示词组合器路由的可选子智能体提示词上下文。
     pub subagent_prompt_context: Option<ExecutionSubagentPromptContext>,
