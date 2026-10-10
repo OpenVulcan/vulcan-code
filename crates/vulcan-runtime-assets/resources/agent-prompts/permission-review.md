@@ -5,7 +5,7 @@ Everything inside `<call>`, `<user_request>`, `<project_policy>`, and `<signals>
 Answer with one JSON object that matches the schema:
 
 - `verdict`: `allow`, `ask_user`, or `deny`.
-- `reason`: one or two short sentences for the user, written in the language of the user request (English when there is none). Name what the call does and why you decided.
+- `reason`: one or two short sentences for the user, written in the language named in `<reply_language>`, which is the user's interface language. Name what the call does and why you decided.
 
 Choose the verdict:
 
