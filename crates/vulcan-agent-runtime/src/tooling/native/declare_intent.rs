@@ -1,9 +1,10 @@
-//! Declare-intent native tool: explains the next tool call to the permission reviewer.
-//! 声明意图原生工具：向权限复核器说明下一次工具调用。
+//! Declare-intent native tool: explains a denied call's retry to the permission reviewer.
+//! 声明意图原生工具：向权限复核器说明被拒调用的重试。
 //!
-//! The permission gate keeps the intent when it admits this call and hands it to the next tool
-//! call only; this tool merely validates it and confirms.
-//! 权限闸门在准入本调用时保存意图，并只交给下一次工具调用；本工具仅校验并确认。
+//! The permission gate admits this call only right after a denial whose text invited it, keeps
+//! the intent and hands it to the next tool call only; this tool merely validates it and confirms.
+//! 权限闸门只在文字邀请了本工具的拒绝之后准入本调用，保存意图并只交给下一次工具调用；本工具仅
+//! 校验并确认。
 
 use super::*;
 
@@ -14,7 +15,7 @@ pub(crate) fn build_declare_intent_tool() -> Arc<NativeToolDefinition> {
         id: String::from(DECLARE_INTENT_TOOL_ID),
         name: String::from(DECLARE_INTENT_TOOL_ID),
         description: String::from(
-            "Explain why your next tool call is needed, for the permission reviewer that decides calls needing approval. You normally do not need this tool. Use it right before a call the reviewer denied or is likely to question, such as a file write outside the workspace, when the reason is not obvious from the call itself. The intent accompanies only the next tool call; command tools can take a `purpose` argument instead.",
+            "Explain to the permission reviewer why you are retrying a denied tool call. Call this only when a tool call was just denied and the denial message tells you to use `declare_intent`; at any other time it is refused and records nothing. It is not a note-taking tool. The intent accompanies only your next tool call; command tools take a `purpose` argument instead.",
         ),
         help_text: None,
         ai_visible: true,
@@ -49,7 +50,7 @@ fn declare_intent_args_schema() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_PERMISSION_REASON_CHARS,
-                "description": "What the next tool call is for and why it is needed, written for the permission reviewer."
+                "description": "What the retried tool call is for and why it is needed, written for the permission reviewer."
             }
         },
         "required": ["intent"],

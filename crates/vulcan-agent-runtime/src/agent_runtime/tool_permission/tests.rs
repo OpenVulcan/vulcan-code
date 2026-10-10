@@ -1044,47 +1044,133 @@ async fn unattended_mode_never_asks_the_user() {
 }
 
 #[tokio::test]
-async fn reasons_reach_the_reviewer_and_an_intent_serves_one_call() {
+async fn declare_intent_needs_a_denial_that_invites_it() {
     let workspace = tempfile::tempdir().unwrap();
-    let host = FixedHost::reviewing(
+    let denying = || {
+        Ok(Some(LlmReview {
+            verdict: ReviewVerdict::Deny,
+            reason: String::from("unclear why"),
+            may_allow_blocked: false,
+        }))
+    };
+    let declare = |host: &Arc<FixedHost>, request: &'static str| {
+        let host = Arc::clone(host);
+        let root = workspace.path().to_path_buf();
+        async move {
+            admit_call(
+                &host,
+                DECLARE_INTENT_TOOL_ID,
+                json!({"intent": " publish the docs "}),
+                Some(request),
+                &root,
+            )
+            .await
+        }
+    };
+    let uninvited = ToolPermissionVerdict::Deny(String::from(DECLARE_INTENT_UNINVITED));
+
+    // Attended sessions and calls that were never denied give no invitation.
+    // 有人值守会话与从未被拒的调用都不会给出邀请。
+    let attended = FixedHost::reviewing(
         Ok(PermissionMode::WorkspaceWrite),
-        Ok(true),
+        Ok(false),
         Ok(None),
-        Ok(None),
+        denying(),
     );
+    assert_eq!(declare(&attended, "build").await, uninvited);
+    admit_call(
+        &attended,
+        SHELL_COMMAND_TOOL_ID,
+        json!({"command": "cargo build"}),
+        Some("build"),
+        workspace.path(),
+    )
+    .await;
+    assert_eq!(declare(&attended, "build").await, uninvited);
+
+    // An unexplained unattended denial invites one declaration under the same user request,
+    // and that intent reaches the reviewer with the next call only.
+    // 未说明理由的无人值守拒绝邀请同一用户请求下的一次声明，该意图只随下一次调用交给复核器。
+    let host = unattended(PermissionMode::WorkspaceWrite, denying());
+    let build = |purpose: Option<&str>| match purpose {
+        Some(purpose) => json!({"command": "cargo build", "purpose": purpose}),
+        None => json!({"command": "cargo build"}),
+    };
+    let ToolPermissionVerdict::Deny(first) = admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        build(None),
+        Some("build"),
+        workspace.path(),
+    )
+    .await
+    else {
+        panic!("the reviewer denies the call");
+    };
+    assert!(first.contains("declare_intent"));
+    assert_eq!(declare(&host, "other").await, uninvited);
     assert_eq!(
-        admit_call(
-            &host,
-            DECLARE_INTENT_TOOL_ID,
-            json!({"intent": " publish the docs "}),
-            None,
-            workspace.path(),
-        )
-        .await,
+        declare(&host, "build").await,
         ToolPermissionVerdict::Proceed
     );
-    admit_call(
+    assert_eq!(declare(&host, "build").await, uninvited);
+    let ToolPermissionVerdict::Deny(second) = admit_call(
         &host,
         SHELL_COMMAND_TOOL_ID,
-        json!({"command": "git push", "purpose": "ship the fix"}),
-        None,
+        build(None),
+        Some("build"),
         workspace.path(),
     )
-    .await;
-    admit_call(
+    .await
+    else {
+        panic!("the reviewer denies the call again");
+    };
+    assert!(!second.contains("declare_intent"));
+    assert_eq!(declare(&host, "build").await, uninvited);
+    {
+        let reviewed = host.reviewed.lock().unwrap();
+        assert_eq!(reviewed[0].intent, None);
+        assert_eq!(reviewed[1].intent.as_deref(), Some("publish the docs"));
+        assert!(reviewed[1].unattended.is_some());
+    }
+
+    // A call that already stated its purpose is told to move on, not invited.
+    // 已说明目的的调用会被告知改做其他事，而不会被邀请。
+    let host = unattended(PermissionMode::WorkspaceWrite, denying());
+    let ToolPermissionVerdict::Deny(explained) = admit_call(
         &host,
         SHELL_COMMAND_TOOL_ID,
-        json!({"command": "git push"}),
-        None,
+        build(Some("ship the fix")),
+        Some("build"),
         workspace.path(),
     )
-    .await;
-    let reviewed = host.reviewed.lock().unwrap();
-    assert_eq!(reviewed[0].intent.as_deref(), Some("publish the docs"));
-    assert_eq!(reviewed[0].purpose.as_deref(), Some("ship the fix"));
-    assert_eq!(reviewed[0].unattended, None);
-    assert_eq!(reviewed[1].intent, None);
-    assert_eq!(reviewed[1].purpose, None);
+    .await
+    else {
+        panic!("the reviewer denies the call");
+    };
+    assert!(!explained.contains("declare_intent"));
+    assert_eq!(declare(&host, "build").await, uninvited);
+    assert_eq!(
+        host.reviewed.lock().unwrap()[0].purpose.as_deref(),
+        Some("ship the fix")
+    );
+
+    // Without a reviewer no reason can help, so nothing is invited.
+    // 没有复核器时任何理由都无济于事，因此不邀请。
+    let host = unattended(PermissionMode::WorkspaceWrite, Ok(None));
+    let ToolPermissionVerdict::Deny(unreviewed) = admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        build(None),
+        Some("build"),
+        workspace.path(),
+    )
+    .await
+    else {
+        panic!("an unreviewed unattended call is denied");
+    };
+    assert!(!unreviewed.contains("declare_intent"));
+    assert_eq!(declare(&host, "build").await, uninvited);
 }
 
 #[tokio::test]

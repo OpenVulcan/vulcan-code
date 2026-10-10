@@ -56,13 +56,21 @@ pub const UNATTENDED_REVIEWED_REPEATS: u32 = 2;
 /// 无人值守只读会话遇到写入时返回给模型的说明。
 pub const UNATTENDED_READ_ONLY_DENIAL: &str = "This unattended session is read-only, and no user is available to approve this call, so it was not executed. Continue with read-only work and leave this step for the user's later instructions.";
 
-/// Guidance after an unattended denial of a call that stated no reason.
-/// 无人值守会话拒绝未说明理由的调用后的指引。
-const UNATTENDED_UNEXPLAINED_GUIDANCE: &str = "No user is watching this unattended session. If the call is necessary and safe, retry it with your reason: pass `purpose` on `shell_command` or `terminal_session`, or call `declare_intent` right before any other tool. Otherwise take another approach, or skip this step and continue with the rest of the task.";
+/// Guidance after an unattended denial that a stated reason could still change: the call stated
+/// none, the reviewer read it, and the reviewer may clear it. Only this text invites
+/// `declare_intent`, and only after it may that tool be called.
+/// 无人值守拒绝后、说明理由仍可能改变结论时的指引：调用未说明理由、复核器已读过且复核器可以放行。
+/// 只有这段文字邀请使用 `declare_intent`，也只有在它之后才可调用该工具。
+const UNATTENDED_RETRY_GUIDANCE: &str = "No user is watching this unattended session. If the call is necessary and safe, you may retry it once with your reason: pass `purpose` on `shell_command` or `terminal_session`, or call `declare_intent` right before retrying any other tool. Otherwise take another approach, or skip this step and continue with the rest of the task.";
 
-/// Guidance after an unattended denial of a call whose reason the reviewer already read.
-/// 无人值守会话拒绝复核器已读过理由的调用后的指引。
-const UNATTENDED_EXPLAINED_GUIDANCE: &str = "No user is watching this unattended session, and the reviewer already read your stated reason. Take another approach, or skip this step and leave it for the user's later instructions while you finish the rest of the task. Retry only with a reason the reviewer has not seen yet.";
+/// Guidance after an unattended denial that no stated reason can change: the reviewer already read
+/// one, could not review, or may not clear the call.
+/// 无人值守拒绝后、任何理由都无法改变结论时的指引：复核器已读过理由、无法复核或不得放行该调用。
+const UNATTENDED_MOVE_ON_GUIDANCE: &str = "No user is watching this unattended session, and stating a reason will not change this decision. Do not retry this call. Take another approach, or skip this step and leave it for the user's later instructions while you finish the rest of the task.";
+
+/// Model-visible refusal of a `declare_intent` call that no denial invited.
+/// 未经拒绝邀请的 `declare_intent` 调用所收到的模型可见拒绝。
+pub const DECLARE_INTENT_UNINVITED: &str = "declare_intent is only available right after a tool call was denied with a message that tells you to use it. It is not a note-taking tool. No intent was recorded.";
 
 /// `file` tool actions that only read.
 /// 仅读取的 `file` 工具动作。
@@ -654,11 +662,16 @@ struct EscalatedDecision {
     outcome: PermissionOutcome,
     review: Option<ReviewFinding>,
     review_elapsed: Option<Duration>,
+    /// The denial text invited `declare_intent`; the same flag chose that text.
+    /// 拒绝文字邀请了 `declare_intent`；该文字也由同一标志选定。
+    invites_intent: bool,
 }
 
-/// Per-session gate state kept only in memory: the intent declared for the next call, and the
-/// streak of consecutive unattended denials of one identical call.
-/// 仅保存在内存中的会话级闸门状态：为下一次调用声明的意图，以及无人值守模式下同一调用的连续拒绝。
+/// Per-session gate state kept only in memory: the invitation to declare an intent, the intent
+/// declared for the next call, and the streak of consecutive unattended denials of one identical
+/// call.
+/// 仅保存在内存中的会话级闸门状态：声明意图的邀请、为下一次调用声明的意图，以及无人值守模式下
+/// 同一调用的连续拒绝。
 #[derive(Debug, Default)]
 pub struct PermissionMemory {
     sessions: Mutex<HashMap<SessionId, SessionMemory>>,
@@ -671,9 +684,20 @@ struct SessionMemory {
     /// Intent for the next tool call, consumed by that call whatever it is.
     /// 下一次工具调用的意图；无论该调用是什么都会被其消费。
     intent: Option<String>,
+    /// Set by a denial whose text invited `declare_intent`, under that user request; the next
+    /// gated call or one declaration ends it.
+    /// 由文字邀请了 `declare_intent` 的拒绝设置，绑定该用户请求；下一次受管控调用或一次声明结束它。
+    invitation: Option<IntentInvitation>,
     /// Consecutive unattended denials of one identical call.
     /// 无人值守模式下同一调用的连续拒绝。
     denials: Option<DenialStreak>,
+}
+
+/// User request under which a denial invited `declare_intent`.
+/// 拒绝邀请 `declare_intent` 时所属的用户请求。
+#[derive(Debug)]
+struct IntentInvitation {
+    user_request: Option<String>,
 }
 
 /// Consecutive unattended denials of one identical call under one user request.
@@ -695,16 +719,42 @@ impl PermissionMemory {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let entry = sessions.entry(session_id).or_default();
         let value = change(entry);
-        if entry.intent.is_none() && entry.denials.is_none() {
+        if entry.intent.is_none() && entry.invitation.is_none() && entry.denials.is_none() {
             sessions.remove(&session_id);
         }
         value
     }
 
-    /// Keeps `intent` for the next tool call of `session_id`, replacing an unused one.
-    /// 为 `session_id` 的下一次工具调用保存 `intent`，替换未使用的意图。
-    pub fn declare_intent(&self, session_id: SessionId, intent: String) {
-        self.with(session_id, |memory| memory.intent = Some(intent));
+    /// Whether the last gated call under `user_request` was denied with an invitation to declare.
+    /// `user_request` 下最近一次受管控调用是否以邀请声明的方式被拒绝。
+    fn invited(&self, session_id: SessionId, user_request: Option<&str>) -> bool {
+        self.with(session_id, |memory| {
+            memory
+                .invitation
+                .as_ref()
+                .is_some_and(|invitation| invitation.user_request.as_deref() == user_request)
+        })
+    }
+
+    /// Keeps `intent` for the next tool call and spends the invitation, so one denial allows one
+    /// declaration.
+    /// 为下一次工具调用保存 `intent` 并用掉邀请，因此一次拒绝只允许一次声明。
+    fn declare_intent(&self, session_id: SessionId, intent: String) {
+        self.with(session_id, |memory| {
+            memory.intent = Some(intent);
+            memory.invitation = None;
+        });
+    }
+
+    /// Records whether the latest gated call ended in an inviting denial; anything else ends the
+    /// invitation.
+    /// 记录最近一次受管控调用是否以邀请式拒绝结束；其他结果都会结束邀请。
+    fn set_invitation(&self, session_id: SessionId, invited: Option<Option<&str>>) {
+        self.with(session_id, |memory| {
+            memory.invitation = invited.map(|user_request| IntentInvitation {
+                user_request: user_request.map(str::to_string),
+            });
+        });
     }
 
     /// Takes the intent declared for this call.
@@ -788,8 +838,10 @@ fn command_purpose(tool_id: &str, args: &Value) -> Option<String> {
 /// 查看判定器未放行的调用：它可以拒绝，也可以放行既未被判定器拦截也未命中高风险的调用（这两类
 /// 仅在用户允许时可放行）。其余全部交给用户；无人值守模式下不询问用户，复核器未放行的调用一律
 /// 拒绝并附带给代理的指引。只读模式会把所有写入直接交给用户，无人值守时直接拒绝。
-/// A `declare_intent` call is kept for the next call, which consumes it whatever it is.
-/// `declare_intent` 调用会为下一次调用保存，无论下一次调用是什么都会消费它。
+/// `declare_intent` proceeds only right after a denial whose text invited it, under the same user
+/// request; its intent is kept for the next call, which consumes it whatever it is.
+/// `declare_intent` 只有紧接在文字邀请了它的拒绝之后、且在同一用户请求下才会执行；其意图为下一次
+/// 调用保存，无论下一次调用是什么都会消费它。
 /// Without a host (embedded or test runtimes) no permission policy is configured and calls proceed.
 /// 没有宿主时（嵌入式或测试运行时）未配置权限策略，调用直接执行。
 pub async fn admit_tool_call(
@@ -806,7 +858,15 @@ pub async fn admit_tool_call(
     };
     let native = definition.descriptor.source == VulcanToolSourceKind::Native;
     if native && definition.descriptor.id == DECLARE_INTENT_TOOL_ID {
-        if let (Some(memory), Some(intent)) = (host.memory(), declared_intent(args)) {
+        let Some(memory) = host
+            .memory()
+            .filter(|memory| memory.invited(session_id, texts.user_request))
+        else {
+            return ToolPermissionVerdict::Deny(String::from(DECLARE_INTENT_UNINVITED));
+        };
+        // An invalid intent keeps the invitation; the tool itself reports what is wrong.
+        // 无效意图保留邀请；由工具自身报告问题。
+        if let Some(intent) = declared_intent(args) {
             memory.declare_intent(session_id, intent);
         }
         return ToolPermissionVerdict::Proceed;
@@ -831,10 +891,14 @@ pub async fn admit_tool_call(
     };
     let fingerprint = call_fingerprint(&definition.descriptor.id, &subject, args);
     if unattended.is_some() {
+        let memory = host.memory();
+        if let Some(memory) = memory {
+            memory.set_invitation(session_id, None);
+        }
         if mode == PermissionMode::ReadOnly {
             return ToolPermissionVerdict::Deny(String::from(UNATTENDED_READ_ONLY_DENIAL));
         }
-        let repeated = host.memory().map_or(0, |memory| {
+        let repeated = memory.map_or(0, |memory| {
             memory.denials(session_id, &fingerprint, texts.user_request)
         });
         if repeated >= UNATTENDED_REVIEWED_REPEATS {
@@ -873,11 +937,17 @@ pub async fn admit_tool_call(
         },
     )
     .await;
-    if !attended && let Some(memory) = host.memory() {
-        match decision.verdict {
-            ToolPermissionVerdict::Proceed => memory.clear_denials(session_id),
-            ToolPermissionVerdict::Deny(_) | ToolPermissionVerdict::Fail(_) => {
-                memory.note_denial(session_id, &fingerprint, texts.user_request);
+    if let Some(memory) = host.memory() {
+        memory.set_invitation(
+            session_id,
+            decision.invites_intent.then_some(texts.user_request),
+        );
+        if !attended {
+            match decision.verdict {
+                ToolPermissionVerdict::Proceed => memory.clear_denials(session_id),
+                ToolPermissionVerdict::Deny(_) | ToolPermissionVerdict::Fail(_) => {
+                    memory.note_denial(session_id, &fingerprint, texts.user_request);
+                }
             }
         }
     }
@@ -916,20 +986,31 @@ struct EscalatedCall<'a> {
     unattended: Option<String>,
 }
 
-/// Why an unattended call the reviewer did not allow was denied, written for the agent.
-/// 写给代理的、复核器未放行的无人值守调用被拒绝的原因。
-fn unattended_denial(review: Option<&ReviewFinding>, blocked: bool, explained: bool) -> String {
-    let guidance = if explained {
-        UNATTENDED_EXPLAINED_GUIDANCE
+/// Why an unattended call the reviewer did not allow was denied, written for the agent, and
+/// whether that text invites `declare_intent`. It invites a reason only when one could change the
+/// outcome: the call stated none, the reviewer read it, and the reviewer may clear it.
+/// 写给代理的、复核器未放行的无人值守调用被拒绝的原因，以及该文字是否邀请 `declare_intent`。只有
+/// 理由可能改变结论时才邀请：调用未说明理由、复核器已读过且复核器可以放行。
+fn unattended_denial(
+    review: Option<&ReviewFinding>,
+    blocked: bool,
+    explained: bool,
+) -> (String, bool) {
+    let invites = !explained
+        && matches!(review, Some(ReviewFinding::Reviewed(reviewed))
+            if !blocked || reviewed.may_allow_blocked);
+    let guidance = if invites {
+        UNATTENDED_RETRY_GUIDANCE
     } else {
-        UNATTENDED_UNEXPLAINED_GUIDANCE
+        UNATTENDED_MOVE_ON_GUIDANCE
     };
     let cause = match review {
         Some(ReviewFinding::Reviewed(reviewed)) if reviewed.verdict == ReviewVerdict::Deny => {
-            return format!(
+            let denial = format!(
                 "The permission reviewer denied this call, so it was not executed. Reviewer's reason: {}\n\n{guidance}",
                 reviewed.reason
             );
+            return (denial, invites);
         }
         Some(ReviewFinding::Reviewed(reviewed)) if blocked => format!(
             "the call matched a high-risk rule or the judge blocked it, which the reviewer may not clear (reviewer's note: {})",
@@ -944,9 +1025,10 @@ fn unattended_denial(review: Option<&ReviewFinding>, blocked: bool, explained: b
         }
         None => String::from("no permission reviewer is configured"),
     };
-    format!(
+    let denial = format!(
         "This call needs approval and no user can give it in an unattended session, so it was not executed: {cause}.\n\n{guidance}"
-    )
+    );
+    (denial, invites)
 }
 
 /// Applies the judge finding, then the reviewer, then the user to one escalated call; an
@@ -978,6 +1060,7 @@ async fn decide_escalated(
             outcome: PermissionOutcome::JudgeAllowed,
             review: None,
             review_elapsed: None,
+            invites_intent: false,
         };
     }
     let explained = purpose.is_some() || intent.is_some();
@@ -1003,6 +1086,7 @@ async fn decide_escalated(
         outcome,
         review,
         review_elapsed,
+        invites_intent: false,
     };
     let blocked = high_risk.is_some() || judge == Some(JudgeFinding::Scored(JudgeLabel::Block));
     if let Some(ReviewFinding::Reviewed(reviewed)) = &review {
@@ -1023,23 +1107,29 @@ async fn decide_escalated(
                 );
             }
             ReviewVerdict::Deny => {
-                let denial = unattended_denial(review.as_ref(), blocked, explained);
-                return decided(
-                    ToolPermissionVerdict::Deny(denial),
-                    PermissionOutcome::ReviewDenied,
-                    review,
-                );
+                let (denial, invites) = unattended_denial(review.as_ref(), blocked, explained);
+                return EscalatedDecision {
+                    invites_intent: invites,
+                    ..decided(
+                        ToolPermissionVerdict::Deny(denial),
+                        PermissionOutcome::ReviewDenied,
+                        review,
+                    )
+                };
             }
             ReviewVerdict::Allow | ReviewVerdict::AskUser => {}
         }
     }
     if !attended {
-        let denial = unattended_denial(review.as_ref(), blocked, explained);
-        return decided(
-            ToolPermissionVerdict::Deny(denial),
-            PermissionOutcome::UnattendedDenied,
-            review,
-        );
+        let (denial, invites) = unattended_denial(review.as_ref(), blocked, explained);
+        return EscalatedDecision {
+            invites_intent: invites,
+            ..decided(
+                ToolPermissionVerdict::Deny(denial),
+                PermissionOutcome::UnattendedDenied,
+                review,
+            )
+        };
     }
     let prompt = ToolApprovalPrompt {
         mode,
