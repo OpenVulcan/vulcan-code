@@ -380,19 +380,12 @@ fn provider_blueprint_from_selection(
     // protocolId is read from the exact immutable selection, never resolved again.
     // protocolId 从精确的不可变选择读取，绝不再次解析。
     let protocol_id = selection.route.protocol_route.protocol_profile_id.as_str();
-    // Apply validated local narrowing to the immutable request blueprint so budgeting and
-    // transport dispatch observe the same limits.
-    // 将已校验的本地收窄应用到不可变请求蓝图，确保预算与传输分派观察到相同限制。
+    // Budgeting and transport dispatch observe the same immutable request blueprint.
+    // 预算与传输分派观察同一份不可变请求蓝图。
     let mut capabilities = selection.model.capabilities.clone();
     // Apply the shared host default before exposing the blueprint to budgeting and transport.
     // 在将运行时蓝图交给预算与传输层前应用共享宿主默认策略。
     vulcan_provider_adapters::apply_host_default_reasoning_policy(&mut capabilities);
-    if let Some(context_limit) = selection.overrides.context_limit {
-        capabilities.context_limit = Some(context_limit);
-    }
-    if let Some(output_limit) = selection.overrides.output_limit {
-        capabilities.output_limit = Some(output_limit);
-    }
     // Provider resolution validates session authority but never substitutes another reasoning level.
     // Provider 解析只校验会话权威值，绝不替换成其他思考档位。
     validate_exact_wire_reasoning_effort(&capabilities, requested_reasoning_effort).map_err(

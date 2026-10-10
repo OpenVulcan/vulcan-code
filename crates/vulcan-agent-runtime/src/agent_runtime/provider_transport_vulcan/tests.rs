@@ -12,22 +12,19 @@ use serde_json::Value;
 #[test]
 fn public_output_limit_uses_default_below_catalog_maximum() {
     assert_eq!(
-        resolved_public_output_token_limit(None, Some(393_216)),
+        resolved_public_output_token_limit(Some(393_216)),
         DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT
     );
 }
 
-/// Verifies user narrowing remains authoritative and cannot exceed the catalog maximum.
-/// 验证用户收窄值保持权威且不能超过目录最大值。
+/// Verifies a model maximum below the default caps the request budget.
+/// 验证低于默认值的模型最大值会为请求预算封顶。
 #[test]
-fn public_output_limit_honors_user_narrowing_and_catalog_cap() {
+fn public_output_limit_is_capped_by_model_maximum() {
+    assert_eq!(resolved_public_output_token_limit(Some(16_000)), 16_000);
     assert_eq!(
-        resolved_public_output_token_limit(Some(16_000), Some(393_216)),
-        16_000
-    );
-    assert_eq!(
-        resolved_public_output_token_limit(Some(500_000), Some(393_216)),
-        393_216
+        resolved_public_output_token_limit(None),
+        DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT
     );
 }
 

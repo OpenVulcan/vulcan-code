@@ -499,11 +499,9 @@ fn persisted_policy_is_sparse_validated_and_does_not_rewrite_defaults() {
             .get("media_delivery_policy")
             .is_none()
     );
-    assert!(
-        !configuration
-            .migrate_to_current_schema()
-            .expect("media policy fixture or operation must be valid")
-    );
+    configuration
+        .validate_current_schema()
+        .expect("media policy fixture or operation must be valid");
     assert_eq!(
         configuration.effective_media_delivery_policy(),
         MediaDeliveryPolicy::default()
@@ -535,7 +533,7 @@ fn persisted_policy_is_sparse_validated_and_does_not_rewrite_defaults() {
     assert!(configuration.set_media_delivery_policy(policy).is_err());
     assert_eq!(configuration, saved);
     configuration.media_delivery_policy = Some(policy);
-    assert!(configuration.migrate_to_current_schema().is_err());
+    assert!(configuration.validate_current_schema().is_err());
 }
 
 /// Rejects malformed JSON and detects every settings revision; returns normally on success.

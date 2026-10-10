@@ -638,13 +638,6 @@ pub(crate) async fn service_save_public_ai_model_overrides(
     // overrides collapses an empty browser record into restoration semantics.
     // overrides 将空浏览器记录折叠为还原语义。
     let overrides = request.overrides.filter(|overrides| !overrides.is_empty());
-    if overrides.as_ref().is_some_and(|overrides| {
-        overrides.context_limit.is_some() || overrides.output_limit.is_some()
-    }) {
-        return Err(String::from(
-            "Context and output limits must be saved through direct model settings, not protocol execution settings.",
-        ));
-    }
     let transaction = begin_public_ai_configuration_transaction().await;
     let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
     let key = PersistedAiConfiguration::provider_model_protocol_key(

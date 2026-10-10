@@ -102,8 +102,8 @@ pub(super) fn apply_model_parameter_defaults(
     Ok(())
 }
 
-/// Validates local limit overrides, cache policy, and closed model parameters.
-/// 校验本地限制覆盖、缓存策略与封闭模型参数。
+/// Validates cache policy and closed model parameters.
+/// 校验缓存策略与封闭模型参数。
 ///
 /// # Parameters
 /// 参数
@@ -112,56 +112,13 @@ pub(super) fn apply_model_parameter_defaults(
 ///
 /// # Returns
 /// 返回值
-/// Success only when declared limits, cache policy, dependencies, and conflicts are satisfied.
-/// 仅在满足声明上限、缓存策略、依赖与冲突约束时返回成功。
+/// Success only when cache policy, dependencies, and conflicts are satisfied.
+/// 仅在满足缓存策略、依赖与冲突约束时返回成功。
 pub(super) fn validate_model_overrides(
     model: &crate::ConnectionModel,
     protocol_id: &str,
     overrides: &crate::ModelExecutionOverrides,
 ) -> Result<(), String> {
-    if let Some(context_limit) = overrides.context_limit {
-        if context_limit == 0 {
-            return Err(format!(
-                "Model `{}` context override must be greater than zero.",
-                model.id
-            ));
-        }
-        if model
-            .capabilities
-            .context_limit
-            .is_some_and(|advertised| context_limit > advertised)
-        {
-            return Err(format!(
-                "Model `{}` context override exceeds its discovered limit.",
-                model.id
-            ));
-        }
-    }
-    if let Some(output_limit) = overrides.output_limit {
-        if output_limit == 0 {
-            return Err(format!(
-                "Model `{}` output override must be greater than zero.",
-                model.id
-            ));
-        }
-        if model
-            .capabilities
-            .output_limit
-            .is_some_and(|advertised| output_limit > advertised)
-        {
-            return Err(format!(
-                "Model `{}` output override exceeds its discovered limit.",
-                model.id
-            ));
-        }
-        let effective_context_limit = overrides.context_limit.or(model.capabilities.context_limit);
-        if effective_context_limit.is_some_and(|context_limit| output_limit > context_limit) {
-            return Err(format!(
-                "Model `{}` output override exceeds its effective context limit.",
-                model.id
-            ));
-        }
-    }
     let cache_policy = overrides
         .prompt_cache
         .as_ref()

@@ -78,10 +78,7 @@ pub(super) async fn build_candidate(
         execution.client.clone(),
         tools,
         execution.model.capabilities.provider_native_tools.clone(),
-        resolved_public_output_token_limit(
-            execution.overrides.output_limit,
-            execution.model.capabilities.output_limit,
-        ),
+        resolved_public_output_token_limit(execution.model.capabilities.output_limit),
         execution.overrides.prompt_cache.clone().unwrap_or_default(),
         public_reasoning_effort_from_level(reasoning),
         execution.overrides.model_parameters.clone(),

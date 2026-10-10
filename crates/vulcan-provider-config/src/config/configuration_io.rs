@@ -240,8 +240,8 @@ pub fn load_public_ai_connections_file() -> Result<PublicAiConnectionsFile, Stri
 ///
 /// # Returns
 /// 返回值
-/// The hydrated current document, after any recoverable legacy migration has completed.
-/// 已完成可恢复旧版迁移后的补水当前文档。
+/// The hydrated current document, or an explicit error for an unsupported document.
+/// 已补水的当前文档；不受支持的文档返回明确错误。
 pub fn load_public_ai_connections_file_at_path(
     path: &Path,
 ) -> Result<PublicAiConnectionsFile, String> {
@@ -258,8 +258,8 @@ pub fn load_public_ai_connections_file_at_path(
 ///
 /// # Returns
 /// 返回值
-/// The hydrated current document, after any legacy bytes are transactionally rewritten.
-/// 返回已补水的当前文档；任何旧版字节均已通过事务完成重写。
+/// The hydrated current document; the load never rewrites persisted bytes.
+/// 返回已补水的当前文档；加载绝不改写持久化字节。
 fn load_public_ai_connections_file_from_path(
     path: &Path,
 ) -> Result<PublicAiConnectionsFile, String> {
@@ -279,52 +279,11 @@ fn load_public_ai_connections_file_from_path(
     let text = read_bounded_configuration_text(path, "公共 AI 连接文件")?;
     let mut file = parse_public_ai_connections_text(&text)
         .map_err(|error| format!("解析公共 AI 连接文件失败（{}）：{error}", path.display()))?;
-    let had_central_custom_providers = !file.configuration.custom_providers.is_empty();
-    let schema_migrated = file.configuration.migrate_to_current_schema()?;
-    // Standalone custom provider manifests own the provider bytes after migration; every
-    // loader hydrates the reference set back into the in-memory map so runtime reads keep
-    // the same authoritative view regardless of the caller (plan §R6.2).
-    // 迁移后独立自定义供应商清单拥有供应商字节；所有加载路径都把引用集补水回内存映射，
-    // 使运行时读取无论调用方是谁都保持相同的权威视图（方案 §R6.2）。
-    let hydration_report = hydrate_public_ai_custom_providers(&store, &mut file.configuration)?;
-    let migration_required = had_central_custom_providers
-        || schema_migrated
-        || !hydration_report.legacy_descriptor_provider_ids.is_empty();
-    if migration_required && hydration_report.failure_total_count == 0 {
-        // backupDigest pins the first complete pre-migration image before the journaled target
-        // transaction can touch either the central document or standalone manifests.
-        // backupDigest 在带日志的目标事务触碰中央文档或独立 Manifest 前，固定首次完整迁移前
-        // 镜像。
-        let backup_digest = crate::custom_manifest::ensure_custom_provider_migration_backup(
-            &store,
-            Some(text.as_str()),
-        )?;
-        // Existing standalone references are hydrated before this transaction, so a mixed
-        // legacy/current document migrates the union and never drops an already externalized
-        // provider. The central target and every provider file commit as one journaled image.
-        // 在执行本事务前先补水现有独立引用，因此新旧混合文档迁移的是并集，绝不会丢失
-        // 已外置供应商；中央目标与全部供应商文件作为一份带日志镜像共同提交。
-        save_public_ai_connections_at_path(&file.configuration, path, &store)?;
-        file.configuration =
-            crate::custom_manifest::project_persisted_configuration(&file.configuration);
-        hydrate_public_ai_custom_providers(&store, &mut file.configuration)?;
-        crate::custom_manifest::mark_custom_provider_migration_complete(
-            &store,
-            backup_digest.as_str(),
-        )?;
-    } else if hydration_report.failure_total_count == 0
-        && let Some(backup_digest) =
-            crate::custom_manifest::custom_provider_migration_backup_digest(&store)?
-    {
-        // A crash after the data transaction but before the tiny marker write is reconciled only
-        // after the current loader has proved that no legacy source remains.
-        // 数据事务完成而微小标记写入前发生崩溃时，仅在当前加载器证明不存在旧来源后补写
-        // 标记。
-        crate::custom_manifest::mark_custom_provider_migration_complete(
-            &store,
-            backup_digest.as_str(),
-        )?;
-    }
+    // Standalone custom provider manifests own the provider bytes; every loader hydrates the
+    // reference set back into the in-memory map so runtime reads keep one authoritative view.
+    // 独立自定义供应商清单拥有供应商字节；所有加载路径都把引用集补水回内存映射，使运行时
+    // 读取保持同一权威视图。
+    hydrate_public_ai_custom_providers(&store, &mut file.configuration)?;
     Ok(file)
 }
 
@@ -377,11 +336,14 @@ fn parse_public_ai_connections_text(text: &str) -> Result<PublicAiConnectionsFil
             file.schema_version
         ));
     }
-    // Optional old settings retain memory defaults, but explicit invalid media policies fail closed.
-    // 旧版缺失设置保留内存默认值，但显式无效媒体策略必须拒绝。
-    file.configuration
-        .effective_media_delivery_policy()
-        .validate()?;
+    // Custom providers are owned by standalone manifests; the central file carries only references.
+    // 自定义供应商由独立 Manifest 持有；中央文件只携带引用。
+    if !file.configuration.custom_providers.is_empty() {
+        return Err(String::from(
+            "中央公共 AI 连接文件不得内嵌自定义供应商定义，只能引用独立 Manifest。",
+        ));
+    }
+    file.configuration.validate_current_schema()?;
     Ok(file)
 }
 
@@ -634,11 +596,6 @@ mod public_ai_connections_tests {
         parse_public_ai_connections_text, save_public_ai_connections_at_path,
     };
 
-    /// Checked-in descriptor-only schema used to verify the real startup migration path.
-    /// 用于验证真实启动迁移路径的签入式仅描述符 Schema。
-    const LEGACY_CUSTOM_PROVIDER_FIXTURE: &str =
-        include_str!("../../tests/fixtures/custom-provider-descriptor-v0.json");
-
     /// Verifies the standalone document round-trips without secrets or runtime catalogs.
     /// 验证独立文档往返时不包含秘密或运行时目录。
     #[test]
@@ -717,10 +674,10 @@ mod public_ai_connections_tests {
         assert!(error.contains("字节上限"));
     }
 
-    /// Verifies startup reads and rewrites custom manifests below the connection file's parent.
-    /// 验证启动从连接文件父目录下读取并重写自定义 Manifest。
+    /// Verifies startup reads custom manifests below the connection file's parent without rewriting them.
+    /// 验证启动从连接文件父目录下读取自定义 Manifest 且不改写它们。
     #[test]
-    fn startup_hydrates_matching_store_and_rewrites_legacy_descriptor() {
+    fn startup_hydrates_matching_store_without_rewriting() {
         // directory isolates both the central file and its co-owned manifest store.
         // directory 隔离中央文件及其共同持有的 Manifest 存储。
         let directory = tempfile::tempdir().expect("temporary root should create");
@@ -729,15 +686,14 @@ mod public_ai_connections_tests {
         let app_data_root = directory.path().join("code");
         let central_path = app_data_root.join("ai-connections.toml");
         let store = crate::manifest_store::ManifestStoreLayout::new(&app_data_root);
-        // provider_id is the exact identity embedded in the historical fixture.
-        // provider_id 是历史夹具内嵌的精确身份。
         let provider_id = "custom:fixture-provider";
+        let document_text = crate::custom_manifest::tests::document_text(provider_id);
         store
-            .write_custom_manifest(provider_id, LEGACY_CUSTOM_PROVIDER_FIXTURE.as_bytes())
-            .expect("legacy descriptor should write beside the central file");
+            .write_custom_manifest(provider_id, document_text.as_bytes())
+            .expect("current document should write beside the central file");
 
-        // persisted carries only the standalone reference, matching a post-migration restart.
-        // persisted 只携带独立引用，匹配迁移后的重启状态。
+        // persisted carries only the standalone reference.
+        // persisted 只携带独立引用。
         let mut persisted = PublicAiConnectionsFile::default();
         persisted
             .configuration
@@ -750,7 +706,7 @@ mod public_ai_connections_tests {
         // loaded proves hydration used the exact store associated with central_path.
         // loaded 证明补水使用了与 central_path 关联的精确存储。
         let loaded = load_public_ai_connections_file_at_path(&central_path)
-            .expect("startup hydration and migration should succeed");
+            .expect("startup hydration should succeed");
         assert!(
             loaded
                 .configuration
@@ -763,55 +719,31 @@ mod public_ai_connections_tests {
                 .custom_provider_manifests
                 .contains_key(provider_id)
         );
-
-        // migrated_value proves the descriptor-only source was transactionally replaced by v1.
-        // migrated_value 证明仅描述符源已通过事务替换为 v1。
-        let migrated_text = store
-            .read_custom_manifest(provider_id)
-            .expect("migrated document should be readable")
-            .expect("migrated document should remain present");
-        let migrated_value: serde_json::Value =
-            serde_json::from_str(&migrated_text).expect("migrated document should be JSON");
-        assert_eq!(
-            migrated_value
-                .get("schema_version")
-                .and_then(serde_json::Value::as_str),
-            Some(crate::custom_manifest::CUSTOM_PROVIDER_MANIFEST_SCHEMA_VERSION)
-        );
-        assert!(migrated_value.get("provider_manifest").is_some());
         assert!(!directory.path().join("provider-manifests").exists());
-
-        // backup and marker prove successful migration retained its exact first before-image.
-        // backup 与 marker 证明成功迁移保留了精确首次前镜像。
-        let backup_path = crate::custom_manifest::custom_provider_migration_backup_path(&store);
-        let backup_value: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(&backup_path).expect("migration backup should remain durable"),
-        )
-        .expect("migration backup should decode");
         assert_eq!(
-            backup_value
-                .get("central_configuration")
-                .and_then(serde_json::Value::as_str),
-            Some(central_text.as_str())
+            std::fs::read_to_string(&central_path).expect("central document should read"),
+            central_text
         );
         assert_eq!(
-            backup_value
-                .pointer("/custom_manifests/custom:fixture-provider")
-                .and_then(serde_json::Value::as_str),
-            Some(LEGACY_CUSTOM_PROVIDER_FIXTURE)
+            store
+                .read_custom_manifest(provider_id)
+                .expect("standalone document should read")
+                .as_deref(),
+            Some(document_text.as_str())
         );
-        assert!(crate::custom_manifest::custom_provider_migration_marker_path(&store).exists());
+    }
 
-        // restarted proves the rewritten document survives a second full load without migration.
-        // restarted 证明重写文档可在无需再次迁移的第二次完整加载中恢复。
-        let restarted = load_public_ai_connections_file_from_path(&central_path)
-            .expect("rewritten document should survive restart");
-        assert!(
-            restarted
-                .configuration
-                .custom_providers
-                .contains_key(provider_id)
+    /// Verifies a central document embedding custom provider definitions is rejected.
+    /// 验证内嵌自定义供应商定义的中央文档会被拒绝。
+    #[test]
+    fn central_document_with_inline_custom_providers_is_rejected() {
+        let mut persisted = PublicAiConnectionsFile::default();
+        persisted.configuration.custom_providers.insert(
+            String::from("custom:inline"),
+            crate::custom_manifest::tests::custom_descriptor("custom:inline"),
         );
+        let text = toml::to_string_pretty(&persisted).expect("central document should serialize");
+        assert!(parse_public_ai_connections_text(text.as_str()).is_err());
     }
 
     /// Verifies one corrupt custom source is preserved by healthy saves until explicit removal.
@@ -830,18 +762,16 @@ mod public_ai_connections_tests {
         // store owns the standalone custom-provider namespace associated with centralPath.
         // store 持有与 centralPath 关联的独立自定义供应商命名空间。
         let store = crate::manifest_store::ManifestStoreLayout::new(&app_data_root);
-        // healthyProviderId is the exact identity embedded in the frozen legacy fixture.
-        // healthyProviderId 是冻结历史夹具内嵌的精确身份。
+        // healthyProviderId owns one complete current standalone document.
+        // healthyProviderId 持有一份完整的当前独立文档。
         let healthy_provider_id = "custom:fixture-provider";
+        let healthy_document = crate::custom_manifest::tests::document_text(healthy_provider_id);
         // corruptProviderId is the independently referenced provider that must be isolated.
         // corruptProviderId 是必须独立隔离的被引用供应商。
         let corrupt_provider_id = "custom:corrupt-provider";
         store
-            .write_custom_manifest(
-                healthy_provider_id,
-                LEGACY_CUSTOM_PROVIDER_FIXTURE.as_bytes(),
-            )
-            .expect("healthy legacy provider should write");
+            .write_custom_manifest(healthy_provider_id, healthy_document.as_bytes())
+            .expect("healthy provider should write");
         store
             .write_custom_manifest(corrupt_provider_id, br#"{"schema_version":"broken"}"#)
             .expect("corrupt provider fixture should write");
@@ -853,8 +783,8 @@ mod public_ai_connections_tests {
             healthy_provider_id.to_string(),
             corrupt_provider_id.to_string(),
         ]);
-        // centralText is the exact before-image that failed migration must preserve.
-        // centralText 是失败迁移必须保留的精确前镜像。
+        // centralText is the exact before-image that loading must preserve.
+        // centralText 是加载必须保留的精确前镜像。
         let central_text =
             toml::to_string_pretty(&persisted).expect("central document should serialize");
         std::fs::write(&central_path, central_text.as_bytes())
@@ -895,10 +825,8 @@ mod public_ai_connections_tests {
                 .read_custom_manifest(healthy_provider_id)
                 .expect("healthy source should remain readable")
                 .as_deref(),
-            Some(LEGACY_CUSTOM_PROVIDER_FIXTURE)
+            Some(healthy_document.as_str())
         );
-        assert!(!crate::custom_manifest::custom_provider_migration_backup_path(&store).exists());
-        assert!(!crate::custom_manifest::custom_provider_migration_marker_path(&store).exists());
 
         loaded.configuration.usage_refresh_interval_seconds = 601;
         save_public_ai_connections_at_path(&loaded.configuration, &central_path, &store)

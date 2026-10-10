@@ -33,14 +33,6 @@ use crate::manifest_store::ManifestStoreLayout;
 /// 单份自定义供应商事务日志接受的最大序列化字节数。
 const CUSTOM_PROVIDER_TRANSACTION_JOURNAL_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Maximum serialized bytes retained for the durable pre-migration backup.
-/// 持久迁移前备份允许保留的最大序列化字节数。
-const CUSTOM_PROVIDER_MIGRATION_BACKUP_MAX_BYTES: u64 = 64 * 1024 * 1024;
-
-/// Maximum serialized bytes accepted for the migration-completion marker.
-/// 迁移完成标记允许接受的最大序列化字节数。
-const CUSTOM_PROVIDER_MIGRATION_MARKER_MAX_BYTES: u64 = 4 * 1024;
-
 /// Maximum isolated custom-provider diagnostics exposed through one runtime snapshot.
 /// 单份运行时快照允许暴露的最大隔离自定义供应商诊断数。
 const CUSTOM_PROVIDER_HYDRATION_FAILURE_MAX_COUNT: usize = 256;
@@ -79,42 +71,10 @@ struct CustomProviderTransactionJournal {
     target_manifests: BTreeMap<String, String>,
 }
 
-/// Immutable first before-image retained across successful custom-provider migration.
-/// 跨成功自定义供应商迁移永久保留的首次前镜像。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CustomProviderMigrationBackup {
-    /// Exact backup schema version.
-    /// 精确备份 Schema 版本。
-    schema_version: u32,
-    /// Central configuration bytes before the first migration attempt, or absence.
-    /// 首次迁移尝试前的中央配置字节，或不存在状态。
-    central_configuration: Option<String>,
-    /// Complete standalone custom-manifest set before the first migration attempt.
-    /// 首次迁移尝试前的完整独立自定义 Manifest 集合。
-    custom_manifests: BTreeMap<String, String>,
-}
-
-/// Durable proof that the backed-up migration reached a validated current image.
-/// 证明已备份迁移到达已验证当前镜像的持久记录。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CustomProviderMigrationMarker {
-    /// Exact marker schema version.
-    /// 精确标记 Schema 版本。
-    schema_version: u32,
-    /// Lowercase SHA-256 of the immutable backup bytes completed by this migration.
-    /// 本次迁移完成所对应不可变备份字节的小写 SHA-256。
-    backup_sha256: String,
-}
-
-/// Reports legacy standalone descriptors discovered while hydrating custom providers.
-/// 报告补水自定义供应商时发现的旧版独立描述符。
+/// Reports providers isolated while hydrating standalone custom providers.
+/// 报告补水独立自定义供应商时被隔离的供应商。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CustomProviderHydrationReport {
-    /// Provider identifiers whose files must be transactionally rewritten as complete documents.
-    /// 文件必须通过事务重写为完整文档的供应商标识。
-    pub legacy_descriptor_provider_ids: Vec<String>,
     /// Bounded failures for providers isolated while every healthy provider remains available.
     /// 当所有健康供应商仍可用时，被隔离供应商的有界失败记录。
     pub failures: Vec<CustomProviderManifestFailure>,
@@ -124,17 +84,6 @@ pub struct CustomProviderHydrationReport {
     /// Whether the bounded failure list omits one or more additional providers.
     /// 有界失败列表是否省略了一个或多个额外供应商。
     pub failures_truncated: bool,
-}
-
-/// One validated standalone document together with its exact on-disk schema provenance.
-/// 一份已校验的独立文档及其精确磁盘 Schema 来源。
-struct ParsedCustomProviderDocument {
-    /// Complete current document consumed by runtime hydration.
-    /// 运行时补水消费的完整当前文档。
-    document: CustomProviderManifestDocumentV1,
-    /// Whether the source bytes used the explicit descriptor-only version-zero schema.
-    /// 源字节是否使用明确的仅描述符零版本 Schema。
-    legacy_descriptor_v0: bool,
 }
 
 /// User-owned provider/model state that belongs beside one custom provider manifest.
@@ -665,9 +614,12 @@ fn validate_document(
     Ok(compiled.provider().clone())
 }
 
-/// Parses the current full document or the one explicit descriptor-only legacy schema.
-/// 解析当前完整文档，或唯一明确的仅描述符旧版 Schema。
-fn parse_document(provider_id: &str, text: &str) -> Result<ParsedCustomProviderDocument, String> {
+/// Parses one complete current standalone document; any other shape is rejected.
+/// 解析一份完整的当前独立文档；其他任何形态均被拒绝。
+fn parse_document(
+    provider_id: &str,
+    text: &str,
+) -> Result<CustomProviderManifestDocumentV1, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| {
         format!("Standalone custom manifest for `{provider_id}` is invalid JSON: {error}")
     })?;
@@ -675,43 +627,20 @@ fn parse_document(provider_id: &str, text: &str) -> Result<ParsedCustomProviderD
         &value,
         "Standalone custom provider manifest",
     )?;
-    let (document, legacy_descriptor_v0) = if value
+    if value
         .get("schema_version")
         .and_then(serde_json::Value::as_str)
-        == Some(CUSTOM_PROVIDER_MANIFEST_SCHEMA_VERSION)
+        != Some(CUSTOM_PROVIDER_MANIFEST_SCHEMA_VERSION)
     {
-        (
-            serde_json::from_value(value).map_err(|error| {
-                format!("Standalone custom manifest for `{provider_id}` is invalid: {error}")
-            })?,
-            false,
-        )
-    } else if value.get("id").and_then(serde_json::Value::as_str) == Some(provider_id)
-        && value.get("provider_manifest").is_none()
-    {
-        let descriptor: ProviderDescriptor = serde_json::from_value(value).map_err(|error| {
-            format!("Legacy custom provider descriptor for `{provider_id}` is invalid: {error}")
-        })?;
-        (
-            CustomProviderManifestDocumentV1 {
-                schema_version: CUSTOM_PROVIDER_MANIFEST_SCHEMA_VERSION.to_string(),
-                provider_manifest: vulcan_provider_adapters::project_custom_descriptor_manifest(
-                    &descriptor,
-                )?,
-                local_overrides: CustomProviderLocalOverridesV1::default(),
-            },
-            true,
-        )
-    } else {
         return Err(format!(
             "Standalone custom manifest for `{provider_id}` has no supported explicit schema."
         ));
-    };
+    }
+    let document = serde_json::from_value(value).map_err(|error| {
+        format!("Standalone custom manifest for `{provider_id}` is invalid: {error}")
+    })?;
     validate_document(provider_id, &document)?;
-    Ok(ParsedCustomProviderDocument {
-        document,
-        legacy_descriptor_v0,
-    })
+    Ok(document)
 }
 
 /// Serializes one complete standalone custom-provider document deterministically.
@@ -789,10 +718,8 @@ fn record_custom_provider_hydration_failure(
 /// # Returns
 /// 返回值
 /// A report after every referenced standalone file is loaded; a missing or invalid file is a
-/// controlled failure, and explicit descriptor-only sources are identified for transactional
-/// rewriting by the startup owner.
-/// 每个被引用独立文件加载后返回报告；文件缺失或无效时受控失败，明确的仅描述符源会被
-/// 标识出来，由启动流程所有者通过事务重写。
+/// controlled failure that isolates only that provider.
+/// 每个被引用独立文件加载后返回报告；文件缺失或无效时受控失败，只隔离该供应商。
 pub fn load_custom_provider_manifests(
     store: &ManifestStoreLayout,
     configuration: &mut PersistedAiConfiguration,
@@ -837,21 +764,15 @@ pub fn load_custom_provider_manifests(
                 continue;
             }
         };
-        // parsed is accepted only through the two explicit current/legacy document shapes.
-        // parsed 只通过两种明确的当前/历史文档形态接受。
-        let parsed = match parse_document(provider_id.as_str(), &text) {
-            Ok(parsed) => parsed,
+        // document is accepted only in the complete current shape.
+        // document 只接受完整的当前形态。
+        let document = match parse_document(provider_id.as_str(), &text) {
+            Ok(document) => document,
             Err(error) => {
                 record_custom_provider_hydration_failure(&mut report, provider_id, error.as_str());
                 continue;
             }
         };
-        if parsed.legacy_descriptor_v0 {
-            report
-                .legacy_descriptor_provider_ids
-                .push(provider_id.clone());
-        }
-        let document = parsed.document;
         // descriptor is the only activation-ready projection accepted from this document.
         // descriptor 是从该文档接受的唯一可激活投影。
         let descriptor = match validate_document(provider_id.as_str(), &document) {
@@ -1148,219 +1069,6 @@ fn custom_provider_transaction_journal_path(store: &ManifestStoreLayout) -> std:
         .join("custom-provider-transaction.v1.json")
 }
 
-/// Returns the immutable pre-migration backup path below the manifest store root.
-/// 返回 Manifest 存储根目录下不可变迁移前备份路径。
-///
-/// # Parameters
-/// 参数
-/// `store` owns the exact custom-provider persistence root.
-/// `store` 持有精确的自定义供应商持久化根目录。
-///
-/// # Returns
-/// 返回值
-/// The fixed version-one backup path.
-/// 返回固定的第一版备份路径。
-pub fn custom_provider_migration_backup_path(store: &ManifestStoreLayout) -> std::path::PathBuf {
-    store
-        .manifests_root()
-        .join("custom-provider-migration-backup.v1.json")
-}
-
-/// Returns the migration-completion marker path below the manifest store root.
-/// 返回 Manifest 存储根目录下迁移完成标记路径。
-///
-/// # Parameters
-/// 参数
-/// `store` owns the exact custom-provider persistence root.
-/// `store` 持有精确的自定义供应商持久化根目录。
-///
-/// # Returns
-/// 返回值
-/// The fixed version-one completion-marker path.
-/// 返回固定的第一版完成标记路径。
-pub fn custom_provider_migration_marker_path(store: &ManifestStoreLayout) -> std::path::PathBuf {
-    store
-        .manifests_root()
-        .join("custom-provider-migration-complete.v1.json")
-}
-
-/// Creates the first immutable pre-migration backup without ever overwriting an existing one.
-/// 创建首次不可变迁移前备份，且绝不覆盖现有备份。
-///
-/// # Parameters
-/// 参数
-/// `store` owns all standalone manifests and `central_configuration` is the exact legacy central
-/// document, or absence.
-/// `store` 持有全部独立 Manifest；`central_configuration` 是精确旧中央文档，或不存在状态。
-///
-/// # Returns
-/// 返回值
-/// Lowercase SHA-256 of the validated immutable backup bytes.
-/// 返回已校验不可变备份字节的小写 SHA-256。
-pub fn ensure_custom_provider_migration_backup(
-    store: &ManifestStoreLayout,
-    central_configuration: Option<&str>,
-) -> Result<String, String> {
-    let path = custom_provider_migration_backup_path(store);
-    if let Some(bytes) = read_optional_bounded_bytes(
-        &path,
-        CUSTOM_PROVIDER_MIGRATION_BACKUP_MAX_BYTES,
-        "custom provider migration backup",
-    )? {
-        validate_custom_provider_migration_backup(bytes.as_slice())?;
-        return Ok(ManifestStoreLayout::sha256_hex(bytes.as_slice()));
-    }
-    let backup = CustomProviderMigrationBackup {
-        schema_version: 1,
-        central_configuration: central_configuration.map(str::to_string),
-        custom_manifests: read_all_custom_manifest_texts(store)?,
-    };
-    let bytes = serde_json::to_vec(&backup).map_err(|error| {
-        format!("Failed to serialize custom provider migration backup: {error}")
-    })?;
-    if bytes.len() as u64 > CUSTOM_PROVIDER_MIGRATION_BACKUP_MAX_BYTES {
-        return Err(format!(
-            "Custom provider migration backup exceeds the {CUSTOM_PROVIDER_MIGRATION_BACKUP_MAX_BYTES} byte bound."
-        ));
-    }
-    validate_custom_provider_migration_backup(bytes.as_slice())?;
-    crate::atomic_file::write_file_atomically(&path, &bytes)?;
-    Ok(ManifestStoreLayout::sha256_hex(bytes.as_slice()))
-}
-
-/// Returns the digest of an existing validated migration backup.
-/// 返回现有已校验迁移备份的摘要。
-///
-/// # Parameters
-/// 参数
-/// `store` owns the fixed backup path.
-/// `store` 持有固定备份路径。
-///
-/// # Returns
-/// 返回值
-/// The lowercase backup SHA-256, or `None` when migration has never started.
-/// 返回小写备份 SHA-256；迁移从未开始时返回 `None`。
-pub fn custom_provider_migration_backup_digest(
-    store: &ManifestStoreLayout,
-) -> Result<Option<String>, String> {
-    let path = custom_provider_migration_backup_path(store);
-    let Some(bytes) = read_optional_bounded_bytes(
-        &path,
-        CUSTOM_PROVIDER_MIGRATION_BACKUP_MAX_BYTES,
-        "custom provider migration backup",
-    )?
-    else {
-        return Ok(None);
-    };
-    validate_custom_provider_migration_backup(bytes.as_slice())?;
-    Ok(Some(ManifestStoreLayout::sha256_hex(bytes.as_slice())))
-}
-
-/// Persists or verifies the completion marker for one exact immutable migration backup.
-/// 持久化或校验一份精确不可变迁移备份的完成标记。
-///
-/// # Parameters
-/// 参数
-/// `store` owns the fixed marker path and `backup_sha256` identifies the retained before-image.
-/// `store` 持有固定标记路径；`backup_sha256` 标识保留的前镜像。
-///
-/// # Returns
-/// 返回值
-/// Success after an identical marker is durable; a conflicting marker fails closed.
-/// 相同标记持久化后返回成功；冲突标记保持失败关闭。
-pub fn mark_custom_provider_migration_complete(
-    store: &ManifestStoreLayout,
-    backup_sha256: &str,
-) -> Result<(), String> {
-    validate_lowercase_sha256(backup_sha256, "migration backup SHA-256")?;
-    let path = custom_provider_migration_marker_path(store);
-    if let Some(bytes) = read_optional_bounded_bytes(
-        &path,
-        CUSTOM_PROVIDER_MIGRATION_MARKER_MAX_BYTES,
-        "custom provider migration marker",
-    )? {
-        let marker = parse_custom_provider_migration_marker(bytes.as_slice())?;
-        if marker.backup_sha256 != backup_sha256 {
-            return Err(String::from(
-                "Custom provider migration marker refers to a different immutable backup.",
-            ));
-        }
-        return Ok(());
-    }
-    let marker = CustomProviderMigrationMarker {
-        schema_version: 1,
-        backup_sha256: backup_sha256.to_string(),
-    };
-    let bytes = serde_json::to_vec(&marker).map_err(|error| {
-        format!("Failed to serialize custom provider migration marker: {error}")
-    })?;
-    if bytes.len() as u64 > CUSTOM_PROVIDER_MIGRATION_MARKER_MAX_BYTES {
-        return Err(String::from(
-            "Custom provider migration marker exceeds its byte bound.",
-        ));
-    }
-    crate::atomic_file::write_file_atomically(&path, &bytes)
-}
-
-/// Validates one immutable migration backup document and all bounded structural invariants.
-/// 校验一份不可变迁移备份文档及全部有界结构不变量。
-fn validate_custom_provider_migration_backup(bytes: &[u8]) -> Result<(), String> {
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|error| format!("Custom provider migration backup is invalid: {error}"))?;
-    vulcan_provider_adapters::provider_manifest::validate_runtime_json_bounds(
-        &value,
-        "Custom provider migration backup",
-    )?;
-    let backup: CustomProviderMigrationBackup = serde_json::from_value(value)
-        .map_err(|error| format!("Custom provider migration backup is invalid: {error}"))?;
-    if backup.schema_version != 1 {
-        return Err(format!(
-            "Unsupported custom provider migration backup schema version {}.",
-            backup.schema_version
-        ));
-    }
-    if backup
-        .custom_manifests
-        .keys()
-        .any(|provider_id| !provider_id.starts_with("custom:"))
-    {
-        return Err(String::from(
-            "Custom provider migration backup contains a non-custom provider identifier.",
-        ));
-    }
-    Ok(())
-}
-
-/// Parses one bounded migration marker through its strict versioned schema.
-/// 通过严格版本化 Schema 解析一份有界迁移标记。
-fn parse_custom_provider_migration_marker(
-    bytes: &[u8],
-) -> Result<CustomProviderMigrationMarker, String> {
-    let marker: CustomProviderMigrationMarker = serde_json::from_slice(bytes)
-        .map_err(|error| format!("Custom provider migration marker is invalid: {error}"))?;
-    if marker.schema_version != 1 {
-        return Err(format!(
-            "Unsupported custom provider migration marker schema version {}.",
-            marker.schema_version
-        ));
-    }
-    validate_lowercase_sha256(marker.backup_sha256.as_str(), "migration backup SHA-256")?;
-    Ok(marker)
-}
-
-/// Validates one exact lowercase SHA-256 field.
-/// 校验一个精确的小写 SHA-256 字段。
-fn validate_lowercase_sha256(value: &str, label: &str) -> Result<(), String> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(format!("Custom provider {label} is invalid."));
-    }
-    Ok(())
-}
-
 /// Persists one bounded transaction journal atomically before any target file changes.
 /// 在任何目标文件变化前原子持久化一份有界事务日志。
 fn write_custom_provider_transaction_journal(
@@ -1632,7 +1340,7 @@ pub fn load_all_custom_provider_manifests(
         let text = store
             .read_custom_manifest(&provider_id)?
             .ok_or_else(|| format!("Standalone custom manifest for `{provider_id}` vanished."))?;
-        let document = parse_document(&provider_id, &text)?.document;
+        let document = parse_document(&provider_id, &text)?;
         let descriptor = validate_document(&provider_id, &document)?;
         providers.insert(provider_id, descriptor);
     }
@@ -1640,7 +1348,7 @@ pub fn load_all_custom_provider_manifests(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use vulcan_provider_adapters::{
@@ -1650,15 +1358,6 @@ mod tests {
         ProviderKind, RequestProjectorKind, ServiceEntry, ServiceEntryKind,
     };
 
-    /// Immutable provider identity embedded in the checked-in descriptor-only v0 fixture.
-    /// 签入的仅描述符 v0 夹具中嵌入的不可变供应商标识。
-    const LEGACY_DESCRIPTOR_FIXTURE_PROVIDER_ID: &str = "custom:fixture-provider";
-
-    /// Exact descriptor-only bytes emitted by the historical standalone writer.
-    /// 历史独立写入器曾输出的精确仅描述符字节。
-    const LEGACY_DESCRIPTOR_FIXTURE: &str =
-        include_str!("../tests/fixtures/custom-provider-descriptor-v0.json");
-
     /// Builds one isolated store layout inside a temporary directory.
     /// 在临时目录内构建一个隔离的存储布局。
     fn layout() -> (ManifestStoreLayout, tempfile::TempDir) {
@@ -1667,9 +1366,9 @@ mod tests {
         (store, directory)
     }
 
-    /// Builds one minimal custom provider descriptor for migration tests.
-    /// 构建一个用于迁移测试的最小自定义供应商描述。
-    fn custom_descriptor(provider_id: &str) -> ProviderDescriptor {
+    /// Builds one minimal custom provider descriptor for standalone-manifest tests.
+    /// 构建一个用于独立 Manifest 测试的最小自定义供应商描述。
+    pub(crate) fn custom_descriptor(provider_id: &str) -> ProviderDescriptor {
         ProviderDescriptor {
             id: provider_id.to_string(),
             display_name: format!("Provider {provider_id}"),
@@ -1726,58 +1425,29 @@ mod tests {
         }
     }
 
-    /// Materializes the checked-in descriptor-only legacy fixture for one exact provider id.
-    /// 为一个精确供应商标识实例化签入的仅描述符旧版夹具。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` replaces the fixture identity in both the id and display-name fields.
-    /// `provider_id` 会替换夹具的标识字段与显示名称字段。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Historical JSON bytes independent of the current Rust descriptor defaults.
-    /// 返回不依赖当前 Rust 描述默认值的历史 JSON 字节。
-    fn legacy_descriptor_text(provider_id: &str) -> String {
-        assert!(
-            provider_id.starts_with("custom:"),
-            "legacy fixture identity must remain custom-owned"
-        );
-        assert_eq!(
-            LEGACY_DESCRIPTOR_FIXTURE
-                .matches(LEGACY_DESCRIPTOR_FIXTURE_PROVIDER_ID)
-                .count(),
-            2,
-            "legacy fixture must contain only its id and derived display name"
-        );
-        LEGACY_DESCRIPTOR_FIXTURE.replace(LEGACY_DESCRIPTOR_FIXTURE_PROVIDER_ID, provider_id)
+    /// Serializes one complete current standalone document for test provider `provider_id`.
+    /// 为测试供应商 `provider_id` 序列化一份完整的当前独立文档。
+    pub(crate) fn document_text(provider_id: &str) -> String {
+        let descriptor = custom_descriptor(provider_id);
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(provider_id.to_string(), descriptor.clone());
+        let document = document_from_configuration(&configuration, provider_id, &descriptor)
+            .expect("current document should build");
+        serialize_document(&document).expect("current document should serialize")
     }
 
-    /// Verifies the checked-in descriptor-only v0 fixture migrates without current defaults.
-    /// 验证签入的仅描述符 v0 夹具无需依赖当前默认值即可迁移。
+    /// Verifies a descriptor-only document without the current schema marker is rejected.
+    /// 验证缺少当前 Schema 标记的仅描述符文档会被拒绝。
     #[test]
-    fn checked_in_descriptor_only_v0_fixture_migrates_to_full_document() {
-        let provider_id = "custom:historical";
-        let parsed = parse_document(provider_id, legacy_descriptor_text(provider_id).as_str())
-            .expect("historical descriptor fixture should migrate");
-        assert!(parsed.legacy_descriptor_v0);
-        let document = parsed.document;
-
-        assert_eq!(
-            document.schema_version,
-            CUSTOM_PROVIDER_MANIFEST_SCHEMA_VERSION
-        );
-        assert_eq!(document.provider_manifest.provider_id, provider_id);
-        assert_eq!(
-            document.local_overrides,
-            CustomProviderLocalOverridesV1::default()
-        );
-        assert_eq!(
-            validate_document(provider_id, &document)
-                .expect("migrated full document should validate")
-                .display_name,
-            "Provider custom:historical"
-        );
+    fn descriptor_only_document_is_rejected() {
+        let provider_id = "custom:descriptor-only";
+        let text = serde_json::to_string(&custom_descriptor(provider_id))
+            .expect("descriptor should serialize");
+        let error = parse_document(provider_id, text.as_str())
+            .expect_err("descriptor-only document must be rejected");
+        assert!(error.contains("no supported explicit schema"));
     }
 
     /// Builds one explicit manual model used by full-document ownership tests.
@@ -1827,7 +1497,7 @@ mod tests {
         configuration.model_overrides.insert(
             execution_key.clone(),
             ModelExecutionOverrides {
-                output_limit: Some(2048),
+                prompt_cache: Some(Default::default()),
                 ..ModelExecutionOverrides::default()
             },
         );
@@ -1838,17 +1508,16 @@ mod tests {
         let parsed = parse_document(provider_id, serialized.as_str())
             .expect("complete document should parse");
 
-        assert!(!parsed.legacy_descriptor_v0);
-        assert_eq!(&parsed.document, &document);
+        assert_eq!(&parsed, &document);
         assert!(
-            !parsed.document.provider_manifest.usage_profiles.is_empty(),
+            !parsed.provider_manifest.usage_profiles.is_empty(),
             "standalone custom manifests must materialize standard Usage profiles"
         );
         assert!(
-            !parsed.document.provider_manifest.services[0].protocol_routes[0]
+            !parsed.provider_manifest.services[0].protocol_routes[0]
                 .usage_profile_refs
                 .is_empty()
-                && parsed.document.provider_manifest.services[0].protocol_routes[0]
+                && parsed.provider_manifest.services[0].protocol_routes[0]
                     .usage_profile_refs
                     .iter()
                     .all(|profile_id| !profile_id.trim().is_empty()),
@@ -1856,7 +1525,6 @@ mod tests {
         );
         assert!(
             parsed
-                .document
                 .provider_manifest
                 .services
                 .iter()
@@ -1872,16 +1540,11 @@ mod tests {
             "manual models must have exactly one persisted owner in local_overrides"
         );
         assert!(
-            parsed
-                .document
-                .local_overrides
-                .custom_models
-                .contains_key(model_id),
+            parsed.local_overrides.custom_models.contains_key(model_id),
             "the local override must retain the manual model definition"
         );
         assert_eq!(
             parsed
-                .document
                 .local_overrides
                 .model_protocol_preferences
                 .get(model_key.as_str()),
@@ -1891,12 +1554,11 @@ mod tests {
         );
         assert_eq!(
             parsed
-                .document
                 .local_overrides
                 .model_execution_overrides
                 .get(execution_key.as_str())
-                .and_then(|overrides| overrides.output_limit),
-            Some(2048)
+                .map(|overrides| overrides.prompt_cache.is_some()),
+            Some(true)
         );
     }
 
@@ -2312,16 +1974,10 @@ mod tests {
     fn standalone_manifests_load_all_files_directly() {
         let (store, _directory) = layout();
         store
-            .write_custom_manifest(
-                "custom:alpha",
-                legacy_descriptor_text("custom:alpha").as_bytes(),
-            )
+            .write_custom_manifest("custom:alpha", document_text("custom:alpha").as_bytes())
             .expect("alpha should write");
         store
-            .write_custom_manifest(
-                "custom:beta",
-                legacy_descriptor_text("custom:beta").as_bytes(),
-            )
+            .write_custom_manifest("custom:beta", document_text("custom:beta").as_bytes())
             .expect("beta should write");
         let providers =
             load_all_custom_provider_manifests(&store).expect("standalone manifests should load");
@@ -2357,62 +2013,6 @@ mod tests {
         assert!(projected.custom_providers.is_empty());
     }
 
-    /// Verifies the first migration before-image is immutable and owns one matching marker.
-    /// 验证首次迁移前镜像不可变，并且只对应一份匹配标记。
-    #[test]
-    fn custom_provider_migration_backup_is_retained_and_marker_is_digest_bound() {
-        let (store, directory) = layout();
-        let central_path = directory.path().join("ai-connections.toml");
-        let before_central = "legacy-central-exact\n";
-        let before_manifest = legacy_descriptor_text("custom:before");
-        std::fs::write(&central_path, before_central)
-            .expect("legacy central configuration should write");
-        store
-            .write_custom_manifest("custom:before", before_manifest.as_bytes())
-            .expect("legacy standalone manifest should write");
-
-        let digest = ensure_custom_provider_migration_backup(&store, Some(before_central))
-            .expect("first migration backup should persist");
-        let backup_path = custom_provider_migration_backup_path(&store);
-        let before_backup_bytes = std::fs::read(&backup_path).expect("backup should read");
-        let backup: CustomProviderMigrationBackup =
-            serde_json::from_slice(&before_backup_bytes).expect("backup should decode");
-        assert_eq!(
-            backup.central_configuration.as_deref(),
-            Some(before_central)
-        );
-        assert_eq!(
-            backup.custom_manifests.get("custom:before"),
-            Some(&before_manifest)
-        );
-
-        std::fs::write(&central_path, "current-central\n")
-            .expect("current central configuration should write");
-        store
-            .write_custom_manifest(
-                "custom:before",
-                legacy_descriptor_text("custom:changed").as_bytes(),
-            )
-            .expect("changed standalone manifest should write");
-        let repeated_digest =
-            ensure_custom_provider_migration_backup(&store, Some("current-central\n"))
-                .expect("existing backup should validate");
-        assert_eq!(repeated_digest, digest);
-        assert_eq!(
-            std::fs::read(&backup_path).expect("immutable backup should read"),
-            before_backup_bytes
-        );
-
-        mark_custom_provider_migration_complete(&store, digest.as_str())
-            .expect("matching completion marker should persist");
-        mark_custom_provider_migration_complete(&store, digest.as_str())
-            .expect("matching completion marker should be idempotent");
-        let conflicting_digest = "0".repeat(64);
-        let error = mark_custom_provider_migration_complete(&store, conflicting_digest.as_str())
-            .expect_err("conflicting completion marker must fail closed");
-        assert!(error.contains("different immutable backup"));
-    }
-
     /// Verifies a synchronous failure before the central write restores the exact before image.
     /// 验证中央文件写入前的同步失败会恢复精确的保存前镜像。
     #[test]
@@ -2420,7 +2020,7 @@ mod tests {
         let (store, directory) = layout();
         let central_path = directory.path().join("ai-connections.toml");
         let before_central = "before-central-exact\n";
-        let before_manifest = legacy_descriptor_text("custom:before");
+        let before_manifest = document_text("custom:before");
         store
             .write_custom_manifest("custom:before", before_manifest.as_bytes())
             .expect("before manifest should write");
@@ -2474,10 +2074,7 @@ mod tests {
         let (store, directory) = layout();
         let central_path = directory.path().join("ai-connections.toml");
         store
-            .write_custom_manifest(
-                "custom:before",
-                legacy_descriptor_text("custom:before").as_bytes(),
-            )
+            .write_custom_manifest("custom:before", document_text("custom:before").as_bytes())
             .expect("before manifest should write");
         std::fs::write(&central_path, "before").expect("before central configuration should write");
         let journal = CustomProviderTransactionJournal {
@@ -2486,19 +2083,16 @@ mod tests {
             target_configuration: String::from("target"),
             before_manifests: BTreeMap::from([(
                 String::from("custom:before"),
-                legacy_descriptor_text("custom:before"),
+                document_text("custom:before"),
             )]),
             target_manifests: BTreeMap::from([(
                 String::from("custom:target"),
-                legacy_descriptor_text("custom:target"),
+                document_text("custom:target"),
             )]),
         };
         write_custom_provider_transaction_journal(&store, &journal).expect("journal should write");
         store
-            .write_custom_manifest(
-                "custom:target",
-                legacy_descriptor_text("custom:target").as_bytes(),
-            )
+            .write_custom_manifest("custom:target", document_text("custom:target").as_bytes())
             .expect("partial target write should succeed");
 
         recover_custom_provider_transaction(&store, &central_path)

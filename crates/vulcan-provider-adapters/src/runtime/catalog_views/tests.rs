@@ -55,7 +55,6 @@ fn signed_system_model_capabilities_win_over_user_overlay() {
             context_limit: Some(4_096),
             output_limit: None,
             input_resources: Some(vec![vulcan_ai_contract::ResourceKind::Image]),
-            output_resources: None,
             ..crate::ModelCapabilityOverrides::default()
         },
     );

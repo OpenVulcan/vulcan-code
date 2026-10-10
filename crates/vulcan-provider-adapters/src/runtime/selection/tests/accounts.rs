@@ -12,7 +12,9 @@ use crate::{
     PersistedAiConfiguration, parse_openai_model_catalog,
 };
 use std::collections::BTreeMap;
-use vulcan_ai_contract::{AiOperation, CapabilitySupport, ModelCapabilities, ReasoningControlMode};
+use vulcan_ai_contract::{
+    AiOperation, CapabilitySupport, ModelCapabilities, PromptCachePolicy, ReasoningControlMode,
+};
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
@@ -453,7 +455,7 @@ fn model_overrides_are_shared_across_matching_accounts() {
     configuration.model_overrides.insert(
         key,
         ModelExecutionOverrides {
-            context_limit: Some(4096),
+            prompt_cache: Some(PromptCachePolicy::ProviderDefault),
             ..ModelExecutionOverrides::default()
         },
     );
@@ -470,7 +472,10 @@ fn model_overrides_are_shared_across_matching_accounts() {
         let selection = runtime
             .resolve_active_selection(&configuration)
             .expect("shared model override should resolve");
-        assert_eq!(selection.overrides.context_limit, Some(4096));
+        assert_eq!(
+            selection.overrides.prompt_cache,
+            Some(PromptCachePolicy::ProviderDefault)
+        );
     }
 }
 

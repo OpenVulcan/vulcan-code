@@ -50,27 +50,22 @@ const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 /// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
 pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
 
-/// Resolves the requested output budget while treating catalog output limits as upper bounds.
-/// 在将目录输出限制视为上限的前提下解析请求输出预算。
+/// Resolves the requested output budget while treating the effective model output limit as an upper bound.
+/// 在将有效模型输出限制视为上限的前提下解析请求输出预算。
 ///
 /// # Parameters
 /// 参数
-/// `configured_limit` is the optional user narrowing and `catalog_limit` is the provider-reported
-/// model maximum.
-/// `configured_limit` 是可选的用户收窄值，`catalog_limit` 是供应商报告的模型最大值。
+/// `model_limit` is the effective model maximum after direct model settings were applied.
+/// `model_limit` 是应用直接模型设置后的有效模型最大值。
 ///
 /// # Returns
 /// 返回值
-/// The configured or default request budget capped by the catalog maximum when present.
-/// 返回配置值或默认请求预算；存在目录最大值时以其封顶。
-pub(crate) fn resolved_public_output_token_limit(
-    configured_limit: Option<u64>,
-    catalog_limit: Option<u64>,
-) -> u64 {
-    let requested_limit = configured_limit.unwrap_or(DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT);
-    catalog_limit
-        .map(|maximum| requested_limit.min(maximum))
-        .unwrap_or(requested_limit)
+/// The default request budget capped by the model maximum when present.
+/// 返回默认请求预算；存在模型最大值时以其封顶。
+pub(crate) fn resolved_public_output_token_limit(model_limit: Option<u64>) -> u64 {
+    model_limit
+        .map(|maximum| DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT.min(maximum))
+        .unwrap_or(DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT)
 }
 /// Executes one public-contract provider run through the existing host controller.
 /// 通过现有宿主控制器执行一次公共契约 Provider 运行。
@@ -99,10 +94,8 @@ pub(crate) fn execute_vulcan_public_stream(
     let provider_error_trace_enabled = request.provider_error_trace_enabled;
     let cache_scope_id = request.session_id.to_string();
     let workspace_path = request.workspace_path.clone();
-    let output_token_limit = resolved_public_output_token_limit(
-        resolved.overrides.output_limit,
-        resolved.model.capabilities.output_limit,
-    );
+    let output_token_limit =
+        resolved_public_output_token_limit(resolved.model.capabilities.output_limit);
     let prompt_cache = resolved.overrides.prompt_cache.clone().unwrap_or_default();
     let PreparedProviderTransportStreamLaunch {
         runtime_inputs,

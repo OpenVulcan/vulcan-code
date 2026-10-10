@@ -448,7 +448,6 @@ fn custom_model_user_override_outranks_credential_evidence() {
             context_limit: Some(32_000),
             output_limit: Some(2_000),
             input_resources: Some(vec![vulcan_ai_contract::ResourceKind::File]),
-            output_resources: None,
             ..crate::ModelCapabilityOverrides::default()
         },
     );

@@ -770,11 +770,9 @@ export interface PublicAiActiveSelection {
   connection_id: string;
 }
 
-// PublicAiModelOverrides stores local limit overrides and registered parameter values.
-// PublicAiModelOverrides 保存本地限制覆盖与注册参数值。
+// PublicAiModelOverrides stores protocol-scoped cache choices and registered parameter values.
+// PublicAiModelOverrides 保存协议作用域缓存选择与注册参数值。
 export interface PublicAiModelOverrides {
-  context_limit?: number;
-  output_limit?: number;
   prompt_cache?: unknown;
   model_parameters?: Record<string, unknown>;
 }

@@ -268,9 +268,9 @@ pub(crate) async fn service_validate_public_ai_custom_model(
         request.model_id.as_str(),
     )?;
     let output_limit = selection
-        .overrides
+        .model
+        .capabilities
         .output_limit
-        .or(selection.model.capabilities.output_limit)
         .unwrap_or(256)
         .clamp(1, 256);
     let reasoning_effort = selection
@@ -704,15 +704,6 @@ pub(crate) async fn service_save_public_ai_custom_provider_model_defaults(
     request: PublicAiCustomProviderModelDefaultsSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     validate_non_empty("providerId", request.provider_id.as_str())?;
-    if request
-        .defaults
-        .as_ref()
-        .is_some_and(|defaults| !defaults.output_resources.is_empty())
-    {
-        return Err(String::from(
-            "Custom provider output is fixed to text in the generic provider settings contract.",
-        ));
-    }
     if let Some(defaults) = request.defaults.as_ref() {
         defaults.validate()?;
     }
@@ -773,7 +764,11 @@ fn replace_custom_provider_model_defaults(
     provider_id: &str,
     defaults: Option<&CustomProviderModelDefaults>,
 ) {
-    if let Some(defaults) = defaults {
+    // A record equal to the system baseline carries no user choice and is stored as absence.
+    // 与系统基线相同的记录不含用户选择，按缺省保存。
+    if let Some(defaults) =
+        defaults.filter(|defaults| **defaults != CustomProviderModelDefaults::default())
+    {
         configuration
             .custom_provider_model_defaults
             .insert(provider_id.to_string(), defaults.clone());

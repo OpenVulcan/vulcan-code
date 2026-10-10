@@ -46,7 +46,7 @@ crates/vulcan-runtime-assets/resources/provider-manifests/fixtures/
 自定义供应商以 `custom:` 命名空间和独立文件持久化。它可以有多个实例、多个启用协议、发现模型
 和手动模型；实例之间的端点、凭据、模型和选择不得串用。
 
-### 1.1 自定义供应商文件位置、格式与迁移
+### 1.1 自定义供应商文件位置与格式
 
 宿主先解析应用数据根目录，再把每个自定义供应商保存到：
 
@@ -73,22 +73,13 @@ ASCII 字节，后缀只允许 `[A-Za-z0-9._-]`，单文件上限为 4 MiB。
 手工模型、逐模型协议偏好、启用差异及模型执行覆盖。连接、凭据、会话与推理配置档仍保留在中央
 连接文件中；中央文件只持久化 `custom_provider_file_refs`，不会再次写入自定义供应商定义。
 
-启动迁移只接受两种明确输入：当前 `vulcan.custom-provider-manifest.v1`，以及历史 descriptor-only
-文档（根 `id` 必须精确等于文件身份，且不得出现 `provider_manifest`）。历史解析由冻结的 v0 fixture
-验证，不根据未知字段或当前默认值猜测版本。
+加载只接受当前 `vulcan.custom-provider-manifest.v1` 文档；缺少该 Schema 标记的任何形态（包括仅含
+描述符的旧文档）都作为该供应商的读取失败隔离，不迁移、不改写。中央文件内嵌 `custom_providers` 定义时
+整份中央文件被拒绝。加载过程绝不改写中央文件或独立文件。
 
-首次需要迁移时，宿主必须先原子创建
-`provider-manifests/custom-provider-migration-backup.v1.json`。该备份精确保存迁移前的中央配置文本与
-当时全部独立自定义 Manifest，总上限为 64 MiB，一旦存在就只校验并复用，绝不覆盖。这是持久的最初
-before-image，不是日志的短期代替品。
-
-中央旧配置和独立文件随后通过
-`provider-manifests/custom-provider-transaction.v1.json` 保存完整 before/target 镜像；进程中断后先重放
-同一 target 镜像，再执行补水。目标镜像落盘并重新加载验证成功后，宿主写入上限 4 KiB 的
-`provider-manifests/custom-provider-migration-complete.v1.json`；其中 SHA-256 必须精确绑定不可变备份。
-如果数据事务已成功但标记写入前崩溃，下次启动只能在当前加载器已证明不再存在旧格式来源后补写标记。
-标记指向不同备份、任何文件缺失、身份不符、Schema 错误或事务恢复失败都会阻止激活，不会静默回退到
-另一供应商或丢弃该供应商。
+中央配置与独立文件的每次保存通过 `provider-manifests/custom-provider-transaction.v1.json` 保存完整
+before/target 镜像；进程中断后先重放同一 target 镜像，再执行补水。事务恢复失败会阻止激活，不会静默
+回退到另一供应商或丢弃该供应商。
 
 独立自定义 Manifest 的读取、格式、身份、Schema 或本地覆盖校验失败只隔离精确所属供应商；
 其他已验证供应商仍可启动和执行，且不得回退使用同 ID 的过期中央内嵌描述。Service 快照最多暴露 256 条

@@ -60,10 +60,6 @@ pub struct CustomProviderModelDefaults {
     /// 供应商级结构化输出能力。
     #[serde(default)]
     pub structured_output: StructuredOutputCapability,
-    /// Legacy non-text output resources retained only for backward-compatible decoding.
-    /// 仅为向后兼容反序列化而保留的旧版非文本输出资源。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output_resources: Vec<ResourceKind>,
     /// Provider-wide reasoning support applied above catalog declarations.
     /// 应用于目录声明之上的供应商级思考支持状态。
     #[serde(default = "default_custom_provider_reasoning")]
@@ -91,7 +87,6 @@ impl Default for CustomProviderModelDefaults {
             output_limit: CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT,
             input_resources: Vec::new(),
             structured_output: StructuredOutputCapability::default(),
-            output_resources: Vec::new(),
             reasoning: default_custom_provider_reasoning(),
             reasoning_control: default_custom_provider_reasoning_control(),
             reasoning_efforts: default_custom_provider_reasoning_efforts(),
@@ -117,11 +112,6 @@ impl CustomProviderModelDefaults {
         if self.output_limit == 0 {
             return Err(String::from(
                 "Custom provider default output limit must be greater than zero.",
-            ));
-        }
-        if !self.output_resources.is_empty() {
-            return Err(String::from(
-                "Non-text output cannot be configured for a custom conversation provider.",
             ));
         }
         if self.input_resources.contains(&ResourceKind::Video) {
@@ -1257,22 +1247,6 @@ mod tests {
 
         assert_eq!(capabilities.context_limit, Some(8_192));
         assert_eq!(capabilities.output_limit, Some(8_192));
-    }
-
-    /// Verifies provider settings reject generic non-text output configuration.
-    /// 验证供应商设置会拒绝通用非文本输出配置。
-    #[test]
-    fn provider_settings_reject_non_text_output() {
-        let settings = CustomProviderModelDefaults {
-            output_resources: vec![ResourceKind::Image],
-            ..CustomProviderModelDefaults::default()
-        };
-
-        let error = settings
-            .validate()
-            .expect_err("non-text output must be rejected");
-
-        assert!(error.contains("Non-text output"));
     }
 
     /// Verifies direct custom-provider settings cannot persist levels absent from their OpenAI-compatible editor.

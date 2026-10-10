@@ -896,126 +896,43 @@ fn inference_profile_preserves_explicit_consumer_embedding_dimensions() {
     assert!(serialized["vmm"].get("embedding_dimensions").is_none());
 }
 
-/// Verifies a current-schema file repairs the system VCE profile without copying VMM routes.
-/// 验证当前 Schema 文件会修复系统 VCE 配置档，且不会复制 VMM 路由。
+/// Verifies a current-schema file missing a required system inference profile is rejected.
+/// 验证缺少必需系统推理配置档的当前 Schema 文件会被拒绝。
 #[test]
-fn current_schema_repairs_missing_vce_profile_without_copying_vmm_routes() {
-    let mut configuration = PersistedAiConfiguration::default();
-    let vmm_profile = InferenceProfile {
-        embedding: Some(InferenceRouteConfiguration {
-            provider_id: String::from("custom:vmm-provider"),
-            service_entry_id: String::from("vmm-entry"),
-            connection_id: String::from("vmm-account"),
-            model_id: String::from("vmm-model"),
-            binding: InferenceRouteBinding::Action {
-                action_binding_id: String::from("vmm-embedding-action"),
-            },
-            operation: AiOperation::EmbeddingCreate,
-            usage_scope: InferenceUsageScope::InternalBackground,
-        }),
-        ..InferenceProfile::default()
-    };
-    configuration
-        .inference_profiles
-        .insert(String::from("vmm"), vmm_profile.clone());
-    configuration.inference_profiles.remove("vce");
-
-    assert!(
-        configuration
-            .migrate_to_current_schema()
-            .expect("current schema must repair VCE")
-    );
-    assert_eq!(
-        configuration.inference_profiles.get("vmm"),
-        Some(&vmm_profile)
-    );
-    assert_eq!(
-        configuration.inference_profiles.get("vce"),
-        Some(&InferenceProfile::default())
-    );
+fn current_schema_rejects_missing_system_inference_profile() {
+    for profile_id in ["vce", "vmm"] {
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.inference_profiles.remove(profile_id);
+        assert!(
+            configuration.validate_current_schema().is_err(),
+            "missing {profile_id} profile must fail"
+        );
+    }
 }
 
-/// Verifies protocol-scoped limits in a current document become one conservative direct model setting.
-/// 验证当前文档中的协议作用域限制会转化为一份保守的直接模型设置。
+/// Verifies protocol execution settings reject model limits as unknown fields.
+/// 验证协议执行设置会把模型限制作为未知字段拒绝。
 #[test]
-fn protocol_limits_normalize_to_direct_model_settings() {
-    let mut historical = PersistedAiConfiguration::default();
-    let first_key = PersistedAiConfiguration::provider_model_protocol_key(
-        "custom:迁移",
-        "model:alpha",
-        "openai-chat-completions.v1",
-    );
-    let second_key = PersistedAiConfiguration::provider_model_protocol_key(
-        "custom:迁移",
-        "model:alpha",
-        "openai-responses.v1",
-    );
-    historical.model_overrides.insert(
-        first_key.clone(),
-        ModelExecutionOverrides {
-            context_limit: Some(16_384),
-            output_limit: Some(4_096),
-            prompt_cache: Some(PromptCachePolicy::ProviderDefault),
-            model_parameters: BTreeMap::new(),
-        },
-    );
-    historical.model_overrides.insert(
-        second_key.clone(),
-        ModelExecutionOverrides {
-            context_limit: Some(8_192),
-            output_limit: Some(2_048),
-            ..ModelExecutionOverrides::default()
-        },
-    );
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("current schema must load")
-    );
-
-    let model_key = PersistedAiConfiguration::provider_model_key("custom:迁移", "model:alpha");
-    let model_settings = historical
-        .model_capability_overrides
-        .get(model_key.as_str())
-        .expect("legacy limits must become direct model settings");
-    assert_eq!(model_settings.context_limit, Some(8_192));
-    assert_eq!(model_settings.output_limit, Some(2_048));
-    let protocol_settings = historical
-        .model_overrides
-        .get(first_key.as_str())
-        .expect("protocol cache settings must remain");
-    assert_eq!(
-        protocol_settings.prompt_cache,
-        Some(PromptCachePolicy::ProviderDefault)
-    );
-    assert!(protocol_settings.context_limit.is_none());
-    assert!(protocol_settings.output_limit.is_none());
-    assert!(!historical.model_overrides.contains_key(second_key.as_str()));
+fn protocol_execution_overrides_reject_model_limits() {
+    let error = serde_json::from_str::<ModelExecutionOverrides>(r#"{"context_limit":8192}"#)
+        .expect_err("protocol-scoped limits must be rejected");
+    assert!(error.to_string().contains("unknown field"));
 }
 
-/// Verifies user-owned non-text output declarations in a current document are removed on load.
-/// 验证当前文档中用户持有的非文本输出声明会在加载时移除。
+/// Verifies user-owned non-text output declarations in a current document are rejected on load.
+/// 验证当前文档中用户持有的非文本输出声明会在加载时被拒绝。
 #[test]
-fn custom_non_text_output_declarations_are_removed_on_load() {
-    let provider_id = "custom:legacy-output";
-    let model_id = "legacy-image-model";
-    let mut historical = PersistedAiConfiguration::default();
-    historical.custom_provider_model_defaults.insert(
-        String::from(provider_id),
-        CustomProviderModelDefaults {
-            context_limit: 150_000,
-            output_resources: vec![ResourceKind::Image],
-            ..CustomProviderModelDefaults::default()
-        },
-    );
-    historical.custom_models.insert(
+fn custom_non_text_output_declarations_are_rejected_on_load() {
+    let provider_id = "custom:image-output";
+    let model_id = "image-model";
+    let mut with_model = PersistedAiConfiguration::default();
+    with_model.custom_models.insert(
         String::from(provider_id),
         BTreeMap::from([(
             String::from(model_id),
             CustomModelDefinition {
                 id: String::from(model_id),
-                display_name: String::from("Legacy Image Model"),
+                display_name: String::from("Image Model"),
                 enabled: true,
                 capabilities: ModelCapabilities {
                     output_resources: vec![ResourceKind::Image],
@@ -1027,7 +944,10 @@ fn custom_non_text_output_declarations_are_removed_on_load() {
             },
         )]),
     );
-    historical.custom_model_template_decisions.insert(
+    assert!(with_model.validate_current_schema().is_err());
+
+    let mut with_template = PersistedAiConfiguration::default();
+    with_template.custom_model_template_decisions.insert(
         PersistedAiConfiguration::provider_model_key(provider_id, model_id),
         CustomModelTemplateDecision::Applied {
             selection: crate::CustomModelTemplateSelection {
@@ -1041,33 +961,7 @@ fn custom_non_text_output_declarations_are_removed_on_load() {
             },
         },
     );
-
-    assert!(
-        historical
-            .migrate_to_current_schema()
-            .expect("current schema must load")
-    );
-
-    assert!(
-        historical
-            .custom_provider_model_defaults
-            .get(provider_id)
-            .expect("non-default provider settings must remain")
-            .output_resources
-            .is_empty()
-    );
-    assert!(
-        historical.custom_models[provider_id][model_id]
-            .capabilities
-            .output_resources
-            .is_empty()
-    );
-    let decision = &historical.custom_model_template_decisions
-        [&PersistedAiConfiguration::provider_model_key(provider_id, model_id)];
-    let CustomModelTemplateDecision::Applied { selection } = decision else {
-        panic!("applied template decision must remain");
-    };
-    assert!(selection.output_resources.is_empty());
+    assert!(with_template.validate_current_schema().is_err());
 }
 
 /// Verifies custom model availability uses the definition default and persists only deviations.
@@ -1287,7 +1181,6 @@ fn custom_capability_overrides_leave_immutable_source_fields_untouched() {
             output_limit: None,
             input_resources: Some(vec![ResourceKind::Image]),
             structured_output: Some(StructuredOutputCapability::JsonSchema),
-            output_resources: None,
             ..ModelCapabilityOverrides::default()
         },
     );
@@ -1374,41 +1267,7 @@ fn system_provider_capability_contract_is_not_user_overridable() {
         ReasoningControlMode::ProviderAdaptive
     );
     assert_eq!(effective.reasoning_efforts, [ReasoningEffort::Adaptive]);
-    assert!(configuration.normalize_direct_provider_model_settings());
-    assert!(!configuration.model_capability_overrides.contains_key(&key));
-}
-
-/// Verifies legacy protocol limits cannot recreate a forbidden system-model override.
-/// 验证旧协议限额不能重新生成已禁止的系统模型覆盖。
-#[test]
-fn system_provider_protocol_limits_are_discarded_during_normalization() {
-    let mut configuration = PersistedAiConfiguration::default();
-    let protocol_key = PersistedAiConfiguration::provider_model_protocol_key(
-        "minimax",
-        "MiniMax-M2.7",
-        "anthropic-messages.v1",
-    );
-    configuration.model_overrides.insert(
-        protocol_key.clone(),
-        ModelExecutionOverrides {
-            context_limit: Some(128_000),
-            output_limit: Some(16_000),
-            ..ModelExecutionOverrides::default()
-        },
-    );
-    configuration.provider_capability_overrides.insert(
-        String::from("minimax"),
-        ModelCapabilityOverrides {
-            context_limit: Some(128_000),
-            ..ModelCapabilityOverrides::default()
-        },
-    );
-
-    assert!(configuration.normalize_direct_provider_model_settings());
-
-    assert!(!configuration.model_overrides.contains_key(&protocol_key));
-    assert!(configuration.model_capability_overrides.is_empty());
-    assert!(configuration.provider_capability_overrides.is_empty());
+    assert!(configuration.validate_current_schema().is_err());
 }
 
 /// Verifies misspelled capability fields fail instead of appearing to persist successfully.
@@ -1892,7 +1751,7 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
 fn model_overlay_round_trip_is_exact() {
     let mut historical = PersistedAiConfiguration::default();
     historical
-        .migrate_to_current_schema()
+        .validate_current_schema()
         .expect("current schema must load");
     assert!(historical.custom_models.is_empty());
     assert!(historical.model_capability_overrides.is_empty());
@@ -1920,7 +1779,6 @@ fn model_overlay_round_trip_is_exact() {
             context_limit: Some(64_000),
             output_limit: None,
             input_resources: Some(Vec::new()),
-            output_resources: None,
             ..ModelCapabilityOverrides::default()
         },
     );
@@ -2172,8 +2030,8 @@ fn context_window_policy_rejects_invalid_global_ordering() {
     );
 }
 
-/// Verifies every non-current persisted schema generation, older or newer, is rejected without mutation.
-/// 验证任何非当前持久化 Schema 代次（无论更旧或更新）均被拒绝且不会发生变更。
+/// Verifies every non-current persisted schema generation, older or newer, is rejected.
+/// 验证任何非当前持久化 Schema 代次（无论更旧或更新）均被拒绝。
 #[test]
 fn non_current_configuration_schema_is_rejected() {
     for schema_version in [
@@ -2181,16 +2039,13 @@ fn non_current_configuration_schema_is_rejected() {
         PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION - 1,
         PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION + 1,
     ] {
-        let mut configuration = PersistedAiConfiguration {
+        let configuration = PersistedAiConfiguration {
             schema_version,
             ..PersistedAiConfiguration::default()
         };
-        let before = configuration.clone();
 
         configuration
-            .migrate_to_current_schema()
+            .validate_current_schema()
             .expect_err("a non-current version must fail");
-
-        assert_eq!(configuration, before, "schema {schema_version}");
     }
 }

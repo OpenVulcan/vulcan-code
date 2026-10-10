@@ -5211,7 +5211,6 @@ fn responses_provider_request(
         request.output_token_limit,
         [
             selection.model.capabilities.output_limit,
-            selection.overrides.output_limit,
             internal_overrides.and_then(|overrides| overrides.output_limit),
             caller.budget.max_output_tokens_per_request,
         ],
@@ -5916,7 +5915,7 @@ fn rerank_request_with_internal_defaults(
 /// 返回值
 /// The smallest known positive limit.
 /// 返回最小已知正数限制。
-fn narrow_output_limit(requested: Option<u64>, ceilings: [Option<u64>; 4]) -> Option<u64> {
+fn narrow_output_limit(requested: Option<u64>, ceilings: [Option<u64>; 3]) -> Option<u64> {
     ceilings
         .into_iter()
         .flatten()
@@ -8371,15 +8370,15 @@ mod tests {
     #[test]
     fn output_limit_is_narrowed_by_every_trusted_ceiling() {
         assert_eq!(
-            narrow_output_limit(Some(1_000), [Some(850), Some(800), Some(900), Some(700)]),
+            narrow_output_limit(Some(1_000), [Some(850), Some(900), Some(700)]),
             Some(700)
         );
         assert_eq!(
-            narrow_output_limit(None, [Some(650), None, Some(900), Some(700)]),
+            narrow_output_limit(None, [Some(650), Some(900), Some(700)]),
             Some(650)
         );
         assert_eq!(
-            narrow_output_limit(None, [None, None, Some(900), Some(700)]),
+            narrow_output_limit(None, [None, Some(900), Some(700)]),
             Some(700)
         );
     }
