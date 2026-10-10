@@ -27,8 +27,8 @@ use vulcan_tools_manager::{
 use crate::agent_runtime::question_runtime::ToolApprovalPrompt;
 use crate::model::SessionId;
 use crate::tooling::native::{
-    APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID, SHELL_COMMAND_TOOL_ID,
-    TERMINAL_SESSION_TOOL_ID,
+    APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID, FILE_WRITE_TOOL_ID,
+    SHELL_COMMAND_TOOL_ID, TERMINAL_SESSION_TOOL_ID,
 };
 pub use command_rules::HighRiskCategory;
 
@@ -46,7 +46,7 @@ pub const MODE_UNAVAILABLE_DENIAL: &str = "The session permission mode could not
 
 /// `file` tool actions that only read.
 /// 仅读取的 `file` 工具动作。
-const FILE_READ_ACTIONS: &[&str] = &["read", "list", "stat"];
+const FILE_READ_ACTIONS: &[&str] = &["list", "stat"];
 
 /// Host services the permission gate needs from the service kernel.
 /// 权限闸门需要服务内核提供的宿主能力。
@@ -304,7 +304,7 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
                 PermissionSubject::FileWrite { paths }
             }
         }
-        FILE_EDIT_TOOL_ID => match string_arg("path") {
+        FILE_WRITE_TOOL_ID | FILE_EDIT_TOOL_ID => match string_arg("path") {
             Some(path) => PermissionSubject::FileWrite { paths: vec![path] },
             None => PermissionSubject::Opaque,
         },

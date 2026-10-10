@@ -2,10 +2,17 @@
 
 ## 归属与更新条件
 
-本契约描述公开 `file(action="read")` 的输出。权威实现位于
+本契约描述公开 `file_read` 的输出。权威实现位于
 `crates/vulcan-host-tools/src/file_runtime.rs`，适配入口位于
-`crates/vulcan-agent-runtime/src/tooling/native/file.rs`。修改读取输出、行映射或前端读取卡时，
+`crates/vulcan-agent-runtime/src/tooling/native/file_read.rs`。修改读取输出、行映射或前端读取卡时，
 同步更新本文与相应测试。
+
+## 工具边界
+
+- `file_read` 读取；`file_write` 新建或整文件覆盖；`file_edit` 精确局部替换；`apply_patch` 应用补丁。
+- `file` 仅支持 `list/stat/move/delete`；模型目录不再暴露其旧读写动作，执行层也拒绝这些动作及旧多目标参数。
+- 计划模式开放 `file_read` 与 `file` 的列表、属性动作；写入、编辑和补丁不可执行。
+- 所有入口复用既有文件运行时与结果投影；旧会话保留展示兼容，不修改持久化数据。
 
 ## 唯一正文
 
@@ -43,21 +50,21 @@
 
 短传统编码样本即使可解码、可往返且重复检测结果一致，也不能证明其原编码。没有独立检查点收敛证据时，读取仍可返回候选解码，但必须附 `[encoding_unverified]` 和 `encoding_certain=false`。不得自动以该候选编码执行写入、精确编辑或补丁；应显式确认源编码。
 
-`file_edit.encoding` 指定源编码，编辑保留该编码。`file.write.source_encoding` 仅用于已有文件的源解码，`encoding` 独立指定目标编码；省略目标编码时保留已确认的源编码。预检确认的变更前后格式必须直接进入持久回执，不能重新自动检测后覆盖。`apply_patch` 保持现有补丁语法；遇到不确定编码时整批不写入，并提示改用支持显式编码的 `file_edit`。
+`file_edit.encoding` 指定源编码，编辑保留该编码。`file_write.source_encoding` 仅用于已有文件的源解码，`encoding` 独立指定目标编码；省略目标编码时保留已确认的源编码。预检确认的变更前后格式必须直接进入持久回执，不能重新自动检测后覆盖。`apply_patch` 保持现有补丁语法；遇到不确定编码时整批不写入，并提示改用支持显式编码的 `file_edit`。
 
 ### 编码参数对照
 
 | 操作 | 未声明源编码 | 显式源编码 | 写出编码 |
 | --- | --- | --- | --- |
-| `file read` | 自动检测；不确定时返回候选及警告，或拒绝无法识别的文本 | `encoding` | 不写入 |
+| `file_read` | 自动检测；不确定时返回候选及警告，或拒绝无法识别的文本 | `encoding` | 不写入 |
 | `file_edit` | 仅允许证据足够的自动检测结果 | `encoding` | 保持已确认的源编码 |
-| `file write` 修改已有文件 | 仅允许证据足够的自动检测结果 | `source_encoding` | `encoding` 指定目标；省略则保持源编码 |
-| `file write` 新建文件 | 没有源文件 | 不允许 `source_encoding` | `encoding` 指定目标；省略使用默认 UTF-8 |
+| `file_write` 修改已有文件 | 仅允许证据足够的自动检测结果 | `source_encoding` | `encoding` 指定目标；省略则保持源编码 |
+| `file_write` 新建文件 | 没有源文件 | 不允许 `source_encoding` | `encoding` 指定目标；省略使用默认 UTF-8 |
 | `apply_patch` 修改已有文件 | 仅允许证据足够的自动检测结果；不确定时整批拒绝 | 当前补丁语法不提供编码参数，应改用 `file_edit` | 保持源编码 |
 
 `encoding_source` 表示本次解码的证据来源：`utf8_validation` 为严格 UTF-8 校验，`bom` 为字节序标记，`detector` 为编码检测器，`unicode_pattern` 为无 BOM Unicode 字节模式，`explicit` 为调用方显式选择。`encoding_certain` 表示当前证据是否允许自动写回，不是概率，也不证明调用方选择的编码就是文件历史上的原始编码。显式源编码仍须通过字节及 BOM 兼容性校验。
 
-两种写入工具共用源编码检查。比较防护行为时，应比较 `file_edit.encoding` 与 `file.write.source_encoding`，不能把显式确认源编码的编辑和未确认源编码的整文件写入当作相同输入。
+两种写入工具共用源编码检查。比较防护行为时，应比较 `file_edit.encoding` 与 `file_write.source_encoding`，不能把显式确认源编码的编辑和未确认源编码的整文件写入当作相同输入。
 
 无 BOM UTF-16/32 只有在字节模式提供充分证据时自动识别；中文短样本不能保证自动判断端序。二进制拒绝信息提供显式编码线索，真正二进制仍禁止当作文本修改。`retryable=false` 表示原参数不得自动重试，不禁止确认编码后发出新请求。
 
@@ -65,7 +72,7 @@
 
 ## 边界与历史兼容
 
-- 请求参数保持兼容。未指定 `end_line` 时，默认最多读取 `DEFAULT_READ_LINES`（当前 400 行），序列化预算为 `DEFAULT_READ_RESPONSE_BYTES`（当前 64 KiB）。
+- 新调用使用 `file_read`，参数不含 `action`；旧会话仍可展示。未指定 `end_line` 时，默认最多读取 `DEFAULT_READ_LINES`（当前 400 行），序列化预算为 `DEFAULT_READ_RESPONSE_BYTES`（当前 64 KiB）。
 - 显式指定结束行时，仍受 `MAX_READ_LINES`（当前 10000 行）与 `MAX_READ_RESPONSE_BYTES`（当前 2 MiB）硬上限约束。各常量在 `file_runtime.rs` 唯一定义，工具帮助直接引用。
 - 大小预算按 `FileToolResponse` 经 `serde_json::to_vec` 序列化后的 UTF-8 字节数计算，包含唯一 Markdown 正文、元数据、字段名和 JSON 转义开销。正文中的 `Lnn: ` 行号、围栏、标题及续读提示都计入；不是源文件字节数，也不是仅计算渲染后的正文。默认预算为 64 × 1024 字节，不包含之后其他层追加的外部消息信封。截断后使用 `next_start_line` 续读，不能重漏源行。
 - 仅截取完整源文件行；单行无法放入预算时显式失败，避免返回无法推进的续读位置。
@@ -83,7 +90,7 @@
 - 创建、删除和文本修改回执只报告路径、动作、实际变更集的增删行数；精确替换另报告替换次数。正文仍只保存于原有变更集，不复制到模型回执。
 - 差异裁剪比较完整逻辑行及其终止符。仅增加或删除末尾换行时，保留最后一行的替换 hunk，变更前后 `final_newline` 记录实际差别；不能裁成空 hunk，也不能把真实字节变化误报为 `no_change`。
 - 公开错误诊断统一展开到单层：`code`、`message`、`hint`、`requires_read`、`retryable` 与动作相关诊断并列；不再嵌套 `details.details`，也不输出重复的 `requires_reread`、`recovery_hint`。
-- `no_change` 提示采用真实参数名：`file` 使用 `content`，`file_edit` 使用 `new_string`。
+- `no_change` 提示采用真实参数名：`file_write` 使用 `content`，`file_edit` 使用 `new_string`。
 - `path_not_found` 的 `requires_read` 为假；应先列出存在的父目录寻找路径。源与目标相同的移动返回 `same_path`。
 - 精确替换的 `ambiguous_match` 返回 `match_count`（全部匹配数）、`candidate_count`（实际返回候选数）、`candidate_ranges`（一基 `start_line` 与 `line_count`）与 `candidates_truncated`；候选上限唯一来源是 `text_document::MAX_ERROR_CANDIDATE_RANGES`。
 - 回滚失败报告 `commit_scope=unknown`、`rollback_state=failed`；执行状态不明不能宣称没有副作用。
@@ -98,7 +105,7 @@
 | `path_not_found` | 操作需要的源路径不存在 | 检查路径或列出现存父目录；不要重读不存在的路径 |
 | `unsupported_file_type` | 当前操作不支持目录、链接或其他目标类型 | 用 `stat` 确认类型；目录发现使用 `list` |
 | `unsupported_encoding` | 编码名称不支持、源字节不满足声明编码或声明与 BOM 冲突 | 根据编码证据修正声明；不要仅更换标签掩盖错误 |
-| `encoding_ambiguous` | 修改所需源编码尚未确认 | 先确认源编码，再使用 `file_edit.encoding` 或 `file.write.source_encoding` |
+| `encoding_ambiguous` | 修改所需源编码尚未确认 | 先确认源编码，再使用 `file_edit.encoding` 或 `file_write.source_encoding` |
 | `binary_file` | 自动读取或文本修改识别到二进制特征 | 已知是无 BOM 文本时显式声明源编码；真正二进制不得按文本修改 |
 | `no_change` | 请求没有产生实际字节变化 | 跳过操作；确需修改时提供不同内容 |
 | `ambiguous_match` | 单次精确替换命中多处 | 检查候选行范围，增加唯一上下文；确需全部替换才指定 `replace_all` |

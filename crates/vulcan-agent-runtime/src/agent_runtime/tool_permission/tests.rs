@@ -3,6 +3,7 @@
 
 use super::command_rules::{high_risk_category, is_known_read_only};
 use super::*;
+use crate::tooling::native::FILE_READ_TOOL_ID;
 use serde_json::json;
 use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolDescriptor, VulcanToolInvocationResult, VulcanToolOrigin,
@@ -263,11 +264,24 @@ fn ordinary_commands_are_not_high_risk() {
 #[test]
 fn native_tools_are_classified_by_effect() {
     assert_eq!(
+        classify_tool_call(&native(FILE_READ_TOOL_ID), &json!({"path": "a"})),
+        PermissionSubject::Ungoverned
+    );
+    assert_eq!(
         classify_tool_call(
             &native(FILE_TOOL_ID),
-            &json!({"action": "read", "path": "a"})
+            &json!({"action": "stat", "path": "a"})
         ),
         PermissionSubject::Ungoverned
+    );
+    assert_eq!(
+        classify_tool_call(
+            &native(FILE_WRITE_TOOL_ID),
+            &json!({"path": "src/x.rs", "content": ""})
+        ),
+        PermissionSubject::FileWrite {
+            paths: vec![String::from("src/x.rs")]
+        }
     );
     assert_eq!(
         classify_tool_call(

@@ -124,7 +124,7 @@ export function FileAccessPresentationCard(props: {
         <FileAccessOperationIcon action={hydratedPresentation.action} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="tool-presentation-command">
-          <span className="file-access-target"><span className="file-operation-label">{title}</span>
+          <span className="file-access-target"><span className={cn("file-operation-label", hydratedPresentation.state === "running" && "shimmer")}>{title}</span>
             {hydratedPresentation.action === "read" && hydratedPresentation.items.length === 1 ? <FileTypeIcon icon={hydratedPresentation.items[0].icon} /> : null}
             <span className="tool-presentation-command-text">{targetLabel ? ` · ${targetLabel}` : ""}</span></span>
         </span>

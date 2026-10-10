@@ -236,84 +236,123 @@ fn implicit_luaskills_dispatch_uses_canonical_name() {
 /// 验证被选中的原生文件工具会优先于同名 Provider 候选，保持稳定公开名称。
 #[test]
 fn native_file_public_ids_are_reserved_and_deduplicated() {
-    let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
-        active_model: None,
-        active_agent_id: String::from("agent-a"),
-        agents: Vec::new(),
-        skills: Vec::new(),
-        tool_policies: Default::default(),
-        configured_mcp_server_ids: Vec::new(),
-        enabled_mcp_server_ids: Vec::new(),
-    };
-    let native_catalog = build_native_tool_catalog(
-        &runtime_config,
-        None,
-        Arc::new(crate::tooling::CommandSessionRuntime::new()),
-        VmmConfigLayer::default(),
-        None,
-        None,
-    );
-    let provider_candidate = VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor::new(
-            String::from("file"),
-            String::from("file"),
-            String::from("Provider file tool."),
+    for tool_id in [
+        "file",
+        "file_read",
+        "file_write",
+        "file_edit",
+        "apply_patch",
+    ] {
+        let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+            active_model: None,
+            active_agent_id: String::from("agent-a"),
+            agents: Vec::new(),
+            skills: Vec::new(),
+            tool_policies: Default::default(),
+            configured_mcp_server_ids: Vec::new(),
+            enabled_mcp_server_ids: Vec::new(),
+        };
+        let native_catalog = build_native_tool_catalog(
+            &runtime_config,
             None,
-            VulcanToolOrigin::new(
-                VulcanToolSourceKind::AiHostBinding,
-                "test",
-                String::from("file"),
+            Arc::new(crate::tooling::CommandSessionRuntime::new()),
+            VmmConfigLayer::default(),
+            None,
+            None,
+        );
+        let provider_candidate = VulcanToolCandidate {
+            descriptor: VulcanToolDescriptor::new(
+                String::from(tool_id),
+                String::from(tool_id),
+                String::from("Provider file tool."),
+                None,
+                VulcanToolOrigin::new(
+                    VulcanToolSourceKind::AiHostBinding,
+                    "test",
+                    String::from(tool_id),
+                ),
             ),
-        ),
-        parameters_schema: json!({"type": "object"}),
-        ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::Visible,
-        request_streaming: None,
-        invoke: Arc::new(|_, _| {
-            Box::pin(async {
-                Ok(VulcanToolInvocationResult::from_model_output(json!(
-                    "provider"
-                )))
-            })
-        }),
-    };
-    let manager = build_vulcan_tools_manager(
-        Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
-        Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
-        native_catalog,
-        None,
-        Vec::new(),
-        vec![provider_candidate],
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        vec![String::from("file"), String::from("file")],
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        None,
-        Vec::new(),
-        VmmConfigLayer::default(),
-        VmmConfigLayer::default(),
-        false,
-        None,
-        None,
-    );
+            parameters_schema: json!({"type": "object"}),
+            ai_visible: true,
+            plan_policy: VulcanPlanToolPolicy::Visible,
+            request_streaming: None,
+            invoke: Arc::new(|_, _| {
+                Box::pin(async {
+                    Ok(VulcanToolInvocationResult::from_model_output(json!(
+                        "provider"
+                    )))
+                })
+            }),
+        };
+        let manager = build_vulcan_tools_manager(
+            Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+            Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+            native_catalog,
+            None,
+            Vec::new(),
+            vec![provider_candidate],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            vec![String::from(tool_id), String::from(tool_id)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Vec::new(),
+            VmmConfigLayer::default(),
+            VmmConfigLayer::default(),
+            false,
+            None,
+            None,
+        );
 
-    let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
-    let file_tools = resolved
-        .descriptors
-        .iter()
-        .filter(|descriptor| descriptor.id == "file")
-        .collect::<Vec<_>>();
-    assert_eq!(file_tools.len(), 1);
-    assert_eq!(file_tools[0].source, VulcanToolSourceKind::Native);
+        let resolved: ResolvedToolSet = manager.resolve_for_execution_mode("Build");
+        let file_tools = resolved
+            .descriptors
+            .iter()
+            .filter(|descriptor| descriptor.id == tool_id)
+            .collect::<Vec<_>>();
+        assert_eq!(file_tools.len(), 1);
+        assert_eq!(file_tools[0].source, VulcanToolSourceKind::Native);
+        // Inspect the same schemas and execution restrictions handed to provider request construction.
+        // 检查交给供应商请求构建的同一结构及执行限制。
+        let plan = manager.resolve_for_execution_mode("Plan");
+        let definition = plan
+            .definitions
+            .iter()
+            .find(|definition| definition.descriptor.id == tool_id)
+            .expect("registered file tool");
+        match tool_id {
+            "file_read" => {
+                assert!(matches!(
+                    definition.plan_policy,
+                    VulcanPlanToolPolicy::Visible
+                ));
+                assert_eq!(definition.parameters_schema["required"], json!(["path"]));
+                assert!(
+                    definition.parameters_schema["properties"]
+                        .get("action")
+                        .is_none()
+                );
+            }
+            "file_write" | "file_edit" | "apply_patch" => assert!(matches!(
+                definition.plan_policy,
+                VulcanPlanToolPolicy::Hidden
+            )),
+            "file" => assert_eq!(
+                definition.parameters_schema["properties"]["action"]["enum"],
+                json!(["list", "stat", "delete", "move"])
+            ),
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// Verifies the canonical VCE public id cannot be replaced by a provider tool collision.

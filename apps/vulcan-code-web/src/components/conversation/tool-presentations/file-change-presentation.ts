@@ -25,7 +25,7 @@ function buildPersistentChangeSetPresentation(blocks: ToolExecutionConversationB
   const nativeId = exactNativeToolId(blocks);
   // source follows the same exact native-tool branches as the legacy host adapter.
   // source 遵循旧宿主适配器相同的精确原生工具分支。
-  const source = nativeId === "file_edit" ? "native_file_edit" : nativeId === "apply_patch" ? "native_apply_patch" : nativeId === "file" ? "native_file_mutation" : "host_change_set";
+  const source = nativeId === "file_edit" ? "native_file_edit" : nativeId === "apply_patch" ? "native_apply_patch" : nativeId === "file" || nativeId === "file_write" ? "native_file_mutation" : "host_change_set";
   // prefix retains the established per-call expansion identity.
   // prefix 保留既有按调用划分的展开身份。
   const prefix = source === "native_file_edit" ? "native-file-edit" : source === "native_apply_patch" ? "native-apply-patch" : source === "native_file_mutation" ? "native-file-mutation" : "change-set";
@@ -99,7 +99,16 @@ export function resolveFileChangePresentation(
   // Resolve file facts first; attach only the exact producer error code, never infer it from prose.
   // 先解析文件事实；仅附加产出方的精确错误码，不从描述文本推测。
   const presentation = resolveFileChangeContent(blocks, displayState, options, detailRef);
-  if (!presentation || displayState !== "failed") return presentation;
+  if (!presentation) return null;
+  // Tool identity owns the visible verb; a modify changeset does not imply a localized edit.
+  // 工具身份决定显示动作；修改变更集不意味着执行了局部编辑。
+  const nativeId = exactNativeToolId(blocks);
+  if (nativeId === "file_write" || (nativeId === "file" && (
+    nativeFileMutationOperation(blocks) === "modify" || options.requestPreview?.kind === "file_write"
+  ))) presentation.executionAction = "write";
+  else if (nativeId === "file_edit") presentation.executionAction = "modify";
+  else if (nativeId === "apply_patch") presentation.executionAction = "patch";
+  if (displayState !== "failed") return presentation;
   // V1 retains the original envelope even when its changeset shadows legacy host metadata.
   // 即使变更集覆盖旧式宿主元数据，V1 仍保留原始输出信封。
   const event = fixedV1ToolEvent(blocks);
@@ -126,29 +135,42 @@ function resolveFileChangeContent(
     return buildPersistentChangeSetPresentation(blocks, displayState, canonicalEvent.changeset, options, detailRef);
   }
   const nativeToolId = exactNativeToolId(blocks);
-  if (nativeToolId === "file") {
+  if (nativeToolId === "file" || nativeToolId === "file_write") {
     // Whole-file writes expose counts without copying incomplete JSON into execution arguments.
     // 整文件写入暴露计数，不把不完整 JSON 复制为执行参数。
-    if (displayState === "running" && options.requestPreview?.kind === "file_write") {
-      const path = metadataString(options.requestPreview, ["title_fields.path"]);
-      const lines = numberValue(metadataValue(options.requestPreview, ["progress_fields.new_line_count"]));
-      if (lines !== null && Number.isSafeInteger(lines) && lines >= 0) {
-        // A trailing path enriches the existing preview; counts never require an invented filename.
-        // 末尾到达的路径补充已有预览；计数绝不依赖虚构文件名。
-        const files = path ? [buildFilePresentation({
-          blocks, options, path, added: lines, removed: null, index: 0,
-          operation: "modify", rows: [], expandable: false, resourceId: null,
-          stableId: path, idOperation: "file", operationIds: [], previousPath: null, readOnly: false,
-        })] : [];
-        return {
-          ...buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef),
-          files, totalAdded: lines, totalRemoved: null, mode: "preview",
-        };
-      }
+    if (displayState === "running" && (nativeToolId === "file_write" ||
+      options.requestPreview?.kind === "file_write" || nativeFileMutationOperation(blocks) === "modify")) {
+      // Streamed metadata and assembled arguments are explicit lifecycle alternatives.
+      // 流式元数据与已组装参数是生命周期中明确的两种来源。
+      const preview = options.requestPreview?.kind === "file_write" ? options.requestPreview : null;
+      // Completed arguments supply the exact path/content only after their assembly boundary.
+      // 完整参数仅在组装边界后提供精确路径及正文。
+      const args = blocks.map(block => objectValue(argumentsFromMetadata(block.rawMetadata))).find(value => value !== null);
+      // Missing path/content is normal before assembly; only declared preview fields can fill them.
+      // 组装前缺少路径及正文属于正常状态；仅声明的预览字段可以提供这些值。
+      const path = preview ? metadataString(preview, ["title_fields.path"]) : stringValue(args?.path);
+      // Preserve empty and whitespace-only strings so generated counts match actual text.
+      // 保留空字符串及纯空白正文，使生成计数匹配实际文本。
+      const content = textValue(args?.content);
+      // Preview counters are exact; complete arguments are counted only after assembly.
+      // 预览计数是精确值；仅在组装完成后计数完整参数。
+      const lines = preview ? numberValue(metadataValue(preview, ["progress_fields.new_line_count"])) : content === null ? null : fileWriteLineCount(content);
+      // A trailing path enriches the existing preview; counts never require an invented filename.
+      // 末尾到达的路径补充已有预览；计数绝不依赖虚构文件名。
+      const files = path ? [buildFilePresentation({
+        blocks, options, path, added: null, removed: null, index: 0,
+        operation: "modify", rows: [], expandable: false, resourceId: null,
+        stableId: path, idOperation: nativeToolId, operationIds: [], previousPath: null, readOnly: false,
+      })] : [];
+      return {
+        ...buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef),
+        files, totalAdded: null, totalRemoved: null, mode: "preview",
+        generatedLineCount: lines !== null && Number.isSafeInteger(lines) && lines >= 0 ? lines : undefined,
+      };
     }
     // Read-only actions belong exclusively to FileAccessPresentation and must never fall through to "Not edited".
     // 只读动作仅属于 FileAccessPresentation，绝不能继续落入“未编辑”兜底。
-    if (nativeFileAccessAction(blocks)) {
+    if (nativeToolId === "file" && nativeFileAccessAction(blocks)) {
       return null;
     }
     const hostPayload = displayState !== "running" ? lastChangeSetPayload(blocks) : null;
@@ -162,7 +184,7 @@ function resolveFileChangeContent(
         detailRef,
       );
     }
-    const mutationOperation = nativeFileMutationOperation(blocks);
+    const mutationOperation = nativeToolId === "file_write" ? "modify" : nativeFileMutationOperation(blocks);
     return mutationOperation
       ? buildNativeVulcanFilePresentation(
         blocks,
@@ -171,7 +193,7 @@ function resolveFileChangeContent(
         options,
         "native_file_mutation",
         detailRef,
-      )
+      ) ?? buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef)
       : buildNoEffectiveChangePresentation(blocks, displayState, "native_file_mutation", options, detailRef);
   }
   if (nativeToolId === "file_edit") {
@@ -260,6 +282,14 @@ function resolveFileChangeContent(
   return buildNativeVulcanFilePresentation(blocks, displayState, nativeOperation, options, "native_vulcan_file", detailRef);
 }
 
+/** Counts logical lines in complete write content, including an empty line terminated by CR/LF.
+ * 统计完整写入正文的逻辑行数，包括以 CR/LF 终止的空行。
+ * Parameter content is decoded text; returns the same count as the streaming write parser.
+ * 参数 content 是解码正文；返回与流式写入解析器一致的行数。 */
+function fileWriteLineCount(content: string): number {
+  return content.length === 0 ? 0 : content.split(/\r\n|\n\r|\r|\n/).length - Number(/[\r\n]$/.test(content));
+}
+
 // resolveFileAccessPresentation recognizes only read-only actions from the exact native file contract.
 // resolveFileAccessPresentation 仅识别精确原生 file 契约中的只读动作。
 // Parameters: blocks contain the invocation/result records, displayState is authoritative lifecycle state,
@@ -274,7 +304,7 @@ export function resolveFileAccessPresentation(
   options: ToolPresentationResolveOptions,
   detailRef?: ConversationDetailRef,
 ): FileAccessPresentation | null {
-  if (exactNativeToolId(blocks) !== "file") {
+  if (exactNativeToolId(blocks) !== "file" && exactNativeToolId(blocks) !== "file_read") {
     return null;
   }
   const action = nativeFileAccessAction(blocks);
@@ -498,7 +528,7 @@ function buildNativeFileAccessPresentation(
   const modelResult = v1ModelResult(fixedV1ToolEvent(blocks)?.output);
   const markdownBody = displayState !== "running" && typeof modelResult === "string"
     ? modelResult : output && isNumberedFileRead(output.metadata.schema) && output.body ? output.body : undefined;
-  if (!targets.length) {
+  if (!targets.length && exactNativeToolId(blocks) !== "file_read") {
     return null;
   }
   const items = targets.map((target, index) => {
@@ -871,6 +901,7 @@ function exactNativeToolId(blocks: ToolExecutionConversationBlock[]): string | n
 // nativeFileAccessAction reads the action selected by the exact native file contract.
 // nativeFileAccessAction 读取原生 file 契约中明确选择的动作。
 function nativeFileAccessAction(blocks: ToolExecutionConversationBlock[]): FileAccessAction | null {
+  if (exactNativeToolId(blocks) === "file_read") return "read";
   for (const block of blocks) {
     const action = stringValue(objectValue(argumentsFromMetadata(block.rawMetadata))?.action);
     if (action === "read" || action === "list" || action === "search" || action === "stat") {

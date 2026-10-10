@@ -222,7 +222,9 @@ mod apply_patch;
 mod codebase_retrieval;
 mod file;
 mod file_edit;
+mod file_read;
 mod file_result;
+mod file_write;
 mod knowledge_base;
 mod prompt_skill;
 mod registry;
@@ -231,6 +233,8 @@ pub(crate) use apply_patch::*;
 pub(crate) use codebase_retrieval::*;
 pub(crate) use file::*;
 pub(crate) use file_edit::*;
+pub(crate) use file_read::*;
+pub(crate) use file_write::*;
 pub(crate) use knowledge_base::*;
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
@@ -509,6 +513,8 @@ pub fn build_native_tool_catalog(
         build_vmm_memory_write_tool(snapshot.clone()),
         build_vmm_memory_delete_tool(snapshot),
         build_file_tool(),
+        build_file_read_tool(),
+        build_file_write_tool(),
         build_file_edit_tool(),
         build_apply_patch_tool(),
         build_browser_list_tool(),

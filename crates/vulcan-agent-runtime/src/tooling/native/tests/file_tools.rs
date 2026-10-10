@@ -1,6 +1,7 @@
 use crate::tooling::native::{
-    APPLY_PATCH_LANGUAGE_NAME, APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID,
-    build_apply_patch_tool, build_file_edit_tool, build_file_tool,
+    APPLY_PATCH_LANGUAGE_NAME, APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_READ_TOOL_ID,
+    FILE_TOOL_ID, FILE_WRITE_TOOL_ID, build_apply_patch_tool, build_file_edit_tool,
+    build_file_read_tool, build_file_tool, build_file_write_tool,
 };
 use serde_json::json;
 use vulcan_change_set::{
@@ -13,6 +14,120 @@ use vulcan_tools_manager::{
 
 use super::test_native_request_with_workspace;
 
+/// Rejects cross-tool fields and legacy action entry points before any file can change.
+/// 在任何文件发生变化前拒绝跨工具字段及旧动作入口。
+/// Takes no arguments; verifies structured errors and unchanged bytes through real native adapters.
+/// 无参数；通过真实原生适配器验证结构化错误及不变的文件字节。
+#[tokio::test]
+async fn native_file_tools_reject_cross_operation_requests() {
+    // Isolate attempted writes and assert that even malformed requests cannot alter the fixture.
+    // 隔离尝试写入并断言畸形请求也不能改变夹具。
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("existing.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    for (tool, arguments) in [
+        (
+            build_file_tool(),
+            json!({"action":"write","path":"existing.txt","content":"changed"}),
+        ),
+        (
+            build_file_tool(),
+            json!({"action":"read","path":"existing.txt"}),
+        ),
+        (
+            build_file_tool(),
+            json!({"action":"stat","path":"existing.txt","content":"changed"}),
+        ),
+        (
+            build_file_read_tool(),
+            json!({"action":"write","path":"existing.txt","content":"changed"}),
+        ),
+        (
+            build_file_read_tool(),
+            json!({"path":"existing.txt","content":"changed"}),
+        ),
+        (
+            build_file_read_tool(),
+            json!({"targets":[{"path":"existing.txt"}]}),
+        ),
+        (
+            build_file_write_tool(),
+            json!({"action":"read","path":"existing.txt","content":"changed"}),
+        ),
+        (
+            build_file_write_tool(),
+            json!({"path":"existing.txt","start_line":1,"content":"changed"}),
+        ),
+        (build_file_write_tool(), json!({"path":"existing.txt"})),
+        (build_file_write_tool(), json!(null)),
+    ] {
+        // Public failures must use the established file diagnostic envelope.
+        // 公开失败必须使用既有文件诊断信封。
+        let result = tool
+            .invoke(test_native_request_with_workspace(
+                arguments,
+                workspace.path().to_path_buf(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.model_output["details"]["code"], "invalid_arguments",
+            "{}",
+            tool.descriptor.id
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
+    }
+}
+
+/// Verifies action-free writes and reads preserve truncation and line-range semantics.
+/// 验证无动作字段的写入与读取保留清空文件及行范围语义。
+/// No parameters or return value; exercises actual disk contents and projected read metadata.
+/// 无参数或返回值；验证真实磁盘内容及投影读取元数据。
+#[tokio::test]
+async fn native_file_read_write_support_ranges_and_empty_content() {
+    // Each test owns its workspace and cannot affect user files.
+    // 每个测试拥有自身工作区，不会影响用户文件。
+    let workspace = tempfile::tempdir().unwrap();
+    let write = build_file_write_tool();
+    for content in ["first\nsecond\nthird\n", ""] {
+        // Reuse the same path to cover both creation and complete truncation.
+        // 复用相同路径以覆盖创建及完整清空。
+        let result = write
+            .invoke(test_native_request_with_workspace(
+                json!({"path":"sample.txt","content":content}),
+                workspace.path().to_path_buf(),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            result
+                .model_output
+                .as_str()
+                .unwrap()
+                .starts_with("# File changes applied")
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("sample.txt")).unwrap(),
+            content
+        );
+        let read = build_file_read_tool()
+            .invoke(test_native_request_with_workspace(
+                json!({"path":"sample.txt","start_line":2,"end_line":2}),
+                workspace.path().to_path_buf(),
+            ))
+            .await
+            .unwrap();
+        let metadata = read.host_result.unwrap().payload;
+        if content.is_empty() {
+            assert_eq!(metadata["read_status"], "empty_file");
+        } else {
+            assert_eq!(metadata["range"]["source_start_line"], 2);
+            assert!(read.model_output.as_str().unwrap().contains("L2: second"));
+            assert!(!read.model_output.as_str().unwrap().contains("L1: first"));
+        }
+    }
+}
+
 /// Verifies explicit source codecs are model-visible and survive native execution plus durable projection.
 /// 验证显式源编码对模型可见，并贯通原生执行及持久投影。
 /// No parameters or return value; also covers a pure final-newline edit through the registered adapter.
@@ -22,7 +137,7 @@ async fn native_file_encoding_and_newline_recovery_is_exposed() {
     // The registered definitions are the same schemas exposed to model request construction.
     // 已注册定义就是模型请求构建所暴露的同一份 Schema。
     let edit = build_file_edit_tool();
-    let file = build_file_tool();
+    let file = build_file_write_tool();
     assert_eq!(edit.args_schema["properties"]["encoding"]["type"], "string");
     assert_eq!(
         file.args_schema["properties"]["source_encoding"]["type"],
@@ -71,7 +186,7 @@ async fn native_file_encoding_and_newline_recovery_is_exposed() {
     let converted = file
         .invoke(test_native_request_with_workspace(
             json!({
-                "action":"write", "path":"encoded.txt", "content":"中文\n",
+                "path":"encoded.txt", "content":"中文\n",
                 "source_encoding":"utf-16be", "encoding":"utf-8",
             }),
             directory.path().to_path_buf(),
@@ -128,8 +243,8 @@ async fn native_file_mutations_keep_review_structure_and_compact_receipts() {
     let directory = tempfile::tempdir().expect("temporary workspace");
     let cases = [
         (
-            build_file_tool(),
-            json!({"action": "write", "path": "edit.txt", "content": "first-unique-source\n"}),
+            build_file_write_tool(),
+            json!({ "path": "edit.txt", "content": "first-unique-source\n"}),
             Some("+1 / -0 lines"),
         ),
         (
@@ -153,8 +268,8 @@ async fn native_file_mutations_keep_review_structure_and_compact_receipts() {
             Some("+0 / -1 lines"),
         ),
         (
-            build_file_tool(),
-            json!({"action": "write", "path": "edit.txt", "content": "second-unique-source\nadded\n"}),
+            build_file_write_tool(),
+            json!({ "path": "edit.txt", "content": "second-unique-source\nadded\n"}),
             Some("+1 / -0 lines"),
         ),
     ];
@@ -210,8 +325,8 @@ async fn native_file_read_persists_one_markdown_body() {
     let marker = "unique-file-read-source-7319";
     std::fs::write(directory.path().join("sample.txt"), format!("{marker}\n"))
         .expect("write source fixture");
-    let arguments = json!({"action": "read", "path": "sample.txt"});
-    let result = build_file_tool()
+    let arguments = json!({"path": "sample.txt"});
+    let result = build_file_read_tool()
         .invoke(test_native_request_with_workspace(
             arguments.clone(),
             directory.path().to_path_buf(),
@@ -221,7 +336,7 @@ async fn native_file_read_persists_one_markdown_body() {
     let request = vulcan_core::types::ToolInvocationRequest {
         request_stream_id: String::from("read-stream"),
         tool_call_id: String::from("read-call"),
-        tool_name: String::from("file"),
+        tool_name: String::from(FILE_READ_TOOL_ID),
         arguments,
         argument_parse_error: None,
         raw_arguments: Default::default(),
@@ -247,19 +362,19 @@ async fn native_file_read_persists_one_markdown_body() {
     );
 }
 
-/// Verifies the three public native file tools expose the frozen minimal contracts.
-/// 验证三个公开原生文件工具暴露冻结的最小契约。
+/// Verifies the five public native file tools expose the frozen minimal contracts.
+/// 验证五个公开原生文件工具暴露冻结的最小契约。
 #[test]
 fn native_file_tools_expose_contracts() {
     let file = build_file_tool();
     assert_eq!(file.descriptor.id, FILE_TOOL_ID);
     assert!(file.descriptor.ai_visible);
     assert!(file.descriptor.available_in_plan);
-    assert!(file.request_streaming.is_some());
+    assert!(file.request_streaming.is_none());
     assert_eq!(file.args_schema["additionalProperties"], json!(false));
     assert_eq!(
         file.args_schema["properties"]["action"]["enum"],
-        json!(["read", "list", "stat", "write", "delete", "move"])
+        json!(["list", "stat", "delete", "move"])
     );
     assert_eq!(file.args_schema["required"], json!(["action", "path"]));
     assert!(file.args_schema["properties"].get("targets").is_none());
@@ -272,19 +387,33 @@ fn native_file_tools_expose_contracts() {
         file.args_schema["properties"]["limit"]["default"],
         json!(200)
     );
+    assert!(file.args_schema["properties"].get("content").is_none());
+    assert!(file.args_schema["properties"].get("start_line").is_none());
+    // Dedicated schemas carry only their own operation and visibility contract.
+    // 独立结构仅承载自身操作及可见性契约。
+    let read = build_file_read_tool();
+    let write = build_file_write_tool();
+    assert_eq!(read.descriptor.id, FILE_READ_TOOL_ID);
+    assert_eq!(write.descriptor.id, FILE_WRITE_TOOL_ID);
+    assert!(read.descriptor.ai_visible && read.descriptor.available_in_plan);
+    assert!(write.descriptor.ai_visible && !write.descriptor.available_in_plan);
+    assert!(read.request_streaming.is_none());
+    assert!(write.request_streaming.is_some());
+    assert_eq!(read.args_schema["required"], json!(["path"]));
+    assert_eq!(write.args_schema["required"], json!(["path", "content"]));
+    for tool in [&read, &write] {
+        assert_eq!(tool.args_schema["additionalProperties"], false);
+        assert!(tool.args_schema["properties"].get("action").is_none());
+    }
+    assert!(read.args_schema["properties"].get("content").is_none());
+    assert!(write.args_schema["properties"].get("start_line").is_none());
     assert_eq!(
-        file.args_schema["properties"]["bom"]["default"],
-        json!("preserve")
+        write.args_schema["properties"]["bom"]["default"],
+        "preserve"
     );
     assert_eq!(
-        file.args_schema["properties"]["line_ending"]["default"],
-        json!("preserve")
-    );
-    assert!(
-        file.args_schema["properties"]["content"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Required for write")
+        write.args_schema["properties"]["line_ending"]["default"],
+        "preserve"
     );
     assert!(
         file.args_schema["properties"]["destination"]["description"]
@@ -380,13 +509,12 @@ async fn file_changeset_v1_native_create_round_trips_through_persistent_contract
     let workspace = tempfile::tempdir().expect("create isolated file tool workspace");
     // file invokes the same public native tool descriptor used by Provider execution.
     // file 调用 Provider 执行使用的同一公开原生工具描述符。
-    let file = build_file_tool();
+    let file = build_file_write_tool();
     // result retains the exact structured host result emitted after the file is committed.
     // result 保留文件提交后发出的精确结构化宿主结果。
     let result = file
         .invoke(test_native_request_with_workspace(
             json!({
-                "action": "write",
                 "path": "created.txt",
                 "content": "第一行\nsecond line\n"
             }),
@@ -465,10 +593,7 @@ async fn native_file_errors_share_flat_diagnostics_after_projection() {
     // 缺失目标覆盖各适配器，且不修改文件系统。
     let directory = tempfile::tempdir().expect("workspace");
     for (tool, arguments) in [
-        (
-            build_file_tool(),
-            json!({"action":"read", "path":"missing.txt"}),
-        ),
+        (build_file_read_tool(), json!({ "path":"missing.txt"})),
         (
             build_file_edit_tool(),
             json!({"path":"missing.txt", "old_string":"old", "new_string":"new"}),
@@ -561,10 +686,10 @@ async fn native_file_edit_path_only_uses_the_public_contract() {
 /// 验证公开 file 缺少路径时会报告当前契约，而不是隐藏的 targets 数组。
 #[tokio::test]
 async fn native_file_missing_path_uses_the_public_contract() {
-    let file = build_file_tool();
+    let file = build_file_read_tool();
     let result = file
         .invoke(test_native_request_with_workspace(
-            json!({"action": "read"}),
+            json!({}),
             std::env::current_dir().expect("current workspace"),
         ))
         .await
@@ -910,7 +1035,7 @@ fn apply_patch_stream_preview_is_bounded_and_marks_truncation() {
 fn file_write_request_preview_counts_partial_content_and_field_order() {
     // Registered capability must be reachable through the actual native tool definition.
     // 注册能力必须能通过实际原生工具定义访问。
-    let tool = build_file_tool();
+    let tool = build_file_write_tool();
     let factory = tool
         .request_streaming
         .as_ref()
@@ -920,9 +1045,8 @@ fn file_write_request_preview_counts_partial_content_and_field_order() {
         .unwrap();
     let mut parser = factory.create(ToolRequestParserContext {
         request_stream_id: "write-preview".into(),
-        tool_name: FILE_TOOL_ID.into(),
+        tool_name: FILE_WRITE_TOOL_ID.into(),
     });
-    push_string(&mut *parser, "action", "write");
     push_string(&mut *parser, "path", "example.html");
     // Mixed logical endings are deliberately split across decoded fragments.
     // 混合逻辑换行被刻意拆到不同解码碎片。
@@ -945,27 +1069,29 @@ fn file_write_request_preview_counts_partial_content_and_field_order() {
     }
     parser.abort();
     assert!(parser.snapshot().is_none());
-    // Content may precede action/path, but must never appear as a read preview.
-    // 正文可以早于动作及路径，但绝不能作为读取预览出现。
+    // Content-first writes expose counts immediately without a filename or an action field.
+    // 正文先到的写入立即展示计数，无需文件名或动作字段。
     push_string_fragments(&mut *parser, "content", "a\r\nb\n\rc");
+    let content_first = parser.snapshot().unwrap();
+    assert_eq!(content_first.progress_fields["new_line_count"], json!(3));
+    assert!(content_first.title_fields.is_empty());
     push_string(&mut *parser, "path", "other.txt");
-    assert!(parser.snapshot().is_none());
-    push_string(&mut *parser, "action", "write");
-    assert_eq!(
-        parser.snapshot().unwrap().progress_fields["new_line_count"],
-        json!(3)
-    );
+    let with_path = parser.snapshot().unwrap();
+    assert_eq!(with_path.title_fields["path"], "other.txt");
+    assert_eq!(with_path.progress_fields["new_line_count"], json!(3));
     let final_preview = parser
-        .finish(&json!({"action":"write","path":"other.txt","content":"done\n"}))
+        .finish(&json!({"path":"other.txt","content":"done\n"}))
         .unwrap()
         .unwrap();
     assert_eq!(final_preview.progress_fields["new_line_count"], json!(1));
-    assert!(
-        parser
-            .finish(&json!({"action":"read","path":"other.txt"}))
-            .unwrap()
-            .is_none()
-    );
+    // Empty content is a valid write with zero generated lines, including after a previous preview.
+    // 空正文是合法写入，生成行数为零，包括已有预览之后的情况。
+    let empty = parser
+        .finish(&json!({"path":"other.txt","content":""}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.progress_fields["new_line_count"], json!(0));
+    assert_eq!(empty.title_fields["path"], "other.txt");
 }
 
 /// Emits one completed top-level JSON string event.

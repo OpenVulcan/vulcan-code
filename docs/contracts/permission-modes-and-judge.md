@@ -30,6 +30,8 @@
 | `shell_command`、`terminal_session` | 已知只读命令放行，其余交给用户 | 进入管线 | 放行 |
 | MCP、插件与其他写入能力 | 已知只读放行，其余交给用户 | 进入管线 | 放行 |
 
+- 文件写入工具指 `file_write`、`file_edit`、`apply_patch` 与 `file` 的移动、删除动作；`file_read` 与 `file` 的
+  列表、属性动作不经闸门。
 - 模式保存在会话配置（`PermissionMode`，会话元数据模式版本见
   [`session-metadata-migrations.md`](session-metadata-migrations.md)）；新会话默认值只存在于运行时内存。
 - 子代理会话使用其根会话的模式；读不到模式时拒绝调用。

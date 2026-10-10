@@ -405,7 +405,7 @@ describe("ConversationBranchWorkspaceV1", () => {
     }
   });
 
-  it.each(["apply_patch", "file_edit", "file"])("shows %s on name discovery and streams counts before any durable ToolCall", async (toolName) => {
+  it.each(["apply_patch", "file_edit", "file_write", "file"])("shows %s on name discovery and streams counts before any durable ToolCall", async (toolName) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     // Canonical API ownership exists, but no complete arguments or tool event exists yet.
     // 规范 API 所有权已存在，但完整参数和工具事件尚不存在。
@@ -435,9 +435,10 @@ describe("ConversationBranchWorkspaceV1", () => {
       await React.act(async () => root.render(workspaceTree(events, "inline_output", [], true, undefined, store)));
       await publish(seed);
       expect(host.querySelector(".tool-presentation-summary")).not.toBeNull();
-      expect(host.textContent).toContain(toolName);
+      expect(host.textContent).toContain(toolName === "file_write" ? "写入" : toolName === "file_edit" ? "编辑" : toolName === "apply_patch" ? "应用补丁" : toolName);
+      if (toolName === "file_write") expect(host.textContent).toContain("正在接收内容");
       await publish({ ...seed, requestRevision: 2, receivedBytes: 100, receivedCharacters: 100,
-        preview: toolName === "file" ? { kind: "file_write", revision: 1,
+        preview: (toolName === "file" || toolName === "file_write") ? { kind: "file_write", revision: 1,
           title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 1 } }
           : { kind: toolName, revision: 1, affected_resources: ["src/example.ts"],
           body_preview: "*** Begin Patch\n*** Update File: src/example.ts\n-old\n+new",
@@ -446,8 +447,8 @@ describe("ConversationBranchWorkspaceV1", () => {
             { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
           ] } });
       expect(host.textContent).toContain("example.ts");
-      expect(host.textContent).toContain("+1");
-      if (toolName !== "file") expect(host.textContent).toContain("-1");
+      expect(host.textContent).toContain((toolName === "file" || toolName === "file_write") ? "已生成 1 行" : "+1");
+      if ((toolName !== "file" && toolName !== "file_write")) expect(host.textContent).toContain("-1");
       // Byte-only events must not erase semantic headers between independently delivered previews.
       // 独立预览之间的纯字节进度事件不能清空语义卡头。
       const summary = host.querySelector(".tool-presentation-summary");
@@ -458,7 +459,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       expect(host.querySelector(".tool-presentation-summary")).toBe(summary);
       expect(summary?.textContent).toBe(firstHeader);
       await publish({ ...seed, requestRevision: 4, receivedBytes: 110, receivedCharacters: 110,
-        preview: toolName === "file" ? { kind: "file_write", revision: 2,
+        preview: (toolName === "file" || toolName === "file_write") ? { kind: "file_write", revision: 2,
           title_fields: { path: "src/example.ts" }, progress_fields: { new_line_count: 2 } }
           : { kind: toolName, revision: 2, affected_resources: ["src/example.ts"],
           body_preview: "*** Begin Patch\n*** Update File: src/example.ts\n-old\n+new\n+next",
@@ -467,8 +468,8 @@ describe("ConversationBranchWorkspaceV1", () => {
             { operation_index: 0, resource_index: 0, side: "new", line_index: 0, content: "new" },
             { operation_index: 0, resource_index: 0, side: "new", line_index: 1, content: "next" },
           ] } });
-      expect(host.textContent).toContain("+2");
-      if (toolName !== "file") expect(host.textContent).toContain("-1");
+      expect(host.textContent).toContain((toolName === "file" || toolName === "file_write") ? "已生成 2 行" : "+2");
+      if ((toolName !== "file" && toolName !== "file_write")) expect(host.textContent).toContain("-1");
       expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
       expect(host.querySelector(".tool-presentation-state")).toBeNull();
       expect(host.textContent).not.toContain("110B");
@@ -511,7 +512,7 @@ describe("ConversationBranchWorkspaceV1", () => {
           kind: "toolRequestProgressChanged", payload: {
             conversationId: "session-branch-v1", requestStreamId: "late-path",
             progress: { apiCallId: 7, requestStreamId: "late-path", toolCallId: "provider-call",
-              toolName: "file", state: "receiving", requestRevision: revision,
+              toolName: "file_write", state: "receiving", requestRevision: revision,
               receivedBytes: revision * 100, receivedCharacters: revision * 100,
               preview: { kind: "file_write", revision, title_fields: path ? { path } : {},
                 progress_fields: { new_line_count: lines } } },
@@ -527,17 +528,18 @@ describe("ConversationBranchWorkspaceV1", () => {
       // 在路径未知时保留请求行和卡片元素。
       const row = host.querySelector(".tool-execution-stack");
       const card = host.querySelector(".tool-presentation-card.file-change");
-      expect(card?.textContent).toContain("编辑");
-      expect(card?.textContent).toContain("+1");
+      expect(card?.textContent).toContain("写入");
+      expect(card?.textContent).toContain("已生成 1 行");
       expect(card?.textContent).not.toContain("file");
       await publish(2, 51);
       expect(host.querySelector(".tool-presentation-card.file-change")).toBe(card);
-      expect(card?.textContent).toContain("+51");
+      expect(card?.textContent).toContain("已生成 51 行");
       await publish(3, 803, "index.html");
       expect(host.querySelector(".tool-execution-stack")).toBe(row);
       expect(host.querySelector(".tool-presentation-card.file-change")).toBe(card);
       expect(card?.textContent).toContain("index.html");
-      expect(card?.textContent).toContain("+803");
+      expect(card?.textContent).toContain("已生成 803 行");
+      expect(card?.textContent).not.toContain("+803");
       expect(host.querySelectorAll(".tool-presentation-summary")).toHaveLength(1);
       expect(host.querySelector(".tool-presentation-state")).toBeNull();
     } finally {

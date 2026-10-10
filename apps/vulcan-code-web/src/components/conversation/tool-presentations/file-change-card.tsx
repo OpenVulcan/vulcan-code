@@ -100,8 +100,11 @@ export function FileChangePresentationCard(props: {
         <FileChangeOperationIcon operation={displayPresentation.operation} />
         {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
         <span className="file-change-path multi">
-          <span className="file-change-path-text">{
-            displayPresentation.mode === "preview" && displayPresentation.files.length === 0
+          <span className={cn("file-change-path-text", displayPresentation.state === "running" && "shimmer")}>{
+            displayPresentation.executionAction
+              ? [t(`toolPresentation.file.action.${displayPresentation.executionAction}`),
+                ...(displayPresentation.files.length > 1 ? [formatTranslation(t, "toolPresentation.file.count", { count: String(displayPresentation.files.length) })] : [])].join(" · ")
+              : displayPresentation.mode === "preview" && displayPresentation.files.length === 0
               ? t(`toolPresentation.file.action.${displayPresentation.operation}`)
               : props.requestProgress && displayPresentation.files.length === 0
               ? props.requestProgress.toolName
@@ -208,7 +211,7 @@ function FileChangeSummaryButton(props: {
       {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
       {status ? <span className="tool-presentation-state shimmer">{status}</span> : null}
       <span className="file-change-path">
-        <span className="file-operation-label">{props.t(`toolPresentation.file.action.${props.file.operation}`)}</span>
+        <span className={cn("file-operation-label", props.presentation.state === "running" && "shimmer")}>{props.t(`toolPresentation.file.action.${props.presentation.executionAction ?? props.file.operation}`)}</span>
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>
         <FileTextFormatBadge file={props.file} t={props.t} />
@@ -253,6 +256,11 @@ function FileChangeCounts(props: {
 }) {
   return (
     <span className="file-change-counts">
+      {props.presentation.executionAction === "write" && props.presentation.state === "running"
+        ? <span className="file-write-progress shimmer">{props.presentation.generatedLineCount === undefined
+          ? props.t("toolPresentation.file.receivingContent")
+          : formatTranslation(props.t, "toolPresentation.file.generatedLines", { count: String(props.presentation.generatedLineCount) })}</span>
+        : null}
       {typeof props.added === "number" && props.added > 0 ? <span className="file-change-added">+{props.added}</span> : null}
       {typeof props.removed === "number" && props.removed > 0 ? <span className="file-change-removed">-{props.removed}</span> : null}
       {props.presentation.state === "failed" ? <span className="file-change-error-badge" title={props.presentation.errorDetail ?? undefined}>{props.t(fileChangeErrorLabelKey(props.presentation.errorCode))}</span> : null}

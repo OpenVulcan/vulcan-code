@@ -44,9 +44,8 @@ impl ToolRequestParserFactory for WritePreviewFactory {
 /// 仅跟踪获准的头部字符串及恒定空间的已解码行计数。
 #[derive(Default)]
 struct WritePreview {
-    /// Completed action and path; missing or oversized paths omit only the preview title.
-    /// 已完成动作及路径；缺失或超限路径仅省略预览标题。
-    action: String,
+    /// Completed path; missing or oversized paths omit only the preview title.
+    /// 已完成路径；缺失或超限路径仅省略预览标题。
     path: String,
     /// Current bounded header string and whether it exceeded the display bound.
     /// 当前有界头部字符串及其是否超过显示限制。
@@ -94,7 +93,7 @@ impl ToolRequestParserSession for WritePreview {
     fn push_json_event(&mut self, event: &IncrementalJsonEvent) -> Result<(), String> {
         match event {
             IncrementalJsonEvent::StringStarted { path } => match field(path) {
-                Some("action" | "path") => {
+                Some("path") => {
                     self.header.clear();
                     self.overflow = false;
                 }
@@ -102,11 +101,12 @@ impl ToolRequestParserSession for WritePreview {
                     self.lines = 0;
                     self.tail = false;
                     self.previous_break = None;
+                    self.dirty.set(true);
                 }
                 _ => {}
             },
             IncrementalJsonEvent::StringContent { path, content } => match field(path) {
-                Some("action" | "path") => {
+                Some("path") => {
                     if self.header.len().saturating_add(content.len()) > PREVIEW_PATH_BYTES {
                         self.overflow = true;
                     } else if !self.overflow {
@@ -117,22 +117,12 @@ impl ToolRequestParserSession for WritePreview {
                 _ => {}
             },
             IncrementalJsonEvent::StringEnded { path } => {
-                match field(path) {
-                    Some("action") => {
-                        self.action = if self.overflow {
-                            String::new()
-                        } else {
-                            self.header.clone()
-                        }
+                if field(path) == Some("path") {
+                    self.path = if self.overflow {
+                        String::new()
+                    } else {
+                        self.header.clone()
                     }
-                    Some("path") => {
-                        self.path = if self.overflow {
-                            String::new()
-                        } else {
-                            self.header.clone()
-                        }
-                    }
-                    _ => {}
                 }
                 self.dirty.set(true);
             }
@@ -144,7 +134,7 @@ impl ToolRequestParserSession for WritePreview {
     /// Returns approved path and exact decoded line count after a semantic change; otherwise none.
     /// 语义变化后返回获准路径及精确已解码行数；否则返回空。
     fn snapshot(&self) -> Option<ToolRequestPreview> {
-        if !self.dirty.replace(false) || self.action != "write" {
+        if !self.dirty.replace(false) {
             return None;
         }
         self.revision.set(self.revision.get().saturating_add(1));
@@ -170,11 +160,6 @@ impl ToolRequestParserSession for WritePreview {
     /// Recounts final schema fields without retaining content; returns the final preview.
     /// 重数最终 Schema 字段但不保留正文；返回最终预览。
     fn finish(&mut self, arguments: &Value) -> Result<Option<ToolRequestPreview>, String> {
-        self.action = arguments
-            .get("action")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .into();
         self.path = arguments
             .get("path")
             .and_then(Value::as_str)

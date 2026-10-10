@@ -95,11 +95,7 @@ pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPla
     if descriptor.id == crate::tooling::native::FILE_TOOL_ID {
         VulcanPlanToolPolicy::StringArgumentAllowlist {
             field: String::from("action"),
-            allowed_values: vec![
-                String::from("read"),
-                String::from("list"),
-                String::from("stat"),
-            ],
+            allowed_values: vec![String::from("list"), String::from("stat")],
         }
     } else if descriptor.available_in_plan {
         VulcanPlanToolPolicy::Visible
@@ -159,6 +155,14 @@ mod tests {
             panic!("file should use an action-scoped Plan policy");
         };
         assert_eq!(field, "action");
-        assert_eq!(allowed_values, ["read", "list", "stat"]);
+        assert_eq!(allowed_values, ["list", "stat"]);
+        assert!(matches!(
+            native_plan_policy(&crate::tooling::native::build_file_read_tool().descriptor),
+            VulcanPlanToolPolicy::Visible
+        ));
+        assert!(matches!(
+            native_plan_policy(&crate::tooling::native::build_file_write_tool().descriptor),
+            VulcanPlanToolPolicy::Hidden
+        ));
     }
 }

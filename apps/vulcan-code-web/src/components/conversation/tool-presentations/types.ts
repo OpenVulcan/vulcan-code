@@ -126,6 +126,12 @@ export interface FileChangePresentation {
   // File operation inferred for the row summary.
   // 行摘要推断出的文件操作。
   operation: FileChangeOperation;
+  // Explicit native invocation semantics, independent of the resulting filesystem change kind.
+  // 明确的原生调用语义，独立于最终文件系统变更种类。
+  executionAction?: "write" | "modify" | "patch";
+  // Decoded whole-file content lines received before execution; never a diff addition count.
+  // 执行前收到的整文件正文解码行数；绝非差异增加行数。
+  generatedLineCount?: number;
   // Hidden detail reference used to hydrate native file results lazily after completion.
   // 用于工具完成后按需加载原生 file 返回内容的隐藏详情引用。
   detailRef?: ConversationDetailRef;

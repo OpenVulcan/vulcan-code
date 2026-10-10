@@ -347,7 +347,7 @@ fn trusted_legacy_encoding(bytes: &[u8]) -> Result<(&'static Encoding, bool), Te
     Err(TextCodecError::new(
         "encoding_ambiguous",
         format!(
-            "The file encoding is ambiguous; the statistical candidate was {} but lacked stable evidence. Retry file.read with an explicit encoding.",
+            "The file encoding is ambiguous; the statistical candidate was {} but lacked stable evidence. Retry file_read with an explicit encoding.",
             candidate.name()
         ),
     ))

@@ -100,10 +100,10 @@ fn test_native_request_with_workspace(
     }
 }
 
-/// Verifies the native catalog registers every direct browser management tool.
-/// 验证原生工具目录注册了全部直接浏览器管理工具。
+/// Verifies the native catalog registers every direct browser and file tool.
+/// 验证原生工具目录注册了全部直接浏览器与文件工具。
 #[test]
-fn native_catalog_registers_browser_management_tools() {
+fn native_catalog_registers_browser_and_file_tools() {
     let config = AgentRuntimeConfig {
         active_model: None,
         active_agent_id: String::from("test-agent"),
@@ -127,10 +127,15 @@ fn native_catalog_registers_browser_management_tools() {
         BROWSER_OPEN_TOOL_ID,
         BROWSER_SELECT_TOOL_ID,
         BROWSER_CLOSE_TOOL_ID,
+        super::FILE_TOOL_ID,
+        super::FILE_READ_TOOL_ID,
+        super::FILE_WRITE_TOOL_ID,
+        super::FILE_EDIT_TOOL_ID,
+        super::APPLY_PATCH_TOOL_ID,
     ] {
         assert!(
             catalog.definition(tool_id).is_some(),
-            "browser management tool {tool_id} should be registered"
+            "native tool {tool_id} should be registered"
         );
     }
 }

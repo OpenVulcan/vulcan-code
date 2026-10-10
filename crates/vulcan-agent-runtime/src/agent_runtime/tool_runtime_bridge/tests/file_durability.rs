@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::agent_runtime::events::ToolExecutionRecoveryBoundary;
-use crate::tooling::native::{NativeToolExecutionRequest, build_file_tool};
+use crate::tooling::native::{NativeToolExecutionRequest, build_file_write_tool};
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
     let calls = Arc::new(AtomicUsize::new(0));
     // Use the production native definition and schema, with only workspace/context supplied by the test.
     // 使用生产原生定义和 Schema，仅由测试提供工作区及上下文。
-    let file = build_file_tool();
+    let file = build_file_write_tool();
     // The invocation closure owns its isolated workspace and counter.
     // 调用闭包持有隔离工作区及计数器。
     let workspace = directory.path().to_path_buf();
@@ -40,7 +40,7 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
             file.descriptor.name.clone(),
             file.descriptor.description.clone(),
             file.descriptor.help_text.clone(),
-            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "test", "file"),
+            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "test", "file_write"),
         ),
         parameters_schema: file.args_schema.clone(),
         ai_visible: true,
@@ -104,8 +104,8 @@ fn file_write_receipt_rejection_preserves_disk_effects_without_replay() {
         tool_calls: vec![ConversationToolCall {
             id: String::from("receipt-stream"),
             tool_call_id: Some(String::from("receipt-call")),
-            tool_name: String::from("file"),
-            arguments: json!({"action":"write", "path":"receipt.txt", "content":"after\n"}),
+            tool_name: String::from("file_write"),
+            arguments: json!({"path":"receipt.txt", "content":"after\n"}),
             argument_parse_error: None,
             raw_arguments: Default::default(),
         }],

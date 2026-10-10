@@ -30,6 +30,68 @@ function toolBlock(
 }
 
 describe("native file presentation mapping", () => {
+  // Read identity is known without action or arguments, while historical calls retain their shape.
+  // 读取身份无需动作或参数即可确定，历史调用继续保留自身结构。
+  it.each(["file_read", "file"])("recognizes %s reads through direct and deferred results", (toolName) => {
+    // The current tool has no action selector; only the historical file call needs one.
+    // 当前工具没有动作选择器；仅历史 file 调用需要。
+    const argumentsValue = toolName === "file_read" ? { path: "read.txt" } : { action: "read", path: "read.txt" };
+    const body = "# File: read.txt\n\nL1: retained-source";
+    // Real read envelopes carry explicit source coordinates rather than guessed Markdown parsing.
+    // 真实读取信封携带明确源码坐标，不通过猜测解析 Markdown。
+    const metadata = { arguments: argumentsValue, host_result: { kind: "file_access", payload: {
+      schema: "vulcan.file_read.v3", path: "read.txt", action: "read",
+      range: { source_start_line: 1, line_count: 1 }, render: { output_start_line: 3 },
+    } } };
+    const blocks = toolBlock(toolName, body, metadata);
+    const inline = resolveFileAccessPresentation(blocks, "completed", {});
+    expect(inline).toMatchObject({ kind: "file_read", action: "read", markdownBody: body });
+    expect(resolveFileChangePresentation(blocks, "completed", {})).toBeNull();
+    const deferred = resolveFileAccessPresentation(toolBlock(toolName, "", { arguments: argumentsValue }), "completed", {});
+    expect(hydrateFileAccessPresentation(deferred!, { body, metadata })).toMatchObject({ markdownBody: body });
+    if (toolName === "file_read") expect(resolveFileAccessPresentation(toolBlock(toolName, "", {}), "running", {})).toMatchObject({ action: "read" });
+  });
+
+  // Generated text counts are not filesystem additions, including empty and newline-only writes.
+  // 生成正文计数不代表文件系统新增行，包括空正文和仅有换行的写入。
+  it.each([["", 0], ["\n", 1], ["one\r\ntwo\n\rthree", 3]] as const)("counts complete write content %j as %i lines", (content, count) => {
+    // Only complete content supplies this count; no changeset exists yet.
+    // 此计数仅来自完整正文；此时尚无变更集。
+    const presentation = resolveFileChangePresentation(toolBlock("file_write", "", {
+      arguments: { path: "write.txt", content },
+    }), "running", {});
+    expect(presentation).toMatchObject({ executionAction: "write", generatedLineCount: count,
+      totalAdded: null, totalRemoved: null, files: [{ path: "write.txt", added: null, removed: null }] });
+  });
+
+  // Invalid user-supplied actions cannot relabel a rejected write as a successful read.
+  // 无效调用动作不能将被拒绝的写入重新标成读取。
+  it("keeps write identity when a caller sends the removed action field", () => {
+    // Execution rejects this payload, and presentation still follows the actual tool name.
+    // 执行层拒绝此载荷，展示仍遵循实际工具名。
+    const presentation = resolveFileChangePresentation(toolBlock("file_write", "invalid arguments", {
+      arguments: { path: "write.txt", action: "read" },
+    }), "failed", {});
+    expect(presentation).toMatchObject({ state: "failed", executionAction: "write", totalAdded: null });
+  });
+
+  // All invocation kinds retain their verb even when the persisted file change is identical.
+  // 即使持久文件变更相同，各调用种类也保留自身动作。
+  it.each([["file_write", "write"], ["file_edit", "modify"], ["apply_patch", "patch"], ["file", "write"]] as const)("keeps %s semantics on a modify receipt", (toolName, action) => {
+    const presentation = resolveFileChangePresentation(toolBlock(toolName, "", {
+      arguments: { path: "write.txt", ...(toolName === "file" ? { action: "write" } : {}) },
+      v1_event: true, v1_tool_event: {
+      kind: "tool_call", api_call_id: 1, tool_call_id: 1, tool_name: toolName,
+      input: { path: "write.txt", ...(toolName === "file" ? { action: "write" } : {}) },
+      status: "completed", request_stream_id: "write-result", changeset: { mode: "applied", files: [{
+        change: "modify", path: "write.txt", hunks: [{ before: "", after: "",
+          deleted: [{ line: 1, content: "old" }], inserted: [{ line: 1, content: "new" }] }],
+      }] },
+    } }), "completed", {});
+    expect(presentation).toMatchObject({ executionAction: action, totalAdded: 1, totalRemoved: 1 });
+    expect(presentation?.generatedLineCount).toBeUndefined();
+  });
+
   // Both delivery paths must show the shared Markdown without rebuilding legacy JSON rows.
   // 两种加载路径都必须展示共享 Markdown，不重新构造旧 JSON 行。
   it.each(["list", "stat"] as const)("renders inline and lazy %s Markdown", (action) => {

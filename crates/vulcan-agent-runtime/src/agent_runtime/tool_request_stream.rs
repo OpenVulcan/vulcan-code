@@ -1542,7 +1542,7 @@ mod tests {
     #[test]
     fn native_edit_preview_bursts_share_the_progress_rate_limit() {
         use crate::tooling::native::{
-            build_apply_patch_tool, build_file_edit_tool, build_file_tool,
+            build_apply_patch_tool, build_file_edit_tool, build_file_write_tool,
         };
         // All fixtures use production parser capabilities and never execute a filesystem operation.
         // 全部夹具使用生产解析能力，绝不执行文件系统操作。
@@ -1550,14 +1550,14 @@ mod tests {
             // The observed Provider sends the entire body before the path; counts must stream meanwhile.
             // 实测供应商在路径之前发送整个正文；期间必须持续发布计数。
             (
-                build_file_tool(),
-                r#"{"action":"write","content":""#,
+                build_file_write_tool(),
+                r#"{"content":""#,
                 r#"line\n"#,
                 r#"","path":"fixture.txt"}"#,
             ),
             (
-                build_file_tool(),
-                r#"{"action":"write","path":"fixture.txt","content":""#,
+                build_file_write_tool(),
+                r#"{"path":"fixture.txt","content":""#,
                 r#"line\n"#,
                 r#""}"#,
             ),

@@ -625,7 +625,7 @@ fn native_read_model_output(
     markdown.push_str(&fence);
     markdown.push('\n');
     if !snapshot.document.encoding_certain {
-        markdown.push_str("\n[encoding_unverified] Automatic detection has limited evidence; this decoding may be incorrect. Confirm the source encoding with file read using encoding before editing; pass that encoding to file_edit.\n");
+        markdown.push_str("\n[encoding_unverified] Automatic detection has limited evidence; this decoding may be incorrect. Confirm the source encoding with file_read using encoding before editing; pass that encoding to file_edit.\n");
     }
     // Empty files and out-of-range requests are distinct successful reads, never missing paths.
     // 空文件与越界请求是两种不同的成功读取，不能混同路径不存在。
@@ -838,7 +838,8 @@ fn native_write_file(
     };
     // Reuse the exact extension accepted before the filesystem commit.
     // 复用文件系统提交前已通过校验的精确扩展。
-    let extension = commit_validated_changes("applied", std::slice::from_ref(&prepared), "file")?;
+    let extension =
+        commit_validated_changes("applied", std::slice::from_ref(&prepared), "file_write")?;
     Ok(native_file_change_response(
         "write",
         vec![prepared],
@@ -1813,7 +1814,7 @@ fn execute_exact_file_edit_sync(
             "path": display_path(&path),
             "requires_read": false,
             "retryable": false,
-            "hint": "Use text representable in the current encoding, or explicitly convert the complete file with file.write.",
+            "hint": "Use text representable in the current encoding, or explicitly convert the complete file with file_write.",
         }));
         enrich_request_edit_error(codec)
     })?;
@@ -3067,7 +3068,7 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
             "Check the target type with file stat. Use file list for directories; this action requires a supported regular file."
         }
         "expected_lines_not_found" => {
-            "Use file read and copy the complete current logical lines before retrying."
+            "Use file_read and copy the complete current logical lines before retrying."
         }
         "target_not_unique" => {
             "Expand old_lines or add stable ordered anchors until exactly one target remains."
@@ -3085,7 +3086,7 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
             "Read every affected file again and regenerate the patch against the current exact text."
         }
         "anchor_chain_not_found" => {
-            "Use file read to verify that anchors occur before the target in the declared order."
+            "Use file_read to verify that anchors occur before the target in the declared order."
         }
         "overlapping_operations" => {
             "Merge overlapping replacements into one operation against the original snapshot."
@@ -3102,7 +3103,7 @@ fn edit_error_recovery_hint(code: &str) -> &'static str {
             "The transaction was rolled back; reread every affected path before retrying."
         }
         "encoding_ambiguous" => {
-            "Confirm the source encoding with file read using encoding, then use file_edit with that encoding. For whole-file writes provide source_encoding; encoding selects the output encoding."
+            "Confirm the source encoding with file_read using encoding, then use file_edit with that encoding. For whole-file writes provide source_encoding; encoding selects the output encoding."
         }
         "binary_file" => {
             "If this is known text without a BOM (for example UTF-16LE/BE), read it with an explicit encoding. Do not retry unchanged arguments or edit a binary file as text."
