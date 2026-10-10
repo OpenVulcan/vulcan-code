@@ -415,7 +415,6 @@ CREATE TABLE IF NOT EXISTS projects (
     sort_order INTEGER NOT NULL DEFAULT 0,
     icon_pack TEXT,
     icon_key TEXT,
-    codebase_memory_enabled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -427,8 +426,6 @@ CREATE TABLE IF NOT EXISTS project_vce_settings (
     project_id TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
     revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
-    migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0
-        CHECK(migrated_from_codebase_memory IN (0, 1)),
     max_file_bytes INTEGER NOT NULL DEFAULT 1048576 CHECK(max_file_bytes > 0),
     extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]',
     allow_query_rewrite INTEGER NOT NULL DEFAULT 0 CHECK(allow_query_rewrite IN (0, 1)),
@@ -437,8 +434,8 @@ CREATE TABLE IF NOT EXISTS project_vce_settings (
     query_max_concurrency INTEGER NOT NULL DEFAULT 3 CHECK(query_max_concurrency > 0),
     max_results INTEGER NOT NULL DEFAULT 10 CHECK(max_results > 0),
     max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars > 0),
-    update_mode TEXT CHECK(update_mode IN ('manual', 'automatic')),
-    auto_update_min_interval_seconds INTEGER CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400),
+    update_mode TEXT NOT NULL CHECK(update_mode IN ('manual', 'automatic')),
+    auto_update_min_interval_seconds INTEGER NOT NULL CHECK(auto_update_min_interval_seconds BETWEEN 60 AND 86400),
     updated_at TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -840,37 +837,13 @@ mod tests {
             .expect("re-applying the v1 initialization must be idempotent");
     }
 
-    /// Verifies the v1 schema defines Codebase Memory as disabled by default.
-    /// 验证 v1 结构把 Codebase Memory 默认定义为关闭。
-    ///
-    /// The column arrives as part of the single initialization rather than through an additive
-    /// migration, so this asserts the folded schema directly. The previous form of this test also
-    /// asserted the `ALTER TABLE` migration constant, which no longer exists.
-    ///
-    /// 该列作为唯一初始化的一部分出现，而不是经追加式迁移加入，因此此处直接断言折入后的结构。本测试先前
-    /// 的形式还会断言 `ALTER TABLE` 迁移常量，而它已不存在。
+    /// Verifies new databases own typed VCE settings in their own table.
+    /// 验证新数据库在独立表中持有类型化 VCE 设置。
     #[test]
-    fn v1_schema_defaults_codebase_memory_to_disabled() {
-        let schema = build_application_schema_script();
-
-        assert!(
-            schema.contains("codebase_memory_enabled INTEGER NOT NULL DEFAULT 0"),
-            "the v1 schema must carry the column directly"
-        );
-        assert!(
-            !schema.contains("ALTER TABLE"),
-            "v1 has no additive migrations, so the script must contain no ALTER TABLE"
-        );
-    }
-
-    /// Verifies new databases own typed VCE settings separately from the legacy CBM switch.
-    /// 验证新数据库在旧 CBM 开关之外独立持有类型化 VCE 设置。
-    #[test]
-    fn project_schema_includes_independent_vce_settings_and_migration_marker() {
+    fn project_schema_includes_independent_vce_settings() {
         let schema = build_application_schema_script();
 
         assert!(schema.contains("CREATE TABLE IF NOT EXISTS project_vce_settings"));
-        assert!(schema.contains("migrated_from_codebase_memory INTEGER NOT NULL DEFAULT 0"));
         assert!(schema.contains("extra_ignore_patterns_json TEXT NOT NULL DEFAULT '[]'"));
         assert!(
             schema.contains("FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE")

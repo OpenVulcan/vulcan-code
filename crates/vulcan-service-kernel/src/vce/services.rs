@@ -542,11 +542,7 @@ async fn commit_vce_project_settings(
         .expected_revision
         .checked_add(1)
         .ok_or_else(|| String::from("VCE 设置修订号已耗尽。"))?;
-    let next = project_vce_settings_from_input(
-        request.settings,
-        next_revision,
-        project.vce.migrated_from_codebase_memory,
-    );
+    let next = project_vce_settings_from_input(request.settings, next_revision);
     next.validate()?;
     vulcan_workspace_store::workspace_store::persist_project_vce_settings(
         host_runtime,
@@ -1808,7 +1804,6 @@ fn vce_settings_summary(settings: &ProjectVceSettings) -> api::VceProjectSetting
         },
         auto_update_min_interval_seconds: settings.auto_update_min_interval_seconds,
         revision: settings.revision,
-        migrated_from_codebase_memory: settings.migrated_from_codebase_memory,
         max_file_bytes: settings.max_file_bytes,
         default_ignore_patterns: super::source_port::default_ignore_patterns(),
         extra_ignore_patterns: settings.extra_ignore_patterns.clone(),
@@ -1826,7 +1821,6 @@ fn vce_settings_summary(settings: &ProjectVceSettings) -> api::VceProjectSetting
 fn project_vce_settings_from_input(
     input: api::VceProjectSettingsInput,
     revision: u64,
-    migrated_from_codebase_memory: bool,
 ) -> ProjectVceSettings {
     ProjectVceSettings {
         enabled: input.enabled,
@@ -1838,7 +1832,6 @@ fn project_vce_settings_from_input(
         },
         auto_update_min_interval_seconds: input.auto_update_min_interval_seconds,
         revision,
-        migrated_from_codebase_memory,
         max_file_bytes: input.max_file_bytes,
         extra_ignore_patterns: input.extra_ignore_patterns,
         allow_query_rewrite: input.allow_query_rewrite,
@@ -2597,10 +2590,9 @@ mod tests {
             max_results: 10,
             max_context_chars: 32_000,
         };
-        let settings = project_vce_settings_from_input(input, 8, true);
+        let settings = project_vce_settings_from_input(input, 8);
 
         assert_eq!(settings.revision, 8);
-        assert!(settings.migrated_from_codebase_memory);
         assert!(settings.enabled);
         assert_eq!(
             settings.update_mode,

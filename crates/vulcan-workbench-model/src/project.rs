@@ -36,20 +36,15 @@ pub struct ProjectVceSettings {
     /// Whether the native code-semantic index is enabled for this project.
     /// 此项目是否启用原生代码语义索引。
     pub enabled: bool,
-    /// Explicit project update policy; legacy documents default to manual in memory only.
-    /// 明确项目更新策略；旧文档仅在内存中缺省为手动。
-    #[serde(default)]
+    /// Explicit project update policy.
+    /// 明确项目更新策略。
     pub update_mode: ProjectVceUpdateMode,
     /// Minimum interval between automatic admissions; manual requests bypass this interval.
     /// 两次自动受理之间的最低间隔；手动请求不受此间隔限制。
-    #[serde(default = "default_vce_auto_update_min_interval_seconds")]
     pub auto_update_min_interval_seconds: u32,
     /// Optimistic settings revision incremented by every accepted update.
     /// 每次接受更新时递增的乐观设置修订号。
     pub revision: u64,
-    /// Whether the initial enabled state was migrated from the former native CBM switch.
-    /// 初始启用状态是否由原生 CBM 旧开关迁移而来。
-    pub migrated_from_codebase_memory: bool,
     /// Maximum UTF-8 source file size accepted for semantic indexing.
     /// 语义索引允许接收的 UTF-8 源文件最大字节数。
     pub max_file_bytes: u64,
@@ -85,7 +80,6 @@ impl Default for ProjectVceSettings {
             update_mode: ProjectVceUpdateMode::Manual,
             auto_update_min_interval_seconds: default_vce_auto_update_min_interval_seconds(),
             revision: 1,
-            migrated_from_codebase_memory: false,
             max_file_bytes: 1_048_576,
             extra_ignore_patterns: Vec::new(),
             allow_query_rewrite: false,
@@ -148,29 +142,23 @@ impl ProjectVceSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProjectVceSettings, ProjectVceUpdateMode};
+    use super::ProjectVceSettings;
 
-    /// Check legacy settings read as manual while invalid explicit policies are rejected.
-    /// 验证旧设置读取为手动，同时拒绝无效的明确策略。
+    /// Check update policies require both fields and reject invalid explicit values.
+    /// 验证更新策略必须同时提供两个字段，并拒绝无效的明确值。
     ///
-    /// Takes no parameters and returns nothing; asserts defaults, wire values and bounds.
-    /// 无参数、无返回值；断言默认值、序列化值和边界。
+    /// Takes no parameters and returns nothing; asserts wire values and bounds.
+    /// 无参数、无返回值；断言序列化值和边界。
     #[test]
-    fn project_vce_update_policy_defaults_and_validation() {
-        // legacy simulates a persisted document predating the two project policy fields.
-        // legacy 模拟两个项目策略字段出现前的持久化文档。
-        let mut legacy = serde_json::to_value(ProjectVceSettings::default()).expect("serialize");
-        legacy.as_object_mut().expect("object").remove("updateMode");
-        legacy
+    fn project_vce_update_policy_validation() {
+        let settings = ProjectVceSettings::default();
+        let mut document = serde_json::to_value(&settings).expect("serialize");
+        let mut missing = document.clone();
+        missing
             .as_object_mut()
             .expect("object")
-            .remove("autoUpdateMinIntervalSeconds");
-        // settings materializes defaults without rewriting the input document.
-        // settings 仅形成内存默认值，不改写输入文档。
-        let settings: ProjectVceSettings = serde_json::from_value(legacy.clone()).expect("legacy");
-        assert_eq!(settings.update_mode, ProjectVceUpdateMode::Manual);
-        assert_eq!(settings.auto_update_min_interval_seconds, 300);
-        assert!(legacy.get("updateMode").is_none());
+            .remove("updateMode");
+        assert!(serde_json::from_value::<ProjectVceSettings>(missing).is_err());
         for interval in [0, 59, 86_401, u32::MAX] {
             // invalid changes only the interval so the exact rejection is exercised.
             // invalid 仅改变间隔，以检验精确拒绝规则。
@@ -189,8 +177,8 @@ mod tests {
             };
             assert!(valid.validate().is_ok());
         }
-        legacy["updateMode"] = serde_json::json!("unknown");
-        assert!(serde_json::from_value::<ProjectVceSettings>(legacy).is_err());
+        document["updateMode"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<ProjectVceSettings>(document).is_err());
     }
 
     /// Verifies the persisted VCE defaults remain bounded and internally valid.
@@ -260,9 +248,6 @@ pub struct TaskProjectSummary {
     /// Optional project icon key selected by the user.
     /// 用户选择的可选项目图标键。
     pub icon_key: Option<String>,
-    /// Legacy Codebase Memory enablement retained only as one-time VCE migration input.
-    /// 仅作为 VCE 一次性迁移输入保留的旧 Codebase Memory 启用状态。
-    pub codebase_memory_enabled: bool,
     /// Native code-semantic settings owned by this project.
     /// 此项目持有的原生代码语义设置。
     pub vce: ProjectVceSettings,
@@ -296,27 +281,9 @@ impl TaskProjectSummary {
             order,
             icon_pack,
             icon_key,
-            codebase_memory_enabled: false,
             vce: ProjectVceSettings::default(),
             session_ids,
         }
-    }
-
-    /// Applies the persisted legacy Codebase Memory flag used by VCE migration.
-    /// 应用供 VCE 迁移使用的持久化旧 Codebase Memory 标记。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `enabled` is the exact project-owned persisted enablement flag.
-    /// `enabled` 是项目实体持有的精确持久化启用标记。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Returns the updated project summary for deterministic projection construction.
-    /// 返回更新后的项目摘要，以便确定性构建投影。
-    pub fn with_codebase_memory_enabled(mut self, enabled: bool) -> Self {
-        self.codebase_memory_enabled = enabled;
-        self
     }
 
     /// Applies the exact persisted native code-semantic settings.

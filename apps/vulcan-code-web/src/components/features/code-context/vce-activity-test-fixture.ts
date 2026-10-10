@@ -11,7 +11,7 @@ export function createVceActivityFixture(projectId = "project-a", revision = 4):
     },
     settings: {
       enabled: true, updateMode: "manual", autoUpdateMinIntervalSeconds: 300, revision,
-      migratedFromCodebaseMemory: false, maxFileBytes: 1048576,
+      maxFileBytes: 1048576,
       defaultIgnorePatterns: ["*.lock", "*.map", "generated/"], extraIgnorePatterns: [], allowQueryRewrite: false,
       allowRerank: true, embeddingMaxConcurrency: 4, queryMaxConcurrency: 3, maxResults: 10, maxContextChars: 32000,
     },

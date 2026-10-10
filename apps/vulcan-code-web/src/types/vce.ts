@@ -260,7 +260,6 @@ export interface VceProjectSettingsSummary {
   // 自动受理的最低间隔；不延迟手动同步。
   autoUpdateMinIntervalSeconds: number;
   revision: number;
-  migratedFromCodebaseMemory: boolean;
   maxFileBytes: number;
   // Host-owned built-in exclusions that the project editor displays without persisting them.
   // 宿主持有的内置排除规则，仅供项目编辑器展示，不参与持久化。

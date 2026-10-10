@@ -2775,8 +2775,8 @@ connection.close()
             r#"
 INSERT INTO projects (
     id, name, root_path, pinned, sort_order, icon_pack, icon_key,
-    codebase_memory_enabled, archived, created_at, updated_at
-) VALUES (?1, ?2, ?3, 0, 0, NULL, NULL, 0, 0, '1', '1');
+    archived, created_at, updated_at
+) VALUES (?1, ?2, ?3, 0, 0, NULL, NULL, 0, '1', '1');
 "#,
             &[vec![
                 SqliteValue::Text("project-id".to_string()),
@@ -2795,7 +2795,7 @@ INSERT INTO projects (
         local_sql::execute_batch(
             app,
             LogicalDatabase::AppState,
-            "INSERT INTO project_vce_settings (project_id, updated_at) VALUES (?1, '1');",
+            "INSERT INTO project_vce_settings (project_id, updated_at, update_mode, auto_update_min_interval_seconds) VALUES (?1, '1', 'manual', 300);",
             &[vec![SqliteValue::Text("project-id".to_string())]],
         )
         .expect("insert legacy project VCE settings")

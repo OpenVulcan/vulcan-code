@@ -139,7 +139,6 @@ beforeEach(() => {
     async (settings: VceProjectSettingsInput, revision: number) => ({
       ...settings,
       revision: revision + 1,
-      migratedFromCodebaseMemory: false,
     }),
   );
   rpc.reload.mockResolvedValue(undefined);

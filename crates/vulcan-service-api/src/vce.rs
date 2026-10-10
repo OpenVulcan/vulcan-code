@@ -456,9 +456,6 @@ pub struct VceProjectSettingsSummary {
     /// Optimistic settings revision.
     /// 乐观设置修订号。
     pub revision: u64,
-    /// Whether the initial state was migrated from the former native CBM switch.
-    /// 初始状态是否由原生 CBM 旧开关迁移而来。
-    pub migrated_from_codebase_memory: bool,
     /// Maximum source file size admitted for indexing.
     /// 索引允许接收的最大源码文件字节数。
     pub max_file_bytes: u64,
@@ -1401,7 +1398,6 @@ mod tests {
         .expect("serialize VCE settings input");
 
         assert!(value.get("revision").is_none());
-        assert!(value.get("migratedFromCodebaseMemory").is_none());
     }
 
     /// Verify boxed maintenance results preserve the exact browser JSON and bounded enum layout.

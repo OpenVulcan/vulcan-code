@@ -32,7 +32,7 @@ function activity(projectId = "project-a"): VceProjectActivityResponse {
     reasoningPolicy: "fixed_off", embedding: { configured: true, available: true },
     queryRewrite: { configured: true, available: true }, rerank: { configured: true, available: true }, issues: [] },
     settings: { enabled: true, updateMode: "manual", autoUpdateMinIntervalSeconds: 300, revision: 4,
-      migratedFromCodebaseMemory: false, maxFileBytes: 1048576,
+      maxFileBytes: 1048576,
       defaultIgnorePatterns: ["*.lock", "*.map", "generated/"], extraIgnorePatterns: [], allowQueryRewrite: false,
       allowRerank: true, embeddingMaxConcurrency: 4, queryMaxConcurrency: 3, maxResults: 10, maxContextChars: 32000 },
     status: { projectId, enabled: true, settingsRevision: 4, lifecycle: "ready", checkpointVersion: 2,

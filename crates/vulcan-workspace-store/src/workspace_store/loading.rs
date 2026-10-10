@@ -14,9 +14,6 @@ struct ValidatedProjectRow {
     /// Exact pinned state decoded from the numeric protocol flag.
     /// 从数值协议标记解码出的精确置顶状态。
     pinned: bool,
-    /// Exact Codebase Memory enablement decoded from the numeric protocol flag.
-    /// 从数值协议标记解码出的精确 Codebase Memory 启用状态。
-    codebase_memory_enabled: bool,
     /// Validated project-owned native code-semantic settings.
     /// 经过校验的项目自有原生代码语义设置。
     vce: ProjectVceSettings,
@@ -68,24 +65,7 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             ));
         }
     };
-    // codebase_memory_enabled accepts only values produced by the project persistence protocol.
-    // codebase_memory_enabled 只接受项目持久化协议产生的值。
-    let codebase_memory_enabled = match row.codebase_memory_enabled {
-        0 => false,
-        1 => true,
-        value => {
-            return Err(format!(
-                "项目索引 `{}` 包含无效 Codebase Memory 启用标记 `{value}`。",
-                row.id
-            ));
-        }
-    };
     let vce_enabled = validate_project_boolean(&row.id, "VCE 启用", row.vce_enabled)?;
-    let vce_migrated_from_codebase_memory = validate_project_boolean(
-        &row.id,
-        "VCE CBM 迁移",
-        row.vce_migrated_from_codebase_memory,
-    )?;
     let vce_revision = u64::try_from(row.vce_revision).map_err(|error| {
         format!(
             "项目索引 `{}` 包含无效 VCE 修订号 `{}`：{error}",
@@ -109,23 +89,21 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             .map_err(|error| format!("项目索引 `{}` 的 VCE 忽略规则 JSON 无效：{error}", row.id))?;
     let vce = ProjectVceSettings {
         enabled: vce_enabled,
-        update_mode: match row.vce_update_mode.as_deref() {
-            None | Some("manual") => vulcan_workbench_model::ProjectVceUpdateMode::Manual,
-            Some("automatic") => vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
-            Some(invalid) => {
+        update_mode: match row.vce_update_mode.as_str() {
+            "manual" => vulcan_workbench_model::ProjectVceUpdateMode::Manual,
+            "automatic" => vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
+            invalid => {
                 return Err(format!(
                     "项目索引 `{}` 的语义更新模式无效：`{invalid}`。",
                     row.id
                 ));
             }
         },
-        auto_update_min_interval_seconds: match row.vce_auto_update_min_interval_seconds {
-            Some(seconds) => u32::try_from(seconds)
-                .map_err(|error| format!("项目索引 `{}` 的语义更新间隔无效：{error}", row.id))?,
-            None => vulcan_workbench_model::default_vce_auto_update_min_interval_seconds(),
-        },
+        auto_update_min_interval_seconds: u32::try_from(row.vce_auto_update_min_interval_seconds)
+            .map_err(|error| {
+            format!("项目索引 `{}` 的语义更新间隔无效：{error}", row.id)
+        })?,
         revision: vce_revision,
-        migrated_from_codebase_memory: vce_migrated_from_codebase_memory,
         max_file_bytes: vce_max_file_bytes,
         extra_ignore_patterns: vce_extra_ignore_patterns,
         allow_query_rewrite: validate_project_boolean(
@@ -164,7 +142,6 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
     Ok(ValidatedProjectRow {
         stored: row,
         pinned,
-        codebase_memory_enabled,
         vce,
         archived,
         sort_order,
@@ -435,7 +412,6 @@ pub async fn load_workspace_index_report(
             row.icon_key.clone(),
             Vec::new(),
         )
-        .with_codebase_memory_enabled(validated_row.codebase_memory_enabled)
         .with_vce_settings(validated_row.vce.clone());
 
         if validated_row.archived {
@@ -841,12 +817,10 @@ mod tests {
             sort_order: 0,
             icon_pack: None,
             icon_key: None,
-            codebase_memory_enabled: 0,
             vce_enabled: 0,
             vce_revision: 1,
-            vce_update_mode: None,
-            vce_auto_update_min_interval_seconds: None,
-            vce_migrated_from_codebase_memory: 1,
+            vce_update_mode: String::from("manual"),
+            vce_auto_update_min_interval_seconds: 300,
             vce_max_file_bytes: 1_048_576,
             vce_extra_ignore_patterns_json: String::from("[]"),
             vce_allow_query_rewrite: 0,
@@ -859,30 +833,19 @@ mod tests {
         }
     }
 
-    /// Verify missing project update policy defaults without accepting malformed explicit values.
-    /// 验证缺失的项目更新策略使用默认值，同时不接受格式错误的明确值。
+    /// Verify persisted project update policies load exactly and malformed values are rejected.
+    /// 验证持久化项目更新策略精确加载，且格式错误的值被拒绝。
     ///
-    /// Takes no parameters and returns nothing; checks loading, isolation and bounds.
-    /// 无参数、无返回值；检查加载、隔离与边界。
+    /// Takes no parameters and returns nothing; checks loading and bounds.
+    /// 无参数、无返回值；检查加载与边界。
     #[test]
-    fn project_vce_policy_loading_preserves_missing_and_explicit_choices() {
-        // legacy has no policy columns populated by an earlier application.
-        // legacy 的策略列尚未由旧应用填充。
-        let legacy = stored_project_row_for_loading_test();
-        // loaded receives in-memory defaults without modifying the stored input.
-        // loaded 接收内存默认值而不修改存储输入。
-        let loaded = validate_project_row(legacy.clone()).expect("legacy policy");
-        assert_eq!(
-            loaded.vce.update_mode,
-            vulcan_workbench_model::ProjectVceUpdateMode::Manual
-        );
-        assert_eq!(loaded.vce.auto_update_min_interval_seconds, 300);
-        assert!(legacy.vce_update_mode.is_none());
+    fn project_vce_policy_loading_preserves_explicit_choices() {
+        let base = stored_project_row_for_loading_test();
         // explicit selects automatic updates and an independently persisted interval.
         // explicit 选择自动更新及独立持久化间隔。
-        let mut explicit = legacy.clone();
-        explicit.vce_update_mode = Some(String::from("automatic"));
-        explicit.vce_auto_update_min_interval_seconds = Some(600);
+        let mut explicit = base.clone();
+        explicit.vce_update_mode = String::from("automatic");
+        explicit.vce_auto_update_min_interval_seconds = 600;
         // selected is the exact settings row after normal loading validation.
         // selected 是通过常规加载校验后的精确设置记录。
         let selected = validate_project_row(explicit).expect("explicit policy");
@@ -894,14 +857,14 @@ mod tests {
         for interval in [-1, 0, 59, 86_401, i64::MAX] {
             // invalid tests explicit invalid values rather than treating them as absent.
             // invalid 测试明确无效值，不能将其当成缺省。
-            let mut invalid = legacy.clone();
-            invalid.vce_auto_update_min_interval_seconds = Some(interval);
+            let mut invalid = base.clone();
+            invalid.vce_auto_update_min_interval_seconds = interval;
             assert!(validate_project_row(invalid).is_err());
         }
         // invalid_mode must not be converted into manual or automatic by a fallback.
         // invalid_mode 不得被兜底转换为手动或自动。
-        let mut invalid_mode = legacy;
-        invalid_mode.vce_update_mode = Some(String::from("true"));
+        let mut invalid_mode = base;
+        invalid_mode.vce_update_mode = String::from("true");
         assert!(validate_project_row(invalid_mode).is_err());
     }
 
@@ -934,10 +897,6 @@ mod tests {
         // invalid_pinned 提供 0/1 协议之外的布尔标记。
         let mut invalid_pinned = valid_row.clone();
         invalid_pinned.pinned = 2;
-        // invalid_codebase_memory supplies an enablement flag outside the strict 0/1 protocol.
-        // invalid_codebase_memory 提供严格 0/1 协议之外的启用标记。
-        let mut invalid_codebase_memory = valid_row.clone();
-        invalid_codebase_memory.codebase_memory_enabled = 2;
         // invalid_archived supplies a lifecycle flag outside the 0/1 protocol.
         // invalid_archived 提供 0/1 协议之外的生命周期标记。
         let mut invalid_archived = valid_row.clone();
@@ -971,11 +930,6 @@ mod tests {
             validate_project_row(invalid_pinned)
                 .expect_err("invalid pinned flag should fail")
                 .contains("无效置顶标记")
-        );
-        assert!(
-            validate_project_row(invalid_codebase_memory)
-                .expect_err("invalid Codebase Memory flag should fail")
-                .contains("Codebase Memory 启用标记")
         );
         assert!(
             validate_project_row(invalid_archived)

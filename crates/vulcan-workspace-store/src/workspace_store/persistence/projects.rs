@@ -43,7 +43,6 @@ async fn upsert_active_project(
         SqliteValue::Integer(sort_order),
         optional_sqlite_string(&project.icon_pack),
         optional_sqlite_string(&project.icon_key),
-        SqliteValue::Integer(i64::from(project.codebase_memory_enabled)),
         SqliteValue::Text(now.clone()),
         SqliteValue::Text(now),
     ])?;
@@ -63,7 +62,6 @@ INSERT INTO projects (
     sort_order,
     icon_pack,
     icon_key,
-    codebase_memory_enabled,
     created_at,
     updated_at
 ) VALUES ({project_values})
@@ -73,13 +71,11 @@ ON CONFLICT(id) DO UPDATE SET
     pinned = excluded.pinned,
     archived = excluded.archived,
     sort_order = excluded.sort_order,
-    codebase_memory_enabled = excluded.codebase_memory_enabled,
     updated_at = excluded.updated_at;
 INSERT INTO project_vce_settings (
     project_id,
     enabled,
     revision,
-    migrated_from_codebase_memory,
     max_file_bytes,
     extra_ignore_patterns_json,
     allow_query_rewrite,
@@ -160,7 +156,6 @@ fn project_vce_settings_params(
         SqliteValue::Text(project_id.to_owned()),
         SqliteValue::Integer(i64::from(settings.enabled)),
         SqliteValue::Integer(revision),
-        SqliteValue::Integer(i64::from(settings.migrated_from_codebase_memory)),
         SqliteValue::Integer(max_file_bytes),
         SqliteValue::Text(ignore_patterns),
         SqliteValue::Integer(i64::from(settings.allow_query_rewrite)),
@@ -896,20 +891,19 @@ pub async fn persist_project_vce_settings(
 UPDATE project_vce_settings
 SET enabled = ?2,
     revision = ?3,
-    migrated_from_codebase_memory = ?4,
-    max_file_bytes = ?5,
-    extra_ignore_patterns_json = ?6,
-    allow_query_rewrite = ?7,
-    allow_rerank = ?8,
-    embedding_max_concurrency = ?9,
-    query_max_concurrency = ?10,
-    max_results = ?11,
-    max_context_chars = ?12,
-    updated_at = ?13,
-    update_mode = ?14,
-    auto_update_min_interval_seconds = ?15
+    max_file_bytes = ?4,
+    extra_ignore_patterns_json = ?5,
+    allow_query_rewrite = ?6,
+    allow_rerank = ?7,
+    embedding_max_concurrency = ?8,
+    query_max_concurrency = ?9,
+    max_results = ?10,
+    max_context_chars = ?11,
+    updated_at = ?12,
+    update_mode = ?13,
+    auto_update_min_interval_seconds = ?14
 WHERE project_id = ?1
-  AND revision = ?16
+  AND revision = ?15
   AND EXISTS (
       SELECT 1 FROM projects
       WHERE projects.id = project_vce_settings.project_id AND projects.archived = 0
@@ -1189,7 +1183,6 @@ mod tests {
             update_mode: vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
             auto_update_min_interval_seconds: 600,
             revision: 7,
-            migrated_from_codebase_memory: true,
             max_file_bytes: 2_097_152,
             extra_ignore_patterns: vec![String::from("generated/**")],
             allow_query_rewrite: true,
@@ -1207,14 +1200,13 @@ mod tests {
         )
         .expect("encode valid VCE settings");
 
-        assert_eq!(parameters.len(), 15);
+        assert_eq!(parameters.len(), 14);
         assert_eq!(
             parameters,
             vec![
                 SqliteValue::Text(String::from("project-a")),
                 SqliteValue::Integer(1),
                 SqliteValue::Integer(7),
-                SqliteValue::Integer(1),
                 SqliteValue::Integer(2_097_152),
                 SqliteValue::Text(String::from("[\"generated/**\"]")),
                 SqliteValue::Integer(1),

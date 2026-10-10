@@ -1092,7 +1092,6 @@
         "updateMode": "manual",
         "autoUpdateMinIntervalSeconds": 60,
         "revision": 1,
-        "migratedFromCodebaseMemory": false,
         "maxFileBytes": 1048576,
         "defaultIgnorePatterns": [
           "target/**"

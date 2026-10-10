@@ -2648,7 +2648,6 @@ fn runtime_policy_matches(admitted: &ProjectVceSettings, current: &ProjectVceSet
     normalized.revision = admitted.revision;
     normalized.update_mode = admitted.update_mode;
     normalized.auto_update_min_interval_seconds = admitted.auto_update_min_interval_seconds;
-    normalized.migrated_from_codebase_memory = admitted.migrated_from_codebase_memory;
     normalized.allow_query_rewrite = admitted.allow_query_rewrite;
     normalized.allow_rerank = admitted.allow_rerank;
     normalized.query_max_concurrency = admitted.query_max_concurrency;

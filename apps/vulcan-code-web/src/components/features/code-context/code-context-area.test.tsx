@@ -24,7 +24,6 @@ function overviewFixture(enabled: boolean): VceProjectOverviewResponse {
       updateMode: "manual",
       autoUpdateMinIntervalSeconds: 300,
       revision: 4,
-      migratedFromCodebaseMemory: true,
       maxFileBytes: 1_048_576,
       defaultIgnorePatterns: ["*.lock", "*.map", "generated/"],
       extraIgnorePatterns: [],

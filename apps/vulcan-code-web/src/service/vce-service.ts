@@ -49,7 +49,6 @@ function browserVceOverview(projectId: string): VceProjectOverviewResponse {
       updateMode: "manual",
       autoUpdateMinIntervalSeconds: 300,
       revision: project.vceSettingsRevision ?? 1,
-      migratedFromCodebaseMemory: false,
       maxFileBytes: 1_048_576,
       defaultIgnorePatterns: [],
       extraIgnorePatterns: [],
