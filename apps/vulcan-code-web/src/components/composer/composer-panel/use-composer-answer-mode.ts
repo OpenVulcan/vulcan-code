@@ -4,13 +4,15 @@ import { useI18n } from "@/i18n";
 import { answerModeAwaitsRequest, isAnswerModeNewer, type AnswerMode, type AnswerModeOwner } from "@/service/answer-mode";
 import { setSessionAnswerMode } from "@/service/answer-mode-service";
 import { useComposerDraftSessionSettings } from "./use-composer-draft-session-settings";
+import { useComposerPermissionMode, type PermissionModeOwner } from "./use-composer-permission-mode";
 
-/** Bind the draft settings capture and persisted answer mode to one composer owner.
- * 将草稿设置捕获与持久回答模式绑定到同一输入区归属。
+/** Bind the draft settings capture and persisted answer and permission modes to one composer owner.
+ * 将草稿设置捕获与持久回答模式、权限模式绑定到同一输入区归属。
  * Returns both controllers so first submission and the settings menu share one draft authority.
  * 返回两个控制器，使首次提交与设置菜单共用一个草稿权威。 */
 export function useComposerSessionSettings(
   scopeKey: string, sessionId: string | null, authority: AnswerModeOwner | null, globalDefault: AnswerMode,
+  permissionAuthority: PermissionModeOwner | null,
 ) {
   const draftSessionSettings = useComposerDraftSessionSettings(scopeKey, sessionId);
   const answerMode = useComposerAnswerMode({
@@ -18,7 +20,12 @@ export function useComposerSessionSettings(
     draftMode: draftSessionSettings.answerMode,
     setDraftMode: draftSessionSettings.setAnswerMode,
   });
-  return { draftSessionSettings, answerMode };
+  const permissionMode = useComposerPermissionMode({
+    scopeKey, sessionId, authority: permissionAuthority,
+    draftMode: draftSessionSettings.permissionMode,
+    setDraftMode: draftSessionSettings.setPermissionMode,
+  });
+  return { draftSessionSettings, answerMode, permissionMode };
 }
 
 /** Inputs bind settings and asynchronous receipts to the exact visible draft or session.

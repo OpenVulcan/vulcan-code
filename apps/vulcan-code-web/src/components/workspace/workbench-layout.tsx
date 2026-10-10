@@ -61,6 +61,7 @@ import { useProjectTerminalRunningCounts } from "@/components/workspace/workbenc
 import { useProjectLifecycleConfirmation } from "@/components/workspace/workbench-layout/use-project-lifecycle-confirmation";
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { useConversationSelectionNavigation } from "@/components/workspace/workbench-layout/use-conversation-selection-navigation";
+import { PermissionJudgeEntryContext, type PermissionJudgeEntry } from "@/components/composer/permission-judge-entry-context";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
@@ -496,6 +497,16 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("runtime-diagnostics");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
+  // handleOpenPermissionJudgeSettings opens the application-wide permission judge settings page.
+  // handleOpenPermissionJudgeSettings 打开应用全局的权限判定设置页。
+  const handleOpenPermissionJudgeSettings = React.useCallback(() => {
+    setActiveSettingsSubArea("permission-judge");
+    handleSelectTopFeatureArea("settings");
+  }, [handleSelectTopFeatureArea]);
+  const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
+    state: workbenchState.permissionJudgeState ?? null,
+    openSettings: handleOpenPermissionJudgeSettings,
+  }), [handleOpenPermissionJudgeSettings, workbenchState.permissionJudgeState]);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
   const handleOpenWorkspaceChat = React.useCallback(() => {
@@ -1036,6 +1047,7 @@ export function WorkbenchLayout(props: {
           </React.Suspense>
         </div>
       ) : null}
+      <PermissionJudgeEntryContext.Provider value={permissionJudgeEntry}>
       <main className="workspace">
         {showConsoleSidebar ? (
           <WorkspaceShell
@@ -1202,6 +1214,7 @@ export function WorkbenchLayout(props: {
         />
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
+      </PermissionJudgeEntryContext.Provider>
       {dialogsActivated ? <React.Suspense fallback={null}><WorkbenchDialogs
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}

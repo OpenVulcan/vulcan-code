@@ -8,6 +8,7 @@ import type {
   ComposerVmmPolicySnapshot,
 } from "@/components/composer/composer-model";
 import type { AnswerMode } from "@/service/answer-mode";
+import type { PermissionMode } from "@/service/permission-mode";
 import type { SessionGoalSummary } from "@/types";
 
 // DraftSessionSettingsEntry contains only overrides explicitly authored for one new-conversation slot.
@@ -16,6 +17,9 @@ interface DraftSessionSettingsEntry {
   // Explicit answer mode captured with all other first-turn settings.
   // 与其他首轮设置一同捕获的显式回答模式。
   answerMode?: AnswerMode;
+  // Explicit permission mode captured with all other first-turn settings.
+  // 与其他首轮设置一同捕获的显式权限模式。
+  permissionMode?: PermissionMode;
   // Explicit output-style override for the new conversation slot.
   // 新会话草稿槽的显式输出风格覆盖。
   outputStyleId?: string;
@@ -75,6 +79,12 @@ export interface ComposerDraftSessionSettingsController {
   // Capture a new draft answer mode synchronously for the next submission.
   // 同步捕获新草稿回答模式供下一次提交使用。
   setAnswerMode: (mode: AnswerMode) => void;
+  // Explicit draft permission mode, or null while the draft keeps the session default.
+  // 显式草稿权限模式；草稿保留会话默认值时为空。
+  permissionMode: PermissionMode | null;
+  // Capture a new draft permission mode synchronously for the next submission.
+  // 同步捕获新草稿权限模式供下一次提交使用。
+  setPermissionMode: (mode: PermissionMode) => void;
   // Output-style override shown for the current draft, or null when inheriting global settings.
   // 当前草稿显示的输出风格覆盖；继承全局设置时为空。
   outputStyleId: string | null;
@@ -162,6 +172,9 @@ export function useComposerDraftSessionSettings(
   // setAnswerMode 复用精确草稿捕获及确认归属。
   const setAnswerMode = React.useCallback((mode: AnswerMode) => {
     updateCurrent((entry) => ({ ...entry, answerMode: mode }));
+  }, [updateCurrent]);
+  const setPermissionMode = React.useCallback((mode: PermissionMode) => {
+    updateCurrent((entry) => ({ ...entry, permissionMode: mode }));
   }, [updateCurrent]);
   const setVmmPolicy = React.useCallback((policy: string, mode: string) => {
     if (!["inherit", "enabled", "disabled"].includes(mode)) return;
@@ -259,6 +272,8 @@ export function useComposerDraftSessionSettings(
   return {
     answerMode: current.answerMode ?? null,
     setAnswerMode,
+    permissionMode: current.permissionMode ?? null,
+    setPermissionMode,
     outputStyleId: current.outputStyleId ?? null,
     vmmPolicy: current.vmmPolicy ?? null,
     providerToolSettings: current.providerToolSettings,

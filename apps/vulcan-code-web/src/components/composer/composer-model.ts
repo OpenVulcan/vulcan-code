@@ -1,4 +1,5 @@
 import type { AnswerMode } from "@/service/answer-mode";
+import type { PermissionMode } from "@/service/permission-mode";
 import type { LocaleCode } from "@/i18n";
 import { pickBilingualText } from "@/i18n-locales";
 import type {
@@ -86,6 +87,9 @@ export interface ComposerSessionSettingsSnapshot {
   // Explicit answer mode for the new session; absence copies the global default.
   // 新会话的显式回答模式；缺省时复制全局默认值。
   answerMode?: AnswerMode;
+  // Explicit permission mode for the new session; absence keeps the session default.
+  // 新会话的显式权限模式；缺省时保留会话默认值。
+  permissionMode?: PermissionMode;
   // Optional output-style override captured only when creating a new conversation.
   // 仅在创建新会话时捕获的可选输出风格覆盖。
   outputStyleId?: string;

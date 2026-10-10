@@ -2,6 +2,7 @@ import React from "react";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
+import type { PermissionModeOwner } from "@/components/composer/composer-panel/use-composer-permission-mode";
 import { createPortal } from "react-dom";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
@@ -53,6 +54,13 @@ export { composerAttachmentMedia } from "@/components/composer/composer-attachme
 function selectAnswerMode(snapshot: ConversationEventWindowControllerSnapshot): AnswerModeOwner | null {
   if (snapshot.owner === null || snapshot.session_config === null) return null;
   return { sessionId: snapshot.owner.session_id, generation: snapshot.owner.window_generation, mode: snapshot.session_config.answer_mode };
+}
+
+/** Select only permission-mode ownership/config so streaming tokens do not rerender the composer dock.
+ * 仅选择权限模式归属与配置，使流式 Token 不触发输入区浮层重绘。 */
+function selectPermissionMode(snapshot: ConversationEventWindowControllerSnapshot): PermissionModeOwner | null {
+  if (snapshot.owner === null || snapshot.session_config === null) return null;
+  return { sessionId: snapshot.owner.session_id, generation: snapshot.owner.window_generation, mode: snapshot.session_config.permission_mode };
 }
 
 // ComposerDock renders composer-related floating controls.
@@ -240,6 +248,7 @@ export function ComposerDock(props: {
   // answerModeState stays bound to the exact hydrated owner across selection transitions.
   // answerModeState 在选择转换期间始终绑定精确已加载归属。
   const answerModeState = useSelectedConversationEventWindowSelector(selectAnswerMode, conversationSelectionEqual);
+  const permissionModeState = useSelectedConversationEventWindowSelector(selectPermissionMode, conversationSelectionEqual);
   // dockRef measures only in-flow composer content; portaled and floating status controls stay outside this height.
   // dockRef 只测量布局流内的输入区内容；Portal 状态与浮动控件不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
@@ -290,6 +299,7 @@ export function ComposerDock(props: {
       <ComposerPanel
         answerModeState={answerModeState}
         defaultAnswerMode={props.defaultAnswerMode}
+        permissionModeState={permissionModeState}
         attachmentCapabilities={props.attachmentCapabilities}
         projectId={props.projectId}
         conversationId={props.conversationId}

@@ -23,7 +23,7 @@ const save = vi.mocked(setSessionAnswerMode);
 function Harness({ sessionId = null, authority = null, slot = "draft:a", globalDefault = "standard" }: {
   sessionId?: string | null; authority?: AnswerModeOwner | null; slot?: string; globalDefault?: AnswerMode;
 }) {
-  settings = useComposerSessionSettings(slot, sessionId, authority, globalDefault);
+  settings = useComposerSessionSettings(slot, sessionId, authority, globalDefault, null);
   return null;
 }
 

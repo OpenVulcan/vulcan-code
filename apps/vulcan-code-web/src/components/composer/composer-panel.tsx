@@ -69,6 +69,7 @@ import { useComposerSendController } from "@/components/composer/composer-panel/
 import { useComposerPlanMode } from "@/components/composer/composer-panel/use-composer-plan-mode";
 import { useComposerSessionSettings } from "@/components/composer/composer-panel/use-composer-answer-mode";
 import type { AnswerMode, AnswerModeOwner } from "@/service/answer-mode";
+import type { PermissionModeOwner } from "@/components/composer/composer-panel/use-composer-permission-mode";
 import { useComposerAttachmentPreparation } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
 import { useComposerAttachmentRemoval } from "@/components/composer/composer-panel/use-composer-attachment-removal";
 import { useComposerAttachmentSubmissionGate } from "@/components/composer/composer-panel/attachment-submission-gate";
@@ -84,6 +85,9 @@ export function ComposerPanel(props: {
   // Global answer mode a new conversation copies unless its draft chooses one.
   // 新会话在草稿未选择时复制的全局回答模式。
   defaultAnswerMode: AnswerMode;
+  // Exact hydrated permission mode; absent while this composer has no loaded owner.
+  // 精确已加载的权限模式；输入区尚无已加载归属时缺省。
+  permissionModeState?: PermissionModeOwner | null;
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -348,9 +352,8 @@ export function ComposerPanel(props: {
   ]);
   // draftSessionSettings owns overrides that cannot be persisted until a new conversation materializes.
   // draftSessionSettings 持有新会话物化前无法持久化的覆盖项。
-  const { draftSessionSettings, answerMode } = useComposerSessionSettings(
-    draftSlotKey, props.conversationId, props.answerModeState ?? null, props.defaultAnswerMode,
-  );
+  const { draftSessionSettings, answerMode, permissionMode } = useComposerSessionSettings(draftSlotKey,
+    props.conversationId, props.answerModeState ?? null, props.defaultAnswerMode, props.permissionModeState ?? null);
   // providerToolSettingsBlocked mirrors explicit session conflicts into the send boundary.
   // providerToolSettingsBlocked 将显式会话冲突映射到发送边界。
   const [providerToolSettingsBlocked, setProviderToolSettingsBlocked] = React.useState(false);
@@ -588,7 +591,7 @@ export function ComposerPanel(props: {
     modelSelection: submittedModelSelection,
     captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
-    beforeSubmit: async () => await flushComposerRouteSelections() && await answerMode.flush(),
+    beforeSubmit: async () => await flushComposerRouteSelections() && await answerMode.flush() && await permissionMode.flush(),
     isConversationRunning: props.isConversationRunning,
     isDraftReplacementActive: isPendingPromptEditActive,
     clearForSubmission,
@@ -921,6 +924,7 @@ export function ComposerPanel(props: {
           <div className="composer-toolbar-left">
             <ComposerAttachmentMenu
               answerMode={answerMode}
+              permissionMode={permissionMode}
               capabilities={enabledAttachmentCapabilities}
               conversationId={props.conversationId}
               draftOutputStyleId={draftSessionSettings.outputStyleId}
