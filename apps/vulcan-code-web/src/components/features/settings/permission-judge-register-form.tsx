@@ -1,7 +1,7 @@
 import * as React from "react";
 import { FolderOpen } from "lucide-react";
 import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-dialog";
-import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
+import { PageHint, PageNotice } from "@/components/page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -132,28 +132,32 @@ export function PermissionJudgeRegisterForm(props: {
         <FolderOpen size={14} />{t("settings.permissionJudge.registerBrowse")}
       </Button>
     </div>
-    {checking !== null ? <p className="flex items-center gap-2 text-xs text-muted-foreground" data-judge-package-state="checking">
+    {checking !== null ? <PageHint className="flex items-center gap-2" data-judge-package-state="checking">
       <Spinner className="size-3.5" />{t("settings.permissionJudge.packageChecking")}
-    </p> : checkError !== null ? <div data-judge-package-state="failed">
-      <SettingsErrorNotice detail={checkError} message={t("settings.permissionJudge.packageCheckFailed")} />
-    </div> : result?.issue ? <div data-judge-package-state="issue" data-judge-package-issue={result.issue.code}>
-      <SettingsErrorNotice detail={result.issue.detail} message={Object.hasOwn(ISSUE_KEYS, result.issue.code)
+    </PageHint> : checkError !== null ? <PageNotice tone="error" data-judge-package-state="failed"
+      details={checkError} detailsLabel={t("settings.errors.showErrorDetails")}>
+      {t("settings.permissionJudge.packageCheckFailed")}
+    </PageNotice> : result?.issue ? <PageNotice tone="error" data-judge-package-state="issue" data-judge-package-issue={result.issue.code}
+      details={result.issue.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
+      {Object.hasOwn(ISSUE_KEYS, result.issue.code)
         ? t(ISSUE_KEYS[result.issue.code])
-        : formatMessage(t("settings.permissionJudge.packageIssue.unknown"), { code: result.issue.code })} />
-    </div> : facts ? <div className="grid gap-1 text-xs" data-judge-package-state={facts.registered ? "registered" : official ? "official" : "custom"}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-(--vcn-content-success)">{t("settings.permissionJudge.packageValid")}</span>
+        : formatMessage(t("settings.permissionJudge.packageIssue.unknown"), { code: result.issue.code })}
+    </PageNotice> : facts ? <PageNotice
+      tone={facts.registered ? "info" : official ? "success" : "warning"}
+      data-judge-package-state={facts.registered ? "registered" : official ? "official" : "custom"}
+      title={<span className="inline-flex flex-wrap items-center gap-2">
+        {t("settings.permissionJudge.packageValid")}
         <Badge variant="outline">{official
           ? formatMessage(t("settings.permissionJudge.modelOfficial"), { name: official })
           : t("settings.permissionJudge.modelCustom")}</Badge>
-      </div>
-      <p className="text-muted-foreground">{formatMessage(t("settings.permissionJudge.modelMeta"), {
+      </span>}>
+      <p>{formatMessage(t("settings.permissionJudge.modelMeta"), {
         policy: facts.policyVersion, precision: facts.precision, size: formatBytes(facts.totalBytes),
       })}</p>
       {facts.registered
-        ? <p className="text-muted-foreground">{t("settings.permissionJudge.packageRegistered")}</p>
-        : official === null ? <p className="text-muted-foreground">{t("settings.permissionJudge.packageCustomHint")}</p> : null}
-    </div> : null}
+        ? <p>{t("settings.permissionJudge.packageRegistered")}</p>
+        : official === null ? <p>{t("settings.permissionJudge.packageCustomHint")}</p> : null}
+    </PageNotice> : null}
     <Input aria-label={t("settings.permissionJudge.registerName")}
       placeholder={facts ? `${t("settings.permissionJudge.registerName")} · ${facts.defaultName}` : t("settings.permissionJudge.registerName")}
       value={name} onChange={(event) => setName(event.target.value)} />

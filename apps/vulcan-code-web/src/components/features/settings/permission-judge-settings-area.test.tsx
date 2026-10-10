@@ -96,11 +96,11 @@ async function mount(phase: PermissionJudgeWorkerStatus["phase"]) {
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
 }
 
-// Nothing is saved until a change; the save request carries the whole draft.
-// 修改前不保存；保存请求携带完整草稿。
+// The save bar appears only for a changed draft; the save request carries the whole draft.
+// 保存栏只在草稿改变时出现；保存请求携带完整草稿。
 it("saves only a changed draft and sends every system choice", async () => {
   await mount("ready");
-  expect(buttonByKey("settings.permissionJudge.save")?.disabled).toBe(true);
+  expect(buttonByKey("settings.permissionJudge.save")).toBeUndefined();
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
   const llmSwitch = host.querySelectorAll<HTMLButtonElement>('[role="switch"]')[1];
   await act(async () => llmSwitch.click());
@@ -108,7 +108,7 @@ it("saves only a changed draft and sends every system choice", async () => {
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
     state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true,
   });
-  expect(buttonByKey("settings.permissionJudge.save")?.disabled).toBe(true);
+  expect(buttonByKey("settings.permissionJudge.save")).toBeUndefined();
 });
 
 // Speed tests need a ready worker and run the chosen batch size.

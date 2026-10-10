@@ -95,7 +95,7 @@ it("reports the saved route and tests it with one decision request", async () =>
     consumerProfileId: "permission_judge",
     operation: "decision_evaluate",
   });
-  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  expect(host.querySelector("[data-cloud-test-result]")).not.toBeNull();
 });
 
 it("clears the saved route through the shared route transaction", async () => {
