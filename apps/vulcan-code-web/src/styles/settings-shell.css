@@ -29,6 +29,9 @@
 /* Routed pages fill the body; pages that own a scroll viewport keep it, others scroll with the body. */
 /* 路由页面填满正文；自带滚动视口的页面保留自身滚动，其余随正文滚动。 */
 .settings-page-body > * { flex: 1 1 auto; min-height: 0; }
+/* Page kit pages scroll with the body: stretching would squeeze their clipped cards and end the sticky save bar early. */
+/* 页面套件页面随正文滚动：拉伸会挤压其裁切的卡片，并使吸附保存栏提前失效。 */
+.settings-page-body > .page-body { flex: none; }
 /* The frame owns the gutter, so page wrappers drop their historical padding. */
 /* 页面留白由框架负责，页面包装层移除历史内边距。 */
 .settings-page-body > :is(.settings-preferences-page, .settings-direct-content) { padding: 0; }

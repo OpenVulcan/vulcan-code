@@ -1,7 +1,13 @@
 import { serviceClient } from "@/service/webui-service-runtime";
 import type {
+  JudgeLabel,
   PermissionJudgeBenchmarkResult,
+  PermissionJudgeRecord,
+  PermissionJudgeRecordExport,
+  PermissionJudgeRecordPage,
+  PermissionJudgeRecordsRequest,
   PermissionJudgeCudaComponent,
+  PermissionJudgePackageInspection,
   PermissionJudgeSettingsSaveRequest,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
@@ -26,6 +32,14 @@ export async function savePermissionJudgeSettings(
   request: PermissionJudgeSettingsSaveRequest,
 ): Promise<PermissionJudgeSettingsSnapshot> {
   return serviceClient.request<PermissionJudgeSettingsSnapshot>("service_save_permission_judge_settings", { request });
+}
+
+// inspectPermissionJudgePackage verifies a package directory without registering it.
+// inspectPermissionJudgePackage 验证模型包目录但不登记。
+export async function inspectPermissionJudgePackage(path: string): Promise<PermissionJudgePackageInspection> {
+  return serviceClient.request<PermissionJudgePackageInspection>("service_inspect_permission_judge_package", {
+    request: { path },
+  });
 }
 
 // registerPermissionJudgeModel verifies a package directory and registers it.
@@ -103,4 +117,30 @@ export async function saveProjectPermissionJudgePolicy(
   return serviceClient.request<ProjectPermissionJudgePolicySnapshot>("service_save_project_permission_judge_policy", {
     request: { projectId, options },
   });
+}
+
+// loadPermissionJudgeRecords reads one page of the decision log, newest first.
+// loadPermissionJudgeRecords 读取判定记录的一页，最新在前。
+export async function loadPermissionJudgeRecords(request: PermissionJudgeRecordsRequest): Promise<PermissionJudgeRecordPage> {
+  return serviceClient.request<PermissionJudgeRecordPage>("service_permission_judge_records", { request });
+}
+
+// markPermissionJudgeRecord marks the label the judge should have given, or clears it with null.
+// markPermissionJudgeRecord 标记判定器本应给出的标签，传 null 时清除标记。
+export async function markPermissionJudgeRecord(id: string, correction: JudgeLabel | null): Promise<PermissionJudgeRecord> {
+  return serviceClient.request<PermissionJudgeRecord>("service_mark_permission_judge_record", {
+    request: { id, correction },
+  });
+}
+
+// exportPermissionJudgeRecords returns the marked records as training samples.
+// exportPermissionJudgeRecords 返回作为训练样本的已标记记录。
+export async function exportPermissionJudgeRecords(): Promise<PermissionJudgeRecordExport> {
+  return serviceClient.request<PermissionJudgeRecordExport>("service_export_permission_judge_records", {});
+}
+
+// clearPermissionJudgeRecords removes every record of the decision log.
+// clearPermissionJudgeRecords 删除判定记录中的全部记录。
+export async function clearPermissionJudgeRecords(): Promise<void> {
+  await serviceClient.request<null>("service_clear_permission_judge_records", {});
 }

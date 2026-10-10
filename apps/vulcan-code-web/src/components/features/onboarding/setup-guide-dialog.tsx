@@ -4,13 +4,12 @@ import { toast } from "sonner";
 import { StatusPill } from "@/components/shared/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { PermissionJudgeRegisterForm, type PermissionJudgeRegisterRequest } from "@/components/features/settings/permission-judge-register-form";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
@@ -174,25 +173,22 @@ function LocalModelStep(props: {
 }) {
   const { t } = useI18n();
   const { snapshot } = props;
-  const [path, setPath] = React.useState("");
-  const [name, setName] = React.useState("");
-  const [custom, setCustom] = React.useState(false);
   const worker = snapshot.status.worker;
   const pill = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
   const devices = snapshot.devices.map((device) => device.unavailableReason
     ? `${t(DEVICE_KEYS[device.device])} · ${label(t, REASON_KEYS, device.unavailableReason)}`
     : t(DEVICE_KEYS[device.device])).join(", ");
-  // register adds the folder and makes it the model in use, which verifies and warms it up.
-  // register 登记文件夹并设为使用中模型，同时完成验证与预热。
-  const register = () => props.run("register", "settings.permissionJudge.registerFailed", async () => {
-    const registered = await registerPermissionJudgeModel(path.trim(), name.trim(), custom);
-    const added = registered.models.find((model) => !snapshot.models.some((known) => known.id === model.id));
-    props.onSnapshot(registered);
-    if (added && registered.activeModelId === null) props.onSnapshot(await activatePermissionJudgeModel(added.id));
-    setPath("");
-    setName("");
-    setCustom(false);
-  });
+  // register adds the checked folder and, while none is in use, makes it the model in use, which
+  // verifies and warms it up.
+  // register 登记已检查的文件夹；尚无使用中模型时将其设为使用中模型，同时完成验证与预热。
+  const register = (request: PermissionJudgeRegisterRequest, reset: () => void) =>
+    props.run("register", "settings.permissionJudge.registerFailed", async () => {
+      const registered = await registerPermissionJudgeModel(request.path, request.name, request.custom);
+      const added = registered.models.find((model) => !snapshot.models.some((known) => known.id === model.id));
+      props.onSnapshot(registered);
+      reset();
+      if (added && registered.activeModelId === null) props.onSnapshot(await activatePermissionJudgeModel(added.id));
+    });
   return <section className="grid gap-2" data-setup-step="local">
     <p className="text-sm">{formatMessage(t("setupGuide.local.devices"), { devices })}</p>
     {snapshot.recommendedDevice ? <p className="text-sm text-muted-foreground">
@@ -215,18 +211,6 @@ function LocalModelStep(props: {
         </div>;
       })}
     {worker.phase === "failed" && worker.error ? <SettingsErrorNotice detail={worker.error} message={t("settings.permissionJudge.status.loadFailed")} /> : null}
-    <Input aria-label={t("settings.permissionJudge.registerPath")} placeholder={t("settings.permissionJudge.registerPath")}
-      value={path} onChange={(event) => setPath(event.target.value)} />
-    <Input aria-label={t("settings.permissionJudge.registerName")} placeholder={t("settings.permissionJudge.registerName")}
-      value={name} onChange={(event) => setName(event.target.value)} />
-    <label className="flex items-center gap-2 text-sm">
-      <Checkbox checked={custom} onCheckedChange={(checked) => setCustom(checked === true)} />
-      {t("settings.permissionJudge.registerCustom")}
-    </label>
-    <div className="settings-card-actions">
-      <Button type="button" size="sm" disabled={props.busy !== null || path.trim() === ""} onClick={() => void register()}>
-        {t("settings.permissionJudge.registerSubmit")}
-      </Button>
-    </div>
+    <PermissionJudgeRegisterForm busy={props.busy} knownPackages={snapshot.knownPackages} onRegister={register} />
   </section>;
 }

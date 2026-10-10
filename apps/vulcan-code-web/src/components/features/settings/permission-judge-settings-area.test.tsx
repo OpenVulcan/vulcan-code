@@ -26,9 +26,11 @@ const service = vi.hoisted(() => ({
   removePermissionJudgeModel: vi.fn(),
   rollbackPermissionJudgeModel: vi.fn(),
   installPermissionJudgeCuda: vi.fn(),
+  loadProjectPermissionJudgePolicy: vi.fn(),
+  saveProjectPermissionJudgePolicy: vi.fn(),
 }));
 vi.mock("@/service/permission-judge-service", () => service);
-vi.mock("@/service/project-actions-service", () => ({ openExternalUrl: vi.fn() }));
+vi.mock("@/service/project-actions-service", () => ({ browseProjectDirectories: vi.fn(), openExternalUrl: vi.fn() }));
 // The review route section keeps loading; its behavior has its own test.
 // 复核路由区块保持加载中；其行为有独立测试。
 vi.mock("@/service/settings-actions-service", () => ({
@@ -96,29 +98,68 @@ async function mount(phase: PermissionJudgeWorkerStatus["phase"]) {
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
 }
 
-// Nothing is saved until a change; the save request carries the whole draft.
-// 修改前不保存；保存请求携带完整草稿。
-it("saves only a changed draft and sends every system choice", async () => {
+// openView opens one sub-page through its overview entry.
+// openView 通过总览入口打开一个子页面。
+async function openView(view: string) {
+  await act(async () => host.querySelector<HTMLButtonElement>(`[data-judge-open="${view}"]`)!.click());
+  expect(host.querySelector(`[data-judge-view="${view}"]`)).not.toBeNull();
+}
+
+// switchByKey finds a switch by its catalog-key label.
+// switchByKey 按目录键标签查找开关。
+function switchByKey(key: string): HTMLButtonElement {
+  return host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${key}"]`)!;
+}
+
+// A choice saves at once, and the request carries every system choice.
+// 选择会立即保存，请求携带全部系统选择。
+it("saves a changed choice at once with every system choice", async () => {
   await mount("ready");
-  expect(buttonByKey("settings.permissionJudge.save")?.disabled).toBe(true);
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
-  const llmSwitch = host.querySelectorAll<HTMLButtonElement>('[role="switch"]')[1];
-  await act(async () => llmSwitch.click());
-  await act(async () => buttonByKey("settings.permissionJudge.save")!.click());
+  await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
     state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true,
   });
-  expect(buttonByKey("settings.permissionJudge.save")?.disabled).toBe(true);
+});
+
+// Before the judge is first turned on, choices wait and are saved together with the switch.
+// 判定首次开启前，选择会暂存，并随开关一起保存。
+it("holds choices until a never set up judge is turned on", async () => {
+  const unset = { ...snapshot("ready"), state: null };
+  service.loadPermissionJudgeSettings.mockResolvedValue(unset);
+  service.loadPermissionJudgeStatus.mockResolvedValue(unset.status);
+  await act(async () => root.render(<PermissionJudgeSettingsArea />));
+  await act(async () => switchByKey("settings.permissionJudge.llmMayAllowBlocked").click());
+  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
+  expect(host.querySelector("[data-judge-held]")).not.toBeNull();
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), llmMayAllowBlocked: true });
+  await act(async () => switchByKey("settings.permissionJudge.enabled").click());
+  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
+    state: "enabled", backend: "local", device: "webgpu", cudaLibraryDirectory: null, llmMayAllowBlocked: true,
+  });
+});
+
+// An enabled judge never switches to a backend that is not set up; the switch waits for it.
+// 已启用的判定不会切换到尚未设置的后端；切换会等待其设置完成。
+it("waits to switch an enabled judge to a backend that is not set up", async () => {
+  await mount("ready");
+  const cloud = host.querySelector<HTMLButtonElement>('[data-slot="segmented-control-item"][value="cloud"]')!;
+  await act(async () => cloud.click());
+  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
+  expect(host.querySelector("[data-judge-switching]")).not.toBeNull();
+  expect(host.querySelector('[aria-label="settings.permissionJudge.device"]')).toBeNull();
 });
 
 // Speed tests need a ready worker and run the chosen batch size.
 // 速度测试需要就绪的 worker，并按所选批量大小执行。
 it("runs speed tests only on a ready model", async () => {
   await mount("warming");
+  await openView("diagnostics");
   expect(buttonByKey("settings.permissionJudge.benchmarkBatch")?.disabled).toBe(true);
   await act(async () => root.unmount());
   root = createRoot(host);
   await mount("ready");
+  await openView("diagnostics");
   service.benchmarkPermissionJudge.mockResolvedValue({
     device: "webgpu", modelId: "model-a", batchSize: 10, rounds: 5, p50Ms: 40, p95Ms: 45, perItemMs: 4, itemsPerSecond: 250,
   });
@@ -148,7 +189,8 @@ it("benchmarks a saved cloud judge without the local model", async () => {
   service.loadPermissionJudgeStatus.mockResolvedValue(cloud.status);
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
   expect(host.querySelector('[aria-label="settings.permissionJudge.device"]')).toBeNull();
-  expect(host.querySelector('[aria-label="settings.permissionJudge.registerPath"]')).toBeNull();
+  expect(host.querySelector('[data-judge-open="models"]')).toBeNull();
+  await openView("diagnostics");
   service.benchmarkPermissionJudge.mockResolvedValue({
     device: null, modelId: "jev", batchSize: 1, rounds: 1, p50Ms: 300, p95Ms: 300, perItemMs: 300, itemsPerSecond: 3.3,
   });
@@ -163,6 +205,7 @@ it("tests a ready model before any backend is saved", async () => {
   service.loadPermissionJudgeSettings.mockResolvedValue(unset);
   service.loadPermissionJudgeStatus.mockResolvedValue(unset.status);
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
+  await openView("diagnostics");
   expect(buttonByKey("settings.permissionJudge.benchmarkSingle")?.disabled).toBe(false);
 });
 
@@ -181,4 +224,21 @@ it("polls the status at the interval it publishes", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+// The categories of the model in use are listed on the overview and open per project.
+// 使用中模型的类别列在总览上，并按项目打开。
+it("lists the model's categories and opens them for the first project", async () => {
+  const withOptions = { ...snapshot("ready"), policyOptions: [{ key: "database_reset", defaultMode: "confirm", modes: ["confirm", "allow"] }] };
+  service.loadPermissionJudgeSettings.mockResolvedValue(withOptions);
+  service.loadPermissionJudgeStatus.mockResolvedValue(withOptions.status);
+  service.loadProjectPermissionJudgePolicy.mockResolvedValue({
+    projectId: "p1", options: [{ ...withOptions.policyOptions[0], chosenMode: null }], unsupportedOptions: {}, issue: null,
+  });
+  const projects = [{ id: "p1", name: "One", path: "D:/one" }, { id: "p2", name: "Two", path: "D:/two" }] as never;
+  await act(async () => root.render(<PermissionJudgeSettingsArea projects={projects} />));
+  expect(host.querySelector("[data-judge-policy-summary]")?.textContent).toContain("projectSettings.permissionJudge.option.databaseReset");
+  await openView("policy");
+  expect(service.loadProjectPermissionJudgePolicy).toHaveBeenCalledExactlyOnceWith("p1");
+  expect(host.querySelector('[data-judge-policy] [data-judge-option="database_reset"]')).not.toBeNull();
 });

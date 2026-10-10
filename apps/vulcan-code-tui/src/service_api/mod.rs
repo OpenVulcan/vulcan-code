@@ -190,9 +190,15 @@ pub enum Slot {
     /// The latest `benchmarkPermissionJudge` result of this page; never saved.
     /// 本页最近一次 `benchmarkPermissionJudge` 结果；不会持久化。
     PermissionJudgeBenchmark,
+    /// The latest `inspectPermissionJudgePackage` result of the registration form; never saved.
+    /// 登记表单最近一次 `inspectPermissionJudgePackage` 结果；不会持久化。
+    PermissionJudgePackageInspection,
     /// `loadProjectPermissionJudgePolicy` of the project chosen on the permission strategy page.
     /// 权限策略页所选项目的 `loadProjectPermissionJudgePolicy`。
     ProjectPermissionJudgePolicy,
+    /// The shown page of `loadPermissionJudgeRecords`; its loader carries the filters.
+    /// `loadPermissionJudgeRecords` 当前显示的一页；其加载器携带筛选条件。
+    PermissionJudgeRecords,
 }
 
 impl Slot {

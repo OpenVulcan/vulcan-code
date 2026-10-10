@@ -18,6 +18,7 @@ vi.mock("@/i18n", async (importOriginal) => {
 const service = vi.hoisted(() => ({
   loadPermissionJudgeSettings: vi.fn(),
   savePermissionJudgeSettings: vi.fn(),
+  inspectPermissionJudgePackage: vi.fn(),
   registerPermissionJudgeModel: vi.fn(),
   activatePermissionJudgeModel: vi.fn(),
 }));
@@ -126,8 +127,13 @@ it("enables the local judge only after a registered model warms up", async () =>
     setter.call(path, "D:/models/model-a");
     path.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  service.inspectPermissionJudgePackage.mockResolvedValue({ issue: null, package: {
+    modelId: "model-a", knownPackageId: null, defaultName: "model-a", policyVersion: "1", precision: "fp16", totalBytes: 1, registered: false,
+  } });
+  await act(async () => { path.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  await act(async () => document.body.querySelector<HTMLButtonElement>("[data-judge-register-custom]")!.click());
   await act(async () => buttonByKey("settings.permissionJudge.registerSubmit")!.click());
-  expect(service.registerPermissionJudgeModel).toHaveBeenCalledExactlyOnceWith("D:/models/model-a", "", false);
+  expect(service.registerPermissionJudgeModel).toHaveBeenCalledExactlyOnceWith("D:/models/model-a", "", true);
   expect(service.activatePermissionJudgeModel).toHaveBeenCalledExactlyOnceWith("model-a");
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
   service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("model-a"), state: "enabled" });

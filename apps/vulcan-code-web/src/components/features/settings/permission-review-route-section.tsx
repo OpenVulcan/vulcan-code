@@ -1,11 +1,11 @@
 import * as React from "react";
 import { toast } from "sonner";
+import { PageNotice, PageRow, PageSection } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { inferenceRouteKey, inferenceRoutePickerOptions } from "@/components/features/inference-route-picker";
-import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import { loadPublicAiSettings, savePublicAiInferenceRoute } from "@/service/settings-actions-service";
@@ -57,7 +57,9 @@ export function permissionReviewCandidates(
 
 // PermissionReviewRouteSection selects the reviewing LLM route and its reasoning effort.
 // PermissionReviewRouteSection 选择复核 LLM 路由及其思考档位。
-export function PermissionReviewRouteSection() {
+// Parameters: `children` holds further review rows owned by the caller, shown after the route rows.
+// 参数：`children` 是调用方持有的其他复核行，显示在路由行之后。
+export function PermissionReviewRouteSection(props: { children?: React.ReactNode }) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [loadError, setLoadError] = React.useState("");
@@ -80,12 +82,14 @@ export function PermissionReviewRouteSection() {
   const options = React.useMemo(() => inferenceRoutePickerOptions(candidates), [candidates]);
 
   if (!snapshot) {
-    return <section className="settings-preferences-section">
-      <h2>{t("settings.permissionJudge.review.title")}</h2>
+    return <PageSection title={t("settings.permissionJudge.review.title")}>
       {loadError
-        ? <SettingsErrorNotice detail={loadError} message={t("settings.permissionJudge.review.loadFailed")} />
+        ? <PageNotice tone="error" details={loadError} detailsLabel={t("settings.errors.showErrorDetails")}>
+          {t("settings.permissionJudge.review.loadFailed")}
+        </PageNotice>
         : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={2} />}
-    </section>;
+      {props.children}
+    </PageSection>;
   }
 
   const profile = snapshot.inferenceProfiles[PERMISSION_REVIEW_CONSUMER_PROFILE_ID];
@@ -126,14 +130,14 @@ export function PermissionReviewRouteSection() {
     void save(candidate.route, keep ? savedEffort : MODEL_DEFAULT_EFFORT);
   };
 
-  return <section className="settings-preferences-section" data-permission-review>
-    <h2>{t("settings.permissionJudge.review.title")}</h2>
-    <p className="settings-muted-line">{t("settings.permissionJudge.review.description")}</p>
+  return <PageSection layout="rows" data-permission-review title={t("settings.permissionJudge.review.title")}
+    description={t("settings.permissionJudge.review.description")}
+    footer={savedRoute ? <Button type="button" size="sm" variant="outline" disabled={busy}
+      onClick={() => void save(null, MODEL_DEFAULT_EFFORT)}>{t("settings.permissionJudge.review.clear")}</Button> : undefined}>
     {savedRoute && !selected
-      ? <p className="settings-muted-line" role="alert">{t("settings.permissionJudge.review.unavailable")}</p>
+      ? <PageNotice tone="error">{t("settings.permissionJudge.review.unavailable")}</PageNotice>
       : null}
-    <div className="settings-preference-row">
-      <span>{t("settings.permissionJudge.review.route")}</span>
+    <PageRow label={t("settings.permissionJudge.review.route")}>
       <Combobox
         ariaLabel={t("settings.permissionJudge.review.route")}
         disabled={busy || candidates.length === 0}
@@ -146,12 +150,11 @@ export function PermissionReviewRouteSection() {
         searchPlaceholder={t("settings.permissionJudge.review.search")}
         value={selected ? routeKey : ""}
       />
-    </div>
-    {selected ? <div className="settings-preference-row">
-      <span>{t("settings.permissionJudge.review.reasoning")}</span>
+    </PageRow>
+    {selected ? <PageRow label={t("settings.permissionJudge.review.reasoning")}>
       <Select disabled={busy} value={savedEffort ?? MODEL_DEFAULT_EFFORT}
         onValueChange={(effort) => void save(selected.route, effort)}>
-        <SelectTrigger aria-label={t("settings.permissionJudge.review.reasoning")} className="w-64"><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t("settings.permissionJudge.review.reasoning")} className="w-56"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value={MODEL_DEFAULT_EFFORT}>{t("settings.permissionJudge.review.reasoningDefault")}</SelectItem>
           {efforts.map((effort) => (
@@ -159,13 +162,12 @@ export function PermissionReviewRouteSection() {
           ))}
         </SelectContent>
       </Select>
-    </div> : null}
-    {savedRoute ? <div className="settings-card-actions">
-      <Button type="button" variant="outline" disabled={busy}
-        onClick={() => void save(null, MODEL_DEFAULT_EFFORT)}>{t("settings.permissionJudge.review.clear")}</Button>
-    </div> : null}
+    </PageRow> : null}
+    {props.children}
     {saveError
-      ? <SettingsErrorNotice className="settings-save-error" detail={saveError} message={t("settings.permissionJudge.review.saveFailed")} />
+      ? <PageNotice tone="error" details={saveError} detailsLabel={t("settings.errors.showErrorDetails")}>
+        {t("settings.permissionJudge.review.saveFailed")}
+      </PageNotice>
       : null}
-  </section>;
+  </PageSection>;
 }

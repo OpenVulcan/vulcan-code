@@ -37,7 +37,7 @@ const PERMISSION_MODE_KEYS: Record<PermissionModeKey, TranslationKey> = {
 
 // HIGH_RISK_KEYS maps backend high-risk category keys to their catalog labels.
 // HIGH_RISK_KEYS 将后端高风险类别键映射到目录标签。
-const HIGH_RISK_KEYS: Record<string, TranslationKey> = {
+export const HIGH_RISK_KEYS: Record<string, TranslationKey> = {
   recursive_delete: "ask.approval.risk.recursiveDelete",
   destructive_git: "ask.approval.risk.destructiveGit",
   disk_format: "ask.approval.risk.diskFormat",

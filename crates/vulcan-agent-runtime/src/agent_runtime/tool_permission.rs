@@ -12,8 +12,10 @@ pub mod command_rules;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 use vulcan_host_tools::file_runtime::{apply_patch_write_paths, path_resolves_inside_workspace};
@@ -73,7 +75,7 @@ pub trait ToolPermissionHost: Send + Sync {
     /// configured. An error means the judge is configured but could not score this call.
     /// 用已配置的判定模型为一次升级调用评分；`Ok(None)` 表示未配置判定器。错误表示已配置判定器
     /// 但无法为本次调用评分。
-    async fn judge(&self, _call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
+    async fn judge(&self, _call: JudgeCall) -> Result<Option<JudgeVerdict>, JudgeFailure> {
         Ok(None)
     }
 
@@ -84,6 +86,146 @@ pub trait ToolPermissionHost: Send + Sync {
     async fn review(&self, _call: ReviewCall) -> Result<Option<LlmReview>, String> {
         Ok(None)
     }
+
+    /// Keeps one finished decision that the judge or the reviewer took part in; it must not
+    /// block, and a failure to keep it never changes the decision.
+    /// 保存一次判定器或复核器参与的已完成决定；不得阻塞，保存失败也绝不改变决定。
+    fn record(&self, _record: PermissionRecord) {}
+}
+
+/// What one judgement read and produced, kept for the decision log.
+/// 一次判定读取与产生的内容，供判定记录保存。
+#[derive(Debug, Clone, PartialEq)]
+pub struct JudgeTrace {
+    /// Judge backend key, `local` or `cloud`.
+    /// 判定后端键，`local` 或 `cloud`。
+    pub backend: String,
+    /// Local model name or cloud model id.
+    /// 本机模型名称或云端模型标识。
+    pub model: String,
+    /// Policy version of the model.
+    /// 模型的策略版本。
+    pub policy_version: String,
+    /// Category choices the judge read, by category.
+    /// 判定器读取的各类别档位。
+    pub settings: BTreeMap<String, String>,
+    /// Call text the judge read.
+    /// 判定器读取的调用文本。
+    pub rendered: String,
+    /// Raw local scores in label order.
+    /// 按标签顺序排列的本机原始分数。
+    pub logits: Option<[f32; 3]>,
+    /// Cloud probability of the allow label.
+    /// 云端 allow 标签的概率。
+    pub allow_probability: Option<f32>,
+    /// Sequence length the local model read or refused.
+    /// 本机模型读取或拒绝的序列长度。
+    pub input_tokens: Option<u32>,
+}
+
+/// One scored judgement.
+/// 一次已评分的判定。
+#[derive(Debug, Clone, PartialEq)]
+pub struct JudgeVerdict {
+    /// Decision after the threshold rule.
+    /// 应用门槛规则后的判定。
+    pub label: JudgeLabel,
+    /// What the judge read and produced.
+    /// 判定器读取与产生的内容。
+    pub trace: JudgeTrace,
+}
+
+/// A configured judge that could not score a call.
+/// 已配置但无法为调用评分的判定器。
+#[derive(Debug, Clone, PartialEq)]
+pub struct JudgeFailure {
+    /// Why the call could not be scored.
+    /// 无法评分的原因。
+    pub reason: String,
+    /// What the judge read, when it got that far.
+    /// 判定器已读取的内容（若已进行到该步）。
+    pub trace: Option<JudgeTrace>,
+}
+
+/// Which layer decided a recorded call, and how.
+/// 已记录调用由哪一层决定以及如何决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionOutcome {
+    /// The judge cleared the call.
+    /// 判定器放行。
+    JudgeAllowed,
+    /// The reviewer cleared the call.
+    /// 复核器放行。
+    ReviewAllowed,
+    /// The reviewer denied the call.
+    /// 复核器拒绝。
+    ReviewDenied,
+    /// The user allowed the call once.
+    /// 用户允许本次调用。
+    UserAllowed,
+    /// The user denied the call.
+    /// 用户拒绝。
+    UserDenied,
+    /// The approval could not finish.
+    /// 审批无法完成。
+    Failed,
+}
+
+impl PermissionOutcome {
+    /// Stable key shared by the decision log and clients.
+    /// 判定记录与客户端共用的稳定键。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::JudgeAllowed => "judge_allowed",
+            Self::ReviewAllowed => "review_allowed",
+            Self::ReviewDenied => "review_denied",
+            Self::UserAllowed => "user_allowed",
+            Self::UserDenied => "user_denied",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// One finished decision the judge or the reviewer took part in.
+/// 一次判定器或复核器参与的已完成决定。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermissionRecord {
+    /// Session that made the call.
+    /// 发起调用的会话。
+    pub session_id: SessionId,
+    /// When the call reached the judge layer.
+    /// 调用到达判定层的时间。
+    pub judged_at: SystemTime,
+    /// Workspace the call runs in.
+    /// 调用运行的工作区。
+    pub workspace_root: Option<PathBuf>,
+    /// Model-visible tool name.
+    /// 模型可见的工具名称。
+    pub tool_name: String,
+    /// Streamed argument text, or the structured arguments as JSON for restored calls.
+    /// 流式参数文本；恢复的调用使用结构化参数的 JSON。
+    pub arguments: String,
+    /// Matched high-risk category, when any.
+    /// 命中的高风险类别（如有）。
+    pub high_risk: Option<HighRiskCategory>,
+    /// Judge layer finding, when a judge is configured.
+    /// 判定层结论（配置判定器时）。
+    pub judge: Option<JudgeFinding>,
+    /// What the judge read and produced, when it got that far.
+    /// 判定器读取与产生的内容（若已进行到该步）。
+    pub judge_trace: Option<JudgeTrace>,
+    /// Time the judge layer took.
+    /// 判定层耗时。
+    pub judge_elapsed: Option<Duration>,
+    /// Review layer finding, when a reviewer is configured.
+    /// 复核层结论（配置复核器时）。
+    pub review: Option<ReviewFinding>,
+    /// Time the review layer took.
+    /// 复核层耗时。
+    pub review_elapsed: Option<Duration>,
+    /// Which layer decided, and how.
+    /// 由哪一层决定以及如何决定。
+    pub outcome: PermissionOutcome,
 }
 
 /// Permission-only text carried with one call; neither persists.
@@ -404,22 +546,50 @@ pub fn evaluate_rules(
     }
 }
 
-/// Asks the judge about one escalated call; `None` when no judge is configured.
-/// 就一次升级调用询问判定器；未配置判定器时返回 `None`。
+/// What the judge layer produced for one call.
+/// 判定层对一次调用的产出。
+#[derive(Default)]
+struct JudgeRun {
+    /// Finding; `None` when no judge is configured or the mode skips it.
+    /// 结论；未配置判定器或模式跳过时为 `None`。
+    finding: Option<JudgeFinding>,
+    /// What the judge read and produced.
+    /// 判定器读取与产生的内容。
+    trace: Option<JudgeTrace>,
+    /// Time the layer took, when it ran.
+    /// 该层运行时的耗时。
+    elapsed: Option<Duration>,
+}
+
+/// Asks the judge about one escalated call.
+/// 就一次升级调用询问判定器。
 async fn judge_layer(
     host: &Arc<dyn ToolPermissionHost>,
     definition: &ResolvedToolDefinition,
     raw_arguments: Option<&str>,
     workspace_root: Option<&Path>,
-) -> Option<JudgeFinding> {
+) -> JudgeRun {
     let call = JudgeCall {
         workspace_root: workspace_root.map(Path::to_path_buf),
         tool_name: definition.descriptor.id.clone(),
         raw_arguments: raw_arguments.map(str::to_string),
     };
-    match host.judge(call).await {
-        Ok(label) => label.map(JudgeFinding::Scored),
-        Err(reason) => Some(JudgeFinding::Unavailable(reason)),
+    let started = Instant::now();
+    let (finding, trace) = match host.judge(call).await {
+        Ok(Some(verdict)) => (
+            Some(JudgeFinding::Scored(verdict.label)),
+            Some(verdict.trace),
+        ),
+        Ok(None) => (None, None),
+        Err(failure) => (
+            Some(JudgeFinding::Unavailable(failure.reason)),
+            failure.trace,
+        ),
+    };
+    JudgeRun {
+        elapsed: finding.as_ref().map(|_| started.elapsed()),
+        finding,
+        trace,
     }
 }
 
@@ -428,11 +598,23 @@ async fn judge_layer(
 async fn review_layer(
     host: &Arc<dyn ToolPermissionHost>,
     call: ReviewCall,
-) -> Option<ReviewFinding> {
-    match host.review(call).await {
+) -> (Option<ReviewFinding>, Option<Duration>) {
+    let started = Instant::now();
+    let finding = match host.review(call).await {
         Ok(review) => review.map(ReviewFinding::Reviewed),
         Err(reason) => Some(ReviewFinding::Unavailable(reason)),
-    }
+    };
+    let elapsed = finding.as_ref().map(|_| started.elapsed());
+    (finding, elapsed)
+}
+
+/// What the layers after the judge decided for one escalated call.
+/// 判定层之后各层对一次升级调用的决定。
+struct EscalatedDecision {
+    verdict: ToolPermissionVerdict,
+    outcome: PermissionOutcome,
+    review: Option<ReviewFinding>,
+    review_elapsed: Option<Duration>,
 }
 
 /// Decides whether one tool call proceeds, reading the session's live permission mode.
@@ -467,40 +649,127 @@ pub async fn admit_tool_call(
     let RuleOutcome::Escalate { high_risk } = evaluate_rules(mode, &subject, workspace_root) else {
         return ToolPermissionVerdict::Proceed;
     };
+    let judged_at = SystemTime::now();
     let judge = if mode == PermissionMode::WorkspaceWrite {
         judge_layer(host, definition, texts.raw_arguments, workspace_root).await
     } else {
-        None
+        JudgeRun::default()
     };
-    if high_risk.is_none() && judge == Some(JudgeFinding::Scored(JudgeLabel::Allow)) {
-        return ToolPermissionVerdict::Proceed;
+    let arguments = texts
+        .raw_arguments
+        .map_or_else(|| args.to_string(), str::to_string);
+    let decision = decide_escalated(
+        host,
+        session_id,
+        definition,
+        args,
+        EscalatedCall {
+            arguments: &arguments,
+            user_request: texts.user_request,
+            context,
+            workspace_root,
+            mode,
+            subject,
+            high_risk,
+            judge: judge.finding.clone(),
+        },
+    )
+    .await;
+    if judge.finding.is_some() || decision.review.is_some() {
+        host.record(PermissionRecord {
+            session_id,
+            judged_at,
+            workspace_root: workspace_root.map(Path::to_path_buf),
+            tool_name: definition.descriptor.id.clone(),
+            arguments,
+            high_risk,
+            judge: judge.finding,
+            judge_trace: judge.trace,
+            judge_elapsed: judge.elapsed,
+            review: decision.review,
+            review_elapsed: decision.review_elapsed,
+            outcome: decision.outcome,
+        });
     }
-    let review = if mode == PermissionMode::WorkspaceWrite {
+    decision.verdict
+}
+
+/// One escalated call as the layers after the judge read it.
+/// 判定层之后各层所读取的一次升级调用。
+struct EscalatedCall<'a> {
+    arguments: &'a str,
+    user_request: Option<&'a str>,
+    context: &'a VulcanToolInvocationContext,
+    workspace_root: Option<&'a Path>,
+    mode: PermissionMode,
+    subject: PermissionSubject,
+    high_risk: Option<HighRiskCategory>,
+    judge: Option<JudgeFinding>,
+}
+
+/// Applies the judge finding, then the reviewer, then the user to one escalated call.
+/// 对一次升级调用依次应用判定结论、复核器与用户。
+async fn decide_escalated(
+    host: &Arc<dyn ToolPermissionHost>,
+    session_id: SessionId,
+    definition: &ResolvedToolDefinition,
+    args: &Value,
+    call: EscalatedCall<'_>,
+) -> EscalatedDecision {
+    let EscalatedCall {
+        arguments,
+        user_request,
+        context,
+        workspace_root,
+        mode,
+        subject,
+        high_risk,
+        judge,
+    } = call;
+    if high_risk.is_none() && judge == Some(JudgeFinding::Scored(JudgeLabel::Allow)) {
+        return EscalatedDecision {
+            verdict: ToolPermissionVerdict::Proceed,
+            outcome: PermissionOutcome::JudgeAllowed,
+            review: None,
+            review_elapsed: None,
+        };
+    }
+    let (review, review_elapsed) = if mode == PermissionMode::WorkspaceWrite {
         let call = ReviewCall {
             workspace_root: workspace_root.map(Path::to_path_buf),
             tool_name: definition.descriptor.id.clone(),
-            arguments: texts
-                .raw_arguments
-                .map_or_else(|| args.to_string(), str::to_string),
-            user_request: texts.user_request.map(str::to_string),
+            arguments: arguments.to_string(),
+            user_request: user_request.map(str::to_string),
             high_risk,
             judge: judge.clone(),
         };
         review_layer(host, call).await
     } else {
-        None
+        (None, None)
     };
-    if let Some(ReviewFinding::Reviewed(review)) = &review {
+    let decided = |verdict, outcome, review| EscalatedDecision {
+        verdict,
+        outcome,
+        review,
+        review_elapsed,
+    };
+    if let Some(ReviewFinding::Reviewed(reviewed)) = &review {
         let blocked = high_risk.is_some() || judge == Some(JudgeFinding::Scored(JudgeLabel::Block));
-        match review.verdict {
-            ReviewVerdict::Allow if !blocked || review.may_allow_blocked => {
-                return ToolPermissionVerdict::Proceed;
+        match reviewed.verdict {
+            ReviewVerdict::Allow if !blocked || reviewed.may_allow_blocked => {
+                return decided(
+                    ToolPermissionVerdict::Proceed,
+                    PermissionOutcome::ReviewAllowed,
+                    review,
+                );
             }
             ReviewVerdict::Deny => {
-                return ToolPermissionVerdict::Deny(format!(
-                    "{REVIEW_DENIAL_PREFIX}{}",
-                    review.reason
-                ));
+                let denial = format!("{REVIEW_DENIAL_PREFIX}{}", reviewed.reason);
+                return decided(
+                    ToolPermissionVerdict::Deny(denial),
+                    PermissionOutcome::ReviewDenied,
+                    review,
+                );
             }
             ReviewVerdict::Allow | ReviewVerdict::AskUser => {}
         }
@@ -510,7 +779,7 @@ pub async fn admit_tool_call(
         subject,
         high_risk,
         judge,
-        review,
+        review: review.clone(),
     };
     match host
         .request_approval(
@@ -522,8 +791,20 @@ pub async fn admit_tool_call(
         )
         .await
     {
-        Ok(true) => ToolPermissionVerdict::Proceed,
-        Ok(false) => ToolPermissionVerdict::Deny(String::from(USER_DENIAL)),
-        Err(error) => ToolPermissionVerdict::Fail(error),
+        Ok(true) => decided(
+            ToolPermissionVerdict::Proceed,
+            PermissionOutcome::UserAllowed,
+            review,
+        ),
+        Ok(false) => decided(
+            ToolPermissionVerdict::Deny(String::from(USER_DENIAL)),
+            PermissionOutcome::UserDenied,
+            review,
+        ),
+        Err(error) => decided(
+            ToolPermissionVerdict::Fail(error),
+            PermissionOutcome::Failed,
+            review,
+        ),
     }
 }

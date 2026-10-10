@@ -106,6 +106,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_permission_judge_settings",
     "service_permission_judge_status",
     "service_save_permission_judge_settings",
+    "service_inspect_permission_judge_package",
     "service_register_permission_judge_model",
     "service_activate_permission_judge_model",
     "service_rollback_permission_judge_model",
@@ -113,6 +114,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_reload_permission_judge",
     "service_benchmark_permission_judge",
     "service_install_permission_judge_cuda",
+    "service_permission_judge_records",
+    "service_mark_permission_judge_record",
+    "service_export_permission_judge_records",
+    "service_clear_permission_judge_records",
     "service_project_permission_judge_policy",
     "service_save_project_permission_judge_policy",
 ];
@@ -715,6 +720,13 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_inspect_permission_judge_package" => rpc_json_result(
+            permission_judge::service_inspect_permission_judge_package(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
         "service_register_permission_judge_model" => rpc_json_result(
             permission_judge::service_register_permission_judge_model(
                 state,
@@ -741,6 +753,26 @@ pub(super) async fn dispatch(
         ),
         "service_reload_permission_judge" => {
             rpc_json_result(permission_judge::service_reload_permission_judge(state).await)
+        }
+        "service_permission_judge_records" => rpc_json_result(
+            permission_judge::service_permission_judge_records(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_mark_permission_judge_record" => rpc_json_result(
+            permission_judge::service_mark_permission_judge_record(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_export_permission_judge_records" => {
+            rpc_json_result(permission_judge::service_export_permission_judge_records(state).await)
+        }
+        "service_clear_permission_judge_records" => {
+            rpc_json_result(permission_judge::service_clear_permission_judge_records(state).await)
         }
         "service_benchmark_permission_judge" => rpc_json_result(
             permission_judge::service_benchmark_permission_judge(

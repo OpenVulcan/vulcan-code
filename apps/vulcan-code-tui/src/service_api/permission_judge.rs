@@ -50,6 +50,22 @@ pub fn save_permission_judge_settings(request: Value) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_inspect_permission_judge_package`; the result replaces the
+/// registration form's check slot and nothing is registered.
+/// 构建 `service_inspect_permission_judge_package` 的请求；结果替换登记表单的检查槽位，不登记任何内容。
+/// `request` is `{path}`, collected by the check form.
+/// `request` 为检查表单收集的 `{path}`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn inspect_permission_judge_package(request: Value) -> ServiceCall {
+    ServiceCall::load(
+        "inspect_permission_judge_package",
+        "service_inspect_permission_judge_package",
+        json!({ "request": request }),
+        Slot::PermissionJudgePackageInspection,
+    )
+}
+
 /// Builds the request for `service_register_permission_judge_model`.
 /// 构建 `service_register_permission_judge_model` 的请求。
 /// `request` is `{path, name, custom}`, collected by the registration form.
@@ -149,6 +165,49 @@ pub fn install_permission_judge_cuda(component: &str) -> ServiceCall {
         "service_install_permission_judge_cuda",
         json!({ "request": { "component": component } }),
         &[Slot::PermissionJudgeStatus],
+    )
+}
+
+/// Builds the request for `service_permission_judge_records`, one page of the decision log.
+/// 构建 `service_permission_judge_records` 的请求，即判定记录的一页。
+/// `request` is the complete `PermissionJudgeRecordsRequest` with filters, cursor and limit.
+/// `request` 为包含筛选、游标与数量的完整 `PermissionJudgeRecordsRequest`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_permission_judge_records(request: Value) -> ServiceCall {
+    ServiceCall::load(
+        "load_permission_judge_records",
+        "service_permission_judge_records",
+        json!({ "request": request }),
+        Slot::PermissionJudgeRecords,
+    )
+}
+
+/// Builds the request for `service_mark_permission_judge_record`.
+/// 构建 `service_mark_permission_judge_record` 的请求。
+/// `correction` is the label the judge should have given, or `None` to clear the mark.
+/// `correction` 为判定器本应给出的标签；为 `None` 时清除标记。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn mark_permission_judge_record(id: &str, correction: Option<&str>) -> ServiceCall {
+    ServiceCall::mutate(
+        "mark_permission_judge_record",
+        "service_mark_permission_judge_record",
+        json!({ "request": { "id": id, "correction": correction } }),
+        &[Slot::PermissionJudgeRecords],
+    )
+}
+
+/// Builds the request for `service_clear_permission_judge_records`, removing every record.
+/// 构建 `service_clear_permission_judge_records` 的请求，删除全部记录。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn clear_permission_judge_records() -> ServiceCall {
+    ServiceCall::mutate(
+        "clear_permission_judge_records",
+        "service_clear_permission_judge_records",
+        json!({}),
+        &[Slot::PermissionJudgeRecords],
     )
 }
 

@@ -124,7 +124,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
     return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
   }
   if (props.activeSettingsSubArea === "permission-judge") {
-    return <PermissionJudgeSettingsArea />;
+    return <PermissionJudgeSettingsArea projects={props.workbench.projects} />;
   }
   // The retired composer page resolves to basics while preserving its useful default setting.
   // 已移除的输入组合页跳转到基础设置，并保留有用的默认设置。

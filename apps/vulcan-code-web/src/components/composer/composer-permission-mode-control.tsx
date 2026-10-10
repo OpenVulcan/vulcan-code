@@ -97,25 +97,26 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
             <ChevronDown aria-hidden="true" className="composer-select-chevron" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="composer-thinking-menu" side="top" width="content" aria-busy={saving}>
-          <DropdownMenuLabel>{t("permissionMode.menuTitle")}</DropdownMenuLabel>
+        <DropdownMenuContent align="start" side="top" width="lg" aria-busy={saving}>
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("permissionMode.menuTitle")}</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={mode ?? ""}>
             {PERMISSION_MODE_OPTIONS.map((option) => {
               const Icon = option.icon;
               return (
                 <DropdownMenuRadioItem
                   key={option.value}
+                  className="items-start text-xs"
                   value={option.value}
                   data-permission-mode={option.value}
                   disabled={saving}
                   onSelect={() => choose(option.value)}
                 >
-                  <span className="composer-select-icon" data-tone={option.value === "full_access" ? "warning" : undefined}>
-                    <Icon size={15} />
+                  <span className="composer-select-icon mt-0.5" data-tone={option.value === "full_access" ? "warning" : undefined}>
+                    <Icon size={14} />
                   </span>
-                  <span className="composer-thinking-mode-label pr-5">
-                    <span>{t(option.label)}</span>
-                    <small>{t(option.hint)}</small>
+                  <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left">
+                    <span className={option.value === "full_access" ? "text-(--vcn-content-warning)" : undefined}>{t(option.label)}</span>
+                    <span className="text-[11px] leading-snug font-normal text-muted-foreground">{t(option.hint)}</span>
                   </span>
                 </DropdownMenuRadioItem>
               );
@@ -124,11 +125,11 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
           {judge !== null && judgeLabel !== null ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem data-judge-state={judge.state ?? "unset"} onSelect={judge.openSettings}>
+              <DropdownMenuItem className="text-xs" data-judge-state={judge.state ?? "unset"} onSelect={judge.openSettings}>
                 <span className="composer-select-icon" data-tone={judge.state === null ? "warning" : undefined}>
-                  <Sparkles size={15} />
+                  <Sparkles size={14} />
                 </span>
-                <span>{t(judgeLabel)}</span>
+                <span className="flex-1 text-left">{t(judgeLabel)}</span>
               </DropdownMenuItem>
             </>
           ) : null}

@@ -56,7 +56,7 @@ HTTP 错误、网络及协议解析失败、工具参数解析失败和宿主响
 | 外观 | TUI 主题、侧栏、思考浮层；语言同步到服务 | 本地状态、Workbench |
 | 上下文 | 五档压缩窗口、新会话默认档位、用量刷新、输出风格、思考展示、工具折叠；基础系统提示词按用户或项目作用域编辑与恢复（作用域取自已加载快照的 `projectId`，未修改的正文只重读不写入） | PublicAiSettings、OutputStyleCatalog、SystemPrompt、Workbench |
 | Git 提交设置 | 分支前缀、补充提示、摘要模型，完整配置保存 | Workbench、PublicAiSettings |
-| 权限判定 | 开关、后端、设备与放行开关以完整保存请求立即保存；云端判定路由（计费测试先确认）；LLM 复核路由与思考档位（换模型时仅保留新模型声明的档位）；本机模型状态按状态中服务发布的 `pollIntervalMs` 重读；1 条与 10 条测速（云端先确认，结果只留本页）；模型登记、切换、回退、移除；CUDA 文件夹锁定、一键安装与官方链接，安装结束后重读设置 | PermissionJudgeSettings、PermissionJudgeStatus、PermissionJudgeBenchmark、PublicAiSettings |
+| 权限判定 | 开关、后端、设备与放行开关以完整保存请求立即保存；云端判定路由（计费测试先确认）；LLM 复核路由与思考档位（换模型时仅保留新模型声明的档位）；本机模型状态按状态中服务发布的 `pollIntervalMs` 重读；1 条与 10 条测速（云端先确认，结果只留本页）；模型登记、切换、回退、移除；CUDA 文件夹锁定、一键安装与官方链接，安装结束后重读设置；判定记录按判定结果、工作区与只看已标记筛选，翻页以记录 ID 为游标并可回到最新，有判定轨迹的记录可标记或取消标记，清除先确认。样本导出（`exportPermissionJudgeRecords`）结果是浏览器下载文件，只在 WebUI 提供 | PermissionJudgeSettings、PermissionJudgeStatus、PermissionJudgeBenchmark、PermissionJudgeRecords、PublicAiSettings |
 | 初始化引导 | 第一步权限判定：本机（设备、模型就地切换与登记，需使用中模型才能确认）、云端（复用云端判定路由区块与提供方入口，需已保存路由才能确认）、暂不启用；只有确认按钮写入设置，离开页面不写入；登记后不自动切换，由用户在列表中切换 | PermissionJudgeSettings、PermissionJudgeStatus、PublicAiSettings |
 | 权限策略 | 仅在判定启用时列出；按项目选择显示使用中判定模型的类别，每个类别可选默认或模型声明的档位，修改立即保存完整选择映射；保留的旧类别选择只注明不编辑 | ProjectPermissionJudgePolicy |
 | 提供方 | 服务条目及凭据配置查看 | PublicAiSettings |
@@ -203,6 +203,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::load_permission_judge_settings` | loadPermissionJudgeSettings | `service_permission_judge_settings` |
 | `permission_judge::load_permission_judge_status` | loadPermissionJudgeStatus | `service_permission_judge_status` |
 | `permission_judge::save_permission_judge_settings` | savePermissionJudgeSettings | `service_save_permission_judge_settings` |
+| `permission_judge::inspect_permission_judge_package` | inspectPermissionJudgePackage | `service_inspect_permission_judge_package` |
 | `permission_judge::register_permission_judge_model` | registerPermissionJudgeModel | `service_register_permission_judge_model` |
 | `permission_judge::activate_permission_judge_model` | activatePermissionJudgeModel | `service_activate_permission_judge_model` |
 | `permission_judge::rollback_permission_judge_model` | rollbackPermissionJudgeModel | `service_rollback_permission_judge_model` |
@@ -210,6 +211,9 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::reload_permission_judge` | reloadPermissionJudge | `service_reload_permission_judge` |
 | `permission_judge::benchmark_permission_judge` | benchmarkPermissionJudge | `service_benchmark_permission_judge` |
 | `permission_judge::install_permission_judge_cuda` | installPermissionJudgeCuda | `service_install_permission_judge_cuda` |
+| `permission_judge::load_permission_judge_records` | loadPermissionJudgeRecords | `service_permission_judge_records` |
+| `permission_judge::mark_permission_judge_record` | markPermissionJudgeRecord | `service_mark_permission_judge_record` |
+| `permission_judge::clear_permission_judge_records` | clearPermissionJudgeRecords | `service_clear_permission_judge_records` |
 | `permission_judge::load_project_permission_judge_policy` | loadProjectPermissionJudgePolicy | `service_project_permission_judge_policy` |
 | `permission_judge::save_project_permission_judge_policy` | saveProjectPermissionJudgePolicy | `service_save_project_permission_judge_policy` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |

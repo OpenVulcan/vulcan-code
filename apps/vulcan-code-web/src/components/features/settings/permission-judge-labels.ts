@@ -29,6 +29,13 @@ export const OPTION_KEYS: Record<string, TranslationKey> = {
   database_reset: "projectSettings.permissionJudge.option.databaseReset",
   project_reset: "projectSettings.permissionJudge.option.projectReset",
 };
+// What each known category covers, shown beside its name.
+// 每个已知类别涵盖的内容，显示在其名称旁。
+export const OPTION_HINT_KEYS: Record<string, TranslationKey> = {
+  cross_project_writes: "projectSettings.permissionJudge.optionHint.crossProjectWrites",
+  database_reset: "projectSettings.permissionJudge.optionHint.databaseReset",
+  project_reset: "projectSettings.permissionJudge.optionHint.projectReset",
+};
 export const MODE_KEYS: Record<string, TranslationKey> = {
   allow: "projectSettings.permissionJudge.mode.allow",
   review: "projectSettings.permissionJudge.mode.review",

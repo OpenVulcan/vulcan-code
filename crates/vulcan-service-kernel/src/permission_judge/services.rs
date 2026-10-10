@@ -9,11 +9,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use vulcan_agent_runtime::agent_runtime::tool_permission::JudgeCall;
+use vulcan_agent_runtime::agent_runtime::tool_permission::{
+    JudgeCall, JudgeFailure, JudgeTrace, JudgeVerdict, PermissionRecord,
+};
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
 use vulcan_permission_judge::{
-    JudgeLabel, JudgePackage, JudgePolicy, cloud_policy, find_known_package, known_packages,
-    render_call,
+    JudgePackage, JudgePolicy, cloud_policy, find_known_package, known_packages, render_call,
 };
 use vulcan_provider_config::provider_config::{
     JudgeBackend, JudgeState, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
@@ -25,7 +26,10 @@ use vulcan_service_api::{
     PermissionJudgeCudaInstallRequest, PermissionJudgeCudaSnapshot, PermissionJudgeDeviceSummary,
     PermissionJudgeIssue, PermissionJudgeKnownPackage, PermissionJudgeLink,
     PermissionJudgeModelRegisterRequest, PermissionJudgeModelRequest, PermissionJudgeModelSummary,
-    PermissionJudgeNvidiaDriver, PermissionJudgePolicyOption, PermissionJudgeSettingsSaveRequest,
+    PermissionJudgeNvidiaDriver, PermissionJudgePackageFacts, PermissionJudgePackageInspectRequest,
+    PermissionJudgePackageInspection, PermissionJudgePolicyOption, PermissionJudgeRecord,
+    PermissionJudgeRecordExport, PermissionJudgeRecordMarkRequest, PermissionJudgeRecordPage,
+    PermissionJudgeRecordsRequest, PermissionJudgeSettingsSaveRequest,
     PermissionJudgeSettingsSnapshot, PermissionJudgeStatus, ProjectPermissionJudgePolicyOption,
     ProjectPermissionJudgePolicySaveRequest, ProjectPermissionJudgePolicySnapshot,
     ServiceEventEmitter,
@@ -491,6 +495,53 @@ pub(crate) async fn service_save_permission_judge_settings(
     snapshot(&runtime, settings).await
 }
 
+/// Name a registration gets when the user leaves it blank: the official name, else the directory
+/// name, else the manifest digest.
+/// 用户未填名称时登记使用的名称：官方名称，其次目录名，最后清单摘要。
+fn default_model_name(path: &Path, package: &JudgePackage) -> String {
+    find_known_package(&package.summary.parent_sha256)
+        .map(|known| known.display_name.clone())
+        .or_else(|| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| package.summary.manifest_sha256.clone())
+}
+
+/// Verifies a package directory completely without registering it, so a form can show whether the
+/// folder is usable before submitting; the digest cache makes the following registration cheap.
+/// 完整验证模型包目录但不登记，使表单提交前即可显示文件夹是否可用；摘要缓存让随后的登记很快完成。
+pub(crate) async fn service_inspect_permission_judge_package(
+    state: SharedServiceBridgeState,
+    request: PermissionJudgePackageInspectRequest,
+) -> Result<PermissionJudgePackageInspection, String> {
+    let (runtime, settings) = read_state(&state)?;
+    let path = PathBuf::from(request.path.trim());
+    let package = match open_package(&runtime, path.clone()).await {
+        Ok(package) => package,
+        Err(issue) => {
+            return Ok(PermissionJudgePackageInspection {
+                issue: Some(issue),
+                package: None,
+            });
+        }
+    };
+    let model_id = package.summary.manifest_sha256.clone();
+    Ok(PermissionJudgePackageInspection {
+        issue: None,
+        package: Some(PermissionJudgePackageFacts {
+            registered: settings.model(&model_id).is_some(),
+            known_package_id: find_known_package(&package.summary.parent_sha256)
+                .map(|known| known.id.clone()),
+            default_name: default_model_name(&path, &package),
+            policy_version: package.summary.policy_version.clone(),
+            precision: package.summary.precision.clone(),
+            total_bytes: package.summary.total_bytes,
+            model_id,
+        }),
+    })
+}
+
 /// Verifies a package directory completely and registers it.
 /// 完整验证模型包目录并登记。
 pub(crate) async fn service_register_permission_judge_model(
@@ -509,13 +560,7 @@ pub(crate) async fn service_register_permission_judge_model(
         ));
     }
     let name = match request.name.trim() {
-        "" => known
-            .map(|package| package.display_name.clone())
-            .or_else(|| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| package.summary.manifest_sha256.clone()),
+        "" => default_model_name(&path, &package),
         name => name.to_string(),
     };
     let model = RegisteredJudgeModel {
@@ -863,40 +908,57 @@ pub(super) fn load_project_options(root: &Path) -> Result<BTreeMap<String, Strin
         .options)
 }
 
-/// Scores one escalated call with the chosen backend; `Ok(None)` when the judge is off.
-/// 用所选后端为一次升级调用评分；判定器关闭时返回 `Ok(None)`。
-///
-/// The workspace's project choices select the policy modes, and the call is passed with the
-/// argument text exactly as the model streamed it. Any failure sends the call to the next layer.
-/// 工作区的项目选择决定策略档位，调用附带模型流式发出的原样参数文本。任何失败都会把调用交给下一层。
+/// Judges one escalated call with the saved backend; `Ok(None)` when the judge is not enabled.
+/// 用已保存的后端判定一次升级调用；判定未启用时返回 `Ok(None)`。
 pub(crate) async fn judge_call(
     state: &SharedServiceBridgeState,
     call: JudgeCall,
-) -> Result<Option<JudgeLabel>, String> {
-    let (runtime, settings) = read_state(state)?;
+) -> Result<Option<JudgeVerdict>, JudgeFailure> {
+    let fail = |reason: String| JudgeFailure {
+        reason,
+        trace: None,
+    };
+    let (runtime, settings) = read_state(state).map_err(fail)?;
     if !local_enabled(&settings) && !cloud_enabled(&settings) {
         return Ok(None);
     }
     let raw_arguments = call.raw_arguments.ok_or_else(|| {
-        String::from("The original argument text of this call is no longer available.")
+        fail(String::from(
+            "The original argument text of this call is no longer available.",
+        ))
     })?;
     let policy = backend_policy(&runtime, &settings)
         .await
-        .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))?
-        .ok_or_else(|| String::from("No judge model is in use."))?;
+        .map_err(|issue| fail(format!("[{}] {}", issue.code, issue.detail)))?
+        .ok_or_else(|| fail(String::from("No judge model is in use.")))?;
     let chosen = match &call.workspace_root {
-        Some(root) => load_project_options(root)?,
+        Some(root) => load_project_options(root).map_err(fail)?,
         None => BTreeMap::new(),
     };
     let modes = policy
         .resolve_settings(&chosen)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| fail(error.to_string()))?;
     let root = call
         .workspace_root
         .as_ref()
         .map(|root| root.display().to_string());
+    let trace = |backend: &str, model: String| JudgeTrace {
+        backend: backend.to_string(),
+        model,
+        policy_version: policy.version.clone(),
+        settings: modes.to_map(),
+        rendered: render_call(root.as_deref(), &call.tool_name, &raw_arguments),
+        logits: None,
+        allow_probability: None,
+        input_tokens: None,
+    };
     if cloud_enabled(&settings) {
-        return cloud::judge(
+        let model = cloud::configured_model(state)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let trace = trace("cloud", model);
+        let judged = cloud::judge(
             state,
             &modes,
             CloudCall {
@@ -905,23 +967,129 @@ pub(crate) async fn judge_call(
                 raw_arguments: &raw_arguments,
             },
         )
-        .await
-        .map(Some);
+        .await;
+        return match judged {
+            Ok((label, allow)) => Ok(Some(JudgeVerdict {
+                label,
+                trace: JudgeTrace {
+                    allow_probability: Some(allow),
+                    ..trace
+                },
+            })),
+            Err(reason) => Err(JudgeFailure {
+                reason,
+                trace: Some(trace),
+            }),
+        };
     }
     let model = settings
         .active_model()
-        .ok_or_else(|| String::from("No judge model is in use."))?;
+        .ok_or_else(|| fail(String::from("No judge model is in use.")))?;
+    let trace = trace("local", model.name.clone());
     let input = JudgeInput {
-        settings: modes.to_map(),
-        rendered: render_call(root.as_deref(), &call.tool_name, &raw_arguments),
+        settings: trace.settings.clone(),
+        rendered: trace.rendered.clone(),
     };
-    match runtime.worker.evaluate(&model.id, vec![input]).await?.pop() {
-        Some(JudgeOutcome::Evaluated { label, .. }) => Ok(Some(label)),
-        Some(JudgeOutcome::InputTokenLimit { input_tokens }) => Err(format!(
-            "The call is too long for the judge model ({input_tokens} tokens)."
-        )),
-        None => Err(String::from("The local judge returned no result.")),
+    let outcome = match runtime.worker.evaluate(&model.id, vec![input]).await {
+        Ok(mut outcomes) => outcomes.pop(),
+        Err(reason) => {
+            return Err(JudgeFailure {
+                reason,
+                trace: Some(trace),
+            });
+        }
+    };
+    match outcome {
+        Some(JudgeOutcome::Evaluated {
+            label,
+            logits,
+            input_tokens,
+        }) => Ok(Some(JudgeVerdict {
+            label,
+            trace: JudgeTrace {
+                logits: Some(logits),
+                input_tokens: Some(input_tokens),
+                ..trace
+            },
+        })),
+        Some(JudgeOutcome::InputTokenLimit { input_tokens }) => Err(JudgeFailure {
+            reason: format!("The call is too long for the judge model ({input_tokens} tokens)."),
+            trace: Some(JudgeTrace {
+                input_tokens: Some(input_tokens),
+                ..trace
+            }),
+        }),
+        None => Err(JudgeFailure {
+            reason: String::from("The local judge returned no result."),
+            trace: Some(trace),
+        }),
     }
+}
+
+/// Keeps one finished gate decision in the decision log without blocking the gate; a failure to
+/// keep it is only logged.
+/// 在不阻塞闸门的情况下把一次已完成的闸门决定保存到判定记录；保存失败只写日志。
+pub(crate) fn record_decision(state: &SharedServiceBridgeState, decision: PermissionRecord) {
+    let store = match state.lock() {
+        Ok(guard) => Arc::clone(&guard.permission_judge.records),
+        Err(error) => {
+            tracing::warn!("failed to lock service state for the decision log: {error}");
+            return;
+        }
+    };
+    let record = super::records::record_of(decision);
+    tokio::task::spawn_blocking(move || {
+        if let Err(error) = store.append(record) {
+            tracing::warn!("failed to keep a permission decision: {error}");
+        }
+    });
+}
+
+/// Returns the decision log store.
+/// 返回判定记录存储。
+fn record_store(
+    state: &SharedServiceBridgeState,
+) -> Result<Arc<super::records::RecordStore>, String> {
+    let (runtime, _) = read_state(state)?;
+    Ok(Arc::clone(&runtime.records))
+}
+
+/// Reads one page of the decision log, newest first.
+/// 读取判定记录的一页，最新在前。
+pub(crate) async fn service_permission_judge_records(
+    state: SharedServiceBridgeState,
+    request: PermissionJudgeRecordsRequest,
+) -> Result<PermissionJudgeRecordPage, String> {
+    let store = record_store(&state)?;
+    blocking(move || store.page(&request)).await?
+}
+
+/// Marks the label the judge should have given a record, or clears the mark.
+/// 标记判定器本应给出的记录标签，或清除标记。
+pub(crate) async fn service_mark_permission_judge_record(
+    state: SharedServiceBridgeState,
+    request: PermissionJudgeRecordMarkRequest,
+) -> Result<PermissionJudgeRecord, String> {
+    let store = record_store(&state)?;
+    blocking(move || store.mark(&request.id, request.correction)).await?
+}
+
+/// Exports marked records as training samples.
+/// 将已标记的记录导出为训练样本。
+pub(crate) async fn service_export_permission_judge_records(
+    state: SharedServiceBridgeState,
+) -> Result<PermissionJudgeRecordExport, String> {
+    let store = record_store(&state)?;
+    blocking(move || store.export()).await?
+}
+
+/// Removes every record of the decision log.
+/// 删除判定记录中的全部记录。
+pub(crate) async fn service_clear_permission_judge_records(
+    state: SharedServiceBridgeState,
+) -> Result<(), String> {
+    let store = record_store(&state)?;
+    blocking(move || store.clear()).await?
 }
 
 #[cfg(test)]

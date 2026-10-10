@@ -1,21 +1,28 @@
 import * as React from "react";
-import { ExternalLink, FolderCheck, Gauge, RefreshCw, RotateCcw } from "lucide-react";
+import { Activity, Box, ChevronLeft, History, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import {
+  PageBody, PageEmptyState, PageFacts, PageHint, PageItem, PageNotice, PageRow, PageSection, PageToolbar, type PageFact,
+} from "@/components/page";
 import { StatusPill } from "@/components/shared/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/choice-controls";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Switch } from "@/components/ui/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
-import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import {
+  PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
+} from "@/components/features/settings/permission-judge-cuda-page";
+import { DEVICE_KEYS, MODE_KEYS, OPTION_HINT_KEYS, OPTION_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { PermissionJudgePolicyPage } from "@/components/features/settings/permission-judge-policy-page";
+import { PermissionJudgeRecordsPage } from "@/components/features/settings/permission-judge-records-page";
+import { PermissionJudgeRegisterForm } from "@/components/features/settings/permission-judge-register-form";
 import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
-import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import {
   activatePermissionJudgeModel,
   benchmarkPermissionJudge,
@@ -28,14 +35,14 @@ import {
   rollbackPermissionJudgeModel,
   savePermissionJudgeSettings,
 } from "@/service/permission-judge-service";
-import { openExternalUrl } from "@/service/project-actions-service";
 import type {
   JudgeBackend,
   JudgeDevice,
+  JudgeState,
   PermissionJudgeBenchmarkResult,
-  PermissionJudgeCudaComponent,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
+  ProjectSummary,
 } from "@/types";
 
 // Labels of stable codes sent by the service; unknown codes render as themselves.
@@ -43,29 +50,6 @@ import type {
 const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
   local: "settings.permissionJudge.backend.local",
   cloud: "settings.permissionJudge.backend.cloud",
-};
-const INSTALL_PHASE_KEYS: Record<string, TranslationKey> = {
-  downloading: "settings.permissionJudge.cuda.phase.downloading",
-  verifying: "settings.permissionJudge.cuda.phase.verifying",
-  extracting: "settings.permissionJudge.cuda.phase.extracting",
-  completed: "settings.permissionJudge.cuda.phase.completed",
-};
-const SOURCE_KEYS: Record<string, TranslationKey> = {
-  managed: "settings.permissionJudge.cuda.source.managed",
-  toolkit: "settings.permissionJudge.cuda.source.toolkit",
-  search_path: "settings.permissionJudge.cuda.source.searchPath",
-};
-const LINK_KEYS: Record<string, TranslationKey> = {
-  cuda_toolkit: "settings.permissionJudge.cuda.link.toolkit",
-  cuda_toolkit_archive: "settings.permissionJudge.cuda.link.toolkitArchive",
-  nvidia_driver: "settings.permissionJudge.cuda.link.driver",
-  cuda_redistributables: "settings.permissionJudge.cuda.link.redistributables",
-  cuda_compatibility: "settings.permissionJudge.cuda.link.compatibility",
-  onnxruntime_cuda_requirements: "settings.permissionJudge.cuda.link.onnxruntimeRequirements",
-};
-const COMPONENT_KEYS: Record<PermissionJudgeCudaComponent, TranslationKey> = {
-  onnxruntime: "settings.permissionJudge.cuda.onnxruntime",
-  cuda_libraries: "settings.permissionJudge.cuda.libraries",
 };
 
 // formatMs renders a duration, or a dash when the reading is absent.
@@ -80,28 +64,30 @@ function formatOptionalBytes(value: number | null | undefined): string {
   return value == null ? "—" : formatBytes(value);
 }
 
-// Draft holds the system-level choices until the user saves them.
-// Draft 在用户保存前保存系统级选择。
-interface Draft {
-  enabled: boolean;
+// Choices are the system-level judge settings besides the on/off state.
+// Choices 是开关状态之外的系统级判定设置。
+interface Choices {
   backend: JudgeBackend;
   device: JudgeDevice | null;
-  cudaLibraryDirectory: string;
+  cudaLibraryDirectory: string | null;
   llmMayAllowBlocked: boolean;
 }
 
-// draftOf reads the saved choices; an unset backend is local and an unset device follows the
+// savedChoices reads the saved choices; an unset backend is local and an unset device follows the
 // recommendation.
-// draftOf 读取已保存的选择；未设置的后端为本机，未设置的设备跟随推荐值。
-function draftOf(snapshot: PermissionJudgeSettingsSnapshot): Draft {
+// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的设备跟随推荐值。
+function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
   return {
-    enabled: snapshot.state === "enabled",
     backend: snapshot.backend ?? "local",
     device: snapshot.device ?? snapshot.recommendedDevice,
-    cudaLibraryDirectory: snapshot.cuda.lockedDirectory ?? "",
+    cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
     llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
   };
 }
+
+// View is the page shown inside the settings frame: the overview or one of its sub-pages.
+// View 是设置框架内显示的页面：总览或其子页面之一。
+type View = "overview" | "models" | "cuda" | "diagnostics" | "records" | "policy";
 
 // Failure is one failed action: a readable outcome plus the raw service error.
 // Failure 是一次失败的操作：可读结果加原始服务错误。
@@ -110,15 +96,22 @@ interface Failure {
   detail: string;
 }
 
-// PermissionJudgeSettingsArea manages the permission judge: switch and backend, then the cloud
-// decision route or the local device, models, live status and CUDA runtime, plus speed tests.
-// Nothing persists until the user saves or acts.
-// PermissionJudgeSettingsArea 管理权限判定：开关与后端，其后是云端判定路由或本机设备、模型、实时状态与
-// CUDA 执行库，以及速度测试。用户保存或操作前不持久化任何内容。
+// RunAction executes one named page action and reports its failure.
+// RunAction 执行一个具名页面操作并报告其失败。
+type RunAction = (name: string, failureKey: TranslationKey, action: () => Promise<void>) => Promise<void>;
+
+// PermissionJudgeSettingsArea manages the permission judge. The overview reads top-down: turn the
+// judge on, choose where calls are judged and set that judge up, then the LLM review and tools.
+// Detailed work opens as sub-pages: model management, the CUDA environment and diagnostics.
+// Every choice saves at once; while the judge was never set up, choices wait until it is turned on,
+// so nothing is written before that explicit choice.
+// PermissionJudgeSettingsArea 管理权限判定。总览自上而下：开启判定、选择在哪里判定并完成该判定器的设置，
+// 然后是 LLM 复核与工具。细节操作以子页面打开：模型管理、CUDA 环境与诊断。每个选择立即保存；判定从未设置时，
+// 选择会等到开启时才一并保存，因此在该显式选择之前不写入任何内容。
 // Parameters: none. Returns the settings page.
 // 参数：无。返回设置页。
-export function PermissionJudgeSettingsArea() {
-  const { t } = useI18n();
+export function PermissionJudgeSettingsArea(props: { projects?: readonly ProjectSummary[] }) {
+  const { locale, t } = useI18n();
   // openGuide re-enters the setup guide; absent outside the workbench layout.
   // openGuide 重新进入初始化引导；在工作台布局之外为空。
   const openGuide = React.useContext(PermissionJudgeEntryContext)?.openGuide;
@@ -126,7 +119,11 @@ export function PermissionJudgeSettingsArea() {
   // snapshot 是最近一次完整读取；status 由轮询单独刷新。
   const [snapshot, setSnapshot] = React.useState<PermissionJudgeSettingsSnapshot | null>(null);
   const [status, setStatus] = React.useState<PermissionJudgeStatus | null>(null);
-  const [draft, setDraft] = React.useState<Draft | null>(null);
+  // held keeps choices that cannot be saved yet: everything before the judge is first turned on,
+  // and a backend switch whose backend is not set up.
+  // held 保存暂时无法保存的选择：判定首次开启前的全部选择，以及尚未设置完成的后端切换。
+  const [held, setHeld] = React.useState<Partial<Choices>>({});
+  const [view, setView] = React.useState<View>("overview");
   // busy names the running action so only one action runs at a time.
   // busy 记录正在执行的操作，保证同一时间只执行一个操作。
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -138,13 +135,18 @@ export function PermissionJudgeSettingsArea() {
   // cloudConfigured tells whether a cloud decision route is saved, as reported by its section.
   // cloudConfigured 表示是否已保存云端判定路由，由其区块报告。
   const [cloudConfigured, setCloudConfigured] = React.useState(false);
+  // topRef brings a newly opened page or a new failure into view.
+  // topRef 将新打开的页面或新失败滚动到可见处。
+  const topRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    topRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [view, failure]);
 
   // applySnapshot replaces the page state with a fresh service read.
   // applySnapshot 用最新服务读取结果替换页面状态。
   const applySnapshot = React.useCallback((next: PermissionJudgeSettingsSnapshot) => {
     setSnapshot(next);
     setStatus(next.status);
-    setDraft(draftOf(next));
   }, []);
 
   const reload = React.useCallback(async () => {
@@ -178,7 +180,7 @@ export function PermissionJudgeSettingsArea() {
 
   // run executes one action, keeping the failure visible until the next action.
   // run 执行一个操作，失败信息保持显示直到下一次操作。
-  const run = async (name: string, failureKey: TranslationKey, action: () => Promise<void>) => {
+  const run: RunAction = async (name, failureKey, action) => {
     if (busy) return;
     setBusy(name);
     setFailure(null);
@@ -191,116 +193,91 @@ export function PermissionJudgeSettingsArea() {
     }
   };
 
-  if (!snapshot || !draft || !status) {
-    return <section className="settings-preferences-page settings-detail-panel">
+  const failureNotice = failure ? <PageNotice tone="error" details={failure.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
+    {failure.message}
+  </PageNotice> : null;
+
+  if (!snapshot || !status) {
+    return <PageBody>
       {loadError
-        ? <SettingsErrorNotice detail={loadError} message={t("settings.permissionJudge.loadFailed")} />
+        ? <PageNotice tone="error" details={loadError} detailsLabel={t("settings.errors.showErrorDetails")}
+          actions={<Button type="button" size="sm" variant="outline" onClick={() => void reload()}>
+            <RefreshCw size={14} />{t("settings.permissionJudge.reload")}
+          </Button>}>
+          {t("settings.permissionJudge.loadFailed")}
+        </PageNotice>
         : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={4} />}
-    </section>;
+    </PageBody>;
   }
 
-  const saved = draftOf(snapshot);
-  const dirty = JSON.stringify(saved) !== JSON.stringify(draft);
+  const saved = savedChoices(snapshot);
+  const choices: Choices = { ...saved, ...held };
   const activeModel = snapshot.models.find((model) => model.id === snapshot.activeModelId) ?? null;
-  const local = draft.backend === "local";
-  const backendReady = local ? activeModel !== null : cloudConfigured;
-  const savedCloud = snapshot.state === "enabled" && snapshot.backend === "cloud";
-  const benchmarkReady = savedCloud
-    ? !dirty
-    : snapshot.backend !== "cloud" && status.worker.phase === "ready";
-  const save = () => run("save", "settings.permissionJudge.saveFailed", async () => {
-    const directory = draft.cudaLibraryDirectory.trim();
-    applySnapshot(await savePermissionJudgeSettings({
-      state: draft.enabled ? "enabled" : "off",
-      backend: draft.backend,
-      device: draft.device,
-      cudaLibraryDirectory: directory === "" ? null : directory,
-      llmMayAllowBlocked: draft.llmMayAllowBlocked,
-    }));
-    toast.success(t("settings.permissionJudge.saved"));
-  });
+  const local = choices.backend === "local";
+  const ready = (backend: JudgeBackend) => backend === "local" ? activeModel !== null : cloudConfigured;
+  const enabled = snapshot.state === "enabled";
 
-  return <section className="settings-preferences-page settings-detail-panel">
-    {openGuide ? <div className="settings-card-actions">
-      <Button type="button" size="sm" variant="outline" onClick={openGuide}>{t("setupGuide.open")}</Button>
-    </div> : null}
-    <section className="settings-preferences-section">
-      <label className="settings-preference-row">
-        <div>
-          <h2>{t("settings.permissionJudge.enabled")}</h2>
-          <p className="settings-muted-line">{t("settings.permissionJudge.enabledHint")}</p>
-        </div>
-        <Switch checked={draft.enabled} disabled={busy !== null || (!draft.enabled && !backendReady)}
-          onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />
-      </label>
-      {!backendReady ? <p className="settings-muted-line">
-        {t(local ? "settings.permissionJudge.needsModel" : "settings.permissionJudge.needsCloudRoute")}
-      </p> : null}
-      <div className="settings-preference-row">
-        <div>
-          <span>{t("settings.permissionJudge.backend")}</span>
-          <p className="settings-muted-line">{t("settings.permissionJudge.backendHint")}</p>
-        </div>
-        <Select disabled={busy !== null} value={draft.backend}
-          onValueChange={(backend) => setDraft({ ...draft, backend: backend as JudgeBackend })}>
-          <SelectTrigger aria-label={t("settings.permissionJudge.backend")} className="w-64"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {(Object.keys(BACKEND_KEYS) as JudgeBackend[]).map((backend) => (
-              <SelectItem key={backend} value={backend}>{t(BACKEND_KEYS[backend])}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      {local ? <div className="settings-preference-row">
-        <div>
-          <span>{t("settings.permissionJudge.device")}</span>
-          {snapshot.recommendedDevice ? <p className="settings-muted-line">
-            {formatMessage(t("settings.permissionJudge.recommended"), { device: t(DEVICE_KEYS[snapshot.recommendedDevice]) })}
-          </p> : null}
-        </div>
-        <Select disabled={busy !== null} value={draft.device ?? undefined}
-          onValueChange={(device) => setDraft({ ...draft, device: device as JudgeDevice })}>
-          <SelectTrigger aria-label={t("settings.permissionJudge.device")} className="w-64"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {snapshot.devices.map((device) => (
-              <SelectItem disabled={device.unavailableReason !== null} key={device.device} value={device.device}>
-                {t(DEVICE_KEYS[device.device])}
-                {device.unavailableReason ? ` · ${label(t, REASON_KEYS, device.unavailableReason)}` : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div> : null}
-      <label className="settings-preference-row">
-        <div>
-          <span>{t("settings.permissionJudge.llmMayAllowBlocked")}</span>
-          <p className="settings-muted-line">{t("settings.permissionJudge.llmMayAllowBlockedHint")}</p>
-        </div>
-        <Switch checked={draft.llmMayAllowBlocked} disabled={busy !== null}
-          onCheckedChange={(llmMayAllowBlocked) => setDraft({ ...draft, llmMayAllowBlocked })} />
-      </label>
-      <div className="settings-card-actions">
-        <Button type="button" disabled={!dirty || busy !== null} onClick={() => void save()}>{t("settings.permissionJudge.save")}</Button>
-        {dirty ? <Button type="button" variant="ghost" disabled={busy !== null} onClick={() => setDraft(saved)}>{t("settings.permissionJudge.discard")}</Button> : null}
-      </div>
-    </section>
+  // persist saves `change` at once in `state`, or holds it while the judge was never set up or while
+  // the enabled judge would switch to a backend that is not set up.
+  // persist 立即以 `state` 保存 `change`；判定从未设置，或已启用的判定将切换到尚未设置的后端时暂存。
+  const persist = (change: Partial<Choices>, state: JudgeState | null = snapshot.state) => {
+    const next = { ...choices, ...change };
+    if (state === snapshot.state && JSON.stringify(next) === JSON.stringify(saved)) {
+      setHeld({});
+      return;
+    }
+    if (state === null || (state === "enabled" && !ready(next.backend))) {
+      setHeld({ ...held, ...change });
+      return;
+    }
+    void run("save", "settings.permissionJudge.saveFailed", async () => {
+      applySnapshot(await savePermissionJudgeSettings({ state, ...next }));
+      setHeld({});
+      toast.success(t("settings.permissionJudge.saved"));
+    });
+  };
 
-    {failure ? <SettingsErrorNotice className="settings-save-error" detail={failure.detail} message={failure.message} /> : null}
+  const back = () => setView("overview");
+  const subPage = (title: string, content: React.ReactNode) => <PageBody data-permission-judge-page="" data-judge-view={view}>
+    <div ref={topRef}>
+      <PageToolbar>
+        <Button type="button" size="sm" variant="ghost" data-judge-back="" onClick={back}>
+          <ChevronLeft size={14} />{t("settings.permissionJudge")}
+        </Button>
+        <span aria-hidden="true" className="text-muted-foreground">/</span>
+        <h2 className="text-sm font-semibold">{title}</h2>
+      </PageToolbar>
+    </div>
+    {failureNotice}
+    {content}
+  </PageBody>;
 
-    {local
-      ? <WorkerStatusSection busy={busy} run={run} snapshot={snapshot} status={status} t={t}
-        onReloaded={(next) => setStatus(next)} />
-      : <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />}
-
-    <PermissionReviewRouteSection />
-
-    <section className="settings-preferences-section">
-      <h2>{t("settings.permissionJudge.benchmark")}</h2>
-      <p className="settings-muted-line">
-        {t(savedCloud ? "settings.permissionJudge.benchmarkCloudHint" : "settings.permissionJudge.benchmarkHint")}
-      </p>
-      <div className="settings-card-actions">
-        {([1, 10] as const).map((batchSize) => (
+  if (view === "models") {
+    return subPage(t("settings.permissionJudge.models"),
+      <ModelsPage applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} t={t} />);
+  }
+  if (view === "cuda") {
+    return subPage(t("settings.permissionJudge.cuda"),
+      <PermissionJudgeCudaPage busy={busy} cuda={snapshot.cuda} install={status.cudaInstall}
+        selectedDirectory={choices.cudaLibraryDirectory} t={t}
+        onInstall={(component) => void run(`install-${component}`, "settings.permissionJudge.cuda.installFailed",
+          async () => setStatus(await installPermissionJudgeCuda(component)))}
+        onSelectDirectory={(cudaLibraryDirectory) => persist({ cudaLibraryDirectory })} />);
+  }
+  if (view === "policy") {
+    return subPage(t("settings.permissionJudge.policy.title"), <PermissionJudgePolicyPage projects={props.projects ?? []} />);
+  }
+  if (view === "records") {
+    return subPage(t("settings.permissionJudge.records.title"), <PermissionJudgeRecordsPage />);
+  }
+  if (view === "diagnostics") {
+    const savedCloud = enabled && snapshot.backend === "cloud";
+    const benchmarkReady = savedCloud || (snapshot.backend !== "cloud" && status.worker.phase === "ready");
+    return subPage(t("settings.permissionJudge.diagnostics"), <>
+      {snapshot.backend !== "cloud" ? <WorkerStatusSection snapshot={snapshot} status={status} t={t} /> : null}
+      <PageSection layout="rows" title={t("settings.permissionJudge.benchmark")}
+        description={t(savedCloud ? "settings.permissionJudge.benchmarkCloudHint" : "settings.permissionJudge.benchmarkHint")}
+        actions={([1, 10] as const).map((batchSize) => (
           <Button key={batchSize} type="button" variant="outline" size="sm"
             disabled={busy !== null || !benchmarkReady}
             onClick={() => void run(`benchmark-${batchSize}`, "settings.permissionJudge.benchmarkFailed", async () => {
@@ -309,11 +286,9 @@ export function PermissionJudgeSettingsArea() {
             })}>
             <Gauge size={14} />{t(batchSize === 1 ? "settings.permissionJudge.benchmarkSingle" : "settings.permissionJudge.benchmarkBatch")}
           </Button>
-        ))}
-      </div>
-      {benchmarks.map((result, index) => (
-        <p className="settings-muted-line" key={index}>
-          {result.device
+        ))}>
+        {benchmarks.map((result, index) => (
+          <PageItem key={index} icon={<Gauge />} title={result.device
             ? formatMessage(t("settings.permissionJudge.benchmarkResult"), {
               batch: result.batchSize,
               device: t(DEVICE_KEYS[result.device]),
@@ -328,88 +303,196 @@ export function PermissionJudgeSettingsArea() {
               total: formatMs(t, result.p50Ms),
               perItem: formatMs(t, result.perItemMs),
               rate: result.itemsPerSecond.toFixed(1),
-            })}
-        </p>
+            })} />
+        ))}
+      </PageSection>
+    </>);
+  }
+
+  // The toolbar summarizes what is saved, not held choices.
+  // 工具栏概括已保存的内容，而非暂存的选择。
+  const stateLabel = enabled
+    ? `${t("settings.permissionJudge.state.enabled")} · ${t(BACKEND_KEYS[snapshot.backend ?? "local"])}`
+    : t(snapshot.state === "off" ? "settings.permissionJudge.state.off" : "settings.permissionJudge.state.unset");
+  const stateTone = enabled ? "ready" : snapshot.state === "off" ? "pending" : "warning";
+  const switching = enabled && held.backend !== undefined && held.backend !== snapshot.backend;
+  const worker = status.worker;
+  const phaseTone = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
+  const cudaMissing = snapshot.cuda.supported ? cudaMissingLabels(t, cudaReadiness(snapshot.cuda)) : [];
+  const open = (next: View, text = t("settings.permissionJudge.open")) => <Button type="button" size="sm" variant="outline" data-judge-open={next} onClick={() => setView(next)}>
+    {text}<ChevronRight size={14} />
+  </Button>;
+
+  return <PageBody data-permission-judge-page="" data-judge-view="overview">
+    <div ref={topRef}>
+      <PageToolbar actions={openGuide
+        ? <Button type="button" size="sm" variant="outline" onClick={openGuide}>{t("setupGuide.open")}</Button>
+        : null}>
+        <StatusPill label={stateLabel} status={stateTone} />
+      </PageToolbar>
+    </div>
+    {failureNotice}
+
+    <PageSection layout="rows" title={t("settings.permissionJudge")} description={t("settings.permissionJudge.description")}>
+      <PageRow label={t("settings.permissionJudge.enabled")}
+        description={!enabled && !ready(choices.backend)
+          ? t(local ? "settings.permissionJudge.needsModel" : "settings.permissionJudge.needsCloudRoute")
+          : t("settings.permissionJudge.enabledHint")}>
+        <Switch aria-label={t("settings.permissionJudge.enabled")} checked={enabled}
+          disabled={busy !== null || (!enabled && !ready(choices.backend))}
+          onCheckedChange={(next) => persist({}, next ? "enabled" : "off")} />
+      </PageRow>
+      <PageRow label={t("settings.permissionJudge.backend")} description={t("settings.permissionJudge.backendHint")}>
+        <SegmentedControl aria-label={t("settings.permissionJudge.backend")} disabled={busy !== null} value={choices.backend}
+          onValueChange={(backend) => persist({ backend: backend as JudgeBackend })}>
+          {(Object.keys(BACKEND_KEYS) as JudgeBackend[]).map((backend) => (
+            <SegmentedControlItem key={backend} value={backend}>{t(BACKEND_KEYS[backend])}</SegmentedControlItem>
+          ))}
+        </SegmentedControl>
+      </PageRow>
+      {switching ? <PageNotice tone="info" data-judge-switching=""
+        actions={<Button type="button" size="sm" disabled={busy !== null || !ready(choices.backend)} onClick={() => persist({})}>
+          {formatMessage(t("settings.permissionJudge.switchBackend"), { backend: t(BACKEND_KEYS[choices.backend]) })}
+        </Button>}>
+        {formatMessage(t("settings.permissionJudge.switchBackendPending"), { backend: t(BACKEND_KEYS[choices.backend]) })}
+      </PageNotice> : null}
+      {snapshot.state === null && Object.keys(held).length > 0
+        ? <PageNotice tone="info" data-judge-held="">{t("settings.permissionJudge.heldUntilEnabled")}</PageNotice>
+        : null}
+    </PageSection>
+
+    {local ? <PageSection layout="rows" data-judge-local="" title={t("settings.permissionJudge.backend.local")}>
+      <PageRow label={t("settings.permissionJudge.activeModel")} description={activeModel
+        ? `${activeModel.name} · ${formatMessage(t("settings.permissionJudge.modelMeta"), {
+          policy: activeModel.policyVersion, precision: activeModel.precision, size: formatBytes(activeModel.totalBytes),
+        })}`
+        : t("settings.permissionJudge.noActiveModel")}>
+        <Button type="button" size="sm" variant={activeModel ? "outline" : "default"} data-judge-open="models" onClick={() => setView("models")}>
+          {t(activeModel ? "settings.permissionJudge.manageModels" : "settings.permissionJudge.addModel")}<ChevronRight size={14} />
+        </Button>
+      </PageRow>
+      <PageRow label={t("settings.permissionJudge.device")} description={snapshot.recommendedDevice
+        ? formatMessage(t("settings.permissionJudge.recommended"), { device: t(DEVICE_KEYS[snapshot.recommendedDevice]) })
+        : undefined}>
+        <Select disabled={busy !== null} value={choices.device ?? undefined}
+          onValueChange={(device) => persist({ device: device as JudgeDevice })}>
+          <SelectTrigger aria-label={t("settings.permissionJudge.device")} className="w-56"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {snapshot.devices.map((device) => (
+              <SelectItem disabled={device.unavailableReason !== null} key={device.device} value={device.device}>
+                {t(DEVICE_KEYS[device.device])}
+                {device.unavailableReason ? ` · ${label(t, REASON_KEYS, device.unavailableReason)}` : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </PageRow>
+      {snapshot.cuda.supported ? <PageRow label={t("settings.permissionJudge.cuda")} description={cudaMissing.length === 0
+        ? t("settings.permissionJudge.cuda.summaryReady")
+        : formatMessage(t("settings.permissionJudge.cuda.summaryMissing"), { items: new Intl.ListFormat(locale, { type: "conjunction" }).format(cudaMissing) })}>
+        <div className="flex items-center gap-2">
+          <StatusPill status={cudaMissing.length === 0 ? "ready" : "warning"}
+            label={t(cudaMissing.length === 0 ? "settings.permissionJudge.cuda.ready" : "settings.permissionJudge.cuda.missing")} />
+          <Button type="button" size="sm" variant="outline" data-judge-open="cuda" onClick={() => setView("cuda")}>
+            {t("settings.permissionJudge.cuda.manage")}<ChevronRight size={14} />
+          </Button>
+        </div>
+      </PageRow> : null}
+      {activeModel ? <PageRow label={t("settings.permissionJudge.runState")} description={worker.phase === "ready"
+        ? formatMessage(t("settings.permissionJudge.status.latencyValue"), {
+          p50: formatMs(t, worker.recentP50Ms), p95: formatMs(t, worker.recentP95Ms), count: worker.evaluations,
+        })
+        : undefined}>
+        <div className="flex items-center gap-2">
+          <StatusPill label={label(t, PHASE_KEYS, worker.phase)} status={phaseTone} />
+          {worker.phase === "failed" ? <Button type="button" size="sm" variant="outline" disabled={busy !== null}
+            onClick={() => void run("reload", "settings.permissionJudge.reloadFailed", async () => setStatus(await reloadPermissionJudge()))}>
+            <RefreshCw size={14} />{t("settings.permissionJudge.reload")}
+          </Button> : null}
+        </div>
+      </PageRow> : null}
+      {worker.phase === "failed" && worker.error ? <PageNotice tone="error" details={worker.error} detailsLabel={t("settings.errors.showErrorDetails")}>
+        {t("settings.permissionJudge.status.loadFailed")}
+      </PageNotice> : null}
+      {snapshot.activeModelIssue ? <PageNotice tone="error" details={snapshot.activeModelIssue.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
+        {formatMessage(t("settings.permissionJudge.activeModelIssue"), { code: snapshot.activeModelIssue.code })}
+      </PageNotice> : null}
+    </PageSection> : <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />}
+
+    {enabled && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
+      title={t("settings.permissionJudge.policy.title")} description={t("settings.permissionJudge.policy.description")}
+      actions={open("policy", t("settings.permissionJudge.policy.manage"))}>
+      {snapshot.policyOptions.map((option) => (
+        <PageRow key={option.key} label={label(t, OPTION_KEYS, option.key)}
+          description={Object.hasOwn(OPTION_HINT_KEYS, option.key) ? t(OPTION_HINT_KEYS[option.key]) : undefined}>
+          <span className="text-sm text-muted-foreground">
+            {formatMessage(t("settings.permissionJudge.policy.default"), { mode: label(t, MODE_KEYS, option.defaultMode) })}
+          </span>
+        </PageRow>
       ))}
-    </section>
+    </PageSection> : null}
 
-    {local ? <>
-      <ModelsSection applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} t={t} />
+    <PermissionReviewRouteSection>
+      <PageRow label={t("settings.permissionJudge.llmMayAllowBlocked")} description={t("settings.permissionJudge.llmMayAllowBlockedHint")}>
+        <Switch aria-label={t("settings.permissionJudge.llmMayAllowBlocked")} checked={choices.llmMayAllowBlocked}
+          disabled={busy !== null} onCheckedChange={(llmMayAllowBlocked) => persist({ llmMayAllowBlocked })} />
+      </PageRow>
+    </PermissionReviewRouteSection>
 
-      <CudaSection busy={busy} draft={draft} run={run} setDraft={setDraft} snapshot={snapshot} status={status} t={t}
-        onStatus={(next) => setStatus(next)} />
-    </> : null}
-  </section>;
+    <PageSection layout="rows" data-judge-tools="" title={t("settings.permissionJudge.tools")}>
+      <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
+        description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />
+      <PageItem icon={<History />} title={t("settings.permissionJudge.records.title")}
+        description={t("settings.permissionJudge.records.entryHint")} actions={open("records")} />
+    </PageSection>
+  </PageBody>;
 }
-
-// RunAction executes one named page action and reports its failure.
-// RunAction 执行一个具名页面操作并报告其失败。
-type RunAction = (name: string, failureKey: TranslationKey, action: () => Promise<void>) => Promise<void>;
 
 // WorkerStatusSection shows the loaded model's phase, memory, GPU use and latency.
 // WorkerStatusSection 展示已加载模型的阶段、内存、GPU 占用与延迟。
 function WorkerStatusSection(props: {
-  busy: string | null;
-  run: RunAction;
   snapshot: PermissionJudgeSettingsSnapshot;
   status: PermissionJudgeStatus;
   t: Translate;
-  onReloaded: (status: PermissionJudgeStatus) => void;
 }) {
   const { t } = props;
   const worker = props.status.worker;
   const model = props.snapshot.models.find((candidate) => candidate.id === worker.modelId);
-  const rows: [string, string][] = [
-    [t("settings.permissionJudge.status.model"), model?.name ?? worker.modelId ?? "—"],
-    [t("settings.permissionJudge.status.device"), worker.device ? t(DEVICE_KEYS[worker.device]) : "—"],
-    [t("settings.permissionJudge.status.process"), worker.processId == null ? "—" : String(worker.processId)],
-    [t("settings.permissionJudge.status.memory"), formatMessage(t("settings.permissionJudge.status.memoryValue"), {
+  const facts: PageFact[] = [
+    { key: "model", label: t("settings.permissionJudge.status.model"), value: model?.name ?? worker.modelId ?? "—" },
+    { key: "device", label: t("settings.permissionJudge.status.device"), value: worker.device ? t(DEVICE_KEYS[worker.device]) : "—" },
+    { key: "process", label: t("settings.permissionJudge.status.process"), value: worker.processId == null ? "—" : String(worker.processId) },
+    { key: "memory", label: t("settings.permissionJudge.status.memory"), value: formatMessage(t("settings.permissionJudge.status.memoryValue"), {
       workingSet: formatOptionalBytes(worker.workingSetBytes),
       private: formatOptionalBytes(worker.privateBytes),
-    })],
-    [t("settings.permissionJudge.status.gpuMemory"), formatMessage(t("settings.permissionJudge.status.gpuMemoryValue"), {
+    }) },
+    { key: "gpuMemory", label: t("settings.permissionJudge.status.gpuMemory"), value: formatMessage(t("settings.permissionJudge.status.gpuMemoryValue"), {
       dedicated: formatOptionalBytes(worker.gpuDedicatedBytes),
       shared: formatOptionalBytes(worker.gpuSharedBytes),
-    })],
-    [t("settings.permissionJudge.status.gpuUtilization"), worker.gpuUtilizationPercent == null ? "—" : `${worker.gpuUtilizationPercent.toFixed(0)}%`],
-    [t("settings.permissionJudge.status.startup"), formatMessage(t("settings.permissionJudge.status.startupValue"), {
+    }) },
+    { key: "gpuUtilization", label: t("settings.permissionJudge.status.gpuUtilization"), value: worker.gpuUtilizationPercent == null ? "—" : `${worker.gpuUtilizationPercent.toFixed(0)}%` },
+    { key: "startup", label: t("settings.permissionJudge.status.startup"), value: formatMessage(t("settings.permissionJudge.status.startupValue"), {
       verify: formatMs(t, worker.verifyMs),
       load: formatMs(t, worker.loadMs),
       warmup: formatMs(t, worker.warmupMs),
-    })],
-    [t("settings.permissionJudge.status.latency"), formatMessage(t("settings.permissionJudge.status.latencyValue"), {
+    }) },
+    { key: "latency", label: t("settings.permissionJudge.status.latency"), value: formatMessage(t("settings.permissionJudge.status.latencyValue"), {
       p50: formatMs(t, worker.recentP50Ms),
       p95: formatMs(t, worker.recentP95Ms),
       count: worker.evaluations,
-    })],
+    }) },
   ];
   const pill = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
-  return <section className="settings-preferences-section">
-    <div className="settings-preference-row">
-      <h2>{t("settings.permissionJudge.status")}</h2>
-      <div className="settings-card-actions">
-        <StatusPill label={label(t, PHASE_KEYS, worker.phase)} status={pill} />
-        {worker.phase === "failed" ? <Button type="button" size="sm" variant="outline" disabled={props.busy !== null}
-          onClick={() => void props.run("reload", "settings.permissionJudge.reloadFailed", async () => props.onReloaded(await reloadPermissionJudge()))}>
-          <RefreshCw size={14} />{t("settings.permissionJudge.reload")}
-        </Button> : null}
-      </div>
-    </div>
-    {worker.phase === "failed" && worker.error ? <SettingsErrorNotice detail={worker.error} message={t("settings.permissionJudge.status.loadFailed")} /> : null}
-    {props.snapshot.activeModelIssue ? <SettingsErrorNotice detail={props.snapshot.activeModelIssue.detail}
-      message={formatMessage(t("settings.permissionJudge.activeModelIssue"), { code: props.snapshot.activeModelIssue.code })} /> : null}
-    <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
-      {rows.map(([name, value]) => <React.Fragment key={name}>
-        <dt className="text-muted-foreground">{name}</dt>
-        <dd className="tabular-nums">{value}</dd>
-      </React.Fragment>)}
-    </dl>
-  </section>;
+  return <PageSection title={t("settings.permissionJudge.status")}
+    status={<StatusPill label={label(t, PHASE_KEYS, worker.phase)} status={pill} />}>
+    <PageFacts items={facts} layout="grid" />
+  </PageSection>;
 }
 
-// ModelsSection lists registered models and registers new ones from local folders.
-// ModelsSection 列出已登记模型，并从本机文件夹登记新模型。
-function ModelsSection(props: {
+// ModelsPage lists registered models with their switch, rollback and removal, then adds new ones
+// from local folders.
+// ModelsPage 列出已登记模型及其切换、回退与移除操作，然后从本机文件夹添加新模型。
+function ModelsPage(props: {
   applySnapshot: (snapshot: PermissionJudgeSettingsSnapshot) => void;
   busy: string | null;
   run: RunAction;
@@ -417,169 +500,50 @@ function ModelsSection(props: {
   t: Translate;
 }) {
   const { t, snapshot } = props;
-  const [path, setPath] = React.useState("");
-  const [name, setName] = React.useState("");
-  const [custom, setCustom] = React.useState(false);
   const packageName = (id: string | null) => snapshot.knownPackages.find((known) => known.id === id)?.displayName ?? id ?? "";
-  return <section className="settings-preferences-section">
-    <h2>{t("settings.permissionJudge.models")}</h2>
-    <p className="settings-muted-line">{t("settings.permissionJudge.modelsHint")}</p>
-    {snapshot.models.length === 0 ? <p className="settings-muted-line">{t("settings.permissionJudge.modelsEmpty")}</p> : null}
-    {snapshot.models.map((model) => {
-      const active = model.id === snapshot.activeModelId;
-      return <div className="settings-preference-row" key={model.id}>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{model.name}</span>
-            {active ? <Badge variant="secondary">{t("settings.permissionJudge.modelActive")}</Badge> : null}
-            <Badge variant="outline">{model.knownPackageId
-              ? formatMessage(t("settings.permissionJudge.modelOfficial"), { name: packageName(model.knownPackageId) })
-              : t("settings.permissionJudge.modelCustom")}</Badge>
-          </div>
-          <p className="settings-muted-line">{formatMessage(t("settings.permissionJudge.modelMeta"), {
-            policy: model.policyVersion, precision: model.precision, size: formatBytes(model.totalBytes),
-          })}</p>
-          <p className="settings-muted-line break-all">{model.path}</p>
-        </div>
-        <div className="settings-card-actions">
-          {!active ? <Button type="button" size="sm" variant="outline" disabled={props.busy !== null}
-            onClick={() => void props.run(`activate-${model.id}`, "settings.permissionJudge.activateFailed", async () => props.applySnapshot(await activatePermissionJudgeModel(model.id)))}>
-            {t("settings.permissionJudge.activate")}
-          </Button> : null}
-          {!active ? <Button type="button" size="sm" variant="ghost" disabled={props.busy !== null}
-            onClick={() => void props.run(`remove-${model.id}`, "settings.permissionJudge.removeFailed", async () => props.applySnapshot(await removePermissionJudgeModel(model.id)))}>
-            {t("settings.permissionJudge.remove")}
-          </Button> : null}
-        </div>
-      </div>;
-    })}
-    {snapshot.previousModelId && snapshot.models.some((model) => model.id === snapshot.previousModelId) ? <div className="settings-card-actions">
-      <Button type="button" size="sm" variant="outline" disabled={props.busy !== null}
+  const previous = snapshot.previousModelId
+    ? snapshot.models.find((model) => model.id === snapshot.previousModelId) ?? null
+    : null;
+  return <>
+    <PageSection layout="rows" title={t("settings.permissionJudge.models")} description={t("settings.permissionJudge.modelsHint")}
+      actions={previous ? <Button type="button" size="sm" variant="outline" disabled={props.busy !== null}
         onClick={() => void props.run("rollback", "settings.permissionJudge.activateFailed", async () => props.applySnapshot(await rollbackPermissionJudgeModel()))}>
-        <RotateCcw size={14} />{formatMessage(t("settings.permissionJudge.rollback"), { name: snapshot.models.find((model) => model.id === snapshot.previousModelId)?.name ?? "" })}
-      </Button>
-    </div> : null}
-    <h3>{t("settings.permissionJudge.register")}</h3>
-    <div className="grid gap-2">
-      <Input aria-label={t("settings.permissionJudge.registerPath")} placeholder={t("settings.permissionJudge.registerPath")}
-        value={path} onChange={(event) => setPath(event.target.value)} />
-      <Input aria-label={t("settings.permissionJudge.registerName")} placeholder={t("settings.permissionJudge.registerName")}
-        value={name} onChange={(event) => setName(event.target.value)} />
-      <label className="flex items-center gap-2 text-sm">
-        <Checkbox checked={custom} onCheckedChange={(checked) => setCustom(checked === true)} />
-        {t("settings.permissionJudge.registerCustom")}
-      </label>
-      <div className="settings-card-actions">
-        <Button type="button" size="sm" disabled={props.busy !== null || path.trim() === ""}
-          onClick={() => void props.run("register", "settings.permissionJudge.registerFailed", async () => {
-            props.applySnapshot(await registerPermissionJudgeModel(path.trim(), name.trim(), custom));
-            setPath("");
-            setName("");
-            setCustom(false);
-          })}>
-          {t("settings.permissionJudge.registerSubmit")}
-        </Button>
-      </div>
-    </div>
-  </section>;
-}
-
-// CudaSection shows the driver, the detected CUDA folders, one-click installs and official links.
-// CudaSection 展示驱动、探测到的 CUDA 文件夹、一键安装与官方链接。
-function CudaSection(props: {
-  busy: string | null;
-  draft: Draft;
-  run: RunAction;
-  setDraft: (draft: Draft) => void;
-  snapshot: PermissionJudgeSettingsSnapshot;
-  status: PermissionJudgeStatus;
-  t: Translate;
-  onStatus: (status: PermissionJudgeStatus) => void;
-}) {
-  const { t, draft } = props;
-  const cuda = props.snapshot.cuda;
-  const install = props.status.cudaInstall;
-  const open = (url: string) => void openExternalUrl(url).catch((cause) => {
-    toast.error(t("settings.permissionJudge.cuda.openFailed"), { description: errorMessage(cause) });
-  });
-  if (!cuda.supported) {
-    return <section className="settings-preferences-section">
-      <h2>{t("settings.permissionJudge.cuda")}</h2>
-      <p className="settings-muted-line">{t("settings.permissionJudge.cuda.unsupported")}</p>
-    </section>;
-  }
-  const driver = cuda.driver
-    ? formatMessage(t("settings.permissionJudge.cuda.driverValue"), { version: cuda.driver.version, gpus: cuda.driver.gpus.join(", ") })
-    : t("settings.permissionJudge.cuda.driverMissing");
-  return <section className="settings-preferences-section">
-    <h2>{t("settings.permissionJudge.cuda")}</h2>
-    <p className="settings-muted-line">{t("settings.permissionJudge.cudaHint")}</p>
-    <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
-      <dt className="text-muted-foreground">{t("settings.permissionJudge.cuda.driver")}</dt>
-      <dd>
-        {driver}
-        {cuda.minimumDriverMajor != null && cuda.cudaMajor != null ? <span className="settings-muted-line"> · {formatMessage(t("settings.permissionJudge.cuda.driverMinimum"), {
-          major: cuda.minimumDriverMajor, cuda: cuda.cudaMajor,
-        })}</span> : null}
-      </dd>
-      <dt className="text-muted-foreground">{t("settings.permissionJudge.cuda.onnxruntime")}</dt>
-      <dd className="break-all">{cuda.onnxruntimeDirectory ?? t("settings.permissionJudge.cuda.notInstalled")}</dd>
-      <dt className="text-muted-foreground">{t("settings.permissionJudge.cuda.libraries")}</dt>
-      <dd className="break-all">{formatMessage(t("settings.permissionJudge.cuda.required"), { libraries: cuda.requiredLibraries.join(", ") })}</dd>
-    </dl>
-    {cuda.detectedDirectories.map((detected) => (
-      <div className="settings-preference-row" key={detected.directory}>
-        <div className="min-w-0">
-          <span>{label(t, SOURCE_KEYS, detected.source)}</span>
-          <p className="settings-muted-line break-all">{detected.directory}</p>
-        </div>
-        {draft.cudaLibraryDirectory === detected.directory
-          ? <Badge variant="secondary"><FolderCheck size={12} />{t("settings.permissionJudge.cuda.locked")}</Badge>
-          : <Button type="button" size="sm" variant="outline" disabled={props.busy !== null}
-            onClick={() => props.setDraft({ ...draft, cudaLibraryDirectory: detected.directory })}>
-            {t("settings.permissionJudge.cuda.useDirectory")}
-          </Button>}
-      </div>
-    ))}
-    <Input aria-label={t("settings.permissionJudge.cuda.directory")} placeholder={t("settings.permissionJudge.cuda.directory")}
-      value={draft.cudaLibraryDirectory} onChange={(event) => props.setDraft({ ...draft, cudaLibraryDirectory: event.target.value })} />
-    {cuda.lockedDirectory && cuda.lockedDirectoryMissing.length > 0 ? <p className="settings-muted-line">
-      {formatMessage(t("settings.permissionJudge.cuda.lockedMissing"), { libraries: cuda.lockedDirectoryMissing.join(", ") })}
-    </p> : null}
-    <h3>{t("settings.permissionJudge.cuda.install")}</h3>
-    {cuda.archives.map((archive) => (
-      <div className="settings-preference-row" key={archive.url}>
-        <div className="min-w-0">
-          <span>{t(COMPONENT_KEYS[archive.component])}</span>
-          <p className="settings-muted-line break-all">{archive.name} · {formatBytes(archive.size)}</p>
-        </div>
-        <Button type="button" size="sm" variant="outline" disabled={props.busy !== null || install?.running === true}
-          onClick={() => void props.run(`install-${archive.component}`, "settings.permissionJudge.cuda.installFailed", async () => props.onStatus(await installPermissionJudgeCuda(archive.component)))}>
-          {t("settings.permissionJudge.cuda.installAction")}
-        </Button>
-      </div>
-    ))}
-    {install ? <p className="settings-muted-line">
-      {install.running
-        ? formatMessage(t("settings.permissionJudge.cuda.installing"), {
-          component: t(COMPONENT_KEYS[install.component]),
-          phase: install.phase ? label(t, INSTALL_PHASE_KEYS, install.phase) : "…",
-          progress: install.completedBytes != null && install.totalBytes
-            ? `${formatBytes(install.completedBytes)} / ${formatBytes(install.totalBytes)}`
-            : "",
-        })
-        : install.error
-          ? null
-          : formatMessage(t("settings.permissionJudge.cuda.installed"), { component: t(COMPONENT_KEYS[install.component]), directory: install.directory ?? "" })}
-    </p> : null}
-    {install && !install.running && install.error ? <SettingsErrorNotice detail={install.error} message={t("settings.permissionJudge.cuda.installFailed")} /> : null}
-    <h3>{t("settings.permissionJudge.cuda.links")}</h3>
-    <div className="settings-card-actions flex-wrap">
-      {cuda.links.map((link) => (
-        <Button key={link.id} type="button" size="sm" variant="ghost" onClick={() => open(link.url)}>
-          <ExternalLink size={14} />{label(t, LINK_KEYS, link.id)}
-        </Button>
-      ))}
-    </div>
-  </section>;
+        <RotateCcw size={14} />{formatMessage(t("settings.permissionJudge.rollback"), { name: previous.name })}
+      </Button> : undefined}>
+      {snapshot.models.length === 0
+        ? <PageEmptyState icon={<Box />} title={t("settings.permissionJudge.modelsEmpty")} />
+        : snapshot.models.map((model) => {
+          const active = model.id === snapshot.activeModelId;
+          return <PageItem key={model.id} icon={<Box />} tone={active ? "success" : "neutral"} title={model.name}
+            meta={<>
+              {active ? <Badge variant="secondary">{t("settings.permissionJudge.modelActive")}</Badge> : null}
+              <Badge variant="outline">{model.knownPackageId
+                ? formatMessage(t("settings.permissionJudge.modelOfficial"), { name: packageName(model.knownPackageId) })
+                : t("settings.permissionJudge.modelCustom")}</Badge>
+            </>}
+            description={formatMessage(t("settings.permissionJudge.modelMeta"), {
+              policy: model.policyVersion, precision: model.precision, size: formatBytes(model.totalBytes),
+            })}
+            actions={active ? undefined : <>
+              <Button type="button" size="sm" variant="outline" disabled={props.busy !== null}
+                onClick={() => void props.run(`activate-${model.id}`, "settings.permissionJudge.activateFailed", async () => props.applySnapshot(await activatePermissionJudgeModel(model.id)))}>
+                {t("settings.permissionJudge.activate")}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" disabled={props.busy !== null}
+                onClick={() => void props.run(`remove-${model.id}`, "settings.permissionJudge.removeFailed", async () => props.applySnapshot(await removePermissionJudgeModel(model.id)))}>
+                {t("settings.permissionJudge.remove")}
+              </Button>
+            </>}>
+            <PageHint className="break-all">{model.path}</PageHint>
+          </PageItem>;
+        })}
+    </PageSection>
+    <PageSection title={t("settings.permissionJudge.register")} description={t("settings.permissionJudge.registerHint")}>
+      <PermissionJudgeRegisterForm busy={props.busy} knownPackages={snapshot.knownPackages}
+        onRegister={(request, reset) => props.run("register", "settings.permissionJudge.registerFailed", async () => {
+          props.applySnapshot(await registerPermissionJudgeModel(request.path, request.name, request.custom));
+          reset();
+        })} />
+    </PageSection>
+  </>;
 }

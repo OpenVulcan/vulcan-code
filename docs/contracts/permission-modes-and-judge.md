@@ -45,10 +45,13 @@
   判定入口与项目策略，启用时全部显示。
 - **本机后端**：模型包登记、切换、回退与移除；包内声明策略版本与放行余量，载入时验证。设备探测给出推荐
   设备，可手动覆写；CUDA 执行库可锁定文件夹或一键安装。闲置卸载尚未实现。
+  登记表单可从服务宿主浏览选择文件夹，并先经 `service_inspect_permission_judge_package` 完整校验（不登记，
+  结果按稳定代码本地化）；只有校验通过才可提交，非官方模型包须显式勾选信任。
 - **云端后端**：使用 `permission_judge` 消费者配置档的判定路由（TypeSafe 或 OpenRouter 上的 jev）。放行
   概率门槛只在 `CLOUD_ALLOW_PROBABILITY` 定义，当前值尚未用样本校准；不记录费用。
 - **复核 LLM**：`permission_review` 配置档、用途 `tool_call_review` 的对话路由；只收到判定层结论标签，
-  不收到原始分数。
+  不收到原始分数。给用户的理由使用界面语言：宿主在 `<reply_language>` 区段写入已保存的界面语言（未保存时为
+  系统语言），以代码与本族语名称表示。
 - **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认。
 
 ## 项目策略
@@ -56,14 +59,34 @@
 - 保存在项目根目录的 `.vulcan/code/config.json` 的 `permission_judge.options`，键为类别、值为档位；
   未列出的类别使用模型包默认档位。判定时按调用所在工作区读取。
 - 读取与保存只针对使用中模型的类别；保存时保留模型已不再有的类别的旧选择，但不发送给判定器。
-- 设置界面只列出使用中模型的类别，判定未启用时整个区块不显示。WebUI 位于项目设置对话框，TUI 位于
-  设置区的同名页面并在页首选择项目。
+- 设置界面只列出使用中模型的类别，判定未启用时整个区块不显示。WebUI 位于项目设置对话框，并在权限判定
+  设置页总览列出各类别与默认档位、经“类别授权”子页面选择项目后编辑；TUI 位于设置区的同名页面并在页首
+  选择项目。各类别附带说明其涵盖范围的提示。
+
+## 判定记录
+
+- **记录范围**：只记录判定模型或复核 LLM 参与的决定；模式闸门与确定性规则直接决定的调用不记录。时间为判定
+  开始时刻，记录在最终结论（判定放行、复核放行或拒绝、用户放行或拒绝、失败）产生后写入，写入不阻塞调用。
+- **内容**：原样保存工具参数文本（含命令与路径）、工作区、会话、高风险类别、判定标签或错误与耗时、判定输入
+  轨迹（后端、模型、策略版本、类别设置、渲染文本、本机三类分数或云端放行概率、输入令牌数）、复核结论与耗时。
+- **存储**：只保存在本机用户目录 `<用户 Vulcan 根>/code/judge-records/records.v1.jsonl`，不上传。滚动上限只在
+  `permission_judge/records.rs` 的 `RETENTION_RECORDS` 与 `RETENTION_DAYS` 定义，超出时整体压缩重写；文件
+  任一行无法解析时整份记录报错且不再写入，直到用户清除（V0.1.x 不做旧格式兼容）。
+- **标记与导出**：用户可为有判定轨迹的记录标记“本应给出”的标签，再次选择同一标签清除标记；没有轨迹（判定
+  失败或未运行）的记录不可标记。导出只包含已标记记录，每行为判定训练输入格式 `{settings, rendered}` 加
+  `label` 与来源元数据，可直接作为本机测试集或训练样本。
+- **服务**：`service_permission_judge_records`（筛选判定结果 / 工作区 / 只看已标记，最新在前，以记录 ID 为游标
+  分页）、`service_mark_permission_judge_record`、`service_export_permission_judge_records`、
+  `service_clear_permission_judge_records`。
 
 ## 界面
 
 - 输入区权限模式选择器（WebUI 为输入区工具栏中加号右侧的权限标签按钮，切换到完全权限前须勾选风险确认；TUI `⛨` 标签、`Alt+P`、`/permissions`）附带判定入口。
-- “权限判定”设置页：开关、后端、设备、模型状态表（按状态中服务发布的 `pollIntervalMs` 重读，唯一定义为服务内核 `STATUS_POLL_INTERVAL_MS`）、速度测试、模型登记表、CUDA、云端
-  路由与复核路由。
+- “权限判定”设置页：总览依次为开关与后端选择、所选后端的设置（本机为使用中模型、设备、CUDA 摘要与运行
+  状态；云端为判定路由）、启用时的类别授权摘要、复核路由（含“允许 LLM 放行判定器拦截项”）与工具入口；模型管理与登记、CUDA
+  环境（组件安装、库文件夹、手动下载）、类别授权（选择项目后编辑类别档位）、诊断（模型状态表、速度测试）和判定记录（筛选、标记、导出、清除）是带返回按钮的子页面。状态按服务发布的
+  `pollIntervalMs` 重读，唯一定义为服务内核 `STATUS_POLL_INTERVAL_MS`。WebUI 每个选择立即保存；判定未设定时
+  选择暂存，开启时一并写入；已启用时切换到尚未设置完成的后端会等待其设置完成，不先写入。
 - 初始化引导：第一步为权限判定，三选一（本机、云端、暂不启用）。WebUI 在判定未设定时于启动后自动
   打开一次（浏览器本地标记），之后可从设置页再次进入；TUI 没有本地持久偏好，只能从 `/setup` 或权限判定
   页进入，不自动弹出。
@@ -78,6 +101,7 @@
 | 模式读取、判定与复核宿主 | `crates/vulcan-service-kernel/src/tool_permission_host.rs` |
 | 会话模式修改与草稿首次提交 | `crates/vulcan-service-kernel/src/permission_mode.rs`、`conversation_submission.rs` |
 | 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs` |
+| 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
 | 策略、模型包、官方清单、云端副本与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,decision}.rs` |

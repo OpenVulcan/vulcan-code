@@ -1,11 +1,11 @@
 import * as React from "react";
 import { PlugZap } from "lucide-react";
 import { toast } from "sonner";
+import { PageNotice, PageRow, PageSection } from "@/components/page";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { inferenceRouteKey, inferenceRoutePickerOptions } from "@/components/features/inference-route-picker";
-import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import {
@@ -70,12 +70,13 @@ export function PermissionJudgeCloudSection(props: { onConfiguredChange: (config
   const options = React.useMemo(() => inferenceRoutePickerOptions(candidates), [candidates]);
 
   if (!snapshot) {
-    return <section className="settings-preferences-section">
-      <h2>{t("settings.permissionJudge.cloud.title")}</h2>
+    return <PageSection title={t("settings.permissionJudge.cloud.title")}>
       {loadError
-        ? <SettingsErrorNotice detail={loadError} message={t("settings.permissionJudge.cloud.loadFailed")} />
+        ? <PageNotice tone="error" details={loadError} detailsLabel={t("settings.errors.showErrorDetails")}>
+          {t("settings.permissionJudge.cloud.loadFailed")}
+        </PageNotice>
         : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={2} />}
-    </section>;
+    </PageSection>;
   }
 
   const routeKey = savedRoute ? inferenceRouteKey(savedRoute) : "";
@@ -123,15 +124,20 @@ export function PermissionJudgeCloudSection(props: { onConfiguredChange: (config
     }
   };
 
-  return <section className="settings-preferences-section" data-permission-judge-cloud>
-    <h2>{t("settings.permissionJudge.cloud.title")}</h2>
-    <p className="settings-muted-line">{t("settings.permissionJudge.cloud.description")}</p>
-    <p className="settings-muted-line" role="note">{t("settings.permissionJudge.cloud.dataNotice")}</p>
+  return <PageSection layout="rows" data-permission-judge-cloud title={t("settings.permissionJudge.cloud.title")}
+    description={t("settings.permissionJudge.cloud.description")}
+    footer={savedRoute ? <>
+      <Button type="button" variant="outline" size="sm" disabled={busy || !selected} onClick={() => void test()}>
+        <PlugZap size={14} />{t("settings.permissionJudge.cloud.test")}
+      </Button>
+      <Button type="button" variant="ghost" size="sm" disabled={busy}
+        onClick={() => void save(null)}>{t("settings.permissionJudge.cloud.clear")}</Button>
+    </> : undefined}>
+    <PageNotice tone="warning" role="note">{t("settings.permissionJudge.cloud.dataNotice")}</PageNotice>
     {savedRoute && !selected
-      ? <p className="settings-muted-line" role="alert">{t("settings.permissionJudge.cloud.unavailable")}</p>
+      ? <PageNotice tone="error">{t("settings.permissionJudge.cloud.unavailable")}</PageNotice>
       : null}
-    <div className="settings-preference-row">
-      <span>{t("settings.permissionJudge.cloud.route")}</span>
+    <PageRow label={t("settings.permissionJudge.cloud.route")}>
       <Combobox
         ariaLabel={t("settings.permissionJudge.cloud.route")}
         disabled={busy || candidates.length === 0}
@@ -147,17 +153,12 @@ export function PermissionJudgeCloudSection(props: { onConfiguredChange: (config
         searchPlaceholder={t("settings.permissionJudge.cloud.search")}
         value={selected ? routeKey : ""}
       />
-    </div>
-    {savedRoute ? <div className="settings-card-actions">
-      <Button type="button" variant="outline" size="sm" disabled={busy || !selected} onClick={() => void test()}>
-        <PlugZap size={14} />{t("settings.permissionJudge.cloud.test")}
-      </Button>
-      <Button type="button" variant="ghost" size="sm" disabled={busy}
-        onClick={() => void save(null)}>{t("settings.permissionJudge.cloud.clear")}</Button>
-    </div> : null}
-    {testResult ? <p className="settings-muted-line" role="status">{testResult}</p> : null}
+    </PageRow>
+    {testResult ? <PageNotice tone="success" data-cloud-test-result="">{testResult}</PageNotice> : null}
     {actionError
-      ? <SettingsErrorNotice className="settings-save-error" detail={actionError.detail} message={actionError.message} />
+      ? <PageNotice tone="error" details={actionError.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
+        {actionError.message}
+      </PageNotice>
       : null}
-  </section>;
+  </PageSection>;
 }
