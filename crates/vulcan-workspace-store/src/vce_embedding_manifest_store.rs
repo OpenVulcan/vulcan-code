@@ -50,16 +50,9 @@ fn observe_manifest_file_progress(
 /// The supported manifest envelope with shared node references, reused Blobs and batch rows.
 /// 支持的清单概要，配合共享节点引用、复用 Blob 和批次记录。
 ///
-/// Opening storage migrates legacy child bodies to shared references without changing this envelope.
-/// 打开存储时将旧子记录正文迁移为共享引用，不改变此概要。
-/// Other envelope versions remain unsupported; runtime reads use only the migrated child tables.
-/// 其他概要版本仍不受支持；运行时仅读取已迁移的子表。
+/// Other envelope versions are unsupported and rejected.
+/// 其他概要版本不受支持并被拒绝。
 const VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED: i64 = 2;
-
-/// Legacy fixture fragment size used only to verify Unicode reconstruction.
-/// 仅用于验证 Unicode 重建的旧夹具分片大小。
-#[cfg(test)]
-const VCE_EMBEDDING_NODE_CHUNK_BYTES: usize = 32 * 1024;
 
 /// Maximum whole nodes persisted or restored in one bounded page.
 /// 单个有界页中持久保存或恢复的完整节点数上限。
@@ -1164,8 +1157,8 @@ impl VceProjectIndex {
                     "embedding manifest run does not exist",
                 )
             })?;
-        // Child-body migration preserves the envelope version; an unknown parent layout is an error.
-        // 子记录正文迁移保持概要版本不变；未知父记录布局必须报错。
+        // An unknown parent layout is an error.
+        // 未知父记录布局必须报错。
         if parent.layout_version != VCE_EMBEDDING_MANIFEST_LAYOUT_SHARDED {
             return Err(port_invalid(
                 VcePortOperation::EmbeddingManifest,
@@ -2287,35 +2280,6 @@ fn decode_batch(row: &EmbeddingBatchStorageRow) -> Result<VceEmbeddingBatchRecor
     Ok(batch)
 }
 
-/// Split one UTF-8 JSON value without cutting a multi-byte scalar.
-/// 在不截断多字节字符的前提下拆分一个 UTF-8 JSON 值。
-///
-/// Splits JSON `value` into ordered fragments no larger than the chunk limit; concatenation restores the input.
-/// 将 JSON `value` 拆分为不超过分片上限的有序片段；拼接后恢复原始输入。
-#[cfg(test)]
-fn split_utf8_chunks(value: &str) -> Vec<String> {
-    // Ordered UTF-8 fragments retained for exact JSON round-trip reconstruction.
-    // 为精确 JSON 往返重建保留的有序 UTF-8 分片。
-    let mut chunks = Vec::new();
-    // Inclusive byte offset of the next UTF-8 fragment.
-    // 下一个 UTF-8 分片的起始字节偏移。
-    let mut start = 0;
-    while start < value.len() {
-        // Exclusive byte boundary adjusted to avoid cutting a UTF-8 scalar.
-        // 为避免截断 UTF-8 字符而调整的结束字节边界。
-        let mut end = start
-            .saturating_add(VCE_EMBEDDING_NODE_CHUNK_BYTES)
-            .min(value.len());
-        while end > start && !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        debug_assert!(end > start);
-        chunks.push(value[start..end].to_owned());
-        start = end;
-    }
-    chunks
-}
-
 /// Require a parent row to expose one complete current-layout plan.
 /// 要求父记录公开一份完整的当前布局计划。
 ///
@@ -2649,28 +2613,6 @@ mod tests {
             cleanup_warning: None,
             updated_at_unix_ms: 1,
         }
-    }
-
-    /// Verify UTF-8 node fragments stay bounded and reconstruct multibyte JSON exactly.
-    /// 验证 UTF-8 节点分片保持有界并精确重建多字节 JSON。
-    #[test]
-    ///
-    /// Uses a multibyte fixture and asserts bounded chunks and exact reconstruction; takes no parameters.
-    /// 使用多字节夹具断言有界分片及精确重建；无参数。
-    fn node_chunks_preserve_multibyte_json() {
-        // Multibyte JSON fixture spanning more than one storage fragment.
-        // 跨越多个存储分片的多字节 JSON 夹具。
-        let value = format!("{{\"source\":\"{}终\"}}", "中".repeat(20_000));
-        // Ordered UTF-8 fragments retained for exact JSON round-trip reconstruction.
-        // 为精确 JSON 往返重建保留的有序 UTF-8 分片。
-        let chunks = split_utf8_chunks(&value);
-        assert!(chunks.len() > 1);
-        assert!(
-            chunks
-                .iter()
-                .all(|chunk| chunk.len() <= VCE_EMBEDDING_NODE_CHUNK_BYTES)
-        );
-        assert_eq!(chunks.concat(), value);
     }
 
     /// Verify run states cannot regress after publication and retries use explicit active edges.

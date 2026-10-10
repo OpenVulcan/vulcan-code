@@ -3349,9 +3349,9 @@ impl VceDataPlaneHandle {
     /// Validate an operation belongs to the physical project's exact owner.
     /// 校验操作属于物理项目的精确所有者。
     ///
-    /// `project_id` selects the requested owner. Legacy shared reads retain namespace checks.
+    /// `project_id` selects the requested owner.
     /// Returns an explicit error for cross-project access.
-    /// `project_id` 选择请求所有者。旧共享读取保留命名空间检查。跨项目访问返回明确错误。
+    /// `project_id` 选择请求所有者。跨项目访问返回明确错误。
     fn validate_project_owner(&self, project_id: &str) -> Result<(), String> {
         if self.project_owner != project_id {
             return Err(String::from("VCE physical project storage owner mismatch"));

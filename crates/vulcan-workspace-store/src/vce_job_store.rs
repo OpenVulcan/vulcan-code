@@ -650,7 +650,6 @@ pub struct VceStoredJob {
     pub idempotency_key: String,
     /// Exact prior failed/cancelled/interrupted job explicitly retried by the user.
     /// 用户明确重试的精确先前失败、取消或中断作业。
-    #[serde(default)]
     pub retry_of_job_id: Option<String>,
     /// Hash of the exact submitted command, not a mutable settings object.
     /// 精确提交命令的哈希，而非可变设置对象。
@@ -686,7 +685,6 @@ pub struct VceStoredJob {
     pub replacement: Option<Box<VceJobReplacement>>,
     /// Table-scoped physical compaction state, present only for compact jobs.
     /// 仅整理作业持有的表作用域物理整理状态。
-    #[serde(default)]
     pub compaction: Option<VceCompactionJobReceipt>,
     /// Resulting checkpoint after successful initialization, synchronization or rebuilding.
     /// 成功初始化、同步或重建之后的结果检查点。
@@ -2046,19 +2044,14 @@ mod tests {
             .validate()
             .expect("the current-version fixture must be valid");
 
-        // The exact pre-plan shape: version 2 with the compaction field absent.
-        // 前代的确切形态：版本 2 且缺少整理字段。
+        // The pre-plan version marker on an otherwise current shape.
+        // 在其余均为当前形态的回执上使用前代版本标记。
         receipt.schema_version = 2;
-        let mut encoded = serde_json::to_value(&receipt).expect("legacy receipt should encode");
-        encoded
-            .as_object_mut()
-            .expect("legacy receipt should be an object")
-            .remove("compaction");
+        let encoded = serde_json::to_value(&receipt).expect("receipt should encode");
 
         let decoded = serde_json::from_value::<VceStoredJob>(encoded)
-            .expect("the pre-plan receipt is still structurally decodable");
+            .expect("the receipt is structurally decodable");
         assert_eq!(decoded.schema_version, 2);
-        assert!(decoded.compaction.is_none());
         // Decodable is not the same as acceptable: the marker must stop it here.
         // 可解码不等于可接受：版本标记必须在此拦住它。
         let error = decoded
