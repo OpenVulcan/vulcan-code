@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, Weak};
 use serde_json::Value;
 use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionRuntime, ToolApprovalPrompt};
 use vulcan_agent_runtime::agent_runtime::tool_permission::{
-    JudgeCall, JudgeLabel, LlmReview, ReviewCall, ToolPermissionHost,
+    JudgeCall, JudgeFailure, JudgeVerdict, LlmReview, PermissionRecord, ReviewCall,
+    ToolPermissionHost,
 };
 use vulcan_agent_runtime::model::SessionId;
 use vulcan_session_core::v1::config::PermissionMode;
@@ -84,11 +85,11 @@ impl ToolPermissionHost for KernelToolPermissionHost {
             .await
     }
 
-    async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
-        let state = self
-            .state
-            .upgrade()
-            .ok_or_else(|| String::from("The service is shutting down."))?;
+    async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeVerdict>, JudgeFailure> {
+        let state = self.state.upgrade().ok_or_else(|| JudgeFailure {
+            reason: String::from("The service is shutting down."),
+            trace: None,
+        })?;
         crate::permission_judge::judge_call(&state, call).await
     }
 
@@ -98,6 +99,12 @@ impl ToolPermissionHost for KernelToolPermissionHost {
             .upgrade()
             .ok_or_else(|| String::from("The service is shutting down."))?;
         crate::permission_judge::review_call(&state, call).await
+    }
+
+    fn record(&self, record: PermissionRecord) {
+        if let Some(state) = self.state.upgrade() {
+            crate::permission_judge::record_decision(&state, record);
+        }
     }
 }
 

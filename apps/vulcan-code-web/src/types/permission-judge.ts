@@ -200,3 +200,88 @@ export interface ProjectPermissionJudgePolicySnapshot {
   unsupportedOptions: Record<string, string>;
   issue: PermissionJudgeIssue | null;
 }
+
+// JudgeLabel is one judge decision.
+// JudgeLabel 是一个判定结果。
+export type JudgeLabel = "allow" | "review" | "block";
+
+// PermissionJudgeRecordTrace is what one judgement read and produced.
+// PermissionJudgeRecordTrace 是一次判定读取与产生的内容。
+export interface PermissionJudgeRecordTrace {
+  backend: string;
+  model: string;
+  policyVersion: string;
+  settings: Record<string, string>;
+  rendered: string;
+  // Raw local scores in label order; null for the cloud judge.
+  // 按标签顺序排列的本机原始分数；云端判定时为 null。
+  logits: [number, number, number] | null;
+  allowProbability: number | null;
+  inputTokens: number | null;
+}
+
+// PermissionJudgeRecord is one decision the judge or the reviewer took part in.
+// PermissionJudgeRecord 是一次判定器或复核器参与的决定。
+export interface PermissionJudgeRecord {
+  id: string;
+  judgedAtMs: number;
+  sessionId: string;
+  workspaceRoot: string | null;
+  toolName: string;
+  // Argument text exactly as the agent model sent it.
+  // 代理模型发送的原样参数文本。
+  arguments: string;
+  highRisk: string | null;
+  judge: {
+    // Absent when the judge could not score the call.
+    // 判定器无法评分时缺省。
+    label: JudgeLabel | null;
+    error: string | null;
+    elapsedMs: number;
+    trace: PermissionJudgeRecordTrace | null;
+  } | null;
+  review: {
+    verdict: string | null;
+    reason: string | null;
+    error: string | null;
+    elapsedMs: number;
+  } | null;
+  // Which layer decided and how, such as "user_denied".
+  // 由哪一层决定以及如何决定，例如 "user_denied"。
+  outcome: string;
+  // Label the user says the judge should have given.
+  // 用户认为判定器应给出的标签。
+  correction: JudgeLabel | null;
+}
+
+// PermissionJudgeRecordsRequest reads one page of the decision log, newest first.
+// PermissionJudgeRecordsRequest 读取判定记录的一页，最新在前。
+export interface PermissionJudgeRecordsRequest {
+  // "allow", "review", "block" or "failed".
+  // "allow"、"review"、"block" 或 "failed"。
+  label: string | null;
+  workspace: string | null;
+  markedOnly: boolean;
+  before: string | null;
+  limit: number;
+}
+
+// PermissionJudgeRecordPage is one page of the decision log with the facts the log page shows.
+// PermissionJudgeRecordPage 是判定记录的一页，以及记录页显示的信息。
+export interface PermissionJudgeRecordPage {
+  records: PermissionJudgeRecord[];
+  hasMore: boolean;
+  total: number;
+  marked: number;
+  workspaces: string[];
+  retentionRecords: number;
+  retentionDays: number;
+}
+
+// PermissionJudgeRecordExport is the marked records as training samples in JSON Lines.
+// PermissionJudgeRecordExport 是以 JSON Lines 表示、作为训练样本的已标记记录。
+export interface PermissionJudgeRecordExport {
+  fileName: string;
+  content: string;
+  count: number;
+}

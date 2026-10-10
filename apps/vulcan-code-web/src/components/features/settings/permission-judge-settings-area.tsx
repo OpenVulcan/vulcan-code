@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Activity, Box, ChevronLeft, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
+import { Activity, Box, ChevronLeft, History, ChevronRight, Gauge, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   PageBody, PageEmptyState, PageFacts, PageHint, PageItem, PageNotice, PageRow, PageSection, PageToolbar, type PageFact,
@@ -18,6 +18,7 @@ import {
   PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
 } from "@/components/features/settings/permission-judge-cuda-page";
 import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { PermissionJudgeRecordsPage } from "@/components/features/settings/permission-judge-records-page";
 import { PermissionJudgeRegisterForm } from "@/components/features/settings/permission-judge-register-form";
 import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
@@ -84,7 +85,7 @@ function savedChoices(snapshot: PermissionJudgeSettingsSnapshot): Choices {
 
 // View is the page shown inside the settings frame: the overview or one of its sub-pages.
 // View 是设置框架内显示的页面：总览或其子页面之一。
-type View = "overview" | "models" | "cuda" | "diagnostics";
+type View = "overview" | "models" | "cuda" | "diagnostics" | "records";
 
 // Failure is one failed action: a readable outcome plus the raw service error.
 // Failure 是一次失败的操作：可读结果加原始服务错误。
@@ -261,6 +262,9 @@ export function PermissionJudgeSettingsArea() {
           async () => setStatus(await installPermissionJudgeCuda(component)))}
         onSelectDirectory={(cudaLibraryDirectory) => persist({ cudaLibraryDirectory })} />);
   }
+  if (view === "records") {
+    return subPage(t("settings.permissionJudge.records.title"), <PermissionJudgeRecordsPage />);
+  }
   if (view === "diagnostics") {
     const savedCloud = enabled && snapshot.backend === "cloud";
     const benchmarkReady = savedCloud || (snapshot.backend !== "cloud" && status.worker.phase === "ready");
@@ -420,6 +424,8 @@ export function PermissionJudgeSettingsArea() {
     <PageSection layout="rows" data-judge-tools="" title={t("settings.permissionJudge.tools")}>
       <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
         description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />
+      <PageItem icon={<History />} title={t("settings.permissionJudge.records.title")}
+        description={t("settings.permissionJudge.records.entryHint")} actions={open("records")} />
     </PageSection>
   </PageBody>;
 }

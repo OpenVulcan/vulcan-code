@@ -483,6 +483,17 @@ pub fn resolve_judge_cuda_runtime_root() -> Option<PathBuf> {
     resolve_user_vulcan_code_root().map(|root| root.join("judge-cuda"))
 }
 
+/// Returns the user-owned directory of the permission judge's decision log.
+/// 返回权限判定判定记录的用户级目录。
+///
+/// # Returns
+/// 返回值
+/// The exact `<user-vulcan-root>/code/judge-records` directory, or `None` when home is unavailable.
+/// 返回精确的 `<user-vulcan-root>/code/judge-records` 目录；无法取得用户主目录时返回 `None`。
+pub fn resolve_judge_records_root() -> Option<PathBuf> {
+    resolve_user_vulcan_code_root().map(|root| root.join("judge-records"))
+}
+
 /// Returns the current user's Vulcan plugin installation root.
 /// 返回当前用户的 Vulcan 插件安装根目录。
 ///

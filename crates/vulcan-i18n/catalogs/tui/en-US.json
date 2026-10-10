@@ -354,6 +354,8 @@
   "tui.knowledge.lines": "lines",
   "tui.knowledge.maintenance": "Index maintenance",
   "tui.knowledge.missingChunks": "Missing / mismatched",
+  "tui.judgeRecords.newest": "Back to newest",
+  "tui.judgeRecords.older": "Older records",
   "tui.knowledge.nextPage": "Next page",
   "tui.knowledge.noDocuments": "No documents in this folder or page.",
   "tui.knowledge.noProjects": "No host projects are available for authorization.",

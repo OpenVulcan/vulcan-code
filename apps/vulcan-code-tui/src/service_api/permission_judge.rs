@@ -168,6 +168,49 @@ pub fn install_permission_judge_cuda(component: &str) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_permission_judge_records`, one page of the decision log.
+/// 构建 `service_permission_judge_records` 的请求，即判定记录的一页。
+/// `request` is the complete `PermissionJudgeRecordsRequest` with filters, cursor and limit.
+/// `request` 为包含筛选、游标与数量的完整 `PermissionJudgeRecordsRequest`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_permission_judge_records(request: Value) -> ServiceCall {
+    ServiceCall::load(
+        "load_permission_judge_records",
+        "service_permission_judge_records",
+        json!({ "request": request }),
+        Slot::PermissionJudgeRecords,
+    )
+}
+
+/// Builds the request for `service_mark_permission_judge_record`.
+/// 构建 `service_mark_permission_judge_record` 的请求。
+/// `correction` is the label the judge should have given, or `None` to clear the mark.
+/// `correction` 为判定器本应给出的标签；为 `None` 时清除标记。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn mark_permission_judge_record(id: &str, correction: Option<&str>) -> ServiceCall {
+    ServiceCall::mutate(
+        "mark_permission_judge_record",
+        "service_mark_permission_judge_record",
+        json!({ "request": { "id": id, "correction": correction } }),
+        &[Slot::PermissionJudgeRecords],
+    )
+}
+
+/// Builds the request for `service_clear_permission_judge_records`, removing every record.
+/// 构建 `service_clear_permission_judge_records` 的请求，删除全部记录。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn clear_permission_judge_records() -> ServiceCall {
+    ServiceCall::mutate(
+        "clear_permission_judge_records",
+        "service_clear_permission_judge_records",
+        json!({}),
+        &[Slot::PermissionJudgeRecords],
+    )
+}
+
 /// Builds the request for `service_project_permission_judge_policy`.
 /// 构建 `service_project_permission_judge_policy` 的请求。
 /// `project_id` is the project whose choices for the model in use are read.

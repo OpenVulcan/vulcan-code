@@ -1388,6 +1388,74 @@
       "perItemMs": 4.2,
       "itemsPerSecond": 238.1
     },
+    "service_permission_judge_records": {
+      "records": [
+        {
+          "id": "demo-record-1",
+          "judgedAtMs": 1790000000000,
+          "sessionId": "demo-session",
+          "workspaceRoot": "D:/demo",
+          "toolName": "shell_command",
+          "arguments": "{\"command\":\"cargo build\"}",
+          "highRisk": null,
+          "judge": {
+            "label": "allow",
+            "error": null,
+            "elapsedMs": 6.3,
+            "trace": {
+              "backend": "local",
+              "model": "demo-judge-official",
+              "policyVersion": "2026.09",
+              "settings": {
+                "network": "ask"
+              },
+              "rendered": "Project: demo\nTool: shell_command\nArguments: {\"command\":\"cargo build\"}",
+              "logits": [
+                2.4,
+                0.1,
+                -1.8
+              ],
+              "allowProbability": null,
+              "inputTokens": 41
+            }
+          },
+          "review": null,
+          "outcome": "judge_allowed",
+          "correction": null
+        },
+        {
+          "id": "demo-record-2",
+          "judgedAtMs": 1789999000000,
+          "sessionId": "demo-session",
+          "workspaceRoot": "D:/demo",
+          "toolName": "apply_patch",
+          "arguments": "{\"path\":\"src/main.rs\"}",
+          "highRisk": null,
+          "judge": {
+            "label": null,
+            "error": "The judge worker stopped.",
+            "elapsedMs": 1.2,
+            "trace": null
+          },
+          "review": {
+            "verdict": "ask_user",
+            "reason": "Edits outside the request.",
+            "error": null,
+            "elapsedMs": 812.0
+          },
+          "outcome": "user_allowed",
+          "correction": null
+        }
+      ],
+      "hasMore": false,
+      "total": 2,
+      "marked": 0,
+      "workspaces": [
+        "D:/demo"
+      ],
+      "retentionRecords": 5000,
+      "retentionDays": 30
+    },
     "service_inspect_permission_judge_package": {
       "issue": null,
       "package": {

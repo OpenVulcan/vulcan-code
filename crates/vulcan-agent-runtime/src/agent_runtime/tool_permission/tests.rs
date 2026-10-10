@@ -53,6 +53,7 @@ struct FixedHost {
     prompts: std::sync::Mutex<Vec<(String, ToolApprovalPrompt)>>,
     judged: std::sync::Mutex<Vec<JudgeCall>>,
     reviewed: std::sync::Mutex<Vec<ReviewCall>>,
+    records: std::sync::Mutex<Vec<PermissionRecord>>,
 }
 
 impl FixedHost {
@@ -88,6 +89,7 @@ impl FixedHost {
             prompts: std::sync::Mutex::new(Vec::new()),
             judged: std::sync::Mutex::new(Vec::new()),
             reviewed: std::sync::Mutex::new(Vec::new()),
+            records: std::sync::Mutex::new(Vec::new()),
         })
     }
 }
@@ -110,14 +112,44 @@ impl ToolPermissionHost for FixedHost {
         self.approval.clone()
     }
 
-    async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeLabel>, String> {
+    async fn judge(&self, call: JudgeCall) -> Result<Option<JudgeVerdict>, JudgeFailure> {
         self.judged.lock().unwrap().push(call);
-        self.judge.clone()
+        self.judge
+            .clone()
+            .map(|label| {
+                label.map(|label| JudgeVerdict {
+                    label,
+                    trace: trace(),
+                })
+            })
+            .map_err(|reason| JudgeFailure {
+                reason,
+                trace: None,
+            })
     }
 
     async fn review(&self, call: ReviewCall) -> Result<Option<LlmReview>, String> {
         self.reviewed.lock().unwrap().push(call);
         self.review.clone()
+    }
+
+    fn record(&self, record: PermissionRecord) {
+        self.records.lock().unwrap().push(record);
+    }
+}
+
+/// Judge trace the fixed host reports with every verdict.
+/// 固定宿主随每个判定一并报告的判定轨迹。
+fn trace() -> JudgeTrace {
+    JudgeTrace {
+        backend: String::from("local"),
+        model: String::from("fixed"),
+        policy_version: String::from("1"),
+        settings: BTreeMap::new(),
+        rendered: String::from("Tool: shell_command"),
+        logits: Some([1.0, 0.0, 0.0]),
+        allow_probability: None,
+        input_tokens: Some(8),
     }
 }
 
@@ -777,4 +809,84 @@ async fn reviewer_decides_within_the_judge_and_high_risk_boundary() {
         ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
     );
     assert!(read_only.reviewed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn records_each_decision_the_judge_or_reviewer_took_part_in() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().to_path_buf();
+    let shell = native(SHELL_COMMAND_TOOL_ID);
+    let admit = |host: Arc<FixedHost>| {
+        let shell = shell.clone();
+        let root = root.clone();
+        async move {
+            let host: Arc<dyn ToolPermissionHost> = host;
+            let raw = r#"{"command": "cargo build"}"#;
+            let args: Value = serde_json::from_str(raw).unwrap();
+            admit_tool_call(
+                Some(&host),
+                SessionId::nil(),
+                &shell,
+                &args,
+                PermissionTexts {
+                    raw_arguments: Some(raw),
+                    user_request: None,
+                },
+                &context(),
+                Some(&root),
+            )
+            .await
+        }
+    };
+    let outcomes = |host: &FixedHost| {
+        host.records
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|record| record.outcome)
+            .collect::<Vec<_>>()
+    };
+
+    // A judge allow is recorded with what the judge read and the raw call text.
+    // 判定器的 allow 会连同其读取内容与原样调用文本一并记录。
+    let clearing = FixedHost::judging(
+        Ok(PermissionMode::WorkspaceWrite),
+        Ok(false),
+        Ok(Some(JudgeLabel::Allow)),
+    );
+    admit(Arc::clone(&clearing)).await;
+    let records = clearing.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].outcome, PermissionOutcome::JudgeAllowed);
+    assert_eq!(records[0].judge_trace, Some(trace()));
+    assert_eq!(records[0].arguments, r#"{"command": "cargo build"}"#);
+    assert!(records[0].judge_elapsed.is_some());
+
+    // The user's answer and the reviewer's denial are recorded as the deciding layer.
+    // 用户的回答与复核器的拒绝按作出决定的层记录。
+    let asking = FixedHost::judging(
+        Ok(PermissionMode::WorkspaceWrite),
+        Ok(false),
+        Ok(Some(JudgeLabel::Review)),
+    );
+    admit(Arc::clone(&asking)).await;
+    assert_eq!(outcomes(&asking), vec![PermissionOutcome::UserDenied]);
+    let denying = FixedHost::reviewing(
+        Ok(PermissionMode::WorkspaceWrite),
+        Ok(true),
+        Ok(None),
+        Ok(Some(LlmReview {
+            verdict: ReviewVerdict::Deny,
+            reason: String::from("because"),
+            may_allow_blocked: false,
+        })),
+    );
+    admit(Arc::clone(&denying)).await;
+    assert_eq!(outcomes(&denying), vec![PermissionOutcome::ReviewDenied]);
+
+    // Without a judge or reviewer nothing is recorded.
+    // 没有判定器与复核器时不记录任何内容。
+    let plain = FixedHost::new(Ok(PermissionMode::WorkspaceWrite), Ok(true));
+    admit(Arc::clone(&plain)).await;
+    assert!(plain.records.lock().unwrap().is_empty());
 }

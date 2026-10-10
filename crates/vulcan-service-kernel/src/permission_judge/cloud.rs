@@ -70,13 +70,14 @@ pub(super) fn configured_model(state: &SharedServiceBridgeState) -> Result<Optio
         .map(|route| route.model_id.clone()))
 }
 
-/// Judges one call through the configured decision route.
-/// 经由已配置的判定路由判定一次调用。
+/// Judges one call through the configured decision route; returns the label and the probability
+/// of allow.
+/// 经由已配置的判定路由判定一次调用；返回标签与 allow 的概率。
 pub(super) async fn judge(
     state: &SharedServiceBridgeState,
     settings: &JudgeSettings,
     call: CloudCall<'_>,
-) -> Result<JudgeLabel, String> {
+) -> Result<(JudgeLabel, f32), String> {
     let port = internal_ai_port(state)?;
     let handle = capability(port.as_ref())?;
     let configured = handle
@@ -104,13 +105,13 @@ pub(super) async fn judge(
             choice,
             probabilities,
             ..
-        }) => cloud_label(
-            choice,
-            probabilities
+        }) => {
+            let allow = probabilities
                 .get(JudgeLabel::Allow.key())
                 .copied()
-                .unwrap_or_default(),
-        ),
+                .unwrap_or_default();
+            cloud_label(choice, allow).map(|label| (label, allow as f32))
+        }
         None => Err(String::from("The cloud judge returned no answer.")),
     }
 }

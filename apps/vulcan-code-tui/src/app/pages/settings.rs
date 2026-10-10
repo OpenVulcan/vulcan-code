@@ -741,7 +741,7 @@ fn provider_task_phase_label(phase: &str) -> String {
 
 /// Formats Unix milliseconds as a UTC minute, or `-` when the value is out of range.
 /// 将 Unix 毫秒格式化为 UTC 分钟；超出范围时为 `-`。
-fn utc_time(unix_ms: i64) -> String {
+pub(super) fn utc_time(unix_ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(unix_ms)
         .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
         .unwrap_or_else(|| String::from("-"))

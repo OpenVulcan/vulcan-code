@@ -354,6 +354,8 @@
   "tui.knowledge.lines": "行",
   "tui.knowledge.maintenance": "索引維護",
   "tui.knowledge.missingChunks": "缺失 / 不匹配",
+  "tui.judgeRecords.newest": "回到最新",
+  "tui.judgeRecords.older": "更早的記錄",
   "tui.knowledge.nextPage": "下一頁",
   "tui.knowledge.noDocuments": "此目錄或當前頁沒有文件。",
   "tui.knowledge.noProjects": "暫無可授權的宿主專案。",

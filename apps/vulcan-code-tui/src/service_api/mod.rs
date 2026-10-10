@@ -196,6 +196,9 @@ pub enum Slot {
     /// `loadProjectPermissionJudgePolicy` of the project chosen on the permission strategy page.
     /// 权限策略页所选项目的 `loadProjectPermissionJudgePolicy`。
     ProjectPermissionJudgePolicy,
+    /// The shown page of `loadPermissionJudgeRecords`; its loader carries the filters.
+    /// `loadPermissionJudgeRecords` 当前显示的一页；其加载器携带筛选条件。
+    PermissionJudgeRecords,
 }
 
 impl Slot {

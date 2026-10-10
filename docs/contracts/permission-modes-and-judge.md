@@ -61,12 +61,28 @@
 - 设置界面只列出使用中模型的类别，判定未启用时整个区块不显示。WebUI 位于项目设置对话框，TUI 位于
   设置区的同名页面并在页首选择项目。
 
+## 判定记录
+
+- **记录范围**：只记录判定模型或复核 LLM 参与的决定；模式闸门与确定性规则直接决定的调用不记录。时间为判定
+  开始时刻，记录在最终结论（判定放行、复核放行或拒绝、用户放行或拒绝、失败）产生后写入，写入不阻塞调用。
+- **内容**：原样保存工具参数文本（含命令与路径）、工作区、会话、高风险类别、判定标签或错误与耗时、判定输入
+  轨迹（后端、模型、策略版本、类别设置、渲染文本、本机三类分数或云端放行概率、输入令牌数）、复核结论与耗时。
+- **存储**：只保存在本机用户目录 `<用户 Vulcan 根>/code/judge-records/records.v1.jsonl`，不上传。滚动上限只在
+  `permission_judge/records.rs` 的 `RETENTION_RECORDS` 与 `RETENTION_DAYS` 定义，超出时整体压缩重写；文件
+  任一行无法解析时整份记录报错且不再写入，直到用户清除（V0.1.x 不做旧格式兼容）。
+- **标记与导出**：用户可为有判定轨迹的记录标记“本应给出”的标签，再次选择同一标签清除标记；没有轨迹（判定
+  失败或未运行）的记录不可标记。导出只包含已标记记录，每行为判定训练输入格式 `{settings, rendered}` 加
+  `label` 与来源元数据，可直接作为本机测试集或训练样本。
+- **服务**：`service_permission_judge_records`（筛选判定结果 / 工作区 / 只看已标记，最新在前，以记录 ID 为游标
+  分页）、`service_mark_permission_judge_record`、`service_export_permission_judge_records`、
+  `service_clear_permission_judge_records`。
+
 ## 界面
 
 - 输入区权限模式选择器（WebUI 为输入区工具栏中加号右侧的权限标签按钮，切换到完全权限前须勾选风险确认；TUI `⛨` 标签、`Alt+P`、`/permissions`）附带判定入口。
 - “权限判定”设置页：总览依次为开关与后端选择、所选后端的设置（本机为使用中模型、设备、CUDA 摘要与运行
   状态；云端为判定路由）、复核路由（含“允许 LLM 放行判定器拦截项”）与工具入口；模型管理与登记、CUDA
-  环境（组件安装、库文件夹、手动下载）和诊断（模型状态表、速度测试）是带返回按钮的子页面。状态按服务发布的
+  环境（组件安装、库文件夹、手动下载）、诊断（模型状态表、速度测试）和判定记录（筛选、标记、导出、清除）是带返回按钮的子页面。状态按服务发布的
   `pollIntervalMs` 重读，唯一定义为服务内核 `STATUS_POLL_INTERVAL_MS`。WebUI 每个选择立即保存；判定未设定时
   选择暂存，开启时一并写入；已启用时切换到尚未设置完成的后端会等待其设置完成，不先写入。
 - 初始化引导：第一步为权限判定，三选一（本机、云端、暂不启用）。WebUI 在判定未设定时于启动后自动
@@ -83,6 +99,7 @@
 | 模式读取、判定与复核宿主 | `crates/vulcan-service-kernel/src/tool_permission_host.rs` |
 | 会话模式修改与草稿首次提交 | `crates/vulcan-service-kernel/src/permission_mode.rs`、`conversation_submission.rs` |
 | 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs` |
+| 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
 | 策略、模型包、官方清单、云端副本与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,decision}.rs` |

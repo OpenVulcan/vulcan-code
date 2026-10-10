@@ -383,7 +383,15 @@ impl PageId {
                     ));
                 }
             }
-            Self::PermissionJudge | Self::SetupGuide => calls.extend([
+            Self::PermissionJudge => calls.extend([
+                settings::load_public_ai_settings(),
+                api::permission_judge::load_permission_judge_settings(),
+                api::permission_judge::load_permission_judge_status(),
+                api::permission_judge::load_permission_judge_records(
+                    permission_judge::records_request(&Value::Null, None),
+                ),
+            ]),
+            Self::SetupGuide => calls.extend([
                 settings::load_public_ai_settings(),
                 api::permission_judge::load_permission_judge_settings(),
                 api::permission_judge::load_permission_judge_status(),

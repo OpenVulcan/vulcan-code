@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use vulcan_permission_judge::JudgeLabel;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
 pub use vulcan_permission_judge::system::{JudgeBackend, JudgeState};
 
@@ -581,4 +582,192 @@ pub struct ProjectPermissionJudgePolicySaveRequest {
     /// Chosen mode per option; options left out follow the default.
     /// 每个选项的已选档位；未列出的选项跟随默认值。
     pub options: BTreeMap<String, String>,
+}
+
+/// One decision the judge or the reviewer took part in, as the decision log keeps it.
+/// 判定记录所保存的一次判定器或复核器参与的决定。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeRecord {
+    /// Record identity.
+    /// 记录标识。
+    pub id: String,
+    /// When the call reached the judge layer, in Unix milliseconds.
+    /// 调用到达判定层的时间（Unix 毫秒）。
+    pub judged_at_ms: u64,
+    /// Session that made the call.
+    /// 发起调用的会话。
+    pub session_id: String,
+    /// Workspace the call runs in.
+    /// 调用运行的工作区。
+    pub workspace_root: Option<String>,
+    /// Model-visible tool name.
+    /// 模型可见的工具名称。
+    pub tool_name: String,
+    /// Argument text exactly as the agent model sent it.
+    /// 代理模型发送的原样参数文本。
+    pub arguments: String,
+    /// Matched high-risk category key, when any.
+    /// 命中的高风险类别键（如有）。
+    pub high_risk: Option<String>,
+    /// Judge layer result, when a judge is configured.
+    /// 判定层结果（配置判定器时）。
+    pub judge: Option<PermissionJudgeRecordJudge>,
+    /// Review layer result, when a reviewer is configured.
+    /// 复核层结果（配置复核器时）。
+    pub review: Option<PermissionJudgeRecordReview>,
+    /// Which layer decided and how, such as `user_denied`.
+    /// 由哪一层决定以及如何决定，例如 `user_denied`。
+    pub outcome: String,
+    /// Label the user says the judge should have given.
+    /// 用户认为判定器应给出的标签。
+    pub correction: Option<JudgeLabel>,
+}
+
+/// Judge layer result of one recorded call.
+/// 一次已记录调用的判定层结果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeRecordJudge {
+    /// Decision; absent when the judge could not score the call.
+    /// 判定结果；判定器无法评分时缺省。
+    pub label: Option<JudgeLabel>,
+    /// Why the judge could not score the call.
+    /// 判定器无法评分的原因。
+    pub error: Option<String>,
+    /// Time the judge layer took.
+    /// 判定层耗时。
+    pub elapsed_ms: f64,
+    /// What the judge read and produced, when it got that far.
+    /// 判定器读取与产生的内容（若已进行到该步）。
+    pub trace: Option<PermissionJudgeRecordTrace>,
+}
+
+/// What one judgement read and produced.
+/// 一次判定读取与产生的内容。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeRecordTrace {
+    /// Judge backend key, `local` or `cloud`.
+    /// 判定后端键，`local` 或 `cloud`。
+    pub backend: String,
+    /// Local model name or cloud model id.
+    /// 本机模型名称或云端模型标识。
+    pub model: String,
+    /// Policy version of the model.
+    /// 模型的策略版本。
+    pub policy_version: String,
+    /// Category choices the judge read.
+    /// 判定器读取的类别档位。
+    pub settings: BTreeMap<String, String>,
+    /// Call text the judge read.
+    /// 判定器读取的调用文本。
+    pub rendered: String,
+    /// Raw local scores in label order.
+    /// 按标签顺序排列的本机原始分数。
+    pub logits: Option<[f32; 3]>,
+    /// Cloud probability of the allow label.
+    /// 云端 allow 标签的概率。
+    pub allow_probability: Option<f32>,
+    /// Sequence length the local model read or refused.
+    /// 本机模型读取或拒绝的序列长度。
+    pub input_tokens: Option<u32>,
+}
+
+/// Review layer result of one recorded call.
+/// 一次已记录调用的复核层结果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeRecordReview {
+    /// Reviewer verdict key; absent when the reviewer could not review the call.
+    /// 复核决定键；复核器无法复核时缺省。
+    pub verdict: Option<String>,
+    /// Reviewer reason.
+    /// 复核理由。
+    pub reason: Option<String>,
+    /// Why the reviewer could not review the call.
+    /// 复核器无法复核的原因。
+    pub error: Option<String>,
+    /// Time the review layer took.
+    /// 复核层耗时。
+    pub elapsed_ms: f64,
+}
+
+/// Reads one page of the decision log, newest first.
+/// 读取判定记录的一页，最新在前。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeRecordsRequest {
+    /// Judge result to keep: `allow`, `review`, `block` or `failed`.
+    /// 保留的判定结果：`allow`、`review`、`block` 或 `failed`。
+    pub label: Option<String>,
+    /// Workspace to keep.
+    /// 保留的工作区。
+    pub workspace: Option<String>,
+    /// Keep only records the user marked.
+    /// 只保留用户已标记的记录。
+    pub marked_only: bool,
+    /// Return records older than this record.
+    /// 返回早于该记录的记录。
+    pub before: Option<String>,
+    /// Records per page.
+    /// 每页记录数。
+    pub limit: u32,
+}
+
+/// One page of the decision log with the facts the log page shows.
+/// 判定记录的一页，以及记录页显示的信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeRecordPage {
+    /// Matching records, newest first.
+    /// 匹配的记录，最新在前。
+    pub records: Vec<PermissionJudgeRecord>,
+    /// Whether older matching records remain.
+    /// 是否还有更早的匹配记录。
+    pub has_more: bool,
+    /// Records kept in the log.
+    /// 记录中保存的总数。
+    pub total: u32,
+    /// Records the user marked.
+    /// 用户已标记的记录数。
+    pub marked: u32,
+    /// Workspaces of every kept record, for the filter.
+    /// 所有已保存记录的工作区，供筛选使用。
+    pub workspaces: Vec<String>,
+    /// Most records the log keeps.
+    /// 记录保存的最大条数。
+    pub retention_records: u32,
+    /// Most days the log keeps a record.
+    /// 记录保存的最长天数。
+    pub retention_days: u32,
+}
+
+/// Marks the label the judge should have given a record, or clears the mark.
+/// 标记判定器本应给出的标签，或清除标记。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeRecordMarkRequest {
+    /// Record identity.
+    /// 记录标识。
+    pub id: String,
+    /// Expected label; absent clears the mark.
+    /// 期望标签；缺省时清除标记。
+    pub correction: Option<JudgeLabel>,
+}
+
+/// Marked records as training samples in JSON Lines.
+/// 以 JSON Lines 表示、作为训练样本的已标记记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeRecordExport {
+    /// Suggested file name.
+    /// 建议的文件名。
+    pub file_name: String,
+    /// One sample per line.
+    /// 每行一个样本。
+    pub content: String,
+    /// Samples exported.
+    /// 导出的样本数。
+    pub count: u32,
 }

@@ -400,6 +400,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         model_rows(&mut rows, app, snapshot);
         cuda_rows(&mut rows, snapshot, status, &base);
     }
+    records_rows(&mut rows, app);
     rows
 }
 
@@ -1163,6 +1164,347 @@ fn cuda_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value, base: &Value
             ),
         );
     }
+}
+
+// Records per page, as in the WebUI decision log page.
+// 每页记录数，与 WebUI 判定记录页一致。
+const RECORDS_PAGE_SIZE: u32 = 50;
+// Judge result filter values; "failed" keeps records the judge could not score.
+// 判定结果筛选值；"failed" 保留判定器无法评分的记录。
+const RECORD_RESULTS: [&str; 4] = ["allow", "review", "block", "failed"];
+// Choice value that keeps every judge result or workspace.
+// 保留全部判定结果或工作区的选择值。
+const RECORDS_ALL: &str = "";
+
+/// The complete records request: `filters` is the shown request (or null) and `before` the
+/// cursor; any filter change starts again from the newest record.
+/// 完整的记录请求：`filters` 为当前显示的请求（或 null），`before` 为游标；任何筛选变化都从最新记录重新开始。
+pub(super) fn records_request(filters: &Value, before: Option<&str>) -> Value {
+    json!({
+        "label": v(filters, "/label"),
+        "workspace": v(filters, "/workspace"),
+        "markedOnly": b(filters, "/markedOnly"),
+        "before": before,
+        "limit": RECORDS_PAGE_SIZE,
+    })
+}
+
+/// Replaces one filter of the shown request and reads the newest page.
+/// 替换当前请求中的一个筛选条件并读取最新一页。
+fn set_record_filter(filters: &Value, field: &str, value: Value) -> ServiceCall {
+    let mut next = filters.clone();
+    next[field] = value;
+    judge::load_permission_judge_records(records_request(&next, None))
+}
+
+fn set_record_result(filters: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let result = value.as_str();
+    Some(set_record_filter(
+        filters,
+        "label",
+        if result == RECORDS_ALL {
+            Value::Null
+        } else {
+            json!(result)
+        },
+    ))
+}
+
+fn set_record_workspace(filters: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let workspace = value.as_str();
+    Some(set_record_filter(
+        filters,
+        "workspace",
+        if workspace == RECORDS_ALL {
+            Value::Null
+        } else {
+            json!(workspace)
+        },
+    ))
+}
+
+fn set_record_marked_only(filters: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    Some(set_record_filter(
+        filters,
+        "markedOnly",
+        json!(value.as_bool()),
+    ))
+}
+
+/// Labels a judge result filter value.
+/// 为判定结果筛选值生成标签。
+fn record_result_label(code: &str) -> String {
+    match code {
+        "allow" => tr!("settings.permissionJudge.records.label.allow"),
+        "review" => tr!("settings.permissionJudge.records.label.review"),
+        "block" => tr!("settings.permissionJudge.records.label.block"),
+        "failed" => tr!("settings.permissionJudge.records.label.failed"),
+        other => other.to_string(),
+    }
+}
+
+/// Labels the layer that decided a recorded call.
+/// 为决定所记录调用的层生成标签。
+fn record_outcome_label(code: &str) -> String {
+    match code {
+        "judge_allowed" => tr!("settings.permissionJudge.records.outcome.judgeAllowed"),
+        "review_allowed" => tr!("settings.permissionJudge.records.outcome.reviewAllowed"),
+        "review_denied" => tr!("settings.permissionJudge.records.outcome.reviewDenied"),
+        "user_allowed" => tr!("settings.permissionJudge.records.outcome.userAllowed"),
+        "user_denied" => tr!("settings.permissionJudge.records.outcome.userDenied"),
+        "failed" => tr!("settings.permissionJudge.records.outcome.failed"),
+        other => other.to_string(),
+    }
+}
+
+/// Mirrors the WebUI `callSummary`: the call's command or path, else the tool name.
+/// 镜像 WebUI `callSummary`：调用的命令或路径，否则为工具名称。
+fn record_summary(record: &Value) -> String {
+    let arguments: Value = serde_json::from_str(&s(record, "/arguments")).unwrap_or(Value::Null);
+    ["command", "path", "destination"]
+        .iter()
+        .find_map(|key| {
+            v(&arguments, &format!("/{key}"))
+                .as_str()
+                .filter(|text| !text.is_empty())
+        })
+        .map_or_else(|| s(record, "/toolName"), str::to_string)
+}
+
+/// The decision log: filters, one page of records with marks, paging and clearing, mirroring the
+/// WebUI decision log page. Sample export downloads a file and stays in the WebUI.
+/// 判定记录：筛选、一页带标记的记录、翻页与清除，镜像 WebUI 判定记录页。样本导出会下载文件，仅在 WebUI 提供。
+fn records_rows(rows: &mut Vec<Row>, app: &App) {
+    rows.push(section(tr!("settings.permissionJudge.records.title")));
+    let page = app.slots.value(Slot::PermissionJudgeRecords);
+    if let Some(error) = app.slot_errors.get(&Slot::PermissionJudgeRecords) {
+        rows.push(note(
+            format!(
+                "{} {error}",
+                tr!("settings.permissionJudge.records.loadFailed")
+            ),
+            Tone::Bad,
+        ));
+    }
+    if page.is_null() {
+        return;
+    }
+    let filters = app
+        .slots
+        .loader(Slot::PermissionJudgeRecords)
+        .map_or(Value::Null, |loader| v(&loader.params, "/request").clone());
+    rows.push(note(
+        tr!(
+            "settings.permissionJudge.records.hint",
+            records = n(page, "/retentionRecords"),
+            days = n(page, "/retentionDays"),
+        ),
+        Tone::Muted,
+    ));
+    rows.push(info(
+        tr!(
+            "settings.permissionJudge.records.count",
+            count = n(page, "/total")
+        ),
+        "",
+        Tone::Normal,
+    ));
+    let mut results = vec![(
+        RECORDS_ALL.to_string(),
+        tr!("settings.permissionJudge.records.all"),
+    )];
+    results.extend(RECORD_RESULTS.map(|code| (code.to_string(), record_result_label(code))));
+    rows.push(choice(
+        tr!("settings.permissionJudge.records.filterResult"),
+        results,
+        v(&filters, "/label")
+            .as_str()
+            .unwrap_or(RECORDS_ALL)
+            .to_string(),
+        Edit::Call(Setter::Build {
+            ctx: filters.clone(),
+            build: set_record_result,
+        }),
+    ));
+    let workspaces = a(page, "/workspaces");
+    if !workspaces.is_empty() {
+        let mut options = vec![(
+            RECORDS_ALL.to_string(),
+            tr!("settings.permissionJudge.records.allWorkspaces"),
+        )];
+        options.extend(
+            workspaces
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|workspace| (workspace.to_string(), workspace.to_string())),
+        );
+        rows.push(choice(
+            tr!("settings.permissionJudge.records.detail.workspace"),
+            options,
+            v(&filters, "/workspace")
+                .as_str()
+                .unwrap_or(RECORDS_ALL)
+                .to_string(),
+            Edit::Call(Setter::Build {
+                ctx: filters.clone(),
+                build: set_record_workspace,
+            }),
+        ));
+    }
+    rows.push(toggle(
+        tr!("settings.permissionJudge.records.markedOnly"),
+        b(&filters, "/markedOnly"),
+        Edit::Call(Setter::Build {
+            ctx: filters.clone(),
+            build: set_record_marked_only,
+        }),
+    ));
+
+    let records = a(page, "/records");
+    if records.is_empty() {
+        rows.push(note(
+            tr!("settings.permissionJudge.records.empty"),
+            Tone::Muted,
+        ));
+    }
+    for record in records {
+        rows.push(record_row(record));
+    }
+    let mut paging = Vec::new();
+    if !v(&filters, "/before").is_null() {
+        paging.push(action(
+            tr!("tui.judgeRecords.newest"),
+            call(judge::load_permission_judge_records(records_request(
+                &filters, None,
+            ))),
+            Tone::Normal,
+        ));
+    }
+    if b(page, "/hasMore")
+        && let Some(last) = records.last()
+    {
+        paging.push(action(
+            tr!("tui.judgeRecords.older"),
+            call(judge::load_permission_judge_records(records_request(
+                &filters,
+                Some(&s(last, "/id")),
+            ))),
+            Tone::Normal,
+        ));
+    }
+    if !paging.is_empty() {
+        rows.push(item("judge-records-paging", tr!("tui.knowledge.page"), "").actions(paging));
+    }
+    if n(page, "/total") > 0 {
+        let clear = tr!("settings.permissionJudge.records.clear");
+        rows.push(button(
+            clear.clone(),
+            confirm(
+                tr!("settings.permissionJudge.records.clearTitle"),
+                tr!(
+                    "settings.permissionJudge.records.clearDescription",
+                    count = n(page, "/total"),
+                ),
+                tr!("settings.permissionJudge.records.clearConfirm"),
+                call(judge::clear_permission_judge_records()),
+            ),
+            Tone::Bad,
+        ));
+    }
+}
+
+/// One record: what was called, how each layer decided, and marks when the judge scored it.
+/// 一条记录：调用了什么、各层如何决定；判定器评过分时提供标记。
+fn record_row(record: &Value) -> Row {
+    let id = s(record, "/id");
+    let judge_result = match v(record, "/judge") {
+        Value::Null => None,
+        judge => Some(v(judge, "/label").as_str().unwrap_or("failed").to_string()),
+    };
+    let detail = [
+        super::settings::utc_time(n(record, "/judgedAtMs")),
+        record_outcome_label(&s(record, "/outcome")),
+    ]
+    .join(" · ");
+    let mut lines = vec![
+        [
+            Some(s(record, "/toolName")),
+            v(record, "/workspaceRoot").as_str().map(str::to_string),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · "),
+    ];
+    let trace = v(record, "/judge/trace");
+    if !trace.is_null() {
+        lines.push(format!(
+            "{} {} · {} {}",
+            tr!("settings.permissionJudge.records.detail.model"),
+            s(trace, "/model"),
+            tr!("settings.permissionJudge.records.detail.judgeTime"),
+            ms(v(record, "/judge/elapsedMs")),
+        ));
+    }
+    if let Some(error) = v(record, "/judge/error").as_str() {
+        lines.push(format!(
+            "{} {error}",
+            tr!("settings.permissionJudge.records.detail.error")
+        ));
+    }
+    if !v(record, "/review").is_null() {
+        let reason = v(record, "/review/reason")
+            .as_str()
+            .or_else(|| v(record, "/review/error").as_str())
+            .unwrap_or("—");
+        lines.push(format!(
+            "{} {reason} · {}",
+            tr!("settings.permissionJudge.records.detail.review"),
+            ms(v(record, "/review/elapsedMs")),
+        ));
+    }
+    let mut row = item(&id, record_summary(record), detail).lines(lines);
+    if let Some(result) = &judge_result {
+        let tone = match result.as_str() {
+            "allow" => Tone::Good,
+            "review" => Tone::Warn,
+            "block" => Tone::Bad,
+            _ => Tone::Muted,
+        };
+        row = row.badge(record_result_label(result), tone);
+    }
+    let correction = v(record, "/correction").as_str();
+    if let Some(correction) = correction {
+        row = row.badge(
+            tr!(
+                "settings.permissionJudge.records.marked",
+                label = record_result_label(correction),
+            ),
+            Tone::Accent,
+        );
+    }
+    if trace.is_null() {
+        return row;
+    }
+    row.actions(
+        RECORD_RESULTS[..3]
+            .iter()
+            .map(|label| {
+                // Choosing the current mark again clears it, as in the WebUI.
+                // 与 WebUI 一致，再次选择当前标记会清除它。
+                let next = (correction != Some(*label)).then_some(*label);
+                action(
+                    record_result_label(label),
+                    call(judge::mark_permission_judge_record(&id, next)),
+                    if correction == Some(*label) {
+                        Tone::Accent
+                    } else {
+                        Tone::Normal
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

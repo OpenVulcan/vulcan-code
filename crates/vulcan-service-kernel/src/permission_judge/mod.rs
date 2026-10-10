@@ -3,6 +3,7 @@
 
 mod cloud;
 mod environment;
+mod records;
 mod review;
 mod services;
 mod worker;
@@ -31,4 +32,7 @@ pub(crate) struct PermissionJudgeRuntime {
     /// Latest CUDA installation.
     /// 最近一次 CUDA 安装。
     cuda_install: Mutex<Option<PermissionJudgeCudaInstall>>,
+    /// Decision log of the judge and the reviewer.
+    /// 判定器与复核器的判定记录。
+    records: Arc<records::RecordStore>,
 }
