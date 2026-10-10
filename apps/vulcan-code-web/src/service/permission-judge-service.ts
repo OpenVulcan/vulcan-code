@@ -2,6 +2,7 @@ import { serviceClient } from "@/service/webui-service-runtime";
 import type {
   PermissionJudgeBenchmarkResult,
   PermissionJudgeCudaComponent,
+  PermissionJudgePackageInspection,
   PermissionJudgeSettingsSaveRequest,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
@@ -26,6 +27,14 @@ export async function savePermissionJudgeSettings(
   request: PermissionJudgeSettingsSaveRequest,
 ): Promise<PermissionJudgeSettingsSnapshot> {
   return serviceClient.request<PermissionJudgeSettingsSnapshot>("service_save_permission_judge_settings", { request });
+}
+
+// inspectPermissionJudgePackage verifies a package directory without registering it.
+// inspectPermissionJudgePackage 验证模型包目录但不登记。
+export async function inspectPermissionJudgePackage(path: string): Promise<PermissionJudgePackageInspection> {
+  return serviceClient.request<PermissionJudgePackageInspection>("service_inspect_permission_judge_package", {
+    request: { path },
+  });
 }
 
 // registerPermissionJudgeModel verifies a package directory and registers it.

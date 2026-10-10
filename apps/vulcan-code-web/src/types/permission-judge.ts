@@ -30,6 +30,25 @@ export interface PermissionJudgeDeviceSummary {
   unavailableReason: string | null;
 }
 
+// PermissionJudgePackageFacts describes a fully verified package directory that is not yet registered.
+// PermissionJudgePackageFacts 描述一个已完整验证、尚未登记的模型包目录。
+export interface PermissionJudgePackageFacts {
+  modelId: string;
+  knownPackageId: string | null;
+  defaultName: string;
+  policyVersion: string;
+  precision: string;
+  totalBytes: number;
+  registered: boolean;
+}
+
+// PermissionJudgePackageInspection is the outcome of checking a folder; exactly one field is set.
+// PermissionJudgePackageInspection 是检查文件夹的结果；恰好一个字段有值。
+export interface PermissionJudgePackageInspection {
+  issue: PermissionJudgeIssue | null;
+  package: PermissionJudgePackageFacts | null;
+}
+
 // PermissionJudgeModelSummary is one registered local model package.
 // PermissionJudgeModelSummary 是一条已登记的本机模型包。
 export interface PermissionJudgeModelSummary {

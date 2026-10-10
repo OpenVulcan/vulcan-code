@@ -203,6 +203,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `permission_judge::load_permission_judge_settings` | loadPermissionJudgeSettings | `service_permission_judge_settings` |
 | `permission_judge::load_permission_judge_status` | loadPermissionJudgeStatus | `service_permission_judge_status` |
 | `permission_judge::save_permission_judge_settings` | savePermissionJudgeSettings | `service_save_permission_judge_settings` |
+| `permission_judge::inspect_permission_judge_package` | inspectPermissionJudgePackage | `service_inspect_permission_judge_package` |
 | `permission_judge::register_permission_judge_model` | registerPermissionJudgeModel | `service_register_permission_judge_model` |
 | `permission_judge::activate_permission_judge_model` | activatePermissionJudgeModel | `service_activate_permission_judge_model` |
 | `permission_judge::rollback_permission_judge_model` | rollbackPermissionJudgeModel | `service_rollback_permission_judge_model` |

@@ -1387,6 +1387,18 @@
       "p95Ms": 47.5,
       "perItemMs": 4.2,
       "itemsPerSecond": 238.1
+    },
+    "service_inspect_permission_judge_package": {
+      "issue": null,
+      "package": {
+        "modelId": "demo-judge-official",
+        "knownPackageId": "demo-judge",
+        "defaultName": "Demo Judge",
+        "policyVersion": "fixed-options-no-intent-v2-critical-writes",
+        "precision": "fp16",
+        "totalBytes": 1288490188,
+        "registered": true
+      }
     }
   },
   "memory": {

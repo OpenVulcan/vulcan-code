@@ -425,6 +425,57 @@ pub struct PermissionJudgeModelRegisterRequest {
     pub custom: bool,
 }
 
+/// Checks a package directory without registering it.
+/// 检查模型包目录但不登记。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgePackageInspectRequest {
+    /// Absolute package directory.
+    /// 绝对模型包目录。
+    pub path: String,
+}
+
+/// Outcome of checking a package directory; exactly one of `issue` and `package` is present.
+/// 检查模型包目录的结果；`issue` 与 `package` 恰好存在一个。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgePackageInspection {
+    /// Why the directory is not a usable package.
+    /// 目录不是可用模型包的原因。
+    pub issue: Option<PermissionJudgeIssue>,
+    /// Facts of the fully verified package.
+    /// 完整验证后的模型包信息。
+    pub package: Option<PermissionJudgePackageFacts>,
+}
+
+/// Facts of a verified package directory.
+/// 已验证模型包目录的信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgePackageFacts {
+    /// Registration identity the package would get, the manifest digest.
+    /// 模型包将获得的登记身份，即清单摘要。
+    pub model_id: String,
+    /// Official package identifier; absent for a custom package, which needs explicit trust.
+    /// 官方模型包标识；自定义模型包缺省，需要显式信任。
+    pub known_package_id: Option<String>,
+    /// Name used when the user leaves the name blank.
+    /// 用户未填名称时使用的名称。
+    pub default_name: String,
+    /// Policy revision identifier.
+    /// 策略修订标识。
+    pub policy_version: String,
+    /// Weight precision description.
+    /// 权重精度说明。
+    pub precision: String,
+    /// Total size of all listed files.
+    /// 所有列出文件的总大小。
+    pub total_bytes: u64,
+    /// Whether this exact package is already registered.
+    /// 这个准确模型包是否已经登记。
+    pub registered: bool,
+}
+
 /// Names one registration.
 /// 指定一条登记。
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -50,6 +50,22 @@ pub fn save_permission_judge_settings(request: Value) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_inspect_permission_judge_package`; the result replaces the
+/// registration form's check slot and nothing is registered.
+/// 构建 `service_inspect_permission_judge_package` 的请求；结果替换登记表单的检查槽位，不登记任何内容。
+/// `request` is `{path}`, collected by the check form.
+/// `request` 为检查表单收集的 `{path}`。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn inspect_permission_judge_package(request: Value) -> ServiceCall {
+    ServiceCall::load(
+        "inspect_permission_judge_package",
+        "service_inspect_permission_judge_package",
+        json!({ "request": request }),
+        Slot::PermissionJudgePackageInspection,
+    )
+}
+
 /// Builds the request for `service_register_permission_judge_model`.
 /// 构建 `service_register_permission_judge_model` 的请求。
 /// `request` is `{path, name, custom}`, collected by the registration form.

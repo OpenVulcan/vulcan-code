@@ -397,7 +397,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     review_rows(&mut rows, ai);
     benchmark_rows(&mut rows, app, snapshot, status, enabled);
     if local {
-        model_rows(&mut rows, snapshot);
+        model_rows(&mut rows, app, snapshot);
         cuda_rows(&mut rows, snapshot, status, &base);
     }
     rows
@@ -752,7 +752,7 @@ fn benchmark_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value, status: &Val
 
 /// Registered models with switch and remove actions, rollback, and registration forms.
 /// 已登记模型及其切换、移除操作、回退，以及登记表单。
-fn model_rows(rows: &mut Vec<Row>, snapshot: &Value) {
+fn model_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value) {
     rows.push(section(tr!("settings.permissionJudge.models")));
     rows.push(note(
         tr!("settings.permissionJudge.modelsHint"),
@@ -824,12 +824,113 @@ fn model_rows(rows: &mut Vec<Row>, snapshot: &Value) {
             Tone::Normal,
         ));
     }
-    register_rows(rows);
+    register_rows(rows, app, snapshot);
 }
 
-/// The two registration forms: an official package folder, or a custom model folder.
-/// 两个登记表单：官方模型包文件夹或自定义模型文件夹。
-pub(super) fn register_rows(rows: &mut Vec<Row>) {
+/// Labels a package check failure code; unknown codes keep the code in a generic sentence.
+/// 为模型包检查失败代码生成标签；未知代码放入通用句子中保留。
+fn package_issue_label(code: &str) -> String {
+    match code {
+        "invalid_path" => tr!("settings.permissionJudge.packageIssue.invalidPath"),
+        "unreadable" => tr!("settings.permissionJudge.packageIssue.unreadable"),
+        "malformed" => tr!("settings.permissionJudge.packageIssue.malformed"),
+        "unsupported" => tr!("settings.permissionJudge.packageIssue.unsupported"),
+        "missing_file" => tr!("settings.permissionJudge.packageIssue.missingFile"),
+        "unsafe_entry" => tr!("settings.permissionJudge.packageIssue.unsafeEntry"),
+        "size_mismatch" => tr!("settings.permissionJudge.packageIssue.sizeMismatch"),
+        "digest_mismatch" => tr!("settings.permissionJudge.packageIssue.digestMismatch"),
+        other => tr!(
+            "settings.permissionJudge.packageIssue.unknown",
+            code = other
+        ),
+    }
+}
+
+/// The folder check form and its latest result, then the two registration forms: an official
+/// package folder, or a custom model folder.
+/// 文件夹检查表单及其最近结果，然后是两个登记表单：官方模型包文件夹或自定义模型文件夹。
+pub(super) fn register_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value) {
+    rows.push(button(
+        tr!("settings.permissionJudge.packageCheck"),
+        form(
+            json!({ "path": "" }),
+            vec![field(
+                tr!("settings.permissionJudge.registerPath"),
+                "/path",
+                false,
+                false,
+            )],
+            judge::inspect_permission_judge_package,
+        ),
+        Tone::Normal,
+    ));
+    let slot = Slot::PermissionJudgePackageInspection;
+    // The checked folder comes from the request that produced the result.
+    // 被检查的文件夹来自产生该结果的请求。
+    let checked = app
+        .slots
+        .loader(slot)
+        .map(|call| {
+            call.param("/request/path")
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let inspection = app.slots.value(slot);
+    let issue = v(inspection, "/issue");
+    let package = v(inspection, "/package");
+    if !issue.is_null() {
+        rows.push(info(
+            package_issue_label(&s(issue, "/code")),
+            format!("{checked}\n{}", s(issue, "/detail")),
+            Tone::Bad,
+        ));
+    } else if !package.is_null() {
+        let known = v(package, "/knownPackageId").as_str().map(|package| {
+            a(snapshot, "/knownPackages")
+                .iter()
+                .find(|known| s(known, "/id") == package)
+                .map_or_else(|| package.to_string(), |known| s(known, "/displayName"))
+        });
+        let kind = match &known {
+            Some(name) => tr!("settings.permissionJudge.modelOfficial", name = name),
+            None => tr!("settings.permissionJudge.modelCustom"),
+        };
+        rows.push(info(
+            format!("{} · {kind}", tr!("settings.permissionJudge.packageValid")),
+            format!(
+                "{checked}\n{}",
+                tr!(
+                    "settings.permissionJudge.modelMeta",
+                    policy = s(package, "/policyVersion"),
+                    precision = s(package, "/precision"),
+                    size = format_bytes(v(package, "/totalBytes").as_f64().unwrap_or(0.0)),
+                )
+            ),
+            Tone::Good,
+        ));
+        if b(package, "/registered") {
+            rows.push(note(
+                tr!("settings.permissionJudge.packageRegistered"),
+                Tone::Muted,
+            ));
+        } else if known.is_none() {
+            rows.push(note(
+                tr!("settings.permissionJudge.packageCustomHint"),
+                Tone::Muted,
+            ));
+        }
+    }
+    if let Some(error) = app.slot_errors.get(&slot) {
+        rows.push(note(
+            format!(
+                "{} {error}",
+                tr!("settings.permissionJudge.packageCheckFailed")
+            ),
+            Tone::Bad,
+        ));
+    }
     for custom in [false, true] {
         let label = if custom {
             format!(

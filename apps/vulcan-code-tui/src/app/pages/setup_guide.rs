@@ -60,7 +60,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     let cloud_route = v(ai, &format!("/inferenceProfiles/{JUDGE_PROFILE}/decision"));
 
     let mut rows = vec![note(tr!("setupGuide.judge.intro"), Tone::Muted)];
-    local_rows(&mut rows, snapshot, status);
+    local_rows(&mut rows, app, snapshot, status);
 
     rows.push(section(tr!("setupGuide.cloud.title")));
     rows.push(note(tr!("setupGuide.cloud.description"), Tone::Muted));
@@ -89,7 +89,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
 /// The local choice: detected devices, registered models with the one in use and its phase, the
 /// registration forms and the confirm button, which waits for a model in use.
 /// 本机选项：探测到的设备、已登记模型及使用中模型的阶段、登记表单与确认按钮；确认需等待使用中模型。
-fn local_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
+fn local_rows(rows: &mut Vec<Row>, app: &App, snapshot: &Value, status: &Value) {
     rows.push(section(tr!("setupGuide.local.title")));
     rows.push(note(tr!("setupGuide.local.description"), Tone::Muted));
     let devices = a(snapshot, "/devices")
@@ -148,7 +148,7 @@ fn local_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
             Tone::Bad,
         ));
     }
-    register_rows(rows);
+    register_rows(rows, app, snapshot);
     let in_use = models.iter().any(|model| v(model, "/id") == active);
     rows.push(confirm_row(
         tr!("setupGuide.local.confirm"),

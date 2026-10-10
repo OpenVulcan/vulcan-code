@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { StatusPill } from "@/components/shared/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
@@ -13,6 +12,7 @@ import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
 import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { PermissionJudgeRegisterForm } from "@/components/features/settings/permission-judge-register-form";
 import { PermissionJudgeEntryContext } from "@/components/composer/permission-judge-entry-context";
 import { PermissionReviewRouteSection } from "@/components/features/settings/permission-review-route-section";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
@@ -417,9 +417,6 @@ function ModelsSection(props: {
   t: Translate;
 }) {
   const { t, snapshot } = props;
-  const [path, setPath] = React.useState("");
-  const [name, setName] = React.useState("");
-  const [custom, setCustom] = React.useState(false);
   const packageName = (id: string | null) => snapshot.knownPackages.find((known) => known.id === id)?.displayName ?? id ?? "";
   return <section className="settings-preferences-section">
     <h2>{t("settings.permissionJudge.models")}</h2>
@@ -460,27 +457,11 @@ function ModelsSection(props: {
       </Button>
     </div> : null}
     <h3>{t("settings.permissionJudge.register")}</h3>
-    <div className="grid gap-2">
-      <Input aria-label={t("settings.permissionJudge.registerPath")} placeholder={t("settings.permissionJudge.registerPath")}
-        value={path} onChange={(event) => setPath(event.target.value)} />
-      <Input aria-label={t("settings.permissionJudge.registerName")} placeholder={t("settings.permissionJudge.registerName")}
-        value={name} onChange={(event) => setName(event.target.value)} />
-      <label className="flex items-center gap-2 text-sm">
-        <Checkbox checked={custom} onCheckedChange={(checked) => setCustom(checked === true)} />
-        {t("settings.permissionJudge.registerCustom")}
-      </label>
-      <div className="settings-card-actions">
-        <Button type="button" size="sm" disabled={props.busy !== null || path.trim() === ""}
-          onClick={() => void props.run("register", "settings.permissionJudge.registerFailed", async () => {
-            props.applySnapshot(await registerPermissionJudgeModel(path.trim(), name.trim(), custom));
-            setPath("");
-            setName("");
-            setCustom(false);
-          })}>
-          {t("settings.permissionJudge.registerSubmit")}
-        </Button>
-      </div>
-    </div>
+    <PermissionJudgeRegisterForm busy={props.busy} knownPackages={snapshot.knownPackages}
+      onRegister={(request, reset) => props.run("register", "settings.permissionJudge.registerFailed", async () => {
+        props.applySnapshot(await registerPermissionJudgeModel(request.path, request.name, request.custom));
+        reset();
+      })} />
   </section>;
 }
 

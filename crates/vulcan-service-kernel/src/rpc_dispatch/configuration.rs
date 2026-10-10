@@ -106,6 +106,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_permission_judge_settings",
     "service_permission_judge_status",
     "service_save_permission_judge_settings",
+    "service_inspect_permission_judge_package",
     "service_register_permission_judge_model",
     "service_activate_permission_judge_model",
     "service_rollback_permission_judge_model",
@@ -710,6 +711,13 @@ pub(super) async fn dispatch(
         "service_save_permission_judge_settings" => rpc_json_result(
             permission_judge::service_save_permission_judge_settings(
                 app,
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_inspect_permission_judge_package" => rpc_json_result(
+            permission_judge::service_inspect_permission_judge_package(
                 state,
                 rpc_required_param(params, "request")?,
             )

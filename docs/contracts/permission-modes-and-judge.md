@@ -45,6 +45,8 @@
   判定入口与项目策略，启用时全部显示。
 - **本机后端**：模型包登记、切换、回退与移除；包内声明策略版本与放行余量，载入时验证。设备探测给出推荐
   设备，可手动覆写；CUDA 执行库可锁定文件夹或一键安装。闲置卸载尚未实现。
+  登记表单可从服务宿主浏览选择文件夹，并先经 `service_inspect_permission_judge_package` 完整校验（不登记，
+  结果按稳定代码本地化）；只有校验通过才可提交，非官方模型包须显式勾选信任。
 - **云端后端**：使用 `permission_judge` 消费者配置档的判定路由（TypeSafe 或 OpenRouter 上的 jev）。放行
   概率门槛只在 `CLOUD_ALLOW_PROBABILITY` 定义，当前值尚未用样本校准；不记录费用。
 - **复核 LLM**：`permission_review` 配置档、用途 `tool_call_review` 的对话路由；只收到判定层结论标签，
