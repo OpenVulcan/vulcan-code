@@ -153,6 +153,11 @@ pub struct WorkbenchSnapshot {
     /// 复制到新会话的已持久化全局回答模式。
     #[serde(default)]
     pub default_answer_mode: vulcan_session_core::v1::config::AnswerMode,
+    /// Saved permission judge switch; `None` until the user decides, which the permission mode
+    /// selector shows as needing setup.
+    /// 已保存的权限判定开关；用户决定前为 `None`，权限模式选择器据此显示需要设定。
+    #[serde(default)]
+    pub permission_judge_state: Option<crate::JudgeState>,
     /// Composer slash commands projected from the shared command catalog.
     /// 从共享指令目录投影出的输入区 slash 指令。
     #[serde(default)]

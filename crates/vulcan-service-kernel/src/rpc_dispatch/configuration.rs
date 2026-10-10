@@ -709,6 +709,7 @@ pub(super) async fn dispatch(
         }
         "service_save_permission_judge_settings" => rpc_json_result(
             permission_judge::service_save_permission_judge_settings(
+                app,
                 state,
                 rpc_required_param(params, "request")?,
             )

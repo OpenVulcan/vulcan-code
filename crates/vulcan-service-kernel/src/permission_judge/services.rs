@@ -28,6 +28,7 @@ use vulcan_service_api::{
     PermissionJudgeNvidiaDriver, PermissionJudgePolicyOption, PermissionJudgeSettingsSaveRequest,
     PermissionJudgeSettingsSnapshot, PermissionJudgeStatus, ProjectPermissionJudgePolicyOption,
     ProjectPermissionJudgePolicySaveRequest, ProjectPermissionJudgePolicySnapshot,
+    ServiceEventEmitter,
 };
 use vulcan_service_runtime::judge_cuda_runtime::{
     CudaComponent, CudaLibrarySource, host_platform, install_component, missing_cuda_libraries,
@@ -38,7 +39,10 @@ use super::PermissionJudgeRuntime;
 use super::cloud::{self, CloudCall};
 use super::environment::{DEVICE_PREFERENCE, JudgeEnvironment, LoadSpec, device_name};
 use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
-use crate::{SharedServiceBridgeState, current_v1_unix_millis, mutate_provider_configuration};
+use crate::{
+    SharedServiceBridgeState, current_v1_unix_millis, emit_workbench_event,
+    mutate_provider_configuration,
+};
 
 /// Rows a speed test may time: one call, or a batch of ten.
 /// 速度测试可计时的行数：一条调用或十条批次。
@@ -396,6 +400,7 @@ pub(crate) fn start_permission_judge(state: &SharedServiceBridgeState) {
 /// one, or the first detected one.
 /// 保存系统级选择。选择 CUDA 会锁定一个完整的库目录：给定的目录，或第一个检测到的目录。
 pub(crate) async fn service_save_permission_judge_settings(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     request: PermissionJudgeSettingsSaveRequest,
 ) -> Result<PermissionJudgeSettingsSnapshot, String> {
@@ -470,6 +475,12 @@ pub(crate) async fn service_save_permission_judge_settings(
         Ok(())
     })
     .await?;
+    // The composer's permission mode selector reads the switch from the workbench.
+    // 输入区的权限模式选择器从工作台读取该开关。
+    if let Ok(mut guard) = state.lock() {
+        guard.workbench.permission_judge_state = settings.state;
+        emit_workbench_event(&app, &guard.workbench);
+    }
     reconcile_worker(&runtime, &settings);
     snapshot(&runtime, settings).await
 }

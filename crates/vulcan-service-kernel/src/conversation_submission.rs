@@ -226,6 +226,10 @@ pub(super) struct SubmissionSessionSettings {
     /// 草稿捕获的显式回答模式；缺省时复制全局默认值。
     #[serde(default)]
     answer_mode: Option<vulcan_session_core::v1::config::AnswerMode>,
+    /// Explicit permission mode captured by the draft; absent keeps the session default.
+    /// 草稿捕获的显式权限模式；缺省时保留会话默认值。
+    #[serde(default)]
+    permission_mode: Option<vulcan_session_core::v1::config::PermissionMode>,
     /// Optional session output-style identifier captured before the first prompt boundary.
     /// 在首次提示词边界前捕获的可选会话输出风格标识。
     #[serde(default)]
@@ -468,6 +472,13 @@ async fn apply_submission_session_settings(
                 .unwrap_or(global_answer_mode),
             updated_at_ms,
         )?;
+        if let Some(mode) = settings.and_then(|settings| settings.permission_mode) {
+            crate::permission_mode::set_session_permission_mode_v1(
+                handle.as_ref(),
+                mode,
+                updated_at_ms,
+            )?;
+        }
         Some(
             handle
                 .read(|document| document.metadata.config.selection.clone())
@@ -3802,12 +3813,27 @@ mod submission_session_settings_tests {
         ));
     }
 
+    /// Verifies the draft wire shape carries an optional permission mode.
+    /// 验证草稿线格式携带可选的权限模式。
+    #[test]
+    fn draft_settings_accept_an_optional_permission_mode() {
+        use vulcan_session_core::v1::config::PermissionMode;
+        let explicit: SubmissionSessionSettings =
+            serde_json::from_value(serde_json::json!({"permissionMode": "read_only"}))
+                .expect("explicit mode should parse");
+        assert_eq!(explicit.permission_mode, Some(PermissionMode::ReadOnly));
+        let omitted: SubmissionSessionSettings =
+            serde_json::from_value(serde_json::json!({})).expect("omitted mode should parse");
+        assert_eq!(omitted.permission_mode, None);
+    }
+
     /// Verifies an ordinary existing-session submission cannot activate a newly selected style.
     /// 验证已有会话的普通提交不能激活新选择的输出风格。
     #[test]
     fn ordinary_submission_keeps_output_style_snapshot_unchanged() {
         let settings = SubmissionSessionSettings {
             answer_mode: None,
+            permission_mode: None,
             output_style_id: Some(String::from("rigorous")),
             vmm_policy: None,
             provider_tool_settings: None,

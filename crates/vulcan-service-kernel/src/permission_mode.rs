@@ -3,10 +3,36 @@
 
 use crate::current_v1_unix_millis;
 use crate::session_runtime_registry_v1::{
-    SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+    SessionFlushReason, SessionHandle, SessionMutationAdmission, SessionMutationChange,
 };
 use crate::{SharedServiceBridgeState, parse_session_id};
 use vulcan_service_api::{SessionPermissionModeUpdateRequest, SessionPermissionModeUpdateResponse};
+use vulcan_session_core::v1::config::PermissionMode;
+
+/// Durably records the draft's permission mode when a new session materializes.
+/// 新会话物化时可靠记录草稿的权限模式。
+/// `handle` owns the V1 document of the session being materialized.
+/// `handle` 持有正在物化会话的 V1 文档。
+pub(crate) fn set_session_permission_mode_v1(
+    handle: &SessionHandle,
+    mode: PermissionMode,
+    now_ms: i64,
+) -> Result<(), String> {
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                Ok(if document.set_permission_mode(mode, now_ms)? {
+                    SessionMutationChange::Changed(())
+                } else {
+                    SessionMutationChange::Unchanged(())
+                })
+            },
+        )
+        .map_err(|error| format!("Failed to save permission mode: {error}"))?;
+    Ok(())
+}
 
 /// Save `request` through the unique session writer and return the durable mode.
 /// 通过唯一会话写入器保存 `request`，返回可靠模式。
