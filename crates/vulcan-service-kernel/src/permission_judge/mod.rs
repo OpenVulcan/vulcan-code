@@ -6,6 +6,7 @@ mod environment;
 mod records;
 mod review;
 mod services;
+mod unattended;
 mod worker;
 
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,7 @@ pub(crate) use review::{
     PERMISSION_REVIEW_CONSUMER_PROFILE_ID, PERMISSION_REVIEW_PURPOSE_ID, review_call,
 };
 pub(crate) use services::*;
+pub(crate) use unattended::*;
 
 /// Process-wide judge state shared by settings commands and the tool permission gate.
 /// 设置命令与工具权限闸门共享的进程级判定状态。

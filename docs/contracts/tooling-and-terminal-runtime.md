@@ -18,6 +18,8 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - 不要在工具 description 中把 `shell_command` 的返回称为 summary；它返回完整解码后的
   `stdout`、`stderr` 和退出状态（输出越过硬上限时除外，见第二节）。
 - 不得在启动时静默改写用户持久化的工具策略。系统默认优先保留为运行时内存默认值。
+- `shell_command` 与 `terminal_session` 的可选 `purpose` 参数、以及原生工具 `declare_intent`，只作为权限复核的
+  代理理由，不影响执行；语义见 [`permission-modes-and-judge.md`](permission-modes-and-judge.md) 的“代理理由”。
 
 ## 二、`shell_command`
 

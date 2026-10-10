@@ -230,6 +230,10 @@ pub(crate) struct TerminalSessionToolArgs {
     /// Optional maximum chunk count returned by one read-like action.
     /// 一次读取类动作返回的可选最大分片数量。
     max_chunks: Option<usize>,
+    /// Optional reason read only by the permission gate; never passed to the command.
+    /// 仅由权限闸门读取的可选理由；从不传给命令。
+    #[serde(default, rename = "purpose")]
+    _purpose: Option<String>,
 }
 
 /// Result summary produced by an interrupt drain pass.
@@ -436,6 +440,11 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
                 "minimum": 1,
                 "maximum": MAX_COMMAND_SESSION_READ_CHUNKS,
                 "description": format!("Optional maximum output chunks returned by one read-like action. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}; host maximum: {MAX_COMMAND_SESSION_READ_CHUNKS}.")
+            },
+            "purpose": {
+                "type": "string",
+                "maxLength": MAX_PERMISSION_REASON_CHARS,
+                "description": PURPOSE_ARGUMENT_DESCRIPTION
             }
         },
         "required": ["action"],

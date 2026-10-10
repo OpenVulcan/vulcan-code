@@ -12,15 +12,15 @@ pub mod command_rules;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 use vulcan_host_tools::file_runtime::{apply_patch_write_paths, path_resolves_inside_workspace};
 pub use vulcan_permission_judge::JudgeLabel;
-use vulcan_session_core::v1::config::PermissionMode;
+use vulcan_session_core::v1::config::{AccessConfig, PermissionMode};
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolInvocationContext, VulcanToolSourceKind,
     tool_is_allowed_in_plan_with_args,
@@ -29,8 +29,9 @@ use vulcan_tools_manager::{
 use crate::agent_runtime::question_runtime::ToolApprovalPrompt;
 use crate::model::SessionId;
 use crate::tooling::native::{
-    APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID, FILE_WRITE_TOOL_ID,
-    SHELL_COMMAND_TOOL_ID, TERMINAL_SESSION_TOOL_ID,
+    APPLY_PATCH_TOOL_ID, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID,
+    FILE_WRITE_TOOL_ID, MAX_PERMISSION_REASON_CHARS, SHELL_COMMAND_TOOL_ID,
+    TERMINAL_SESSION_TOOL_ID, declared_intent,
 };
 pub use command_rules::HighRiskCategory;
 
@@ -46,6 +47,23 @@ pub const REVIEW_DENIAL_PREFIX: &str = "The permission reviewer denied this call
 /// 无法读取会话权限模式时返回给模型的说明。
 pub const MODE_UNAVAILABLE_DENIAL: &str = "The session permission mode could not be read, so this call was not executed. Tell the user that tool permissions are unavailable.";
 
+/// Consecutive denials of one identical call an unattended session reviews; the next identical
+/// call is denied without review, so the agent cannot wear the reviewer down.
+/// 无人值守会话对同一调用连续拒绝时复核的次数；下一次相同调用不经复核直接拒绝，避免代理磨损复核器。
+pub const UNATTENDED_REVIEWED_REPEATS: u32 = 2;
+
+/// Model-visible explanation returned when an unattended read-only session meets a write.
+/// 无人值守只读会话遇到写入时返回给模型的说明。
+pub const UNATTENDED_READ_ONLY_DENIAL: &str = "This unattended session is read-only, and no user is available to approve this call, so it was not executed. Continue with read-only work and leave this step for the user's later instructions.";
+
+/// Guidance after an unattended denial of a call that stated no reason.
+/// 无人值守会话拒绝未说明理由的调用后的指引。
+const UNATTENDED_UNEXPLAINED_GUIDANCE: &str = "No user is watching this unattended session. If the call is necessary and safe, retry it with your reason: pass `purpose` on `shell_command` or `terminal_session`, or call `declare_intent` right before any other tool. Otherwise take another approach, or skip this step and continue with the rest of the task.";
+
+/// Guidance after an unattended denial of a call whose reason the reviewer already read.
+/// 无人值守会话拒绝复核器已读过理由的调用后的指引。
+const UNATTENDED_EXPLAINED_GUIDANCE: &str = "No user is watching this unattended session, and the reviewer already read your stated reason. Take another approach, or skip this step and leave it for the user's later instructions while you finish the rest of the task. Retry only with a reason the reviewer has not seen yet.";
+
 /// `file` tool actions that only read.
 /// 仅读取的 `file` 工具动作。
 const FILE_READ_ACTIONS: &[&str] = &["list", "stat"];
@@ -54,9 +72,16 @@ const FILE_READ_ACTIONS: &[&str] = &["list", "stat"];
 /// 权限闸门需要服务内核提供的宿主能力。
 #[async_trait::async_trait]
 pub trait ToolPermissionHost: Send + Sync {
-    /// Returns the live permission mode of `session_id`, read at call time.
-    /// 返回 `session_id` 在调用时的实时权限模式。
-    fn permission_mode(&self, session_id: SessionId) -> Result<PermissionMode, String>;
+    /// Returns the live access selections of `session_id`, read at call time.
+    /// 返回 `session_id` 在调用时的实时授权选择。
+    fn access(&self, session_id: SessionId) -> Result<AccessConfig, String>;
+
+    /// In-memory per-session state of the gate: declared intents and repeated denials.
+    /// `None` keeps no state, so intents are dropped and repeats are never limited.
+    /// 闸门的会话级内存状态：已声明意图与重复拒绝。`None` 不保存状态，意图被丢弃，重复也不受限。
+    fn memory(&self) -> Option<&PermissionMemory> {
+        None
+    }
 
     /// Waits for the user's decision on one escalated call; `true` runs it once.
     /// 等待用户对一次升级调用的决定；`true` 表示执行一次。
@@ -169,6 +194,9 @@ pub enum PermissionOutcome {
     /// The approval could not finish.
     /// 审批无法完成。
     Failed,
+    /// Unattended mode denied a call the reviewer did not allow, since no user can approve it.
+    /// 无人值守模式拒绝复核器未放行的调用，因为没有用户可以批准。
+    UnattendedDenied,
 }
 
 impl PermissionOutcome {
@@ -182,6 +210,7 @@ impl PermissionOutcome {
             Self::UserAllowed => "user_allowed",
             Self::UserDenied => "user_denied",
             Self::Failed => "failed",
+            Self::UnattendedDenied => "unattended_denied",
         }
     }
 }
@@ -262,6 +291,16 @@ pub struct ReviewCall {
     /// Judge layer finding, when a judge is configured.
     /// 判定层结论（配置判定器时）。
     pub judge: Option<JudgeFinding>,
+    /// `purpose` the agent gave on a command tool, when any.
+    /// 代理在命令工具上给出的 `purpose`（如有）。
+    pub purpose: Option<String>,
+    /// Intent the agent declared just before this call, when any.
+    /// 代理在本调用之前声明的意图（如有）。
+    pub intent: Option<String>,
+    /// Deny policy of an unattended session; `Some` means no user can be asked, so the reviewer
+    /// must allow or deny.
+    /// 无人值守会话的拒绝策略；`Some` 表示无法询问用户，复核器必须放行或拒绝。
+    pub unattended: Option<String>,
 }
 
 /// Decision of the reviewing LLM.
@@ -617,16 +656,140 @@ struct EscalatedDecision {
     review_elapsed: Option<Duration>,
 }
 
-/// Decides whether one tool call proceeds, reading the session's live permission mode.
-/// 读取会话实时权限模式，决定一次工具调用是否执行。
+/// Per-session gate state kept only in memory: the intent declared for the next call, and the
+/// streak of consecutive unattended denials of one identical call.
+/// 仅保存在内存中的会话级闸门状态：为下一次调用声明的意图，以及无人值守模式下同一调用的连续拒绝。
+#[derive(Debug, Default)]
+pub struct PermissionMemory {
+    sessions: Mutex<HashMap<SessionId, SessionMemory>>,
+}
+
+/// Gate state of one session.
+/// 一个会话的闸门状态。
+#[derive(Debug, Default)]
+struct SessionMemory {
+    /// Intent for the next tool call, consumed by that call whatever it is.
+    /// 下一次工具调用的意图；无论该调用是什么都会被其消费。
+    intent: Option<String>,
+    /// Consecutive unattended denials of one identical call.
+    /// 无人值守模式下同一调用的连续拒绝。
+    denials: Option<DenialStreak>,
+}
+
+/// Consecutive unattended denials of one identical call under one user request.
+/// 同一用户请求下同一调用的连续无人值守拒绝。
+#[derive(Debug)]
+struct DenialStreak {
+    fingerprint: String,
+    user_request: Option<String>,
+    count: u32,
+}
+
+impl PermissionMemory {
+    /// Runs `change` on one session's state and drops the entry once it holds nothing.
+    /// 对一个会话的状态执行 `change`，状态为空时移除条目。
+    fn with<T>(&self, session_id: SessionId, change: impl FnOnce(&mut SessionMemory) -> T) -> T {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = sessions.entry(session_id).or_default();
+        let value = change(entry);
+        if entry.intent.is_none() && entry.denials.is_none() {
+            sessions.remove(&session_id);
+        }
+        value
+    }
+
+    /// Keeps `intent` for the next tool call of `session_id`, replacing an unused one.
+    /// 为 `session_id` 的下一次工具调用保存 `intent`，替换未使用的意图。
+    pub fn declare_intent(&self, session_id: SessionId, intent: String) {
+        self.with(session_id, |memory| memory.intent = Some(intent));
+    }
+
+    /// Takes the intent declared for this call.
+    /// 取出为本次调用声明的意图。
+    fn take_intent(&self, session_id: SessionId) -> Option<String> {
+        self.with(session_id, |memory| memory.intent.take())
+    }
+
+    /// Consecutive denials of this identical call under the same user request.
+    /// 同一用户请求下本相同调用的连续拒绝次数。
+    fn denials(&self, session_id: SessionId, fingerprint: &str, user_request: Option<&str>) -> u32 {
+        self.with(session_id, |memory| match &memory.denials {
+            Some(streak)
+                if streak.fingerprint == fingerprint
+                    && streak.user_request.as_deref() == user_request =>
+            {
+                streak.count
+            }
+            _ => 0,
+        })
+    }
+
+    /// Counts one more denial of this call; a different call starts a new streak.
+    /// 为本调用多计一次拒绝；不同调用开始新的连续计数。
+    fn note_denial(&self, session_id: SessionId, fingerprint: &str, user_request: Option<&str>) {
+        let count = self.denials(session_id, fingerprint, user_request) + 1;
+        self.with(session_id, |memory| {
+            memory.denials = Some(DenialStreak {
+                fingerprint: fingerprint.to_string(),
+                user_request: user_request.map(str::to_string),
+                count,
+            });
+        });
+    }
+
+    /// Ends the streak because a call ran.
+    /// 因有调用执行而结束连续计数。
+    fn clear_denials(&self, session_id: SessionId) {
+        self.with(session_id, |memory| memory.denials = None);
+    }
+}
+
+/// Identity of one call for repeat counting: the tool and what it affects, without the reasons
+/// the agent attached, so a retry that only adds a `purpose` counts as the same call.
+/// 用于重复计数的调用身份：工具及其影响对象，不含代理附加的理由，因此只补充 `purpose` 的重试视为
+/// 同一调用。
+fn call_fingerprint(tool_name: &str, subject: &PermissionSubject, args: &Value) -> String {
+    let affected = match subject {
+        PermissionSubject::Command { text } => text.clone(),
+        PermissionSubject::FileWrite { paths } => paths.join("\n"),
+        PermissionSubject::Ungoverned | PermissionSubject::Opaque => {
+            let mut args = args.clone();
+            if let Some(object) = args.as_object_mut() {
+                object.remove("purpose");
+            }
+            args.to_string()
+        }
+    };
+    format!("{tool_name}\n{affected}")
+}
+
+/// Non-blank `purpose` of a command tool call, cut to the reviewer's limit.
+/// 命令工具调用中非空白的 `purpose`，截断到复核器上限。
+fn command_purpose(tool_id: &str, args: &Value) -> Option<String> {
+    if !matches!(tool_id, SHELL_COMMAND_TOOL_ID | TERMINAL_SESSION_TOOL_ID) {
+        return None;
+    }
+    let purpose = args.get("purpose")?.as_str()?.trim();
+    (!purpose.is_empty()).then(|| purpose.chars().take(MAX_PERMISSION_REASON_CHARS).collect())
+}
+
+/// Decides whether one tool call proceeds, reading the session's live access selections.
+/// 读取会话实时授权选择，决定一次工具调用是否执行。
 /// In workspace-write mode an escalated call is first scored by the judge, which may clear it
 /// unless a high-risk rule matched. The reviewing LLM then sees what the judge did not clear: it
 /// may deny, or clear calls that are neither judge-blocked nor high-risk (those only when the user
-/// allows it). Everything else goes to the user. Read-only escalates every write straight to the
-/// user.
+/// allows it). Everything else goes to the user, except in unattended mode, where no user is
+/// asked and everything the reviewer did not allow is denied with guidance for the agent.
+/// Read-only escalates every write straight to the user, or denies it when unattended.
 /// 在工作区写入模式下，升级调用先由判定器评分；除非命中高风险规则，判定器可放行。复核 LLM 随后
 /// 查看判定器未放行的调用：它可以拒绝，也可以放行既未被判定器拦截也未命中高风险的调用（这两类
-/// 仅在用户允许时可放行）。其余全部交给用户。只读模式会把所有写入直接交给用户。
+/// 仅在用户允许时可放行）。其余全部交给用户；无人值守模式下不询问用户，复核器未放行的调用一律
+/// 拒绝并附带给代理的指引。只读模式会把所有写入直接交给用户，无人值守时直接拒绝。
+/// A `declare_intent` call is kept for the next call, which consumes it whatever it is.
+/// `declare_intent` 调用会为下一次调用保存，无论下一次调用是什么都会消费它。
 /// Without a host (embedded or test runtimes) no permission policy is configured and calls proceed.
 /// 没有宿主时（嵌入式或测试运行时）未配置权限策略，调用直接执行。
 pub async fn admit_tool_call(
@@ -641,14 +804,45 @@ pub async fn admit_tool_call(
     let Some(host) = host else {
         return ToolPermissionVerdict::Proceed;
     };
-    let mode = match host.permission_mode(session_id) {
-        Ok(mode) => mode,
+    let native = definition.descriptor.source == VulcanToolSourceKind::Native;
+    if native && definition.descriptor.id == DECLARE_INTENT_TOOL_ID {
+        if let (Some(memory), Some(intent)) = (host.memory(), declared_intent(args)) {
+            memory.declare_intent(session_id, intent);
+        }
+        return ToolPermissionVerdict::Proceed;
+    }
+    let intent = host
+        .memory()
+        .and_then(|memory| memory.take_intent(session_id));
+    let access = match host.access(session_id) {
+        Ok(access) => access,
         Err(_) => return ToolPermissionVerdict::Deny(String::from(MODE_UNAVAILABLE_DENIAL)),
     };
+    let mode = access.permission;
     let subject = classify_tool_call(definition, args);
     let RuleOutcome::Escalate { high_risk } = evaluate_rules(mode, &subject, workspace_root) else {
         return ToolPermissionVerdict::Proceed;
     };
+    let unattended = access.unattended.map(|config| config.deny_policy);
+    let purpose = if native {
+        command_purpose(&definition.descriptor.id, args)
+    } else {
+        None
+    };
+    let fingerprint = call_fingerprint(&definition.descriptor.id, &subject, args);
+    if unattended.is_some() {
+        if mode == PermissionMode::ReadOnly {
+            return ToolPermissionVerdict::Deny(String::from(UNATTENDED_READ_ONLY_DENIAL));
+        }
+        let repeated = host.memory().map_or(0, |memory| {
+            memory.denials(session_id, &fingerprint, texts.user_request)
+        });
+        if repeated >= UNATTENDED_REVIEWED_REPEATS {
+            return ToolPermissionVerdict::Deny(format!(
+                "This identical call was already denied {UNATTENDED_REVIEWED_REPEATS} times in a row, so it was denied again without review. Take another approach, or skip this step and leave it for the user's later instructions while you finish the rest of the task."
+            ));
+        }
+    }
     let judged_at = SystemTime::now();
     let judge = if mode == PermissionMode::WorkspaceWrite {
         judge_layer(host, definition, texts.raw_arguments, workspace_root).await
@@ -658,6 +852,7 @@ pub async fn admit_tool_call(
     let arguments = texts
         .raw_arguments
         .map_or_else(|| args.to_string(), str::to_string);
+    let attended = unattended.is_none();
     let decision = decide_escalated(
         host,
         session_id,
@@ -672,9 +867,20 @@ pub async fn admit_tool_call(
             subject,
             high_risk,
             judge: judge.finding.clone(),
+            purpose,
+            intent,
+            unattended,
         },
     )
     .await;
+    if !attended && let Some(memory) = host.memory() {
+        match decision.verdict {
+            ToolPermissionVerdict::Proceed => memory.clear_denials(session_id),
+            ToolPermissionVerdict::Deny(_) | ToolPermissionVerdict::Fail(_) => {
+                memory.note_denial(session_id, &fingerprint, texts.user_request);
+            }
+        }
+    }
     if judge.finding.is_some() || decision.review.is_some() {
         host.record(PermissionRecord {
             session_id,
@@ -705,10 +911,47 @@ struct EscalatedCall<'a> {
     subject: PermissionSubject,
     high_risk: Option<HighRiskCategory>,
     judge: Option<JudgeFinding>,
+    purpose: Option<String>,
+    intent: Option<String>,
+    unattended: Option<String>,
 }
 
-/// Applies the judge finding, then the reviewer, then the user to one escalated call.
-/// 对一次升级调用依次应用判定结论、复核器与用户。
+/// Why an unattended call the reviewer did not allow was denied, written for the agent.
+/// 写给代理的、复核器未放行的无人值守调用被拒绝的原因。
+fn unattended_denial(review: Option<&ReviewFinding>, blocked: bool, explained: bool) -> String {
+    let guidance = if explained {
+        UNATTENDED_EXPLAINED_GUIDANCE
+    } else {
+        UNATTENDED_UNEXPLAINED_GUIDANCE
+    };
+    let cause = match review {
+        Some(ReviewFinding::Reviewed(reviewed)) if reviewed.verdict == ReviewVerdict::Deny => {
+            return format!(
+                "The permission reviewer denied this call, so it was not executed. Reviewer's reason: {}\n\n{guidance}",
+                reviewed.reason
+            );
+        }
+        Some(ReviewFinding::Reviewed(reviewed)) if blocked => format!(
+            "the call matched a high-risk rule or the judge blocked it, which the reviewer may not clear (reviewer's note: {})",
+            reviewed.reason
+        ),
+        Some(ReviewFinding::Reviewed(reviewed)) => format!(
+            "the reviewer did not allow it (reviewer's note: {})",
+            reviewed.reason
+        ),
+        Some(ReviewFinding::Unavailable(reason)) => {
+            format!("the permission reviewer could not review it: {reason}")
+        }
+        None => String::from("no permission reviewer is configured"),
+    };
+    format!(
+        "This call needs approval and no user can give it in an unattended session, so it was not executed: {cause}.\n\n{guidance}"
+    )
+}
+
+/// Applies the judge finding, then the reviewer, then the user to one escalated call; an
+/// unattended call never reaches the user.
+/// 对一次升级调用依次应用判定结论、复核器与用户；无人值守调用绝不交给用户。
 async fn decide_escalated(
     host: &Arc<dyn ToolPermissionHost>,
     session_id: SessionId,
@@ -725,6 +968,9 @@ async fn decide_escalated(
         subject,
         high_risk,
         judge,
+        purpose,
+        intent,
+        unattended,
     } = call;
     if high_risk.is_none() && judge == Some(JudgeFinding::Scored(JudgeLabel::Allow)) {
         return EscalatedDecision {
@@ -734,6 +980,8 @@ async fn decide_escalated(
             review_elapsed: None,
         };
     }
+    let explained = purpose.is_some() || intent.is_some();
+    let attended = unattended.is_none();
     let (review, review_elapsed) = if mode == PermissionMode::WorkspaceWrite {
         let call = ReviewCall {
             workspace_root: workspace_root.map(Path::to_path_buf),
@@ -742,6 +990,9 @@ async fn decide_escalated(
             user_request: user_request.map(str::to_string),
             high_risk,
             judge: judge.clone(),
+            purpose,
+            intent,
+            unattended,
         };
         review_layer(host, call).await
     } else {
@@ -753,8 +1004,8 @@ async fn decide_escalated(
         review,
         review_elapsed,
     };
+    let blocked = high_risk.is_some() || judge == Some(JudgeFinding::Scored(JudgeLabel::Block));
     if let Some(ReviewFinding::Reviewed(reviewed)) = &review {
-        let blocked = high_risk.is_some() || judge == Some(JudgeFinding::Scored(JudgeLabel::Block));
         match reviewed.verdict {
             ReviewVerdict::Allow if !blocked || reviewed.may_allow_blocked => {
                 return decided(
@@ -763,8 +1014,16 @@ async fn decide_escalated(
                     review,
                 );
             }
-            ReviewVerdict::Deny => {
+            ReviewVerdict::Deny if attended => {
                 let denial = format!("{REVIEW_DENIAL_PREFIX}{}", reviewed.reason);
+                return decided(
+                    ToolPermissionVerdict::Deny(denial),
+                    PermissionOutcome::ReviewDenied,
+                    review,
+                );
+            }
+            ReviewVerdict::Deny => {
+                let denial = unattended_denial(review.as_ref(), blocked, explained);
                 return decided(
                     ToolPermissionVerdict::Deny(denial),
                     PermissionOutcome::ReviewDenied,
@@ -773,6 +1032,14 @@ async fn decide_escalated(
             }
             ReviewVerdict::Allow | ReviewVerdict::AskUser => {}
         }
+    }
+    if !attended {
+        let denial = unattended_denial(review.as_ref(), blocked, explained);
+        return decided(
+            ToolPermissionVerdict::Deny(denial),
+            PermissionOutcome::UnattendedDenied,
+            review,
+        );
     }
     let prompt = ToolApprovalPrompt {
         mode,

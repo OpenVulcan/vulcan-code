@@ -38,6 +38,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_dedicated_memory_lock",
     "service_draft_dedicated_prompt",
     "service_set_session_permission_mode",
+    "service_set_session_unattended",
+    "service_session_unattended_default",
     "service_set_session_vmm_policy",
     "service_set_session_context_compaction_window",
     "service_set_session_output_style",
@@ -106,6 +108,19 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_set_session_unattended" => rpc_json_result(
+            crate::permission_mode::service_set_session_unattended(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_session_unattended_default" => {
+            rpc_json_result(crate::permission_judge::service_session_unattended_default(
+                state,
+                rpc_required_param(params, "request")?,
+            ))
+        }
         "service_submit_conversation_prompt" => rpc_json_result(
             service_submit_conversation_prompt_rpc(
                 app,

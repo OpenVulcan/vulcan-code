@@ -24,11 +24,16 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// migrating it; per-version migrations become mandatory from V0.2 (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。发布前版本（V0.1.x）拒绝其他任何版本而不迁移；自 V0.2 起才必须提供逐版本迁移
 /// （AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 6;
+pub const METADATA_SCHEMA_VERSION: u32 = 7;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
 pub const MAX_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+
+/// Maximum number of Unicode scalar values accepted in one unattended deny policy, whether it is
+/// a session snapshot, a project default, or the system default.
+/// 一份无人值守拒绝策略允许的 Unicode 标量值最大数量，适用于会话快照、项目默认值与系统默认值。
+pub const MAX_UNATTENDED_DENY_POLICY_CHARS: usize = 4_000;
 
 /// Returns whether one serialized boolean is false.
 /// 返回一个序列化布尔值是否为 false。
@@ -154,12 +159,27 @@ pub enum PermissionMode {
 /// Only real implemented fields may be added; no speculative configuration is
 /// created ahead of the product feature.
 /// 只允许加入真实已实现的字段；不为尚未到来的产品功能提前创造配置。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccessConfig {
     /// Current permission mode; new sessions start from the runtime default.
     /// 当前权限模式；新会话从运行时默认值开始。
     pub permission: PermissionMode,
+    /// Unattended mode, when the user turned it on: no approval prompt is ever shown.
+    /// 用户开启时的无人值守模式：从不显示审批提示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<UnattendedConfig>,
+}
+
+/// Unattended mode of one session: the reviewer decides every escalated call alone.
+/// 一个会话的无人值守模式：复核器单独决定每次升级调用。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnattendedConfig {
+    /// Deny policy the user confirmed when turning the mode on; later default changes never
+    /// reach it. Empty means no extra policy.
+    /// 用户开启该模式时确认的拒绝策略；之后的默认值修改不会影响它。为空表示没有额外策略。
+    pub deny_policy: String,
 }
 
 /// Session mode switches.

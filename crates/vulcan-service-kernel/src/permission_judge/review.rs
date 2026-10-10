@@ -262,7 +262,7 @@ fn review_request(
             description: Some(String::from(
                 "Decision on one tool call and the reason shown to the user.",
             )),
-            schema: answer_schema(),
+            schema: answer_schema(call.unattended.is_some()),
             strict: true,
         },
         prompt_cache: Default::default(),
@@ -306,19 +306,41 @@ fn render_review_input(call: &ReviewCall, policy: &[String], language: &str) -> 
     } else {
         policy.join("\n")
     };
+    let reason = |text: &Option<String>| text.clone().unwrap_or_else(|| String::from("(none)"));
+    let attendance = match &call.unattended {
+        Some(deny_policy) => {
+            let deny_policy = if deny_policy.trim().is_empty() {
+                "(none)"
+            } else {
+                deny_policy.as_str()
+            };
+            format!(
+                "<attendance>\nunattended\n</attendance>\n\n<deny_policy>\n{deny_policy}\n</deny_policy>"
+            )
+        }
+        None => String::from("<attendance>\nattended\n</attendance>"),
+    };
     format!(
-        "<call>\nProject: {project}\nTool: {}\nArguments: {}\n</call>\n\n<user_request>\n{user_request}\n</user_request>\n\n<project_policy>\n{policy}\n</project_policy>\n\n<signals>\njudge: {judge}\nhigh_risk: {high_risk}\n</signals>\n\n<reply_language>\n{language}\n</reply_language>",
-        call.tool_name, call.arguments
+        "<call>\nProject: {project}\nTool: {}\nArguments: {}\n</call>\n\n<agent_reason>\npurpose: {}\ndeclared_intent: {}\n</agent_reason>\n\n<user_request>\n{user_request}\n</user_request>\n\n<project_policy>\n{policy}\n</project_policy>\n\n<signals>\njudge: {judge}\nhigh_risk: {high_risk}\n</signals>\n\n{attendance}\n\n<reply_language>\n{language}\n</reply_language>",
+        call.tool_name,
+        call.arguments,
+        reason(&call.purpose),
+        reason(&call.intent),
     )
 }
 
-/// JSON Schema of the reviewer's answer.
-/// 复核器回答的 JSON Schema。
-fn answer_schema() -> Value {
+/// JSON Schema of the reviewer's answer; an unattended session has no user to ask.
+/// 复核器回答的 JSON Schema；无人值守会话没有可询问的用户。
+fn answer_schema(unattended: bool) -> Value {
+    let verdicts: &[&str] = if unattended {
+        &["allow", "deny"]
+    } else {
+        &["allow", "ask_user", "deny"]
+    };
     json!({
         "type": "object",
         "properties": {
-            "verdict": {"type": "string", "enum": ["allow", "ask_user", "deny"]},
+            "verdict": {"type": "string", "enum": verdicts},
             "reason": {"type": "string"}
         },
         "required": ["verdict", "reason"],
@@ -396,6 +418,9 @@ mod tests {
             user_request: Some("x".repeat(REVIEW_USER_REQUEST_CHARS + 10)),
             high_risk: Some(HighRiskCategory::RecursiveDelete),
             judge: Some(JudgeFinding::Scored(JudgeLabel::Review)),
+            purpose: Some(String::from("clean stale build output")),
+            intent: None,
+            unattended: None,
         };
         let request = review_request(&call, &[String::from("writes = allow")], "zh-TW (繁體中文)");
         assert_eq!(
@@ -409,6 +434,8 @@ mod tests {
         };
         for section in [
             "<call>",
+            "<agent_reason>",
+            "<attendance>\nattended\n</attendance>",
             "<user_request>",
             "<project_policy>",
             "<signals>",
@@ -423,6 +450,37 @@ mod tests {
         };
         let validator = jsonschema::draft202012::new(schema).unwrap();
         assert!(validator.is_valid(&json!({"verdict": "deny", "reason": "r"})));
+        assert!(validator.is_valid(&json!({"verdict": "ask_user", "reason": "r"})));
         assert!(!validator.is_valid(&json!({"verdict": "deny"})));
+    }
+
+    /// An unattended review carries the confirmed deny policy and cannot hand the call to a user.
+    /// 无人值守复核携带已确认的拒绝策略，且不能把调用交给用户。
+    #[test]
+    fn unattended_request_carries_the_deny_policy_and_drops_ask_user() {
+        let call = ReviewCall {
+            workspace_root: None,
+            tool_name: String::from("shell_command"),
+            arguments: String::from(r#"{"command":"git push"}"#),
+            user_request: None,
+            high_risk: None,
+            judge: None,
+            purpose: None,
+            intent: Some(String::from("publish the release branch")),
+            unattended: Some(String::from("never push to remote")),
+        };
+        let request = review_request(&call, &[], "en-US (English)");
+        let ContentItem::Text { text } = &request.messages[1].content[0] else {
+            panic!("the user turn must be text");
+        };
+        assert!(text.contains("<attendance>\nunattended\n</attendance>"));
+        assert!(text.contains("<deny_policy>\nnever push to remote\n</deny_policy>"));
+        assert!(text.contains("declared_intent: publish the release branch"));
+        let StructuredOutputPolicy::JsonSchema { schema, .. } = &request.structured_output else {
+            panic!("the reviewer must request a JSON Schema answer");
+        };
+        let validator = jsonschema::draft202012::new(schema).unwrap();
+        assert!(validator.is_valid(&json!({"verdict": "deny", "reason": "r"})));
+        assert!(!validator.is_valid(&json!({"verdict": "ask_user", "reason": "r"})));
     }
 }

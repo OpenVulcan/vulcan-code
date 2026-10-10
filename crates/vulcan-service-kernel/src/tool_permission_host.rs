@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex, Weak};
 use serde_json::Value;
 use vulcan_agent_runtime::agent_runtime::question_runtime::{QuestionRuntime, ToolApprovalPrompt};
 use vulcan_agent_runtime::agent_runtime::tool_permission::{
-    JudgeCall, JudgeFailure, JudgeVerdict, LlmReview, PermissionRecord, ReviewCall,
-    ToolPermissionHost,
+    JudgeCall, JudgeFailure, JudgeVerdict, LlmReview, PermissionMemory, PermissionRecord,
+    ReviewCall, ToolPermissionHost,
 };
 use vulcan_agent_runtime::model::SessionId;
-use vulcan_session_core::v1::config::PermissionMode;
+use vulcan_session_core::v1::config::AccessConfig;
 use vulcan_tools_manager::VulcanToolInvocationContext;
 
 use crate::ServiceBridgeState;
@@ -30,6 +30,9 @@ pub(crate) struct KernelToolPermissionHost {
     /// runtime that owns this host.
     /// 持有判定设置与 worker 的服务状态；使用弱引用，因为该状态拥有持有本宿主的运行时。
     state: Weak<Mutex<ServiceBridgeState>>,
+    /// Declared intents and repeated unattended denials, per session, in memory only.
+    /// 按会话保存、仅在内存中的已声明意图与无人值守重复拒绝。
+    memory: PermissionMemory,
 }
 
 impl KernelToolPermissionHost {
@@ -44,19 +47,22 @@ impl KernelToolPermissionHost {
             registry,
             question_runtime,
             state,
+            memory: PermissionMemory::default(),
         }
     }
 }
 
 #[async_trait::async_trait]
 impl ToolPermissionHost for KernelToolPermissionHost {
-    /// Child agent sessions follow their root user session, so a child can never run with more
-    /// permission than the session the user controls; a missing root fails closed.
-    /// 子代理会话跟随其根用户会话，因此子会话的权限绝不会超过用户控制的会话；根会话缺失时失败即关闭。
-    fn permission_mode(&self, session_id: SessionId) -> Result<PermissionMode, String> {
-        let (own_mode, root) = self.read(session_id, |document| {
+    /// Child agent sessions follow their root user session, including its unattended mode, so a
+    /// child can never run with more permission than the session the user controls, nor ask a
+    /// user who is not there; a missing root fails closed.
+    /// 子代理会话跟随其根用户会话（包括其无人值守模式），因此子会话的权限绝不会超过用户控制的会话，
+    /// 也不会询问不在场的用户；根会话缺失时失败即关闭。
+    fn access(&self, session_id: SessionId) -> Result<AccessConfig, String> {
+        let (own_access, root) = self.read(session_id, |document| {
             (
-                document.metadata.mode.access.permission,
+                document.metadata.mode.access.clone(),
                 document
                     .metadata
                     .child_execution_profile
@@ -65,11 +71,15 @@ impl ToolPermissionHost for KernelToolPermissionHost {
             )
         })?;
         let Some(root) = root else {
-            return Ok(own_mode);
+            return Ok(own_access);
         };
         let root_id = SessionId::parse_str(&root)
             .map_err(|error| format!("invalid root session `{root}`: {error}"))?;
-        self.read(root_id, |document| document.metadata.mode.access.permission)
+        self.read(root_id, |document| document.metadata.mode.access.clone())
+    }
+
+    fn memory(&self) -> Option<&PermissionMemory> {
+        Some(&self.memory)
     }
 
     async fn request_approval(

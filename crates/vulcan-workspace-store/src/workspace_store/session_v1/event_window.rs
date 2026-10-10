@@ -52,9 +52,9 @@ pub struct EventWindowState {
     /// Session request and compaction configuration captured from the same metadata.
     /// 从同一份 metadata 捕获的会话请求与压缩配置。
     pub config: SessionConfig,
-    /// Session permission mode captured from the same metadata.
-    /// 从同一份 metadata 捕获的会话权限模式。
-    pub permission_mode: vulcan_session_core::v1::config::PermissionMode,
+    /// Session access selections captured from the same metadata.
+    /// 从同一份 metadata 捕获的会话授权选择。
+    pub access: vulcan_session_core::v1::config::AccessConfig,
     /// Dedicated-session profile captured from the same metadata.
     /// 从同一份 metadata 捕获的专职会话配置。
     pub dedicated: Option<vulcan_session_core::v1::DedicatedSessionProfile>,
@@ -276,7 +276,7 @@ fn event_window_state(
         next_seq: metadata.id_frontier.next_seq,
         open_turn_start_seq: metadata.open_turn_start_seq,
         config: metadata.config.clone(),
-        permission_mode: metadata.mode.access.permission,
+        access: metadata.mode.access.clone(),
         dedicated: metadata.dedicated.clone(),
     }
 }

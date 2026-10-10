@@ -120,6 +120,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_clear_permission_judge_records",
     "service_project_permission_judge_policy",
     "service_save_project_permission_judge_policy",
+    "service_unattended_system_default",
+    "service_save_unattended_system_default",
+    "service_project_unattended_default",
+    "service_save_project_unattended_default",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -802,6 +806,28 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_unattended_system_default" => {
+            rpc_json_result(permission_judge::service_unattended_system_default(state))
+        }
+        "service_save_unattended_system_default" => rpc_json_result(
+            permission_judge::service_save_unattended_system_default(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_project_unattended_default" => {
+            rpc_json_result(permission_judge::service_project_unattended_default(
+                state,
+                rpc_required_param(params, "projectId")?,
+            ))
+        }
+        "service_save_project_unattended_default" => {
+            rpc_json_result(permission_judge::service_save_project_unattended_default(
+                state,
+                rpc_required_param(params, "request")?,
+            ))
+        }
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };
     Ok(ServiceRpcDispatch::Handled(result))

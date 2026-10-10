@@ -54,6 +54,8 @@ struct FixedHost {
     judged: std::sync::Mutex<Vec<JudgeCall>>,
     reviewed: std::sync::Mutex<Vec<ReviewCall>>,
     records: std::sync::Mutex<Vec<PermissionRecord>>,
+    unattended: std::sync::Mutex<Option<String>>,
+    memory: PermissionMemory,
 }
 
 impl FixedHost {
@@ -90,14 +92,25 @@ impl FixedHost {
             judged: std::sync::Mutex::new(Vec::new()),
             reviewed: std::sync::Mutex::new(Vec::new()),
             records: std::sync::Mutex::new(Vec::new()),
+            unattended: std::sync::Mutex::new(None),
+            memory: PermissionMemory::default(),
         })
     }
 }
 
 #[async_trait::async_trait]
 impl ToolPermissionHost for FixedHost {
-    fn permission_mode(&self, _session_id: SessionId) -> Result<PermissionMode, String> {
-        self.mode.clone()
+    fn access(&self, _session_id: SessionId) -> Result<AccessConfig, String> {
+        Ok(AccessConfig {
+            permission: self.mode.clone()?,
+            unattended: self.unattended.lock().unwrap().clone().map(|deny_policy| {
+                vulcan_session_core::v1::config::UnattendedConfig { deny_policy }
+            }),
+        })
+    }
+
+    fn memory(&self) -> Option<&PermissionMemory> {
+        Some(&self.memory)
     }
 
     async fn request_approval(
@@ -710,6 +723,9 @@ async fn reviewer_decides_within_the_judge_and_high_risk_boundary() {
             user_request: Some(String::from("clean the build")),
             high_risk: None,
             judge: Some(JudgeFinding::Scored(JudgeLabel::Review)),
+            purpose: None,
+            intent: None,
+            unattended: None,
         }]
     );
 
@@ -889,4 +905,267 @@ async fn records_each_decision_the_judge_or_reviewer_took_part_in() {
     let plain = FixedHost::new(Ok(PermissionMode::WorkspaceWrite), Ok(true));
     admit(Arc::clone(&plain)).await;
     assert!(plain.records.lock().unwrap().is_empty());
+}
+
+/// Runs one call of `tool` with `args` under `user_request` through the gate of `host`.
+/// 在 `user_request` 下经 `host` 的闸门运行一次 `tool` 调用。
+async fn admit_call(
+    host: &Arc<FixedHost>,
+    tool: &str,
+    args: Value,
+    user_request: Option<&str>,
+    root: &Path,
+) -> ToolPermissionVerdict {
+    let host: Arc<dyn ToolPermissionHost> = Arc::clone(host) as Arc<dyn ToolPermissionHost>;
+    let raw = args.to_string();
+    admit_tool_call(
+        Some(&host),
+        SessionId::nil(),
+        &native(tool),
+        &args,
+        PermissionTexts {
+            raw_arguments: Some(&raw),
+            user_request,
+        },
+        &context(),
+        Some(root),
+    )
+    .await
+}
+
+/// Builds an unattended host whose reviewer answers every call with `review`.
+/// 构建一个无人值守宿主，其复核器对每次调用都回答 `review`。
+fn unattended(mode: PermissionMode, review: Result<Option<LlmReview>, String>) -> Arc<FixedHost> {
+    let host = FixedHost::reviewing(Ok(mode), Ok(true), Ok(None), review);
+    *host.unattended.lock().unwrap() = Some(String::from("never push"));
+    host
+}
+
+#[tokio::test]
+async fn unattended_mode_never_asks_the_user() {
+    let workspace = tempfile::tempdir().unwrap();
+    let command = || json!({"command": "cargo build"});
+    let verdict = |verdict| {
+        Ok(Some(LlmReview {
+            verdict,
+            reason: String::from("reviewer note"),
+            may_allow_blocked: false,
+        }))
+    };
+
+    // Whatever the reviewer cannot settle is denied with its note, and no prompt is shown.
+    // 复核器无法定夺的调用都会附带其说明被拒绝，且不显示任何提示。
+    for review in [
+        verdict(ReviewVerdict::AskUser),
+        verdict(ReviewVerdict::Deny),
+        Ok(None),
+        Err(String::from("offline")),
+    ] {
+        let host = unattended(PermissionMode::WorkspaceWrite, review);
+        let ToolPermissionVerdict::Deny(denial) = admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            command(),
+            None,
+            workspace.path(),
+        )
+        .await
+        else {
+            panic!("an unattended call the reviewer did not allow must be denied");
+        };
+        assert!(!denial.is_empty());
+        assert!(host.prompts.lock().unwrap().is_empty());
+        let reviewed = host.reviewed.lock().unwrap();
+        assert_eq!(reviewed[0].unattended.as_deref(), Some("never push"));
+    }
+    let host = unattended(
+        PermissionMode::WorkspaceWrite,
+        verdict(ReviewVerdict::AskUser),
+    );
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        command(),
+        None,
+        workspace.path(),
+    )
+    .await;
+    let ToolPermissionVerdict::Deny(denial) = admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        json!({"command": "cargo test"}),
+        None,
+        workspace.path(),
+    )
+    .await
+    else {
+        panic!("the reviewer's ask_user must be denied");
+    };
+    assert!(denial.contains("reviewer note"));
+    assert_eq!(
+        host.records.lock().unwrap()[0].outcome,
+        PermissionOutcome::UnattendedDenied
+    );
+
+    // A reviewer allow still runs the call.
+    // 复核器放行时调用仍会执行。
+    let host = unattended(
+        PermissionMode::WorkspaceWrite,
+        verdict(ReviewVerdict::Allow),
+    );
+    assert_eq!(
+        admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            command(),
+            None,
+            workspace.path()
+        )
+        .await,
+        ToolPermissionVerdict::Proceed
+    );
+
+    // Read-only denies writes outright without asking anyone.
+    // 只读模式直接拒绝写入，不询问任何人。
+    let host = unattended(PermissionMode::ReadOnly, verdict(ReviewVerdict::Allow));
+    assert_eq!(
+        admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            command(),
+            None,
+            workspace.path()
+        )
+        .await,
+        ToolPermissionVerdict::Deny(String::from(UNATTENDED_READ_ONLY_DENIAL))
+    );
+    assert!(host.prompts.lock().unwrap().is_empty());
+    assert!(host.reviewed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn reasons_reach_the_reviewer_and_an_intent_serves_one_call() {
+    let workspace = tempfile::tempdir().unwrap();
+    let host = FixedHost::reviewing(
+        Ok(PermissionMode::WorkspaceWrite),
+        Ok(true),
+        Ok(None),
+        Ok(None),
+    );
+    assert_eq!(
+        admit_call(
+            &host,
+            DECLARE_INTENT_TOOL_ID,
+            json!({"intent": " publish the docs "}),
+            None,
+            workspace.path(),
+        )
+        .await,
+        ToolPermissionVerdict::Proceed
+    );
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        json!({"command": "git push", "purpose": "ship the fix"}),
+        None,
+        workspace.path(),
+    )
+    .await;
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        json!({"command": "git push"}),
+        None,
+        workspace.path(),
+    )
+    .await;
+    let reviewed = host.reviewed.lock().unwrap();
+    assert_eq!(reviewed[0].intent.as_deref(), Some("publish the docs"));
+    assert_eq!(reviewed[0].purpose.as_deref(), Some("ship the fix"));
+    assert_eq!(reviewed[0].unattended, None);
+    assert_eq!(reviewed[1].intent, None);
+    assert_eq!(reviewed[1].purpose, None);
+}
+
+#[tokio::test]
+async fn unattended_mode_stops_reviewing_a_call_denied_twice_in_a_row() {
+    let workspace = tempfile::tempdir().unwrap();
+    let host = unattended(
+        PermissionMode::WorkspaceWrite,
+        Ok(Some(LlmReview {
+            verdict: ReviewVerdict::Deny,
+            reason: String::from("no"),
+            may_allow_blocked: false,
+        })),
+    );
+    let push = |purpose: Option<&str>| match purpose {
+        Some(purpose) => json!({"command": "git push", "purpose": purpose}),
+        None => json!({"command": "git push"}),
+    };
+    let reviews = || host.reviewed.lock().unwrap().len();
+
+    // Adding a purpose does not make it a different call.
+    // 添加 purpose 不会使其成为不同的调用。
+    for purpose in [None, Some("ship"), Some("ship it now")] {
+        let verdict = admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            push(purpose),
+            Some("release"),
+            workspace.path(),
+        )
+        .await;
+        assert!(matches!(verdict, ToolPermissionVerdict::Deny(_)));
+    }
+    assert_eq!(reviews() as u32, UNATTENDED_REVIEWED_REPEATS);
+
+    // A different gated call in between starts over.
+    // 中间出现不同的受管控调用会重新计数。
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        json!({"command": "cargo publish"}),
+        Some("release"),
+        workspace.path(),
+    )
+    .await;
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        push(None),
+        Some("release"),
+        workspace.path(),
+    )
+    .await;
+    assert_eq!(reviews() as u32, UNATTENDED_REVIEWED_REPEATS + 2);
+
+    // A new user request starts over as well.
+    // 新的用户请求同样会重新计数。
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        push(None),
+        Some("release"),
+        workspace.path(),
+    )
+    .await;
+    let before = reviews();
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        push(None),
+        Some("release"),
+        workspace.path(),
+    )
+    .await;
+    assert_eq!(reviews(), before);
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        push(None),
+        Some("push now"),
+        workspace.path(),
+    )
+    .await;
+    assert_eq!(reviews(), before + 1);
 }
