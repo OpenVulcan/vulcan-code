@@ -1760,6 +1760,19 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
         operation: AiOperation::RerankDocuments,
         usage_scope: InferenceUsageScope::InternalBackground,
     };
+    // removed_decision_route proves the decision slot is cleared with its provider.
+    // removed_decision_route 验证判定槽位随其供应商一并清除。
+    let removed_decision_route = InferenceRouteConfiguration {
+        provider_id: String::from(removed_provider),
+        service_entry_id: String::from("removed-entry"),
+        connection_id: String::from("removed-connection"),
+        model_id: String::from("private-model"),
+        binding: InferenceRouteBinding::Action {
+            action_binding_id: String::from("removed-decision-action"),
+        },
+        operation: AiOperation::DecisionEvaluate,
+        usage_scope: InferenceUsageScope::InternalBackground,
+    };
     configuration.inference_profiles.insert(
         String::from("mixed-profile"),
         InferenceProfile {
@@ -1774,6 +1787,7 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
             embedding: Some(removed_embedding_route),
             embedding_dimensions: None,
             rerank: Some(retained_rerank_route),
+            decision: Some(removed_decision_route),
         },
     );
 
@@ -1852,6 +1866,7 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
         vec![String::from("retained-purpose")]
     );
     assert!(profile.embedding.is_none());
+    assert!(profile.decision.is_none());
     assert_eq!(
         profile
             .rerank

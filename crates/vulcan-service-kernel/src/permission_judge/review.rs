@@ -4,7 +4,7 @@
 //! 并使用其独立思考档位。
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,9 +20,10 @@ use vulcan_ai_contract::{
     InferenceSchedulingClass, InferenceUsageScope, MessageRole, ParallelToolCallPolicy,
     ReasoningOutputPolicy, ResponsesExecutionRequest, StructuredOutputPolicy, ToolChoicePolicy,
 };
+use vulcan_provider_config::provider_config::JudgeState;
 use vulcan_runtime_assets::PERMISSION_REVIEW_MD;
 
-use super::services::{load_project_options, local_enabled, open_package, read_state};
+use super::services::{backend_policy, load_project_options, read_state};
 use crate::SharedServiceBridgeState;
 
 /// Consumer profile that owns the reviewer's inference route and reasoning effort.
@@ -173,26 +174,24 @@ fn registration() -> HostAiCapabilityRegistration {
     }
 }
 
-/// Project policy lines: resolved with sentences when the local judge package opens, otherwise
-/// the project's raw choices.
-/// 项目策略行：本机判定模型包可打开时按策略解析并附带说明句，否则为项目的原始选择。
+/// Project policy lines: resolved with sentences when the chosen backend's policy is available,
+/// otherwise the project's raw choices.
+/// 项目策略行：所选后端的策略可用时按策略解析并附带说明句，否则为项目的原始选择。
 async fn project_policy(state: &SharedServiceBridgeState, root: Option<&Path>) -> Vec<String> {
     let chosen = match root {
         Some(root) => load_project_options(root).unwrap_or_default(),
         None => BTreeMap::new(),
     };
     if let Ok((runtime, settings)) = read_state(state)
-        && local_enabled(&settings)
-        && let Some(model) = settings.active_model()
-        && let Ok(package) = open_package(&runtime, PathBuf::from(&model.path)).await
-        && let Ok(modes) = package.policy.resolve_settings(&chosen)
+        && settings.state == Some(JudgeState::Enabled)
+        && let Ok(Some(policy)) = backend_policy(&runtime, &settings).await
+        && let Ok(modes) = policy.resolve_settings(&chosen)
     {
         return modes
             .to_map()
             .into_iter()
             .map(|(key, mode)| {
-                let sentence = package
-                    .policy
+                let sentence = policy
                     .options
                     .get(&key)
                     .and_then(|option| option.modes.get(&mode))
@@ -332,7 +331,7 @@ fn parse_answer(value: Value, may_allow_blocked: bool) -> Result<LlmReview, Stri
 
 /// Absolute Unix milliseconds `after` from now.
 /// 从现在起 `after` 之后的绝对 Unix 毫秒数。
-fn unix_ms_after(after: Duration) -> u64 {
+pub(super) fn unix_ms_after(after: Duration) -> u64 {
     SystemTime::now()
         .checked_add(after)
         .and_then(|deadline| deadline.duration_since(UNIX_EPOCH).ok())
@@ -342,6 +341,7 @@ fn unix_ms_after(after: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use vulcan_agent_runtime::agent_runtime::tool_permission::{HighRiskCategory, JudgeLabel};
 
     #[test]

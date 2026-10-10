@@ -12,7 +12,8 @@ use std::sync::Arc;
 use vulcan_agent_runtime::agent_runtime::tool_permission::JudgeCall;
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
 use vulcan_permission_judge::{
-    JudgeLabel, JudgePackage, JudgePolicy, find_known_package, known_packages, render_call,
+    JudgeLabel, JudgePackage, JudgePolicy, cloud_policy, find_known_package, known_packages,
+    render_call,
 };
 use vulcan_provider_config::provider_config::{
     JudgeBackend, JudgeState, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
@@ -34,6 +35,7 @@ use vulcan_service_runtime::judge_cuda_runtime::{
 };
 
 use super::PermissionJudgeRuntime;
+use super::cloud::{self, CloudCall};
 use super::environment::{DEVICE_PREFERENCE, JudgeEnvironment, LoadSpec, device_name};
 use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::{SharedServiceBridgeState, current_v1_unix_millis, mutate_provider_configuration};
@@ -95,6 +97,30 @@ async fn blocking<T: Send + 'static>(
 /// 已保存设置是否运行本机判定器。
 pub(super) fn local_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
     settings.state == Some(JudgeState::Enabled) && settings.backend == Some(JudgeBackend::Local)
+}
+
+/// Whether the saved settings run the cloud judge.
+/// 已保存设置是否运行云端判定。
+fn cloud_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
+    settings.state == Some(JudgeState::Enabled) && settings.backend == Some(JudgeBackend::Cloud)
+}
+
+/// Policy of the chosen backend: the cloud policy, or the local model in use; `None` when neither
+/// applies or the local package cannot be opened.
+/// 所选后端的策略：云端策略或使用中本机模型的策略；两者都不适用或本机模型包无法打开时为 `None`。
+pub(super) async fn backend_policy(
+    runtime: &Arc<PermissionJudgeRuntime>,
+    settings: &PersistedPermissionJudgeConfiguration,
+) -> Result<Option<JudgePolicy>, PermissionJudgeIssue> {
+    if settings.backend == Some(JudgeBackend::Cloud) {
+        return Ok(Some(cloud_policy().clone()));
+    }
+    match settings.active_model() {
+        Some(model) => open_package(runtime, PathBuf::from(&model.path))
+            .await
+            .map(|package| Some(package.policy)),
+        None => Ok(None),
+    }
 }
 
 /// Opens and verifies a package directory with the shared digest cache.
@@ -256,12 +282,12 @@ async fn snapshot(
     settings: PersistedPermissionJudgeConfiguration,
 ) -> Result<PermissionJudgeSettingsSnapshot, String> {
     let environment = blocking(JudgeEnvironment::probe).await?;
-    let (policy_options, active_model_issue) = match settings.active_model() {
-        Some(model) => match open_package(runtime, PathBuf::from(&model.path)).await {
-            Ok(package) => (policy_options(&package.policy), None),
-            Err(issue) => (Vec::new(), Some(issue)),
-        },
-        None => (Vec::new(), None),
+    let (policy_options, active_model_issue) = match backend_policy(runtime, &settings).await {
+        Ok(policy) => (
+            policy.as_ref().map(policy_options).unwrap_or_default(),
+            None,
+        ),
+        Err(issue) => (Vec::new(), Some(issue)),
     };
     let locked = settings.cuda_library_directory.as_deref().map(Path::new);
     Ok(PermissionJudgeSettingsSnapshot {
@@ -380,9 +406,16 @@ pub(crate) async fn service_save_permission_judge_settings(
                 "Choose a backend to enable the permission judge.",
             ));
         }
-        if current.active_model().is_none() {
+        if request.backend == Some(JudgeBackend::Local) && current.active_model().is_none() {
             return Err(String::from(
                 "Register and activate a local model before enabling the local judge.",
+            ));
+        }
+        if request.backend == Some(JudgeBackend::Cloud)
+            && cloud::configured_model(&state)?.is_none()
+        {
+            return Err(String::from(
+                "Choose a decision model before enabling the cloud judge.",
             ));
         }
     }
@@ -580,15 +613,35 @@ pub(crate) async fn service_benchmark_permission_judge(
         ));
     }
     let (runtime, settings) = read_state(&state)?;
+    if cloud_enabled(&settings) {
+        let model_id = cloud::configured_model(&state)?
+            .ok_or_else(|| String::from("Choose a decision model for the cloud judge."))?;
+        // One timed round keeps a paid speed test to the calls the user asked for.
+        // 仅计时一轮，使付费速度测试只发出用户要求的调用。
+        let elapsed_ms = cloud::time_batch(&state, request.batch_size)
+            .await?
+            .as_secs_f64()
+            * 1_000.0;
+        return Ok(PermissionJudgeBenchmarkResult {
+            device: None,
+            model_id,
+            batch_size: request.batch_size,
+            rounds: 1,
+            p50_ms: elapsed_ms,
+            p95_ms: elapsed_ms,
+            per_item_ms: elapsed_ms / f64::from(request.batch_size),
+            items_per_second: f64::from(request.batch_size) * 1_000.0 / elapsed_ms,
+        });
+    }
     let model_id = settings
         .active_model_id
         .clone()
         .filter(|_| local_enabled(&settings))
-        .ok_or_else(|| String::from("Enable the local judge before running a speed test."))?;
+        .ok_or_else(|| String::from("Enable the permission judge before running a speed test."))?;
     let spec = load_spec(&settings, &model_id).await?;
     let report = runtime.worker.benchmark(&spec, request.batch_size).await?;
     Ok(PermissionJudgeBenchmarkResult {
-        device: report.device,
+        device: Some(report.device),
         model_id,
         batch_size: report.batch_size,
         rounds: report.rounds,
@@ -682,17 +735,14 @@ fn project_directory(
         .ok_or_else(|| format!("unknown project: {project_id}"))
 }
 
-/// Policy of the model in use.
-/// 使用中模型的策略。
+/// Policy of the chosen backend.
+/// 所选后端的策略。
 async fn active_policy(state: &SharedServiceBridgeState) -> Result<JudgePolicy, String> {
     let (runtime, settings) = read_state(state)?;
-    let model = settings
-        .active_model()
-        .ok_or_else(|| String::from("No judge model is in use."))?;
-    open_package(&runtime, PathBuf::from(&model.path))
+    backend_policy(&runtime, &settings)
         .await
-        .map(|package| package.policy)
-        .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))
+        .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))?
+        .ok_or_else(|| String::from("No judge model is in use."))
 }
 
 /// Projects a project's saved choices against `policy`.
@@ -796,30 +846,27 @@ pub(super) fn load_project_options(root: &Path) -> Result<BTreeMap<String, Strin
         .options)
 }
 
-/// Scores one escalated call with the local judge; `Ok(None)` when the local judge is off.
-/// 用本机判定器为一次升级调用评分；本机判定器关闭时返回 `Ok(None)`。
+/// Scores one escalated call with the chosen backend; `Ok(None)` when the judge is off.
+/// 用所选后端为一次升级调用评分；判定器关闭时返回 `Ok(None)`。
 ///
-/// The workspace's project choices select the policy modes, and the call is rendered from the
-/// argument text exactly as the model streamed it. Any failure sends the call to the user.
-/// 工作区的项目选择决定策略档位，调用按模型流式发出的原样参数文本渲染。任何失败都会把调用交给用户。
+/// The workspace's project choices select the policy modes, and the call is passed with the
+/// argument text exactly as the model streamed it. Any failure sends the call to the next layer.
+/// 工作区的项目选择决定策略档位，调用附带模型流式发出的原样参数文本。任何失败都会把调用交给下一层。
 pub(crate) async fn judge_call(
     state: &SharedServiceBridgeState,
     call: JudgeCall,
 ) -> Result<Option<JudgeLabel>, String> {
     let (runtime, settings) = read_state(state)?;
-    if !local_enabled(&settings) {
+    if !local_enabled(&settings) && !cloud_enabled(&settings) {
         return Ok(None);
     }
-    let model = settings
-        .active_model()
-        .ok_or_else(|| String::from("No judge model is in use."))?;
     let raw_arguments = call.raw_arguments.ok_or_else(|| {
         String::from("The original argument text of this call is no longer available.")
     })?;
-    let policy = open_package(&runtime, PathBuf::from(&model.path))
+    let policy = backend_policy(&runtime, &settings)
         .await
         .map_err(|issue| format!("[{}] {}", issue.code, issue.detail))?
-        .policy;
+        .ok_or_else(|| String::from("No judge model is in use."))?;
     let chosen = match &call.workspace_root {
         Some(root) => load_project_options(root)?,
         None => BTreeMap::new(),
@@ -831,6 +878,22 @@ pub(crate) async fn judge_call(
         .workspace_root
         .as_ref()
         .map(|root| root.display().to_string());
+    if cloud_enabled(&settings) {
+        return cloud::judge(
+            state,
+            &modes,
+            CloudCall {
+                project_root: root.as_deref(),
+                tool: &call.tool_name,
+                raw_arguments: &raw_arguments,
+            },
+        )
+        .await
+        .map(Some);
+    }
+    let model = settings
+        .active_model()
+        .ok_or_else(|| String::from("No judge model is in use."))?;
     let input = JudgeInput {
         settings: modes.to_map(),
         rendered: render_call(root.as_deref(), &call.tool_name, &raw_arguments),

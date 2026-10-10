@@ -447,9 +447,9 @@ pub struct PermissionJudgeBenchmarkRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeBenchmarkResult {
-    /// Device the session runs on.
-    /// 会话运行的设备。
-    pub device: JudgeDevice,
+    /// Device the session runs on; absent for the cloud judge.
+    /// 会话运行的设备；云端判定时缺省。
+    pub device: Option<JudgeDevice>,
     /// Registration that was timed.
     /// 被计时的登记。
     pub model_id: String,

@@ -9,7 +9,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use vulcan_ai_contract::{
-    AiOperation, EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent, EmbeddingOutputKind,
+    AiOperation, DecisionCriterion, DecisionQuestion, DecisionQuestionKind, DecisionRequest,
+    EmbeddingEncoding, EmbeddingInput, EmbeddingInputContent, EmbeddingOutputKind,
     EmbeddingPayload, EmbeddingRequest, EmbeddingTask, INFERENCE_CONTRACT_VERSION,
     InferenceCallerBudget, InferenceCallerContext, InferencePermission, InferenceUsageScope,
     RerankRequest, RerankScoreSemantics, RerankText, RerankTruncation,
@@ -19,8 +20,8 @@ use vulcan_provider_adapters::{InferenceRouteConfiguration, PersistedAiConfigura
 use super::{public_ai_runtime_and_configuration, validate_non_empty};
 use crate::SharedServiceBridgeState;
 
-/// Requests one real embedding or rerank connection test through a consumer profile.
-/// 请求通过一个消费者配置档执行真实向量或重排连接测试。
+/// Requests one real embedding, rerank or decision connection test through a consumer profile.
+/// 请求通过一个消费者配置档执行真实向量、重排或判定连接测试。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PublicAiInferenceTestRequest {
@@ -84,6 +85,7 @@ pub(crate) async fn service_test_public_ai_inference_route(
     let permission = match request.operation {
         AiOperation::EmbeddingCreate => InferencePermission::Embedding,
         AiOperation::RerankDocuments => InferencePermission::Rerank,
+        AiOperation::DecisionEvaluate => InferencePermission::Decision,
         _ => {
             return Err(format!(
                 "Operation `{}` does not have a settings connection test.",
@@ -242,6 +244,54 @@ pub(crate) async fn service_test_public_ai_inference_route(
                 duration_ms: response.duration_ms,
             })
         }
+        AiOperation::DecisionEvaluate => {
+            let request_id = format!("settings_decision_test_{}", uuid::Uuid::new_v4().simple());
+            // The response is checked against the declared options by the inference facade.
+            // 推理门面按已声明选项校验响应。
+            let response = service
+                .evaluate_decision(
+                    &caller,
+                    DecisionRequest {
+                        contract_version: INFERENCE_CONTRACT_VERSION,
+                        request_id,
+                        idempotency_key: None,
+                        consumer_profile_id: request.consumer_profile_id,
+                        state: serde_json::json!({ "message": "connection test" }),
+                        questions: vec![DecisionQuestion {
+                            id: String::from("settings_test"),
+                            kind: DecisionQuestionKind::Choice {
+                                instructions: String::from(
+                                    "Answer whether the message is a connection test.",
+                                ),
+                                criteria: vec![
+                                    DecisionCriterion {
+                                        option: String::from("yes"),
+                                        criterion: String::from(
+                                            "The message is a connection test.",
+                                        ),
+                                    },
+                                    DecisionCriterion {
+                                        option: String::from("no"),
+                                        criterion: String::from("The message is anything else."),
+                                    },
+                                ],
+                            },
+                        }],
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(PublicAiInferenceTestResult {
+                operation: AiOperation::DecisionEvaluate,
+                provider_id: response.route.provider_id,
+                service_entry_id: response.route.service_entry_id,
+                connection_id: response.route.connection_id,
+                model_id: response.route.model_id,
+                result_count: response.answers.len(),
+                dimensions: None,
+                duration_ms: response.duration_ms,
+            })
+        }
         _ => Err(format!(
             "Operation `{}` does not have a settings connection test.",
             request.operation.as_str()
@@ -376,6 +426,7 @@ fn configured_settings_inference_test_route(
     let route = match operation {
         AiOperation::EmbeddingCreate => profile.embedding.as_ref(),
         AiOperation::RerankDocuments => profile.rerank.as_ref(),
+        AiOperation::DecisionEvaluate => profile.decision.as_ref(),
         _ => None,
     }
     .ok_or_else(|| {

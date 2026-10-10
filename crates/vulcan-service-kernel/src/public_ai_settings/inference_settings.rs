@@ -423,6 +423,32 @@ fn validate_permission_review_inference_route_request(
     Ok(())
 }
 
+/// Validates the single route the permission judge owns.
+/// 验证权限判定器拥有的唯一路由。
+fn validate_permission_judge_inference_route_request(
+    request: &PublicAiInferenceRouteSaveRequest,
+) -> Result<(), String> {
+    if request.consumer_profile_id != crate::permission_judge::PERMISSION_JUDGE_CONSUMER_PROFILE_ID
+    {
+        return Ok(());
+    }
+    if request.operation != AiOperation::DecisionEvaluate {
+        return Err(String::from(
+            "The permission judge accepts only the `decision_evaluate` inference route.",
+        ));
+    }
+    if request
+        .route
+        .as_ref()
+        .is_some_and(|route| route.usage_scope != InferenceUsageScope::InternalBackground)
+    {
+        return Err(String::from(
+            "The permission judge route must use the `internal_background` usage scope.",
+        ));
+    }
+    Ok(())
+}
+
 /// Validates the exact route surface owned by the optional LuaSkills consumer.
 /// 验证可选 LuaSkills 消费者拥有的精确路由表面。
 ///
@@ -486,6 +512,7 @@ fn remove_emptied_luaskills_profile(
             && profile.embedding.is_none()
             && profile.embedding_dimensions.is_none()
             && profile.rerank.is_none()
+            && profile.decision.is_none()
     });
     if emptied {
         profiles.remove(consumer_profile_id);
@@ -517,10 +544,12 @@ pub(crate) async fn service_save_public_ai_inference_route(
             })?;
             validate_non_empty("purposeId", purpose_id)?;
         }
-        AiOperation::EmbeddingCreate | AiOperation::RerankDocuments => {
+        AiOperation::EmbeddingCreate
+        | AiOperation::RerankDocuments
+        | AiOperation::DecisionEvaluate => {
             if request.purpose_id.is_some() {
                 return Err(String::from(
-                    "Embedding and rerank inference routes do not accept purposeId.",
+                    "Embedding, rerank and decision inference routes do not accept purposeId.",
                 ));
             }
         }
@@ -533,6 +562,7 @@ pub(crate) async fn service_save_public_ai_inference_route(
     }
     validate_luaskills_inference_route_request(&request)?;
     validate_permission_review_inference_route_request(&request)?;
+    validate_permission_judge_inference_route_request(&request)?;
     // transaction serializes validation, activation, and Workbench publication.
     // transaction 串行化校验、激活与工作台发布。
     let transaction = begin_public_ai_configuration_transaction().await;
@@ -657,6 +687,9 @@ pub(crate) async fn service_save_public_ai_inference_route(
                     AiOperation::RerankDocuments => {
                         profile.rerank = request.route.clone();
                     }
+                    AiOperation::DecisionEvaluate => {
+                        profile.decision = request.route.clone();
+                    }
                     _ => {
                         return Err(format!(
                             "Operation `{}` is not configurable through the inference profile.",
@@ -739,6 +772,17 @@ pub(super) fn build_internal_inference_route_diagnostics(
                 consumer_profile_id,
                 None,
                 AiOperation::RerankDocuments,
+                route,
+            );
+        }
+        if let Some(route) = profile.decision.as_ref() {
+            push_internal_inference_route_diagnostic(
+                &mut diagnostics,
+                runtime,
+                configuration,
+                consumer_profile_id,
+                None,
+                AiOperation::DecisionEvaluate,
                 route,
             );
         }
@@ -907,6 +951,7 @@ pub(super) fn build_internal_inference_candidates(
                         AiOperation::ConversationRespond
                             | AiOperation::EmbeddingCreate
                             | AiOperation::RerankDocuments
+                            | AiOperation::DecisionEvaluate
                     )
                 })
             {
@@ -924,7 +969,9 @@ pub(super) fn build_internal_inference_candidates(
                             protocol_profile_id: protocol_profile_id.to_string(),
                         }
                     }
-                    AiOperation::EmbeddingCreate | AiOperation::RerankDocuments => {
+                    AiOperation::EmbeddingCreate
+                    | AiOperation::RerankDocuments
+                    | AiOperation::DecisionEvaluate => {
                         let Some(action_binding_id) = registered_native_action_binding_id(
                             entry,
                             operation,

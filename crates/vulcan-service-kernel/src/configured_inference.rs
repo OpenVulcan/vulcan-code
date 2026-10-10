@@ -27,7 +27,8 @@ use vulcan_agent_runtime::agent_runtime::provider_transport_retry::{
 use vulcan_agent_runtime::provider_input_normalizer::protocol_profile_supports_structured_output;
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiExecutionRequest, AiOperation, AiStreamEvent, ContentItem,
-    DispatchOutcome, EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
+    DecisionQuestionKind, DecisionRequest, DecisionResponse, DispatchOutcome,
+    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
     EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
     EmbeddingInputContent, EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot,
     InferenceCallerContext, InferenceCapabilitySnapshot, InferenceOperationCapability,
@@ -1402,6 +1403,7 @@ impl InternalInferenceTelemetryFacts {
             operation: match owner_kind {
                 "internal_embedding" => AiOperation::EmbeddingCreate.as_str().to_string(),
                 "internal_rerank" => AiOperation::RerankDocuments.as_str().to_string(),
+                "internal_decision" => AiOperation::DecisionEvaluate.as_str().to_string(),
                 "internal_llm" => AiOperation::ConversationRespond.as_str().to_string(),
                 _ => owner_kind.to_string(),
             },
@@ -2119,6 +2121,16 @@ impl ConfiguredInferenceService {
                 AiOperation::RerankDocuments,
                 None,
                 "No rerank route is configured for this consumer profile.",
+            ),
+        });
+        operations.push(match profile.decision.as_ref() {
+            Some(route) => {
+                self.operation_capability(&configuration, route, None, caller.usage_scope)
+            }
+            None => unavailable_operation_capability(
+                AiOperation::DecisionEvaluate,
+                None,
+                "No decision route is configured for this consumer profile.",
             ),
         });
         Ok(InferenceCapabilitySnapshot {
@@ -3295,6 +3307,131 @@ impl ConfiguredInferenceService {
                     )
                     .with_retry_count(retry_count)
                     .with_metrics(Some(input_item_count), None, None),
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// Executes one configured decision request.
+    /// 执行一次已配置判定请求。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `caller` is trusted host identity and `request` cannot select a provider route.
+    /// `caller` 是可信宿主身份，`request` 无法选择供应商路由。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One answer per question, each naming a declared option.
+    /// 每个问题一个回答，且每个回答都指向已声明选项。
+    pub async fn evaluate_decision(
+        &self,
+        caller: &InferenceCallerContext,
+        request: DecisionRequest,
+    ) -> Result<DecisionResponse, ConfiguredInferenceError> {
+        request.validate().map_err(|message| {
+            ConfiguredInferenceError::new(ConfiguredInferenceErrorCategory::Contract, message)
+        })?;
+        authorize_caller(
+            caller,
+            request.consumer_profile_id.as_str(),
+            InferencePermission::Decision,
+        )?;
+        let input_units = decision_input_units(&request)?;
+        enforce_input_budget(caller, input_units)?;
+        let _permit = self.acquire_caller_permit(caller, input_units).await?;
+        let configuration = self.configuration_snapshot()?;
+        let route = configured_operation_route(
+            &configuration,
+            request.consumer_profile_id.as_str(),
+            AiOperation::DecisionEvaluate,
+            None,
+        )?;
+        validate_route_scope(route, caller)?;
+        let selection = self
+            .runtime
+            .resolve_internal_inference_selection(&configuration, route)
+            .map_err(configuration_error)?;
+        let route_snapshot = configured_route_snapshot(&selection, route);
+        // telemetry_execution_id separates the provider request identity from the UUID-owned usage lifecycle.
+        // telemetry_execution_id 将供应商请求身份与由 UUID 持有的用量生命周期分离。
+        let telemetry_execution_id = Uuid::new_v4().to_string();
+        let started_at_unix_ms = current_unix_millis();
+        let question_count = u64::try_from(request.questions.len()).unwrap_or(u64::MAX);
+        let started_facts = InternalInferenceTelemetryFacts::from_selection(
+            caller,
+            request.consumer_profile_id.as_str(),
+            request.request_id.as_str(),
+            telemetry_execution_id.as_str(),
+            "internal_decision",
+            &selection,
+            started_at_unix_ms,
+            0,
+            "succeeded",
+            &RequestUsage::default(),
+            None,
+        )
+        .with_metrics(Some(question_count), None, None);
+        self.emit_internal_inference_started(&started_facts);
+        let (result, retry_count) = self
+            .execute_non_streaming_provider_with_retry(caller, &started_facts, || {
+                self.runtime
+                    .execute_internal_decision(&selection, &request, caller.usage_scope)
+            })
+            .await;
+        // result rejects answers that skip a question or choose an undeclared option.
+        // result 拒绝遗漏问题或选择未声明选项的回答。
+        let result = result
+            .and_then(|response| {
+                response.validate_for_request(&request).map_err(|message| {
+                    ConfiguredInferenceError::new(
+                        ConfiguredInferenceErrorCategory::Execution,
+                        message,
+                    )
+                })?;
+                Ok(response)
+            })
+            .map_err(|error| error.with_route(route_snapshot));
+        match result {
+            Ok(response) => {
+                let first_response_at_unix_ms = current_unix_millis();
+                let facts = InternalInferenceTelemetryFacts::succeeded(
+                    caller,
+                    request.consumer_profile_id.as_str(),
+                    request.request_id.as_str(),
+                    telemetry_execution_id.as_str(),
+                    "internal_decision",
+                    &selection,
+                    started_at_unix_ms,
+                    response.duration_ms,
+                    &response.usage,
+                )
+                .with_retry_count(retry_count)
+                .with_metrics(
+                    Some(question_count),
+                    Some(u64::try_from(response.answers.len()).unwrap_or(u64::MAX)),
+                    None,
+                )
+                .with_first_response(Some(first_response_at_unix_ms));
+                self.emit_internal_inference_first_response(&facts);
+                self.emit_internal_inference_telemetry(facts);
+                Ok(response)
+            }
+            Err(error) => {
+                self.emit_internal_inference_telemetry(
+                    InternalInferenceTelemetryFacts::failed(
+                        caller,
+                        request.consumer_profile_id.as_str(),
+                        request.request_id.as_str(),
+                        telemetry_execution_id.as_str(),
+                        "internal_decision",
+                        &selection,
+                        started_at_unix_ms,
+                        &error,
+                    )
+                    .with_retry_count(retry_count)
+                    .with_metrics(Some(question_count), None, None),
                 );
                 Err(error)
             }
@@ -4689,6 +4826,12 @@ fn configured_operation_route<'a>(
             ConfiguredInferenceError::new(
                 ConfiguredInferenceErrorCategory::Configuration,
                 format!("Inference consumer profile `{profile_id}` has no rerank route."),
+            )
+        })?,
+        AiOperation::DecisionEvaluate => profile.decision.as_ref().ok_or_else(|| {
+            ConfiguredInferenceError::new(
+                ConfiguredInferenceErrorCategory::Configuration,
+                format!("Inference consumer profile `{profile_id}` has no decision route."),
             )
         })?,
         _ => {
@@ -6448,6 +6591,38 @@ fn rerank_input_units(request: &RerankRequest) -> Result<u64, ConfiguredInferenc
     Ok(units)
 }
 
+/// Counts the public input units of one decision request: its state text and every question.
+/// 统计一次判定请求的公共输入单位：其状态文本与每个问题。
+///
+/// # Parameters
+/// 参数
+/// `request` has passed its contract validation.
+/// `request` 已通过契约校验。
+///
+/// # Returns
+/// 返回值
+/// The checked byte total or a stable overflow error.
+/// 返回经过检查的字节合计或稳定溢出错误。
+fn decision_input_units(request: &DecisionRequest) -> Result<u64, ConfiguredInferenceError> {
+    let mut units = checked_input_units(0, request.state.to_string().len())?;
+    for question in &request.questions {
+        units = checked_input_units(units, question.id.len())?;
+        match &question.kind {
+            DecisionQuestionKind::Choice {
+                instructions,
+                criteria,
+            } => {
+                units = checked_input_units(units, instructions.len())?;
+                for criterion in criteria {
+                    units = checked_input_units(units, criterion.option.len())?;
+                    units = checked_input_units(units, criterion.criterion.len())?;
+                }
+            }
+        }
+    }
+    Ok(units)
+}
+
 /// Adds one platform byte length to a stable public input-unit counter.
 /// 将一项平台字节长度加入稳定公共输入单位计数器。
 ///
@@ -7823,6 +7998,50 @@ mod tests {
             ConfiguredInferenceErrorCategory::Configuration
         );
         assert!(error.message.contains("precheck_l1"));
+    }
+
+    /// Verifies the decision slot serves only decision requests and never another operation.
+    /// 验证判定槽位只服务判定请求，绝不服务其他操作。
+    #[test]
+    fn decision_route_resolves_only_for_decision_requests() {
+        let route = InferenceRouteConfiguration {
+            provider_id: String::from("typesafe"),
+            service_entry_id: String::from("public-api"),
+            connection_id: String::from("connection"),
+            model_id: String::from("jev-1.13.0"),
+            binding: InferenceRouteBinding::Action {
+                action_binding_id: String::from("typesafe.systemone.v1"),
+            },
+            operation: AiOperation::DecisionEvaluate,
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        let mut configuration = PersistedAiConfiguration::default();
+        configuration.inference_profiles.insert(
+            String::from("permission_judge"),
+            InferenceProfile {
+                decision: Some(route.clone()),
+                ..Default::default()
+            },
+        );
+        let resolved = configured_operation_route(
+            &configuration,
+            "permission_judge",
+            AiOperation::DecisionEvaluate,
+            None,
+        )
+        .expect("the saved decision route resolves");
+        assert_eq!(resolved, &route);
+        let error = configured_operation_route(
+            &configuration,
+            "permission_judge",
+            AiOperation::RerankDocuments,
+            None,
+        )
+        .expect_err("a decision route never serves rerank");
+        assert_eq!(
+            error.category,
+            ConfiguredInferenceErrorCategory::Configuration
+        );
     }
 
     /// Verifies VMM eligibility accepts only exact contracts that can disable reasoning.

@@ -13,12 +13,12 @@ use futures_core::Stream;
 use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use crate::{
-    AiErrorCategory, AiExecutionError, AiOperation, AiStreamEvent, DispatchOutcome,
-    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
-    EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
-    EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot, InferenceCallerContext,
-    InferenceCapabilitySnapshot, RerankRequest, RerankResponse, ResponsesExecutionRequest,
-    ResponsesExecutionResult, RetryAfterHint,
+    AiErrorCategory, AiExecutionError, AiOperation, AiStreamEvent, DecisionRequest,
+    DecisionResponse, DispatchOutcome, EmbeddingBatchCollectedResult, EmbeddingBatchPlan,
+    EmbeddingBatchSnapshot, EmbeddingBatchSubmission, EmbeddingBatchTaskPlan,
+    EmbeddingBatchUploadedInput, EmbeddingRequest, EmbeddingResponse, ExecutionRouteSnapshot,
+    InferenceCallerContext, InferenceCapabilitySnapshot, RerankRequest, RerankResponse,
+    ResponsesExecutionRequest, ResponsesExecutionResult, RetryAfterHint,
 };
 
 /// Provides a process-local cancellation signal without coupling the contract crate to one async runtime.
@@ -1067,6 +1067,21 @@ pub trait HostAiPort: Send + Sync {
         context: HostAiCallContext,
         request: RerankRequest,
     ) -> Result<RerankResponse, HostAiError>;
+
+    /// Executes one typed decision request through the registered host route.
+    /// 通过已注册宿主路由执行一次类型化判定请求。
+    async fn evaluate_decision(
+        &self,
+        _handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: DecisionRequest,
+    ) -> Result<DecisionResponse, HostAiError> {
+        Err(HostAiError::new(
+            HostAiErrorCode::CapabilityUnavailable,
+            "The Host AI implementation does not support decision evaluation.",
+        )
+        .with_request_context(&context, Some(request.request_id.as_str())))
+    }
 
     /// Starts one typed Responses execution and returns its stable asynchronous handle.
     /// 启动一次类型化 Responses 执行并返回稳定的异步执行句柄。

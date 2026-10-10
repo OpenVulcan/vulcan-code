@@ -24,4 +24,7 @@ pub enum JudgeBackend {
     /// The active registered model in a local worker process.
     /// 在本机 worker 进程中运行的使用中登记模型。
     Local,
+    /// The decision route saved for the permission judge, such as jev on TypeSafe or OpenRouter.
+    /// 为权限判定保存的判定路由，例如 TypeSafe 或 OpenRouter 上的 jev。
+    Cloud,
 }

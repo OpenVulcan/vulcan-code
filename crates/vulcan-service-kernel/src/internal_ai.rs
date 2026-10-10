@@ -17,14 +17,14 @@ use std::{
 };
 use tokio::sync::broadcast;
 use vulcan_ai_contract::{
-    AiOperation, AiStreamEvent, DispatchOutcome, EmbeddingBatchCollectedResult, EmbeddingBatchPlan,
-    EmbeddingBatchSnapshot, EmbeddingBatchSubmission, EmbeddingBatchTaskPlan,
-    EmbeddingBatchUploadedInput, EmbeddingResponse, HostAiCallContext, HostAiCapabilityHandle,
-    HostAiCapabilityRegistration, HostAiEmbeddingRequest, HostAiEmbeddingResponse, HostAiError,
-    HostAiErrorCode, HostAiEventStream, HostAiExecutionHandle, HostAiExecutionPhase,
-    HostAiExecutionSnapshot, HostAiPort, InferenceCallerContext, InferenceCapabilitySnapshot,
-    InferencePermission, RerankRequest, RerankResponse, ResponsesExecutionRequest,
-    ResponsesExecutionResult,
+    AiOperation, AiStreamEvent, DecisionRequest, DecisionResponse, DispatchOutcome,
+    EmbeddingBatchCollectedResult, EmbeddingBatchPlan, EmbeddingBatchSnapshot,
+    EmbeddingBatchSubmission, EmbeddingBatchTaskPlan, EmbeddingBatchUploadedInput,
+    EmbeddingResponse, HostAiCallContext, HostAiCapabilityHandle, HostAiCapabilityRegistration,
+    HostAiEmbeddingRequest, HostAiEmbeddingResponse, HostAiError, HostAiErrorCode,
+    HostAiEventStream, HostAiExecutionHandle, HostAiExecutionPhase, HostAiExecutionSnapshot,
+    HostAiPort, InferenceCallerContext, InferenceCapabilitySnapshot, InferencePermission,
+    RerankRequest, RerankResponse, ResponsesExecutionRequest, ResponsesExecutionResult,
 };
 
 use crate::configured_inference::{
@@ -876,6 +876,55 @@ impl HostAiPort for ConfiguredInferenceHostAiPort {
             _ = cancellation.cancelled() => return Err(Self::cancelled(&context, request.request_id.as_str())),
         };
         Self::validate_rerank_response(&request, response, &context)
+    }
+
+    /// Executes one decision request with host cancellation and deadline context.
+    /// 使用宿主取消和 deadline 上下文执行一个判定请求。
+    async fn evaluate_decision(
+        &self,
+        handle: &HostAiCapabilityHandle,
+        context: HostAiCallContext,
+        request: DecisionRequest,
+    ) -> Result<DecisionResponse, HostAiError> {
+        request.validate().map_err(|message| {
+            HostAiError::new(HostAiErrorCode::Contract, message)
+                .with_request_context(&context, Some(request.request_id.as_str()))
+        })?;
+        if request.consumer_profile_id != handle.consumer_profile_id {
+            return Err(HostAiError::new(
+                HostAiErrorCode::PermissionDenied,
+                "Decision request profile does not match the capability handle.",
+            )
+            .with_request_context(&context, Some(request.request_id.as_str())));
+        }
+        self.validate_call(
+            handle,
+            &context,
+            request.request_id.as_str(),
+            AiOperation::DecisionEvaluate,
+            None,
+            InferencePermission::Decision,
+        )?;
+        if context.cancellation.is_cancelled() {
+            return Err(Self::cancelled(&context, request.request_id.as_str()));
+        }
+        let caller = Self::caller_for_context(handle, &context).map_err(|error| {
+            error.with_request_context(&context, Some(request.request_id.as_str()))
+        })?;
+        let service = Arc::clone(&self.service);
+        let cancellation = Arc::clone(&context.cancellation);
+        let operation = service.evaluate_decision(&caller, request.clone());
+        tokio::pin!(operation);
+        let response = tokio::select! {
+            biased;
+            result = &mut operation => result.map_err(|error| Self::map_error(error, Some(&context), Some(request.request_id.as_str()), None))?,
+            _ = cancellation.cancelled() => return Err(Self::cancelled(&context, request.request_id.as_str())),
+        };
+        response.validate_for_request(&request).map_err(|message| {
+            HostAiError::new(HostAiErrorCode::InvalidRequest, message)
+                .with_request_context(&context, Some(request.request_id.as_str()))
+        })?;
+        Ok(response)
     }
 
     /// Starts one LLM execution and returns a host-owned lifecycle handle.

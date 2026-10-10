@@ -447,6 +447,10 @@ pub struct InferenceProfile {
     /// 可选的已配置重排路由。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rerank: Option<InferenceRouteConfiguration>,
+    /// Optional configured decision route.
+    /// 可选的已配置判定路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<InferenceRouteConfiguration>,
 }
 
 #[path = "context_engine_embedding_policy.rs"]
@@ -2691,6 +2695,7 @@ impl PersistedAiConfiguration {
                 .values()
                 .chain(profile.embedding.iter())
                 .chain(profile.rerank.iter())
+                .chain(profile.decision.iter())
                 .any(|route| route.provider_id == provider_id)
         })
     }
@@ -2895,6 +2900,13 @@ impl PersistedAiConfiguration {
                 .is_some_and(|route| route.provider_id == provider_id)
             {
                 profile.rerank = None;
+            }
+            if profile
+                .decision
+                .as_ref()
+                .is_some_and(|route| route.provider_id == provider_id)
+            {
+                profile.decision = None;
             }
         }
         self.connection_graph

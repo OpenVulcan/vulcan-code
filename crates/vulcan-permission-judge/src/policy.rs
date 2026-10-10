@@ -1,11 +1,11 @@
-//! Judge policy text shipped inside a model package.
-//! 随模型包发布的判定策略文本。
+//! Judge policy text: shipped inside a model package, or with this build for the cloud judge.
+//! 判定策略文本：随模型包发布，或为云端判定随本构建发布。
 //!
-//! The policy must match the weights it was trained with, so the registered package is its only
-//! source: the local model and the cloud judge both render instructions from it. Options are fixed
-//! enumerations; neither the agent nor tool arguments can add policy text.
-//! 策略必须与训练所用权重一致，因此已登记的模型包是唯一来源：本机模型与云端判定都由它渲染指令。
-//! 选项是固定枚举；代理与工具参数都不能添加策略文本。
+//! The policy must match the weights it was trained with, so the registered package is the only
+//! source for the local model; the cloud judge, which has no package, reads the copy in `cloud`.
+//! Options are fixed enumerations; neither the agent nor tool arguments can add policy text.
+//! 策略必须与训练所用权重一致，因此已登记的模型包是本机模型的唯一来源；没有模型包的云端判定读取
+//! `cloud` 中的副本。选项是固定枚举；代理与工具参数都不能添加策略文本。
 
 use std::collections::BTreeMap;
 

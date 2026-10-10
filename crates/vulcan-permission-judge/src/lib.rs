@@ -7,6 +7,7 @@
 //! 判定器把一次受管控工具调用评为 allow、review 或 block。本 crate 持有双方无需加载模型即须一致的
 //! 全部内容：模型包验证、策略文本、调用渲染、判定规则与 worker 协议。推理位于 `vulcan-judge-host`。
 
+pub mod cloud;
 pub mod decision;
 pub mod known;
 pub mod package;
@@ -16,6 +17,7 @@ pub mod render;
 pub mod runtime;
 pub mod system;
 
+pub use cloud::{CLOUD_ALLOW_PROBABILITY, cloud_label, cloud_policy, cloud_state};
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
 pub use known::{KnownPackage, find_known_package, known_packages};
 pub use package::{

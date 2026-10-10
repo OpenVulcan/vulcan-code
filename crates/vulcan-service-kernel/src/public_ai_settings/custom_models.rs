@@ -1153,7 +1153,8 @@ fn referenced_custom_model_ids(
             .llm_routes
             .values()
             .chain(profile.embedding.iter())
-            .chain(profile.rerank.iter());
+            .chain(profile.rerank.iter())
+            .chain(profile.decision.iter());
         for route in routes {
             if route.provider_id == provider_id
                 && removed_model_ids.contains(route.model_id.as_str())
