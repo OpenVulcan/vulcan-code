@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useI18n } from "@/i18n";
 import type { ProjectDirectoryListing } from "@/types";
+import "@/styles/project-folder-picker.css";
 
 // projectFolderPickerPathKey normalizes a path for picker root matching.
 // projectFolderPickerPathKey 将路径归一化用于选择器根目录匹配。

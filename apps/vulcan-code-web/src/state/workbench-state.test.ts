@@ -323,3 +323,36 @@ describe("LuaSkills operation progress delta", () => {
     expect(next.luaSkills.operationProgress?.correlationId).toBe("luaskills-op-0");
   });
 });
+
+describe("conversation archive selection", () => {
+  // archiveWorkbench holds one selected ordinary session, a floating assistant, and optionally another ordinary session.
+  // archiveWorkbench 包含一个选中的普通会话、一个浮动助手，以及可选的另一个普通会话。
+  function archiveWorkbench(withOrdinarySibling: boolean): ReturnType<typeof browserFallbackSnapshot> {
+    const base = browserFallbackSnapshot();
+    return {
+      ...base,
+      selectedConversationId: "ordinary-1",
+      conversations: [
+        { id: "assistant-1", title: "Assistant", status: "idle", projectId: "project-1", dedicated: true, assistantName: "Helper" },
+        { id: "ordinary-1", title: "Ordinary 1", status: "idle", projectId: "project-1" },
+        ...(withOrdinarySibling ? [{ id: "ordinary-2", title: "Ordinary 2", status: "idle", projectId: "project-1" }] : []),
+      ],
+    };
+  }
+
+  it("never falls back to an assistant session after archiving the selected session", () => {
+    const next = applyWorkbenchDelta(archiveWorkbench(true), {
+      generation: (archiveWorkbench(true).revision ?? 0) + 1,
+      delta: { kind: "conversationArchived", payload: { conversationId: "ordinary-1", selectedConversationId: "assistant-1" } },
+    });
+    expect(next.selectedConversationId).toBe("ordinary-2");
+  });
+
+  it("clears the selection when only assistant sessions remain", () => {
+    const next = applyWorkbenchDelta(archiveWorkbench(false), {
+      generation: (archiveWorkbench(false).revision ?? 0) + 1,
+      delta: { kind: "conversationArchived", payload: { conversationId: "ordinary-1", selectedConversationId: null } },
+    });
+    expect(next.selectedConversationId).toBeNull();
+  });
+});

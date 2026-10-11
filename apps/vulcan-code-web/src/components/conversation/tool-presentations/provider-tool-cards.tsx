@@ -6,6 +6,7 @@ import { dispatchConversationManualViewportInteraction } from "@/components/conv
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import type { ProviderToolExtractPresentation, ProviderToolSearchPresentation, ProviderToolStructuredPresentation, ProviderToolTextPresentation } from "@/components/conversation/conversation-tool-presentations";
+import type { ProviderToolExtractPresentationResult } from "./types";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ToolResultBody, type ToolRequestCardProgress, activeToolStatusLabel } from "./tool-card-common";
@@ -143,7 +144,7 @@ export function ProviderToolTextPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-text:${props.presentation.id}`} expanded={props.expanded}>
         <ToolResultBody>
-        <div className="markdown-tool-block">
+        <div className="markdown-tool-block provider-tool-result-scroll">
           {props.presentation.text.trim() ? (
             <MarkdownMessage content={props.presentation.text} eager />
           ) : (
@@ -213,21 +214,9 @@ export function ProviderToolExtractPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-extract:${props.presentation.id}`} expanded={props.expanded}>
         <ToolResultBody>
-        <div className="grid gap-2 px-3 pb-3">
+        <div className="provider-tool-result-scroll grid gap-2 px-3 pb-3">
           {props.presentation.results.map((result) => (
-            <article className="rounded-md border p-2 text-sm" key={result.url}>
-              <a className="font-medium hover:underline" href={result.url} rel="noreferrer" target="_blank">
-                {result.url}
-              </a>
-              <div className="mt-2 max-h-64 overflow-auto rounded bg-muted/40 p-2">
-                <MarkdownMessage content={result.content} />
-              </div>
-              {result.images.length ? (
-                <div className="text-muted-foreground mt-2 text-xs">
-                  {result.images.length} {t("toolPresentation.providerExtract.images")}
-                </div>
-              ) : null}
-            </article>
+            <ProviderToolExtractResultItem key={result.url} result={result} />
           ))}
           {props.presentation.failures.map((failure) => (
             <div className="rounded-md border border-destructive/30 p-2 text-sm" key={`failure:${failure.url}`}>
@@ -245,6 +234,57 @@ export function ProviderToolExtractPresentationCard(props: {
         </ToolResultBody>
       </ConversationMeasuredCollapse>
     </div>
+  );
+}
+
+// EXTRACT_PREVIEW_CHARACTERS bounds the plain-text preview shown before a page is opened.
+// EXTRACT_PREVIEW_CHARACTERS 限定页面展开前显示的纯文本预览长度。
+const EXTRACT_PREVIEW_CHARACTERS = 320;
+
+// ProviderToolExtractResultItem shows one extracted page as a cheap plain-text preview and parses its Markdown
+// only when the page is opened, so expanding a card with many long pages stays responsive.
+// ProviderToolExtractResultItem 以低成本纯文本预览展示单个提取页面，仅在打开该页面时解析其 Markdown，
+// 使展开含多个长页面的卡片依然流畅。
+function ProviderToolExtractResultItem(props: {
+  // Normalized extracted page.
+  // 归一化提取页面。
+  result: ProviderToolExtractPresentationResult;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = React.useState(false);
+  const preview = React.useMemo(() => {
+    const text = props.result.content.replace(/\s+/gu, " ").trim();
+    return text.length > EXTRACT_PREVIEW_CHARACTERS ? `${text.slice(0, EXTRACT_PREVIEW_CHARACTERS)}…` : text;
+  }, [props.result.content]);
+  return (
+    <article className="min-w-0 rounded-md border p-2 text-sm">
+      <div className="flex min-w-0 items-center gap-2">
+        <a className="min-w-0 flex-1 truncate font-medium hover:underline" href={props.result.url} rel="noreferrer" target="_blank">
+          {props.result.url}
+        </a>
+        <button
+          aria-expanded={open}
+          className="text-muted-foreground inline-flex flex-none items-center gap-1 text-xs hover:text-foreground"
+          onClick={() => setOpen((current) => !current)}
+          type="button"
+        >
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          {t(open ? "toolPresentation.providerExtract.hideContent" : "toolPresentation.providerExtract.showContent")}
+        </button>
+      </div>
+      {open ? (
+        <div className="mt-2 rounded bg-muted/40 p-2">
+          <MarkdownMessage content={props.result.content} />
+        </div>
+      ) : preview ? (
+        <p className="text-muted-foreground mt-1 line-clamp-3 [overflow-wrap:anywhere]">{preview}</p>
+      ) : null}
+      {props.result.images.length ? (
+        <div className="text-muted-foreground mt-2 text-xs">
+          {props.result.images.length} {t("toolPresentation.providerExtract.images")}
+        </div>
+      ) : null}
+    </article>
   );
 }
 
@@ -314,7 +354,7 @@ export function ProviderToolSearchPresentationCard(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={`provider-search:${props.presentation.id}`} expanded={props.expanded}>
         <ToolResultBody>
-        <div className="grid min-w-0 max-w-full gap-2 overflow-hidden px-3 pb-3">
+        <div className="provider-tool-result-scroll grid min-w-0 max-w-full gap-2 px-3 pb-3">
           {props.presentation.results.length ? props.presentation.results.map((result) => (
             <a
               className="min-w-0 max-w-full overflow-hidden rounded-md border p-2 text-sm transition-colors hover:bg-muted/50"

@@ -33,6 +33,7 @@ const DIFF_REVIEW_MODE_LABEL_KEYS: Record<DiffReviewMode, TranslationKey> = {
   staged: "diff.mode.staged",
   commit: "diff.mode.commit",
   branch: "diff.mode.branch",
+  last_turn: "diff.mode.lastTurn",
 };
 
 // BranchSelectorOption stores one deduplicated branch menu option.
@@ -526,6 +527,11 @@ function DiffModeMenu(props: {
         <DropdownMenuItem onSelect={() => selectMode("branch")}>
           <span>{t("diff.mode.branch")}</span>
           {props.selection.mode === "branch" ? <Check size={14} /> : null}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => selectMode("last_turn")}>
+          <span>{t("diff.mode.lastTurn")}</span>
+          {props.selection.mode === "last_turn" ? <Check size={14} /> : null}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

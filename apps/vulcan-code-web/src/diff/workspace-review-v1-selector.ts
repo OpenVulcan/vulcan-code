@@ -1,12 +1,25 @@
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type {
   ConversationEventBody,
+  ConversationEventSummary,
   PersistentChangeSet,
   PersistentChangeSetFile,
   PersistentChangeSetHunk,
   PersistentLifecycleContent,
 } from "@/service/conversation-event-window-store";
 import { diffFileLargeReasons, diffStatsLargeReasons } from "./limits";
+import {
+  isWorkspaceReviewToolCallV1,
+  persistentFileAdditionCount,
+  persistentFileDeletionCount,
+  requirePersistentPath,
+  resolveLastReviewTurnIdV1,
+  isAppliedChangeSetToolCallV1,
+  trackTurnFilesV1,
+  turnFileStatusV1,
+  type TurnFileTrackV1,
+  type WorkspaceReviewToolCallV1,
+} from "./turn-change-summary-v1";
 import type {
   DiffFile,
   DiffHunk,
@@ -17,12 +30,6 @@ import type {
 // textEncoder measures exact UTF-8 bytes for producer-authored changed lines.
 // textEncoder 计算产出方已记录变更行的精确 UTF-8 字节数。
 const textEncoder = new TextEncoder();
-
-/** One typed ToolCall event whose persistent ChangeSet is present.
- * 一条已携带持久化 ChangeSet 的强类型 ToolCall 事件。 */
-export type WorkspaceReviewToolCallV1 =
-  Extract<ConversationEventBody, { kind: "tool_call" }>
-  & { changeset: PersistentChangeSet };
 
 /** Latest canonical ToolCall selection consumed by the production Workspace Review host.
  * 生产 Workspace Review Host 消费的最新 canonical ToolCall 选择结果。 */
@@ -86,6 +93,104 @@ export function selectLatestWorkspaceReviewChangeSetV1(
   return selected;
 }
 
+/** The Turn whose applied ChangeSets the review panel shows as its "last turn" source.
+ * 审核面板作为「上一轮」来源展示其已应用 ChangeSet 的 Turn。 */
+export interface WorkspaceReviewTurnSelectionV1 {
+  /** Exact selected-session identity.
+   * 精确的选中会话身份。 */
+  session_id: string;
+  /** Event-window generation that owns this selection.
+   * 持有该选择结果的事件窗口代次。 */
+  window_generation: number;
+  /** Selected Turn identity.
+   * 选中的 Turn 身份。 */
+  turn_id: number;
+  /** Applied ChangeSet tool calls of the Turn in canonical seq order; empty when the Turn changed no file.
+   * 该 Turn 按 canonical seq 排列的已应用 ChangeSet 工具调用；未改动文件时为空。 */
+  tool_calls: readonly WorkspaceReviewToolCallV1[];
+}
+
+/** Selects the "last turn" review source from the selected-session V1 window.
+ * 从选中会话 V1 窗口选择「上一轮」审核来源。
+ *
+ * @param snapshot one atomically published selected-session V1 window.
+ *                 一份原子发布的选中会话 V1 窗口。
+ * @returns the resolved Turn with its applied ChangeSets, or null before hydration or when no Turn exists.
+ *          解析出的 Turn 及其已应用 ChangeSet；hydration 前或不存在 Turn 时为空。 */
+export function selectLastTurnWorkspaceReviewV1(
+  snapshot: ConversationEventWindowControllerSnapshot,
+): WorkspaceReviewTurnSelectionV1 | null {
+  const owner = snapshot.owner;
+  if (owner === null) return null;
+  const turnId = resolveLastReviewTurnIdV1(snapshot.events, snapshot.open_turn_id);
+  if (turnId === null) return null;
+  return {
+    session_id: owner.session_id,
+    window_generation: owner.window_generation,
+    turn_id: turnId,
+    tool_calls: snapshot.events.flatMap((summary) => summary.turn_id === turnId
+      && isAppliedChangeSetToolCallV1(summary.event) ? [summary.event] : []),
+  };
+}
+
+/** Projects every applied ChangeSet of one Turn into one review snapshot with one entry per file.
+ * 把单个 Turn 的全部已应用 ChangeSet 投影为每个文件一项的审核快照。
+ *
+ * Hunks of the same file keep their tool-call order; each keeps the line numbers its producer recorded.
+ * 同一文件的 hunk 保持工具调用顺序，各自保留产出方记录的行号。
+ *
+ * @param selection resolved "last turn" source, or null when the window holds no Turn.
+ *                  已解析的「上一轮」来源；窗口中没有 Turn 时为空。
+ * @returns one renderer-ready typed snapshot, empty when there is no Turn or it changed no file.
+ *          一份可直接渲染的强类型快照；没有 Turn 或其未改动文件时为空。 */
+export function workspaceReviewSnapshotFromTurnV1(
+  selection: WorkspaceReviewTurnSelectionV1 | null,
+): DiffPanelSnapshot {
+  const toolCalls = selection?.tool_calls ?? [];
+  const files = trackTurnFilesV1(toolCalls).map(projectTurnFileV1);
+  const changeSets = toolCalls.map((toolCall) => toolCall.changeset);
+  return reviewSnapshotFromFilesV1(files, changeSets);
+}
+
+/** Merges the projected records of one tracked file into one review file.
+ * 把单个被追踪文件的投影记录合并为一份审核文件。 */
+function projectTurnFileV1(track: TurnFileTrackV1): DiffFile {
+  const projected = track.records.map(projectPersistentChangeSetFileV1);
+  const status = turnFileStatusV1(track);
+  const oldPath = status === "added" ? "/dev/null" : track.originalPath ?? track.currentPath;
+  const newPath = status === "deleted" ? "/dev/null" : track.currentPath;
+  const sum = (read: (file: DiffFile) => number) => projected.reduce((total, file) => total + read(file), 0);
+  const changedLines = sum((file) => file.changedLines);
+  const changedBytes = sum((file) => file.changedBytes);
+  const maxChangedLineBytes = Math.max(0, ...projected.map((file) => file.maxChangedLineBytes));
+  const largeReasons = diffFileLargeReasons({ changedLines, changedBytes, maxChangedLineBytes });
+  const hunks = projected.flatMap((file) => file.hunks);
+  return {
+    key: `turn\u0000${track.originalPath ?? ""}\u0000${track.currentPath}`,
+    oldPath,
+    newPath,
+    status,
+    additions: sum((file) => file.additions),
+    deletions: sum((file) => file.deletions),
+    isBinary: false,
+    isGitlink: false,
+    fileMode: null,
+    changedLines,
+    changedBytes,
+    maxChangedLineBytes,
+    isLarge: largeReasons.length > 0,
+    tooLargeToDisplay: projected.some((file) => file.tooLargeToDisplay),
+    largeReasons,
+    rowCount: sum((file) => file.rowCount ?? 0),
+    estimatedHunkCount: hunks.length,
+    oldFileLineCount: projected[0]?.oldFileLineCount,
+    newFileLineCount: projected[projected.length - 1]?.newFileLineCount,
+    isPartial: projected.some((file) => file.isPartial),
+    rawDiff: projected.map((file) => file.rawDiff ?? "").filter(Boolean).join("\n"),
+    hunks,
+  };
+}
+
 /** Projects one selected persisted ChangeSet directly into the Workspace Review render model.
  * 把一份已选中的持久化 ChangeSet 直接投影为 Workspace Review 渲染模型。
  *
@@ -103,6 +208,15 @@ export function workspaceReviewSnapshotFromChangeSetV1(
   // files preserve the producer-authored file order without sorting or filesystem reads.
   // files 保留产出方记录的文件顺序，不排序也不读取当前文件系统。
   const files = changeSet.files.map(projectPersistentChangeSetFileV1);
+  return reviewSnapshotFromFilesV1(files, [changeSet]);
+}
+
+/** Builds one review snapshot from projected files and the ChangeSets they came from.
+ * 由已投影文件及其来源 ChangeSet 构建一份审核快照。 */
+function reviewSnapshotFromFilesV1(
+  files: DiffFile[],
+  changeSets: readonly PersistentChangeSet[],
+): DiffPanelSnapshot {
   // totalChangedLines is derived only from typed inserted/deleted or lifecycle totals.
   // totalChangedLines 仅从强类型新增、删除行或生命周期总数派生。
   const totalChangedLines = files.reduce((total, file) => total + file.changedLines, 0);
@@ -121,7 +235,7 @@ export function workspaceReviewSnapshotFromChangeSetV1(
   const rawDiff = files.map((file) => file.rawDiff ?? "").filter(Boolean).join("\n");
   // completeness reflects explicit producer truncation or omission across all file records.
   // completeness 反映全部文件记录中产出方明确声明的截断或省略。
-  const completeness = changeSetCompleteness(changeSet);
+  const completeness = changeSetCompleteness(changeSets);
   return {
     source: "change_set",
     files,
@@ -455,34 +569,6 @@ function logicalPersistentLines(text: string): string[] {
   return lines;
 }
 
-/** Returns complete additions for one persistent file record.
- * 返回一条持久化文件记录的完整新增行数。
- *
- * @param file validated persistent file record.
- *             已校验的持久化文件记录。
- * @returns producer-owned complete addition count.
- *          产出方拥有的完整新增行数。
- */
-function persistentFileAdditionCount(file: PersistentChangeSetFile): number {
-  if (file.change === "create") return file.lifecycle_content?.total_line_count ?? 0;
-  if (file.change === "delete") return 0;
-  return file.hunks.reduce((total, hunk) => total + hunk.inserted.length, 0);
-}
-
-/** Returns complete deletions for one persistent file record.
- * 返回一条持久化文件记录的完整删除行数。
- *
- * @param file validated persistent file record.
- *             已校验的持久化文件记录。
- * @returns producer-owned complete deletion count.
- *          产出方拥有的完整删除行数。
- */
-function persistentFileDeletionCount(file: PersistentChangeSetFile): number {
-  if (file.change === "delete") return file.lifecycle_content?.total_line_count ?? 0;
-  if (file.change === "create") return 0;
-  return file.hunks.reduce((total, hunk) => total + hunk.deleted.length, 0);
-}
-
 /** Returns the complete old-side line count when lifecycle content declares it.
  * 在生命周期正文声明完整数量时返回旧侧完整行数。
  *
@@ -512,32 +598,16 @@ function persistentNewFileLineCount(file: PersistentChangeSetFile): number | nul
 /** Derives aggregate completeness from explicit lifecycle modes.
  * 从明确的生命周期模式派生聚合完整性。
  *
- * @param changeSet validated persistent ChangeSet.
- *                  已校验的持久化 ChangeSet。
+ * @param changeSets validated persistent ChangeSets shown together.
+ *                   一同展示的已校验持久化 ChangeSet。
  * @returns complete, truncated, or partial review state.
  *          完整、截断或局部审核状态。
  */
-function changeSetCompleteness(changeSet: PersistentChangeSet): DiffPanelSnapshot["completeness"] {
-  if (changeSet.files.some((file) => file.lifecycle_content?.mode === "omitted")) return "partial";
-  if (changeSet.files.some((file) => file.lifecycle_content?.mode === "truncated")) return "truncated";
+function changeSetCompleteness(changeSets: readonly PersistentChangeSet[]): DiffPanelSnapshot["completeness"] {
+  const files = changeSets.flatMap((changeSet) => changeSet.files);
+  if (files.some((file) => file.lifecycle_content?.mode === "omitted")) return "partial";
+  if (files.some((file) => file.lifecycle_content?.mode === "truncated")) return "truncated";
   return "complete";
-}
-
-/** Requires an already validated path without trying alternate fields.
- * 要求已校验路径存在，不尝试其他候选字段。
- *
- * @param path exact field value from the persistent contract.
- *             来自持久化契约的精确字段值。
- * @param location field location used by the explicit error.
- *                 显式错误使用的字段位置。
- * @returns the non-empty producer-authored path.
- *          产出方记录的非空路径。
- */
-function requirePersistentPath(path: string | undefined, location: string): string {
-  if (path === undefined || path.trim().length === 0) {
-    throw new Error(`missing validated persistent path at ${location}`);
-  }
-  return path;
 }
 
 /** Serializes one typed review file for the existing copy action only.
@@ -581,17 +651,4 @@ function serializeTypedReviewFileV1(
       ...hunk.lines.map((line) => `${line.kind === "added" ? "+" : line.kind === "removed" ? "-" : " "}${line.content}`),
     ]),
   ].join("\n");
-}
-
-/** Narrows one canonical event body to a ToolCall carrying a persistent ChangeSet.
- * 将一条 canonical 事件体收窄为携带持久化 ChangeSet 的 ToolCall。
- *
- * @param event exact typed event body from the V1 snapshot.
- *              来自 V1 快照的精确强类型事件体。
- * @returns whether the event is a ToolCall with a present ChangeSet.
- *          该事件是否为已携带 ChangeSet 的 ToolCall。 */
-function isWorkspaceReviewToolCallV1(
-  event: ConversationEventBody,
-): event is WorkspaceReviewToolCallV1 {
-  return event.kind === "tool_call" && event.changeset !== undefined;
 }

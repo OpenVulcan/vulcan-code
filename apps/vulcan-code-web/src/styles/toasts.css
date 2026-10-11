@@ -38,6 +38,16 @@
 [data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-description] {
   color: var(--muted-foreground);
 }
+
+/* Long service errors stay inside a bounded, scrollable, selectable body instead of stretching the toast up the window. */
+/* 较长的服务错误保留在有上限、可滚动、可选取的正文中，而不是把通知撑到窗口顶部。 */
+[data-sonner-toaster].toaster [data-content] {
+  min-width: 0;
+  max-height: min(40vh, 16rem);
+  overflow: hidden auto;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 [data-sonner-toaster].toaster [data-sonner-toast][data-styled="true"] [data-button] {
   background: var(--primary);
   color: var(--primary-foreground);

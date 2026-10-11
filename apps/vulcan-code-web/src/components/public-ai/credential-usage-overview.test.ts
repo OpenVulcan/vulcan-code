@@ -11,9 +11,11 @@ import {
   kimiUsageWindowLabel,
   usageWindowValue,
   usageWindowPercentage,
+} from "./credential-usage-overview"
+import {
   usageCapabilityRequiresManagementKey,
   usageCapabilitySupportsQuotaWindows,
-} from "./credential-usage-overview"
+} from "./credential-usage-capability"
 
 // credentialProfile creates one minimal manifest-projected credential profile for semantics tests.
 // credentialProfile 为语义测试创建一个最小 Manifest 投影凭据配置档。

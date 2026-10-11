@@ -64,4 +64,27 @@ describe("empty workbench draft routing", () => {
       null,
     )).toBeNull();
   });
+
+  it("opens a new conversation when only assistant sessions remain active", () => {
+    // route treats floating assistants as absent from the main conversation surface.
+    // route 将浮动助手视为不属于主会话界面。
+    const route = resolveEmptyWorkbenchDraftRoute(
+      {
+        conversations: [{
+          id: "assistant-1",
+          title: "Assistant 1",
+          status: "idle",
+          projectId: "project-1",
+          dedicated: true,
+          assistantName: "Helper",
+        }],
+        projects: PROJECTS,
+      },
+      "project-1",
+      null,
+    );
+
+    expect(route?.draftConversation.projectId).toBe("project-1");
+    expect(route?.selectedConversationId).toBe(route?.draftConversation.id);
+  });
 });

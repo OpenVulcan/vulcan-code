@@ -4,6 +4,8 @@ import { ConversationAgentInteractionActionsContext } from "./conversation-colla
 import { conversationV1SubagentNames, createConversationV1CollaborationNavigation, type ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
 import { ConversationCollaborationStateContext, projectConversationCollaborationState } from "./conversation-collaboration-state";
 import { ThinkingPopupContext } from "./thinking-preview";
+import { TurnChangeReviewTargetContext, type TurnChangeReviewTarget } from "./turn-change-review-context";
+import { resolveLastReviewTurnIdV1 } from "@/diff/turn-change-summary-v1";
 
 import type { GeneratedMediaAttachment, GeneratedMediaKind } from "@/components/media/generated-media";
 import {
@@ -189,6 +191,13 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   const events = ownerReady ? props.snapshot.events : [];
   // dedicatedMemory keeps its identity while streaming deltas leave the memory facts unchanged.
   // dedicatedMemory 在流式增量未改变记忆事实时保持身份。
+  // reviewTurnId is the Turn the review panel's last-turn source shows for this transcript.
+  // reviewTurnId 是审核面板上一轮来源为该转录展示的 Turn。
+  const reviewTurnId = ownerReady ? resolveLastReviewTurnIdV1(events, props.snapshot.open_turn_id) : null;
+  const reviewTarget = React.useMemo<TurnChangeReviewTarget>(
+    () => ({ sessionId: props.sessionId, turnId: reviewTurnId }),
+    [props.sessionId, reviewTurnId],
+  );
   const dedicatedMemory = useEqualValue(ownerReady ? selectDedicatedMemory(props.snapshot) : null, conversationSelectionEqual);
   // collaborationRoutes only enables participants present in the current host navigation snapshot.
   // collaborationRoutes 仅启用当前宿主导航快照中存在的参与会话。
@@ -297,6 +306,12 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     }
   }, [ownerReady, props.commands, props.snapshot.has_more]);
 
+  // generationAction is withheld from dedicated sessions, whose edit-regenerate and fork are frozen after creation.
+  // generationAction 不提供给专职会话，其编辑重生成与分叉在创建后即冻结。
+  const generationAction = props.conversation.dedicated === true || dedicatedMemory !== null
+    ? undefined
+    : props.onRootInputGenerationAction;
+
   // handleEditUserPrompt maps the restored icon action back to the exact V1 root-input anchor.
   // handleEditUserPrompt 把恢复后的图标操作映射回精确 V1 根输入锚点。
   const handleEditUserPrompt = React.useCallback((message: ConversationMessage): void => {
@@ -342,6 +357,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     <ConversationAgentInteractionActionsContext.Provider value={collaborationActions}>
     <ConversationCollaborationStateContext.Provider value={collaborationState}>
     <DedicatedTranscriptMemoryProvider memory={dedicatedMemory}>
+    <TurnChangeReviewTargetContext.Provider value={reviewTarget}>
     <ConversationWorkspace
       autoExpandStreamingThinking={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "inline_output"}
       commandSessions={props.commandSessions}
@@ -354,10 +370,10 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       initialExpandedState={props.initialExpandedState}
       messages={messages}
       onCopyText={props.onCopyText}
-      onEditUserPrompt={props.onRootInputGenerationAction ? handleEditUserPrompt : undefined}
+      onEditUserPrompt={generationAction ? handleEditUserPrompt : undefined}
       onExpandedStateChange={props.onExpandedStateChange}
       onExtractGeneratedMediaAttachments={emptyGeneratedMediaAttachmentsV1}
-      onForkConversation={props.onRootInputGenerationAction ? handleForkConversation : undefined}
+      onForkConversation={generationAction ? handleForkConversation : undefined}
       onLoadMoreHistory={handleLoadMoreHistory}
       onLoadToolDetail={unavailableToolDetailV1}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -379,6 +395,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       transientReasoningStatus={props.transientReasoningStatus}
       workspacePath={props.workspacePath}
     />
+    </TurnChangeReviewTargetContext.Provider>
     </DedicatedTranscriptMemoryProvider>
     </ConversationCollaborationStateContext.Provider>
     </ConversationAgentInteractionActionsContext.Provider>

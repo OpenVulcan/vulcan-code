@@ -2,9 +2,11 @@
 // DiffPanelSource 标识单个已渲染 diff 快照的来源。
 export type DiffPanelSource = "workspace" | "turn" | "change_set" | "message";
 
-// DiffReviewMode identifies the Git comparison source selected by the review panel.
-// DiffReviewMode 标识审核面板当前选择的 Git 对比来源。
-export type DiffReviewMode = "unstaged" | "staged" | "commit" | "branch";
+// DiffReviewMode identifies the comparison source selected by the review panel. `last_turn` is derived in the
+// client from the selected conversation's applied ChangeSets and is never sent to the Git service.
+// DiffReviewMode 标识审核面板当前选择的对比来源。`last_turn` 由客户端从选中会话的已应用 ChangeSet 派生，
+// 绝不发送给 Git 服务。
+export type DiffReviewMode = "unstaged" | "staged" | "commit" | "branch" | "last_turn";
 
 // WorkspaceGitFileActionKind identifies file-level Git mutations exposed by the review panel.
 // WorkspaceGitFileActionKind 标识审核面板暴露的文件级 Git 变更操作。
@@ -415,6 +417,9 @@ export interface WorkspaceReviewFocusRequest {
   // Repository key that should be selected when the panel opens.
   // 面板打开时需要选择的仓库键。
   repositoryKey: string | null;
+  // Source to show; absent selects the live uncommitted changes.
+  // 需要展示的来源；缺省时选择实时未提交变更。
+  mode?: DiffReviewMode;
 }
 
 // WorkspaceGitRepositorySummary describes one discovered repository node.

@@ -15,8 +15,8 @@ import {
   CredentialUsageInlineFacts,
   CredentialUsageQuotaPanel,
   useCredentialUsageOverview,
-  usageCapabilityRequiresManagementKey,
 } from "@/components/public-ai/credential-usage-overview"
+import { usageCapabilityRequiresManagementKey } from "@/components/public-ai/credential-usage-capability"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"

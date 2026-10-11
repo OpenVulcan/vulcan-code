@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Cpu, RotateCcw, UserRound } from "lucide-react";
 import {
   ModelAccountUsageCard,
+  ModelAccountUsageOverview,
   ModelAccountUsageSummary,
   useModelAccountDetails,
   type ModelAccountDetails,
@@ -14,7 +15,6 @@ import {
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
-import { CredentialUsageOverview } from "@/components/public-ai/credential-usage-overview";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { Button } from "@/components/ui/button";
@@ -748,7 +748,7 @@ function ModelReasoningSummary(props: {
         <div className="model-reasoning-summary-usage">
           <span className="model-reasoning-eyebrow">{t("composer.modelReasoning.planUsage")}</span>
           {account.connection && account.usageOverviewVisible ? (
-            <CredentialUsageOverview
+            <ModelAccountUsageOverview
               connection={account.connection}
               credentialProfile={account.credentialProfile}
               showQuotaSection={account.quotaWindowsSupported}

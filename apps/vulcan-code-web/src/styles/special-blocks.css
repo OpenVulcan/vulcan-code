@@ -698,6 +698,19 @@
   white-space: nowrap;
 }
 
+/* A Turn that changed files shows its change chip beside the usage chip; the file list wraps below both. */
+/* 改动过文件的 Turn 在用量胶囊旁显示变更胶囊，文件列表换行显示在两者下方。 */
+.turn-stats-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.turn-changes-toggle:hover {
+  background: var(--accent);
+}
+
 .turn-stats-tooltip {
   width: min(320px, calc(100vw - 24px));
   max-width: none;

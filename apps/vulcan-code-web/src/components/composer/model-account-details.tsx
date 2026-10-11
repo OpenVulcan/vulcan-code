@@ -7,11 +7,8 @@ import {
 } from "@/components/composer/model-picker-control";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
-import {
-  CredentialUsageOverview,
-  useCredentialUsageOverview,
-  usageCapabilitySupportsQuotaWindows,
-} from "@/components/public-ai/credential-usage-overview";
+import { usageCapabilitySupportsQuotaWindows } from "@/components/public-ai/credential-usage-capability";
+import type { CredentialUsageOverviewProps } from "@/components/public-ai/credential-usage-overview";
 import { Button } from "@/components/ui/button";
 import { StreamPlaceholder } from "@/components/ui/stream-placeholder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -27,6 +24,26 @@ import type {
   PublicAiProviderDescriptor,
   PublicAiSettingsSnapshot,
 } from "@/types";
+
+// loadCredentialUsageOverview fetches the usage card module; account usage only exists after the picker reads its
+// snapshot, so the module stays out of the initial bundle and is requested as that read starts.
+// loadCredentialUsageOverview 加载用量卡片模块；账号用量只在选择器读取快照后才存在，
+// 因此该模块不进入首屏包，并在读取开始时请求。
+const loadCredentialUsageOverview = () => import("@/components/public-ai/credential-usage-overview");
+const LazyCredentialUsageOverview = React.lazy(() => loadCredentialUsageOverview()
+  .then((module) => ({ default: module.CredentialUsageOverview })));
+const LazyCredentialUsageSummaryLine = React.lazy(() => loadCredentialUsageOverview()
+  .then((module) => ({ default: module.CredentialUsageSummaryLine })));
+
+// ModelAccountUsageOverview renders the full usage card once its module has loaded.
+// ModelAccountUsageOverview 在模块加载后渲染完整用量卡片。
+export function ModelAccountUsageOverview(props: CredentialUsageOverviewProps) {
+  return (
+    <React.Suspense fallback={<StreamPlaceholder className="py-1" shape="tiles" count={1} />}>
+      <LazyCredentialUsageOverview {...props} />
+    </React.Suspense>
+  );
+}
 
 // ModelAccountDetails is the resolved credential and usage view of the active model account.
 // ModelAccountDetails 是当前模型账号解析后的凭据与用量视图。
@@ -120,6 +137,7 @@ export function useModelAccountDetails(accounts: ModelPickerChoice[], value: str
   const load = React.useCallback(async () => {
     const current = owner.current;
     const version = ++current.readVersion;
+    void loadCredentialUsageOverview();
     setLoading(true);
     setError(null);
     try {
@@ -226,7 +244,7 @@ export function ModelAccountUsageCard(props: { details: ModelAccountDetails }) {
         <strong>{details.effectiveProtocolId ? modelAccountProtocolDisplayName(details.effectiveProtocolId) : "—"}</strong>
       </div>
       {details.connection && details.usageOverviewVisible ? (
-        <CredentialUsageOverview
+        <ModelAccountUsageOverview
           connection={details.connection}
           credentialProfile={details.credentialProfile}
           showQuotaSection={details.quotaWindowsSupported}
@@ -246,13 +264,16 @@ export function ModelAccountUsageCard(props: { details: ModelAccountDetails }) {
 // ModelAccountUsageSummary 将套餐与余额压缩为账号行中的一行文字。
 // Parameters: connection, credentialProfile and usage are the selected account's facts.
 // 参数：connection、credentialProfile 与 usage 为当前账号的事实。
-// Returns: "plan · balance" using the same localized facts as the full usage card.
-// 返回值：使用与完整用量卡片相同的本地化事实，格式为“套餐 · 余额”。
+// Returns: "plan · balance" using the same localized facts as the full usage card; empty until its module loads.
+// 返回值：使用与完整用量卡片相同的本地化事实，格式为“套餐 · 余额”；模块加载前为空。
 export function ModelAccountUsageSummary(props: {
   connection: PublicAiConnection;
   credentialProfile?: PublicAiCredentialProfile;
   usage?: PublicAiAccountUsage;
 }) {
-  const { model } = useCredentialUsageOverview(props);
-  return <>{`${model.planValue} · ${model.balanceLabel} ${model.balanceValue}`}</>;
+  return (
+    <React.Suspense fallback={null}>
+      <LazyCredentialUsageSummaryLine {...props} />
+    </React.Suspense>
+  );
 }

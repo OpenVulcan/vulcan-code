@@ -1,4 +1,5 @@
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
+import { isMainViewConversation } from "@/state/workbench-state";
 import type { WorkbenchSnapshot } from "@/types";
 
 // EmptyWorkbenchDraftRoute describes the draft and selection that replace an empty active conversation list.
@@ -26,7 +27,9 @@ export function resolveEmptyWorkbenchDraftRoute(
   preferredProjectId: string | null,
   currentDraft: DraftConversationSelection | null,
 ): EmptyWorkbenchDraftRoute | null {
-  if (workbench.conversations.length > 0) {
+  // Assistant sessions stay in their floating panels and never keep the main view out of the draft route.
+  // 助手会话留在浮动面板中，不会阻止主视图进入草稿路由。
+  if (workbench.conversations.some(isMainViewConversation)) {
     return null;
   }
   // preferredProject is the still-visible project where the user most recently stayed.

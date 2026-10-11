@@ -4,6 +4,7 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  FileDiff,
   ScrollText,
 } from "lucide-react";
 import {
@@ -31,6 +32,15 @@ import {
 } from "@/components/conversation/conversation-metadata";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { TurnStatsTooltipCard } from "@/components/conversation/conversation-turn-stats-card";
+import { useOpenTurnChangeReview } from "@/components/conversation/turn-change-review-context";
+import type { TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
+
+// LazyTurnChangeFileList loads the per-turn file list and its stylesheet on first expansion.
+// LazyTurnChangeFileList 在首次展开时加载每轮文件列表及其样式表。
+const LazyTurnChangeFileList = React.lazy(async () => {
+  const module = await import("@/components/conversation/turn-change-file-list");
+  return { default: module.TurnChangeFileList };
+});
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
 // ConversationDisplayBlock 包含已拆分展示块所需的转录字段。
@@ -454,10 +464,15 @@ export function TurnStatsBlock(props: {
       <strong>{summary}</strong>
     </div>
   );
-  if (!turnStatsMetadataObject(props.block.rawMetadata)) {
-    return statisticsRow;
-  }
-  return (
+  // turnChanges is the Turn's applied file changes merged into this row; absent when the Turn changed no file.
+  // turnChanges 是合并到本行的该 Turn 已应用文件变更；该 Turn 未改动文件时缺省。
+  const turnChanges = turnChangeSummaryMetadata(props.block.rawMetadata);
+  const turnId = metadataValue(props.block.rawMetadata, ["v1_turn_id"]);
+  // openInGit exists only while the review panel's last-turn source shows exactly this Turn.
+  // openInGit 仅在审核面板的上一轮来源恰好展示本 Turn 时存在。
+  const openInGit = useOpenTurnChangeReview(typeof turnId === "number" ? turnId : null);
+  const [changesOpen, setChangesOpen] = React.useState(false);
+  const statistics = turnStatsMetadataObject(props.block.rawMetadata) ? (
     <Tooltip>
       <TooltipTrigger asChild>
         {statisticsRow}
@@ -476,7 +491,42 @@ export function TurnStatsBlock(props: {
         />
       </TooltipContent>
     </Tooltip>
+  ) : statisticsRow;
+  if (!turnChanges) {
+    return statistics;
+  }
+  return (
+    <div className="turn-stats-line">
+      {statistics}
+      <button
+        aria-expanded={changesOpen}
+        aria-label={t("conversation.turnChanges.title")}
+        className="turn-stats-row turn-changes-toggle"
+        onClick={() => setChangesOpen((current) => !current)}
+        type="button"
+      >
+        <FileDiff aria-hidden="true" size={13} />
+        <strong>{formatStatsTemplate(t("conversation.turnChanges.files"), turnChanges.files.length)}</strong>
+        <span className="file-change-added">+{turnChanges.additions.toLocaleString(locale)}</span>
+        <span className="file-change-removed">-{turnChanges.deletions.toLocaleString(locale)}</span>
+        {changesOpen ? <ChevronDown aria-hidden="true" size={13} /> : <ChevronRight aria-hidden="true" size={13} />}
+      </button>
+      {changesOpen ? (
+        <React.Suspense fallback={null}>
+          <LazyTurnChangeFileList summary={turnChanges} onOpenInGit={openInGit} />
+        </React.Suspense>
+      ) : null}
+    </div>
   );
+}
+
+// turnChangeSummaryMetadata reads the Turn change summary the V1 presentation attached to a statistics block.
+// turnChangeSummaryMetadata 读取 V1 展示附加到统计块上的 Turn 变更汇总。
+function turnChangeSummaryMetadata(metadata: unknown): TurnChangeSummaryV1 | null {
+  const value = metadataValue(metadata, ["turn_changes"]);
+  return value && typeof value === "object" && Array.isArray((value as TurnChangeSummaryV1).files)
+    ? value as TurnChangeSummaryV1
+    : null;
 }
 
 // turnStatsIcon returns the compact status mark used by turn statistics.

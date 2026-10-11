@@ -149,9 +149,10 @@
   padding: 13px 16px;
 }
 
-/* Every expanded tool surface keeps long results inside one bounded local viewport. */
-/* 所有展开后的工具界面都把长结果限制在一个有界的局部视口内。 */
-.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > * {
+/* Every expanded tool surface keeps long results inside one bounded local viewport; provider results own theirs inside the tabs. */
+/* 所有展开后的工具界面都把长结果限制在一个有界的局部视口内；供应商结果在标签页内持有自己的视口。 */
+.tool-presentation-card > .conversation-collapsible-motion > .conversation-collapsible-motion-inner > *,
+.provider-tool-result-scroll {
   max-height: min(var(--tool-presentation-expanded-height-unit), 56vh);
   overflow: auto;
   /* Boundary wheel deltas continue into the parent conversation viewport. */

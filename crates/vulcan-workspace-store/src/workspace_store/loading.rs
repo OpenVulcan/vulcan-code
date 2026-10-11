@@ -575,8 +575,12 @@ pub async fn load_workspace_index_report(
         .filter(|project| !collapsed_task_projects.contains(&project.id))
         .map(|project| project.id.clone())
         .collect::<BTreeSet<_>>();
+    // Assistant sessions live in floating panels, so the default main selection skips them;
+    // nil lets clients open a new draft when only assistants remain.
+    // 助手会话位于浮动面板中，默认主选择跳过它们；仅剩助手时 nil 让客户端打开新建草稿。
     let selected_session = visible_sessions
-        .first()
+        .iter()
+        .find(|session| session.assistant_name.is_none())
         .map(|session| session.id)
         .unwrap_or_default();
     let session_run_phases = visible_sessions

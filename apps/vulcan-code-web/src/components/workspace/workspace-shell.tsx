@@ -85,6 +85,8 @@ import {
 } from "@/components/workspace/workspace-shell/context-tabs";
 import { useWorkspaceGitState } from "@/components/workspace/workspace-shell/use-workspace-git-state";
 import { AssistantDockButton } from "@/components/assistant/assistant-dock-button";
+import { TurnChangeReviewActionsContext } from "@/components/conversation/turn-change-review-context";
+import { useReviewFocusActions } from "@/components/workspace/workspace-shell/use-review-focus-actions";
 import { useWorkspacePanelLayout } from "@/components/workspace/workspace-shell/use-workspace-panel-layout";
 import {
   WORKSPACE_FEATURE_AREAS,
@@ -539,23 +541,17 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     return () => { cancelled = true; stop(); };
   }, [aiBrowserPluginEnabled, contextTabCacheKey, hasSelectedChatConversation, openRightContextPanel, props.selectedConversationId, t]);
 
-  // handleOpenReviewChanges opens the right panel and focuses the live uncommitted review source.
-  // handleOpenReviewChanges 打开右侧面板并聚焦实时未提交审核来源。
-  const handleOpenReviewChanges = React.useCallback((repositoryKey?: string) => {
-    if (!hasSelectedChatConversation) {
-      return;
-    }
-    const nextRepositoryKey = repositoryKey ?? selectedGitRepositoryForActions;
-    if (nextRepositoryKey) {
-      setSelectedGitRepositoryKey(nextRepositoryKey);
-    }
-    openContextTab("review");
-    setReviewFocusRequest((current) => ({
-      sequence: current.sequence + 1,
-      repositoryKey: nextRepositoryKey,
-    }));
-    openRightContextPanel();
-  }, [hasSelectedChatConversation, openContextTab, openRightContextPanel, selectedGitRepositoryForActions]);
+  // reviewFocus opens the right review panel on live changes or on the last-turn source.
+  // reviewFocus 打开右侧审核面板并切到实时变更或上一轮来源。
+  const reviewFocus = useReviewFocusActions({
+    selectedConversationId: props.selectedConversationId,
+    hasSelectedChatConversation,
+    selectedGitRepositoryForActions,
+    setSelectedGitRepositoryKey,
+    setReviewFocusRequest,
+    openReviewTab: React.useCallback(() => openContextTab("review"), [openContextTab]),
+    openRightContextPanel,
+  });
 
   // handleOpenSubagentPanel opens a read-only subagent transcript tab in the right context panel.
   // handleOpenSubagentPanel 在右侧上下文面板中打开只读子代理转录页签。
@@ -964,7 +960,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           todolist={null}
           onCommitDialogOpenChange={handleGitCommitDialogOpenChange}
           onExpandedChange={handleSessionToolExpandedChange}
-          onOpenReviewChanges={handleOpenReviewChanges}
+          onOpenReviewChanges={reviewFocus.openReviewChanges}
           onSelectReviewRepository={handleSelectReviewRepository}
           onToggleReviewMonitoring={(repositoryKey, enabled) => {
             return handleToggleReviewMonitoring(repositoryKey, enabled).catch((error) => {
@@ -1014,6 +1010,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSelectConversation={props.onSelectConversation}
       />}
       <SidebarInset className="workspace-inset">
+        <TurnChangeReviewActionsContext.Provider value={reviewFocus.turnChangeReviewActions}>
         <WorkspaceResizableBody
           aiBrowserAvailable={aiBrowserAvailable}
           localBrowserAvailable={localBrowserAvailable}
@@ -1082,6 +1079,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             {props.footer}
           </div>
         ) : null}
+        </TurnChangeReviewActionsContext.Provider>
       </SidebarInset>
       {browserCloseRequest && browserCloseRequest.cacheKey === contextTabCacheKey
         && browserCloseRequest.owner === props.selectedConversationId ? <LocalBrowserCloseDialog

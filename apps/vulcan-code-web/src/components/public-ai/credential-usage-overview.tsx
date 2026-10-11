@@ -125,6 +125,15 @@ export function useCredentialUsageOverview(props: CredentialUsageOverviewProps):
   return { model, quotaContent }
 }
 
+// CredentialUsageSummaryLine condenses plan and balance into one line of text.
+// CredentialUsageSummaryLine 将套餐与余额压缩为一行文字。
+// Parameters: props supplies the account facts; returns "plan · balance" with the same localized facts as the card.
+// 参数：props 提供账号事实；返回与卡片相同本地化事实的“套餐 · 余额”。
+export function CredentialUsageSummaryLine(props: CredentialUsageOverviewProps) {
+  const { model } = useCredentialUsageOverview(props)
+  return <>{`${model.planValue} · ${model.balanceLabel} ${model.balanceValue}`}</>
+}
+
 // CredentialUsageOverviewView renders only determined account view data and adapted quota content.
 // CredentialUsageOverviewView 只渲染确定的账号视图数据与已适配额度内容。
 // Parameters: props supplies adapted account usage and pricing facts; returns known values and explicit unknown states without issuing queries.
@@ -185,45 +194,6 @@ export function CredentialUsageQuotaPanel(props: { children?: React.ReactNode; h
       ) : null}
     </div>
   )
-}
-
-// usageCapabilitySupportsQuotaWindows returns whether one account contract exposes plan windows.
-// usageCapabilitySupportsQuotaWindows 返回一个账号契约是否公开套餐额度窗口。
-//
-// Parameters
-// 参数
-// `capability` is the exact backend-declared account usage implementation.
-// `capability` 是后端声明的精确账号用量实现。
-//
-// Returns
-// 返回值
-// True only for usage implementations that produce user-facing quota windows.
-// 仅对会产生用户可见额度窗口的用量实现返回 true。
-export function usageCapabilitySupportsQuotaWindows(
-  capability: PublicAiConnection["usage_capability"],
-): boolean {
-  return capability === "mini_max_token_plan"
-    || capability === "tavily_credits"
-    || capability === "kimi_coding_plan"
-    || capability === "command_code_usage"
-}
-
-// usageCapabilityRequiresManagementKey returns whether one registered usage primitive needs a separate credential.
-// usageCapabilityRequiresManagementKey 返回一个已注册用量原语是否需要独立凭据。
-//
-// Parameters
-// 参数
-// `capability` is the exact manifest-projected account usage primitive.
-// `capability` 是清单投影得到的精确账号用量原语。
-//
-// Returns
-// 返回值
-// True only when the registered primitive requires a credential separate from model inference.
-// 仅当已注册原语需要独立于模型推理的凭据时返回 true。
-export function usageCapabilityRequiresManagementKey(
-  capability: PublicAiCredentialProfile["account_usage_query"],
-): boolean {
-  return capability === "open_router_credits"
 }
 
 // CredentialUsageSummary renders provider-aware compact quota information.

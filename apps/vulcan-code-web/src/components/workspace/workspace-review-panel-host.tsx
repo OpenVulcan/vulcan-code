@@ -11,10 +11,6 @@ import {
   selectedConversationWorkspacePath,
   type WorkspaceReviewDraftConversation,
 } from "@/diff/workspace-review-model";
-import {
-  selectLatestWorkspaceReviewChangeSetV1,
-  workspaceReviewSnapshotFromChangeSetV1,
-} from "@/diff/workspace-review-v1-selector";
 import type {
   DiffFile,
   DiffHunkExpansionRequest,
@@ -34,8 +30,7 @@ import type {
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import { loadWorkspaceGitCatalog } from "@/service/workbench-snapshot-service";
-import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
-import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
+import { useConversationReviewSnapshots } from "@/components/workspace/use-conversation-review-snapshots";
 import { useWorkspaceReviewRequestOwnership } from "@/components/workspace/workspace-review-panel-request-ownership";
 import type { WorkbenchSnapshot } from "@/types";
 
@@ -169,24 +164,6 @@ export function WorkspaceReviewPanelHost(props: {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
   const { t } = useI18n();
-  // conversationChangeSetSelection is read from the atomically published selected-session V1 authority and stays
-  // empty while the external-store owner belongs to another route; it re-renders only when the selection changes.
-  // conversationChangeSetSelection 从原子发布的选中会话 V1 权威读取，在 external-store owner 属于其他路由时为空；
-  // 仅在选择结果变化时重新渲染。
-  const conversationChangeSetSelection = useSelectedConversationEventWindowSelector(React.useCallback(
-    (snapshot: ConversationEventWindowControllerSnapshot) => snapshot.owner?.session_id === props.selectedConversationId
-      ? selectLatestWorkspaceReviewChangeSetV1(snapshot)
-      : null,
-    [props.selectedConversationId],
-  ), conversationSelectionEqual);
-  // conversationReviewSnapshot projects the typed persistent ChangeSet without raw-diff parsing.
-  // conversationReviewSnapshot 无需解析 raw diff，直接投影强类型持久化 ChangeSet。
-  const conversationReviewSnapshot = React.useMemo(
-    () => conversationChangeSetSelection === null
-      ? null
-      : workspaceReviewSnapshotFromChangeSetV1(conversationChangeSetSelection),
-    [conversationChangeSetSelection],
-  );
   // activeSurfaceId stores the conversation or subagent surface currently represented by the panel.
   // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
   const activeSurfaceId = activeWorkbenchSurfaceId(props.workbench, props.selectedConversationId);
@@ -239,6 +216,12 @@ export function WorkspaceReviewPanelHost(props: {
     () => diffReviewSelectionStableKey(diffReviewSelection),
     [diffReviewSelection],
   );
+  // lastTurnMode shows the selected conversation's last Turn changes instead of a Git comparison.
+  // lastTurnMode 展示选中会话上一轮的变更，而不是 Git 对比。
+  const lastTurnMode = diffReviewSelection.mode === "last_turn";
+  // conversationSnapshots are derived from the selected conversation rather than loaded from Git.
+  // conversationSnapshots 由选中会话派生，而不是从 Git 加载。
+  const conversationSnapshots = useConversationReviewSnapshots(props.selectedConversationId, lastTurnMode);
   // reviewSourceCacheKey isolates right-panel snapshots and source choices by project and repository.
   // reviewSourceCacheKey 按项目与仓库隔离右侧面板快照及来源选择。
   const reviewSourceCacheKey = React.useMemo(
@@ -294,7 +277,7 @@ export function WorkspaceReviewPanelHost(props: {
     && workspaceReviewKey === diffReviewSelectionKey
       ? workspaceReviewSnapshot
       : null;
-  const activeReviewSnapshot = activeWorkspaceReviewSnapshot ?? conversationReviewSnapshot;
+  const activeReviewSnapshot = conversationSnapshots.lastTurn ?? activeWorkspaceReviewSnapshot ?? conversationSnapshots.latestChangeSet;
 
   React.useLayoutEffect(() => {
     // Project route changes synchronously release loading flags owned by invalidated requests.
@@ -375,6 +358,11 @@ export function WorkspaceReviewPanelHost(props: {
     // requestSelection freezes the requested Git source across service load and asynchronous parsing.
     // requestSelection 在服务加载与异步解析期间固定所请求的 Git 来源。
     const requestSelection = selectionOverride ?? diffReviewSelection;
+    if (requestSelection.mode === "last_turn") {
+      // The last-turn source is derived live from the event window; there is nothing to load.
+      // 上一轮来源实时派生自事件窗口，无需加载。
+      return;
+    }
     // requestKey is the stable source identity attached to the resulting snapshot.
     // requestKey 是附加到结果快照的稳定来源身份。
     const requestKey = diffReviewSelectionStableKey(requestSelection);
@@ -701,6 +689,7 @@ export function WorkspaceReviewPanelHost(props: {
     handledReviewFocusRequestRef.current = props.reviewFocusRequest.sequence;
     handleDiffReviewSelectionChange({
       ...DEFAULT_WORKSPACE_REVIEW_SELECTION,
+      ...(props.reviewFocusRequest.mode ? { mode: props.reviewFocusRequest.mode } : {}),
       repositoryKey: props.reviewFocusRequest.repositoryKey,
     });
   }, [handleDiffReviewSelectionChange, props.reviewFocusRequest]);
@@ -784,6 +773,9 @@ export function WorkspaceReviewPanelHost(props: {
       workspaceDetailAttemptedRef.current.clear();
       return;
     }
+    if (lastTurnMode) {
+      return;
+    }
     if (
       workspaceReviewPath === workspacePath
       && workspaceReviewKey === diffReviewSelectionKey
@@ -804,6 +796,7 @@ export function WorkspaceReviewPanelHost(props: {
     diffReviewSelectionKey,
     handleRefreshWorkspaceDiff,
     hydratedReviewPanelCacheKey,
+    lastTurnMode,
     requestOwnership,
     reviewPanelCacheKey,
     workspacePath,
@@ -814,7 +807,9 @@ export function WorkspaceReviewPanelHost(props: {
 
   return (
     <DiffReviewPanel
-      emptyBody={workspaceReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
+      emptyBody={lastTurnMode
+        ? t("workspaceReview.lastTurnEmpty")
+        : workspaceReviewError ?? gitRepositoryCatalogError ?? t("contextPanel.reviewEmpty")}
       emptyTitle={t("contextPanel.review")}
       loading={workspaceReviewLoading}
       selection={diffReviewSelection}

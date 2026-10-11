@@ -11,6 +11,7 @@ import { useI18n } from "@/i18n";
 import { browseKnowledgePackages } from "@/service/knowledge-base-service";
 import type { KnowledgeLibrarySummary, KnowledgePackageFileListing, KnowledgePackageInspection } from "@/types";
 import { formatBytes } from "@/lib/display-format";
+import "@/styles/project-folder-picker.css";
 
 // knowledgePackagePathKey normalizes a native path for root-selection matching.
 // knowledgePackagePathKey 规范化原生路径以匹配根目录选择状态。

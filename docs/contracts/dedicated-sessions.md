@@ -85,7 +85,7 @@
   以基础提示词作为首轮输入提交 `sessionSettings.dedicated`。基础提示词长度只由服务端校验，WebUI 不复制上限。
 - **已创建会话**：输入区上方显示记忆锁定条，回合进行中禁用切换。创建时冻结的设置在菜单中直接隐藏（Goal、
   Plan、回答模式、输出风格、知识库、VMM、供应商工具与 AI 能力开关），`none` 另隐藏权限模式，不提供会被服务
-  拒绝的操作。
+  拒绝的操作。转录中的用户消息编辑与回合分叉按钮同样不显示（编辑重生成与分叉在创建后即冻结）。
 - **快速指令**：服务目录只提供稳定 `id` 与 `command`，说明文案为共享键 `composer.slash.<id>`。
   `composerSlashCommandsForSession`（`components/composer/composer-model.ts`）按会话种类筛选：专职会话隐藏
   被冻结或不适用的指令（`/compact`、`/plan`、`/goal`、`/style`、`/answer`、`/knowledge`、`/semantic`、
@@ -94,6 +94,9 @@
 - **浮动助手**（`components/assistant/`）：记忆锁定条在锁定后提供“转换为助手”并弹出命名对话框；转换的会话
   若正被选中，主视图移到同项目的新草稿（不自动选择用户未选的其他会话）。侧栏列表排除带 `assistantName` 的会话，但它们仍留在
   `workbench.conversations` 中供停靠控制器使用。
+  - 助手永远不会被自动选入主视图：工作区索引的默认选择（`loading.rs`）跳过带 `assistant_name` 的会话，
+    WebUI 的归档回退与后端选择校验（`state/workbench-state.ts` `fallbackMainViewConversationId`）同样排除助手；
+    仅剩助手时主视图进入新建草稿（`empty-workbench-route.ts`）。
   - 顶部栏在终端按钮旁显示助手按钮（存在助手时）：悬停列出助手，点击某个助手显示或隐藏；窗口以相同的
     精灵动画最小化收入该按钮。
   - 每个窗口容纳一个或多个助手；多于一个时左侧首字栏切换。新显示的助手加入最近使用的窗口；标题栏提供

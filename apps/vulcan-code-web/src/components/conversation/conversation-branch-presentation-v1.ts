@@ -24,6 +24,7 @@ import { collaborationEventIsUserVisible, collaborationTaskMessageId, requestCon
 import { projectCollaborationTurnLayout } from "@/service/conversation-collaboration-turn-layout";
 import { decodeAgentQuestionInput } from "@/service/conversation-agent-question-input";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
+import { turnChangeSummariesV1, type TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
 import { dedicatedMemoryNoticeTitle, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
@@ -164,6 +165,9 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // usageCoverageBySeq retains known API contributions separately from strict persisted totals.
     // usageCoverageBySeq 将已知 API 贡献与严格持久化总量分开保留。
     const usageCoverageBySeq = projectTurnUsageCoverage(events);
+    // turnChanges merges each Turn's applied ChangeSets into the statistics row of that Turn.
+    // turnChanges 将每个 Turn 的已应用 ChangeSet 合并到该 Turn 的统计行。
+    const turnChanges = turnChangeSummariesV1(events);
     // apiStatsByCall makes terminal request facts available without changing event display order.
     // apiStatsByCall 让终态请求事实可供读取，同时不改变事件显示顺序。
     const apiStatsByCall = new Map<number, ApiStatsBody>();
@@ -226,6 +230,7 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       if (summary.event.kind === "turn_stats") {
         messages.push(...conversationMessagesForV1Event(
           sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, usageCoverageBySeq.get(summary.seq),
+          summary.turn_id === null ? undefined : turnChanges.get(summary.turn_id),
         ));
         continue;
       }
@@ -242,7 +247,7 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         continue;
       }
       const projected = conversationMessagesForV1Event(
-        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined,
+        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined, undefined,
       );
       cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, messages: projected });
       messages.push(...projected);
@@ -350,6 +355,9 @@ function conversationMessagesForV1Event(
   // Optional canonical usage evidence for the current terminal event, never persisted message content.
   // 当前终态事件的可选规范用量证据，绝不是持久化消息正文。
   usageCoverage: TurnUsageCoverage | undefined,
+  // Applied file changes of the Turn, read only by its statistics row.
+  // 该 Turn 的已应用文件变更，仅由其统计行读取。
+  turnChanges: TurnChangeSummaryV1 | undefined,
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
   if (compaction) {
@@ -409,6 +417,7 @@ function conversationMessagesForV1Event(
         metadata: {
           ...presentationMetadata(summary, rootInput),
           turn_stats: turnStatsMetadata(summary.event.buckets.total, summary.event.buckets.subagent, summary.event.duration_ms, summary.event.outcome, usageCoverage),
+          ...(turnChanges ? { turn_changes: turnChanges } : {}),
         },
       }];
     case "display_note":

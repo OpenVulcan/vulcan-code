@@ -148,7 +148,9 @@ import {
 } from "@/service/workbench-snapshot-service";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import {
+  fallbackMainViewConversationId,
   markConversationLocallyRead,
+  visibleConversationId,
   workbenchWithSelectedConversationProjection,
 } from "@/state/workbench-state";
 import { toast } from "sonner";
@@ -286,7 +288,7 @@ export function WorkbenchLayout(props: {
   // selectedConversationId stores the conversation selected in the sidebar.
   // selectedConversationId 保存侧栏当前选中的会话。
   const [selectedConversationId, setSelectedConversationId] = React.useState<string | null>(
-    props.workbench.selectedConversationId
+    fallbackMainViewConversationId(props.workbench.conversations, props.workbench.selectedConversationId)
       ?? initialDraftConversation?.id
     ?? null,
   );
@@ -1008,17 +1010,13 @@ export function WorkbenchLayout(props: {
       if (current && current === pendingMaterializedConversationIdRef.current) {
         return current;
       }
-      if (current && workbenchState.conversations.some((conversation) => conversation.id === current)) {
+      if (visibleConversationId(workbenchState.conversations, current)) {
         return current;
       }
-      // nextSelectedConversationId uses the backend lifecycle choice only while it remains active.
-      // nextSelectedConversationId 仅在后端生命周期选择仍处于活动状态时使用它。
-      const nextSelectedConversationId = workbenchState.selectedConversationId;
-      if (nextSelectedConversationId
-        && workbenchState.conversations.some((conversation) => conversation.id === nextSelectedConversationId)) {
-        return nextSelectedConversationId;
-      }
-      return null;
+      // The backend lifecycle choice is used only while active; assistant sessions are never auto-selected,
+      // and null hands an assistant-only list to the empty-workbench draft route.
+      // 后端生命周期选择仅在仍活动时使用；助手会话永不自动选中，null 会把仅剩助手的列表交给空工作台草稿路由。
+      return fallbackMainViewConversationId(workbenchState.conversations, workbenchState.selectedConversationId);
     });
   }, [workbenchState.conversations, workbenchState.selectedConversationId]);
 

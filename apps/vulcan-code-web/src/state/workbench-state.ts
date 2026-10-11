@@ -40,6 +40,14 @@ export function shouldAcceptWorkbenchRevision(currentRevision: number, incomingR
   return currentRevision <= 0 || incomingRevision > currentRevision;
 }
 
+// isMainViewConversation reports whether a conversation may own the main conversation surface.
+// isMainViewConversation 判断会话是否可以占据主会话界面。
+// Assistant sessions live only in their floating panels, so they are never selected for the main view.
+// 助手会话只存在于其浮动面板中，因此永远不会被选入主视图。
+export function isMainViewConversation(conversation: ConversationSummary): boolean {
+  return !conversation.assistantName;
+}
+
 // visibleConversationId returns a candidate only when it still exists in the provided sidebar list.
 // visibleConversationId 仅在候选会话仍存在于给定侧栏列表时返回该候选。
 //
@@ -52,15 +60,28 @@ export function shouldAcceptWorkbenchRevision(currentRevision: number, incomingR
 //
 // Returns:
 // 返回值：
-// The candidate id when it is visible in conversations; otherwise null.
-// 当候选标识存在于会话列表中时返回该标识，否则返回 null。
-function visibleConversationId(
+// The candidate id when it is a visible main-view conversation; otherwise null.
+// 当候选标识是会话列表中可见的主视图会话时返回该标识，否则返回 null。
+export function visibleConversationId(
   conversations: ConversationSummary[],
   candidate: string | null | undefined,
 ): string | null {
-  return candidate && conversations.some((conversation) => conversation.id === candidate)
+  return candidate && conversations.some((conversation) => conversation.id === candidate && isMainViewConversation(conversation))
     ? candidate
     : null;
+}
+
+// fallbackMainViewConversationId keeps a visible candidate, otherwise picks the first main-view conversation.
+// fallbackMainViewConversationId 保留可见候选，否则选择首个主视图会话。
+// Returns null when only assistant sessions remain, which routes the main view to a new draft.
+// 仅剩助手会话时返回 null，使主视图进入新建草稿。
+export function fallbackMainViewConversationId(
+  conversations: ConversationSummary[],
+  candidate: string | null | undefined,
+): string | null {
+  return visibleConversationId(conversations, candidate)
+    ?? conversations.find(isMainViewConversation)?.id
+    ?? null;
 }
 
 // mergeWorkbenchSnapshot merges one authoritative structural snapshot while preserving UI-local selection state.
@@ -460,10 +481,10 @@ function applyConversationArchivedDelta(
   const conversations = workbench.conversations.filter(
     (conversation) => conversation.id !== conversationId,
   );
-  const selectedConversationId = visibleConversationId(
+  const selectedConversationId = fallbackMainViewConversationId(
     conversations,
     delta.selectedConversationId,
-  ) ?? conversations[0]?.id ?? null;
+  );
   const retainedArchivedConversations = (workbench.archivedConversations ?? [])
     .filter((conversation) => conversation.id !== conversationId);
   const archivedConversations = delta.archivedConversation
