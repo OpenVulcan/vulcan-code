@@ -479,8 +479,8 @@ pub fn render_vmm_context_item_panel(item: &ContextItem) -> String {
 ///
 /// # Returns
 /// 返回值
-/// A multiline Chinese detail body matching the existing memory-panel contract.
-/// 返回符合既有记忆面板契约的多行中文详情正文。
+/// A multiline English detail body matching the existing memory-panel contract.
+/// 返回符合既有记忆面板契约的多行英文详情正文。
 pub fn render_vmm_context_item_detail(item: &ContextItem) -> String {
     let mut lines = Vec::new();
     let text = render_vmm_context_item_panel(item);

@@ -1510,7 +1510,7 @@ mod tests {
             name: String::from("Current Plugin"),
             kind: String::from("LuaSkill / USER"),
             runtime_state: String::from("enabled"),
-            capability: String::from("1 个入口"),
+            capability: String::from("1 entry"),
             name_by_locale: BTreeMap::new(),
             capability_by_locale: BTreeMap::new(),
             enabled: true,
@@ -1580,12 +1580,12 @@ mod tests {
             sessions: vec![SessionSummary::new(
                 session_id,
                 session_project_id,
-                "VMM 投影测试会话",
+                "VMM projection test session",
                 "",
                 SessionState::Completed,
                 0,
                 0,
-                "刚刚",
+                "just now",
             )],
             archived_sessions: Vec::new(),
             session_runtime_state: BTreeMap::new(),
@@ -1627,12 +1627,12 @@ mod tests {
         let session = SessionSummary::new(
             SessionId::new_v4(),
             Some(String::from("   ")),
-            "归档会话",
+            "Archived session",
             "",
             SessionState::Completed,
             0,
             0,
-            "刚刚",
+            "just now",
         );
         // restorable_project_ids intentionally contains the same blank id.
         // restorable_project_ids 故意包含相同的空白标识。

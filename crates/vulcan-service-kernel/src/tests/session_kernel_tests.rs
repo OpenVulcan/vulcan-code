@@ -259,10 +259,10 @@ impl SessionPersistenceBackend for FailNextSessionPersistenceBackend {
 fn insert_test_workbench_conversation(state: &mut ServiceBridgeState, session_id: SessionId) {
     state.workbench.conversations.push(ConversationSummary {
         id: session_id.to_string(),
-        title: String::from("测试会话"),
+        title: String::from("Test session"),
         status: SessionState::Completed.label().to_string(),
         run_phase: SessionRunPhase::Ready.to_string(),
-        last_updated_label: String::from("刚刚"),
+        last_updated_label: String::from("just now"),
         last_updated_at: String::from("100"),
         unread: false,
         attention: None,
@@ -329,8 +329,9 @@ fn goal_dispatch_registration_requires_the_current_prompt_reservation() {
     )));
     // transition_guard prevents registration while the durable Goal mutation is incomplete.
     // transition_guard 在持久 Goal 变更尚未完成时阻止回合注册。
-    let transition_guard = begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")
-        .expect("Goal mutation should reserve turn registration");
+    let transition_guard =
+        begin_session_turn_start_exclusion(&state, [session_id], "update the goal status")
+            .expect("Goal mutation should reserve turn registration");
     {
         // guard exposes the shared service state for the registration attempt under test.
         // guard 为测试中的注册尝试提供共享服务状态。

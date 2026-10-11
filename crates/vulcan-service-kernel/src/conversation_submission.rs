@@ -326,7 +326,7 @@ fn submission_vmm_policy_value(mode: &str) -> Result<Option<bool>, String> {
         "inherit" => Ok(None),
         "enabled" => Ok(Some(true)),
         "disabled" => Ok(Some(false)),
-        other => Err(format!("不支持的 VMM 记忆策略模式：{other}")),
+        other => Err(format!("Unsupported VMM memory policy mode: {other}")),
     }
 }
 
@@ -374,7 +374,7 @@ async fn apply_submission_session_settings(
         && execution_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("plan"))
     {
         return Err(String::from(
-            "目标模式与计划模式互斥，不能在同一首次提交中同时启用。",
+            "Goal mode and plan mode are mutually exclusive and cannot both be enabled in the same first submission.",
         ));
     }
     let configuration = runtime.configuration_snapshot()?;
@@ -435,7 +435,7 @@ async fn apply_submission_session_settings(
         let mode = match selection.mode.as_str() {
             "inherit" => KnowledgeLibrarySelectionModeV1::Inherit,
             "explicit" => KnowledgeLibrarySelectionModeV1::Explicit,
-            other => return Err(format!("未知知识库选择模式：{other}")),
+            other => return Err(format!("Unknown knowledge library selection mode: {other}")),
         };
         let knowledge_runtime = state
             .lock()
@@ -445,8 +445,10 @@ async fn apply_submission_session_settings(
             .ok_or_else(|| {
                 String::from("service is still starting; knowledge runtime is not ready")
             })?;
-        let project_id = owning_project_id_for_session(workspace_snapshot, session_id)
-            .ok_or_else(|| String::from("当前会话不属于可用项目。"))?;
+        let project_id =
+            owning_project_id_for_session(workspace_snapshot, session_id).ok_or_else(|| {
+                String::from("The current session does not belong to an available project.")
+            })?;
         let authorized = knowledge_runtime
             .authorized_library_ids(&project_id, false)
             .await?
@@ -466,7 +468,11 @@ async fn apply_submission_session_settings(
             Some("raw_bm25") => Some(KnowledgeRetrievalModeV1::RawBm25),
             Some("display_bm25") => Some(KnowledgeRetrievalModeV1::DisplayBm25),
             Some("display_hybrid") => Some(KnowledgeRetrievalModeV1::DisplayHybrid),
-            Some(other) => return Err(format!("未知知识库检索策略：{other}")),
+            Some(other) => {
+                return Err(format!(
+                    "Unknown knowledge library retrieval strategy: {other}"
+                ));
+            }
         };
         let mut library_ids = selection.library_ids.clone();
         library_ids.sort();
@@ -497,8 +503,9 @@ async fn apply_submission_session_settings(
     } else {
         VmmSessionPolicyConfig::default()
     };
-    let updated_at_ms = i64::try_from(current_unix_millis_value())
-        .map_err(|_| String::from("当前 Unix 毫秒时间超出 V1 持久化范围。"))?;
+    let updated_at_ms = i64::try_from(current_unix_millis_value()).map_err(|_| {
+        String::from("Current Unix millisecond time exceeds the V1 persistence range.")
+    })?;
     let updated_at = updated_at_ms.to_string();
     let persisted_selection_v1 = if allow_output_style_activation {
         let handle =
@@ -506,7 +513,7 @@ async fn apply_submission_session_settings(
         let provider_tools = if preserve_existing_provider_tools {
             handle
                 .read(|document| document.metadata.config.selection.provider_tools.clone())
-                .map_err(|error| format!("读取 V1 Provider 工具选择失败：{error}"))?
+                .map_err(|error| format!("Failed to read V1 Provider tool selection: {error}"))?
         } else {
             crate::public_ai_settings::provider_tool_selection_config_from_parts_v1(
                 enabled_capabilities,
@@ -539,7 +546,7 @@ async fn apply_submission_session_settings(
         Some(
             handle
                 .read(|document| document.metadata.config.selection.clone())
-                .map_err(|error| format!("读取 V1 会话选择配置失败：{error}"))?,
+                .map_err(|error| format!("Failed to read V1 session selection config: {error}"))?,
         )
     } else {
         None
@@ -2538,7 +2545,7 @@ async fn service_start_conversation_execution(
     );
     let attachment_summaries = attachments.unwrap_or_default();
     if prompt.is_empty() && attachment_summaries.is_empty() && !submission_mode.is_continuation() {
-        return Err(String::from("请输入任务指令。"));
+        return Err(String::from("Enter a task instruction."));
     }
     // Measures runtime handle acquisition before workspace hydration begins.
     // 衡量工作区水合开始前获取运行时句柄的耗时。
@@ -2603,31 +2610,32 @@ async fn service_start_conversation_execution(
         ),
     );
     let workspace_load_started_at = current_unix_millis_value();
-    let (mut workspace_snapshot, workspace_source) =
-        if let Some(workspace_snapshot) = retained_workspace_snapshot {
-            (
-                workspace_snapshot,
-                if submission_session_id.is_some() {
-                    "retained-existing"
-                } else {
-                    "retained-new-slice"
-                },
+    let (mut workspace_snapshot, workspace_source) = if let Some(workspace_snapshot) =
+        retained_workspace_snapshot
+    {
+        (
+            workspace_snapshot,
+            if submission_session_id.is_some() {
+                "retained-existing"
+            } else {
+                "retained-new-slice"
+            },
+        )
+    } else if submission_session_id.is_none() {
+        return Err(String::from(
+            "Workspace is still initializing; new sessions do not fall back to loading the previous workspace. Try again later.",
+        ));
+    } else {
+        (
+            load_workspace_for_submission(
+                &state,
+                controller_runtime.clone(),
+                submission_session_id,
             )
-        } else if submission_session_id.is_none() {
-            return Err(String::from(
-                "工作区仍在初始化，新会话不会回退加载历史工作区；请稍后重试。",
-            ));
-        } else {
-            (
-                load_workspace_for_submission(
-                    &state,
-                    controller_runtime.clone(),
-                    submission_session_id,
-                )
-                .await?,
-                "disk",
-            )
-        };
+            .await?,
+            "disk",
+        )
+    };
     if existing_submission_requires_hydration(
         submission_session_id,
         existing_session_hydration_policy,
@@ -2956,7 +2964,7 @@ async fn service_start_conversation_execution(
         materialization_project_id,
         submission_target,
         if prompt.is_empty() {
-            "附件会话"
+            "Attachment session"
         } else {
             &prompt
         },
@@ -3109,7 +3117,7 @@ async fn service_start_conversation_execution(
         if session_settings.is_some()
             && materialized_session.kind != PromptSessionMaterializationKind::Created
         {
-            return Err(String::from("草稿会话设置只能随新会话的首次提交应用。"));
+            return Err(String::from("Draft session settings can only be applied with the first submission of a new session."));
         }
         apply_submission_session_settings(
             &state,
@@ -3149,7 +3157,7 @@ async fn service_start_conversation_execution(
             // 内激活其不可变绑定配置；若在此消费更新的选择器意图，就会改写正在运行的节点。
             handle
                 .activate_pending_request_for_new_session_root(crate::current_v1_unix_millis()?)
-                .map_err(|error| format!("激活新建会话根边界的 V1 请求配置失败：{error}"))?;
+                .map_err(|error| format!("Failed to activate the V1 request config for the new session root boundary: {error}"))?;
         }
         let runtime_state = workspace_snapshot
             .session_runtime_state
@@ -3165,20 +3173,20 @@ async fn service_start_conversation_execution(
         let direct_canonical_user_message_id = if append_user_records {
             let root_input_seq = handle
                 .read(|document| document.active_turn().map(|turn| turn.start_seq))
-                .map_err(|error| format!("读取直接提交的 V1 根回合失败：{error}"))?
-                .ok_or_else(|| String::from("直接提交的 V1 根回合不存在。"))?;
+                .map_err(|error| format!("Failed to read the directly submitted V1 root turn: {error}"))?
+                .ok_or_else(|| String::from("The directly submitted V1 root turn does not exist."))?;
             let root_authority =
                 user_root_dispatch_authority_from_v1_handle(handle.as_ref(), root_input_seq)?;
             if root_authority.client_action_id != accepted_action_id {
                 return Err(format!(
-                    "直接提交的 V1 根输入身份不匹配：期望 `{}`，实际 `{}`。",
+                    "Directly submitted V1 root input identity mismatch: expected `{}`, actual `{}`.",
                     accepted_action_id.as_str(),
                     root_authority.client_action_id.as_str()
                 ));
             }
             let projection = handle
                 .capture_controller_projection_snapshot()
-                .map_err(|error| format!("捕获直接提交的 V1 投影失败：{error}"))?;
+                .map_err(|error| format!("Failed to capture the directly submitted V1 projection: {error}"))?;
             let canonical_user_message_id =
                 crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
                     &projection,
@@ -3221,7 +3229,7 @@ async fn service_start_conversation_execution(
             } else { None };
             let mut hook_runtime = agent_runtime
                 .lock_conversation_hooks()
-                .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+                .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?;
             let begin_input = SharedPromptTurnBeginInput {
                     session_id,
                     session_title,

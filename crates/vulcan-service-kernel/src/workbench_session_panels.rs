@@ -756,7 +756,7 @@ pub(crate) fn context_injection_cards_to_summary(
 /// 从已渲染的 VMM 面板详情文本中提取长期 VMM 记忆标识。
 pub(crate) fn context_injection_memory_id_from_detail(detail: &str) -> Option<u64> {
     detail.lines().find_map(|line| {
-        let value = line.trim().strip_prefix("记忆 ID：")?;
+        let value = line.trim().strip_prefix("Memory ID:")?;
         value
             .trim()
             .parse::<u64>()
@@ -1017,6 +1017,19 @@ mod tests {
             compact_panel_preview(content),
             "first line\nsecond line\nthird line"
         );
+    }
+
+    /// Verifies the memory id parser reads the detail text rendered by the VMM adapter.
+    /// 验证记忆标识解析能读取 VMM 适配器渲染的详情文本。
+    #[test]
+    fn context_injection_memory_id_parses_vmm_rendered_detail() {
+        let detail = vulcan_vmm::render_vmm_context_item_detail(&ContextItem {
+            text: String::from("remembered fact"),
+            memory_id: 137,
+            ..ContextItem::default()
+        });
+
+        assert_eq!(context_injection_memory_id_from_detail(&detail), Some(137));
     }
 
     /// Verifies a stable context-compaction node id alone keeps one retained addon entry.

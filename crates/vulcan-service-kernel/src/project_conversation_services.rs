@@ -569,7 +569,7 @@ mod tests {
         // transition_guard keeps the target reserved across the first kernel start attempt.
         // transition_guard 在首次内核启动尝试期间持续预留目标。
         let transition_guard =
-            begin_project_lifecycle_transition(&state, &project_id, [session_id], "归档")
+            begin_project_lifecycle_transition(&state, &project_id, [session_id], "archive")
                 .expect("idle project should enter lifecycle transition");
         {
             let mut guard = state.lock().expect("service state should lock");
@@ -620,8 +620,9 @@ mod tests {
         let state = create_service_bridge_state(Arc::new(LifecycleTransitionTestShellHost));
         // stale_guard owns the first Goal-mutation reservation generation.
         // stale_guard 持有第一代 Goal 变更预留。
-        let stale_guard = begin_session_turn_start_exclusion(&state, [session_id], "更新目标")
-            .expect("first reservation should succeed");
+        let stale_guard =
+            begin_session_turn_start_exclusion(&state, [session_id], "update the goal")
+                .expect("first reservation should succeed");
         // replacement_id identifies a later reservation generation for the same session.
         // replacement_id 标识同一会话后续一代预留。
         let replacement_id = Uuid::new_v4();
@@ -719,7 +720,8 @@ mod tests {
             );
         }
 
-        let result = begin_project_lifecycle_transition(&state, &project_id, [session_id], "归档");
+        let result =
+            begin_project_lifecycle_transition(&state, &project_id, [session_id], "archive");
 
         assert!(result.is_err());
         let guard = state
@@ -748,7 +750,7 @@ mod tests {
         // stale_guard owns the first cross-resource transaction generation.
         // stale_guard 持有第一代跨资源事务。
         let stale_guard =
-            begin_project_lifecycle_transition(&state, &project_id, [session_id], "归档")
+            begin_project_lifecycle_transition(&state, &project_id, [session_id], "archive")
                 .expect("first lifecycle reservation should succeed");
         // replacement_id identifies the newer owner installed for both resources.
         // replacement_id 标识为两类资源安装的更新所有者。
@@ -831,7 +833,7 @@ mod tests {
             &state,
             &owned_project_id,
             [owned_session_id],
-            "归档",
+            "archive",
         )
         .expect("lifecycle reservation should succeed before poisoning");
         {

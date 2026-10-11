@@ -370,7 +370,7 @@ async fn maintenance_admission_retains_owner_until_durable_terminal() {
             crate::project_conversation_services::begin_session_lifecycle_transition(
                 &state,
                 [scope.root_session_id],
-                "归档",
+                "archive",
             )
             .is_err()
         );
@@ -379,7 +379,7 @@ async fn maintenance_admission_retains_owner_until_durable_terminal() {
                 &state,
                 &scope.project_id,
                 [],
-                "移除",
+                "remove",
             )
             .is_err()
         );
@@ -431,7 +431,7 @@ async fn maintenance_admission_retains_owner_until_durable_terminal() {
             crate::project_conversation_services::begin_session_lifecycle_transition(
                 &state,
                 [scope.root_session_id],
-                "归档",
+                "archive",
             )
             .unwrap(),
         );

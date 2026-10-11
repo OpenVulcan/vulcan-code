@@ -350,7 +350,7 @@ fn new_session_project_admission_blocks_lifecycle_transition_until_release() {
 
     // conflict proves project removal cannot cross the in-flight submission.
     // conflict 证明项目移除不能穿越进行中的提交。
-    let conflict = begin_project_lifecycle_transition(&state, "project-a", [session_id], "移除")
+    let conflict = begin_project_lifecycle_transition(&state, "project-a", [session_id], "remove")
         .err()
         .expect("lifecycle transition must respect prompt project ownership");
     assert!(conflict.contains("user prompt submission"));
@@ -360,7 +360,7 @@ fn new_session_project_admission_blocks_lifecycle_transition_until_release() {
     // lifecycle_guard proves exact ownership release reopens the project transition.
     // lifecycle_guard 证明精确所有权释放后项目转换重新开放。
     let lifecycle_guard =
-        begin_project_lifecycle_transition(&state, "project-a", [session_id], "移除")
+        begin_project_lifecycle_transition(&state, "project-a", [session_id], "remove")
             .expect("released project admission should allow lifecycle transition");
     drop(lifecycle_guard);
 }
@@ -400,7 +400,7 @@ fn new_session_rejects_uninitialized_workspace_without_reservation_leak() {
 
     // lifecycle_guard proves rejected admission left no unresolved reservation behind.
     // lifecycle_guard 证明被拒绝的准入没有遗留未解析预留。
-    let lifecycle_guard = begin_project_lifecycle_transition(&state, "project-any", [], "归档")
+    let lifecycle_guard = begin_project_lifecycle_transition(&state, "project-any", [], "archive")
         .expect("rejected submission must not retain project admission");
     drop(lifecycle_guard);
 }

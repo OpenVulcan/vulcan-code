@@ -110,7 +110,7 @@ async fn question_preparation_stop_joins_live_future_and_rejects_late_restart() 
         crate::project_conversation_services::begin_session_lifecycle_transition(
             &state,
             [root],
-            "归档",
+            "archive",
         )
         .is_err()
     );
@@ -131,7 +131,7 @@ async fn question_preparation_stop_joins_live_future_and_rejects_late_restart() 
         crate::project_conversation_services::begin_session_lifecycle_transition(
             &state,
             [root],
-            "归档",
+            "archive",
         )
         .unwrap(),
     );

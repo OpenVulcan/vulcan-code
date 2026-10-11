@@ -24,10 +24,10 @@ async fn selecting_active_session_does_not_require_lifecycle_quiescence() {
         .conversations
         .push(ConversationSummary {
             id: session_id.to_string(),
-            title: String::from("运行中会话"),
+            title: String::from("Running session"),
             status: SessionState::Completed.label().to_string(),
             run_phase: SessionRunPhase::Requesting.to_string(),
-            last_updated_label: String::from("刚刚"),
+            last_updated_label: String::from("just now"),
             last_updated_at: String::from("1"),
             unread: false,
             attention: None,

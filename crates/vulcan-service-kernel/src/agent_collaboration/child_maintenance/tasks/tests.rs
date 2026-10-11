@@ -26,7 +26,7 @@ async fn maintenance_storage_lifecycle_exclusion_covers_root_project_and_late_re
     let root_guard = crate::project_conversation_services::begin_session_lifecycle_transition(
         &state,
         [scope.root_session_id],
-        "归档",
+        "archive",
     )
     .unwrap();
     assert!(
@@ -43,7 +43,7 @@ async fn maintenance_storage_lifecycle_exclusion_covers_root_project_and_late_re
         &state,
         &scope.project_id,
         [],
-        "移除",
+        "remove",
     )
     .unwrap();
     assert!(
@@ -73,7 +73,7 @@ async fn maintenance_storage_lifecycle_exclusion_covers_root_project_and_late_re
         crate::project_conversation_services::begin_session_lifecycle_transition(
             &state,
             [scope.root_session_id],
-            "归档",
+            "archive",
         )
         .is_err()
     );
@@ -82,7 +82,7 @@ async fn maintenance_storage_lifecycle_exclusion_covers_root_project_and_late_re
             &state,
             &scope.project_id,
             [],
-            "移除",
+            "remove",
         )
         .is_err()
     );
@@ -93,7 +93,7 @@ async fn maintenance_storage_lifecycle_exclusion_covers_root_project_and_late_re
             &state,
             "unrelated-maintenance-project",
             [],
-            "归档",
+            "archive",
         )
         .unwrap(),
     );

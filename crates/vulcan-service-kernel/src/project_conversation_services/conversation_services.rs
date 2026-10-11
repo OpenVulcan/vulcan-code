@@ -18,8 +18,9 @@ use vulcan_workspace_store::workspace_store::{
 /// A checked signed timestamp, or an explicit range failure.
 /// 返回受检的有符号时间戳，超出范围时返回显式错误。
 fn current_session_lifecycle_unix_millis() -> Result<i64, String> {
-    i64::try_from(current_unix_millis_value())
-        .map_err(|_| String::from("当前时间超出 V1 会话生命周期毫秒范围。"))
+    i64::try_from(current_unix_millis_value()).map_err(|_| {
+        String::from("Current time exceeds the V1 session lifecycle millisecond range.")
+    })
 }
 
 /// Renames one authoritative active conversation and reloads the workbench from persistence.
@@ -73,7 +74,7 @@ pub(crate) async fn service_rename_conversation(
         updated_at_ms,
     )
     .await
-    .map_err(|error| format!("重命名会话失败：{error}"))?;
+    .map_err(|error| format!("Failed to rename session: {error}"))?;
     refresh_workbench_snapshot(state).await
 }
 
@@ -103,7 +104,7 @@ pub(crate) async fn service_archive_conversation(
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
     // lifecycle_guard atomically blocks new turns and rejects archival while this session is active.
     // lifecycle_guard 原子阻止新回合，并在此会话活动时拒绝归档。
-    let _lifecycle_guard = begin_session_lifecycle_transition(&state, [session_id], "归档")?;
+    let _lifecycle_guard = begin_session_lifecycle_transition(&state, [session_id], "archive")?;
     // controller_runtime deliberately does not revalidate the mutable active snapshot before the authoritative lookup.
     // controller_runtime 刻意不在权威查询前重复校验可变活动快照。
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -128,7 +129,7 @@ pub(crate) async fn service_archive_conversation(
         current_session_lifecycle_unix_millis()?,
     )
     .await
-    .map_err(|error| format!("归档会话失败：{error}"))?;
+    .map_err(|error| format!("Failed to archive session: {error}"))?;
     if let Some(runtime) = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -182,7 +183,9 @@ fn parse_archived_conversation_ids(
     conversation_ids: Vec<String>,
 ) -> Result<Vec<SessionId>, String> {
     if conversation_ids.is_empty() {
-        return Err(String::from("归档会话批量操作至少需要一个会话标识。"));
+        return Err(String::from(
+            "Archived session batch operation requires at least one session id.",
+        ));
     }
     let mut unique_ids = BTreeSet::new();
     for conversation_id in conversation_ids {
@@ -190,7 +193,9 @@ fn parse_archived_conversation_ids(
             .parse::<SessionId>()
             .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
         if !unique_ids.insert(session_id) {
-            return Err(format!("归档会话批量操作包含重复会话标识：{session_id}"));
+            return Err(format!(
+                "Archived session batch operation contains a duplicate session id: {session_id}"
+            ));
         }
     }
     Ok(unique_ids.into_iter().collect())
@@ -218,8 +223,8 @@ async fn apply_archived_conversation_batch(
     action: ArchivedConversationAction,
 ) -> Result<WorkbenchSnapshot, String> {
     let action_label = match action {
-        ArchivedConversationAction::Restore => "恢复",
-        ArchivedConversationAction::Delete => "彻底删除",
+        ArchivedConversationAction::Restore => "restore",
+        ArchivedConversationAction::Delete => "permanently delete",
     };
     let _lifecycle_guard =
         begin_session_lifecycle_transition(&state, session_ids.iter().copied(), action_label)?;
@@ -242,7 +247,7 @@ async fn apply_archived_conversation_batch(
             drain_vulcan_plugin_sessions_for_owners(&state, &session_ids).await;
         if !plugin_cleanup_failures.is_empty() {
             return Err(format!(
-                "彻底删除归档会话前无法清理插件运行时：{}",
+                "Failed to clean up plugin runtime before permanently deleting archived session: {}",
                 plugin_cleanup_failures.join("; ")
             ));
         }
@@ -269,7 +274,7 @@ async fn apply_archived_conversation_batch(
                     restore_now_ms,
                 )
                 .await
-                .map_err(|error| format!("恢复会话 `{session_id}` 失败：{error}"))?;
+                .map_err(|error| format!("Failed to restore session `{session_id}`: {error}"))?;
             }
             ArchivedConversationAction::Delete => {
                 delete_session_lifecycle_v1(
@@ -278,7 +283,7 @@ async fn apply_archived_conversation_batch(
                     *session_id,
                 )
                 .await
-                .map_err(|error| format!("删除会话 `{session_id}` 失败：{error}"))?;
+                .map_err(|error| format!("Failed to delete session `{session_id}`: {error}"))?;
             }
         }
     }
@@ -424,12 +429,11 @@ fn controller_runtime_for_visible_session_from_state(
     let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
         String::from("service is still starting; controller runtime is not ready")
     })?;
-    let workspace_snapshot = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理会话。"))?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from("Workspace snapshot is not loaded; cannot process the session.")
+    })?;
     workspace_session_summary_for_session(workspace_snapshot, session_id)
-        .ok_or_else(|| format!("未找到活动会话：{session_id}"))?;
+        .ok_or_else(|| format!("Active session not found: {session_id}"))?;
     Ok(controller_runtime)
 }
 
@@ -480,7 +484,7 @@ pub(crate) async fn service_mark_conversation_read(
     // V1 SQLite 记录是轻量列表未读投影的唯一持久化所有者。
     set_session_unread_v1(&controller_runtime, &session_id.to_string(), false)
         .await
-        .map_err(|error| format!("标记会话已读失败：{error}"))?;
+        .map_err(|error| format!("Failed to mark session as read: {error}"))?;
     Ok(workbench)
 }
 
@@ -694,10 +698,10 @@ mod tests {
         // archived_conversation 是归档后工作台暴露的精确可恢复行。
         let archived_conversation = ConversationSummary {
             id: session_id.to_string(),
-            title: String::from("归档事件测试"),
+            title: String::from("Archive event test"),
             status: String::from("Archived"),
             run_phase: String::from("idle"),
-            last_updated_label: String::from("刚刚"),
+            last_updated_label: String::from("just now"),
             last_updated_at: String::from("1783671000000"),
             unread: false,
             attention: None,

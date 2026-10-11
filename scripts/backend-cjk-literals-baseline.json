@@ -8,9 +8,6 @@
   "crates/vulcan-memorymesh-core-contracts/src/ids.rs": 13,
   "crates/vulcan-memorymesh-core-engine/src/precheck.rs": 36,
   "crates/vulcan-prompt-composer/src/output_style.rs": 4,
-  "crates/vulcan-service-kernel/src/conversation_submission.rs": 18,
   "crates/vulcan-service-kernel/src/generated_ts_constants.rs": 13,
-  "crates/vulcan-service-kernel/src/native_vmm/prompt.rs": 26,
-  "crates/vulcan-service-kernel/src/project_conversation_services/conversation_services.rs": 14,
-  "crates/vulcan-service-kernel/src/workbench_session_panels.rs": 1
+  "crates/vulcan-service-kernel/src/native_vmm/prompt.rs": 26
 }
