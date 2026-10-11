@@ -125,14 +125,14 @@ pub fn load_session(layout: &SessionV1Layout) -> Result<LoadedV1Session, Session
     // be surfaced instead of silently rewound (plan 5.2.16).
     // 分配器 frontier 是缓存：滞后于事实时以事实为准；但 frontier 超前于事实
     // 说明状态缺失或不一致，必须显式暴露而不是静默回卷(计划 5.2.16)。
-    let verified_document = SessionDocument::from_parts(
+    let verified_document = stored_document(
         metadata.clone(),
         runtime_lock,
         compactions,
         metadata.split_list.clone(),
         events,
-    )
-    .map_err(|error| map_domain_error(error, &layout.session_id, layout.metadata_path()))?;
+        layout,
+    )?;
     verify_frontier_not_ahead(&verified_document, &metadata, layout)?;
     Ok(LoadedV1Session {
         document: verified_document,
@@ -211,16 +211,48 @@ pub fn load_session_tail_only(
         locked_sources: runtime_document.locked_sources,
     };
     let compactions = compactions_document.nodes;
-    let document = SessionDocument::from_parts(
+    let document = stored_document(
         metadata.clone(),
         runtime_lock,
         compactions,
         metadata.split_list.clone(),
         resident_events,
-    )
-    .map_err(|error| map_domain_error(error, &layout.session_id, layout.metadata_path()))?;
+        layout,
+    )?;
     verify_frontier_not_ahead(&document, &metadata, layout)?;
     Ok((LoadedV1Session { document, metadata }, report))
+}
+
+/// Builds the document from stored parts, quarantining replay checkpoints whose fingerprint no longer verifies.
+/// 从存储部件构建文档，并隔离指纹已无法校验的重放检查点。
+///
+/// A quarantined checkpoint only loses its Provider-native continuation data; the session still opens and
+/// the event history is unchanged. Each quarantine is logged with its hosting seq.
+/// 被隔离的检查点只失去 Provider 原生续接数据；会话照常打开，事件历史不变。每次隔离都会记录承载 seq。
+fn stored_document(
+    metadata: MetadataDocument,
+    runtime_lock: RuntimeLock,
+    compactions: Vec<vulcan_session_core::v1::context::CompactionNode>,
+    segment_catalog: Vec<SegmentInfo>,
+    events: Vec<ConversationEvent>,
+    layout: &SessionV1Layout,
+) -> Result<SessionDocument, SessionV1Error> {
+    let (document, quarantined) = SessionDocument::from_stored_parts(
+        metadata,
+        runtime_lock,
+        compactions,
+        segment_catalog,
+        events,
+    )
+    .map_err(|error| map_domain_error(error, &layout.session_id, layout.metadata_path()))?;
+    if !quarantined.is_empty() {
+        tracing::warn!(
+            session_id = %layout.session_id,
+            checkpoint_seqs = ?quarantined,
+            "quarantined Provider replay checkpoints whose fingerprint no longer verifies; their API groups replay as plain projected content"
+        );
+    }
+    Ok(document)
 }
 
 /// Loads only the retained goal's missing prefix; sessions without goals keep the ordinary tail-only path.

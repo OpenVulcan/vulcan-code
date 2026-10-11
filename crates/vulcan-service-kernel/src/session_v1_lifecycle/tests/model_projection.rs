@@ -4,7 +4,9 @@
 use super::*;
 use crate::session_model_projection_v1::read_automatic_session_model_projection_v1;
 use vulcan_workbench_model::TaskProjectSummary;
-use vulcan_workspace_store::workspace_store::{load_workspace_index_snapshot, persist_new_project};
+use vulcan_workspace_store::workspace_store::{
+    load_workspace_index_snapshot, persist_new_project, set_session_assistant_v1,
+};
 
 /// Loads a real mixed active/archive index and removes every missing record without selecting it first.
 /// 加载真实混合活动及归档索引，无需先选中便移除每个缺失记录。
@@ -316,5 +318,65 @@ async fn automatic_model_restore_ignores_failures_and_deletes_missing_sessions()
         Err(SessionRuntimeError::SessionNotRegistered(_))
     ));
     drop(healthy);
+    fixture.shutdown().await;
+}
+
+/// Verifies the default workspace selection skips floating assistants and clears when only assistants remain.
+/// 验证默认工作区选择会跳过浮动助手，且仅剩助手时清空选择。
+#[tokio::test]
+async fn workspace_index_default_selection_skips_assistant_sessions() {
+    let fixture = LifecycleStorageFixture::start().await;
+    vulcan_workspace_store::data_plane::prepare_application_schema_for_test(&fixture.controller)
+        .await
+        .unwrap();
+    let project = TaskProjectSummary::new(
+        "project-explicit",
+        "Assistants",
+        fixture.controller.data_root.to_string_lossy(),
+        false,
+        0,
+        None,
+        None,
+        Vec::new(),
+    );
+    persist_new_project(fixture.controller.clone(), &project)
+        .await
+        .unwrap();
+    let registry = SessionRuntimeRegistry::default();
+    // Equal timestamps order sessions by id, so the assistant sorts ahead of the ordinary session.
+    // 时间戳相同时按标识排序，因此助手排在普通会话之前。
+    let assistant_id = SessionId::from_u128(0x7a_01);
+    let ordinary_id = SessionId::from_u128(0x7a_02);
+    create_fixture_session(&fixture, &registry, assistant_id).await;
+    create_fixture_session(&fixture, &registry, ordinary_id).await;
+    set_session_assistant_v1(
+        &fixture.controller,
+        &assistant_id.to_string(),
+        Some("Helper"),
+    )
+    .await
+    .unwrap();
+
+    let workspace = load_workspace_index_snapshot(fixture.controller.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        workspace.sessions.first().map(|session| session.id),
+        Some(assistant_id)
+    );
+    assert_eq!(workspace.selected_session, ordinary_id);
+
+    set_session_assistant_v1(
+        &fixture.controller,
+        &ordinary_id.to_string(),
+        Some("Second"),
+    )
+    .await
+    .unwrap();
+    let workspace = load_workspace_index_snapshot(fixture.controller.clone())
+        .await
+        .unwrap();
+    assert_eq!(workspace.sessions.len(), 2);
+    assert_eq!(workspace.selected_session, SessionId::nil());
     fixture.shutdown().await;
 }

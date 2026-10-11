@@ -240,3 +240,97 @@ fn fingerprint_rejects_tampered_content() {
         );
     }
 }
+
+/// Builds one resource-only root input followed by a completed sourced reply.
+/// 构造一条仅资源根输入及随后带来源的完整回复。
+fn resource_only_history() -> SessionDocument {
+    let mut document = SessionDocument::new("resource-only", "project", "title", 1);
+    document
+        .submit_root_input_fixture("", vec![ResourceId::try_new(1).unwrap()], 1)
+        .unwrap();
+    let request = ApiRequestSnapshot::new("deepseek", "deepseek-flash");
+    let api = document
+        .start_api(ApiPurposeKind::MainGeneration, request.clone(), 2)
+        .unwrap();
+    document
+        .append_assistant_text(api, "ack", AssistantSemanticStatus::Completed, 3)
+        .unwrap();
+    document
+        .complete_api_group(
+            api,
+            ApiCompletion {
+                request,
+                usage: UsageSnapshot::default(),
+                status: ApiCallStatus::Completed,
+                end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                error: None,
+                continuation_eligibility: ContinuationEligibility::Forbidden,
+                timing: ApiTimings::default(),
+                provider_source: Some(ProviderSourceInput {
+                    provider: "deepseek".into(),
+                    profile: None,
+                    model: "deepseek-flash".into(),
+                    connection_id: None,
+                    message_id: None,
+                    response_id: None,
+                    replay: None,
+                }),
+                completed_at_ms: 4,
+            },
+        )
+        .unwrap();
+    document.close_turn(TurnOutcome::Completed, 1, 5).unwrap();
+    document
+}
+
+/// The frozen format hashes the durable empty text of a resource-only input, while requests still receive the note.
+/// 冻结格式哈希仅资源输入的可靠空文字，而请求仍收到说明文字。
+#[test]
+fn fingerprint_hashes_durable_text_of_resource_only_input() {
+    let document = resource_only_history();
+    let mut events = document.events().to_vec();
+    let durable_bytes = br#"[{"kind":"user_input","text":"","resource_ids":[1]},{"kind":"assistant_text","text":"ack","reasoning":null,"tool_calls":[]}]"#;
+    assert_eq!(
+        source_mut(&mut events).fingerprint_sha256,
+        hex_encode(&Sha256::digest(durable_bytes))
+    );
+    let projected = project_provider_items(document.events(), None, &[]).unwrap();
+    assert!(projected.iter().any(|item| matches!(
+        item,
+        ProjectedItem::UserInput { text, .. } if text == RESOURCE_ONLY_INPUT_TEXT
+    )));
+    assert!(reload(&document, events).is_ok());
+}
+
+/// Stored loading quarantines a checkpoint whose digest no longer verifies instead of refusing the session.
+/// 存储加载会隔离摘要已无法校验的检查点，而不是拒绝整个会话。
+#[test]
+fn stored_parts_quarantine_unverifiable_checkpoint() {
+    let document = interrupted_history(false);
+    let mut events = document.events().to_vec();
+    let coverage = source_mut(&mut events).covered_until_seq;
+    source_mut(&mut events).fingerprint_sha256 = "0".repeat(64);
+    assert!(matches!(
+        reload(&document, events.clone()),
+        Err(DomainError::ProviderSourceFingerprintMismatch { .. })
+    ));
+    let (loaded, quarantined) = SessionDocument::from_stored_parts(
+        document.metadata.clone(),
+        RuntimeLock {
+            initialization_state: RuntimeInitializationState::Initialized,
+            ..RuntimeLock::default()
+        },
+        vec![],
+        vec![],
+        events,
+    )
+    .unwrap();
+    assert_eq!(quarantined, vec![coverage.value()]);
+    assert_eq!(loaded.events().len(), document.events().len());
+    assert!(loaded.events().iter().all(|event| match &event.event {
+        EventBody::AssistantReasoning(reasoning) => reasoning.provider_source.is_none(),
+        EventBody::AssistantText(text) => text.provider_source.is_none(),
+        EventBody::ToolCall(tool) => tool.provider_source.is_none(),
+        _ => true,
+    }));
+}

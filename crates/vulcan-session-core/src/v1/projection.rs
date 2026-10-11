@@ -1042,10 +1042,27 @@ fn fingerprint_with_policy(
             _ => {}
         }
     }
+    // The frozen format hashes the durable input text. The resource-only note is request rendering
+    // derived from the same facts, so introducing or changing it never invalidates a checkpoint.
+    // 冻结格式哈希可靠输入文字。仅资源说明是由同一事实派生的请求渲染，引入或修改它都不会使检查点失效。
+    let durable_input_texts: BTreeMap<u64, &str> = stripped
+        .iter()
+        .filter_map(|event| match &event.event {
+            EventBody::UserInput(input) => Some((event.seq.value(), input.text.as_str())),
+            _ => None,
+        })
+        .collect();
     let mut items: Vec<ProjectedItem> =
         project_items_with_policy(&stripped, None, &[], partial_policy, None)?
             .into_iter()
-            .map(|sourced| sourced.item)
+            .map(|mut sourced| {
+                if let ProjectedItem::UserInput { text, .. } = &mut sourced.item
+                    && let Some(durable) = durable_input_texts.get(&sourced.source_from_seq.value())
+                {
+                    *text = (*durable).to_string();
+                }
+                sourced.item
+            })
             .collect();
     // Tool results are new Provider inputs after the replay checkpoint and
     // must never enter the checkpoint fingerprint (plan 5.5.10); the tool call

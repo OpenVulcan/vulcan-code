@@ -488,6 +488,88 @@ impl SessionDocument {
         segment_catalog: Vec<SegmentInfo>,
         events: Vec<ConversationEvent>,
     ) -> Result<Self, DomainError> {
+        let mut document =
+            Self::assemble_parts(metadata, runtime_lock, compactions, segment_catalog, events);
+        document.rebuild_derived_state()?;
+        document.validate_assembled_parts()?;
+        Ok(document)
+    }
+
+    /// Builds one document read from storage, quarantining replay checkpoints whose fingerprint no
+    /// longer verifies instead of refusing the whole session.
+    /// 从存储读取的部件构建文档；指纹已无法校验的重放检查点被隔离，而不是拒绝整个会话。
+    ///
+    /// A checkpoint only carries Provider-native continuation data (`provider_source`); the events
+    /// themselves are untouched. A quarantined checkpoint is dropped from the resident copy, so its
+    /// API group is replayed as plain projected content. Every other validation stays strict.
+    /// 检查点只携带 Provider 原生续接数据(`provider_source`)，事件本身不受影响。被隔离的检查点从
+    /// 常驻副本中移除，其 API 组改以普通投影内容重放；其他校验保持严格。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The document and the hosting seqs of every quarantined checkpoint, in discovery order.
+    /// 返回文档以及每个被隔离检查点的承载 seq(按发现顺序)。
+    pub fn from_stored_parts(
+        metadata: MetadataDocument,
+        runtime_lock: RuntimeLock,
+        compactions: Vec<CompactionNode>,
+        segment_catalog: Vec<SegmentInfo>,
+        events: Vec<ConversationEvent>,
+    ) -> Result<(Self, Vec<u64>), DomainError> {
+        let mut document =
+            Self::assemble_parts(metadata, runtime_lock, compactions, segment_catalog, events);
+        let mut quarantined = Vec::new();
+        loop {
+            match document.rebuild_derived_state() {
+                Ok(()) => break,
+                Err(error @ DomainError::ProviderSourceFingerprintMismatch { seq, .. }) => {
+                    // Each pass removes one checkpoint, so the loop ends after at most one pass per checkpoint.
+                    // 每轮移除一个检查点，因此循环至多按检查点数量执行。
+                    if !document.drop_resident_provider_source(seq) {
+                        return Err(error);
+                    }
+                    quarantined.push(seq);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        document.validate_assembled_parts()?;
+        Ok((document, quarantined))
+    }
+
+    /// Removes the replay checkpoint hosted by one resident event.
+    /// 移除一个常驻事件承载的重放检查点。
+    /// Returns whether the event existed and carried a checkpoint.
+    /// 返回该事件是否存在且带有检查点。
+    fn drop_resident_provider_source(&mut self, seq: u64) -> bool {
+        let Some(index) = self
+            .events
+            .iter()
+            .position(|event| event.seq.value() == seq)
+        else {
+            return false;
+        };
+        let Some(event) = self.events.get_mut(index) else {
+            return false;
+        };
+        let source = match &mut event.event {
+            EventBody::AssistantReasoning(reasoning) => &mut reasoning.provider_source,
+            EventBody::AssistantText(text) => &mut text.provider_source,
+            EventBody::ToolCall(tool) => &mut tool.provider_source,
+            _ => return false,
+        };
+        source.take().is_some()
+    }
+
+    /// Wraps loaded parts into a document whose derived state is not yet rebuilt.
+    /// 把已加载部件包装为尚未重建派生状态的文档。
+    fn assemble_parts(
+        metadata: MetadataDocument,
+        runtime_lock: RuntimeLock,
+        compactions: Vec<CompactionNode>,
+        segment_catalog: Vec<SegmentInfo>,
+        events: Vec<ConversationEvent>,
+    ) -> Self {
         let published_compaction_id = runtime_lock.current_compaction_id;
         let persisted_revision = metadata.document_revision;
         let resident_start_seq = events
@@ -499,7 +581,7 @@ impl SessionDocument {
                     .map(|entry| entry.start_seq.value())
                     .unwrap_or(1)
             });
-        let mut document = Self {
+        Self {
             metadata,
             runtime_lock,
             compactions,
@@ -518,20 +600,24 @@ impl SessionDocument {
             pending_compaction_publish: BTreeMap::new(),
             segment_catalog,
             resident_start_seq,
-        };
-        document.rebuild_derived_state()?;
-        document.validate_collaboration_state()?;
-        document.validate_child_execution_profile()?;
-        document.validate_child_creation_intents()?;
-        document.validate_business_hook_binding()?;
-        if let Some(record) = document.terminal_settlement_record() {
-            document.terminal_settlement_has_terminal_fact(record)?;
         }
-        dynamic_context::validate_dynamic_context_map(&document.metadata.dynamic_context)?;
-        document.validate_runtime_initialization_state()?;
-        document.validate_compaction_state()?;
-        document.validate_loaded_metadata()?;
-        Ok(document)
+    }
+
+    /// Runs the whole-document validations that follow a derived-state rebuild of loaded parts.
+    /// 在已加载部件的派生状态重建之后执行整文档校验。
+    fn validate_assembled_parts(&self) -> Result<(), DomainError> {
+        self.validate_collaboration_state()?;
+        self.validate_child_execution_profile()?;
+        self.validate_child_creation_intents()?;
+        self.validate_business_hook_binding()?;
+        if let Some(record) = self.terminal_settlement_record() {
+            self.terminal_settlement_has_terminal_fact(record)?;
+        }
+        dynamic_context::validate_dynamic_context_map(&self.metadata.dynamic_context)?;
+        self.validate_runtime_initialization_state()?;
+        self.validate_compaction_state()?;
+        self.validate_loaded_metadata()?;
+        Ok(())
     }
 
     /// Returns the last revision confirmed durable.
