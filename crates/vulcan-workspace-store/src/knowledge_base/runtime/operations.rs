@@ -174,7 +174,8 @@ impl KnowledgeBaseRuntime {
     /// 参数：`library_id` 选择精确知识库，`job_id` 用于拒绝过期请求。返回值：匹配活动操作是否接受取消信号。
     pub async fn cancel_operation(&self, library_id: &str, job_id: &str) -> Result<bool, String> {
         validate_library_id(library_id)?;
-        Uuid::parse_str(job_id).map_err(|error| format!("知识库操作任务标识符无效：{error}"))?;
+        Uuid::parse_str(job_id)
+            .map_err(|error| format!("Invalid knowledge operation task identifier: {error}"))?;
         // Operations contains the only runtime-owned cancellation identity for each library.
         // Operations 包含每个知识库唯一由运行时持有的取消身份。
         let operations = self.active_operations.lock().await;
@@ -226,13 +227,18 @@ impl KnowledgeBaseRuntime {
                     )?,
                     current_file: row.current_file,
                     processed_bytes: nonnegative_u64(row.processed_bytes, "processed_bytes")?,
-                    warnings: serde_json::from_str(&row.warnings_json)
-                        .map_err(|error| format!("解析知识库导入告警失败：{error}"))?,
+                    warnings: serde_json::from_str(&row.warnings_json).map_err(|error| {
+                        format!("Failed to parse knowledge import warnings: {error}")
+                    })?,
                     error_message: row.error_message,
                     observability: serde_json::from_str::<KnowledgeOperationObservability>(
                         &row.observability_json,
                     )
-                    .map_err(|error| format!("解析知识库操作可观测状态失败：{error}"))?,
+                    .map_err(|error| {
+                        format!(
+                            "Failed to parse the knowledge operation observability state: {error}"
+                        )
+                    })?,
                 })
             })
             .transpose()
@@ -257,7 +263,7 @@ impl KnowledgeBaseRuntime {
             KnowledgeOperationKind::DisplayBuild | KnowledgeOperationKind::VectorBuild
         ) {
             return Err(String::from(
-                "外部资料库操作必须使用 display_build 或 vector_build 类型。",
+                "External library operations must use the display_build or vector_build type.",
             ));
         }
         self.require_active_library(library_id).await?;
@@ -327,11 +333,15 @@ impl KnowledgeBaseRuntime {
         current_file: Option<&str>,
     ) -> Result<(), String> {
         if phase.trim().is_empty() {
-            return Err(String::from("资料库派生操作阶段不能为空。"));
+            return Err(String::from(
+                "The library derived-operation phase must not be empty.",
+            ));
         }
         let active = self.active_operation_for_job(job_id).await?;
         if !active {
-            return Err(format!("资料库派生操作已不再活动：job_id={job_id}"));
+            return Err(format!(
+                "The library derived operation is no longer active: job_id={job_id}"
+            ));
         }
         self.update_operation_phase(job_id, "running", phase)
             .await?;
@@ -351,17 +361,20 @@ impl KnowledgeBaseRuntime {
         observability: &KnowledgeOperationObservability,
     ) -> Result<(), String> {
         if !self.active_operation_for_job(job_id).await? {
-            return Err(format!("资料库派生操作已不再活动：job_id={job_id}"));
+            return Err(format!(
+                "The library derived operation is no longer active: job_id={job_id}"
+            ));
         }
-        let observability_json = serde_json::to_string(observability)
-            .map_err(|error| format!("序列化知识库操作可观测状态失败：{error}"))?;
+        let observability_json = serde_json::to_string(observability).map_err(|error| {
+            format!("Failed to serialize the knowledge operation observability state: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
                 "UPDATE knowledge_import_jobs SET observability_json = ? WHERE id = ? AND state = 'running';",
                 vec![text(observability_json), text(job_id)],
             ).await
-            .map_err(|error| format!("更新知识库操作可观测状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the knowledge operation observability state: {error}"))?;
         Ok(())
     }
 
@@ -390,7 +403,8 @@ impl KnowledgeBaseRuntime {
     /// Returns: `true` only when the active operation's cooperative signal is set.
     /// 参数：`job_id` 是持久化操作身份。返回值：仅当活动操作的协作信号已设置时为 `true`。
     pub async fn operation_is_cancelled(&self, job_id: &str) -> Result<bool, String> {
-        Uuid::parse_str(job_id).map_err(|error| format!("知识库操作任务标识符无效：{error}"))?;
+        Uuid::parse_str(job_id)
+            .map_err(|error| format!("Invalid knowledge operation task identifier: {error}"))?;
         let operations = self.active_operations.lock().await;
         Ok(operations
             .values()
@@ -474,7 +488,10 @@ impl KnowledgeBaseRuntime {
             // Operations 在持久化插入等待 I/O 前关闭重复启动竞态。
             let mut operations = self.active_operations.lock().await;
             if let Some(active) = operations.get(library_id) {
-                return Err(format!("知识库已有运行中的操作：job_id={}", active.job_id));
+                return Err(format!(
+                    "The knowledge library already has a running operation: job_id={}",
+                    active.job_id
+                ));
             }
             operations.insert(
                 library_id.to_string(),
@@ -523,7 +540,7 @@ impl KnowledgeBaseRuntime {
             ],
         )
         .await
-        .map_err(|error| format!("创建知识库操作任务失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the knowledge operation task: {error}"))?;
         Ok(())
     }
 
@@ -558,7 +575,8 @@ impl KnowledgeBaseRuntime {
     /// Whether any current reservation owns that job, or an invalid UUID error.
     /// 返回当前是否有预留持有此任务，或 UUID 无效错误。
     async fn active_operation_for_job(&self, job_id: &str) -> Result<bool, String> {
-        Uuid::parse_str(job_id).map_err(|error| format!("知识库操作任务标识符无效：{error}"))?;
+        Uuid::parse_str(job_id)
+            .map_err(|error| format!("Invalid knowledge operation task identifier: {error}"))?;
         let operations = self.active_operations.lock().await;
         Ok(operations.values().any(|active| active.job_id == job_id))
     }
@@ -610,7 +628,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_import_jobs SET scanned_files = ?, current_file = ? WHERE id = ? AND state = 'running';",
                 vec![int(discovered_files as i64), text(current_path), text(job_id)],
             ).await
-            .map_err(|error| format!("更新知识库扫描进度失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the knowledge scan progress: {error}"))?;
         Ok(())
     }
 
@@ -637,7 +655,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_import_jobs SET state = 'running', phase = 'parsing', scanned_files = ?, total_files = ?, processed_files = 0, current_file = NULL WHERE id = ?;",
                 vec![int(total_files as i64), int(total_files as i64), text(job_id)],
             ).await
-            .map_err(|error| format!("发布知识库文件总数失败：{error}"))?;
+            .map_err(|error| format!("Failed to publish the knowledge file total: {error}"))?;
         Ok(())
     }
 
@@ -671,7 +689,7 @@ impl KnowledgeBaseRuntime {
                     text(job_id),
                 ],
             ).await
-            .map_err(|error| format!("更新知识库操作阶段失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the knowledge operation phase: {error}"))?;
         Ok(())
     }
 
@@ -695,8 +713,9 @@ impl KnowledgeBaseRuntime {
         current_file: Option<&str>,
         warnings: &[String],
     ) -> Result<(), String> {
-        let warnings_json = serde_json::to_string(warnings)
-            .map_err(|error| format!("序列化知识库导入进度告警失败：{error}"))?;
+        let warnings_json = serde_json::to_string(warnings).map_err(|error| {
+            format!("Failed to serialize knowledge import progress warnings: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -709,7 +728,7 @@ impl KnowledgeBaseRuntime {
                     text(job_id),
                 ],
             ).await
-            .map_err(|error| format!("更新知识库导入进度失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the knowledge import progress: {error}"))?;
         Ok(())
     }
 
@@ -743,7 +762,7 @@ impl KnowledgeBaseRuntime {
                     text(job_id),
                 ],
             ).await
-            .map_err(|error| format!("更新知识库索引进度失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the knowledge index progress: {error}"))?;
         Ok(())
     }
 
@@ -765,8 +784,9 @@ impl KnowledgeBaseRuntime {
         error: Option<&str>,
     ) -> Result<(), String> {
         let now = unix_epoch_millis()?;
-        let warnings_json = serde_json::to_string(&report.warnings)
-            .map_err(|failure| format!("序列化知识库导入告警失败：{failure}"))?;
+        let warnings_json = serde_json::to_string(&report.warnings).map_err(|failure| {
+            format!("Failed to serialize knowledge import warnings: {failure}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -789,7 +809,7 @@ impl KnowledgeBaseRuntime {
                     text(&report.job_id),
                 ],
             ).await
-            .map_err(|failure| format!("完成知识库导入任务失败：{failure}"))?;
+            .map_err(|failure| format!("Failed to complete the knowledge import task: {failure}"))?;
         Ok(())
     }
 
@@ -815,7 +835,7 @@ impl KnowledgeBaseRuntime {
                     text(job_id),
                 ],
             ).await
-            .map_err(|failure| format!("完成知识库索引操作失败：{failure}"))?;
+            .map_err(|failure| format!("Failed to complete the knowledge index operation: {failure}"))?;
         Ok(())
     }
 
@@ -843,7 +863,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_import_jobs SET state = 'failed', error_message = ?, finished_at_ms = ? WHERE id = ?;",
                 vec![text(bounded), int(unix_epoch_millis()?), text(job_id)],
             ).await
-            .map_err(|failure| format!("记录知识库操作失败状态失败：{failure}"))?;
+            .map_err(|failure| format!("Failed to record the knowledge operation failure state: {failure}"))?;
         Ok(())
     }
 
@@ -866,7 +886,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_import_jobs SET state = 'cancelled', phase = 'cancelled', error_message = NULL, finished_at_ms = ? WHERE id = ?;",
                 vec![int(unix_epoch_millis()?), text(job_id)],
             ).await
-            .map_err(|failure| format!("记录知识库操作取消状态失败：{failure}"))?;
+            .map_err(|failure| format!("Failed to record the knowledge operation cancellation state: {failure}"))?;
         Ok(())
     }
 }

@@ -32,27 +32,27 @@ pub(super) fn relative_time_label_from_unix_millis(timestamp_millis: i64) -> Str
     let delta_secs = delta_millis / 1_000;
 
     if delta_secs < 60 {
-        return String::from("刚刚");
+        return String::from("just now");
     }
 
     let delta_minutes = delta_secs / 60;
     if delta_minutes < 60 {
-        return format!("{delta_minutes}分钟前");
+        return format!("{delta_minutes} min ago");
     }
 
     let delta_hours = delta_minutes / 60;
     if delta_hours < 24 {
-        return format!("{delta_hours}小时前");
+        return format!("{delta_hours} h ago");
     }
 
     let delta_days = delta_hours / 24;
     if delta_days < 7 {
-        return format!("{delta_days}天前");
+        return format!("{delta_days} d ago");
     }
 
     if delta_days < 30 {
-        return format!("{}周前", (delta_days / 7).max(1));
+        return format!("{} w ago", (delta_days / 7).max(1));
     }
 
-    format!("{}月前", (delta_days / 30).max(1))
+    format!("{} mo ago", (delta_days / 30).max(1))
 }

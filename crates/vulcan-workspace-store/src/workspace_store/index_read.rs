@@ -6,6 +6,7 @@ use super::{
     session_index_v1::SessionIndexV1Row,
 };
 use crate::{data_plane::HostRuntimeHandle, local_database_runtime::LogicalDatabase, local_sql};
+use std::collections::BTreeSet;
 
 /// One statement's decoded rows and explicit row-local failures; query failures remain errors.
 /// 同一查询中成功解码的记录和明确的行级失败；查询级失败仍返回错误。
@@ -14,6 +15,9 @@ pub(super) struct WorkspaceIndexRows {
     /// Valid records admitted for independent locator inspection.
     /// 已准入、可独立检查定位器的有效记录。
     pub rows: Vec<SessionIndexV1Row>,
+    /// Admitted rows whose session carries a creation-frozen dedicated profile.
+    /// 已准入记录中带有创建时冻结专职配置的会话。
+    pub dedicated_session_ids: BTreeSet<String>,
     /// Corrupt records excluded from rows but retained for incomplete-load reporting.
     /// 未放入有效记录、但保留用于不完整加载报告的损坏记录。
     pub issues: Vec<WorkspaceIndexLoadIssue>,
@@ -37,7 +41,7 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
     // Retain a single SQL snapshot instead of retrying each project after a decode error.
     // 保留单次 SQL 快照，避免解码失败后逐项目重试。
     let mut statement = connection.prepare(
-        "SELECT session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread FROM session_index_v1 WHERE project_id IN (SELECT id FROM projects) ORDER BY session_id"
+        "SELECT session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated FROM session_index_v1 WHERE project_id IN (SELECT id FROM projects) ORDER BY session_id"
     )?;
     // Cursor failures abort the snapshot; only typed decoding failures isolate one row.
     // 游标读取失败终止快照；仅强类型解码失败隔离单条记录。
@@ -46,11 +50,19 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
     // 分别累计正常记录和诊断，两者均不得丢弃。
     let mut report = WorkspaceIndexRows {
         rows: Vec::new(),
+        dedicated_session_ids: BTreeSet::new(),
         issues: Vec::new(),
     };
     while let Some(row) = cursor.next()? {
-        match decode_row(row) {
-            Ok(row) => report.rows.push(row),
+        match decode_row(row).and_then(|decoded| Ok((decoded, row.get::<_, bool>("dedicated")?))) {
+            Ok((decoded, dedicated)) => {
+                if dedicated {
+                    report
+                        .dedicated_session_ids
+                        .insert(decoded.session_id.clone());
+                }
+                report.rows.push(decoded);
+            }
             Err(error) => report.issues.push(WorkspaceIndexLoadIssue {
                 stage: WorkspaceIndexLoadStage::Index,
                 // Corruption can affect identity columns too; missing diagnostic identities
@@ -162,6 +174,31 @@ mod tests {
         assert_eq!(archived.project_id, "two");
         assert_eq!(archived.archived_at_ms, Some(3));
         assert_eq!(archived.unread, 1);
+    }
+
+    /// Only marked sessions are reported as dedicated, and pruning a row removes its marker.
+    /// 只有带标记的会话被报告为专职会话，清理记录时同时移除其标记。
+    #[test]
+    fn dedicated_marker_follows_its_locator_row() {
+        let mut connection = fixture();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON; INSERT INTO session_dedicated_index_v1 VALUES ('a')",
+            )
+            .expect("mark dedicated session");
+        let report = read_rows(&connection).expect("typed rows");
+        assert!(report.issues.is_empty());
+        assert_eq!(
+            report.dedicated_session_ids,
+            BTreeSet::from([String::from("a")])
+        );
+        prune_rows(&mut connection, &report.rows).expect("prune observed rows");
+        let remaining: i64 = connection
+            .query_row("SELECT COUNT(*) FROM session_dedicated_index_v1", [], |row| {
+                row.get(0)
+            })
+            .expect("count markers");
+        assert_eq!(remaining, 0, "a pruned locator must not leave its dedicated marker");
     }
 
     /// A newer locator or lifecycle prevents stale deletion and rolls back earlier batch removals.

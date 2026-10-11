@@ -1645,9 +1645,9 @@ COMMIT;", old_sequence = previous.sequence, new_sequence = next.sequence, update
             .data_plane
             .query_json_classified(sql, params)
             .await
-            .map_err(|error| VceJobStoreError::storage("查询 VCE SQLite 失败", error))?;
+            .map_err(|error| VceJobStoreError::storage("Failed to query the VCE SQLite", error))?;
         serde_json::from_str(&json)
-            .map_err(|error| format!("解析 VCE SQLite 查询结果失败：{error}").into())
+            .map_err(|error| format!("Failed to parse the VCE SQLite query result: {error}").into())
     }
 }
 

@@ -116,7 +116,9 @@ impl KnowledgeFilePreview {
         confirmation: &KnowledgeFileConfirmation,
     ) -> Result<Vec<&'a KnowledgeFilePreviewEntry>, String> {
         if self.fingerprint != confirmation.fingerprint {
-            return Err(String::from("文件清单或忽略规则已变化，请重新扫描并确认。"));
+            return Err(String::from(
+                "The file list or ignore rules changed; scan again and confirm.",
+            ));
         }
         // A repeated key must not dispatch duplicate work.
         // 重复键不得触发重复执行。
@@ -126,14 +128,14 @@ impl KnowledgeFilePreview {
             .iter()
             .map(|key| {
                 if !seen.insert(key) {
-                    return Err(String::from("确认清单包含重复文件。"));
+                    return Err(String::from("The confirmed list contains duplicate files."));
                 }
                 self.entries
                     .iter()
                     .find(|entry| {
                         &entry.key == key && entry.disposition == KnowledgeFileDisposition::Ready
                     })
-                    .ok_or_else(|| String::from("确认清单包含不可选或已不存在的文件，请重新扫描。"))
+                    .ok_or_else(|| String::from("The confirmed list contains unselectable or missing files; scan again."))
             })
             .collect()
     }

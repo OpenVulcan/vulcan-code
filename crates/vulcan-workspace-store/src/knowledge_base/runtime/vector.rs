@@ -57,7 +57,9 @@ impl KnowledgeBaseRuntime {
     ) -> Result<String, String> {
         validate_generation_id(generation)?;
         if dimension == 0 {
-            return Err(String::from("向量代次维度必须大于 0"));
+            return Err(String::from(
+                "The vector generation dimension must be greater than 0",
+            ));
         }
         let previous_dimension = self
             .get_library(library_id)
@@ -119,9 +121,11 @@ impl KnowledgeBaseRuntime {
         if let Err(error) = create_result {
             return Err(match drop_error {
                 Some(drop_error) => format!(
-                    "创建知识库 LanceDB 向量代次失败：{error}；清理旧维度表也失败：{drop_error}"
+                    "Failed to create the knowledge LanceDB vector generation: {error}; dropping the old-dimension table also failed: {drop_error}"
                 ),
-                None => format!("创建知识库 LanceDB 向量代次失败：{error}"),
+                None => {
+                    format!("Failed to create the knowledge LanceDB vector generation: {error}")
+                }
             });
         }
         Ok(table_name)
@@ -160,22 +164,25 @@ impl KnowledgeBaseRuntime {
         if rows.is_empty() {
             return Ok(0);
         }
-        let expected_dimension =
-            usize::try_from(dimension).map_err(|_| String::from("向量维度超出当前平台支持范围"))?;
+        let expected_dimension = usize::try_from(dimension).map_err(|_| {
+            String::from("The vector dimension exceeds the range supported by this platform")
+        })?;
         for row in rows {
             let vector = row
                 .get("vector")
                 .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| String::from("向量写入行缺少 vector 数组"))?;
+                .ok_or_else(|| String::from("A vector write row is missing the vector array"))?;
             if vector.len() != expected_dimension {
                 return Err(format!(
-                    "向量写入维度 {} 与配置维度 {} 不一致",
+                    "The vector write dimension {} disagrees with the configured dimension {}",
                     vector.len(),
                     expected_dimension
                 ));
             }
             if row.get("generation").and_then(serde_json::Value::as_str) != Some(generation) {
-                return Err(String::from("向量写入行代次不一致"));
+                return Err(String::from(
+                    "The vector write row generation is inconsistent",
+                ));
             }
         }
         // The binding is re-established here rather than assumed. In-memory activation is per runtime, so a
@@ -191,7 +198,7 @@ impl KnowledgeBaseRuntime {
         // 必须报出而不是被创建出来。
         let (_space_id, binding_id) = self.activate_vector_binding(library_id, false).await?;
         let data = serde_json::to_vec(rows)
-            .map_err(|error| format!("编码 LanceDB 向量行失败：{error}"))?;
+            .map_err(|error| format!("Failed to encode LanceDB vector rows: {error}"))?;
         let result = self
             .resolve_vector_engine(&binding_id)
             .await?
@@ -202,7 +209,9 @@ impl KnowledgeBaseRuntime {
                 key_columns: vec![String::from("id")],
             })
             .await
-            .map_err(|error| format!("写入知识库 LanceDB 向量批次失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to write the knowledge LanceDB vector batch: {error}")
+            })?;
         Ok(result.input_rows)
     }
 
@@ -237,7 +246,7 @@ impl KnowledgeBaseRuntime {
         validate_generation_id(generation)?;
         validate_vector_table_name(table_name)?;
         if vector.is_empty() {
-            return Err(String::from("向量查询不能为空"));
+            return Err(String::from("The vector query must not be empty"));
         }
         // This is the production hybrid-search path's read, and it must stand on its own. Activation is per
         // runtime, so after a restart the persisted `Ready` status and active generation are present while the
@@ -261,9 +270,10 @@ impl KnowledgeBaseRuntime {
                 output_format: LanceDbOutputFormat::JsonRows,
             })
             .await
-            .map_err(|error| format!("检索知识库 LanceDB 向量失败：{error}"))?;
-        serde_json::from_slice(&result.data)
-            .map_err(|error| format!("解析知识库 LanceDB 检索结果失败：{error}"))
+            .map_err(|error| format!("Failed to search the knowledge LanceDB vectors: {error}"))?;
+        serde_json::from_slice(&result.data).map_err(|error| {
+            format!("Failed to parse the knowledge LanceDB search results: {error}")
+        })
     }
 
     /// Persists a successful vector generation and its exact model-space snapshot.
@@ -293,18 +303,22 @@ impl KnowledgeBaseRuntime {
     ) -> Result<KnowledgeLibrarySummary, String> {
         validate_generation_id(generation)?;
         if dimension == 0 {
-            return Err(String::from("向量索引维度必须大于 0"));
+            return Err(String::from(
+                "The vector index dimension must be greater than 0",
+            ));
         }
         let _guard = self.library_mutation_guard(library_id).await?;
         let current = self.require_active_library(library_id).await?;
         if !current.settings.embedding.enabled {
-            return Err(String::from("当前资料库未启用向量模型"));
+            return Err(String::from(
+                "No embedding model is enabled for this library",
+            ));
         }
         if current.settings.display_index.status != KnowledgeDisplayIndexStatus::Ready
             || current.settings.display_index.active_generation.as_deref() != Some(generation)
         {
             return Err(String::from(
-                "显示库活动代次已变化，拒绝发布不匹配的向量索引",
+                "The active display-library generation changed; refusing to publish the mismatched vector index",
             ));
         }
         let mut settings = current.settings.clone();
@@ -312,7 +326,7 @@ impl KnowledgeBaseRuntime {
             .embedding
             .desired_model_fingerprint
             .clone()
-            .ok_or_else(|| String::from("向量模型指纹尚未配置"))?;
+            .ok_or_else(|| String::from("The embedding model fingerprint is not configured yet"))?;
         settings.vector_index.status = KnowledgeVectorIndexStatus::Ready;
         settings.vector_index.active_generation = Some(generation.to_string());
         settings.vector_index.indexed_model_fingerprint = Some(model_fingerprint);
@@ -324,8 +338,9 @@ impl KnowledgeBaseRuntime {
         settings.embedding.last_successful_sync_snapshot = Some(model_snapshot);
         settings.normalize_derived_compatibility();
         settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化向量索引成功状态失败：{error}"))?;
+        let settings_json = serde_json::to_string(&settings).map_err(|error| {
+            format!("Failed to serialize the vector index success state: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -336,7 +351,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("保存向量索引成功状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the vector index success state: {error}"))?;
         self.get_library(library_id).await
     }
 
@@ -370,7 +385,7 @@ impl KnowledgeBaseRuntime {
         settings.normalize_derived_compatibility();
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化向量索引状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize the vector index state: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -381,7 +396,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("保存向量索引生命周期状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the vector index lifecycle state: {error}"))?;
         self.get_library(library_id).await
     }
 }
@@ -419,9 +434,11 @@ fn validate_vector_table_name(table_name: &str) -> Result<(), String> {
     let prefix = "knowledge_vectors_";
     let suffix = table_name
         .strip_prefix(prefix)
-        .ok_or_else(|| String::from("知识库向量表名称前缀无效。"))?;
+        .ok_or_else(|| String::from("The knowledge vector table name prefix is invalid."))?;
     if suffix.len() != 32 || !suffix.chars().all(|value| value.is_ascii_hexdigit()) {
-        return Err(String::from("知识库向量表名称格式无效。"));
+        return Err(String::from(
+            "The knowledge vector table name format is invalid.",
+        ));
     }
     Ok(())
 }

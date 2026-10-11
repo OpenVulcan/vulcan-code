@@ -94,13 +94,24 @@ impl PreparedKnowledgePackage {
 /// The canonical ordinary directory, or an explicit metadata/path failure.
 /// 返回规范化普通目录，或明确的元数据/路径错误。
 pub(super) fn canonical_existing_directory(path: &Path) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("读取目标目录失败（{}）：{error}", path.display()))?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to read the target directory ({}): {error}",
+            path.display()
+        )
+    })?;
     if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
-        return Err(format!("目标路径不是可信普通目录：{}", path.display()));
+        return Err(format!(
+            "The target path is not a trusted regular directory: {}",
+            path.display()
+        ));
     }
-    fs::canonicalize(path)
-        .map_err(|error| format!("规范化目标目录失败（{}）：{error}", path.display()))
+    fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to canonicalize the target directory ({}): {error}",
+            path.display()
+        )
+    })
 }
 
 /// Canonicalizes and bounds one user-selected .vkb archive.
@@ -116,14 +127,21 @@ pub(super) fn canonical_existing_directory(path: &Path) -> Result<PathBuf, Strin
 /// The canonical bounded archive path, or an explicit rejection.
 /// 返回有界归档的规范路径，或明确拒绝原因。
 pub(super) fn canonical_knowledge_package_path(path: &Path) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("读取知识库包失败（{}）：{error}", path.display()))?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to read the knowledge package ({}): {error}",
+            path.display()
+        )
+    })?;
     if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-        return Err(format!("知识库包不是可信普通文件：{}", path.display()));
+        return Err(format!(
+            "The knowledge package is not a trusted regular file: {}",
+            path.display()
+        ));
     }
     if metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
         return Err(format!(
-            "知识库包超过大小上限 {} 字节。",
+            "The knowledge package exceeds the size limit of {} bytes.",
             MAX_KNOWLEDGE_PACKAGE_BYTES
         ));
     }
@@ -132,10 +150,16 @@ pub(super) fn canonical_knowledge_package_path(path: &Path) -> Result<PathBuf, S
         .and_then(|extension| extension.to_str())
         .is_none_or(|extension| !extension.eq_ignore_ascii_case("vkb"))
     {
-        return Err(String::from("知识库包扩展名必须为 .vkb。"));
+        return Err(String::from(
+            "The knowledge package extension must be .vkb.",
+        ));
     }
-    fs::canonicalize(path)
-        .map_err(|error| format!("规范化知识库包失败（{}）：{error}", path.display()))
+    fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to canonicalize the knowledge package ({}): {error}",
+            path.display()
+        )
+    })
 }
 
 /// Extracts and validates one package into a host-controlled temporary directory.
@@ -156,26 +180,36 @@ pub(super) fn prepare_knowledge_package(
 ) -> Result<PreparedKnowledgePackage, String> {
     fs::create_dir_all(temporary_parent).map_err(|error| {
         format!(
-            "创建知识库临时目录父级失败（{}）：{error}",
+            "Failed to create the parent of the knowledge temporary directory ({}): {error}",
             temporary_parent.display()
         )
     })?;
     let temporary = tempfile::Builder::new()
         .prefix(KNOWLEDGE_PACKAGE_INSPECTION_TEMP_PREFIX)
         .tempdir_in(temporary_parent)
-        .map_err(|error| format!("创建知识库包检查临时目录失败：{error}"))?;
-    let input = File::open(archive_path)
-        .map_err(|error| format!("打开知识库包失败（{}）：{error}", archive_path.display()))?;
-    let mut archive =
-        ZipArchive::new(input).map_err(|error| format!("解析知识库 ZIP 包失败：{error}"))?;
+        .map_err(|error| {
+            format!(
+                "Failed to create the knowledge package inspection temporary directory: {error}"
+            )
+        })?;
+    let input = File::open(archive_path).map_err(|error| {
+        format!(
+            "Failed to open the knowledge package ({}): {error}",
+            archive_path.display()
+        )
+    })?;
+    let mut archive = ZipArchive::new(input)
+        .map_err(|error| format!("Failed to parse the knowledge ZIP package: {error}"))?;
     if archive.len() < 3 {
         return Err(format!(
-            "知识库包条目数量无效：{}，至少需要 3 项。",
+            "Invalid knowledge package entry count: {}; at least 3 entries are required.",
             archive.len()
         ));
     }
     if archive.len() > 10_000 {
-        return Err(String::from("知识库包条目数量超过安全上限。"));
+        return Err(String::from(
+            "The knowledge package entry count exceeds the safety limit.",
+        ));
     }
     let mut package_bytes: Option<Vec<u8>> = None;
     let mut manifest_bytes: Option<Vec<u8>> = None;
@@ -189,19 +223,25 @@ pub(super) fn prepare_knowledge_package(
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
-            .map_err(|error| format!("读取知识库包条目 {index} 失败：{error}"))?;
+            .map_err(|error| format!("Failed to read knowledge package entry {index}: {error}"))?;
         let name = entry.name().to_string();
         if entry.is_dir() || entry.enclosed_name().is_none() {
-            return Err(format!("知识库包包含非法条目：{name}"));
+            return Err(format!(
+                "The knowledge package contains an invalid entry: {name}"
+            ));
         }
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            return Err(format!("知识库包不允许符号链接条目：{name}"));
+            return Err(format!(
+                "The knowledge package does not allow symbolic link entries: {name}"
+            ));
         }
         if !seen.insert(name.clone()) {
-            return Err(format!("知识库包包含重复条目：{name}"));
+            return Err(format!(
+                "The knowledge package contains a duplicate entry: {name}"
+            ));
         }
         match name.as_str() {
             KNOWLEDGE_PACKAGE_METADATA_ENTRY => {
@@ -228,7 +268,9 @@ pub(super) fn prepare_knowledge_package(
                     KNOWLEDGE_PACKAGE_DATABASE_ENTRY,
                 )?);
                 if extracted_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("知识库包解压总大小超过安全上限。"));
+                    return Err(String::from(
+                        "The knowledge package's total extracted size exceeds the safety limit.",
+                    ));
                 }
                 database_seen = true;
             }
@@ -242,7 +284,9 @@ pub(super) fn prepare_knowledge_package(
                     KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY,
                 )?);
                 if extracted_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("知识库包解压总大小超过安全上限。"));
+                    return Err(String::from(
+                        "The knowledge package's total extracted size exceeds the safety limit.",
+                    ));
                 }
                 extracted_artifacts.insert(
                     String::from(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY),
@@ -253,8 +297,11 @@ pub(super) fn prepare_knowledge_package(
                 let relative = safe_vector_archive_relative_path(&name)?;
                 let target = vector_root.join(&relative);
                 if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|error| format!("创建知识库向量临时目录失败：{error}"))?;
+                    fs::create_dir_all(parent).map_err(|error| {
+                        format!(
+                            "Failed to create the knowledge vector temporary directory: {error}"
+                        )
+                    })?;
                 }
                 let expected_bytes = entry.size();
                 extracted_bytes = extracted_bytes.saturating_add(extract_bounded_zip_file(
@@ -265,23 +312,35 @@ pub(super) fn prepare_knowledge_package(
                     &name,
                 )?);
                 if extracted_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(String::from("知识库包解压总大小超过安全上限。"));
+                    return Err(String::from(
+                        "The knowledge package's total extracted size exceeds the safety limit.",
+                    ));
                 }
                 extracted_artifacts.insert(name, target);
             }
-            _ => return Err(format!("知识库包包含未知条目：{name}")),
+            _ => {
+                return Err(format!(
+                    "The knowledge package contains an unknown entry: {name}"
+                ));
+            }
         }
     }
     let package: KnowledgePackageManifest = serde_json::from_slice(
-        &package_bytes.ok_or_else(|| String::from("知识库包缺少 package.json。"))?,
+        &package_bytes
+            .ok_or_else(|| String::from("The knowledge package is missing package.json."))?,
     )
-    .map_err(|error| format!("解析知识库 package.json 失败：{error}"))?;
-    let source_manifest: KnowledgeManifest = serde_json::from_slice(
-        &manifest_bytes.ok_or_else(|| String::from("知识库包缺少内部 manifest.json。"))?,
-    )
-    .map_err(|error| format!("解析知识库内部 manifest.json 失败：{error}"))?;
+    .map_err(|error| format!("Failed to parse the knowledge package.json: {error}"))?;
+    let source_manifest: KnowledgeManifest =
+        serde_json::from_slice(&manifest_bytes.ok_or_else(|| {
+            String::from("The knowledge package is missing the internal manifest.json.")
+        })?)
+        .map_err(|error| {
+            format!("Failed to parse the knowledge internal manifest.json: {error}")
+        })?;
     if !database_seen {
-        return Err(String::from("知识库包缺少 content.sqlite3。"));
+        return Err(String::from(
+            "The knowledge package is missing content.sqlite3.",
+        ));
     }
     validate_knowledge_package_metadata(
         &package,
@@ -323,20 +382,32 @@ fn extract_bounded_zip_file<R: Read>(
     name: &str,
 ) -> Result<u64, String> {
     if expected_bytes > limit {
-        return Err(format!("知识库包条目超过大小上限：{name}"));
+        return Err(format!(
+            "A knowledge package entry exceeds the size limit: {name}"
+        ));
     }
-    let mut output = File::create(target)
-        .map_err(|error| format!("创建知识库包临时条目失败（{}）：{error}", target.display()))?;
-    let copied = std::io::copy(&mut entry.by_ref().take(limit + 1), &mut output)
-        .map_err(|error| format!("解压知识库包条目失败（{name}）：{error}"))?;
+    let mut output = File::create(target).map_err(|error| {
+        format!(
+            "Failed to create a knowledge package temporary entry ({}): {error}",
+            target.display()
+        )
+    })?;
+    let copied =
+        std::io::copy(&mut entry.by_ref().take(limit + 1), &mut output).map_err(|error| {
+            format!("Failed to extract the knowledge package entry ({name}): {error}")
+        })?;
     if copied > limit {
-        return Err(format!("知识库包条目解压内容超过大小上限：{name}"));
+        return Err(format!(
+            "The extracted content of a knowledge package entry exceeds the size limit: {name}"
+        ));
     }
-    output
-        .sync_all()
-        .map_err(|error| format!("同步知识库临时条目失败（{name}）：{error}"))?;
+    output.sync_all().map_err(|error| {
+        format!("Failed to sync the knowledge temporary entry ({name}): {error}")
+    })?;
     if copied != expected_bytes {
-        return Err(format!("知识库包条目解压字节数不一致：{name}"));
+        return Err(format!(
+            "The extracted byte count of a knowledge package entry is inconsistent: {name}"
+        ));
     }
     Ok(copied)
 }
@@ -357,16 +428,20 @@ fn safe_vector_archive_relative_path(name: &str) -> Result<PathBuf, String> {
     let relative = name
         .strip_prefix(KNOWLEDGE_PACKAGE_VECTOR_PREFIX)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("知识库向量条目路径无效：{name}"))?;
+        .ok_or_else(|| format!("Invalid knowledge vector entry path: {name}"))?;
     if relative.contains('\\') || relative.contains(':') {
-        return Err(format!("知识库向量条目包含非法路径字符：{name}"));
+        return Err(format!(
+            "A knowledge vector entry contains invalid path characters: {name}"
+        ));
     }
     let path = PathBuf::from(relative);
     if path
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))
     {
-        return Err(format!("知识库向量条目包含非法路径组件：{name}"));
+        return Err(format!(
+            "A knowledge vector entry contains an invalid path component: {name}"
+        ));
     }
     Ok(path)
 }
@@ -392,9 +467,11 @@ fn read_bounded_zip_entry<R: Read>(
     entry
         .take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("读取知识库包条目 {name} 失败：{error}"))?;
+        .map_err(|error| format!("Failed to read knowledge package entry {name}: {error}"))?;
     if bytes.len() as u64 > limit {
-        return Err(format!("知识库包条目超过大小上限：{name}"));
+        return Err(format!(
+            "A knowledge package entry exceeds the size limit: {name}"
+        ));
     }
     Ok(bytes)
 }
@@ -420,27 +497,35 @@ fn validate_knowledge_package_metadata(
     if package.format != KNOWLEDGE_PACKAGE_FORMAT
         || !matches!(package.package_version, 1 | KNOWLEDGE_PACKAGE_VERSION)
     {
-        return Err(String::from("知识库包格式或包版本不受支持。"));
+        return Err(String::from(
+            "The knowledge package format or package version is not supported.",
+        ));
     }
     validate_library_id(&package.source_library_id)?;
     if validate_library_name(&package.name)? != package.name {
-        return Err(String::from("知识库包名称不是规范化名称。"));
+        return Err(String::from(
+            "The knowledge package name is not normalized.",
+        ));
     }
     if package.schema_version != KNOWLEDGE_SCHEMA_VERSION
         || source_manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
     {
         return Err(format!(
-            "知识库包 Schema 版本不兼容：package={}, manifest={}, current={}",
+            "Incompatible knowledge package schema version: package={}, manifest={}, current={}",
             package.schema_version, source_manifest.schema_version, KNOWLEDGE_SCHEMA_VERSION
         ));
     }
     if source_manifest.library_id != package.source_library_id
         || source_manifest.name != package.name
     {
-        return Err(String::from("知识库包来源清单与 package.json 不一致。"));
+        return Err(String::from(
+            "The knowledge package source manifest disagrees with package.json.",
+        ));
     }
     if package.index_status != "ready" {
-        return Err(String::from("知识库包不包含 ready 状态的可直接使用索引。"));
+        return Err(String::from(
+            "The knowledge package has no directly usable index in the ready state.",
+        ));
     }
     let mut settings = package.settings.clone();
     settings.normalize_derived_compatibility();
@@ -452,7 +537,7 @@ fn validate_knowledge_package_metadata(
         )
     {
         return Err(String::from(
-            "旧版知识库包未包含可验证的显示库实体，只能以原始库 BM25 状态导入。",
+            "The legacy knowledge package has no verifiable display-library entity and can only be imported in raw BM25 state.",
         ));
     }
     if package.content_sha256.len() != 64
@@ -461,17 +546,23 @@ fn validate_knowledge_package_metadata(
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(String::from("知识库包 SQLite SHA-256 字段格式无效。"));
+        return Err(String::from(
+            "The knowledge package SQLite SHA-256 field has an invalid format.",
+        ));
     }
     let content_bytes = fs::metadata(database_path)
-        .map_err(|error| format!("读取知识库包 SQLite 元数据失败：{error}"))?
+        .map_err(|error| format!("Failed to read the knowledge package SQLite metadata: {error}"))?
         .len();
     if content_bytes != package.content_bytes {
-        return Err(String::from("知识库包 SQLite 大小与 package.json 不一致。"));
+        return Err(String::from(
+            "The knowledge package SQLite size disagrees with package.json.",
+        ));
     }
     let digest = sha256_file_hex(database_path)?;
     if digest != package.content_sha256.to_ascii_lowercase() {
-        return Err(String::from("知识库包 SQLite SHA-256 校验失败。"));
+        return Err(String::from(
+            "The knowledge package SQLite SHA-256 check failed.",
+        ));
     }
     let declared_artifacts = package
         .derived_artifacts
@@ -479,7 +570,9 @@ fn validate_knowledge_package_metadata(
         .map(|artifact| (artifact.archive_path.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
     if declared_artifacts.len() != package.derived_artifacts.len() {
-        return Err(String::from("知识库包派生文件清单包含重复路径。"));
+        return Err(String::from(
+            "The knowledge package derived-file manifest contains duplicate paths.",
+        ));
     }
     let extracted_names = extracted_artifacts
         .keys()
@@ -487,12 +580,19 @@ fn validate_knowledge_package_metadata(
         .collect::<BTreeSet<_>>();
     let declared_names = declared_artifacts.keys().copied().collect::<BTreeSet<_>>();
     if extracted_names != declared_names {
-        return Err(String::from("知识库包派生文件清单与实际归档条目不一致。"));
+        return Err(String::from(
+            "The knowledge package derived-file manifest disagrees with the actual archive entries.",
+        ));
     }
     for artifact in &package.derived_artifacts {
         let path = extracted_artifacts
             .get(&artifact.archive_path)
-            .ok_or_else(|| format!("知识库包缺少派生文件：{}", artifact.archive_path))?;
+            .ok_or_else(|| {
+                format!(
+                    "The knowledge package is missing a derived file: {}",
+                    artifact.archive_path
+                )
+            })?;
         if !matches!(
             artifact.archive_path.as_str(),
             KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY
@@ -501,21 +601,21 @@ fn validate_knowledge_package_metadata(
             .starts_with(KNOWLEDGE_PACKAGE_VECTOR_PREFIX)
         {
             return Err(format!(
-                "知识库包派生文件路径不受支持：{}",
+                "Unsupported knowledge package derived-file path: {}",
                 artifact.archive_path
             ));
         }
         let metadata = fs::symlink_metadata(path)
-            .map_err(|error| format!("读取知识库派生文件失败：{error}"))?;
+            .map_err(|error| format!("Failed to read a knowledge derived file: {error}"))?;
         if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
             return Err(format!(
-                "知识库派生文件不是可信普通文件：{}",
+                "A knowledge derived file is not a trusted regular file: {}",
                 path.display()
             ));
         }
         if metadata.len() != artifact.bytes {
             return Err(format!(
-                "知识库派生文件大小校验失败：{}",
+                "Knowledge derived file size check failed: {}",
                 artifact.archive_path
             ));
         }
@@ -524,7 +624,7 @@ fn validate_knowledge_package_metadata(
             || sha256_file_hex(path)? != artifact.sha256.to_ascii_lowercase()
         {
             return Err(format!(
-                "知识库派生文件 SHA-256 校验失败：{}",
+                "Knowledge derived file SHA-256 check failed: {}",
                 artifact.archive_path
             ));
         }
@@ -533,7 +633,7 @@ fn validate_knowledge_package_metadata(
         && !extracted_artifacts.contains_key(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY)
     {
         return Err(String::from(
-            "知识库包声明显示库 ready，但缺少 display.sqlite3。",
+            "The knowledge package declares the display library ready but is missing display.sqlite3.",
         ));
     }
     if settings.vector_index.status == KnowledgeVectorIndexStatus::Ready
@@ -542,7 +642,7 @@ fn validate_knowledge_package_metadata(
             .any(|path| path.starts_with(KNOWLEDGE_PACKAGE_VECTOR_PREFIX))
     {
         return Err(String::from(
-            "知识库包声明向量索引 ready，但缺少 LanceDB 派生文件。",
+            "The knowledge package declares the vector index ready but is missing the LanceDB derived files.",
         ));
     }
     Ok(())
@@ -568,19 +668,21 @@ pub(super) fn export_knowledge_package_files(
     let database_path = library_root.join("content.sqlite3");
     let manifest_path = library_root.join("manifest.json");
     let database_metadata = fs::symlink_metadata(&database_path)
-        .map_err(|error| format!("读取待导出 SQLite 失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the SQLite to export: {error}"))?;
     let manifest_metadata = fs::symlink_metadata(&manifest_path)
-        .map_err(|error| format!("读取待导出清单失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the manifest to export: {error}"))?;
     if !database_metadata.is_file()
         || metadata_is_link_or_reparse(&database_metadata)
         || !manifest_metadata.is_file()
         || metadata_is_link_or_reparse(&manifest_metadata)
     {
-        return Err(String::from("知识库导出来源包含非普通文件。"));
+        return Err(String::from(
+            "The knowledge export source contains non-regular files.",
+        ));
     }
     if database_metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
         return Err(format!(
-            "知识库 SQLite 超过可移植包大小上限 {} 字节。",
+            "The knowledge SQLite exceeds the portable package size limit of {} bytes.",
             MAX_KNOWLEDGE_PACKAGE_BYTES
         ));
     }
@@ -595,47 +697,54 @@ pub(super) fn export_knowledge_package_files(
         // transientPath must be absent after the owning SQLite binding is stopped.
         // transientPath 在所属 SQLite 绑定停止后必须不存在。
         let transient_path = library_root.join(transient_name);
-        if transient_path
-            .try_exists()
-            .map_err(|error| format!("检查知识库 SQLite 临时日志失败：{error}"))?
-        {
+        if transient_path.try_exists().map_err(|error| {
+            format!("Failed to check the knowledge SQLite temporary journal: {error}")
+        })? {
             return Err(format!(
-                "知识库 SQLite 日志尚未完全收口，拒绝导出：{}",
+                "The knowledge SQLite journal is not fully checkpointed; export refused: {}",
                 transient_path.display()
             ));
         }
     }
     let source_manifest: KnowledgeManifest = serde_json::from_slice(
-        &fs::read(&manifest_path).map_err(|error| format!("读取待导出清单失败：{error}"))?,
+        &fs::read(&manifest_path)
+            .map_err(|error| format!("Failed to read the manifest to export: {error}"))?,
     )
-    .map_err(|error| format!("解析待导出清单失败：{error}"))?;
+    .map_err(|error| format!("Failed to parse the manifest to export: {error}"))?;
     if source_manifest.library_id != library.id
         || source_manifest.name != library.name
         || source_manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
     {
-        return Err(String::from("待导出知识库清单与注册记录不一致。"));
+        return Err(String::from(
+            "The knowledge manifest to export disagrees with the registry record.",
+        ));
     }
     let artifact_files = collect_export_artifact_files(library_root)?;
     let artifact_bytes = artifact_files.iter().try_fold(0_u64, |total, (_, path)| {
         let bytes = fs::metadata(path)
-            .map_err(|error| format!("读取知识库派生产物大小失败：{error}"))?
+            .map_err(|error| {
+                format!("Failed to read the knowledge derived-artifact size: {error}")
+            })?
             .len();
-        total
-            .checked_add(bytes)
-            .ok_or_else(|| String::from("知识库派生产物总大小超出支持范围。"))
+        total.checked_add(bytes).ok_or_else(|| {
+            String::from("The total knowledge derived-artifact size is out of the supported range.")
+        })
     })?;
     if database_metadata
         .len()
         .checked_add(artifact_bytes)
         .is_none_or(|total| total > MAX_KNOWLEDGE_PACKAGE_BYTES)
     {
-        return Err(String::from("知识库可移植包未压缩内容超过大小上限。"));
+        return Err(String::from(
+            "The uncompressed content of the portable knowledge package exceeds the size limit.",
+        ));
     }
     let derived_artifacts = artifact_files
         .iter()
         .map(|(archive_path, path)| {
-            let metadata = fs::metadata(path)
-                .map_err(|error| format!("读取知识库派生产物元数据失败：{error}"))?;
+            let metadata = fs::metadata(path).map_err(|error| {
+                format!("Failed to read the knowledge derived-artifact metadata: {error}")
+            })?;
             Ok(KnowledgePackageArtifact {
                 archive_path: archive_path.clone(),
                 sha256: sha256_file_hex(path)?,
@@ -669,7 +778,9 @@ pub(super) fn export_knowledge_package_files(
         .prefix(".knowledge-export-")
         .suffix(".vkb.tmp")
         .tempfile_in(destination_directory)
-        .map_err(|error| format!("创建知识库导出临时文件失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to create the knowledge export temporary file: {error}")
+        })?;
     {
         let mut writer = ZipWriter::new(temporary.as_file_mut());
         let options = SimpleFileOptions::default()
@@ -677,61 +788,66 @@ pub(super) fn export_knowledge_package_files(
             .unix_permissions(0o600);
         writer
             .start_file(KNOWLEDGE_PACKAGE_METADATA_ENTRY, options)
-            .map_err(|error| format!("创建知识库 package.json 条目失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to create the knowledge package.json entry: {error}")
+            })?;
         writer
-            .write_all(
-                &serde_json::to_vec_pretty(&package)
-                    .map_err(|error| format!("序列化知识库包元数据失败：{error}"))?,
-            )
-            .map_err(|error| format!("写入知识库 package.json 失败：{error}"))?;
+            .write_all(&serde_json::to_vec_pretty(&package).map_err(|error| {
+                format!("Failed to serialize the knowledge package metadata: {error}")
+            })?)
+            .map_err(|error| format!("Failed to write the knowledge package.json: {error}"))?;
         writer
             .start_file(KNOWLEDGE_PACKAGE_LIBRARY_MANIFEST_ENTRY, options)
-            .map_err(|error| format!("创建知识库内部清单条目失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to create the knowledge internal manifest entry: {error}")
+            })?;
         writer
             .write_all(
-                &serde_json::to_vec_pretty(&source_manifest)
-                    .map_err(|error| format!("序列化知识库内部清单失败：{error}"))?,
+                &serde_json::to_vec_pretty(&source_manifest).map_err(|error| {
+                    format!("Failed to serialize the knowledge internal manifest: {error}")
+                })?,
             )
-            .map_err(|error| format!("写入知识库内部清单失败：{error}"))?;
+            .map_err(|error| format!("Failed to write the knowledge internal manifest: {error}"))?;
         writer
             .start_file(KNOWLEDGE_PACKAGE_DATABASE_ENTRY, options)
-            .map_err(|error| format!("创建知识库 SQLite 条目失败：{error}"))?;
+            .map_err(|error| format!("Failed to create the knowledge SQLite entry: {error}"))?;
         let mut database = File::open(&database_path)
-            .map_err(|error| format!("打开待导出 SQLite 失败：{error}"))?;
+            .map_err(|error| format!("Failed to open the SQLite to export: {error}"))?;
         std::io::copy(&mut database, &mut writer)
-            .map_err(|error| format!("写入知识库 SQLite 条目失败：{error}"))?;
+            .map_err(|error| format!("Failed to write the knowledge SQLite entry: {error}"))?;
         for (archive_path, source_path) in &artifact_files {
-            writer
-                .start_file(archive_path, options)
-                .map_err(|error| format!("创建知识库派生条目失败：{archive_path}：{error}"))?;
+            writer.start_file(archive_path, options).map_err(|error| {
+                format!("Failed to create the knowledge derived entry: {archive_path}: {error}")
+            })?;
             let mut source = File::open(source_path)
-                .map_err(|error| format!("打开知识库派生产物失败：{error}"))?;
-            std::io::copy(&mut source, &mut writer)
-                .map_err(|error| format!("写入知识库派生条目失败：{archive_path}：{error}"))?;
+                .map_err(|error| format!("Failed to open a knowledge derived artifact: {error}"))?;
+            std::io::copy(&mut source, &mut writer).map_err(|error| {
+                format!("Failed to write the knowledge derived entry: {archive_path}: {error}")
+            })?;
         }
         writer
             .finish()
-            .map_err(|error| format!("完成知识库 ZIP 包失败：{error}"))?;
+            .map_err(|error| format!("Failed to finish the knowledge ZIP package: {error}"))?;
     }
     temporary
         .as_file()
         .sync_all()
-        .map_err(|error| format!("同步知识库导出临时文件失败：{error}"))?;
+        .map_err(|error| format!("Failed to sync the knowledge export temporary file: {error}"))?;
     // archiveBytes enforces that an exported package can pass the same size gate during import.
     // archiveBytes 确保导出包能够通过导入时相同的大小门禁。
     let archive_bytes = temporary
         .as_file()
         .metadata()
-        .map_err(|error| format!("读取知识库导出包大小失败：{error}"))?
+        .map_err(|error| format!("Failed to read the knowledge export package size: {error}"))?
         .len();
     if archive_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
         return Err(format!(
-            "知识库导出包超过大小上限 {} 字节。",
+            "The knowledge export package exceeds the size limit of {} bytes.",
             MAX_KNOWLEDGE_PACKAGE_BYTES
         ));
     }
     persist_tempfile_atomically(temporary, &archive_path)
-        .map_err(|error| format!("提交知识库导出文件失败：{error}"))?;
+        .map_err(|error| format!("Failed to commit the knowledge export file: {error}"))?;
     Ok(KnowledgePackageExportResult {
         archive_path: runtime_assets::native_host_path_text_from_path(&archive_path),
         package,
@@ -756,7 +872,9 @@ fn collect_export_artifact_files(library_root: &Path) -> Result<Vec<(String, Pat
     match fs::symlink_metadata(&display_path) {
         Ok(metadata) if metadata.is_file() && !metadata_is_link_or_reparse(&metadata) => {
             if metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                return Err(String::from("知识库显示库 SQLite 超过可移植包大小上限。"));
+                return Err(String::from(
+                    "The knowledge display-library SQLite exceeds the portable package size limit.",
+                ));
             }
             artifacts.push((
                 String::from(KNOWLEDGE_PACKAGE_DISPLAY_DATABASE_ENTRY),
@@ -764,10 +882,16 @@ fn collect_export_artifact_files(library_root: &Path) -> Result<Vec<(String, Pat
             ));
         }
         Ok(_) => {
-            return Err(String::from("知识库显示库文件不是可信普通文件。"));
+            return Err(String::from(
+                "The knowledge display-library file is not a trusted regular file.",
+            ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("读取知识库显示库文件失败：{error}")),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read the knowledge display-library file: {error}"
+            ));
+        }
     }
     let vector_root = library_root.join("lancedb");
     match fs::symlink_metadata(&vector_root) {
@@ -775,37 +899,52 @@ fn collect_export_artifact_files(library_root: &Path) -> Result<Vec<(String, Pat
             let mut files = Vec::new();
             collect_ordinary_files_recursively(&vector_root, &mut files)?;
             for path in files {
-                let relative = path
-                    .strip_prefix(&vector_root)
-                    .map_err(|error| format!("计算知识库向量归档路径失败：{error}"))?;
+                let relative = path.strip_prefix(&vector_root).map_err(|error| {
+                    format!("Failed to compute the knowledge vector archive path: {error}")
+                })?;
                 let archive_path = format!(
                     "{}{}",
                     KNOWLEDGE_PACKAGE_VECTOR_PREFIX,
                     relative_to_zip_path(relative)?
                 );
-                let metadata = fs::metadata(&path)
-                    .map_err(|error| format!("读取知识库向量文件元数据失败：{error}"))?;
+                let metadata = fs::metadata(&path).map_err(|error| {
+                    format!("Failed to read the knowledge vector file metadata: {error}")
+                })?;
                 if metadata.len() > MAX_KNOWLEDGE_PACKAGE_BYTES {
-                    return Err(format!("知识库向量文件超过大小上限：{archive_path}"));
+                    return Err(format!(
+                        "A knowledge vector file exceeds the size limit: {archive_path}"
+                    ));
                 }
                 artifacts.push((archive_path, path));
             }
         }
-        Ok(_) => return Err(String::from("知识库 LanceDB 根目录不是可信普通目录。")),
+        Ok(_) => {
+            return Err(String::from(
+                "The knowledge LanceDB root is not a trusted regular directory.",
+            ));
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("读取知识库 LanceDB 根目录失败：{error}")),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read the knowledge LanceDB root: {error}"
+            ));
+        }
     }
     artifacts.sort_by(|left, right| left.0.cmp(&right.0));
     let total_bytes = artifacts.iter().try_fold(0_u64, |total, (_, path)| {
         let bytes = fs::metadata(path)
-            .map_err(|error| format!("读取知识库派生产物大小失败：{error}"))?
+            .map_err(|error| {
+                format!("Failed to read the knowledge derived-artifact size: {error}")
+            })?
             .len();
-        total
-            .checked_add(bytes)
-            .ok_or_else(|| String::from("知识库派生产物总大小超出支持范围。"))
+        total.checked_add(bytes).ok_or_else(|| {
+            String::from("The total knowledge derived-artifact size is out of the supported range.")
+        })
     })?;
     if total_bytes > MAX_KNOWLEDGE_PACKAGE_BYTES {
-        return Err(String::from("知识库派生产物总大小超过可移植包上限。"));
+        return Err(String::from(
+            "The total knowledge derived-artifact size exceeds the portable package limit.",
+        ));
     }
     Ok(artifacts)
 }
@@ -828,12 +967,14 @@ pub(super) fn copy_prepared_derived_artifacts(
 ) -> Result<(), String> {
     if let Some(source) = prepared.display_database_path() {
         let metadata = fs::symlink_metadata(&source)
-            .map_err(|error| format!("读取暂存显示库失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the staged display library: {error}"))?;
         if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-            return Err(String::from("暂存显示库不是可信普通文件。"));
+            return Err(String::from(
+                "The staged display library is not a trusted regular file.",
+            ));
         }
         fs::copy(&source, target_root.join("display.sqlite3"))
-            .map_err(|error| format!("复制知识库显示库失败：{error}"))?;
+            .map_err(|error| format!("Failed to copy the knowledge display library: {error}"))?;
     }
     if let Some(source_root) = prepared.vector_root() {
         let target_root = target_root.join("lancedb");
@@ -855,29 +996,37 @@ pub(super) fn copy_prepared_derived_artifacts(
 /// Success for an ordinary tree; links, special entries and I/O failures are explicitly rejected.
 /// 普通目录树复制成功；链接、特殊条目与 I/O 失败明确拒绝。
 fn copy_ordinary_directory_recursively(source: &Path, target: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(source)
-        .map_err(|error| format!("读取暂存派生目录失败（{}）：{error}", source.display()))?;
+    let metadata = fs::symlink_metadata(source).map_err(|error| {
+        format!(
+            "Failed to read the staged derived directory ({}): {error}",
+            source.display()
+        )
+    })?;
     if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
         return Err(format!(
-            "暂存派生目录不是可信普通目录：{}",
+            "The staged derived directory is not a trusted regular directory: {}",
             source.display()
         ));
     }
-    fs::create_dir_all(target)
-        .map_err(|error| format!("创建目标派生目录失败（{}）：{error}", target.display()))?;
+    fs::create_dir_all(target).map_err(|error| {
+        format!(
+            "Failed to create the target derived directory ({}): {error}",
+            target.display()
+        )
+    })?;
     let mut entries = fs::read_dir(source)
-        .map_err(|error| format!("读取暂存派生目录失败：{error}"))?
+        .map_err(|error| format!("Failed to read the staged derived directory: {error}"))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("读取暂存派生条目失败：{error}"))?;
+        .map_err(|error| format!("Failed to read a staged derived entry: {error}"))?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());
         let metadata = fs::symlink_metadata(&source_path)
-            .map_err(|error| format!("读取暂存派生条目失败：{error}"))?;
+            .map_err(|error| format!("Failed to read a staged derived entry: {error}"))?;
         if metadata_is_link_or_reparse(&metadata) {
             return Err(format!(
-                "暂存派生目录包含链接条目：{}",
+                "The staged derived directory contains a link entry: {}",
                 source_path.display()
             ));
         }
@@ -885,10 +1034,10 @@ fn copy_ordinary_directory_recursively(source: &Path, target: &Path) -> Result<(
             copy_ordinary_directory_recursively(&source_path, &target_path)?;
         } else if metadata.is_file() {
             fs::copy(&source_path, &target_path)
-                .map_err(|error| format!("复制知识库派生文件失败：{error}"))?;
+                .map_err(|error| format!("Failed to copy a knowledge derived file: {error}"))?;
         } else {
             return Err(format!(
-                "暂存派生目录包含非普通条目：{}",
+                "The staged derived directory contains a non-regular entry: {}",
                 source_path.display()
             ));
         }
@@ -910,23 +1059,38 @@ fn copy_ordinary_directory_recursively(source: &Path, target: &Path) -> Result<(
 /// 确定性遍历后成功，或返回链接/特殊条目、I/O 错误。
 fn collect_ordinary_files_recursively(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let mut entries = fs::read_dir(root)
-        .map_err(|error| format!("读取知识库派生目录失败（{}）：{error}", root.display()))?
+        .map_err(|error| {
+            format!(
+                "Failed to read the knowledge derived directory ({}): {error}",
+                root.display()
+            )
+        })?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("读取知识库派生目录条目失败：{error}"))?;
+        .map_err(|error| format!("Failed to read a knowledge derived directory entry: {error}"))?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("读取知识库派生条目失败（{}）：{error}", path.display()))?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "Failed to read a knowledge derived entry ({}): {error}",
+                path.display()
+            )
+        })?;
         if metadata_is_link_or_reparse(&metadata) {
-            return Err(format!("知识库派生目录包含链接条目：{}", path.display()));
+            return Err(format!(
+                "The knowledge derived directory contains a link entry: {}",
+                path.display()
+            ));
         }
         if metadata.is_dir() {
             collect_ordinary_files_recursively(&path, files)?;
         } else if metadata.is_file() {
             files.push(path);
         } else {
-            return Err(format!("知识库派生目录包含非普通条目：{}", path.display()));
+            return Err(format!(
+                "The knowledge derived directory contains a non-regular entry: {}",
+                path.display()
+            ));
         }
     }
     Ok(())
@@ -949,24 +1113,31 @@ fn relative_to_zip_path(path: &Path) -> Result<String, String> {
     for component in path.components() {
         let Component::Normal(value) = component else {
             return Err(format!(
-                "知识库派生产物相对路径包含非法组件：{}",
+                "A knowledge derived-artifact relative path contains an invalid component: {}",
                 path.display()
             ));
         };
-        let value = value
-            .to_str()
-            .ok_or_else(|| format!("知识库派生产物路径不是有效 UTF-8：{}", path.display()))?;
+        let value = value.to_str().ok_or_else(|| {
+            format!(
+                "A knowledge derived-artifact path is not valid UTF-8: {}",
+                path.display()
+            )
+        })?;
         if value.is_empty()
             || value
                 .chars()
                 .any(|character| matches!(character, '/' | '\\' | ':'))
         {
-            return Err(format!("知识库派生产物路径包含非法字符：{value}"));
+            return Err(format!(
+                "A knowledge derived-artifact path contains invalid characters: {value}"
+            ));
         }
         parts.push(value);
     }
     if parts.is_empty() {
-        return Err(String::from("知识库派生产物相对路径不能为空。"));
+        return Err(String::from(
+            "A knowledge derived-artifact relative path must not be empty.",
+        ));
     }
     Ok(parts.join("/"))
 }
@@ -984,14 +1155,18 @@ fn relative_to_zip_path(path: &Path) -> Result<String, String> {
 /// Its streaming lowercase SHA-256 digest, or an open/read failure.
 /// 返回流式小写 SHA-256 摘要，或打开/读取错误。
 fn sha256_file_hex(path: &Path) -> Result<String, String> {
-    let mut input = File::open(path)
-        .map_err(|error| format!("打开 SHA-256 输入文件失败（{}）：{error}", path.display()))?;
+    let mut input = File::open(path).map_err(|error| {
+        format!(
+            "Failed to open the SHA-256 input file ({}): {error}",
+            path.display()
+        )
+    })?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 128 * 1024];
     loop {
         let read = input
             .read(&mut buffer)
-            .map_err(|error| format!("读取 SHA-256 输入文件失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the SHA-256 input file: {error}"))?;
         if read == 0 {
             break;
         }

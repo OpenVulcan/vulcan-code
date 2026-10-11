@@ -74,7 +74,7 @@ impl WorkspaceIndexLoadReport {
         }
         let first = &self.issues[0];
         Err(format!(
-            "工作区索引读取不完整（{} 项问题）；未发布替换快照。阶段={:?} 项目={} 会话={}：{}",
+            "The workspace index read is incomplete ({} issues); the replacement snapshot was not published. phase={:?} project={} session={}: {}",
             self.issues.len(),
             first.stage,
             first.project_id.as_deref().unwrap_or("-"),

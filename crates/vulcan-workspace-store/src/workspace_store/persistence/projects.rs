@@ -24,7 +24,7 @@ async fn upsert_active_project(
     // sort_order uses a checked conversion so project order cannot truncate on wide usize hosts.
     // sort_order 使用受检查转换，避免项目顺序在宽 usize 宿主上发生截断。
     let sort_order = i64::try_from(project.order)
-        .map_err(|_| String::from("写入活动项目失败：项目顺序超出 SQLite 整数范围。"))?;
+        .map_err(|_| String::from("Failed to write the active project: the project order exceeds the SQLite integer range."))?;
     // Validate and encode both rows before the engine can commit any project metadata.
     // 在宿主运行时可能提交任何项目元数据之前，完成两条记录的校验和编码。
     let vce_values = project_persistence_sql_values(&project_vce_settings_params(
@@ -99,7 +99,9 @@ COMMIT;
         vec![],
     )
     .await
-    .map_err(|error| format!("写入活动项目及 VCE 设置事务失败：{error}"))?;
+    .map_err(|error| {
+        format!("Failed to write the active project and VCE settings transaction: {error}")
+    })?;
 
     Ok(())
 }
@@ -122,9 +124,9 @@ fn project_persistence_sql_values(parameters: &[SqliteValue]) -> Result<String, 
                 "'{}'",
                 value.replace('\'', "''").replace('\0', "' || char(0) || '")
             )),
-            SqliteValue::Real(_) | SqliteValue::Blob(_) => {
-                Err(String::from("项目持久化参数只能使用整数、文本或 NULL。"))
-            }
+            SqliteValue::Real(_) | SqliteValue::Blob(_) => Err(String::from(
+                "Project persistence parameters can only be integers, text or NULL.",
+            )),
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|values| values.join(", "))
@@ -139,19 +141,22 @@ fn project_vce_settings_params(
 ) -> Result<Vec<SqliteValue>, String> {
     settings.validate()?;
     let revision = i64::try_from(settings.revision)
-        .map_err(|_| String::from("VCE 设置修订号超出 SQLite 整数范围。"))?;
+        .map_err(|_| String::from("The VCE settings revision exceeds the SQLite integer range."))?;
     let max_file_bytes = i64::try_from(settings.max_file_bytes)
-        .map_err(|_| String::from("VCE 最大文件字节数超出 SQLite 整数范围。"))?;
-    let embedding_max_concurrency = i64::try_from(settings.embedding_max_concurrency)
-        .map_err(|_| String::from("VCE 向量并发数超出 SQLite 整数范围。"))?;
+        .map_err(|_| String::from("The VCE maximum file bytes exceed the SQLite integer range."))?;
+    let embedding_max_concurrency =
+        i64::try_from(settings.embedding_max_concurrency).map_err(|_| {
+            String::from("The VCE embedding concurrency exceeds the SQLite integer range.")
+        })?;
     let query_max_concurrency = i64::try_from(settings.query_max_concurrency)
-        .map_err(|_| String::from("VCE 查询并发数超出 SQLite 整数范围。"))?;
+        .map_err(|_| String::from("The VCE query concurrency exceeds the SQLite integer range."))?;
     let max_results = i64::try_from(settings.max_results)
-        .map_err(|_| String::from("VCE 结果数量超出 SQLite 整数范围。"))?;
-    let max_context_chars = i64::try_from(settings.max_context_chars)
-        .map_err(|_| String::from("VCE 上下文字符数超出 SQLite 整数范围。"))?;
+        .map_err(|_| String::from("The VCE result count exceeds the SQLite integer range."))?;
+    let max_context_chars = i64::try_from(settings.max_context_chars).map_err(|_| {
+        String::from("The VCE context character count exceeds the SQLite integer range.")
+    })?;
     let ignore_patterns = serde_json::to_string(&settings.extra_ignore_patterns)
-        .map_err(|error| format!("序列化 VCE 忽略规则失败：{error}"))?;
+        .map_err(|error| format!("Failed to serialize the VCE ignore rules: {error}"))?;
     Ok(vec![
         SqliteValue::Text(project_id.to_owned()),
         SqliteValue::Integer(i64::from(settings.enabled)),
@@ -231,7 +236,9 @@ struct ProjectLayoutMutationEntry {
 /// 对非空白身份返回成功，否则返回显式校验错误。
 fn validate_project_mutation_id(project_id: &str, action_description: &str) -> Result<(), String> {
     if project_id.trim().is_empty() {
-        return Err(format!("{action_description}失败：项目标识不能为空。"));
+        return Err(format!(
+            "Failed to {action_description}: the project identifier must not be empty."
+        ));
     }
     Ok(())
 }
@@ -261,14 +268,14 @@ fn validate_project_mutation_identity_rows(
     match rows {
         [row] if row.id == project_id => Ok(()),
         [] => Err(format!(
-            "{action_description}失败：活动项目 `{project_id}` 不存在或状态已改变。"
+            "Failed to {action_description}: active project `{project_id}` does not exist or its state changed."
         )),
         [row] => Err(format!(
-            "{action_description}失败：SQLite 返回意外项目标识 `{}`，预期 `{project_id}`。",
+            "Failed to {action_description}: SQLite returned unexpected project identifier `{}`, expected `{project_id}`.",
             row.id
         )),
         _ => Err(format!(
-            "{action_description}失败：SQLite 返回 {} 条项目身份，预期恰好一条。",
+            "Failed to {action_description}: SQLite returned {} project identities, expected exactly one.",
             rows.len()
         )),
     }
@@ -302,23 +309,23 @@ fn append_project_layout_section(
     pin_transition: Option<(&str, bool)>,
 ) -> Result<(), String> {
     for (index, project_id) in project_ids.iter().enumerate() {
-        validate_project_mutation_id(project_id, "更新项目布局")?;
+        validate_project_mutation_id(project_id, "update the project layout")?;
         if !seen_project_ids.insert(project_id.clone()) {
             return Err(format!(
-                "更新项目布局失败：项目标识 `{project_id}` 在布局请求中重复。"
+                "Failed to update the project layout: project identifier `{project_id}` is duplicated in the layout request."
             ));
         }
         // sort_order uses a checked conversion so an oversized layout cannot silently truncate.
         // sort_order 使用受检查转换，避免超大布局被静默截断。
         let sort_order = i64::try_from(index)
-            .map_err(|_| String::from("更新项目布局失败：项目数量超出 SQLite 顺序范围。"))?;
+            .map_err(|_| String::from("Failed to update the project layout: the project count exceeds the SQLite order range."))?;
         // expected_pinned differs only for the explicitly requested pin transition.
         // expected_pinned 仅对显式请求的置顶转换项目取相反值。
         let expected_pinned = match pin_transition {
             Some((transition_project_id, next_pinned)) if transition_project_id == project_id => {
                 if next_pinned != pinned {
                     return Err(format!(
-                        "更新项目布局失败：置顶转换项目 `{project_id}` 位于错误分区。"
+                        "Failed to update the project layout: pin-transition project `{project_id}` is in the wrong section."
                     ));
                 }
                 !next_pinned
@@ -362,7 +369,9 @@ fn project_layout_mutation_entries(
         pinned_project_ids
             .len()
             .checked_add(regular_project_ids.len())
-            .ok_or_else(|| String::from("更新项目布局失败：项目数量溢出。"))?,
+            .ok_or_else(|| {
+                String::from("Failed to update the project layout: the project count overflowed.")
+            })?,
     );
     // seen_project_ids proves the request contains one unique identity per active project.
     // seen_project_ids 证明请求为每个活动项目只包含一个唯一身份。
@@ -382,13 +391,15 @@ fn project_layout_mutation_entries(
         pin_transition,
     )?;
     if entries.is_empty() {
-        return Err(String::from("更新项目布局失败：完整项目布局不能为空。"));
+        return Err(String::from(
+            "Failed to update the project layout: the complete project layout must not be empty.",
+        ));
     }
     if let Some((transition_project_id, _next_pinned)) = pin_transition
         && !seen_project_ids.contains(transition_project_id)
     {
         return Err(format!(
-            "更新项目布局失败：置顶转换项目 `{transition_project_id}` 不在完整布局中。"
+            "Failed to update the project layout: pin-transition project `{transition_project_id}` is not in the complete layout."
         ));
     }
     Ok(entries)
@@ -408,7 +419,9 @@ fn project_layout_mutation_entries(
 /// 返回使用编号参数、只会更新全部行或完全不更新的语句。
 fn project_layout_mutation_statement(entry_count: usize) -> Result<String, String> {
     if entry_count == 0 {
-        return Err(String::from("更新项目布局失败：完整项目布局不能为空。"));
+        return Err(String::from(
+            "Failed to update the project layout: the complete project layout must not be empty.",
+        ));
     }
     // value_rows assigns four stable parameters to every requested project transition.
     // value_rows 为每个请求的项目转换分配四个稳定参数。
@@ -416,21 +429,31 @@ fn project_layout_mutation_statement(entry_count: usize) -> Result<String, Strin
     for index in 0..entry_count {
         // parameter_offset is checked before deriving the one-based SQLite parameter indices.
         // parameter_offset 在派生 SQLite 一基参数索引前执行溢出检查。
-        let parameter_offset = index
-            .checked_mul(4)
-            .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
-        let id_parameter = parameter_offset
-            .checked_add(1)
-            .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
-        let expected_pinned_parameter = parameter_offset
-            .checked_add(2)
-            .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
-        let pinned_parameter = parameter_offset
-            .checked_add(3)
-            .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
-        let sort_order_parameter = parameter_offset
-            .checked_add(4)
-            .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
+        let parameter_offset = index.checked_mul(4).ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
+        let id_parameter = parameter_offset.checked_add(1).ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
+        let expected_pinned_parameter = parameter_offset.checked_add(2).ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
+        let pinned_parameter = parameter_offset.checked_add(3).ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
+        let sort_order_parameter = parameter_offset.checked_add(4).ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
         value_rows.push(format!(
             "(?{id_parameter}, ?{expected_pinned_parameter}, ?{pinned_parameter}, ?{sort_order_parameter})"
         ));
@@ -440,7 +463,11 @@ fn project_layout_mutation_statement(entry_count: usize) -> Result<String, Strin
     let updated_at_parameter = entry_count
         .checked_mul(4)
         .and_then(|value| value.checked_add(1))
-        .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
+        .ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
     Ok(format!(
         r#"
 WITH requested(id, expected_pinned, pinned, sort_order) AS (
@@ -506,7 +533,7 @@ fn validate_project_layout_mutation_rows(
 ) -> Result<(), String> {
     if rows.len() != entries.len() {
         return Err(format!(
-            "{action_description}失败：活动项目集合或置顶状态已改变，SQLite 返回 {} 行，预期 {} 行。",
+            "Failed to {action_description}: the active project set or pin state changed; SQLite returned {} rows, expected {} rows.",
             rows.len(),
             entries.len()
         ));
@@ -525,13 +552,13 @@ fn validate_project_layout_mutation_rows(
             expected_layout.get(row.id.as_str()).copied()
         else {
             return Err(format!(
-                "{action_description}失败：SQLite 返回未请求的项目标识 `{}`。",
+                "Failed to {action_description}: SQLite returned unrequested project identifier `{}`.",
                 row.id
             ));
         };
         if !returned_project_ids.insert(row.id.as_str()) {
             return Err(format!(
-                "{action_description}失败：SQLite 重复返回项目标识 `{}`。",
+                "Failed to {action_description}: SQLite returned project identifier `{}` more than once.",
                 row.id
             ));
         }
@@ -542,14 +569,14 @@ fn validate_project_layout_mutation_rows(
             1 => true,
             value => {
                 return Err(format!(
-                    "{action_description}失败：项目 `{}` 返回非法置顶标记 `{value}`。",
+                    "Failed to {action_description}: project `{}` returned an invalid pinned flag `{value}`.",
                     row.id
                 ));
             }
         };
         if returned_pinned != expected_pinned || row.sort_order != expected_sort_order {
             return Err(format!(
-                "{action_description}失败：项目 `{}` 返回布局 pinned={}, sort_order={}，预期 pinned={}, sort_order={}。",
+                "Failed to {action_description}: project `{}` returned layout pinned={}, sort_order={}, expected pinned={}, sort_order={}.",
                 row.id,
                 row.pinned,
                 row.sort_order,
@@ -591,7 +618,11 @@ async fn persist_project_layout_mutation(
         .len()
         .checked_mul(4)
         .and_then(|value| value.checked_add(1))
-        .ok_or_else(|| String::from("更新项目布局失败：SQLite 参数数量溢出。"))?;
+        .ok_or_else(|| {
+            String::from(
+                "Failed to update the project layout: the SQLite parameter count overflowed.",
+            )
+        })?;
     // parameters follow the exact numbered-placeholder order generated above.
     // parameters 严格遵循上面生成的编号占位符顺序。
     let mut parameters = Vec::with_capacity(parameter_capacity);
@@ -611,7 +642,7 @@ async fn persist_project_layout_mutation(
         parameters.clone(),
     )
     .await
-    .map_err(|error| format!("{action_description}失败：{error}"))?;
+    .map_err(|error| format!("Failed to {action_description}: {error}"))?;
     // rows retain the authoritative result state instead of trusting write completion alone.
     // rows 保留权威结果状态，而不是只相信写入调用完成。
     let rows = decode_query_rows::<ProjectLayoutMutationRow>(&result.json_data)?;
@@ -651,10 +682,10 @@ pub(super) async fn update_project_archive_flag(
     expected_archived: bool,
     archived: bool,
 ) -> Result<(), String> {
-    validate_project_mutation_id(project_id, "更新项目归档状态")?;
+    validate_project_mutation_id(project_id, "update the project archive state")?;
     if expected_archived == archived {
         return Err(String::from(
-            "更新项目归档状态失败：预期状态与结果状态不能相同。",
+            "Failed to update the project archive state: the expected state and the result state must differ.",
         ));
     }
     // result proves the exact expected lifecycle transition changed one project row.
@@ -676,11 +707,11 @@ RETURNING id;
         ],
     )
     .await
-    .map_err(|error| format!("更新项目归档状态失败：{error}"))?;
+    .map_err(|error| format!("Failed to update the project archive state: {error}"))?;
     // rows must contain the one project whose lifecycle predicate matched.
     // rows 必须包含生命周期谓词命中的唯一项目。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
-    validate_project_mutation_identity_rows(project_id, &rows, "更新项目归档状态")
+    validate_project_mutation_identity_rows(project_id, &rows, "update the project archive state")
 }
 
 /// Deletes one active project row while preserving archived session directories.
@@ -701,7 +732,7 @@ pub(super) async fn delete_active_project_row(
     host_runtime: &HostRuntimeHandle,
     project_id: &str,
 ) -> Result<(), String> {
-    validate_project_mutation_id(project_id, "移除项目记录")?;
+    validate_project_mutation_id(project_id, "remove the project record")?;
     // result proves the active project row still existed at deletion time.
     // result 证明活动项目行在删除时仍然存在。
     let result = local_sql::query_json_async(
@@ -711,11 +742,11 @@ pub(super) async fn delete_active_project_row(
         vec![SqliteValue::Text(project_id.to_string())],
     )
     .await
-    .map_err(|error| format!("移除项目记录失败：{error}"))?;
+    .map_err(|error| format!("Failed to remove the project record: {error}"))?;
     // rows must contain the one active identity deleted by SQLite.
     // rows 必须包含 SQLite 删除的唯一活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
-    validate_project_mutation_identity_rows(project_id, &rows, "移除项目记录")
+    validate_project_mutation_identity_rows(project_id, &rows, "remove the project record")
 }
 
 /// Reactivates one exact archived project row after every child V1 session has been restored.
@@ -787,7 +818,7 @@ pub async fn persist_project_pinned_and_order_update(
     pinned_project_ids: &[String],
     regular_project_ids: &[String],
 ) -> Result<(), String> {
-    validate_project_mutation_id(project_id, "切换项目置顶状态")?;
+    validate_project_mutation_id(project_id, "toggle the project pin state")?;
     // entries model one pin transition plus the complete resulting active-project layout.
     // entries 表示一次置顶转换以及完整的结果活动项目布局。
     let entries = project_layout_mutation_entries(
@@ -795,7 +826,7 @@ pub async fn persist_project_pinned_and_order_update(
         regular_project_ids,
         Some((project_id, pinned)),
     )?;
-    persist_project_layout_mutation(host_runtime, &entries, "切换项目置顶状态").await
+    persist_project_layout_mutation(host_runtime, &entries, "toggle the project pin state").await
 }
 
 /// Persists one active project's display name without touching its sessions.
@@ -839,11 +870,11 @@ RETURNING id;
         ],
     )
     .await
-    .map_err(|error| format!("重命名项目失败：{error}"))?;
+    .map_err(|error| format!("Failed to rename the project: {error}"))?;
     // rows must contain the exact active identity renamed by SQLite.
     // rows 必须包含 SQLite 重命名的精确活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
-    validate_project_mutation_identity_rows(project_id, &rows, "重命名项目")
+    validate_project_mutation_identity_rows(project_id, &rows, "rename the project")
 }
 
 /// Replaces one active project's VCE settings under an exact optimistic revision.
@@ -870,19 +901,22 @@ pub async fn persist_project_vce_settings(
     expected_revision: u64,
     settings: &ProjectVceSettings,
 ) -> Result<(), String> {
-    validate_project_mutation_id(project_id, "更新 VCE 项目设置")?;
+    validate_project_mutation_id(project_id, "update the VCE project settings")?;
     settings.validate()?;
     let expected_next = expected_revision
         .checked_add(1)
-        .ok_or_else(|| String::from("VCE 设置修订号已耗尽。"))?;
+        .ok_or_else(|| String::from("The VCE settings revisions are exhausted."))?;
     if settings.revision != expected_next {
-        return Err(String::from("VCE 设置必须精确递增一个修订号。"));
+        return Err(String::from(
+            "VCE settings must increment the revision by exactly one.",
+        ));
     }
     let mut parameters =
         project_vce_settings_params(project_id, settings, current_unix_millis_text())?;
     parameters.push(SqliteValue::Integer(
-        i64::try_from(expected_revision)
-            .map_err(|_| String::from("VCE 预期修订号超出 SQLite 整数范围。"))?,
+        i64::try_from(expected_revision).map_err(|_| {
+            String::from("The expected VCE revision exceeds the SQLite integer range.")
+        })?,
     ));
     let result = local_sql::query_json_async(
         &host_runtime.local,
@@ -913,9 +947,9 @@ RETURNING project_id AS id;
         parameters.clone(),
     )
     .await
-    .map_err(|error| format!("更新 VCE 项目设置失败：{error}"))?;
+    .map_err(|error| format!("Failed to update the VCE project settings: {error}"))?;
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
-    validate_project_mutation_identity_rows(project_id, &rows, "更新 VCE 项目设置")
+    validate_project_mutation_identity_rows(project_id, &rows, "update the VCE project settings")
 }
 
 /// Persists one active project's complete icon override pair.
@@ -942,7 +976,7 @@ pub async fn persist_project_icon_update(
     icon_pack: Option<&str>,
     icon_key: Option<&str>,
 ) -> Result<(), String> {
-    validate_project_mutation_id(project_id, "更新项目图标")?;
+    validate_project_mutation_id(project_id, "update the project icon")?;
     // normalized_icon_pair preserves the invariant that icon pack and key are both present or both absent.
     // normalized_icon_pair 保持图标集合与图标键同时存在或同时缺失的不变量。
     let (normalized_icon_pack, normalized_icon_key) =
@@ -966,11 +1000,11 @@ RETURNING id;
         ],
     )
     .await
-    .map_err(|error| format!("更新项目图标失败：{error}"))?;
+    .map_err(|error| format!("Failed to update the project icon: {error}"))?;
     // rows must contain the exact active identity whose icon pair changed.
     // rows 必须包含图标对发生变化的精确活动身份。
     let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
-    validate_project_mutation_identity_rows(project_id, &rows, "更新项目图标")
+    validate_project_mutation_identity_rows(project_id, &rows, "update the project icon")
 }
 
 /// Normalizes and validates one optional project icon pair.
@@ -1001,7 +1035,9 @@ fn normalize_project_icon_pair(
             // normalized_icon_key 拒绝仅含空白的图标身份。
             let normalized_icon_key = icon_key.trim();
             if normalized_icon_pack.is_empty() || normalized_icon_key.is_empty() {
-                return Err(String::from("更新项目图标失败：图标集合与图标键不能为空。"));
+                return Err(String::from(
+                    "Failed to update the project icon: the icon set and icon key must not be empty.",
+                ));
             }
             Ok((
                 Some(normalized_icon_pack.to_string()),
@@ -1009,7 +1045,7 @@ fn normalize_project_icon_pair(
             ))
         }
         _ => Err(String::from(
-            "更新项目图标失败：图标集合与图标键必须同时提供或同时清除。",
+            "Failed to update the project icon: the icon set and icon key must be provided or cleared together.",
         )),
     }
 }
@@ -1041,13 +1077,13 @@ pub(super) async fn resolve_project_rename_target(
         "SELECT root_path FROM projects WHERE id = ?1 AND archived = 0 LIMIT 1;",
         &[SqliteValue::Text(project_id.to_string())],
     )
-    .map_err(|error| format!("查询项目路径失败：{error}"))?;
+    .map_err(|error| format!("Failed to query the project path: {error}"))?;
     let row = decode_query_rows::<ProjectPathRow>(&result.json_data)?
         .into_iter()
         .next()
-        .ok_or_else(|| String::from("没有找到要重命名的项目。"))?;
+        .ok_or_else(|| String::from("The project to rename was not found."))?;
     let fallback_name = project_folder_name_from_path_text(&row.root_path)
-        .ok_or_else(|| String::from("项目路径无法生成默认名称。"))?;
+        .ok_or_else(|| String::from("A default name cannot be derived from the project path."))?;
     Ok(fallback_name)
 }
 
@@ -1094,7 +1130,7 @@ pub async fn persist_project_order_update(
     // entries require every active project's current pin state and resulting section order.
     // entries 要求包含每个活动项目的当前置顶状态与结果分区顺序。
     let entries = project_layout_mutation_entries(pinned_project_ids, regular_project_ids, None)?;
-    persist_project_layout_mutation(host_runtime, &entries, "重排项目").await
+    persist_project_layout_mutation(host_runtime, &entries, "reorder projects").await
 }
 
 /// Persists the collapsed task-project identifiers as workspace-level UI state.
@@ -1103,8 +1139,9 @@ pub async fn persist_collapsed_task_project_ids(
     host_runtime: HostRuntimeHandle,
     collapsed_project_ids: &[String],
 ) -> Result<(), String> {
-    let value = serde_json::to_string(collapsed_project_ids)
-        .map_err(|error| format!("序列化工作台项目展开状态失败：{error}"))?;
+    let value = serde_json::to_string(collapsed_project_ids).map_err(|error| {
+        format!("Failed to serialize the workbench project expansion state: {error}")
+    })?;
     local_sql::execute_batch_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
@@ -1119,7 +1156,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;
         ]],
     )
     .await
-    .map_err(|error| format!("写入工作台项目展开状态失败：{error}"))?;
+    .map_err(|error| format!("Failed to write the workbench project expansion state: {error}"))?;
 
     Ok(())
 }
@@ -1238,18 +1275,18 @@ mod tests {
         }];
 
         assert!(
-            validate_project_mutation_identity_rows("project-a", &matching_rows, "测试项目变更")
+            validate_project_mutation_identity_rows("project-a", &matching_rows, "test project mutation")
                 .is_ok()
         );
         assert!(
-            validate_project_mutation_identity_rows("project-a", &[], "测试项目变更")
+            validate_project_mutation_identity_rows("project-a", &[], "test project mutation")
                 .expect_err("missing mutation row should fail")
-                .contains("状态已改变")
+                .contains("state changed")
         );
         assert!(
-            validate_project_mutation_identity_rows("project-a", &mismatched_rows, "测试项目变更",)
+            validate_project_mutation_identity_rows("project-a", &mismatched_rows, "test project mutation",)
                 .expect_err("mismatched mutation identity should fail")
-                .contains("意外项目标识")
+                .contains("unexpected project identifier")
         );
     }
 
@@ -1279,12 +1316,12 @@ mod tests {
                 None,
             )
             .expect_err("duplicate project identity should fail")
-            .contains("重复")
+            .contains("duplicated")
         );
         assert!(
             project_layout_mutation_entries(&pinned_ids, &regular_ids, Some(("project-b", false)),)
                 .expect_err("transition target in wrong section should fail")
-                .contains("错误分区")
+                .contains("wrong section")
         );
         assert!(
             project_layout_mutation_entries(
@@ -1293,7 +1330,7 @@ mod tests {
                 Some(("missing-project", true)),
             )
             .expect_err("missing transition target should fail")
-            .contains("不在完整布局")
+            .contains("not in the complete layout")
         );
     }
 
@@ -1338,22 +1375,22 @@ mod tests {
         wrong_order_rows[2].sort_order = 0;
 
         assert!(
-            validate_project_layout_mutation_rows(&entries, &matching_rows, "测试布局").is_ok()
+            validate_project_layout_mutation_rows(&entries, &matching_rows, "test layout").is_ok()
         );
         assert!(
-            validate_project_layout_mutation_rows(&entries, &matching_rows[..2], "测试布局")
+            validate_project_layout_mutation_rows(&entries, &matching_rows[..2], "test layout")
                 .expect_err("partial returned layout should fail")
-                .contains("状态已改变")
+                .contains("state changed")
         );
         assert!(
-            validate_project_layout_mutation_rows(&entries, &invalid_flag_rows, "测试布局")
+            validate_project_layout_mutation_rows(&entries, &invalid_flag_rows, "test layout")
                 .expect_err("invalid pinned flag should fail")
-                .contains("非法置顶标记")
+                .contains("invalid pinned flag")
         );
         assert!(
-            validate_project_layout_mutation_rows(&entries, &wrong_order_rows, "测试布局")
+            validate_project_layout_mutation_rows(&entries, &wrong_order_rows, "test layout")
                 .expect_err("wrong returned order should fail")
-                .contains("返回布局")
+                .contains("returned layout")
         );
     }
 
@@ -1374,7 +1411,7 @@ mod tests {
         assert!(
             project_layout_mutation_statement(0)
                 .expect_err("empty layout statement should fail")
-                .contains("不能为空")
+                .contains("must not be empty")
         );
     }
 

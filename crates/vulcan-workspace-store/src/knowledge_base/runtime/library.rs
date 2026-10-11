@@ -101,7 +101,7 @@ impl KnowledgeBaseRuntime {
             ]],
         )
         .await
-        .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the knowledge registry record: {error}"))?;
 
         let initialize_result = async {
             self.initialize_library_storage(&library_id, &normalized_name)
@@ -161,7 +161,7 @@ impl KnowledgeBaseRuntime {
         let library_id = Uuid::new_v4().to_string();
         let now = unix_epoch_millis()?;
         let settings_json = serde_json::to_string(settings)
-            .map_err(|error| format!("序列化知识库配置失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize the knowledge configuration: {error}"))?;
         local_sql::execute_batch_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -180,7 +180,7 @@ impl KnowledgeBaseRuntime {
             ]],
         )
         .await
-        .map_err(|error| format!("创建知识库注册记录失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the knowledge registry record: {error}"))?;
         let initialize_result = async {
             self.initialize_library_storage(&library_id, &normalized_name)
                 .await?;
@@ -210,15 +210,16 @@ impl KnowledgeBaseRuntime {
             if persisted.embedding.enabled {
                 persisted.vector_index.status = KnowledgeVectorIndexStatus::Pending;
             }
-            let settings_json = serde_json::to_string(&persisted)
-                .map_err(|error| format!("序列化显示库初始状态失败：{error}"))?;
+            let settings_json = serde_json::to_string(&persisted).map_err(|error| {
+                format!("Failed to serialize the initial display-library state: {error}")
+            })?;
             local_sql::execute_script_async(
                 &self.host_runtime.local,
                 LogicalDatabase::AppState,
                     "UPDATE knowledge_libraries SET settings_json = ? WHERE id = ? AND lifecycle_state = 'active';",
                     vec![text(&settings_json), text(&library_id)],
                 ).await
-                .map_err(|error| format!("保存显示库初始状态失败：{error}"))?;
+                .map_err(|error| format!("Failed to save the initial display-library state: {error}"))?;
         }
         self.get_library(&library_id).await
     }
@@ -317,7 +318,7 @@ impl KnowledgeBaseRuntime {
                 KnowledgeDisplayIndexStatus::Stale
             };
             next.display_index.last_error = Some(String::from(
-                "显示库整理模型或固定提示词发生变化，必须重新生成显示库",
+                "The display-library curation model or fixed prompt changed; the display library must be regenerated",
             ));
             next.display_index.pending_generation = None;
             next.display_index.pending_source_content_revision = None;
@@ -350,13 +351,13 @@ impl KnowledgeBaseRuntime {
                 next.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
                 next.vector_index.compatibility_override = None;
                 next.vector_index.last_error = Some(String::from(
-                    "向量配置维度发生变化，必须重新探测并重建索引后才能恢复向量检索",
+                    "The vector dimension changed; probe again and rebuild the index before vector search can resume",
                 ));
             } else if same_dimension_override {
                 next.vector_index.status = KnowledgeVectorIndexStatus::Ready;
                 next.vector_index.compatibility_override = override_note.map(ToOwned::to_owned);
                 next.vector_index.last_error = Some(format!(
-                    "已人工确认同维度模型兼容，查询继续复用旧向量索引：{}",
+                    "Same-dimension model compatibility was confirmed manually; queries keep reusing the old vector index: {}",
                     next.vector_index
                         .compatibility_override
                         .as_deref()
@@ -366,7 +367,7 @@ impl KnowledgeBaseRuntime {
                 next.vector_index.status = KnowledgeVectorIndexStatus::Stale;
                 next.vector_index.compatibility_override = None;
                 next.vector_index.last_error = Some(String::from(
-                    "向量模型路由发生变化，旧索引仍保留，必须重新构建或确认兼容性",
+                    "The embedding model route changed; the old index is kept and must be rebuilt or confirmed compatible",
                 ));
             }
         }
@@ -375,7 +376,7 @@ impl KnowledgeBaseRuntime {
         }
         next.validate()?;
         let settings_json = serde_json::to_string(&next)
-            .map_err(|error| format!("序列化知识库配置失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize the knowledge configuration: {error}"))?;
         let updated_at_ms = unix_epoch_millis()?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
@@ -383,7 +384,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_libraries SET settings_json = ?, updated_at_ms = ? WHERE id = ? AND lifecycle_state = 'active';",
                 vec![text(&settings_json), int(updated_at_ms), text(library_id)],
             ).await
-            .map_err(|error| format!("保存知识库配置失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the knowledge configuration: {error}"))?;
         self.get_library(library_id).await
     }
 
@@ -425,7 +426,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("重命名知识库失败：{error}"))?;
+            .map_err(|error| format!("Failed to rename the knowledge library: {error}"))?;
 
         let manifest = KnowledgeManifest {
             library_id: library_id.to_string(),
@@ -545,11 +546,13 @@ impl KnowledgeBaseRuntime {
                     vec![int(unix_epoch_millis()?), text(library_id)],
                 )
                 .await
-                .map_err(|error| format!("撤销知识库访问失败：{error}"))?;
+                .map_err(|error| format!("Failed to revoke knowledge access: {error}"))?;
             }
             "deleting" => {}
             state => {
-                return Err(format!("知识库当前不可删除：{library_id} ({state})"));
+                return Err(format!(
+                    "The knowledge library cannot be deleted now: {library_id} ({state})"
+                ));
             }
         }
 
@@ -576,7 +579,7 @@ impl KnowledgeBaseRuntime {
             runtime.remove_host_owned_child_directory_if_exists(&root, &expected_name)
         })
         .await
-        .map_err(|error| format!("删除知识库目录任务失败：{error}"))??;
+        .map_err(|error| format!("Failed to delete the knowledge directory task: {error}"))??;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -584,7 +587,7 @@ impl KnowledgeBaseRuntime {
             vec![text(library_id)],
         )
         .await
-        .map_err(|error| format!("删除知识库注册记录失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete the knowledge registry record: {error}"))?;
         Ok(())
     }
 
@@ -620,7 +623,7 @@ impl KnowledgeBaseRuntime {
             settings.display_index.pending_prompt_version = None;
             settings.display_index.pending_model_fingerprint = None;
             settings.display_index.last_error = Some(String::from(
-                "原始 Markdown 内容发生变化，显示库需要重新生成",
+                "The raw Markdown content changed; the display library must be regenerated",
             ));
             changed = true;
         }
@@ -632,7 +635,7 @@ impl KnowledgeBaseRuntime {
         {
             settings.vector_index.status = KnowledgeVectorIndexStatus::Stale;
             settings.vector_index.last_error = Some(String::from(
-                "原始或显示 Markdown 内容发生变化，向量索引需要重新构建",
+                "The raw or display Markdown content changed; the vector index must be rebuilt",
             ));
             changed = true;
         }
@@ -640,8 +643,9 @@ impl KnowledgeBaseRuntime {
             return Ok(());
         }
         settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化派生索引过期状态失败：{error}"))?;
+        let settings_json = serde_json::to_string(&settings).map_err(|error| {
+            format!("Failed to serialize the stale derived-index state: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -652,7 +656,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("保存派生索引过期状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the stale derived-index state: {error}"))?;
         Ok(())
     }
 
@@ -719,7 +723,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("更新知识库权威摘要失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the authoritative knowledge summary: {error}"))?;
         Ok(())
     }
 
@@ -761,7 +765,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("更新知识库中央摘要失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the central knowledge summary: {error}"))?;
         Ok(())
     }
 }
@@ -781,10 +785,14 @@ impl KnowledgeBaseRuntime {
 pub(super) fn validate_library_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(String::from("知识库名称不能为空。"));
+        return Err(String::from(
+            "The knowledge library name must not be empty.",
+        ));
     }
     if trimmed.chars().count() > 120 {
-        return Err(String::from("知识库名称不能超过 120 个字符。"));
+        return Err(String::from(
+            "The knowledge library name must not exceed 120 characters.",
+        ));
     }
     Ok(trimmed.to_string())
 }
@@ -821,8 +829,12 @@ pub(super) fn library_summary_from_row(row: LibraryRow) -> Result<KnowledgeLibra
     let mut settings = if row.settings_json.trim().is_empty() || row.settings_json.trim() == "{}" {
         KnowledgeLibrarySettings::default()
     } else {
-        serde_json::from_str::<KnowledgeLibrarySettings>(&row.settings_json)
-            .map_err(|error| format!("解析知识库 {} 的持久化配置失败：{error}", row.id))?
+        serde_json::from_str::<KnowledgeLibrarySettings>(&row.settings_json).map_err(|error| {
+            format!(
+                "Failed to parse the persisted configuration of knowledge library {}: {error}",
+                row.id
+            )
+        })?
     };
     settings.normalize_derived_compatibility();
     settings.validate()?;

@@ -96,7 +96,7 @@ impl KnowledgeReplacementJournalGuard {
         self.retain = true;
         fs::remove_file(&self.path).map_err(|error| {
             format!(
-                "删除知识库覆盖恢复日志失败（{}）：{error}",
+                "Failed to delete the knowledge replacement recovery journal ({}): {error}",
                 self.path.display()
             )
         })
@@ -130,28 +130,35 @@ impl KnowledgeBaseRuntime {
         let knowledge_root = self.knowledge_root();
         fs::create_dir_all(&knowledge_root).map_err(|error| {
             format!(
-                "创建知识库根目录用于覆盖恢复失败（{}）：{error}",
+                "Failed to create the knowledge root for replacement recovery ({}): {error}",
                 knowledge_root.display()
             )
         })?;
         // journalPaths is sorted to make repeated recovery deterministic.
         // journalPaths 经过排序，使重复恢复保持确定性。
         let mut journal_paths = Vec::new();
-        for entry in fs::read_dir(&knowledge_root)
-            .map_err(|error| format!("扫描知识库覆盖恢复日志失败：{error}"))?
-        {
-            let entry = entry.map_err(|error| format!("读取知识库覆盖恢复目录项失败：{error}"))?;
+        for entry in fs::read_dir(&knowledge_root).map_err(|error| {
+            format!("Failed to scan knowledge replacement recovery journals: {error}")
+        })? {
+            let entry = entry.map_err(|error| {
+                format!("Failed to read a knowledge replacement recovery directory entry: {error}")
+            })?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with(".replacement-") || !name.ends_with(".json") {
                 continue;
             }
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| format!("读取知识库覆盖恢复日志类型失败：{error}"))?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+                format!("Failed to read a knowledge replacement recovery journal type: {error}")
+            })?;
             if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-                return Err(format!("知识库覆盖恢复日志不是可信普通文件：{name}"));
+                return Err(format!(
+                    "A knowledge replacement recovery journal is not a trusted regular file: {name}"
+                ));
             }
             if metadata.len() > MAX_KNOWLEDGE_PACKAGE_JSON_BYTES {
-                return Err(format!("知识库覆盖恢复日志超过大小上限：{name}"));
+                return Err(format!(
+                    "A knowledge replacement recovery journal exceeds the size limit: {name}"
+                ));
             }
             journal_paths.push(entry.path());
         }
@@ -159,11 +166,13 @@ impl KnowledgeBaseRuntime {
         for journal_path in journal_paths {
             // journal is validated before any derived path is used.
             // journal 会在使用任何派生路径前完成校验。
-            let journal: KnowledgeReplacementJournal = serde_json::from_slice(
-                &fs::read(&journal_path)
-                    .map_err(|error| format!("读取知识库覆盖恢复日志失败：{error}"))?,
-            )
-            .map_err(|error| format!("解析知识库覆盖恢复日志失败：{error}"))?;
+            let journal: KnowledgeReplacementJournal =
+                serde_json::from_slice(&fs::read(&journal_path).map_err(|error| {
+                    format!("Failed to read a knowledge replacement recovery journal: {error}")
+                })?)
+                .map_err(|error| {
+                    format!("Failed to parse a knowledge replacement recovery journal: {error}")
+                })?;
             let operation_id = validate_replacement_journal(&journal)?;
             let expected_journal_name = format!(
                 ".replacement-{}-{operation_id}.json",
@@ -173,21 +182,22 @@ impl KnowledgeBaseRuntime {
                 != Some(expected_journal_name.as_str())
             {
                 return Err(format!(
-                    "知识库覆盖恢复日志文件名与日志身份不匹配：{}",
+                    "The knowledge replacement recovery journal file name does not match the journal identity: {}",
                     journal_path.display()
                 ));
             }
             let root = self.library_root(&journal.target_library_id)?;
             let backup_root = knowledge_root.join(&journal.backup_directory_name);
-            let backup_exists = backup_root
-                .try_exists()
-                .map_err(|error| format!("检查知识库覆盖备份失败：{error}"))?;
+            let backup_exists = backup_root.try_exists().map_err(|error| {
+                format!("Failed to check the knowledge replacement backup: {error}")
+            })?;
             if backup_exists {
-                let metadata = fs::symlink_metadata(&backup_root)
-                    .map_err(|error| format!("读取知识库覆盖备份类型失败：{error}"))?;
+                let metadata = fs::symlink_metadata(&backup_root).map_err(|error| {
+                    format!("Failed to read the knowledge replacement backup type: {error}")
+                })?;
                 if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
                     return Err(format!(
-                        "知识库覆盖备份不是可信普通目录：{}",
+                        "The knowledge replacement backup is not a trusted regular directory: {}",
                         backup_root.display()
                     ));
                 }
@@ -205,7 +215,7 @@ impl KnowledgeBaseRuntime {
                 "prepared" => {
                     if !root.exists() {
                         return Err(format!(
-                            "覆盖恢复缺少目标与备份目录：{}",
+                            "Replacement recovery is missing both the target and backup directories: {}",
                             journal.target_library_id
                         ));
                     }
@@ -223,7 +233,7 @@ impl KnowledgeBaseRuntime {
                 "committed" => {
                     if !root.exists() {
                         return Err(format!(
-                            "已提交覆盖恢复缺少目标目录：{}",
+                            "Committed replacement recovery is missing the target directory: {}",
                             journal.target_library_id
                         ));
                     }
@@ -241,7 +251,7 @@ impl KnowledgeBaseRuntime {
                             != current.chunk_count
                     {
                         return Err(String::from(
-                            "已提交知识库覆盖的注册计数与 SQLite 内容不一致。",
+                            "The registry counts of the committed knowledge replacement disagree with the SQLite content.",
                         ));
                     }
                     if backup_exists {
@@ -255,7 +265,7 @@ impl KnowledgeBaseRuntime {
             }
             fs::remove_file(&journal_path).map_err(|error| {
                 format!(
-                    "完成恢复后删除知识库覆盖日志失败（{}）：{error}",
+                    "Failed to delete the knowledge replacement journal after recovery ({}): {error}",
                     journal_path.display()
                 )
             })?;
@@ -285,10 +295,12 @@ impl KnowledgeBaseRuntime {
             .map(|library| library.id)
             .collect();
         let knowledge_root = self.knowledge_root();
-        for entry in fs::read_dir(&knowledge_root)
-            .map_err(|error| format!("扫描知识库包孤立暂存目录失败：{error}"))?
-        {
-            let entry = entry.map_err(|error| format!("读取知识库包孤立目录项失败：{error}"))?;
+        for entry in fs::read_dir(&knowledge_root).map_err(|error| {
+            format!("Failed to scan orphaned knowledge package staging directories: {error}")
+        })? {
+            let entry = entry.map_err(|error| {
+                format!("Failed to read an orphaned knowledge package directory entry: {error}")
+            })?;
             let name = entry.file_name().to_string_lossy().into_owned();
             // orphanLibrary identifies an unregistered UUID directory created by package installation.
             // orphanLibrary 标识知识库包安装创建但未注册的 UUID 目录。
@@ -300,10 +312,13 @@ impl KnowledgeBaseRuntime {
             if !orphan_library && !abandoned_extraction {
                 continue;
             }
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| format!("读取知识库包孤立目录类型失败：{error}"))?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+                format!("Failed to read an orphaned knowledge package directory type: {error}")
+            })?;
             if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
-                return Err(format!("知识库包孤立暂存项不是可信普通目录：{name}"));
+                return Err(format!(
+                    "An orphaned knowledge package staging entry is not a trusted regular directory: {name}"
+                ));
             }
             if orphan_library {
                 self.release_library_binding(&name).await?;
@@ -334,13 +349,13 @@ impl KnowledgeBaseRuntime {
         let library = self.require_active_library(library_id).await?;
         if library.index_status != "ready" {
             return Err(format!(
-                "知识库索引状态不是 ready，不能导出免重建包：{}",
+                "The knowledge index state is not ready; a no-rebuild package cannot be exported: {}",
                 library.index_status
             ));
         }
         if self.operation_is_active_for_library(library_id).await? {
             return Err(String::from(
-                "知识库仍有导入或派生索引操作运行中，拒绝导出。",
+                "The knowledge library still has an import or derived-index operation running; export refused.",
             ));
         }
         if matches!(
@@ -350,27 +365,29 @@ impl KnowledgeBaseRuntime {
             library.settings.vector_index.status,
             KnowledgeVectorIndexStatus::Building
         ) {
-            return Err(String::from("知识库派生索引仍在构建中，拒绝导出。"));
+            return Err(String::from(
+                "The knowledge derived index is still building; export refused.",
+            ));
         }
         let destination_directory = canonical_existing_directory(destination_directory)?;
         let display_path = self.library_root(library_id)?.join("display.sqlite3");
         if library.settings.display_index.status == KnowledgeDisplayIndexStatus::Ready
-            && !display_path
-                .try_exists()
-                .map_err(|error| format!("检查知识库显示库是否存在失败：{error}"))?
+            && !display_path.try_exists().map_err(|error| {
+                format!("Failed to check whether the knowledge display library exists: {error}")
+            })?
         {
             return Err(String::from(
-                "知识库显示库状态为 ready，但显示库文件不存在。",
+                "The knowledge display library is ready but its file does not exist.",
             ));
         }
         let vector_root = self.library_root(library_id)?.join("lancedb");
         if library.settings.vector_index.status == KnowledgeVectorIndexStatus::Ready
-            && !vector_root
-                .try_exists()
-                .map_err(|error| format!("检查知识库 LanceDB 是否存在失败：{error}"))?
+            && !vector_root.try_exists().map_err(|error| {
+                format!("Failed to check whether the knowledge LanceDB exists: {error}")
+            })?
         {
             return Err(String::from(
-                "知识库向量索引状态为 ready，但 LanceDB 目录不存在。",
+                "The knowledge vector index is ready but the LanceDB directory does not exist.",
             ));
         }
         let (space_id, binding_id) = self.ensure_library_binding(library_id).await?;
@@ -386,7 +403,7 @@ impl KnowledgeBaseRuntime {
                 != library.chunk_count
         {
             return Err(String::from(
-                "知识库注册计数与 SQLite 权威内容不一致，拒绝导出。",
+                "The knowledge registry counts disagree with the authoritative SQLite content; export refused.",
             ));
         }
         local_sql::execute_script_async(
@@ -396,11 +413,12 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("导出前收口知识库 SQLite 日志失败：{error}"))?;
-        if display_path
-            .try_exists()
-            .map_err(|error| format!("检查知识库显示库是否存在失败：{error}"))?
-        {
+        .map_err(|error| {
+            format!("Failed to checkpoint the knowledge SQLite journal before export: {error}")
+        })?;
+        if display_path.try_exists().map_err(|error| {
+            format!("Failed to check whether the knowledge display library exists: {error}")
+        })? {
             let (_display_space_id, _display_binding_id) =
                 self.ensure_display_binding(library_id).await?;
             local_sql::execute_script_async(
@@ -410,7 +428,7 @@ impl KnowledgeBaseRuntime {
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("导出前收口知识库显示库日志失败：{error}"))?;
+            .map_err(|error| format!("Failed to checkpoint the knowledge display-library journal before export: {error}"))?;
         }
         self.release_library_binding(library_id).await?;
         let export_result = export_knowledge_package_files(
@@ -428,10 +446,10 @@ impl KnowledgeBaseRuntime {
             (Ok(result), Ok(())) => Ok(result),
             (Err(error), Ok(())) => Err(error),
             (Ok(_), Err(restore_error)) => Err(format!(
-                "知识库包已经写出，但恢复 SQLite 绑定失败：{restore_error}"
+                "The knowledge package was written, but restoring the SQLite binding failed: {restore_error}"
             )),
             (Err(error), Err(restore_error)) => Err(format!(
-                "{error}；同时恢复 SQLite 绑定失败：{restore_error}"
+                "{error}; restoring the SQLite binding also failed: {restore_error}"
             )),
         }
     }
@@ -477,7 +495,7 @@ impl KnowledgeBaseRuntime {
             (Ok(()), Err(cleanup_error)) => return Err(cleanup_error),
             (Err(error), Err(cleanup_error)) => {
                 return Err(format!(
-                    "{error}；同时清理包检查暂存知识库失败：{cleanup_error}"
+                    "{error}; cleaning up the package inspection staging library also failed: {cleanup_error}"
                 ));
             }
         }
@@ -513,7 +531,10 @@ impl KnowledgeBaseRuntime {
             .find_library_by_normalized_name(&normalized_name, None)
             .await?
         {
-            return Err(format!("知识库名称已存在：{}", conflict.name));
+            return Err(format!(
+                "A knowledge library with this name already exists: {}",
+                conflict.name
+            ));
         }
         let canonical_archive = canonical_knowledge_package_path(archive_path)?;
         let prepared = prepare_knowledge_package(&canonical_archive, &self.knowledge_root())?;
@@ -526,7 +547,7 @@ impl KnowledgeBaseRuntime {
             return match self.cleanup_failed_package_install(&library_id).await {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理失败的知识库包安装失败：{cleanup_error}"
+                    "{error}; cleaning up the failed knowledge package installation also failed: {cleanup_error}"
                 )),
             };
         }
@@ -537,7 +558,7 @@ impl KnowledgeBaseRuntime {
             return match self.cleanup_failed_package_install(&library_id).await {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理未注册的知识库包失败：{cleanup_error}"
+                    "{error}; cleaning up the unregistered knowledge package also failed: {cleanup_error}"
                 )),
             };
         }
@@ -588,7 +609,10 @@ impl KnowledgeBaseRuntime {
             .find_library_by_normalized_name(&normalized_name, Some(target_library_id))
             .await?
         {
-            return Err(format!("知识库名称已被其他知识库使用：{}", conflict.name));
+            return Err(format!(
+                "The knowledge library name is used by another knowledge library: {}",
+                conflict.name
+            ));
         }
         let canonical_archive = canonical_knowledge_package_path(archive_path)?;
         let prepared = prepare_knowledge_package(&canonical_archive, &self.knowledge_root())?;
@@ -600,7 +624,9 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("覆盖前收口知识库 SQLite 日志失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to checkpoint the knowledge SQLite journal before replacement: {error}")
+        })?;
         // stagingLibraryId owns a fully copied and validated sibling directory before the old target moves.
         // stagingLibraryId 在旧目标移动前持有一个已完整复制并校验的同级暂存目录。
         let staging_library_id = Uuid::new_v4().to_string();
@@ -614,7 +640,7 @@ impl KnowledgeBaseRuntime {
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
+                    "{error}; cleaning up the replacement staging library also failed: {cleanup_error}"
                 )),
             };
         }
@@ -625,7 +651,7 @@ impl KnowledgeBaseRuntime {
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
+                    "{error}; cleaning up the replacement staging library also failed: {cleanup_error}"
                 )),
             };
         }
@@ -654,7 +680,7 @@ impl KnowledgeBaseRuntime {
             {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
+                    "{error}; cleaning up the replacement staging library also failed: {cleanup_error}"
                 )),
             };
         }
@@ -668,7 +694,7 @@ impl KnowledgeBaseRuntime {
             return match cleanup_result {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(format!(
-                    "{error}；同时清理覆盖暂存知识库失败：{cleanup_error}"
+                    "{error}; cleaning up the replacement staging library also failed: {cleanup_error}"
                 )),
             };
         }
@@ -695,20 +721,20 @@ impl KnowledgeBaseRuntime {
             }
             return match (restore_result, cleanup_result) {
                 (Ok(()), Ok(())) => Err(format!(
-                    "暂存待覆盖知识库目录失败（{}）：{error}",
+                    "Failed to stage the knowledge directory to replace ({}): {error}",
                     root.display()
                 )),
                 (Ok(()), Err(cleanup_error)) => Err(format!(
-                    "暂存待覆盖知识库目录失败（{}）：{error}；同时清理新库暂存目录失败：{}",
+                    "Failed to stage the knowledge directory to replace ({}): {error}; cleaning up the new library staging directory also failed: {}",
                     root.display(),
                     cleanup_error
                 )),
                 (Err(restore_error), Ok(())) => Err(format!(
-                    "暂存待覆盖知识库目录失败（{}）：{error}；同时恢复原 SQLite 绑定失败：{restore_error}",
+                    "Failed to stage the knowledge directory to replace ({}): {error}; restoring the original SQLite binding also failed: {restore_error}",
                     root.display()
                 )),
                 (Err(restore_error), Err(cleanup_error)) => Err(format!(
-                    "暂存待覆盖知识库目录失败（{}）：{error}；同时恢复原 SQLite 绑定失败：{restore_error}；清理新库暂存目录失败：{}",
+                    "Failed to stage the knowledge directory to replace ({}): {error}; restoring the original SQLite binding also failed: {restore_error}; cleaning up the new library staging directory failed: {}",
                     root.display(),
                     cleanup_error
                 )),
@@ -725,15 +751,17 @@ impl KnowledgeBaseRuntime {
                 journal_guard.retain();
             }
             return match (rollback, cleanup) {
-                (Ok(()), Ok(())) => Err(format!("切换已校验知识库暂存目录失败：{error}")),
+                (Ok(()), Ok(())) => Err(format!(
+                    "Failed to switch the verified knowledge staging directory: {error}"
+                )),
                 (Err(rollback_error), Ok(())) => Err(format!(
-                    "切换已校验知识库暂存目录失败：{error}；同时恢复原知识库失败：{rollback_error}"
+                    "Failed to switch the verified knowledge staging directory: {error}; restoring the original knowledge library also failed: {rollback_error}"
                 )),
                 (Ok(()), Err(cleanup_error)) => Err(format!(
-                    "切换已校验知识库暂存目录失败：{error}；同时清理新库暂存目录失败：{cleanup_error}"
+                    "Failed to switch the verified knowledge staging directory: {error}; cleaning up the new library staging directory also failed: {cleanup_error}"
                 )),
                 (Err(rollback_error), Err(cleanup_error)) => Err(format!(
-                    "切换已校验知识库暂存目录失败：{error}；同时恢复原知识库失败：{rollback_error}；清理新库暂存目录失败：{cleanup_error}"
+                    "Failed to switch the verified knowledge staging directory: {error}; restoring the original knowledge library also failed: {rollback_error}; cleaning up the new library staging directory failed: {cleanup_error}"
                 )),
             };
         }
@@ -771,7 +799,7 @@ impl KnowledgeBaseRuntime {
                     return match rollback {
                         Ok(()) => Err(journal_error),
                         Err(rollback_error) => Err(format!(
-                            "{journal_error}；同时恢复原知识库失败：{rollback_error}"
+                            "{journal_error}; restoring the original knowledge library also failed: {rollback_error}"
                         )),
                     };
                 }
@@ -784,12 +812,12 @@ impl KnowledgeBaseRuntime {
                 ) {
                     journal_guard.retain();
                     warnings.push(format!(
-                        "知识库覆盖成功，但清理旧备份目录失败（{}）：{error}；服务重启时将自动重试",
+                        "The knowledge library was replaced, but cleaning up the old backup directory failed ({}): {error}; it will be retried when the service restarts",
                         backup_root.display()
                     ));
                 } else if let Err(error) = journal_guard.remove_now() {
                     warnings.push(format!(
-                        "知识库覆盖成功，但清理恢复日志失败：{error}；服务重启时将自动重试"
+                        "The knowledge library was replaced, but cleaning up the recovery journal failed: {error}; it will be retried when the service restarts"
                     ));
                 }
                 Ok(KnowledgePackageImportResult {
@@ -807,9 +835,9 @@ impl KnowledgeBaseRuntime {
                 }
                 match rollback {
                     Ok(()) => Err(error),
-                    Err(rollback_error) => {
-                        Err(format!("{error}；同时恢复原知识库失败：{rollback_error}"))
-                    }
+                    Err(rollback_error) => Err(format!(
+                        "{error}; restoring the original knowledge library also failed: {rollback_error}"
+                    )),
                 }
             }
         }
@@ -874,14 +902,21 @@ impl KnowledgeBaseRuntime {
         validate_library_id(target_library_id)?;
         let root = self.library_root(target_library_id)?;
         if root.exists() {
-            return Err(format!("知识库目标目录已经存在：{}", root.display()));
+            return Err(format!(
+                "The knowledge target directory already exists: {}",
+                root.display()
+            ));
         }
-        fs::create_dir(&root)
-            .map_err(|error| format!("创建知识库目标目录失败（{}）：{error}", root.display()))?;
+        fs::create_dir(&root).map_err(|error| {
+            format!(
+                "Failed to create the knowledge target directory ({}): {error}",
+                root.display()
+            )
+        })?;
         let target_database = root.join("content.sqlite3");
         fs::copy(prepared.database_path(), &target_database).map_err(|error| {
             format!(
-                "复制知识库 SQLite 失败（{}）：{error}",
+                "Failed to copy the knowledge SQLite ({}): {error}",
                 target_database.display()
             )
         })?;
@@ -906,7 +941,7 @@ impl KnowledgeBaseRuntime {
             ],
         )
         .await
-        .map_err(|error| format!("重写导入知识库内部标识失败：{error}"))?;
+        .map_err(|error| format!("Failed to rewrite the internal identifiers of the imported knowledge library: {error}"))?;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
             .await?;
         self.verify_index_integrity(&space_id, &binding_id).await?;
@@ -924,7 +959,7 @@ impl KnowledgeBaseRuntime {
                 ],
             )
             .await
-            .map_err(|error| format!("重写导入显示库内部标识失败：{error}"))?;
+            .map_err(|error| format!("Failed to rewrite the internal identifiers of the imported display library: {error}"))?;
             self.validate_display_bound_metadata(
                 target_library_id,
                 &display_space_id,
@@ -940,7 +975,9 @@ impl KnowledgeBaseRuntime {
             != prepared.package.document_count
             || nonnegative_u64(counts.chunk_count, "chunk_count")? != prepared.package.chunk_count
         {
-            return Err(String::from("知识库包权威计数与 SQLite 内容不一致。"));
+            return Err(String::from(
+                "The knowledge package's authoritative counts disagree with the SQLite content.",
+            ));
         }
         Ok(())
     }
@@ -979,7 +1016,7 @@ impl KnowledgeBaseRuntime {
             vec![text(target_library_id), text(staging_library_id)],
         )
         .await
-        .map_err(|error| format!("提交覆盖知识库内部标识失败：{error}"))?;
+        .map_err(|error| format!("Failed to commit the internal identifiers of the replacement knowledge library: {error}"))?;
         self.verify_sqlite_quick_check(&space_id, &binding_id)
             .await?;
         self.validate_bound_library_metadata(target_library_id, &space_id, &binding_id)
@@ -996,7 +1033,7 @@ impl KnowledgeBaseRuntime {
                 vec![text(target_library_id), text(staging_library_id)],
             )
             .await
-            .map_err(|error| format!("提交覆盖显示库内部标识失败：{error}"))?;
+            .map_err(|error| format!("Failed to commit the internal identifiers of the replacement display library: {error}"))?;
             self.validate_display_bound_metadata(
                 target_library_id,
                 &display_space_id,
@@ -1014,7 +1051,9 @@ impl KnowledgeBaseRuntime {
             != prepared.package.document_count
             || nonnegative_u64(counts.chunk_count, "chunk_count")? != prepared.package.chunk_count
         {
-            return Err(String::from("覆盖知识库权威计数与已检查包不一致。"));
+            return Err(String::from(
+                "The replacement knowledge library's authoritative counts disagree with the inspected package.",
+            ));
         }
         Ok(())
     }
@@ -1059,8 +1098,9 @@ impl KnowledgeBaseRuntime {
         let mut settings = package.settings.clone();
         settings.normalize_derived_compatibility();
         settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化导入知识库配置失败：{error}"))?;
+        let settings_json = serde_json::to_string(&settings).map_err(|error| {
+            format!("Failed to serialize the imported knowledge configuration: {error}")
+        })?;
         local_sql::execute_batch_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -1084,7 +1124,7 @@ impl KnowledgeBaseRuntime {
             ]],
         )
         .await
-        .map_err(|error| format!("注册导入知识库失败：{error}"))?;
+        .map_err(|error| format!("Failed to register the imported knowledge library: {error}"))?;
         Ok(())
     }
 
@@ -1110,8 +1150,9 @@ impl KnowledgeBaseRuntime {
         let mut settings = package.settings.clone();
         settings.normalize_derived_compatibility();
         settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化被覆盖知识库配置失败：{error}"))?;
+        let settings_json = serde_json::to_string(&settings).map_err(|error| {
+            format!("Failed to serialize the replaced knowledge configuration: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -1135,7 +1176,9 @@ impl KnowledgeBaseRuntime {
             ],
         )
         .await
-        .map_err(|error| format!("更新被覆盖知识库注册记录失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to update the replaced knowledge registry record: {error}")
+        })?;
         Ok(())
     }
 
@@ -1161,7 +1204,10 @@ impl KnowledgeBaseRuntime {
         self.release_library_binding(library_id).await?;
         self.remove_host_owned_child_directory_if_exists(root, library_id)?;
         fs::rename(backup_root, root).map_err(|error| {
-            format!("恢复原知识库目录失败（{}）：{error}", backup_root.display())
+            format!(
+                "Failed to restore the original knowledge directory ({}): {error}",
+                backup_root.display()
+            )
         })?;
         let identities = self.activate_library_binding(library_id, false).await?;
         self.validate_bound_library_metadata(library_id, &identities.0, &identities.1)
@@ -1205,10 +1251,9 @@ impl KnowledgeBaseRuntime {
                 )?),
                 int(checked_package_count(previous.chunk_count, "chunk_count")?),
                 text(&previous.index_status),
-                text(
-                    &serde_json::to_string(&previous.settings)
-                        .map_err(|error| format!("序列化恢复知识库配置失败：{error}"))?,
-                ),
+                text(&serde_json::to_string(&previous.settings).map_err(|error| {
+                    format!("Failed to serialize the restored knowledge configuration: {error}")
+                })?),
                 previous
                     .last_completed_import_at_ms
                     .map_or(SqliteValue::Null, int),
@@ -1218,10 +1263,14 @@ impl KnowledgeBaseRuntime {
             ],
         )
         .await
-        .map_err(|error| format!("恢复原知识库注册记录失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to restore the original knowledge registry record: {error}")
+        })?;
         let restored = self.get_library(&previous.id).await?;
         if restored != *previous {
-            return Err(String::from("恢复后的知识库注册记录与旧记录不一致。"));
+            return Err(String::from(
+                "The restored knowledge registry record disagrees with the old record.",
+            ));
         }
         Ok(())
     }
@@ -1280,12 +1329,14 @@ impl KnowledgeBaseRuntime {
         let (_, expected_path, _) =
             self.replacement_operation_artifacts(&journal.target_library_id, &operation_id)?;
         if path != expected_path {
-            return Err(String::from("知识库覆盖恢复日志路径与日志身份不匹配。"));
+            return Err(String::from(
+                "The knowledge replacement recovery journal path does not match the journal identity.",
+            ));
         }
         let knowledge_root = self.knowledge_root();
         fs::create_dir_all(&knowledge_root).map_err(|error| {
             format!(
-                "创建知识库根目录用于覆盖日志失败（{}）：{error}",
+                "Failed to create the knowledge root for the replacement journal ({}): {error}",
                 knowledge_root.display()
             )
         })?;
@@ -1293,32 +1344,42 @@ impl KnowledgeBaseRuntime {
             && (!metadata.is_file() || metadata_is_link_or_reparse(&metadata))
         {
             return Err(format!(
-                "拒绝替换非普通知识库覆盖恢复日志：{}",
+                "Refusing to replace a non-regular knowledge replacement recovery journal: {}",
                 path.display()
             ));
         }
-        let bytes = serde_json::to_vec_pretty(journal)
-            .map_err(|error| format!("序列化知识库覆盖恢复日志失败：{error}"))?;
+        let bytes = serde_json::to_vec_pretty(journal).map_err(|error| {
+            format!("Failed to serialize the knowledge replacement recovery journal: {error}")
+        })?;
         if bytes.len() as u64 > MAX_KNOWLEDGE_PACKAGE_JSON_BYTES {
-            return Err(String::from("知识库覆盖恢复日志超过大小上限。"));
+            return Err(String::from(
+                "The knowledge replacement recovery journal exceeds the size limit.",
+            ));
         }
         let mut temporary = tempfile::Builder::new()
             .prefix("replacement-journal.")
             .suffix(".tmp")
             .tempfile_in(&knowledge_root)
-            .map_err(|error| format!("创建知识库覆盖临时恢复日志失败：{error}"))?;
+            .map_err(|error| {
+                format!(
+                    "Failed to create the temporary knowledge replacement recovery journal: {error}"
+                )
+            })?;
         temporary
             .write_all(&bytes)
             .and_then(|_| temporary.as_file().sync_all())
-            .map_err(|error| format!("写入并同步知识库覆盖临时恢复日志失败：{error}"))?;
-        persist_tempfile_atomically(temporary, path)
-            .map_err(|error| format!("提交知识库覆盖恢复日志失败：{error}"))?;
+            .map_err(|error| format!("Failed to write and sync the temporary knowledge replacement recovery journal: {error}"))?;
+        persist_tempfile_atomically(temporary, path).map_err(|error| {
+            format!("Failed to commit the knowledge replacement recovery journal: {error}")
+        })?;
         File::options()
             .read(true)
             .write(true)
             .open(path)
             .and_then(|file| file.sync_all())
-            .map_err(|error| format!("同步知识库覆盖恢复日志失败：{error}"))
+            .map_err(|error| {
+                format!("Failed to sync the knowledge replacement recovery journal: {error}")
+            })
     }
 }
 
@@ -1354,32 +1415,41 @@ fn is_package_inspection_temp_directory_name(name: &str) -> bool {
 fn validate_replacement_journal(journal: &KnowledgeReplacementJournal) -> Result<String, String> {
     if journal.version != KNOWLEDGE_REPLACEMENT_JOURNAL_VERSION {
         return Err(format!(
-            "知识库覆盖恢复日志版本不受支持：{}",
+            "Unsupported knowledge replacement recovery journal version: {}",
             journal.version
         ));
     }
     validate_library_id(&journal.target_library_id)?;
     if journal.previous.id != journal.target_library_id {
-        return Err(String::from("知识库覆盖恢复日志的旧注册身份不匹配。"));
+        return Err(String::from(
+            "The old registry identity in the knowledge replacement recovery journal does not match.",
+        ));
     }
     if journal.previous.lifecycle_state != "active" {
-        return Err(String::from("知识库覆盖恢复日志的旧知识库状态无效。"));
+        return Err(String::from(
+            "The old knowledge state in the knowledge replacement recovery journal is invalid.",
+        ));
     }
     validate_library_name(&journal.previous.name)?;
     if !matches!(
         journal.phase.as_str(),
         KNOWLEDGE_REPLACEMENT_PHASE_PREPARED | KNOWLEDGE_REPLACEMENT_PHASE_COMMITTED
     ) {
-        return Err(format!("知识库覆盖恢复日志阶段无效：{}", journal.phase));
+        return Err(format!(
+            "Invalid knowledge replacement recovery journal phase: {}",
+            journal.phase
+        ));
     }
     let backup_prefix = format!(".replace-{}-", journal.target_library_id);
     let operation_id = journal
         .backup_directory_name
         .strip_prefix(&backup_prefix)
-        .ok_or_else(|| String::from("知识库覆盖恢复日志的备份目录名称无效。"))?;
+        .ok_or_else(|| String::from("The backup directory name in the knowledge replacement recovery journal is invalid."))?;
     validate_library_id(operation_id)?;
     if journal.backup_directory_name != format!("{backup_prefix}{operation_id}") {
-        return Err(String::from("知识库覆盖恢复日志的备份目录名称不规范。"));
+        return Err(String::from(
+            "The backup directory name in the knowledge replacement recovery journal is not canonical.",
+        ));
     }
     Ok(operation_id.to_string())
 }
@@ -1387,7 +1457,8 @@ fn validate_replacement_journal(journal: &KnowledgeReplacementJournal) -> Result
 /// Converts one public package count to the signed SQLite representation.
 /// 将一个公开包计数转换为 SQLite 有符号表示。
 fn checked_package_count(value: u64, field: &str) -> Result<i64, String> {
-    i64::try_from(value).map_err(|_| format!("知识库包字段超出 SQLite 范围：{field}"))
+    i64::try_from(value)
+        .map_err(|_| format!("A knowledge package field exceeds the SQLite range: {field}"))
 }
 
 #[cfg(test)]

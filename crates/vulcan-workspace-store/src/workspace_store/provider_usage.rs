@@ -591,7 +591,7 @@ VALUES ('health_status', 'ready', 0);
         vec![],
     )
     .await
-    .map_err(|error| format!("初始化原生供应商用量 Schema 失败：{error}"))?;
+    .map_err(|error| format!("Failed to initialize the native provider usage schema: {error}"))?;
     write_provider_usage_schema_revision(host_runtime, logical).await?;
     Ok(())
 }
@@ -622,7 +622,7 @@ async fn write_provider_usage_schema_revision(
         vec![],
     )
     .await
-    .map_err(|error| format!("更新供应商用量 Schema 修订失败：{error}"))?;
+    .map_err(|error| format!("Failed to update the provider usage schema revision: {error}"))?;
     Ok(())
 }
 
@@ -652,7 +652,7 @@ LIMIT 500;
 "#,
         &[],
     )
-    .map_err(|error| format!("读取原生供应商每日用量失败：{error}"))?;
+    .map_err(|error| format!("Failed to read native provider daily usage: {error}"))?;
     let daily = decode_query_rows::<ProviderUsageDailySummary>(&daily_result.json_data)?;
     let recent_attempts_result = vulcan_sqlite_engine::sql_exec::query_json(connection,
         r#"
@@ -674,7 +674,7 @@ LIMIT 200;
 "#,
         &[],
     )
-    .map_err(|error| format!("读取原生供应商近期 attempt 失败：{error}"))?;
+    .map_err(|error| format!("Failed to read recent native provider attempts: {error}"))?;
     let recent_attempt_rows =
         decode_query_rows::<ProviderUsageAttemptDashboardRow>(&recent_attempts_result.json_data)?;
     let recent_attempts = recent_attempt_rows
@@ -690,7 +690,7 @@ FROM provider_usage_meta;
 "#,
         &[],
     )
-        .map_err(|error| format!("读取原生供应商用量元数据失败：{error}"))?;
+        .map_err(|error| format!("Failed to read native provider usage metadata: {error}"))?;
     let meta = decode_query_rows::<ProviderUsageDashboardMetaRow>(&meta_result.json_data)?
         .into_iter()
         .next()
@@ -717,7 +717,7 @@ LIMIT 200;
 "#,
         &[],
     )
-    .map_err(|error| format!("读取原生供应商账户用量失败：{error}"))?;
+    .map_err(|error| format!("Failed to read native provider account usage: {error}"))?;
     let account_rows =
         decode_query_rows::<ProviderAccountUsageDashboardRow>(&accounts_result.json_data)?;
     let accounts = account_rows
@@ -801,8 +801,11 @@ impl ProviderUsageAttemptDashboardRow {
     /// 解码供应商计费 JSON，且不虚构缺失分区。
     fn decode(self) -> Result<ProviderUsageAttemptSummary, String> {
         let billing_details = match self.provider_billing_details_json {
-            Some(json) => serde_json::from_str::<Vec<UsageBillingDetail>>(&json)
-                .map_err(|error| format!("原生供应商计费明细 JSON 无效：{error}"))?,
+            Some(json) => {
+                serde_json::from_str::<Vec<UsageBillingDetail>>(&json).map_err(|error| {
+                    format!("Invalid native provider billing details JSON: {error}")
+                })?
+            }
             None => Vec::new(),
         };
         Ok(ProviderUsageAttemptSummary {
@@ -861,7 +864,7 @@ impl ProviderAccountUsageDashboardRow {
     /// 将有界载荷解码为公开仪表盘记录。
     fn decode(self) -> Result<ProviderAccountUsageSummary, String> {
         let payload = serde_json::from_str(&self.payload_json)
-            .map_err(|error| format!("原生账户用量快照 JSON 无效：{error}"))?;
+            .map_err(|error| format!("Invalid native account usage snapshot JSON: {error}"))?;
         Ok(ProviderAccountUsageSummary {
             provider_id: self.provider_id,
             connection_id: self.connection_id,
@@ -1029,7 +1032,7 @@ WHERE NOT EXISTS (
                 optional_integer(record.first_token_at_ms),
             ]).collect::<Vec<Vec<SqliteValue>>>(),
     ).await
-        .map_err(|error| format!("写入供应商 attempt 事实失败：{error}"))?;
+        .map_err(|error| format!("Failed to write provider attempt facts: {error}"))?;
     Ok(())
 }
 
@@ -1107,7 +1110,7 @@ WHERE NOT EXISTS (
         ]],
     )
     .await
-    .map_err(|error| format!("写入供应商账户用量快照失败：{error}"))?;
+    .map_err(|error| format!("Failed to write the provider account usage snapshot: {error}"))?;
     Ok(())
 }
 
@@ -1140,7 +1143,7 @@ INSERT OR IGNORE INTO provider_rate_limit_snapshots_v1 (
         ]],
     )
     .await
-    .map_err(|error| format!("写入供应商限流快照失败：{error}"))?;
+    .map_err(|error| format!("Failed to write the provider rate limit snapshot: {error}"))?;
     Ok(())
 }
 
@@ -1432,7 +1435,7 @@ ORDER BY calendar_date, provider_id, service_entry_id, consumer_id, operation,
         vec![],
     )
     .await
-    .map_err(|error| format!("读取供应商 attempt 聚合事实失败：{error}"))?;
+    .map_err(|error| format!("Failed to read provider attempt aggregate facts: {error}"))?;
     let rows = decode_query_rows::<ProviderUsageAggregateInputRow>(&result.json_data)?;
     let aggregates = aggregate_provider_usage_rows(rows)?;
     let mut script = String::from("BEGIN IMMEDIATE;\nDELETE FROM provider_usage_daily_v3;\n");
@@ -1459,7 +1462,7 @@ COMMIT;
         vec![],
     )
     .await
-    .map_err(|error| format!("重建供应商每日用量聚合失败：{error}"))?;
+    .map_err(|error| format!("Failed to rebuild the provider daily usage aggregates: {error}"))?;
     Ok(())
 }
 
@@ -1482,14 +1485,16 @@ fn validate_attempt(record: &ProviderUsageAttemptRecord) -> Result<(), String> {
         ("calendar_date", &record.calendar_date),
     ])?;
     if record.attempt_index < 0 || record.failover_index.is_some_and(|value| value < 0) {
-        return Err(String::from("供应商 attempt 索引不能为负数。"));
+        return Err(String::from(
+            "The provider attempt index must not be negative.",
+        ));
     }
     if !matches!(
         record.usage_availability.as_str(),
         "missing" | "partial" | "final"
     ) {
         return Err(String::from(
-            "供应商 attempt 的 usage_availability 必须是 missing、partial 或 final。",
+            "The provider attempt usage_availability must be missing, partial or final.",
         ));
     }
     Ok(())
@@ -1500,7 +1505,9 @@ fn validate_attempt(record: &ProviderUsageAttemptRecord) -> Result<(), String> {
 fn validate_non_empty_fields(fields: &[(&str, &String)]) -> Result<(), String> {
     for (label, value) in fields {
         if value.trim().is_empty() {
-            return Err(format!("供应商用量事实缺少非空字段 `{label}`。"));
+            return Err(format!(
+                "A provider usage fact is missing the non-empty field `{label}`."
+            ));
         }
     }
     Ok(())
@@ -1699,7 +1706,7 @@ mod tests {
         row.provider_billing_details_json = Some(String::from("{}"));
 
         let error = row.decode().expect_err("non-array billing JSON must fail");
-        assert!(error.contains("计费明细 JSON 无效"));
+        assert!(error.contains("Invalid native provider billing details JSON"));
     }
 
     /// Verifies daily aggregation sums token facts without any price dimension.

@@ -908,8 +908,11 @@ pub async fn create_indexed_session_v1(
     ensure_session_index_v1_schema(host_runtime).await?;
     let row = create_index_row(request)?;
     validate_new_session_index_v1(host_runtime, &row).await?;
+    // The list kind mirrors the published metadata; dedicated profiles are frozen at creation.
+    // 列表种类镜像已发布 metadata；专职配置在创建时冻结。
+    let dedicated = request.metadata.dedicated.is_some();
     create_indexed_session_v1_with_insert(&host_runtime.data_root, request, row, |row| async move {
-        insert_session_index_v1(host_runtime, &row).await
+        insert_session_index_v1(host_runtime, &row, dedicated).await
     })
     .await
 }

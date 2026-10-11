@@ -50,8 +50,12 @@ impl KnowledgeBaseRuntime {
         name: &str,
     ) -> Result<(), String> {
         let root = self.library_root(library_id)?;
-        fs::create_dir_all(&root)
-            .map_err(|error| format!("创建知识库目录失败（{}）：{error}", root.display()))?;
+        fs::create_dir_all(&root).map_err(|error| {
+            format!(
+                "Failed to create the knowledge directory ({}): {error}",
+                root.display()
+            )
+        })?;
         self.write_manifest_atomic(&KnowledgeManifest {
             library_id: library_id.to_string(),
             name: name.to_string(),
@@ -65,7 +69,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("初始化知识库 SQLite 结构失败：{error}"))?;
+        .map_err(|error| format!("Failed to initialize the knowledge SQLite schema: {error}"))?;
         self.validate_bound_library_metadata(library_id, &space_id, &binding_id)
             .await?;
         Ok(())
@@ -171,11 +175,15 @@ impl KnowledgeBaseRuntime {
                 let binding = self.library_database_binding(library_id, false)?;
                 local_sql::close_database_file_async(&self.host_runtime.local, &binding)
                     .await
-                    .map_err(|error| format!("关闭知识库内容数据库失败：{error}"))?;
+                    .map_err(|error| {
+                        format!("Failed to close the knowledge content database: {error}")
+                    })?;
                 self.host_runtime
                     .local
                     .unregister_named_binding(&binding_id, &binding)
-                    .map_err(|error| format!("注销知识库内容绑定失败：{error}"))?;
+                    .map_err(|error| {
+                        format!("Failed to unregister the knowledge content binding: {error}")
+                    })?;
                 self.active_bindings.lock().await.remove(library_id);
             }
         }
@@ -209,11 +217,13 @@ impl KnowledgeBaseRuntime {
         let binding = self.display_database_binding(library_id, false)?;
         local_sql::close_database_file_async(&self.host_runtime.local, &binding)
             .await
-            .map_err(|error| format!("关闭知识库显示数据库失败：{error}"))?;
+            .map_err(|error| format!("Failed to close the knowledge display database: {error}"))?;
         self.host_runtime
             .local
             .unregister_named_binding(&binding_id, &binding)
-            .map_err(|error| format!("注销知识库显示绑定失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to unregister the knowledge display binding: {error}")
+            })?;
         self.active_display_bindings.lock().await.remove(library_id);
         Ok(())
     }
@@ -245,11 +255,13 @@ impl KnowledgeBaseRuntime {
         self.host_runtime
             .local
             .close_lance_directory(&binding)
-            .map_err(|error| format!("关闭知识库 LanceDB 目录失败：{error}"))?;
+            .map_err(|error| format!("Failed to close the knowledge LanceDB directory: {error}"))?;
         self.host_runtime
             .local
             .unregister_named_lance_binding(&binding_id, &binding)
-            .map_err(|error| format!("注销知识库 LanceDB 绑定失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to unregister the knowledge LanceDB binding: {error}")
+            })?;
         self.active_vector_bindings.lock().await.remove(library_id);
         Ok(())
     }
@@ -320,7 +332,9 @@ impl KnowledgeBaseRuntime {
         self.host_runtime
             .local
             .register_named_lance_binding(&binding_id, &directory)
-            .map_err(|error| format!("登记知识库 LanceDB 绑定失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to register the knowledge LanceDB binding: {error}")
+            })?;
         Ok((space_id, binding_id))
     }
 
@@ -433,12 +447,12 @@ impl KnowledgeBaseRuntime {
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("知识库显示库元数据缺失。"))?;
+            .ok_or_else(|| String::from("The knowledge display-library metadata is missing."))?;
         if row.library_id != library_id
             || row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string()
         {
             return Err(format!(
-                "知识库显示库身份或结构版本不匹配：library={}, schema={}",
+                "The knowledge display-library identity or schema version does not match: library={}, schema={}",
                 row.library_id, row.schema_version
             ));
         }
@@ -572,9 +586,9 @@ impl KnowledgeBaseRuntime {
                 .collect::<Vec<_>>()
                 .join("；");
             return Err(format!(
-                "知识库包 SQLite quick_check 未通过：{}",
+                "The knowledge package SQLite quick_check failed: {}",
                 if diagnostics.is_empty() {
-                    "未返回诊断"
+                    "no diagnostics returned"
                 } else {
                     diagnostics.as_str()
                 }
@@ -608,40 +622,57 @@ impl KnowledgeBaseRuntime {
         database_path: &Path,
         allow_database_creation: bool,
     ) -> Result<(), String> {
-        let root_metadata = fs::symlink_metadata(root)
-            .map_err(|error| format!("读取知识库目录失败（{}）：{error}", root.display()))?;
+        let root_metadata = fs::symlink_metadata(root).map_err(|error| {
+            format!(
+                "Failed to read the knowledge directory ({}): {error}",
+                root.display()
+            )
+        })?;
         if !root_metadata.is_dir() || metadata_is_link_or_reparse(&root_metadata) {
-            return Err(format!("知识库目录不是可信普通目录：{}", root.display()));
+            return Err(format!(
+                "The knowledge directory is not a trusted regular directory: {}",
+                root.display()
+            ));
         }
         let canonical_knowledge_root = fs::canonicalize(self.knowledge_root())
-            .map_err(|error| format!("规范化知识库根目录失败：{error}"))?;
-        let canonical_root = fs::canonicalize(root)
-            .map_err(|error| format!("规范化知识库目录失败（{}）：{error}", root.display()))?;
+            .map_err(|error| format!("Failed to canonicalize the knowledge root: {error}"))?;
+        let canonical_root = fs::canonicalize(root).map_err(|error| {
+            format!(
+                "Failed to canonicalize the knowledge directory ({}): {error}",
+                root.display()
+            )
+        })?;
         if canonical_root.parent() != Some(canonical_knowledge_root.as_path())
             || canonical_root.file_name().and_then(|value| value.to_str()) != Some(library_id)
         {
             return Err(format!(
-                "知识库目录超出宿主派生边界：{}",
+                "The knowledge directory is outside the host-derived boundary: {}",
                 canonical_root.display()
             ));
         }
         let manifest_path = root.join("manifest.json");
         let manifest_metadata = fs::symlink_metadata(&manifest_path).map_err(|error| {
-            format!("读取知识库清单失败（{}）：{error}", manifest_path.display())
+            format!(
+                "Failed to read the knowledge manifest ({}): {error}",
+                manifest_path.display()
+            )
         })?;
         if !manifest_metadata.is_file() || metadata_is_link_or_reparse(&manifest_metadata) {
             return Err(format!(
-                "知识库清单不是可信普通文件：{}",
+                "The knowledge manifest is not a trusted regular file: {}",
                 manifest_path.display()
             ));
         }
         let manifest: KnowledgeManifest = serde_json::from_slice(
-            &fs::read(&manifest_path).map_err(|error| format!("读取知识库清单失败：{error}"))?,
+            &fs::read(&manifest_path)
+                .map_err(|error| format!("Failed to read the knowledge manifest: {error}"))?,
         )
-        .map_err(|error| format!("解析知识库清单失败：{error}"))?;
+        .map_err(|error| format!("Failed to parse the knowledge manifest: {error}"))?;
         if manifest.library_id != library_id || manifest.schema_version != KNOWLEDGE_SCHEMA_VERSION
         {
-            return Err(String::from("知识库清单身份或结构版本不匹配。"));
+            return Err(String::from(
+                "The knowledge manifest identity or schema version does not match.",
+            ));
         }
         match fs::symlink_metadata(database_path) {
             Ok(database_metadata)
@@ -649,7 +680,7 @@ impl KnowledgeBaseRuntime {
                     && !metadata_is_link_or_reparse(&database_metadata) => {}
             Ok(_) => {
                 return Err(format!(
-                    "知识库数据库不是可信普通文件：{}",
+                    "The knowledge database is not a trusted regular file: {}",
                     database_path.display()
                 ));
             }
@@ -657,7 +688,7 @@ impl KnowledgeBaseRuntime {
                 if allow_database_creation && error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(format!(
-                    "读取知识库数据库失败（{}）：{error}",
+                    "Failed to read the knowledge database ({}): {error}",
                     database_path.display()
                 ));
             }
@@ -693,7 +724,7 @@ impl KnowledgeBaseRuntime {
         self.host_runtime
             .local
             .register_named_binding(binding_id, binding)
-            .map_err(|error| format!("登记知识库绑定失败：{error}"))
+            .map_err(|error| format!("Failed to register the knowledge binding: {error}"))
     }
     /// Resolves the per-library binding an addressing identity names.
     /// 解析寻址身份所指的按资料库绑定。
@@ -744,12 +775,12 @@ impl KnowledgeBaseRuntime {
             .host_runtime
             .local
             .named_lance_binding(binding_id.as_ref())
-            .map_err(|error| format!("解析知识库向量绑定失败：{error}"))?;
+            .map_err(|error| format!("Failed to resolve the knowledge vector binding: {error}"))?;
         self.host_runtime
             .local
             .lance_engine(directory)
             .await
-            .map_err(|error| format!("打开知识库 LanceDB 引擎失败：{error}"))
+            .map_err(|error| format!("Failed to open the knowledge LanceDB engine: {error}"))
     }
     pub(super) fn library_binding_identity(
         &self,
@@ -895,7 +926,7 @@ impl KnowledgeBaseRuntime {
             Ok(metadata) => {
                 if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
                     return Err(format!(
-                        "知识库 LanceDB 目录不是可信普通目录：{}",
+                        "The knowledge LanceDB directory is not a trusted regular directory: {}",
                         lancedb_root.display()
                     ));
                 }
@@ -905,14 +936,14 @@ impl KnowledgeBaseRuntime {
             {
                 fs::create_dir_all(&lancedb_root).map_err(|create_error| {
                     format!(
-                        "创建知识库 LanceDB 目录失败（{}）：{create_error}",
+                        "Failed to create the knowledge LanceDB directory ({}): {create_error}",
                         lancedb_root.display()
                     )
                 })?;
             }
             Err(error) => {
                 return Err(format!(
-                    "读取知识库 LanceDB 目录失败（{}）：{error}",
+                    "Failed to read the knowledge LanceDB directory ({}): {error}",
                     lancedb_root.display()
                 ));
             }
@@ -955,7 +986,9 @@ impl KnowledgeBaseRuntime {
             .components()
             .any(|component| matches!(component, Component::ParentDir))
         {
-            return Err(String::from("知识库路径包含非法父目录组件。"));
+            return Err(String::from(
+                "The knowledge path contains an invalid parent directory component.",
+            ));
         }
         Ok(root)
     }
@@ -981,12 +1014,14 @@ impl KnowledgeBaseRuntime {
     ) -> Result<(), String> {
         let mut components = Path::new(expected_name).components();
         if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
-            return Err(String::from("宿主目录删除名称不是单一普通路径组件。"));
+            return Err(String::from(
+                "The host directory deletion name is not a single regular path component.",
+            ));
         }
         let knowledge_root = self.knowledge_root();
         if path != knowledge_root.join(expected_name) {
             return Err(format!(
-                "宿主目录删除路径与预期名称不匹配：{}",
+                "The host directory deletion path does not match the expected name: {}",
                 path.display()
             ));
         }
@@ -995,29 +1030,33 @@ impl KnowledgeBaseRuntime {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
                 return Err(format!(
-                    "读取待删除宿主目录失败（{}）：{error}",
+                    "Failed to read the host directory to delete ({}): {error}",
                     path.display()
                 ));
             }
         };
         if !metadata.is_dir() || metadata_is_link_or_reparse(&metadata) {
-            return Err(format!("拒绝删除非普通宿主目录：{}", path.display()));
+            return Err(format!(
+                "Refusing to delete a non-regular host directory: {}",
+                path.display()
+            ));
         }
         let canonical_knowledge_root = fs::canonicalize(&knowledge_root)
-            .map_err(|error| format!("规范化知识库根目录失败：{error}"))?;
-        let canonical_path =
-            fs::canonicalize(path).map_err(|error| format!("规范化待删除宿主目录失败：{error}"))?;
+            .map_err(|error| format!("Failed to canonicalize the knowledge root: {error}"))?;
+        let canonical_path = fs::canonicalize(path).map_err(|error| {
+            format!("Failed to canonicalize the host directory to delete: {error}")
+        })?;
         if canonical_path.parent() != Some(canonical_knowledge_root.as_path())
             || canonical_path.file_name().and_then(|value| value.to_str()) != Some(expected_name)
         {
             return Err(format!(
-                "待删除宿主目录超出知识库根边界：{}",
+                "The host directory to delete is outside the knowledge root boundary: {}",
                 canonical_path.display()
             ));
         }
         fs::remove_dir_all(&canonical_path).map_err(|error| {
             format!(
-                "删除宿主资料目录失败（{}）：{error}",
+                "Failed to delete the host data directory ({}): {error}",
                 canonical_path.display()
             )
         })
@@ -1037,27 +1076,38 @@ impl KnowledgeBaseRuntime {
     /// 返回所述操作完成后的成功结果，或其明确错误。
     pub(super) fn write_manifest_atomic(&self, manifest: &KnowledgeManifest) -> Result<(), String> {
         let root = self.library_root(&manifest.library_id)?;
-        fs::create_dir_all(&root)
-            .map_err(|error| format!("创建知识库目录失败（{}）：{error}", root.display()))?;
+        fs::create_dir_all(&root).map_err(|error| {
+            format!(
+                "Failed to create the knowledge directory ({}): {error}",
+                root.display()
+            )
+        })?;
         let path = root.join("manifest.json");
         let bytes = serde_json::to_vec_pretty(manifest)
-            .map_err(|error| format!("序列化知识库清单失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize the knowledge manifest: {error}"))?;
         if let Ok(metadata) = fs::symlink_metadata(&path)
             && (!metadata.is_file() || metadata_is_link_or_reparse(&metadata))
         {
-            return Err(format!("拒绝替换非普通知识库清单：{}", path.display()));
+            return Err(format!(
+                "Refusing to replace a non-regular knowledge manifest: {}",
+                path.display()
+            ));
         }
         let mut temporary = tempfile::Builder::new()
             .prefix("manifest.")
             .suffix(".tmp")
             .tempfile_in(&root)
-            .map_err(|error| format!("创建知识库临时清单失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to create the temporary knowledge manifest: {error}")
+            })?;
         temporary
             .write_all(&bytes)
             .and_then(|_| temporary.as_file().sync_all())
-            .map_err(|error| format!("写入并同步知识库临时清单失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to write and sync the temporary knowledge manifest: {error}")
+            })?;
         persist_tempfile_atomically(temporary, &path)
-            .map_err(|error| format!("提交知识库清单失败：{error}"))
+            .map_err(|error| format!("Failed to commit the knowledge manifest: {error}"))
     }
 
     /// Queries typed rows from the central application database.
@@ -1086,7 +1136,7 @@ impl KnowledgeBaseRuntime {
             params.to_vec(),
         )
         .await
-        .map_err(|error| format!("查询知识库中央注册表失败：{error}"))?;
+        .map_err(|error| format!("Failed to query the central knowledge registry: {error}"))?;
         decode_rows(&result.json_data)
     }
 
@@ -1273,7 +1323,7 @@ fn validate_trusted_database_file(path: &Path, allow_creation: bool) -> Result<(
         Ok(metadata) => {
             if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
                 return Err(format!(
-                    "知识库派生数据库不是可信普通文件：{}",
+                    "The knowledge derived database is not a trusted regular file: {}",
                     path.display()
                 ));
             }
@@ -1281,7 +1331,7 @@ fn validate_trusted_database_file(path: &Path, allow_creation: bool) -> Result<(
         }
         Err(error) if allow_creation && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!(
-            "读取知识库派生数据库失败（{}）：{error}",
+            "Failed to read the knowledge derived database ({}): {error}",
             path.display()
         )),
     }
@@ -1300,10 +1350,13 @@ fn validate_trusted_database_file(path: &Path, allow_creation: bool) -> Result<(
 /// Returns success after the documented operation completes, or its explicit failure.
 /// 返回所述操作完成后的成功结果，或其明确错误。
 pub(super) fn validate_library_id(library_id: &str) -> Result<(), String> {
-    let parsed = Uuid::parse_str(library_id)
-        .map_err(|error| format!("知识库标识符不是有效 UUID：{error}"))?;
+    let parsed = Uuid::parse_str(library_id).map_err(|error| {
+        format!("The knowledge library identifier is not a valid UUID: {error}")
+    })?;
     if parsed.to_string() != library_id {
-        return Err(String::from("知识库标识符必须使用规范小写 UUID 格式。"));
+        return Err(String::from(
+            "The knowledge library identifier must use the canonical lowercase UUID format.",
+        ));
     }
     Ok(())
 }
@@ -1321,7 +1374,8 @@ pub(super) fn validate_library_id(library_id: &str) -> Result<(), String> {
 /// Returns the decoded typed rows, or the storage/decoding error.
 /// 返回已解码的类型化记录，或存储/解码错误。
 fn decode_rows<T: DeserializeOwned>(json: &str) -> Result<Vec<T>, String> {
-    serde_json::from_str(json).map_err(|error| format!("解码知识库查询结果失败：{error}"))
+    serde_json::from_str(json)
+        .map_err(|error| format!("Failed to decode the knowledge query result: {error}"))
 }
 
 #[cfg(test)]

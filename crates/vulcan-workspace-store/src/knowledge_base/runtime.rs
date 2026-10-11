@@ -148,7 +148,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_import_jobs SET state = 'interrupted', phase = 'interrupted', error_message = 'service restarted before knowledge operation completion', finished_at_ms = ? WHERE state IN ('queued', 'running');",
                 vec![int(unix_epoch_millis()?)],
             ).await
-            .map_err(|error| format!("恢复知识库操作状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to recover the knowledge operation state: {error}"))?;
         self.recover_interrupted_replacements().await?;
         self.recover_interrupted_derived_index_states().await?;
         self.cleanup_orphan_package_directories().await?;
@@ -176,12 +176,16 @@ impl KnowledgeBaseRuntime {
             ) {
                 // A published generation remains usable while the retained pending generation is completed.
                 // 已发布代次在保留的待完成代次补齐期间仍然可用。
-                let recovery_message =
-                    if library.settings.display_index.pending_generation.is_some() {
-                        "服务重启中断了显示库生成；已生成文档均已保留，可以继续生成"
-                    } else {
-                        "服务重启中断了显示库生成；尚未建立可恢复代次，请重新生成"
-                    };
+                let recovery_message = if library
+                    .settings
+                    .display_index
+                    .pending_generation
+                    .is_some()
+                {
+                    "A service restart interrupted display-library generation; generated documents are kept and generation can continue"
+                } else {
+                    "A service restart interrupted display-library generation; no recoverable generation exists yet, so regenerate it"
+                };
                 self.set_display_index_status(
                     &library.id,
                     recovered_status,
@@ -198,7 +202,9 @@ impl KnowledgeBaseRuntime {
                 self.set_vector_index_status(
                     &library.id,
                     recovered_status,
-                    Some(String::from("服务重启中断了向量索引生成，请重新生成")),
+                    Some(String::from(
+                        "A service restart interrupted vector index generation; regenerate it",
+                    )),
                 )
                 .await?;
             }
@@ -235,10 +241,13 @@ impl KnowledgeBaseRuntime {
 /// Returns success only for the canonical lowercase UUID form; otherwise returns an explicit error.
 /// 仅对规范小写 UUID 格式返回成功，否则返回明确错误。
 fn validate_generation_id(generation: &str) -> Result<(), String> {
-    let parsed = Uuid::parse_str(generation)
-        .map_err(|error| format!("显示库代次标识符不是有效 UUID：{error}"))?;
+    let parsed = Uuid::parse_str(generation).map_err(|error| {
+        format!("The display-library generation identifier is not a valid UUID: {error}")
+    })?;
     if parsed.to_string() != generation {
-        return Err(String::from("显示库代次必须使用规范小写 UUID 格式。"));
+        return Err(String::from(
+            "The display-library generation must use the canonical lowercase UUID format.",
+        ));
     }
     Ok(())
 }
@@ -250,7 +259,8 @@ fn validate_generation_id(generation: &str) -> Result<(), String> {
 /// Returns the nonnegative count or an explicit negative-value error.
 /// 返回非负计数，或明确的负值错误。
 fn nonnegative_u64(value: i64, field: &str) -> Result<u64, String> {
-    u64::try_from(value).map_err(|_| format!("知识库字段 {field} 包含非法负值：{value}"))
+    u64::try_from(value)
+        .map_err(|_| format!("Knowledge field {field} contains an invalid negative value: {value}"))
 }
 
 /// Returns a typed SQLite text value.
@@ -276,9 +286,10 @@ fn int(value: i64) -> SqliteValue {
 fn unix_epoch_millis() -> Result<i64, String> {
     let value = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("系统时间早于 Unix 纪元：{error}"))?
+        .map_err(|error| format!("The system time is earlier than the Unix epoch: {error}"))?
         .as_millis();
-    i64::try_from(value).map_err(|_| String::from("当前 Unix 毫秒时间戳超出 i64 范围。"))
+    i64::try_from(value)
+        .map_err(|_| String::from("The current Unix millisecond timestamp exceeds the i64 range."))
 }
 
 /// Truncates text by Unicode scalar count without splitting UTF-8.

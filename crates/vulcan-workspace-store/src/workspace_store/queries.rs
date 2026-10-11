@@ -29,7 +29,7 @@ ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC;
 "#,
         &[],
     )
-    .map_err(|error| format!("查询工作台项目列表失败：{error}"))?;
+    .map_err(|error| format!("Failed to query the workbench project list: {error}"))?;
 
     decode_query_rows::<StoredProjectRow>(&result.json_data)
 }
@@ -47,14 +47,15 @@ pub(super) async fn query_collapsed_task_project_ids(
             COLLAPSED_TASK_PROJECTS_METADATA_KEY.to_string(),
         )],
     )
-    .map_err(|error| format!("查询工作台项目展开状态失败：{error}"))?;
+    .map_err(|error| format!("Failed to query the workbench project expansion state: {error}"))?;
 
     let rows = decode_query_rows::<StoredAppMetadataRow>(&result.json_data)?;
     let Some(row) = rows.first() else {
         return Ok(None);
     };
-    let parsed = serde_json::from_str::<Vec<String>>(&row.value)
-        .map_err(|error| format!("解析工作台项目展开状态失败：{error}"))?;
+    let parsed = serde_json::from_str::<Vec<String>>(&row.value).map_err(|error| {
+        format!("Failed to parse the workbench project expansion state: {error}")
+    })?;
     Ok(Some(parsed.into_iter().collect()))
 }
 
@@ -65,5 +66,5 @@ where
     T: for<'de> Deserialize<'de>,
 {
     serde_json::from_str::<Vec<T>>(json_data)
-        .map_err(|error| format!("解析宿主运行时 SQLite 查询结果失败：{error}"))
+        .map_err(|error| format!("Failed to parse the host runtime SQLite query result: {error}"))
 }

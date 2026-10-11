@@ -121,15 +121,16 @@ impl KnowledgeBaseRuntime {
             self.resolve_library_binding(&binding_id)?,
         )
         .await
-        .map_err(|error| format!("读取知识库 Jieba 自定义词失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the knowledge Jieba custom words: {error}"))?;
         result
             .words
             .into_iter()
             .map(|entry| {
                 Ok(KnowledgeCustomWord {
                     word: entry.word,
-                    weight: u32::try_from(entry.weight)
-                        .map_err(|_| String::from("Jieba 自定义词权重超出 u32 范围。"))?,
+                    weight: u32::try_from(entry.weight).map_err(|_| {
+                        String::from("The Jieba custom word weight exceeds the u32 range.")
+                    })?,
                 })
             })
             .collect()
@@ -168,7 +169,7 @@ impl KnowledgeBaseRuntime {
             weight.max(1) as usize,
         )
         .await
-        .map_err(|error| format!("保存知识库 Jieba 自定义词失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the knowledge Jieba custom word: {error}"))?;
         self.mark_dictionary_dirty(library_id, &space_id, &binding_id)
             .await
     }
@@ -198,7 +199,7 @@ impl KnowledgeBaseRuntime {
             word,
         )
         .await
-        .map_err(|error| format!("删除知识库 Jieba 自定义词失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete the knowledge Jieba custom word: {error}"))?;
         self.mark_dictionary_dirty(library_id, &space_id, &binding_id)
             .await
     }
@@ -311,7 +312,7 @@ impl KnowledgeBaseRuntime {
             KnowledgeOperationKind::Repair | KnowledgeOperationKind::Rebuild
         ) {
             return Err(String::from(
-                "索引维护操作只能使用 repair 或 rebuild 类型。",
+                "Index maintenance operations can only use the repair or rebuild type.",
             ));
         }
         self.require_active_library(library_id).await?;
@@ -371,10 +372,14 @@ impl KnowledgeBaseRuntime {
                 KnowledgeOperationKind::Repair => "repairing",
                 KnowledgeOperationKind::Rebuild => "rebuilding",
                 KnowledgeOperationKind::Import => {
-                    return Err(String::from("导入操作不能进入索引维护执行器。"));
+                    return Err(String::from(
+                        "Import operations cannot enter the index maintenance executor.",
+                    ));
                 }
                 KnowledgeOperationKind::DisplayBuild | KnowledgeOperationKind::VectorBuild => {
-                    return Err(String::from("派生构建操作不能进入原始 FTS 维护执行器。"));
+                    return Err(String::from(
+                        "Derived build operations cannot enter the raw FTS maintenance executor.",
+                    ));
                 }
             };
             self.update_operation_phase(&operation.job_id, "running", phase)
@@ -408,11 +413,13 @@ impl KnowledgeBaseRuntime {
                     )
                     .await
                 }
-                KnowledgeOperationKind::Import => {
-                    Err(String::from("导入操作不能进入索引维护执行器。"))
-                }
+                KnowledgeOperationKind::Import => Err(String::from(
+                    "Import operations cannot enter the index maintenance executor.",
+                )),
                 KnowledgeOperationKind::DisplayBuild | KnowledgeOperationKind::VectorBuild => {
-                    Err(String::from("派生构建操作不能进入原始 FTS 维护执行器。"))
+                    Err(String::from(
+                        "Derived build operations cannot enter the raw FTS maintenance executor.",
+                    ))
                 }
             }
         }
@@ -500,7 +507,7 @@ impl KnowledgeBaseRuntime {
             TokenizerMode::Jieba,
         )
         .await
-        .map_err(|error| format!("创建 Jieba FTS 索引失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the Jieba FTS index: {error}"))?;
         for chunk_ids in stale_chunk_ids.chunks(FTS_DELETE_PARAMETER_BATCH_SIZE) {
             if require_operation_not_cancelled(cancellation).is_err() {
                 return Ok(ImportIndexSyncOutcome::Cancelled);
@@ -517,7 +524,7 @@ impl KnowledgeBaseRuntime {
                 chunk_ids.iter().map(text).collect::<Vec<_>>(),
             )
             .await
-            .map_err(|error| format!("集合式删除过期 FTS 切片失败：{error}"))?;
+            .map_err(|error| format!("Failed to delete stale FTS chunks in bulk: {error}"))?;
         }
         // TotalItems is derived from the committed authoritative rows selected by staged documents.
         // TotalItems 从暂存文档选择出的已提交权威记录派生。
@@ -573,7 +580,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("删除旧 FTS 索引失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete the old FTS index: {error}"))?;
         local_sql::ensure_fts_index_async(
             &self.host_runtime.local,
             self.resolve_library_binding(binding_id)?,
@@ -581,7 +588,7 @@ impl KnowledgeBaseRuntime {
             TokenizerMode::Jieba,
         )
         .await
-        .map_err(|error| format!("重建 Jieba FTS 索引结构失败：{error}"))?;
+        .map_err(|error| format!("Failed to rebuild the Jieba FTS index schema: {error}"))?;
         // TotalItems is read without materializing all chunk bodies across the storage boundary.
         // TotalItems 无需跨存储边界物化全部切片正文即可读取。
         let total_items = nonnegative_u64(
@@ -759,7 +766,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("集合式写入变更 Jieba FTS 切片失败：{error}"))?;
+        .map_err(|error| format!("Failed to write changed Jieba FTS chunks in bulk: {error}"))?;
         Ok(())
     }
 
@@ -811,7 +818,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("集合式回放 Jieba FTS 切片失败：{error}"))?;
+        .map_err(|error| format!("Failed to replay Jieba FTS chunks in bulk: {error}"))?;
         Ok(())
     }
 
@@ -871,7 +878,9 @@ impl KnowledgeBaseRuntime {
             TokenizerMode::Jieba,
         )
         .await
-        .map_err(|error| format!("创建待补全 Jieba FTS 索引失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to create the Jieba FTS index to be completed: {error}")
+        })?;
         // TotalItems is authoritative work scanned by deterministic repair windows.
         // TotalItems 是确定性补全窗口扫描的权威工作量。
         let total_items = before.authoritative_chunk_count;
@@ -913,7 +922,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("删除孤立或错配 FTS 切片失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete orphaned or mismatched FTS chunks: {error}"))?;
         // Offset advances over authoritative rows rather than the shrinking missing-row subset.
         // Offset 在权威记录而非不断缩小的缺失记录子集上推进。
         let mut offset = 0usize;
@@ -996,7 +1005,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("集合式补全 Jieba FTS 切片失败：{error}"))?;
+        .map_err(|error| format!("Failed to backfill Jieba FTS chunks in bulk: {error}"))?;
         Ok(())
     }
 
@@ -1038,7 +1047,7 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("删除旧 FTS 索引失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete the old FTS index: {error}"))?;
         local_sql::ensure_fts_index_async(
             &self.host_runtime.local,
             self.resolve_library_binding(binding_id)?,
@@ -1046,7 +1055,7 @@ impl KnowledgeBaseRuntime {
             TokenizerMode::Jieba,
         )
         .await
-        .map_err(|error| format!("重建 Jieba FTS 索引结构失败：{error}"))?;
+        .map_err(|error| format!("Failed to rebuild the Jieba FTS index schema: {error}"))?;
         // Counts supplies a constant authoritative denominator without materializing chunk bodies.
         // Counts 提供恒定权威分母，无需物化切片正文。
         let counts = self.authoritative_counts(space_id, binding_id).await?;
@@ -1151,7 +1160,7 @@ impl KnowledgeBaseRuntime {
         let index_exists = presence_rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("知识库索引结构检查未返回结果。"))?
+            .ok_or_else(|| String::from("The knowledge index schema check returned no result."))?
             .index_exists
             == 1;
         // Counts uses exact source-field comparison when the FTS table exists.
@@ -1273,7 +1282,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("知识库索引元数据缺失。"))
+            .ok_or_else(|| String::from("The knowledge index metadata is missing."))
     }
 
     /// Verifies all index revisions and the tokenizer before allowing search.
@@ -1370,7 +1379,7 @@ impl KnowledgeBaseRuntime {
             || row.orphan_or_mismatched_count != 0
         {
             return Err(format!(
-                "知识库 FTS 与权威切片不一致：authoritative={}, indexed={}, missing_or_mismatched={}, orphan_or_mismatched={}",
+                "The knowledge FTS disagrees with the authoritative chunks: authoritative={}, indexed={}, missing_or_mismatched={}, orphan_or_mismatched={}",
                 row.authoritative_count,
                 row.indexed_count,
                 row.missing_or_mismatched_count,
@@ -1468,7 +1477,7 @@ impl KnowledgeBaseRuntime {
                     UPDATE knowledge_metadata SET value = '' WHERE key = 'last_index_error';"#,
                 Vec::new(),
             ).await
-            .map_err(|error| format!("提交知识库索引版本失败：{error}"))?;
+            .map_err(|error| format!("Failed to commit the knowledge index version: {error}"))?;
         Ok(())
     }
 
@@ -1500,7 +1509,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_metadata SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'dictionary_revision'; UPDATE knowledge_metadata SET value = 'dirty' WHERE key = 'index_status';",
                 Vec::new(),
             ).await
-            .map_err(|error| format!("更新知识库词典版本失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the knowledge dictionary version: {error}"))?;
         self.set_registry_index_status(library_id, "dirty").await
     }
 
@@ -1536,7 +1545,7 @@ impl KnowledgeBaseRuntime {
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("读取知识库变更切片计数失败。"))?;
+            .ok_or_else(|| String::from("Failed to read the knowledge changed-chunk count."))?;
         nonnegative_u64(row.chunk_count, "chunk_count")
     }
 
@@ -1574,7 +1583,7 @@ impl KnowledgeBaseRuntime {
                 "UPDATE knowledge_metadata SET value = CASE key WHEN 'index_status' THEN ? WHEN 'last_index_error' THEN ? END WHERE key IN ('index_status', 'last_index_error');",
                 vec![text(state), text(error)],
             ).await
-            .map_err(|failure| format!("更新知识库索引状态失败：{failure}"))?;
+            .map_err(|failure| format!("Failed to update the knowledge index state: {failure}"))?;
         self.set_registry_index_status(library_id, state).await
     }
 
@@ -1600,7 +1609,7 @@ impl KnowledgeBaseRuntime {
             vec![text(state), int(unix_epoch_millis()?), text(library_id)],
         )
         .await
-        .map_err(|error| format!("更新知识库中央索引状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to update the central knowledge index status: {error}"))?;
         Ok(())
     }
 }
@@ -1620,10 +1629,12 @@ impl KnowledgeBaseRuntime {
 fn validate_custom_word(word: &str) -> Result<&str, String> {
     let word = word.trim();
     if word.is_empty() {
-        return Err(String::from("Jieba 自定义词不能为空。"));
+        return Err(String::from("The Jieba custom word must not be empty."));
     }
     if word.chars().count() > 128 {
-        return Err(String::from("Jieba 自定义词不能超过 128 个字符。"));
+        return Err(String::from(
+            "The Jieba custom word must not exceed 128 characters.",
+        ));
     }
     Ok(word)
 }
@@ -1643,7 +1654,7 @@ fn validate_custom_word(word: &str) -> Result<&str, String> {
 /// Returns the parsed unsigned revision, or an explicit metadata-integrity error.
 /// 返回解析后的无符号修订，或明确元数据完整性错误。
 fn parse_revision(value: &str, field: &str) -> Result<u64, String> {
-    value
-        .parse::<u64>()
-        .map_err(|error| format!("知识库元数据 {field} 不是有效非负版本（{value}）：{error}"))
+    value.parse::<u64>().map_err(|error| {
+        format!("Knowledge metadata {field} is not a valid non-negative version ({value}): {error}")
+    })
 }

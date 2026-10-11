@@ -130,7 +130,7 @@ impl VceProjectIndex {
             vec![sqlite_text(&self.binding.namespace_id), sqlite_text(refresh_id),
                 sqlite_u64(generation, "VCE staging origin generation").map_err(|error| error.to_string())?,
                 sqlite_text(self.embedding_producer_fingerprint())],
-            "绑定 VCE 暂存实际来源失败",
+            "Failed to bind the actual origin of the VCE staging",
         ).await?;
         self.validate_embedding_stage_origin(refresh_id, generation)
             .await

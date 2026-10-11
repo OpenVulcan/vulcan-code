@@ -104,9 +104,9 @@ impl DisplayDocumentRow {
     /// 消费当前精确记录；返回公开文档，或关键词/符号 JSON 解码错误。
     fn into_display_document(self) -> Result<KnowledgeDisplayDocument, String> {
         let keywords = serde_json::from_str(&self.keywords_json)
-            .map_err(|error| format!("解析显示库关键词失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse display-library keywords: {error}"))?;
         let symbols = serde_json::from_str(&self.symbols_json)
-            .map_err(|error| format!("解析显示库符号失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse display-library symbols: {error}"))?;
         Ok(KnowledgeDisplayDocument {
             id: self.id,
             source_document_id: self.source_document_id,
@@ -229,7 +229,9 @@ impl KnowledgeBaseRuntime {
         // 新代次完整发布之前，活动元数据保持不变。
         let mut document = self.read_display_document(library_id, source_id).await?;
         if document.source_sha256 != source_hash {
-            return Err(String::from("已完成文档在确认后变化，请重新扫描。"));
+            return Err(String::from(
+                "A completed document changed after confirmation; scan again.",
+            ));
         }
         // Resolve stored chunks through the existing display binding.
         // 通过现有显示绑定解析已保存切片。
@@ -280,7 +282,9 @@ impl KnowledgeBaseRuntime {
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("初始化知识库显示库 SQLite 结构失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to initialize the knowledge display-library SQLite schema: {error}")
+        })?;
         Ok(())
     }
 
@@ -314,7 +318,9 @@ impl KnowledgeBaseRuntime {
             TokenizerMode::Jieba,
         )
         .await
-        .map_err(|error| format!("初始化显示库 Jieba FTS 索引失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to initialize the display-library Jieba FTS index: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
@@ -322,7 +328,7 @@ impl KnowledgeBaseRuntime {
             vec![text(generation)],
         )
         .await
-        .map_err(|error| format!("清理显示库代次切片失败：{error}"))?;
+        .map_err(|error| format!("Failed to clear display-library generation chunks: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
@@ -330,7 +336,9 @@ impl KnowledgeBaseRuntime {
             vec![text(generation)],
         )
         .await
-        .map_err(|error| format!("清理显示库代次文档失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to clear display-library generation documents: {error}")
+        })?;
         Ok(fts_index)
     }
 
@@ -364,7 +372,9 @@ impl KnowledgeBaseRuntime {
             TokenizerMode::Jieba,
         )
         .await
-        .map_err(|error| format!("恢复显示库 Jieba FTS 索引失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to restore the display-library Jieba FTS index: {error}")
+        })?;
         Ok(fts_index)
     }
 
@@ -394,7 +404,9 @@ impl KnowledgeBaseRuntime {
         let _guard = self.library_mutation_guard(library_id).await?;
         let current = self.require_active_library(library_id).await?;
         if !current.settings.curation.enabled {
-            return Err(String::from("当前资料库未启用显示库整理"));
+            return Err(String::from(
+                "Display-library curation is not enabled for this library",
+            ));
         }
         let mut settings = current.settings.clone();
         settings.display_index.status = KnowledgeDisplayIndexStatus::Building;
@@ -406,8 +418,9 @@ impl KnowledgeBaseRuntime {
             settings.curation.desired_model_fingerprint.clone();
         settings.display_index.last_error = None;
         settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化显示库待完成状态失败：{error}"))?;
+        let settings_json = serde_json::to_string(&settings).map_err(|error| {
+            format!("Failed to serialize the pending display-library state: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -418,7 +431,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("保存显示库待完成状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the pending display-library state: {error}"))?;
         self.get_library(library_id).await
     }
 
@@ -506,14 +519,14 @@ impl KnowledgeBaseRuntime {
             vec![text(source_document_id), text(generation), text(generation)],
         )
         .await
-        .map_err(|error| format!("清理显示库旧 FTS 切片失败：{error}"))?;
+        .map_err(|error| format!("Failed to clear old display-library FTS chunks: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
                 "DELETE FROM display_chunks WHERE display_document_id IN (SELECT id FROM display_documents WHERE source_document_id = ? AND generation = ?);",
                 vec![text(source_document_id), text(generation)],
             ).await
-            .map_err(|error| format!("清理显示库旧切片失败：{error}"))?;
+            .map_err(|error| format!("Failed to clear old display-library chunks: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
@@ -521,7 +534,7 @@ impl KnowledgeBaseRuntime {
             vec![text(source_document_id), text(generation)],
         )
         .await
-        .map_err(|error| format!("清理显示库旧文档失败：{error}"))?;
+        .map_err(|error| format!("Failed to clear old display-library documents: {error}"))?;
         Ok(())
     }
 
@@ -552,19 +565,23 @@ impl KnowledgeBaseRuntime {
     ) -> Result<(), String> {
         validate_generation_id(document.generation.as_str())?;
         if document.generation.trim().is_empty() || chunks.is_empty() {
-            return Err(String::from("显示库文档代次与切片不能为空"));
+            return Err(String::from(
+                "The display-library document generation and chunks must not be empty",
+            ));
         }
         if chunks
             .iter()
             .any(|chunk| chunk.generation != document.generation)
         {
-            return Err(String::from("显示库文档与切片代次不一致"));
+            return Err(String::from(
+                "The display-library document and chunk generations disagree",
+            ));
         }
         let (_space_id, binding_id) = self.ensure_display_binding(library_id).await?;
         let keywords_json = serde_json::to_string(&document.keywords)
-            .map_err(|error| format!("序列化显示库关键词失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize display-library keywords: {error}"))?;
         let symbols_json = serde_json::to_string(&document.symbols)
-            .map_err(|error| format!("序列化显示库符号失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize display-library symbols: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
@@ -590,7 +607,7 @@ impl KnowledgeBaseRuntime {
             ],
         )
         .await
-        .map_err(|error| format!("写入显示库文档失败：{error}"))?;
+        .map_err(|error| format!("Failed to write the display-library document: {error}"))?;
         for chunk in chunks {
             local_sql::execute_script_async(
                 &self.host_runtime.local,
@@ -602,20 +619,29 @@ impl KnowledgeBaseRuntime {
                 vec![
                     text(&chunk.id),
                     text(&chunk.display_document_id),
-                    int(i64::try_from(chunk.ordinal)
-                        .map_err(|_| String::from("显示库切片序号超出 SQLite 整数范围"))?),
+                    int(i64::try_from(chunk.ordinal).map_err(|_| {
+                        String::from(
+                            "The display-library chunk index exceeds the SQLite integer range",
+                        )
+                    })?),
                     text(&chunk.heading_path),
-                    int(i64::try_from(chunk.start_line)
-                        .map_err(|_| String::from("显示库切片起始行超出 SQLite 整数范围"))?),
-                    int(i64::try_from(chunk.end_line)
-                        .map_err(|_| String::from("显示库切片结束行超出 SQLite 整数范围"))?),
+                    int(i64::try_from(chunk.start_line).map_err(|_| {
+                        String::from(
+                            "The display-library chunk start line exceeds the SQLite integer range",
+                        )
+                    })?),
+                    int(i64::try_from(chunk.end_line).map_err(|_| {
+                        String::from(
+                            "The display-library chunk end line exceeds the SQLite integer range",
+                        )
+                    })?),
                     text(&chunk.content),
                     text(&chunk.embedding_text),
                     text(&chunk.generation),
                 ],
             )
             .await
-            .map_err(|error| format!("写入显示库切片失败：{error}"))?;
+            .map_err(|error| format!("Failed to write display-library chunks: {error}"))?;
             local_sql::upsert_fts_document_async(
                 &self.host_runtime.local,
                 self.resolve_library_binding(&binding_id)?,
@@ -633,7 +659,9 @@ impl KnowledgeBaseRuntime {
                 ),
             )
             .await
-            .map_err(|error| format!("写入显示库 Jieba FTS 切片失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to write display-library Jieba FTS chunks: {error}")
+            })?;
         }
         Ok(())
     }
@@ -682,12 +710,14 @@ impl KnowledgeBaseRuntime {
             .transpose()?
             .unwrap_or(0);
         if document_count == 0 && !all_sources_skipped {
-            return Err(String::from("显示库代次没有可发布文档"));
+            return Err(String::from(
+                "The display-library generation has no publishable documents",
+            ));
         }
         let source_integrity = self.inspect_index_integrity(library_id).await?;
         if source_integrity.content_revision != source_content_revision as u64 {
             return Err(String::from(
-                "原始库在显示库生成期间发生变化，已拒绝发布过期显示代次",
+                "The raw library changed while the display library was being generated; the stale display generation was not published",
             ));
         }
         local_sql::execute_script_async(
@@ -696,21 +726,21 @@ impl KnowledgeBaseRuntime {
                 "INSERT INTO display_metadata(key, value) VALUES ('active_generation', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 vec![text(generation)],
             ).await
-            .map_err(|error| format!("发布显示库活动代次失败：{error}"))?;
+            .map_err(|error| format!("Failed to publish the active display-library generation: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
                 "INSERT INTO display_metadata(key, value) VALUES ('active_fts_index', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 vec![text(fts_index)],
             ).await
-            .map_err(|error| format!("发布显示库活动 FTS 索引失败：{error}"))?;
+            .map_err(|error| format!("Failed to publish the active display-library FTS index: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             self.resolve_library_binding(&binding_id)?,
                 "INSERT INTO display_metadata(key, value) VALUES ('source_content_revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
                 vec![int(source_content_revision)],
             ).await
-            .map_err(|error| format!("发布显示库来源修订失败：{error}"))?;
+            .map_err(|error| format!("Failed to publish the display-library source revision: {error}"))?;
         Ok(document_count)
     }
 
@@ -749,7 +779,9 @@ impl KnowledgeBaseRuntime {
         let _guard = self.library_mutation_guard(library_id).await?;
         let current = self.require_active_library(library_id).await?;
         if !current.settings.curation.enabled {
-            return Err(String::from("当前资料库未启用显示库整理"));
+            return Err(String::from(
+                "Display-library curation is not enabled for this library",
+            ));
         }
         let mut settings = current.settings.clone();
         settings.display_index.status = KnowledgeDisplayIndexStatus::Ready;
@@ -769,13 +801,15 @@ impl KnowledgeBaseRuntime {
         if settings.embedding.enabled {
             settings.vector_index.status = KnowledgeVectorIndexStatus::Stale;
             settings.vector_index.active_generation = None;
-            settings.vector_index.last_error =
-                Some(String::from("显示库活动代次发生变化，必须重新构建向量索引"));
+            settings.vector_index.last_error = Some(String::from(
+                "The active display-library generation changed; the vector index must be rebuilt",
+            ));
         }
         settings.curation.last_successful_sync_snapshot = Some(curation_snapshot);
         settings.validate()?;
-        let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化显示库成功状态失败：{error}"))?;
+        let settings_json = serde_json::to_string(&settings).map_err(|error| {
+            format!("Failed to serialize the display-library success state: {error}")
+        })?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -786,7 +820,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("保存显示库成功状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the display-library success state: {error}"))?;
         self.get_library(library_id).await
     }
 
@@ -819,7 +853,7 @@ impl KnowledgeBaseRuntime {
         settings.display_index.last_error = last_error;
         settings.validate()?;
         let settings_json = serde_json::to_string(&settings)
-            .map_err(|error| format!("序列化显示库状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to serialize the display-library state: {error}"))?;
         local_sql::execute_script_async(
             &self.host_runtime.local,
             LogicalDatabase::AppState,
@@ -830,7 +864,7 @@ impl KnowledgeBaseRuntime {
                     text(library_id),
                 ],
             ).await
-            .map_err(|error| format!("保存显示库生命周期状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to save the display-library lifecycle state: {error}"))?;
         self.get_library(library_id).await
     }
 
@@ -973,22 +1007,24 @@ impl KnowledgeBaseRuntime {
     ) -> Result<(Vec<KnowledgeSearchHit>, String), String> {
         let library = self.require_active_library(library_id).await?;
         if library.settings.vector_index.status != KnowledgeVectorIndexStatus::Ready {
-            return Err(String::from("资料库向量索引尚未就绪"));
+            return Err(String::from("The library vector index is not ready yet"));
         }
         let generation = library
             .settings
             .vector_index
             .active_generation
             .clone()
-            .ok_or_else(|| String::from("资料库向量活动代次缺失"))?;
+            .ok_or_else(|| String::from("The library's active vector generation is missing"))?;
         let display_generation = library
             .settings
             .display_index
             .active_generation
             .clone()
-            .ok_or_else(|| String::from("显示库活动代次缺失"))?;
+            .ok_or_else(|| String::from("The active display-library generation is missing"))?;
         if generation != display_generation {
-            return Err(String::from("资料库向量索引与显示库代次不一致"));
+            return Err(String::from(
+                "The library vector index and display-library generation disagree",
+            ));
         }
         let table_name = vector_table_name(&generation)?;
         let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
@@ -1014,7 +1050,7 @@ impl KnowledgeBaseRuntime {
             let id = row
                 .get("id")
                 .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| String::from("LanceDB 向量结果缺少 id 字段"))?;
+                .ok_or_else(|| String::from("A LanceDB vector result is missing the id field"))?;
             vector_scores.insert(id.to_string(), 1.0 / (RRF_K + rank as f64 + 1.0));
         }
         let vector_only_ids = vector_scores
@@ -1121,7 +1157,7 @@ impl KnowledgeBaseRuntime {
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| format!("显示库文档不存在：{source_document_id}"))?;
+            .ok_or_else(|| format!("Display-library document not found: {source_document_id}"))?;
         row.into_display_document()
     }
 
@@ -1179,17 +1215,21 @@ impl KnowledgeBaseRuntime {
         let chunk_count = count_rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("读取显示库文档切片数量失败。"))?
+            .ok_or_else(|| {
+                String::from("Failed to read the display-library document chunk count.")
+            })?
             .chunk_count;
         // markdown owns the normalized display-layer body returned to the viewer.
         // markdown 持有返回阅读器的规范化显示层正文。
         let markdown = display_document.markdown;
         // byteSize and lineCount describe the displayed Markdown rather than the raw source file.
         // byteSize 与 lineCount 描述显示 Markdown，而不是原始来源文件。
-        let byte_size = u64::try_from(markdown.len())
-            .map_err(|_| String::from("显示库 Markdown 字节数超出支持范围。"))?;
-        let line_count = u64::try_from(markdown.lines().count().max(1))
-            .map_err(|_| String::from("显示库 Markdown 行数超出支持范围。"))?;
+        let byte_size = u64::try_from(markdown.len()).map_err(|_| {
+            String::from("The display-library Markdown byte count is out of the supported range.")
+        })?;
+        let line_count = u64::try_from(markdown.lines().count().max(1)).map_err(|_| {
+            String::from("The display-library Markdown line count is out of the supported range.")
+        })?;
         Ok(KnowledgeDocumentContent {
             document: KnowledgeDocumentSummary {
                 id: display_document.source_document_id,
@@ -1247,8 +1287,9 @@ impl KnowledgeBaseRuntime {
             })?;
         validate_generation_id(&generation)?;
         let limit = limit.clamp(1, 500);
-        let offset =
-            i64::try_from(offset).map_err(|_| String::from("显示库切片偏移量超出支持范围"))?;
+        let offset = i64::try_from(offset).map_err(|_| {
+            String::from("The display-library chunk offset is out of the supported range")
+        })?;
         let rows: Vec<DisplayChunkRow> = self
             .query_library_rows(
                 &space_id,
@@ -1305,7 +1346,9 @@ impl KnowledgeBaseRuntime {
             .next()
             .map(|row| nonnegative_u64(row.count, "display_chunk_count"))
             .transpose()?
-            .ok_or_else(|| String::from("显示库切片计数查询未返回结果。"))
+            .ok_or_else(|| {
+                String::from("The display-library chunk count query returned no result.")
+            })
     }
 }
 
@@ -1344,11 +1387,13 @@ pub(super) fn display_fts_index_name(generation: &str) -> Result<String, String>
 /// 返回所述操作完成后的成功结果，或其明确错误。
 fn validate_display_fts_index(index_name: &str) -> Result<(), String> {
     let prefix = format!("{}{}", KNOWLEDGE_DISPLAY_FTS_INDEX_PREFIX, "_");
-    let suffix = index_name
-        .strip_prefix(&prefix)
-        .ok_or_else(|| String::from("显示库活动 FTS 索引名称前缀无效。"))?;
+    let suffix = index_name.strip_prefix(&prefix).ok_or_else(|| {
+        String::from("The active display-library FTS index name prefix is invalid.")
+    })?;
     if suffix.len() != 32 || !suffix.chars().all(|value| value.is_ascii_hexdigit()) {
-        return Err(String::from("显示库活动 FTS 索引名称格式无效。"));
+        return Err(String::from(
+            "The active display-library FTS index name format is invalid.",
+        ));
     }
     Ok(())
 }

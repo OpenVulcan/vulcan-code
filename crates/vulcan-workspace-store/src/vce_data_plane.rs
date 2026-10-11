@@ -381,7 +381,7 @@ impl ProjectBindingRow {
             || self.vector_space_id != config.vector_space_id
         {
             return Err(format!(
-                "VCE 项目 `{}` 的持久索引身份与当前配置不一致",
+                "The persisted index identity of VCE project `{}` disagrees with the current configuration",
                 config.project_id
             ));
         }
@@ -492,7 +492,7 @@ impl CheckpointRow {
     fn checkpoint_members(&self) -> Result<BTreeSet<String>, String> {
         serde_json::from_str::<Checkpoint>(&self.checkpoint_json)
             .map(|checkpoint| checkpoint.members)
-            .map_err(|error| format!("解析 VCE 检查点失败：{error}"))
+            .map_err(|error| format!("Failed to parse the VCE checkpoint: {error}"))
     }
 }
 
@@ -1958,9 +1958,10 @@ fn lance_string_set(values: &BTreeSet<String>) -> String {
 fn current_unix_epoch_millis_i64() -> Result<i64, String> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("读取系统时间失败：{error}"))?
+        .map_err(|error| format!("Failed to read the system time: {error}"))?
         .as_millis();
-    i64::try_from(millis).map_err(|_| String::from("当前时间超出 SQLite 整数范围"))
+    i64::try_from(millis)
+        .map_err(|_| String::from("The current time exceeds the SQLite integer range"))
 }
 
 /// Hash every semantic commit field into one durable idempotency identity.
@@ -2137,7 +2138,9 @@ impl VceProjectIndexConfig {
             || self.dimension == 0
             || self.config_revision == 0
         {
-            return Err(String::from("VCE 项目索引配置包含空身份或无效维度"));
+            return Err(String::from(
+                "The VCE project index configuration contains an empty identity or invalid dimension",
+            ));
         }
         Ok(())
     }
@@ -2252,7 +2255,7 @@ fn partition_vector_rows_by_data_limit(
     }
     if max_data_bytes < 2 {
         return Err(format!(
-            "VCE LanceDB 表 `{table_name}` 的请求上限无法容纳 JSON 数组"
+            "The request limit of VCE LanceDB table `{table_name}` cannot hold a JSON array"
         ));
     }
 
@@ -2260,14 +2263,14 @@ fn partition_vector_rows_by_data_limit(
         .into_iter()
         .map(|row| {
             serde_json::to_vec(&row)
-                .map_err(|error| format!("编码 VCE LanceDB 向量行失败：{error}"))
+                .map_err(|error| format!("Failed to encode VCE LanceDB vector rows: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     for encoded in &encoded_rows {
         let standalone_size = encoded.len().saturating_add(2);
         if standalone_size > max_data_bytes {
             return Err(format!(
-                "VCE LanceDB 表 `{table_name}` 的单行 JSON 载荷为 {standalone_size} 字节，超过可用上限 {max_data_bytes} 字节"
+                "The single-row JSON payload of VCE LanceDB table `{table_name}` is {standalone_size} bytes, exceeding the available limit of {max_data_bytes} bytes"
             ));
         }
     }
@@ -2459,7 +2462,7 @@ impl VceDataPlaneHandle {
         self.local_runtime
             .lance_engine(self.vector_store_binding())
             .await
-            .map_err(|error| format!("打开原生 VCE LanceDB 数据库失败：{error}"))
+            .map_err(|error| format!("Failed to open the native VCE LanceDB database: {error}"))
     }
 
     /// Activate bindings only after the factory has retained cleanup ownership.
@@ -2534,7 +2537,7 @@ impl VceDataPlaneHandle {
                 Vec::new(),
             )
             .await
-            .map_err(|error| format!("初始化 VCE 数据结构失败：{error}"))?;
+            .map_err(|error| format!("Failed to initialize the VCE data schema: {error}"))?;
         }
         self.reconcile_publication_intents().await?;
         // Reopening also reclaims settled historical work; unknown remote tasks and active jobs stay pinned.
@@ -2543,7 +2546,7 @@ impl VceDataPlaneHandle {
             artifact_retention::collect(connection, "")
         })
         .await
-        .map_err(|error| format!("回收 VCE 过期运行材料失败：{error}"))?;
+        .map_err(|error| format!("Failed to reclaim expired VCE runtime material: {error}"))?;
         Ok(())
     }
 
@@ -2570,7 +2573,7 @@ impl VceDataPlaneHandle {
                        AND c.refresh_id = vce_publication_intents.refresh_id
                  );"#,
             vec![SqliteValue::Integer(now), SqliteValue::Integer(now)],
-            "恢复 VCE 发布意图状态失败",
+            "Failed to recover the VCE publication intent state",
         )
         .await
     }
@@ -3048,8 +3051,12 @@ impl VceDataPlaneHandle {
                        WHERE namespace_id = '{namespace_id}';
                        COMMIT;"#,
                 );
-                self.execute(&script, Vec::new(), "激活 VCE 项目索引失败")
-                    .await?;
+                self.execute(
+                    &script,
+                    Vec::new(),
+                    "Failed to activate the VCE project index",
+                )
+                .await?;
             }
         } else {
             // Only a new admitted binding creates tables; existing bindings never recreate missing data.
@@ -3137,7 +3144,11 @@ impl VceDataPlaneHandle {
                    COMMIT;"#,
             );
             if let Err(primary) = self
-                .execute(&script, Vec::new(), "登记 VCE 项目索引失败")
+                .execute(
+                    &script,
+                    Vec::new(),
+                    "Failed to register the VCE project index",
+                )
                 .await
             {
                 return Err(match &initial_allocation {
@@ -3167,8 +3178,12 @@ impl VceDataPlaneHandle {
                 let finish = format!(
                     "BEGIN IMMEDIATE;\nINSERT OR ROLLBACK INTO vce_commit_guards(namespace_id, valid) VALUES ('{namespace_id}', CASE WHEN ({condition}) AND EXISTS(SELECT 1 FROM vce_rebuild_candidates WHERE namespace_id = '{namespace_id}' AND state = 'allocating') THEN 1 ELSE 0 END);\nUPDATE vce_rebuild_candidates SET state = 'building', updated_at_unix_ms = {now} WHERE namespace_id = '{namespace_id}' AND state = 'allocating';\nDELETE FROM vce_commit_guards WHERE namespace_id = '{namespace_id}';\nCOMMIT;"
                 );
-                self.execute(&finish, Vec::new(), "完成 VCE 候选物理分配失败")
-                    .await?;
+                self.execute(
+                    &finish,
+                    Vec::new(),
+                    "Failed to complete the VCE candidate physical allocation",
+                )
+                .await?;
             }
         }
         let index = VceProjectIndex {
@@ -3211,7 +3226,7 @@ impl VceDataPlaneHandle {
         rows.first()
             .map(|row| {
                 serde_json::from_str(&row.snapshot_json)
-                    .map_err(|error| format!("解析 VCE 状态快照失败：{error}"))
+                    .map_err(|error| format!("Failed to parse the VCE state snapshot: {error}"))
             })
             .transpose()
     }
@@ -3224,10 +3239,12 @@ impl VceDataPlaneHandle {
         snapshot: &VceStateSnapshot,
     ) -> Result<(), String> {
         if namespace_id.trim().is_empty() {
-            return Err(String::from("VCE 状态快照命名空间不能为空"));
+            return Err(String::from(
+                "The VCE state snapshot namespace must not be empty",
+            ));
         }
         let snapshot_json = serde_json::to_string(snapshot)
-            .map_err(|error| format!("编码 VCE 状态快照失败：{error}"))?;
+            .map_err(|error| format!("Failed to encode the VCE state snapshot: {error}"))?;
         self.execute(
             r#"INSERT INTO vce_state_snapshots(namespace_id, snapshot_json, updated_at_unix_ms)
                VALUES (?, ?, ?)
@@ -3239,7 +3256,7 @@ impl VceDataPlaneHandle {
                 sqlite_text(snapshot_json),
                 SqliteValue::Integer(current_unix_epoch_millis_i64()?),
             ],
-            "持久化 VCE 状态快照失败",
+            "Failed to persist the VCE state snapshot",
         )
         .await
     }
@@ -3259,7 +3276,9 @@ impl VceDataPlaneHandle {
                 overwrite_if_exists: false,
             })
             .await
-            .map_err(|error| format!("创建 VCE LanceDB 表 `{table_name}` 失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to create VCE LanceDB table `{table_name}`: {error}")
+            })?;
         Ok(())
     }
 
@@ -3307,9 +3326,9 @@ impl VceDataPlaneHandle {
         let result =
             local_sql::query_json_async(&self.local_runtime, &self.sqlite_binding, sql, params)
                 .await
-                .map_err(|error| format!("查询 VCE SQLite 失败：{error}"))?;
+                .map_err(|error| format!("Failed to query the VCE SQLite: {error}"))?;
         serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析 VCE SQLite 查询结果失败：{error}"))
+            .map_err(|error| format!("Failed to parse the VCE SQLite query result: {error}"))
     }
 
     /// Executes one statement and keeps SQLite's typed failure for callers that classify it.
@@ -3675,7 +3694,6 @@ CREATE TABLE IF NOT EXISTS vce_staged_symbols (
 );
 
 -- Cascade cleanup must locate one exact file instead of scanning its entire generation for every parent.
--- 级联清理必须定位单个精确文件，避免为每个父记录扫描整个代次。
 CREATE INDEX IF NOT EXISTS idx_vce_staged_chunk_blob
 ON vce_staged_chunks(namespace_id, refresh_id, generation, blob_name);
 CREATE INDEX IF NOT EXISTS idx_vce_staged_symbol_blob
@@ -4094,7 +4112,7 @@ impl VceProjectIndex {
                 compaction: engine_compaction_options(&physical_compaction_options())?,
             })
             .await
-            .map_err(|error| format!("读取 VCE 物理表统计失败：{error}"))?;
+            .map_err(|error| format!("Failed to read VCE physical table statistics: {error}"))?;
         if statistics.table_name != table_name {
             return Err(String::from(
                 "VCE physical statistics returned a different table identity",
@@ -4766,7 +4784,11 @@ impl VceProjectIndex {
             project = sqlite_string_literal(&self.project_id),
         );
         self.data_plane
-            .execute(&script, Vec::new(), "撤销 VCE 候选发布权限失败")
+            .execute(
+                &script,
+                Vec::new(),
+                "Failed to revoke the VCE candidate publication permission",
+            )
             .await
     }
 
@@ -4972,7 +4994,7 @@ impl VceProjectIndex {
                     SqliteValue::Integer(now),
                     SqliteValue::Integer(now),
                 ],
-                "登记 VCE 暂存代次失败",
+                "Failed to register the VCE staging generation",
             )
             .await
             .map_err(|message| port_failed(VcePortOperation::Stage, message))?;
@@ -5081,7 +5103,7 @@ impl VceProjectIndex {
                 SqliteValue::Integer(abort_recorded_at),
                 SqliteValue::Integer(abort_recorded_at),
             ],
-            "记录 VCE 中止身份失败",
+            "Failed to record the VCE abort identity",
         ).await.map_err(|message| port_failed(VcePortOperation::AbortStage, message))?;
         match self
             .generation_state(
@@ -5174,7 +5196,11 @@ impl VceProjectIndex {
                COMMIT;"#,
         );
         self.data_plane
-            .execute(&script, Vec::new(), "中止 VCE 暂存事务失败")
+            .execute(
+                &script,
+                Vec::new(),
+                "Failed to abort the VCE staging transaction",
+            )
             .await
             .map_err(|message| port_failed(VcePortOperation::AbortStage, message))?;
         self.record_operation(OperationRecord {
@@ -5288,7 +5314,7 @@ impl VceProjectIndex {
                     SqliteValue::Integer(now),
                     SqliteValue::Integer(now),
                 ],
-                "持久化 VCE 发布意图失败",
+                "Failed to persist the VCE publication intent",
             )
             .await
             .map_err(|message| port_failed(VcePortOperation::Commit, message))
@@ -5315,7 +5341,7 @@ impl VceProjectIndex {
                     sqlite_text(&request.request_id),
                     sqlite_text(request_fingerprint),
                 ],
-                "记录 VCE 发布意图失败状态",
+                "Failed to record the VCE publication intent failure state",
             )
             .await
     }
@@ -5473,7 +5499,7 @@ impl VceProjectIndex {
             .await?;
         if let Err(message) = self
             .data_plane
-            .execute(&script, Vec::new(), "发布 VCE 检查点失败")
+            .execute(&script, Vec::new(), "Failed to publish the VCE checkpoint")
             .await
         {
             let _ = self
@@ -5737,7 +5763,7 @@ impl VceProjectIndex {
                 missing_blob_count,
                 orphan_blob_count,
                 detail: (!issues.is_empty())
-                    .then(|| format!("检测到 {} 项 VCE 索引完整性问题", issues.len())),
+                    .then(|| format!("Detected {} VCE index integrity issues", issues.len())),
             },
             active_job,
             last_error: self.latest_operation_error().await?,
@@ -5936,7 +5962,7 @@ impl VceProjectIndex {
                 .await
                 .map_err(|error| {
                     format!(
-                        "写入 VCE LanceDB 表 `{}` 失败：{error}",
+                        "Failed to write VCE LanceDB table `{}`: {error}",
                         prepared.table_name
                     )
                 })?;
@@ -6328,7 +6354,7 @@ COMMIT;"#,
                                 sqlite_text(&self.binding.namespace_id),
                                 sqlite_text(&row.cleanup_id),
                             ],
-                            "完成 VCE 向量清理记录失败",
+                            "Failed to complete the VCE vector cleanup record",
                         )
                         .await?;
                 }
@@ -6345,7 +6371,7 @@ COMMIT;"#,
                                 sqlite_text(&self.binding.namespace_id),
                                 sqlite_text(&row.cleanup_id),
                             ],
-                            "记录 VCE 向量清理失败诊断失败",
+                            "Failed to record the VCE vector cleanup failure diagnostics",
                         )
                         .await?;
                     failures.push(format!("{}: {error}", row.cleanup_id));
@@ -6459,7 +6485,7 @@ COMMIT;"#,
             // 元数据在向量成功删除之后清理；中断后仍可安全重试。
             self.data_plane.execute(
                 "DELETE FROM vce_blob_versions WHERE namespace_id = ? AND refresh_id = ? AND generation = ? AND blob_name = ? AND NOT EXISTS(SELECT 1 FROM vce_read_members m WHERE m.namespace_id = vce_blob_versions.namespace_id AND m.refresh_id = vce_blob_versions.refresh_id AND m.generation = vce_blob_versions.generation AND m.blob_name = vce_blob_versions.blob_name);",
-                parameters, "回收无读取引用的 VCE 代码版本失败",
+                parameters, "Failed to reclaim VCE code versions without read references",
             ).await?;
         }
         Ok(true)
@@ -6494,7 +6520,12 @@ COMMIT;"#,
             .data_plane
             .vector_engine()
             .await
-            .map_err(|error| port_failed(operation, format!("打开 VCE LanceDB 引擎失败：{error}")))?
+            .map_err(|error| {
+                port_failed(
+                    operation,
+                    format!("Failed to open the VCE LanceDB engine: {error}"),
+                )
+            })?
             .vector_search(LanceDbSearchInput {
                 table_name: table_name.to_string(),
                 vector: query_vector.to_vec(),
@@ -6504,9 +6535,15 @@ COMMIT;"#,
                 output_format: LanceDbOutputFormat::JsonRows,
             })
             .await
-            .map_err(|error| port_failed(operation, format!("VCE LanceDB 检索失败：{error}")))?;
-        let mut rows: Vec<LanceHitRow> = serde_json::from_slice(&result.data)
-            .map_err(|error| port_invalid(operation, format!("解析 VCE 向量候选失败：{error}")))?;
+            .map_err(|error| {
+                port_failed(operation, format!("VCE LanceDB search failed: {error}"))
+            })?;
+        let mut rows: Vec<LanceHitRow> = serde_json::from_slice(&result.data).map_err(|error| {
+            port_invalid(
+                operation,
+                format!("Failed to parse VCE vector candidates: {error}"),
+            )
+        })?;
         for row in &rows {
             if row.id.trim().is_empty()
                 || row.namespace_id != self.binding.namespace_id
@@ -6519,7 +6556,10 @@ COMMIT;"#,
                 || row.vector.len() != self.dimension as usize
                 || row.vector.iter().any(|value| !value.is_finite())
             {
-                return Err(port_invalid(operation, "VCE LanceDB 返回了越界或无效候选"));
+                return Err(port_invalid(
+                    operation,
+                    "VCE LanceDB returned an out-of-range or invalid candidate",
+                ));
             }
         }
         let mut seen_ids = BTreeSet::new();
@@ -6801,7 +6841,7 @@ COMMIT;"#,
                     VceIntegrityIssueKind::MissingBlob,
                     None,
                     Some(member.clone()),
-                    "检查点引用的 Blob 不存在",
+                    "A blob referenced by the checkpoint does not exist",
                 ));
                 continue;
             };
@@ -6812,8 +6852,10 @@ COMMIT;"#,
                     Some(row.path.clone()),
                     Some(row.blob_name.clone()),
                     &match &row.status_reason {
-                        Some(reason) => format!("Blob 的内容代码块或向量不完整：{reason}"),
-                        None => String::from("Blob 的内容代码块或向量不完整"),
+                        Some(reason) => {
+                            format!("The blob's content chunks or vectors are incomplete: {reason}")
+                        }
+                        None => String::from("The blob's content chunks or vectors are incomplete"),
                     },
                 ));
             }
@@ -6822,7 +6864,7 @@ COMMIT;"#,
                     VceIntegrityIssueKind::PathIndexMismatch,
                     Some(row.path.clone()),
                     Some(row.blob_name.clone()),
-                    "Blob 的路径索引通道失败",
+                    "The blob's path index channel failed",
                 ));
             }
             if row.symbol_status == "failed" {
@@ -6831,8 +6873,8 @@ COMMIT;"#,
                     Some(row.path.clone()),
                     Some(row.blob_name.clone()),
                     &match &row.symbol_error {
-                        Some(reason) => format!("Blob 的精确符号通道失败：{reason}"),
-                        None => String::from("Blob 的精确符号通道失败"),
+                        Some(reason) => format!("The blob's exact symbol channel failed: {reason}"),
+                        None => String::from("The blob's exact symbol channel failed"),
                     },
                 ));
             }
@@ -6858,7 +6900,7 @@ COMMIT;"#,
             // Ownership is unconfirmed, not proof that an external producer has stopped.
             // 活动归属尚未确认，并不证明外部生产者已经停止。
             let message = format!(
-                "暂存 Blob 的活动归属尚未确认（刷新 {}，代次 {}）",
+                "The active ownership of a staged blob is not confirmed yet (refresh {}, generation {})",
                 row.refresh_id, row.generation
             );
             issues.push(integrity_issue(
@@ -6880,8 +6922,18 @@ COMMIT;"#,
             .map_err(|message| port_failed(VcePortOperation::ManagementQuery, message))?;
         for row in pending_cleanup {
             let detail = row.error.map_or_else(
-                || format!("派生向量清理 `{}` 等待执行", row.cleanup_id),
-                |error| format!("派生向量清理 `{}` 等待重试：{error}", row.cleanup_id),
+                || {
+                    format!(
+                        "Derived vector cleanup `{}` is waiting to run",
+                        row.cleanup_id
+                    )
+                },
+                |error| {
+                    format!(
+                        "Derived vector cleanup `{}` is waiting to retry: {error}",
+                        row.cleanup_id
+                    )
+                },
             );
             issues.push(integrity_issue(
                 VceIntegrityIssueKind::OrphanedStaging,
@@ -6921,9 +6973,9 @@ COMMIT;"#,
             blob_names = rows.into_iter().map(|row| row.blob_name).collect();
         }
         let description = match mode {
-            VceMaintenanceMode::Repair => "修复已识别的 VCE 索引完整性问题",
-            VceMaintenanceMode::Rebuild => "重建当前项目的全部 VCE 派生索引",
-            VceMaintenanceMode::CleanupStaging => "清理未发布的 VCE 暂存数据",
+            VceMaintenanceMode::Repair => "Repair the identified VCE index integrity issues",
+            VceMaintenanceMode::Rebuild => "Rebuild all VCE derived indexes of the current project",
+            VceMaintenanceMode::CleanupStaging => "Clean up unpublished VCE staging data",
             VceMaintenanceMode::Compact => unreachable!("compact mode returned above"),
         };
         let action_required = match mode {
@@ -6983,7 +7035,9 @@ COMMIT;"#,
                 let role = physical_table_role_text(table.statistics.role);
                 VceMaintenanceAction {
                     action_id: physical_compaction_action_id(&table),
-                    description: format!("整理 VCE {role} 向量表的物理碎片"),
+                    description: format!(
+                        "Compact the physical fragments of the VCE {role} vector table"
+                    ),
                     blob_names: Vec::new(),
                     destructive: false,
                     physical_table: Some(table),
@@ -7028,7 +7082,7 @@ COMMIT;"#,
                     SqliteValue::Integer(now),
                     SqliteValue::Integer(now),
                 ],
-                "记录 VCE 操作失败",
+                "Failed to record the VCE operation",
             )
             .await
     }

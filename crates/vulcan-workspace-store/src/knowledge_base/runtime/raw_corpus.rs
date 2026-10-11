@@ -577,7 +577,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("读取知识库权威计数失败。"))
+            .ok_or_else(|| String::from("Failed to read the authoritative knowledge counts."))
     }
 }
 

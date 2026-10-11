@@ -72,7 +72,9 @@ impl KnowledgeBaseRuntime {
                 ],
             )
             .await
-            .map_err(|error| format!("保存知识库项目授权失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to save the knowledge project authorization: {error}")
+            })?;
         } else {
             local_sql::execute_script_async(
                 &self.host_runtime.local,
@@ -80,7 +82,7 @@ impl KnowledgeBaseRuntime {
                     "DELETE FROM knowledge_library_project_bindings WHERE library_id = ? AND project_id = ?;",
                     vec![text(library_id), text(project_id)],
                 ).await
-                .map_err(|error| format!("移除知识库项目授权失败：{error}"))?;
+                .map_err(|error| format!("Failed to remove the knowledge project authorization: {error}"))?;
         }
         Ok(())
     }

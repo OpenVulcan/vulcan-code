@@ -27,7 +27,7 @@ pub(super) fn read_preview_bytes(path: &Path) -> Result<Vec<u8>, std::io::Error>
     // 扫描后重新检查类型，因为执行前文件系统可能变化。
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
-        return Err(std::io::Error::other("文件类型已变化，请重新扫描。"));
+        return Err(std::io::Error::other("The file type changed; scan again."));
     }
     // Bounding the read protects against a file growing between metadata inspection and open.
     // 限制读取量，防止文件在元数据检查与打开之间增长。
@@ -54,19 +54,23 @@ fn scan_preview(root: &Path) -> Result<Vec<KnowledgeFilePreviewEntry>, String> {
     // 目录和文件均计入预览安全上限。
     let mut visited = 0_usize;
     while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(&directory).map_err(|error| format!("扫描目录失败：{error}"))?
+        for entry in fs::read_dir(&directory)
+            .map_err(|error| format!("Failed to scan the directory: {error}"))?
         {
             // An entry is inspected without following symlinks or junctions.
             // 检查目录项但不跟随符号链接或联接点。
-            let entry = entry.map_err(|error| format!("读取目录项失败：{error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Failed to read a directory entry: {error}"))?;
             visited += 1;
             if visited > 20_000 {
-                return Err(String::from("预览目录项超过 20000，请选择更小的来源目录。"));
+                return Err(String::from(
+                    "The preview has more than 20000 directory entries; choose a smaller source directory.",
+                ));
             }
             // File metadata supplies the exact selection size boundary.
             // 文件元数据提供精确的选择大小边界。
             let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| format!("读取文件属性失败：{error}"))?;
+                .map_err(|error| format!("Failed to read file attributes: {error}"))?;
             if metadata.is_dir() && !metadata_is_link_or_reparse(&metadata) {
                 pending.push(entry.path());
                 continue;
@@ -130,7 +134,9 @@ fn scan_preview(root: &Path) -> Result<Vec<KnowledgeFilePreviewEntry>, String> {
     }
     entries.sort_by(|left, right| left.key.cmp(&right.key));
     if entries.windows(2).any(|pair| pair[0].key == pair[1].key) {
-        return Err(String::from("来源文件路径在大小写规范化后冲突。"));
+        return Err(String::from(
+            "Source file paths collide after case normalization.",
+        ));
     }
     Ok(entries)
 }
@@ -196,10 +202,10 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("知识库内容修订缺失。"))?
+            .ok_or_else(|| String::from("The knowledge content revision is missing."))?
             .value
             .parse::<u64>()
-            .map_err(|error| format!("知识库内容修订无效：{error}"))
+            .map_err(|error| format!("Invalid knowledge content revision: {error}"))
     }
 
     /// Previews `root` for import into `library_id`, optionally remapping `source_id`; never creates an import job.
@@ -235,22 +241,22 @@ impl KnowledgeBaseRuntime {
         let root_key = path_key(&canonical_import_root(root)?);
         // Explicit source IDs must belong to this exact library.
         // 明确来源标识必须属于当前精确知识库。
-        let source = match source_id {
-            Some(id) => Some(
-                sources
+        let source =
+            match source_id {
+                Some(id) => Some(sources.iter().find(|source| source.id == id).ok_or_else(
+                    || String::from("The source directory no longer exists; refresh."),
+                )?),
+                None => sources
                     .iter()
-                    .find(|source| source.id == id)
-                    .ok_or_else(|| String::from("来源目录已不存在，请刷新。"))?,
-            ),
-            None => sources
-                .iter()
-                .find(|source| path_key(Path::new(&source.canonical_root)) == root_key),
-        };
+                    .find(|source| path_key(Path::new(&source.canonical_root)) == root_key),
+            };
         if sources.iter().any(|candidate| {
             path_key(Path::new(&candidate.canonical_root)) == root_key
                 && source.is_some_and(|source| candidate.id != source.id)
         }) {
-            return Err(String::from("所选目录已属于另一个知识库来源。"));
+            return Err(String::from(
+                "The selected directory already belongs to another knowledge source.",
+            ));
         }
         if let Some(source) = source {
             // Existing raw hashes avoid reimporting content that already matches byte-for-byte.
@@ -357,7 +363,7 @@ impl KnowledgeBaseRuntime {
                 let source = sources
                     .iter()
                     .find(|source| source.id == document.source_id)
-                    .ok_or_else(|| String::from("文档来源目录缺失，请修复知识库。"))?;
+                    .ok_or_else(|| String::from("The document source directory is missing; repair the knowledge library."))?;
                 // Content hashes use the same normalized imported text as generated documents.
                 // 内容哈希使用与生成文档相同的规范化导入文本。
                 let hash = sha256_hex(document.content.as_bytes());
@@ -427,7 +433,9 @@ impl KnowledgeBaseRuntime {
         // 内容库变化使整个预览失效，避免混合两次修订的分页。
         let revision = self.read_preview_revision(&space, &binding).await?;
         if revision != expected_revision {
-            return Err(String::from("知识库内容在扫描期间变化，请重新扫描。"));
+            return Err(String::from(
+                "The knowledge content changed during the scan; scan again.",
+            ));
         }
         // Only provenance and policy are included; the worker's queued/building status is not content.
         // 只纳入来源和策略，工作器排队或构建状态不属于内容。
@@ -460,7 +468,9 @@ impl KnowledgeBaseRuntime {
         // 与导入和发布串行化，并拒绝活动工作器期间的变更。
         let _guard = self.library_mutation_guard(library_id).await?;
         if self.active_operations.lock().await.contains_key(library_id) {
-            return Err(String::from("知识库操作进行中，请结束后修改忽略规则。"));
+            return Err(String::from(
+                "A knowledge operation is in progress; change the ignore rules after it finishes.",
+            ));
         }
         // Current settings retain every unrelated user preference.
         // 当前配置保留全部无关用户偏好。
@@ -475,7 +485,9 @@ impl KnowledgeBaseRuntime {
                     .any(|part| !matches!(part, Component::Normal(_)))
                 || file.relative_path.contains('\\')
             {
-                return Err(String::from("忽略项必须是来源目录内的规范相对文件路径。"));
+                return Err(String::from(
+                    "An ignored entry must be a canonical relative file path inside the source directory.",
+                ));
             }
             if ignored {
                 file.source_root = runtime_assets::native_host_path_text_from_path(

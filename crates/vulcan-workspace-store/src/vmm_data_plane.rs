@@ -366,7 +366,7 @@ impl VmmDataPlaneHandle {
         self.local
             .lance_engine(self.vector_store_binding())
             .await
-            .map_err(|error| format!("打开原生 VMM LanceDB 数据库失败：{error}"))
+            .map_err(|error| format!("Failed to open the native VMM LanceDB database: {error}"))
     }
 
     /// Lists all one-level native VMM projects in stable identity order.
@@ -383,9 +383,9 @@ impl VmmDataPlaneHandle {
             vec![],
         )
         .await
-        .map_err(|error| format!("读取原生 VMM 项目列表失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM project list: {error}"))?;
         let rows: Vec<NativeProjectRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 项目列表失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse the native VMM project list: {error}"))?;
         rows.into_iter().map(native_project_from_row).collect()
     }
 
@@ -404,7 +404,7 @@ impl VmmDataPlaneHandle {
             vec![SqliteValue::Integer(project_id)],
         )
         .await
-        .map_err(|error| format!("读取原生 VMM 项目失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM project: {error}"))?;
         one_native_project(result.json_data.as_str())
     }
 
@@ -415,8 +415,8 @@ impl VmmDataPlaneHandle {
     /// Returns a validation, uniqueness, storage, or readback error.
     /// 返回校验、唯一性、存储或回读错误。
     pub async fn create_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
-        let name = validate_native_project_text(name, "VMM 项目名称", 512)?;
-        let tag = validate_native_project_text(tag, "VMM 项目标签", 256)?;
+        let name = validate_native_project_text(name, "VMM project name", 512)?;
+        let tag = validate_native_project_text(tag, "VMM project tag", 256)?;
         let now = current_unix_epoch_millis_i64()?;
         let result = local_sql::execute_script_async(
             &self.local,
@@ -433,13 +433,16 @@ impl VmmDataPlaneHandle {
             ],
         )
         .await
-        .map_err(|error| format!("创建原生 VMM 项目失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the native VMM project: {error}"))?;
         if !result.success {
-            return Err(format!("创建原生 VMM 项目失败：{}", result.message));
+            return Err(format!(
+                "Failed to create the native VMM project: {}",
+                result.message
+            ));
         }
-        self.project_by_tag(tag)
-            .await?
-            .ok_or_else(|| String::from("创建原生 VMM 项目后无法按标签回读"))
+        self.project_by_tag(tag).await?.ok_or_else(|| {
+            String::from("The native VMM project cannot be read back by tag after creation")
+        })
     }
 
     /// Resolves a native project by immutable tag or creates it exactly once.
@@ -455,7 +458,7 @@ impl VmmDataPlaneHandle {
     /// Returns a storage, validation, or catalog consistency error.
     /// 返回存储、校验或目录一致性错误。
     pub async fn ensure_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
-        let tag = validate_native_project_text(tag, "VMM 项目标签", 256)?;
+        let tag = validate_native_project_text(tag, "VMM project tag", 256)?;
         if let Some(project) = self.project_by_tag(tag).await? {
             return Ok(project);
         }
@@ -477,7 +480,7 @@ impl VmmDataPlaneHandle {
         name: &str,
     ) -> Result<NativeVmmProject, String> {
         let project_id_i64 = project_id_i64(project_id)?;
-        let name = validate_native_project_text(name, "VMM 项目名称", 512)?;
+        let name = validate_native_project_text(name, "VMM project name", 512)?;
         let result = local_sql::execute_script_async(
             &self.local,
             LogicalDatabase::VmmMetadata,
@@ -489,13 +492,16 @@ impl VmmDataPlaneHandle {
             ],
         )
         .await
-        .map_err(|error| format!("重命名原生 VMM 项目失败：{error}"))?;
+        .map_err(|error| format!("Failed to rename the native VMM project: {error}"))?;
         if !result.success {
-            return Err(format!("重命名原生 VMM 项目失败：{}", result.message));
+            return Err(format!(
+                "Failed to rename the native VMM project: {}",
+                result.message
+            ));
         }
         self.project_by_id(project_id)
             .await?
-            .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))
+            .ok_or_else(|| format!("Native VMM project {project_id} does not exist"))
     }
 
     /// Resolves every owner and linked-query association for one native VMM project.
@@ -512,18 +518,18 @@ impl VmmDataPlaneHandle {
                 "SELECT vulcan_project_id FROM vmm_project_bindings WHERE vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
                 &[SqliteValue::Integer(project_id)],
             )
-            .map_err(|error| format!("读取原生 VMM 项目归属关联失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the native VMM project ownership links: {error}"))?;
         let linked_result =
             vulcan_sqlite_engine::sql_exec::query_json(connection,
                 "SELECT vulcan_project_id FROM vmm_project_query_links WHERE linked_vmm_project_id = ? ORDER BY vulcan_project_id ASC;",
                 &[SqliteValue::Integer(project_id)],
             )
-            .map_err(|error| format!("读取原生 VMM 项目连带查询关联失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the native VMM project linked-query links: {error}"))?;
         let owner_rows: Vec<VulcanProjectIdRow> = serde_json::from_str(&owner_result.json_data)
-            .map_err(|error| format!("解析原生 VMM 项目归属关联失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse the native VMM project ownership links: {error}"))?;
         let linked_rows: Vec<VulcanProjectIdRow> =
             serde_json::from_str(&linked_result.json_data)
-                .map_err(|error| format!("解析原生 VMM 项目连带查询关联失败：{error}"))?;
+                .map_err(|error| format!("Failed to parse the native VMM project linked-query links: {error}"))?;
         Ok(NativeVmmProjectUsage {
             owner_vulcan_project_ids: owner_rows
                 .into_iter()
@@ -552,22 +558,22 @@ impl VmmDataPlaneHandle {
                 "SELECT vulcan_project_id, vmm_project_id FROM vmm_project_bindings ORDER BY vulcan_project_id ASC;",
                 &[],
             )
-            .map_err(|error| format!("读取原生 VMM 项目绑定列表失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the native VMM project binding list: {error}"))?;
         let link_result =
             vulcan_sqlite_engine::sql_exec::query_json(connection,
                 "SELECT vulcan_project_id, linked_vmm_project_id, position FROM vmm_project_query_links ORDER BY vulcan_project_id ASC, position ASC, linked_vmm_project_id ASC;",
                 &[],
             )
-            .map_err(|error| format!("读取原生 VMM 连带查询列表失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the native VMM linked-query list: {error}"))?;
         let bindings: Vec<NativeProjectBindingRow> =
             serde_json::from_str(&binding_result.json_data)
-                .map_err(|error| format!("解析原生 VMM 项目绑定列表失败：{error}"))?;
+                .map_err(|error| format!("Failed to parse the native VMM project binding list: {error}"))?;
         let links: Vec<NativeProjectQueryLinkRow> = serde_json::from_str(&link_result.json_data)
-            .map_err(|error| format!("解析原生 VMM 连带查询列表失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse the native VMM linked-query list: {error}"))?;
         let mut links_by_project = BTreeMap::<String, Vec<u64>>::new();
         for link in links {
             let linked_project_id = u64::try_from(link.linked_vmm_project_id)
-                .map_err(|_| String::from("原生 VMM 连带查询项目包含无效标识"))?;
+                .map_err(|_| String::from("A native VMM linked-query project contains an invalid identifier"))?;
             links_by_project
                 .entry(link.vulcan_project_id)
                 .or_default()
@@ -577,7 +583,7 @@ impl VmmDataPlaneHandle {
             .into_iter()
             .map(|binding| {
                 let owner_project_id = u64::try_from(binding.vmm_project_id)
-                    .map_err(|_| String::from("原生 VMM 项目绑定包含无效所有者标识"))?;
+                    .map_err(|_| String::from("A native VMM project binding contains an invalid owner identifier"))?;
                 let vulcan_project_id = binding.vulcan_project_id;
                 Ok(NativeVmmProjectBindingAccess {
                     linked_project_ids: links_by_project
@@ -613,7 +619,7 @@ impl VmmDataPlaneHandle {
             return Ok(NativeVmmProjectUsage::default());
         };
         if project.protected {
-            return Err(String::from("default VMM 项目不允许删除"));
+            return Err(String::from("The default VMM project cannot be deleted"));
         }
         let usage = self.project_usage(project_id).await?;
         let project_id_i64 = project_id_i64(project_id)?;
@@ -627,15 +633,17 @@ impl VmmDataPlaneHandle {
             vec![],
         )
         .await
-        .map_err(|error| format!("删除原生 VMM 项目并解除绑定失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to delete the native VMM project and remove its bindings: {error}")
+        })?;
         if !result.success {
             return Err(format!(
-                "删除原生 VMM 项目并解除绑定失败：{}",
+                "Failed to delete the native VMM project and remove its bindings: {}",
                 result.message
             ));
         }
         if self.project_by_id(project.id).await?.is_some() {
-            return Err(format!("原生 VMM 项目 {project_id} 未被删除"));
+            return Err(format!("Native VMM project {project_id} was not deleted"));
         }
         Ok(usage)
     }
@@ -652,9 +660,11 @@ impl VmmDataPlaneHandle {
         vmm_project_id: u64,
     ) -> Result<NativeVmmProjectBinding, String> {
         let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
+            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
         if self.project_by_id(vmm_project_id).await?.is_none() {
-            return Err(format!("待绑定的原生 VMM 项目 {vmm_project_id} 不存在"));
+            return Err(format!(
+                "Native VMM project {vmm_project_id} to bind does not exist"
+            ));
         }
         let now = current_unix_epoch_millis_i64()?;
         let escaped_project_id = sqlite_string_literal(vulcan_project_id);
@@ -679,9 +689,12 @@ COMMIT;"#
             vec![],
         )
         .await
-        .map_err(|error| format!("保存原生 VMM 项目绑定失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the native VMM project binding: {error}"))?;
         if !result.success {
-            return Err(format!("保存原生 VMM 项目绑定失败：{}", result.message));
+            return Err(format!(
+                "Failed to save the native VMM project binding: {}",
+                result.message
+            ));
         }
         Ok(NativeVmmProjectBinding {
             vulcan_project_id: vulcan_project_id.to_owned(),
@@ -702,14 +715,18 @@ COMMIT;"#
         linked_project_ids: &[u64],
     ) -> Result<NativeVmmProjectAccess, String> {
         let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
+            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
         validate_project_access_ids(owner_project_id, linked_project_ids)?;
         if self.project_by_id(owner_project_id).await?.is_none() {
-            return Err(format!("待绑定的原生 VMM 项目 {owner_project_id} 不存在"));
+            return Err(format!(
+                "Native VMM project {owner_project_id} to bind does not exist"
+            ));
         }
         for project_id in linked_project_ids {
             if self.project_by_id(*project_id).await?.is_none() {
-                return Err(format!("连带查询的原生 VMM 项目 {project_id} 不存在"));
+                return Err(format!(
+                    "Linked-query native VMM project {project_id} does not exist"
+                ));
             }
         }
         let script = build_project_access_assignment_script(
@@ -725,9 +742,14 @@ COMMIT;"#
             vec![],
         )
         .await
-        .map_err(|error| format!("保存原生 VMM 项目访问配置失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to save the native VMM project access configuration: {error}")
+        })?;
         if !result.success {
-            return Err(format!("保存原生 VMM 项目访问配置失败：{}", result.message));
+            return Err(format!(
+                "Failed to save the native VMM project access configuration: {}",
+                result.message
+            ));
         }
         self.resolve_project_access(vulcan_project_id).await
     }
@@ -740,7 +762,7 @@ COMMIT;"#
     /// 返回校验或存储错误。
     pub async fn unbind_vulcan_project(&self, vulcan_project_id: &str) -> Result<(), String> {
         let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
+            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
         let result = local_sql::execute_script_async(
             &self.local,
             LogicalDatabase::VmmMetadata,
@@ -748,9 +770,12 @@ COMMIT;"#
             vec![sqlite_text(vulcan_project_id)],
         )
         .await
-        .map_err(|error| format!("移除原生 VMM 项目绑定失败：{error}"))?;
+        .map_err(|error| format!("Failed to remove the native VMM project binding: {error}"))?;
         if !result.success {
-            return Err(format!("移除原生 VMM 项目绑定失败：{}", result.message));
+            return Err(format!(
+                "Failed to remove the native VMM project binding: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -766,7 +791,7 @@ COMMIT;"#
         vulcan_project_id: &str,
     ) -> Result<NativeVmmProjectAccess, String> {
         let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
+            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
         let owner_result = local_sql::query_json_async(
             &self.local,
             LogicalDatabase::VmmMetadata,
@@ -778,9 +803,11 @@ LIMIT 1;"#,
             vec![sqlite_text(vulcan_project_id)],
         )
         .await
-        .map_err(|error| format!("解析原生 VMM 所有者项目失败：{error}"))?;
+        .map_err(|error| format!("Failed to resolve the native VMM owner project: {error}"))?;
         let owner = one_native_project(owner_result.json_data.as_str())?.ok_or_else(|| {
-            format!("VulcanCode 项目 `{vulcan_project_id}` 尚未绑定原生 VMM 项目")
+            format!(
+                "VulcanCode project `{vulcan_project_id}` is not bound to a native VMM project yet"
+            )
         })?;
         let linked_result = local_sql::query_json_async(
             &self.local,
@@ -793,9 +820,13 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![sqlite_text(vulcan_project_id)],
         )
         .await
-        .map_err(|error| format!("解析原生 VMM 连带查询项目失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to resolve the native VMM linked-query projects: {error}")
+        })?;
         let linked_rows: Vec<NativeProjectRow> = serde_json::from_str(&linked_result.json_data)
-            .map_err(|error| format!("解析原生 VMM 连带查询项目失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to resolve the native VMM linked-query projects: {error}")
+            })?;
         let linked = linked_rows
             .into_iter()
             .map(native_project_from_row)
@@ -820,26 +851,35 @@ ORDER BY l.position ASC, p.id ASC;"#,
             .copied()
             .collect::<BTreeSet<_>>();
         if unique.len() != linked_vmm_project_ids.len() {
-            return Err(String::from("原生 VMM 连带查询项目不得重复"));
+            return Err(String::from(
+                "Native VMM linked-query projects must not be duplicated",
+            ));
         }
         if linked_vmm_project_ids.contains(&access.owner.id) {
-            return Err(String::from("原生 VMM 连带查询项目不得包含所有者项目"));
+            return Err(String::from(
+                "Native VMM linked-query projects must not include the owner project",
+            ));
         }
         for project_id in linked_vmm_project_ids {
             if self.project_by_id(*project_id).await?.is_none() {
-                return Err(format!("连带查询的原生 VMM 项目 {project_id} 不存在"));
+                return Err(format!(
+                    "Linked-query native VMM project {project_id} does not exist"
+                ));
             }
         }
         let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode 项目标识", 512)?;
+            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
         let escaped_project_id = sqlite_string_literal(vulcan_project_id);
         let now = current_unix_epoch_millis_i64()?;
         let mut script = format!(
             "BEGIN IMMEDIATE;\nDELETE FROM vmm_project_query_links WHERE vulcan_project_id = '{escaped_project_id}';\n"
         );
         for (position, project_id) in linked_vmm_project_ids.iter().enumerate() {
-            let position = i64::try_from(position)
-                .map_err(|_| String::from("原生 VMM 连带查询项目数量超出支持范围"))?;
+            let position = i64::try_from(position).map_err(|_| {
+                String::from(
+                    "The number of native VMM linked-query projects exceeds the supported range",
+                )
+            })?;
             script.push_str(
                 format!(
                     "INSERT INTO vmm_project_query_links(vulcan_project_id, linked_vmm_project_id, position, created_at_unix_ms) VALUES ('{escaped_project_id}', {project_id}, {position}, {now});\n"
@@ -855,9 +895,12 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![],
         )
         .await
-        .map_err(|error| format!("保存原生 VMM 连带查询项目失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the native VMM linked-query projects: {error}"))?;
         if !result.success {
-            return Err(format!("保存原生 VMM 连带查询项目失败：{}", result.message));
+            return Err(format!(
+                "Failed to save the native VMM linked-query projects: {}",
+                result.message
+            ));
         }
         self.resolve_project_access(vulcan_project_id).await
     }
@@ -872,7 +915,7 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![sqlite_text(tag)],
         )
         .await
-        .map_err(|error| format!("按标签读取原生 VMM 项目失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM project by tag: {error}"))?;
         one_native_project(result.json_data.as_str())
     }
 
@@ -893,7 +936,9 @@ ORDER BY l.position ASC, p.id ASC;"#,
         vector_space_id: &str,
     ) -> Result<Option<VmmVectorSpaceBinding>, String> {
         if vector_space_id.trim().is_empty() {
-            return Err(String::from("VMM 向量空间标识不能为空"));
+            return Err(String::from(
+                "The VMM vector space identifier must not be empty",
+            ));
         }
         let result =
             local_sql::query_json_async(
@@ -902,16 +947,20 @@ ORDER BY l.position ASC, p.id ASC;"#,
                 "SELECT vector_space_id, table_name, dimension, physical_fingerprint_json FROM vmm_vector_spaces WHERE vector_space_id = ? LIMIT 1;",
                 vec![sqlite_text(vector_space_id)],
             ).await
-            .map_err(|error| format!("读取 VMM 向量空间失败：{error}"))?;
-        let rows: Vec<VectorSpaceRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析 VMM 向量空间查询结果失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the VMM vector space: {error}"))?;
+        let rows: Vec<VectorSpaceRow> =
+            serde_json::from_str(&result.json_data).map_err(|error| {
+                format!("Failed to parse the VMM vector space query result: {error}")
+            })?;
         match rows.as_slice() {
             [] => Ok(None),
             [row] => {
                 let dimension = u32::try_from(row.dimension)
                     .ok()
                     .filter(|dimension| *dimension > 0)
-                    .ok_or_else(|| String::from("VMM 向量空间持久维度无效"))?;
+                    .ok_or_else(|| {
+                        String::from("The persisted dimension of the VMM vector space is invalid")
+                    })?;
                 Ok(Some(VmmVectorSpaceBinding {
                     vector_space_id: row.vector_space_id.clone(),
                     table_name: row.table_name.clone(),
@@ -919,7 +968,9 @@ ORDER BY l.position ASC, p.id ASC;"#,
                     physical_fingerprint_json: row.physical_fingerprint_json.clone(),
                 }))
             }
-            _ => Err(String::from("VMM 向量空间标识返回了多条记录")),
+            _ => Err(String::from(
+                "The VMM vector space identifier returned multiple records",
+            )),
         }
     }
 
@@ -938,13 +989,17 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![sqlite_text(VMM_CORE_SNAPSHOT_KEY)],
         )
         .await
-        .map_err(|error| format!("读取原生 VMM Core 快照失败：{error}"))?;
-        let rows: Vec<SnapshotJsonRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM Core 快照查询结果失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM Core snapshot: {error}"))?;
+        let rows: Vec<SnapshotJsonRow> =
+            serde_json::from_str(&result.json_data).map_err(|error| {
+                format!("Failed to parse the native VMM Core snapshot query result: {error}")
+            })?;
         match rows.as_slice() {
             [] => Ok(None),
             [row] => Ok(Some(row.snapshot_json.clone())),
-            _ => Err(String::from("原生 VMM Core 快照键返回了多条记录")),
+            _ => Err(String::from(
+                "The native VMM Core snapshot key returned multiple records",
+            )),
         }
     }
 
@@ -975,7 +1030,9 @@ ORDER BY l.position ASC, p.id ASC;"#,
             || job.next_attempt_at_unix_ms != 0
             || job.last_error.is_some()
         {
-            return Err(String::from("原生 VMM 待分析作业初始字段无效"));
+            return Err(String::from(
+                "The initial fields of the native VMM pending analysis job are invalid",
+            ));
         }
         let now = current_unix_epoch_millis_i64()?;
         let result = local_sql::execute_script_async(
@@ -996,19 +1053,26 @@ ORDER BY l.position ASC, p.id ASC;"#,
             ],
         )
         .await
-        .map_err(|error| format!("登记原生 VMM 待分析作业失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to register the native VMM pending analysis job: {error}")
+        })?;
         if !result.success {
-            return Err(format!("登记原生 VMM 待分析作业失败：{}", result.message));
+            return Err(format!(
+                "Failed to register the native VMM pending analysis job: {}",
+                result.message
+            ));
         }
         let stored = self
             .load_pending_analysis_job(&job.operation_id)
             .await?
-            .ok_or_else(|| String::from("原生 VMM 待分析作业写入后不可见"))?;
+            .ok_or_else(|| {
+                String::from("The native VMM pending analysis job is not visible after writing")
+            })?;
         if stored.request_fingerprint != job.request_fingerprint
             || stored.intake_mutation_operation_id != job.intake_mutation_operation_id
         {
             return Err(format!(
-                "原生 VMM PostAction 操作 `{}` 已绑定到不同请求载荷",
+                "Native VMM PostAction operation `{}` is already bound to a different request payload",
                 job.operation_id
             ));
         }
@@ -1043,14 +1107,16 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![sqlite_text(operation_id)],
         )
         .await
-        .map_err(|error| format!("读取原生 VMM 待分析作业失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM pending analysis job: {error}"))?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 待分析作业失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to parse the native VMM pending analysis job: {error}")
+            })?;
         match rows.as_slice() {
             [] => Ok(None),
             [row] => row.clone().into_job().map(Some),
             _ => Err(String::from(
-                "原生 VMM PostAction 操作标识返回了多条作业记录",
+                "The native VMM PostAction operation identifier returned multiple job records",
             )),
         }
     }
@@ -1082,9 +1148,13 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![],
         )
         .await
-        .map_err(|error| format!("列出活动原生 VMM 待分析作业失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to list active native VMM pending analysis jobs: {error}")
+        })?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析活动原生 VMM 待分析作业失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to parse active native VMM pending analysis jobs: {error}")
+            })?;
         rows.into_iter()
             .map(NativeVmmPendingAnalysisJobRow::into_job)
             .collect()
@@ -1116,9 +1186,9 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![],
         )
         .await
-        .map_err(|error| format!("列出原生 VMM 分析审计作业失败：{error}"))?;
+        .map_err(|error| format!("Failed to list native VMM analysis audit jobs: {error}"))?;
         let rows: Vec<NativeVmmPendingAnalysisJobRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 分析审计作业失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse native VMM analysis audit jobs: {error}"))?;
         rows.into_iter()
             .map(NativeVmmPendingAnalysisJobRow::into_job)
             .collect()
@@ -1152,7 +1222,7 @@ ORDER BY l.position ASC, p.id ASC;"#,
             .map(|operation_id| operation_id.trim())
             .map(|operation_id| {
                 if operation_id.is_empty() {
-                    Err(String::from("原生 VMM 终态分析作业操作身份不能为空"))
+                    Err(String::from("The operation identity of native VMM terminal analysis jobs must not be empty"))
                 } else {
                     Ok(operation_id.to_owned())
                 }
@@ -1185,10 +1255,12 @@ ORDER BY l.position ASC, p.id ASC;"#,
                 parameters.clone(),
             )
             .await
-            .map_err(|error| format!("删除原生 VMM 终态分析审计作业失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to delete native VMM terminal analysis audit jobs: {error}")
+            })?;
             if !result.success {
                 return Err(format!(
-                    "删除原生 VMM 终态分析审计作业失败：{}",
+                    "Failed to delete native VMM terminal analysis audit jobs: {}",
                     result.message
                 ));
             }
@@ -1205,7 +1277,7 @@ ORDER BY l.position ASC, p.id ASC;"#,
             .find(|operation_id| remaining_operation_ids.contains(operation_id.as_str()))
         {
             return Err(format!(
-                "原生 VMM 分析审计作业 `{remaining}` 仍处于活动态，不能作为终态记录删除"
+                "Native VMM analysis audit job `{remaining}` is still active and cannot be deleted as a terminal record"
             ));
         }
         Ok(())
@@ -1227,7 +1299,9 @@ ORDER BY l.position ASC, p.id ASC;"#,
         last_error: &str,
     ) -> Result<(), String> {
         if last_error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT {
-            return Err(String::from("原生 VMM 分析失败诊断超过持久化长度限制"));
+            return Err(String::from(
+                "The native VMM analysis failure diagnostics exceed the persistence length limit",
+            ));
         }
         let result = local_sql::execute_script_async(
             &self.local,
@@ -1246,9 +1320,12 @@ ORDER BY l.position ASC, p.id ASC;"#,
             ],
         )
         .await
-        .map_err(|error| format!("记录原生 VMM 分析失败失败：{error}"))?;
+        .map_err(|error| format!("Failed to record the native VMM analysis failure: {error}"))?;
         if !result.success {
-            return Err(format!("记录原生 VMM 分析失败失败：{}", result.message));
+            return Err(format!(
+                "Failed to record the native VMM analysis failure: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -1278,12 +1355,16 @@ ORDER BY l.position ASC, p.id ASC;"#,
             terminal_state,
             VMM_PENDING_ANALYSIS_BYPASSED | VMM_PENDING_ANALYSIS_CORRUPTED
         ) {
-            return Err(format!("原生 VMM 分析作业终态 `{terminal_state}` 不受支持"));
+            return Err(format!(
+                "Unsupported native VMM analysis job terminal state `{terminal_state}`"
+            ));
         }
         if last_error.trim().is_empty()
             || last_error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT
         {
-            return Err(String::from("原生 VMM 分析作业最终诊断为空或超过长度限制"));
+            return Err(String::from(
+                "The final diagnostics of the native VMM analysis job are empty or exceed the length limit",
+            ));
         }
         let result = local_sql::execute_script_async(
             &self.local,
@@ -1301,9 +1382,14 @@ ORDER BY l.position ASC, p.id ASC;"#,
             ],
         )
         .await
-        .map_err(|error| format!("终结原生 VMM 失败分析作业失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to finalize the failed native VMM analysis job: {error}")
+        })?;
         if !result.success {
-            return Err(format!("终结原生 VMM 失败分析作业失败：{}", result.message));
+            return Err(format!(
+                "Failed to finalize the failed native VMM analysis job: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -1334,9 +1420,12 @@ ORDER BY l.position ASC, p.id ASC;"#,
             ],
         )
         .await
-        .map_err(|error| format!("完成原生 VMM 分析作业失败：{error}"))?;
+        .map_err(|error| format!("Failed to complete the native VMM analysis job: {error}"))?;
         if !result.success {
-            return Err(format!("完成原生 VMM 分析作业失败：{}", result.message));
+            return Err(format!(
+                "Failed to complete the native VMM analysis job: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -1356,10 +1445,10 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![],
         )
         .await
-        .map_err(|error| format!("删除原生 VMM 未完成登记作业失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete unfinished native VMM intake jobs: {error}"))?;
         if !result.success {
             return Err(format!(
-                "删除原生 VMM 未完成登记作业失败：{}",
+                "Failed to delete unfinished native VMM intake jobs: {}",
                 result.message
             ));
         }
@@ -1387,10 +1476,12 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![sqlite_text(operation_id), sqlite_text(request_fingerprint)],
         )
         .await
-        .map_err(|error| format!("删除原生 VMM 未提交登记作业失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to delete the uncommitted native VMM intake job: {error}")
+        })?;
         if !result.success {
             return Err(format!(
-                "删除原生 VMM 未提交登记作业失败：{}",
+                "Failed to delete the uncommitted native VMM intake job: {}",
                 result.message
             ));
         }
@@ -1424,13 +1515,17 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![sqlite_text(operation_id)],
         )
         .await
-        .map_err(|error| format!("读取原生 VMM 维护变更失败：{error}"))?;
-        let rows: Vec<NativeVmmCoreMutationRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 维护变更失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM maintenance mutation: {error}"))?;
+        let rows: Vec<NativeVmmCoreMutationRow> =
+            serde_json::from_str(&result.json_data).map_err(|error| {
+                format!("Failed to parse the native VMM maintenance mutation: {error}")
+            })?;
         match rows.as_slice() {
             [] => Ok(None),
             [row] => Ok(Some(row.clone().into_mutation())),
-            _ => Err(String::from("原生 VMM 维护操作标识返回了多条记录")),
+            _ => Err(String::from(
+                "The native VMM maintenance operation identifier returned multiple records",
+            )),
         }
     }
 
@@ -1455,9 +1550,13 @@ ORDER BY l.position ASC, p.id ASC;"#,
             vec![],
         )
         .await
-        .map_err(|error| format!("读取未完成原生 VMM 维护变更失败：{error}"))?;
-        let rows: Vec<NativeVmmCoreMutationRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析未完成原生 VMM 维护变更失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to read unfinished native VMM maintenance mutations: {error}")
+        })?;
+        let rows: Vec<NativeVmmCoreMutationRow> =
+            serde_json::from_str(&result.json_data).map_err(|error| {
+                format!("Failed to parse unfinished native VMM maintenance mutations: {error}")
+            })?;
         Ok(rows
             .into_iter()
             .map(NativeVmmCoreMutationRow::into_mutation)
@@ -1481,7 +1580,9 @@ ORDER BY l.position ASC, p.id ASC;"#,
         mutation: &NativeVmmCoreMutation,
     ) -> Result<(), String> {
         if mutation.state != VMM_CORE_MUTATION_PREPARED {
-            return Err(String::from("原生 VMM 维护变更必须以 prepared 状态写入"));
+            return Err(String::from(
+                "A native VMM maintenance mutation must be written in the prepared state",
+            ));
         }
         let result = local_sql::execute_script_async(
             &self.local,
@@ -1501,9 +1602,14 @@ ORDER BY l.position ASC, p.id ASC;"#,
             ],
         )
         .await
-        .map_err(|error| format!("准备原生 VMM 维护变更失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to prepare the native VMM maintenance mutation: {error}")
+        })?;
         if !result.success {
-            return Err(format!("准备原生 VMM 维护变更失败：{}", result.message));
+            return Err(format!(
+                "Failed to prepare the native VMM maintenance mutation: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -1534,7 +1640,10 @@ ORDER BY l.position ASC, p.id ASC;"#,
         removed_turn_ids: &[String],
     ) -> Result<(), String> {
         if pending_turn_id.is_some_and(|id| removed_turn_ids.iter().any(|removed| removed == id)) {
-            return Err("原生 VMM 不能在同一次提交中登记并永久移除同一回合。".to_owned());
+            return Err(
+                "Native VMM cannot register and permanently remove the same turn in one commit."
+                    .to_owned(),
+            );
         }
         let operation_id = sqlite_string_literal(operation_id);
         let snapshot_json = sqlite_string_literal(snapshot_json);
@@ -1582,9 +1691,14 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             vec![],
         )
         .await
-        .map_err(|error| format!("提交原生 VMM 维护关系状态失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to commit the native VMM maintenance relation state: {error}")
+        })?;
         if !result.success {
-            return Err(format!("提交原生 VMM 维护关系状态失败：{}", result.message));
+            return Err(format!(
+                "Failed to commit the native VMM maintenance relation state: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -1612,9 +1726,16 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             ],
         )
         .await
-        .map_err(|error| format!("完成原生 VMM 维护变更对账失败：{error}"))?;
+        .map_err(|error| {
+            format!(
+                "Failed to complete the native VMM maintenance mutation reconciliation: {error}"
+            )
+        })?;
         if !result.success {
-            return Err(format!("完成原生 VMM 维护变更对账失败：{}", result.message));
+            return Err(format!(
+                "Failed to complete the native VMM maintenance mutation reconciliation: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -1643,7 +1764,9 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             || dimension == 0
             || physical_fingerprint_json.trim().is_empty()
         {
-            return Err(String::from("VMM 向量空间标识、维度与物理指纹必须有效"));
+            return Err(String::from(
+                "The VMM vector space identifier, dimension and physical fingerprint must be valid",
+            ));
         }
         let result =
             local_sql::query_json_async(
@@ -1652,20 +1775,25 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 "SELECT vector_space_id, table_name, dimension, physical_fingerprint_json FROM vmm_vector_spaces WHERE vector_space_id = ? LIMIT 1;",
                 vec![sqlite_text(vector_space_id)],
             ).await
-            .map_err(|error| format!("读取 VMM 向量空间失败：{error}"))?;
-        let rows: Vec<VectorSpaceRow> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析 VMM 向量空间查询结果失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the VMM vector space: {error}"))?;
+        let rows: Vec<VectorSpaceRow> =
+            serde_json::from_str(&result.json_data).map_err(|error| {
+                format!("Failed to parse the VMM vector space query result: {error}")
+            })?;
         if let Some(row) = rows.first() {
-            let stored_dimension = u32::try_from(row.dimension)
-                .map_err(|_| String::from("VMM 向量空间持久维度超出支持范围"))?;
+            let stored_dimension = u32::try_from(row.dimension).map_err(|_| {
+                String::from(
+                    "The persisted dimension of the VMM vector space is out of the supported range",
+                )
+            })?;
             if stored_dimension != dimension {
                 return Err(format!(
-                    "VMM 向量空间 `{vector_space_id}` 的持久维度 {stored_dimension} 与请求维度 {dimension} 不一致"
+                    "The persisted dimension {stored_dimension} of VMM vector space `{vector_space_id}` disagrees with the requested dimension {dimension}"
                 ));
             }
             if row.physical_fingerprint_json != physical_fingerprint_json {
                 return Err(format!(
-                    "VMM 向量空间 `{vector_space_id}` 的物理向量指纹与当前 Embedding 路由不一致"
+                    "The physical vector fingerprint of VMM vector space `{vector_space_id}` disagrees with the current embedding route"
                 ));
             }
             return Ok(VmmVectorSpaceBinding {
@@ -1685,7 +1813,7 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 overwrite_if_exists: true,
             })
             .await
-            .map_err(|error| format!("创建 VMM LanceDB 向量表失败：{error}"))?;
+            .map_err(|error| format!("Failed to create the VMM LanceDB vector table: {error}"))?;
         let now = current_unix_epoch_millis_i64()?;
         let inserted = local_sql::execute_script_async(
             &self.local,
@@ -1704,9 +1832,12 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             ],
         )
         .await
-        .map_err(|error| format!("登记 VMM 向量空间失败：{error}"))?;
+        .map_err(|error| format!("Failed to register the VMM vector space: {error}"))?;
         if !inserted.success {
-            return Err(format!("登记 VMM 向量空间失败：{}", inserted.message));
+            return Err(format!(
+                "Failed to register the VMM vector space: {}",
+                inserted.message
+            ));
         }
         Ok(VmmVectorSpaceBinding {
             vector_space_id: vector_space_id.to_string(),
@@ -1736,15 +1867,18 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         if records.is_empty() {
             return Ok(());
         }
-        let expected_dimension = usize::try_from(binding.dimension)
-            .map_err(|_| String::from("VMM 向量维度超出当前平台支持范围"))?;
+        let expected_dimension = usize::try_from(binding.dimension).map_err(|_| {
+            String::from("The VMM vector dimension exceeds the range supported by this platform")
+        })?;
         if records.iter().any(|record| {
             record.memory_id.trim().is_empty()
                 || record.scope_id.trim().is_empty()
                 || record.vector.len() != expected_dimension
                 || record.vector.iter().any(|value| !value.is_finite())
         }) {
-            return Err(String::from("VMM LanceDB 向量批次包含无效记录"));
+            return Err(String::from(
+                "The VMM LanceDB vector batch contains invalid records",
+            ));
         }
         let rows = records
             .iter()
@@ -1760,7 +1894,7 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
             })
             .collect::<Vec<_>>();
         let data = serde_json::to_vec(&rows)
-            .map_err(|error| format!("编码 VMM LanceDB 向量批次失败：{error}"))?;
+            .map_err(|error| format!("Failed to encode the VMM LanceDB vector batch: {error}"))?;
         self.vector_engine()
             .await?
             .vector_upsert(LanceDbUpsertInput {
@@ -1770,7 +1904,7 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 key_columns: vec![String::from("id")],
             })
             .await
-            .map_err(|error| format!("写入 VMM LanceDB 向量批次失败：{error}"))?;
+            .map_err(|error| format!("Failed to write the VMM LanceDB vector batch: {error}"))?;
         Ok(())
     }
 
@@ -1812,10 +1946,10 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                     condition: format!("id IN ({identities})"),
                 })
                 .await
-                .map_err(|error| format!("删除 VMM LanceDB 向量失败：{error}"))?;
+                .map_err(|error| format!("Failed to delete VMM LanceDB vectors: {error}"))?;
             deleted_rows = deleted_rows
                 .checked_add(deletion.deleted_rows)
-                .ok_or_else(|| String::from("VMM 物理向量删除计数溢出"))?;
+                .ok_or_else(|| String::from("The VMM physical vector deletion count overflowed"))?;
         }
         Ok(deleted_rows)
     }
@@ -1837,13 +1971,16 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         binding: &VmmVectorSpaceBinding,
         memory_ids: &[String],
     ) -> Result<Vec<VmmVectorCandidate>, String> {
-        let expected_dimension = usize::try_from(binding.dimension)
-            .map_err(|_| String::from("VMM 向量维度超出当前平台支持范围"))?;
+        let expected_dimension = usize::try_from(binding.dimension).map_err(|_| {
+            String::from("The VMM vector dimension exceeds the range supported by this platform")
+        })?;
         if expected_dimension == 0
             || memory_ids.iter().any(|identity| identity.trim().is_empty())
             || memory_ids.iter().collect::<BTreeSet<_>>().len() != memory_ids.len()
         {
-            return Err(String::from("VMM LanceDB 向量回填参数无效"));
+            return Err(String::from(
+                "Invalid VMM LanceDB vector backfill parameters",
+            ));
         }
         let mut probe_vector = vec![0.0_f32; expected_dimension];
         probe_vector[0] = 1.0;
@@ -1857,7 +1994,7 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 .collect::<Vec<_>>()
                 .join(", ");
             let limit = u32::try_from(chunk.len())
-                .map_err(|_| String::from("VMM LanceDB 向量回填批次过大"))?;
+                .map_err(|_| String::from("The VMM LanceDB vector backfill batch is too large"))?;
             let result = engine
                 .vector_search(LanceDbSearchInput {
                     table_name: binding.table_name.clone(),
@@ -1868,9 +2005,11 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                     output_format: LanceDbOutputFormat::JsonRows,
                 })
                 .await
-                .map_err(|error| format!("回填 VMM LanceDB 向量失败：{error}"))?;
-            let rows: Vec<VectorCandidateRow> = serde_json::from_slice(&result.data)
-                .map_err(|error| format!("解析 VMM LanceDB 回填结果失败：{error}"))?;
+                .map_err(|error| format!("Failed to backfill VMM LanceDB vectors: {error}"))?;
+            let rows: Vec<VectorCandidateRow> =
+                serde_json::from_slice(&result.data).map_err(|error| {
+                    format!("Failed to parse the VMM LanceDB backfill results: {error}")
+                })?;
             let mut returned_ids = BTreeSet::new();
             for row in rows {
                 if !expected_ids.contains(row.id.as_str())
@@ -1878,7 +2017,9 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                     || row.vector.len() != expected_dimension
                     || row.vector.iter().any(|value| !value.is_finite())
                 {
-                    return Err(String::from("VMM LanceDB 返回了无效的向量回填记录"));
+                    return Err(String::from(
+                        "VMM LanceDB returned an invalid vector backfill record",
+                    ));
                 }
                 loaded.push(VmmVectorCandidate {
                     memory_id: row.id,
@@ -1886,7 +2027,9 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 });
             }
             if returned_ids.len() != expected_ids.len() {
-                return Err(String::from("VMM LanceDB 缺少 Core 快照引用的记忆向量"));
+                return Err(String::from(
+                    "VMM LanceDB is missing memory vectors referenced by the Core snapshot",
+                ));
             }
         }
         Ok(loaded)
@@ -1910,14 +2053,15 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
         query_vector: Vec<f32>,
         filter: &VmmVectorSearchFilter,
     ) -> Result<Vec<VmmVectorCandidate>, String> {
-        let expected_dimension = usize::try_from(binding.dimension)
-            .map_err(|_| String::from("VMM 向量维度超出当前平台支持范围"))?;
+        let expected_dimension = usize::try_from(binding.dimension).map_err(|_| {
+            String::from("The VMM vector dimension exceeds the range supported by this platform")
+        })?;
         if query_vector.len() != expected_dimension
             || query_vector.iter().any(|value| !value.is_finite())
             || filter.subject_id.trim().is_empty()
             || filter.visible_scope_ids.is_empty()
         {
-            return Err(String::from("VMM LanceDB 向量查询参数无效"));
+            return Err(String::from("Invalid VMM LanceDB vector query parameters"));
         }
         let predicate = build_vector_filter(filter)?;
         let result = self
@@ -1932,16 +2076,18 @@ WHERE operation_id = '{operation_id}' AND state = '{prepared}';
                 output_format: LanceDbOutputFormat::JsonRows,
             })
             .await
-            .map_err(|error| format!("检索 VMM LanceDB 向量失败：{error}"))?;
+            .map_err(|error| format!("Failed to search VMM LanceDB vectors: {error}"))?;
         let rows: Vec<VectorCandidateRow> = serde_json::from_slice(&result.data)
-            .map_err(|error| format!("解析 VMM LanceDB 检索结果失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse the VMM LanceDB search results: {error}"))?;
         rows.into_iter()
             .map(|row| {
                 if row.id.trim().is_empty()
                     || row.vector.len() != expected_dimension
                     || row.vector.iter().any(|value| !value.is_finite())
                 {
-                    return Err(String::from("VMM LanceDB 返回了无效向量候选"));
+                    return Err(String::from(
+                        "VMM LanceDB returned an invalid vector candidate",
+                    ));
                 }
                 Ok(VmmVectorCandidate {
                     memory_id: row.id,
@@ -2011,10 +2157,13 @@ impl NativeVmmPendingAnalysisJobRow {
                 | VMM_PENDING_ANALYSIS_BYPASSED
                 | VMM_PENDING_ANALYSIS_CORRUPTED
         ) {
-            return Err(format!("原生 VMM 待分析作业状态 `{}` 无效", self.state));
+            return Err(format!(
+                "Invalid native VMM pending analysis job state `{}`",
+                self.state
+            ));
         }
         let attempt_count = u32::try_from(self.attempt_count)
-            .map_err(|_| String::from("原生 VMM 待分析作业尝试次数无效"))?;
+            .map_err(|_| String::from("Invalid native VMM pending analysis job attempt count"))?;
         let state_shape_valid = match self.state.as_str() {
             VMM_PENDING_ANALYSIS_INTAKING => {
                 self.turn_id.is_none() && !self.payload_json.is_empty()
@@ -2032,14 +2181,18 @@ impl NativeVmmPendingAnalysisJobRow {
             _ => false,
         };
         if !state_shape_valid || self.next_attempt_at_unix_ms < 0 {
-            return Err(String::from("原生 VMM 待分析作业持久状态形态无效"));
+            return Err(String::from(
+                "Invalid native VMM pending analysis job persisted state shape",
+            ));
         }
         if self
             .last_error
             .as_ref()
             .is_some_and(|error| error.chars().count() > VMM_PENDING_ANALYSIS_ERROR_CHAR_LIMIT)
         {
-            return Err(String::from("原生 VMM 待分析作业诊断超过长度限制"));
+            return Err(String::from(
+                "The native VMM pending analysis job diagnostics exceed the length limit",
+            ));
         }
         Ok(NativeVmmPendingAnalysisJob {
             operation_id: self.operation_id,
@@ -2214,7 +2367,7 @@ pub async fn bootstrap_vmm_data_plane(
     let local = Arc::clone(&host_runtime.local);
     local
         .bind(LogicalDatabase::VmmMetadata, sqlite_path.clone())
-        .map_err(|error| format!("绑定原生 VMM SQLite 数据库失败：{error}"))?;
+        .map_err(|error| format!("Failed to bind the native VMM SQLite database: {error}"))?;
 
     let schema_result = local_sql::execute_script_async(
         &local,
@@ -2223,10 +2376,10 @@ pub async fn bootstrap_vmm_data_plane(
         vec![],
     )
     .await
-    .map_err(|error| format!("初始化原生 VMM 数据结构失败：{error}"))?;
+    .map_err(|error| format!("Failed to initialize the native VMM data schema: {error}"))?;
     if !schema_result.success {
         return Err(format!(
-            "初始化原生 VMM 数据结构失败：{}",
+            "Failed to initialize the native VMM data schema: {}",
             schema_result.message
         ));
     }
@@ -2488,7 +2641,9 @@ fn build_vector_filter(filter: &VmmVectorSearchFilter) -> Result<String, String>
 /// 将非空列表编码为安全的 LanceDB 单引号字符串字面量。
 fn lance_string_set(values: &[String]) -> Result<String, String> {
     if values.is_empty() || values.iter().any(|value| value.trim().is_empty()) {
-        return Err(String::from("VMM LanceDB 过滤作用域不能为空"));
+        return Err(String::from(
+            "The VMM LanceDB filter scope must not be empty",
+        ));
     }
     Ok(values
         .iter()
@@ -2528,10 +2683,14 @@ fn validate_project_access_ids(
     project_id_i64(owner_project_id)?;
     let unique = linked_project_ids.iter().copied().collect::<BTreeSet<_>>();
     if unique.len() != linked_project_ids.len() {
-        return Err(String::from("原生 VMM 连带查询项目不得重复"));
+        return Err(String::from(
+            "Native VMM linked-query projects must not be duplicated",
+        ));
     }
     if linked_project_ids.contains(&owner_project_id) {
-        return Err(String::from("原生 VMM 连带查询项目不得包含所有者项目"));
+        return Err(String::from(
+            "Native VMM linked-query projects must not include the owner project",
+        ));
     }
     for project_id in linked_project_ids {
         project_id_i64(*project_id)?;
@@ -2555,8 +2714,11 @@ fn build_project_access_assignment_script(
     );
     for (position, project_id) in linked_project_ids.iter().enumerate() {
         let project_id = project_id_i64(*project_id)?;
-        let position = i64::try_from(position)
-            .map_err(|_| String::from("原生 VMM 连带查询项目数量超出支持范围"))?;
+        let position = i64::try_from(position).map_err(|_| {
+            String::from(
+                "The number of native VMM linked-query projects exceeds the supported range",
+            )
+        })?;
         script.push_str(
             format!(
                 "INSERT INTO vmm_project_query_links(vulcan_project_id, linked_vmm_project_id, position, created_at_unix_ms) VALUES ('{escaped_project_id}', {project_id}, {position}, {now});\n"
@@ -2572,9 +2734,13 @@ fn build_project_access_assignment_script(
 /// 将一个公开的原生 VMM 项目标识转换到准确的 SQLite 整数域。
 fn project_id_i64(project_id: u64) -> Result<i64, String> {
     if project_id == 0 {
-        return Err(String::from("原生 VMM 项目标识必须大于零"));
+        return Err(String::from(
+            "The native VMM project identifier must be greater than zero",
+        ));
     }
-    i64::try_from(project_id).map_err(|_| String::from("原生 VMM 项目标识超出 SQLite 支持范围"))
+    i64::try_from(project_id).map_err(|_| {
+        String::from("The native VMM project identifier exceeds the range supported by SQLite")
+    })
 }
 
 /// Validates and trims one persisted native project text field.
@@ -2586,13 +2752,13 @@ fn validate_native_project_text<'a>(
 ) -> Result<&'a str, String> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(format!("{label}不能为空"));
+        return Err(format!("{label} must not be empty"));
     }
     if value.contains('\0') {
-        return Err(format!("{label}不能包含 NUL 字符"));
+        return Err(format!("{label} must not contain NUL characters"));
     }
     if value.chars().count() > max_chars {
-        return Err(format!("{label}不能超过 {max_chars} 个字符"));
+        return Err(format!("{label} must not exceed {max_chars} characters"));
     }
     Ok(value)
 }
@@ -2603,21 +2769,29 @@ fn native_project_from_row(row: NativeProjectRow) -> Result<NativeVmmProject, St
     let id = u64::try_from(row.id)
         .ok()
         .filter(|id| *id > 0)
-        .ok_or_else(|| String::from("原生 VMM 项目持久化标识无效"))?;
+        .ok_or_else(|| String::from("Invalid persisted native VMM project identifier"))?;
     let expected_scope_id = format!("vmm-project:{id}");
     if row.scope_id != expected_scope_id {
-        return Err(format!("原生 VMM 项目 {id} 的持久化作用域与稳定身份不一致"));
+        return Err(format!(
+            "The persisted scope of native VMM project {id} disagrees with its stable identity"
+        ));
     }
     let protected = match row.protected {
         0 => false,
         1 => true,
-        _ => return Err(format!("原生 VMM 项目 {id} 的保护标记无效")),
+        _ => {
+            return Err(format!(
+                "Invalid protection flag of native VMM project {id}"
+            ));
+        }
     };
     if id == DEFAULT_VMM_PROJECT_ID as u64 && !protected {
-        return Err(String::from("default VMM 项目必须保持删除保护"));
+        return Err(String::from(
+            "The default VMM project must stay delete-protected",
+        ));
     }
-    validate_native_project_text(row.name.as_str(), "VMM 项目名称", 512)?;
-    validate_native_project_text(row.tag.as_str(), "VMM 项目标签", 256)?;
+    validate_native_project_text(row.name.as_str(), "VMM project name", 512)?;
+    validate_native_project_text(row.tag.as_str(), "VMM project tag", 256)?;
     Ok(NativeVmmProject {
         id,
         scope_id: row.scope_id,
@@ -2631,15 +2805,16 @@ fn native_project_from_row(row: NativeProjectRow) -> Result<NativeVmmProject, St
 /// 解码一项最多允许返回一个原生项目的查询。
 fn one_native_project(json_data: &str) -> Result<Option<NativeVmmProject>, String> {
     let mut rows: Vec<NativeProjectRow> = serde_json::from_str(json_data)
-        .map_err(|error| format!("解析原生 VMM 项目查询结果失败：{error}"))?;
+        .map_err(|error| format!("Failed to parse the native VMM project query result: {error}"))?;
     match rows.len() {
         0 => Ok(None),
-        1 => native_project_from_row(
-            rows.pop()
-                .ok_or_else(|| String::from("原生 VMM 项目查询结果意外为空"))?,
-        )
+        1 => native_project_from_row(rows.pop().ok_or_else(|| {
+            String::from("The native VMM project query result is unexpectedly empty")
+        })?)
         .map(Some),
-        _ => Err(String::from("原生 VMM 项目查询返回了多条记录")),
+        _ => Err(String::from(
+            "The native VMM project query returned multiple records",
+        )),
     }
 }
 
@@ -2655,18 +2830,18 @@ fn ensure_trusted_directory(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
         Ok(_) => Err(format!(
-            "原生 VMM 数据目录不是可信普通目录：{}",
+            "The native VMM data directory is not a trusted regular directory: {}",
             path.display()
         )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir_all(path)
             .map_err(|create_error| {
                 format!(
-                    "创建原生 VMM 数据目录失败（{}）：{create_error}",
+                    "Failed to create the native VMM data directory ({}): {create_error}",
                     path.display()
                 )
             }),
         Err(error) => Err(format!(
-            "读取原生 VMM 数据目录失败（{}）：{error}",
+            "Failed to read the native VMM data directory ({}): {error}",
             path.display()
         )),
     }
@@ -2684,8 +2859,9 @@ fn current_unix_epoch_millis() -> u128 {
 /// Returns current Unix milliseconds within SQLite's signed integer range.
 /// 返回位于 SQLite 有符号整数范围内的当前 Unix 毫秒数。
 fn current_unix_epoch_millis_i64() -> Result<i64, String> {
-    i64::try_from(current_unix_epoch_millis())
-        .map_err(|_| String::from("当前 Unix 毫秒时间超出 SQLite 支持范围"))
+    i64::try_from(current_unix_epoch_millis()).map_err(|_| {
+        String::from("The current Unix millisecond time exceeds the range supported by SQLite")
+    })
 }
 
 #[cfg(test)]
@@ -2802,11 +2978,11 @@ mod tests {
     fn project_access_assignment_rejects_invalid_link_sets() {
         assert_eq!(
             validate_project_access_ids(2, &[3, 3]).expect_err("duplicates must fail"),
-            "原生 VMM 连带查询项目不得重复"
+            "Native VMM linked-query projects must not be duplicated"
         );
         assert_eq!(
             validate_project_access_ids(2, &[2]).expect_err("owner link must fail"),
-            "原生 VMM 连带查询项目不得包含所有者项目"
+            "Native VMM linked-query projects must not include the owner project"
         );
     }
 }

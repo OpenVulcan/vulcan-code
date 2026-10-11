@@ -99,14 +99,18 @@ impl VmmDataPlaneHandle {
             "SELECT (SELECT COUNT(*) FROM vmm_lexical_documents) AS document_count, (SELECT COUNT(*) FROM vmm_memory_fts) AS indexed_row_count;",
             &[],
         )
-        .map_err(|error| format!("读取原生 VMM 全文索引计数失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the native VMM full-text index counts: {error}"))?;
         let mut rows: Vec<VmmLexicalIndexCounts> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 全文索引计数失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to parse the native VMM full-text index counts: {error}")
+            })?;
         if rows.len() != 1 {
-            return Err(String::from("原生 VMM 全文索引计数未返回唯一聚合记录。"));
+            return Err(String::from(
+                "The native VMM full-text index count did not return a single aggregate record.",
+            ));
         }
         rows.pop()
-            .ok_or_else(|| String::from("原生 VMM 全文索引计数记录缺失。"))
+            .ok_or_else(|| String::from("The native VMM full-text index count record is missing."))
     }
 
     /// Atomically replaces only derived text using the caller's complete authoritative active set.
@@ -122,13 +126,16 @@ impl VmmDataPlaneHandle {
         let mut identities = std::collections::BTreeSet::new();
         for document in documents {
             if document.memory_id.is_empty() || !identities.insert(&document.memory_id) {
-                return Err(String::from("原生 VMM 全文重建文档 ID 为空或重复。"));
+                return Err(String::from(
+                    "A native VMM full-text rebuild document ID is empty or duplicated.",
+                ));
             }
         }
         // Reuse the existing VMM transaction-script quoting contract, including quotes and newlines.
         // 复用现有 VMM 事务脚本的引用契约，包括引号与换行。
-        let serialized = serde_json::to_string(documents)
-            .map_err(|error| format!("序列化原生 VMM 全文重建文档失败：{error}"))?;
+        let serialized = serde_json::to_string(documents).map_err(|error| {
+            format!("Failed to serialize native VMM full-text rebuild documents: {error}")
+        })?;
         let escaped = sqlite_string_literal(&serialized);
         // Clear orphan FTS rows too; inserting documents runs the existing stable-ID triggers.
         // 同时清除孤立全文行，插入文档时运行现有稳定 ID 触发器。
@@ -141,9 +148,14 @@ impl VmmDataPlaneHandle {
             &script,
             &[],
         )
-        .map_err(|error| format!("替换原生 VMM 全文派生文档失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to replace native VMM full-text derived documents: {error}")
+        })?;
         if !result.success {
-            return Err(format!("替换原生 VMM 全文派生文档失败：{}", result.message));
+            return Err(format!(
+                "Failed to replace native VMM full-text derived documents: {}",
+                result.message
+            ));
         }
         Ok(())
     }
@@ -161,12 +173,14 @@ impl VmmDataPlaneHandle {
             VMM_LEXICAL_INDEX,
             TokenizerMode::Jieba,
         )
-        .map_err(|error| format!("初始化原生 VMM 全文索引失败：{error}"))?;
+        .map_err(|error| format!("Failed to initialize the native VMM full-text index: {error}"))?;
         if !ensured.success
             || ensured.index_name != VMM_LEXICAL_INDEX
             || ensured.tokenizer_mode != "jieba"
         {
-            return Err("原生 VMM 全文索引未返回声明的 Jieba 索引".to_owned());
+            return Err(
+                "The native VMM full-text index did not return the declared Jieba index".to_owned(),
+            );
         }
         // schema contains no user values and is safe for the unparameterized script path.
         // schema 不含用户值，可安全使用无参数脚本路径。
@@ -176,9 +190,13 @@ impl VmmDataPlaneHandle {
             LEXICAL_SCHEMA,
             &[],
         )
-        .map_err(|error| format!("初始化原生 VMM 全文文档表失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to initialize the native VMM full-text document table: {error}")
+        })?;
         if !schema.success {
-            return Err("原生 VMM 全文文档表初始化未成功".to_owned());
+            return Err(
+                "The native VMM full-text document table initialization did not succeed".to_owned(),
+            );
         }
         Ok(())
     }
@@ -198,12 +216,15 @@ impl VmmDataPlaneHandle {
             VMM_LEXICAL_INDEX,
             TokenizerMode::Jieba,
         )
-        .map_err(|error| format!("重建原生 VMM 全文索引失败：{error}"))?;
+        .map_err(|error| format!("Failed to rebuild the native VMM full-text index: {error}"))?;
         if !rebuilt.success
             || rebuilt.index_name != VMM_LEXICAL_INDEX
             || rebuilt.tokenizer_mode != "jieba"
         {
-            return Err("原生 VMM 全文重建未返回声明的 Jieba 索引".to_owned());
+            return Err(
+                "The native VMM full-text rebuild did not return the declared Jieba index"
+                    .to_owned(),
+            );
         }
         Ok(rebuilt.reindexed_rows)
     }
@@ -224,13 +245,14 @@ impl VmmDataPlaneHandle {
         let mut identities = std::collections::BTreeSet::new();
         for document in documents {
             if document.memory_id.is_empty() || !identities.insert(&document.memory_id) {
-                return Err("原生 VMM 全文文档 ID 为空或重复".to_owned());
+                return Err("A native VMM full-text document ID is empty or duplicated".to_owned());
             }
         }
         // serialized remains a bound value, including quotes, JSON punctuation and multiline text.
         // serialized 始终作为绑定值，包括引号、JSON 标点及多行文本。
-        let serialized = serde_json::to_string(documents)
-            .map_err(|error| format!("序列化原生 VMM 全文文档失败：{error}"))?;
+        let serialized = serde_json::to_string(documents).map_err(|error| {
+            format!("Failed to serialize native VMM full-text documents: {error}")
+        })?;
         // result updates only text changes, avoiding needless reindexing on recall-counter updates.
         // result 仅更新文本变化，避免召回计数更新引发无谓重建索引。
         let result = local_sql::execute_script(
@@ -243,9 +265,9 @@ impl VmmDataPlaneHandle {
                WHERE summary != excluded.summary OR details != excluded.details;"#,
             &[sqlite_text(serialized)],
         )
-        .map_err(|error| format!("更新原生 VMM 全文文档失败：{error}"))?;
+        .map_err(|error| format!("Failed to update native VMM full-text documents: {error}"))?;
         if !result.success {
-            return Err("原生 VMM 全文文档更新未成功".to_owned());
+            return Err("The native VMM full-text document update did not succeed".to_owned());
         }
         Ok(())
     }
@@ -258,8 +280,9 @@ impl VmmDataPlaneHandle {
         }
         // serialized is data, never a synthesized SQL identifier or predicate.
         // serialized 是数据，绝不是拼接的 SQL 标识符或谓词。
-        let serialized = serde_json::to_string(memory_ids)
-            .map_err(|error| format!("序列化原生 VMM 全文删除列表失败：{error}"))?;
+        let serialized = serde_json::to_string(memory_ids).map_err(|error| {
+            format!("Failed to serialize the native VMM full-text deletion list: {error}")
+        })?;
         // result includes the trigger-driven deletion of the associated FTS rows.
         // result 包含触发器驱动的关联全文行删除。
         let result = local_sql::execute_script(
@@ -268,9 +291,9 @@ impl VmmDataPlaneHandle {
             "DELETE FROM vmm_lexical_documents WHERE memory_id IN (SELECT value FROM json_each(?));",
             &[sqlite_text(serialized)],
         )
-        .map_err(|error| format!("删除原生 VMM 全文文档失败：{error}"))?;
+        .map_err(|error| format!("Failed to delete native VMM full-text documents: {error}"))?;
         if !result.success {
-            return Err("原生 VMM 全文文档删除未成功".to_owned());
+            return Err("The native VMM full-text document deletion did not succeed".to_owned());
         }
         Ok(())
     }
@@ -288,7 +311,7 @@ impl VmmDataPlaneHandle {
         offset: u32,
     ) -> Result<Vec<VmmLexicalHit>, String> {
         if limit == 0 || limit > MAX_LEXICAL_PAGE_SIZE {
-            return Err("原生 VMM 全文分页大小须在 1 至 1024 之间".to_owned());
+            return Err("The native VMM full-text page size must be between 1 and 1024".to_owned());
         }
         if query.trim().is_empty() {
             return Ok(Vec::new());
@@ -302,9 +325,12 @@ impl VmmDataPlaneHandle {
             query,
             true,
         )
-        .map_err(|error| format!("原生 VMM 全文查询分词失败：{error}"))?;
+        .map_err(|error| format!("Failed to tokenize the native VMM full-text query: {error}"))?;
         if tokenized.tokenizer_mode != "jieba" {
-            return Err("原生 VMM 全文查询未使用声明的 Jieba 分词器".to_owned());
+            return Err(
+                "The native VMM full-text query did not use the declared Jieba tokenizer"
+                    .to_owned(),
+            );
         }
         if tokenized.fts_query.is_empty() {
             return Ok(Vec::new());
@@ -321,15 +347,18 @@ impl VmmDataPlaneHandle {
                 SqliteValue::Integer(i64::from(offset)),
             ],
         )
-        .map_err(|error| format!("查询原生 VMM 全文索引失败：{error}"))?;
+        .map_err(|error| format!("Failed to query the native VMM full-text index: {error}"))?;
         // hits retain original negative BM25 values and exact physical ordering.
         // hits 保留原始负 BM25 值及精确物理顺序。
         let hits: Vec<VmmLexicalHit> = serde_json::from_str(&result.json_data)
-            .map_err(|error| format!("解析原生 VMM 全文候选失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse native VMM full-text candidates: {error}"))?;
         if hits.iter().any(|hit| {
             hit.memory_id.is_empty() || !hit.raw_score.is_finite() || hit.raw_score > 0.0
         }) {
-            return Err("原生 VMM 全文索引返回无效身份或 BM25 分数".to_owned());
+            return Err(
+                "The native VMM full-text index returned an invalid identity or BM25 score"
+                    .to_owned(),
+            );
         }
         Ok(hits)
     }

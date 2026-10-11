@@ -24,7 +24,7 @@ pub async fn load_git_repository_monitoring_preferences(
     host_runtime: HostRuntimeHandle,
     project_id: &str,
 ) -> Result<std::collections::BTreeMap<String, bool>, String> {
-    let project_id = validate_git_preference_text(project_id, "项目标识")?;
+    let project_id = validate_git_preference_text(project_id, "Project ID")?;
     // The asynchronous twin is the entry every async caller uses, so this call leaves the Tokio core threads.
     // 异步孪生是每个异步调用方使用的入口，因此本次调用会离开 Tokio 核心线程。
     let result = local_sql::query_json_async(
@@ -39,13 +39,13 @@ ORDER BY repository_key ASC;
         vec![SqliteValue::Text(project_id.to_string())],
     )
     .await
-    .map_err(|error| format!("查询 Git 审查监听偏好失败：{error}"))?;
+    .map_err(|error| format!("Failed to query the Git review monitoring preferences: {error}"))?;
     let rows = decode_query_rows::<GitRepositoryMonitoringPreferenceRow>(&result.json_data)?;
     let mut preferences = std::collections::BTreeMap::new();
     for row in rows {
         if row.project_id != project_id {
             return Err(format!(
-                "Git 审查监听偏好返回了错误项目 `{}`。",
+                "The Git review monitoring preferences returned the wrong project `{}`.",
                 row.project_id
             ));
         }
@@ -62,8 +62,8 @@ pub async fn persist_git_repository_monitoring_preference(
     repository_key: &str,
     enabled: bool,
 ) -> Result<(), String> {
-    let project_id = validate_git_preference_text(project_id, "项目标识")?;
-    let repository_key = validate_git_preference_text(repository_key, "仓库键")?;
+    let project_id = validate_git_preference_text(project_id, "Project ID")?;
+    let repository_key = validate_git_preference_text(repository_key, "Repository key")?;
     local_sql::execute_batch_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
@@ -87,7 +87,7 @@ ON CONFLICT(project_id, repository_key) DO UPDATE SET
         ]],
     )
     .await
-    .map_err(|error| format!("保存 Git 审查监听偏好失败：{error}"))?;
+    .map_err(|error| format!("Failed to save the Git review monitoring preference: {error}"))?;
     Ok(())
 }
 
@@ -96,7 +96,7 @@ ON CONFLICT(project_id, repository_key) DO UPDATE SET
 fn validate_git_preference_text<'a>(value: &'a str, label: &str) -> Result<&'a str, String> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(format!("{label}不能为空。"));
+        return Err(format!("{label} must not be empty."));
     }
     Ok(value)
 }

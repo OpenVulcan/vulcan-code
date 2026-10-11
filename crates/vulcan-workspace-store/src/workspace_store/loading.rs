@@ -39,17 +39,25 @@ struct ValidatedProjectRow {
 /// 返回已验证行；身份、路径、标记或顺序损坏时返回显式错误。
 fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, String> {
     if row.id.trim().is_empty() {
-        return Err(String::from("项目索引包含空白项目标识。"));
+        return Err(String::from(
+            "The project index contains a blank project identifier.",
+        ));
     }
     if row.name.trim().is_empty() {
-        return Err(format!("项目索引 `{}` 包含空白展示名称。", row.id));
+        return Err(format!(
+            "Project index `{}` contains a blank display name.",
+            row.id
+        ));
     }
     if row.root_path.trim().is_empty() {
-        return Err(format!("项目索引 `{}` 缺少根目录路径。", row.id));
+        return Err(format!(
+            "Project index `{}` is missing the root directory path.",
+            row.id
+        ));
     }
     if !std::path::Path::new(&row.root_path).is_absolute() {
         return Err(format!(
-            "项目索引 `{}` 的根目录不是绝对路径：`{}`。",
+            "The root directory of project index `{}` is not an absolute path: `{}`.",
             row.id, row.root_path
         ));
     }
@@ -60,33 +68,48 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
         1 => true,
         value => {
             return Err(format!(
-                "项目索引 `{}` 包含无效置顶标记 `{value}`。",
+                "Project index `{}` contains an invalid pinned flag `{value}`.",
                 row.id
             ));
         }
     };
-    let vce_enabled = validate_project_boolean(&row.id, "VCE 启用", row.vce_enabled)?;
+    let vce_enabled = validate_project_boolean(&row.id, "VCE enabled", row.vce_enabled)?;
     let vce_revision = u64::try_from(row.vce_revision).map_err(|error| {
         format!(
-            "项目索引 `{}` 包含无效 VCE 修订号 `{}`：{error}",
+            "Project index `{}` contains an invalid VCE revision `{}`: {error}",
             row.id, row.vce_revision
         )
     })?;
     if vce_revision == 0 {
-        return Err(format!("项目索引 `{}` 的 VCE 修订号必须大于零。", row.id));
+        return Err(format!(
+            "The VCE revision of project index `{}` must be greater than zero.",
+            row.id
+        ));
     }
     let vce_max_file_bytes =
-        positive_project_u64(&row.id, "VCE 最大文件字节数", row.vce_max_file_bytes)?;
-    let vce_embedding_max_concurrency =
-        positive_project_usize(&row.id, "VCE 向量并发数", row.vce_embedding_max_concurrency)?;
-    let vce_query_max_concurrency =
-        positive_project_usize(&row.id, "VCE 查询并发数", row.vce_query_max_concurrency)?;
-    let vce_max_results = positive_project_usize(&row.id, "VCE 结果数量", row.vce_max_results)?;
+        positive_project_u64(&row.id, "VCE maximum file bytes", row.vce_max_file_bytes)?;
+    let vce_embedding_max_concurrency = positive_project_usize(
+        &row.id,
+        "VCE embedding concurrency",
+        row.vce_embedding_max_concurrency,
+    )?;
+    let vce_query_max_concurrency = positive_project_usize(
+        &row.id,
+        "VCE query concurrency",
+        row.vce_query_max_concurrency,
+    )?;
+    let vce_max_results = positive_project_usize(&row.id, "VCE result count", row.vce_max_results)?;
     let vce_max_context_chars =
-        positive_project_usize(&row.id, "VCE 上下文字符数", row.vce_max_context_chars)?;
-    let vce_extra_ignore_patterns =
-        serde_json::from_str::<Vec<String>>(&row.vce_extra_ignore_patterns_json)
-            .map_err(|error| format!("项目索引 `{}` 的 VCE 忽略规则 JSON 无效：{error}", row.id))?;
+        positive_project_usize(&row.id, "VCE context characters", row.vce_max_context_chars)?;
+    let vce_extra_ignore_patterns = serde_json::from_str::<Vec<String>>(
+        &row.vce_extra_ignore_patterns_json,
+    )
+    .map_err(|error| {
+        format!(
+            "The VCE ignore rules JSON of project index `{}` is invalid: {error}",
+            row.id
+        )
+    })?;
     let vce = ProjectVceSettings {
         enabled: vce_enabled,
         update_mode: match row.vce_update_mode.as_str() {
@@ -94,31 +117,38 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             "automatic" => vulcan_workbench_model::ProjectVceUpdateMode::Automatic,
             invalid => {
                 return Err(format!(
-                    "项目索引 `{}` 的语义更新模式无效：`{invalid}`。",
+                    "The semantic update mode of project index `{}` is invalid: `{invalid}`.",
                     row.id
                 ));
             }
         },
         auto_update_min_interval_seconds: u32::try_from(row.vce_auto_update_min_interval_seconds)
             .map_err(|error| {
-            format!("项目索引 `{}` 的语义更新间隔无效：{error}", row.id)
+            format!(
+                "The semantic update interval of project index `{}` is invalid: {error}",
+                row.id
+            )
         })?,
         revision: vce_revision,
         max_file_bytes: vce_max_file_bytes,
         extra_ignore_patterns: vce_extra_ignore_patterns,
         allow_query_rewrite: validate_project_boolean(
             &row.id,
-            "VCE 查询改写",
+            "VCE query rewrite",
             row.vce_allow_query_rewrite,
         )?,
-        allow_rerank: validate_project_boolean(&row.id, "VCE 重排", row.vce_allow_rerank)?,
+        allow_rerank: validate_project_boolean(&row.id, "VCE rerank", row.vce_allow_rerank)?,
         embedding_max_concurrency: vce_embedding_max_concurrency,
         query_max_concurrency: vce_query_max_concurrency,
         max_results: vce_max_results,
         max_context_chars: vce_max_context_chars,
     };
-    vce.validate()
-        .map_err(|error| format!("项目索引 `{}` 的 VCE 设置无效：{error}", row.id))?;
+    vce.validate().map_err(|error| {
+        format!(
+            "The VCE settings of project index `{}` are invalid: {error}",
+            row.id
+        )
+    })?;
     // archived must be exact before it can decide whether default-project seeding writes data.
     // archived 在决定默认项目播种是否写入数据前必须保持精确。
     let archived = match row.archived {
@@ -126,7 +156,7 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
         1 => true,
         value => {
             return Err(format!(
-                "项目索引 `{}` 包含无效归档标记 `{value}`。",
+                "Project index `{}` contains an invalid archived flag `{value}`.",
                 row.id
             ));
         }
@@ -135,7 +165,7 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
     // sort_order 拒绝负值或平台溢出值，而不是投影为顺序零。
     let sort_order = usize::try_from(row.sort_order).map_err(|error| {
         format!(
-            "项目索引 `{}` 包含无效分区顺序 `{}`：{error}",
+            "Project index `{}` contains an invalid section order `{}`: {error}",
             row.id, row.sort_order
         )
     })?;
@@ -169,7 +199,7 @@ fn validate_project_boolean(
         0 => Ok(false),
         1 => Ok(true),
         value => Err(format!(
-            "项目索引 `{project_id}` 包含无效 {field_name} 标记 `{value}`。"
+            "Project index `{project_id}` contains an invalid {field_name} flag `{value}`."
         )),
     }
 }
@@ -178,11 +208,11 @@ fn validate_project_boolean(
 /// 将一个正数 SQLite 整数转换为项目自有 `u64` 设置。
 fn positive_project_u64(project_id: &str, field_name: &str, value: i64) -> Result<u64, String> {
     let value = u64::try_from(value).map_err(|error| {
-        format!("项目索引 `{project_id}` 包含无效 {field_name} `{value}`：{error}")
+        format!("Project index `{project_id}` contains an invalid {field_name} `{value}`: {error}")
     })?;
     if value == 0 {
         return Err(format!(
-            "项目索引 `{project_id}` 的 {field_name} 必须大于零。"
+            "The {field_name} of project index `{project_id}` must be greater than zero."
         ));
     }
     Ok(value)
@@ -192,11 +222,11 @@ fn positive_project_u64(project_id: &str, field_name: &str, value: i64) -> Resul
 /// 将一个正数 SQLite 整数转换为平台宽度的项目设置。
 fn positive_project_usize(project_id: &str, field_name: &str, value: i64) -> Result<usize, String> {
     let value = usize::try_from(value).map_err(|error| {
-        format!("项目索引 `{project_id}` 包含无效 {field_name} `{value}`：{error}")
+        format!("Project index `{project_id}` contains an invalid {field_name} `{value}`: {error}")
     })?;
     if value == 0 {
         return Err(format!(
-            "项目索引 `{project_id}` 的 {field_name} 必须大于零。"
+            "The {field_name} of project index `{project_id}` must be greater than zero."
         ));
     }
     Ok(value)
@@ -317,7 +347,9 @@ pub async fn load_workspace_index_report(
         seed_default_workspace_project(&host_runtime).await?;
         project_rows = query_validated_project_rows(&host_runtime).await?;
         if workspace_requires_default_project(&project_rows) {
-            return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
+            return Err(String::from(
+                "No active project exists after seeding the default project.",
+            ));
         }
     }
     // Session-index bootstrap is non-essential to the desktop shell: a schema failure starts with an
@@ -341,12 +373,14 @@ pub async fn load_workspace_index_report(
         .collect::<BTreeMap<_, _>>();
     let mut valid_rows = Vec::new();
     let mut seen_sessions = BTreeSet::new();
+    let mut dedicated_session_ids = BTreeSet::new();
     if session_index_available {
         match super::index_read::list_workspace_rows(&host_runtime).await {
             Ok(report) => {
                 // Preserve usable startup rows while retaining every decode issue for strict refreshes.
                 // 保留可用的启动记录，同时保存全部解码问题供严格刷新判定。
                 issues.extend(report.issues);
+                dedicated_session_ids = report.dedicated_session_ids;
                 for row in report.rows {
                     let Some(project) = project_by_id.get(row.project_id.as_str()) else {
                         continue;
@@ -462,6 +496,7 @@ pub async fn load_workspace_index_report(
             (&mut task_projects, &mut active_positions)
         };
         append_indexed_session(projects, positions, project_id, project_name, session_id);
+        let dedicated = dedicated_session_ids.contains(&row.session_id);
         let session_summary = SessionSummary::new(
             session_id,
             Some(project_id.to_string()),
@@ -474,7 +509,8 @@ pub async fn load_workspace_index_report(
         )
         .with_title_source(SessionTitleSource::Manual)
         .with_created_at(row.created_at_ms.to_string())
-        .with_updated_at(row.updated_at_ms.to_string());
+        .with_updated_at(row.updated_at_ms.to_string())
+        .with_dedicated(dedicated);
         session_updated_at.insert(session_id, row.updated_at_ms);
 
         if archived {
@@ -577,7 +613,7 @@ async fn seed_default_workspace_project(host_runtime: &HostRuntimeHandle) -> Res
     let project_root = default_workspace_project_root()?;
     std::fs::create_dir_all(&project_root).map_err(|error| {
         format!(
-            "创建默认项目目录 `{}` 失败：{error}",
+            "Failed to create the default project directory `{}`: {error}",
             workspace_project_path_text_from_path(&project_root)
         )
     })?;
@@ -585,7 +621,7 @@ async fn seed_default_workspace_project(host_runtime: &HostRuntimeHandle) -> Res
     // 规范化证明新建逻辑根可解析，同时持久化身份保持路径稳定。
     std::fs::canonicalize(&project_root).map_err(|error| {
         format!(
-            "规范化默认项目目录 `{}` 失败：{error}",
+            "Failed to canonicalize the default project directory `{}`: {error}",
             workspace_project_path_text_from_path(&project_root)
         )
     })?;
@@ -622,7 +658,9 @@ pub async fn ensure_default_workspace_project(
     // refreshed_rows 证明写入实际发布了一个活动项目。
     let refreshed_rows = query_validated_project_rows(&host_runtime).await?;
     if workspace_requires_default_project(&refreshed_rows) {
-        return Err(String::from("默认项目播种完成后仍不存在活动项目。"));
+        return Err(String::from(
+            "No active project exists after seeding the default project.",
+        ));
     }
     Ok(())
 }
@@ -667,7 +705,7 @@ pub fn default_workspace_project_path_text() -> Result<String, String> {
 fn default_workspace_project_root() -> Result<std::path::PathBuf, String> {
     dirs::home_dir()
         .map(|home| default_workspace_project_root_from_home(&home))
-        .ok_or_else(|| String::from("无法解析用户主目录，无法创建默认项目。"))
+        .ok_or_else(|| String::from("Cannot resolve the user's home directory, so the default project cannot be created."))
 }
 
 /// Builds the default project root from an explicit user home path.
@@ -906,37 +944,37 @@ mod tests {
         assert!(
             validate_project_row(missing_id)
                 .expect_err("missing project id should fail")
-                .contains("空白项目标识")
+                .contains("blank project identifier")
         );
         assert!(
             validate_project_row(missing_name)
                 .expect_err("missing project name should fail")
-                .contains("空白展示名称")
+                .contains("blank display name")
         );
         assert!(
             validate_project_row(missing_root)
                 .expect_err("missing project root should fail")
-                .contains("缺少根目录路径")
+                .contains("missing the root directory path")
         );
         assert!(
             validate_project_row(relative_root)
                 .expect_err("relative project root should fail")
-                .contains("不是绝对路径")
+                .contains("is not an absolute path")
         );
         assert!(
             validate_project_row(invalid_pinned)
                 .expect_err("invalid pinned flag should fail")
-                .contains("无效置顶标记")
+                .contains("invalid pinned flag")
         );
         assert!(
             validate_project_row(invalid_archived)
                 .expect_err("invalid archived flag should fail")
-                .contains("无效归档标记")
+                .contains("invalid archived flag")
         );
         assert!(
             validate_project_row(invalid_order)
                 .expect_err("negative project order should fail")
-                .contains("无效分区顺序")
+                .contains("invalid section order")
         );
     }
 

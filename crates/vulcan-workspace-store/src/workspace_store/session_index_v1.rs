@@ -307,7 +307,17 @@ CREATE TABLE IF NOT EXISTS session_index_v1 (
     archived_at_ms INTEGER,
     unread INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS session_dedicated_index_v1 (
+    session_id TEXT PRIMARY KEY
+        REFERENCES session_index_v1(session_id) ON DELETE CASCADE
+);
 "#;
+
+/// SQL that marks one indexed session as dedicated; the creation-frozen profile is the authority.
+/// 将一条已索引会话标记为专职会话的 SQL；权威来源是创建时冻结的专职配置。
+const INSERT_SESSION_DEDICATED_INDEX_V1_SQL: &str =
+    "INSERT INTO session_dedicated_index_v1 (session_id) VALUES (?1);";
 
 /// Creates the `session_index_v1` table when missing.
 /// 在缺失时创建 `session_index_v1` 表。
@@ -334,43 +344,68 @@ pub async fn ensure_session_index_v1_schema(
 /// Inserts one V1 session index row. The session becomes visible only after
 /// this insert succeeds (files are published first).
 /// 插入一条 V1 会话索引行。只有该插入成功(文件已先发布)后会话才可见。
+///
+/// `dedicated` mirrors the creation-frozen profile of the published metadata; the row and its
+/// dedicated marker commit in one transaction so a listed session never lacks its kind.
+/// `dedicated` 镜像已发布 metadata 中创建时冻结的专职配置；记录与专职标记在同一事务中提交，
+/// 因此列表中的会话绝不会缺失其种类。
 pub async fn insert_session_index_v1(
     host_runtime: &HostRuntimeHandle,
     row: &SessionIndexV1Row,
+    dedicated: bool,
 ) -> Result<(), SessionIndexV1Error> {
-    let execution = local_sql::execute_batch_async(
+    let inserted = row.clone();
+    let execution = local_sql::with_connection_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
-        STRICT_INSERT_SESSION_INDEX_V1_SQL,
-        vec![vec![
-            SqliteValue::Text(row.session_id.clone()),
-            SqliteValue::Text(row.project_id.clone()),
-            SqliteValue::Text(row.project_tag.clone()),
-            SqliteValue::Text(row.storage_partition.clone()),
-            SqliteValue::Text(row.relative_path.clone()),
-            SqliteValue::Text(row.title.clone()),
-            SqliteValue::Integer(row.created_at_ms),
-            SqliteValue::Integer(row.updated_at_ms),
-            row.archived_at_ms
-                .map(SqliteValue::Integer)
-                .unwrap_or(SqliteValue::Null),
-            SqliteValue::Integer(row.unread),
-        ]],
+        move |connection| {
+            insert_session_index_v1_rows(connection, &inserted, dedicated)
+                .map_err(|error| error.to_string())
+        },
     )
     .await;
     match execution {
-        Ok(result) if result.success && result.rows_changed == 1 => Ok(()),
-        Ok(result) => {
-            let detail = format!(
-                "engine returned success={}, rows_changed={}, message={}",
-                result.success, result.rows_changed, result.message
-            );
-            Err(classify_failed_session_index_v1_insert(host_runtime, row, detail).await)
-        }
-        Err(error) => {
-            Err(classify_failed_session_index_v1_insert(host_runtime, row, error.to_string()).await)
+        Ok(()) => Ok(()),
+        Err(detail) => Err(classify_failed_session_index_v1_insert(host_runtime, row, detail).await),
+    }
+}
+
+/// Writes the locator row and optional dedicated marker atomically on one connection.
+/// 在同一连接上原子写入定位记录与可选的专职标记。
+fn insert_session_index_v1_rows(
+    connection: &mut rusqlite::Connection,
+    row: &SessionIndexV1Row,
+    dedicated: bool,
+) -> rusqlite::Result<()> {
+    let transaction = connection.transaction()?;
+    let inserted = transaction.execute(
+        STRICT_INSERT_SESSION_INDEX_V1_SQL,
+        rusqlite::params![
+            row.session_id,
+            row.project_id,
+            row.project_tag,
+            row.storage_partition,
+            row.relative_path,
+            row.title,
+            row.created_at_ms,
+            row.updated_at_ms,
+            row.archived_at_ms,
+            row.unread
+        ],
+    )?;
+    if inserted != 1 {
+        return Err(rusqlite::Error::StatementChangedRows(inserted));
+    }
+    if dedicated {
+        let marked = transaction.execute(
+            INSERT_SESSION_DEDICATED_INDEX_V1_SQL,
+            rusqlite::params![row.session_id],
+        )?;
+        if marked != 1 {
+            return Err(rusqlite::Error::StatementChangedRows(marked));
         }
     }
+    transaction.commit()
 }
 
 /// Validates one proposed row and rejects every existing unique-key owner.

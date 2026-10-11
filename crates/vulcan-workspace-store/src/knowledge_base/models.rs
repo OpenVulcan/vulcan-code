@@ -532,7 +532,7 @@ impl KnowledgeLibrarySettings {
             self.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
             self.vector_index.compatibility_override = None;
             self.vector_index.last_error = Some(String::from(
-                "向量配置、实际观测与索引维度不一致，向量检索已自动关闭",
+                "The vector configuration, observed vectors and index dimensions disagree; vector search was turned off automatically",
             ));
         } else if matches!(self.vector_index.status, KnowledgeVectorIndexStatus::Ready)
             && (self.vector_index.active_generation.is_none()
@@ -542,7 +542,7 @@ impl KnowledgeLibrarySettings {
             self.vector_index.status = KnowledgeVectorIndexStatus::Disabled;
             self.vector_index.compatibility_override = None;
             self.vector_index.last_error = Some(String::from(
-                "向量索引就绪状态缺少活动代次、模型指纹或维度，向量检索已自动关闭",
+                "The ready vector index is missing an active generation, model fingerprint or dimension; vector search was turned off automatically",
             ));
         } else if matches!(self.vector_index.status, KnowledgeVectorIndexStatus::Ready)
             && self.vector_index.compatibility_override.is_none()
@@ -552,7 +552,7 @@ impl KnowledgeLibrarySettings {
         {
             self.vector_index.status = KnowledgeVectorIndexStatus::Stale;
             self.vector_index.last_error = Some(String::from(
-                "向量模型指纹发生变化，旧索引仍保留，必须重建或明确确认同维度兼容",
+                "The embedding model fingerprint changed; the old index is kept and must be rebuilt or explicitly confirmed as same-dimension compatible",
             ));
         }
     }
@@ -563,67 +563,91 @@ impl KnowledgeLibrarySettings {
         match self.retrieval_mode {
             KnowledgeRetrievalMode::RawBm25 => {
                 if self.curation.enabled || self.embedding.enabled {
-                    return Err(String::from("原始 BM25 模式不能启用显示库整理或向量检索"));
+                    return Err(String::from(
+                        "Raw BM25 mode cannot enable display-library curation or vector search",
+                    ));
                 }
             }
             KnowledgeRetrievalMode::DisplayBm25 => {
                 if !self.curation.enabled {
-                    return Err(String::from("显示库 BM25 模式必须启用整理模型"));
+                    return Err(String::from("Display BM25 mode requires a curation model"));
                 }
                 if self.embedding.enabled {
-                    return Err(String::from("显示库 BM25 模式不能启用向量检索"));
+                    return Err(String::from(
+                        "Display BM25 mode cannot enable vector search",
+                    ));
                 }
             }
             KnowledgeRetrievalMode::DisplayHybrid => {
                 if !self.curation.enabled {
-                    return Err(String::from("显示库混合模式必须启用整理模型"));
+                    return Err(String::from(
+                        "Display hybrid mode requires a curation model",
+                    ));
                 }
                 if !self.embedding.enabled {
-                    return Err(String::from("显示库混合模式必须启用向量检索配置"));
+                    return Err(String::from(
+                        "Display hybrid mode requires a vector search configuration",
+                    ));
                 }
             }
         }
         if self.curation.enabled && self.curation.route.is_none() {
-            return Err(String::from("启用显示库整理时必须选择整理模型路由"));
+            return Err(String::from(
+                "A curation model route must be selected when display-library curation is enabled",
+            ));
         }
         if let Some(route) = self.curation.route.as_ref() {
-            validate_knowledge_route_reference(route, "整理")?;
+            validate_knowledge_route_reference(route, "curation")?;
         }
         if self.curation.enabled && self.curation.prompt_version.trim().is_empty() {
-            return Err(String::from("显示库整理提示词版本不能为空"));
+            return Err(String::from(
+                "The display-library curation prompt version must not be empty",
+            ));
         }
         if self.embedding.enabled && self.embedding.route.is_none() {
-            return Err(String::from("启用向量检索时必须选择向量模型路由"));
+            return Err(String::from(
+                "An embedding model route must be selected when vector search is enabled",
+            ));
         }
         if let Some(route) = self.embedding.route.as_ref() {
-            validate_knowledge_route_reference(route, "向量")?;
+            validate_knowledge_route_reference(route, "embedding")?;
         }
         if self.embedding.enabled && self.embedding.configured_dimension.is_none() {
-            return Err(String::from("启用向量检索时必须配置向量维度"));
+            return Err(String::from(
+                "A vector dimension must be configured when vector search is enabled",
+            ));
         }
         if self.embedding.embedding_batch_size == 0 {
-            return Err(String::from("向量批量大小必须大于 0"));
+            return Err(String::from(
+                "The embedding batch size must be greater than 0",
+            ));
         }
         if let Some(maximum) = self.embedding.model_max_batch_size {
             if maximum == 0 {
-                return Err(String::from("模型能力配置的最大向量批量不能为 0"));
+                return Err(String::from(
+                    "The model capability's maximum embedding batch must not be 0",
+                ));
             }
             if self.embedding.embedding_batch_size > maximum {
                 return Err(format!(
-                    "向量批量大小 {} 超过模型能力上限 {}",
+                    "Embedding batch size {} exceeds the model capability limit {}",
                     self.embedding.embedding_batch_size, maximum
                 ));
             }
         }
         if self.embedding.enabled && self.embedding.configured_dimension == Some(0) {
-            return Err(String::from("向量维度必须大于 0"));
+            return Err(String::from("The vector dimension must be greater than 0"));
         }
         if let Some(note) = self.vector_index.compatibility_override.as_deref() {
             if !self.embedding.enabled {
-                return Err(String::from("关闭向量检索时不能保留兼容性覆盖记录"));
+                return Err(String::from(
+                    "A compatibility override cannot be kept while vector search is off",
+                ));
             }
             if note.trim().is_empty() {
-                return Err(String::from("向量兼容性覆盖说明不能为空"));
+                return Err(String::from(
+                    "The vector compatibility override note must not be empty",
+                ));
             }
         }
         Ok(())
@@ -642,11 +666,13 @@ fn validate_knowledge_route_reference(
         || route.service_entry_id.trim().is_empty()
         || route.model_id.trim().is_empty()
     {
-        return Err(format!("{label}模型路由身份不能为空"));
+        return Err(format!(
+            "The {label} model route identity must not be empty"
+        ));
     }
     if route.usage_scope != "internal_background" {
         return Err(format!(
-            "{label}模型路由必须使用 internal_background 使用范围"
+            "The {label} model route must use the internal_background usage scope"
         ));
     }
     Ok(())
@@ -659,16 +685,20 @@ pub fn resolve_embedding_batch_size(
     model_maximum_inputs: Option<u32>,
 ) -> Result<(u32, KnowledgeBatchSizeSource), String> {
     if model_maximum_inputs == Some(0) {
-        return Err(String::from("模型能力配置的最大向量批量不能为 0"));
+        return Err(String::from(
+            "The model capability's maximum embedding batch must not be 0",
+        ));
     }
     let batch_size = user_override
         .unwrap_or_else(|| model_maximum_inputs.unwrap_or(KNOWLEDGE_DEFAULT_EMBEDDING_BATCH_SIZE));
     if batch_size == 0 {
-        return Err(String::from("向量批量大小必须大于 0"));
+        return Err(String::from(
+            "The embedding batch size must be greater than 0",
+        ));
     }
     if let Some(maximum) = model_maximum_inputs.filter(|maximum| batch_size > *maximum) {
         return Err(format!(
-            "向量批量大小 {} 超过模型能力上限 {}",
+            "Embedding batch size {} exceeds the model capability limit {}",
             batch_size, maximum
         ));
     }
@@ -713,7 +743,7 @@ mod settings_tests {
     #[test]
     fn user_override_is_bounded_by_capability() {
         let error = resolve_embedding_batch_size(Some(21), Some(20)).expect_err("must reject");
-        assert!(error.contains("超过模型能力上限"));
+        assert!(error.contains("exceeds the model capability limit"));
     }
 
     /// Verifies the raw-BM25 default used by new libraries is valid.
@@ -1082,7 +1112,7 @@ impl KnowledgeOperationKind {
             "rebuild" => Ok(Self::Rebuild),
             "display_build" => Ok(Self::DisplayBuild),
             "vector_build" => Ok(Self::VectorBuild),
-            _ => Err(format!("未知的知识库操作类型：{value}")),
+            _ => Err(format!("Unknown knowledge operation type: {value}")),
         }
     }
 }

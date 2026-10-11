@@ -386,10 +386,9 @@ impl KnowledgeBaseRuntime {
                 .map(|entry| {
                     // Selectable rows always carry a successfully inspected byte digest.
                     // 可选记录始终携带成功检查的字节摘要。
-                    let hash = entry
-                        .content_sha256
-                        .clone()
-                        .ok_or_else(|| String::from("已确认文件缺少内容摘要。"))?;
+                    let hash = entry.content_sha256.clone().ok_or_else(|| {
+                        String::from("A confirmed file is missing its content digest.")
+                    })?;
                     confirmed_hashes.insert(entry.relative_path.to_lowercase(), hash);
                     Ok(ScannedMarkdownFile {
                         relative_path: entry.relative_path.clone(),
@@ -441,7 +440,7 @@ impl KnowledgeBaseRuntime {
                 "INSERT INTO knowledge_import_staging_context(singleton, job_id, source_id, committed_at_ms) VALUES (1, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET job_id = excluded.job_id, source_id = excluded.source_id, committed_at_ms = excluded.committed_at_ms;",
                 vec![text(job_id), text(&source_id), int(now)],
             ).await
-            .map_err(|error| format!("初始化知识库导入暂存上下文失败：{error}"))?;
+            .map_err(|error| format!("Failed to initialize the knowledge import staging context: {error}"))?;
 
         let mut warnings = Vec::new();
         let mut staged_paths = Vec::with_capacity(candidates.len());
@@ -490,14 +489,14 @@ impl KnowledgeBaseRuntime {
                 Err(error) => {
                     if confirmation.is_some() {
                         return Err(format!(
-                            "已确认文件 {} 无法读取：{error}，请重新扫描。",
+                            "Confirmed file {} cannot be read: {error}; scan again.",
                             candidate.relative_path
                         ));
                     }
                     skipped_files += 1;
                     push_warning(
                         &mut warnings,
-                        format!("无法读取 {}：{error}", candidate.relative_path),
+                        format!("Cannot read {}: {error}", candidate.relative_path),
                     );
                     continue;
                 }
@@ -508,7 +507,7 @@ impl KnowledgeBaseRuntime {
                 && expected != &digest
             {
                 return Err(format!(
-                    "{} 在确认后发生变化，请重新扫描。",
+                    "{} changed after confirmation; scan again.",
                     candidate.relative_path
                 ));
             }
@@ -526,7 +525,7 @@ impl KnowledgeBaseRuntime {
                     push_warning(
                         &mut warnings,
                         format!(
-                            "{} 不是有效 UTF-8 或 GB18030：{error}",
+                            "{} is not valid UTF-8 or GB18030: {error}",
                             candidate.relative_path
                         ),
                     );
@@ -731,7 +730,9 @@ impl KnowledgeBaseRuntime {
         if let Some(requested_source_id) = requested_source_id {
             let requested_source_id = requested_source_id.trim();
             if requested_source_id.is_empty() {
-                return Err(String::from("知识库来源标识符不能为空。"));
+                return Err(String::from(
+                    "The knowledge source identifier must not be empty.",
+                ));
             }
             let target_rows: Vec<SourceRow> = self
                 .query_library_rows(
@@ -742,7 +743,7 @@ impl KnowledgeBaseRuntime {
                 )
                 .await?;
             if target_rows.is_empty() {
-                return Err(format!("知识库来源不存在：{requested_source_id}"));
+                return Err(format!("Knowledge source not found: {requested_source_id}"));
             }
             let root_rows: Vec<SourceRow> = self
                 .query_library_rows(
@@ -757,7 +758,7 @@ impl KnowledgeBaseRuntime {
                 .find(|source| source.id != requested_source_id)
             {
                 return Err(format!(
-                    "所选目录已属于另一个知识库来源：{}",
+                    "The selected directory already belongs to another knowledge source: {}",
                     conflicting_source.id
                 ));
             }
@@ -834,7 +835,7 @@ impl KnowledgeBaseRuntime {
             ],
         )
         .await
-        .map_err(|error| format!("保存知识库来源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the knowledge source directory: {error}"))?;
         Ok(())
     }
 
@@ -859,7 +860,7 @@ impl KnowledgeBaseRuntime {
                 "DELETE FROM knowledge_staged_chunks; DELETE FROM knowledge_staged_documents; DELETE FROM knowledge_staged_paths; DELETE FROM knowledge_import_staging_context;",
                 Vec::new(),
             ).await
-            .map_err(|error| format!("清理知识库导入暂存区失败：{error}"))?;
+            .map_err(|error| format!("Failed to clear the knowledge import staging area: {error}"))?;
         Ok(())
     }
 
@@ -897,7 +898,7 @@ impl KnowledgeBaseRuntime {
                 binding_id,
                 "INSERT INTO knowledge_staged_paths(relative_path_key) VALUES (?);",
                 paths,
-                "写入扫描路径暂存表失败",
+                "Failed to write the scanned-path staging table",
             )
             .await?;
         }
@@ -910,7 +911,7 @@ impl KnowledgeBaseRuntime {
                     source_sha256, byte_size, line_count, source_modified_at_ms, created_at_ms, updated_at_ms
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
                 documents,
-                "写入文档暂存表失败",
+                "Failed to write the document staging table",
             )
             .await?;
         }
@@ -923,7 +924,7 @@ impl KnowledgeBaseRuntime {
                     content_sha256, estimated_tokens, created_at_ms, updated_at_ms
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"#,
                 chunks,
-                "写入切片暂存表失败",
+                "Failed to write the chunk staging table",
             )
             .await?;
         }
@@ -994,7 +995,9 @@ COMMIT;
             Vec::new(),
         )
         .await
-        .map_err(|error| format!("提交知识库权威内容失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to commit the authoritative knowledge content: {error}")
+        })?;
         Ok(())
     }
 
@@ -1043,7 +1046,7 @@ COMMIT;
             tokio::select! {
                 scan_result = &mut scan_task => {
                     return scan_result
-                        .map_err(|error| format!("知识库目录扫描工作器失败：{error}"))?;
+                        .map_err(|error| format!("The knowledge directory scan worker failed: {error}"))?;
                 }
                 progress = progress_receiver.recv(), if progress_channel_open => {
                     match progress {
@@ -1102,13 +1105,19 @@ fn scan_markdown_files(
             publish_scan_progress(progress_sender, files.len() as u64, &last_visited_path);
             last_progress_at = Instant::now();
         }
-        let entries = fs::read_dir(&directory)
-            .map_err(|error| format!("读取导入目录失败（{}）：{error}", directory.display()))?;
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            format!(
+                "Failed to read the import directory ({}): {error}",
+                directory.display()
+            )
+        })?;
         for entry in entries {
             require_operation_not_cancelled(cancellation)?;
-            let entry = entry.map_err(|error| format!("读取导入目录项失败：{error}"))?;
-            let entry_metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| format!("读取导入目录项类型失败：{error}"))?;
+            let entry = entry
+                .map_err(|error| format!("Failed to read an import directory entry: {error}"))?;
+            let entry_metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+                format!("Failed to read an import directory entry type: {error}")
+            })?;
             if metadata_is_link_or_reparse(&entry_metadata) {
                 continue;
             }
@@ -1127,11 +1136,13 @@ fn scan_markdown_files(
                 continue;
             }
             if files.len() >= MAX_IMPORT_FILES {
-                return Err(format!("Markdown 文件数量超过上限 {MAX_IMPORT_FILES}。"));
+                return Err(format!(
+                    "The number of Markdown files exceeds the limit {MAX_IMPORT_FILES}."
+                ));
             }
             if entry_metadata.len() > MAX_MARKDOWN_FILE_BYTES {
                 return Err(format!(
-                    "Markdown 文件超过单文件上限 {} 字节：{}",
+                    "A Markdown file exceeds the per-file limit of {} bytes: {}",
                     MAX_MARKDOWN_FILE_BYTES,
                     path.display()
                 ));
@@ -1139,13 +1150,16 @@ fn scan_markdown_files(
             total_bytes = total_bytes.saturating_add(entry_metadata.len());
             if total_bytes > MAX_IMPORT_BYTES {
                 return Err(format!(
-                    "Markdown 导入总字节数超过上限 {MAX_IMPORT_BYTES}。"
+                    "The total Markdown import size exceeds the limit {MAX_IMPORT_BYTES}."
                 ));
             }
             // Relative is derived from a path emitted by read_dir under the canonical root.
             // Relative 来自规范根目录下 read_dir 直接产生的路径。
             let relative = path.strip_prefix(root).map_err(|error| {
-                format!("计算 Markdown 相对路径失败（{}）：{error}", path.display())
+                format!(
+                    "Failed to compute the Markdown relative path ({}): {error}",
+                    path.display()
+                )
             })?;
             let relative_path = slash_path(relative)?;
             last_visited_path.clone_from(&relative_path);
@@ -1176,7 +1190,7 @@ fn scan_markdown_files(
         .find(|pair| pair[0].relative_path_key == pair[1].relative_path_key)
     {
         return Err(format!(
-            "Markdown 相对路径在大小写规范化后冲突：{} 与 {}",
+            "Markdown relative paths collide after case normalization: {} and {}",
             duplicate[0].relative_path, duplicate[1].relative_path
         ));
     }
@@ -1248,10 +1262,17 @@ fn import_progress_path(root: &Path, path: &Path) -> String {
 /// Returns the existing canonical directory, or a path validation error.
 /// 返回现有规范目录，或路径校验错误。
 pub(super) fn canonical_import_root(root: &Path) -> Result<PathBuf, String> {
-    let canonical = fs::canonicalize(root)
-        .map_err(|error| format!("规范化导入目录失败（{}）：{error}", root.display()))?;
+    let canonical = fs::canonicalize(root).map_err(|error| {
+        format!(
+            "Failed to canonicalize the import directory ({}): {error}",
+            root.display()
+        )
+    })?;
     if !canonical.is_dir() {
-        return Err(format!("导入路径不是目录：{}", canonical.display()));
+        return Err(format!(
+            "The import path is not a directory: {}",
+            canonical.display()
+        ));
     }
     Ok(canonical)
 }
@@ -1274,8 +1295,11 @@ pub(super) fn slash_path(path: &Path) -> Result<String, String> {
         .map(|component| match component {
             Component::Normal(value) => value
                 .to_str()
-                .ok_or_else(|| format!("资料路径不是有效 UTF-8：{}", path.display())),
-            _ => Err(format!("资料相对路径包含非法组件：{}", path.display())),
+                .ok_or_else(|| format!("The source path is not valid UTF-8: {}", path.display())),
+            _ => Err(format!(
+                "The source relative path contains an invalid component: {}",
+                path.display()
+            )),
         })
         .collect();
     parts.map(|parts| parts.join("/"))

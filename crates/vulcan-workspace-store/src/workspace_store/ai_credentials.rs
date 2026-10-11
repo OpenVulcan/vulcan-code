@@ -131,10 +131,12 @@ LIMIT 1;
 "#,
             vec![SqliteValue::Text(secret_reference.to_string())],
         ).await
-        .map_err(|error| format!("查询 AI 凭据记录失败：{error}"))?;
+        .map_err(|error| format!("Failed to query the AI credential record: {error}"))?;
     let mut rows = decode_query_rows::<AiCredentialSecretRecord>(&result.json_data)?;
     if rows.len() > 1 {
-        return Err(String::from("AI 凭据查询返回了重复主键记录。"));
+        return Err(String::from(
+            "The AI credential query returned duplicate primary key records.",
+        ));
     }
     Ok(rows.pop())
 }
@@ -157,9 +159,11 @@ pub async fn create_ai_credential_secret_record(
 ) -> Result<(), String> {
     validate_record(record)?;
     if record.revision != 1 {
-        return Err(String::from("新 AI 凭据记录必须从修订号一开始。"));
+        return Err(String::from(
+            "A new AI credential record must start at revision one.",
+        ));
     }
-    insert_ai_credential_secret_record(host_runtime, record, "创建").await
+    insert_ai_credential_secret_record(host_runtime, record, "create").await
 }
 
 /// Restores one previously deleted relational credential record with its exact revision.
@@ -179,7 +183,7 @@ pub async fn restore_ai_credential_secret_record(
     record: &AiCredentialSecretRecord,
 ) -> Result<(), String> {
     validate_record(record)?;
-    insert_ai_credential_secret_record(host_runtime, record, "恢复").await
+    insert_ai_credential_secret_record(host_runtime, record, "restore").await
 }
 
 /// Replaces one relational credential only when its stored revision matches the caller expectation.
@@ -203,9 +207,11 @@ pub async fn replace_ai_credential_secret_record(
     validate_record(record)?;
     let expected_next = expected_revision
         .checked_add(1)
-        .ok_or_else(|| String::from("AI 凭据修订号已耗尽。"))?;
+        .ok_or_else(|| String::from("The AI credential revisions are exhausted."))?;
     if record.revision != expected_next {
-        return Err(String::from("替换 AI 凭据必须精确递增一个修订号。"));
+        return Err(String::from(
+            "Replacing an AI credential must increment the revision by exactly one.",
+        ));
     }
     let result = local_sql::query_json_async(
         &host_runtime.local,
@@ -242,8 +248,12 @@ RETURNING secret_reference;
         update_params(record, expected_revision),
     )
     .await
-    .map_err(|error| format!("替换 AI 凭据记录失败：{error}"))?;
-    require_single_mutation_row(&result.json_data, record.secret_reference.as_str(), "替换")
+    .map_err(|error| format!("Failed to replace the AI credential record: {error}"))?;
+    require_single_mutation_row(
+        &result.json_data,
+        record.secret_reference.as_str(),
+        "replace",
+    )
 }
 
 /// Deletes one relational credential record idempotently.
@@ -270,7 +280,7 @@ pub async fn delete_ai_credential_secret_record(
         vec![vec![SqliteValue::Text(secret_reference.to_string())]],
     )
     .await
-    .map_err(|error| format!("删除 AI 凭据记录失败：{error}"))?;
+    .map_err(|error| format!("Failed to delete the AI credential record: {error}"))?;
     Ok(())
 }
 
@@ -304,7 +314,7 @@ RETURNING secret_reference;
 "#,
             insert_params(record),
         ).await
-        .map_err(|error| format!("{operation} AI 凭据记录失败：{error}"))?;
+        .map_err(|error| format!("Failed to {operation} the AI credential record: {error}"))?;
     require_single_mutation_row(
         &result.json_data,
         record.secret_reference.as_str(),
@@ -367,10 +377,10 @@ fn require_single_mutation_row(
     match rows.as_slice() {
         [row] if row.secret_reference == secret_reference => Ok(()),
         [] => Err(format!(
-            "AI 凭据 `{secret_reference}` 在{operation}期间发生并发变化。"
+            "AI credential `{secret_reference}` changed concurrently during {operation}."
         )),
         _ => Err(format!(
-            "AI 凭据 `{secret_reference}` 的{operation}结果不唯一。"
+            "The {operation} result of AI credential `{secret_reference}` is not unique."
         )),
     }
 }
@@ -380,13 +390,19 @@ fn require_single_mutation_row(
 fn validate_record(record: &AiCredentialSecretRecord) -> Result<(), String> {
     validate_secret_reference(record.secret_reference.as_str())?;
     if record.format_version <= 0 || record.revision <= 0 {
-        return Err(String::from("AI 凭据版本和修订号必须为正数。"));
+        return Err(String::from(
+            "The AI credential version and revision must be positive.",
+        ));
     }
     if record.material_kind.trim().is_empty() {
-        return Err(String::from("AI 凭据材料类别不能为空。"));
+        return Err(String::from(
+            "The AI credential material kind must not be empty.",
+        ));
     }
     if record.created_at_unix_ms < 0 || record.updated_at_unix_ms < 0 {
-        return Err(String::from("AI 凭据记录时间不能为负数。"));
+        return Err(String::from(
+            "The AI credential record time must not be negative.",
+        ));
     }
     Ok(())
 }
@@ -396,7 +412,9 @@ fn validate_record(record: &AiCredentialSecretRecord) -> Result<(), String> {
 fn validate_secret_reference(secret_reference: &str) -> Result<&str, String> {
     let normalized = secret_reference.trim();
     if normalized.is_empty() {
-        return Err(String::from("AI 凭据秘密引用不能为空。"));
+        return Err(String::from(
+            "The AI credential secret reference must not be empty.",
+        ));
     }
     Ok(normalized)
 }

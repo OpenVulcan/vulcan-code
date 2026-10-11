@@ -60,8 +60,12 @@ impl VceDataPlaneHandle {
         let script = format!(
             "BEGIN IMMEDIATE;\nINSERT OR ROLLBACK INTO vce_commit_guards(namespace_id, valid) VALUES ('{namespace}', CASE WHEN EXISTS(SELECT 1 FROM vce_rebuild_candidates c JOIN vce_project_bindings b ON b.namespace_id = c.namespace_id WHERE c.namespace_id = '{namespace}' AND c.state IN ('allocating', 'aborted') AND b.active = 0 AND NOT EXISTS(SELECT 1 FROM vce_active_checkpoints WHERE namespace_id = b.namespace_id)) THEN 1 ELSE 0 END);\nUPDATE vce_rebuild_candidates SET {column} = 1 WHERE namespace_id = '{namespace}';\nDELETE FROM vce_commit_guards WHERE namespace_id = '{namespace}';\nCOMMIT;"
         );
-        self.execute(&script, Vec::new(), "记录 VCE 候选表创建回执失败")
-            .await
+        self.execute(
+            &script,
+            Vec::new(),
+            "Failed to record the VCE candidate table creation receipt",
+        )
+        .await
     }
 }
 
@@ -123,7 +127,7 @@ impl VceProjectIndex {
             self.data_plane.execute(
                 &format!("UPDATE vce_rebuild_candidates SET {column} = 0 WHERE namespace_id = ? AND job_id = ? AND state = 'aborted';"),
                 vec![sqlite_text(&self.binding.namespace_id), sqlite_text(&base.job_id)],
-                "确认 VCE 候选表清理失败",
+                "Failed to confirm the VCE candidate table cleanup",
             ).await?;
         }
         Ok(())

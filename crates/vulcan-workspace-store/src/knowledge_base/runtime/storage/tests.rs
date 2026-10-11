@@ -680,7 +680,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 0)
         .await
         .expect_err("a zero dimension must be rejected");
-    assert_eq!(error, "向量索引维度必须大于 0");
+    assert_eq!(error, "The vector index dimension must be greater than 0");
 
     // Guard 3: a library that never enabled vectors cannot publish a vector index.
     // 护栏 3：从未启用向量的资料库不能发布向量索引。
@@ -688,7 +688,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a library without vectors must be rejected");
-    assert_eq!(error, "当前资料库未启用向量模型");
+    assert_eq!(error, "No embedding model is enabled for this library");
 
     // Guard 4a: enabling vectors is not sufficient — a library with no active display generation yet must
     // be refused.
@@ -701,7 +701,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a library without an active display generation must be rejected");
-    assert_eq!(error, "显示库活动代次已变化，拒绝发布不匹配的向量索引");
+    assert_eq!(error, "The active display-library generation changed; refusing to publish the mismatched vector index");
 
     // Guard 4b: the same guard must reject a *different* active generation. Publishing a vector index
     // against a superseded display generation is the mismatch this guard exists to stop, so the superseded
@@ -739,7 +739,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a superseded display generation must be rejected");
-    assert_eq!(error, "显示库活动代次已变化，拒绝发布不匹配的向量索引");
+    assert_eq!(error, "The active display-library generation changed; refusing to publish the mismatched vector index");
 
     // Guard 5: with the generation now matching, a missing model fingerprint still blocks publication —
     // the index would otherwise be published without the immutable identity that makes it interpretable.
@@ -765,7 +765,7 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a missing model fingerprint must be rejected");
-    assert_eq!(error, "向量模型指纹尚未配置");
+    assert_eq!(error, "The embedding model fingerprint is not configured yet");
 
     // Past every guard: publication must persist the full indexed identity, not just the status.
     // 通过全部护栏之后：发布必须持久化完整的已索引身份，而不只是状态。
@@ -1005,11 +1005,11 @@ async fn a_fresh_directory_round_trips_through_a_real_close_and_reopen() {
         Ok(_) => {}
         Err(error) => {
             assert!(
-                error.contains("读取知识库派生数据库失败"),
+                error.contains("Failed to read the knowledge derived database"),
                 "an absent derived database is the only acceptable display failure after reopen: {error}"
             );
             assert!(
-                !error.contains("named binding") && !error.contains("解析知识库"),
+                !error.contains("named binding") && !error.contains("Failed to resolve the knowledge"),
                 "the display binding must be re-established by the read itself: {error}"
             );
         }
@@ -1073,7 +1073,7 @@ async fn a_fresh_directory_round_trips_through_a_real_close_and_reopen() {
     match published {
         Err(error) => {
             assert_eq!(
-                error, "当前资料库未启用向量模型",
+                error, "No embedding model is enabled for this library",
                 "a reopened library must be refused by a business guard, not by storage"
             );
             assert!(

@@ -200,7 +200,7 @@ impl super::VceDataPlaneHandle {
             .collect();
         self.execute_batch(
             "DELETE FROM vce_read_leases WHERE namespace_id = ? AND lease_id = ? AND owner_run_id = ?;",
-            items, "释放 VCE 检查点读取租约失败",
+            items, "Failed to release VCE checkpoint read leases",
         ).await?;
         // Concurrent drains are idempotent; newly queued identities must not be acknowledged here.
         // 并发提交具有幂等性；本次不能确认新入队的其他身份。
@@ -422,7 +422,7 @@ impl VceProjectIndex {
             "INSERT INTO vce_read_leases(namespace_id, lease_id, owner_run_id, checkpoint_version, created_at_unix_ms) SELECT namespace_id, ?, ?, checkpoint_version, ? FROM vce_checkpoints WHERE namespace_id = ? AND checkpoint_version = ? AND checkpoint_json = ?;",
             vec![sqlite_text(&lease.lease_id), sqlite_text(owner_run_id), SqliteValue::Integer(current_unix_epoch_millis_i64()?),
                 sqlite_text(&self.binding.namespace_id), version, sqlite_text(snapshot)],
-            "固定 VCE 已发布检查点失败",
+            "Failed to pin the published VCE checkpoint",
         ).await?;
         // admitted distinguishes a successful SQL statement from an insert that matched no checkpoint.
         // admitted 区分 SQL 语句执行成功与未匹配检查点而未插入的情况。
@@ -483,7 +483,7 @@ impl VceProjectIndex {
     pub(super) async fn retire_unleased_checkpoints(&self) -> Result<(), String> {
         self.data_plane.execute(
             "DELETE FROM vce_read_checkpoints WHERE namespace_id = ? AND NOT EXISTS(SELECT 1 FROM vce_active_checkpoints a WHERE a.namespace_id = vce_read_checkpoints.namespace_id AND a.checkpoint_version = vce_read_checkpoints.checkpoint_version) AND NOT EXISTS(SELECT 1 FROM vce_read_leases l WHERE l.namespace_id = vce_read_checkpoints.namespace_id AND l.checkpoint_version = vce_read_checkpoints.checkpoint_version);",
-            vec![sqlite_text(&self.binding.namespace_id)], "退役无读取引用的 VCE 检查点失败",
+            vec![sqlite_text(&self.binding.namespace_id)], "Failed to retire VCE checkpoints without read references",
         ).await
     }
 
@@ -583,7 +583,6 @@ CREATE TABLE IF NOT EXISTS vce_symbol_versions (
 CREATE INDEX IF NOT EXISTS idx_vce_version_symbol_lookup
 ON vce_symbol_versions(namespace_id, identifier, refresh_id, generation, blob_name);
 -- Retired-file reclamation follows the complete foreign key without scanning unrelated file payloads.
--- 退役文件回收沿完整外键定位，不扫描其他文件正文。
 CREATE INDEX IF NOT EXISTS idx_vce_version_chunk_blob
 ON vce_chunk_versions(namespace_id, refresh_id, generation, blob_name);
 CREATE INDEX IF NOT EXISTS idx_vce_version_symbol_blob

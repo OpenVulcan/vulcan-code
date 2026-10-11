@@ -442,11 +442,11 @@ fn vector_row_preparation_rejects_oversized_or_impossible_payloads() {
     let oversized =
         partition_vector_rows_by_data_limit("content_vectors", vec![row.clone()], exact_size - 1)
             .expect_err("one oversized row must reject the entire table preparation");
-    assert!(oversized.contains("单行 JSON 载荷"));
+    assert!(oversized.contains("single-row JSON payload"));
 
     let impossible = partition_vector_rows_by_data_limit("content_vectors", vec![row], 1)
         .expect_err("a limit smaller than an empty JSON array must be rejected");
-    assert!(impossible.contains("无法容纳 JSON 数组"));
+    assert!(impossible.contains("cannot hold a JSON array"));
 
     let empty = partition_vector_rows_by_data_limit("content_vectors", Vec::new(), 0)
         .expect("empty row sets require no transport envelope");

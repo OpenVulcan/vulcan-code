@@ -182,7 +182,7 @@ impl DataPlaneBootstrapReport {
     /// 为状态栏与日志构建一条简洁的人类可读摘要。
     pub fn summary_text(&self) -> String {
         format!(
-            "vldb 数据平面已就绪：SQLite {}",
+            "vldb data plane ready: SQLite {}",
             self.handle.sqlite_path.display()
         )
     }
@@ -211,7 +211,7 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
     );
     let local = Arc::new(
         LocalDatabaseRuntime::open(bindings)
-            .map_err(|error| format!("打开本地数据库运行时失败：{error}"))?,
+            .map_err(|error| format!("Failed to open the local database runtime: {error}"))?,
     );
 
     let bootstrap_result = async {
@@ -231,14 +231,16 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         {
             let connection = local
                 .connect(LogicalDatabase::AppState)
-                .map_err(|error| format!("打开应用数据库失败：{error}"))?;
+                .map_err(|error| format!("Failed to open the application database: {error}"))?;
             connection
                 .execute_batch(&build_application_schema_script())
-                .map_err(|error| format!("初始化应用数据结构失败：{error}"))?;
+                .map_err(|error| {
+                    format!("Failed to initialize the application data schema: {error}")
+                })?;
         }
         local
             .verify_app_schema_version()
-            .map_err(|error| format!("应用数据结构版本校验失败：{error}"))?;
+            .map_err(|error| format!("Application data schema version check failed: {error}"))?;
 
         let runtime_handle = HostRuntimeHandle::new(
             Arc::clone(&local),
@@ -366,13 +368,13 @@ pub fn application_luaskills_config_root() -> Result<PathBuf, String> {
     // root requires the platform home directory and deliberately has no current-directory fallback.
     // root 要求平台主目录存在，并刻意不提供当前目录回退。
     let home = dirs::home_dir()
-        .ok_or_else(|| String::from("无法解析 LuaSkills 技能包配置根：系统主目录不可用。"))?;
+        .ok_or_else(|| String::from("Cannot resolve the LuaSkills package configuration root: the home directory is unavailable."))?;
     #[cfg(not(test))]
     let root = runtime_assets::user_vulcan_code_root_for_home(&home);
 
     if !root.is_absolute() {
         return Err(format!(
-            "LuaSkills 技能包配置根必须是绝对路径：{}",
+            "The LuaSkills package configuration root must be an absolute path: {}",
             root.display()
         ));
     }
@@ -386,8 +388,12 @@ fn ensure_parent_directory(path: &Path) -> Result<(), String> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    fs::create_dir_all(&parent)
-        .map_err(|error| format!("创建应用数据目录失败（{}）：{error}", parent.display()))
+    fs::create_dir_all(&parent).map_err(|error| {
+        format!(
+            "Failed to create the application data directory ({}): {error}",
+            parent.display()
+        )
+    })
 }
 
 /// Builds the initial SQLite schema used by the Vulcan application data plane.
