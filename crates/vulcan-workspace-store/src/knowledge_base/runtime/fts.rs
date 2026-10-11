@@ -1304,7 +1304,7 @@ impl KnowledgeBaseRuntime {
             || gate.tokenizer != "jieba"
         {
             return Err(format!(
-                "知识库索引当前不可检索：status={}, content={}/{}, dictionary={}/{}, tokenizer={}",
+                "The knowledge index is not searchable: status={}, content={}/{}, dictionary={}/{}, tokenizer={}",
                 gate.index_status,
                 gate.indexed_content_revision,
                 gate.content_revision,
@@ -1440,7 +1440,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| String::from("知识库 FTS 完整性检查未返回结果。"))
+            .ok_or_else(|| String::from("The knowledge FTS integrity check returned no result."))
     }
 
     /// Marks FTS revisions equal to authoritative revisions after successful replay.

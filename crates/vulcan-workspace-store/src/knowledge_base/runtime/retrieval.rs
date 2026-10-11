@@ -79,7 +79,7 @@ impl KnowledgeBaseRuntime {
     ) -> Result<KnowledgeSearchResult, String> {
         let query = query.trim();
         if query.is_empty() {
-            return Err(String::from("知识库搜索词不能为空。"));
+            return Err(String::from("Knowledge search query must not be empty."));
         }
         let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
         let mut failures = Vec::new();
@@ -190,7 +190,7 @@ impl KnowledgeBaseRuntime {
                     // 显式回退仅适用于显示库从未创建的状态。
                 } else {
                     return Err(String::from(
-                        "当前资料库显示库尚未生成或索引尚未就绪；请显式切换到原始库 BM25，或先完成显示库构建。",
+                        "The display corpus of this library is not built or its index is not ready; switch explicitly to raw-corpus BM25, or finish building the display corpus first.",
                     ));
                 }
             } else {
@@ -201,7 +201,7 @@ impl KnowledgeBaseRuntime {
                     super::models::KnowledgeRetrievalMode::DisplayHybrid
                 ) {
                     return Err(String::from(
-                        "当前版本尚未启用显示库向量融合执行器；请显式切换到显示库 BM25。",
+                        "Display-corpus vector fusion is not enabled in this version; switch explicitly to display-corpus BM25.",
                     ));
                 }
                 return Ok((display_hits, expression));
@@ -219,7 +219,7 @@ impl KnowledgeBaseRuntime {
             true,
         )
         .await
-        .map_err(|error| format!("构建 Jieba FTS 查询失败：{error}"))?;
+        .map_err(|error| format!("Failed to build the Jieba FTS query: {error}"))?;
         // The generic VLDB search response computes highlights and snippets that this host discards.
         // 通用 VLDB 搜索响应会计算本宿主不使用的高亮与摘要，因此这里只读取标识符与 BM25 分值。
         let ranked_rows: Vec<FtsRankRow> = self
@@ -236,7 +236,7 @@ impl KnowledgeBaseRuntime {
                 vec![text(&tokenized_query.fts_query), int(i64::from(limit))],
             )
             .await
-            .map_err(|error| format!("执行 Jieba BM25 检索失败：{error}"))?;
+            .map_err(|error| format!("Jieba BM25 search failed: {error}"))?;
         // hits preserves the exact rank order returned by the lightweight BM25 query.
         // hits 保留轻量 BM25 查询返回的精确排名顺序。
         let mut hits = Vec::with_capacity(ranked_rows.len());
@@ -254,9 +254,12 @@ impl KnowledgeBaseRuntime {
         for ranked_row in ranked_rows {
             // Materialize ranked hits from one bulk query to avoid one storage call per result.
             // 从单次批量查询物化排序命中，避免每条结果各发生一次存储调用。
-            let row = authoritative_rows
-                .remove(&ranked_row.id)
-                .ok_or_else(|| format!("FTS 命中的权威切片不存在：{}", ranked_row.id))?;
+            let row = authoritative_rows.remove(&ranked_row.id).ok_or_else(|| {
+                format!(
+                    "Authoritative chunk for an FTS hit not found: {}",
+                    ranked_row.id
+                )
+            })?;
             hits.push(KnowledgeSearchHit {
                 library_id: library.id.clone(),
                 library_name: library.name.clone(),

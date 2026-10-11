@@ -518,12 +518,12 @@ impl KnowledgeBaseRuntime {
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("知识库数据库元数据缺失。"))?;
+            .ok_or_else(|| String::from("Knowledge database metadata is missing."))?;
         if row.library_id != library_id
             || row.schema_version != KNOWLEDGE_SCHEMA_VERSION.to_string()
         {
             return Err(format!(
-                "知识库数据库身份或结构版本不匹配：library={}, schema={}",
+                "Knowledge database identity or schema version mismatch: library={}, schema={}",
                 row.library_id, row.schema_version
             ));
         }
@@ -718,7 +718,7 @@ impl KnowledgeBaseRuntime {
         self.host_runtime
             .local
             .named_binding(binding_id.as_ref())
-            .map_err(|error| format!("解析知识库绑定失败：{error}"))
+            .map_err(|error| format!("Failed to resolve the knowledge library binding: {error}"))
     }
     /// Resolves the LanceDB engine for the directory an addressing identity names.
     /// 解析寻址身份所指目录的 LanceDB 引擎。
@@ -1122,7 +1122,7 @@ impl KnowledgeBaseRuntime {
             params,
         )
         .await
-        .map_err(|error| format!("查询知识库 SQLite 失败：{error}"))?;
+        .map_err(|error| format!("Knowledge SQLite query failed: {error}"))?;
         decode_rows(&result.json_data)
     }
 

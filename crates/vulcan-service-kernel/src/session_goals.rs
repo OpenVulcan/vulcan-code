@@ -135,7 +135,7 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
                     ))
                 },
             )
-            .map_err(|error| format!("创建 V1 Goal 失败：{error}"))?;
+            .map_err(|error| format!("Failed to create the goal: {error}"))?;
         native_goal_snapshot_after_mutation(&self.app, &self.state, handle.as_ref(), session_id)
     }
 
@@ -175,7 +175,7 @@ impl NativeGoalRuntime for SessionV1NativeGoalRuntime {
                     }
                 },
             )
-            .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the goal status: {error}"))?;
         native_goal_snapshot_after_mutation(&self.app, &self.state, handle.as_ref(), session_id)
     }
 }
@@ -200,8 +200,9 @@ fn native_goal_snapshot_after_mutation(
     handle: &SessionHandle,
     session_id: SessionId,
 ) -> Result<NativeGoalSnapshot, String> {
-    let summary = session_goal_summary_from_v1_handle(handle, session_id)?
-        .ok_or_else(|| format!("V1 会话 `{session_id}` 的 Goal 修改成功后缺少权威摘要"))?;
+    let summary = session_goal_summary_from_v1_handle(handle, session_id)?.ok_or_else(|| {
+        format!("The goal summary of session `{session_id}` is missing after a successful update.")
+    })?;
     refresh_session_goal_summary_and_emit(app, state, session_id, Some(summary.clone()))?;
     Ok(native_goal_snapshot_from_summary(session_id, summary))
 }
@@ -574,7 +575,7 @@ pub(super) async fn service_update_session_goal_status(
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let now_ms = current_v1_goal_unix_millis()?;
     update_session_goal_status_v1(handle.as_ref(), request.status, now_ms)
-        .map_err(|error| format!("更新 V1 Goal 状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to update the goal status: {error}"))?;
     let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);

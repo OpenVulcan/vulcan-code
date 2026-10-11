@@ -513,7 +513,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| format!("知识库不存在：{library_id}"))
+            .ok_or_else(|| format!("Knowledge library not found: {library_id}"))
             .and_then(library_summary_from_row)
     }
 
@@ -675,7 +675,7 @@ impl KnowledgeBaseRuntime {
         let library = self.get_library(library_id).await?;
         if library.lifecycle_state != "active" {
             return Err(format!(
-                "知识库当前不可访问：{} ({})",
+                "Knowledge library is not accessible: {} ({})",
                 library.id, library.lifecycle_state
             ));
         }

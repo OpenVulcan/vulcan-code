@@ -858,7 +858,9 @@ impl KnowledgeBaseRuntime {
     ) -> Result<(Vec<KnowledgeSearchHit>, String), String> {
         let query = query.trim();
         if query.is_empty() {
-            return Err(String::from("显示库搜索词不能为空。"));
+            return Err(String::from(
+                "Display-corpus search query must not be empty.",
+            ));
         }
         let library = self.require_active_library(library_id).await?;
         let (space_id, binding_id) = self.ensure_display_binding(library_id).await?;
@@ -873,15 +875,17 @@ impl KnowledgeBaseRuntime {
         let metadata = metadata_rows
             .into_iter()
             .next()
-            .ok_or_else(|| String::from("显示库元数据缺失。"))?;
+            .ok_or_else(|| String::from("Display-corpus metadata is missing."))?;
         let generation = metadata
             .active_generation
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+            .ok_or_else(|| {
+                String::from("The display corpus has no published active generation.")
+            })?;
         let fts_index = metadata
             .active_fts_index
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| String::from("显示库活动 FTS 索引缺失。"))?;
+            .ok_or_else(|| String::from("The display corpus active FTS index is missing."))?;
         validate_generation_id(&generation)?;
         validate_display_fts_index(&fts_index)?;
         let tokenized_query = local_sql::tokenize_async(
@@ -892,7 +896,7 @@ impl KnowledgeBaseRuntime {
             true,
         )
         .await
-        .map_err(|error| format!("构建显示库 Jieba FTS 查询失败：{error}"))?;
+        .map_err(|error| format!("Failed to build the display-corpus Jieba FTS query: {error}"))?;
         let limit = limit.clamp(1, MAX_SEARCH_LIMIT);
         let sql = format!(
             r#"SELECT f.id, d.source_document_id, d.title, d.relative_path,
@@ -918,7 +922,7 @@ impl KnowledgeBaseRuntime {
                 ],
             )
             .await
-            .map_err(|error| format!("执行显示库 Jieba BM25 检索失败：{error}"))?;
+            .map_err(|error| format!("Display-corpus Jieba BM25 search failed: {error}"))?;
         let hits = ranked_rows
             .into_iter()
             .map(|row| {
@@ -1103,7 +1107,9 @@ impl KnowledgeBaseRuntime {
             .next()
             .and_then(|row| row.active_generation)
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+            .ok_or_else(|| {
+                String::from("The display corpus has no published active generation.")
+            })?;
         let rows: Vec<DisplayDocumentRow> = self
             .query_library_rows(
                 &space_id,
@@ -1236,7 +1242,9 @@ impl KnowledgeBaseRuntime {
             .next()
             .and_then(|row| row.active_generation)
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+            .ok_or_else(|| {
+                String::from("The display corpus has no published active generation.")
+            })?;
         validate_generation_id(&generation)?;
         let limit = limit.clamp(1, 500);
         let offset =
@@ -1281,7 +1289,9 @@ impl KnowledgeBaseRuntime {
             .next()
             .and_then(|row| row.active_generation)
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| String::from("显示库尚未发布活动代次。"))?;
+            .ok_or_else(|| {
+                String::from("The display corpus has no published active generation.")
+            })?;
         validate_generation_id(&generation)?;
         let rows: Vec<DisplayCountRow> = self
             .query_library_rows(

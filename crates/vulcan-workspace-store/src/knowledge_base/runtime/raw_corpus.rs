@@ -328,7 +328,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| format!("资料文档不存在：{document_id}"))
+            .ok_or_else(|| format!("Knowledge document not found: {document_id}"))
             .and_then(document_summary_from_row)
     }
 
@@ -368,7 +368,7 @@ impl KnowledgeBaseRuntime {
         let row = rows
             .into_iter()
             .next()
-            .ok_or_else(|| format!("资料文档不存在：{document_id}"))?;
+            .ok_or_else(|| format!("Knowledge document not found: {document_id}"))?;
         let document = KnowledgeDocumentSummary {
             id: row.id,
             source_id: row.source_id,
@@ -499,7 +499,7 @@ impl KnowledgeBaseRuntime {
             .await?;
         rows.into_iter()
             .next()
-            .ok_or_else(|| format!("FTS 命中的权威切片不存在：{chunk_id}"))
+            .ok_or_else(|| format!("Knowledge chunk not found: {chunk_id}"))
     }
 
     /// Loads authoritative joined chunks for one exact bounded identifier set.

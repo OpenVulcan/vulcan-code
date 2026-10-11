@@ -73,23 +73,25 @@ const EXPLORE_PROMPT_FILE_NAME: &str = "explore.txt";
 
 /// Legacy inline worker prompt kept as one compatibility fallback.
 /// 保留为兼容回退的一条旧版内联工作代理提示词。
-const LEGACY_DEFAULT_WORKER_PROMPT: &str = "你是 Vulcan Code 的默认工作代理。";
+const LEGACY_DEFAULT_WORKER_PROMPT: &str = "You are the default worker agent for Vulcan Code.";
 
 /// Legacy inline Lua prompt kept as one compatibility fallback.
 /// 保留为兼容回退的一条旧版内联 Lua 代理提示词。
-const LEGACY_LUA_SPECIALIST_PROMPT: &str = "你是 LuaSkills 方向的专家代理。";
+const LEGACY_LUA_SPECIALIST_PROMPT: &str =
+    "You are the LuaSkills specialist agent for Vulcan Code.";
 
 /// Legacy inline memory prompt kept as one compatibility fallback.
 /// 保留为兼容回退的一条旧版内联记忆代理提示词。
-const LEGACY_MEMORY_SPECIALIST_PROMPT: &str = "你是 VulcanMemoryMesh 方向的专家代理。";
+const LEGACY_MEMORY_SPECIALIST_PROMPT: &str =
+    "You are the memory specialist agent for Vulcan Code.";
 
 /// Legacy inline plan prompt kept as one compatibility fallback.
 /// 保留为兼容回退的一条旧版内联规划代理提示词。
-const LEGACY_PLAN_PROMPT: &str = "你是 Vulcan Code 的方案代理。";
+const LEGACY_PLAN_PROMPT: &str = "You are the planning agent for Vulcan Code.";
 
 /// Legacy inline explore prompt kept as one compatibility fallback.
 /// 保留为兼容回退的一条旧版内联探索代理提示词。
-const LEGACY_EXPLORE_PROMPT: &str = "你是 Vulcan Code 的探索代理。";
+const LEGACY_EXPLORE_PROMPT: &str = "You are the explore agent for Vulcan Code.";
 
 /// Runtime-facing agent family used by the compose foundation.
 /// compose 基础架构使用的运行时代理类型。
