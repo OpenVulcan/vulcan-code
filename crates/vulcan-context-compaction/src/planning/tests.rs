@@ -1051,7 +1051,7 @@ fn prepare_compaction_source_prunes_old_tool_output_clone_only() {
     assert!(
         prepared.source_messages[2]
             .body
-            .contains("[上下文压缩省略：")
+            .contains("[Context compaction omitted: ")
     );
     assert_eq!(prepared.source_messages[5].body, "recent output must stay");
     assert_eq!(prepared.prune_report.pruned_tool_output_count, 2);

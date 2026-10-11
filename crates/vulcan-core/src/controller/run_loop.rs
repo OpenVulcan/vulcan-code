@@ -276,7 +276,7 @@ impl VulcanCoreController {
                 return Ok(());
             }
             let error = CoreError::InvalidState {
-                message: String::from("控制器无法执行空白用户输入。"),
+                message: String::from("The controller cannot run blank user input."),
             };
             self.mark_failed(error.to_string());
             return Err(error);
@@ -314,7 +314,7 @@ impl VulcanCoreController {
             if provider_turns_executed >= self.config.max_turns {
                 let error = CoreError::InvalidState {
                     message: format!(
-                        "控制器已达到最大 Provider 回合限制 `{}`，仍存在未收敛的工具循环。",
+                        "The controller reached the maximum provider turn limit `{}` while the tool loop has not converged.",
                         self.config.max_turns
                     ),
                 };
@@ -571,7 +571,9 @@ impl VulcanCoreController {
         }
 
         let error = CoreError::InvalidState {
-            message: String::from("控制器无法执行缺少 Provider 可见输入的播种回合。"),
+            message: String::from(
+                "The controller cannot run a seeded turn without provider-visible input.",
+            ),
         };
         self.mark_failed(error.to_string());
         Err(error)
@@ -605,7 +607,7 @@ impl VulcanCoreController {
             if provider_turns_executed >= self.config.max_turns {
                 let error = CoreError::InvalidState {
                     message: format!(
-                        "控制器已达到最大 Provider 回合限制 `{}`，仍存在未收敛的工具循环。",
+                        "The controller reached the maximum provider turn limit `{}` while the tool loop has not converged.",
                         self.config.max_turns
                     ),
                 };

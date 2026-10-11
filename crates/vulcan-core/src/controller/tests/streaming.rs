@@ -61,7 +61,8 @@ fn run_user_turn_streaming_records_provider_deltas_before_finalizing() {
         assert_eq!(output_events.len(), 1);
         assert_eq!(output_events[0].body, "已完成分析。");
         assert!(controller.events().iter().any(|event| {
-            matches!(event.kind, CoreEventKind::Final) && event.body.contains("Provider 回合数为 1")
+            matches!(event.kind, CoreEventKind::Final)
+                && event.body.contains("with 1 provider turns")
         }));
         assert!(matches!(
             &controller.snapshot().messages[1].payload,

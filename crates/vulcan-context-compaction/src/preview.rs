@@ -17,7 +17,7 @@ pub const TOOL_OUTPUT_PREVIEW_TAIL_TOKENS: usize = 500;
 
 /// Stable marker prefix used to detect an already previewed tool output.
 /// 用于检测工具输出已经被预览过的稳定标记前缀。
-pub const TOOL_OUTPUT_PREVIEW_MARKER_PREFIX: &str = "[上下文压缩省略：";
+pub const TOOL_OUTPUT_PREVIEW_MARKER_PREFIX: &str = "[Context compaction omitted: ";
 
 /// Model-facing preview and token accounting for one historical tool output.
 /// 单条历史工具输出的模型侧预览与 Token 统计。
@@ -84,7 +84,7 @@ pub fn preview_tool_output(text: &str) -> ToolOutputPreview {
         .saturating_sub(head_token_estimate)
         .saturating_sub(tail_token_estimate);
     let marker = format!(
-        "{TOOL_OUTPUT_PREVIEW_MARKER_PREFIX}该工具结果原始约 {original_token_estimate} token；保留头部约 {head_token_estimate} token 和尾部约 {tail_token_estimate} token；中间约 {omitted_token_estimate} token 已从本次模型上下文省略。]"
+        "{TOOL_OUTPUT_PREVIEW_MARKER_PREFIX}this tool result was about {original_token_estimate} tokens; the first ~{head_token_estimate} tokens and last ~{tail_token_estimate} tokens are kept; the middle ~{omitted_token_estimate} tokens were omitted from this model context.]"
     );
     ToolOutputPreview {
         text: format!("{head}\n\n{marker}\n\n{tail}"),

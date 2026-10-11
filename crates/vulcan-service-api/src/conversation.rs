@@ -81,6 +81,10 @@ pub struct ConversationSummary {
     /// 可选所属项目标识。
     #[serde(default)]
     pub project_id: Option<String>,
+    /// Whether this is a dedicated session, whose kind is fixed at creation.
+    /// 是否为专职会话；该种类在创建时固定。
+    #[serde(default)]
+    pub dedicated: bool,
 }
 
 /// Describes one conversation-level action marker for cross-session navigation.

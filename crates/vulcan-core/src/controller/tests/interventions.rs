@@ -121,7 +121,7 @@ fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
                 title,
                 metadata: Some(metadata),
                 ..
-            }) if title == "用户指令"
+            }) if title == "User Prompt"
                 && metadata.get("canonical_user_text").and_then(Value::as_str) == Some("不需要配图了")
                 && metadata.get("source").and_then(Value::as_str) == Some("user_interrupt")
                 && metadata.get("starts_user_turn").and_then(Value::as_bool) == Some(false)
@@ -229,7 +229,7 @@ fn interjected_user_turn_without_attachments_keeps_process_metadata() {
             title,
             metadata: Some(metadata),
             ..
-        }) if title == "用户指令"
+        }) if title == "User Prompt"
             && metadata.get("canonical_user_text").and_then(Value::as_str) == Some("停止当前循环")
             && metadata.get("source").and_then(Value::as_str) == Some("user_interrupt")
             && metadata.get("starts_user_turn").and_then(Value::as_bool) == Some(false)

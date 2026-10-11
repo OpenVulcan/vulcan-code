@@ -470,7 +470,10 @@ fn structured_renderer_controls_model_and_panel_output() {
     assert!(view.transient_prefix.contains("model:memory"));
     assert_eq!(cards[0].items[0].content, "panel:memory");
     assert_eq!(cards[0].items[0].detail, "detail:memory");
-    assert_eq!(cards[0].items[0].turn_label.as_deref(), Some("当前轮次"));
+    assert_eq!(
+        cards[0].items[0].turn_label.as_deref(),
+        Some("Current turn")
+    );
 }
 
 #[test]
@@ -540,5 +543,8 @@ fn panel_label_treats_consumed_transient_items_as_retained_without_current_marke
 
     let cards = state.panel_cards();
 
-    assert_eq!(cards[0].items[0].turn_label.as_deref(), Some("历史保留"));
+    assert_eq!(
+        cards[0].items[0].turn_label.as_deref(),
+        Some("Retained from history")
+    );
 }

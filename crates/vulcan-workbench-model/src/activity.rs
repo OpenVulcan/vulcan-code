@@ -60,18 +60,18 @@ impl ActivityEntry {
         vec![
             Self::new(
                 ActivityLevel::Success,
-                "工作区骨架已准备",
-                "已规划 Cargo workspace、WebUI crate 与后续扩展模块边界。",
+                "Workspace skeleton prepared",
+                "The Cargo workspace, WebUI crate and extension module boundaries are planned.",
             ),
             Self::new(
                 ActivityLevel::Info,
-                "WebUI 组件接入中",
-                "当前窗口将同时验证 pane_grid、text_editor、markdown 与 svg 等关键控件。",
+                "WebUI components being integrated",
+                "This window verifies key controls such as pane_grid, text_editor, markdown and svg.",
             ),
             Self::new(
                 ActivityLevel::Warning,
-                "真实 AI 服务尚未接入",
-                "当前版本聚焦桌面基础设施与交互骨架，网络编排与代理协议留待下一阶段。",
+                "Real AI service not connected yet",
+                "This version focuses on desktop infrastructure and the interaction skeleton; network orchestration and agent protocols come in the next stage.",
             ),
         ]
     }

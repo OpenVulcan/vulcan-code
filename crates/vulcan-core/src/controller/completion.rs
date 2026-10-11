@@ -11,9 +11,9 @@ impl VulcanCoreController {
     ) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::Final,
-            title: String::from("控制器完成"),
+            title: String::from("Controller completed"),
             body: format!(
-                "宿主控制器已完成一次完整回合，Provider 回合数为 {}，工具调用数为 {}。",
+                "The host controller completed one full turn with {} provider turns and {} tool calls.",
                 provider_turns_executed, tool_calls_processed
             ),
             metadata: Some(json!({

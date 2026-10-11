@@ -1369,7 +1369,7 @@ fn run_user_turn_synthesizes_skipped_tool_result_when_policy_blocks_tool() {
                 if text == "Tool execution was skipped by the host policy."
         ));
         assert!(controller.snapshot().records.iter().any(|record| {
-            record.title == "调用 blocked_tool 工具"
+            record.title == "Tool Call blocked_tool"
                 && record.body == "Tool execution was skipped by the host policy."
         }));
     });

@@ -262,15 +262,22 @@ fn load_public_ai_connections_file_from_path(
         &path.parent().map(Path::to_path_buf).unwrap_or_default(),
     );
     crate::custom_manifest::recover_custom_provider_transaction(&store, path)?;
-    let exists = path
-        .try_exists()
-        .map_err(|error| format!("探测公共 AI 连接文件失败（{}）：{error}", path.display()))?;
+    let exists = path.try_exists().map_err(|error| {
+        format!(
+            "Failed to probe the public AI connections file ({}): {error}",
+            path.display()
+        )
+    })?;
     if !exists {
         return Ok(PublicAiConnectionsFile::default());
     }
-    let text = read_bounded_configuration_text(path, "公共 AI 连接文件")?;
-    let mut file = parse_public_ai_connections_text(&text)
-        .map_err(|error| format!("解析公共 AI 连接文件失败（{}）：{error}", path.display()))?;
+    let text = read_bounded_configuration_text(path, "public AI connections file")?;
+    let mut file = parse_public_ai_connections_text(&text).map_err(|error| {
+        format!(
+            "Failed to parse the public AI connections file ({}): {error}",
+            path.display()
+        )
+    })?;
     // Standalone custom provider manifests own the provider bytes; every loader hydrates the
     // reference set back into the in-memory map so runtime reads keep one authoritative view.
     // 独立自定义供应商清单拥有供应商字节；所有加载路径都把引用集补水回内存映射，使运行时
@@ -318,13 +325,13 @@ fn hydrate_public_ai_custom_providers(
 fn parse_public_ai_connections_text(text: &str) -> Result<PublicAiConnectionsFile, String> {
     if text.len() as u64 > PERSISTED_CONFIGURATION_MAX_BYTES {
         return Err(format!(
-            "公共 AI 连接文件超过 {PERSISTED_CONFIGURATION_MAX_BYTES} 字节上限。"
+            "The public AI connections file exceeds the {PERSISTED_CONFIGURATION_MAX_BYTES}-byte limit."
         ));
     }
     let file: PublicAiConnectionsFile = toml::from_str(text).map_err(|error| error.to_string())?;
     if file.schema_version != 1 {
         return Err(format!(
-            "不支持公共 AI 连接文件 Schema 版本 {}，当前仅支持版本 1。",
+            "Unsupported public AI connections file schema version {}; only version 1 is supported.",
             file.schema_version
         ));
     }
@@ -332,7 +339,7 @@ fn parse_public_ai_connections_text(text: &str) -> Result<PublicAiConnectionsFil
     // 自定义供应商由独立 Manifest 持有；中央文件只携带引用。
     if !file.configuration.custom_providers.is_empty() {
         return Err(String::from(
-            "中央公共 AI 连接文件不得内嵌自定义供应商定义，只能引用独立 Manifest。",
+            "The central public AI connections file must not embed custom provider definitions; it may only reference standalone manifests.",
         ));
     }
     file.configuration.validate_current_schema()?;
@@ -354,25 +361,29 @@ fn parse_public_ai_connections_text(text: &str) -> Result<PublicAiConnectionsFil
 fn read_bounded_configuration_text(path: &Path, document_label: &str) -> Result<String, String> {
     // file freezes the opened object before metadata and body checks, avoiding path replacement drift.
     // file 在元数据与正文检查前冻结已打开对象，避免路径替换漂移。
-    let file = fs::File::open(path)
-        .map_err(|error| format!("读取{document_label}失败（{}）：{error}", path.display()))?;
+    let file = fs::File::open(path).map_err(|error| {
+        format!(
+            "Failed to read the {document_label} ({}): {error}",
+            path.display()
+        )
+    })?;
     // metadata supplies the allocation and regular-file boundary from the opened handle itself.
     // metadata 从已打开句柄本身提供分配与普通文件边界。
     let metadata = file.metadata().map_err(|error| {
         format!(
-            "读取{document_label}元数据失败（{}）：{error}",
+            "Failed to read metadata of the {document_label} ({}): {error}",
             path.display()
         )
     })?;
     if !metadata.is_file() {
         return Err(format!(
-            "{document_label}路径不是普通文件（{}）。",
+            "The {document_label} path is not a regular file ({}).",
             path.display()
         ));
     }
     if metadata.len() > PERSISTED_CONFIGURATION_MAX_BYTES {
         return Err(format!(
-            "{document_label}超过 {PERSISTED_CONFIGURATION_MAX_BYTES} 字节上限（{}）。",
+            "The {document_label} exceeds the {PERSISTED_CONFIGURATION_MAX_BYTES}-byte limit ({}).",
             path.display()
         ));
     }
@@ -382,18 +393,21 @@ fn read_bounded_configuration_text(path: &Path, document_label: &str) -> Result<
     // limited detects concurrent growth with one sentinel byte instead of allocating the new size.
     // limited 用一个哨兵字节检测并发增长，而不会按新大小分配内存。
     let mut limited = file.take(PERSISTED_CONFIGURATION_MAX_BYTES.saturating_add(1));
-    limited
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("读取{document_label}失败（{}）：{error}", path.display()))?;
+    limited.read_to_end(&mut bytes).map_err(|error| {
+        format!(
+            "Failed to read the {document_label} ({}): {error}",
+            path.display()
+        )
+    })?;
     if bytes.len() as u64 > PERSISTED_CONFIGURATION_MAX_BYTES {
         return Err(format!(
-            "{document_label}在读取期间超过 {PERSISTED_CONFIGURATION_MAX_BYTES} 字节上限（{}）。",
+            "The {document_label} exceeded the {PERSISTED_CONFIGURATION_MAX_BYTES}-byte limit while being read ({}).",
             path.display()
         ));
     }
     String::from_utf8(bytes).map_err(|error| {
         format!(
-            "{document_label}不是有效 UTF-8（{}）：{error}",
+            "The {document_label} is not valid UTF-8 ({}): {error}",
             path.display()
         )
     })
@@ -450,10 +464,10 @@ fn save_public_ai_connections_at_path(
         configuration: projected,
     };
     let content = toml::to_string_pretty(&file)
-        .map_err(|error| format!("序列化公共 AI 连接文件失败：{error}"))?;
+        .map_err(|error| format!("Failed to serialize the public AI connections file: {error}"))?;
     if content.len() as u64 > PERSISTED_CONFIGURATION_MAX_BYTES {
         return Err(format!(
-            "公共 AI 连接文件超过 {PERSISTED_CONFIGURATION_MAX_BYTES} 字节上限。"
+            "The public AI connections file exceeds the {PERSISTED_CONFIGURATION_MAX_BYTES}-byte limit."
         ));
     }
     crate::custom_manifest::persist_custom_provider_transaction(
@@ -493,18 +507,27 @@ pub fn load_project_configuration_file(
     let path = project_configuration_file_path(workspace_path);
     // path_exists distinguishes a missing optional configuration from an inaccessible path.
     // path_exists 区分缺失的可选配置与不可访问路径。
-    let path_exists = path
-        .try_exists()
-        .map_err(|error| format!("探测项目配置文件失败（{}）：{}。", path.display(), error))?;
+    let path_exists = path.try_exists().map_err(|error| {
+        format!(
+            "Failed to probe the project configuration file ({}): {}.",
+            path.display(),
+            error
+        )
+    })?;
     if !path_exists {
         return Ok(ProjectVulcanCodeConfigurationFile::default());
     }
 
     // text is the exact persisted JSON document parsed below.
     // text 是下方执行解析的精确持久化 JSON 文档。
-    let text = read_bounded_configuration_text(&path, "项目配置文件")?;
-    serde_json::from_str(&text)
-        .map_err(|error| format!("解析项目配置文件失败（{}）：{}。", path.display(), error))
+    let text = read_bounded_configuration_text(&path, "project configuration file")?;
+    serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "Failed to parse the project configuration file ({}): {}.",
+            path.display(),
+            error
+        )
+    })
 }
 
 /// Saves one project-local Vulcan Code configuration file back to disk.
@@ -515,15 +538,15 @@ pub fn save_project_configuration_file(
 ) -> Result<(), String> {
     let path = project_configuration_file_path(workspace_path);
     let content = serde_json::to_string_pretty(config)
-        .map_err(|error| format!("序列化项目配置失败：{}。", error))?;
+        .map_err(|error| format!("Failed to serialize the project configuration: {}.", error))?;
     if content.len() as u64 > PERSISTED_CONFIGURATION_MAX_BYTES {
         return Err(format!(
-            "项目配置文件超过 {PERSISTED_CONFIGURATION_MAX_BYTES} 字节上限（{}）。",
+            "The project configuration file exceeds the {PERSISTED_CONFIGURATION_MAX_BYTES}-byte limit ({}).",
             path.display()
         ));
     }
     crate::atomic_file::write_file_atomically(&path, content.as_bytes())
-        .map_err(|error| format!("写入项目配置失败：{error}。"))
+        .map_err(|error| format!("Failed to write the project configuration: {error}."))
 }
 
 /// Loads the persisted provider configuration file from disk.
@@ -533,16 +556,24 @@ pub fn load_configuration_file() -> Result<ProviderConfigurationFile, String> {
 
     // path_exists preserves access/probe failures instead of silently replacing them with defaults.
     // path_exists 保留访问与探测失败，不会静默用默认值替代这些失败。
-    let path_exists = path
-        .try_exists()
-        .map_err(|error| format!("探测供应商配置文件失败（{}）：{error}。", path.display()))?;
+    let path_exists = path.try_exists().map_err(|error| {
+        format!(
+            "Failed to probe the provider configuration file ({}): {error}.",
+            path.display()
+        )
+    })?;
     if !path_exists {
         return Ok(ProviderConfigurationFile::default());
     }
 
-    let text = read_bounded_configuration_text(&path, "供应商配置文件")?;
+    let text = read_bounded_configuration_text(&path, "provider configuration file")?;
 
-    serde_json::from_str(&text).map_err(|error| format!("解析供应商配置文件失败：{}。", error))
+    serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "Failed to parse the provider configuration file: {}.",
+            error
+        )
+    })
 }
 
 /// Saves the provider configuration file back to disk, creating parent directories when needed.
@@ -566,15 +597,15 @@ pub fn save_configuration_file_at_path(
     // Share serialization and bounds with production so isolated tests exercise the real writer.
     // 与生产共享序列化与大小限制，让隔离测试执行真实写入器。
     let content = serde_json::to_string_pretty(config)
-        .map_err(|error| format!("序列化供应商配置失败：{}。", error))?;
+        .map_err(|error| format!("Failed to serialize the provider configuration: {}.", error))?;
     if content.len() as u64 > PERSISTED_CONFIGURATION_MAX_BYTES {
         return Err(format!(
-            "供应商配置文件超过 {PERSISTED_CONFIGURATION_MAX_BYTES} 字节上限（{}）。",
+            "The provider configuration file exceeds the {PERSISTED_CONFIGURATION_MAX_BYTES}-byte limit ({}).",
             path.display()
         ));
     }
     crate::atomic_file::write_file_atomically(path, content.as_bytes())
-        .map_err(|error| format!("写入供应商配置失败：{error}。"))
+        .map_err(|error| format!("Failed to write the provider configuration: {error}."))
 }
 
 #[cfg(test)]
@@ -611,7 +642,7 @@ mod public_ai_connections_tests {
             "schema_version = 2\n\n[configuration.connection_graph]\n",
         )
         .expect_err("unsupported schema must fail");
-        assert!(error.contains("Schema 版本 2"));
+        assert!(error.contains("schema version 2"));
     }
 
     /// Verifies unknown fields are rejected instead of becoming compatibility aliases.
@@ -637,7 +668,7 @@ mod public_ai_connections_tests {
 
         let error = load_public_ai_connections_file_from_path(&path)
             .expect_err("oversized central document must fail closed");
-        assert!(error.contains("字节上限"));
+        assert!(error.contains("-byte limit"));
     }
 
     /// Verifies an oversized project configuration is rejected before body allocation.
@@ -662,8 +693,8 @@ mod public_ai_connections_tests {
         // error 证明稀疏正文被消费前即拒绝分配。
         let error = load_project_configuration_file(workspace.path())
             .expect_err("oversized project configuration must fail closed");
-        assert!(error.contains("项目配置文件超过"));
-        assert!(error.contains("字节上限"));
+        assert!(error.contains("project configuration file exceeds"));
+        assert!(error.contains("-byte limit"));
     }
 
     /// Verifies startup reads custom manifests below the connection file's parent without rewriting them.

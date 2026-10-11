@@ -116,62 +116,49 @@ pub struct PendingPromptEditOutcome {
 
 /// Describes one slash command visible to composer clients.
 /// 描述输入区客户端可见的单个 slash 指令。
+///
+/// Clients render the description from their language catalog by `id`; the service carries no
+/// display text.
+/// 客户端按 `id` 从语言目录渲染说明；服务不携带展示文案。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposerSlashCommandSummary {
-    /// Stable command identifier used by routers.
-    /// 路由使用的稳定指令标识。
+    /// Stable command identifier used by routers and catalog lookups.
+    /// 路由与目录查找使用的稳定指令标识。
     pub id: String,
     /// Canonical English slash trigger shown to users.
     /// 展示给用户的规范英文 slash 触发词。
     pub command: String,
-    /// Chinese command description.
-    /// 中文指令说明。
-    pub description_zh: String,
-    /// English command description.
-    /// 英文指令说明。
-    pub description_en: String,
 }
 
-/// Returns every composer slash command in the same stable order as the native workbench.
-/// 按原生工作台相同的稳定顺序返回全部输入区 slash 指令。
+/// Stable `(id, trigger)` pairs in composer display order.
+/// 按输入区展示顺序排列的稳定 `(id, 触发词)` 对。
+const COMPOSER_SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("model", "/model"),
+    ("reasoning", "/reasoning"),
+    ("compact", "/compact"),
+    ("plan", "/plan"),
+    ("goal", "/goal"),
+    ("settings", "/settings"),
+    ("style", "/style"),
+    ("answer", "/answer"),
+    ("knowledge", "/knowledge"),
+    ("semantic", "/semantic"),
+    ("collapse", "/collapse"),
+    ("thinking", "/thinking"),
+    ("memory", "/memory"),
+    ("skill", "/skill"),
+    ("skills", "/skills"),
+];
+
+/// Returns every composer slash command in its stable display order.
+/// 按稳定展示顺序返回全部输入区 slash 指令。
 pub fn composer_slash_command_catalog() -> Vec<ComposerSlashCommandSummary> {
-    vec![
-        ComposerSlashCommandSummary {
-            id: String::from("model"),
-            command: String::from("/model"),
-            description_zh: String::from("选择当前模型"),
-            description_en: String::from("Choose the current model"),
-        },
-        ComposerSlashCommandSummary {
-            id: String::from("compact"),
-            command: String::from("/compact"),
-            description_zh: String::from("立即压缩当前会话上下文"),
-            description_en: String::from("Compact the current conversation context"),
-        },
-        ComposerSlashCommandSummary {
-            id: String::from("reasoning"),
-            command: String::from("/reasoning"),
-            description_zh: String::from("选择当前思考级别"),
-            description_en: String::from("Choose the current reasoning effort"),
-        },
-        ComposerSlashCommandSummary {
-            id: String::from("plan"),
-            command: String::from("/plan"),
-            description_zh: String::from("切换当前会话计划模式"),
-            description_en: String::from("Toggle Plan mode for the current conversation"),
-        },
-        ComposerSlashCommandSummary {
-            id: String::from("skill"),
-            command: String::from("/skill"),
-            description_zh: String::from("插入提示词技能加载指令"),
-            description_en: String::from("Insert a prompt-skill loading instruction"),
-        },
-        ComposerSlashCommandSummary {
-            id: String::from("skills"),
-            command: String::from("/skills"),
-            description_zh: String::from("打开提示词技能面板"),
-            description_en: String::from("Open the prompt skills panel"),
-        },
-    ]
+    COMPOSER_SLASH_COMMANDS
+        .iter()
+        .map(|(id, command)| ComposerSlashCommandSummary {
+            id: (*id).to_string(),
+            command: (*command).to_string(),
+        })
+        .collect()
 }

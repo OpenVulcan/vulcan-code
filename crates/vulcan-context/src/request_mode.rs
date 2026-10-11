@@ -130,9 +130,9 @@ impl ContextRequestMode {
     /// 返回供界面摘要使用的紧凑中文标签。
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Full { .. } => "全量上下文",
-            Self::IncrementalCandidate { .. } => "可增量候选",
-            Self::IncrementalDisabled { .. } => "增量禁用",
+            Self::Full { .. } => "Full context",
+            Self::IncrementalCandidate { .. } => "Incremental candidate",
+            Self::IncrementalDisabled { .. } => "Incremental disabled",
         }
     }
 
@@ -141,7 +141,7 @@ impl ContextRequestMode {
     pub fn summary_note(&self) -> String {
         match self {
             Self::Full { reason } => format!(
-                "{}：{}。实际发送仍为完整上下文。",
+                "{}: {}. The request still sends the full context.",
                 self.label(),
                 reason.label()
             ),
@@ -150,14 +150,14 @@ impl ContextRequestMode {
                 continuation_message_id,
                 history_message_count,
             } => format!(
-                "{}：基线 `{}` 与 continuation `{}` 可用于后续增量；当前仍安全全量发送 {} 条历史。",
+                "{}: baseline `{}` and continuation `{}` can be used for later incremental requests; {} history messages are still sent in full for safety.",
                 self.label(),
                 baseline_fingerprint,
                 continuation_message_id,
                 history_message_count
             ),
             Self::IncrementalDisabled { reason } => format!(
-                "{}：{}。实际发送回退为完整上下文。",
+                "{}: {}. The request falls back to the full context.",
                 self.label(),
                 reason.label()
             ),
@@ -176,10 +176,10 @@ impl ContextFullRequestReason {
     /// 返回该完整请求原因的紧凑中文诊断标签。
     pub const fn label(self) -> &'static str {
         match self {
-            Self::AssemblyNotReady => "上下文层尚未就绪",
-            Self::BaselineNotReady => "上下文基线尚未就绪",
-            Self::ProviderContinuationMissing => "Provider continuation 尚未建立",
-            Self::InitialTurn => "初始回合无需增量",
+            Self::AssemblyNotReady => "Context layers are not ready yet",
+            Self::BaselineNotReady => "Context baseline is not ready yet",
+            Self::ProviderContinuationMissing => "Provider continuation is not established yet",
+            Self::InitialTurn => "The initial turn needs no increment",
         }
     }
 }
@@ -189,17 +189,19 @@ impl ContextIncrementalDisabledReason {
     /// 返回该禁用原因的紧凑中文诊断标签。
     pub fn label(&self) -> String {
         match self {
-            Self::InternalRequest => String::from("内部请求不参与增量上下文"),
+            Self::InternalRequest => {
+                String::from("Internal requests do not use incremental context")
+            }
             Self::BaselineMismatch { detail } => detail
                 .as_deref()
-                .map(|value| format!("基线失配：{value}"))
-                .unwrap_or_else(|| String::from("基线失配")),
+                .map(|value| format!("Baseline mismatch: {value}"))
+                .unwrap_or_else(|| String::from("Baseline mismatch")),
             Self::ProviderContinuationMismatch {
                 continuation_provider_id,
                 continuation_protocol_profile_id,
                 continuation_model_id,
             } => format!(
-                "continuation 属于 {}/{}/{}",
+                "continuation belongs to {}/{}/{}",
                 continuation_provider_id.as_deref().unwrap_or("?"),
                 continuation_protocol_profile_id.as_deref().unwrap_or("?"),
                 continuation_model_id.as_deref().unwrap_or("?")
@@ -330,7 +332,7 @@ mod tests {
         let mode = resolve_context_request_mode(test_input(&assembly, &baseline, None));
 
         assert!(mode.is_incremental_candidate());
-        assert!(mode.summary_note().contains("可增量候选"));
+        assert!(mode.summary_note().contains("Incremental candidate"));
     }
 
     /// Verifies missing continuation keeps the request in safe full mode.

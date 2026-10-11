@@ -74,9 +74,9 @@ impl SessionTurnUsageGroupKind {
     /// 返回转录详情中展示的人类可读标签。
     pub const fn display_label(self) -> &'static str {
         match self {
-            Self::Regular => "常规",
-            Self::Subagent => "智能体",
-            Self::ContextCompaction => "压缩",
+            Self::Regular => "Regular",
+            Self::Subagent => "Agent",
+            Self::ContextCompaction => "Compaction",
         }
     }
 }
@@ -308,9 +308,9 @@ impl SessionTurnStatsStatus {
     /// 返回展示在转录摘要与悬浮详情中的人类可读标签。
     pub const fn display_label(self) -> &'static str {
         match self {
-            Self::Completed => "已完成",
-            Self::Failed => "失败",
-            Self::Stopped => "已中止",
+            Self::Completed => "Completed",
+            Self::Failed => "Failed",
+            Self::Stopped => "Aborted",
         }
     }
 }
@@ -447,36 +447,36 @@ impl SessionTurnStats {
     /// 返回供原文与后续悬浮或详情表面使用的多行人类可读详情正文。
     pub fn detail_body(&self) -> String {
         let mut lines = vec![
-            format!("状态：{}", self.status.display_label()),
-            format!("Provider 调用：{}", self.provider_call_count),
-            format!("工具调用：{}", self.tool_call_count),
-            format!("输入 Tokens：{}", self.input_tokens),
-            format!("输出 Tokens：{}", self.output_tokens),
-            format!("思考 Tokens：{}", self.reasoning_tokens),
-            format!("总 Tokens：{}", self.total_tokens),
+            format!("Status: {}", self.status.display_label()),
+            format!("Provider calls: {}", self.provider_call_count),
+            format!("Tool calls: {}", self.tool_call_count),
+            format!("Input tokens: {}", self.input_tokens),
+            format!("Output tokens: {}", self.output_tokens),
+            format!("Reasoning tokens: {}", self.reasoning_tokens),
+            format!("Total tokens: {}", self.total_tokens),
         ];
         if let Some(duration_ms) = self.duration_ms {
-            lines.push(format!("耗时：{duration_ms} ms"));
+            lines.push(format!("Duration: {duration_ms} ms"));
         }
         if let Some(uncached_input_tokens) = self.uncached_input_tokens {
-            lines.push(format!("无缓存输入 Tokens：{uncached_input_tokens}"));
+            lines.push(format!("Uncached input tokens: {uncached_input_tokens}"));
         }
         if let Some(speed) = self.output_tokens_per_second
             && speed.is_finite()
         {
-            lines.push(format!("输出速度：{speed:.3} tokens/s"));
+            lines.push(format!("Output speed: {speed:.3} tokens/s"));
         }
         if let Some(cached_input_tokens) = self.cached_input_tokens {
-            lines.push(format!("缓存命中 Tokens：{cached_input_tokens}"));
+            lines.push(format!("Cached input tokens: {cached_input_tokens}"));
         }
         if let Some(cache_creation_input_tokens) = self.cache_creation_input_tokens {
-            lines.push(format!("缓存写入 Tokens：{cache_creation_input_tokens}"));
+            lines.push(format!("Cache write tokens: {cache_creation_input_tokens}"));
         }
         if !self.usage_groups.is_empty() {
-            lines.push(String::from("用量分组："));
+            lines.push(String::from("Usage groups:"));
             for group in &self.usage_groups {
                 lines.push(format!(
-                    "{}：Provider {}，工具 {}，输入 {}，输出 {}，思考 {}，总 {}",
+                    "{}: provider {}, tools {}, input {}, output {}, reasoning {}, total {}",
                     group.kind.display_label(),
                     group.provider_call_count,
                     group.tool_call_count,
@@ -487,21 +487,21 @@ impl SessionTurnStats {
                 ));
                 if let Some(cached_input_tokens) = group.cached_input_tokens {
                     lines.push(format!(
-                        "{}缓存命中 Tokens：{}",
+                        "{}Cached input tokens: {}",
                         group.kind.display_label(),
                         cached_input_tokens
                     ));
                 }
                 if let Some(uncached_input_tokens) = group.uncached_input_tokens {
                     lines.push(format!(
-                        "{}无缓存输入 Tokens：{}",
+                        "{}Uncached input tokens: {}",
                         group.kind.display_label(),
                         uncached_input_tokens
                     ));
                 }
                 if let Some(cache_creation_input_tokens) = group.cache_creation_input_tokens {
                     lines.push(format!(
-                        "{}缓存写入 Tokens：{}",
+                        "{}Cache write tokens: {}",
                         group.kind.display_label(),
                         cache_creation_input_tokens
                     ));

@@ -485,25 +485,25 @@ pub fn render_vmm_context_item_detail(item: &ContextItem) -> String {
     let mut lines = Vec::new();
     let text = render_vmm_context_item_panel(item);
     if !text.is_empty() {
-        lines.push(format!("内容：{text}"));
+        lines.push(format!("Content: {text}"));
     }
     if let Some(created_datetime) = format_context_created_time(&item.created_datetime) {
-        lines.push(format!("时间：{created_datetime}"));
+        lines.push(format!("Time: {created_datetime}"));
     }
     if item.memory_id > 0 {
-        lines.push(format!("记忆 ID：{}", item.memory_id));
+        lines.push(format!("Memory ID: {}", item.memory_id));
     }
     lines.push(format!(
-        "来源：{}",
+        "Source: {}",
         format_vmm_context_item_turn_label(item)
     ));
     lines.push(format!(
-        "相关性：{}",
+        "Relevance: {}",
         format_context_source_score(item.score)
     ));
     lines.push(format!(
-        "可回查：{}",
-        if item.has_dialogue { "是" } else { "否" }
+        "Traceable: {}",
+        if item.has_dialogue { "yes" } else { "no" }
     ));
     lines.join("\n")
 }
@@ -947,8 +947,8 @@ mod tests {
         assert!(
             cards[0].items[0]
                 .detail
-                .contains("时间：2026-05-02 14:20:00")
+                .contains("Time: 2026-05-02 14:20:00")
         );
-        assert!(cards[0].items[0].detail.contains("记忆 ID：137"));
+        assert!(cards[0].items[0].detail.contains("Memory ID: 137"));
     }
 }

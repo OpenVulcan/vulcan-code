@@ -21,9 +21,9 @@ pub fn service_media_path_from_encoded_route_segment(
 ) -> Result<PathBuf, String> {
     let path_bytes = BASE64_URL_SAFE_NO_PAD
         .decode(encoded_path)
-        .map_err(|error| format!("媒体路径解码失败：{error}"))?;
+        .map_err(|error| format!("Failed to decode the media path: {error}"))?;
     let path_text = String::from_utf8(path_bytes)
-        .map_err(|error| format!("媒体路径不是有效 UTF-8：{error}"))?;
+        .map_err(|error| format!("The media path is not valid UTF-8: {error}"))?;
     Ok(PathBuf::from(path_text))
 }
 
@@ -37,23 +37,29 @@ pub fn build_service_media_file_response(
     if !is_allowed_service_media_asset_path(&media_path) {
         return Ok(service_media_error_response(
             403,
-            "媒体路径不是允许的媒体资源类型。",
+            "The media path is not an allowed media resource type.",
         ));
     }
 
     let mut file = match File::open(&media_path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(service_media_error_response(404, "媒体文件不存在。"));
+            return Ok(service_media_error_response(
+                404,
+                "The media file does not exist.",
+            ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            return Ok(service_media_error_response(403, "没有权限读取媒体文件。"));
+            return Ok(service_media_error_response(
+                403,
+                "No permission to read the media file.",
+            ));
         }
-        Err(error) => return Err(format!("无法打开媒体文件：{error}")),
+        Err(error) => return Err(format!("Failed to open the media file: {error}")),
     };
     let file_len = file
         .metadata()
-        .map_err(|error| format!("无法读取媒体文件元数据：{error}"))?
+        .map_err(|error| format!("Failed to read media file metadata: {error}"))?
         .len();
     let mime_type = infer_service_media_asset_mime_type(&media_path);
     let mut headers = service_media_base_headers(mime_type);
@@ -73,10 +79,10 @@ pub fn build_service_media_file_response(
         let range_end = range.start + range.length - 1;
         let mut body = Vec::with_capacity(range.length as usize);
         file.seek(SeekFrom::Start(range_start))
-            .map_err(|error| format!("无法定位媒体范围：{error}"))?;
+            .map_err(|error| format!("Failed to seek to the media range: {error}"))?;
         file.take(range.length)
             .read_to_end(&mut body)
-            .map_err(|error| format!("无法读取媒体范围：{error}"))?;
+            .map_err(|error| format!("Failed to read the media range: {error}"))?;
         headers.push((
             String::from("content-range"),
             format!("bytes {range_start}-{range_end}/{file_len}"),
@@ -91,7 +97,7 @@ pub fn build_service_media_file_response(
 
     let mut body = Vec::with_capacity(file_len.min(SERVICE_MEDIA_RANGE_MAX_BYTES) as usize);
     file.read_to_end(&mut body)
-        .map_err(|error| format!("无法读取媒体文件：{error}"))?;
+        .map_err(|error| format!("Failed to read the media file: {error}"))?;
     headers.push((String::from("content-length"), file_len.to_string()));
     Ok(ServiceMediaResponse {
         status: 200,
@@ -321,12 +327,12 @@ fn has_supported_service_media_asset_extension(path: &Path) -> bool {
 /// 解析一个有上限的媒体播放 HTTP 范围。
 fn single_service_media_http_range(range_header: &str, file_len: u64) -> Result<HttpRange, String> {
     let mut ranges = HttpRange::parse(range_header, file_len)
-        .map_err(|error| format!("媒体 Range 请求无效：{error:?}"))?;
+        .map_err(|error| format!("Invalid media Range request: {error:?}"))?;
     let Some(mut range) = ranges.drain(..).next() else {
-        return Err(String::from("媒体 Range 请求为空。"));
+        return Err(String::from("The media Range request is empty."));
     };
     if range.start >= file_len || range.length == 0 {
-        return Err(String::from("媒体 Range 请求越界。"));
+        return Err(String::from("The media Range request is out of bounds."));
     }
     range.length = range.length.min(SERVICE_MEDIA_RANGE_MAX_BYTES);
     Ok(range)

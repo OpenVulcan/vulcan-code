@@ -86,6 +86,9 @@ pub struct SessionSummary {
     /// Raw last-updated timestamp as Unix milliseconds text.
     /// 以 Unix 毫秒文本保存的原始最近更新时间。
     pub updated_at: String,
+    /// Whether the session was created as a dedicated session; the kind never changes afterwards.
+    /// 会话是否以专职会话创建；该种类创建后永不改变。
+    pub dedicated: bool,
 }
 
 impl SessionSummary {
@@ -117,7 +120,15 @@ impl SessionSummary {
             queued_steps,
             last_updated_label: last_updated_label.into(),
             updated_at: String::new(),
+            dedicated: false,
         }
+    }
+
+    /// Records whether the indexed session is a dedicated session.
+    /// 记录已索引会话是否为专职会话。
+    pub fn with_dedicated(mut self, dedicated: bool) -> Self {
+        self.dedicated = dedicated;
+        self
     }
 
     /// Overrides the title source attached to the session summary.
@@ -148,45 +159,45 @@ impl SessionSummary {
             Self::new(
                 Uuid::from_u128(1),
                 Some(String::from("vulcan-luaskills")),
-                "重命名中枢系统",
-                "收敛工作台命名与主入口语义",
+                "Rename the hub system",
+                "Converge workbench naming and main entry semantics",
                 SessionState::Running,
                 7,
                 4,
-                "1天前",
+                "1 day ago",
             )
             .with_title_source(SessionTitleSource::Seeded),
             Self::new(
                 Uuid::from_u128(2),
                 Some(String::from("vulcan-luaskills")),
-                "评估 LuaSkills 会话声明机制",
-                "梳理技能、工具与角色接入策略",
+                "Evaluate the LuaSkills session declaration mechanism",
+                "Review skill, tool and role integration strategy",
                 SessionState::Completed,
                 3,
                 2,
-                "3天前",
+                "3 days ago",
             )
             .with_title_source(SessionTitleSource::Seeded),
             Self::new(
                 Uuid::from_u128(3),
                 Some(String::from("vulcan-memory-mesh")),
-                "检查构建脚本异常相关问题",
-                "核对桌面窗口、打包与启动细节",
+                "Check build script issues",
+                "Verify desktop window, packaging and startup details",
                 SessionState::Blocked,
                 2,
                 1,
-                "3周前",
+                "3 weeks ago",
             )
             .with_title_source(SessionTitleSource::Seeded),
             Self::new(
                 Uuid::from_u128(4),
                 Some(String::from("vulcan-memory-mesh")),
-                "为 opencode.json 引用安装",
-                "梳理供应商配置读取与安装体验",
+                "Install from an opencode.json reference",
+                "Review provider configuration loading and installation experience",
                 SessionState::Draft,
                 1,
                 2,
-                "26天前",
+                "26 days ago",
             )
             .with_title_source(SessionTitleSource::Seeded),
         ]

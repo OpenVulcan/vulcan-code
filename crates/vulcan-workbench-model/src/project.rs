@@ -103,17 +103,23 @@ impl ProjectVceSettings {
     pub fn validate(&self) -> Result<(), String> {
         if !(60..=86_400).contains(&self.auto_update_min_interval_seconds) {
             return Err(String::from(
-                "语义索引自动更新最低间隔必须位于 1 到 1440 分钟。",
+                "The minimum automatic semantic index update interval must be between 1 and 1440 minutes.",
             ));
         }
         if self.revision == 0 {
-            return Err(String::from("VCE 设置修订号必须大于零。"));
+            return Err(String::from(
+                "The VCE settings revision must be greater than zero.",
+            ));
         }
         if !(1..=16 * 1_048_576).contains(&self.max_file_bytes) {
-            return Err(String::from("VCE 最大文件字节数必须位于 1 到 16777216。"));
+            return Err(String::from(
+                "The VCE maximum file size must be between 1 and 16777216 bytes.",
+            ));
         }
         if self.extra_ignore_patterns.len() > 64 {
-            return Err(String::from("VCE 附加忽略规则不能超过 64 条。"));
+            return Err(String::from(
+                "VCE additional ignore rules must not exceed 64 entries.",
+            ));
         }
         if let Some(pattern) = self.extra_ignore_patterns.iter().find(|pattern| {
             pattern.trim().is_empty()
@@ -122,19 +128,25 @@ impl ProjectVceSettings {
                     .chars()
                     .any(|character| matches!(character, '\r' | '\n' | '\0'))
         }) {
-            return Err(format!("VCE 附加忽略规则无效：`{pattern}`。"));
+            return Err(format!("Invalid VCE additional ignore rule: `{pattern}`."));
         }
         if !(1..=16).contains(&self.embedding_max_concurrency) {
-            return Err(String::from("VCE 向量并发数必须位于 1 到 16。"));
+            return Err(String::from(
+                "VCE embedding concurrency must be between 1 and 16.",
+            ));
         }
         if !(1..=8).contains(&self.query_max_concurrency) {
-            return Err(String::from("VCE 查询并发数必须位于 1 到 8。"));
+            return Err(String::from(
+                "VCE query concurrency must be between 1 and 8.",
+            ));
         }
         if !(1..=50).contains(&self.max_results) {
-            return Err(String::from("VCE 结果数量必须位于 1 到 50。"));
+            return Err(String::from("VCE result count must be between 1 and 50."));
         }
         if !(1_024..=200_000).contains(&self.max_context_chars) {
-            return Err(String::from("VCE 上下文字符数必须位于 1024 到 200000。"));
+            return Err(String::from(
+                "VCE context character count must be between 1024 and 200000.",
+            ));
         }
         Ok(())
     }

@@ -115,8 +115,8 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
     });
     let mut feedback_entry = SessionMessageEntry::new(
         SessionMessageKind::Assistant,
-        "智能体返回处理结果",
-        "智能体返回处理结果",
+        "Agent returned its result",
+        "Agent returned its result",
     );
     feedback_entry.record_kind = SessionMessageRecordKind::DisplayNote;
     feedback_entry.metadata = Some(json!({
@@ -142,9 +142,9 @@ pub fn subagent_feedback_display_records_from_tool_metadata(
 
     let mut stats_entry = SessionMessageEntry::new(
         SessionMessageKind::Assistant,
-        format!("智能体统计 · {}", state.subagent_label),
+        format!("Agent statistics · {}", state.subagent_label),
         format!(
-            "智能体：{}\n任务：{}\n\n{}",
+            "Agent: {}\nTask: {}\n\n{}",
             state.subagent_label,
             state.public_task_id,
             turn_stats.detail_body()
@@ -593,7 +593,7 @@ fn subagent_send_message_display_record_id_from_metadata(
 fn parse_tool_finished_event_title_call_id(title: &str) -> Option<String> {
     let mut segments = title.split(" · ");
     match (segments.next(), segments.next()) {
-        (Some("工具返回"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
+        (Some("Tool result"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
             Some(tool_call_id.trim().to_string())
         }
         _ => None,
@@ -788,7 +788,7 @@ pub fn task_session_tool_display_label(
     if let Some(public_task_id) = public_task_id {
         return public_task_id.to_string();
     }
-    String::from("智能体")
+    String::from("Agent")
 }
 
 /// Injects one display-only execution state flag into tool-card metadata.

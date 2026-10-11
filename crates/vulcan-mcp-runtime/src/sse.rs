@@ -623,7 +623,10 @@ fn spawn_sse_listener(input: SseListenerInput) -> tokio::task::JoinHandle<()> {
                 Err(_) => {
                     if observed_connection {
                         let _ = event_sender.send(McpTransportEvent::Disconnected {
-                            reason: format!("MCP SSE 传输 `{}` 已断开，正在等待重连。", sse_url),
+                            reason: format!(
+                                "MCP SSE transport `{}` disconnected; waiting to reconnect.",
+                                sse_url
+                            ),
                         });
                         observed_connection = false;
                     }
@@ -667,7 +670,7 @@ fn spawn_sse_listener(input: SseListenerInput) -> tokio::task::JoinHandle<()> {
 
             if observed_connection {
                 let _ = event_sender.send(McpTransportEvent::Disconnected {
-                    reason: format!("MCP SSE 传输 `{}` 已断开。", sse_url),
+                    reason: format!("MCP SSE transport `{}` disconnected.", sse_url),
                 });
                 observed_connection = false;
             }

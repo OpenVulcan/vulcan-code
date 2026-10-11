@@ -1509,7 +1509,7 @@ mod tests {
         assert_eq!(historical_tool_call_id.as_deref(), Some("call-historical"));
         assert!(*historical_is_error);
         assert_ne!(historical_text, &historical_tool_text);
-        assert!(historical_text.contains("[上下文压缩省略："));
+        assert!(historical_text.contains("[Context compaction omitted: "));
         let SessionConversationPayload::ToolResult {
             tool_call_id: newest_tool_call_id,
             is_error: newest_is_error,
@@ -1974,7 +1974,7 @@ mod tests {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolResultOutput,
             visible: true,
-            title: String::from("调用 image_generation 工具"),
+            title: String::from("Tool Call image_generation"),
             body: String::from("## 工具返回\n\n媒体已生成。"),
             metadata: Some(json!({
                 "tool_call_id": "call-media-1",
@@ -2071,7 +2071,7 @@ mod tests {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolResultOutput,
             visible: true,
-            title: String::from("调用 write_file 工具"),
+            title: String::from("Tool Call write_file"),
             body: String::from("## 工具返回\n\n文件变更已应用。"),
             metadata: Some(json!({
                 "tool_call_id": "call-change-set-1",

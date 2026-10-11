@@ -100,7 +100,7 @@ pub trait McpTransport: Send + Sync {
         _args: Value,
     ) -> Result<GetPromptResult, McpRuntimeError> {
         Err(McpRuntimeError::transport(format!(
-            "MCP 传输 `{}` 不支持 prompts/get。",
+            "MCP transport `{}` does not support prompts/get.",
             self.endpoint()
         )))
     }
@@ -115,7 +115,7 @@ pub trait McpTransport: Send + Sync {
     /// 通过 URI 从远端端点读取单个资源。
     async fn read_resource(&self, _uri: &str) -> Result<ReadResourceResult, McpRuntimeError> {
         Err(McpRuntimeError::transport(format!(
-            "MCP 传输 `{}` 不支持 resources/read。",
+            "MCP transport `{}` does not support resources/read.",
             self.endpoint()
         )))
     }

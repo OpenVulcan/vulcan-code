@@ -383,7 +383,7 @@ pub fn apply_context_budget_anchor_baseline(
         snapshot.baseline_budget_fingerprint_matches =
             previous_budget_fingerprint == snapshot.fingerprint;
         if !snapshot.baseline_budget_fingerprint_matches {
-            mismatch_reasons.push(String::from("预算指纹变化"));
+            mismatch_reasons.push(String::from("Budget fingerprint changed"));
         }
     }
 
@@ -393,7 +393,7 @@ pub fn apply_context_budget_anchor_baseline(
         snapshot.baseline_assembly_fingerprint_matches =
             previous_assembly_fingerprint == current_assembly_fingerprint;
         if !snapshot.baseline_assembly_fingerprint_matches {
-            mismatch_reasons.push(String::from("上下文层指纹变化"));
+            mismatch_reasons.push(String::from("Context layer fingerprint changed"));
         }
     }
 
@@ -997,7 +997,7 @@ mod tests {
         assert!(!validated.baseline_assembly_fingerprint_matches);
         assert_eq!(
             validated.baseline_mismatch_reason.as_deref(),
-            Some("预算指纹变化 · 上下文层指纹变化")
+            Some("Budget fingerprint changed · Context layer fingerprint changed")
         );
     }
 

@@ -96,7 +96,7 @@ impl VulcanCoreController {
     pub fn record_output(&mut self, body: impl Into<String>) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::Output,
-            title: String::from("模型输出"),
+            title: String::from("Model output"),
             body: body.into(),
             metadata: None,
         });
@@ -107,7 +107,7 @@ impl VulcanCoreController {
     pub fn record_thinking(&mut self, body: impl Into<String>) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::Thinking,
-            title: String::from("模型思考"),
+            title: String::from("Model thinking"),
             body: body.into(),
             metadata: None,
         });
@@ -118,7 +118,7 @@ impl VulcanCoreController {
     pub fn record_tool_started(&mut self, request: &ToolInvocationRequest) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::ToolStarted,
-            title: format!("调用 {} 工具", request.tool_name),
+            title: format!("Tool Call {}", request.tool_name),
             body: render_json_pretty(&request.arguments),
             metadata: Some(json!({
                 "tool_call_id": request.tool_call_id,
@@ -134,7 +134,7 @@ impl VulcanCoreController {
     pub fn record_tool_finished(&mut self, result: &ToolInvocationResult) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::ToolFinished,
-            title: format!("调用 {} 工具", result.tool_name),
+            title: format!("Tool Call {}", result.tool_name),
             body: result.model_output.clone(),
             metadata: Some(build_tool_result_metadata(result)),
         });
@@ -146,7 +146,7 @@ impl VulcanCoreController {
         self.phase = ControllerPhase::Failed;
         self.push_event(CoreEvent {
             kind: CoreEventKind::Error,
-            title: String::from("控制器失败"),
+            title: String::from("Controller failed"),
             body: body.into(),
             metadata: None,
         });

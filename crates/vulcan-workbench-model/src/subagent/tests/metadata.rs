@@ -30,7 +30,7 @@ fn parses_task_session_payload_into_subagent_state() {
 fn task_session_display_label_uses_agent_fallback() {
     let label = task_session_tool_display_label(None, None, None, None, None);
 
-    assert_eq!(label, "智能体");
+    assert_eq!(label, "Agent");
 }
 
 /// Verifies task-card payload parsing does not invent a completed state without explicit execution status.
@@ -711,7 +711,7 @@ fn subagent_send_message_projection_falls_back_to_event_title() {
 
     let projection = subagent_send_message_projection_from_tool_metadata(
         &metadata,
-        "工具返回 · call-from-title",
+        "Tool result · call-from-title",
     )
     .expect("projection parse should succeed")
     .expect("projection should exist");
@@ -723,7 +723,7 @@ fn subagent_send_message_projection_falls_back_to_event_title() {
 /// 验证规范智能体 send_message display note 会被共享分类器识别。
 #[test]
 fn session_message_is_subagent_send_message_display_note_accepts_canonical_note() {
-    let mut message = SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", "继续。");
+    let mut message = SessionMessageEntry::new(SessionMessageKind::User, "Agent message", "继续。");
     message.record_kind = SessionMessageRecordKind::DisplayNote;
     message.metadata = Some(json!({
         "display_note": true,
@@ -740,7 +740,7 @@ fn session_message_is_subagent_send_message_display_note_accepts_canonical_note(
 /// 验证带相同元数据的普通可见行不会被视为仅显示记录。
 #[test]
 fn session_message_is_subagent_send_message_display_note_rejects_normal_rows() {
-    let mut message = SessionMessageEntry::new(SessionMessageKind::User, "智能体消息", "继续。");
+    let mut message = SessionMessageEntry::new(SessionMessageKind::User, "Agent message", "继续。");
     message.metadata = Some(json!({
         "display_note": true,
         "kind": "subagent_message",
@@ -779,7 +779,7 @@ fn session_conversation_record_is_subagent_send_message_display_note_accepts_can
         kind: SessionMessageKind::User,
         record_kind: SessionMessageRecordKind::DisplayNote,
         visible: true,
-        title: String::from("智能体消息"),
+        title: String::from("Agent message"),
         body: String::from("继续。"),
         metadata: Some(json!({
             "display_note": true,
@@ -801,7 +801,7 @@ fn session_conversation_record_is_subagent_send_message_display_note_rejects_hid
         kind: SessionMessageKind::User,
         record_kind: SessionMessageRecordKind::DisplayNote,
         visible: false,
-        title: String::from("智能体消息"),
+        title: String::from("Agent message"),
         body: String::from("继续。"),
         metadata: Some(json!({
             "display_note": true,
@@ -856,8 +856,8 @@ fn subagent_feedback_display_records_builds_visible_rows_and_stats() {
         records.feedback_entry.record_kind,
         SessionMessageRecordKind::DisplayNote
     );
-    assert_eq!(records.feedback_entry.title, "智能体返回处理结果");
-    assert_eq!(records.feedback_entry.body, "智能体返回处理结果");
+    assert_eq!(records.feedback_entry.title, "Agent returned its result");
+    assert_eq!(records.feedback_entry.body, "Agent returned its result");
     assert_eq!(
         records
             .feedback_entry
@@ -996,7 +996,7 @@ fn subagent_feedback_display_records_uses_empty_result_body() {
         subagent_feedback_display_records_from_tool_metadata(parent_session_id, &metadata, &state)
             .expect("feedback records should build");
 
-    assert_eq!(records.feedback_entry.body, "智能体返回处理结果");
+    assert_eq!(records.feedback_entry.body, "Agent returned its result");
     assert_eq!(
         records
             .feedback_entry

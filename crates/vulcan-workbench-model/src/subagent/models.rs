@@ -2,7 +2,7 @@ use super::*;
 
 /// Canonical user-facing stop summary reused by agent cards, panels, and WebUI projections.
 /// 供智能体卡片、面板与 WebUI 投影共同复用的规范用户可见停止摘要。
-pub const SUBAGENT_TASK_STOPPED_SUMMARY_TEXT: &str = "智能体已按用户请求主动停止，当前没有完整返回结果。请基于现有上下文决定是否重试、改写任务，或直接继续主流程。";
+pub const SUBAGENT_TASK_STOPPED_SUMMARY_TEXT: &str = "The agent was stopped at the user's request and has no complete result. Decide from the existing context whether to retry, rewrite the task, or continue the main flow.";
 
 /// Lifecycle states used by one cached subagent task panel.
 /// 单个已缓存子代理任务面板使用的生命周期状态。

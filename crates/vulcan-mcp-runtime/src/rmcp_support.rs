@@ -77,7 +77,7 @@ pub(crate) fn spawn_rmcp_disconnect_watch(
         loop {
             if peer.is_transport_closed() {
                 let _ = event_sender.send(McpTransportEvent::Disconnected {
-                    reason: format!("MCP {transport_label} 传输 `{endpoint}` 已关闭。"),
+                    reason: format!("MCP {transport_label} transport `{endpoint}` closed."),
                 });
                 break;
             }

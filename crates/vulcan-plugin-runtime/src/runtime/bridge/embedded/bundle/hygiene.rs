@@ -35,31 +35,24 @@ pub(super) fn bundle_source_with_hygiene(
         ));
         source.push_str(r#"
 -- Capture each callback once; subsequent module mutations cannot bypass hygiene.
--- 仅捕获每个回调一次；后续模块变更不能绕过清理。
 local invoke, before, after, check = exports[names[1]], exports[names[2]], exports[names[3]], exports[names[4]]
 -- Wrap one request envelope and return its original frame after mandatory cleanup.
--- 包装单个请求信封，在强制清理后返回其原始帧。
 exports[names[1]] = function(envelope)
     -- A failed preparation poisons this instance; core retirement still owns shutdown.
-    -- 准备失败使此实例失效；核心退役仍拥有关闭。
     if before(envelope) ~= true then error("Reusable tool before_call must return true.") end
     -- Preserve the original business failure while always attempting declared cleanup.
-    -- 始终尝试声明清理，同时保留原始业务失败。
     local ok, result = pcall(invoke, envelope)
     -- Success means no Lua exception; application-level ok=false frames remain business results.
-    -- 成功表示没有 Lua 异常；应用层 ok=false 帧仍为业务结果。
     local cleaned, cleanup = pcall(after, envelope, ok)
     if not cleaned or cleanup ~= true then
         error("Reusable tool after_call failed: " .. tostring(cleanup) .. (ok and "" or "; business: " .. tostring(result)))
     end
     -- The final affirmative check permits core reuse only after declared request state is cleared.
-    -- 仅在声明请求状态已清理后，最终肯定检查才允许核心复用。
     if check() ~= true then error("Reusable tool reuse_check must return true.") end
     if not ok then error(result) end
     return result
 end
 -- Hygiene callbacks are private and cannot be submitted as ordinary exports.
--- 清理回调为私有函数，不能作为普通导出提交。
 exports[names[2]], exports[names[3]], exports[names[4]] = nil, nil, nil
 "#);
     }

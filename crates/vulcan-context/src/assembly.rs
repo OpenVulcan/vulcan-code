@@ -41,14 +41,14 @@ impl ContextLayerKind {
     /// 返回供预览与诊断使用的一条简短显示标签。
     pub fn label(&self) -> &'static str {
         match self {
-            Self::System => "系统",
-            Self::ProjectRules => "项目规则",
-            Self::Runtime => "运行时",
-            Self::History => "历史",
-            Self::Retrieval => "检索",
-            Self::Compaction => "压缩",
-            Self::Tools => "工具",
-            Self::User => "用户",
+            Self::System => "System",
+            Self::ProjectRules => "Project rules",
+            Self::Runtime => "Runtime",
+            Self::History => "History",
+            Self::Retrieval => "Retrieval",
+            Self::Compaction => "Compaction",
+            Self::Tools => "Tools",
+            Self::User => "User",
         }
     }
 }
@@ -128,7 +128,7 @@ impl ContextAssembly {
     /// 返回一条供诊断与预览使用的紧凑人类可读摘要行。
     pub fn summary_note(&self) -> String {
         if self.layers.is_empty() {
-            return String::from("上下文为空");
+            return String::from("Context is empty");
         }
 
         let labels = self
@@ -137,7 +137,7 @@ impl ContextAssembly {
             .map(|layer| layer.label.trim().to_string())
             .collect::<Vec<_>>()
             .join(" · ");
-        format!("{} 层 · {}", self.layers.len(), labels)
+        format!("{} layers · {}", self.layers.len(), labels)
     }
 
     /// Builds one layered assembly from a provider request snapshot.
@@ -302,23 +302,23 @@ impl ContextBaselineComparison {
     /// 返回一条紧凑的人类可读诊断语句。
     pub fn summary_note(&self) -> String {
         if self.matches {
-            return format!("基线匹配 · {} 层", self.current_layer_count);
+            return format!("Baseline matched · {} layers", self.current_layer_count);
         }
 
         let layer_label = if self.layer_count_matches {
-            format!("层数未变 {}", self.current_layer_count)
+            format!("Layer count unchanged {}", self.current_layer_count)
         } else {
             format!(
-                "层数变化 {} -> {}",
+                "Layer count changed {} -> {}",
                 self.baseline_layer_count, self.current_layer_count
             )
         };
         let fingerprint_label = if self.fingerprint_matches {
-            "指纹未变"
+            "Fingerprint unchanged"
         } else {
-            "指纹变化"
+            "Fingerprint changed"
         };
-        format!("基线失配 · {layer_label} · {fingerprint_label}")
+        format!("Baseline mismatch · {layer_label} · {fingerprint_label}")
     }
 }
 
@@ -423,12 +423,12 @@ fn render_message_layer_content(message: &ConversationMessage) -> String {
         ConversationPayload::UserText { text, attachments } => {
             let mut sections = vec![text.trim().to_string()];
             if !attachments.is_empty() {
-                sections.push(String::from("附件："));
+                sections.push(String::from("Attachments:"));
                 sections.extend(attachments.iter().map(|attachment| {
                     let byte_label = attachment
                         .byte_len
                         .map(|value| value.to_string())
-                        .unwrap_or_else(|| String::from("未知"));
+                        .unwrap_or_else(|| String::from("unknown"));
                     format!(
                         "- kind={:?} · file={} · mime={} · bytes={}",
                         attachment.kind, attachment.file_name, attachment.mime_type, byte_label
@@ -450,16 +450,16 @@ fn render_message_layer_content(message: &ConversationMessage) -> String {
         } => {
             let mut sections = Vec::new();
             if !text.trim().is_empty() {
-                sections.push(format!("文本：\n{}", text.trim()));
+                sections.push(format!("Text:\n{}", text.trim()));
             }
             if !reasoning.trim().is_empty() {
-                sections.push(format!("推理：\n{}", reasoning.trim()));
+                sections.push(format!("Reasoning:\n{}", reasoning.trim()));
             }
             if let Some(provider_message_id) = provider_message_id.as_deref() {
                 sections.push(format!("provider_message_id={provider_message_id}"));
             }
             if !tool_calls.is_empty() {
-                sections.push(String::from("工具调用："));
+                sections.push(String::from("Tool calls:"));
                 sections.extend(tool_calls.iter().map(|tool_call| {
                     let arguments = serde_json::to_string_pretty(&tool_call.arguments)
                         .unwrap_or_else(|_| tool_call.arguments.to_string());
@@ -631,7 +631,7 @@ mod tests {
         assert!(!comparison.matches);
         assert!(!comparison.layer_count_matches);
         assert!(!comparison.fingerprint_matches);
-        assert!(comparison.summary_note().contains("基线失配"));
+        assert!(comparison.summary_note().contains("Baseline mismatch"));
     }
 
     /// Splits embedded project and runtime instructions out of the provider system prompt for diagnostics.

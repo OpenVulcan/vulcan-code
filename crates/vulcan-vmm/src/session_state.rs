@@ -1619,7 +1619,7 @@ impl VmmSessionMemoryState {
                 let remaining_turns = lease
                     .expires_after_turn_sequence
                     .saturating_sub(self.completed_turn_sequence);
-                vmm_panel_item(lease, format!("剩余 {remaining_turns} 回合"))
+                vmm_panel_item(lease, format!("{remaining_turns} turns left"))
             })
             .collect::<Vec<_>>();
         if items.is_empty() {
@@ -1627,7 +1627,9 @@ impl VmmSessionMemoryState {
         }
         Some(InjectionPanelCard {
             tag: String::from("VMM_MEMORY"),
-            description: String::from("当前会话仍在 TTL 有效期内的 VMM 召回记忆。"),
+            description: String::from(
+                "VMM recalled memories still within their TTL in the current session.",
+            ),
             items,
         })
     }
@@ -1644,14 +1646,16 @@ impl VmmSessionMemoryState {
             .active_leases
             .values()
             .filter(|lease| !lease.is_active_at(self.completed_turn_sequence))
-            .map(|lease| vmm_panel_item(lease, String::from("已过期")))
+            .map(|lease| vmm_panel_item(lease, String::from("Expired")))
             .collect::<Vec<_>>();
         if items.is_empty() {
             return None;
         }
         Some(InjectionPanelCard {
             tag: String::from("VMM_MEMORY_EXPIRED"),
-            description: String::from("已过期的 VMM 召回记忆，等待上下文压缩后清理。"),
+            description: String::from(
+                "Expired VMM recalled memories, waiting to be cleaned up after context compaction.",
+            ),
             items,
         })
     }

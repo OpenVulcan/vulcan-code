@@ -9,11 +9,11 @@ mod observation_tests;
 mod separate_fallback_tests;
 
 #[cfg(test)]
-#[path = "review_query_tests.rs"]
-mod review_query_tests;
-#[cfg(test)]
 #[path = "replacement_decision_tests.rs"]
 mod replacement_decision_tests;
+#[cfg(test)]
+#[path = "review_query_tests.rs"]
+mod review_query_tests;
 
 #[path = "review_query_checkpoint.rs"]
 mod review_query_checkpoint;
@@ -7874,12 +7874,10 @@ fn render_full_profile_bundle(
     sections: &[ProfileSectionBundle],
     include_explanations: bool,
 ) -> String {
-    const INTRO: &str = "以下内容是结合用户历史习惯、偏好、设定总结的画像。";
-    const ENVIRONMENT_HEADER: &str =
-        "以下是你当前所处的项目环境约束（后出现的环境分区优先于更早分区）：";
-    const SUBJECT_HEADER: &str =
-        "以下是你当前正在服务的目标主体偏好（请在不违反环境约束的前提下，尽量满足）：";
-    const LEGEND: &str = "以下是等级与偏好权重说明：\n- P/L/W 说明：\n- P = Priority（优先级）\n  - P0：硬约束 / 不可违背的规则\n  - P1：重要偏好 / 重要工作约定\n  - P2：普通参考 / 低优先级偏好\n- L = Lifetime Level（生命周期级别）\n  - L0：短暂上下文\n  - L1：阶段性偏好或语境\n  - L2：稳定习惯或长期偏好\n  - L3：持久规则 / 强约束 / 身份特征\n- W = Refresh Weight（刷新权重）\n  - 更高的 W 代表这条记忆被再次确认或续期的次数更多。";
+    const INTRO: &str = "The following is a profile summarized from the user's past habits, preferences and settings.";
+    const ENVIRONMENT_HEADER: &str = "The following are the project environment constraints you are working in (later environment sections take precedence over earlier ones):";
+    const SUBJECT_HEADER: &str = "The following are the preferences of the subject you are serving (satisfy them as far as possible without violating the environment constraints):";
+    const LEGEND: &str = "The following explains the levels and preference weights:\n- P/L/W legend:\n- P = Priority\n  - P0: hard constraint / rule that must not be violated\n  - P1: important preference / important working agreement\n  - P2: general reference / low-priority preference\n- L = Lifetime Level\n  - L0: transient context\n  - L1: phase-specific preference or context\n  - L2: stable habit or long-term preference\n  - L3: durable rule / strong constraint / identity trait\n- W = Refresh Weight\n  - A higher W means this memory has been reconfirmed or renewed more often.";
     let nonempty = sections
         .iter()
         .filter(|section| !section.rendered.is_empty())
@@ -7893,14 +7891,14 @@ fn render_full_profile_bundle(
             .iter()
             .map(|section| {
                 let role = match section.role {
-                    SectionRole::Environment => "环境约束",
-                    SectionRole::Subject => "主体偏好",
+                    SectionRole::Environment => "environment constraint",
+                    SectionRole::Subject => "subject preference",
                 };
-                format!("- [{}]：{role}分区。", section.display_label)
+                format!("- [{}]: {role} section.", section.display_label)
             })
             .collect::<Vec<_>>()
             .join("\n");
-        blocks.push(format!("{LEGEND}\n\n结构说明：\n{structure}"));
+        blocks.push(format!("{LEGEND}\n\nStructure:\n{structure}"));
     }
     for (role, header) in [
         (SectionRole::Environment, ENVIRONMENT_HEADER),

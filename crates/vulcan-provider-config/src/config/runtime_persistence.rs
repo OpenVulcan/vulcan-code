@@ -120,9 +120,9 @@ pub enum PersistedLuaSkillToolRegistrationState {
 impl fmt::Display for PersistedLuaSkillToolRegistrationState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
-            Self::Explicit => "显式启用",
-            Self::Implicit => "隐式启用",
-            Self::Disabled => "禁用",
+            Self::Explicit => "Explicitly enabled",
+            Self::Implicit => "Implicitly enabled",
+            Self::Disabled => "Disabled",
         };
         formatter.write_str(label)
     }
@@ -705,17 +705,6 @@ impl PersistedPromptOutputStyleSelection {
     pub const fn is_default(&self) -> bool {
         matches!(self, Self::Balanced)
     }
-
-    /// Returns the compact Chinese selector label.
-    /// 返回紧凑中文选择器名称。
-    pub const fn label_zh(self) -> &'static str {
-        match self {
-            Self::Unrestricted => "不限定",
-            Self::Balanced => "清晰均衡",
-            Self::Structured => "分层报告",
-            Self::Rigorous => "工程严谨",
-        }
-    }
 }
 
 /// Persisted answer mode the user explicitly chose for new conversations. It has no default of its
@@ -819,9 +808,9 @@ impl PersistedPromptPersonalitySelection {
     /// 返回该人格选择在设置中使用的紧凑标签。
     pub fn label(&self) -> String {
         match self {
-            Self::Default => String::from("亲和（默认）"),
-            Self::Named(id) => format!("自定义：{id}"),
-            Self::Disabled => String::from("禁用人格"),
+            Self::Default => String::from("Friendly (default)"),
+            Self::Named(id) => format!("Custom: {id}"),
+            Self::Disabled => String::from("Personality disabled"),
         }
     }
 }

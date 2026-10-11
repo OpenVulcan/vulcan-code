@@ -99,7 +99,7 @@ pub fn allocate_unique_public_tool_name(
         }
     }
 
-    unreachable!("公开工具名分配器应始终能找到可用编号后缀。");
+    unreachable!("The public tool name allocator should always find an available numeric suffix.");
 }
 
 /// Finalizes one partially sanitized name into the host-wide canonical public format.

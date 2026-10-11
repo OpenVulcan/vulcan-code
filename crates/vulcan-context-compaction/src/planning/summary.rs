@@ -317,15 +317,6 @@ pub(super) fn canonical_tool_summary_title(message: &SessionMessageEntry, prefix
 /// 从旧版持久化转录标题中提取最佳努力工具名称。
 fn legacy_tool_name_from_title(title: &str) -> Option<String> {
     let trimmed = title.trim();
-    if let Some(tool_name) = trimmed
-        .strip_prefix("调用 ")
-        .and_then(|value| value.strip_suffix(" 工具"))
-    {
-        return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
-    }
-    if let Some(tool_name) = trimmed.strip_prefix("工具返回 ") {
-        return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
-    }
     if let Some(tool_name) = trimmed.strip_prefix("Tool Call ") {
         return (!tool_name.trim().is_empty()).then(|| tool_name.trim().to_string());
     }

@@ -472,7 +472,7 @@ function hasLegacyToolCallBlockMarker(source: string): boolean {
   return /^#{1,6}\s*Tool Call\b/im.test(source)
     || /(?:^|\n)\s*tool_call_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
     || /(?:^|\n)\s*Tool call\s*[·:]\s*[A-Za-z0-9_.:-]+/i.test(source)
-    || /(?:^|\n)\s*调用\s+[A-Za-z0-9_.:-]+\s+工具\s*(?:进行中|运行中|已完成|失败)?\s*$/im.test(source);
+    || /(?:^|\n)\s*Tool Call\s+[A-Za-z0-9_.:-]+\s*$/im.test(source);
 }
 
 // hasLegacyToolResultBlockMarker detects explicit legacy tool-result transcript blocks.

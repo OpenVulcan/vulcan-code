@@ -205,12 +205,9 @@ fn hard_dedupe_pool_spans_the_larger_window_within_the_ceiling() {
     let ranked: Vec<SearchHit> = (0..40)
         .map(|index| hit(record(&format!("m{index:02}"), None), 0.5))
         .collect();
-    for (pool_top_k, limit, ceiling, expected) in [
-        (3, 1, 32, 3),
-        (1, 1, 32, 1),
-        (1, 5, 32, 5),
-        (16, 1, 4, 4),
-    ] {
+    for (pool_top_k, limit, ceiling, expected) in
+        [(3, 1, 32, 3), (1, 1, 32, 1), (1, 5, 32, 5), (16, 1, 4, 4)]
+    {
         let mut policy = RetrievalPolicy::v1();
         policy.hard_dedupe_pool_top_k = pool_top_k;
         policy.candidate_pool_max = ceiling;

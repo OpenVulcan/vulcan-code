@@ -471,10 +471,10 @@ impl ContextBudgetSeverity {
     /// 返回供诊断、预览与工作台提示浮层使用的简短中文标签。
     pub const fn display_label(self) -> &'static str {
         match self {
-            Self::Healthy => "正常",
-            Self::Warning => "预警",
-            Self::CompactSoon => "建议压缩",
-            Self::Overflow => "预算溢出",
+            Self::Healthy => "Normal",
+            Self::Warning => "Warning",
+            Self::CompactSoon => "Compaction recommended",
+            Self::Overflow => "Budget overflow",
         }
     }
 }
@@ -510,9 +510,9 @@ impl ContextBudgetAccountingSource {
     /// 返回用量提示中展示的简短中文标签。
     pub const fn display_label(self) -> &'static str {
         match self {
-            Self::ProviderReported => "Provider 实测",
-            Self::ProviderAnchorPlusCharacterDelta => "Provider 锚点 + 字符增量",
-            Self::CharacterEstimate => "字符粗估",
+            Self::ProviderReported => "Provider measured",
+            Self::ProviderAnchorPlusCharacterDelta => "Provider anchor + character delta",
+            Self::CharacterEstimate => "Character estimate",
         }
     }
 }
@@ -684,7 +684,7 @@ impl ContextBudgetSnapshot {
         if let Some(limit) = self.effective_context_window {
             format!("{} / {}", self.active_context_tokens, limit)
         } else {
-            format!("{} / 未声明上限", self.active_context_tokens)
+            format!("{} / limit not declared", self.active_context_tokens)
         }
     }
 
@@ -693,9 +693,9 @@ impl ContextBudgetSnapshot {
     pub fn summary_note(&self) -> String {
         let severity_label = self.severity.display_label();
         let baseline_label = if self.baseline_matches_active_runtime {
-            "基线匹配"
+            "Baseline matched"
         } else {
-            "基线失配"
+            "Baseline mismatch"
         };
         let baseline_reason_suffix = self
             .baseline_mismatch_reason
@@ -705,23 +705,23 @@ impl ContextBudgetSnapshot {
         let context_limit_label = self
             .context_limit
             .map(|value| value.to_string())
-            .unwrap_or_else(|| String::from("未声明"));
+            .unwrap_or_else(|| String::from("not declared"));
         let input_source_label = self.accounting_source.display_label();
         let breakdown_label = if self.observed_usage.is_some() {
-            "本地估算拆分"
+            "Local estimate breakdown"
         } else {
-            "估算拆分"
+            "Estimate breakdown"
         };
         format!(
-            "{severity_label} · {baseline_label}{} · 原始窗口 {} · 有效窗口 {} · 自动压缩线 {} · 输入来源 {} · {} · {} 系统 {} / 历史 {} / 当前 {} / 工具 {} · 活动上下文 {} · 自动压缩计量 {} · 端到端占用 {} · 输出预留 {} · 推理预留 {} · 旧压缩预留 {}{}{}",
+            "{severity_label} · {baseline_label}{} · raw window {} · effective window {} · auto-compaction line {} · input source {} · {} · {} system {} / history {} / current {} / tools {} · active context {} · auto-compaction metered {} · end-to-end usage {} · output reserve {} · reasoning reserve {} · legacy compaction reserve {}{}{}",
             baseline_reason_suffix,
             context_limit_label,
             self.effective_context_window
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| String::from("未声明")),
+                .unwrap_or_else(|| String::from("not declared")),
             self.auto_compact_limit
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| String::from("未声明")),
+                .unwrap_or_else(|| String::from("not declared")),
             input_source_label,
             self.usage_label(),
             breakdown_label,
@@ -741,7 +741,7 @@ impl ContextBudgetSnapshot {
                 .unwrap_or_default(),
             self.accounting_warning_code
                 .as_ref()
-                .map(|warning| format!(" · 警告 {warning}"))
+                .map(|warning| format!(" · warning {warning}"))
                 .unwrap_or_default()
         )
     }
@@ -766,7 +766,7 @@ fn provider_usage_label(usage: &ProviderUsageSnapshot) -> String {
         .total_tokens
         .map(|value| value.to_string())
         .unwrap_or_else(|| String::from("?"));
-    format!("最近实测 输入 {input} / 输出 {output} / 推理 {reasoning} / 总计 {total}")
+    format!("Last measured input {input} / output {output} / reasoning {reasoning} / total {total}")
 }
 
 #[cfg(test)]
@@ -781,14 +781,18 @@ mod tests {
     #[test]
     fn context_budget_severity_keys_and_labels_are_stable() {
         let cases = [
-            (ContextBudgetSeverity::Healthy, "healthy", "正常"),
-            (ContextBudgetSeverity::Warning, "warning", "预警"),
+            (ContextBudgetSeverity::Healthy, "healthy", "Normal"),
+            (ContextBudgetSeverity::Warning, "warning", "Warning"),
             (
                 ContextBudgetSeverity::CompactSoon,
                 "compact-soon",
-                "建议压缩",
+                "Compaction recommended",
             ),
-            (ContextBudgetSeverity::Overflow, "overflow", "预算溢出"),
+            (
+                ContextBudgetSeverity::Overflow,
+                "overflow",
+                "Budget overflow",
+            ),
         ];
 
         for (severity, key, label) in cases {

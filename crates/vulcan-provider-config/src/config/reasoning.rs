@@ -78,16 +78,16 @@ impl ReasoningEffortLevel {
     /// 返回紧凑中文显示标签。
     pub const fn compact_label(self) -> &'static str {
         match self {
-            Self::Off => "默认",
-            Self::None => "关闭",
-            Self::Adaptive => "自适应",
-            Self::Minimal => "最小",
-            Self::Low => "低",
-            Self::Medium => "中",
-            Self::High => "高",
-            Self::XHigh => "超高",
-            Self::Max => "最大",
-            Self::Ultra => "极限",
+            Self::Off => "Default",
+            Self::None => "None",
+            Self::Adaptive => "Adaptive",
+            Self::Minimal => "Minimal",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::XHigh => "Extra high",
+            Self::Max => "Max",
+            Self::Ultra => "Ultra",
         }
     }
 }

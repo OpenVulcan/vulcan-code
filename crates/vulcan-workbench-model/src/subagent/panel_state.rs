@@ -7,7 +7,7 @@ pub fn subagent_navigation_task_label(state: &SubagentTaskPanelState) -> String 
     if !label.is_empty() {
         return label.to_string();
     }
-    String::from("智能体")
+    String::from("Agent")
 }
 
 /// Converts one explicit execution-status string into the canonical subagent run state.

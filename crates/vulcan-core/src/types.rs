@@ -764,11 +764,11 @@ impl ConversationAttachmentKind {
     /// 返回展示在宿主侧附件预览与标签中的紧凑中文名称。
     pub fn display_label(&self) -> &'static str {
         match self {
-            Self::Audio => "音频",
-            Self::Image => "图片",
-            Self::Video => "视频",
+            Self::Audio => "Audio",
+            Self::Image => "Image",
+            Self::Video => "Video",
             Self::Pdf => "PDF",
-            Self::File => "文件",
+            Self::File => "File",
         }
     }
 }

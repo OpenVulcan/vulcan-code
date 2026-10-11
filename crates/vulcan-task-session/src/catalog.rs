@@ -749,7 +749,7 @@ pub fn plugin_subagent_category() -> SubagentCategoryDefinition {
             (
                 String::from("zh-CN"),
                 SubagentCategoryLocaleDefinition {
-                    name: Some(String::from("插件")),
+                    name: Some(String::from("Plugins")),
                     description: None,
                 },
             ),

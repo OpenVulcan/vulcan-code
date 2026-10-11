@@ -109,7 +109,7 @@ fn run_user_turn_executes_multi_turn_loop_and_refreshes_continuation() {
             ConversationPayload::ToolResult { text, .. } if text == "已读取 src/main.rs 的摘要内容。"
         ));
         assert!(controller.snapshot().records.iter().any(|record| {
-            record.title == "调用 read_file 工具"
+            record.title == "Tool Call read_file"
                 && record
                     .metadata
                     .as_ref()
@@ -644,7 +644,7 @@ fn run_user_turn_fails_when_provider_turn_budget_is_exhausted() {
         assert_eq!(controller.phase(), ControllerPhase::Failed);
         assert!(controller.events().iter().any(|event| {
             matches!(event.kind, CoreEventKind::Error)
-                && event.body.contains("最大 Provider 回合限制")
+                && event.body.contains("maximum provider turn limit")
         }));
         assert_eq!(controller.snapshot().messages.len(), 3);
     });
