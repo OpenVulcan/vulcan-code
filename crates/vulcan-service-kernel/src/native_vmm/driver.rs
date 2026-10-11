@@ -348,17 +348,23 @@ fn optional_capability_status(
     let Some(capability) = handle.snapshot.operations.iter().find(|capability| {
         capability.operation == operation && capability.purpose_id.as_deref() == purpose_id
     }) else {
-        return (false, Some(String::from("宿主未发布该可选 AI 能力")));
+        return (
+            false,
+            Some(String::from(
+                "The host has not published this optional AI capability",
+            )),
+        );
     };
     if capability.available {
         return (true, None);
     }
     (
         false,
-        capability
-            .unavailable_reason
-            .clone()
-            .or_else(|| Some(String::from("宿主 AI 能力当前不可用"))),
+        capability.unavailable_reason.clone().or_else(|| {
+            Some(String::from(
+                "The host AI capability is currently unavailable",
+            ))
+        }),
     )
 }
 
@@ -655,12 +661,14 @@ impl NativeVmmCoreRuntime {
         inputs: Vec<String>,
     ) -> Result<Vec<Vec<f32>>, String> {
         if inputs.is_empty() {
-            return Err(String::from("原生 VMM 维护向量批次不能为空。"));
+            return Err(String::from(
+                "The native VMM maintenance embedding batch must not be empty.",
+            ));
         }
         let current = self.current_vector_space_descriptor().await?;
         if current != *descriptor {
             return Err(String::from(
-                "向量重建期间 Embedding 路由发生变化；请重新预检剩余记录。",
+                "The embedding route changed during the vector rebuild; precheck the remaining records again.",
             ));
         }
         let effect = vulcan_memorymesh_core::EmbeddingEffect {
@@ -690,18 +698,18 @@ impl NativeVmmCoreRuntime {
                             effect.inputs.len(),
                         )
                         .map_err(|error| {
-                            format!("原生 VMM 维护向量批次计数超出范围：{error}")
+                            format!("The native VMM maintenance embedding batch count is out of range: {error}")
                         })?)) =>
             {
                 Ok(batch.vectors)
             }
             HostEffectResult::Failure(failure) => {
-                Err(format!("原生 VMM 维护向量生成失败：{}", failure.diagnostic))
+                Err(format!("Native VMM maintenance embedding failed: {}", failure.diagnostic))
             }
             HostEffectResult::Embedding(_) => Err(String::from(
-                "原生 VMM 维护向量响应包含缺失、丢弃或乱序结果。",
+                "The native VMM maintenance embedding response contains missing, dropped or out-of-order results.",
             )),
-            _ => Err(String::from("原生 VMM 维护向量返回了错误的结果类型。")),
+            _ => Err(String::from("Native VMM maintenance embedding returned the wrong result type.")),
         }
     }
 
@@ -735,7 +743,7 @@ impl NativeVmmCoreRuntime {
             return Ok(());
         }
         Err(format!(
-            "当前 Embedding 路由与 {rebuild_required} 条活动记忆的向量代次不一致。请在记忆设置的“内部维护”中完成向量重建后再使用记忆读写。"
+            "The current embedding route disagrees with the vector generation of {rebuild_required} active memories. Finish the vector rebuild under Internal maintenance in the memory settings before reading or writing memories."
         ))
     }
 
@@ -1128,7 +1136,7 @@ impl NativeVmmCoreRuntime {
         self.host
             .storage
             .read()
-            .map_err(|_| String::from("原生 VMM 存储读锁已损坏"))
+            .map_err(|_| String::from("The native VMM storage read lock is poisoned"))
             .map(|storage| storage.snapshot())
     }
 
@@ -1146,7 +1154,7 @@ impl NativeVmmCoreRuntime {
             .host
             .storage
             .read()
-            .map_err(|_| "原生 VMM 存储读锁已损坏".to_owned())?;
+            .map_err(|_| "The native VMM storage read lock is poisoned".to_owned())?;
         check(&storage)
     }
 
@@ -1180,7 +1188,9 @@ impl NativeVmmCoreRuntime {
             .map_err(|error| error.to_string())?;
         match result {
             CommandResult::Retention(plan) => Ok(plan),
-            _ => Err(String::from("原生 VMM 清洗预览返回了非保留计划结果。")),
+            _ => Err(String::from(
+                "The native VMM retention preview returned a non-retention-plan result.",
+            )),
         }
     }
 
@@ -1232,17 +1242,18 @@ impl NativeVmmCoreRuntime {
         {
             if existing.mutation_kind != mutation_kind {
                 return Err(format!(
-                    "原生 VMM 操作 `{operation_id}` 已用于 `{}`，不能重用于 `{mutation_kind}`",
+                    "Native VMM operation `{operation_id}` was already used for `{}` and cannot be reused for `{mutation_kind}`",
                     existing.mutation_kind
                 ));
             }
-            return serde_json::from_str(&existing.result_json)
-                .map_err(|error| format!("解析原生 VMM 幂等维护结果失败：{error}"));
+            return serde_json::from_str(&existing.result_json).map_err(|error| {
+                format!("Failed to parse the idempotent native VMM maintenance result: {error}")
+            });
         }
         let before = self.storage_snapshot()?;
         if before.storage_version != expected_storage_version {
             return Err(format!(
-                "原生 VMM 维护预检已过期：预期存储版本 {expected_storage_version}，当前版本 {}，请重新预检",
+                "The native VMM maintenance precheck is stale: expected storage version {expected_storage_version}, current version {}; precheck again",
                 before.storage_version
             ));
         }
@@ -1251,9 +1262,9 @@ impl NativeVmmCoreRuntime {
         after.storage_version = after
             .storage_version
             .checked_add(1)
-            .ok_or_else(|| String::from("原生 VMM 存储版本已耗尽"))?;
+            .ok_or_else(|| String::from("The native VMM storage versions are exhausted"))?;
         let staged = InMemoryStorage::from_snapshot(after.clone())
-            .map_err(|error| format!("原生 VMM 维护结果无效：{error}"))?;
+            .map_err(|error| format!("Invalid native VMM maintenance result: {error}"))?;
         self.host
             .persist_prepared_storage_transition(
                 operation_id,
@@ -1305,13 +1316,15 @@ impl NativeVmmCoreRuntime {
         };
         if existing.mutation_kind != mutation_kind {
             return Err(format!(
-                "原生 VMM 操作 `{operation_id}` 已用于 `{}`，不能重用于 `{mutation_kind}`",
+                "Native VMM operation `{operation_id}` was already used for `{}` and cannot be reused for `{mutation_kind}`",
                 existing.mutation_kind
             ));
         }
         serde_json::from_str(&existing.result_json)
             .map(Some)
-            .map_err(|error| format!("解析原生 VMM 幂等维护结果失败：{error}"))
+            .map_err(|error| {
+                format!("Failed to parse the idempotent native VMM maintenance result: {error}")
+            })
     }
 
     /// Activates a Core snapshot derived from the exact configured embedding route.
@@ -1501,12 +1514,15 @@ impl NativeVmmHostDriver {
             operation_id: operation_id.to_owned(),
             mutation_kind: mutation_kind.to_owned(),
             state: String::from(VMM_CORE_MUTATION_PREPARED),
-            before_snapshot_json: serde_json::to_string(before)
-                .map_err(|error| format!("序列化原生 VMM 变更前快照失败：{error}"))?,
-            after_snapshot_json: serde_json::to_string(after)
-                .map_err(|error| format!("序列化原生 VMM 变更后快照失败：{error}"))?,
-            result_json: serde_json::to_string(output)
-                .map_err(|error| format!("序列化原生 VMM 变更结果失败：{error}"))?,
+            before_snapshot_json: serde_json::to_string(before).map_err(|error| {
+                format!("Failed to serialize the native VMM pre-mutation snapshot: {error}")
+            })?,
+            after_snapshot_json: serde_json::to_string(after).map_err(|error| {
+                format!("Failed to serialize the native VMM post-mutation snapshot: {error}")
+            })?,
+            result_json: serde_json::to_string(output).map_err(|error| {
+                format!("Failed to serialize the native VMM mutation result: {error}")
+            })?,
         };
         self.data_plane.prepare_core_mutation(&mutation).await?;
         self.resume_core_mutation(&mutation).await
@@ -1552,17 +1568,25 @@ impl NativeVmmHostDriver {
             return Ok(0);
         }
         let before: StorageSnapshot = serde_json::from_str(&mutation.before_snapshot_json)
-            .map_err(|error| format!("解析原生 VMM 维护前快照失败：{error}"))?;
-        let after: StorageSnapshot = serde_json::from_str(&mutation.after_snapshot_json)
-            .map_err(|error| format!("解析原生 VMM 维护后快照失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to parse the native VMM pre-maintenance snapshot: {error}")
+            })?;
+        let after: StorageSnapshot =
+            serde_json::from_str(&mutation.after_snapshot_json).map_err(|error| {
+                format!("Failed to parse the native VMM post-maintenance snapshot: {error}")
+            })?;
         let staged = InMemoryStorage::from_snapshot(after.clone())
-            .map_err(|error| format!("原生 VMM 恢复快照无效：{error}"))?;
+            .map_err(|error| format!("Invalid native VMM recovery snapshot: {error}"))?;
         if mutation.state == VMM_CORE_MUTATION_PREPARED {
             self.persist_vectors(&after)
                 .await
                 .map_err(|error| error.to_string())?;
-            let relational = serde_json::to_string(&after.without_embeddings())
-                .map_err(|error| format!("序列化原生 VMM 恢复关系快照失败：{error}"))?;
+            let relational =
+                serde_json::to_string(&after.without_embeddings()).map_err(|error| {
+                    format!(
+                        "Failed to serialize the native VMM recovery relation snapshot: {error}"
+                    )
+                })?;
             let pending_turn_id = pending_turn_id_from_core_mutation(mutation)?;
             // Compare both active and recoverable records: a moved turn is not permanently removed.
             // 比较活动和可恢复记录：已移动回合并非永久移除。
@@ -1577,7 +1601,7 @@ impl NativeVmmHostDriver {
                 .await?;
         } else if mutation.state != VMM_CORE_MUTATION_COMMITTED {
             return Err(format!(
-                "原生 VMM 维护变更 `{}` 包含未知状态 `{}`",
+                "Native VMM maintenance mutation `{}` has an unknown state `{}`",
                 mutation.operation_id, mutation.state
             ));
         }
@@ -1587,7 +1611,7 @@ impl NativeVmmHostDriver {
         *self
             .storage
             .write()
-            .map_err(|_| String::from("原生 VMM 存储写锁已损坏，需重启后恢复维护变更"))? = staged;
+            .map_err(|_| String::from("The native VMM storage write lock is poisoned; restart to recover the maintenance mutation"))? = staged;
         // This transition's physical count is returned, not merged into unrelated recovery or command state.
         // 返回本次变换的物理计数，不合并到无关恢复或命令状态。
         let deleted_vector_rows = self.delete_stale_vectors_strict(&before, &after).await?;
@@ -2487,7 +2511,7 @@ impl NativeVmmHostDriver {
                 .data_plane
                 .resolve_vector_space(&space_id)
                 .await?
-                .ok_or_else(|| format!("原生 VMM 向量空间 `{space_id}` 不存在"))?;
+                .ok_or_else(|| format!("Native VMM vector space `{space_id}` does not exist"))?;
             // The physical data plane reports the exact row total for this space.
             // 物理数据面报告此空间的准确行数总计。
             let space_deleted_rows = self
@@ -2496,7 +2520,9 @@ impl NativeVmmHostDriver {
                 .await?;
             deleted_rows = deleted_rows
                 .checked_add(space_deleted_rows)
-                .ok_or_else(|| String::from("原生 VMM 物理向量删除计数溢出"))?;
+                .ok_or_else(|| {
+                    String::from("The native VMM physical vector deletion count overflowed")
+                })?;
         }
         Ok(deleted_rows)
     }
@@ -2704,8 +2730,10 @@ fn pending_turn_id_from_core_mutation(
     if !mutation.mutation_kind.starts_with("core_storage_mutation:") {
         return Ok(None);
     }
-    let outcome: MutationOutcome = serde_json::from_str(&mutation.result_json)
-        .map_err(|error| format!("解析原生 VMM Core 存储变更结果失败：{error}"))?;
+    let outcome: MutationOutcome =
+        serde_json::from_str(&mutation.result_json).map_err(|error| {
+            format!("Failed to parse the native VMM Core storage mutation result: {error}")
+        })?;
     let MutationOutcome::Committed { receipt, .. } = outcome else {
         return Ok(None);
     };
@@ -2718,12 +2746,16 @@ fn pending_turn_id_from_core_mutation(
         .iter()
         .any(|binding| binding.entity_kind != vulcan_memorymesh_core::EntityKind::Turn)
     {
-        return Err(String::from("原生 VMM 登记变更的待处理回合绑定类别无效"));
+        return Err(String::from(
+            "The pending turn binding kind of the native VMM intake mutation is invalid",
+        ));
     }
     match bindings.as_slice() {
         [] => Ok(None),
         [binding] => Ok(Some(binding.domain_id.clone())),
-        _ => Err(String::from("原生 VMM 登记变更包含多个待处理回合绑定")),
+        _ => Err(String::from(
+            "The native VMM intake mutation contains multiple pending turn bindings",
+        )),
     }
 }
 
@@ -2748,7 +2780,7 @@ async fn hydrate_storage(data_plane: &VmmDataPlaneHandle) -> Result<InMemoryStor
         return Ok(InMemoryStorage::default());
     };
     let mut snapshot: StorageSnapshot = serde_json::from_str(&encoded)
-        .map_err(|error| format!("解析原生 VMM Core 快照失败：{error}"))?;
+        .map_err(|error| format!("Failed to parse the native VMM Core snapshot: {error}"))?;
     let mut by_space = BTreeMap::<String, Vec<String>>::new();
     for memory in snapshot.dataset.memories.iter().chain(
         snapshot
@@ -2768,31 +2800,37 @@ async fn hydrate_storage(data_plane: &VmmDataPlaneHandle) -> Result<InMemoryStor
         let binding = data_plane
             .resolve_vector_space(&space_id)
             .await?
-            .ok_or_else(|| format!("原生 VMM 向量空间 `{space_id}` 不存在"))?;
+            .ok_or_else(|| format!("Native VMM vector space `{space_id}` does not exist"))?;
         for candidate in data_plane.load_vectors(&binding, &memory_ids).await? {
             vectors.insert(candidate.memory_id, candidate.vector);
         }
     }
     for memory in &mut snapshot.dataset.memories {
         if memory.vector_space_id.is_some() {
-            memory.embedding = Some(
-                vectors
-                    .remove(memory.id.as_str())
-                    .ok_or_else(|| format!("原生 VMM 记忆 `{}` 缺少向量", memory.id.as_str()))?,
-            );
+            memory.embedding = Some(vectors.remove(memory.id.as_str()).ok_or_else(|| {
+                format!(
+                    "Native VMM memory `{}` is missing its vector",
+                    memory.id.as_str()
+                )
+            })?);
         }
     }
     for batch in &mut snapshot.retention_trash_batches {
         for memory in &mut batch.dataset.memories {
             if memory.vector_space_id.is_some() {
                 memory.embedding = Some(vectors.remove(memory.id.as_str()).ok_or_else(|| {
-                    format!("原生 VMM 回收站记忆 `{}` 缺少隔离向量", memory.id.as_str())
+                    format!(
+                        "Native VMM recycle-bin memory `{}` is missing its quarantined vector",
+                        memory.id.as_str()
+                    )
                 })?);
             }
         }
     }
     if !vectors.is_empty() {
-        return Err(String::from("原生 VMM 向量回填返回了未引用记录"));
+        return Err(String::from(
+            "The native VMM vector backfill returned unreferenced records",
+        ));
     }
     InMemoryStorage::from_snapshot(snapshot)
 }

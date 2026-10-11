@@ -35,7 +35,7 @@ impl NativeVmmMaintenance {
         let _operation_guard = self.operation_gate.read().await;
         *self.removal_preview.lock().await = None;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("请先启用原生记忆。".to_owned());
+            return Err("Enable native memory first.".to_owned());
         }
         self.ensure_project(query.vmm_project_id).await?;
         // Read the same owner-specific policy used by scheduled retention.
@@ -81,7 +81,7 @@ impl NativeVmmMaintenance {
         // 移动原记录时排除提取及全部其他快照变更。
         let _operation_guard = self.operation_gate.write().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("原生记忆已关闭，请重新启用并预览。".to_owned());
+            return Err("Native memory is turned off; enable it again and preview.".to_owned());
         }
         // A committed retry is bound to the same opaque preview, not a new client selection.
         // 已提交重试绑定同一不透明预览，而非新的客户端选择。
@@ -101,13 +101,18 @@ impl NativeVmmMaintenance {
             let mut slot = self.removal_preview.lock().await;
             match slot.as_ref() {
                 Some(prepared) if prepared.summary.preview_id == preview_id => {}
-                _ => return Err("回收预览不存在或已被替换，请重新预览。".to_owned()),
+                _ => {
+                    return Err(
+                        "The removal preview does not exist or was replaced; preview again."
+                            .to_owned(),
+                    );
+                }
             }
             slot.take()
-                .ok_or_else(|| "回收预览已消费，请重新预览。".to_owned())?
+                .ok_or_else(|| "The removal preview was already used; preview again.".to_owned())?
         };
         if prepared.created_at.elapsed() > Duration::from_secs(300) {
-            return Err("回收预览已过期，请重新预览。".to_owned());
+            return Err("The removal preview expired; preview again.".to_owned());
         }
         // Check live policy without silently replacing the already displayed impact.
         // 检查实时策略，不静默替换已经显示的影响。
@@ -119,7 +124,7 @@ impl NativeVmmMaintenance {
         if rules.effective.turn_hot_window_size != prepared.summary.impact.hot_window_size
             || rules.effective.trash_retention_ms != prepared.summary.trash_retention_ms
         {
-            return Err("回收保留规则已改变，请重新预览。".to_owned());
+            return Err("The removal retention rules changed; preview again.".to_owned());
         }
         // Retention starts when records are moved, not while the user reads the dialog.
         // 保留期限从记录移动时开始，而非用户阅读对话框时开始。
@@ -152,20 +157,20 @@ pub(super) fn apply_manual_removal(
         preview.impact.hot_window_size,
     )?;
     if observed != preview.impact {
-        return Err("所选记忆来源已变化，请重新预览。".to_owned());
+        return Err("The source of the selected memories changed; preview again.".to_owned());
     }
     // Check both time bounds and the next storage version before moving any original record.
     // 移动任一原记录之前检查时间边界及下一存储版本。
     let expires_at_ns = now_ns
         .checked_add(retention_duration_ns(preview.trash_retention_ms)?)
         .filter(|expires| now_ns > 0 && *expires > now_ns)
-        .ok_or_else(|| "回收批次时间或保留期限无效。".to_owned())?;
+        .ok_or_else(|| "The recycle batch time or retention period is invalid.".to_owned())?;
     // The transaction owner performs the actual version increment.
     // 事务归属方执行实际版本递增。
     let storage_version = snapshot
         .storage_version
         .checked_add(1)
-        .ok_or_else(|| "原生记忆存储版本已耗尽。".to_owned())?;
+        .ok_or_else(|| "The native memory storage versions are exhausted.".to_owned())?;
     // The batch identity is derived only from the server-generated confirmation token.
     // 批次身份只从服务端生成的确认令牌派生。
     let batch_id = format!("manual:{}", preview.preview_id);
@@ -174,7 +179,7 @@ pub(super) fn apply_manual_removal(
         .iter()
         .any(|batch| batch.batch_id == batch_id)
     {
-        return Err("回收批次已存在，请刷新。".to_owned());
+        return Err("The recycle batch already exists; refresh.".to_owned());
     }
     // Every selected record was resolved under these exact native owner identities.
     // 每条所选记录均在这些准确原生归属身份下解析。

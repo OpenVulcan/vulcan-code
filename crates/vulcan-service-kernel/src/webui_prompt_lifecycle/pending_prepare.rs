@@ -179,7 +179,9 @@ pub(crate) fn pending_in_turn_dispatch_authority_from_v1_handle(
                 inputs,
             })
         })
-        .map_err(|error| format!("读取 V1 回合内输入分发权威失败：{error}"))?
+        .map_err(|error| {
+            format!("Failed to read the V1 in-turn input dispatch authority: {error}")
+        })?
 }
 
 /// Exact V1 authority of one root user input already owning an open Turn.
@@ -259,7 +261,7 @@ pub(crate) fn subagent_return_dispatch_authority_from_v1_handle(
 ) -> Result<SessionSubagentReturnDispatchAuthority, String> {
     handle
         .read(|document| subagent_return_dispatch_authority_from_document(document, receipt))
-        .map_err(|error| format!("读取 V1 子代理回流失败：{error}"))?
+        .map_err(|error| format!("Failed to read the V1 subagent return: {error}"))?
 }
 
 /// Validates a return receipt against one complete snapshot supplied by its storage owner.
@@ -389,7 +391,7 @@ pub(crate) fn queued_dispatch_authority_from_v1_handle(
                 resource_ids: input.resource_ids.clone(),
             })
         })
-        .map_err(|error| format!("读取 V1 排队后继失败：{error}"))?
+        .map_err(|error| format!("Failed to read the V1 queued successor: {error}"))?
 }
 
 /// Reads one undispatched root input directly from the authoritative open V1 Turn.
@@ -451,7 +453,7 @@ pub(crate) fn user_root_dispatch_authority_from_v1_handle(
                 resource_ids: input.resource_ids.clone(),
             })
         })
-        .map_err(|error| format!("读取 V1 根输入分发权威失败：{error}"))?
+        .map_err(|error| format!("Failed to read the V1 root input dispatch authority: {error}"))?
 }
 
 /// Resolves the exact scheduled user Turn created for one browser action.
@@ -501,7 +503,7 @@ pub(crate) fn queued_dispatch_authority_for_client_action(
             }
             Ok((turn.turn_id, input.input_id, event.seq))
         })
-        .map_err(|error| format!("读取 V1 已调度用户回合失败：{error}"))??;
+        .map_err(|error| format!("Failed to read the V1 scheduled user turn: {error}"))??;
     queued_dispatch_authority_from_v1_handle(handle, turn_id, input_id, client_action_id, input_seq)
 }
 
@@ -852,7 +854,7 @@ fn exact_goal_continuation_prompt_entry(
         ),
         prompt: String::from("Continue working toward the active thread goal."),
         hidden_model_guidance: None,
-        preview: String::from("继续执行目标"),
+        preview: String::from("Continue the goal"),
         attachments: Vec::new(),
         model_reference: None,
         runtime_options: PendingPromptRuntimeOptions::default(),
@@ -1119,7 +1121,7 @@ pub(super) async fn prepare_webui_pending_prompt(
         // 提交预留覆盖 Hook 准备、可靠捕获以及 kernel 注册。
         let mut hook_runtime = entry_agent_runtime
             .lock_conversation_hooks()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+            .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?;
         let precheck_start = begin_shared_prompt_turn(
             &mut workspace_snapshot,
             &mut hook_runtime,
@@ -1297,7 +1299,7 @@ pub(super) async fn prepare_webui_pending_prompt(
         // 保留的提交预留串行化本次准入，无须跨 I/O 持有外层锁。
         let mut hook_runtime = entry_agent_runtime
             .lock_conversation_hooks()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+            .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?;
         // Exact process inputs retain their individual canonical identities even when Provider preparation uses a batch prompt.
         // 即使 Provider 准备使用批次提示，精确过程输入仍保留各自规范身份。
         let precheck_start = if let ExactPendingPromptDispatch::PendingInTurn {

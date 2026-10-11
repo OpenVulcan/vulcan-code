@@ -117,7 +117,7 @@ pub(crate) async fn service_save_public_ai_usage_refresh_settings(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存账号用量刷新间隔失败",
+        "Failed to save the account usage refresh interval",
         |configuration| {
             configuration.usage_refresh_interval_seconds = request.interval_seconds;
             Ok(())
@@ -168,7 +168,7 @@ pub(crate) async fn service_save_public_ai_provider_priority(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存供应商优先级失败",
+        "Failed to save the provider priority",
         |configuration| {
             if request.priority == 0 {
                 configuration
@@ -215,7 +215,7 @@ pub(crate) async fn service_save_public_ai_context_window_policy_overrides(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存系统级上下文窗口策略失败",
+        "Failed to save the system-level context window policy",
         |configuration| configuration.set_context_window_policy_overrides(overrides),
         |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
     )?;
@@ -254,7 +254,7 @@ pub(crate) async fn service_save_public_ai_context_compaction_window_nodes(
             &state,
             runtime.as_ref(),
             &current_configuration,
-            "保存上下文压缩窗口节点失败",
+            "Failed to save the context compaction window nodes",
             |configuration| configuration.set_context_compaction_window_nodes(nodes),
             |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
             |configuration| {
@@ -289,7 +289,7 @@ pub(crate) async fn service_save_public_ai_new_session_context_window_default(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存新建会话上下文窗口默认值失败",
+        "Failed to save the new session context window default",
         |configuration| {
             configuration.set_new_session_context_compaction_window_node_id(request.node_id);
             Ok(())
@@ -323,7 +323,7 @@ pub(crate) async fn service_ack_public_ai_model_takeover_notices(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "确认系统模型接管提示失败",
+        "Failed to acknowledge the system model takeover notices",
         |configuration| {
             configuration.acknowledge_system_model_takeover_notices(
                 &notices.iter().cloned().collect::<Vec<_>>(),

@@ -19,13 +19,33 @@ pub(crate) fn startup_snapshot_with_phase(
                     (
                         "service-process",
                         StartupStepStatus::Pending,
-                        "等待 Core Service 启动",
+                        "Waiting for Core Service to start",
                     ),
-                    ("vldb", StartupStepStatus::Pending, "等待初始化"),
-                    ("luaskills", StartupStepStatus::Pending, "等待初始化"),
-                    ("mcp", StartupStepStatus::Pending, "等待初始化"),
-                    ("plugins", StartupStepStatus::Pending, "等待初始化"),
-                    ("workspace", StartupStepStatus::Pending, "等待初始化"),
+                    (
+                        "vldb",
+                        StartupStepStatus::Pending,
+                        "Waiting for initialization",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Pending,
+                        "Waiting for initialization",
+                    ),
+                    (
+                        "mcp",
+                        StartupStepStatus::Pending,
+                        "Waiting for initialization",
+                    ),
+                    (
+                        "plugins",
+                        StartupStepStatus::Pending,
+                        "Waiting for initialization",
+                    ),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "Waiting for initialization",
+                    ),
                 ],
             )
         } else {

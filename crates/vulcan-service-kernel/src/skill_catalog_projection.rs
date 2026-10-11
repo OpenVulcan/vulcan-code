@@ -423,10 +423,10 @@ pub(crate) fn lua_skills_catalog_summary(
         restart_required: catalog.restart_required,
         entry_count: catalog.entry_count,
         notice: if catalog.runtime_root.as_os_str().is_empty() {
-            String::from("LuaSkills 技能目录尚未载入。")
+            String::from("The LuaSkills skill catalog is not loaded yet.")
         } else {
             format!(
-                "可见技能 {} 个，运行时入口 {} 个。",
+                "{} visible skills, {} runtime entries.",
                 catalog.skills.len(),
                 catalog.entry_count
             )
@@ -564,7 +564,7 @@ pub(crate) fn agent_skills_catalog_summary_from_catalog(
         user_root: normalized_workspace_path_text_from_path(&catalog.user_root),
         notice: if chinese {
             format!(
-                "系统记录 {}，用户记录 {}，插件记录 {}，有效技能 {}，目录问题 {}。",
+                "{} system records, {} user records, {} plugin records, {} effective skills, {} catalog issues.",
                 catalog
                     .records
                     .iter()
@@ -698,7 +698,7 @@ pub(crate) fn subagent_catalog_summary_from_catalog(
         system_root: normalized_workspace_path_text_from_path(&catalog.system_root),
         user_root: normalized_workspace_path_text_from_path(&catalog.user_root),
         notice: format!(
-            "智能体定义 {} 个，已启用 {} 个，加载警告 {}。",
+            "{} agent definitions, {} enabled, {} loading warnings.",
             catalog.definitions.len(),
             enabled_count,
             catalog.errors.len()
@@ -853,7 +853,6 @@ fn subagent_definition_summary(
         disabled_prompt_skills: capability_policy_denied_selectors(
             &definition.prompt_skills.policy,
         ),
-        capability_diagnostics: subagent_capability_diagnostics(definition),
     }
 }
 
@@ -906,7 +905,7 @@ fn subagent_provider_model_summary(
             selector,
             available: Some(false),
             unavailable_reason: Some(String::from(
-                "固定模型配置不完整，请重新选择模型或恢复跟随会话模型。",
+                "The pinned model configuration is incomplete; select a model again or follow the session model again.",
             )),
         };
     };
@@ -923,7 +922,7 @@ fn subagent_provider_model_summary(
             None
         } else {
             Some(String::from(
-                "当前固定模型不在已启用模型列表中；未显式指定模型时 spawn_agent 会回退到会话模型。",
+                "The current pinned model is not in the enabled model list; without an explicit model, spawn_agent falls back to the session model.",
             ))
         },
     }
@@ -972,65 +971,16 @@ fn subagent_definition_can_restore_default(
     system_definition_ids.contains(system_agent_id)
 }
 
-/// Loads immutable system agent ids for one summary projection pass.
-/// 为单次摘要投影加载不可变系统智能体标识集合。
-/// Builds compact effective-capability diagnostics for one agent definition.
-/// 为单个智能体定义构建紧凑的最终能力诊断。
-fn subagent_capability_diagnostics(
-    definition: &vulcan_task_session::SubagentDefinition,
-) -> Vec<String> {
-    let mut diagnostics = Vec::new();
-    if !definition.enabled {
-        diagnostics.push(String::from(
-            "当前智能体已禁用，不会暴露给模型，也不能被 spawn_agent 解析。",
-        ));
-    }
-    let allowed_tools = capability_policy_allowed_selectors(&definition.tool_exposure.policy);
-    let disabled_tools = capability_policy_denied_selectors(&definition.tool_exposure.policy);
-    let enabled_prompt_skills =
-        capability_policy_allowed_selectors(&definition.prompt_skills.policy);
-    let disabled_prompt_skills =
-        capability_policy_denied_selectors(&definition.prompt_skills.policy);
-    if allowed_tools.is_empty()
-        && disabled_tools.is_empty()
-        && definition.tool_exposure.luaskills_overrides.is_null()
-        && definition.tool_exposure.mcp_server_overrides.is_null()
-        && enabled_prompt_skills.is_empty()
-        && disabled_prompt_skills.is_empty()
-    {
-        diagnostics.push(String::from(
-            "未声明额外限制；最终能力仍由系统策略、LuaSkills 状态、MCP 连接和运行时工具快照决定。",
-        ));
-    } else {
-        diagnostics.push(String::from(
-            "已声明能力策略；最终可见能力会继续受系统策略、LuaSkills 状态和 MCP 连接过滤。",
-        ));
-    }
-    if !allowed_tools.is_empty() {
-        diagnostics.push(format!(
-            "配置允许工具 {} 个；不存在或被系统禁用的工具不会进入最终工具集。",
-            allowed_tools.len()
-        ));
-    }
-    if !enabled_prompt_skills.is_empty() {
-        diagnostics.push(format!(
-            "配置启用 Prompt Skills {} 个；不存在或已停用的技能不会进入最终提示词组合。",
-            enabled_prompt_skills.len()
-        ));
-    }
-    diagnostics
-}
-
-/// Returns the Chinese scope label for one agent definition source.
-/// 返回单个智能体定义来源的中文作用域标签。
+/// Returns the English scope label for one agent definition source; clients localize by scope key.
+/// 返回单个智能体定义来源的英文作用域标签；客户端按作用域键本地化。
 fn subagent_definition_scope_label(
     scope: vulcan_task_session::SubagentDefinitionScope,
 ) -> &'static str {
     match scope {
-        vulcan_task_session::SubagentDefinitionScope::System => "系统",
-        vulcan_task_session::SubagentDefinitionScope::User => "用户",
-        vulcan_task_session::SubagentDefinitionScope::Package => "包",
-        vulcan_task_session::SubagentDefinitionScope::Plugin => "插件",
+        vulcan_task_session::SubagentDefinitionScope::System => "System",
+        vulcan_task_session::SubagentDefinitionScope::User => "User",
+        vulcan_task_session::SubagentDefinitionScope::Package => "Package",
+        vulcan_task_session::SubagentDefinitionScope::Plugin => "Plugin",
     }
 }
 
@@ -1150,7 +1100,7 @@ pub(crate) fn prompt_skill_short_description(skill: &vulcan_prompt_skills::Promp
         .as_deref()
         .filter(|description| !description.trim().is_empty())
         .or_else(|| (!skill.description.trim().is_empty()).then_some(skill.description.as_str()))
-        .unwrap_or("该技能没有提供描述。")
+        .unwrap_or("This skill provides no description.")
 }
 
 /// Returns a stable key for one persisted LuaSkills tool registration state.
@@ -1172,13 +1122,13 @@ pub(crate) fn luaskill_tool_registration_state_help(
 ) -> &'static str {
     match state {
         PersistedLuaSkillToolRegistrationState::Explicit => {
-            "显式启用：工具会作为独立函数 Schema 暴露给模型。"
+            "Explicitly enabled: the tool is exposed to the model as a standalone function schema."
         }
         PersistedLuaSkillToolRegistrationState::Implicit => {
-            "隐式启用：工具保留宿主调用能力，但不暴露独立 Schema。"
+            "Implicitly enabled: the tool keeps host invocation but exposes no standalone schema."
         }
         PersistedLuaSkillToolRegistrationState::Disabled => {
-            "禁用：工具不会注册给模型，也不应被宿主调度调用。"
+            "Disabled: the tool is not registered for the model and should not be scheduled by the host."
         }
     }
 }

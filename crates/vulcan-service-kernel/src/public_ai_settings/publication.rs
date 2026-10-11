@@ -376,7 +376,7 @@ where
                 runtime,
                 before_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 配置发布前状态失败",
+                "Failed to restore the state from before the public AI configuration publication",
             );
             Err(compensated_operation_error(primary, restoration, Ok(())))
         }

@@ -30,7 +30,7 @@ pub(super) async fn remove_policy(
     let policy_committed = &mut resources.policy_committed;
     crate::service_state_access::mutate_provider_configuration_with_state_validation(
         state,
-        "清理原卸载插件状态覆盖失败",
+        "Failed to clear the plugin state override of the original uninstall",
         |service| {
             crate::service_state_access::require_plugin_publication_shutdown_admission(service)?;
             // Prove actual membership before UUID coordination exemption.
@@ -39,7 +39,7 @@ pub(super) async fn remove_policy(
                 .pending_local_plugin_uninstalls
                 .lookup(&owner.plugin_id, owner.request_id)?;
             if !Arc::ptr_eq(&current, owner) {
-                return Err(String::from("原卸载实际资源槽已经改变。"));
+                return Err(String::from("The actual resource slot of the original uninstall changed."));
             }
             crate::service_state_access::require_plugin_update_full_publication_admission(
                 service,
@@ -61,7 +61,7 @@ pub(super) async fn remove_policy(
             );
             if current != original_membership && !(prior_intent && current == (false, false)) {
                 return Err(String::from(
-                    "原卸载插件策略成员关系已被替代，保留原所有者。",
+                    "The plugin policy membership of the original uninstall was superseded; keeping the original owner.",
                 ));
             }
             configuration
@@ -104,9 +104,9 @@ pub(super) fn hide_and_publish(
         let catalog = resources
             .committed_full
             .as_ref()
-            .ok_or("原卸载完整回执缺失。")?
+            .ok_or("The full receipt of the original uninstall is missing.")?
             .plugin_catalog()
-            .ok_or("原卸载完整目录缺失。")?;
+            .ok_or("The full catalog of the original uninstall is missing.")?;
         synchronize_service_vulcan_plugin_hooks(state, resources.runtime.clone(), &catalog)?;
         return Ok(());
     }
@@ -114,7 +114,9 @@ pub(super) fn hide_and_publish(
         || resources.callback_result.is_none()
         || !resources.policy_committed
     {
-        return Err(String::from("原卸载回调退役及策略提交尚未确认。"));
+        return Err(String::from(
+            "The callback retirement and policy commit of the original uninstall are not confirmed yet.",
+        ));
     }
     // Read latest policy only after this original's committed removal and retain no old descriptor pins.
     // 仅在此原实例已提交移除之后读取最新策略，不保留旧描述符固定。
@@ -128,7 +130,7 @@ pub(super) fn hide_and_publish(
     } = resources
         .original
         .as_mut()
-        .ok_or("原卸载物理所有者缺失。")?;
+        .ok_or("The physical owner of the original uninstall is missing.")?;
     match resources
         .runtime
         .observe_deactivation_state(local, selection)
@@ -143,7 +145,7 @@ pub(super) fn hide_and_publish(
         vulcan_plugin_runtime::VulcanPluginDeactivationStateObservation::Frozen => {}
         _ => {
             return Err(String::from(
-                "完整发布之前原本地卸载状态已进入回收，保留原实例。",
+                "The original local uninstall state was reclaimed before the full publication; keeping the original instance.",
             ));
         }
     }
@@ -159,7 +161,9 @@ pub(super) fn hide_and_publish(
         )
         .map_err(|error| error.to_string())?;
     if catalog.plugins.contains_key(&owner.plugin_id) {
-        return Err(String::from("原卸载选择已隐藏，但实际核心目录仍暴露插件。"));
+        return Err(String::from(
+            "The original uninstall selection is hidden, but the actual core catalog still exposes the plugin.",
+        ));
     }
     // No asynchronous wait or plugin business is permitted while holding the publication mutex.
     // 持有发布互斥锁时，不允许异步等待或插件业务。
@@ -171,7 +175,9 @@ pub(super) fn hide_and_publish(
         .pending_local_plugin_uninstalls
         .lookup(&owner.plugin_id, owner.request_id)?;
     if !Arc::ptr_eq(&current, owner) {
-        return Err(String::from("原卸载发布所有者已改变。"));
+        return Err(String::from(
+            "The publication owner of the original uninstall changed.",
+        ));
     }
     crate::service_state_access::require_plugin_update_full_publication_admission(
         &service,
@@ -182,15 +188,17 @@ pub(super) fn hide_and_publish(
     let bridge = service
         .agent_runtime
         .as_mut()
-        .ok_or("Agent 扩展代次尚未初始化。")?;
+        .ok_or("The agent extension generation is not initialized yet.")?;
     // Original Full retains predecessor resources until neighboring commit succeeds.
     // 原完整代次保留前驱资源，直至相邻提交成功。
     let expected = resources
         .expected_full
         .as_ref()
-        .ok_or("原卸载缺少实际前置完整代次。")?;
+        .ok_or("The original uninstall has no actual preceding full generation.")?;
     if !Arc::ptr_eq(expected, &bridge.extension_generation) {
-        return Err(String::from("原卸载实际前置完整代次被替代，不能重新准备。"));
+        return Err(String::from(
+            "The actual preceding full generation of the original uninstall was superseded; it cannot be prepared again.",
+        ));
     }
     // Remove only the original plugin partition; every unrelated actual partition is preserved.
     // 仅移除原插件分区；保留每个无关实际分区。
@@ -232,7 +240,7 @@ pub(super) fn confirm_current(
     let committed = resources
         .committed_full
         .as_ref()
-        .ok_or("原卸载尚未确认完整发布。")?;
+        .ok_or("The original uninstall has not confirmed the full publication yet.")?;
     // Service exclusion makes current pointer comparison coherent with publication.
     // 服务互斥使当前指针比较与发布保持一致。
     let service = state.lock().map_err(|error| error.to_string())?;
@@ -241,14 +249,18 @@ pub(super) fn confirm_current(
     let bridge = service
         .agent_runtime
         .as_ref()
-        .ok_or("Agent 扩展代次尚未初始化。")?;
+        .ok_or("The agent extension generation is not initialized yet.")?;
     // Both Core and Full must retain the same actually published catalog allocation.
     // 核心及完整代次必须保留相同实际已发布目录分配。
-    let catalog = committed.plugin_catalog().ok_or("原卸载完整目录缺失。")?;
+    let catalog = committed
+        .plugin_catalog()
+        .ok_or("The full catalog of the original uninstall is missing.")?;
     if !Arc::ptr_eq(committed, &bridge.extension_generation)
         || !Arc::ptr_eq(&catalog, &resources.runtime.snapshot())
     {
-        return Err(String::from("原卸载实际完整回执或核心目录已经改变。"));
+        return Err(String::from(
+            "The actual full receipt or core catalog of the original uninstall changed.",
+        ));
     }
     Ok(())
 }

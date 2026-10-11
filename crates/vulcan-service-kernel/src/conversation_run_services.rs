@@ -155,7 +155,7 @@ pub(crate) fn terminate_active_conversation_hook_turn_after_stop(
     // hookRuntime 是逻辑会话 Hook 回合的唯一内存所有者。
     let mut hook_runtime = agent_runtime
         .lock_conversation_hooks()
-        .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?;
     // expectedTurnId must exist before stop may mutate the retained Hook owner.
     // expectedTurnId 必须存在，停止操作才可以变更保留的 Hook 所有者。
     let Some(expected_turn_id) = expected_turn_id else {
@@ -194,7 +194,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
     };
     if has_active_stream_task || has_active_kernel_turn || has_active_session_run {
         return Err(String::from(
-            "当前会话仍有运行中的执行链路，暂时无法执行手动上下文压缩。",
+            "The current session still has a running execution chain; manual context compaction is temporarily unavailable.",
         ));
     }
 
@@ -222,7 +222,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         &state,
         selected_session_id,
         model_target.context_compaction_policy,
-        "当前会话暂时没有可压缩的历史上下文。",
+        "The current session has no history context to compact yet.",
     )?;
 
     let budget_note = context_compaction_budget_note_from_state(&state, selected_session_id);
@@ -246,7 +246,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         .find(|session| session.id == selected_session_id)
     {
         session.status = SessionState::Running;
-        session.last_updated_label = String::from("刚刚");
+        session.last_updated_label = String::from("just now");
         session.updated_at = current_unix_millis_text();
     }
     let turn_id = format!("context-compaction-{}", current_unix_millis_text());
@@ -365,8 +365,8 @@ async fn service_stop_conversation_run_owned(
     // target_session_id is the validated immutable target shared by preflight and final mutation.
     // target_session_id 是预检与最终变更共享的已验证不可变目标。
     let target_session_id = parse_session_id(conversation_id.trim())
-        .ok_or_else(|| format!("无效的停止目标会话标识：{conversation_id}"))?;
-    ensure_regular_session_exists(&state, target_session_id, "停止")?;
+        .ok_or_else(|| format!("Invalid stop target session identifier: {conversation_id}"))?;
+    ensure_regular_session_exists(&state, target_session_id, "stop")?;
     let (controller_runtime, agent_runtime, luaskills_catalog, mcp_catalog, logs) =
         runtime_parts_from_state(&state)?;
     let mode = mode.unwrap_or_default();
@@ -433,7 +433,7 @@ async fn service_stop_conversation_run_owned(
     // stoppedHookTurnId 在停止清理可能与替代回合竞争前冻结精确逻辑 Hook 所有者。
     let stopped_hook_turn_id = agent_runtime
         .lock_conversation_hooks()
-        .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?
         .active_turn_id(target_session_id)
         .map(str::to_string);
     let stop_running_subagents = mode == StopConversationRunMode::MainAndSubagents;
@@ -529,11 +529,15 @@ async fn service_stop_conversation_run_owned(
     let browser_manager = state
         .lock()
         .map(|guard| guard.browser_manager.clone())
-        .map_err(|error| format!("停止浏览器授权时服务状态加锁失败：{error}"))?;
+        .map_err(|error| {
+            format!(
+                "Failed to lock the service state while stopping browser authorization: {error}"
+            )
+        })?;
     browser_manager
         .retire_ai_connection_after_turn(target_session_id)
         .await
-        .map_err(|error| format!("停止浏览器自动化授权失败：{error}"))?;
+        .map_err(|error| format!("Failed to stop browser automation authorization: {error}"))?;
     // The aborted stream cannot publish its normal Finished event, so Stop owns the V1 API interruption.
     // 被中止的流无法发布正常 Finished 事件，因此 Stop 负责 V1 API 中断事实。
     let stop_interruption_at_ms = current_v1_goal_unix_millis()?;
@@ -568,7 +572,9 @@ async fn service_stop_conversation_run_owned(
                 )
             },
         )
-        .map_err(|error| format!("停止后持久化 V1 API 中断失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to persist the V1 API interruption after stopping: {error}")
+        })?;
     // Scoped terminal persistence reacquires this gate; retaining it would deadlock the same stop.
     // 带范围终态持久化会重新获取该关卡；继续持有会使同一次停止死锁。
     // Run-stop admission and terminal ownership still exclude all replacement requests.
@@ -649,7 +655,7 @@ async fn service_stop_conversation_run_owned(
                 }
             },
         )
-        .map_err(|error| format!("停止后持久化 V1 Goal 状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to persist the V1 goal state after stopping: {error}"))?;
     if goal_pause.changed {
         let summary = session_goal_summary_from_v1_handle(goal_handle.as_ref(), target_session_id)?;
         cache_session_goal_summary(&state, target_session_id, summary)?;
@@ -706,7 +712,7 @@ async fn service_stop_conversation_run_owned(
         .await
         {
             return Err(String::from(
-                "答疑停止结算尚未完成，已保留恢复记录与终态所有者。",
+                "The question stop settlement has not finished yet; the recovery record and terminal owner were kept.",
             ));
         }
     } else {
@@ -783,7 +789,7 @@ pub(crate) async fn service_set_session_plan_mode(
         .conversation_id
         .as_deref()
         .and_then(parse_session_id)
-        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换计划模式。"))?;
+        .ok_or_else(|| String::from("The current draft session has not been created yet; plan mode cannot be switched for now."))?;
     {
         let guard = state
             .lock()
@@ -792,7 +798,9 @@ pub(crate) async fn service_set_session_plan_mode(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
-            return Err(format!("未找到要切换计划模式的会话：{session_id}"));
+            return Err(format!(
+                "Session to switch plan mode not found: {session_id}"
+            ));
         }
     }
     let enabled = request.enabled;
@@ -856,7 +864,7 @@ pub(crate) async fn service_set_session_vmm_policy(
         .conversation_id
         .as_deref()
         .and_then(parse_session_id)
-        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换 VMM 记忆策略。"))?;
+        .ok_or_else(|| String::from("The current draft session has not been created yet; the VMM memory policy cannot be switched for now."))?;
     let policy_value = session_vmm_policy_mode_from_request(&request.mode)?;
     let policy_field = match request.policy.trim().to_ascii_lowercase().as_str() {
         "precheck" | "precheck_enabled" | "precheck-injection" | "precheck_injection" => {
@@ -865,7 +873,7 @@ pub(crate) async fn service_set_session_vmm_policy(
         "writeback" | "memory_writeback" | "memory_writeback_enabled" | "post_action" => {
             VmmSessionPolicyField::MemoryWriteback
         }
-        other => return Err(format!("不支持的 VMM 记忆策略：{other}")),
+        other => return Err(format!("Unsupported VMM memory policy: {other}")),
     };
     {
         let guard = state
@@ -875,7 +883,9 @@ pub(crate) async fn service_set_session_vmm_policy(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
-            return Err(format!("未找到要切换 VMM 记忆策略的会话：{session_id}"));
+            return Err(format!(
+                "Session to switch the VMM memory policy not found: {session_id}"
+            ));
         }
     }
     let updated_at_ms = current_v1_goal_unix_millis()?;
@@ -883,7 +893,7 @@ pub(crate) async fn service_set_session_vmm_policy(
     set_vmm_session_policy_value_v1(handle.as_ref(), policy_field, policy_value, updated_at_ms)?;
     let persisted_policy = handle
         .read(|document| document.metadata.config.selection.vmm.clone())
-        .map_err(|error| format!("读取 V1 VMM 会话策略失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 VMM session policy: {error}"))?;
     let updated_at = updated_at_ms.to_string();
     {
         let mut guard = state
@@ -939,7 +949,7 @@ pub(crate) async fn service_set_session_context_compaction_window(
     request: SessionContextCompactionWindowUpdateRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
     let session_id = parse_session_id(&request.conversation_id)
-        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换上下文压缩窗口。"))?;
+        .ok_or_else(|| String::from("The current draft session has not been created yet; the context compaction window cannot be switched for now."))?;
     let node_id = request
         .node_id
         .as_deref()
@@ -962,7 +972,9 @@ pub(crate) async fn service_set_session_context_compaction_window(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
-            return Err(format!("未找到要切换上下文压缩窗口的会话：{session_id}"));
+            return Err(format!(
+                "Session to switch the context compaction window not found: {session_id}"
+            ));
         }
         let runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
         if let Some(node_id) = node_id {
@@ -980,14 +992,16 @@ pub(crate) async fn service_set_session_context_compaction_window(
                 Some(session_id),
                 runtime_state,
             )?
-            .ok_or_else(|| String::from("当前会话没有可验证的模型选择。"))?;
+            .ok_or_else(|| {
+                String::from("The current session has no verifiable model selection.")
+            })?;
             let model_context_limit =
                 selection.model.capabilities.context_limit.ok_or_else(|| {
-                    String::from("当前模型未声明上下文窗口，无法锁定上下文压缩节点。")
+                    String::from("The current model does not declare a context window, so the context compaction node cannot be locked.")
                 })?;
             if node_tokens >= model_context_limit {
                 return Err(format!(
-                    "上下文压缩节点 `{}` 当前为 {} Token，必须严格小于模型上下文窗口 {} Token。",
+                    "Context compaction node `{}` is currently {} tokens and must be strictly smaller than the model context window of {} tokens.",
                     node_id.as_str(),
                     node_tokens,
                     model_context_limit
@@ -1010,7 +1024,7 @@ pub(crate) async fn service_set_session_context_compaction_window(
                 })
             },
         )
-        .map_err(|error| format!("持久化 V1 上下文压缩窗口失败：{error}"))?;
+        .map_err(|error| format!("Failed to persist the V1 context compaction window: {error}"))?;
     if mutation.changed {
         let mut guard = state
             .lock()
@@ -1045,7 +1059,7 @@ pub(crate) async fn service_set_session_output_style(
     request: SessionOutputStyleUpdateRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
     let session_id = parse_session_id(&request.conversation_id)
-        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换输出风格。"))?;
+        .ok_or_else(|| String::from("The current draft session has not been created yet; the output style cannot be switched for now."))?;
     let global_selection = {
         let guard = state
             .lock()
@@ -1054,7 +1068,9 @@ pub(crate) async fn service_set_session_output_style(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
         if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
-            return Err(format!("未找到要切换输出风格的会话：{session_id}"));
+            return Err(format!(
+                "Session to switch the output style not found: {session_id}"
+            ));
         }
         guard
             .agent_runtime
@@ -1092,7 +1108,7 @@ pub(crate) async fn service_set_session_output_style(
                 }
             },
         )
-        .map_err(|error| format!("持久化 V1 输出风格失败：{error}"))?;
+        .map_err(|error| format!("Failed to persist the V1 output style: {error}"))?;
     if mutation.changed {
         // The legacy runtime field is a temporary WebUI projection only; V1 metadata is the sole durable authority.
         // 旧运行态字段仅是阶段内 WebUI 投影；V1 metadata 是唯一持久化权威。
@@ -1140,7 +1156,7 @@ fn session_vmm_policy_mode_from_request(mode: &str) -> Result<Option<bool>, Stri
         "inherit" | "inherit_project" | "inheritproject" => Ok(None),
         "enabled" | "on" | "true" => Ok(Some(true)),
         "disabled" | "off" | "false" => Ok(Some(false)),
-        other => Err(format!("不支持的 VMM 记忆策略模式：{other}")),
+        other => Err(format!("Unsupported VMM memory policy mode: {other}")),
     }
 }
 

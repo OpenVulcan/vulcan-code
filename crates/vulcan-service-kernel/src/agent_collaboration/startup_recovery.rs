@@ -262,7 +262,7 @@ pub(crate) fn start_collaboration_recovery(
         tracing::warn!(%error, "Collaboration recovery worker could not start");
         if let Err(diagnostic) = crate::push_webui_service_diagnostic(
             &state,
-            format!("代理协作恢复任务启动失败：{error}"),
+            format!("Failed to start the agent collaboration recovery task: {error}"),
         ) {
             tracing::warn!(%diagnostic, "Collaboration recovery diagnostic publication failed");
         }

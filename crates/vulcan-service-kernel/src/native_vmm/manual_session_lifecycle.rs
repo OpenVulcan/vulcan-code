@@ -30,7 +30,7 @@ pub(super) fn validate(
             })
             .ok_or_else(|| {
                 format!(
-                    "原会话 `{}` 的回收状态不存在，请刷新。",
+                    "The recycle state of original session `{}` does not exist; refresh.",
                     original.session_source_id
                 )
             })?;
@@ -39,7 +39,7 @@ pub(super) fn validate(
             || current.last_extraction_completed_at_ns.is_some()
         {
             return Err(format!(
-                "原会话 `{}` 的回收状态已变化，请刷新。",
+                "The recycle state of original session `{}` changed; refresh.",
                 original.session_source_id
             ));
         }

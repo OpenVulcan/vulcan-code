@@ -457,7 +457,9 @@ fn load_webui_selected_workspace_unified_diff_for_scope(
                     )?,
                 );
             }
-            _ => notices.push(String::from("当前仓库无法解析用于分支对比的分支。")),
+            _ => notices.push(String::from(
+                "The current repository cannot resolve the branch for branch comparison.",
+            )),
         },
     }
     Ok(WebuiLoadedUnifiedDiff {
@@ -773,7 +775,7 @@ pub(crate) fn load_webui_untracked_git_diff(
         .count();
     if skipped_binary > 0 {
         notices.push(format!(
-            "已将 {skipped_binary} 个未跟踪二进制文件按二进制变更展示。"
+            "Showed {skipped_binary} untracked binary files as binary changes."
         ));
     }
 
@@ -799,11 +801,13 @@ pub(crate) fn load_webui_untracked_git_diff_for_path(
     };
     match section.binary_reason {
         Some(WebuiUntrackedBinaryReason::ContainsNull) => {
-            notices.push(String::from("该未跟踪文件是二进制文件，按二进制变更展示。"));
+            notices.push(String::from(
+                "This untracked file is binary and is shown as a binary change.",
+            ));
         }
         Some(WebuiUntrackedBinaryReason::NonUtf8) => {
             notices.push(String::from(
-                "该未跟踪文件不是 UTF-8 文本，按二进制变更展示。",
+                "This untracked file is not UTF-8 text and is shown as a binary change.",
             ));
         }
         None => {}

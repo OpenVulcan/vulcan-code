@@ -75,7 +75,7 @@ pub(crate) async fn service_save_prompt_output_style(
         .ok_or_else(|| format!("unknown output style: {}", request.style_id))?;
     let provider_configuration = mutate_provider_configuration(
         &state,
-        "保存输出风格设置失败",
+        "Failed to save the output style settings",
         |configuration| {
             configuration.prompt.output_style = selection;
             Ok(())

@@ -353,12 +353,15 @@ impl VceWatcherService {
         }
         let canonical = std::fs::canonicalize(project_root).map_err(|error| {
             format!(
-                "无法规范化 VCE 监听项目目录 `{}`：{error}",
+                "Cannot normalize the VCE watched project directory `{}`: {error}",
                 project_root.display()
             )
         })?;
         if !canonical.is_dir() {
-            return Err(format!("VCE 监听项目路径不是目录：{}", canonical.display()));
+            return Err(format!(
+                "The VCE watched project path is not a directory: {}",
+                canonical.display()
+            ));
         }
         // registrations retains the RAII handle through the same publication critical section.
         // registrations 在同一发布临界区内保留 RAII 句柄。

@@ -148,7 +148,7 @@ pub(crate) async fn read_session_model_projection_v1(
         &session_id.to_string(),
     )
     .await
-    .map_err(|error| format!("定位会话模型配置失败：{error}"))?;
+    .map_err(|error| format!("Failed to locate the session model configuration: {error}"))?;
     // A resident writer may hold a newer pending choice than the latest disk publication.
     // 常驻写入器可能持有比最新磁盘发布更新的待生效选择。
     let (active, pending) = registry.with_configuration_access(
@@ -161,12 +161,12 @@ pub(crate) async fn read_session_model_projection_v1(
                         document.metadata.config.pending_request.clone(),
                     )
                 })
-                .map_err(|error| format!("读取会话模型配置失败：{error}"))
+                .map_err(|error| format!("Failed to read the session model configuration: {error}"))
         },
         || {
             locator
                 .read_request_configuration()
-                .map_err(|error| format!("读取会话模型配置失败：{error}"))
+                .map_err(|error| format!("Failed to read the session model configuration: {error}"))
         },
     )?;
     Ok(SessionModelProjectionV1 {
@@ -197,7 +197,9 @@ impl SessionModelProjectionV1 {
                         document.metadata.config.pending_request.clone(),
                     )
                 })
-                .map_err(|error| format!("读取会话模型配置失败：{error}"))?,
+                .map_err(|error| {
+                    format!("Failed to read the session model configuration: {error}")
+                })?,
             Err(SessionRuntimeError::SessionNotRegistered(_)) => {
                 (self.active.clone(), self.pending.clone())
             }

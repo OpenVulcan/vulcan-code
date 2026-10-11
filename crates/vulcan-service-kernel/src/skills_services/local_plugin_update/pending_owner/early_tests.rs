@@ -377,7 +377,7 @@ async fn pending_update_early_missing_package_requires_original_abort() {
         let mut resources = owner.resources.lock().await;
         publish_reserved(&mut resources).expect("actual journal");
         let error = recover_preparation(&mut resources).expect_err("recovery cannot copy");
-        assert!(error.contains("不能重复制"), "{error}");
+        assert!(error.contains("cannot be copied again"), "{error}");
     }
     busy(&harness, &owner);
     let result = service_abort_local_plugin_update(
@@ -430,7 +430,7 @@ async fn pending_update_early_completed_package_corruption_retains_original_abor
     {
         let mut resources = owner.resources.lock().await;
         let error = recover_preparation(&mut resources).expect_err("strict package rejects bytes");
-        assert!(error.contains("不能重复制"), "{error}");
+        assert!(error.contains("cannot be copied again"), "{error}");
     }
     busy(&harness, &owner);
     let error = service_abort_local_plugin_update(
@@ -1340,7 +1340,7 @@ async fn manager_replacement_cleanup(prepared: bool) {
     )
     .await
     .expect_err("original issuer cannot publish under replacement manager");
-    assert!(error.contains("服务插件管理器已改变"), "{error}");
+    assert!(error.contains("service plugin manager changed"), "{error}");
     assert!(Arc::ptr_eq(
         &registry
             .get(PLUGIN, owner.request_id)

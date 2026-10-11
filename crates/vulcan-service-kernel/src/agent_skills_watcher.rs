@@ -150,7 +150,7 @@ fn record_agent_skills_watcher_error(
             .unwrap_or("zh-CN")
             .starts_with("zh");
         guard.workbench.agent_skills.notice = if chinese {
-            String::from("提示词技能自动同步失败；请查看目录问题并修复后重新保存文件。")
+            String::from("Prompt skill auto-sync failed; review the catalog issues, fix them and save the file again.")
         } else {
             String::from(
                 "Prompt Skills automatic synchronization failed. Review the catalog issues and save the corrected files again.",

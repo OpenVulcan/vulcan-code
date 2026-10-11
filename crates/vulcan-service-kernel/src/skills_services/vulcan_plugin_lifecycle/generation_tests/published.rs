@@ -406,31 +406,24 @@ fn install_fixture_hook(
         source.join("runtime/plugin.bundle.lua"),
         r#"
 -- Every actual module initialization emits one real native event before exporting functions.
--- 每次实际模块初始化在导出函数之前发出单个真实原生事件。
 vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='module-initialize', revision=0})
 -- This module's private counter proves repeated Hook calls use its persistent original allocation.
--- 此模块私有计数器证明重复 Hook 调用使用其持久原分配。
 local M, count = {}, 0
 -- No business arguments are consumed; return the declared success frame.
--- 不消费业务参数；返回声明成功帧。
 function M.dispatch() return '{"ok":true,"result":{}}' end
 -- No shutdown arguments are consumed; return successful ordinary cleanup.
--- 不消费关闭参数；返回成功普通清理。
 function M.shutdown() return '{"ok":true,"result":{}}' end
 -- args carries the actual lifecycle event; record its execution and return success.
--- args 携带实际生命周期事件；记录其执行并返回成功。
 function M.on_lifecycle(args)
     vulcan.host.call('vulcan.plugin.ui.invalidate', {topic=args.event, revision=0})
     return '{"ok":true,"result":{}}'
 end
 -- The invocation envelope is unused; return the increasing same-module payload.
--- 不使用调用信封；返回递增的同模块载荷。
 function M.on_precheck(_args)
     count = count + 1
     return '{"ok":true,"result":{"payload":{"value":{"count":' .. tostring(count) .. '}}}}'
 end
 -- The original Hook finalizer emits its actual retirement once and returns successful cleanup.
--- 原 Hook 关闭器仅发出一次实际退役事件，并返回成功清理。
 function M.shutdown_hooks(_args)
     vulcan.host.call('vulcan.plugin.ui.invalidate', {topic='hook-shutdown', revision=count})
     return '{"ok":true,"result":{}}'

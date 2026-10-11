@@ -79,7 +79,13 @@ pub(crate) async fn service_stage_composer_attachment_bytes(
         .or_else(|| attachment_descriptor_from_path_fallback(&file_name));
     let bytes = BASE64_STANDARD
         .decode(data_base64.trim())
-        .map_err(|error| format!("解码附件 `{}` 失败：{}。", file_name.trim(), error))?;
+        .map_err(|error| {
+            format!(
+                "Failed to decode attachment `{}`: {}.",
+                file_name.trim(),
+                error
+            )
+        })?;
     let attachment = if let Some(descriptor) = descriptor {
         stage_project_attachment_bytes(
             &workspace_path,

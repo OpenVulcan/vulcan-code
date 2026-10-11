@@ -142,10 +142,9 @@ impl PluginEnvironmentInstallTaskRegistry {
         &self,
         key: PluginEnvironmentInstallKey,
     ) -> Result<PluginEnvironmentInstallEnqueueResult, String> {
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|error| format!("插件环境安装任务登记表加锁失败：{error}"))?;
+        let mut guard = self.inner.lock().map_err(|error| {
+            format!("Failed to lock the plugin environment install task registry: {error}")
+        })?;
         if let Some(task_id) = guard.keys.get(&key).cloned() {
             let retained_status = guard
                 .tasks
@@ -210,14 +209,13 @@ impl PluginEnvironmentInstallTaskRegistry {
         stage: &str,
         error: Option<&str>,
     ) -> Result<(), String> {
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|lock_error| format!("插件环境安装任务登记表加锁失败：{lock_error}"))?;
+        let mut guard = self.inner.lock().map_err(|lock_error| {
+            format!("Failed to lock the plugin environment install task registry: {lock_error}")
+        })?;
         let record = guard
             .tasks
             .get_mut(task_id)
-            .ok_or_else(|| format!("未找到插件环境安装任务：{task_id}"))?;
+            .ok_or_else(|| format!("Plugin environment install task not found: {task_id}"))?;
         record.status.state = state.to_string();
         record.status.stage = stage.to_string();
         record.status.error = error.map(bound_install_error);
@@ -233,10 +231,9 @@ impl PluginEnvironmentInstallTaskRegistry {
         &self,
         task_id: &str,
     ) -> Result<Option<PluginEnvironmentInstallTaskStatus>, String> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|error| format!("插件环境安装任务登记表加锁失败：{error}"))?;
+        let guard = self.inner.lock().map_err(|error| {
+            format!("Failed to lock the plugin environment install task registry: {error}")
+        })?;
         Ok(guard.tasks.get(task_id).map(|record| record.status.clone()))
     }
 
@@ -256,10 +253,9 @@ impl PluginEnvironmentInstallTaskRegistry {
         &self,
         key: &PluginEnvironmentInstallKey,
     ) -> Result<Option<PluginEnvironmentInstallTaskStatus>, String> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|error| format!("插件环境安装任务登记表加锁失败：{error}"))?;
+        let guard = self.inner.lock().map_err(|error| {
+            format!("Failed to lock the plugin environment install task registry: {error}")
+        })?;
         let Some(task_id) = guard.keys.get(key) else {
             return Ok(None);
         };

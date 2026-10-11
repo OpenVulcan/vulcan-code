@@ -44,10 +44,10 @@ pub(crate) async fn prepare_native_recall_publication(
     // 克隆原生归属方，不跨异步发布屏障持有服务互斥锁。
     let maintenance = state
         .lock()
-        .map_err(|error| format!("锁定原生记忆发布状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the native memory publication state: {error}"))?
         .native_vmm_maintenance
         .clone()
-        .ok_or_else(|| "原生记忆发布运行时尚未就绪。".to_owned())?;
+        .ok_or_else(|| "The native memory publication runtime is not ready yet.".to_owned())?;
     maintenance
         .prepare_recall_publication(start.project_id.as_deref(), &start.session_id.to_string())
         .await
@@ -84,7 +84,7 @@ pub(crate) fn webui_vmm_runtime_readiness(
     let (global_layer, native_host_ai_ready) = {
         let guard = state
             .lock()
-            .map_err(|error| format!("读取 VMM 服务就绪状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to read the VMM service readiness state: {error}"))?;
         let Some(agent_runtime) = guard.agent_runtime.as_ref() else {
             return Ok(project_webui_vmm_runtime_readiness(false, false, false));
         };
@@ -200,7 +200,7 @@ pub(crate) fn webui_shared_prompt_precheck_plan(
     let hook_snapshot_started_at = current_unix_millis_value();
     let precheck_hook_snapshots = agent_runtime
         .lock_conversation_hooks()
-        .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the session hook runtime: {error}"))?
         .precheck_hook_snapshots();
     webui_trace(
         "precheck_plan_hook_snapshots_ready",
@@ -458,7 +458,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         && effective_vmm_backend == vulcan_vmm::VmmBackendMode::Native
         && native_publication.is_none()
     {
-        return Err("原生记忆配置在提示词发布前发生变化，请重新发起。".to_owned());
+        return Err("The native memory configuration changed before the prompt was published; send it again.".to_owned());
     }
     // Freeze the current profile identity independently of the returned profile effect.
     // 独立于传回画像效果，冻结当前画像身份。
@@ -466,19 +466,24 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         match effective_vmm_backend {
             vulcan_vmm::VmmBackendMode::Native => Some(
                 native_publication
-                    .ok_or_else(|| "原生画像发布缺少当前来源屏障。".to_owned())?
+                    .ok_or_else(|| {
+                        "The native profile publication is missing the current source barrier."
+                            .to_owned()
+                    })?
                     .profile_read_source()?,
             ),
             vulcan_vmm::VmmBackendMode::ExternalGrpc => Some(
                 vulcan_vmm::VmmMemoryReadSource::new(
                     vulcan_vmm::VmmMemorySource::external(
                         &vulcan_vmm::VmmTransportConfig::from_effective(&effective_vmm),
-                        effective_vmm
-                            .user_id
-                            .ok_or_else(|| "外置画像发布缺少记忆用户 ID。".to_owned())?,
-                        effective_vmm
-                            .project_id
-                            .ok_or_else(|| "外置画像发布缺少记忆项目 ID。".to_owned())?,
+                        effective_vmm.user_id.ok_or_else(|| {
+                            "The external profile publication is missing the memory user ID."
+                                .to_owned()
+                        })?,
+                        effective_vmm.project_id.ok_or_else(|| {
+                            "The external profile publication is missing the memory project ID."
+                                .to_owned()
+                        })?,
                     )
                     .map_err(|error| error.to_string())?,
                     Vec::new(),
@@ -703,7 +708,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         tracing::warn!("[webui-service] precheck hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
             state,
-            format!("warning · Precheck hook 执行失败：{detail}"),
+            format!("warning · Precheck hook failed: {detail}"),
         ) {
             tracing::warn!("[webui-service] record precheck warning failed: {error}");
         }
@@ -712,7 +717,7 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         tracing::warn!("[webui-service] profile hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
             state,
-            format!("warning · 画像准备 Hook 执行失败：{detail}"),
+            format!("warning · Profile preparation hook failed: {detail}"),
         ) {
             tracing::warn!("[webui-service] record profile warning failed: {error}");
         }
@@ -880,8 +885,8 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         .find(|session| session.id == session_id)
     {
         session.status = SessionState::Running;
-        session.focus = String::from("正在请求");
-        session.last_updated_label = String::from("刚刚");
+        session.focus = String::from("Requesting");
+        session.last_updated_label = String::from("just now");
     }
     // vmmProjection retains the exact memory state after the detached slice moves into commit.
     // vmmProjection 在分离切片移入提交后继续保留精确记忆状态。
@@ -1451,8 +1456,8 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
         // failure_entry 为 ACK 后异步失败创建即时且可靠的反馈。
         let failure_entry = SessionMessageEntry::new(
             SessionMessageKind::Error,
-            "请求准备失败",
-            format!("本轮请求未能继续，已安全停止。原因：{error}"),
+            "Request preparation failed",
+            format!("This request could not continue and was stopped safely. Reason: {error}"),
         );
         if let Err(projection_error) =
             append_webui_session_message_entry_to_state(runtime_state, session_id, failure_entry)
@@ -1482,8 +1487,10 @@ pub(crate) fn commit_prompt_preparation_failure_boundary(
         .find(|session| session.id == session_id)
     {
         session.status = SessionState::Blocked;
-        session.focus = String::from("提示词准备结果无法应用，已停止本轮请求。");
-        session.last_updated_label = String::from("刚刚");
+        session.focus = String::from(
+            "The prompt preparation result cannot be applied; this request was stopped.",
+        );
+        session.last_updated_label = String::from("just now");
     }
     // owning_project_id is derived before the committed workspace replaces shared state.
     // owning_project_id 在已提交工作区替换共享状态前派生。

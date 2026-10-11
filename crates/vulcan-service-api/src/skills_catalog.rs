@@ -915,9 +915,6 @@ pub struct SubagentDefinitionSummary {
     /// Explicitly disabled prompt skill names.
     /// 显式禁用的提示词技能名称。
     pub disabled_prompt_skills: Vec<String>,
-    /// Human-readable effective capability diagnostics.
-    /// 人类可读的最终能力诊断信息。
-    pub capability_diagnostics: Vec<String>,
 }
 
 /// Provider/model selection projected for one subagent definition.

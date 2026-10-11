@@ -172,7 +172,7 @@ fn real_host_storage_project_creation_is_atomic_with_vce_settings() {
             invalid_new.id = String::from("preflight-vce-project");
             invalid_new.vce.revision = u64::MAX;
             assert!(persist_new_project(controller.clone(), &invalid_new).await
-                .expect_err("revision conversion must fail").contains("SQLite 整数范围"));
+                .expect_err("revision conversion must fail").contains("SQLite integer range"));
             assert_eq!(project_persistence_rows(&controller, &invalid_new.id).await,
                 [serde_json::json!([]), serde_json::json!([])]);
 
@@ -447,7 +447,7 @@ fn real_host_storage_project_settings_require_explicit_initialization_and_preser
                 )
                 .await
                 .expect_err("stale settings must fail");
-                assert!(stale.contains("设置修订冲突"), "{stale}");
+                assert!(stale.contains("revision conflict"), "{stale}");
                 let mut invalid = editable_settings(&expected);
                 invalid.auto_update_min_interval_seconds = 0;
                 assert!(

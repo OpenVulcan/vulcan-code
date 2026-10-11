@@ -90,14 +90,14 @@ pub(crate) async fn service_run_git_commit_action(
                 &["checkout", "-b", &branch_name],
             )?;
             ensure_git_commit_action_command_succeeded("git checkout -b", output)?;
-            summary_rows.push(format!("已创建并切换到分支 `{branch_name}`。"));
+            summary_rows.push(format!("Created and switched to branch `{branch_name}`."));
         }
     }
 
     if request.include_unstaged {
         let output = run_webui_git_mutating_command(&repository_root, &["add", "-A"])?;
         ensure_git_commit_action_command_succeeded("git add -A", output)?;
-        summary_rows.push(String::from("已暂存工作区变更。"));
+        summary_rows.push(String::from("Staged the workspace changes."));
     }
 
     if !commit_message.is_empty() {
@@ -109,7 +109,7 @@ pub(crate) async fn service_run_git_commit_action(
         )?;
         ensure_git_commit_action_command_succeeded("git commit", output)?;
         committed = true;
-        summary_rows.push(String::from("已创建 Git 提交。"));
+        summary_rows.push(String::from("Created the Git commit."));
     }
 
     if request.push {
@@ -123,7 +123,7 @@ pub(crate) async fn service_run_git_commit_action(
         let output = run_webui_git_mutating_command(&repository_root, &push_args)?;
         ensure_git_commit_action_command_succeeded("git push", output)?;
         pushed = true;
-        summary_rows.push(String::from("已推送当前分支。"));
+        summary_rows.push(String::from("Pushed the current branch."));
     }
 
     let branch_name = load_webui_current_git_branch(&repository_root)?;
@@ -133,7 +133,7 @@ pub(crate) async fn service_run_git_commit_action(
         None
     };
     if summary_rows.is_empty() {
-        summary_rows.push(String::from("没有执行提交或推送操作。"));
+        summary_rows.push(String::from("No commit or push was performed."));
     }
     Ok(GitCommitActionResponse {
         summary: summary_rows.join(" "),

@@ -15,7 +15,7 @@ pub(crate) fn openrouter_secondary_route_option_subtitle(
         .and_then(parse_openrouter_f64_text)
         .and_then(|value| format_openrouter_price_per_mtokens(Some(value)))
     {
-        parts.push(format!("输入 {price}"));
+        parts.push(format!("Input {price}"));
     }
     if let Some(price) = option
         .completion_price_per_token
@@ -23,7 +23,7 @@ pub(crate) fn openrouter_secondary_route_option_subtitle(
         .and_then(parse_openrouter_f64_text)
         .and_then(|value| format_openrouter_price_per_mtokens(Some(value)))
     {
-        parts.push(format!("输出 {price}"));
+        parts.push(format!("Output {price}"));
     }
     if let Some(price) = option
         .cache_read_price_per_token
@@ -31,18 +31,18 @@ pub(crate) fn openrouter_secondary_route_option_subtitle(
         .and_then(parse_openrouter_f64_text)
         .and_then(|value| format_openrouter_price_per_mtokens(Some(value)))
     {
-        parts.push(format!("缓存 {price}"));
+        parts.push(format!("Cache {price}"));
     }
     if let Some(latency) = format_openrouter_latency_ms(option.latency_milliseconds) {
-        parts.push(format!("延迟 {latency}"));
+        parts.push(format!("Latency {latency}"));
     }
     if let Some(throughput) =
         format_openrouter_throughput_tokens_per_second(option.throughput_tokens_per_second)
     {
-        parts.push(format!("速度 {throughput}"));
+        parts.push(format!("Throughput {throughput}"));
     }
     if let Some(uptime) = format_openrouter_percentage(option.uptime_percent) {
-        parts.push(format!("可用性 {uptime}"));
+        parts.push(format!("Uptime {uptime}"));
     }
     if parts.is_empty() {
         option.endpoint_display_name.clone()
@@ -146,9 +146,9 @@ mod tests {
             throughput_tokens_per_second: Some(42.5),
         };
         let subtitle = openrouter_secondary_route_option_subtitle(&option);
-        assert!(subtitle.contains("输入 $3.000/MTokens"));
-        assert!(subtitle.contains("延迟 123ms"));
-        assert!(subtitle.contains("可用性 99.8%"));
-        assert!(subtitle.contains("速度 42 tok/s"));
+        assert!(subtitle.contains("Input $3.000/MTokens"));
+        assert!(subtitle.contains("Latency 123ms"));
+        assert!(subtitle.contains("Uptime 99.8%"));
+        assert!(subtitle.contains("Throughput 42 tok/s"));
     }
 }

@@ -32,7 +32,7 @@ pub(crate) fn ensure_regular_session_exists(
     if workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
         Ok(())
     } else {
-        Err(format!("未找到要{action_label}的会话：{session_id}"))
+        Err(format!("Session to {action_label} not found: {session_id}"))
     }
 }
 
@@ -45,9 +45,11 @@ pub(crate) async fn ensure_session_can_enter_plan_mode(
     let handle = session_v1_handle_from_state(state, session_id).await?;
     let goal_enabled = handle
         .read(|document| document.metadata.mode.goal.enabled)
-        .map_err(|error| format!("读取当前 V1 Goal 状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the current V1 goal state: {error}"))?;
     if goal_enabled {
-        return Err(String::from("计划模式与目标模式不能同时开启。"));
+        return Err(String::from(
+            "Plan mode and goal mode cannot be on at the same time.",
+        ));
     }
     Ok(())
 }
@@ -57,11 +59,11 @@ pub(crate) async fn ensure_session_can_enter_plan_mode(
 pub(crate) fn normalize_session_goal_objective(objective: &str) -> Result<String, String> {
     let normalized = objective.trim();
     if normalized.is_empty() {
-        return Err(String::from("目标内容不能为空。"));
+        return Err(String::from("The goal content must not be empty."));
     }
     if normalized.chars().count() > MAX_GOAL_OBJECTIVE_CHARS {
         return Err(format!(
-            "目标内容不能超过 {MAX_GOAL_OBJECTIVE_CHARS} 个字符。"
+            "The goal content must not exceed {MAX_GOAL_OBJECTIVE_CHARS} characters."
         ));
     }
     Ok(normalized.to_string())
@@ -71,7 +73,9 @@ pub(crate) fn normalize_session_goal_objective(objective: &str) -> Result<String
 /// 校验单个面向用户的可选会话目标 token 预算。
 pub(crate) fn validate_session_goal_budget(token_budget: Option<i64>) -> Result<(), String> {
     if token_budget.is_some_and(|budget| budget <= 0) {
-        return Err(String::from("目标 token 预算必须是正整数。"));
+        return Err(String::from(
+            "The goal token budget must be a positive integer.",
+        ));
     }
     Ok(())
 }
@@ -89,12 +93,12 @@ mod tests {
         );
         assert_eq!(
             normalize_session_goal_objective(" "),
-            Err(String::from("目标内容不能为空。"))
+            Err(String::from("The goal content must not be empty."))
         );
         assert_eq!(
             normalize_session_goal_objective("x".repeat(MAX_GOAL_OBJECTIVE_CHARS + 1).as_str()),
             Err(format!(
-                "目标内容不能超过 {MAX_GOAL_OBJECTIVE_CHARS} 个字符。"
+                "The goal content must not exceed {MAX_GOAL_OBJECTIVE_CHARS} characters."
             ))
         );
     }
@@ -107,7 +111,9 @@ mod tests {
         assert_eq!(validate_session_goal_budget(Some(1)), Ok(()));
         assert_eq!(
             validate_session_goal_budget(Some(0)),
-            Err(String::from("目标 token 预算必须是正整数。"))
+            Err(String::from(
+                "The goal token budget must be a positive integer."
+            ))
         );
     }
 }

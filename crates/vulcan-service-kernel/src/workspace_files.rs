@@ -130,11 +130,11 @@ pub(super) async fn service_workspace_files_list(
     let directory = workspace_file_canonical_child_path(
         &workspace_root,
         directory_path.as_deref(),
-        "目录路径",
+        "directory path",
     )?;
     if !directory.is_dir() {
         return Err(format!(
-            "文件树路径不是目录：{}",
+            "The file tree path is not a directory: {}",
             normalized_workspace_path_text_from_path(&directory)
         ));
     }
@@ -148,7 +148,7 @@ pub(super) async fn service_workspace_files_list(
         let walked_entry = match walked_entry {
             Ok(entry) => entry,
             Err(error) => {
-                notice.get_or_insert_with(|| format!("部分文件无法读取：{error}"));
+                notice.get_or_insert_with(|| format!("Some files cannot be read: {error}"));
                 continue;
             }
         };
@@ -171,7 +171,7 @@ pub(super) async fn service_workspace_files_list(
     if truncated {
         notice.get_or_insert_with(|| {
             format!(
-                "当前目录超过 {WORKSPACE_FILE_DIRECTORY_ENTRY_LIMIT} 个可显示条目，结果已截断。"
+                "The current directory exceeds {WORKSPACE_FILE_DIRECTORY_ENTRY_LIMIT} displayable entries; the result was truncated."
             )
         });
     }
@@ -218,16 +218,16 @@ pub(super) async fn service_workspace_files_read(
 ) -> Result<WorkspaceFileReadResponse, String> {
     let filters = filters.unwrap_or_default();
     let workspace_root = workspace_file_canonical_root(&workspace_path)?;
-    let file = workspace_file_canonical_child_path(&workspace_root, Some(&file_path), "文件路径")?;
+    let file = workspace_file_canonical_child_path(&workspace_root, Some(&file_path), "file path")?;
     let metadata = fs::metadata(&file).map_err(|error| {
         format!(
-            "读取文件元数据失败 `{}`：{error}",
+            "Failed to read file metadata `{}`: {error}",
             normalized_workspace_path_text_from_path(&file)
         )
     })?;
     if !metadata.is_file() {
         return Err(format!(
-            "文件树路径不是文件：{}",
+            "The file tree path is not a file: {}",
             normalized_workspace_path_text_from_path(&file)
         ));
     }
@@ -249,11 +249,13 @@ pub(super) async fn service_workspace_files_read(
                     kind,
                 ))
             } else {
-                Err(String::from("当前过滤规则未允许预览该媒体文件。"))
+                Err(String::from(
+                    "The current filter rules do not allow previewing this media file.",
+                ))
             }
         }
         WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Other => {
-            Err(String::from("当前文件类型不支持预览。"))
+            Err(String::from("Previewing this file type is not supported."))
         }
     }
 }

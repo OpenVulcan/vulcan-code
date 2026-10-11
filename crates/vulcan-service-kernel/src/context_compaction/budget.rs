@@ -11,7 +11,7 @@ pub(crate) fn context_compaction_budget_note_from_state(
 ) -> String {
     context_compaction_budget_snapshot_from_state(state, session_id)
         .map(|budget| budget.summary_note())
-        .unwrap_or_else(|| String::from("当前未提供预算快照"))
+        .unwrap_or_else(|| String::from("No budget snapshot provided"))
 }
 
 /// Returns the best available budget snapshot for compaction decisions.

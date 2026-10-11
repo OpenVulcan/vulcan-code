@@ -228,7 +228,7 @@ pub(super) async fn service_create_project_terminal(
         .name
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| format!("终端 {}", existing.len() + 1));
+        .unwrap_or_else(|| format!("Terminal {}", existing.len() + 1));
     let terminal = project_terminal_runtime()
         .start_terminal(ProjectTerminalStartRequest {
             project_id: project_id.clone(),

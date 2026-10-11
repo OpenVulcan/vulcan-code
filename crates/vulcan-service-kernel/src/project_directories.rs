@@ -63,13 +63,13 @@ pub(super) fn service_browse_project_directories(
     let directory_path = normalize_task_project_path(&requested_path);
     if !directory_path.exists() {
         return Err(format!(
-            "目录不存在：{}",
+            "Directory does not exist: {}",
             normalized_workspace_path_text_from_path(&directory_path)
         ));
     }
     if !directory_path.is_dir() {
         return Err(format!(
-            "路径不是目录：{}",
+            "The path is not a directory: {}",
             normalized_workspace_path_text_from_path(&directory_path)
         ));
     }
@@ -77,7 +77,7 @@ pub(super) fn service_browse_project_directories(
     let mut entries = fs::read_dir(&directory_path)
         .map_err(|error| {
             format!(
-                "读取目录失败 `{}`：{error}",
+                "Failed to read directory `{}`: {error}",
                 normalized_workspace_path_text_from_path(&directory_path)
             )
         })?
@@ -281,13 +281,13 @@ pub async fn service_add_project_from_path(
     let normalized_path = normalize_task_project_path(&selected_path);
     if !normalized_path.exists() {
         return Err(format!(
-            "项目目录不存在：{}",
+            "Project directory does not exist: {}",
             normalized_workspace_path_text_from_path(&normalized_path)
         ));
     }
     if !normalized_path.is_dir() {
         return Err(format!(
-            "项目路径不是目录：{}",
+            "The project path is not a directory: {}",
             normalized_workspace_path_text_from_path(&normalized_path)
         ));
     }
@@ -341,7 +341,7 @@ pub async fn service_add_project_from_path(
             &state,
             &project.id,
             project.session_ids.iter().copied(),
-            "恢复",
+            "restore",
         )?;
         let (vmm_controller_registry, session_registry) = {
             let guard = state
@@ -452,7 +452,7 @@ pub async fn service_add_project_from_path(
         (_, Ok(workbench)) => Ok(Some(workbench)),
         (Ok(_), Err(error)) => Err(error),
         (Err(initial_error), Err(final_error)) => Err(format!(
-            "项目已创建，但首次工作台发布失败：{initial_error}；绑定后重试仍失败：{final_error}"
+            "The project was created, but the first workbench publication failed: {initial_error}; retrying after binding still failed: {final_error}"
         )),
     }
 }

@@ -93,7 +93,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
     if request.dedicated_session.is_some() {
         return if force_compaction {
             Err(String::from(
-                "专职助手会话不支持上下文压缩；当前上下文已超出模型窗口，请选择容量更大的模型或新建会话。",
+                "Dedicated assistant sessions do not support context compaction; the current context exceeds the model window, so choose a model with a larger capacity or start a new session.",
             ))
         } else {
             Ok(None)
@@ -116,7 +116,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         .is_some_and(|limit| context_budget.active_context_tokens >= limit)
     {
         return Err(format!(
-            "当前上下文 {} Token 已达到所选模型的真实请求上限；请先选择容量足够的模型或缩短上下文。",
+            "The current context of {} tokens has reached the real request limit of the selected model; choose a model with enough capacity or shorten the context first.",
             context_budget.active_context_tokens
         ));
     }
@@ -147,7 +147,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
     }
     let session_id = request.session_id;
     let budget_note = format!(
-        "{}；VMM 可回收锚点约 {} tokens（{} bytes）",
+        "{}; VMM reclaimable anchors about {} tokens ({} bytes)",
         context_budget.summary_note(),
         vmm_cache_pressure.reclaimable_anchor_estimated_tokens,
         vmm_cache_pressure.reclaimable_anchor_bytes,
@@ -200,7 +200,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 .find(|session| session.id == session_id)
             {
                 session.status = SessionState::Running;
-                session.last_updated_label = String::from("刚刚");
+                session.last_updated_label = String::from("just now");
                 session.updated_at = current_unix_millis_text();
             }
             (previous_phase, status_message_id)
@@ -222,7 +222,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         >= MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES
     {
         let error = format!(
-            "自动上下文压缩已连续失败 {MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES} 次，本次请求已停止，避免覆盖或反复改写当前会话状态。"
+            "Automatic context compaction failed {MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES} times in a row; this request was stopped to avoid overwriting or repeatedly rewriting the current session state."
         );
         persist_failed_webui_context_compaction(
             app,
@@ -267,7 +267,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         state,
         session_id,
         prepared_policy,
-        "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
+        "Automatic context compaction found no history context to compact; this request was stopped to avoid a budget overflow.",
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -825,7 +825,7 @@ pub(crate) fn refreshed_execution_request_after_context_compaction(
         .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?
         .session_runtime_state
         .get_mut(&request.session_id)
-        .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
+        .ok_or_else(|| String::from("The session runtime state was not found after automatic context compaction finished."))?;
     let mut refreshed = request.clone();
     // vmmRuntimeReady cannot become true during compaction and is revoked immediately after stop.
     // vmmRuntimeReady 在压缩期间不能由 false 变为 true，并会在服务停止后立即撤销。

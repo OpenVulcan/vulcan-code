@@ -41,10 +41,11 @@ impl NativeVmmResourceStore {
         };
         // Reject unknown fields, unsupported versions and reserved project identities explicitly.
         // 明确拒绝未知字段、不支持的版本和保留项目身份。
-        let document: ProjectProfilePolicies = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("解析记忆项目画像规则失败：{error}"))?;
+        let document: ProjectProfilePolicies = serde_json::from_slice(&bytes).map_err(|error| {
+            format!("Failed to parse the memory project profile rules: {error}")
+        })?;
         if document.schema_version != 1 || document.projects.contains_key(&0) {
-            return Err("记忆项目画像规则版本或项目 ID 无效。".to_owned());
+            return Err("Invalid memory project profile rules version or project ID.".to_owned());
         }
         for rules in document.projects.values() {
             core_lifetimes(rules).validate()?;
@@ -61,7 +62,7 @@ impl NativeVmmResourceStore {
         project_id: u64,
     ) -> Result<VmmNativeProjectProfilePolicySummary, String> {
         if project_id == 0 {
-            return Err("记忆项目 ID 必须大于零。".to_owned());
+            return Err("The memory project ID must be greater than zero.".to_owned());
         }
         // Global personal rules never enter the project editor or its persisted payload.
         // 全局个人规则绝不进入项目编辑器或其持久化载荷。
@@ -92,7 +93,7 @@ impl NativeVmmResourceStore {
         rules: Option<VmmNativeProfileLifetimes>,
     ) -> Result<(), String> {
         if project_id == 0 {
-            return Err("记忆项目 ID 必须大于零。".to_owned());
+            return Err("The memory project ID must be greater than zero.".to_owned());
         }
         // Validate before replacing the file, preserving existing content on every rejected edit.
         // 替换文件前校验，使每次被拒绝的编辑均保留原内容。
@@ -106,10 +107,11 @@ impl NativeVmmResourceStore {
                 document.projects.remove(&project_id);
             }
         }
-        let bytes = serde_json::to_vec_pretty(&document)
-            .map_err(|error| format!("序列化记忆项目画像规则失败：{error}"))?;
+        let bytes = serde_json::to_vec_pretty(&document).map_err(|error| {
+            format!("Failed to serialize the memory project profile rules: {error}")
+        })?;
         if bytes.len() as u64 > MAX_SETTINGS_BYTES {
-            return Err("记忆项目画像规则超过文件大小上限。".to_owned());
+            return Err("The memory project profile rules exceed the file size limit.".to_owned());
         }
         persist_file_atomically(
             &self.config_root,
@@ -128,7 +130,7 @@ impl NativeVmmResourceStore {
         project_id: u64,
     ) -> Result<(), String> {
         if project_id == 0 {
-            return Err("记忆项目 ID 必须大于零。".to_owned());
+            return Err("The memory project ID must be greater than zero.".to_owned());
         }
         // Absence is declared inheritance, not a fallback for malformed configuration.
         // 缺失代表声明的继承，而非无效配置的兜底。

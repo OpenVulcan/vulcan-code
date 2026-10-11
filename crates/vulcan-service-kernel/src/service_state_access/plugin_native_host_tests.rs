@@ -62,7 +62,7 @@ fn service_native_host_pair_reuses_first_issuer_and_rejects_manager_only_replace
         service_vulcan_plugin_native_mcp_host(&state)
             .err()
             .expect("manager-only replacement must be rejected")
-            .contains("服务插件管理器与原生宿主签发者不一致")
+            .contains("disagrees with the native host issuer")
     );
     {
         // Pair the same replacement issuer under the original state lock, without registering a third host.

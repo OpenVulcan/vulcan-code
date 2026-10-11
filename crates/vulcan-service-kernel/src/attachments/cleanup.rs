@@ -129,7 +129,7 @@ pub(crate) async fn service_preview_project_attachment_cleanup(
     run_webui_attachment_cleanup_operation(
         state,
         request,
-        "附件清理预览任务失败",
+        "The attachment cleanup preview task failed",
         |context| {
             let preview = preview_attachment_cleanup(
                 &context.project_path,
@@ -163,7 +163,7 @@ pub(crate) async fn service_execute_project_attachment_cleanup(
     run_webui_attachment_cleanup_operation(
         state,
         request,
-        "附件清理执行任务失败",
+        "The attachment cleanup execution task failed",
         |context| {
             let report = execute_attachment_cleanup(
                 &context.project_path,
@@ -195,7 +195,7 @@ where
     let context = webui_attachment_cleanup_operation_context(&state, request)?;
     spawn_service_blocking_task(move || operation(context))
         .await
-        .map_err(|error| format!("{task_error_label}：{error}"))?
+        .map_err(|error| format!("{task_error_label}: {error}"))?
 }
 
 /// Resolves a WebUI attachment cleanup request into shared runtime inputs.
@@ -260,7 +260,7 @@ fn webui_attachment_cleanup_preview_summary(
 ) -> WebuiAttachmentCleanupPreviewSummary {
     let matched_byte_len_label = webui_attachment_cleanup_byte_len_label(preview.matched_byte_len);
     let summary = format!(
-        "截止 {cutoff} 将匹配 {count} 个附件、约 {byte_len}、影响 {sessions} 个会话（{kind_summary}）",
+        "Up to {cutoff}: {count} attachments, about {byte_len}, across {sessions} sessions ({kind_summary})",
         cutoff = preview.cutoff_date_text,
         count = preview.matched_asset_count,
         byte_len = matched_byte_len_label,
@@ -297,12 +297,12 @@ fn webui_attachment_cleanup_report_summary(
         String::new()
     } else {
         format!(
-            "，{} 个文件删除失败但已撤销回放",
+            "; {} files failed to delete but their replay was reverted",
             report.failed_delete_count
         )
     };
     let summary = format!(
-        "已按 {cutoff} 清理 {purged} 个附件，删除 {deleted} 个托管文件，{missing} 个文件已缺失，共释放约 {byte_len}，影响 {sessions} 个会话{failed_delete_suffix}",
+        "Cleaned up {purged} attachments up to {cutoff}, deleted {deleted} managed files, {missing} files were already missing, freed about {byte_len}, across {sessions} sessions{failed_delete_suffix}",
         cutoff = report.cutoff_date_text,
         purged = report.purged_asset_count,
         deleted = report.deleted_file_count,
@@ -364,7 +364,7 @@ fn webui_attachment_cleanup_byte_len_label(byte_len: u64) -> String {
 /// WebUI 摘要行使用的紧凑按类型计数字符串。
 fn webui_attachment_cleanup_kind_summary(per_kind_counts: &BTreeMap<String, usize>) -> String {
     if per_kind_counts.is_empty() {
-        String::from("未匹配任何类型")
+        String::from("no matching types")
     } else {
         let mut summary = String::new();
         for (kind, count) in per_kind_counts {
@@ -432,7 +432,7 @@ mod tests {
     fn webui_attachment_cleanup_kind_summary_keeps_empty_label() {
         assert_eq!(
             webui_attachment_cleanup_kind_summary(&BTreeMap::new()),
-            "未匹配任何类型"
+            "no matching types"
         );
     }
 }

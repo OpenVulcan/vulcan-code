@@ -64,7 +64,9 @@ impl SessionProviderToolConfiguration {
             &session_id.to_string(),
         )
         .await
-        .map_err(|error| format!("定位会话能力配置失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to locate the session capability configuration: {error}")
+        })?;
         Ok(Self {
             locator,
             registry,
@@ -81,12 +83,16 @@ impl SessionProviderToolConfiguration {
             |handle| {
                 handle
                     .read(|document| document.metadata.config.selection.provider_tools.clone())
-                    .map_err(|error| format!("读取会话能力配置失败：{error}"))
+                    .map_err(|error| {
+                        format!("Failed to read the session capability configuration: {error}")
+                    })
             },
             || {
                 self.locator
                     .read_provider_tool_selection()
-                    .map_err(|error| format!("读取会话能力配置失败：{error}"))
+                    .map_err(|error| {
+                        format!("Failed to read the session capability configuration: {error}")
+                    })
             },
         )
     }
@@ -106,7 +112,9 @@ impl SessionProviderToolConfiguration {
             || {
                 self.locator
                     .save_unloaded_provider_tool_selection(selection.clone(), now_ms)
-                    .map_err(|error| format!("保存会话能力配置失败：{error}"))
+                    .map_err(|error| {
+                        format!("Failed to save the session capability configuration: {error}")
+                    })
             },
         )
     }
@@ -126,7 +134,9 @@ impl SessionProviderToolConfiguration {
             || {
                 self.locator
                     .rebuild_unloaded_provider_tool_selection(selection.clone(), now_ms)
-                    .map_err(|error| format!("重建会话能力配置失败：{error}"))
+                    .map_err(|error| {
+                        format!("Failed to rebuild the session capability configuration: {error}")
+                    })
             },
         )
     }
@@ -305,7 +315,9 @@ pub(crate) fn set_pending_model_request_v1(
                 set_pending_request_if_effectively_changed(document, request, now_ms)
             },
         )
-        .map_err(|error| format!("保存 V1 下一请求模型配置失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to save the V1 next-request model configuration: {error}")
+        })?;
     Ok(receipt.changed)
 }
 
@@ -466,7 +478,9 @@ pub(crate) fn persist_missing_reasoning_reconciliation_after_user_admission_v1(
                 set_pending_request_if_effectively_changed(document, request, now_ms)
             },
         )
-        .map_err(|error| format!("保存 V1 缺失思考档位校正失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to save the V1 missing reasoning level reconciliation: {error}")
+        })?;
     Ok(receipt.changed)
 }
 
@@ -599,7 +613,9 @@ pub(crate) fn set_pending_reasoning_request_v1(
                 set_pending_request_if_effectively_changed(document, request, now_ms)
             },
         )
-        .map_err(|error| format!("保存 V1 下一请求思考配置失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to save the V1 next-request reasoning configuration: {error}")
+        })?;
     Ok(receipt.changed)
 }
 
@@ -633,7 +649,7 @@ pub(crate) fn set_provider_tool_selection_v1(
                 }
             },
         )
-        .map_err(|error| format!("保存 V1 Provider 工具选择失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the V1 provider tool selection: {error}"))?;
     Ok(receipt.changed)
 }
 
@@ -675,7 +691,9 @@ pub(crate) fn set_session_selection_bundle_v1(
                 })
             },
         )
-        .map_err(|error| format!("保存 V1 会话选择配置失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to save the V1 session selection configuration: {error}")
+        })?;
     Ok(receipt.changed)
 }
 
@@ -709,7 +727,7 @@ pub(crate) fn set_knowledge_library_selection_v1(
                 }
             },
         )
-        .map_err(|error| format!("保存 V1 知识库选择失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the V1 knowledge library selection: {error}"))?;
     Ok(receipt.changed)
 }
 
@@ -764,7 +782,7 @@ pub(crate) fn set_vmm_session_policy_value_v1(
                 }
             },
         )
-        .map_err(|error| format!("保存 V1 VMM 会话策略失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the V1 VMM session policy: {error}"))?;
     Ok(receipt.changed)
 }
 

@@ -701,7 +701,10 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a library without an active display generation must be rejected");
-    assert_eq!(error, "The active display-library generation changed; refusing to publish the mismatched vector index");
+    assert_eq!(
+        error,
+        "The active display-library generation changed; refusing to publish the mismatched vector index"
+    );
 
     // Guard 4b: the same guard must reject a *different* active generation. Publishing a vector index
     // against a superseded display generation is the mismatch this guard exists to stop, so the superseded
@@ -739,7 +742,10 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a superseded display generation must be rejected");
-    assert_eq!(error, "The active display-library generation changed; refusing to publish the mismatched vector index");
+    assert_eq!(
+        error,
+        "The active display-library generation changed; refusing to publish the mismatched vector index"
+    );
 
     // Guard 5: with the generation now matching, a missing model fingerprint still blocks publication —
     // the index would otherwise be published without the immutable identity that makes it interpretable.
@@ -765,7 +771,10 @@ async fn mark_vector_generation_ready_enforces_every_publication_guard() {
         .mark_vector_generation_ready(&library_id, &generation, snapshot.clone(), 4)
         .await
         .expect_err("a missing model fingerprint must be rejected");
-    assert_eq!(error, "The embedding model fingerprint is not configured yet");
+    assert_eq!(
+        error,
+        "The embedding model fingerprint is not configured yet"
+    );
 
     // Past every guard: publication must persist the full indexed identity, not just the status.
     // 通过全部护栏之后：发布必须持久化完整的已索引身份，而不只是状态。
@@ -1009,7 +1018,8 @@ async fn a_fresh_directory_round_trips_through_a_real_close_and_reopen() {
                 "an absent derived database is the only acceptable display failure after reopen: {error}"
             );
             assert!(
-                !error.contains("named binding") && !error.contains("Failed to resolve the knowledge"),
+                !error.contains("named binding")
+                    && !error.contains("Failed to resolve the knowledge"),
                 "the display binding must be re-established by the read itself: {error}"
             );
         }

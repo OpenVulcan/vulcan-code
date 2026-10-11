@@ -93,7 +93,7 @@ pub(super) async fn verify_rejections(
     )
     .await
     .expect_err("unbound caller must be rejected");
-    assert!(unbound.contains("尚未绑定"), "{unbound}");
+    assert!(unbound.contains("not bound"), "{unbound}");
     // Unknown ownership fields must fail strict decoding instead of being ignored.
     // 未知归属字段必须被严格解码拒绝，不能被忽略。
     let forbidden = action(

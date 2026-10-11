@@ -170,7 +170,7 @@ pub(crate) async fn drive<S>(
                     Err(error) => {
                         if terminal.defer(error.clone()) {
                             tracing::warn!(%task_id, %execution_id, %error, "Child terminal remains pending; retry retained");
-                            if let Err(diagnostic) = crate::push_webui_service_diagnostic(state, format!("子代理结果暂未完成交付，正在保留原结果重试：{error}")) {
+                            if let Err(diagnostic) = crate::push_webui_service_diagnostic(state, format!("The subagent result has not been delivered yet; retrying with the original result: {error}")) {
                                 tracing::warn!(%diagnostic, "Child terminal retry diagnostic failed");
                             }
                         }

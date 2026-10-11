@@ -9,27 +9,47 @@ pub(crate) fn settings() -> Vec<SettingSectionSummary> {
     vec![
         setting_section(
             "runtime",
-            "运行时",
-            "Core Service、LuaSkills、VLDB、MCP 的启动与状态设置",
-            &["启动模式", "运行时目录", "MCP 工具策略", "本地数据库"],
+            "Runtime",
+            "Startup and status settings of Core Service, LuaSkills, VLDB and MCP",
+            &[
+                "Startup mode",
+                "Runtime directory",
+                "MCP tool policy",
+                "Local database",
+            ],
         ),
         setting_section(
             "providers",
-            "模型与 Provider",
-            "模型供应商、默认模型、工具能力与推理配置",
-            &["默认 Provider", "默认模型", "工具调用", "推理强度"],
+            "Models and providers",
+            "Model providers, default models, tool capabilities and reasoning configuration",
+            &[
+                "Default provider",
+                "Default model",
+                "Tool calls",
+                "Reasoning effort",
+            ],
         ),
         setting_section(
             "plugins",
-            "插件",
-            "LuaSkills、Rust lib 插件、WebUI 控制面板与权限",
-            &["插件目录", "启用状态", "权限声明", "WebUI 面板"],
+            "Plugins",
+            "LuaSkills, Rust lib plugins, WebUI control panels and permissions",
+            &[
+                "Plugin directory",
+                "Enable state",
+                "Permission declarations",
+                "WebUI panels",
+            ],
         ),
         setting_section(
             "remote",
-            "远程访问",
-            "浏览器、手机、远程客户端访问 Core Service 的设置",
-            &["监听地址", "访问令牌", "远程开关", "审计日志"],
+            "Remote access",
+            "Settings for browser, phone and remote client access to Core Service",
+            &[
+                "Listen address",
+                "Access token",
+                "Remote switch",
+                "Audit log",
+            ],
         ),
     ]
 }
@@ -457,7 +477,9 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                 preferred_connection: false,
                 enabled: true,
                 route_revision: Some(selection.route_revision.clone()),
-                status: Some(String::from("会话路由已冻结；重新选择模型后使用最新目录")),
+                status: Some(String::from(
+                    "The session route is frozen; select the model again to use the latest catalog",
+                )),
                 family: None,
                 context_limit: capabilities
                     .context_limit
@@ -506,12 +528,12 @@ pub(crate) fn public_ai_provider_rows_for_selection(
         let active = models.iter().any(|model| model.active);
         let status = errors
             .get(connection.id.as_str())
-            .map(|error| format!("同步失败：{error}"))
+            .map(|error| format!("Sync failed: {error}"))
             .unwrap_or_else(|| {
                 if catalogs.get(connection.id.as_str()).is_some() {
-                    String::from("目录可用")
+                    String::from("Catalog available")
                 } else {
-                    String::from("目录未同步")
+                    String::from("Catalog not synced")
                 }
             });
         rows.push(ProviderSummary {
@@ -693,16 +715,16 @@ pub(crate) fn memories(
     vec![
         MemorySummary {
             id: String::from("projects"),
-            title: String::from("项目绑定"),
+            title: String::from("Project bindings"),
             category: String::from("Project"),
-            state: format!("已恢复 {} 个项目", workspace.task_projects.len()),
+            state: format!("Restored {} projects", workspace.task_projects.len()),
         },
         MemorySummary {
             id: String::from("sessions"),
-            title: String::from("会话绑定"),
+            title: String::from("Session bindings"),
             category: String::from("Conversation"),
             state: format!(
-                "已恢复 {} 个会话运行态",
+                "Restored {} session runtime states",
                 workspace.session_runtime_state.len()
             ),
         },

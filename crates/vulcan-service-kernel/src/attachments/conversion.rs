@@ -50,19 +50,19 @@ fn composer_attachment_kind_metadata(
         ConversationAttachmentKind::Image => ComposerAttachmentKindMetadata {
             key: "image",
             aliases: &[],
-            label: "图片",
+            label: "Image",
             accept: "image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/x-icon,.tif,.tiff,.ico,.pbm,.pgm,.ppm,.pnm,.pam,.tga,.qoi",
         },
         ConversationAttachmentKind::Video => ComposerAttachmentKindMetadata {
             key: "video",
             aliases: &[],
-            label: "视频",
+            label: "Video",
             accept: "video/mp4,video/mpeg,video/quicktime,video/mov,video/x-m4v,video/x-matroska,video/webm,video/x-msvideo,video/avi,video/x-flv,video/x-ms-wmv,video/wmv,video/3gpp,video/3gpp2",
         },
         ConversationAttachmentKind::Audio => ComposerAttachmentKindMetadata {
             key: "audio",
             aliases: &[],
-            label: "音频",
+            label: "Audio",
             accept: "audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/m4a,audio/x-m4a,audio/aac,audio/flac,audio/ogg,audio/oga,audio/opus,audio/pcm,audio/l16,audio/basic",
         },
         ConversationAttachmentKind::Pdf => ComposerAttachmentKindMetadata {
@@ -74,7 +74,7 @@ fn composer_attachment_kind_metadata(
         ConversationAttachmentKind::File => ComposerAttachmentKindMetadata {
             key: "file",
             aliases: &[],
-            label: "文件",
+            label: "File",
             accept: "*/*",
         },
     }
@@ -249,7 +249,7 @@ fn parse_composer_attachment_kind(value: &str) -> Result<ConversationAttachmentK
             return Ok(kind);
         }
     }
-    Err(format!("不支持的附件类型：{normalized}"))
+    Err(format!("Unsupported attachment type: {normalized}"))
 }
 
 /// Resolves an attachment descriptor from a browser file name when the MIME type is missing.

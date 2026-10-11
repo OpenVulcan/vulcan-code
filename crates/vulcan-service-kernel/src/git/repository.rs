@@ -40,13 +40,13 @@ pub(crate) fn discover_webui_git_repository_catalog(
 ) -> Result<WebuiGitRepositoryCatalog, String> {
     let project_root = fs::canonicalize(project_root).map_err(|error| {
         format!(
-            "无法解析 Git 多仓库项目根目录 `{}`：{error}",
+            "Cannot resolve the Git multi-repository project root `{}`: {error}",
             project_root.display()
         )
     })?;
     if !project_root.is_dir() {
         return Err(format!(
-            "Git 多仓库项目根目录不是目录：{}",
+            "The Git multi-repository project root is not a directory: {}",
             project_root.display()
         ));
     }
@@ -96,7 +96,7 @@ pub(crate) fn resolve_webui_repository_root_for_key(
 ) -> Result<PathBuf, String> {
     let project_root = fs::canonicalize(project_root).map_err(|error| {
         format!(
-            "无法解析 Git 项目根目录 `{}`：{error}",
+            "Cannot resolve the Git project root `{}`: {error}",
             project_root.display()
         )
     })?;
@@ -116,22 +116,29 @@ pub(crate) fn resolve_webui_repository_root_for_key(
                 )
             })
         {
-            return Err(format!("Git 仓库键包含非法路径：`{repository_key}`。"));
+            return Err(format!(
+                "The Git repository key contains an invalid path: `{repository_key}`."
+            ));
         }
         project_root.join(key_path)
     };
-    let candidate = fs::canonicalize(&candidate)
-        .map_err(|error| format!("无法解析 Git 仓库键 `{repository_key}`：{error}"))?;
+    let candidate = fs::canonicalize(&candidate).map_err(|error| {
+        format!("Cannot resolve Git repository key `{repository_key}`: {error}")
+    })?;
     if !candidate.starts_with(&project_root) {
-        return Err(format!("Git 仓库键超出项目根目录：`{repository_key}`。"));
+        return Err(format!(
+            "The Git repository key escapes the project root: `{repository_key}`."
+        ));
     }
     if resolve_webui_git_repository_root(&candidate)?.as_deref() != Some(candidate.as_path()) {
-        return Err(format!("路径不是项目内的 Git 仓库：`{repository_key}`。"));
+        return Err(format!(
+            "The path is not a Git repository inside the project: `{repository_key}`."
+        ));
     }
     let canonical_repository_key = repository_key_for_root(&project_root, &candidate);
     if canonical_repository_key != repository_key {
         return Err(format!(
-            "Git 仓库键不是项目目录中已发现的规范键：`{repository_key}`。"
+            "The Git repository key is not a canonical key discovered in the project directory: `{repository_key}`."
         ));
     }
     Ok(candidate)
@@ -149,7 +156,7 @@ pub(crate) fn resolve_webui_repository_root_for_request(
     }
     let project_root = fs::canonicalize(project_root).map_err(|error| {
         format!(
-            "无法解析 Git 项目根目录 `{}`：{error}",
+            "Cannot resolve the Git project root `{}`: {error}",
             project_root.display()
         )
     })?;
@@ -176,7 +183,11 @@ pub(crate) fn resolve_webui_repository_root_from_workspace_text_with_key(
             None,
             resolve_webui_git_repository_root(&workspace_path)?,
         )?
-        .ok_or_else(|| String::from("当前工作区不是 Git 仓库，无法执行 Git 操作。"));
+        .ok_or_else(|| {
+            String::from(
+                "The current workspace is not a Git repository; the Git operation cannot run.",
+            )
+        });
     }
     resolve_webui_repository_root_for_key(&workspace_path, repository_key)
 }
@@ -198,16 +209,24 @@ fn collect_git_repository_candidates(
         return Ok(());
     }
     let mut entries = fs::read_dir(current)
-        .map_err(|error| format!("无法读取 Git 发现目录 `{}`：{error}", current.display()))?
+        .map_err(|error| {
+            format!(
+                "Cannot read the Git discovery directory `{}`: {error}",
+                current.display()
+            )
+        })?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("读取 Git 发现目录条目失败：{error}"))?;
+        .map_err(|error| format!("Failed to read a Git discovery directory entry: {error}"))?;
     entries.sort_by_key(|entry| entry.file_name());
     let mut seen_paths = BTreeSet::new();
     for entry in entries {
         let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("读取 Git 发现条目 `{}` 类型失败：{error}", path.display()))?;
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "Failed to read the type of Git discovery entry `{}`: {error}",
+                path.display()
+            )
+        })?;
         if !file_type.is_dir() || file_type.is_symlink() {
             continue;
         }
@@ -220,8 +239,12 @@ fn collect_git_repository_candidates(
         {
             continue;
         }
-        let canonical_path = fs::canonicalize(&path)
-            .map_err(|error| format!("无法解析 Git 发现路径 `{}`：{error}", path.display()))?;
+        let canonical_path = fs::canonicalize(&path).map_err(|error| {
+            format!(
+                "Cannot resolve the Git discovery path `{}`: {error}",
+                path.display()
+            )
+        })?;
         if !canonical_path.starts_with(project_root) || !seen_paths.insert(canonical_path.clone()) {
             continue;
         }
@@ -238,7 +261,7 @@ fn git_marker_exists(path: &Path) -> Result<bool, String> {
         Ok(metadata) => Ok(metadata.file_type().is_dir() || metadata.file_type().is_file()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(format!(
-            "读取 Git 标记 `{}` 失败：{error}",
+            "Failed to read Git marker `{}`: {error}",
             marker_path.display()
         )),
     }
@@ -315,7 +338,7 @@ mod tests {
         create_repository(temporary.path());
         let error = resolve_webui_repository_root_for_key(temporary.path(), Some("../outside"))
             .expect_err("parent key must be rejected");
-        assert!(error.contains("非法路径"));
+        assert!(error.contains("invalid path"));
     }
 
     #[test]
@@ -326,7 +349,7 @@ mod tests {
         let error =
             resolve_webui_repository_root_for_key(temporary.path(), Some("nested/./service"))
                 .expect_err("noncanonical repository key must be rejected");
-        assert!(error.contains("规范键"));
+        assert!(error.contains("canonical key"));
     }
 
     #[test]

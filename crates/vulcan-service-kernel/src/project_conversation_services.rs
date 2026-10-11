@@ -209,7 +209,7 @@ pub(super) fn begin_session_run_stop_exclusion(
         .contains_key(&session_id)
     {
         return Err(format!(
-            "会话 `{session_id}` 正在可靠提交终态，暂时不能重复停止。"
+            "Session `{session_id}` is reliably committing its terminal state; it cannot be stopped again yet."
         ));
     }
     reserve_session_turn_admission(
@@ -217,7 +217,7 @@ pub(super) fn begin_session_run_stop_exclusion(
         &reserved_session_ids,
         reservation_id,
         SessionTurnAdmissionReservationKind::RunStop,
-        "停止",
+        "stop",
     )?;
     drop(guard);
     Ok(SessionTurnAdmissionGuard {
@@ -262,7 +262,7 @@ pub(super) fn try_begin_pending_prompt_dispatch_exclusion(
         &BTreeSet::from([session_id]),
         reservation_id,
         SessionTurnAdmissionReservationKind::PromptSubmission,
-        "分发排队提示词",
+        "dispatch queued prompts",
     )?;
     drop(guard);
     Ok(Some(SessionTurnAdmissionGuard {
@@ -362,7 +362,7 @@ fn begin_lifecycle_transition(
         &reserved_project_scopes,
     ) {
         return Err(format!(
-            "子会话 `{child}` 正在维护上下文或等待可靠清理，请先停止后再{action_label}。"
+            "Child session `{child}` is maintaining context or waiting for reliable cleanup; stop it before you {action_label}."
         ));
     }
     for session_id in &reserved_session_ids {
@@ -380,7 +380,7 @@ fn begin_lifecycle_transition(
             || child_is_running
         {
             return Err(format!(
-                "会话 `{session_id}` 正在运行，请先停止后再{action_label}。"
+                "Session `{session_id}` is running; stop it before you {action_label}."
             ));
         }
     }
@@ -468,7 +468,7 @@ fn reserve_session_turn_admission(
     for session_id in session_ids {
         if let Some(existing) = state.session_turn_admission_reservations.get(session_id) {
             return Err(format!(
-                "会话 `{session_id}` 已由 {} 预留，无法执行{action_label}。",
+                "Session `{session_id}` is reserved by {}; cannot {action_label}.",
                 existing.kind.diagnostic_label()
             ));
         }
@@ -492,7 +492,7 @@ fn reserve_session_turn_admission(
 pub(super) fn normalize_non_empty_name(name: &str) -> Result<String, String> {
     let normalized_name = name.trim();
     if normalized_name.is_empty() {
-        return Err(String::from("名称不能为空。"));
+        return Err(String::from("The name must not be empty."));
     }
     Ok(normalized_name.to_string())
 }
@@ -528,7 +528,7 @@ pub(super) fn selected_session_id_from_state(
         .selected_conversation_id
         .as_deref()
         .and_then(parse_session_id)
-        .ok_or_else(|| String::from("当前没有选中的会话。"))
+        .ok_or_else(|| String::from("No session is selected."))
 }
 
 #[cfg(test)]

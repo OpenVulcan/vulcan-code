@@ -51,7 +51,7 @@ pub(crate) fn load_webui_workspace_diff_search_input(
         selected_base_branch,
         selected_compare_branch,
         selected_commit_hash,
-        "当前分支没有可搜索的未推送提交。",
+        "The current branch has no unpushed commits to search.",
     )?;
     let unified_diff = loaded_diff.unified_diff;
     let summaries = webui_unified_diff_file_summaries(&unified_diff);

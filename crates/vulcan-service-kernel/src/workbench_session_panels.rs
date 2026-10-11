@@ -1243,8 +1243,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(tags, vec!["VMM_MEMORY", "VMM_MEMORY_EXPIRED"]);
-        assert_eq!(snapshot.dynamic_cards[0].items[0].ttl_label, "剩余 3 回合");
-        assert_eq!(snapshot.dynamic_cards[1].items[0].ttl_label, "已过期");
+        assert_eq!(snapshot.dynamic_cards[0].items[0].ttl_label, "3 turns left");
+        assert_eq!(snapshot.dynamic_cards[1].items[0].ttl_label, "Expired");
         // A restored controller remains projectable even before prompt runtime hydration.
         // 恢复的控制器即使尚未水合提示词运行态也必须可投影。
         let restored =

@@ -20,7 +20,7 @@ fn parses_task_session_payload_into_subagent_state() {
     assert_eq!(state.parent_session_id, parent_session_id);
     assert_eq!(state.task_id, task_id);
     assert_eq!(state.public_task_id, "task-public");
-    assert_eq!(state.subagent_label, "检查工程结构（explorer）");
+    assert_eq!(state.subagent_label, "检查工程结构 (explorer)");
     assert_eq!(state.run_state, SubagentTaskRunState::Running);
 }
 
@@ -209,7 +209,7 @@ fn extracts_task_session_fields_from_host_result_metadata() {
         .expect("host-result task-session metadata should parse");
     assert_eq!(state.task_id, task_id);
     assert_eq!(state.run_state, SubagentTaskRunState::Running);
-    assert_eq!(state.subagent_label, "图片子代理（image-worker）");
+    assert_eq!(state.subagent_label, "图片子代理 (image-worker)");
 }
 
 /// Verifies the shared task-card lookup ignores prompt-only candidates and keeps exact identity matches.

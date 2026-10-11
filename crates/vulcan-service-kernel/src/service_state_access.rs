@@ -57,7 +57,7 @@ pub(crate) fn require_plugin_publication_shutdown_admission(
             .shutdown_admission_is_closed()
     {
         return Err(String::from(
-            "服务正在关闭或关闭恢复已被阻止，不能发布插件扩展代次。",
+            "The service is shutting down or shutdown recovery is blocked; plugin extension generations cannot be published.",
         ));
     }
     Ok(())
@@ -298,7 +298,7 @@ pub(crate) fn update_project_icon_local_state(
     mutate_retained_project_local_state(
         state,
         project_id,
-        "设置图标",
+        "set the icon",
         |project| {
             project.icon_pack = icon_pack.clone();
             project.icon_key = icon_key.clone();
@@ -365,7 +365,7 @@ where
         Ok(())
     } else {
         Err(format!(
-            "没有找到要{missing_project_action}的项目：{project_id}"
+            "Project to {missing_project_action} not found: {project_id}"
         ))
     }
 }
@@ -426,7 +426,9 @@ pub(crate) fn service_vulcan_plugin_native_mcp_host(
         .vulcan_plugin_native_mcp_host
         .matches_manager(&bridge.vulcan_plugin_runtime)
     {
-        return Err(String::from("服务插件管理器与原生宿主签发者不一致。"));
+        return Err(String::from(
+            "The service plugin manager disagrees with the native host issuer.",
+        ));
     }
     Ok((
         bridge.vulcan_plugin_runtime.clone(),
@@ -572,17 +574,17 @@ pub(crate) fn sync_agent_luaskills_tool_cache(
             String::from("service is still starting; LuaSkills runtime is not ready")
         })?;
         let engine = tauri_handle.engine.read().map_err(|_| {
-            String::from("LuaSkills 引擎读锁已损坏，无法同步 Agent Runtime 工具缓存。")
+            String::from("The LuaSkills engine read lock is poisoned; the agent runtime tool cache cannot be synced.")
         })?;
         engine
             .list_entries_for_authority(
                 vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
             )
-            .map_err(|error| format!("读取 Agent Runtime 工具入口失败：{error}"))?
+            .map_err(|error| format!("Failed to read the agent runtime tool entries: {error}"))?
     };
     let entry_count = entries.len();
     let mut tool_entries = runtime_handle.tool_entries.lock().map_err(|_| {
-        String::from("LuaSkills 工具缓存锁已损坏，无法同步 Agent Runtime 工具缓存。")
+        String::from("The LuaSkills tool cache lock is poisoned; the agent runtime tool cache cannot be synced.")
     })?;
     *tool_entries = entries;
     invalidate_runtime_prompt_luaskill_catalog_cache();
@@ -1381,7 +1383,7 @@ mod tests {
         .expect_err("missing project should return a retained-project diagnostic");
 
         let guard = state.lock().expect("test service state lock must be valid");
-        assert_eq!("没有找到要设置图标的项目：missing-project", error);
+        assert_eq!("Project to set the icon not found: missing-project", error);
         assert_eq!(7, guard.workbench_generation);
         assert_eq!(7, guard.workbench.revision);
     }

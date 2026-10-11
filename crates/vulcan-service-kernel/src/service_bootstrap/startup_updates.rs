@@ -46,20 +46,28 @@ pub(crate) fn update_luaskills_bootstrap_progress(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Core Service 已启动",
+                        "Core Service started",
                     ),
                     (
                         "vldb",
                         StartupStepStatus::Ready,
-                        "VLDB/controller 数据平面已就绪",
+                        "VLDB/controller data plane ready",
                     ),
                     ("luaskills", StartupStepStatus::Running, message),
-                    ("mcp", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
-                    ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
+                    (
+                        "mcp",
+                        StartupStepStatus::Pending,
+                        "Waiting for LuaSkills to be ready",
+                    ),
+                    (
+                        "plugins",
+                        StartupStepStatus::Pending,
+                        "Waiting for the plugin catalog initialization",
+                    ),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
-                        "等待工作区数据库载入",
+                        "Waiting for the workspace database to load",
                     ),
                 ],
             )
@@ -87,24 +95,32 @@ pub(crate) fn update_managed_runtime_bootstrap_progress(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Core Service 已启动",
+                        "Core Service started",
                     ),
                     (
                         "vldb",
                         StartupStepStatus::Ready,
-                        "VLDB/controller 数据平面已就绪",
+                        "VLDB/controller data plane ready",
                     ),
                     (
                         "luaskills",
                         StartupStepStatus::Running,
                         progress.message.as_str(),
                     ),
-                    ("mcp", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
-                    ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
+                    (
+                        "mcp",
+                        StartupStepStatus::Pending,
+                        "Waiting for LuaSkills to be ready",
+                    ),
+                    (
+                        "plugins",
+                        StartupStepStatus::Pending,
+                        "Waiting for the plugin catalog initialization",
+                    ),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
-                        "等待工作区数据库载入",
+                        "Waiting for the workspace database to load",
                     ),
                 ],
             );
@@ -188,7 +204,7 @@ pub(crate) fn startup_failure_steps(
             } else {
                 (
                     StartupStepStatus::Pending,
-                    String::from("上游启动失败，未继续"),
+                    String::from("An upstream startup step failed; not continued"),
                 )
             };
             StartupStepSnapshot {
@@ -210,13 +226,13 @@ pub(crate) fn startup_failure_steps(
 /// 返回单个启动步骤的稳定就绪文案。
 pub(crate) fn startup_ready_message(step_id: &str) -> String {
     match step_id {
-        "service-process" => "Core Service 已启动",
-        "vldb" => "VLDB/controller 数据平面已就绪",
-        "luaskills" => "LuaSkills 引擎与技能目录已就绪",
-        "mcp" => "MCP Runtime 已初始化",
-        "plugins" => "插件目录与已启用运行时已就绪",
-        "workspace" => "项目与会话索引已载入",
-        _ => "已就绪",
+        "service-process" => "Core Service started",
+        "vldb" => "VLDB/controller data plane ready",
+        "luaskills" => "LuaSkills engine and skill catalog ready",
+        "mcp" => "MCP runtime initialized",
+        "plugins" => "Plugin catalog and enabled runtimes ready",
+        "workspace" => "Project and session index loaded",
+        _ => "Ready",
     }
     .to_string()
 }

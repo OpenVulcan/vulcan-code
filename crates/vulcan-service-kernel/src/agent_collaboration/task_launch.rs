@@ -177,7 +177,7 @@ pub(super) fn schedule_task_wakeup(
             tracing::warn!(%target_id, %error, "Agent task wakeup failed");
             if let Err(diagnostic_error) = crate::push_webui_service_diagnostic(
                 &invocation.state,
-                format!("代理任务会话 {target_id} 启动失败：{error}"),
+                format!("Failed to start agent task session {target_id}: {error}"),
             ) {
                 tracing::warn!(%diagnostic_error, "Agent task diagnostic publication failed");
             }

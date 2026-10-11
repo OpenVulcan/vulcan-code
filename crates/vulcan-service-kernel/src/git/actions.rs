@@ -84,7 +84,7 @@ fn run_webui_git_file_action_command(
     pathspecs: &[String],
 ) -> Result<(), String> {
     if pathspecs.is_empty() {
-        return Err(String::from("请选择需要操作的文件。"));
+        return Err(String::from("Select the files to operate on."));
     }
     let mut args = prefix_args
         .iter()
@@ -103,7 +103,7 @@ fn run_webui_restore_file_action(
     pathspecs: &[String],
 ) -> Result<(), String> {
     if pathspecs.is_empty() {
-        return Err(String::from("请选择需要还原的文件。"));
+        return Err(String::from("Select the files to restore."));
     }
     let mut tracked_pathspecs = BTreeSet::new();
     let mut untracked_pathspecs = BTreeSet::new();
@@ -175,7 +175,9 @@ fn webui_git_file_action_file_pathspecs(
         }
     }
     if pathspecs.is_empty() {
-        return Err(String::from("文件路径无效，无法执行 Git 文件操作。"));
+        return Err(String::from(
+            "Invalid file path; the Git file operation cannot run.",
+        ));
     }
     Ok(pathspecs)
 }
@@ -207,13 +209,13 @@ fn webui_git_file_action_name(action: WebuiWorkspaceGitFileAction) -> &'static s
 /// 为已完成的 Git 文件操作构建紧凑的用户摘要。
 fn webui_git_file_action_summary(action: WebuiWorkspaceGitFileAction, path_count: usize) -> String {
     match action {
-        WebuiWorkspaceGitFileAction::StageAll => String::from("已暂存全部变更。"),
-        WebuiWorkspaceGitFileAction::RestoreAll => String::from("已还原全部未暂存变更。"),
-        WebuiWorkspaceGitFileAction::StageFile => format!("已暂存 {path_count} 个文件路径。"),
+        WebuiWorkspaceGitFileAction::StageAll => String::from("Staged all changes."),
+        WebuiWorkspaceGitFileAction::RestoreAll => String::from("Restored all unstaged changes."),
+        WebuiWorkspaceGitFileAction::StageFile => format!("Staged {path_count} file paths."),
         WebuiWorkspaceGitFileAction::RestoreFile => {
-            format!("已还原 {path_count} 个文件路径的未暂存变更。")
+            format!("Restored the unstaged changes of {path_count} file paths.")
         }
-        WebuiWorkspaceGitFileAction::UnstageAll => String::from("已取消全部暂存。"),
-        WebuiWorkspaceGitFileAction::UnstageFile => format!("已取消暂存 {path_count} 个文件路径。"),
+        WebuiWorkspaceGitFileAction::UnstageAll => String::from("Unstaged all changes."),
+        WebuiWorkspaceGitFileAction::UnstageFile => format!("Unstaged {path_count} file paths."),
     }
 }

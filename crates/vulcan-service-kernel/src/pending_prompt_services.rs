@@ -83,7 +83,9 @@ pub(crate) fn reconcile_pending_prompt_attachment_leases(
                 .pending_staging_release_actions
                 .clone()
         })
-        .map_err(|error| format!("读取 V1 队列附件释放意图失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to read the V1 queued attachment release intent: {error}")
+        })?;
     if pending.is_empty() {
         return Ok(());
     }
@@ -91,12 +93,15 @@ pub(crate) fn reconcile_pending_prompt_attachment_leases(
         .iter()
         .map(|action| pending_prompt_attachment_staging_scope(session_id, action.as_str()))
         .collect::<Result<BTreeSet<_>, _>>()?;
-    release_staged_attachment_scopes(workspace_path, &scopes)
-        .map_err(|error| format!("重试 V1 队列附件租约释放失败：{error}"))?;
+    release_staged_attachment_scopes(workspace_path, &scopes).map_err(|error| {
+        format!("Failed to retry the V1 queued attachment lease release: {error}")
+    })?;
     for action in pending {
         handle
             .acknowledge_queued_staging_release(action, current_v1_goal_unix_millis()?)
-            .map_err(|error| format!("确认 V1 队列附件租约释放失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to confirm the V1 queued attachment lease release: {error}")
+            })?;
     }
     Ok(())
 }
@@ -105,7 +110,7 @@ pub(crate) fn reconcile_pending_prompt_attachment_leases(
 /// 把一条可见队列条目 ID 解析为权威浏览器动作身份。
 pub(crate) fn pending_prompt_action_id(entry_id: &str) -> Result<ClientActionId, String> {
     ClientActionId::try_new(entry_id.to_string())
-        .map_err(|error| format!("待发送消息身份无效：{error}"))
+        .map_err(|error| format!("Invalid pending message identity: {error}"))
 }
 
 /// Resolves the current or terminal local queue identity for one exact browser action.
@@ -116,9 +121,9 @@ pub(crate) fn pending_prompt_queue_identity(
 ) -> Result<QueuedInputIdentity, String> {
     let identity = handle
         .read(|document| document.queued_input_identity_for_action(client_action_id))
-        .map_err(|error| format!("读取 V1 待发送消息身份失败：{error}"))?
-        .map_err(|error| format!("解析 V1 待发送消息身份失败：{error}"))?;
-    identity.ok_or_else(|| format!("没有找到待发送消息 `{}`。", client_action_id.as_str()))
+        .map_err(|error| format!("Failed to read the V1 pending message identity: {error}"))?
+        .map_err(|error| format!("Failed to parse the V1 pending message identity: {error}"))?;
+    identity.ok_or_else(|| format!("Pending message `{}` not found.", client_action_id.as_str()))
 }
 
 /// Rebuilds only the visible queue panel from authoritative V1 metadata.
@@ -144,7 +149,7 @@ pub(crate) fn rebuild_pending_prompt_panel_from_v1(
 ) -> Result<bool, String> {
     let queued_inputs = handle
         .read(|document| document.metadata.input_state.queued_inputs.clone())
-        .map_err(|error| format!("读取 V1 待发送消息队列失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 pending message queue: {error}"))?;
     let rebuilt =
         pending_prompt_process_mirror_from_v1_queued_inputs(&queued_inputs, |queued_input| {
             Ok(conversation_attachments_from_resource_ids(
@@ -187,7 +192,9 @@ fn existing_moved_pending_prompt_timestamp(
                     .then_some(event.updated_at_ms)
             })
         })
-        .map_err(|error| format!("读取 V1 待发送消息处置事实失败：{error}"))
+        .map_err(|error| {
+            format!("Failed to read the V1 pending message disposition facts: {error}")
+        })
 }
 
 /// Builds the edit response only from the durable draft receipt and project resources.
@@ -221,20 +228,22 @@ fn committed_pending_prompt_edit_outcome(
 ) -> PendingPromptEditOutcome {
     let mut projection_warnings = Vec::new();
     if let Err(error) = attachment_release {
-        projection_warnings.push(format!("清理已处置消息的附件租约失败：{error}"));
+        projection_warnings.push(format!(
+            "Failed to clean up the attachment leases of the disposed message: {error}"
+        ));
     }
     if let Err(error) = panel_projection {
-        projection_warnings.push(format!("刷新队列投影失败：{error}"));
+        projection_warnings.push(format!("Failed to refresh the queue projection: {error}"));
     }
     if let Err(error) = delta_projection {
-        projection_warnings.push(format!("发布队列变更事件失败：{error}"));
+        projection_warnings.push(format!("Failed to publish the queue change event: {error}"));
     }
     // Post-commit projection faults are explicit warnings and never disguise the durable move as failure.
     // 提交后的投影故障以明确警告返回，绝不把持久移动伪装成失败。
     let projection_warning = (!projection_warnings.is_empty()).then(|| {
         format!(
-            "待发送提示词已恢复，但局部投影需要重新刷新：{}",
-            projection_warnings.join("；")
+            "The pending prompt was restored, but the partial projection needs a refresh: {}",
+            projection_warnings.join("; ")
         )
     });
     PendingPromptEditOutcome {
@@ -272,15 +281,15 @@ pub(super) async fn service_edit_pending_prompt(
         pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     let locator = handle
         .storage_locator()
-        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 session resource location: {error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the V1 project resource catalog: {error}"))?;
     let existing_moved_at_ms = existing_moved_pending_prompt_timestamp(handle.as_ref(), &identity)?;
     let now_ms = current_v1_goal_unix_millis()?;
     let receipt = handle
         .move_queued_input_to_draft(identity, now_ms)
-        .map_err(|error| format!("把 V1 待发送消息恢复为草稿失败：{error}"))?;
+        .map_err(|error| format!("Failed to restore the V1 pending message as a draft: {error}"))?;
     let QueuedInputDraftReceipt { identity, draft } = receipt.value;
     let attachments = conversation_attachments_from_resource_ids(
         &project_directory,
@@ -348,7 +357,7 @@ pub(super) async fn service_remove_pending_prompt(
         pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     let receipt = handle
         .remove_queued_input(identity, current_v1_goal_unix_millis()?)
-        .map_err(|error| format!("移除 V1 待发送消息失败：{error}"))?;
+        .map_err(|error| format!("Failed to remove the V1 pending message: {error}"))?;
     // The V1 removal is already durable; display projection must not skip the exact lease release.
     // V1 移除已可靠提交；显示投影失败不能跳过精确租约释放。
     reconcile_pending_prompt_attachment_leases(
@@ -356,13 +365,13 @@ pub(super) async fn service_remove_pending_prompt(
         selected_session_id,
         &attachment_workspace_path,
     )
-    .map_err(|error| format!("待发送消息已从 V1 队列移除，但附件清理待重试：{error}"))?;
+    .map_err(|error| format!("The pending message was removed from the V1 queue, but attachment cleanup is pending a retry: {error}"))?;
     let locator = handle
         .storage_locator()
-        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 session resource location: {error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the V1 project resource catalog: {error}"))?;
     rebuild_pending_prompt_panel_from_v1(
         &state,
         selected_session_id,
@@ -425,12 +434,17 @@ pub(super) async fn service_reorder_pending_prompts(
                 })
                 .collect::<Vec<_>>()
         })
-        .map_err(|error| format!("读取 V1 待发送消息顺序失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 pending message order: {error}"))?;
     let dragged_identity = current_order
         .iter()
         .find(|identity| identity.client_action_id == dragged_action_id)
         .cloned()
-        .ok_or_else(|| format!("没有找到待移动消息 `{}`。", dragged_action_id.as_str()))?;
+        .ok_or_else(|| {
+            format!(
+                "Message to move `{}` not found.",
+                dragged_action_id.as_str()
+            )
+        })?;
     let ordered = if target_action_id.as_ref() == Some(&dragged_action_id) {
         current_order
     } else {
@@ -442,7 +456,9 @@ pub(super) async fn service_reorder_pending_prompts(
             let target_index = ordered
                 .iter()
                 .position(|identity| identity.client_action_id == target_action_id)
-                .ok_or_else(|| format!("没有找到目标消息 `{}`。", target_action_id.as_str()))?;
+                .ok_or_else(|| {
+                    format!("Target message `{}` not found.", target_action_id.as_str())
+                })?;
             ordered.insert(target_index, dragged_identity);
         } else {
             ordered.push(dragged_identity);
@@ -451,13 +467,13 @@ pub(super) async fn service_reorder_pending_prompts(
     };
     let receipt = handle
         .reorder_queued_inputs(ordered, current_v1_goal_unix_millis()?)
-        .map_err(|error| format!("重排 V1 待发送消息失败：{error}"))?;
+        .map_err(|error| format!("Failed to reorder the V1 pending messages: {error}"))?;
     let locator = handle
         .storage_locator()
-        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 session resource location: {error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the V1 project resource catalog: {error}"))?;
     rebuild_pending_prompt_panel_from_v1(
         &state,
         selected_session_id,

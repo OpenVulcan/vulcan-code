@@ -225,7 +225,7 @@ fn new_submission_workspace_slice(
         .find(|candidate| candidate.id == project_id)
         .cloned()
         .ok_or_else(|| {
-            format!("项目 `{project_id}` 尚未进入当前工作区，请等待工作区初始化完成后重试。")
+            format!("Project `{project_id}` is not in the current workspace yet; wait for the workspace initialization to finish and retry.")
         })?;
     // Historical membership is intentionally excluded because this transaction creates one independent session.
     // 此事务只创建一个独立会话，因此有意排除历史会话成员关系。
@@ -374,7 +374,7 @@ pub(crate) fn prepare_retained_submission_preflight(
             .contains_key(&session_id)
     {
         return Err(format!(
-            "会话 `{session_id}` 正在可靠提交终态，暂时不能启动新的提示词。"
+            "Session `{session_id}` is reliably committing its terminal state; a new prompt cannot start yet."
         ));
     }
     if let Some(session_id) = submission_session_id
@@ -387,7 +387,7 @@ pub(crate) fn prepare_retained_submission_preflight(
         });
         if !matches_preauthorization {
             return Err(format!(
-                "会话 `{session_id}` 已由 {} 预留，无法提交新的提示词。",
+                "Session `{session_id}` is reserved by {}; a new prompt cannot be submitted.",
                 reservation.kind.diagnostic_label()
             ));
         }
@@ -452,7 +452,7 @@ pub(crate) fn prepare_retained_submission_preflight(
                 .or_else(|| guard.project_admission_reservations.get(&project_scope))
             {
                 return Err(format!(
-                    "项目 `{project_id}` 已由 {} 预留，无法提交新的提示词。",
+                    "Project `{project_id}` is reserved by {}; a new prompt cannot be submitted.",
                     reservation.kind.diagnostic_label()
                 ));
             }
@@ -462,7 +462,7 @@ pub(crate) fn prepare_retained_submission_preflight(
                 guard.project_admission_reservations.iter().next()
             {
                 return Err(format!(
-                    "项目选择已与作用域 `{reserved_scope:?}` 的 {} 冲突，无法提交新的提示词。",
+                    "The project selection conflicts with {} of scope `{reserved_scope:?}`; a new prompt cannot be submitted.",
                     reservation.kind.diagnostic_label()
                 ));
             }
@@ -490,14 +490,14 @@ pub(crate) fn prepare_retained_submission_preflight(
             ProjectAdmissionScope::Exact(project_id) => project_id.as_str(),
             ProjectAdmissionScope::UnresolvedSubmission => {
                 return Err(String::from(
-                    "工作区仍在初始化，当前没有可用于创建会话的项目。",
+                    "The workspace is still initializing; no project is available to create a session.",
                 ));
             }
         };
         let retained_workspace = guard
             .workspace_snapshot
             .as_ref()
-            .ok_or_else(|| String::from("工作区仍在初始化，请等待项目列表加载完成后再发送。"))?;
+            .ok_or_else(|| String::from("The workspace is still initializing; wait for the project list to load before sending."))?;
         Some(new_submission_workspace_slice(
             retained_workspace,
             exact_project_id,

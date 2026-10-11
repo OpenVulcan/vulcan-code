@@ -66,7 +66,7 @@ pub(crate) async fn service_save_git_commit_settings(
     )?;
     let workbench = mutate_provider_configuration(
         &state,
-        "保存 Git 提交设置失败",
+        "Failed to save the Git commit settings",
         |configuration| {
             configuration.git_commit.new_branch_prefix = normalized_prefix;
             configuration.git_commit.summary_model = summary_model;
@@ -161,7 +161,7 @@ fn validate_git_commit_summary_model_selection(
                 Ok(())
             } else {
                 Err(format!(
-                    "Git 提交总结模型 `{provider_id}/{model_id}` 当前不可用，请重新选择模型。"
+                    "Git commit summary model `{provider_id}/{model_id}` is currently unavailable; select another model."
                 ))
             }
         }
@@ -178,14 +178,12 @@ pub(crate) fn resolve_git_commit_summary_model(
 ) -> Result<(String, String), String> {
     match selection.normalized() {
         GitCommitSummaryModelSelection::Session => {
-            let provider_id = runtime_state
-                .active_provider_id
-                .as_ref()
-                .ok_or_else(|| String::from("提交所属会话没有可用的当前 Provider。"))?;
-            let model_id = runtime_state
-                .active_model_id
-                .as_ref()
-                .ok_or_else(|| String::from("提交所属会话没有可用的当前模型。"))?;
+            let provider_id = runtime_state.active_provider_id.as_ref().ok_or_else(|| {
+                String::from("The commit's session has no available current provider.")
+            })?;
+            let model_id = runtime_state.active_model_id.as_ref().ok_or_else(|| {
+                String::from("The commit's session has no available current model.")
+            })?;
             validate_git_commit_summary_model_pair(
                 provider_id,
                 model_id,
@@ -223,7 +221,7 @@ fn validate_git_commit_summary_model_pair(
         Ok(())
     } else {
         Err(format!(
-            "Git 提交总结模型 `{provider_id}/{model_id}` 当前不可用。"
+            "Git commit summary model `{provider_id}/{model_id}` is currently unavailable."
         ))
     }
 }

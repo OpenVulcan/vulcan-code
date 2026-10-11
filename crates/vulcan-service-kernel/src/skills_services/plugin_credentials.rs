@@ -24,7 +24,7 @@ pub(crate) async fn service_set_vulcan_plugin_credentials(
 ) -> Result<LuaSkillsCatalogUpdate, String> {
     let plugin_id = plugin_id.trim().to_owned();
     if plugin_id.is_empty() {
-        return Err(String::from("插件标识不能为空。"));
+        return Err(String::from("The plugin identifier must not be empty."));
     }
     let values = credential_values(changes)?;
     run_luaskills_management_owned("set plugin credentials", move || async move {
@@ -39,7 +39,9 @@ fn credential_values(
     changes: Vec<VulcanPluginCredentialChange>,
 ) -> Result<VulcanPluginCredentialValues, String> {
     if changes.is_empty() {
-        return Err(String::from("至少需要一项插件凭据变更。"));
+        return Err(String::from(
+            "At least one plugin credential change is required.",
+        ));
     }
     let mut values = VulcanPluginCredentialValues::new();
     for change in changes {
@@ -48,10 +50,14 @@ fn credential_values(
             secret_key: change.secret_key.trim().to_owned(),
         };
         if key.server_id.is_empty() || key.secret_key.is_empty() {
-            return Err(String::from("MCP Server 与 Secret 键均不能为空。"));
+            return Err(String::from(
+                "The MCP server and secret key must not be empty.",
+            ));
         }
         if values.insert(key, change.value).is_some() {
-            return Err(String::from("同一 Secret 键只能变更一次。"));
+            return Err(String::from(
+                "The same secret key can only be changed once.",
+            ));
         }
     }
     Ok(values)
@@ -74,7 +80,7 @@ async fn set_plugin_credentials_owned(
         Ok(replacement) => replacement,
         Err(error) => {
             let _ = runtime.discard_plugin_credentials(edit, &backend);
-            return Err(format!("插件凭据未变更：{error}"));
+            return Err(format!("Plugin credentials were not changed: {error}"));
         }
     };
     let catalog = match runtime.commit_plugin_credentials(edit, &backend) {
@@ -83,7 +89,7 @@ async fn set_plugin_credentials_owned(
             if let Some(replacement) = replacement.as_ref() {
                 let _ = replacement.abort_and_drain().await;
             }
-            return Err(format!("插件凭据未变更：{error}"));
+            return Err(format!("Plugin credentials were not changed: {error}"));
         }
     };
     if let Some(replacement) = replacement.as_ref()
@@ -96,7 +102,7 @@ async fn set_plugin_credentials_owned(
     {
         let _ = replacement.abort_and_drain().await;
         return Err(format!(
-            "插件凭据已保存，但运行中的 MCP 服务器未能切换到新凭据：{error}；停用后重新启用该插件即可生效。"
+            "The plugin credentials were saved, but the running MCP server could not switch to the new credentials: {error}; disable and re-enable the plugin for them to take effect."
         ));
     }
     // Revisions still read by draining servers are collected by a later edit or the next startup.
@@ -126,11 +132,11 @@ async fn ready_candidate_mcp(
     }
     let current_mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?
         .agent_runtime
         .as_ref()
         .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     let replacement = RetainedPluginMcpReplacement::prepare(
         &current_mcp_runtime,
         &candidate.id,

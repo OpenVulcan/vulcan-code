@@ -333,9 +333,11 @@ pub(crate) async fn persist_initial_submission_goal(
     let token_budget = token_budget.map(|value| value as u64);
     let now_ms = current_v1_goal_unix_millis()?;
     let receipt = save_session_goal_v1(handle.as_ref(), objective, token_budget, now_ms)
-        .map_err(|error| format!("保存初始 V1 Goal 失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the initial V1 goal: {error}"))?;
     if !receipt.changed {
-        return Err(format!("新会话 `{session_id}` 的初始 Goal 未产生 V1 修改"));
+        return Err(format!(
+            "The initial goal of new session `{session_id}` produced no V1 change"
+        ));
     }
     let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     cache_session_goal_summary(state, session_id, summary)?;
@@ -423,14 +425,14 @@ pub(super) async fn service_save_session_goal(
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     let objective = normalize_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
-    ensure_regular_session_exists(&state, session_id, "保存目标")?;
+    ensure_regular_session_exists(&state, session_id, "save the goal")?;
     let goal_transition_guard =
-        begin_session_turn_start_exclusion(&state, [session_id], "保存目标")?;
+        begin_session_turn_start_exclusion(&state, [session_id], "save the goal")?;
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let token_budget = request.token_budget.map(|value| value as u64);
     let now_ms = current_v1_goal_unix_millis()?;
     let receipt = save_session_goal_v1(handle.as_ref(), objective, token_budget, now_ms)
-        .map_err(|error| format!("保存 V1 Goal 失败：{error}"))?;
+        .map_err(|error| format!("Failed to save the V1 goal: {error}"))?;
     let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);
@@ -476,14 +478,14 @@ pub(super) async fn service_resume_session_goal(
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
     let objective = normalize_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
-    ensure_regular_session_exists(&state, session_id, "继续目标")?;
+    ensure_regular_session_exists(&state, session_id, "resume the goal")?;
     let goal_transition_guard =
-        begin_session_turn_start_exclusion(&state, [session_id], "继续目标")?;
+        begin_session_turn_start_exclusion(&state, [session_id], "resume the goal")?;
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let token_budget = request.token_budget.map(|value| value as u64);
     let now_ms = current_v1_goal_unix_millis()?;
     resume_session_goal_v1(handle.as_ref(), objective, token_budget, now_ms)
-        .map_err(|error| format!("继续 V1 Goal 失败：{error}"))?;
+        .map_err(|error| format!("Failed to resume the V1 goal: {error}"))?;
     let summary = session_goal_summary_from_v1_handle(handle.as_ref(), session_id)?;
     cache_session_goal_summary(&state, session_id, summary.clone())?;
     drop(goal_transition_guard);
@@ -524,9 +526,9 @@ pub(super) async fn service_clear_session_goal(
     request: SessionGoalClearRequest,
 ) -> Result<SessionAddonsChangedResponse, String> {
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
-    ensure_regular_session_exists(&state, session_id, "清理目标")?;
+    ensure_regular_session_exists(&state, session_id, "clear the goal")?;
     let goal_transition_guard =
-        begin_session_turn_start_exclusion(&state, [session_id], "清理目标")?;
+        begin_session_turn_start_exclusion(&state, [session_id], "clear the goal")?;
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let now_ms = current_v1_goal_unix_millis()?;
     handle
@@ -538,7 +540,7 @@ pub(super) async fn service_clear_session_goal(
                 Ok(SessionMutationChange::Changed(()))
             },
         )
-        .map_err(|error| format!("清理 V1 Goal 失败：{error}"))?;
+        .map_err(|error| format!("Failed to clear the V1 goal: {error}"))?;
     cache_session_goal_summary(&state, session_id, None)?;
     drop(goal_transition_guard);
     refresh_session_goal_summary_and_emit(&app, &state, session_id, None)
@@ -568,10 +570,10 @@ pub(super) async fn service_update_session_goal_status(
     let (controller_runtime, agent_runtime, _luaskills_catalog, _mcp_catalog, _logs) =
         runtime_parts_from_state(&state)?;
     let session_id = session_goal_request_session_id(&state, request.conversation_id.as_deref())?;
-    ensure_regular_session_exists(&state, session_id, "更新目标状态")?;
+    ensure_regular_session_exists(&state, session_id, "update the goal status")?;
     let target_status = request.status.into_goal_state();
     let goal_transition_guard =
-        begin_session_turn_start_exclusion(&state, [session_id], "更新目标状态")?;
+        begin_session_turn_start_exclusion(&state, [session_id], "update the goal status")?;
     let handle = session_v1_handle_from_state(&state, session_id).await?;
     let now_ms = current_v1_goal_unix_millis()?;
     update_session_goal_status_v1(handle.as_ref(), request.status, now_ms)

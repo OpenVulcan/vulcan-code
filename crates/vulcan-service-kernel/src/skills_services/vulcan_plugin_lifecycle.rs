@@ -51,7 +51,7 @@ impl CleanupEvidence {
             Ok(Some(message)) => Self {
                 entries: vec![CleanupEvidenceItem::RuntimeRecorded(message)],
             },
-            Err(error) => Self::additional(vec![format!("{context}：{error}")]),
+            Err(error) => Self::additional(vec![format!("{context}: {error}")]),
         }
     }
 
@@ -150,7 +150,7 @@ pub(super) fn publish_native_published_plugin_extension_generation(
     // 在来源及原生守卫之前取得服务所有权，避免原生到服务的锁反序。
     let mut guard = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?;
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
     crate::service_state_access::require_plugin_update_full_publication_admission(&guard, None)?;
     // This actual bridge contains the sole full slot consumed by new executions.
@@ -158,7 +158,7 @@ pub(super) fn publish_native_published_plugin_extension_generation(
     let bridge = guard
         .agent_runtime
         .as_mut()
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     // The same original prepared lease transfers without allocation of a replacement runtime or issuer.
     // 同一原已准备租约转交，不分配替代运行时或签发者。
     let (committed, displaced) =
@@ -282,14 +282,16 @@ pub(super) async fn set_vulcan_plugin_enabled(
     // stable_plugin_id 采用所有权字符串，因为所有异步补偿路径都使用同一标识。
     let stable_plugin_id = plugin_id.trim().to_owned();
     if stable_plugin_id.is_empty() {
-        return Err(String::from("Vulcan 插件标识不能为空。"));
+        return Err(String::from(
+            "The Vulcan plugin identifier must not be empty.",
+        ));
     }
     {
         // Core refresh also replaces the exact catalog Arc, so reject before any lifecycle or policy mutation begins.
         // 核心刷新也替换精确目录 Arc，因此在任何生命周期或策略变更开始前拒绝。
         let guard = state
             .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to lock the service state: {error}"))?;
         crate::service_state_access::require_plugin_update_full_publication_admission(
             &guard, None,
         )?;
@@ -315,14 +317,14 @@ pub(super) async fn set_vulcan_plugin_enabled(
     let current_plugin = current_catalog
         .plugins
         .get(&stable_plugin_id)
-        .ok_or_else(|| format!("未发现 Vulcan 插件：{stable_plugin_id}"))?;
+        .ok_or_else(|| format!("Vulcan plugin not found: {stable_plugin_id}"))?;
     // default_enabled is the manifest baseline required by configuration normalization.
     // default_enabled 是配置归一化所需的清单基线。
     let default_enabled = current_plugin
         .manifest
         .as_ref()
         .map(|manifest| manifest.default_enabled)
-        .ok_or_else(|| format!("Vulcan 插件 `{stable_plugin_id}` 缺少有效清单，无法变更状态"))?;
+        .ok_or_else(|| format!("Vulcan plugin `{stable_plugin_id}` has no valid manifest; its state cannot be changed"))?;
     // previous_enabled is the exact effective state restored by every failed transaction.
     // previous_enabled 是每个失败事务都要恢复的精确生效状态。
     let previous_enabled = current_plugin.desired_enabled;
@@ -355,8 +357,8 @@ pub(super) async fn set_vulcan_plugin_enabled(
             | vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
     ) {
         return Err(format!(
-            "Vulcan 插件 `{stable_plugin_id}` 当前不可管理：{}",
-            current_plugin.diagnostics.join("；")
+            "Vulcan plugin `{stable_plugin_id}` is currently not manageable: {}",
+            current_plugin.diagnostics.join("; ")
         ));
     }
     if previous_enabled == target.is_enabled() && already_settled {
@@ -385,7 +387,9 @@ pub(super) async fn set_vulcan_plugin_enabled(
     let target_plugin = target_catalog
         .plugins
         .get(&stable_plugin_id)
-        .ok_or_else(|| format!("目标目录未发现 Vulcan 插件：{stable_plugin_id}"))?;
+        .ok_or_else(|| {
+            format!("Vulcan plugin not found in the target catalog: {stable_plugin_id}")
+        })?;
     // expected_availability is the only availability accepted for the requested target.
     // expected_availability 是请求目标唯一允许的可用性。
     let expected_availability = if target.is_enabled() {
@@ -395,8 +399,8 @@ pub(super) async fn set_vulcan_plugin_enabled(
     };
     if target_plugin.availability != expected_availability {
         return Err(format!(
-            "Vulcan 插件 `{stable_plugin_id}` 无法进入请求状态：{}",
-            target_plugin.diagnostics.join("；")
+            "Vulcan plugin `{stable_plugin_id}` cannot enter the requested state: {}",
+            target_plugin.diagnostics.join("; ")
         ));
     }
     // target_hooks are cloned from the prevalidated catalog before it leaves this planning phase.
@@ -477,7 +481,7 @@ pub(super) async fn set_vulcan_plugin_enabled(
                 &transition,
                 prepared_mcp_runtime.ok_or_else(|| {
                     format!(
-                        "Vulcan 插件 `{}` 缺少已准备的 MCP 访问代次。",
+                        "Vulcan plugin `{}` has no prepared MCP access generation.",
                         transition.plugin_id
                     )
                 })?,
@@ -518,7 +522,7 @@ async fn prepare_enable_transition(
             .await
             .map_err(|error| {
                 format!(
-                    "Vulcan 插件 `{}` 重新启用前清理失败：{error}",
+                    "Vulcan plugin `{}` cleanup before re-enabling failed: {error}",
                     transition.plugin_id
                 )
             })?;
@@ -531,15 +535,15 @@ async fn prepare_enable_transition(
                 CleanupEvidence::from_runtime(Ok(cleanup_report.clone())),
             )?;
             return Err(format!(
-                "Vulcan 插件 `{}` 仍有未清理资源：{}",
+                "Vulcan plugin `{}` still has uncleaned resources: {}",
                 transition.plugin_id,
-                cleanup_report.failures.join("；")
+                cleanup_report.failures.join("; ")
             ));
         }
     }
     validate_service_vulcan_plugin_hooks(state, target_hooks).map_err(|error| {
         format!(
-            "Vulcan 插件 `{}` Hook 声明无效：{error}",
+            "Vulcan plugin `{}` has an invalid hook declaration: {error}",
             transition.plugin_id
         )
     })?;
@@ -550,7 +554,7 @@ async fn prepare_enable_transition(
         .map_err(|error| error.to_string())?;
     if !environment_ready {
         return Err(format!(
-            "Vulcan 插件 `{}` 的执行环境尚未安装，请先在插件设置中安装环境。",
+            "The execution environment of Vulcan plugin `{}` is not installed yet; install it in the plugin settings first.",
             transition.plugin_id
         ));
     }
@@ -561,13 +565,13 @@ async fn prepare_enable_transition(
     // 在整个启用准备窗口内保持所有者 MCP 准入关闭，包括此前只是普通 Disabled 的状态。
     begin_plugin_mcp_drain(state, &transition.plugin_id).map_err(|error| {
         append_rollback_error(
-            format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
+            format!("Failed to open the Vulcan plugin owner MCP drain gate: {error}"),
             restore_previous_projection(state, runtime, transition, CleanupEvidence::default()),
         )
     })?;
     if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
         return Err(append_rollback_error(
-            format!("重新启用前 MCP 排空失败：{error}"),
+            format!("MCP drain before re-enabling failed: {error}"),
             restore_previous_projection(
                 state,
                 runtime,
@@ -578,7 +582,7 @@ async fn prepare_enable_transition(
     }
     synchronize_transient_hooks(state, runtime).map_err(|error| {
         append_rollback_error(
-            format!("Vulcan Plugin hook 同步失败：{error}"),
+            format!("Vulcan plugin hook sync failed: {error}"),
             restore_previous_projection(state, runtime, transition, CleanupEvidence::default()),
         )
     })?;
@@ -595,7 +599,7 @@ async fn prepare_enable_transition(
             compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
             format!(
-                "Vulcan 插件 `{}` 启用回调失败：{error}",
+                "Vulcan plugin `{}` enable callback failed: {error}",
                 transition.plugin_id
             ),
             restore_previous_projection(state, runtime, transition, cleanup_failures),
@@ -608,7 +612,7 @@ async fn prepare_enable_transition(
             compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
             format!(
-                "Vulcan 插件 `{}` 启用探测失败：{error}",
+                "Vulcan plugin `{}` enable probe failed: {error}",
                 transition.plugin_id
             ),
             restore_previous_projection(state, runtime, transition, cleanup_failures),
@@ -631,7 +635,7 @@ async fn prepare_enable_transition(
                 compensate_failed_enable(state, runtime, &transition.plugin_id).await;
             return Err(append_rollback_error(
                 format!(
-                    "Vulcan 插件 `{}` MCP 就绪检查失败：{error}",
+                    "Vulcan plugin `{}` MCP readiness check failed: {error}",
                     transition.plugin_id
                 ),
                 restore_previous_projection(state, runtime, transition, cleanup_failures),
@@ -665,7 +669,7 @@ async fn prepare_disable_transition(
     // 在任何异步排空或可靠发布前关闭共享所有者 MCP 闸门。
     begin_plugin_owner_mcp_drain(state, &transition.plugin_id).map_err(|error| {
         append_rollback_error(
-            format!("Vulcan Plugin 所有者 MCP 排空闸门开启失败：{error}"),
+            format!("Failed to open the Vulcan plugin owner MCP drain gate: {error}"),
             restore_previous_projection(state, runtime, transition, CleanupEvidence::default()),
         )
     })?;
@@ -680,7 +684,7 @@ async fn prepare_disable_transition(
             begin_plugin_owner_mcp_drain(state, &transition.plugin_id)
         };
         let rollback = append_rollback_error(append_rollback_error(error, rollback), gate);
-        return Err(format!("Vulcan Plugin hook 同步失败：{rollback}"));
+        return Err(format!("Vulcan plugin hook sync failed: {rollback}"));
     }
     Ok(())
 }
@@ -705,7 +709,7 @@ async fn persist_transition_target(
         state,
         transition,
         transition.target.is_enabled(),
-        "保存 Vulcan 插件状态失败",
+        "Failed to save the Vulcan plugin state",
     )
     .await
 }
@@ -792,16 +796,16 @@ async fn commit_enable_transition(
                 state,
                 transition,
                 transition.previous_enabled,
-                "回滚 Vulcan 插件状态失败",
+                "Failed to roll back the Vulcan plugin state",
             )
             .await;
             if let Err(rollback_error) = persistence_rollback {
                 return Err(format!(
-                    "Vulcan Plugin 启用最终发布失败：{error}；配置回滚失败：{rollback_error}"
+                    "Vulcan plugin enable final publication failed: {error}; configuration rollback failed: {rollback_error}"
                 ));
             }
             return Err(append_rollback_error(
-                format!("Vulcan Plugin 启用最终发布失败：{error}"),
+                format!("Vulcan plugin enable final publication failed: {error}"),
                 restore_previous_projection(state, runtime, transition, cleanup_failures),
             ));
         }
@@ -817,7 +821,7 @@ async fn commit_enable_transition(
             .prewarm_plugin_runtime(&transition.plugin_id)
             .await
             .map(|_| ())
-            .map_err(|error| format!("插件 Hook 运行时预热失败：{error}"))
+            .map_err(|error| format!("Plugin hook runtime warm-up failed: {error}"))
             .err()
     } else {
         activation_error
@@ -845,7 +849,7 @@ async fn commit_enable_transition(
         let error = if cleanup.is_empty() {
             error
         } else {
-            format!("{error}；{}", cleanup.join("；"))
+            format!("{error}; {}", cleanup.join("; "))
         };
         // rollback_result performs a real disable lifecycle because the plugin is already Enabled.
         // rollback_result 执行真实停用生命周期，因为插件已经进入 Enabled。
@@ -858,7 +862,7 @@ async fn commit_enable_transition(
         )
         .await;
         return Err(append_rollback_error(
-            format!("Vulcan Plugin hook 最终激活失败：{error}"),
+            format!("Vulcan plugin hook final activation failed: {error}"),
             rollback_result,
         ));
     }
@@ -874,7 +878,7 @@ async fn commit_enable_transition(
         )
         .await;
         return Err(append_rollback_error(
-            format!("Vulcan Plugin 所有者 MCP 准入恢复失败：{error}"),
+            format!("Failed to restore the Vulcan plugin owner MCP admission: {error}"),
             rollback_result,
         ));
     }
@@ -906,11 +910,11 @@ async fn commit_disable_transition(
     let mut cleanup_failures =
         CleanupEvidence::from_runtime(runtime.drain_plugin_sessions(&transition.plugin_id).await);
     if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
-        cleanup_failures.push(format!("插件 MCP 清理失败：{error}"));
+        cleanup_failures.push(format!("Plugin MCP cleanup failed: {error}"));
     }
     // This exact existing prefix is shared by recording and accounting-error projection.
     // 此精确既有前缀由记账及记账错误投影共享。
-    let diagnostic_context = "插件停用生命周期回调失败";
+    let diagnostic_context = "The plugin disable lifecycle callback failed";
     cleanup_failures.extend(CleanupEvidence::from_recorded_lifecycle(
         runtime
             .invoke_lifecycle_for_cleanup(
@@ -931,7 +935,7 @@ async fn commit_disable_transition(
             .browser_manager
             .clone();
         if let Err(error) = browser_manager.shutdown_ai_connections().await {
-            cleanup_failures.push(format!("浏览器 AI MCP 清理失败：{error}"));
+            cleanup_failures.push(format!("Browser AI MCP cleanup failed: {error}"));
         }
     }
     // finish_result is the only post-callback state publication and therefore owns disable rollback.
@@ -951,18 +955,18 @@ async fn commit_disable_transition(
                 rollback_disable(state, runtime, transition, rollback_cleanup_failures, false)
                     .await;
             return Err(append_rollback_error(
-                format!("Vulcan Plugin 停用最终发布失败：{error}"),
+                format!("Vulcan plugin disable final publication failed: {error}"),
                 rollback_result,
             ));
         }
     };
     let current_mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?
         .agent_runtime
         .as_ref()
         .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     let next_mcp_runtime =
         remove_plugin_mcp_runtime_partition(&current_mcp_runtime, &transition.plugin_id);
     if let Err(error) = publish_extension_generation(
@@ -974,7 +978,7 @@ async fn commit_disable_transition(
         let rollback_result =
             rollback_disable(state, runtime, transition, rollback_cleanup_failures, true).await;
         return Err(append_rollback_error(
-            format!("Vulcan Plugin 停用扩展代次发布失败：{error}"),
+            format!("Vulcan plugin disable extension generation publication failed: {error}"),
             rollback_result,
         ));
     }
@@ -1009,8 +1013,9 @@ async fn rollback_prepared_transition(
             // cleanup_failures 在投影回滚前补偿已完成的启用回调。
             // Enabling preparation always owns a ready candidate; disabled preparation owns none.
             // 启用准备始终持有就绪候选；停用准备不持有候选。
-            let candidate =
-                candidate_mcp.ok_or_else(|| String::from("启用补偿缺少原 MCP 候选。"))?;
+            let candidate = candidate_mcp.ok_or_else(|| {
+                String::from("The enable compensation has no original MCP candidate.")
+            })?;
             // Keep original candidate cleanup diagnostics alongside lifecycle compensation.
             // 将原候选清理诊断与生命周期补偿一起保留。
             let mut cleanup_failures =
@@ -1026,9 +1031,9 @@ async fn rollback_prepared_transition(
             match (result, gate_result) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-                (Err(error), Err(gate_error)) => {
-                    Err(format!("{error}；所有者 MCP 闸门补偿失败：{gate_error}"))
-                }
+                (Err(error), Err(gate_error)) => Err(format!(
+                    "{error}; owner MCP gate compensation failed: {gate_error}"
+                )),
             }
         }
         VulcanPluginTargetState::Disabled => {
@@ -1044,9 +1049,9 @@ async fn rollback_prepared_transition(
             match (result, gate_result) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-                (Err(error), Err(gate_error)) => {
-                    Err(format!("{error}；所有者 MCP 闸门补偿失败：{gate_error}"))
-                }
+                (Err(error), Err(gate_error)) => Err(format!(
+                    "{error}; owner MCP gate compensation failed: {gate_error}"
+                )),
             }
         }
     }
@@ -1075,7 +1080,7 @@ async fn rollback_finalized_enable_to_policy(
         state,
         transition,
         restored_enabled,
-        "回滚 Vulcan 插件状态失败",
+        "Failed to roll back the Vulcan plugin state",
     )
     .await?;
     runtime
@@ -1090,11 +1095,11 @@ async fn rollback_finalized_enable_to_policy(
     let mut cleanup_failures =
         CleanupEvidence::from_runtime(runtime.drain_plugin_sessions(&transition.plugin_id).await);
     if let Err(error) = wait_plugin_mcp_drain(state, &transition.plugin_id).await {
-        cleanup_failures.push(format!("插件 MCP 清理失败：{error}"));
+        cleanup_failures.push(format!("Plugin MCP cleanup failed: {error}"));
     }
     // The compensation keeps its original prefix and the runtime's actual recorded origin.
     // 补偿保留原前缀及运行时实际登记来源。
-    let diagnostic_context = "插件启用回滚的停用回调失败";
+    let diagnostic_context = "The disable callback of the plugin enable rollback failed";
     cleanup_failures.extend(CleanupEvidence::from_recorded_lifecycle(
         runtime
             .invoke_lifecycle_for_cleanup(
@@ -1116,11 +1121,11 @@ async fn rollback_finalized_enable_to_policy(
     // 同步捕获当前访问；服务锁不跨越异步等待。
     let current_mcp = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?
         .agent_runtime
         .as_ref()
         .map(|bridge| bridge.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     publish_extension_generation(
         state,
         &transition.plugin_id,
@@ -1131,8 +1136,8 @@ async fn rollback_finalized_enable_to_policy(
         Ok(())
     } else {
         Err(format!(
-            "插件启用回滚清理不完整：{}",
-            incomplete_cleanup.join("；")
+            "The plugin enable rollback cleanup is incomplete: {}",
+            incomplete_cleanup.join("; ")
         ))
     }
 }
@@ -1169,7 +1174,7 @@ async fn rollback_disable(
         let mut failures = cleanup_failures;
         failures.push(error.clone());
         return Err(append_rollback_error(
-            format!("停用回滚前 MCP 排空失败：{error}"),
+            format!("MCP drain before the disable rollback failed: {error}"),
             // The disabled target is already durable; incomplete cleanup cannot restore enabled hooks.
             // 停用目标已经持久化；清理不完整不能恢复启用 Hook。
             finish_transition_and_sync(
@@ -1205,7 +1210,7 @@ async fn rollback_disable(
         let cleanup_failures =
             compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
-            format!("停用回滚的启用回调失败：{error}"),
+            format!("The enable callback of the disable rollback failed: {error}"),
             finish_transition_and_sync(
                 state,
                 runtime,
@@ -1219,7 +1224,7 @@ async fn rollback_disable(
         let cleanup_failures =
             compensate_failed_enable(state, runtime, &transition.plugin_id).await;
         return Err(append_rollback_error(
-            format!("停用回滚的启用探测失败：{error}"),
+            format!("The enable probe of the disable rollback failed: {error}"),
             finish_transition_and_sync(
                 state,
                 runtime,
@@ -1247,7 +1252,7 @@ async fn rollback_disable(
             let cleanup_failures =
                 compensate_failed_enable(state, runtime, &transition.plugin_id).await;
             return Err(append_rollback_error(
-                format!("停用回滚的 MCP 就绪检查失败：{error}"),
+                format!("The MCP readiness check of the disable rollback failed: {error}"),
                 finish_transition_and_sync(
                     state,
                     runtime,
@@ -1262,7 +1267,7 @@ async fn rollback_disable(
         state,
         transition,
         transition.previous_enabled,
-        "回滚 Vulcan 插件状态失败",
+        "Failed to roll back the Vulcan plugin state",
     )
     .await
     {
@@ -1303,11 +1308,11 @@ async fn rollback_disable(
                 state,
                 transition,
                 transition.target.is_enabled(),
-                "恢复 Vulcan 插件停用状态失败",
+                "Failed to restore the Vulcan plugin disabled state",
             )
             .await?;
             return Err(append_rollback_error(
-                format!("停用回滚的启用发布失败：{error}"),
+                format!("The enable publication of the disable rollback failed: {error}"),
                 finish_transition_and_sync(
                     state,
                     runtime,
@@ -1329,7 +1334,9 @@ async fn rollback_disable(
             .prewarm_plugin_runtime(&transition.plugin_id)
             .await
             .map(|_| ())
-            .map_err(|error| format!("停用回滚的 Hook 运行时预热失败：{error}"))
+            .map_err(|error| {
+                format!("The hook runtime warm-up of the disable rollback failed: {error}")
+            })
             .err()
     } else {
         activation_error
@@ -1354,7 +1361,7 @@ async fn rollback_disable(
         let error = if cleanup.is_empty() {
             error
         } else {
-            format!("{error}；{}", cleanup.join("；"))
+            format!("{error}; {}", cleanup.join("; "))
         };
         return Err(append_rollback_error(
             error,
@@ -1421,7 +1428,7 @@ async fn compensate_failed_enable(
     ));
     // Preserve this existing host prefix for both recorded evidence and accounting failures.
     // 为已登记证据及记账失败保留此既有宿主前缀。
-    let diagnostic_context = "插件启用补偿回调失败";
+    let diagnostic_context = "The plugin enable compensation callback failed";
     failures.extend(CleanupEvidence::from_recorded_lifecycle(
         runtime
             .invoke_lifecycle_for_cleanup(
@@ -1462,13 +1469,13 @@ fn begin_plugin_owner_mcp_drain(
 ) -> Result<(), String> {
     let guard = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?;
     let browser_manager = guard.browser_manager.clone();
     let mcp_runtime = guard
         .agent_runtime
         .as_ref()
         .map(|agent_runtime| agent_runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     drop(guard);
     mcp_runtime.begin_plugin_owner_drain(plugin_id)?;
     if plugin_id == "vulcan-browser" {
@@ -1497,11 +1504,11 @@ async fn prepare_transition_mcp(
     // 等待前仅捕获一次，避免候选混用扩展代次。
     let current_mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?
         .agent_runtime
         .as_ref()
         .map(|bridge| bridge.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     // Resolve credentials only through the exact descriptor binding.
     // 仅通过精确描述符绑定解析凭据。
     let secret_store = crate::plugin_mcp_secret_store::OsPluginMcpSecretStore;
@@ -1546,7 +1553,9 @@ async fn drain_prepared_transition_mcp(
         .await
     {
         Ok(()) => CleanupEvidence::default(),
-        Err(error) => CleanupEvidence::additional(vec![format!("候选 MCP 清理失败：{error}")]),
+        Err(error) => {
+            CleanupEvidence::additional(vec![format!("Candidate MCP cleanup failed: {error}")])
+        }
     }
 }
 
@@ -1560,11 +1569,11 @@ fn begin_plugin_mcp_drain(state: &SharedServiceBridgeState, plugin_id: &str) -> 
     // 串行化管理操作保持此发布访问的权威性。
     let mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?
         .agent_runtime
         .as_ref()
         .map(|bridge| bridge.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     mcp_runtime.begin_plugin_mcp_drain(plugin_id)
 }
 
@@ -1580,11 +1589,11 @@ async fn wait_plugin_mcp_drain(
     // 捕获共享访问，不跨异步清理持有服务状态。
     let mcp_runtime = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?
         .agent_runtime
         .as_ref()
         .map(|bridge| bridge.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     mcp_runtime
         .wait_plugin_mcp_drain(
             plugin_id,
@@ -1608,14 +1617,16 @@ async fn finish_plugin_owner_mcp_drain(
         // 此锁守卫仅存在于同步捕获作用域内。
         let guard = state
             .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to lock the service state: {error}"))?;
         // Preserve the exact access whose original resource receipts will be observed.
         // 保留将要观察其原资源回执的精确访问。
         let mcp_runtime = guard
             .agent_runtime
             .as_ref()
             .map(|bridge| bridge.extension_generation.mcp_runtime())
-            .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+            .ok_or_else(|| {
+                String::from("The agent extension generation is not initialized yet.")
+            })?;
         (guard.browser_manager.clone(), mcp_runtime)
     };
     mcp_runtime
@@ -1743,7 +1754,7 @@ pub(super) fn publish_credential_extension_generation(
     let bridge = guard
         .agent_runtime
         .as_mut()
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     let expected = Arc::clone(&bridge.extension_generation);
     let current = expected.mcp_runtime();
     let access = replacement.publication_access(&current)?;
@@ -1793,7 +1804,7 @@ pub(super) fn publish_extension_generation_with_current_mcp(
     // 服务锁共同发布目录、MCP 访问面及插件会话处理器。
     let mut guard = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?;
     // Check shutdown admission under the same lock that replaces the extension pointer.
     // 在替换扩展指针的同一锁内检查关闭准入。
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
@@ -1803,7 +1814,7 @@ pub(super) fn publish_extension_generation_with_current_mcp(
     let agent_runtime = guard
         .agent_runtime
         .as_mut()
-        .ok_or_else(|| String::from("Agent 扩展代次尚未初始化。"))?;
+        .ok_or_else(|| String::from("The agent extension generation is not initialized yet."))?;
     // Capture the actual original extension only after acquiring its publication lock.
     // 仅在取得其发布锁后捕获实际原扩展。
     let expected = Arc::clone(&agent_runtime.extension_generation);
@@ -1878,7 +1889,7 @@ fn finish_transition(
 fn append_rollback_error(primary_error: String, rollback_result: Result<(), String>) -> String {
     match rollback_result {
         Ok(()) => primary_error,
-        Err(rollback_error) => format!("{primary_error}；回滚失败：{rollback_error}"),
+        Err(rollback_error) => format!("{primary_error}; rollback failed: {rollback_error}"),
     }
 }
 
@@ -1912,7 +1923,7 @@ mod tests {
         );
         assert_eq!(
             append_rollback_error(String::from("主失败"), Err(String::from("补偿失败"))),
-            "主失败；回滚失败：补偿失败"
+            "主失败; rollback failed: 补偿失败"
         );
     }
 }

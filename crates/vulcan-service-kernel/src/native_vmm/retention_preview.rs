@@ -58,7 +58,9 @@ impl NativeVmmMaintenance {
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.read().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err(String::from("请先启用内部原生记忆，再预览清洗。"));
+            return Err(String::from(
+                "Enable internal native memory before previewing the cleanup.",
+            ));
         }
         *self.retention_preview.lock().await = None;
         let policy = retention_policy::resolve(&self.runtime.retention_settings().await?)?;
@@ -102,7 +104,9 @@ impl NativeVmmMaintenance {
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err(String::from("原生记忆已关闭，请重新启用并预览。"));
+            return Err(String::from(
+                "Native memory is turned off; enable it again and preview.",
+            ));
         }
         // Bind the durable result to the exact preview, so retries cannot reuse a different plan.
         // 将耐久结果绑定到准确预览，防止重试复用不同计划。
@@ -120,10 +124,15 @@ impl NativeVmmMaintenance {
             let mut slot = self.retention_preview.lock().await;
             match slot.as_ref() {
                 Some(prepared) if prepared.summary.preview_id == preview_id => {}
-                _ => return Err(String::from("清洗预览不存在或已被替换，请重新预览。")),
+                _ => {
+                    return Err(String::from(
+                        "The cleanup preview does not exist or was replaced; preview again.",
+                    ));
+                }
             }
-            slot.take()
-                .ok_or_else(|| String::from("清洗预览已被消费，请重新预览。"))?
+            slot.take().ok_or_else(|| {
+                String::from("The cleanup preview was already used; preview again.")
+            })?
         };
         let policy = retention_policy::resolve(&self.runtime.retention_settings().await?)?;
         let projects = self.data_plane.list_projects().await?;
@@ -204,7 +213,7 @@ impl PreparedRetentionCleanup {
             || policies != &self.policies
         {
             return Err(String::from(
-                "清洗预览已过期，或记忆数据、项目、规则已改变，请重新预览后确认。",
+                "The cleanup preview expired, or the memory data, projects or rules changed; preview again and confirm.",
             ));
         }
         Ok(())
@@ -224,7 +233,7 @@ impl PreparedRetentionCleanup {
         let applied_at_ns = clock.now_ns()?;
         if applied_at_ns < self.evaluated_at_ns {
             return Err(String::from(
-                "系统时间早于清洗预览时间，请校准时间并重新预览。",
+                "The system time is earlier than the cleanup preview time; correct the clock and preview again.",
             ));
         }
         // Only records created by these admitted steps may receive the new commit timestamp.
@@ -251,7 +260,7 @@ impl PreparedRetentionCleanup {
         }
         if actual != self.expected {
             return Err(String::from(
-                "实际清洗影响与预览不一致，已拒绝提交，请重新预览。",
+                "The actual cleanup impact disagrees with the preview; the commit was refused; preview again.",
             ));
         }
         for batch in &mut snapshot.retention_trash_batches {
@@ -262,11 +271,15 @@ impl PreparedRetentionCleanup {
                     .expires_at_ns
                     .checked_sub(batch.recycled_at_ns)
                     .filter(|duration| *duration > 0)
-                    .ok_or_else(|| String::from("预览批次的冻结保留期限无效。"))?;
+                    .ok_or_else(|| {
+                        String::from("The frozen retention period of the preview batch is invalid.")
+                    })?;
                 batch.recycled_at_ns = applied_at_ns;
-                batch.expires_at_ns = applied_at_ns
-                    .checked_add(duration_ns)
-                    .ok_or_else(|| String::from("新回收批次截止时间超出可表示范围。"))?;
+                batch.expires_at_ns = applied_at_ns.checked_add(duration_ns).ok_or_else(|| {
+                    String::from(
+                        "The deadline of the new recycle batch is out of the representable range.",
+                    )
+                })?;
             }
         }
         for job in &mut snapshot.retention_cold_turn_jobs {
@@ -307,9 +320,12 @@ async fn prepare_cleanup(
         expected: NativeVmmRetentionApplyResult::default(),
     };
     for project in projects {
-        let policy = policies
-            .get(&project.id)
-            .ok_or_else(|| format!("缺少已准入的记忆项目 {} 保留策略。", project.id))?;
+        let policy = policies.get(&project.id).ok_or_else(|| {
+            format!(
+                "The retention policy of admitted memory project {} is missing.",
+                project.id
+            )
+        })?;
         // Preserve exact identities before this project's stages, including the shared personal profile.
         // 在当前项目各阶段前保留准确标识，包括共享个人画像。
         let before = snapshot.clone();

@@ -130,7 +130,7 @@ async fn publish_media_delivery_policy(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存媒体投递策略失败",
+        "Failed to save the media delivery policy",
         |configuration| match policy {
             Some(policy) => configuration.set_media_delivery_policy(policy),
             None => {

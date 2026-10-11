@@ -245,7 +245,7 @@ pub(crate) async fn service_select_public_ai_model(
         )
     {
         return Err(format!(
-            "当前会话上下文约 {} Token，已达到或超过目标模型 `{}` 的真实上下文上限 {} Token，不能切换到该模型。请先缩短上下文或选择容量足够的模型。",
+            "The current session context is about {} tokens, which reaches or exceeds the real context limit of target model `{}` ({} tokens); cannot switch to that model. Shorten the context or choose a model with enough capacity first.",
             current_budget.active_context_tokens, request.model_id, target_context_limit
         ));
     }
@@ -263,11 +263,11 @@ pub(crate) async fn service_select_public_ai_model(
                 .capabilities
                 .context_limit
                 .ok_or_else(|| {
-                    String::from("目标模型未声明上下文窗口，无法保留当前会话的上下文压缩锁定。")
+                    String::from("The target model does not declare a context window, so the context compaction lock of the current session cannot be kept.")
                 })?;
         if node_tokens >= model_context_limit {
             return Err(format!(
-                "当前会话锁定的上下文压缩节点 `{}` 为 {} Token，必须严格小于目标模型上下文窗口 {} Token。请先切回默认窗口。",
+                "The context compaction node `{}` locked by the current session is {} tokens and must be strictly smaller than the target model context window of {} tokens. Switch back to the default window first.",
                 node_id.as_str(),
                 node_tokens,
                 model_context_limit
@@ -337,7 +337,7 @@ pub(crate) async fn service_select_public_ai_model(
             &state,
             runtime.as_ref(),
             &current_configuration,
-            "选择公共 AI 模型失败",
+            "Failed to select the public AI model",
             |configuration| {
                 configuration.connection_graph.remember_model_connection(
                     request.provider_id.as_str(),

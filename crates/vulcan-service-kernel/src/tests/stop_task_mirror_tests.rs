@@ -270,8 +270,8 @@ fn webui_stop_session_work_appends_stopped_turn_projection_once() {
         .expect("stopped turn stats should be retained in process-local runtime state");
     assert!(turn_stats.visible);
     assert_eq!(turn_stats.title, "Turn Stats · stopped");
-    assert!(turn_stats.body.contains("状态：已中止"));
-    assert!(turn_stats.body.contains("Provider 调用：0"));
+    assert!(turn_stats.body.contains("Status: Aborted"));
+    assert!(turn_stats.body.contains("Provider calls: 0"));
     let stopped_record_count = runtime_records.len();
 
     let did_stop_again =

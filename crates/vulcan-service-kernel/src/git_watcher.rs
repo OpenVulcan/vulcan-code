@@ -71,14 +71,17 @@ pub(crate) fn reconcile_webui_git_repository_watches(
     workspace_path: &str,
     catalog: &WebuiGitRepositoryCatalog,
 ) -> Result<(), String> {
-    let workspace_path = std::fs::canonicalize(workspace_path)
-        .map_err(|error| format!("无法规范化 Git 监听工作区 `{workspace_path}`：{error}"))?;
+    let workspace_path = std::fs::canonicalize(workspace_path).map_err(|error| {
+        format!("Cannot normalize the Git watcher workspace `{workspace_path}`: {error}")
+    })?;
     let watcher_center = state
         .lock()
-        .map_err(|_| String::from("读取共享工作区监听器时服务状态已锁定。"))?
+        .map_err(|_| {
+            String::from("The service state was locked while reading the shared workspace watcher.")
+        })?
         .workspace_watcher
         .clone()
-        .ok_or_else(|| String::from("共享工作区监听器尚未初始化。"))?;
+        .ok_or_else(|| String::from("The shared workspace watcher is not initialized yet."))?;
     let manager = shared_webui_git_watcher(event_emitter, &watcher_center)?;
     let owner_project_id = project_id.map(str::to_owned);
     let mut desired_targets: BTreeMap<PathBuf, BTreeSet<GitWatchTarget>> = BTreeMap::new();

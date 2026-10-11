@@ -354,7 +354,7 @@ pub(crate) async fn service_save_public_ai_connection_model_enabled(
             &state,
             runtime.as_ref(),
             &current_configuration,
-            "保存凭据模型启用状态失败",
+            "Failed to save the credential model enable state",
             |configuration| {
                 *configuration = candidate_configuration.clone();
                 Ok(())
@@ -467,7 +467,7 @@ pub(crate) async fn service_save_public_ai_connection_models_enabled(
             &state,
             runtime.as_ref(),
             &current_configuration,
-            "批量保存凭据模型启用状态失败",
+            "Failed to save the credential model enable states in batch",
             |configuration| {
                 *configuration = candidate_configuration.clone();
                 Ok(())
@@ -546,7 +546,7 @@ pub(crate) async fn service_save_public_ai_model_capability_overrides(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存模型能力覆盖失败",
+        "Failed to save the model capability overrides",
         |configuration| {
             if let Some(overrides) = overrides.clone() {
                 configuration
@@ -599,7 +599,7 @@ pub(crate) async fn service_save_public_ai_provider_capability_overrides(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存供应商能力覆盖失败",
+        "Failed to save the provider capability overrides",
         |configuration| {
             if let Some(overrides) = overrides.clone() {
                 configuration
@@ -659,7 +659,7 @@ pub(crate) async fn service_save_public_ai_model_overrides(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存公共 AI 模型覆盖失败",
+        "Failed to save the public AI model overrides",
         |configuration| {
             if let Some(overrides) = overrides.clone() {
                 configuration.model_overrides.insert(key.clone(), overrides);
@@ -783,7 +783,7 @@ pub(crate) async fn service_save_public_ai_model_enabled(
             &state,
             runtime.as_ref(),
             &current_configuration,
-            "保存公共 AI 模型启用状态失败",
+            "Failed to save the public AI model enable state",
             |configuration| {
                 *configuration = candidate_configuration.clone();
                 Ok(())

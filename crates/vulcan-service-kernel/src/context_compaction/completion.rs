@@ -447,14 +447,14 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     } = execution;
     if execution.fallback_used {
         let retry_hint = if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
-            "自动压缩未完成，已停止本次请求以避免预算溢出。"
+            "Automatic compaction did not finish; this request was stopped to avoid a budget overflow."
         } else {
-            "请重新触发 /compact。"
+            "Trigger /compact again."
         };
         // rejectionError is retained with the failure snapshot and stops automatic continuation.
         // rejectionError 与失败快照共同保留，并阻止自动续接。
         let rejection_error = format!(
-            "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。{retry_hint}",
+            "The API returned no usable compaction result; this context compaction failed. Provider request: {}. {retry_hint}",
             execution.provider_request_count,
         );
         let workspace_snapshot = fail_webui_context_compaction_execution(
@@ -583,7 +583,7 @@ pub(crate) async fn finish_webui_context_compaction_execution(
                 .find(|session| session.id == session_id)
             {
                 session.status = SessionState::Completed;
-                session.last_updated_label = String::from("刚刚");
+                session.last_updated_label = String::from("just now");
                 session.updated_at = current_unix_millis_text();
             }
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -783,7 +783,7 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
         .find(|session| session.id == session_id)
     {
         session.status = SessionState::Completed;
-        session.last_updated_label = String::from("刚刚");
+        session.last_updated_label = String::from("just now");
         session.updated_at = current_unix_millis_text();
     }
     sync_hydrated_session_dialogue_ready_marker(workspace, session_id);

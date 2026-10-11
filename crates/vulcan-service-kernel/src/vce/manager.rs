@@ -1273,7 +1273,11 @@ impl VceRuntimeManager {
             let expected_fingerprint = readiness
                 .embedding_physical_fingerprint
                 .as_deref()
-                .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?;
+                .ok_or_else(|| {
+                    String::from(
+                        "The VCE readiness state is missing the vector physical fingerprint.",
+                    )
+                })?;
             // The persisted root and policy are the sole configuration inputs.
             // 持久化根目录及策略是唯一配置输入。
             let project_root = Path::new(&project.path);
@@ -1319,7 +1323,8 @@ impl VceRuntimeManager {
             {
                 // An automatic initialized project requires the host-owned shared watcher.
                 // 自动且已初始化的项目必须使用宿主持有的共享监听器。
-                let watcher = watcher.ok_or_else(|| String::from("VCE 文件监听服务不可用。"))?;
+                let watcher = watcher
+                    .ok_or_else(|| String::from("The VCE file watcher service is unavailable."))?;
                 watcher.watch_project(&project.id, project_root)?;
             } else if let Some(watcher) = watcher {
                 watcher.unwatch_project(&project.id).await;
@@ -1478,7 +1483,9 @@ impl VceRuntimeManager {
             .await
             .map_err(|error| error.to_string())?;
         if runtime.active_refresh_observation().await.0 != refresh_revision {
-            return Err(String::from("VCE 索引任务已变化，请重新读取管理状态。"));
+            return Err(String::from(
+                "The VCE index job changed; read the management state again.",
+            ));
         }
         if snapshot
             .index
@@ -1486,7 +1493,9 @@ impl VceRuntimeManager {
             .and_then(|index| index.checkpoint_version)
             != snapshot.engine.checkpoint_version
         {
-            return Err(String::from("VCE 管理读取期间检查点已变化，请重新读取。"));
+            return Err(String::from(
+                "The VCE checkpoint changed during the management read; read again.",
+            ));
         }
         Ok((engine_handle.management_read_identity(), snapshot))
     }
@@ -1539,7 +1548,7 @@ impl VceRuntimeManager {
             || expected_read_identity != engine_handle.management_read_identity().as_deref())
         {
             return Err(String::from(
-                "语义索引已变化或缺少读取身份，请刷新索引详情后重试。",
+                "The semantic index changed or has no read identity; refresh the index details and retry.",
             ));
         }
         // Maintenance targets current writable storage; inventory and detail target the publication lease.
@@ -1559,7 +1568,9 @@ impl VceRuntimeManager {
             .await
             .map_err(|error| error.to_string())?;
         if observes_staging && runtime.active_refresh_observation().await.0 != refresh_revision {
-            return Err(String::from("VCE 索引任务已变化，请重新读取完整性状态。"));
+            return Err(String::from(
+                "The VCE index job changed; read the integrity state again.",
+            ));
         }
         Ok(response)
     }

@@ -57,7 +57,9 @@ pub(crate) fn service_open_external_url(
     user_confirmed: bool,
 ) -> Result<String, String> {
     if !external_url_is_safe(&url) {
-        return Err(String::from("不允许打开不安全的外部链接。"));
+        return Err(String::from(
+            "Opening unsafe external links is not allowed.",
+        ));
     }
     if !external_url_is_allowed(&url) && !user_confirmed {
         return Ok(String::from(EXTERNAL_URL_CONFIRMATION_REQUIRED));

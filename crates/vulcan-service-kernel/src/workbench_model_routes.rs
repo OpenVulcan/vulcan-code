@@ -161,8 +161,10 @@ pub(super) async fn service_select_workbench_model_secondary_route(
     };
     let settings_key =
         PersistedAiConfiguration::connection_model_key(connection_id.as_str(), model_id.as_str());
-    let configuration =
-        mutate_public_ai_configuration(&state, "保存二级供应商失败", |configuration| {
+    let configuration = mutate_public_ai_configuration(
+        &state,
+        "Failed to save the secondary provider",
+        |configuration| {
             runtime.resolve_connection_model_selection(
                 configuration,
                 connection_id.as_str(),
@@ -173,8 +175,9 @@ pub(super) async fn service_select_workbench_model_secondary_route(
                 .secondary_routes
                 .insert(settings_key.clone(), selection.clone());
             Ok(())
-        })
-        .await?;
+        },
+    )
+    .await?;
     publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)
 }
 
@@ -235,15 +238,15 @@ pub(super) async fn service_select_workbench_reasoning_effort(
     conversation_id: SessionId,
     effort: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let selected_effort =
-        parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
+    let selected_effort = parse_reasoning_effort(effort.trim())
+        .ok_or_else(|| format!("Unknown reasoning level: {effort}"))?;
     let pending_requested_at_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
     let handle =
         crate::session_goal_lifecycle::session_v1_handle_from_state(&state, conversation_id)
             .await?;
     let workbench = mutate_provider_configuration_with_state_validation(
         &state,
-        "保存思考档位失败",
+        "Failed to save the reasoning level",
         |guard| {
             // workspace proves the caller-owned session still exists at the serialized
             // transaction boundary; selected_session is deliberately not consulted.
@@ -326,10 +329,10 @@ pub(super) async fn service_select_workbench_thinking_display_mode(
     mode: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_mode = parse_thinking_display_mode(mode.trim())
-        .ok_or_else(|| format!("未知思考展示模式：{mode}"))?;
+        .ok_or_else(|| format!("Unknown thinking display mode: {mode}"))?;
     let workbench = mutate_provider_configuration(
         &state,
-        "保存思考展示模式失败",
+        "Failed to save the thinking display mode",
         |configuration| {
             configuration.workbench_thinking_display_mode = Some(selected_mode);
             Ok(())
@@ -360,7 +363,7 @@ pub(super) async fn service_save_tool_collapse_default(
     // 仅在用户明确操作时持久化；加载时不改写旧配置。
     let workbench = mutate_provider_configuration(
         &state,
-        "保存默认工具折叠设置失败",
+        "Failed to save the default tool collapse setting",
         |configuration| {
             configuration.tool_collapse_default_enabled = Some(enabled);
             Ok(())

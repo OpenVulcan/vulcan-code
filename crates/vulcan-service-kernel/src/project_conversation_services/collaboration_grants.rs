@@ -42,7 +42,9 @@ pub(crate) async fn service_list_collaboration_grants(
     let (controller, registry) = lifecycle_handles(&state)?;
     let source = get_or_load_session_v1(&controller, registry.as_ref(), source_id)
         .await
-        .map_err(|error| format!("无法加载授权来源会话 `{source_session_id}`：{error}"))?;
+        .map_err(|error| {
+            format!("Cannot load grant source session `{source_session_id}`: {error}")
+        })?;
     let grants = source
         .read(|document| {
             document
@@ -53,7 +55,7 @@ pub(crate) async fn service_list_collaboration_grants(
                 .cloned()
                 .collect::<Vec<_>>()
         })
-        .map_err(|error| format!("读取会话协作授权失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the session collaboration grants: {error}"))?;
     Ok(json!({
         "status": "ok",
         "sourceSessionId": source_session_id,
@@ -88,30 +90,41 @@ pub(crate) async fn service_add_collaboration_grant(
     let source_id = parse_session_id(&source_session_id, "sourceSessionId")?;
     let target_id = parse_session_id(&target_session_id, "targetSessionId")?;
     if source_id == target_id {
-        return Err(String::from("协作授权的来源会话与目标会话必须不同。"));
+        return Err(String::from(
+            "The source and target sessions of a collaboration grant must differ.",
+        ));
     }
     if actions.is_empty() {
-        return Err(String::from("协作授权至少需要一个动作。"));
+        return Err(String::from(
+            "A collaboration grant needs at least one action.",
+        ));
     }
 
     // The exclusion closes new-turn admission for both participants while the host validates
     // generation and durably publishes the source-owned grant.
     // 该排除在宿主校验代际并可靠发布来源授权期间关闭双方新回合准入。
-    let _admission =
-        begin_session_turn_start_exclusion(&state, [source_id, target_id], "协作授权添加")?;
+    let _admission = begin_session_turn_start_exclusion(
+        &state,
+        [source_id, target_id],
+        "add a collaboration grant",
+    )?;
     let (controller, registry) = lifecycle_handles(&state)?;
     let source = get_or_load_session_v1(&controller, registry.as_ref(), source_id)
         .await
-        .map_err(|error| format!("无法加载授权来源会话 `{source_session_id}`：{error}"))?;
+        .map_err(|error| {
+            format!("Cannot load grant source session `{source_session_id}`: {error}")
+        })?;
     let target = get_or_load_session_v1(&controller, registry.as_ref(), target_id)
         .await
-        .map_err(|error| format!("无法加载授权目标会话 `{target_session_id}`：{error}"))?;
+        .map_err(|error| {
+            format!("Cannot load grant target session `{target_session_id}`: {error}")
+        })?;
     let source_locator = source
         .storage_locator()
-        .map_err(|error| format!("读取授权来源定位失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the grant source location: {error}"))?;
     let target_locator = target
         .storage_locator()
-        .map_err(|error| format!("读取授权目标定位失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the grant target location: {error}"))?;
     let source_project_id = source_locator.project_id().to_string();
     let target_project_id = target_locator.project_id().to_string();
     let (source_generation, target_generation) = participant_generations(&source, &target)?;
@@ -157,7 +170,9 @@ pub(crate) async fn service_add_collaboration_grant(
                         })
                     },
                 )
-                .map_err(|error| format!("可靠保存协作授权失败：{error}"))
+                .map_err(|error| {
+                    format!("Failed to reliably save the collaboration grant: {error}")
+                })
         },
     )
     .await?;
@@ -197,13 +212,16 @@ pub(crate) async fn service_remove_collaboration_grant(
     operation_id: String,
 ) -> Result<Value, String> {
     let source_id = parse_session_id(&source_session_id, "sourceSessionId")?;
-    let _admission = begin_session_turn_start_exclusion(&state, [source_id], "协作授权撤销")?;
+    let _admission =
+        begin_session_turn_start_exclusion(&state, [source_id], "revoke a collaboration grant")?;
     let (controller, registry) = lifecycle_handles(&state)?;
     let source = get_or_load_session_v1(&controller, registry.as_ref(), source_id)
         .await
-        .map_err(|error| format!("无法加载授权来源会话 `{source_session_id}`：{error}"))?;
+        .map_err(|error| {
+            format!("Cannot load grant source session `{source_session_id}`: {error}")
+        })?;
     let grant_id = CollaborationGrantId::try_new(grant_id)
-        .map_err(|error| format!("协作授权标识无效：{error}"))?;
+        .map_err(|error| format!("Invalid collaboration grant identifier: {error}"))?;
     let operation_id =
         parse_user_grant_operation_id(operation_id, USER_GRANT_REMOVE_OPERATION_PREFIX)?;
     let revoked_at_ms = current_session_lifecycle_unix_millis()?;
@@ -236,7 +254,9 @@ pub(crate) async fn service_remove_collaboration_grant(
                         })
                     },
                 )
-                .map_err(|error| format!("可靠撤销协作授权失败：{error}"))
+                .map_err(|error| {
+                    format!("Failed to reliably revoke the collaboration grant: {error}")
+                })
         },
     )
     .await?;
@@ -299,10 +319,10 @@ fn participant_generations(
 ) -> Result<(u64, u64), String> {
     let source_generation = source
         .read(|document| document.segment_generation())
-        .map_err(|error| format!("读取来源会话代际失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the source session generation: {error}"))?;
     let target_generation = target
         .read(|document| document.segment_generation())
-        .map_err(|error| format!("读取目标会话代际失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the target session generation: {error}"))?;
     Ok((source_generation, target_generation))
 }
 
@@ -321,7 +341,7 @@ fn participant_generations(
 fn parse_session_id(value: &str, field: &str) -> Result<SessionId, String> {
     value
         .parse::<SessionId>()
-        .map_err(|error| format!("{field} 无效：{error}"))
+        .map_err(|error| format!("Invalid {field}: {error}"))
 }
 
 /// Returns a checked signed lifecycle timestamp for collaboration metadata.
@@ -332,8 +352,9 @@ fn parse_session_id(value: &str, field: &str) -> Result<SessionId, String> {
 /// 返回当前 Unix 有符号毫秒时间戳。
 /// 返回经过检查的协作 metadata 生命周期有符号时间戳。
 fn current_session_lifecycle_unix_millis() -> Result<i64, String> {
-    i64::try_from(current_unix_millis_value())
-        .map_err(|_| String::from("当前时间超出 V1 会话生命周期毫秒范围。"))
+    i64::try_from(current_unix_millis_value()).map_err(|_| {
+        String::from("The current time exceeds the V1 session lifecycle millisecond range.")
+    })
 }
 
 /// Prefixes accepted for user-originated grant mutation identities.
@@ -350,12 +371,12 @@ fn parse_user_grant_operation_id(
     expected_prefix: &str,
 ) -> Result<CollaborationOperationId, String> {
     let operation_id = CollaborationOperationId::try_new(value)
-        .map_err(|error| format!("协作授权操作标识无效：{error}"))?;
+        .map_err(|error| format!("Invalid collaboration grant operation identifier: {error}"))?;
     if !operation_id.as_str().starts_with(expected_prefix)
         || operation_id.as_str().len() == expected_prefix.len()
     {
         return Err(format!(
-            "协作授权操作标识必须以 `{expected_prefix}` 开始，并且包含请求 ID"
+            "The collaboration grant operation identifier must start with `{expected_prefix}` and include the request ID"
         ));
     }
     Ok(operation_id)

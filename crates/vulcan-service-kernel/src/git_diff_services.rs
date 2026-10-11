@@ -38,14 +38,16 @@ pub(crate) async fn begin_webui_git_repository_operation(
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
     let repository_root = std::fs::canonicalize(repository_root).map_err(|error| {
         format!(
-            "无法规范化 Git 仓库写操作锁路径 `{}`：{error}",
+            "Cannot normalize the Git repository write lock path `{}`: {error}",
             repository_root.display()
         )
     })?;
     let lock = {
         let mut registry = WEBUI_GIT_REPOSITORY_OPERATION_LOCKS
             .lock()
-            .map_err(|error| format!("无法锁定 Git 仓库写操作注册表：{error}"))?;
+            .map_err(|error| {
+                format!("Cannot lock the Git repository write operation registry: {error}")
+            })?;
         registry.retain(|_, lock| lock.strong_count() > 0);
         if let Some(lock) = registry
             .get(&repository_root)
@@ -146,7 +148,7 @@ pub(crate) async fn service_set_workspace_git_monitoring(
         project_id.as_deref(),
         conversation_id.as_deref(),
     )?
-    .ok_or_else(|| String::from("缺少 Git 审查监听设置所属项目。"))?;
+    .ok_or_else(|| String::from("The project of the Git review monitoring setting is missing."))?;
     let resolved_workspace_path = webui_diff_workspace_path_from_state(
         &state,
         Some(project_id.as_str()),
@@ -167,7 +169,7 @@ pub(crate) async fn service_set_workspace_git_monitoring(
         .any(|repository| repository.repository_key == request.repository_key)
     {
         return Err(format!(
-            "未发现项目内 Git 仓库键 `{}`。",
+            "Git repository key `{}` was not found in the project.",
             request.repository_key
         ));
     }
@@ -219,10 +221,12 @@ pub(crate) async fn ensure_webui_git_repository_monitoring_enabled(
         .repositories
         .iter()
         .find(|repository| repository.repository_key == target_key)
-        .ok_or_else(|| format!("未发现项目内 Git 仓库键 `{target_key}`。"))?;
+        .ok_or_else(|| {
+            format!("Git repository key `{target_key}` was not found in the project.")
+        })?;
     if !repository.monitoring_enabled {
         return Err(format!(
-            "Git 仓库 `{target_key}` 已关闭审查监听，无法执行写操作。"
+            "Review monitoring is turned off for Git repository `{target_key}`; write operations cannot run."
         ));
     }
     Ok(())

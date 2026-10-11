@@ -276,7 +276,7 @@ pub(crate) fn apply_session_phase_to_state(
         .find(|session| session.id == session_id)
     {
         session.status = session_state;
-        session.last_updated_label = String::from("刚刚");
+        session.last_updated_label = String::from("just now");
         session.updated_at = updated_at.clone();
     }
     state.workbench_generation = state.workbench_generation.wrapping_add(1);
@@ -291,7 +291,7 @@ pub(crate) fn apply_session_phase_to_state(
         if conversation.id == conversation_id {
             conversation.run_phase = phase.to_string();
             conversation.status = status_label.clone();
-            conversation.last_updated_label = String::from("刚刚");
+            conversation.last_updated_label = String::from("just now");
             conversation.last_updated_at = updated_at;
             break;
         }
@@ -427,7 +427,7 @@ pub(crate) fn mark_webui_prompt_snapshot_preparing(
     if let Some(session) = workspace_session_summary_for_session_mut(workspace_snapshot, session_id)
     {
         session.status = SessionState::Running;
-        session.focus = String::from("正在准备请求");
-        session.last_updated_label = String::from("刚刚");
+        session.focus = String::from("Preparing request");
+        session.last_updated_label = String::from("just now");
     }
 }

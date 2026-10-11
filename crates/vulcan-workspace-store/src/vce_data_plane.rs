@@ -3292,7 +3292,7 @@ impl VceDataPlaneHandle {
     ) -> Result<(), String> {
         local_sql::execute_script_async(&self.local_runtime, &self.sqlite_binding, sql, params)
             .await
-            .map_err(|error| format!("{context}：{error}"))?;
+            .map_err(|error| format!("{context}: {error}"))?;
         Ok(())
     }
 
@@ -3309,7 +3309,7 @@ impl VceDataPlaneHandle {
         }
         local_sql::execute_batch_async(&self.local_runtime, &self.sqlite_binding, sql, items)
             .await
-            .map_err(|error| format!("{context}：{error}"))?;
+            .map_err(|error| format!("{context}: {error}"))?;
         Ok(())
     }
 

@@ -175,7 +175,7 @@ impl PendingLocalPluginUninstallRegistry {
             .find(|owner| Some(owner.request_id) != request)
         {
             return Err(format!(
-                "原卸载请求 `{}` 仍保留实际资源；请先继续相同请求。",
+                "Original uninstall request `{}` still holds actual resources; continue the same request first.",
                 owner.request_id
             ));
         }
@@ -198,7 +198,7 @@ impl PendingLocalPluginUninstallRegistry {
             .get(&request)
             .filter(|owner| owner.plugin_id == plugin)
             .cloned()
-            .ok_or_else(|| String::from("找不到相同实际原卸载所有者，不能重建卸载。"))
+            .ok_or_else(|| String::from("The same actual original uninstall owner was not found; the uninstall cannot be rebuilt."))
     }
 
     /// Read all sanitized owners; no parameters, no mutation and no waiting on active execution.
@@ -273,7 +273,9 @@ impl PendingLocalPluginUninstallRegistry {
             || !resources.policy_committed
             || resources.projection.is_none()
         {
-            return Err(String::from("原卸载资源或终态确认不匹配，保留物理所有者。"));
+            return Err(String::from(
+                "The resource or terminal-state confirmation of the original uninstall does not match; keeping the physical owner.",
+            ));
         }
         // Acquire every fallible coordination lock before releasing any physical original.
         // 释放任何物理原实例之前取得每个可失败协调锁。
@@ -299,7 +301,9 @@ impl PendingLocalPluginUninstallRegistry {
         {
             Ok(())
         } else {
-            Err(String::from("实际原卸载尚未完成，必须保留服务运行时。"))
+            Err(String::from(
+                "The actual original uninstall has not finished; the service runtime must be kept.",
+            ))
         }
     }
 
@@ -323,7 +327,7 @@ impl PendingLocalPluginUninstallRegistry {
             let mut resources = owner
                 .resources
                 .try_lock()
-                .map_err(|_| String::from("原卸载执行器仍借用实际资源，关闭不能继续。"))?;
+                .map_err(|_| String::from("The original uninstall executor still borrows actual resources; shutdown cannot continue."))?;
             if let Some(call) = resources.callback.as_mut() {
                 call.drain_cleanup()
                     .await
@@ -361,7 +365,9 @@ pub(super) fn require_current(
         .pending_local_plugin_uninstalls
         .lookup(&owner.plugin_id, owner.request_id)?;
     if !Arc::ptr_eq(&current, owner) {
-        return Err(String::from("原卸载实际服务槽已经改变。"));
+        return Err(String::from(
+            "The actual service slot of the original uninstall changed.",
+        ));
     }
     crate::service_state_access::require_plugin_update_full_publication_admission(
         &service,
@@ -387,13 +393,16 @@ pub(super) fn reserve(
     let bridge = service
         .agent_runtime
         .as_ref()
-        .ok_or("Agent 扩展代次尚未初始化。")?;
+        .ok_or("The agent extension generation is not initialized yet.")?;
     // The snapshot is temporary and is dropped before any physical collection.
     // 快照为临时对象，在任何物理回收之前释放。
     let catalog = bridge.vulcan_plugin_runtime.snapshot();
     // Absence is an explicit error, never guessed from the user plugin root.
     // 缺失为明确错误，绝不从用户插件根目录猜测。
-    let descriptor = catalog.plugins.get(plugin).ok_or("用户插件尚未安装。")?;
+    let descriptor = catalog
+        .plugins
+        .get(plugin)
+        .ok_or("The user plugin is not installed yet.")?;
     if descriptor.origin != vulcan_plugin_runtime::VulcanPluginPackageOrigin::UserInstalled
         || descriptor.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
         || bridge
@@ -406,7 +415,9 @@ pub(super) fn reserve(
             .has_cleanup_diagnostics(plugin)
             .map_err(|error| error.to_string())?
     {
-        return Err(String::from("用户插件必须先停用并完全排空才能卸载。"));
+        return Err(String::from(
+            "The user plugin must be disabled and fully drained before it can be uninstalled.",
+        ));
     }
     // Allocate only lookup metadata; concrete originals independently establish physical ownership.
     // 仅分配查询元数据；具体原实例独立建立物理所有权。
@@ -414,20 +425,20 @@ pub(super) fn reserve(
     // Every user plugin is a managed selection that must exist in its actual configured store.
     // 每个用户插件都是受管选择，必须存在于其实际配置存储。
     if descriptor.managed_package().is_none() {
-        return Err(String::from("用户插件缺少受管选择。"));
+        return Err(String::from("The user plugin has no managed selection."));
     }
     // Existing stores are opened without creation.
     // 打开既有存储而不创建。
     let store =
         VulcanPluginGenerationStore::open_existing(bridge.vulcan_plugin_runtime.user_plugin_root())
             .map_err(|error| error.to_string())?
-            .ok_or("受管插件存储缺失。")?;
+            .ok_or("The managed plugin storage is missing.")?;
     // Read the complete authoritative selection before reserving its same File.
     // 在预留相同文件之前读取完整权威选择。
     let selected = store
         .activation(plugin)
         .map_err(|error| error.to_string())?
-        .ok_or("受管插件完整选择缺失。")?;
+        .ok_or("The complete managed plugin selection is missing.")?;
     // Sole physical reservation captures actual inventories before all effects.
     // 唯一物理预留在全部副作用之前捕获实际清单。
     let mut selection = store
@@ -495,7 +506,9 @@ pub(super) fn reserve(
         .lock()
         .map_err(|error| error.to_string())?;
     if owners.contains_key(&request_id) || owners.values().any(|owner| owner.plugin_id == plugin) {
-        return Err(String::from("相同插件已有实际原卸载。"));
+        return Err(String::from(
+            "The same plugin already has an actual original uninstall.",
+        ));
     }
     owners.insert(request_id, Arc::clone(&owner));
     Ok(owner)

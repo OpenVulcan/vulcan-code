@@ -767,7 +767,7 @@ pub fn task_session_tool_display_label(
 
     match (description, subagent) {
         (Some(description), Some(subagent)) if description != subagent => {
-            return format!("{description}（{subagent}）");
+            return format!("{description} ({subagent})");
         }
         (Some(description), _) => return description.to_string(),
         (_, Some(subagent)) => return subagent.to_string(),

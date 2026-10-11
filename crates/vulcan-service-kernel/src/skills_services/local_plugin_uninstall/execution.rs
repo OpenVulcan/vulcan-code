@@ -18,7 +18,7 @@ pub(super) async fn retire_callback(resources: &mut UninstallResources) -> Resul
         let original = resources
             .original
             .as_ref()
-            .ok_or("原卸载物理所有者已释放。")?;
+            .ok_or("The physical owner of the original uninstall was released.")?;
         let call = resources
             .runtime
             .prepare_deactivation_lifecycle_call(&original.selection)
@@ -27,7 +27,10 @@ pub(super) async fn retire_callback(resources: &mut UninstallResources) -> Resul
     }
     // Calling start again is the original protocol's idempotent once-only entry, never another preparation.
     // 再次调用 start 为原协议幂等一次性入口，绝不是再次准备。
-    let call = resources.callback.as_mut().ok_or("原卸载回调句柄缺失。")?;
+    let call = resources
+        .callback
+        .as_mut()
+        .ok_or("The callback handle of the original uninstall is missing.")?;
     call.start().map_err(|error| error.to_string())?;
     // Business errors remain distinct from outer retirement failures.
     // 业务错误保持独立于外层退役失败。
@@ -59,7 +62,9 @@ pub(super) async fn drain(plugin: &str, resources: &mut UninstallResources) -> R
         )
         .await?;
     } else if resources.committed_full.is_none() {
-        return Err(String::from("原卸载缺少实际 MCP 排空所有者。"));
+        return Err(String::from(
+            "The original uninstall has no actual MCP drain owner.",
+        ));
     }
     // The real manager union reports errors instead of hiding them behind a descriptor state.
     // 真实管理器集合报告错误，而非将其隐藏于描述符状态之后。
@@ -70,8 +75,8 @@ pub(super) async fn drain(plugin: &str, resources: &mut UninstallResources) -> R
         .map_err(|error| error.to_string())?;
     if !report.failures.is_empty() {
         return Err(format!(
-            "原卸载资源排空失败：{}",
-            report.failures.join("；")
+            "Failed to drain the original uninstall resources: {}",
+            report.failures.join("; ")
         ));
     }
     if resources
@@ -84,7 +89,9 @@ pub(super) async fn drain(plugin: &str, resources: &mut UninstallResources) -> R
             .has_cleanup_diagnostics(plugin)
             .map_err(|error| error.to_string())?
     {
-        return Err(String::from("原卸载实际资源仍未完全退役。"));
+        return Err(String::from(
+            "The actual resources of the original uninstall are not fully retired yet.",
+        ));
     }
     Ok(())
 }

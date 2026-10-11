@@ -584,7 +584,7 @@ impl KnowledgeBaseRuntime {
                 .map(|row| row.quick_check)
                 .take(8)
                 .collect::<Vec<_>>()
-                .join("；");
+                .join("; ");
             return Err(format!(
                 "The knowledge package SQLite quick_check failed: {}",
                 if diagnostics.is_empty() {
@@ -1211,7 +1211,7 @@ impl KnowledgeBaseRuntime {
             items,
         )
         .await
-        .map_err(|error| format!("{context}：{error}"))?;
+        .map_err(|error| format!("{context}: {error}"))?;
         Ok(())
     }
 }

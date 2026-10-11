@@ -36,13 +36,13 @@ impl TargetPluginExtensionPublication {
         // 此短暂服务观察遵循与实际提交相同的发布锁序。
         let guard = state
             .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to lock the service state: {error}"))?;
         // Actual pointer identity cannot be replaced by equal catalog fields or diagnostic revision numbers.
         // 实际指针身份不能由相等目录字段或诊断修订号替代。
         let bridge = guard
             .agent_runtime
             .as_ref()
-            .ok_or("Agent 扩展代次尚未初始化。")?;
+            .ok_or("The agent extension generation is not initialized yet.")?;
         if !bridge
             .vulcan_plugin_native_mcp_host
             .matches_manager(runtime)
@@ -50,7 +50,7 @@ impl TargetPluginExtensionPublication {
             || !Arc::ptr_eq(&runtime.snapshot(), self.publication.catalog())
         {
             return Err(String::from(
-                "原更新已确认发布不再匹配实际服务槽或原管理器。",
+                "The confirmed original update publication no longer matches the actual service slot or original manager.",
             ));
         }
         Ok(())
@@ -76,7 +76,7 @@ pub(in crate::skills_services) fn publish_activation_target_plugin_extension_gen
     // 服务所有权先于管理器注册及每个真实原生／来源守卫。
     let mut guard = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?;
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
     crate::service_state_access::require_plugin_update_full_publication_admission(
         &guard,
@@ -87,19 +87,25 @@ pub(in crate::skills_services) fn publish_activation_target_plugin_extension_gen
     let bridge = guard
         .agent_runtime
         .as_mut()
-        .ok_or("Agent 扩展代次尚未初始化。")?;
+        .ok_or("The agent extension generation is not initialized yet.")?;
     if !bridge
         .vulcan_plugin_native_mcp_host
         .matches_manager(&bridge.vulcan_plugin_runtime)
     {
-        return Err(String::from("原更新管理器与服务首次原生签发者不一致。"));
+        return Err(String::from(
+            "The original update manager disagrees with the first native issuer of the service.",
+        ));
     }
     if let Some(native) = native {
         // Recovery cannot substitute a second issuer registered on the same manager.
         // 恢复不能替换为相同管理器上登记的第二签发者。
-        let authority = native.authority().ok_or("原更新目标缺少原生签发者。")?;
+        let authority = native
+            .authority()
+            .ok_or("The original update target has no native issuer.")?;
         if !authority.same_issuer(&bridge.vulcan_plugin_native_mcp_host) {
-            return Err(String::from("原更新目标与服务首次原生签发者不一致。"));
+            return Err(String::from(
+                "The original update target disagrees with the first native issuer of the service.",
+            ));
         }
     }
     // Retain only the actual manager authority; the original transaction never leaves its request slot.
@@ -110,7 +116,7 @@ pub(in crate::skills_services) fn publish_activation_target_plugin_extension_gen
     let publish = if let Some(previous) = retained.as_ref() {
         if !Arc::ptr_eq(&bridge.extension_generation, &previous.committed) {
             return Err(String::from(
-                "原更新已提交完整代次不再是实际服务槽，保留原所有者。",
+                "The committed full generation of the original update is no longer the actual service slot; keeping the original owner.",
             ));
         }
         // Current manager identity distinguishes retryable original rollback from unrelated route changes.
@@ -122,7 +128,7 @@ pub(in crate::skills_services) fn publish_activation_target_plugin_extension_gen
             true
         } else {
             return Err(String::from(
-                "原更新目录已被其他发布改变，不能重建目标或替换原凭据。",
+                "The original update catalog was changed by another publication; the target cannot be rebuilt and the original credentials cannot be replaced.",
             ));
         }
     } else {

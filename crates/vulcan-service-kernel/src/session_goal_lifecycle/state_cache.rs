@@ -282,7 +282,7 @@ pub(crate) async fn session_v1_handle_from_state(
     };
     get_or_load_session_v1(&controller_runtime, registry.as_ref(), session_id)
         .await
-        .map_err(|error| format!("加载 V1 会话 `{session_id}` 失败：{error}"))
+        .map_err(|error| format!("Failed to load V1 session `{session_id}`: {error}"))
 }
 
 /// Loads one V1 session handle and re-arms any durable terminal settlement owner it still reports.
@@ -347,9 +347,9 @@ pub(crate) fn registered_session_v1_handle(
     registry: &crate::session_runtime_registry_v1::SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<Arc<SessionHandle>, String> {
-    registry
-        .get(session_id)
-        .map_err(|error| format!("V1 会话 `{session_id}` 尚未完成精确 hydration：{error}"))
+    registry.get(session_id).map_err(|error| {
+        format!("V1 session `{session_id}` has not finished exact hydration: {error}")
+    })
 }
 
 /// Updates the non-authoritative in-memory Goal summary projection.
@@ -397,7 +397,7 @@ pub(crate) fn session_goal_summary_from_v1_handle(
                 handle.goal_usage_snapshot().ok().as_ref(),
             )
         })
-        .map_err(|error| format!("读取 V1 Goal 状态失败：{error}"))
+        .map_err(|error| format!("Failed to read the V1 goal state: {error}"))
 }
 
 /// Durable Goal dispatch identity captured from one authoritative V1 document read.
@@ -436,7 +436,7 @@ pub(crate) fn session_goal_dispatch_authority_from_v1_handle(
 ) -> Result<Option<SessionGoalDispatchAuthority>, String> {
     handle
         .read(|document| session_goal_dispatch_authority_from_document(document, session_id))
-        .map_err(|error| format!("读取 V1 Goal 分发身份失败：{error}"))
+        .map_err(|error| format!("Failed to read the V1 goal dispatch identity: {error}"))
 }
 
 /// Derives Goal dispatch identity from one caller-owned canonical snapshot.
@@ -579,7 +579,9 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
                     .pending_staging_release_actions
                     .is_empty()
             })
-            .map_err(|error| format!("读取 V1 队列附件释放状态失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to read the V1 queued attachment release state: {error}")
+            })?;
         if has_pending_release {
             let attachment_workspace_path = composer_attachment_workspace_path_from_snapshot(
                 refreshed_snapshot,
@@ -602,7 +604,9 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
         }
         let mut projection = handle
             .read(|document| session_v1_runtime_projection(document, selected_session_id))
-            .map_err(|error| format!("读取 V1 会话配置投影失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to read the V1 session configuration projection: {error}")
+            })?;
         projection.goal_summary =
             session_goal_summary_from_v1_handle(&handle, selected_session_id)?;
         let process_mirror = if projection.queued_inputs.is_empty() {
@@ -612,10 +616,13 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
             let locator =
                 locate_session_v1_storage(&controller_runtime, selected_session_id_text.as_str())
                     .await
-                    .map_err(|error| format!("定位 V1 排队资源所属项目失败：{error}"))?;
+                    .map_err(|error| {
+                        format!("Failed to locate the project of the V1 queued resources: {error}")
+                    })?;
             let project_directory = locator.project_directory();
-            let catalog = load_project_resource_catalog(&project_directory)
-                .map_err(|error| format!("加载 V1 排队资源目录失败：{error}"))?;
+            let catalog = load_project_resource_catalog(&project_directory).map_err(|error| {
+                format!("Failed to load the V1 queued resource catalog: {error}")
+            })?;
             pending_prompt_process_mirror_from_v1_queued_inputs(
                 &projection.queued_inputs,
                 |queued_input| {

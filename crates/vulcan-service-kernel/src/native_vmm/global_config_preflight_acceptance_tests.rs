@@ -143,7 +143,7 @@ pub(super) async fn verify(
         assert!(
             stale_result
                 .expect_err("stale preflight must be rejected")
-                .contains("重新加载")
+                .contains("reload")
         );
         assert_configuration(path, state, &before);
         if disable_after_preflight {

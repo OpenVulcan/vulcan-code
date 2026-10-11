@@ -35,7 +35,9 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
     let Some(repository_root) = repository_root else {
         return Ok(empty_webui_diff_snapshot(
             normalized_workspace_path_text_from_path(&resolution.workspace_path),
-            String::from("当前工作区不是 Git 仓库，无法生成代码审查 diff。"),
+            String::from(
+                "The current workspace is not a Git repository; the code review diff cannot be generated.",
+            ),
         ));
     };
 
@@ -57,7 +59,7 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
         selection.selected_base_branch.as_deref(),
         selection.selected_compare_branch.as_deref(),
         selection.selected_commit_hash.as_deref(),
-        "当前分支没有可展示的未推送提交。",
+        "The current branch has no unpushed commits to show.",
     )?;
     let mut notices = loaded_diff.notices;
     let complete_unified_diff = loaded_diff.unified_diff;
@@ -71,7 +73,7 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
     let omitted_large_file_count = webui_large_diff_omitted_file_count(&file_summaries);
     if omitted_large_file_count > 0 {
         notices.push(format!(
-            "已跳过 {omitted_large_file_count} 个超过 WebUI 渲染阈值的文件正文，可展开文件后打开所在位置查看。"
+            "Skipped the bodies of {omitted_large_file_count} files exceeding the WebUI rendering threshold; expand a file and open its location to view it."
         ));
     }
     let unified_diff = if omitted_large_file_count > 0 {
@@ -80,7 +82,9 @@ pub(crate) fn load_webui_workspace_diff_snapshot(
         complete_unified_diff
     };
     let notice = if stats.files == 0 {
-        Some(String::from("当前工作区没有可展示的 Git 变更。"))
+        Some(String::from(
+            "The current workspace has no Git changes to show.",
+        ))
     } else if notices.is_empty() {
         None
     } else {

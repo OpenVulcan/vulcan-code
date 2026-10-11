@@ -96,7 +96,9 @@ impl PendingLocalPluginUpdateRegistry {
         reserved: ReservedLocalPluginUpdate,
     ) -> Result<Arc<PendingLocalPluginUpdate>, String> {
         if !authority.matches_manager(&runtime) {
-            return Err(String::from("原更新预留的管理器与原生宿主签发者不一致。"));
+            return Err(String::from(
+                "The manager reserved by the original update disagrees with the native host issuer.",
+            ));
         }
         // Stable lookup identity is derived directly from the actual first reservation.
         // 稳定查询身份直接从实际首次预留派生。
@@ -109,7 +111,7 @@ impl PendingLocalPluginUpdateRegistry {
             || owners.values().any(|owner| owner.plugin_id == plugin_id)
         {
             return Err(String::from(
-                "插件原更新请求已有服务所有者，不能替换其实际资源。",
+                "The original plugin update request already has a service owner; its actual resources cannot be replaced.",
             ));
         }
         // Inputs remain outside the replaceable resource variant throughout every borrowed transfer.
@@ -185,11 +187,16 @@ pub(in crate::skills_services::local_plugin_update) fn materialize_preparation(
 ) -> Result<(), String> {
     publish_reserved(resources)?;
     let PendingLocalPluginUpdateStage::Preparing(preparing) = &mut resources.stage else {
-        return Err(String::from("首次准备必须使用原早期所有者。"));
+        return Err(String::from(
+            "The first preparation must use the original early owner.",
+        ));
     };
     // No recovery caller reaches this original-source copy primitive.
     // 任何恢复调用者均不会到达此原来源复制原语。
-    let source = resources.source.as_ref().ok_or("原更新来源输入缺失。")?;
+    let source = resources
+        .source
+        .as_ref()
+        .ok_or("The source input of the original update is missing.")?;
     preparing.generation = Some(
         preparing
             .store
@@ -244,7 +251,7 @@ pub(in crate::skills_services::local_plugin_update) fn recover_preparation_with_
             preparing.preparation.request_id(),
         )
         .map_err(|error| error.to_string())?
-        .ok_or("原准备日志缺失。")?;
+        .ok_or("The original preparation log is missing.")?;
     match record {
         VulcanPluginActivationRequestRecord::Activation(record)
             if record.phase() == Phase::Prepared =>
@@ -254,7 +261,9 @@ pub(in crate::skills_services::local_plugin_update) fn recover_preparation_with_
         VulcanPluginActivationRequestRecord::Preparation(record) => {
             if VulcanPluginActivationRequestRecord::Preparation(record).phase() != Phase::Preparing
             {
-                return Err(String::from("原准备已放弃；必须继续同原请求的清理。"));
+                return Err(String::from(
+                    "The original preparation was abandoned; the cleanup of the same original request must continue.",
+                ));
             }
             // The strict marker reader accepts no source and performs no repair or directory deletion.
             // 严格标记读取器不接受来源，不执行修复或目录删除。
@@ -263,12 +272,14 @@ pub(in crate::skills_services::local_plugin_update) fn recover_preparation_with_
                     .store
                     .inspect_activation_preparation_package(&preparing.preparation)
                     .map_err(|error| {
-                        format!("原插件包尚无可验证的完整准备，不能重复制；请中止相同请求：{error}")
+                        format!("The original plugin package has no verifiable full preparation and cannot be copied again; abort the same request: {error}")
                     })?,
             );
             complete_preparation_with_backend(resources, backend)
         }
-        _ => Err(String::from("原准备日志已改变，不能重建或重放候选工作。")),
+        _ => Err(String::from(
+            "The original preparation log changed; candidate work cannot be rebuilt or replayed.",
+        )),
     }
 }
 
@@ -278,9 +289,14 @@ pub(in crate::skills_services::local_plugin_update) fn recover_preparation_with_
 /// 输入仅从已固定不可变候选及原保留描述符和提交值派生。
 fn freeze_inputs(resources: &mut PendingLocalPluginUpdateResources) -> Result<(), String> {
     let PendingLocalPluginUpdateStage::Preparing(preparing) = &resources.stage else {
-        return Err(String::from("固定输入要求原实际准备所有者。"));
+        return Err(String::from(
+            "Freezing inputs requires the original actual preparation owner.",
+        ));
     };
-    let generation = preparing.generation.as_ref().ok_or("原插件包固定缺失。")?;
+    let generation = preparing
+        .generation
+        .as_ref()
+        .ok_or("The original plugin package pin is missing.")?;
     if resources.configuration.is_none() {
         resources.configuration = Some(
             resources
@@ -292,7 +308,10 @@ fn freeze_inputs(resources: &mut PendingLocalPluginUpdateResources) -> Result<()
     if resources.values.is_none() {
         // This derivation occurs before any inventory/backend operation and is never repeated after values enter the slot.
         // 此派生在任何清单或后端操作之前发生；值进入槽后绝不重复。
-        let source = resources.source.as_ref().ok_or("原秘密输入缺失。")?;
+        let source = resources
+            .source
+            .as_ref()
+            .ok_or("The original secret input is missing.")?;
         let candidate =
             vulcan_plugin_runtime::inspect_user_plugin_package(generation.package_root())?;
         let secrets = OsPluginMcpSecretStore;
@@ -353,9 +372,14 @@ fn complete_preparation_with_backend(
 ) -> Result<(), String> {
     freeze_inputs(resources)?;
     let PendingLocalPluginUpdateStage::Preparing(preparing) = &mut resources.stage else {
-        return Err(String::from("完成准备要求原早期所有者。"));
+        return Err(String::from(
+            "Completing the preparation requires the original early owner.",
+        ));
     };
-    let values = resources.values.as_ref().ok_or("原固定凭据值缺失。")?;
+    let values = resources
+        .values
+        .as_ref()
+        .ok_or("The original pinned credential values are missing.")?;
     if preparing.credentials.is_none() && resources.inventory.is_none() {
         // Retain the actual revision writer before any first inventory or secure-store effect.
         // 在任何首份清单或安全存储副作用之前保留实际修订写入者。
@@ -364,7 +388,10 @@ fn complete_preparation_with_backend(
                 .store
                 .reserve_activation_credential_staging(
                     &preparing.preparation,
-                    preparing.generation.as_ref().ok_or("原插件包固定缺失。")?,
+                    preparing
+                        .generation
+                        .as_ref()
+                        .ok_or("The original plugin package pin is missing.")?,
                     values,
                 )
                 .map_err(|error| error.to_string())?,
@@ -415,7 +442,9 @@ fn complete_preparation_with_backend(
         if resources.inventory.as_ref().map(|record| record.phase())
             != Some(VulcanPluginCredentialPhase::Staged)
         {
-            return Err(String::from("原凭据尚未确认实际暂存完成。"));
+            return Err(String::from(
+                "The original credentials have not confirmed the actual staging yet.",
+            ));
         }
         // True Staged confirmation retires the actual exclusive revision and shared parent owner before promotion.
         // 真实 Staged 确认在晋级之前退役实际排他修订及共享父所有者。
@@ -424,7 +453,9 @@ fn complete_preparation_with_backend(
     if resources.inventory.as_ref().map(|record| record.phase())
         != Some(VulcanPluginCredentialPhase::Staged)
     {
-        return Err(String::from("原准备缺少真实完整 Staged 凭据确认。"));
+        return Err(String::from(
+            "The original preparation has no real full Staged credential confirmation.",
+        ));
     }
     promote_preparation(resources)
 }
@@ -438,7 +469,7 @@ fn promote_preparation(resources: &mut PendingLocalPluginUpdateResources) -> Res
     let configuration = resources
         .configuration
         .as_ref()
-        .ok_or("原固定配置缺失，不能认领已写晋级。")?
+        .ok_or("The original pinned configuration is missing; the written promotion cannot be claimed.")?
         .clone();
     // This borrowed API keeps the original preparation alive on writer failure, readback loss or unwind.
     // 此借用接口在写入者失败、回读丢失或展开时让原准备存活。
@@ -533,7 +564,7 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
                     preparing.preparation.request_id(),
                 )
                 .map_err(|error| error.to_string())?
-                .ok_or("原准备日志缺失。")?;
+                .ok_or("The original preparation log is missing.")?;
             if matches!(record, VulcanPluginActivationRequestRecord::Activation(_)) {
                 // Frozen configuration is the only authority for claiming an actual promotion with a lost result.
                 // 固定配置是认领结果丢失的实际晋级的唯一权威。
@@ -544,7 +575,7 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
         }
         if !reserved && !actual_aborted && !acknowledge {
             return Err(String::from(
-                "原准备可能已有实际插件包或凭据副作用；必须明确确认原请求放弃。",
+                "The original preparation may already have actual plugin package or credential side effects; the abandonment of the original request must be confirmed explicitly.",
             ));
         }
         if let Some(credentials) = preparing.credentials.as_mut() {
@@ -598,7 +629,9 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
         .abort_activation_preparation_retained(&mut preparing.preparation)
         .map_err(|error| error.to_string())?;
     if preparing.abandoned.as_ref() != Some(&original) {
-        return Err(String::from("原 Aborted 完整正文发生变化，不能继续清理。"));
+        return Err(String::from(
+            "The original Aborted full body changed; the cleanup cannot continue.",
+        ));
     }
     let revision = preparing.preparation.intent().credential_revision();
     let actual = preparing
@@ -634,15 +667,21 @@ pub(in crate::skills_services::local_plugin_update) fn abort_preparation_with_ba
                 .store
                 .credential_record(&plugin_id, revision)
                 .map_err(|error| error.to_string())?
-                .ok_or("原清理清单消失。")?;
+                .ok_or("The original cleanup manifest disappeared.")?;
             if !same_inventory(original, &discarded)
                 || discarded.phase() != VulcanPluginCredentialPhase::Discarded
             {
-                return Err(String::from("原凭据清理尚未得到完整 Discarded 回读。"));
+                return Err(String::from(
+                    "The original credential cleanup has no full Discarded read-back yet.",
+                ));
             }
             resources.inventory = Some(discarded);
         }
-        _ => return Err(String::from("原凭据清单缺失或被替换，保留同原请求供检查。")),
+        _ => {
+            return Err(String::from(
+                "The original credential manifest is missing or was replaced; keeping the same original request for inspection.",
+            ));
+        }
     }
     #[cfg(test)]
     observation::after(
@@ -676,7 +715,7 @@ pub(super) fn confirm_abandoned_retirement(
     let original = preparing
         .abandoned
         .as_ref()
-        .ok_or("原准备尚未确认 Aborted。")?;
+        .ok_or("The original preparation has not confirmed Aborted yet.")?;
     if preparing.credentials.is_some()
         || preparing.generation.is_some()
         || original.phase() != Phase::Aborted
@@ -690,7 +729,9 @@ pub(super) fn confirm_abandoned_retirement(
             .as_ref()
             != Some(original)
     {
-        return Err(String::from("原准备终态或实际资源退役尚未得到完整确认。"));
+        return Err(String::from(
+            "The terminal state or actual resource retirement of the original preparation is not fully confirmed yet.",
+        ));
     }
     let actual = preparing
         .store
@@ -703,7 +744,11 @@ pub(super) fn confirm_abandoned_retirement(
         (None, None) => {}
         (Some(original), Some(actual))
             if original == &actual && actual.phase() == VulcanPluginCredentialPhase::Discarded => {}
-        _ => return Err(String::from("原终态凭据清单尚未完整确认。")),
+        _ => {
+            return Err(String::from(
+                "The original terminal credential manifest is not fully confirmed yet.",
+            ));
+        }
     }
     // The sealed original collector verifies its full request, index, selection and exact marker/byte observation.
     // 密封原回收器校验完整请求、索引、选择及精确标记与字节观察。
@@ -803,15 +848,17 @@ fn inspection_rows(
         .requests()
         .iter()
         .map(|(request_id, record)| {
-            let candidate = record.candidate().ok_or("原历史请求缺少候选身份。")?;
+            let candidate = record
+                .candidate()
+                .ok_or("The original historical request has no candidate identity.")?;
             let effects = inspection
                 .effects()
                 .get(request_id)
-                .ok_or("原历史请求缺少完整副作用观察。")?;
+                .ok_or("The original historical request has no full side-effect observation.")?;
             let installation = inspection
                 .installations()
                 .get(request_id)
-                .ok_or("原历史请求缺少完整安装观察。")?;
+                .ok_or("The original historical request has no full install observation.")?;
             Ok(LocalPluginUpdateStatus {
                 request_id: request_id.to_string(),
                 plugin_id: candidate.plugin_id.clone(),

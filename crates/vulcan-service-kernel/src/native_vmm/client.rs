@@ -230,11 +230,16 @@ pub(super) fn pending_analysis_job_targets_scope(
     job: &NativeVmmPendingAnalysisJob,
     scope: &ScopeId,
 ) -> Result<bool, String> {
-    let payload: NativePendingPostActionPayload = serde_json::from_str(&job.payload_json)
-        .map_err(|error| format!("解析待分析作业 `{}` 失败：{error}", job.operation_id))?;
+    let payload: NativePendingPostActionPayload =
+        serde_json::from_str(&job.payload_json).map_err(|error| {
+            format!(
+                "Failed to parse pending analysis job `{}`: {error}",
+                job.operation_id
+            )
+        })?;
     if payload.intake.scope_access.write_scope != payload.analysis.scope_access.write_scope {
         return Err(format!(
-            "待分析作业 `{}` 的登记与分析写入作用域不一致",
+            "The intake and analysis write scopes of pending analysis job `{}` disagree",
             job.operation_id
         ));
     }
@@ -495,7 +500,7 @@ impl NativeVmmClient {
         };
         if current.request_fingerprint != job.request_fingerprint {
             return Err(format!(
-                "待分析作业 `{}` 的准确请求身份已变化。",
+                "The exact request identity of pending analysis job `{}` changed.",
                 job.operation_id
             ));
         }
@@ -568,14 +573,22 @@ impl NativeVmmClient {
             requested_status,
             TurnStatus::AnalysisBypassed | TurnStatus::Corrupted
         ) {
-            return Err(String::from("待分析作业请求了不受支持的失败终态"));
+            return Err(String::from(
+                "The pending analysis job requested an unsupported failure terminal state",
+            ));
         }
-        let turn_id = TurnId::new(
-            job.turn_id
-                .clone()
-                .ok_or_else(|| format!("待分析作业 `{}` 缺少回合身份", job.operation_id))?,
-        )
-        .map_err(|error| format!("待分析作业 `{}` 回合身份无效：{error}", job.operation_id))?;
+        let turn_id = TurnId::new(job.turn_id.clone().ok_or_else(|| {
+            format!(
+                "Pending analysis job `{}` is missing the turn identity",
+                job.operation_id
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "Pending analysis job `{}` has an invalid turn identity: {error}",
+                job.operation_id
+            )
+        })?;
         // A write guard prevents normal Core commands and maintenance from changing the exact turn
         // between the previewed version and the host-owned failure-policy transition.
         // 写守卫防止普通 Core 命令与维护过程在预检版本和宿主持有失败策略迁移之间改变准确回合。
@@ -599,7 +612,7 @@ impl NativeVmmClient {
             .map(|turn| turn.status)
             .ok_or_else(|| {
                 format!(
-                    "待分析作业 `{}` 引用的回合 `{}` 不存在",
+                    "Pending analysis job `{}` references turn `{}`, which does not exist",
                     job.operation_id, turn_id
                 )
             })?;
@@ -662,7 +675,7 @@ impl NativeVmmClient {
                     .await
             }
             TurnStatus::Pending | TurnStatus::ProcessedUnknown => Err(format!(
-                "待分析作业 `{}` 未收敛到可终结状态",
+                "Pending analysis job `{}` did not converge to a finalizable state",
                 job.operation_id
             )),
         }
@@ -697,14 +710,14 @@ impl NativeVmmClient {
         }
         if job.state != VMM_PENDING_ANALYSIS_READY {
             return Err(PendingAnalysisJobError::Corrupted(format!(
-                "待分析作业 `{}` 未处于 ready 状态",
+                "Pending analysis job `{}` is not in the ready state",
                 job.operation_id
             )));
         }
         let mut payload: NativePendingPostActionPayload = serde_json::from_str(&job.payload_json)
             .map_err(|error| {
             PendingAnalysisJobError::Corrupted(format!(
-                "解析待分析作业 `{}` 失败：{error}",
+                "Failed to parse pending analysis job `{}`: {error}",
                 job.operation_id
             ))
         })?;
@@ -714,19 +727,19 @@ impl NativeVmmClient {
             || payload.intake.session_source_id != payload.analysis.session_source_id
         {
             return Err(PendingAnalysisJobError::Corrupted(format!(
-                "待分析作业 `{}` 的登记与分析归属或向量代次不一致",
+                "The intake and analysis ownership or vector generation of pending analysis job `{}` disagree",
                 job.operation_id
             )));
         }
         let turn_id = TurnId::new(job.turn_id.clone().ok_or_else(|| {
             PendingAnalysisJobError::Corrupted(format!(
-                "待分析作业 `{}` 缺少回合身份",
+                "Pending analysis job `{}` is missing the turn identity",
                 job.operation_id
             ))
         })?)
         .map_err(|error| {
             PendingAnalysisJobError::Corrupted(format!(
-                "待分析作业 `{}` 回合身份无效：{error}",
+                "Pending analysis job `{}` has an invalid turn identity: {error}",
                 job.operation_id
             ))
         })?;
@@ -746,7 +759,8 @@ impl NativeVmmClient {
                 || turn.session_source_id != payload.analysis.session_source_id
             {
                 return Err(PendingAnalysisJobError::Corrupted(
-                    "待分析作业与已回收回合归属不一致".to_owned(),
+                    "The pending analysis job disagrees with the ownership of the reclaimed turn"
+                        .to_owned(),
                 ));
             }
             return Ok(());
@@ -759,14 +773,17 @@ impl NativeVmmClient {
             .iter()
             .find(|turn| turn.id == turn_id)
             .ok_or_else(|| {
-                PendingAnalysisJobError::Corrupted("待分析作业引用的回合不存在".to_owned())
+                PendingAnalysisJobError::Corrupted(
+                    "The turn referenced by the pending analysis job does not exist".to_owned(),
+                )
             })?;
         if turn.subject_id != payload.analysis.subject_id
             || turn.scope_id != payload.analysis.scope_access.write_scope
             || turn.session_source_id != payload.analysis.session_source_id
         {
             return Err(PendingAnalysisJobError::Corrupted(
-                "待分析作业与已登记回合归属不一致".to_owned(),
+                "The pending analysis job disagrees with the ownership of the registered turn"
+                    .to_owned(),
             ));
         }
         // A committed successful turn needs only queue acknowledgement, never a second extraction.
@@ -790,7 +807,10 @@ impl NativeVmmClient {
                     && session.session_source_id == turn.session_source_id
             })
             .ok_or_else(|| {
-                PendingAnalysisJobError::Corrupted("待分析回合缺少权威记忆会话记录".to_owned())
+                PendingAnalysisJobError::Corrupted(
+                    "The pending analysis turn is missing the authoritative memory session record"
+                        .to_owned(),
+                )
             })?;
         // observed_after_ns survives retries and advances only with successful derived storage.
         // observed_after_ns 跨重试保留，仅随成功派生存储提交推进。
@@ -810,7 +830,7 @@ impl NativeVmmClient {
                 .await
                 .map_err(|error| {
                     PendingAnalysisJobError::Retryable(format!(
-                        "待分析作业 `{}` 无法解析当前向量代次：{error}",
+                        "Pending analysis job `{}` cannot resolve the current vector generation: {error}",
                         job.operation_id
                     ))
                 })?;
@@ -836,7 +856,7 @@ impl NativeVmmClient {
             vulcan_memorymesh_core::CommandResult::PostActionAnalysis(_)
         ) {
             return Err(PendingAnalysisJobError::Analysis {
-                diagnostic: String::from("Core 未返回 PostActionAnalysis 结果"),
+                diagnostic: String::from("Core returned no PostActionAnalysis result"),
                 outcome_uncertain: false,
             });
         }
@@ -2008,14 +2028,16 @@ fn transition_pending_turn_status(
         requested_status,
         TurnStatus::AnalysisBypassed | TurnStatus::Corrupted
     ) {
-        return Err(String::from("待分析回合请求了不受支持的失败终态"));
+        return Err(String::from(
+            "The pending analysis turn requested an unsupported failure terminal state",
+        ));
     }
     let turn = snapshot
         .dataset
         .turns
         .iter_mut()
         .find(|turn| turn.id == *turn_id)
-        .ok_or_else(|| format!("待分析作业 `{job_operation_id}` 引用的回合 `{turn_id}` 不存在"))?;
+        .ok_or_else(|| format!("Turn `{turn_id}` referenced by pending analysis job `{job_operation_id}` does not exist"))?;
     match turn.status {
         TurnStatus::Pending => {
             turn.status = requested_status;
@@ -2025,7 +2047,7 @@ fn transition_pending_turn_status(
         TurnStatus::Completed | TurnStatus::AnalysisBypassed | TurnStatus::Corrupted => {}
         TurnStatus::ProcessedUnknown => {
             return Err(format!(
-                "待分析作业 `{job_operation_id}` 的回合已处于不可重写状态 {:?}",
+                "The turn of pending analysis job `{job_operation_id}` is already in a non-rewritable state {:?}",
                 turn.status
             ));
         }

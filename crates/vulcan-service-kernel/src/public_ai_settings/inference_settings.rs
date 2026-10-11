@@ -265,7 +265,7 @@ pub(crate) async fn service_save_public_ai_internal_model_enabled(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存内部推理模型启用状态失败",
+        "Failed to save the internal inference model enable state",
         |configuration| {
             configuration.set_internal_model_enabled(
                 request.provider_id.as_str(),
@@ -343,7 +343,7 @@ pub(crate) async fn service_save_public_ai_internal_model_overrides(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存内部推理模型覆盖失败",
+        "Failed to save the internal inference model overrides",
         |configuration| {
             let key = PersistedAiConfiguration::internal_model_operation_key(
                 request.provider_id.as_str(),
@@ -636,7 +636,7 @@ pub(crate) async fn service_save_public_ai_inference_route(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存内部推理路由失败",
+        "Failed to save the internal inference route",
         |configuration| {
             // LuaSkills is an optional consumer that only an explicit save of a real
             // route may create. Clearing a route for a consumer that has no profile
@@ -1104,13 +1104,13 @@ pub(crate) fn resolve_knowledge_internal_inference_candidate(
         })
         .ok_or_else(|| {
             format!(
-                "未找到可执行的官方知识库模型路由：provider={provider_id}, service={service_entry_id}, model={model_id}, operation={}",
+                "No executable official knowledge model route found: provider={provider_id}, service={service_entry_id}, model={model_id}, operation={}",
                 operation.as_str()
             )
         })?;
     if !candidate.enabled {
         return Err(format!(
-            "知识库模型当前未在模型列表启用内部使用：provider={provider_id}, model={model_id}"
+            "The knowledge model is not enabled for internal use in the model list: provider={provider_id}, model={model_id}"
         ));
     }
     Ok(candidate)
@@ -1155,7 +1155,7 @@ pub(crate) async fn sync_knowledge_inference_profile(
             AiOperation::ConversationRespond | AiOperation::EmbeddingCreate
         ) {
             return Err(format!(
-                "资料库配置档不支持内部操作 `{}`",
+                "The knowledge library profile does not support internal operation `{}`",
                 route.operation.as_str()
             ));
         }
@@ -1180,7 +1180,7 @@ pub(crate) async fn sync_knowledge_inference_profile(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存资料库独立模型配置失败",
+        "Failed to save the knowledge library dedicated model configuration",
         |configuration| {
             let profile = configuration
                 .inference_profiles
@@ -1229,7 +1229,7 @@ pub(crate) async fn remove_knowledge_inference_profile(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "删除资料库独立模型配置失败",
+        "Failed to delete the knowledge library dedicated model configuration",
         |configuration| {
             configuration.inference_profiles.remove(consumer_profile_id);
             Ok(())

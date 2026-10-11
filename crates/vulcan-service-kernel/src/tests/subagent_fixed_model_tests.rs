@@ -192,7 +192,7 @@ fn rejects_new_fixed_model_outside_enabled_choices() {
     )
     .expect_err("missing model should be rejected");
 
-    assert!(error.contains("不在当前已启用模型列表中"));
+    assert!(error.contains("is not in the currently enabled model list"));
 }
 
 /// Verifies partial fixed-model requests are rejected instead of becoming ambiguous snapshots.
@@ -209,7 +209,7 @@ fn rejects_partial_fixed_model_request() {
     )
     .expect_err("partial fixed model should be rejected");
 
-    assert!(error.contains("同时提供 Provider 和模型"));
+    assert!(error.contains("needs both a provider and a model"));
 }
 
 /// Verifies an existing invalid pair can be preserved while editing unrelated metadata.
@@ -267,6 +267,6 @@ fn projects_partial_fixed_model_as_unavailable_diagnostic() {
             .unavailable_reason
             .as_deref()
             .unwrap_or_default()
-            .contains("固定模型配置不完整")
+            .contains("pinned model configuration is incomplete")
     );
 }

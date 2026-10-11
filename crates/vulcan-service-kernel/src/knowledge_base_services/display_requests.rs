@@ -87,7 +87,7 @@ fn knowledge_display_source_requests(
         let mut end = boundaries[low];
         if end == start {
             return Err(format!(
-                "整理 {} 的请求元数据过大，无法在 {} 字节限额内容纳正文",
+                "The request metadata for curating {} is too large to fit the body within the {}-byte limit",
                 source.document.relative_path, KNOWLEDGE_DISPLAY_INPUT_BYTE_LIMIT
             ));
         }
@@ -107,7 +107,9 @@ fn knowledge_display_source_requests(
         start = end;
     }
     if requests.is_empty() {
-        return Err(String::from("整理请求元数据超过调用方字节限额"));
+        return Err(String::from(
+            "The curation request metadata exceeds the caller's byte limit",
+        ));
     }
     Ok(requests)
 }
@@ -135,14 +137,16 @@ pub(super) async fn execute_knowledge_display_source(
     let mut drafts = Vec::with_capacity(total);
     for (index, request) in requests.into_iter().enumerate() {
         if reporter.runtime.operation_is_cancelled(job_id).await? {
-            return Err(String::from("资料库显示库整理操作已取消"));
+            return Err(String::from(
+                "The knowledge display library curation operation was cancelled",
+            ));
         }
         // label makes segmented work identifiable without exposing host IDs to the model.
         // label 使分段工作可识别，同时不向模型暴露宿主标识。
         let label = if total == 1 {
             source.document.relative_path.clone()
         } else {
-            format!("{}（{}/{total}）", source.document.relative_path, index + 1)
+            format!("{} ({}/{total})", source.document.relative_path, index + 1)
         };
         drafts.push(
             execute_knowledge_display_draft(
@@ -171,7 +175,7 @@ fn merge_knowledge_display_drafts(
     // merged 使用第一段标题，并累积后续事实内容。
     let mut merged = parts
         .next()
-        .ok_or_else(|| String::from("资料库整理分段结果为空"))?;
+        .ok_or_else(|| String::from("The knowledge curation segment results are empty"))?;
     for draft in parts {
         merged.summary.push_str("\n\n");
         merged.summary.push_str(&draft.summary);

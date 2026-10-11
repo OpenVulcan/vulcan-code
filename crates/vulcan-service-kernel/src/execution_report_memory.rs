@@ -690,7 +690,7 @@ pub(super) fn apply_execution_report_to_memory(
                 } else {
                     SessionState::Running
                 };
-                session.last_updated_label = String::from("刚刚");
+                session.last_updated_label = String::from("just now");
             }
             if workspace.selected_session != session_id {
                 runtime_state.ui_state.unread = true;
@@ -881,7 +881,7 @@ fn emit_terminal_execution_report_workbench_deltas(
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
                 conversation.status = status_label.to_string();
-                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_label = String::from("just now");
                 conversation.last_updated_at = current_unix_millis_text();
                 changed_conversation = Some(conversation.clone());
                 break;

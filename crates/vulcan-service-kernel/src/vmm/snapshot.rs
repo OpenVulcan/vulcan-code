@@ -714,8 +714,11 @@ pub(crate) fn vmm_runtime_summary(
             native_host_ai_status
                 .and_then(|status| status.error.clone())
                 .or_else(|| {
-                    (effective.enabled && !native_ready)
-                        .then(|| String::from("原生 VMM 尚未完成宿主 AI 能力校验"))
+                    (effective.enabled && !native_ready).then(|| {
+                        String::from(
+                            "Native VMM has not finished verifying the host AI capabilities",
+                        )
+                    })
                 })
         })
         .flatten();
@@ -779,46 +782,46 @@ pub(crate) fn vmm_management_sections(
     // 原生页面暴露一级项目及其宿主持有的资源与保留控制。
     let native = backend_mode == vulcan_vmm::VmmBackendMode::Native;
     let content_description = if native {
-        "使用自然语言搜索、查看、写入和删除当前绑定原生项目的长期记忆。"
+        "Search, view, write and delete the long-term memory of the bound native project in natural language."
     } else {
-        "按会话和回合查看、归档、回收、恢复并维护外置 VMM 长期记忆。"
+        "View, archive, recycle, restore and maintain external VMM long-term memory by session and turn."
     };
     let identity_label = if native {
-        "记忆项目"
+        "Memory projects"
     } else {
-        "用户与项目"
+        "Users and projects"
     };
     let identity_description = if native {
-        "管理一级原生记忆项目、项目归属、连带召回、迁移、清空和删除。"
+        "Manage top-level native memory projects, project ownership, linked recall, migration, clearing and deletion."
     } else {
-        "管理外置 VMM 身份、项目绑定、迁移和删除。"
+        "Manage external VMM identities, project bindings, migration and deletion."
     };
     [
         (
             "overview",
             "OVERVIEW",
-            "状态总览",
-            "查看记忆服务状态、完成首次配置并处理阻塞问题。",
+            "Status overview",
+            "View the memory service status, finish the first-time setup and resolve blocking issues.",
         ),
         (
             "inference",
             "INFERENCE",
-            "内部推理",
-            "为记忆检索、整理和画像任务选择专用模型。",
+            "Internal inference",
+            "Choose dedicated models for memory retrieval, organization and profile tasks.",
         ),
         (
             "rules",
             "RULES",
-            "记忆规则",
-            "编辑记忆规则，并应用到全局或指定项目。",
+            "Memory rules",
+            "Edit memory rules and apply them globally or to a specific project.",
         ),
         (
             "resource_rules",
             "RESOURCE RULES",
-            "规则文件",
-            "按提示词、PII 和噪音分类查看、测试并安全覆盖原生 VMM 规则文件。",
+            "Rule files",
+            "View, test and safely override native VMM rule files by prompt, PII and noise category.",
         ),
-        ("content", "CONTENT", "记忆数据", content_description),
+        ("content", "CONTENT", "Memory data", content_description),
         (
             "identity_projects",
             "IDENTITY AND PROJECTS",
@@ -828,20 +831,20 @@ pub(crate) fn vmm_management_sections(
         (
             "profile",
             "PROFILE",
-            "画像管理",
-            "查看画像摘要并应用人工画像指令。",
+            "Profile management",
+            "View profile summaries and apply manual profile instructions.",
         ),
         (
             "maintenance",
             "RETENTION",
-            "清洗与回收",
-            "查看周期清洗状态、立即运行清洗，并恢复或永久清除回收批次。",
+            "Cleanup and recycling",
+            "View the periodic cleanup status, run a cleanup now, and restore or permanently purge recycle batches.",
         ),
         (
             "advanced",
             "ADVANCED",
-            "高级设置",
-            "选择内置原生或外置 gRPC 后端，并查看对应配置与技术诊断。",
+            "Advanced settings",
+            "Choose the built-in native or external gRPC backend and view its configuration and technical diagnostics.",
         ),
     ]
     .into_iter()
@@ -866,10 +869,10 @@ pub(crate) fn vmm_memory_notice(
     selected_project: Option<&TaskProjectSummary>,
 ) -> String {
     format!(
-        "当前项目：{}；诊断：{}；用户/项目：{}/{}。",
+        "Current project: {}; diagnostics: {}; users/projects: {}/{}.",
         selected_project
             .map(|project| project.title.as_str())
-            .unwrap_or("未选择项目"),
+            .unwrap_or("No project selected"),
         vmm_diagnostic_key(
             effective.diagnose_memory_flow(!effective.grpc_target.trim().is_empty())
         ),

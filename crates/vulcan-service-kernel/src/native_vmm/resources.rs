@@ -153,7 +153,7 @@ impl NativeVmmResourceStore {
                     noise_languages.insert(descriptor.selector.clone());
                 }
                 "pii" | "noise" => {}
-                _ => return Err(format!("不支持的原生 VMM 资源分组：{path}")),
+                _ => return Err(format!("Unsupported native VMM resource group: {path}")),
             }
             files.push(VmmNativeResourceFileSummary {
                 path: path.clone(),
@@ -269,7 +269,7 @@ impl NativeVmmResourceStore {
         ensure_catalog_path(path)?;
         if !confirmed_purpose || !confirmed_modification {
             return Err(String::from(
-                "原生 VMM 规则覆盖必须先确认文件用途与修改风险，并在保存时再次确认。",
+                "Overriding native VMM rules requires confirming the file purpose and modification risk first, and confirming again when saving.",
             ));
         }
         let paths = embedded_paths()?;
@@ -306,7 +306,7 @@ impl NativeVmmResourceStore {
             let bytes = user_layer
                 .files
                 .get(path)
-                .ok_or_else(|| format!("待写入资源没有进入用户层：{path}"))?;
+                .ok_or_else(|| format!("The resource to write is not in the user layer: {path}"))?;
             self.persist_override(path, bytes)?;
         } else {
             self.persist_prompt_bundle(path, &prompt_bundle_files, &user_layer)?;
@@ -414,11 +414,13 @@ impl NativeVmmResourceStore {
         else {
             return Ok(PersistedResourceSettings::default());
         };
-        let settings: PersistedResourceSettings = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("解析原生 VMM 资源设置失败：{error}"))?;
+        let settings: PersistedResourceSettings =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                format!("Failed to parse the native VMM resource settings: {error}")
+            })?;
         if settings.schema_version != RESOURCE_SETTINGS_SCHEMA_VERSION {
             return Err(format!(
-                "不支持的原生 VMM 资源设置版本：{}",
+                "Unsupported native VMM resource settings version: {}",
                 settings.schema_version
             ));
         }
@@ -455,9 +457,9 @@ impl NativeVmmResourceStore {
         else {
             return Ok(None);
         };
-        String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|error| format!("原生 VMM 用户覆盖不是有效 UTF-8 `{path}`：{error}"))
+        String::from_utf8(bytes).map(Some).map_err(|error| {
+            format!("Native VMM user override `{path}` is not valid UTF-8: {error}")
+        })
     }
 
     /// Reports whether one exact physical override exists.
@@ -470,8 +472,9 @@ impl NativeVmmResourceStore {
     /// Persists the complete settings document with same-directory atomic replacement.
     /// 使用同目录原子替换持久化完整设置文档。
     fn persist_settings(&self, settings: &PersistedResourceSettings) -> Result<(), String> {
-        let bytes = serde_json::to_vec_pretty(settings)
-            .map_err(|error| format!("序列化原生 VMM 资源设置失败：{error}"))?;
+        let bytes = serde_json::to_vec_pretty(settings).map_err(|error| {
+            format!("Failed to serialize the native VMM resource settings: {error}")
+        })?;
         persist_file_atomically(
             &self.config_root,
             &self.config_root.join("settings.json"),
@@ -501,29 +504,34 @@ impl NativeVmmResourceStore {
             let bundle_name = prompt_bundle_from_path(
                 bundle_paths
                     .first()
-                    .ok_or_else(|| String::from("提示词 Bundle 不包含场景文件"))?,
+                    .ok_or_else(|| String::from("The prompt bundle contains no scene file"))?,
             )
-            .ok_or_else(|| String::from("提示词 Bundle 路径无效"))?;
+            .ok_or_else(|| String::from("Invalid prompt bundle path"))?;
             let prompts_root = self.config_root.join("prompts");
             ensure_safe_directory(&self.config_root, &prompts_root)?;
             let staging = tempfile::Builder::new()
                 .prefix(&format!(".{bundle_name}.stage-"))
                 .tempdir_in(&prompts_root)
-                .map_err(|error| format!("创建提示词 Bundle 暂存目录失败：{error}"))?;
+                .map_err(|error| {
+                    format!("Failed to create the prompt bundle staging directory: {error}")
+                })?;
             for path in bundle_paths {
                 let file_name = Path::new(path)
                     .file_name()
-                    .ok_or_else(|| format!("提示词资源缺少文件名：{path}"))?;
-                let bytes = user_layer
-                    .files
-                    .get(path)
-                    .ok_or_else(|| format!("提示词 Bundle 缺少用户层文件：{path}"))?;
-                let mut file = fs::File::create(staging.path().join(file_name))
-                    .map_err(|error| format!("创建提示词暂存文件失败 `{path}`：{error}"))?;
-                file.write_all(bytes)
-                    .map_err(|error| format!("写入提示词暂存文件失败 `{path}`：{error}"))?;
-                file.sync_all()
-                    .map_err(|error| format!("同步提示词暂存文件失败 `{path}`：{error}"))?;
+                    .ok_or_else(|| format!("The prompt resource is missing a file name: {path}"))?;
+                let bytes = user_layer.files.get(path).ok_or_else(|| {
+                    format!("The prompt bundle is missing a user-layer file: {path}")
+                })?;
+                let mut file =
+                    fs::File::create(staging.path().join(file_name)).map_err(|error| {
+                        format!("Failed to create the prompt staging file `{path}`: {error}")
+                    })?;
+                file.write_all(bytes).map_err(|error| {
+                    format!("Failed to write the prompt staging file `{path}`: {error}")
+                })?;
+                file.sync_all().map_err(|error| {
+                    format!("Failed to sync the prompt staging file `{path}`: {error}")
+                })?;
             }
             let destination = prompts_root.join(bundle_name);
             let staging_path = staging.keep();
@@ -531,19 +539,20 @@ impl NativeVmmResourceStore {
                 // The disarmed staging guard no longer cleans up, so a failed publish removes it here.
                 // 已解除的暂存守卫不再自动清理，因此发布失败时在此移除暂存目录。
                 let _ = fs::remove_dir_all(&staging_path);
-                return Err(format!("发布完整提示词 Bundle 失败：{error}"));
+                return Err(format!(
+                    "Failed to publish the complete prompt bundle: {error}"
+                ));
             }
             return Ok(());
         }
         if existing_count != bundle_paths.len() {
             return Err(String::from(
-                "用户提示词 Bundle 不完整；请修复或移除该 Bundle 目录后重新编辑。",
+                "The user prompt bundle is incomplete; repair or remove the bundle directory, then edit again.",
             ));
         }
-        let bytes = user_layer
-            .files
-            .get(changed_path)
-            .ok_or_else(|| format!("提示词 Bundle 缺少用户层文件：{changed_path}"))?;
+        let bytes = user_layer.files.get(changed_path).ok_or_else(|| {
+            format!("The prompt bundle is missing a user-layer file: {changed_path}")
+        })?;
         self.persist_override(changed_path, bytes)
     }
 
@@ -557,17 +566,22 @@ impl NativeVmmResourceStore {
             {
                 ensure_existing_safe_directory_chain(
                     &self.config_root,
-                    target
-                        .parent()
-                        .ok_or_else(|| format!("原生 VMM 用户覆盖缺少父目录：{path}"))?,
+                    target.parent().ok_or_else(|| {
+                        format!("Native VMM user override is missing its parent directory: {path}")
+                    })?,
                 )?;
                 ensure_canonical_path_within_root(&self.config_root, &target)?;
-                fs::remove_file(&target)
-                    .map_err(|error| format!("删除原生 VMM 用户覆盖失败 `{path}`：{error}"))
+                fs::remove_file(&target).map_err(|error| {
+                    format!("Failed to delete native VMM user override `{path}`: {error}")
+                })
             }
-            Ok(_) => Err(format!("拒绝删除非普通文件的原生 VMM 用户覆盖：{path}")),
+            Ok(_) => Err(format!(
+                "Refusing to delete a native VMM user override that is not a regular file: {path}"
+            )),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("检查原生 VMM 用户覆盖失败 `{path}`：{error}")),
+            Err(error) => Err(format!(
+                "Failed to inspect native VMM user override `{path}`: {error}"
+            )),
         }
     }
 
@@ -577,22 +591,27 @@ impl NativeVmmResourceStore {
         let prompts_root = self.config_root.join("prompts");
         let target = prompts_root.join(bundle_name);
         let metadata = fs::symlink_metadata(&target)
-            .map_err(|error| format!("检查提示词 Bundle 目录失败：{error}"))?;
+            .map_err(|error| format!("Failed to inspect the prompt bundle directory: {error}"))?;
         if !metadata.file_type().is_dir() || metadata_is_link_or_reparse(&metadata) {
-            return Err(String::from("拒绝删除非普通目录的提示词 Bundle。"));
+            return Err(String::from(
+                "Refusing to delete a prompt bundle that is not a regular directory.",
+            ));
         }
         ensure_existing_safe_directory_chain(&self.config_root, &prompts_root)?;
         let (canonical_root, canonical_target) =
             canonical_root_and_target(&self.config_root, &target)?;
         if canonical_target == canonical_root {
-            return Err(String::from("拒绝删除配置根目录之外的提示词 Bundle。"));
+            return Err(String::from(
+                "Refusing to delete a prompt bundle outside the configuration root.",
+            ));
         }
         let tombstone =
             prompts_root.join(format!(".{bundle_name}.removed-{}", uuid::Uuid::new_v4()));
-        fs::rename(&target, &tombstone)
-            .map_err(|error| format!("隔离待删除提示词 Bundle 失败：{error}"))?;
+        fs::rename(&target, &tombstone).map_err(|error| {
+            format!("Failed to quarantine the prompt bundle pending deletion: {error}")
+        })?;
         fs::remove_dir_all(&tombstone)
-            .map_err(|error| format!("删除已隔离提示词 Bundle 失败：{error}"))
+            .map_err(|error| format!("Failed to delete the quarantined prompt bundle: {error}"))
     }
 
     /// Resolves one manifest path below the exact configuration root.
@@ -633,7 +652,7 @@ fn ensure_catalog_path(path: &str) -> Result<(), String> {
     if embedded_paths()?.iter().any(|candidate| candidate == path) {
         return Ok(());
     }
-    Err(format!("未知的原生 VMM 资源路径：{path}"))
+    Err(format!("Unknown native VMM resource path: {path}"))
 }
 
 /// Parses one exact manifest resource path into its stable UI dimensions.
@@ -656,7 +675,7 @@ fn describe_resource(path: &str) -> Result<ResourceDescriptor, String> {
             selector: file_name.trim_end_matches(".json").to_owned(),
             file_name: (*file_name).to_owned(),
         }),
-        _ => Err(format!("不支持的原生 VMM 资源路径：{path}")),
+        _ => Err(format!("Unsupported native VMM resource path: {path}")),
     }
 }
 
@@ -691,26 +710,26 @@ fn prompt_bundle_paths(paths: &[String], bundle_name: &str) -> Vec<String> {
 fn validate_settings(settings: &PersistedResourceSettings, paths: &[String]) -> Result<(), String> {
     let prompt_prefix = format!("prompts/{}/", settings.prompt_bundle);
     if !paths.iter().any(|path| path.starts_with(&prompt_prefix)) {
-        return Err(format!("未知的提示词 Bundle：{}", settings.prompt_bundle));
+        return Err(format!("Unknown prompt bundle: {}", settings.prompt_bundle));
     }
     if !paths
         .iter()
         .any(|path| path == &format!("pii_rules/{}.json", settings.pii_language))
     {
-        return Err(format!("未知的 PII 区域：{}", settings.pii_language));
+        return Err(format!("Unknown PII region: {}", settings.pii_language));
     }
     if !paths
         .iter()
         .any(|path| path == &format!("noise_rules/{}.json", settings.noise_language))
     {
-        return Err(format!("未知的噪音区域：{}", settings.noise_language));
+        return Err(format!("Unknown noise region: {}", settings.noise_language));
     }
     if !settings.noise_semantic_threshold.is_finite()
         || settings.noise_semantic_threshold <= 0.0
         || settings.noise_semantic_threshold > 1.0
     {
         return Err(String::from(
-            "噪音语义阈值必须是大于 0 且不超过 1 的有限数值。",
+            "The noise semantic threshold must be a finite number greater than 0 and at most 1.",
         ));
     }
     Ok(())
@@ -730,7 +749,7 @@ fn select_resource_for_validation(
             settings.noise_language = descriptor.selector;
         }
         "pii" | "noise" => {}
-        _ => return Err(format!("无法校验原生 VMM 资源：{path}")),
+        _ => return Err(format!("Cannot validate native VMM resource: {path}")),
     }
     Ok(())
 }
@@ -789,50 +808,68 @@ fn read_optional_regular_file(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(format!(
-                "检查原生 VMM 配置根目录失败 `{}`：{error}",
+                "Failed to inspect the native VMM configuration root `{}`: {error}",
                 config_root.display()
             ));
         }
     };
     if !root_metadata.file_type().is_dir() || metadata_is_link_or_reparse(&root_metadata) {
-        return Err(String::from("原生 VMM 配置根目录不是安全的普通目录。"));
+        return Err(String::from(
+            "The native VMM configuration root is not a safe regular directory.",
+        ));
     }
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(format!(
-                "检查原生 VMM 配置文件失败 `{}`：{error}",
+                "Failed to inspect the native VMM configuration file `{}`: {error}",
                 path.display()
             ));
         }
     };
     if !metadata.file_type().is_file() || metadata_is_link_or_reparse(&metadata) {
-        return Err(format!("原生 VMM 配置路径不是普通文件：{}", path.display()));
+        return Err(format!(
+            "The native VMM configuration path is not a regular file: {}",
+            path.display()
+        ));
     }
     ensure_existing_safe_directory_chain(
         config_root,
-        path.parent()
-            .ok_or_else(|| format!("原生 VMM 配置文件缺少父目录：{}", path.display()))?,
+        path.parent().ok_or_else(|| {
+            format!(
+                "The native VMM configuration file is missing its parent directory: {}",
+                path.display()
+            )
+        })?,
     )?;
     ensure_canonical_path_within_root(config_root, path)?;
     if max_bytes > 0 && metadata.len() > max_bytes {
-        return Err(format!("原生 VMM 配置文件超过大小限制：{}", path.display()));
+        return Err(format!(
+            "The native VMM configuration file exceeds the size limit: {}",
+            path.display()
+        ));
     }
     if max_bytes == 0 {
         return Ok(Some(Vec::new()));
     }
-    fs::read(path)
-        .map(Some)
-        .map_err(|error| format!("读取原生 VMM 配置文件失败 `{}`：{error}", path.display()))
+    fs::read(path).map(Some).map_err(|error| {
+        format!(
+            "Failed to read the native VMM configuration file `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 /// Publishes one complete file using a synchronized same-directory temporary file.
 /// 使用已同步的同目录临时文件发布一份完整文件。
 fn persist_file_atomically(config_root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("原生 VMM 配置文件缺少父目录：{}", path.display()))?;
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "The native VMM configuration file is missing its parent directory: {}",
+            path.display()
+        )
+    })?;
     ensure_safe_directory(config_root, parent)?;
     match fs::symlink_metadata(path) {
         Ok(metadata)
@@ -842,50 +879,58 @@ fn persist_file_atomically(config_root: &Path, path: &Path, bytes: &[u8]) -> Res
         }
         Ok(_) => {
             return Err(format!(
-                "拒绝覆盖非普通原生 VMM 配置文件：{}",
+                "Refusing to overwrite a native VMM configuration file that is not a regular file: {}",
                 path.display()
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(format!(
-                "检查原生 VMM 配置目标失败 `{}`：{error}",
+                "Failed to inspect the native VMM configuration target `{}`: {error}",
                 path.display()
             ));
         }
     }
-    let mut temporary = NamedTempFile::new_in(parent)
-        .map_err(|error| format!("创建原生 VMM 配置暂存文件失败：{error}"))?;
-    temporary
-        .write_all(bytes)
-        .map_err(|error| format!("写入原生 VMM 配置暂存文件失败：{error}"))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|error| format!("同步原生 VMM 配置暂存文件失败：{error}"))?;
-    temporary
-        .persist(path)
-        .map(|_| ())
-        .map_err(|error| format!("发布原生 VMM 配置文件失败：{}", error.error))
+    let mut temporary = NamedTempFile::new_in(parent).map_err(|error| {
+        format!("Failed to create the native VMM configuration staging file: {error}")
+    })?;
+    temporary.write_all(bytes).map_err(|error| {
+        format!("Failed to write the native VMM configuration staging file: {error}")
+    })?;
+    temporary.as_file().sync_all().map_err(|error| {
+        format!("Failed to sync the native VMM configuration staging file: {error}")
+    })?;
+    temporary.persist(path).map(|_| ()).map_err(|error| {
+        format!(
+            "Failed to publish the native VMM configuration file: {}",
+            error.error
+        )
+    })
 }
 
 /// Creates and validates one exact directory below the non-linked configuration root.
 /// 创建并校验非链接配置根目录下的一个准确目录。
 fn ensure_safe_directory(config_root: &Path, directory: &Path) -> Result<(), String> {
     fs::create_dir_all(config_root)
-        .map_err(|error| format!("创建原生 VMM 配置根目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the native VMM configuration root: {error}"))?;
     let root_metadata = fs::symlink_metadata(config_root)
-        .map_err(|error| format!("检查原生 VMM 配置根目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to inspect the native VMM configuration root: {error}"))?;
     if !root_metadata.file_type().is_dir() || metadata_is_link_or_reparse(&root_metadata) {
-        return Err(String::from("原生 VMM 配置根目录不是安全的普通目录。"));
+        return Err(String::from(
+            "The native VMM configuration root is not a safe regular directory.",
+        ));
     }
-    let relative = directory
-        .strip_prefix(config_root)
-        .map_err(|_| String::from("原生 VMM 配置子目录不在配置根目录内。"))?;
+    let relative = directory.strip_prefix(config_root).map_err(|_| {
+        String::from(
+            "The native VMM configuration subdirectory is not inside the configuration root.",
+        )
+    })?;
     let mut current = config_root.to_path_buf();
     for component in relative.components() {
         let std::path::Component::Normal(segment) = component else {
-            return Err(String::from("原生 VMM 配置子目录包含非法路径片段。"));
+            return Err(String::from(
+                "The native VMM configuration subdirectory contains an invalid path segment.",
+            ));
         };
         current.push(segment);
         match fs::symlink_metadata(&current) {
@@ -893,28 +938,32 @@ fn ensure_safe_directory(config_root: &Path, directory: &Path) -> Result<(), Str
                 if metadata.file_type().is_dir() && !metadata_is_link_or_reparse(&metadata) => {}
             Ok(_) => {
                 return Err(format!(
-                    "原生 VMM 配置子目录不是安全的普通目录：{}",
+                    "The native VMM configuration subdirectory is not a safe regular directory: {}",
                     current.display()
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&current)
-                    .map_err(|error| format!("创建原生 VMM 配置子目录失败：{error}"))?;
+                fs::create_dir(&current).map_err(|error| {
+                    format!("Failed to create the native VMM configuration subdirectory: {error}")
+                })?;
             }
             Err(error) => {
                 return Err(format!(
-                    "检查原生 VMM 配置子目录失败 `{}`：{error}",
+                    "Failed to inspect the native VMM configuration subdirectory `{}`: {error}",
                     current.display()
                 ));
             }
         }
     }
     let canonical_root = fs::canonicalize(config_root)
-        .map_err(|error| format!("解析原生 VMM 配置根目录失败：{error}"))?;
-    let canonical_directory = fs::canonicalize(directory)
-        .map_err(|error| format!("解析原生 VMM 配置子目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to resolve the native VMM configuration root: {error}"))?;
+    let canonical_directory = fs::canonicalize(directory).map_err(|error| {
+        format!("Failed to resolve the native VMM configuration subdirectory: {error}")
+    })?;
     if !canonical_directory.starts_with(&canonical_root) {
-        return Err(String::from("原生 VMM 配置子目录越过了配置根目录。"));
+        return Err(String::from(
+            "The native VMM configuration subdirectory escapes the configuration root.",
+        ));
     }
     Ok(())
 }
@@ -925,23 +974,28 @@ fn ensure_existing_safe_directory_chain(
     config_root: &Path,
     directory: &Path,
 ) -> Result<(), String> {
-    let relative = directory
-        .strip_prefix(config_root)
-        .map_err(|_| String::from("原生 VMM 配置目录不在配置根目录内。"))?;
+    let relative = directory.strip_prefix(config_root).map_err(|_| {
+        String::from("The native VMM configuration directory is not inside the configuration root.")
+    })?;
     let mut current = config_root.to_path_buf();
     for component in std::iter::once(None).chain(relative.components().map(Some)) {
         if let Some(component) = component {
             let std::path::Component::Normal(segment) = component else {
-                return Err(String::from("原生 VMM 配置目录包含非法路径片段。"));
+                return Err(String::from(
+                    "The native VMM configuration directory contains an invalid path segment.",
+                ));
             };
             current.push(segment);
         }
         let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            format!("检查原生 VMM 配置目录失败 `{}`：{error}", current.display())
+            format!(
+                "Failed to inspect the native VMM configuration directory `{}`: {error}",
+                current.display()
+            )
         })?;
         if !metadata.file_type().is_dir() || metadata_is_link_or_reparse(&metadata) {
             return Err(format!(
-                "原生 VMM 配置目录不是安全的普通目录：{}",
+                "The native VMM configuration directory is not a safe regular directory: {}",
                 current.display()
             ));
         }
@@ -956,12 +1010,16 @@ fn canonical_root_and_target(
     target: &Path,
 ) -> Result<(PathBuf, PathBuf), String> {
     let canonical_root = fs::canonicalize(config_root)
-        .map_err(|error| format!("解析原生 VMM 配置根目录失败：{error}"))?;
-    let canonical_target = fs::canonicalize(target)
-        .map_err(|error| format!("解析原生 VMM 配置目标失败 `{}`：{error}", target.display()))?;
+        .map_err(|error| format!("Failed to resolve the native VMM configuration root: {error}"))?;
+    let canonical_target = fs::canonicalize(target).map_err(|error| {
+        format!(
+            "Failed to resolve the native VMM configuration target `{}`: {error}",
+            target.display()
+        )
+    })?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(format!(
-            "原生 VMM 配置目标越过了配置根目录：{}",
+            "The native VMM configuration target escapes the configuration root: {}",
             target.display()
         ));
     }
@@ -1085,7 +1143,7 @@ mod tests {
                 false,
             )
             .expect_err("missing second confirmation must fail");
-        assert!(error.contains("再次确认"));
+        assert!(error.contains("confirming again"));
 
         let pii_error = store
             .write_file(
@@ -1096,7 +1154,7 @@ mod tests {
                 true,
             )
             .expect_err("PII edit without unlock confirmation must fail");
-        assert!(pii_error.contains("确认文件用途"));
+        assert!(pii_error.contains("confirming the file purpose"));
     }
 
     /// Verifies oversized override files are rejected before their contents are read into memory.
@@ -1116,7 +1174,10 @@ mod tests {
         let error = store
             .read_file(path)
             .expect_err("oversized override must fail before reading");
-        assert!(error.contains("超过大小限制"), "unexpected error: {error}");
+        assert!(
+            error.contains("exceeds the size limit"),
+            "unexpected error: {error}"
+        );
     }
 
     /// Verifies an existing non-directory configuration root is rejected during reads.
@@ -1130,6 +1191,6 @@ mod tests {
         let error = store
             .catalog()
             .expect_err("non-directory config root must fail");
-        assert!(error.contains("不是安全的普通目录"));
+        assert!(error.contains("not a safe regular directory"));
     }
 }

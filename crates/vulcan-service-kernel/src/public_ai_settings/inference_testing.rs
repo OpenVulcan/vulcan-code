@@ -322,8 +322,11 @@ fn settings_embedding_dimensions(
     if consumer_profile_id == crate::vce::VCE_CONSUMER_PROFILE_ID {
         // dimension must be explicitly saved before testing VCE or admitting its engine.
         // dimension 必须在测试 VCE 或准入引擎前由用户明确保存。
-        let dimension =
-            dimensions.ok_or_else(|| String::from("请先在语义引擎设置中确认并保存向量维度。"))?;
+        let dimension = dimensions.ok_or_else(|| {
+            String::from(
+                "Confirm and save the vector dimension in the semantic engine settings first.",
+            )
+        })?;
         crate::vce::validate_explicit_embedding_dimension(capabilities, dimension)?;
     }
     Ok(dimensions)

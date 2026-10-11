@@ -268,23 +268,23 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
     let mut tooltip_rows = Vec::new();
     if let Some(context_budget) = context_budget {
         tooltip_rows.push(format!(
-            "输入占用：{:.0}% · {}",
+            "Input usage: {:.0}% · {}",
             context_budget.usage_percent(),
             context_budget.severity.display_label(),
         ));
-        tooltip_rows.push(format!("输入窗口：{}", context_budget.usage_label()));
+        tooltip_rows.push(format!("Input window: {}", context_budget.usage_label()));
         tooltip_rows.push(format!(
-            "预算来源：{}",
+            "Budget source: {}",
             context_budget.accounting_source.display_label()
         ));
         if let Some(warning_code) = context_budget.accounting_warning_code.as_deref() {
             tooltip_rows.push(format!(
-                "用量提示：当前值不是精确 Provider 用量（{warning_code}）。"
+                "Usage note: the current value is not exact provider usage ({warning_code})."
             ));
         }
         tooltip_rows.extend(context_budget_breakdown_rows(context_budget));
         tooltip_rows.push(format!(
-            "预留：输出 {} · 推理 {} · 压缩 {}",
+            "Reserved: output {} · reasoning {} · compaction {}",
             context_budget.reserved_output_tokens,
             context_budget.reserved_reasoning_tokens,
             context_budget.reserved_compaction_tokens
@@ -293,22 +293,24 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
             let reason = context_budget
                 .baseline_mismatch_reason
                 .as_deref()
-                .unwrap_or("当前运行时上下文与压缩锚点不一致");
-            tooltip_rows.push(format!("恢复：基线失配（{reason}），已回退完整上下文。"));
+                .unwrap_or("The current runtime context disagrees with the compaction anchor");
+            tooltip_rows.push(format!(
+                "Recovery: baseline mismatch ({reason}); fell back to the full context."
+            ));
         }
         if let Some(usage) = context_budget.observed_usage.as_ref() {
-            tooltip_rows.push(format!("最近 API：{}", provider_usage_label(usage)));
+            tooltip_rows.push(format!("Latest API: {}", provider_usage_label(usage)));
         }
     } else {
         tooltip_rows.push(String::from(
-            "请求拆分：暂无历史用量，下一次请求将先显示字符粗估",
+            "Request breakdown: no usage history yet; the next request shows a character estimate first",
         ));
     }
 
     tooltip_rows.push(if v1_usage_facts.has_compaction {
-        String::from("压缩状态：已使用摘要前文")
+        String::from("Compaction state: using the summarized history")
     } else {
-        String::from("压缩状态：尚未触发")
+        String::from("Compaction state: not triggered yet")
     });
 
     let used_tokens = context_budget
@@ -333,7 +335,6 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
         baseline_matches_active_runtime: context_budget
             .map(|budget| budget.baseline_matches_active_runtime)
             .unwrap_or(true),
-        tooltip_title: String::from("上下文容量"),
         tooltip_rows,
     })
 }
@@ -394,12 +395,12 @@ fn context_usage_breakdown_items(
         return Vec::new();
     };
     let categories = [
-        ("messages", "消息", message_units),
-        ("system-tools", "系统工具", system_tool_units),
-        ("mcp-tools", "MCP 工具", mcp_tool_units),
-        ("other", "其他", other_units),
-        ("skills", "技能", skill_units),
-        ("system-prompt", "系统提示词", system_prompt_units),
+        ("messages", "Messages", message_units),
+        ("system-tools", "System tools", system_tool_units),
+        ("mcp-tools", "MCP tools", mcp_tool_units),
+        ("other", "Other", other_units),
+        ("skills", "Skills", skill_units),
+        ("system-prompt", "System prompt", system_prompt_units),
     ];
     let non_zero_categories = categories
         .into_iter()
@@ -656,16 +657,16 @@ pub(crate) fn historical_context_budget_severity(usage_ratio: f32) -> ContextBud
 /// 构建提示浮层使用的上下文预算 Token 拆分行。
 pub(crate) fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapshot) -> Vec<String> {
     let raw_parts = [
-        ("系统", context_budget.estimated_system_tokens),
-        ("历史", context_budget.estimated_history_tokens),
-        ("当前", context_budget.estimated_prompt_tokens),
-        ("工具", context_budget.estimated_tool_tokens),
+        ("System", context_budget.estimated_system_tokens),
+        ("History", context_budget.estimated_history_tokens),
+        ("Current", context_budget.estimated_prompt_tokens),
+        ("Tools", context_budget.estimated_tool_tokens),
     ];
     let raw_total = raw_parts
         .iter()
         .fold(0_usize, |total, (_, value)| total.saturating_add(*value));
     let prediction_row = format!(
-        "预测拆分（字符估算）：{}",
+        "Estimated breakdown (character estimate): {}",
         context_budget_token_breakdown_text(&raw_parts, None)
     );
 
@@ -680,9 +681,11 @@ pub(crate) fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapsh
     let calibrated =
         context_budget_token_breakdown_text(&raw_parts, Some((observed_input, raw_total)));
     vec![
-        String::from("说明：API实测为准；拆分已按实测输入比例校准。"),
+        String::from(
+            "Note: API measurements are authoritative; the breakdown is calibrated to the measured input ratio.",
+        ),
         prediction_row,
-        format!("校准拆分（实测）：{calibrated}"),
+        format!("Calibrated breakdown (measured): {calibrated}"),
     ]
 }
 
@@ -776,25 +779,25 @@ fn checked_v1_token_dimension(value: Option<u64>) -> Option<Option<usize>> {
 pub(crate) fn provider_usage_label(usage: &vulcan_core::types::ProviderUsageSnapshot) -> String {
     let mut parts = Vec::new();
     if let Some(input) = usage.input_tokens {
-        parts.push(format!("输入 {input}"));
+        parts.push(format!("Input {input}"));
     }
     if let Some(output) = usage.output_tokens {
-        parts.push(format!("输出 {output}"));
+        parts.push(format!("Output {output}"));
     }
     if let Some(reasoning) = usage.reasoning_tokens {
-        parts.push(format!("推理 {reasoning}"));
+        parts.push(format!("Reasoning {reasoning}"));
     }
     if let Some(total) = usage.total_tokens {
-        parts.push(format!("总计 {total}"));
+        parts.push(format!("Total {total}"));
     }
     if let Some(cached) = usage.cached_input_tokens {
-        parts.push(format!("缓存命中 {cached}"));
+        parts.push(format!("Cache hits {cached}"));
     }
     if let Some(created) = usage.cache_creation_input_tokens {
-        parts.push(format!("缓存写入 {created}"));
+        parts.push(format!("Cache writes {created}"));
     }
     if parts.is_empty() {
-        String::from("无可用 Token 数据")
+        String::from("No token data available")
     } else {
         parts.join(" / ")
     }
@@ -872,9 +875,15 @@ mod tests {
         assert_eq!(
             context_budget_breakdown_rows(&context_budget),
             vec![
-                String::from("说明：API实测为准；拆分已按实测输入比例校准。"),
-                String::from("预测拆分（字符估算）：系统 10 / 历史 30 / 当前 20 / 工具 40"),
-                String::from("校准拆分（实测）：系统 20 / 历史 60 / 当前 40 / 工具 80"),
+                String::from(
+                    "Note: API measurements are authoritative; the breakdown is calibrated to the measured input ratio."
+                ),
+                String::from(
+                    "Estimated breakdown (character estimate): System 10 / History 30 / Current 20 / Tools 40"
+                ),
+                String::from(
+                    "Calibrated breakdown (measured): System 20 / History 60 / Current 40 / Tools 80"
+                ),
             ]
         );
     }
@@ -889,7 +898,7 @@ mod tests {
         assert_eq!(
             context_budget_breakdown_rows(&context_budget),
             vec![String::from(
-                "预测拆分（字符估算）：系统 10 / 历史 30 / 当前 20 / 工具 40"
+                "Estimated breakdown (character estimate): System 10 / History 30 / Current 20 / Tools 40"
             )]
         );
     }
@@ -986,7 +995,7 @@ mod tests {
             assert!(
                 live.tooltip_rows
                     .iter()
-                    .all(|row| !row.contains("不是精确"))
+                    .all(|row| !row.contains("not exact provider usage"))
             );
         }
         assert_eq!(live_budgets[&session_id].active_context_tokens, 682_800);

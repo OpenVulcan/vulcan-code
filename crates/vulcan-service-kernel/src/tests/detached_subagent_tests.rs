@@ -612,7 +612,7 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
     assert!(
         outcome
             .rejection_error()
-            .is_some_and(|error| error.contains("已停止本次请求"))
+            .is_some_and(|error| error.contains("this request was stopped"))
     );
     // snapshot proves the rejected attempt remains durable in the process-local runtime state.
     // snapshot 证明被拒绝尝试仍保留在进程内运行态中。

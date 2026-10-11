@@ -359,10 +359,12 @@ fn luaskills_startup_warning_message(error: &str) -> String {
     .any(|prefix| error.starts_with(prefix))
     {
         return format!(
-            "LuaSkills 配置无法加载：{error}。请备份并手动修复该配置文件，然后重启应用；原文件不会被自动覆盖。"
+            "The LuaSkills configuration cannot be loaded: {error}. Back up and manually repair the configuration file, then restart the app; the original file is never overwritten automatically."
         );
     }
-    String::from("LuaSkills 不可用，插件内容组件继续运行；请查看启动日志了解原因。")
+    String::from(
+        "LuaSkills is unavailable; plugin content components keep running. See the startup log for the reason.",
+    )
 }
 
 /// Removes manual definitions newly owned by the verified staged startup catalog.
@@ -455,7 +457,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "service-process",
                 "Core Service",
-                format!("自定义供应商独立清单事务迁移失败：{error}"),
+                format!("The transactional migration of custom providers to standalone manifests failed: {error}"),
             )
         })?;
         public_ai_configuration.custom_provider_file_refs = public_ai_configuration
@@ -464,7 +466,7 @@ fn run_service_bootstrap(
             .cloned()
             .collect();
         logs.push(format!(
-            "已事务迁移 {} 个自定义供应商到独立清单：{}",
+            "Migrated {} custom providers to standalone manifests transactionally: {}",
             legacy_custom_provider_ids.len(),
             legacy_custom_provider_ids.join(", ")
         ));
@@ -480,20 +482,32 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Core Service 已启动",
+                    "Core Service started",
                 ),
                 (
                     "vldb",
                     StartupStepStatus::Running,
-                    "正在初始化 VLDB/controller 数据平面",
+                    "Initializing the VLDB/controller data plane",
                 ),
-                ("luaskills", StartupStepStatus::Pending, "等待 VLDB 就绪"),
-                ("mcp", StartupStepStatus::Pending, "等待 LuaSkills 就绪"),
-                ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
+                (
+                    "luaskills",
+                    StartupStepStatus::Pending,
+                    "Waiting for VLDB to be ready",
+                ),
+                (
+                    "mcp",
+                    StartupStepStatus::Pending,
+                    "Waiting for LuaSkills to be ready",
+                ),
+                (
+                    "plugins",
+                    StartupStepStatus::Pending,
+                    "Waiting for the plugin catalog initialization",
+                ),
                 (
                     "workspace",
                     StartupStepStatus::Pending,
-                    "等待工作区数据库载入",
+                    "Waiting for the workspace database to load",
                 ),
             ],
         )
@@ -510,7 +524,7 @@ fn run_service_bootstrap(
                 ServiceBootstrapError::new(
                     "service-process",
                     "Core Service",
-                    format!("创建 Core Service tokio runtime 失败：{error}"),
+                    format!("Failed to create the Core Service tokio runtime: {error}"),
                 )
             })?,
     );
@@ -567,24 +581,32 @@ fn run_service_bootstrap(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Core Service 已启动",
+                        "Core Service started",
                     ),
                     (
                         "vldb",
                         StartupStepStatus::Ready,
-                        "VLDB/controller 数据平面已就绪",
+                        "VLDB/controller data plane ready",
                     ),
                     (
                         "luaskills",
                         StartupStepStatus::Running,
-                        "正在初始化 LuaSkills 引擎与技能根",
+                        "Initializing the LuaSkills engine and skill roots",
                     ),
-                    ("mcp", StartupStepStatus::Pending, "等待 MCP Runtime"),
-                    ("plugins", StartupStepStatus::Pending, "等待插件目录初始化"),
+                    (
+                        "mcp",
+                        StartupStepStatus::Pending,
+                        "Waiting for the MCP runtime",
+                    ),
+                    (
+                        "plugins",
+                        StartupStepStatus::Pending,
+                        "Waiting for the plugin catalog initialization",
+                    ),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
-                        "等待工作区数据库载入",
+                        "Waiting for the workspace database to load",
                     ),
                 ],
             )
@@ -651,7 +673,7 @@ fn run_service_bootstrap(
                             Some(runtime_handle),
                             catalog,
                             StartupStepStatus::Ready,
-                            String::from("LuaSkills 引擎与技能目录已就绪"),
+                            String::from("LuaSkills engine and skill catalog ready"),
                         )
                     }
                     Err(error) => {
@@ -662,7 +684,9 @@ fn run_service_bootstrap(
                             Some(runtime_handle),
                             crate::workspace_persistence_versions::empty_luaskills_catalog(),
                             StartupStepStatus::Warning,
-                            String::from("LuaSkills 目录不可用，插件内容组件继续运行"),
+                            String::from(
+                                "The LuaSkills catalog is unavailable; plugin content components keep running",
+                            ),
                         )
                     }
                 }
@@ -732,12 +756,12 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Core Service 已启动",
+                    "Core Service started",
                 ),
                 (
                     "vldb",
                     StartupStepStatus::Ready,
-                    "VLDB/controller 数据平面已就绪",
+                    "VLDB/controller data plane ready",
                 ),
                 (
                     "luaskills",
@@ -747,17 +771,17 @@ fn run_service_bootstrap(
                 (
                     "mcp",
                     StartupStepStatus::Running,
-                    "正在初始化 Agent MCP Runtime 与插件 Hook 运行时",
+                    "Initializing the agent MCP runtime and plugin hook runtime",
                 ),
                 (
                     "plugins",
                     StartupStepStatus::Running,
-                    "正在后台预热已启用插件 Hook 运行时",
+                    "Warming up the enabled plugin hook runtimes in the background",
                 ),
                 (
                     "workspace",
                     StartupStepStatus::Pending,
-                    "等待工作区数据库载入",
+                    "Waiting for the workspace database to load",
                 ),
             ],
         )
@@ -779,12 +803,12 @@ fn run_service_bootstrap(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Core Service 已启动",
+                        "Core Service started",
                     ),
                     (
                         "vldb",
                         StartupStepStatus::Ready,
-                        "VLDB/controller 数据平面已就绪",
+                        "VLDB/controller data plane ready",
                     ),
                     (
                         "luaskills",
@@ -794,17 +818,17 @@ fn run_service_bootstrap(
                     (
                         "mcp",
                         StartupStepStatus::Running,
-                        "正在初始化 Agent MCP Runtime",
+                        "Initializing the agent MCP runtime",
                     ),
                     (
                         "plugins",
                         StartupStepStatus::Running,
-                        "正在等待后台插件 Hook 运行时预热完成",
+                        "Waiting for the background plugin hook runtime warm-up to finish",
                     ),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
-                        "等待插件运行时初始化",
+                        "Waiting for the plugin runtime initialization",
                     ),
                 ],
             )
@@ -818,14 +842,14 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "plugins",
                 "Plugin Hook Runtime",
-                format!("插件 Hook 运行时预热线程失败：{error}"),
+                format!("The plugin hook runtime warm-up thread failed: {error}"),
             )
         })?;
     let prewarmed_plugin_ids = prewarmed_plugin_ids.map_err(|error| {
         ServiceBootstrapError::new(
             "plugins",
             "Plugin Hook Runtime",
-            format!("预热已启用插件 Hook 运行时失败：{error}"),
+            format!("Failed to warm up the enabled plugin hook runtimes: {error}"),
         )
     })?;
     trace_bootstrap_stage(
@@ -868,7 +892,7 @@ fn run_service_bootstrap(
             .errors
             .push(vulcan_task_session::SubagentCatalogLoadError {
                 path: vulcan_plugin_catalog.root.clone(),
-                message: format!("合并插件智能体目录失败：{error}"),
+                message: format!("Failed to merge the plugin agent catalog: {error}"),
             });
     }
     for error in &subagent_catalog.errors {
@@ -951,12 +975,12 @@ fn run_service_bootstrap(
                     (
                         "service-process",
                         StartupStepStatus::Ready,
-                        "Core Service 已启动",
+                        "Core Service started",
                     ),
                     (
                         "vldb",
                         StartupStepStatus::Ready,
-                        "VLDB/controller 数据平面已就绪",
+                        "VLDB/controller data plane ready",
                     ),
                     (
                         "luaskills",
@@ -966,17 +990,17 @@ fn run_service_bootstrap(
                     (
                         "mcp",
                         StartupStepStatus::Running,
-                        "正在初始化 Agent MCP Runtime",
+                        "Initializing the agent MCP runtime",
                     ),
                     (
                         "plugins",
                         StartupStepStatus::Ready,
-                        "插件目录与已启用 Hook 运行时已就绪",
+                        "Plugin catalog and enabled hook runtimes ready",
                     ),
                     (
                         "workspace",
                         StartupStepStatus::Pending,
-                        "等待 Agent MCP Runtime 就绪",
+                        "Waiting for the agent MCP runtime to be ready",
                     ),
                 ],
             )
@@ -987,7 +1011,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "mcp",
                 "MCP Runtime",
-                format!("Agent MCP Runtime 配置无效：{error}"),
+                format!("Invalid agent MCP runtime configuration: {error}"),
             )
         })?;
     // MCP OAuth tokens persist in the OS secure store; install before any MCP session exists.
@@ -1023,7 +1047,7 @@ fn run_service_bootstrap(
         ServiceBootstrapError::new(
             "mcp",
             "Plugin MCP Runtime",
-            format!("插件 MCP Runtime 配置无效：{error}"),
+            format!("Invalid plugin MCP runtime configuration: {error}"),
         )
     })?;
     // mcp_started_at measures the single Agent MCP runtime bootstrap and its catalog projection.
@@ -1041,7 +1065,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "mcp",
                 "MCP Runtime",
-                format!("Agent MCP Runtime 初始化失败：{error}"),
+                format!("Agent MCP runtime initialization failed: {error}"),
             )
         })?;
     // The initial unpublished bridge shares all original admission and cleanup registries.
@@ -1057,7 +1081,7 @@ fn run_service_bootstrap(
         ServiceBootstrapError::new(
             "workspace",
             "Workspace",
-            format!("VMM hook 注册失败：{error}"),
+            format!("VMM hook registration failed: {error}"),
         )
     })?;
     synchronize_vulcan_plugin_hooks(
@@ -1069,7 +1093,7 @@ fn run_service_bootstrap(
         ServiceBootstrapError::new(
             "workspace",
             "Workspace",
-            format!("Vulcan Plugin hook 注册失败：{error}"),
+            format!("Vulcan plugin hook registration failed: {error}"),
         )
     })?;
     // credentialStore binds every new credential mutation to the Controller-owned application SQLite database.
@@ -1085,7 +1109,7 @@ fn run_service_bootstrap(
                 ServiceBootstrapError::new(
                     "workspace",
                     "Workspace",
-                    format!("公共 AI 运行时初始化失败：{error}"),
+                    format!("Public AI runtime initialization failed: {error}"),
                 )
             },
         )?,
@@ -1113,12 +1137,12 @@ fn run_service_bootstrap(
         ServiceBootstrapError::new(
             "workspace",
             "Workspace",
-            format!("系统清单恢复链执行失败：{error}"),
+            format!("The system manifest recovery chain failed: {error}"),
         )
     })?;
     if !manifest_restores.is_empty() {
         logs.push(format!(
-            "已从持久化存储恢复 {} 个系统供应商清单：{}",
+            "Restored {} system provider manifests from persistent storage: {}",
             manifest_restores.len(),
             manifest_restores
                 .iter()
@@ -1152,7 +1176,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "workspace",
                 "Workspace",
-                format!("保存系统模型接管后的供应商配置失败：{error}"),
+                format!("Failed to save the provider configuration after the system model takeover: {error}"),
             )
         })?;
     }
@@ -1161,7 +1185,7 @@ fn run_service_bootstrap(
             guard.startup.model_reconciliation_notices = model_reconciliation_notices.clone();
         }
         logs.push(format!(
-            "系统模型已接管 {} 条同 ID 手工定义。",
+            "The system models took over {} same-ID manual definitions.",
             model_reconciliation_notices.len()
         ));
     }
@@ -1176,7 +1200,9 @@ fn run_service_bootstrap(
                 ServiceBootstrapError::new(
                     "workspace",
                     "Workspace",
-                    format!("供应商清单安全同步客户端初始化失败：{error}"),
+                    format!(
+                        "Failed to initialize the provider manifest secure sync client: {error}"
+                    ),
                 )
             })?;
         let sync_service = crate::provider_manifest_sync::ProviderManifestSyncService::new(
@@ -1198,7 +1224,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "workspace",
                 "Workspace",
-                format!("供应商异步任务恢复状态加载失败：{error}"),
+                format!("Failed to load the provider async task recovery state: {error}"),
             )
         })?;
     refresh_public_ai_catalogs_at_startup(
@@ -1214,7 +1240,7 @@ fn run_service_bootstrap(
         ServiceBootstrapError::new(
             "workspace",
             "Workspace",
-            format!("系统清单恢复事件发布失败：{error}"),
+            format!("Failed to publish the system manifest recovery event: {error}"),
         )
     })?;
     // providerTaskRecoveryRuntime resumes only confirmed task identifiers and never replays
@@ -1397,14 +1423,14 @@ fn run_service_bootstrap(
         let native_vmm_data_plane =
             vulcan_workspace_store::vmm_data_plane::bootstrap_vmm_data_plane(&controller_runtime)
                 .await
-                .map_err(|error| format!("原生 VMM 数据平面初始化失败：{error}"))?;
+                .map_err(|error| format!("Native VMM data plane initialization failed: {error}"))?;
         let native_vmm_runtime = Arc::new(
             crate::native_vmm::NativeVmmCoreRuntime::bootstrap(
                 Arc::clone(&internal_ai_port),
                 native_vmm_data_plane.clone(),
             )
             .await
-            .map_err(|error| format!("原生 VMM Core 初始化失败：{error}"))?,
+            .map_err(|error| format!("Native VMM Core initialization failed: {error}"))?,
         );
         // Install committed-content publication before any client or background worker can mutate Core.
         // 在任何客户端或后台工作器可以变更 Core 之前安装已提交内容发布。
@@ -1435,7 +1461,9 @@ fn run_service_bootstrap(
         native_vmm_client
             .prepare_pending_analysis_worker()
             .await
-            .map_err(|error| format!("原生 VMM 待分析队列恢复失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to recover the native VMM pending analysis queue: {error}")
+            })?;
         Ok::<_, String>((native_vmm_maintenance, native_vmm_client))
     });
     let native_vmm_maintenance = match native_vmm_bootstrap.and_then(
@@ -1444,9 +1472,12 @@ fn run_service_bootstrap(
                 native_vmm_client.clone();
             vmm_hook_runtime
                 .install_native_client(Arc::clone(&process_native_vmm_client))
-                .map_err(|error| format!("原生 VMM Hook 客户端安装失败：{error}"))?;
-            vulcan_vmm::install_process_native_vmm_client(process_native_vmm_client)
-                .map_err(|error| format!("原生 VMM 进程客户端安装失败：{error}"))?;
+                .map_err(|error| {
+                    format!("Failed to install the native VMM hook client: {error}")
+                })?;
+            vulcan_vmm::install_process_native_vmm_client(process_native_vmm_client).map_err(
+                |error| format!("Failed to install the native VMM process client: {error}"),
+            )?;
             // The durable worker starts only after every public native client registry accepts it.
             // 仅在全部公开原生客户端注册表接纳后启动耐久工作器。
             native_vmm_client.start_pending_analysis_worker(runtime.handle());
@@ -1543,7 +1574,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "mcp",
                 "Plugin MCP Runtime",
-                format!("插件 MCP 完整发布失败：{error}"),
+                format!("The full plugin MCP publication failed: {error}"),
             )
         })?;
     // Project only after the actual full slot owns every original partition and its business gate is open.
@@ -1575,7 +1606,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "service-process",
                 "Core Service",
-                format!("安装 ask 弹窗事件桥失败：{error}"),
+                format!("Failed to install the ask popup event bridge: {error}"),
             )
         },
     )?;
@@ -1588,7 +1619,7 @@ fn run_service_bootstrap(
             ServiceBootstrapError::new(
                 "service-process",
                 "Core Service",
-                format!("安装工具权限宿主失败：{error}"),
+                format!("Failed to install the tool permission host: {error}"),
             )
         })?;
     agent_runtime
@@ -1616,28 +1647,28 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Core Service 已启动",
+                    "Core Service started",
                 ),
                 (
                     "vldb",
                     StartupStepStatus::Ready,
-                    "VLDB/controller 数据平面已就绪",
+                    "VLDB/controller data plane ready",
                 ),
                 (
                     "luaskills",
                     luaskills_step_status,
                     luaskills_step_message.as_str(),
                 ),
-                ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
+                ("mcp", StartupStepStatus::Ready, "MCP runtime initialized"),
                 (
                     "plugins",
                     StartupStepStatus::Ready,
-                    "插件目录与已启用运行时已就绪",
+                    "Plugin catalog and enabled runtimes ready",
                 ),
                 (
                     "workspace",
                     StartupStepStatus::Running,
-                    "正在载入项目与会话索引",
+                    "Loading the project and session index",
                 ),
             ],
         )
@@ -1657,10 +1688,10 @@ fn run_service_bootstrap(
     )?;
     let workspace_complete = workspace_report.is_complete();
     let workspace_step_message = if workspace_complete {
-        "项目与会话索引已载入".to_string()
+        "Project and session index loaded".to_string()
     } else {
         format!(
-            "索引仅部分载入（{} 项问题），未能读取的会话不代表已删除；详情见启动日志",
+            "The index was only partially loaded ({} issues); unreadable sessions are not deleted; see the startup log for details",
             workspace_report.issues.len()
         )
     };
@@ -1749,23 +1780,23 @@ fn run_service_bootstrap(
                 (
                     "service-process",
                     StartupStepStatus::Ready,
-                    "Core Service 已启动",
+                    "Core Service started",
                 ),
                 (
                     "vldb",
                     StartupStepStatus::Ready,
-                    "VLDB/controller 数据平面已就绪",
+                    "VLDB/controller data plane ready",
                 ),
                 (
                     "luaskills",
                     luaskills_step_status,
                     luaskills_step_message.as_str(),
                 ),
-                ("mcp", StartupStepStatus::Ready, "MCP Runtime 已初始化"),
+                ("mcp", StartupStepStatus::Ready, "MCP runtime initialized"),
                 (
                     "plugins",
                     StartupStepStatus::Ready,
-                    "插件目录与已启用运行时已就绪",
+                    "Plugin catalog and enabled runtimes ready",
                 ),
                 (
                     "workspace",
@@ -1876,7 +1907,7 @@ fn run_service_bootstrap(
     // VCE 启动只保留已创建的服务边界；项目索引必须由用户明确触发。
     let vce_started_at = start_bootstrap_stage("vce");
     logs.push(String::from(
-        "语义引擎服务已准备；项目索引等待用户明确创建或同步。",
+        "The semantic engine service is prepared; project indexes wait for the user to explicitly create or sync them.",
     ));
     trace_bootstrap_stage("vce", vce_started_at, "result=lazy_ready");
     // runtime_guard makes the retained service runtime current while the notify loop is spawned.
@@ -1891,9 +1922,9 @@ fn run_service_bootstrap(
     )
     .map_err(|error| ServiceBootstrapError::new("workspace", "Provider Manifest", error))?
     {
-        true => logs.push(String::from("供应商清单异步启动同步与周期同步任务已启动。")),
+        true => logs.push(String::from("The provider manifest async startup sync and periodic sync tasks started.")),
         false => logs.push(String::from(
-            "供应商清单远端 URL 或受信密钥未配置；未启动自动同步任务。",
+            "The provider manifest remote URL or trusted key is not configured; automatic sync tasks were not started.",
         )),
     }
     crate::agent_skills_watcher::start_agent_skills_catalog_watcher(
@@ -1984,7 +2015,7 @@ fn refresh_public_ai_catalogs_at_startup(
             ServiceBootstrapError::new(
                 "workspace",
                 "Workspace",
-                format!("公共 AI 启动同步运行时创建失败：{error}"),
+                format!("Failed to create the public AI startup sync runtime: {error}"),
             )
         })?;
     // Startup recovery has already staged persisted manifests. Refresh every affected source
@@ -2008,14 +2039,14 @@ fn refresh_public_ai_catalogs_at_startup(
             ServiceBootstrapError::new(
                 "workspace",
                 "Workspace",
-                format!("公共 AI 启动代际发布失败：{error}"),
+                format!("Public AI startup generation publication failed: {error}"),
             )
         })?;
     let catalogs = runtime.catalog_snapshot().map_err(|error| {
         ServiceBootstrapError::new(
             "workspace",
             "Workspace",
-            format!("公共 AI 启动目录读取失败：{error}"),
+            format!("Failed to read the public AI startup catalog: {error}"),
         )
     })?;
     for connection_id in connection_ids {
@@ -2067,17 +2098,25 @@ fn prepare_vulcan_plugin_runtime(
     // bundledPluginRoot and userPluginRoot are managed by Vulcan instead of LuaSkills.
     // bundledPluginRoot 与 userPluginRoot 由 Vulcan 管理，而不是由 LuaSkills 管理。
     let bundled_plugin_root = runtime_assets::resolve_bundled_plugin_root().ok_or_else(|| {
-        ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 内建插件根目录。")
+        ServiceBootstrapError::new(
+            "plugins",
+            "Plugins",
+            "The Vulcan built-in plugin root directory was not found.",
+        )
     })?;
     let user_plugin_root = runtime_assets::resolve_user_plugin_root().ok_or_else(|| {
-        ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件根目录。")
+        ServiceBootstrapError::new(
+            "plugins",
+            "Plugins",
+            "The Vulcan user plugin root directory was not found.",
+        )
     })?;
     std::fs::create_dir_all(&bundled_plugin_root).map_err(|error| {
         ServiceBootstrapError::new(
             "plugins",
             "Plugins",
             format!(
-                "创建内建插件根 `{}` 失败：{error}",
+                "Failed to create the built-in plugin root `{}`: {error}",
                 bundled_plugin_root.display()
             ),
         )
@@ -2087,7 +2126,7 @@ fn prepare_vulcan_plugin_runtime(
             "plugins",
             "Plugins",
             format!(
-                "创建用户插件根 `{}` 失败：{error}",
+                "Failed to create the user plugin root `{}`: {error}",
                 user_plugin_root.display()
             ),
         )
@@ -2095,7 +2134,11 @@ fn prepare_vulcan_plugin_runtime(
     // pluginStateRoot is shared by the manager metadata and in-process data isolation.
     // pluginStateRoot 由管理器元数据与 Controller 后端数据隔离共同使用。
     let plugin_state_root = runtime_assets::resolve_user_plugin_state_root().ok_or_else(|| {
-        ServiceBootstrapError::new("plugins", "Plugins", "未找到 Vulcan 用户插件状态根目录。")
+        ServiceBootstrapError::new(
+            "plugins",
+            "Plugins",
+            "The Vulcan user plugin state root directory was not found.",
+        )
     })?;
     // bridge_package_root is only consumed by execution plugins; content plugins remain independent from this optional adapter path.
     // bridge_package_root 仅供执行型插件使用；内容型插件不依赖此可选适配器路径。
@@ -2119,7 +2162,7 @@ fn prepare_vulcan_plugin_runtime(
             ServiceBootstrapError::new(
                 "plugins",
                 "Plugins",
-                "未找到 Vulcan 共享 Python/Node 发行根目录。",
+                "The Vulcan shared Python/Node distribution root directory was not found.",
             )
         })?,
         plugin_state_root.clone(),
@@ -2127,7 +2170,7 @@ fn prepare_vulcan_plugin_runtime(
             ServiceBootstrapError::new(
                 "plugins",
                 "Plugins",
-                "未找到 Vulcan 用户插件运行环境根目录。",
+                "The Vulcan user plugin runtime environment root directory was not found.",
             )
         })?,
     );
@@ -2139,7 +2182,7 @@ fn prepare_vulcan_plugin_runtime(
             ServiceBootstrapError::new(
                 "plugins",
                 "Vulcan Plugins",
-                format!("初始化插件恢复门控失败：{error}"),
+                format!("Failed to initialize the plugin recovery gate: {error}"),
             )
         })?;
     // Read settings outside the short service gate; absence means a documented metadata-only manager.
@@ -2151,7 +2194,7 @@ fn prepare_vulcan_plugin_runtime(
                     ServiceBootstrapError::new(
                         "plugins",
                         "Vulcan Plugins",
-                        format!("读取插件运行时预算失败：{error}"),
+                        format!("Failed to read the plugin runtime budget: {error}"),
                     )
                 },
             )?,
@@ -2167,14 +2210,18 @@ fn prepare_vulcan_plugin_runtime(
             if let Some(luaskills_runtime) = luaskills_runtime {
                 vulcan_plugin_runtime
                     .attach_runtime_engine(Arc::clone(&luaskills_runtime.plugin_engine))
-                    .map_err(|error| format!("附加 Vulcan 插件执行运行时失败：{error}"))?;
+                    .map_err(|error| {
+                        format!("Failed to attach the Vulcan plugin execution runtime: {error}")
+                    })?;
                 // The optional budget exists exactly when the declared engine exists, established above.
                 // 可选预算恰好在声明引擎存在时存在，该关系已在上方建立。
                 let settings = plugin_runtime_settings
                     .expect("formal settings exist for the declared plugin engine");
                 vulcan_plugin_runtime
                     .initialize_formal_runtime(settings)
-                    .map_err(|error| format!("初始化插件正式运行时失败：{error}"))?;
+                    .map_err(|error| {
+                        format!("Failed to initialize the formal plugin runtime: {error}")
+                    })?;
             }
             Ok(())
         },
@@ -2208,7 +2255,7 @@ fn prepare_vulcan_plugin_runtime(
             ServiceBootstrapError::new(
                 "plugins",
                 "Vulcan Plugins",
-                format!("安装 Vulcan 插件宿主服务失败：{error}"),
+                format!("Failed to install the Vulcan plugin host services: {error}"),
             )
         })?;
     let vulcan_plugin_catalog = vulcan_plugin_runtime
@@ -2220,7 +2267,7 @@ fn prepare_vulcan_plugin_runtime(
             ServiceBootstrapError::new(
                 "plugins",
                 "Vulcan Plugins",
-                format!("加载 Vulcan 插件目录失败：{error}"),
+                format!("Failed to load the Vulcan plugin catalog: {error}"),
             )
         })?;
     Ok((vulcan_plugin_runtime, vulcan_plugin_catalog))
@@ -2265,8 +2312,8 @@ mod luaskills_startup_warning_tests {
         let displayed = steps[0].message.as_deref().expect("startup step message");
         assert!(displayed.contains("C:\\Vulcan\\output\\config\\luaskills-runtime-setting.json"));
         assert!(displayed.contains("schema: 2"));
-        assert!(displayed.contains("手动修复"));
-        assert!(displayed.contains("重启应用"));
+        assert!(displayed.contains("manually repair"));
+        assert!(displayed.contains("restart the app"));
     }
 
     /// Verify unrelated engine failures do not receive a misleading settings-file diagnosis.
@@ -2274,7 +2321,7 @@ mod luaskills_startup_warning_tests {
     #[test]
     fn unrelated_failure_keeps_generic_warning() {
         let message = luaskills_startup_warning_message("创建 LuaSkills 引擎失败：VM 初始化失败");
-        assert!(!message.contains("配置文件"));
-        assert!(message.contains("启动日志"));
+        assert!(!message.contains("configuration file"));
+        assert!(message.contains("startup log"));
     }
 }

@@ -457,7 +457,9 @@ async fn apply_submission_session_settings(
             .iter()
             .find(|library_id| !authorized.contains(*library_id))
         {
-            return Err(format!("知识库未授权给当前项目：{denied}"));
+            return Err(format!(
+                "Knowledge libraries not authorized for the current project: {denied}"
+            ));
         }
         let retrieval_mode = match selection.retrieval_mode.as_deref() {
             None => None,

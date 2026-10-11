@@ -23,8 +23,9 @@ impl WorkspaceWatcherCenter {
     /// A shared watcher center or an explicit notify initialization error.
     /// 返回共享监听中心或明确的 notify 初始化错误。
     pub(crate) fn new() -> Result<Self, String> {
-        let watcher = LiveFileWatcher::new()
-            .map_err(|error| format!("无法初始化共享工作区文件监听器：{error}"))?;
+        let watcher = LiveFileWatcher::new().map_err(|error| {
+            format!("Cannot initialize the shared workspace file watcher: {error}")
+        })?;
         Ok(Self {
             watcher: Arc::new(watcher),
         })

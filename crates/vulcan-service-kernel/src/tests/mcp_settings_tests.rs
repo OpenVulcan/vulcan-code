@@ -105,7 +105,10 @@ fn create_mcp_server_entry_rejects_existing_id() {
     )
     .expect_err("duplicate create must fail");
 
-    assert!(error.contains("已存在"), "unexpected error: {error}");
+    assert!(
+        error.contains("already exists"),
+        "unexpected error: {error}"
+    );
     assert_eq!(
         configuration.mcp.servers["local-search"].command,
         "old-command"
@@ -126,7 +129,7 @@ fn update_mcp_server_entry_rejects_missing_id() {
     )
     .expect_err("missing update target must fail");
 
-    assert!(error.contains("未找到"), "unexpected error: {error}");
+    assert!(error.contains("not found"), "unexpected error: {error}");
     assert!(configuration.mcp.servers.is_empty());
 }
 

@@ -38,13 +38,15 @@ pub(super) fn build_page(
         || query.batch_id.is_empty()
         || query.batch_id.trim() != query.batch_id
     {
-        return Err("回收明细需要准确批次 ID，页大小应为 1 至 100。".to_owned());
+        return Err(
+            "Recycle details need an exact batch ID and a page size from 1 to 100.".to_owned(),
+        );
     }
     if query
         .expected_storage_version
         .is_some_and(|version| version != snapshot.storage_version)
     {
-        return Err("回收站内容已变化，请刷新明细后重新翻页。".to_owned());
+        return Err("The recycle bin changed; refresh the details and page again.".to_owned());
     }
     let scope = project_scope(query.vmm_project_id)?;
     let subject = native_vmm_subject_id()?;
@@ -57,9 +59,12 @@ pub(super) fn build_page(
                 && batch.scope_id == scope
                 && batch.subject_id == subject
         })
-        .ok_or_else(|| "该项目中已不存在此回收批次，请刷新回收站。".to_owned())?;
-    let offset =
-        usize::try_from(query.offset).map_err(|_| "回收明细偏移超过平台范围。".to_owned())?;
+        .ok_or_else(|| {
+            "This recycle batch no longer exists in the project; refresh the recycle bin."
+                .to_owned()
+        })?;
+    let offset = usize::try_from(query.offset)
+        .map_err(|_| "The recycle detail offset exceeds the platform range.".to_owned())?;
     let limit = query.limit as usize;
     let (total, records) = match query.record_kind {
         VmmNativeRecycleRecordKind::Turn => select_page(
@@ -119,7 +124,9 @@ pub(super) fn build_page(
                 } else if profile.scope_id == subject_scope {
                     "user"
                 } else {
-                    return Err("回收画像归属与批次不一致。".to_owned());
+                    return Err(
+                        "The recycled profile ownership disagrees with the batch.".to_owned()
+                    );
                 };
                 Ok(VmmNativeRecycleRecord::Profile {
                     profile_node_id: profile.id.to_string(),
@@ -159,9 +166,12 @@ pub(super) fn build_page(
     // 偏移溢出不能回绕到另一页或静默跳过记录。
     let end = offset
         .checked_add(records.len())
-        .ok_or_else(|| "回收明细分页范围溢出。".to_owned())?;
+        .ok_or_else(|| "The recycle detail page range overflowed.".to_owned())?;
     let next_offset = if end < total {
-        Some(u32::try_from(end).map_err(|_| "回收明细超过可分页范围。".to_owned())?)
+        Some(
+            u32::try_from(end)
+                .map_err(|_| "The recycle details exceed the pageable range.".to_owned())?,
+        )
     } else {
         None
     };

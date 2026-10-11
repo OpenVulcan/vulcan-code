@@ -40,13 +40,12 @@ pub(super) fn apply(
 ) -> Result<(), String> {
     // rrf_k preserves all signed-64 source values without crossing a JavaScript floating-point number.
     // rrf_k 保留来源有符号64位值域，不经过 JavaScript 浮点数转换。
-    let rrf_k = settings
-        .rrf_k
-        .parse::<u64>()
-        .map_err(|_| String::from("RRF 常数必须是规范的正十进制整数。"))?;
+    let rrf_k = settings.rrf_k.parse::<u64>().map_err(|_| {
+        String::from("The RRF constant must be a canonical positive decimal integer.")
+    })?;
     if rrf_k == 0 || rrf_k > i64::MAX as u64 || rrf_k.to_string() != settings.rrf_k {
         return Err(String::from(
-            "RRF 常数必须在 1 至 9223372036854775807 之间，且不能包含空格、符号或前导零。",
+            "The RRF constant must be between 1 and 9223372036854775807 and must not contain spaces, signs or leading zeros.",
         ));
     }
     policy.hybrid_enabled = settings.hybrid_enabled;

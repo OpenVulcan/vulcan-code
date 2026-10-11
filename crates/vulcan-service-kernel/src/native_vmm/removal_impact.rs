@@ -47,11 +47,14 @@ pub(super) fn build_impact(
         VmmNativeRemovalTarget::Turns { ids } => (ids, false),
     };
     if ids.is_empty() || ids.len() > 100 {
-        return Err("请选择 1 至 100 个记忆会话或回合。".to_owned());
+        return Err("Select 1 to 100 memory sessions or turns.".to_owned());
     }
     for id in ids.iter() {
         if id.is_empty() || id.trim() != id {
-            return Err("所选身份不能为空或包含首尾空白。".to_owned());
+            return Err(
+                "Selected identities must not be empty or have leading or trailing whitespace."
+                    .to_owned(),
+            );
         }
         if whole_sessions {
             SessionSourceId::new(id.clone()).map_err(|error| error.to_string())?;
@@ -86,7 +89,7 @@ pub(super) fn build_impact(
         }
     }
     if !whole_sessions && selected_turns.len() != selected_ids.len() {
-        return Err("一个或多个所选回合不在当前项目的活动存储中，请刷新。".to_owned());
+        return Err("One or more selected turns are not in the active storage of the current project; refresh.".to_owned());
     }
     for id in &sessions {
         let session = snapshot
@@ -97,9 +100,13 @@ pub(super) fn build_impact(
                     && session.scope_id == scope
                     && session.session_source_id.as_str() == *id
             })
-            .ok_or_else(|| format!("项目中不存在记忆会话 `{id}`，请刷新。"))?;
+            .ok_or_else(|| {
+                format!("Memory session `{id}` does not exist in the project; refresh.")
+            })?;
         if !session.status.allows_runtime_memory() {
-            return Err(format!("记忆会话 `{id}` 已回收或遗忘，不能再次选择回收。"));
+            return Err(format!(
+                "Memory session `{id}` was already recycled or forgotten and cannot be selected for recycling again."
+            ));
         }
     }
     // Numeric ordering matches external newer.id > selected.id, including IDs 2 and 10.

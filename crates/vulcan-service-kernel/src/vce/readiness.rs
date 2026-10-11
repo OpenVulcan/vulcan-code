@@ -206,8 +206,8 @@ pub(crate) fn require_vce_configuration_ready(
         return Ok(readiness);
     }
     Err(format!(
-        "VCE 全局模型配置未就绪：{}",
-        readiness.status.issues.join("；")
+        "The VCE global model configuration is not ready: {}",
+        readiness.status.issues.join("; ")
     ))
 }
 
@@ -270,7 +270,7 @@ fn try_vce_configuration_readiness(
         .get(VCE_CONSUMER_PROFILE_ID)
     else {
         return Ok(unavailable_readiness(format!(
-            "公共 AI 中尚未配置 `{VCE_CONSUMER_PROFILE_ID}` 推理配置档。"
+            "The `{VCE_CONSUMER_PROFILE_ID}` inference profile is not configured in public AI yet."
         )));
     };
     let snapshot = configured_inference
@@ -321,7 +321,7 @@ fn vce_ai_runtime_handles(
     let runtime = guard
         .agent_runtime
         .as_ref()
-        .ok_or_else(|| String::from("公共 AI 推理运行时尚未启动。"))?;
+        .ok_or_else(|| String::from("The public AI inference runtime has not started yet."))?;
     Ok((
         Arc::clone(&runtime.public_ai_runtime),
         Arc::clone(&runtime.configured_inference_service),
@@ -361,7 +361,7 @@ fn evaluate_embedding(
 ) -> (api::VceConfigurationCapabilityStatus, Option<String>) {
     if !configured {
         return (
-            unavailable_capability(false, "VCE Embedding 路由未配置。"),
+            unavailable_capability(false, "The VCE embedding route is not configured."),
             None,
         );
     }
@@ -369,13 +369,16 @@ fn evaluate_embedding(
     // 配置必须保存数值维度，不能以模型默认值补全。
     let Some(dimension) = dimension else {
         return (
-            unavailable_capability(true, "请在语义引擎设置中确认并保存明确的向量维度。"),
+            unavailable_capability(
+                true,
+                "Confirm and save an explicit vector dimension in the semantic engine settings.",
+            ),
             None,
         );
     };
     let Some(operation) = exact_operation(snapshot, AiOperation::EmbeddingCreate, None) else {
         return (
-            unavailable_capability(true, "VCE Embedding 能力快照缺失。"),
+            unavailable_capability(true, "The VCE embedding capability snapshot is missing."),
             None,
         );
     };
@@ -386,7 +389,7 @@ fn evaluate_embedding(
                 operation
                     .unavailable_reason
                     .as_deref()
-                    .unwrap_or("VCE Embedding 路由当前不可用。"),
+                    .unwrap_or("The VCE embedding route is currently unavailable."),
             ),
             None,
         );
@@ -406,14 +409,17 @@ fn evaluate_query_rewrite(
     snapshot: &InferenceCapabilitySnapshot,
 ) -> api::VceConfigurationCapabilityStatus {
     let Some(route) = route else {
-        return unavailable_capability(false, "VCE 查询改写 LLM 路由未配置。");
+        return unavailable_capability(false, "The VCE query rewrite LLM route is not configured.");
     };
     let Some(operation) = exact_operation(
         snapshot,
         AiOperation::ConversationRespond,
         Some(VCE_QUERY_REWRITE_PURPOSE_ID),
     ) else {
-        return unavailable_capability(true, "VCE 查询改写 LLM 能力快照缺失。");
+        return unavailable_capability(
+            true,
+            "The VCE query rewrite LLM capability snapshot is missing.",
+        );
     };
     if !operation.available {
         return unavailable_capability(
@@ -421,7 +427,7 @@ fn evaluate_query_rewrite(
             operation
                 .unavailable_reason
                 .as_deref()
-                .unwrap_or("VCE 查询改写 LLM 路由当前不可用。"),
+                .unwrap_or("The VCE query rewrite LLM route is currently unavailable."),
         );
     }
     let selection = match runtime.resolve_internal_inference_selection(configuration, route) {
@@ -429,15 +435,24 @@ fn evaluate_query_rewrite(
         Err(error) => return unavailable_capability(true, error),
     };
     if selection.model.capabilities.structured_output == StructuredOutputCapability::Unsupported {
-        return unavailable_capability(true, "VCE 查询改写要求模型支持可由宿主校验的 JSON 输出。");
+        return unavailable_capability(
+            true,
+            "VCE query rewrite requires a model that supports host-verifiable JSON output.",
+        );
     }
     if !crate::configured_inference::model_supports_disabled_reasoning(
         &selection.model.capabilities,
     ) {
-        return unavailable_capability(true, "VCE 查询改写要求模型能够明确关闭推理。");
+        return unavailable_capability(
+            true,
+            "VCE query rewrite requires a model that can explicitly turn off reasoning.",
+        );
     }
     if let Err(error) = runtime.validate_disabled_reasoning_route_projection(&selection) {
-        return unavailable_capability(true, format!("VCE 查询改写无法投影关闭推理请求：{error}"));
+        return unavailable_capability(
+            true,
+            format!("VCE query rewrite cannot project the reasoning-off request: {error}"),
+        );
     }
     available_capability()
 }
@@ -449,10 +464,10 @@ fn evaluate_rerank(
     snapshot: &InferenceCapabilitySnapshot,
 ) -> api::VceConfigurationCapabilityStatus {
     if !configured {
-        return unavailable_capability(false, "VCE Rerank 路由未配置。");
+        return unavailable_capability(false, "The VCE rerank route is not configured.");
     }
     let Some(operation) = exact_operation(snapshot, AiOperation::RerankDocuments, None) else {
-        return unavailable_capability(true, "VCE Rerank 能力快照缺失。");
+        return unavailable_capability(true, "The VCE rerank capability snapshot is missing.");
     };
     if !operation.available {
         return unavailable_capability(
@@ -460,11 +475,14 @@ fn evaluate_rerank(
             operation
                 .unavailable_reason
                 .as_deref()
-                .unwrap_or("VCE Rerank 路由当前不可用。"),
+                .unwrap_or("The VCE rerank route is currently unavailable."),
         );
     }
     let Some(capabilities) = operation.rerank.as_ref() else {
-        return unavailable_capability(true, "VCE Rerank 模型缺少强类型能力声明。");
+        return unavailable_capability(
+            true,
+            "The VCE rerank model has no typed capability declaration.",
+        );
     };
     if let Err(error) = vce_rerank_truncation(&capabilities.truncation) {
         return unavailable_capability(true, error);

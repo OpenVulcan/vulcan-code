@@ -66,10 +66,14 @@ impl NativeVmmResourceStore {
                 projects: BTreeMap::new(),
             });
         };
-        let document: ProjectRetentionPolicies = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("解析原生记忆项目保留策略失败：{error}"))?;
+        let document: ProjectRetentionPolicies =
+            serde_json::from_slice(&bytes).map_err(|error| {
+                format!("Failed to parse the native memory project retention policy: {error}")
+            })?;
         if document.schema_version != 1 || document.projects.contains_key(&0) {
-            return Err("原生记忆项目保留策略版本或项目 ID 无效。".to_owned());
+            return Err(
+                "Invalid native memory project retention policy version or project ID.".to_owned(),
+            );
         }
         for rule in document.projects.values() {
             resolve(base, rule)?;
@@ -86,7 +90,7 @@ impl NativeVmmResourceStore {
         project_id: u64,
     ) -> Result<VmmNativeProjectRetentionSummary, String> {
         if project_id == 0 {
-            return Err("记忆项目 ID 必须大于零。".to_owned());
+            return Err("The memory project ID must be greater than zero.".to_owned());
         }
         let base = retention_policy::resolve(&self.retention_settings()?)?;
         let mut document = self.load_project_retention_document(&base)?;
@@ -113,7 +117,7 @@ impl NativeVmmResourceStore {
         rules: Option<VmmNativeProjectRetentionRules>,
     ) -> Result<(), String> {
         if project_id == 0 {
-            return Err("记忆项目 ID 必须大于零。".to_owned());
+            return Err("The memory project ID must be greater than zero.".to_owned());
         }
         let base = retention_policy::resolve(&self.retention_settings()?)?;
         let mut document = self.load_project_retention_document(&base)?;
@@ -126,10 +130,13 @@ impl NativeVmmResourceStore {
                 document.projects.remove(&project_id);
             }
         }
-        let bytes = serde_json::to_vec_pretty(&document)
-            .map_err(|error| format!("序列化记忆项目保留策略失败：{error}"))?;
+        let bytes = serde_json::to_vec_pretty(&document).map_err(|error| {
+            format!("Failed to serialize the memory project retention policy: {error}")
+        })?;
         if bytes.len() as u64 > MAX_SETTINGS_BYTES {
-            return Err("记忆项目保留策略超过文件大小上限。".to_owned());
+            return Err(
+                "The memory project retention policy exceeds the file size limit.".to_owned(),
+            );
         }
         persist_file_atomically(
             &self.config_root,
@@ -154,7 +161,10 @@ impl NativeVmmResourceStore {
         let mut policies = BTreeMap::new();
         for id in project_ids {
             if *id == 0 || policies.contains_key(id) {
-                return Err("原生记忆项目保留策略需要非零且不重复的目录 ID。".to_owned());
+                return Err(
+                    "Native memory project retention policies need non-zero, unique catalog IDs."
+                        .to_owned(),
+                );
             }
             // Absence has the explicitly declared inheritance meaning, not a fallback for a parsing error.
             // 缺失具有明确声明的继承含义，不作为解析错误的回退。

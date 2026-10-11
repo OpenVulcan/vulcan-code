@@ -247,12 +247,12 @@ pub(super) async fn service_run_vmm_management_http_action(
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
     let target = external_management_target_from_state(&state)
-        .ok_or_else(|| String::from("外置 VMM 管理服务尚未就绪。"))?;
+        .ok_or_else(|| String::from("The external VMM management service is not ready yet."))?;
     let client = reqwest::Client::builder()
         .timeout(target.timeout)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| format!("创建 VMM 管理代理客户端失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the VMM management proxy client: {error}"))?;
     let action = request.action.trim().to_string();
     let (method, path, query, body) = management_request_parts(&action, &request.payload)?;
     reject_active_local_session_targets(&state, &client, &target, &action, body.as_ref()).await?;
@@ -260,7 +260,7 @@ pub(super) async fn service_run_vmm_management_http_action(
         "{}/management/v1/{path}",
         target.base_url.trim_end_matches('/')
     ))
-    .map_err(|error| format!("解析 VMM 管理地址失败：{error}"))?;
+    .map_err(|error| format!("Failed to parse the VMM management address: {error}"))?;
     append_management_query(&mut url, &query);
     let mut outgoing = client
         .request(method, url)
@@ -278,8 +278,9 @@ pub(super) async fn service_run_vmm_management_http_action(
     let response = outgoing
         .send()
         .await
-        .map_err(|error| format!("VMM 管理请求失败：{error}"))?;
-    let (status, bytes) = read_bounded_management_response(response, "VMM 管理响应").await?;
+        .map_err(|error| format!("VMM management request failed: {error}"))?;
+    let (status, bytes) =
+        read_bounded_management_response(response, "VMM management response").await?;
     let mut value = serde_json::from_slice::<Value>(&bytes)
         .map_err(|error| format_non_json_management_response(status, &bytes, &error.to_string()))?;
     if !status.is_success() {
@@ -316,18 +317,18 @@ async fn reject_active_local_session_targets(
     let target_type = body
         .and_then(|value| value.get("target_type"))
         .and_then(Value::as_str)
-        .ok_or_else(|| String::from("VMM 回收目标类型无效。"))?;
+        .ok_or_else(|| String::from("Invalid VMM recycle target type."))?;
     if !matches!(target_type, "session" | "turn") {
         return Ok(());
     }
     let ids = body
         .and_then(|value| value.get("target_ids"))
         .and_then(Value::as_array)
-        .ok_or_else(|| String::from("VMM 会话回收目标无效。"))?;
+        .ok_or_else(|| String::from("Invalid VMM session recycle target."))?;
     for id in ids {
         let id = id
             .as_str()
-            .ok_or_else(|| String::from("VMM 回收目标必须是十进制字符串。"))?;
+            .ok_or_else(|| String::from("VMM recycle targets must be decimal strings."))?;
         let session_id = if target_type == "session" {
             id.to_string()
         } else {
@@ -335,7 +336,9 @@ async fn reject_active_local_session_targets(
             let session_id = turn
                 .get("session_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| String::from("VMM 回合详情缺少会话标识。"))?
+                .ok_or_else(|| {
+                    String::from("The VMM turn details are missing the session identifier.")
+                })?
                 .to_string();
             required_decimal_id(Some(&session_id), "sessionId")?;
             session_id
@@ -346,9 +349,11 @@ async fn reject_active_local_session_targets(
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| String::from("VMM 会话详情缺少后端会话键，无法安全检查活跃状态。"))?;
+            .ok_or_else(|| String::from("The VMM session details are missing the backend session key, so the active state cannot be checked safely."))?;
         if local_session_is_active(state, session_key)? {
-            return Err(String::from("当前会话仍在生成或运行工具，不能移入回收站。"));
+            return Err(String::from(
+                "The current session is still generating or running tools and cannot be moved to the recycle bin.",
+            ));
         }
     }
     Ok(())
@@ -366,15 +371,16 @@ async fn load_management_detail(
         "{}/management/v1/{resource}/{id}",
         target.base_url.trim_end_matches('/')
     ))
-    .map_err(|error| format!("解析 VMM 管理地址失败：{error}"))?;
+    .map_err(|error| format!("Failed to parse the VMM management address: {error}"))?;
     let response = client
         .get(url)
         .bearer_auth(&target.access_token)
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|error| format!("检查活跃会话失败：{error}"))?;
-    let (status, bytes) = read_bounded_management_response(response, "VMM 管理详情响应").await?;
+        .map_err(|error| format!("Failed to check active sessions: {error}"))?;
+    let (status, bytes) =
+        read_bounded_management_response(response, "VMM management detail response").await?;
     let detail = serde_json::from_slice::<Value>(&bytes)
         .map_err(|error| format_non_json_management_response(status, &bytes, &error.to_string()))?;
     if !status.is_success() {
@@ -394,16 +400,16 @@ async fn read_bounded_management_response(
         .content_length()
         .is_some_and(|length| length > MAX_MANAGEMENT_RESPONSE_BYTES as u64)
     {
-        return Err(format!("{label}超过 1 MiB 安全上限。"));
+        return Err(format!("The {label} exceeds the 1 MiB safety limit."));
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| format!("读取{label}失败：{error}"))?
+        .map_err(|error| format!("Failed to read the {label}: {error}"))?
     {
         if body.len().saturating_add(chunk.len()) > MAX_MANAGEMENT_RESPONSE_BYTES {
-            return Err(format!("{label}超过 1 MiB 安全上限。"));
+            return Err(format!("The {label} exceeds the 1 MiB safety limit."));
         }
         body.extend_from_slice(&chunk);
     }
@@ -418,7 +424,7 @@ fn local_session_is_active(
 ) -> Result<bool, String> {
     let guard = state
         .lock()
-        .map_err(|error| format!("读取本地会话状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the local session state: {error}"))?;
     let Some(workspace) = guard.workspace_snapshot.as_ref() else {
         return Ok(false);
     };
@@ -461,7 +467,7 @@ fn project_management_session_rows(
     }
     let guard = state
         .lock()
-        .map_err(|error| format!("读取本地会话投影失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the local session projection: {error}"))?;
     let Some(workspace) = guard.workspace_snapshot.as_ref() else {
         strip_management_session_keys(value);
         return Ok(());
@@ -591,7 +597,7 @@ fn management_request_parts(
         }
         "management_get_recycle_batch" => management_batch_parts(payload),
         "management_get_operation" => management_operation_parts(payload),
-        _ => Err(format!("不支持的 VMM 管理动作：{action}")),
+        _ => Err(format!("Unsupported VMM management action: {action}")),
     }
 }
 
@@ -653,14 +659,14 @@ fn management_operation_parts(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("operationId 不能为空。"))?;
+        .ok_or_else(|| String::from("operationId must not be empty."))?;
     if operation_id.len() > 128
         || !operation_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     {
         return Err(String::from(
-            "operationId 只能包含 ASCII 字母、数字、下划线和连字符，且最多 128 字符。",
+            "operationId may only contain ASCII letters, digits, underscores and hyphens, and at most 128 characters.",
         ));
     }
     Ok((
@@ -681,8 +687,8 @@ where
     T: for<'de> Deserialize<'de> + Serialize,
 {
     let decoded: T = decode_management_payload(payload)?;
-    let body =
-        serde_json::to_value(decoded).map_err(|error| format!("构建 VMM 管理请求失败：{error}"))?;
+    let body = serde_json::to_value(decoded)
+        .map_err(|error| format!("Failed to build the VMM management request: {error}"))?;
     Ok((
         Method::POST,
         path.to_string(),
@@ -700,8 +706,8 @@ fn management_json_value_parts<T>(
 where
     T: Serialize,
 {
-    let body =
-        serde_json::to_value(decoded).map_err(|error| format!("构建 VMM 管理请求失败：{error}"))?;
+    let body = serde_json::to_value(decoded)
+        .map_err(|error| format!("Failed to build the VMM management request: {error}"))?;
     Ok((
         Method::POST,
         path.to_string(),
@@ -716,7 +722,9 @@ fn validate_management_removal_preview(
     payload: &ManagementRemovalPreviewPayload,
 ) -> Result<(), String> {
     if payload.target_ids.is_empty() || payload.target_ids.len() > 100 {
-        return Err(String::from("VMM 管理操作每次必须选择 1 到 100 个目标。"));
+        return Err(String::from(
+            "Each VMM management operation must select 1 to 100 targets.",
+        ));
     }
     for id in &payload.target_ids {
         required_decimal_id(Some(id), "targetIds")?;
@@ -725,16 +733,18 @@ fn validate_management_removal_preview(
         payload.target_type.as_str(),
         "session" | "turn" | "recycle_batch"
     ) {
-        return Err(String::from("VMM 管理目标类型无效。"));
+        return Err(String::from("Invalid VMM management target type."));
     }
     if !matches!(
         payload.action.as_str(),
         "archive" | "unarchive" | "recycle" | "restart" | "purge"
     ) {
-        return Err(String::from("VMM 管理操作类型无效。"));
+        return Err(String::from("Invalid VMM management operation type."));
     }
     if payload.source.trim().is_empty() || payload.source.len() > 128 {
-        return Err(String::from("VMM 管理请求来源不能为空且最多 128 字符。"));
+        return Err(String::from(
+            "The VMM management request source must not be empty and is limited to 128 characters.",
+        ));
     }
     Ok(())
 }
@@ -745,7 +755,8 @@ fn decode_management_payload<T>(payload: &Value) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    serde_json::from_value(payload.clone()).map_err(|error| format!("VMM 管理参数无效：{error}"))
+    serde_json::from_value(payload.clone())
+        .map_err(|error| format!("Invalid VMM management parameters: {error}"))
 }
 
 /// Validates one positive decimal-string identifier before placing it into a path.
@@ -754,12 +765,12 @@ fn required_decimal_id<'a>(value: Option<&'a str>, field: &str) -> Result<&'a st
     let value = value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{field} 不能为空。"))?;
+        .ok_or_else(|| format!("{field} must not be empty."))?;
     let parsed = value
         .parse::<u64>()
-        .map_err(|_| format!("{field} 必须是十进制标识。"))?;
+        .map_err(|_| format!("{field} must be a decimal identifier."))?;
     if parsed == 0 {
-        return Err(format!("{field} 必须大于 0。"));
+        return Err(format!("{field} must be greater than 0."));
     }
     Ok(value)
 }
@@ -813,12 +824,14 @@ fn format_management_problem(status: StatusCode, value: &Value) -> String {
     let detail = value
         .get("detail")
         .and_then(Value::as_str)
-        .unwrap_or("VMM 管理请求失败。");
+        .unwrap_or("VMM management request failed.");
     let request_id = value
         .get("request_id")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    format!("VMM 管理请求失败：HTTP {status} | {code} | {detail} | request_id={request_id}")
+    format!(
+        "VMM management request failed: HTTP {status} | {code} | {detail} | request_id={request_id}"
+    )
 }
 
 /// Formats a bounded non-JSON response without exposing markup or arbitrary binary data.
@@ -829,7 +842,7 @@ fn format_non_json_management_response(
     parse_error: &str,
 ) -> String {
     if status.is_success() {
-        return format!("VMM 管理服务返回了无效 JSON：{parse_error}");
+        return format!("The VMM management service returned invalid JSON: {parse_error}");
     }
     let preview = String::from_utf8_lossy(bytes)
         .chars()
@@ -838,9 +851,11 @@ fn format_non_json_management_response(
         .collect::<String>();
     let preview = preview.trim();
     if preview.is_empty() {
-        format!("VMM 管理请求失败：HTTP {status}，服务端未返回结构化错误。")
+        format!(
+            "VMM management request failed: HTTP {status}; the server returned no structured error."
+        )
     } else {
-        format!("VMM 管理请求失败：HTTP {status} | {preview}")
+        format!("VMM management request failed: HTTP {status} | {preview}")
     }
 }
 
@@ -848,11 +863,11 @@ fn format_non_json_management_response(
 /// 返回一个紧凑的用户可见动作摘要。
 fn management_action_summary(action: &str) -> String {
     match action {
-        "management_create_removal_preview" => String::from("已生成数据影响预览。"),
-        "management_execute_removal" => String::from("已提交记忆数据变更。"),
-        "management_restore_batch" => String::from("已提交回收数据恢复。"),
-        "management_purge" => String::from("已提交永久删除。"),
-        _ => String::from("已读取 VMM 管理数据。"),
+        "management_create_removal_preview" => String::from("Generated the data impact preview."),
+        "management_execute_removal" => String::from("Committed the memory data change."),
+        "management_restore_batch" => String::from("Committed the recycled data restore."),
+        "management_purge" => String::from("Committed the permanent deletion."),
+        _ => String::from("Read the VMM management data."),
     }
 }
 

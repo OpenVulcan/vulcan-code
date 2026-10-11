@@ -43,20 +43,24 @@ impl NativeVmmMaintenance {
         confirmed: bool,
     ) -> Result<VmmNativeLexicalRebuildResult, String> {
         if !confirmed {
-            return Err(String::from("请先确认从当前记忆内容重建全文索引。"));
+            return Err(String::from(
+                "Confirm rebuilding the full-text index from the current memory content first.",
+            ));
         }
         // Match the existing maintenance lock order; rebuild cannot race content publication.
         // 匹配既有维护锁顺序，重建不能与内容发布竞争。
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err(String::from("全文索引重建仅在内部原生记忆已启用时可用。"));
+            return Err(String::from(
+                "Full-text index rebuild is only available when internal native memory is enabled.",
+            ));
         }
         self.runtime.recover_storage_mutations().await?;
         let snapshot = self.runtime.storage_snapshot()?;
         if snapshot.storage_version != expected_storage_version {
             return Err(String::from(
-                "记忆内容已变化，请刷新全文索引状态后重新确认。",
+                "The memory content changed; refresh the full-text index status and confirm again.",
             ));
         }
         // Only the same Active lifecycle set used by persist_lexical_transition enters this derived table.
@@ -79,7 +83,7 @@ impl NativeVmmMaintenance {
         let reindexed_memory_count = self.data_plane.rebuild_lexical_index().await?;
         if reindexed_memory_count != expected_count {
             return Err(format!(
-                "全文索引重建回执与权威活跃记忆数量不一致：预期 {expected_count}，实际 {reindexed_memory_count}。"
+                "The full-text index rebuild receipt disagrees with the authoritative active memory count: expected {expected_count}, actual {reindexed_memory_count}."
             ));
         }
         Ok(VmmNativeLexicalRebuildResult {

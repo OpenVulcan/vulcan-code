@@ -85,7 +85,9 @@ async fn restore_retained_predecessor(
     let mut resources = owner.resources.lock().await;
     pending_owner::require_current_manager(state, &resources)?;
     if resources.target.is_none() {
-        return Err(String::from("原启用更新缺少实际前驱排空所有者。"));
+        return Err(String::from(
+            "The original enabled update has no actual predecessor drain owner.",
+        ));
     }
     if acknowledgement.is_none()
         && !resources
@@ -94,7 +96,9 @@ async fn restore_retained_predecessor(
             .expect("retained enabled original")
             .has_restoration()
     {
-        return Err(String::from("原请求缺少实际恢复槽；恢复不能新执行补偿。"));
+        return Err(String::from(
+            "The original request has no actual restoration slot; restoration cannot run new compensation.",
+        ));
     }
     // A successful transfer may only validate its real Full and continue cleanup; core completion is not replayable.
     // 成功转交仅可校验真实 Full 并继续清理；核心完成不可重放。
@@ -124,7 +128,7 @@ async fn restore_retained_predecessor(
         {
             if acknowledgement != Some(true) {
                 return Err(String::from(
-                    "启用更新已有实际副作用；恢复前必须明确确认补偿不等于撤销外部副作用。",
+                    "The enabled update already has actual side effects; before restoring, explicitly confirm that compensation does not undo external side effects.",
                 ));
             }
             prepare_original_restoration(&mut resources, owner).await?;
@@ -140,7 +144,9 @@ async fn restore_retained_predecessor(
             // A configured owner must remain the same throughout every restoration checkpoint.
             // 每个恢复检查点期间已配置所有者必须保持相同。
             let pending_owner::PendingLocalPluginUpdateStage::Prepared(prepared) = stage else {
-                return Err(String::from("原前驱恢复的准备类型已经变化。"));
+                return Err(String::from(
+                    "The preparation kind of the original predecessor restoration changed.",
+                ));
             };
             // This is the actual retained restoration, not a credential reconstructed from Aborted bytes.
             // 此为实际保留恢复，而非从 Aborted 字节重建的凭据。
@@ -237,10 +243,10 @@ async fn restore_retained_predecessor(
                 .expect("actual predecessor restoration is retained")
                 .restoration
                 .staged_catalog()
-                .ok_or("原前驱关闭目录缺失。")?
+                .ok_or("The original predecessor shutdown catalog is missing.")?
                 .plugins
                 .get(&owner.plugin_id)
-                .ok_or("原前驱关闭描述符缺失。")?
+                .ok_or("The original predecessor shutdown descriptor is missing.")?
                 .mcp_servers
                 .iter()
                 .any(|server| {
@@ -328,7 +334,9 @@ async fn restore_retained_predecessor(
             // Only the already retained actual configured transaction can authorize this same-source transfer.
             // 仅已保留实际已配置事务可以授权此次同来源转交。
             let pending_owner::PendingLocalPluginUpdateStage::Prepared(prepared) = stage else {
-                return Err(String::from("原前驱组合交接的准备类型已经变化。"));
+                return Err(String::from(
+                    "The preparation kind of the original predecessor composition handoff changed.",
+                ));
             };
             // This strong restoration retains its real pair before fallible Transferred confirmation.
             // 此强恢复在可失败 Transferred 确认之前保留真实配对。
@@ -352,7 +360,7 @@ async fn restore_retained_predecessor(
                     restoration
                         .restoration
                         .staged_catalog()
-                        .ok_or("原前驱关闭目录缺失。")?,
+                        .ok_or("The original predecessor shutdown catalog is missing.")?,
                     restoration.native.as_ref(),
                     &mut restoration.publication,
                 );
@@ -376,7 +384,7 @@ async fn restore_retained_predecessor(
         .expect("actual predecessor restoration is retained")
         .publication
         .as_ref()
-        .ok_or("已转交前驱缺少实际 Full 凭据。")?
+        .ok_or("The handed-over predecessor has no actual Full credential.")?
         .validate_current(state, &resources.runtime)?;
     target
         .current_mcp
@@ -419,12 +427,15 @@ async fn prepare_original_restoration(
             != prepared.transaction.record().predecessor()
     {
         return Err(String::from(
-            "原请求尚无可执行的 Prepared 前驱恢复权威；已选目标须继续目标恢复。",
+            "The original request has no executable Prepared predecessor restoration authority; a selected target must continue the target restoration.",
         ));
     }
     // The actual old observation lineage includes all original transports and unfinished preparations.
     // 实际旧观察谱系包含全部原传输及未完成准备。
-    let target = resources.target.as_ref().ok_or("原启用更新槽缺失。")?;
+    let target = resources
+        .target
+        .as_ref()
+        .ok_or("The original enabled update slot is missing.")?;
     if target.predecessor_drain.is_none()
         || target.staged.is_some()
         || target.native.is_some()
@@ -432,7 +443,7 @@ async fn prepare_original_restoration(
         || target.completed
     {
         return Err(String::from(
-            "原请求缺少实际旧排空或已经开始目标发布，不能重建前驱恢复。",
+            "The original request has no actual old drain or already started the target publication; the predecessor restoration cannot be rebuilt.",
         ));
     }
     target
@@ -475,11 +486,11 @@ async fn prepare_original_restoration(
                 .drain_activation_predecessor(drain)
                 .await
                 .map_err(|error| error.to_string())?;
-            require_retired(report, "原前驱 Lua")?;
+            require_retired(report, "Original predecessor Lua")?;
         }
         _ => {
             return Err(String::from(
-                "原前驱排空未确认成功；保留实际所有者，不能重放失败排空。",
+                "The original predecessor drain was not confirmed successful; keeping the actual owner, the failed drain cannot be replayed.",
             ));
         }
     }
@@ -488,14 +499,14 @@ async fn prepare_original_restoration(
             .drain_activation_candidate_calls(owner.request_id)
             .await
             .map_err(|error| error.to_string())?,
-        "原候选调用",
+        "Original candidate callback",
     )?;
     require_retired(
         runtime
             .drain_activation_predecessor_calls(owner.request_id)
             .await
             .map_err(|error| error.to_string())?,
-        "原前驱调用",
+        "Original predecessor callback",
     )?;
     // Read fresh original effects only after actual retirement; uncertain work cannot become an authorization to replay.
     // 仅实际退役后读取新鲜原副作用；不确定工作不能成为重放授权。
@@ -504,7 +515,7 @@ async fn prepare_original_restoration(
         .store
         .activation_effects(&owner.plugin_id, owner.request_id)
         .map_err(|error| error.to_string())?
-        .ok_or("原前驱排空回执缺失。")?;
+        .ok_or("The original predecessor drain receipt is missing.")?;
     if effects
         .observations()
         .iter()
@@ -517,7 +528,7 @@ async fn prepare_original_restoration(
             .is_some_and(|receipt| receipt.phase() == Observation::Started)
     {
         return Err(String::from(
-            "原副作用仍为未确认 Started；请核对原请求，不能重放补偿或旧恢复。",
+            "The original side effect is still an unconfirmed Started; check the original request, compensation or the old restoration cannot be replayed.",
         ));
     }
     if effect_observation(resources.prepared()?, Effect::Enable)?.is_some() {
@@ -536,14 +547,18 @@ async fn prepare_original_restoration(
                     .await
                     .map_err(|error| error.to_string())?;
             }
-            _ => return Err(String::from("原候选补偿未确认成功；不能重复执行。")),
+            _ => {
+                return Err(String::from(
+                    "The original candidate compensation was not confirmed successful; it cannot run again.",
+                ));
+            }
         }
         require_retired(
             runtime
                 .drain_activation_candidate_calls(owner.request_id)
                 .await
                 .map_err(|error| error.to_string())?,
-            "原候选补偿",
+            "Original candidate compensation",
         )?;
     }
     match effect_observation(resources.prepared()?, Effect::RestorePredecessor)? {
@@ -570,14 +585,18 @@ async fn prepare_original_restoration(
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        _ => return Err(String::from("原前驱恢复回调未确认成功；不能重复执行。")),
+        _ => {
+            return Err(String::from(
+                "The original predecessor restoration callback was not confirmed successful; it cannot run again.",
+            ));
+        }
     }
     require_retired(
         runtime
             .drain_activation_predecessor_calls(owner.request_id)
             .await
             .map_err(|error| error.to_string())?,
-        "原前驱恢复",
+        "Original predecessor restoration",
     )?;
     // Split the configured transaction borrow from its actual drain, which the factory returns on ordinary failure.
     // 将已配置事务借用与实际排空分开；工厂在普通失败时返回该排空。
@@ -585,7 +604,9 @@ async fn prepare_original_restoration(
     // No record or file owner is moved out of the original strong service slot.
     // 不将任何记录或文件所有者移出原强服务槽。
     let pending_owner::PendingLocalPluginUpdateStage::Prepared(prepared) = stage else {
-        return Err(String::from("原前驱恢复准备类型已经变化。"));
+        return Err(String::from(
+            "The preparation kind of the original predecessor restoration changed.",
+        ));
     };
     // This temporary inspection must end before any mutable transaction writer can run.
     // 任一可变事务写入器运行之前，此临时检查必须结束。
@@ -601,7 +622,7 @@ async fn prepare_original_restoration(
     let drain = target
         .predecessor_drain
         .take()
-        .ok_or("原实际前驱排空缺失。")?;
+        .ok_or("The original actual predecessor drain is missing.")?;
     match runtime.prepare_activation_predecessor_restoration(&candidate, drain) {
         Ok(restoration) => {
             target.restoration = Some(RetainedPredecessorRestoration {
@@ -644,14 +665,17 @@ fn materialize_retained_predecessor_mcp(
     // 实际恢复工厂已在此阻塞物化器之前保留已配置来源。
     let restoration = target
         .as_mut()
-        .ok_or("原启用更新槽缺失。")?
+        .ok_or("The original enabled update slot is missing.")?
         .restoration
         .as_mut()
-        .ok_or("实际前驱恢复缺失。")?;
+        .ok_or("The actual predecessor restoration is missing.")?;
     if restoration.prepared_mcp.is_none() {
         // Store the sole strong physical preparation before conversion; the core source retains only its weak control link.
         // 转换之前保存唯一强物理准备；核心来源仅保留其弱控制链接。
-        let source = restoration.source.as_ref().ok_or("实际前驱来源缺失。")?;
+        let source = restoration
+            .source
+            .as_ref()
+            .ok_or("The actual predecessor source is missing.")?;
         restoration.prepared_mcp = Some(
             runtime
                 .prepare_predecessor_mcp_resources(source, authority)
@@ -703,8 +727,8 @@ fn require_retired(
         Ok(())
     } else {
         Err(format!(
-            "{label}资源尚未退役：{}",
-            report.failures.join("；")
+            "{label} resources are not retired yet: {}",
+            report.failures.join("; ")
         ))
     }
 }

@@ -135,7 +135,7 @@ pub(crate) fn materialize_prompt_session(
             return Err(format!("Conversation `{session_id}` was not found"));
         };
         session.status = SessionState::Running;
-        session.last_updated_label = String::from("刚刚");
+        session.last_updated_label = String::from("just now");
         workspace_snapshot.selected_session = session_id;
         let session_title = session.title.clone();
         let owner_project_id = session_summary_project_id(session).map(str::to_string);
@@ -165,12 +165,12 @@ pub(crate) fn materialize_prompt_session(
                 .first()
                 .map(|project| project.id.clone())
         })
-        .ok_or_else(|| String::from("新建会话需要提供项目标识。"))?;
+        .ok_or_else(|| String::from("Creating a session requires a project identifier."))?;
     let project = workspace_snapshot
         .task_projects
         .iter_mut()
         .find(|candidate| candidate.id == project_id.as_str())
-        .ok_or_else(|| format!("未找到项目：{project_id}"))?;
+        .ok_or_else(|| format!("Project not found: {project_id}"))?;
     // materialized_project_id captures the exact active project selected before its mutable membership update.
     // materialized_project_id 在项目成员关系变更前捕获选中的精确活动项目。
     let materialized_project_id = project.id.clone();
@@ -181,11 +181,11 @@ pub(crate) fn materialize_prompt_session(
         session_id,
         Some(project.id.clone()),
         session_title.clone(),
-        "正在执行 WebUI 提交的任务",
+        "Running the task submitted from the WebUI",
         SessionState::Running,
         0,
         0,
-        "刚刚",
+        "just now",
     )
     .with_title_source(SessionTitleSource::Generated)
     .with_created_at(now.clone())

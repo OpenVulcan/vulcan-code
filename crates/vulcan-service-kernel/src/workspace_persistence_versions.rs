@@ -155,7 +155,7 @@ pub(crate) fn reasoning_selection(
         return Some(ReasoningSelectionSummary {
             options: vec![ReasoningSelectionOptionSummary {
                 value: String::from("fixed-off"),
-                label: String::from("关闭"),
+                label: String::from("Off"),
             }],
             selected_effort: String::from("fixed-off"),
             default_effort: Some(String::from("fixed-off")),
@@ -167,7 +167,7 @@ pub(crate) fn reasoning_selection(
         return Some(ReasoningSelectionSummary {
             options: vec![ReasoningSelectionOptionSummary {
                 value: String::from(if enabled { "fixed-on" } else { "fixed-off" }),
-                label: String::from(if enabled { "开启" } else { "关闭" }),
+                label: String::from(if enabled { "On" } else { "Off" }),
             }],
             selected_effort: String::from(if enabled { "fixed-on" } else { "fixed-off" }),
             default_effort: Some(String::from(if enabled { "fixed-on" } else { "fixed-off" })),
@@ -181,9 +181,9 @@ pub(crate) fn reasoning_selection(
             options: vec![ReasoningSelectionOptionSummary {
                 value: reasoning_effort_wire_value(level).to_string(),
                 label: String::from(match effort {
-                    vulcan_ai_contract::ReasoningEffort::None => "关闭",
-                    vulcan_ai_contract::ReasoningEffort::Adaptive => "自动",
-                    _ => "开启",
+                    vulcan_ai_contract::ReasoningEffort::None => "Off",
+                    vulcan_ai_contract::ReasoningEffort::Adaptive => "Auto",
+                    _ => "On",
                 }),
             }],
             selected_effort: reasoning_effort_wire_value(level).to_string(),
@@ -240,7 +240,7 @@ pub(crate) fn reasoning_selection(
         .filter(|effort| reasoning_effort_wire_value(*effort) != selected_effort)
         .map(|effort| {
             format!(
-                "当前模型不支持已保存的推理档位“{}”，已切换到该模型的启用档位“{}”。",
+                "The current model does not support the saved reasoning level `{}`; switched to the model's enabled level `{}`.",
                 effort.compact_label(),
                 selected_effort
             )
@@ -295,7 +295,7 @@ pub(crate) fn prompt_to_session_title(prompt: &str) -> String {
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .unwrap_or("新会话");
+        .unwrap_or("New session");
     title.chars().take(48).collect()
 }
 
@@ -745,7 +745,7 @@ mod tests {
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.options[0].value, "adaptive");
-        assert_eq!(selection.options[0].label, "自动");
+        assert_eq!(selection.options[0].label, "Auto");
         assert_eq!(selection.selected_effort, "adaptive");
     }
 
@@ -795,7 +795,7 @@ mod tests {
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.options[0].value, "fixed-on");
-        assert_eq!(selection.options[0].label, "开启");
+        assert_eq!(selection.options[0].label, "On");
         assert_eq!(selection.selected_effort, "fixed-on");
     }
 
@@ -814,7 +814,7 @@ mod tests {
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.options[0].value, "fixed-off");
-        assert_eq!(selection.options[0].label, "关闭");
+        assert_eq!(selection.options[0].label, "Off");
         assert_eq!(selection.selected_effort, "fixed-off");
     }
 

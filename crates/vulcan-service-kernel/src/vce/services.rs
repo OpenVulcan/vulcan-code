@@ -315,13 +315,13 @@ pub(crate) async fn service_get_vce_project_overview(
             integrity: None,
         });
     }
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    let manager = manager.ok_or_else(|| String::from("The VCE runtime is not ready yet."))?;
     if manager.project_status(&project.id).await.is_none() {
         // Lazy restoration reads existing storage only and never initializes a project.
         // 惰性恢复只读取现有存储，绝不初始化项目。
-        let dimension = readiness
-            .embedding_dimension
-            .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?;
+        let dimension = readiness.embedding_dimension.ok_or_else(|| {
+            String::from("The VCE readiness state is missing an explicit vector dimension.")
+        })?;
         manager
             .restore_existing_project(
                 &project.id,
@@ -331,7 +331,11 @@ pub(crate) async fn service_get_vce_project_overview(
                 readiness
                     .embedding_physical_fingerprint
                     .as_deref()
-                    .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?,
+                    .ok_or_else(|| {
+                        String::from(
+                            "The VCE readiness state is missing the vector physical fingerprint.",
+                        )
+                    })?,
             )
             .await?;
     }
@@ -362,7 +366,9 @@ pub(crate) async fn service_get_vce_project_overview(
         || current_readiness.embedding_physical_fingerprint
             != readiness.embedding_physical_fingerprint
     {
-        return Err(String::from("语义引擎配置已变化，请重新读取项目状态。"));
+        return Err(String::from(
+            "The semantic engine configuration changed; read the project state again.",
+        ));
     }
     let mut overview = vce_overview_from_runtime(readiness.status, settings, status, snapshot);
     overview.read_identity = read_identity;
@@ -394,13 +400,17 @@ pub(crate) async fn service_get_vce_project_activity(
     let mut source_freshness = super::watcher::VceSourceFreshness::default();
     if let Some(manager) = manager {
         if project.vce.enabled && readiness.status.ready {
-            let dimension = readiness
-                .embedding_dimension
-                .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?;
+            let dimension = readiness.embedding_dimension.ok_or_else(|| {
+                String::from("The VCE readiness state is missing an explicit vector dimension.")
+            })?;
             let fingerprint = readiness
                 .embedding_physical_fingerprint
                 .as_deref()
-                .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?;
+                .ok_or_else(|| {
+                    String::from(
+                        "The VCE readiness state is missing the vector physical fingerprint.",
+                    )
+                })?;
             if manager.project_status(&project.id).await.is_none() {
                 manager
                     .restore_existing_project(
@@ -429,7 +439,7 @@ pub(crate) async fn service_get_vce_project_activity(
         last_successful_update_unix_ms = manager.last_successful_update(&project.id).await?;
         source_freshness = manager.source_freshness(&project.id).await;
     } else if project.vce.enabled && readiness.status.ready {
-        return Err(String::from("VCE 运行时尚未就绪。"));
+        return Err(String::from("The VCE runtime is not ready yet."));
     }
     // Reject a response whose authority changed during asynchronous metadata reads.
     // 拒绝异步元数据读取期间权威配置已经变化的响应。
@@ -441,7 +451,9 @@ pub(crate) async fn service_get_vce_project_activity(
         || current_readiness.embedding_physical_fingerprint
             != readiness.embedding_physical_fingerprint
     {
-        return Err(String::from("语义引擎配置已变化，请重新读取项目状态。"));
+        return Err(String::from(
+            "The semantic engine configuration changed; read the project state again.",
+        ));
     }
     Ok(api::VceProjectActivityResponse {
         configuration: readiness.status,
@@ -488,7 +500,9 @@ pub(crate) async fn service_update_vce_project_settings(
     let next = commit_vce_project_settings(&state, &project_id, request).await?;
     refresh_workbench_snapshot(state.clone())
         .await
-        .map_err(|error| format!("VCE 设置已保存，但工作台刷新失败：{error}"))?;
+        .map_err(|error| {
+            format!("The VCE settings were saved, but refreshing the workbench failed: {error}")
+        })?;
     let reconcile_error = reconcile_vce_project(&state, &project_id).await.err();
     commit_and_emit_project_settings_changed_delta(
         &app,
@@ -498,7 +512,9 @@ pub(crate) async fn service_update_vce_project_settings(
     )?;
     emit_vce_project_changed(&app, &state, &project_id).await;
     if let Some(error) = reconcile_error {
-        return Err(format!("VCE 设置已保存，但运行时协调失败：{error}"));
+        return Err(format!(
+            "The VCE settings were saved, but runtime reconciliation failed: {error}"
+        ));
     }
     Ok(vce_settings_summary(&next))
 }
@@ -529,19 +545,19 @@ async fn commit_vce_project_settings(
         let host_runtime = guard
             .controller_runtime
             .clone()
-            .ok_or_else(|| String::from("宿主存储运行时尚未就绪。"))?;
+            .ok_or_else(|| String::from("The host storage runtime is not ready yet."))?;
         (project, host_runtime)
     };
     if project.vce.revision != request.expected_revision {
         return Err(format!(
-            "VCE 设置修订冲突：期望 {}，当前 {}。",
+            "VCE settings revision conflict: expected {}, current {}.",
             request.expected_revision, project.vce.revision
         ));
     }
     let next_revision = request
         .expected_revision
         .checked_add(1)
-        .ok_or_else(|| String::from("VCE 设置修订号已耗尽。"))?;
+        .ok_or_else(|| String::from("The VCE settings revision numbers are exhausted."))?;
     let next = project_vce_settings_from_input(request.settings, next_revision);
     next.validate()?;
     vulcan_workspace_store::workspace_store::persist_project_vce_settings(
@@ -637,24 +653,28 @@ pub(crate) async fn service_submit_vce_job(
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
     validate_project_revision(&project, request.expected_settings_revision)?;
     if !project.vce.enabled {
-        return Err(String::from("请先在项目设置中启用语义引擎。"));
+        return Err(String::from(
+            "Enable the semantic engine in the project settings first.",
+        ));
     }
     if request.idempotency_key.trim().is_empty() || request.idempotency_key.len() > 512 {
-        return Err(String::from("索引请求缺少有效的幂等标识。"));
+        return Err(String::from(
+            "The index request has no valid idempotency identifier.",
+        ));
     }
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    let manager = manager.ok_or_else(|| String::from("The VCE runtime is not ready yet."))?;
     let executor = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .service_runtime
         .clone()
-        .ok_or_else(|| String::from("VCE 后台执行器尚未就绪。"))?;
-    let dimension = readiness
-        .embedding_dimension
-        .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?;
-    let fingerprint = readiness
-        .embedding_physical_fingerprint
-        .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?;
+        .ok_or_else(|| String::from("The VCE background executor is not ready yet."))?;
+    let dimension = readiness.embedding_dimension.ok_or_else(|| {
+        String::from("The VCE readiness state is missing an explicit vector dimension.")
+    })?;
+    let fingerprint = readiness.embedding_physical_fingerprint.ok_or_else(|| {
+        String::from("The VCE readiness state is missing the vector physical fingerprint.")
+    })?;
     let initialize = request.action == api::VceJobAction::Initialize;
     manager
         .enable_project(
@@ -675,7 +695,7 @@ pub(crate) async fn service_submit_vce_job(
         || current.embedding_physical_fingerprint.as_deref() != Some(&fingerprint)
     {
         return Err(String::from(
-            "项目或模型配置已变化，请刷新后重新提交索引作业。",
+            "The project or model configuration changed; refresh and submit the index job again.",
         ));
     }
     let receipt = manager
@@ -711,7 +731,7 @@ pub(crate) async fn service_get_vce_job(
     request: api::VceJobQueryRequest,
 ) -> Result<Option<api::VceJobSummary>, String> {
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    let manager = manager.ok_or_else(|| String::from("The VCE runtime is not ready yet."))?;
     manager
         .get_job(&project.id, request.job_id.as_deref())
         .await
@@ -729,7 +749,7 @@ pub(crate) async fn service_cancel_vce_job(
     request: api::VceJobCancelRequest,
 ) -> Result<api::VceJobSummary, String> {
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    let manager = manager.ok_or_else(|| String::from("The VCE runtime is not ready yet."))?;
     manager
         .cancel_job(&project.id, &request.job_id)
         .await
@@ -932,7 +952,9 @@ pub(crate) async fn service_list_vce_files(
     .await?
     {
         VceManagementQueryResult::Files(page) => Ok(map_page(page, map_file_summary)),
-        _ => Err(String::from("VCE 文件查询返回了不匹配的结果类型。")),
+        _ => Err(String::from(
+            "The VCE file query returned a mismatched result type.",
+        )),
     }
 }
 
@@ -955,7 +977,9 @@ pub(crate) async fn service_get_vce_blob_detail(
     .await?
     {
         VceManagementQueryResult::BlobDetail(detail) => Ok(detail.map(map_blob_detail)),
-        _ => Err(String::from("VCE Blob 查询返回了不匹配的结果类型。")),
+        _ => Err(String::from(
+            "The VCE blob query returned a mismatched result type.",
+        )),
     }
 }
 
@@ -969,7 +993,9 @@ pub(crate) async fn service_list_vce_operations(
     let query = VceManagementQuery::Operations(core_page_request(request.page)?);
     match execute_management_query(&manager, &request.project_id, query, None).await? {
         VceManagementQueryResult::Operations(page) => Ok(map_page(page, map_operation)),
-        _ => Err(String::from("VCE 作业查询返回了不匹配的结果类型。")),
+        _ => Err(String::from(
+            "The VCE job query returned a mismatched result type.",
+        )),
     }
 }
 
@@ -990,7 +1016,9 @@ pub(crate) async fn service_list_vce_integrity_issues(
     .await?
     {
         VceManagementQueryResult::IntegrityIssues(page) => Ok(map_page(page, map_integrity_issue)),
-        _ => Err(String::from("VCE 完整性查询返回了不匹配的结果类型。")),
+        _ => Err(String::from(
+            "The VCE integrity query returned a mismatched result type.",
+        )),
     }
 }
 
@@ -1027,12 +1055,12 @@ pub(crate) async fn service_plan_vce_maintenance(
     let readiness = require_vce_configuration_ready(&state)?;
     Ok(map_maintenance_plan(
         target.plan,
-        readiness
-            .embedding_physical_fingerprint
-            .ok_or_else(|| String::from("VCE 就绪状态缺少向量物理指纹。"))?,
-        readiness
-            .embedding_dimension
-            .ok_or_else(|| String::from("VCE 就绪状态缺少明确向量维度。"))?,
+        readiness.embedding_physical_fingerprint.ok_or_else(|| {
+            String::from("The VCE readiness state is missing the vector physical fingerprint.")
+        })?,
+        readiness.embedding_dimension.ok_or_else(|| {
+            String::from("The VCE readiness state is missing an explicit vector dimension.")
+        })?,
         target.checkpoint_version,
     ))
 }
@@ -1047,9 +1075,11 @@ pub(crate) async fn service_execute_vce_maintenance(
     let (project, manager, _) = vce_project_runtime_inputs(&state, &request.project_id)?;
     validate_project_revision(&project, request.expected_settings_revision)?;
     if !project.vce.enabled {
-        return Err(String::from("请先在项目设置中启用语义引擎。"));
+        return Err(String::from(
+            "Enable the semantic engine in the project settings first.",
+        ));
     }
-    let manager = manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))?;
+    let manager = manager.ok_or_else(|| String::from("The VCE runtime is not ready yet."))?;
     let mode = parse_maintenance_mode(&request.mode)?;
     validate_maintenance_checkpoint_requirement(mode, request.expected_checkpoint_version)?;
     // Exact action sets enter durable admission before current-plan reads, so completed retries can replay.
@@ -1057,7 +1087,9 @@ pub(crate) async fn service_execute_vce_maintenance(
     let requested_action_count = request.action_ids.len();
     let requested_ids = request.action_ids.into_iter().collect::<BTreeSet<_>>();
     if requested_ids.len() != requested_action_count {
-        return Err(String::from("VCE 维护操作包含重复身份，请重新生成计划。"));
+        return Err(String::from(
+            "The VCE maintenance operations contain duplicate identities; generate the plan again.",
+        ));
     }
     if mode == VceMaintenanceMode::Compact {
         // Physical compaction binds only to the stored index contract and never activates a model.
@@ -1067,7 +1099,7 @@ pub(crate) async fn service_execute_vce_maintenance(
             .map_err(|error| format!("failed to lock service state: {error}"))?
             .service_runtime
             .clone()
-            .ok_or_else(|| String::from("VCE 后台执行器尚未就绪。"))?;
+            .ok_or_else(|| String::from("The VCE background executor is not ready yet."))?;
         let receipt = manager
             .submit_physical_compaction(
                 &project.id,
@@ -1101,7 +1133,7 @@ pub(crate) async fn service_execute_vce_maintenance(
             .map_err(|error| format!("failed to lock service state: {error}"))?
             .service_runtime
             .clone()
-            .ok_or_else(|| String::from("VCE 后台执行器尚未就绪。"))?;
+            .ok_or_else(|| String::from("The VCE background executor is not ready yet."))?;
         // fingerprint preserves the confirmed preview so exact completed submissions can replay before new admission.
         // fingerprint 保留已确认预览，使精确已完成提交可在新准入前重放。
         let fingerprint = request.expected_embedding_fingerprint;
@@ -1113,13 +1145,15 @@ pub(crate) async fn service_execute_vce_maintenance(
                     project_id: project.id.clone(),
                     project_root: std::path::PathBuf::from(&project.path),
                     settings: project.vce.clone(),
-                    dimension: readiness
-                        .embedding_dimension
-                        .ok_or_else(|| String::from("VCE 缺少明确向量维度。"))?,
+                    dimension: readiness.embedding_dimension.ok_or_else(|| {
+                        String::from("VCE is missing an explicit vector dimension.")
+                    })?,
                     fingerprint: readiness
                         .embedding_physical_fingerprint
                         .clone()
-                        .ok_or_else(|| String::from("VCE 缺少当前向量契约。"))?,
+                        .ok_or_else(|| {
+                            String::from("VCE is missing the current vector contract.")
+                        })?,
                 },
                 super::VceJobAdmission {
                     retry_of_job_id: None,
@@ -1144,12 +1178,12 @@ pub(crate) async fn service_execute_vce_maintenance(
         != Some(request.expected_embedding_fingerprint.as_str())
     {
         return Err(String::from(
-            "VCE 向量配置已在维护预览后变化，请重新生成计划并确认。",
+            "The VCE vector configuration changed after the maintenance preview; generate the plan again and confirm.",
         ));
     }
-    let expected_checkpoint_version = request
-        .expected_checkpoint_version
-        .ok_or_else(|| String::from("修复或暂存清理要求一个已发布检查点。"))?;
+    let expected_checkpoint_version = request.expected_checkpoint_version.ok_or_else(|| {
+        String::from("Repair or staging cleanup requires a published checkpoint.")
+    })?;
     validate_checkpoint(&manager, &project.id, Some(expected_checkpoint_version)).await?;
     let plan = load_maintenance_plan(&manager, &project.id, mode).await?;
     let planned_ids = plan
@@ -1158,7 +1192,9 @@ pub(crate) async fn service_execute_vce_maintenance(
         .map(|action| action.action_id.clone())
         .collect::<BTreeSet<_>>();
     if planned_ids.is_empty() || requested_ids != planned_ids {
-        return Err(String::from("VCE 维护操作已经变化，请重新生成计划并确认。"));
+        return Err(String::from(
+            "The VCE maintenance operations changed; generate the plan again and confirm.",
+        ));
     }
     manager.cleanup_staging(&project.id).await?;
     emit_vce_project_changed(&app, &state, &project.id).await;
@@ -1202,7 +1238,7 @@ async fn reconcile_vce_project_handles(
     // 启动只在存在管理器时创建监听器；缺失管理器不能持有异步变更。
     validate_current()?;
     if watcher.is_some() || (project.vce.enabled && readiness.status.ready) {
-        return Err(String::from("VCE 运行时不可用。"));
+        return Err(String::from("The VCE runtime is unavailable."));
     }
     Ok(())
 }
@@ -1351,7 +1387,7 @@ fn active_project_from_guard(
                 .find(|project| project.id == project_id)
         })
         .cloned()
-        .ok_or_else(|| format!("项目 `{project_id}` 不存在。"))
+        .ok_or_else(|| format!("Project `{project_id}` does not exist."))
 }
 
 /// Resolve the required manager only after confirming the project is enabled.
@@ -1372,9 +1408,9 @@ fn vce_manager_for_stored_project(
 ) -> Result<VceRuntimeManager, String> {
     let (project, manager, _) = vce_project_runtime_inputs(state, project_id)?;
     if !project.vce.enabled {
-        return Err(format!("VCE 项目 `{}` 已禁用。", project.id));
+        return Err(format!("VCE project `{}` is disabled.", project.id));
     }
-    manager.ok_or_else(|| String::from("VCE 运行时尚未就绪。"))
+    manager.ok_or_else(|| String::from("The VCE runtime is not ready yet."))
 }
 
 /// Execute one typed management request with a unique operation identity.
@@ -1505,11 +1541,11 @@ fn validate_project_revision(
     expected_revision: u64,
 ) -> Result<(), String> {
     if !project.vce.enabled {
-        return Err(format!("VCE 项目 `{}` 已禁用。", project.id));
+        return Err(format!("VCE project `{}` is disabled.", project.id));
     }
     if project.vce.revision != expected_revision {
         return Err(format!(
-            "VCE 设置修订冲突：期望 {expected_revision}，当前 {}。",
+            "VCE settings revision conflict: expected {expected_revision}, current {}.",
             project.vce.revision
         ));
     }
@@ -1529,11 +1565,11 @@ async fn validate_checkpoint(
     let status = manager
         .project_status(project_id)
         .await
-        .ok_or_else(|| format!("VCE 项目 `{project_id}` 尚未协调。"))?;
+        .ok_or_else(|| format!("VCE project `{project_id}` is not reconciled yet."))?;
     let actual_checkpoint = status.engine.and_then(|engine| engine.checkpoint_version);
     if actual_checkpoint != Some(expected_checkpoint) {
         return Err(format!(
-            "VCE 检查点冲突：期望 {expected_checkpoint}，当前 {actual_checkpoint:?}。"
+            "VCE checkpoint conflict: expected {expected_checkpoint}, current {actual_checkpoint:?}."
         ));
     }
     Ok(())
@@ -1748,8 +1784,8 @@ fn blocked_configuration_status(
         present_files: 0,
         checkpoint_blobs: 0,
         last_error: Some(bounded_service_error(format!(
-            "VCE 全局模型配置未就绪：{}",
-            configuration.issues.join("；")
+            "The VCE global model configuration is not ready: {}",
+            configuration.issues.join("; ")
         ))),
     }
 }
@@ -1969,7 +2005,7 @@ fn map_channel_state(state: VceChannelState) -> api::VceChannelStateSummary {
 fn stable_project_id(project_id: &str) -> Result<String, String> {
     let stable = project_id.trim();
     if stable.is_empty() {
-        Err(String::from("项目标识不能为空。"))
+        Err(String::from("The project identifier must not be empty."))
     } else {
         Ok(stable.to_owned())
     }
@@ -1988,7 +2024,7 @@ fn parse_file_status(value: &str) -> Result<FileStatus, String> {
         "present" => Ok(FileStatus::Present),
         "skipped" => Ok(FileStatus::Skipped),
         "deleted" => Ok(FileStatus::Deleted),
-        _ => Err(format!("不支持的 VCE 文件状态：`{value}`。")),
+        _ => Err(format!("Unsupported VCE file status: `{value}`.")),
     }
 }
 
@@ -2000,7 +2036,7 @@ fn parse_maintenance_mode(value: &str) -> Result<VceMaintenanceMode, String> {
         "rebuild" => Ok(VceMaintenanceMode::Rebuild),
         "cleanup_staging" => Ok(VceMaintenanceMode::CleanupStaging),
         "compact" => Ok(VceMaintenanceMode::Compact),
-        _ => Err(format!("不支持的 VCE 维护模式：`{value}`。")),
+        _ => Err(format!("Unsupported VCE maintenance mode: `{value}`.")),
     }
 }
 
@@ -2016,7 +2052,7 @@ fn validate_maintenance_checkpoint_requirement(
 ) -> Result<(), String> {
     if expected_checkpoint.is_none() && mode != VceMaintenanceMode::Rebuild {
         return Err(String::from(
-            "修复、暂存清理或物理整理要求一个已发布检查点。",
+            "Repair, staging cleanup or physical compaction requires a published checkpoint.",
         ));
     }
     Ok(())
@@ -2556,19 +2592,19 @@ mod tests {
         assert_eq!(
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Repair, None),
             Err(String::from(
-                "修复、暂存清理或物理整理要求一个已发布检查点。"
+                "Repair, staging cleanup or physical compaction requires a published checkpoint."
             ))
         );
         assert_eq!(
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::CleanupStaging, None),
             Err(String::from(
-                "修复、暂存清理或物理整理要求一个已发布检查点。"
+                "Repair, staging cleanup or physical compaction requires a published checkpoint."
             ))
         );
         assert_eq!(
             validate_maintenance_checkpoint_requirement(VceMaintenanceMode::Compact, None),
             Err(String::from(
-                "修复、暂存清理或物理整理要求一个已发布检查点。"
+                "Repair, staging cleanup or physical compaction requires a published checkpoint."
             ))
         );
     }

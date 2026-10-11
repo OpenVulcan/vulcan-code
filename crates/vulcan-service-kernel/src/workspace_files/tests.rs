@@ -13,7 +13,7 @@ fn workspace_file_child_path_rejects_outside_root() {
     let error = workspace_file_canonical_child_path(&root, outside.to_str(), "文件路径")
         .expect_err("outside path should be rejected");
 
-    assert!(error.contains("越出工作区"));
+    assert!(error.contains("escapes the workspace"));
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(outside);
 }

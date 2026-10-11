@@ -65,7 +65,9 @@ pub(crate) async fn account_session_goal_from_report(
                     }
                 },
             )
-            .map_err(|write_error| format!("持久化 V1 Goal 错误状态失败：{write_error}"))?;
+            .map_err(|write_error| {
+                format!("Failed to persist the V1 goal error state: {write_error}")
+            })?;
     }
     let after = session_goal_summary_from_v1_handle(handle.as_ref(), report.session_id)?;
     cache_session_goal_summary(state, report.session_id, after.clone())?;

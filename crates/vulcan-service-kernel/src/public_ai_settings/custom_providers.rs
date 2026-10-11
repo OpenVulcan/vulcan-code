@@ -1237,7 +1237,7 @@ pub(crate) async fn service_save_public_ai_custom_provider(
 
         let persist_result = mutate_public_ai_configuration_in_transaction(
             &state,
-            "保存自定义供应商失败",
+            "Failed to save the custom provider",
             |configuration| {
                 configuration
                     .custom_providers
@@ -1371,7 +1371,7 @@ pub(crate) async fn service_save_public_ai_custom_provider(
                 // 保存前快照。
                 let configuration_restore = mutate_public_ai_configuration_in_transaction(
                     &state,
-                    "恢复自定义供应商保存前配置失败",
+                    "Failed to restore the configuration from before the custom provider was saved",
                     |configuration| {
                         *configuration = current_configuration.clone();
                         Ok(())
@@ -1473,7 +1473,7 @@ pub(crate) async fn service_remove_public_ai_custom_provider(
     };
     let remove_result = mutate_public_ai_configuration_in_transaction(
         &state,
-        "移除自定义供应商失败",
+        "Failed to remove the custom provider",
         |configuration| {
             let was_isolated =
                 configuration.custom_provider_manifest_is_isolated(provider_id.as_str());
@@ -1522,7 +1522,7 @@ pub(crate) async fn service_remove_public_ai_custom_provider(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复自定义供应商移除前配置失败",
+                "Failed to restore the configuration from before the custom provider was removed",
             );
             return Err(compensated_operation_error(
                 error,
@@ -1570,7 +1570,7 @@ pub(crate) async fn service_remove_public_ai_custom_provider(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复自定义供应商移除前配置失败",
+                "Failed to restore the configuration from before the custom provider was removed",
             );
             drop(transaction);
             Err(compensated_operation_error(

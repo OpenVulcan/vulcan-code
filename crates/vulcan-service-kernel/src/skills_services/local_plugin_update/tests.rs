@@ -310,7 +310,7 @@ async fn immutable_service_update_policy_recovery_serializes_with_user_edits() {
             .await
             .expect("recovery task")
             .expect_err("late policy conflict")
-            .contains("不一致")
+            .contains("disagrees")
     );
     assert!(Arc::ptr_eq(&original_catalog, &fixture.runtime.snapshot()));
     assert_eq!(
@@ -397,7 +397,7 @@ async fn immutable_service_update_policy_uses_original_plugin_only_compare_and_s
                 // 验证生产串行写入器，而非测试专用局部策略变换。
                 let result = persist_update_policy(&fixture.state, &prepared).await;
                 if changed_plugin {
-                    assert!(result.expect_err("policy conflict").contains("已改变"));
+                    assert!(result.expect_err("policy conflict").contains("changed"));
                     assert!(!destination.exists());
                 } else {
                     result.expect("unrelated edit preserved");
@@ -468,7 +468,7 @@ fn immutable_service_update_policy_mismatch_precedes_durable_preparation() {
             .prepare(request_id)
             .err()
             .expect("mismatch")
-            .contains("不一致")
+            .contains("disagrees")
     );
     assert!(list(&fixture.runtime, PLUGIN).expect("query").is_empty());
 }
@@ -642,7 +642,7 @@ return M
         assert!(
             abort(&fixture.runtime, PLUGIN, &request.to_string(), false)
                 .expect_err("acknowledgement is required")
-                .contains("副作用")
+                .contains("side effects")
         );
         // Acknowledged abandonment retains historical evidence instead of claiming external rollback.
         // 已确认放弃保留历史证据，而非声称外部回滚。
@@ -1589,7 +1589,7 @@ async fn immutable_service_update_rejects_changed_predecessor_authority() {
             .prepare(uuid::Uuid::new_v4())
             .err()
             .expect("full mismatch rejected")
-            .contains("持久选择与当前目录不一致")
+            .contains("persisted plugin selection disagrees with the current catalog")
     );
     assert_eq!(
         list(&fixture.runtime, PLUGIN).expect("no new intent").len(),
@@ -1623,7 +1623,7 @@ async fn immutable_service_update_recovery_does_not_infer_commit_or_policy() {
         )
         .await
         .expect_err("not committed")
-        .contains("尚无确定的已提交目标")
+        .contains("no determined committed target")
     );
     assert_eq!(
         list(&fixture.runtime, PLUGIN).expect("unchanged request")[0].phase,
@@ -1663,7 +1663,7 @@ async fn immutable_service_update_recovery_does_not_infer_commit_or_policy() {
         )
         .await
         .expect_err("policy changed")
-        .contains("停用目标与当前用户策略不一致")
+        .contains("disagrees with the current user policy")
     );
     assert_eq!(
         list(&fixture.runtime, PLUGIN).expect("retained published request")[0].phase,

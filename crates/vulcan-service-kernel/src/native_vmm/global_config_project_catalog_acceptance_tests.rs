@@ -188,7 +188,7 @@ pub(super) async fn verify(
     assert!(
         stale_result
             .expect_err("changed project catalog must reject old plan")
-            .contains("项目")
+            .contains("project")
     );
     assert_configuration(path, state, &reviewed_configuration);
     // A freshly reviewed request now explicitly covers both genuinely unbound projects.

@@ -18,13 +18,14 @@ use super::*;
 pub(crate) fn workspace_file_canonical_root(workspace_path: &str) -> Result<PathBuf, String> {
     let trimmed_path = workspace_path.trim();
     if trimmed_path.is_empty() {
-        return Err(String::from("工作区路径不能为空。"));
+        return Err(String::from("The workspace path must not be empty."));
     }
-    let root = fs::canonicalize(Path::new(trimmed_path))
-        .map_err(|error| format!("解析工作区路径失败 `{trimmed_path}`：{error}"))?;
+    let root = fs::canonicalize(Path::new(trimmed_path)).map_err(|error| {
+        format!("Failed to resolve the workspace path `{trimmed_path}`: {error}")
+    })?;
     if !root.is_dir() {
         return Err(format!(
-            "工作区路径不是目录：{}",
+            "The workspace path is not a directory: {}",
             normalized_workspace_path_text_from_path(&root)
         ));
     }
@@ -64,13 +65,13 @@ pub(crate) fn workspace_file_canonical_child_path(
     };
     let canonical = fs::canonicalize(&joined).map_err(|error| {
         format!(
-            "解析{label}失败 `{}`：{error}",
+            "Failed to resolve the {label} `{}`: {error}",
             normalized_workspace_path_text_from_path(&joined)
         )
     })?;
     if !workspace_path_is_inside_root(&canonical, workspace_root) {
         return Err(format!(
-            "{label}越出工作区：{}",
+            "The {label} escapes the workspace: {}",
             normalized_workspace_path_text_from_path(&canonical)
         ));
     }

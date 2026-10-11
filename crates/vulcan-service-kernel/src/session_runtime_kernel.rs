@@ -348,7 +348,7 @@ fn start_webui_session_kernel_turn_with_admission(
         .start_turn(turn_id.to_string(), kind, current_unix_millis_u64())
         .map_err(|error| {
             format!(
-                "会话 `{session_id}` 无法启动运行内核回合：{}",
+                "Session `{session_id}` cannot start a runtime kernel turn: {}",
                 error.message
             )
         })?;

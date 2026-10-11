@@ -453,7 +453,7 @@ async fn verify_saved_cleanup_policy_on_real_storage(runtime: NativeVmmCoreRunti
             .execute_retention_cleanup("changed-policy", &replaced.preview_id)
             .await
             .expect_err("policy changed")
-            .contains("规则已改变")
+            .contains("rules changed")
     );
     maintenance
         .update_retention_settings(settings.clone())
@@ -477,7 +477,7 @@ async fn verify_saved_cleanup_policy_on_real_storage(runtime: NativeVmmCoreRunti
             .execute_retention_cleanup("stale-storage", &stale.preview_id)
             .await
             .expect_err("version changed")
-            .contains("规则已改变")
+            .contains("rules changed")
     );
     // The fresh plan executes exactly the displayed identities even with the periodic switch off.
     // 即使周期清洗开关关闭，新计划也准确执行显示的标识。

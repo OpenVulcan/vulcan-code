@@ -47,7 +47,10 @@ impl NativeVmmMaintenance {
         // 只在远端或 AI 准备完成后获取，绝不在等待模型响应时持有。
         let operation_guard = self.operation_gate.clone().write_owned().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("原生记忆已关闭，不能发布此前的召回结果。".to_owned());
+            return Err(
+                "Native memory is turned off; earlier recall results cannot be published."
+                    .to_owned(),
+            );
         }
         // Operation admission alone cannot stop a detached Core worker finishing after caller cancellation.
         // 仅靠操作准入不能阻止脱离的 Core 工作器在调用方取消后完成。

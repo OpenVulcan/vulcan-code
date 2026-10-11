@@ -32,7 +32,7 @@ impl NativeVmmMaintenance {
         let _operation_guard = self.operation_gate.read().await;
         *self.session_archive_preview.lock().await = None;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("请先启用原生记忆。".to_owned());
+            return Err("Enable native memory first.".to_owned());
         }
         self.ensure_project(selection.vmm_project_id).await?;
         // Bound and normalize only declared session identities, never session titles.
@@ -64,7 +64,7 @@ impl NativeVmmMaintenance {
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("原生记忆已关闭，请重新启用并预览。".to_owned());
+            return Err("Native memory is turned off; enable it again and preview.".to_owned());
         }
         // The durable operation identity binds to the opaque preview, not to newly supplied targets.
         // 持久操作身份绑定不透明预览，而不是新提交的目标。
@@ -80,13 +80,18 @@ impl NativeVmmMaintenance {
             let mut slot = self.session_archive_preview.lock().await;
             match slot.as_ref() {
                 Some(prepared) if prepared.summary.preview_id == preview_id => {}
-                _ => return Err("归档预览不存在或已被替换，请重新预览。".to_owned()),
+                _ => {
+                    return Err(
+                        "The archive preview does not exist or was replaced; preview again."
+                            .to_owned(),
+                    );
+                }
             }
             slot.take()
-                .ok_or_else(|| "归档预览已消费，请重新预览。".to_owned())?
+                .ok_or_else(|| "The archive preview was already used; preview again.".to_owned())?
         };
         if prepared.created_at.elapsed() > Duration::from_secs(300) {
-            return Err("归档预览已过期，请重新预览。".to_owned());
+            return Err("The archive preview expired; preview again.".to_owned());
         }
         self.ensure_project(prepared.summary.selection.vmm_project_id)
             .await?;
@@ -107,11 +112,14 @@ fn normalize_selection(
     mut selection: VmmNativeSessionArchiveSelection,
 ) -> Result<VmmNativeSessionArchiveSelection, String> {
     if selection.session_source_ids.is_empty() || selection.session_source_ids.len() > 100 {
-        return Err("请选择 1 至 100 个记忆会话。".to_owned());
+        return Err("Select 1 to 100 memory sessions.".to_owned());
     }
     for id in &selection.session_source_ids {
         if id.trim() != id || id.is_empty() {
-            return Err("记忆会话 ID 不能为空或包含首尾空白。".to_owned());
+            return Err(
+                "Memory session IDs must not be empty or have leading or trailing whitespace."
+                    .to_owned(),
+            );
         }
         SessionSourceId::new(id.clone()).map_err(|error| error.to_string())?;
     }
@@ -137,11 +145,13 @@ fn validate_selection(
                     && session.subject_id == subject
                     && session.session_source_id.as_str() == id
             })
-            .ok_or_else(|| format!("项目中不存在记忆会话 `{id}`，请刷新列表。"))?;
+            .ok_or_else(|| {
+                format!("Memory session `{id}` does not exist in the project; refresh the list.")
+            })?;
         session
             .status
             .archive_transition(selection.archived)
-            .map_err(|_| format!("会话 `{id}` 的状态不允许此归档操作，请刷新列表。"))?;
+            .map_err(|_| format!("The state of session `{id}` does not allow this archive operation; refresh the list."))?;
     }
     Ok(())
 }
@@ -172,7 +182,7 @@ fn apply_archive(
         storage_version: snapshot
             .storage_version
             .checked_add(1)
-            .ok_or_else(|| "原生记忆存储版本已耗尽。".to_owned())?,
+            .ok_or_else(|| "The native memory storage versions are exhausted.".to_owned())?,
         selection,
     })
 }

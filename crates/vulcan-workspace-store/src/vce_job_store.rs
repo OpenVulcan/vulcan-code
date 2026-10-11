@@ -50,7 +50,7 @@ impl VceJobStoreError {
     fn storage(context: &str, error: crate::local_sql::typed::LocalSqlError) -> Self {
         Self {
             busy: error.is_busy(),
-            message: format!("{context}：{error}"),
+            message: format!("{context}: {error}"),
         }
     }
 

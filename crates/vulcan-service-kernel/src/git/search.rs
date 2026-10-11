@@ -80,7 +80,9 @@ pub(crate) fn load_webui_workspace_diff_search(
         return Ok(empty_webui_diff_search_response(
             repository_root_text,
             query,
-            String::from("当前工作区不是 Git 仓库，无法搜索代码审查 diff。"),
+            String::from(
+                "The current workspace is not a Git repository; the code review diff cannot be searched.",
+            ),
         ));
     };
     let repository_root_text = normalized_workspace_path_text_from_path(&repository_root);
@@ -89,7 +91,7 @@ pub(crate) fn load_webui_workspace_diff_search(
         return Ok(empty_webui_diff_search_response(
             repository_root_text,
             query,
-            String::from("搜索词为空，未执行 Git diff 搜索。"),
+            String::from("The search term is empty; the Git diff search was not run."),
         ));
     }
     // Normalize the selected repository before response-cache lookup so cached searches avoid Git IO.
@@ -119,7 +121,9 @@ pub(crate) fn load_webui_workspace_diff_search(
         input.raw_line_count,
     );
     let notice = if input.unified_diff.trim().is_empty() {
-        Some(String::from("当前工作区没有可搜索的 Git 变更。"))
+        Some(String::from(
+            "The current workspace has no Git changes to search.",
+        ))
     } else if input.notices.is_empty() {
         None
     } else {

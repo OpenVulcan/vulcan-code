@@ -159,10 +159,10 @@ impl NativeVmmResourceStore {
             });
         };
         let document: PersistedRuntimePolicy = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("解析原生 VMM 运行策略失败：{error}"))?;
+            .map_err(|error| format!("Failed to parse the native VMM runtime policy: {error}"))?;
         if document.schema_version != 1 {
             return Err(format!(
-                "不支持的原生 VMM 运行策略版本：{}",
+                "Unsupported native VMM runtime policy version: {}",
                 document.schema_version
             ));
         }
@@ -364,8 +364,9 @@ impl NativeVmmResourceStore {
             text,
             profiles,
         };
-        let bytes = serde_json::to_vec_pretty(&document)
-            .map_err(|error| format!("序列化原生 VMM 运行策略失败：{error}"))?;
+        let bytes = serde_json::to_vec_pretty(&document).map_err(|error| {
+            format!("Failed to serialize the native VMM runtime policy: {error}")
+        })?;
         persist_file_atomically(
             &self.config_root,
             &self.config_root.join("runtime-policy.json"),

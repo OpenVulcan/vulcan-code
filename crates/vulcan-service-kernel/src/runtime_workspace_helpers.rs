@@ -13,13 +13,14 @@ pub(crate) fn vmm_project_scope_path(
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let workspace_snapshot = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("工作区尚未载入，无法保存项目 VMM 配置。"))?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from(
+            "The workspace is not loaded yet; the project VMM configuration cannot be saved.",
+        )
+    })?;
     vmm_request_project_scope(workspace_snapshot, project_id)
         .map(|project| project.path.clone())
-        .ok_or_else(|| String::from("选中的项目已不存在，请重新选择。"))
+        .ok_or_else(|| String::from("The selected project no longer exists; select again."))
 }
 
 /// Finds the project scope requested by WebUI or implied by the selected session.
@@ -486,7 +487,7 @@ pub(crate) fn webui_turn_completion_gate_from_state(
     let pending_subagent_count = usize::from(durable_has_pending_collaboration);
     let has_active_hook_turn = agent_runtime
         .lock_conversation_hooks()
-        .map_err(|error| format!("读取会话 Hook 完成门控失败：{error}"))?
+        .map_err(|error| format!("Failed to read the session hook completion gate: {error}"))?
         .has_active_turn(session_id);
     Ok(WebuiTurnCompletionGate {
         pending_subagent_count,
@@ -721,8 +722,8 @@ pub(crate) fn stop_webui_session_work(
     if let Some(session) = workspace_session_summary_for_session_mut(workspace_snapshot, session_id)
     {
         session.status = SessionState::Blocked;
-        session.focus = String::from("已按用户请求停止当前会话运行。");
-        session.last_updated_label = String::from("刚刚");
+        session.focus = String::from("Stopped the current session run at the user's request.");
+        session.last_updated_label = String::from("just now");
     }
     workspace_snapshot
         .session_runtime_state
@@ -945,7 +946,7 @@ mod tests {
                 SessionState::Completed,
                 0,
                 0,
-                "刚刚",
+                "just now",
             )],
             archived_sessions: Vec::new(),
             session_runtime_state: BTreeMap::new(),
@@ -1050,7 +1051,7 @@ mod tests {
                 SessionState::Completed,
                 0,
                 0,
-                "刚刚",
+                "just now",
             ));
 
         assert!(

@@ -378,7 +378,7 @@ where
             if conversation.id == conversation_id {
                 conversation.run_phase = run_phase.to_string();
                 conversation.status = session_state.label().to_string();
-                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_label = String::from("just now");
                 conversation.last_updated_at = current_unix_millis_text();
                 break;
             }
@@ -592,7 +592,7 @@ fn commit_workspace_snapshot_and_emit_session_phase_delta_internal(
                 if conversation.id == conversation_id {
                     conversation.run_phase = run_phase.to_string();
                     conversation.status = session_state.label().to_string();
-                    conversation.last_updated_label = String::from("刚刚");
+                    conversation.last_updated_label = String::from("just now");
                     conversation.last_updated_at = current_unix_millis_text();
                     break;
                 }

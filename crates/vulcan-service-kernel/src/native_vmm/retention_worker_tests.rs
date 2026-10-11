@@ -179,11 +179,11 @@ pub(in crate::native_vmm) async fn verify_worker_lifecycle(
         status
             .last_error
             .as_deref()
-            .is_some_and(|error| error.contains("解析原生 VMM"))
+            .is_some_and(|error| error.contains("Failed to parse the native VMM"))
             && status
                 .profile_expiry_last_error
                 .as_deref()
-                .is_some_and(|error| error.contains("解析原生 VMM"))
+                .is_some_and(|error| error.contains("Failed to parse the native VMM"))
     })
     .await;
     tokio::time::sleep(Duration::from_millis(1_250)).await;

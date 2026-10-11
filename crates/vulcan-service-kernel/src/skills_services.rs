@@ -131,9 +131,9 @@ where
             None => owned_operation.await,
         }
     };
-    spawn_service_task(owned_operation)
-        .await
-        .map_err(|error| format!("LuaSkills 管理事务 `{label}` 任务异常结束：{error}"))?
+    spawn_service_task(owned_operation).await.map_err(|error| {
+        format!("LuaSkills management transaction `{label}` task ended abnormally: {error}")
+    })?
 }
 
 /// Acquires the complete Agent Skills catalog transaction guard.
@@ -298,7 +298,9 @@ where
 {
     spawn_service_blocking_task(operation)
         .await
-        .map_err(|error| format!("扩展管理操作 `{label}` 任务异常结束：{error}"))?
+        .map_err(|error| {
+            format!("Extension management operation `{label}` task ended abnormally: {error}")
+        })?
 }
 
 /// Refreshes the LuaSkills catalog used by the WebUI skill page.
@@ -334,7 +336,7 @@ pub(crate) async fn service_refresh_luaskills_catalog(
             .cloned()
             .collect::<Vec<_>>();
         validate_service_vulcan_plugin_hooks(&state, &preview_hooks)
-            .map_err(|error| format!("Vulcan Plugin hook 刷新预检失败：{error}"))?;
+            .map_err(|error| format!("Vulcan plugin hook refresh precheck failed: {error}"))?;
         let catalog = run_extension_management_blocking("refresh catalog", move || {
             vulcan_service_runtime::luaskills_bridge::refresh_luaskills_catalog(&handle)
         })
@@ -753,21 +755,31 @@ fn project_luaskill_config_descriptor(
             // item_key 同时为配置项行与其附加校验问题保留声明身份。
             let item_key = item.key.clone();
             let value_type = item.value_type.as_str().to_string();
-            let constraints = serde_json::to_value(item.constraints)
-                .map_err(|error| format!("序列化技能包配置约束失败：{error}"))?;
+            let constraints = serde_json::to_value(item.constraints).map_err(|error| {
+                format!("Failed to serialize the skill package configuration constraints: {error}")
+            })?;
             let format = item
                 .format
                 .map(|format| {
-                    serde_json::to_value(format)
-                        .map_err(|error| format!("序列化技能包配置格式失败：{error}"))
+                    serde_json::to_value(format).map_err(|error| {
+                        format!(
+                            "Failed to serialize the skill package configuration format: {error}"
+                        )
+                    })
                 })
                 .transpose()?
                 .and_then(|value| value.as_str().map(str::to_string));
             let state = serde_json::to_value(item.state)
-                .map_err(|error| format!("序列化技能包配置状态失败：{error}"))?
+                .map_err(|error| {
+                    format!("Failed to serialize the skill package configuration state: {error}")
+                })?
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| String::from("技能包配置状态未序列化为字符串。"))?;
+                .ok_or_else(|| {
+                    String::from(
+                        "The skill package configuration state did not serialize to a string.",
+                    )
+                })?;
             Ok(LuaSkillConfigItem {
                 key: item.key,
                 value_type,
@@ -973,19 +985,19 @@ fn validate_initial_plugin_mcp_secrets(
         let key = (input.server_id, input.secret_key);
         if !required_keys.contains(&key) {
             return Err(format!(
-                "插件 `{}` 安装请求包含未声明的本地 MCP Secret `{}:{}`。",
+                "The install request of plugin `{}` contains undeclared local MCP secret `{}:{}`.",
                 preview.plugin_id, key.0, key.1
             ));
         }
         if input.value.is_empty() {
             return Err(format!(
-                "插件 `{}` 的本地 MCP Secret `{}:{}` 不能为空。",
+                "Plugin `{}` has an empty local MCP secret `{}:{}`.",
                 preview.plugin_id, key.0, key.1
             ));
         }
         if values.insert(key.clone(), input.value).is_some() {
             return Err(format!(
-                "插件 `{}` 的本地 MCP Secret `{}:{}` 重复提交。",
+                "Plugin `{}` submitted local MCP secret `{}:{}` more than once.",
                 preview.plugin_id, key.0, key.1
             ));
         }
@@ -998,7 +1010,7 @@ fn validate_initial_plugin_mcp_secrets(
             .collect::<Vec<_>>()
             .join(", ");
         return Err(format!(
-            "插件 `{}` 缺少本地 MCP 安装验证所需的 Secret：{missing}。",
+            "Plugin `{}` is missing the secrets required for local MCP install verification: {missing}.",
             preview.plugin_id
         ));
     }
@@ -1723,12 +1735,12 @@ pub(crate) async fn service_prepare_plugin_environment(
         let plugin = snapshot
             .plugins
             .get(&plugin_id)
-            .ok_or_else(|| format!("未发现 Vulcan 插件：{plugin_id}"))?;
+            .ok_or_else(|| format!("Vulcan plugin not found: {plugin_id}"))?;
         if plugin.desired_enabled
             || plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
         {
             return Err(format!(
-                "Vulcan 插件 `{plugin_id}` 必须先停用，才能安装其执行环境。"
+                "Vulcan plugin `{plugin_id}` must be disabled before its execution environment can be installed."
             ));
         }
         if !matches!(
@@ -1737,8 +1749,8 @@ pub(crate) async fn service_prepare_plugin_environment(
                 | vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
         ) {
             return Err(format!(
-                "Vulcan 插件 `{plugin_id}` 当前不可安装：{}",
-                plugin.diagnostics.join("；")
+                "Vulcan plugin `{plugin_id}` cannot be installed right now: {}",
+                plugin.diagnostics.join("; ")
             ));
         }
         run_extension_management_blocking("install plugin environment", move || {
@@ -1777,12 +1789,12 @@ pub(crate) async fn service_start_plugin_environment_install(
     let plugin = snapshot
         .plugins
         .get(&plugin_id)
-        .ok_or_else(|| format!("未发现 Vulcan 插件：{plugin_id}"))?;
+        .ok_or_else(|| format!("Vulcan plugin not found: {plugin_id}"))?;
     if plugin.desired_enabled
         || plugin.runtime_state != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
     {
         return Err(format!(
-            "Vulcan 插件 `{plugin_id}` 必须先停用，才能安装其执行环境。"
+            "Vulcan plugin `{plugin_id}` must be disabled before its execution environment can be installed."
         ));
     }
     if !matches!(
@@ -1791,8 +1803,8 @@ pub(crate) async fn service_start_plugin_environment_install(
             | vulcan_plugin_runtime::VulcanPluginAvailability::Disabled
     ) {
         return Err(format!(
-            "Vulcan 插件 `{plugin_id}` 当前不可安装：{}",
-            plugin.diagnostics.join("；")
+            "Vulcan plugin `{plugin_id}` cannot be installed right now: {}",
+            plugin.diagnostics.join("; ")
         ));
     }
     // key fixes one request to the exact source directory generation observed at enqueue time.
@@ -1827,13 +1839,13 @@ pub(crate) async fn service_start_plugin_environment_install(
                 let current_plugin = current
                     .plugins
                     .get(&task_plugin_id)
-                    .ok_or_else(|| format!("未发现 Vulcan 插件：{task_plugin_id}"))?;
+                    .ok_or_else(|| format!("Vulcan plugin not found: {task_plugin_id}"))?;
                 if current_plugin.desired_enabled
                     || current_plugin.runtime_state
                         != vulcan_plugin_runtime::VulcanPluginRuntimeState::Disabled
                 {
                     return Err(format!(
-                        "Vulcan 插件 `{task_plugin_id}` 在安装期间必须保持停用状态。"
+                        "Vulcan plugin `{task_plugin_id}` must stay disabled during installation."
                     ));
                 }
                 let current_key = PluginEnvironmentInstallKey {
@@ -1844,7 +1856,7 @@ pub(crate) async fn service_start_plugin_environment_install(
                 };
                 if current_key != expected_key {
                     return Err(format!(
-                        "Vulcan 插件 `{task_plugin_id}` 的目录代次在排队期间发生变化，请刷新目录后重试。"
+                        "The catalog generation of Vulcan plugin `{task_plugin_id}` changed while queued; refresh the catalog and retry."
                     ));
                 }
                 let install_plugin_id = task_plugin_id.clone();
@@ -1862,7 +1874,7 @@ pub(crate) async fn service_start_plugin_environment_install(
                     let prepared_plugin = prepared_snapshot
                         .plugins
                         .get(&task_plugin_id)
-                        .ok_or_else(|| format!("未发现 Vulcan 插件：{task_plugin_id}"))?;
+                        .ok_or_else(|| format!("Vulcan plugin not found: {task_plugin_id}"))?;
                     PluginEnvironmentInstallKey {
                         plugin_id: prepared_plugin.id.clone(),
                         package_root: prepared_plugin.package_root.clone(),
@@ -1872,7 +1884,7 @@ pub(crate) async fn service_start_plugin_environment_install(
                 };
                 if prepared_key != expected_key {
                     return Err(format!(
-                        "Vulcan 插件 `{task_plugin_id}` 的目录代次在安装期间发生变化，已拒绝旧任务结果。"
+                        "The catalog generation of Vulcan plugin `{task_plugin_id}` changed during installation; the stale task result was rejected."
                     ));
                 }
                 operation_registry.update(&operation_task_id, "running", "verifying", None)?;
@@ -1891,7 +1903,7 @@ pub(crate) async fn service_start_plugin_environment_install(
                     let verified_plugin = verified_snapshot
                         .plugins
                         .get(&task_plugin_id)
-                        .ok_or_else(|| format!("未发现 Vulcan 插件：{task_plugin_id}"))?;
+                        .ok_or_else(|| format!("Vulcan plugin not found: {task_plugin_id}"))?;
                     PluginEnvironmentInstallKey {
                         plugin_id: verified_plugin.id.clone(),
                         package_root: verified_plugin.package_root.clone(),
@@ -1901,7 +1913,7 @@ pub(crate) async fn service_start_plugin_environment_install(
                 };
                 if verified_key != expected_key {
                     return Err(format!(
-                        "Vulcan 插件 `{task_plugin_id}` 的目录代次在校验期间发生变化，已拒绝旧任务结果。"
+                        "The catalog generation of Vulcan plugin `{task_plugin_id}` changed during verification; the stale task result was rejected."
                     ));
                 }
                 Ok(verification_result)
@@ -1916,7 +1928,7 @@ pub(crate) async fn service_start_plugin_environment_install(
                     &task_id,
                     "failed",
                     "failed",
-                    Some("插件执行环境安装后未通过完整性检查。"),
+                    Some("The plugin execution environment failed the integrity check after installation."),
                 );
             }
             Err(error) => {
@@ -1946,7 +1958,7 @@ pub(crate) fn service_plugin_environment_install_status(
     let registry = plugin_environment_install_task_registry().clone();
     registry
         .status(&task_id)?
-        .ok_or_else(|| format!("未找到插件环境安装任务：{task_id}"))
+        .ok_or_else(|| format!("Plugin environment install task not found: {task_id}"))
 }
 
 /// Reads the latest task for the plugin's current catalog directory generation.
@@ -1970,7 +1982,7 @@ pub(crate) fn service_plugin_environment_install_status_for_plugin(
     let plugin = snapshot
         .plugins
         .get(&plugin_id)
-        .ok_or_else(|| format!("未发现 Vulcan 插件：{plugin_id}"))?;
+        .ok_or_else(|| format!("Vulcan plugin not found: {plugin_id}"))?;
     let key = PluginEnvironmentInstallKey {
         plugin_id: plugin.id.clone(),
         package_root: plugin.package_root.clone(),
@@ -2016,7 +2028,7 @@ pub(crate) async fn service_set_luaskill_tool_registration_state(
         let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
         mutate_provider_configuration(
             &state,
-            "保存 LuaSkills 工具注册失败",
+            "Failed to save the LuaSkills tool registration",
             |configuration| {
                 configuration.luaskills.set_tool_registration_state(
                     &skill_id,
@@ -2054,7 +2066,7 @@ pub(crate) async fn service_open_agent_skills_user_directory(
     let created_root = user_root.clone();
     run_agent_skill_file_operation(move || {
         std::fs::create_dir_all(&created_root)
-            .map_err(|error| format!("创建 Agent Skills 用户目录失败：{error}"))
+            .map_err(|error| format!("Failed to create the Agent Skills user directory: {error}"))
     })
     .await?;
     let update = refresh_agent_skills_local_state(&state).await?;
@@ -2165,7 +2177,7 @@ pub(crate) async fn service_save_agent_skill(
     let configuration_target_name = name.clone();
     crate::service_state_access::mutate_provider_configuration_with_state_validation(
         &state,
-        "保存 Agent Skill 状态失败",
+        "Failed to save the Agent Skill state",
         |guard| {
             crate::service_state_access::require_plugin_update_full_publication_admission(
                 guard, None,
@@ -2202,7 +2214,7 @@ pub(crate) async fn service_save_agent_skill(
         let rollback_target_name = name.clone();
         let rollback_result = mutate_provider_configuration(
             &state,
-            "回滚 Agent Skill 状态失败",
+            "Failed to roll back the Agent Skill state",
             move |configuration| {
                 configuration
                     .prompt_skills
@@ -2251,7 +2263,7 @@ pub(crate) async fn service_delete_agent_skill(
     let state_name = name.clone();
     crate::service_state_access::mutate_provider_configuration_with_state_validation(
         &state,
-        "删除 Agent Skill 状态失败",
+        "Failed to delete the Agent Skill state",
         |guard| {
             crate::service_state_access::require_plugin_update_full_publication_admission(
                 guard, None,
@@ -2275,7 +2287,7 @@ pub(crate) async fn service_delete_agent_skill(
         let rollback_name = name.clone();
         let rollback_result = mutate_provider_configuration(
             &state,
-            "回滚 Agent Skill 删除状态失败",
+            "Failed to roll back the Agent Skill deletion state",
             move |configuration| {
                 configuration
                     .prompt_skills
@@ -2311,7 +2323,9 @@ pub(crate) async fn service_restore_agent_skill_default(
             .join(vulcan_prompt_skills::SKILL_FILE_NAME)
             .is_file()
         {
-            return Err(format!("Agent Skill `{name}` 没有可恢复的系统版本。"));
+            return Err(format!(
+                "Agent Skill `{name}` has no system version to restore."
+            ));
         }
         vulcan_prompt_skills::delete_user_prompt_skill_package(&user_root, &name)
     })
@@ -2490,7 +2504,7 @@ pub(crate) async fn service_open_subagent_user_directory(
     let user_definition_root = user_subagent_definition_root();
     std::fs::create_dir_all(&user_definition_root).map_err(|error| {
         format!(
-            "创建用户智能体定义目录 `{}` 失败：{error}",
+            "Failed to create the user agent definition directory `{}`: {error}",
             user_definition_root.display()
         )
     })?;
@@ -2517,7 +2531,9 @@ pub(crate) async fn service_set_subagent_definition_enabled(
 ) -> Result<SubagentCatalogUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
-        return Err(String::from("智能体定义标识不能为空。"));
+        return Err(String::from(
+            "The agent definition identifier must not be empty.",
+        ));
     }
     reject_plugin_agent_mutation(&state, agent_id)?;
     // Keep the filesystem override and both retained runtime projections ordered as one catalog transaction.
@@ -2534,7 +2550,7 @@ pub(crate) async fn service_set_subagent_definition_enabled(
             .iter()
             .any(|definition| definition.agent_id == agent_id)
         {
-            return Err(format!("未找到智能体定义：{agent_id}"));
+            return Err(format!("Agent definition not found: {agent_id}"));
         }
     }
     vulcan_task_session::write_user_subagent_enabled_override(
@@ -2544,7 +2560,7 @@ pub(crate) async fn service_set_subagent_definition_enabled(
     )
     .map_err(|error| {
         format!(
-            "写入智能体启停覆盖 `{}` 失败：{}",
+            "Failed to write the agent enable override `{}`: {}",
             error.path.display(),
             error.message
         )
@@ -2559,14 +2575,14 @@ pub(crate) async fn service_set_subagent_definition_enabled(
         .iter_mut()
         .find(|definition| definition.agent_id == agent_id)
     else {
-        return Err(format!("未找到智能体定义：{agent_id}"));
+        return Err(format!("Agent definition not found: {agent_id}"));
     };
     definition.enabled = enabled;
     if let Some(runtime) = guard.agent_runtime.as_ref() {
         runtime
             .task_runtime
             .set_subagent_definition_enabled(agent_id, enabled)
-            .map_err(|error| format!("更新运行时智能体启停状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to update the runtime agent enable state: {error}"))?;
     }
     let notice = subagent_catalog_notice_from_summary(&guard.workbench.subagent_catalog);
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
@@ -2589,7 +2605,7 @@ pub(crate) async fn service_save_subagent_definition(
 ) -> Result<SubagentCatalogUpdate, String> {
     let requested_agent_id = normalize_agent_file_name_input(&request.agent_id);
     if requested_agent_id.is_empty() {
-        return Err(String::from("智能体标识不能为空。"));
+        return Err(String::from("The agent identifier must not be empty."));
     }
     let mode = vulcan_task_session::SubagentDefinitionMode::Expert;
     let target_package_id = normalized_optional_user_package_id(request.package_id.as_deref())?;
@@ -2628,10 +2644,12 @@ pub(crate) async fn service_save_subagent_definition(
         .filter(|definition| subagent_definition_is_system_backed(definition))
     {
         if requested_agent_id != original_agent_id {
-            return Err(String::from("系统智能体不允许修改 agent_id。"));
+            return Err(String::from("System agents cannot change their agent_id."));
         }
         if target_package_id.is_some() {
-            return Err(String::from("系统智能体不允许转移到用户包。"));
+            return Err(String::from(
+                "System agents cannot be moved to a user package.",
+            ));
         }
         let mut metadata_override = existing_definition.clone();
         apply_request_tool_policy(&mut metadata_override.tool_exposure, &request);
@@ -2648,7 +2666,7 @@ pub(crate) async fn service_save_subagent_definition(
         )
         .map_err(|error| {
             format!(
-                "保存系统智能体 `{}` 的用户元数据覆盖失败：{}",
+                "Failed to save the user metadata override of system agent `{}`: {}",
                 existing_definition.id, error.message
             )
         })?;
@@ -2669,7 +2687,7 @@ pub(crate) async fn service_save_subagent_definition(
         == Some(vulcan_task_session::PLUGIN_SUBAGENT_CATEGORY_ID)
     {
         return Err(String::from(
-            "分类 `plugins` 由插件系统保留，普通智能体不能写入该分类。",
+            "The `plugins` category is reserved by the plugin system; ordinary agents cannot write to it.",
         ));
     }
     let target_conflicts_with_other_definition = catalog
@@ -2683,7 +2701,7 @@ pub(crate) async fn service_save_subagent_definition(
             .any(|definition| definition.id == target_agent_id);
     if target_conflicts_with_other_definition || new_definition_conflicts_with_existing {
         return Err(format!(
-            "目标智能体 `{target_agent_id}` 已存在，请更换文件名或先编辑已有智能体。"
+            "Target agent `{target_agent_id}` already exists; use another file name or edit the existing agent first."
         ));
     }
     let user_file = user_subagent_definition_path(&target_agent_id)?;
@@ -2766,7 +2784,7 @@ pub(crate) async fn service_save_subagent_definition(
     )
     .map_err(|error| {
         format!(
-            "保存智能体定义 `{}` 失败：{}",
+            "Failed to save agent definition `{}`: {}",
             error.path.display(),
             error.message
         )
@@ -2793,7 +2811,9 @@ pub(crate) async fn service_delete_subagent_definition(
 ) -> Result<SubagentCatalogUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
-        return Err(String::from("智能体定义标识不能为空。"));
+        return Err(String::from(
+            "The agent definition identifier must not be empty.",
+        ));
     }
     reject_plugin_agent_mutation(&state, agent_id)?;
     // Keep catalog discovery and deletion under the same process-wide mutation guard.
@@ -2804,14 +2824,14 @@ pub(crate) async fn service_delete_subagent_definition(
         .definitions
         .iter()
         .find(|definition| definition.id == agent_id)
-        .ok_or_else(|| format!("未找到智能体定义：{agent_id}"))?;
+        .ok_or_else(|| format!("Agent definition not found: {agent_id}"))?;
     if !matches!(
         definition.source.scope,
         vulcan_task_session::SubagentDefinitionScope::User
             | vulcan_task_session::SubagentDefinitionScope::Package
     ) || definition.source.override_of.is_some()
     {
-        return Err(String::from("只有用户自定义智能体允许删除。"));
+        return Err(String::from("Only user-defined agents can be deleted."));
     }
     let delete_candidates = user_definition_delete_candidates(agent_id, definition)?;
     let mut deleted_any = false;
@@ -2822,7 +2842,7 @@ pub(crate) async fn service_delete_subagent_definition(
         }
     }
     if !deleted_any {
-        return Err(format!("未找到可删除的用户智能体文件：{agent_id}"));
+        return Err(format!("No deletable user agent file found: {agent_id}"));
     }
     refresh_subagent_catalog_local_state_and_emit(&app, &state)
 }
@@ -2836,7 +2856,9 @@ pub(crate) async fn service_restore_subagent_definition_default(
 ) -> Result<SubagentCatalogUpdate, String> {
     let agent_id = agent_id.trim();
     if agent_id.is_empty() {
-        return Err(String::from("智能体定义标识不能为空。"));
+        return Err(String::from(
+            "The agent definition identifier must not be empty.",
+        ));
     }
     reject_plugin_agent_mutation(&state, agent_id)?;
     // Keep restore eligibility checks and override deletion in one serialized catalog transaction.
@@ -2847,7 +2869,7 @@ pub(crate) async fn service_restore_subagent_definition_default(
         .definitions
         .iter()
         .find(|definition| definition.id == agent_id)
-        .ok_or_else(|| format!("未找到智能体定义：{agent_id}"))?;
+        .ok_or_else(|| format!("Agent definition not found: {agent_id}"))?;
     let restore_candidates = restore_default_user_file_candidates(agent_id, definition)?;
     let has_user_layer = restore_candidates.iter().try_fold(false, |found, path| {
         user_subagent_file_exists_inside_root(path).map(|exists| found || exists)
@@ -2861,7 +2883,7 @@ pub(crate) async fn service_restore_subagent_definition_default(
                 .is_some_and(system_subagent_definition_exists));
     if !can_restore {
         return Err(format!(
-            "当前智能体没有可恢复的系统或包默认定义：{agent_id}"
+            "The current agent has no system or package default definition to restore: {agent_id}"
         ));
     }
     for path in restore_candidates {
@@ -2888,7 +2910,7 @@ pub(crate) async fn service_set_agent_skill_enabled(
     };
     crate::service_state_access::mutate_provider_configuration_with_state_validation(
         &state,
-        "保存 Agent Skill 状态失败",
+        "Failed to save the Agent Skill state",
         |guard| {
             crate::service_state_access::require_plugin_update_full_publication_admission(
                 guard, None,
@@ -3137,13 +3159,15 @@ pub(crate) async fn service_set_agent_skill_project_state(
     let project_path = vmm_project_scope_path(&state, Some(&project_id))?;
     let stable_name = name.trim().to_string();
     if stable_name.is_empty() {
-        return Err(String::from("项目级 Agent Skill 名称不能为空。"));
+        return Err(String::from(
+            "The project-level Agent Skill name must not be empty.",
+        ));
     }
     reject_plugin_skill_mutation(&state, &stable_name)?;
     let state_override = parse_agent_skill_project_state(&state_key)?;
     mutate_project_configuration(
         &PathBuf::from(&project_path),
-        "保存项目 Agent Skill 状态失败",
+        "Failed to save the project Agent Skill state",
         move |project_configuration| {
             match state_override {
                 Some(state_override) => {
@@ -3193,7 +3217,7 @@ fn refresh_subagent_catalog_local_state_with_errors(
     let plugin_catalog = runtime.snapshot();
     catalog
         .merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
-        .map_err(|error| format!("合并插件智能体目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to merge the plugin agent catalog: {error}"))?;
     catalog.errors.extend(transient_errors);
     let available_model_selectors = public_ai_available_model_selectors(state)?;
     let mut guard = state
@@ -3203,7 +3227,7 @@ fn refresh_subagent_catalog_local_state_with_errors(
         runtime
             .task_runtime
             .replace_subagent_catalog(catalog.clone())
-            .map_err(|error| format!("刷新运行时智能体目录失败：{error}"))?;
+            .map_err(|error| format!("Failed to refresh the runtime agent catalog: {error}"))?;
         // subagentCatalog preserves the exact refresh generation for projection without another filesystem traversal.
         // subagentCatalog 为投影保留本次精确刷新代次，避免再次遍历文件系统。
         runtime.subagent_catalog = Arc::new(catalog.clone());
@@ -3227,7 +3251,7 @@ fn subagent_catalog_notice_from_summary(catalog: &SubagentCatalogSummary) -> Str
         .filter(|definition| definition.enabled)
         .count();
     format!(
-        "智能体定义 {} 个，已启用 {} 个，加载警告 {}。",
+        "{} agent definitions, {} enabled, {} loading warnings.",
         catalog.definitions.len(),
         enabled_count,
         catalog.errors.len()
@@ -3397,7 +3421,7 @@ pub(crate) fn validate_subagent_provider_model_request_with_existing(
         },
         _ => {
             return Err(String::from(
-                "固定模型需要同时提供 Provider 和模型；如需不固定模型，请清空两者以跟随会话模型。",
+                "A pinned model needs both a provider and a model; to follow the session model instead, clear both.",
             ));
         }
     };
@@ -3424,7 +3448,7 @@ pub(crate) fn validate_subagent_provider_model_request_with_existing(
         Ok(snapshot)
     } else {
         Err(format!(
-            "固定模型 `{provider_id}/{model_id}` 不在当前已启用模型列表中，请选择可用模型或恢复跟随会话模型。"
+            "Pinned model `{provider_id}/{model_id}` is not in the currently enabled model list; select an available model or follow the session model again."
         ))
     }
 }
@@ -3500,7 +3524,7 @@ fn normalized_package_id(value: &str) -> Result<String, String> {
         || package_id.contains('\\')
         || package_id.contains(':')
     {
-        return Err(format!("无效的智能体包标识：{value}"));
+        return Err(format!("Invalid agent package identifier: {value}"));
     }
     Ok(package_id.to_string())
 }
@@ -3513,7 +3537,9 @@ fn normalized_optional_user_package_id(value: Option<&str>) -> Result<Option<Str
     };
     let package_id = normalized_package_id(value)?;
     if system_subagent_package_exists(&package_id) {
-        return Err(format!("用户自定义包不能与系统包 `{package_id}` 重名。"));
+        return Err(format!(
+            "A user-defined package cannot share the name of system package `{package_id}`."
+        ));
     }
     Ok(Some(package_id))
 }
@@ -3697,12 +3723,16 @@ fn user_subagent_file_exists_inside_root(path: &Path) -> Result<bool, String> {
     let user_root = user_subagent_root();
     let canonical_user_root = std::fs::canonicalize(&user_root).map_err(|error| {
         format!(
-            "解析用户智能体根目录 `{}` 失败：{error}",
+            "Failed to resolve the user agent root directory `{}`: {error}",
             user_root.display()
         )
     })?;
-    let canonical_path = std::fs::canonicalize(path)
-        .map_err(|error| format!("解析智能体用户层文件 `{}` 失败：{error}", path.display()))?;
+    let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to resolve the agent user-layer file `{}`: {error}",
+            path.display()
+        )
+    })?;
     Ok(canonical_path.starts_with(canonical_user_root))
 }
 
@@ -3712,8 +3742,12 @@ fn remove_user_subagent_file_if_inside_root(path: &Path) -> Result<(), String> {
     if !user_subagent_file_exists_inside_root(path)? {
         return Ok(());
     }
-    std::fs::remove_file(path)
-        .map_err(|error| format!("删除用户智能体文件 `{}` 失败：{error}", path.display()))
+    std::fs::remove_file(path).map_err(|error| {
+        format!(
+            "Failed to delete the user agent file `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 /// Pushes one filesystem path while preserving first occurrence order.
@@ -3733,12 +3767,16 @@ fn remove_user_subagent_file_if_safe(path: &Path, retained_file: &Path) -> Resul
     let user_root = user_subagent_root();
     let canonical_user_root = std::fs::canonicalize(&user_root).map_err(|error| {
         format!(
-            "解析用户智能体根目录 `{}` 失败：{error}",
+            "Failed to resolve the user agent root directory `{}`: {error}",
             user_root.display()
         )
     })?;
-    let canonical_path = std::fs::canonicalize(path)
-        .map_err(|error| format!("解析旧智能体文件 `{}` 失败：{error}", path.display()))?;
+    let canonical_path = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "Failed to resolve the old agent file `{}`: {error}",
+            path.display()
+        )
+    })?;
     if std::fs::canonicalize(retained_file)
         .ok()
         .as_ref()
@@ -3748,12 +3786,16 @@ fn remove_user_subagent_file_if_safe(path: &Path, retained_file: &Path) -> Resul
     }
     if !canonical_path.starts_with(&canonical_user_root) {
         return Err(format!(
-            "拒绝删除用户智能体目录外的旧文件：{}",
+            "Refusing to delete an old file outside the user agent directory: {}",
             path.display()
         ));
     }
-    std::fs::remove_file(path)
-        .map_err(|error| format!("删除旧智能体文件 `{}` 失败：{error}", path.display()))
+    std::fs::remove_file(path).map_err(|error| {
+        format!(
+            "Failed to delete the old agent file `{}`: {error}",
+            path.display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -3925,7 +3967,7 @@ mod tests {
             }],
         )
         .expect_err("reject undeclared local MCP secret");
-        assert!(undeclared_error.contains("未声明"));
+        assert!(undeclared_error.contains("undeclared"));
 
         let duplicate_error = validate_initial_plugin_mcp_secrets(
             &preview,
@@ -3943,7 +3985,7 @@ mod tests {
             ],
         )
         .expect_err("reject duplicate local MCP secret");
-        assert!(duplicate_error.contains("重复提交"));
+        assert!(duplicate_error.contains("more than once"));
     }
 
     /// Loads one isolated content-plugin catalog for service-side ownership rejection tests.

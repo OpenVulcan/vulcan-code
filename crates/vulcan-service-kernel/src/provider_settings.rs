@@ -116,7 +116,7 @@ pub(super) async fn service_save_provider_retry_settings(
     };
     let workbench = mutate_provider_configuration(
         &state,
-        "保存 Provider 重试设置失败",
+        "Failed to save the provider retry settings",
         |configuration| {
             configuration.retry = persisted_retry.clone();
             Ok(())
@@ -155,7 +155,7 @@ pub(super) async fn service_save_provider_request_trace_settings(
 ) -> Result<WorkbenchSnapshot, String> {
     let workbench = mutate_provider_configuration(
         &state,
-        "保存 Provider 请求追踪设置失败",
+        "Failed to save the provider request trace settings",
         |configuration| {
             configuration.provider_request_trace_enabled = request.enabled;
             if let Some(enabled) = request.errors_enabled {
@@ -303,31 +303,33 @@ fn validate_provider_retry_settings_request(
 ) -> Result<(), String> {
     if request.max_retries > PROVIDER_RETRY_MAX_RETRIES {
         return Err(format!(
-            "普通重试最大次数必须位于 0 到 {PROVIDER_RETRY_MAX_RETRIES} 之间。"
+            "The maximum ordinary retry count must be between 0 and {PROVIDER_RETRY_MAX_RETRIES}."
         ));
     }
     validate_retry_delay_range(
-        "普通重试",
+        "ordinary retry",
         request.initial_delay_ms,
         request.max_delay_ms,
         None,
     )?;
-    validate_backoff_factor_milli("普通重试", request.backoff_factor_milli)?;
+    validate_backoff_factor_milli("ordinary retry", request.backoff_factor_milli)?;
     if request.jitter_percent > 80 {
-        return Err(String::from("普通重试抖动百分比必须位于 0 到 80 之间。"));
+        return Err(String::from(
+            "The ordinary retry jitter percentage must be between 0 and 80.",
+        ));
     }
     if !(1..=PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES).contains(&request.rate_limit.max_retries) {
         return Err(format!(
-            "限流重试最大次数必须位于 1 到 {PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES} 之间。"
+            "The maximum rate-limit retry count must be between 1 and {PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES}."
         ));
     }
     validate_retry_delay_range(
-        "限流重试",
+        "rate-limit retry",
         request.rate_limit.initial_delay_ms,
         request.rate_limit.max_delay_ms,
         Some(PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS),
     )?;
-    validate_backoff_factor_milli("限流重试", request.rate_limit.backoff_factor_milli)
+    validate_backoff_factor_milli("rate-limit retry", request.rate_limit.backoff_factor_milli)
 }
 
 /// Validates one initial and maximum retry-delay pair in milliseconds.
@@ -339,13 +341,19 @@ fn validate_retry_delay_range(
     delay_ceiling_ms: Option<u64>,
 ) -> Result<(), String> {
     if initial_ms == 0 {
-        return Err(format!("{label}首次等待必须大于 0 毫秒。"));
+        return Err(format!(
+            "The {label} initial delay must be greater than 0 milliseconds."
+        ));
     }
     if max_ms < initial_ms {
-        return Err(format!("{label}最大等待必须不小于首次等待。"));
+        return Err(format!(
+            "The {label} maximum delay must not be smaller than the initial delay."
+        ));
     }
     if delay_ceiling_ms.is_some_and(|ceiling_ms| max_ms > ceiling_ms) {
-        return Err(format!("{label}最大等待不能超过 1800 秒。"));
+        return Err(format!(
+            "The {label} maximum delay must not exceed 1800 seconds."
+        ));
     }
     Ok(())
 }
@@ -354,7 +362,9 @@ fn validate_retry_delay_range(
 /// 校验浏览器提交的定点退避倍数。
 fn validate_backoff_factor_milli(label: &str, factor_milli: u32) -> Result<(), String> {
     if !(1_000..=8_000).contains(&factor_milli) {
-        return Err(format!("{label}递增倍数必须位于 1.0 到 8.0 之间。"));
+        return Err(format!(
+            "The {label} backoff multiplier must be between 1.0 and 8.0."
+        ));
     }
     Ok(())
 }

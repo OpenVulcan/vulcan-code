@@ -182,7 +182,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                 terminal_result = Some(result.and_then(|execution| {
                     if execution.fallback_used {
                         return Err(format!(
-                            "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。",
+                            "The API returned no usable compaction result; this context compaction failed. Provider request: {}.",
                             execution.provider_request_count
                         ));
                     }
@@ -205,8 +205,11 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     }
     // execution is the validated Agent-level compaction result.
     // execution 是已校验的 Agent 层压缩结果。
-    let execution = terminal_result
-        .unwrap_or_else(|| Err(String::from("模型总结流提前结束，已取消本次提示词压缩。")))?;
+    let execution = terminal_result.unwrap_or_else(|| {
+        Err(String::from(
+            "The model summary stream ended early; this prompt compaction was cancelled.",
+        ))
+    })?;
     // durability contains the exact V1 API and normalized assistant semantic receipts.
     // durability 包含精确的 V1 API 与规范化 assistant 语义回执。
     let durability = provider_v1_sink.take_finished_durability();
@@ -850,5 +853,5 @@ pub(crate) fn current_session_title_from_state(
                     .map(|session| session.title.clone())
             })
         })
-        .unwrap_or_else(|| format!("会话 #{session_id}"))
+        .unwrap_or_else(|| format!("Session #{session_id}"))
 }

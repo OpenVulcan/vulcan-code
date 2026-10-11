@@ -205,10 +205,10 @@ pub(crate) async fn start_exact_v1_queued_turn(
     let handle = session_v1_handle_from_state(state, session_id).await?;
     let locator = locate_session_v1_storage(controller_runtime, session_id.to_string().as_str())
         .await
-        .map_err(|error| format!("定位排队后继 `{session_id}` 的项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to locate the project resource catalog of queued successor `{session_id}`: {error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载排队后继 `{session_id}` 的项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the project resource catalog of queued successor `{session_id}`: {error}"))?;
     if rebuild_pending_prompt_panel_from_v1(
         state,
         session_id,
@@ -227,7 +227,7 @@ pub(crate) async fn start_exact_v1_queued_turn(
                 document.business_input_dispatch_started(authority.turn_id, authority.input_seq),
             )
         })
-        .map_err(|error| format!("读取 V1 排队分发活动 API 失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 queued dispatch active API: {error}"))?;
     if let Some(active_turn_id) = active_turn {
         if active_turn_id == authority.turn_id {
             return Ok(already_dispatched);
@@ -277,7 +277,7 @@ pub(crate) async fn start_exact_v1_queued_turn(
         .read(|document| {
             document.business_input_dispatch_started(authority.turn_id, authority.input_seq)
         })
-        .map_err(|error| format!("复核 V1 排队分发活动 API 失败：{error}"))?;
+        .map_err(|error| format!("Failed to recheck the V1 queued dispatch active API: {error}"))?;
     Ok(dispatched_after_attempt)
 }
 
@@ -314,7 +314,9 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
                 document.business_input_dispatch_started(receipt.turn_id, last_input_seq);
             (active_api_turn, already_dispatched)
         })
-        .map_err(|error| format!("读取 V1 回合内续跑分发状态失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to read the V1 in-turn continuation dispatch state: {error}")
+        })?;
     if let Some(active_turn_id) = active_api_turn {
         if active_turn_id == receipt.turn_id {
             // Auxiliary occupancy cannot acknowledge the promoted business input.
@@ -332,10 +334,10 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
     let authority = pending_in_turn_dispatch_authority_from_v1_handle(handle.as_ref(), &receipt)?;
     let locator = locate_session_v1_storage(controller_runtime, session_id.to_string().as_str())
         .await
-        .map_err(|error| format!("定位回合内续跑 `{session_id}` 的项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to locate the project resource catalog of in-turn continuation `{session_id}`: {error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载回合内续跑 `{session_id}` 的项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the project resource catalog of in-turn continuation `{session_id}`: {error}"))?;
     let resource_ids = authority
         .inputs
         .iter()
@@ -382,7 +384,9 @@ pub(crate) async fn start_exact_v1_pending_in_turn(
     }
     let dispatched_after_attempt = handle
         .read(|document| document.business_input_dispatch_started(receipt.turn_id, last_input_seq))
-        .map_err(|error| format!("复核 V1 回合内续跑分发状态失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to recheck the V1 in-turn continuation dispatch state: {error}")
+        })?;
     Ok(dispatched_after_attempt)
 }
 
@@ -428,7 +432,7 @@ pub(crate) async fn start_exact_v1_user_root_turn(
                 already_dispatched,
             ))
         })
-        .map_err(|error| format!("读取 V1 根输入分发状态失败：{error}"))??;
+        .map_err(|error| format!("Failed to read the V1 root input dispatch state: {error}"))??;
     if let Some(active_turn_id) = active_api_turn {
         if active_turn_id == turn_id {
             // An active auxiliary API occupies the slot without acknowledging the original task.
@@ -446,10 +450,11 @@ pub(crate) async fn start_exact_v1_user_root_turn(
     let authority = user_root_dispatch_authority_from_v1_handle(handle.as_ref(), input_seq)?;
     let locator = locate_session_v1_storage(controller_runtime, session_id.to_string().as_str())
         .await
-        .map_err(|error| format!("定位根输入 `{session_id}` 的项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to locate the project resource catalog of root input `{session_id}`: {error}"))?;
     let project_directory = locator.project_directory();
-    let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载根输入 `{session_id}` 的项目资源目录失败：{error}"))?;
+    let catalog = load_project_resource_catalog(&project_directory).map_err(|error| {
+        format!("Failed to load the project resource catalog of root input `{session_id}`: {error}")
+    })?;
     let attachments = conversation_attachments_from_resource_ids(
         &project_directory,
         &catalog,
@@ -483,7 +488,7 @@ pub(crate) async fn start_exact_v1_user_root_turn(
     }
     let dispatched_after_attempt = handle
         .read(|document| document.business_input_dispatch_started(turn_id, input_seq))
-        .map_err(|error| format!("复核 V1 根输入分发状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to recheck the V1 root input dispatch state: {error}"))?;
     Ok(dispatched_after_attempt)
 }
 
@@ -504,7 +509,9 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
             let already_dispatched = document.subagent_return_dispatch_started(&receipt);
             (active_api_turn, already_dispatched)
         })
-        .map_err(|error| format!("读取 V1 子代理回流分发状态失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to read the V1 subagent return dispatch state: {error}")
+        })?;
     if already_dispatched {
         return Ok(true);
     }
@@ -543,7 +550,9 @@ pub(crate) async fn start_exact_v1_subagent_return_turn(
     }
     let dispatched_after_attempt = handle
         .read(|document| document.subagent_return_dispatch_started(&receipt))
-        .map_err(|error| format!("复核 V1 子代理回流分发状态失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to recheck the V1 subagent return dispatch state: {error}")
+        })?;
     Ok(dispatched_after_attempt)
 }
 

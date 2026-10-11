@@ -907,7 +907,7 @@ async fn pending_update_owner_retains_native_attempt_until_acknowledged_abort() 
     )
     .await
     .expect_err("native attempt requires explicit acknowledgement");
-    assert!(denied.contains("MCP 启动尝试"), "{denied}");
+    assert!(denied.contains("actual MCP startup"), "{denied}");
     {
         // The rejected abort retains both the original journal observation and the same real control object.
         // 被拒中止保留原日志观察及相同真实控制对象。

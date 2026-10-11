@@ -50,7 +50,9 @@ pub(crate) async fn service_generate_git_commit_message(
     let session_id = request
         .conversation_id
         .parse::<SessionId>()
-        .map_err(|error| format!("会话标识无效，无法生成提交信息：{error}"))?;
+        .map_err(|error| {
+            format!("Invalid session identifier; the commit message cannot be generated: {error}")
+        })?;
     let resolved_workspace_path = crate::webui_diff_workspace_path_from_state(
         &state,
         None,
@@ -76,7 +78,9 @@ pub(crate) async fn service_generate_git_commit_message(
         let runtime_state = workspace_snapshot
             .session_runtime_state
             .get(&session_id)
-            .ok_or_else(|| String::from("无法找到提交所属会话的运行时状态。"))?;
+            .ok_or_else(|| {
+                String::from("The runtime state of the commit's session was not found.")
+            })?;
         let public_ai_configuration = agent_runtime.public_ai_runtime.configuration_snapshot()?;
         let (provider_id, model_id) = resolve_git_commit_summary_model(
             &agent_runtime
@@ -136,7 +140,7 @@ pub(crate) async fn service_generate_git_commit_message(
         .as_deref()
         .map(clean_generated_git_commit_message)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| String::from("提交信息生成结果为空。"))?;
+        .ok_or_else(|| String::from("The generated commit message is empty."))?;
     Ok(GitCommitSummaryGenerateResponse {
         message,
         provider_id,
@@ -240,7 +244,9 @@ async fn build_git_commit_summary_input(
         );
     }
     if sections.is_empty() {
-        return Err(String::from("当前没有可用于生成提交信息的变更。"));
+        return Err(String::from(
+            "There are no changes available to generate a commit message.",
+        ));
     }
     let repository_root_text =
         vulcan_runtime_assets::native_host_path_text_from_path(repository_root);

@@ -112,14 +112,16 @@ pub(crate) async fn save_vmm_memory_config(
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         if !request.binding_plan.is_empty() {
-            return Err(String::from("项目级 VMM 设置不接受全局项目绑定计划。"));
+            return Err(String::from(
+                "Project-level VMM settings do not accept a global project binding plan.",
+            ));
         }
         let project_path = vmm_project_scope_path(state, request.project_id.as_deref())?;
         let commit_state = Arc::clone(state);
         let commit_path = project_path.clone();
         return mutate_project_configuration(
             &PathBuf::from(&project_path),
-            "保存项目 VMM 配置失败",
+            "Failed to save the project VMM configuration",
             move |project_configuration| {
                 project_configuration.vmm = if request.draft.has_override {
                     vmm_config_layer_from_draft(&request.draft, false)?
@@ -141,7 +143,7 @@ pub(crate) async fn save_vmm_memory_config(
         .map(|()| None);
     }
     if scope != "global" {
-        return Err(format!("不支持的 VMM 配置作用域：{scope}"));
+        return Err(format!("Unsupported VMM configuration scope: {scope}"));
     }
     let current_configuration = provider_configuration_from_state(state)?;
     request.draft.grpc_api_key = vulcan_service_api::restore_redacted_webui_secret(
@@ -159,10 +161,12 @@ pub(crate) async fn save_vmm_memory_config(
     if next_effective.enabled && next_effective.backend_mode == vulcan_vmm::VmmBackendMode::Native {
         let maintenance = state
             .lock()
-            .map_err(|error| format!("锁定原生 VMM 推理预检状态失败：{error}"))?
+            .map_err(|error| {
+                format!("Failed to lock the native VMM inference precheck state: {error}")
+            })?
             .native_vmm_maintenance
             .clone()
-            .ok_or_else(|| String::from("原生 VMM 运行时尚未就绪。"))?;
+            .ok_or_else(|| String::from("The native VMM runtime is not ready yet."))?;
         maintenance.validate_host_ai().await?;
     }
     // Initial setup, backend changes and explicit plans reconcile bindings. Resuming the same
@@ -208,7 +212,7 @@ pub(crate) async fn save_vmm_memory_config(
     // 保存后的全局传输可能指向其他端点，因此此前的探测结果不再具备权威性。
     mutate_provider_configuration_with_state_validation(
         state,
-        "保存 VMM 全局配置失败",
+        "Failed to save the global VMM configuration",
         |guard| validate_prepared_project_binding_scope(guard, &prepared_binding_plan),
         move |configuration| {
             // Preflight and redacted-secret expansion were admitted against this exact VMM layer.
@@ -217,7 +221,7 @@ pub(crate) async fn save_vmm_memory_config(
             // 在既有事务内比较，避免覆盖并发 VMM 编辑或绕过启用检查。
             if configuration.vmm != current_configuration.vmm {
                 return Err(String::from(
-                    "VMM 全局配置在预检期间已发生变化，请重新加载配置后保存。",
+                    "The global VMM configuration changed during the precheck; reload the configuration and save again.",
                 ));
             }
             configuration.vmm = next_layer;
@@ -280,7 +284,9 @@ async fn prepare_project_binding_plan(
     let effective = vulcan_vmm::VmmEffectiveConfig::resolve(next_layer, None, None);
     if !effective.enabled {
         if !plan.is_empty() {
-            return Err(String::from("VMM 禁用时不允许提交项目绑定计划。"));
+            return Err(String::from(
+                "Project binding plans cannot be submitted while VMM is disabled.",
+            ));
         }
         return Ok(PreparedProjectBindingPlan::None);
     }
@@ -302,18 +308,17 @@ async fn prepare_native_project_binding_plan(
     plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
 ) -> Result<PreparedProjectBindingPlan, String> {
     let (maintenance, workspace) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("锁定原生 VMM 项目绑定状态失败：{error}"))?;
+        let guard = state.lock().map_err(|error| {
+            format!("Failed to lock the native VMM project binding state: {error}")
+        })?;
         (
-            guard
-                .native_vmm_maintenance
-                .clone()
-                .ok_or_else(|| String::from("原生 VMM 项目绑定运行时尚未就绪。"))?,
+            guard.native_vmm_maintenance.clone().ok_or_else(|| {
+                String::from("The native VMM project binding runtime is not ready yet.")
+            })?,
             guard
                 .workspace_snapshot
                 .clone()
-                .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?,
+                .ok_or_else(|| String::from("The workspace project list is not ready yet."))?,
         )
     };
     let catalog = maintenance.project_catalog().await?;
@@ -324,7 +329,7 @@ async fn prepare_native_project_binding_plan(
             .any(|item| item.project.id == effective.native_fixed_project_id)
     {
         return Err(format!(
-            "原生 VMM 固定项目 {} 不存在，请选择已有项目。",
+            "Native VMM fixed project {} does not exist; select an existing project.",
             effective.native_fixed_project_id
         ));
     }
@@ -346,7 +351,7 @@ async fn prepare_native_project_binding_plan(
             .is_some()
         {
             return Err(format!(
-                "原生 VMM 绑定计划重复包含项目 `{}`。",
+                "The native VMM binding plan contains project `{}` more than once.",
                 entry.vulcan_project_id
             ));
         }
@@ -358,7 +363,7 @@ async fn prepare_native_project_binding_plan(
     let actual_ids = decisions.keys().copied().collect::<Vec<_>>();
     if expected_ids != actual_ids {
         return Err(format!(
-            "原生 VMM 绑定计划必须准确覆盖当前未绑定项目。未绑定项目：[{}]。",
+            "The native VMM binding plan must cover exactly the currently unbound projects. Unbound projects: [{}].",
             expected_ids.join(", ")
         ));
     }
@@ -373,7 +378,7 @@ async fn prepare_native_project_binding_plan(
                     .filter(|project_id| *project_id > 0)
                     .ok_or_else(|| {
                         format!(
-                            "项目 `{}` 缺少待绑定的已有 VMM 项目。",
+                            "Project `{}` is missing the existing VMM project to bind.",
                             entry.vulcan_project_id
                         )
                     })?;
@@ -383,7 +388,7 @@ async fn prepare_native_project_binding_plan(
                     .any(|item| item.project.id == project_id)
                 {
                     return Err(format!(
-                        "项目 `{}` 选择的原生 VMM 项目 {} 不存在。",
+                        "Project `{}` selected native VMM project {}, which does not exist.",
                         entry.vulcan_project_id, project_id
                     ));
                 }
@@ -396,11 +401,14 @@ async fn prepare_native_project_binding_plan(
                     .map(str::trim)
                     .filter(|name| !name.is_empty())
                     .ok_or_else(|| {
-                        format!("项目 `{}` 缺少新 VMM 项目名称。", entry.vulcan_project_id)
+                        format!(
+                            "Project `{}` is missing the new VMM project name.",
+                            entry.vulcan_project_id
+                        )
                     })?;
                 if name.chars().count() > 512 {
                     return Err(format!(
-                        "项目 `{}` 的新 VMM 项目名称超过 512 个字符。",
+                        "The new VMM project name of project `{}` exceeds 512 characters.",
                         entry.vulcan_project_id
                     ));
                 }
@@ -408,7 +416,7 @@ async fn prepare_native_project_binding_plan(
             }
             action => {
                 return Err(format!(
-                    "项目 `{}` 使用了不支持的绑定动作 `{action}`。",
+                    "Project `{}` uses the unsupported binding action `{action}`.",
                     entry.vulcan_project_id
                 ));
             }
@@ -438,25 +446,33 @@ async fn prepare_external_project_binding_plan(
     plan: &[vulcan_service_api::VmmProjectBindingPlanEntry],
 ) -> Result<PreparedProjectBindingPlan, String> {
     if effective.user_id.filter(|user_id| *user_id > 0).is_none() {
-        return Err(String::from("启用外置 VMM 前必须选择有效用户。"));
+        return Err(String::from(
+            "Select a valid user before enabling external VMM.",
+        ));
     }
     let workspace = state
         .lock()
-        .map_err(|error| format!("锁定外置 VMM 项目绑定状态失败：{error}"))?
+        .map_err(|error| format!("Failed to lock the external VMM project binding state: {error}"))?
         .workspace_snapshot
         .clone()
-        .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?;
+        .ok_or_else(|| String::from("The workspace project list is not ready yet."))?;
     let remote_projects = load_external_vmm_projects(next_layer.clone()).await?;
     if effective.external_project_binding_mode == vulcan_vmm::VmmNativeProjectBindingMode::Fixed {
         let project_id = effective
             .project_id
             .filter(|project_id| *project_id > 0)
-            .ok_or_else(|| String::from("启用外置固定项目策略前必须选择有效项目。"))?;
+            .ok_or_else(|| {
+                String::from(
+                    "Select a valid project before enabling the external fixed-project policy.",
+                )
+            })?;
         if !remote_projects
             .iter()
             .any(|project| project.project_id == project_id)
         {
-            return Err(format!("外置 VMM 固定项目 {project_id} 不存在。"));
+            return Err(format!(
+                "External VMM fixed project {project_id} does not exist."
+            ));
         }
     }
     let unbound_projects = workspace
@@ -465,7 +481,7 @@ async fn prepare_external_project_binding_plan(
         .filter(|project| cached_project_vmm_layer(&project.path).project_id.is_none())
         .map(|project| (project.id.clone(), project.path.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let decisions = validate_binding_plan_coverage(&unbound_projects, plan, "外置 VMM")?;
+    let decisions = validate_binding_plan_coverage(&unbound_projects, plan, "External VMM")?;
     // prepared_entries owns exact paths and actions so later failures are isolated per project.
     // prepared_entries 持有准确路径与动作，使后续失败可以按项目隔离。
     let mut prepared_entries = Vec::with_capacity(decisions.len());
@@ -474,9 +490,12 @@ async fn prepare_external_project_binding_plan(
         // explicit per-project choice made in the enablement dialog.
         // 全局固定项目只是未编辑行的默认值，不限制用户在启用对话框中作出的逐项目明确选择。
         let action = prepare_external_project_binding_action(effective, &remote_projects, entry)?;
-        let project_config_path = unbound_projects
-            .get(&entry.vulcan_project_id)
-            .ok_or_else(|| String::from("已校验的外置 VMM 项目路径意外缺失"))?;
+        let project_config_path =
+            unbound_projects
+                .get(&entry.vulcan_project_id)
+                .ok_or_else(|| {
+                    String::from("The validated external VMM project path is unexpectedly missing")
+                })?;
         prepared_entries.push(PreparedExternalProjectBinding {
             vulcan_project_id: entry.vulcan_project_id.clone(),
             project_config_path: project_config_path.clone(),
@@ -520,7 +539,7 @@ fn validate_prepared_project_binding_scope(
     let workspace = guard
         .workspace_snapshot
         .as_ref()
-        .ok_or_else(|| String::from("工作区项目列表尚未就绪。"))?;
+        .ok_or_else(|| String::from("The workspace project list is not ready yet."))?;
     // A changed full catalog invalidates the reviewed scope even when a newly added row is already bound.
     // 即使新增行已有绑定，完整目录变化仍使已审查范围失效。
     let unchanged = match prepared {
@@ -550,7 +569,7 @@ fn validate_prepared_project_binding_scope(
         Ok(())
     } else {
         Err(String::from(
-            "VMM 项目绑定范围在预检期间已发生变化，请重新加载项目列表并确认绑定计划后保存。",
+            "The VMM project binding scope changed during the precheck; reload the project list, confirm the binding plan and save again.",
         ))
     }
 }
@@ -583,7 +602,7 @@ fn prepare_external_project_binding_action(
                 .filter(|project_id| *project_id > 0)
                 .ok_or_else(|| {
                     format!(
-                        "项目 `{}` 缺少待绑定的已有外置 VMM 项目。",
+                        "Project `{}` is missing the existing external VMM project to bind.",
                         entry.vulcan_project_id
                     )
                 })?;
@@ -592,7 +611,7 @@ fn prepare_external_project_binding_action(
                 .any(|project| project.project_id == project_id)
             {
                 return Err(format!(
-                    "项目 `{}` 选择的外置 VMM 项目 {} 不存在。",
+                    "Project `{}` selected external VMM project {}, which does not exist.",
                     entry.vulcan_project_id, project_id
                 ));
             }
@@ -602,16 +621,15 @@ fn prepare_external_project_binding_action(
         }
         "create_and_bind" => {
             validate_external_project_leaf(entry)?;
-            let project_name = entry
-                .project_name
-                .as_deref()
-                .ok_or_else(|| String::from("已校验的外置 VMM 项目名称意外缺失"))?;
+            let project_name = entry.project_name.as_deref().ok_or_else(|| {
+                String::from("The validated external VMM project name is unexpectedly missing")
+            })?;
             Ok(PreparedExternalProjectBindingAction::CreateAndBind(
                 format!("{}/{}", effective.external_project_prefix, project_name),
             ))
         }
         action => Err(format!(
-            "项目 `{}` 使用了不支持的外置 VMM 绑定动作 `{action}`。",
+            "Project `{}` uses the unsupported external VMM binding action `{action}`.",
             entry.vulcan_project_id
         )),
     }
@@ -645,7 +663,7 @@ async fn execute_prepared_project_binding_plan(
                         .map(|_| ()),
                 };
                 if let Err(error) = result {
-                    failures.push(format!("项目 `{}`：{error}", entry.vulcan_project_id));
+                    failures.push(format!("Project `{}`: {error}", entry.vulcan_project_id));
                 }
             }
         }
@@ -672,7 +690,7 @@ async fn execute_prepared_project_binding_plan(
                     Err(error) => Err(error),
                 };
                 if let Err(error) = result {
-                    failures.push(format!("项目 `{}`：{error}", entry.vulcan_project_id));
+                    failures.push(format!("Project `{}`: {error}", entry.vulcan_project_id));
                 }
             }
         }
@@ -685,8 +703,8 @@ async fn execute_prepared_project_binding_plan(
 fn format_project_binding_failures(failures: &[String]) -> Option<String> {
     (!failures.is_empty()).then(|| {
         format!(
-            "VMM 已启用，但以下项目绑定失败；其他项目的成功绑定已保留，可在项目设置中重新绑定：{}",
-            failures.join("；")
+            "VMM is enabled, but binding failed for the following projects; successful bindings of other projects were kept and can be rebound in the project settings: {}",
+            failures.join("; ")
         )
     })
 }
@@ -708,7 +726,7 @@ fn validate_binding_plan_coverage<'a>(
             .is_some()
         {
             return Err(format!(
-                "{label} 绑定计划重复包含项目 `{}`。",
+                "The {label} binding plan contains project `{}` more than once.",
                 entry.vulcan_project_id
             ));
         }
@@ -720,7 +738,7 @@ fn validate_binding_plan_coverage<'a>(
     let actual_ids = decisions.keys().copied().collect::<Vec<_>>();
     if expected_ids != actual_ids {
         return Err(format!(
-            "{label} 绑定计划必须准确覆盖当前未绑定项目。未绑定项目：[{}]。",
+            "The {label} binding plan must cover exactly the currently unbound projects. Unbound projects: [{}].",
             expected_ids.join(", ")
         ));
     }
@@ -737,16 +755,21 @@ fn validate_external_project_leaf(
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .ok_or_else(|| format!("项目 `{}` 缺少外置 VMM 项目名称。", entry.vulcan_project_id))?;
+        .ok_or_else(|| {
+            format!(
+                "Project `{}` is missing the external VMM project name.",
+                entry.vulcan_project_id
+            )
+        })?;
     if project_name.contains('/') {
         return Err(format!(
-            "项目 `{}` 的外置 VMM 项目名称不得包含 `/`。",
+            "The external VMM project name of project `{}` must not contain `/`.",
             entry.vulcan_project_id
         ));
     }
     if project_name.chars().count() > 128 {
         return Err(format!(
-            "项目 `{}` 的外置 VMM 项目名称超过 128 个字符。",
+            "The external VMM project name of project `{}` exceeds 128 characters.",
             entry.vulcan_project_id
         ));
     }
@@ -771,7 +794,9 @@ async fn load_external_vmm_projects(
             projects,
             ..
         } => Ok(projects.projects),
-        _ => Err(String::from("外置 VMM 返回了不匹配的项目目录结果。")),
+        _ => Err(String::from(
+            "External VMM returned a mismatched project catalog result.",
+        )),
     }
 }
 
@@ -794,11 +819,16 @@ async fn ensure_external_vmm_project(
     .await?
     {
         vulcan_service_runtime::vmm_management::VmmManagementOutcome::EnsureProject(response) => {
-            response
-                .project
-                .ok_or_else(|| format!("外置 VMM 未返回已确保项目：{}", response.message))
+            response.project.ok_or_else(|| {
+                format!(
+                    "External VMM did not return the ensured project: {}",
+                    response.message
+                )
+            })
         }
-        _ => Err(String::from("外置 VMM 返回了不匹配的项目创建结果。")),
+        _ => Err(String::from(
+            "External VMM returned a mismatched project creation result.",
+        )),
     }
 }
 
@@ -822,13 +852,15 @@ pub(super) async fn persist_external_project_id_if_unbound(
     remote_project_id: u64,
 ) -> Result<u64, String> {
     if remote_project_id == 0 {
-        return Err(String::from("外置 VMM 项目 ID 必须是正整数。"));
+        return Err(String::from(
+            "The external VMM project ID must be a positive integer.",
+        ));
     }
     let project_config_path = project_path.to_string();
     let commit_state = Arc::clone(state);
     mutate_project_configuration(
         &PathBuf::from(&project_config_path),
-        "保存外置 VMM 自动项目 ID 绑定失败",
+        "Failed to save the automatic external VMM project ID binding",
         move |project_configuration| {
             if project_configuration
                 .vmm
@@ -845,7 +877,11 @@ pub(super) async fn persist_external_project_id_if_unbound(
                 .vmm
                 .project_id
                 .filter(|project_id| *project_id > 0)
-                .ok_or_else(|| String::from("外置 VMM 自动绑定提交后缺少有效项目 ID。"))?;
+                .ok_or_else(|| {
+                    String::from(
+                        "The external VMM automatic binding has no valid project ID after commit.",
+                    )
+                })?;
             update_cached_project_vmm_layer(
                 &project_config_path,
                 project_configuration.vmm.clone(),
@@ -915,7 +951,7 @@ pub(crate) fn vmm_config_layer_from_draft(
             .then(|| {
                 vmm_parse_optional_positive_u64(
                     &draft.native_fixed_project_id,
-                    "原生 VMM 固定项目 ID",
+                    "Native VMM fixed project ID",
                 )
             })
             .transpose()?
@@ -937,57 +973,72 @@ pub(crate) fn vmm_config_layer_from_draft(
             .then(|| vmm_non_empty_text(&draft.management_bearer_token))
             .flatten(),
         management_timeout_ms: include_transport
-            .then(|| vmm_parse_optional_u64(&draft.management_timeout_ms, "VMM 管理请求超时"))
+            .then(|| {
+                vmm_parse_optional_u64(
+                    &draft.management_timeout_ms,
+                    "VMM management request timeout",
+                )
+            })
             .transpose()?
             .flatten(),
         handshake_timeout_ms: include_transport
-            .then(|| vmm_parse_optional_u64(&draft.handshake_timeout_ms, "VMM 握手超时"))
+            .then(|| vmm_parse_optional_u64(&draft.handshake_timeout_ms, "VMM handshake timeout"))
             .transpose()?
             .flatten(),
         receive_timeout_ms: include_transport
-            .then(|| vmm_parse_optional_u64(&draft.receive_timeout_ms, "VMM 请求超时"))
+            .then(|| vmm_parse_optional_u64(&draft.receive_timeout_ms, "VMM request timeout"))
             .transpose()?
             .flatten(),
         max_receive_message_bytes: include_transport
             .then(|| {
-                vmm_parse_optional_usize(&draft.max_receive_message_bytes, "VMM 最大接收字节数")
+                vmm_parse_optional_usize(
+                    &draft.max_receive_message_bytes,
+                    "VMM maximum receive bytes",
+                )
             })
             .transpose()?
             .flatten(),
         grpc_keepalive_time_ms: include_transport
-            .then(|| vmm_parse_optional_u64(&draft.grpc_keepalive_time_ms, "VMM keepalive 间隔"))
+            .then(|| {
+                vmm_parse_optional_u64(&draft.grpc_keepalive_time_ms, "VMM keepalive interval")
+            })
             .transpose()?
             .flatten(),
         grpc_keepalive_timeout_ms: include_transport
-            .then(|| vmm_parse_optional_u64(&draft.grpc_keepalive_timeout_ms, "VMM keepalive 超时"))
+            .then(|| {
+                vmm_parse_optional_u64(&draft.grpc_keepalive_timeout_ms, "VMM keepalive timeout")
+            })
             .transpose()?
             .flatten(),
         grpc_keepalive_permit_without_calls: include_transport
             .then_some(draft.grpc_keepalive_permit_without_calls),
-        user_id: vmm_parse_optional_positive_u64(&draft.user_id, "VMM 用户 ID")?,
-        project_id: vmm_parse_optional_positive_u64(&draft.project_id, "VMM 项目 ID")?,
+        user_id: vmm_parse_optional_positive_u64(&draft.user_id, "VMM user ID")?,
+        project_id: vmm_parse_optional_positive_u64(&draft.project_id, "VMM project ID")?,
         visible_memory_injection: Some(false),
         implicit_memory_turns: vmm_parse_optional_u32(
             &draft.implicit_memory_turns,
-            "临时记忆 TTL",
+            "Temporary memory TTL",
         )?,
         profile_refresh_turns: vmm_parse_optional_u32(
             &draft.profile_refresh_turns,
-            "画像刷新间隔",
+            "Profile refresh interval",
         )?,
-        profile_node_limit: vmm_parse_optional_u32(&draft.profile_node_limit, "画像节点上限")?,
+        profile_node_limit: vmm_parse_optional_u32(
+            &draft.profile_node_limit,
+            "Profile node limit",
+        )?,
         session_compact_recall: Some(true),
         precheck_enabled: vmm_policy_from_draft_mode(
             &draft.precheck_mode,
             draft.precheck_enabled,
             include_transport,
-            "前置记忆注入",
+            "Pre-turn memory injection",
         )?,
         memory_writeback_enabled: vmm_policy_from_draft_mode(
             &draft.memory_writeback_mode,
             draft.memory_writeback_enabled,
             include_transport,
-            "后置记忆提交",
+            "Post-turn memory commit",
         )?,
         ai_tools_enabled: Some(draft.ai_tools_enabled),
         injection_tag: vmm_non_empty_text(&draft.injection_tag),
@@ -1004,7 +1055,7 @@ fn vmm_backend_mode_from_draft(value: &str) -> Result<vulcan_vmm::VmmBackendMode
         "" | "native" => Ok(vulcan_vmm::VmmBackendMode::Native),
         "external_grpc" => Ok(vulcan_vmm::VmmBackendMode::ExternalGrpc),
         other => Err(format!(
-            "VMM 后端模式无效：{other}，只允许 native 或 external_grpc"
+            "Invalid VMM backend mode: {other}; only native or external_grpc is allowed"
         )),
     }
 }
@@ -1017,7 +1068,9 @@ fn vmm_native_binding_mode_from_draft(
     match value.trim() {
         "fixed" => Ok(vulcan_vmm::VmmNativeProjectBindingMode::Fixed),
         "per_project" => Ok(vulcan_vmm::VmmNativeProjectBindingMode::PerProject),
-        value => Err(format!("不支持的原生 VMM 项目绑定策略：{value}")),
+        value => Err(format!(
+            "Unsupported native VMM project binding policy: {value}"
+        )),
     }
 }
 
@@ -1027,12 +1080,12 @@ fn vmm_external_project_prefix(value: &str) -> Result<String, String> {
     let segments = value.split('/').map(str::trim).collect::<Vec<_>>();
     if segments.len() != 2 || segments.iter().any(|segment| segment.is_empty()) {
         return Err(String::from(
-            "外置 VMM 项目前缀必须使用非空 team/space 格式。",
+            "The external VMM project prefix must use a non-empty team/space format.",
         ));
     }
     if segments.iter().any(|segment| segment.chars().count() > 128) {
         return Err(String::from(
-            "外置 VMM 项目前缀的单个层级不得超过 128 个字符。",
+            "Each level of the external VMM project prefix must not exceed 128 characters.",
         ));
     }
     Ok(format!("{}/{}", segments[0], segments[1]))
@@ -1048,32 +1101,44 @@ fn validate_external_management_layer(layer: &vulcan_vmm::VmmConfigLayer) -> Res
         token.filter(|value| !value.is_empty()),
     ) {
         (None, None) => return Ok(()),
-        (Some(_), None) => return Err(String::from("外部 VMM 管理地址已填写，但缺少管理 Token。")),
+        (Some(_), None) => {
+            return Err(String::from(
+                "The external VMM management address is set, but the management token is missing.",
+            ));
+        }
         (None, Some(_)) => {
-            return Err(String::from("外部 VMM 管理 Token 已填写，但缺少管理地址。"));
+            return Err(String::from(
+                "The external VMM management token is set, but the management address is missing.",
+            ));
         }
         (Some(_), Some(_)) => {}
     }
     let base_url = reqwest::Url::parse(base_url.unwrap_or_default())
-        .map_err(|error| format!("外部 VMM 管理地址无效：{error}"))?;
+        .map_err(|error| format!("Invalid external VMM management address: {error}"))?;
     if !base_url.username().is_empty() || base_url.password().is_some() {
-        return Err(String::from("外部 VMM 管理地址不能包含账号或密码。"));
+        return Err(String::from(
+            "The external VMM management address must not contain a username or password.",
+        ));
     }
     if base_url.query().is_some() || base_url.fragment().is_some() {
-        return Err(String::from("外部 VMM 管理地址不能包含查询参数或片段。"));
+        return Err(String::from(
+            "The external VMM management address must not contain query parameters or a fragment.",
+        ));
     }
     let loopback = base_url
         .host_str()
         .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
     if base_url.scheme() != "https" && !(base_url.scheme() == "http" && loopback) {
-        return Err(String::from("非回环 VMM 管理地址必须使用 HTTPS。"));
+        return Err(String::from(
+            "Non-loopback VMM management addresses must use HTTPS.",
+        ));
     }
     if layer
         .management_timeout_ms
         .is_some_and(|value| !(1_000..=120_000).contains(&value))
     {
         return Err(String::from(
-            "VMM 管理请求超时必须位于 1000 到 120000 毫秒之间。",
+            "The VMM management request timeout must be between 1000 and 120000 milliseconds.",
         ));
     }
     Ok(())
@@ -1094,7 +1159,7 @@ fn vmm_policy_from_draft_mode(
         }
         "enabled" | "on" | "true" => Ok(Some(true)),
         "disabled" | "off" | "false" => Ok(Some(false)),
-        other => Err(format!("{label} 策略模式不受支持：{other}")),
+        other => Err(format!("Unsupported {label} policy mode: {other}")),
     }
 }
 
@@ -1107,7 +1172,7 @@ pub(crate) fn parse_vmm_profile_target(value: &str) -> Result<vulcan_vmm::Profil
         "team" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetTeam),
         "space" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetSpace),
         "all" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetAll),
-        other => Err(format!("不支持的 VMM 画像目标：{other}")),
+        other => Err(format!("Unsupported VMM profile target: {other}")),
     }
 }
 
@@ -1191,7 +1256,7 @@ pub(crate) fn vmm_payload_u64_list(payload: &Value, key: &str) -> Result<Vec<u64
                 value
                     .as_u64()
                     .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
-                    .ok_or_else(|| format!("无法解析 VMM u64 id：{value}"))
+                    .ok_or_else(|| format!("Cannot parse VMM u64 id: {value}"))
             })
             .collect();
     }
@@ -1200,7 +1265,7 @@ pub(crate) fn vmm_payload_u64_list(payload: &Value, key: &str) -> Result<Vec<u64
         .map(|value| {
             value
                 .parse::<u64>()
-                .map_err(|_| format!("无法解析 VMM u64 id：{value}"))
+                .map_err(|_| format!("Cannot parse VMM u64 id: {value}"))
         })
         .collect()
 }
@@ -1233,7 +1298,7 @@ pub(crate) fn vmm_parse_optional_u64(value: &str, label: &str) -> Result<Option<
     trimmed
         .parse::<u64>()
         .map(Some)
-        .map_err(|_| format!("{label} 必须是非负整数。"))
+        .map_err(|_| format!("{label} must be a non-negative integer."))
 }
 
 /// Parses an optional positive u64 identity field.
@@ -1244,7 +1309,7 @@ pub(crate) fn vmm_parse_optional_positive_u64(
 ) -> Result<Option<u64>, String> {
     let parsed = vmm_parse_optional_u64(value, label)?;
     match parsed {
-        Some(0) => Err(format!("{label} 必须是正整数。")),
+        Some(0) => Err(format!("{label} must be a positive integer.")),
         value => Ok(value),
     }
 }
@@ -1259,7 +1324,7 @@ pub(crate) fn vmm_parse_optional_u32(value: &str, label: &str) -> Result<Option<
     trimmed
         .parse::<u32>()
         .map(Some)
-        .map_err(|_| format!("{label} 必须是 32 位非负整数。"))
+        .map_err(|_| format!("{label} must be a 32-bit non-negative integer."))
 }
 
 /// Parses an optional usize draft field.
@@ -1272,7 +1337,7 @@ pub(crate) fn vmm_parse_optional_usize(value: &str, label: &str) -> Result<Optio
     trimmed
         .parse::<usize>()
         .map(Some)
-        .map_err(|_| format!("{label} 必须是非负整数。"))
+        .map_err(|_| format!("{label} must be a non-negative integer."))
 }
 
 #[cfg(test)]
@@ -1350,7 +1415,7 @@ mod tests {
         assert!(
             validate_prepared_project_binding_scope(&guard, &prepared)
                 .expect_err("binding scope validation fixture must reject invalid input")
-                .contains("重新加载")
+                .contains("reload")
         );
         guard
             .workspace_snapshot
@@ -1414,7 +1479,7 @@ mod tests {
         let error = validate_binding_plan_coverage(&unbound_projects, &plan, "测试 VMM")
             .expect_err("duplicate decisions must fail validation");
 
-        assert!(error.contains("重复包含项目 `project-a`"));
+        assert!(error.contains("contains project `project-a` more than once"));
     }
 
     /// Failure aggregation keeps all project errors and explains that enablement succeeded.
@@ -1431,10 +1496,10 @@ mod tests {
         let message = format_project_binding_failures(&failures)
             .expect("non-empty failures must produce one message");
 
-        assert!(message.starts_with("VMM 已启用"));
+        assert!(message.starts_with("VMM is enabled"));
         assert!(message.contains("项目 `project-a`：远端不可用"));
         assert!(message.contains("项目 `project-b`：写入失败"));
-        assert!(message.contains("可在项目设置中重新绑定"));
+        assert!(message.contains("can be rebound in the project settings"));
         assert_eq!(format_project_binding_failures(&[]), None);
     }
 

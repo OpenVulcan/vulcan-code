@@ -87,17 +87,20 @@ impl NativeVmmResourceStore {
                 projects: BTreeMap::new(),
             });
         };
-        let document: HostProjectPolicies = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("解析原生宿主项目策略失败：{error}"))?;
+        let document: HostProjectPolicies = serde_json::from_slice(&bytes).map_err(|error| {
+            format!("Failed to parse the native host project policies: {error}")
+        })?;
         if document.schema_version != 1 {
-            return Err("不支持的原生宿主项目策略版本".to_owned());
+            return Err("Unsupported native host project policy version".to_owned());
         }
         if document
             .projects
             .keys()
             .any(|key| key.trim().is_empty() || key.trim() != key)
         {
-            return Err("原生宿主项目策略包含非法项目标签".to_owned());
+            return Err(
+                "The native host project policies contain an invalid project tag".to_owned(),
+            );
         }
         Ok(document)
     }
@@ -109,7 +112,7 @@ impl NativeVmmResourceStore {
         host_project_id: &str,
     ) -> Result<VmmNativeHostProjectPolicyOverrides, String> {
         if host_project_id.trim().is_empty() || host_project_id.trim() != host_project_id {
-            return Err("原生宿主项目策略需要准确项目标签".to_owned());
+            return Err("The native host project policy requires an exact project tag".to_owned());
         }
         Ok(self
             .load_host_project_policies()?
@@ -161,10 +164,13 @@ impl NativeVmmResourceStore {
                 .projects
                 .insert(host_project_id.to_owned(), overrides.clone());
         }
-        let bytes = serde_json::to_vec_pretty(&document)
-            .map_err(|error| format!("序列化原生宿主项目策略失败：{error}"))?;
+        let bytes = serde_json::to_vec_pretty(&document).map_err(|error| {
+            format!("Failed to serialize the native host project policies: {error}")
+        })?;
         if bytes.len() as u64 > MAX_SETTINGS_BYTES {
-            return Err("原生宿主项目策略文档超过大小上限".to_owned());
+            return Err(
+                "The native host project policy document exceeds the size limit".to_owned(),
+            );
         }
         persist_file_atomically(
             &self.config_root,

@@ -54,7 +54,7 @@ pub(crate) async fn persist_session_plan_mode_v1(
         render_plan_mode_exit_developer_context()
     };
     let transition_input = PlanModeTransitionInput::try_new(enabled, provider_context)
-        .map_err(|error| format!("构建 V1 Plan 模式转换失败：{error}"))?;
+        .map_err(|error| format!("Failed to build the V1 plan mode transition: {error}"))?;
     let receipt = handle
         .mutate_durable_if_changed(
             SessionMutationAdmission::MetadataOnly,
@@ -68,7 +68,7 @@ pub(crate) async fn persist_session_plan_mode_v1(
                 })
             },
         )
-        .map_err(|error| format!("持久化 V1 Plan 模式失败：{error}"))?;
+        .map_err(|error| format!("Failed to persist the V1 plan mode: {error}"))?;
     Ok(receipt.changed)
 }
 /// Renders the Plan-mode developer guidance attached to each active Plan request.

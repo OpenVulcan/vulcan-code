@@ -145,7 +145,7 @@ async fn assert_bundle_matrix(
                 assert!(response.combined_text.is_empty());
             }
             assert_eq!(
-                project_text.contains("P/L/W 说明"),
+                project_text.contains("P/L/W legend"),
                 !split
                     && explanation == Some(true)
                     && (!projects.is_empty() || user_content.is_some())

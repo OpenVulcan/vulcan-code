@@ -87,7 +87,9 @@ impl PendingLocalPluginUpdateResources {
     pub(super) fn prepared(&self) -> Result<&PreparedLocalPluginUpdate, String> {
         match &self.stage {
             PendingLocalPluginUpdateStage::Prepared(prepared) => Ok(prepared),
-            _ => Err(String::from("原更新请求尚未完成实际准备。")),
+            _ => Err(String::from(
+                "The original update request has not finished the actual preparation yet.",
+            )),
         }
     }
 
@@ -98,7 +100,9 @@ impl PendingLocalPluginUpdateResources {
     pub(super) fn prepared_mut(&mut self) -> Result<&mut PreparedLocalPluginUpdate, String> {
         match &mut self.stage {
             PendingLocalPluginUpdateStage::Prepared(prepared) => Ok(prepared),
-            _ => Err(String::from("原更新请求尚未完成实际准备。")),
+            _ => Err(String::from(
+                "The original update request has not finished the actual preparation yet.",
+            )),
         }
     }
 }
@@ -173,7 +177,7 @@ impl PendingLocalPluginUpdateRegistry {
                     .load(std::sync::atomic::Ordering::Acquire)
         }) {
             return Err(format!(
-                "插件原请求 `{}` 仍保留实际发布；请先继续相同请求，再更新运行时设置。",
+                "Original plugin request `{}` still holds the actual publication; continue the same request first, then update the runtime settings.",
                 owner.request_id
             ));
         }
@@ -192,7 +196,9 @@ impl PendingLocalPluginUpdateRegistry {
             .get(&owner.request_id)
             .is_some_and(|retained| Arc::ptr_eq(retained, owner))
         {
-            return Err(String::from("原发布所有者不再属于实际服务注册表。"));
+            return Err(String::from(
+                "The original publication owner no longer belongs to the actual service registry.",
+            ));
         }
         if owners.values().any(|retained| {
             !Arc::ptr_eq(retained, owner)
@@ -200,7 +206,9 @@ impl PendingLocalPluginUpdateRegistry {
                     .full_publication_retained
                     .load(std::sync::atomic::Ordering::Acquire)
         }) {
-            return Err(String::from("其他原请求仍保留实际发布，不能替换其运行时。"));
+            return Err(String::from(
+                "Another original request still holds the actual publication; its runtime cannot be replaced.",
+            ));
         }
         owner
             .full_publication_retained
@@ -218,7 +226,7 @@ impl PendingLocalPluginUpdateRegistry {
         let owners = self.owners.lock().map_err(|error| error.to_string())?;
         if let Some(owner) = owners.values().find(|owner| owner.plugin_id == plugin_id) {
             return Err(format!(
-                "插件仍有原更新服务所有者 `{}`；必须先检查并恢复或中止相同请求。",
+                "The plugin still has original update service owner `{}`; inspect and resume or abort the same request first.",
                 owner.request_id
             ));
         }
@@ -241,7 +249,9 @@ impl PendingLocalPluginUpdateRegistry {
             return Ok(None);
         };
         if owner.plugin_id != plugin_id || owner.request_id != request_id {
-            return Err(String::from("原更新请求不属于此插件命名空间。"));
+            return Err(String::from(
+                "The original update request does not belong to this plugin namespace.",
+            ));
         }
         Ok(Some(Arc::clone(owner)))
     }
@@ -289,7 +299,9 @@ impl PendingLocalPluginUpdateRegistry {
         // Successful local observation and canonical durable readback must describe the same complete record.
         // 成功本地观察及规范持久回读必须描述相同完整记录。
         if resources.candidate.is_some() {
-            return Err(String::from("原候选控制对象尚未实际退役。"));
+            return Err(String::from(
+                "The original candidate control object is not actually retired yet.",
+            ));
         }
         // Durable terminal phase alone cannot retire unconfirmed target or original predecessor transfers.
         // 仅持久终态阶段不能退役未确认目标或原前驱转交。
@@ -299,7 +311,7 @@ impl PendingLocalPluginUpdateRegistry {
             })
         }) {
             return Err(String::from(
-                "启用目标或原前驱尚未确认实际组合交接；保留原服务所有者。",
+                "The enable target or original predecessor has not confirmed the actual composition handoff; keeping the original service owner.",
             ));
         }
         match &resources.stage {
@@ -320,7 +332,7 @@ impl PendingLocalPluginUpdateRegistry {
                     )
                 {
                     return Err(String::from(
-                        "原更新请求尚未确认终态及实际资源退役，保留服务所有者。",
+                        "The original update request has not confirmed the terminal state and actual resource retirement; keeping the service owner.",
                     ));
                 }
             }
@@ -328,7 +340,9 @@ impl PendingLocalPluginUpdateRegistry {
                 preparation::confirm_abandoned_retirement(resources.inventory.as_ref(), preparing)?;
             }
             PendingLocalPluginUpdateStage::Reserved(_) => {
-                return Err(String::from("原预留尚未发布及明确中止，保留服务所有者。"));
+                return Err(String::from(
+                    "The original reservation was not published and explicitly aborted yet; keeping the service owner.",
+                ));
             }
         }
         // Pointer equality prevents an executor from removing a different slot with copied identifiers.
@@ -339,7 +353,7 @@ impl PendingLocalPluginUpdateRegistry {
             .is_some_and(|retained| Arc::ptr_eq(retained, owner))
         {
             return Err(String::from(
-                "原更新服务所有者已改变，不能释放其他实际资源。",
+                "The original update service owner changed; other actual resources cannot be released.",
             ));
         }
         owners.remove(&owner.request_id);
@@ -406,9 +420,9 @@ impl PendingLocalPluginUpdateRegistry {
                 .map_err(|error| error.to_string())?;
             if !drained.failures.is_empty() {
                 return Err(format!(
-                    "原更新请求 `{}` 的 Lua 资源未退役：{}",
+                    "The Lua resources of original update request `{}` are not retired: {}",
                     owner.request_id,
-                    drained.failures.join("；")
+                    drained.failures.join("; ")
                 ));
             }
         }
@@ -532,7 +546,7 @@ pub(super) fn require_current_manager(
     let current = service_vulcan_plugin_runtime(state)?;
     if !resources.authority.matches_manager(&current) {
         return Err(String::from(
-            "服务插件管理器已改变；保留原更新所有者，不能混合代次发布路由。",
+            "The service plugin manager changed; keeping the original update owner, mixed-generation publication routes are not allowed.",
         ));
     }
     Ok(())

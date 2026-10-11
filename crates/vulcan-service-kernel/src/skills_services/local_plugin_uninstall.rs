@@ -74,7 +74,9 @@ impl LocalPluginUninstallProjection<'_> {
             || !self.resources.collection_confirmed
             || self.resources.callback.is_some()
         {
-            return Err(String::from("原卸载投影必须使用相同实际已回收所有者。"));
+            return Err(String::from(
+                "The original uninstall projection must use the same actual reclaimed owner.",
+            ));
         }
         // Genuine Full receipt comes only from its adjacent original production publication.
         // 真实完整回执仅来自相邻原生产发布。
@@ -82,16 +84,18 @@ impl LocalPluginUninstallProjection<'_> {
             .resources
             .committed_full
             .as_ref()
-            .ok_or("原卸载完整回执缺失。")?;
+            .ok_or("The full receipt of the original uninstall is missing.")?;
         // Actual configured bridge owns both first issuer and the unique current Full pointer.
         // 实际配置桥拥有首次签发者及唯一当前完整指针。
         let bridge = service
             .agent_runtime
             .as_ref()
-            .ok_or("Agent 扩展代次尚未初始化。")?;
+            .ok_or("The agent extension generation is not initialized yet.")?;
         // Absence never supplies an alternative catalog authority.
         // 缺失绝不提供替代目录权威。
-        let published = committed.plugin_catalog().ok_or("原卸载完整目录缺失。")?;
+        let published = committed
+            .plugin_catalog()
+            .ok_or("The full catalog of the original uninstall is missing.")?;
         if !Arc::ptr_eq(committed, &bridge.extension_generation)
             || !Arc::ptr_eq(&published, catalog)
             || !Arc::ptr_eq(catalog, &self.resources.runtime.snapshot())
@@ -106,7 +110,7 @@ impl LocalPluginUninstallProjection<'_> {
             || catalog.plugins.contains_key(&self.original.plugin_id)
         {
             return Err(String::from(
-                "原卸载投影的实际完整、目录或首次签发者已改变。",
+                "The actual full state, catalog or first issuer of the original uninstall projection changed.",
             ));
         }
         Ok(self.original.request_id)
@@ -309,7 +313,7 @@ async fn execute(
         {
             if !acknowledge {
                 return Err(format!(
-                    "原卸载请求 `{}` 的回调已经退役但业务失败；请明确确认外部副作用后继续相同请求。",
+                    "The callback of original uninstall request `{}` was retired but the operation failed; explicitly confirm the external side effects, then continue the same request.",
                     original.request_id
                 ));
             }
@@ -338,7 +342,9 @@ async fn execute(
     let mut resources = original.resources.lock().await;
     publication::confirm_current(state, &resources)?;
     if !resources.collection_confirmed {
-        return Err(String::from("原卸载尚未确认实际回收。"));
+        return Err(String::from(
+            "The original uninstall has not confirmed the actual reclamation yet.",
+        ));
     }
     if resources.projection.is_none() {
         // A temporary typed borrow carries actual original evidence into the existing shared projector.
@@ -358,7 +364,7 @@ async fn execute(
     let projection = resources
         .projection
         .as_ref()
-        .ok_or("原卸载真实投影回执缺失。")?;
+        .ok_or("The real projection receipt of the original uninstall is missing.")?;
     emit_plugin_catalog_delta(app, projection);
     // Response and broadcast are derived from the exact same retained neighboring projection receipt.
     // 响应及广播从精确相同保留相邻投影回执派生。

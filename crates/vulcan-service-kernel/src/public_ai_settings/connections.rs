@@ -435,7 +435,7 @@ pub(super) async fn add_public_ai_connection_with_secret(
     }
     let add_result = mutate_public_ai_configuration_in_transaction(
         &state,
-        "保存公共 AI 连接失败",
+        "Failed to save the public AI connection",
         |configuration| {
             let effective_providers = runtime.effective_providers(configuration)?;
             configuration
@@ -457,7 +457,7 @@ pub(super) async fn add_public_ai_connection_with_secret(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 连接新增前配置失败",
+                "Failed to restore the configuration from before the public AI connection was added",
             );
             return Err(compensated_operation_error(
                 error,
@@ -490,7 +490,7 @@ pub(super) async fn add_public_ai_connection_with_secret(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 连接新增前配置失败",
+                "Failed to restore the configuration from before the public AI connection was added",
             );
             drop(transaction);
             Err(compensated_operation_error(
@@ -911,7 +911,7 @@ pub(crate) async fn service_update_public_ai_connection(
     }
     let update_result = mutate_public_ai_configuration_in_transaction(
         &state,
-        "更新公共 AI 连接失败",
+        "Failed to update the public AI connection",
         |configuration| {
             *configuration = validation_configuration.clone();
             Ok(())
@@ -934,7 +934,7 @@ pub(crate) async fn service_update_public_ai_connection(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 连接更新前配置失败",
+                "Failed to restore the configuration from before the public AI connection update",
             );
             return Err(compensated_operation_error(
                 error,
@@ -973,7 +973,7 @@ pub(crate) async fn service_update_public_ai_connection(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 连接更新前配置失败",
+                "Failed to restore the configuration from before the public AI connection update",
             );
             drop(transaction);
             Err(compensated_operation_error(
@@ -1349,7 +1349,7 @@ pub(crate) async fn service_save_public_ai_default_connection(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存公共 AI 默认账号失败",
+        "Failed to save the public AI default account",
         |configuration| {
             let connection = configuration
                 .connection_graph
@@ -1452,7 +1452,7 @@ pub(crate) async fn service_save_public_ai_connection_enabled(
             &state,
             runtime.as_ref(),
             &current_configuration,
-            "保存凭据启用状态失败",
+            "Failed to save the credential enable state",
             |configuration| {
                 *configuration = candidate_configuration.clone();
                 Ok(())
@@ -1533,7 +1533,7 @@ pub(crate) async fn service_remove_public_ai_connection(
     }
     let remove_result = mutate_public_ai_configuration_in_transaction(
         &state,
-        "移除公共 AI 连接失败",
+        "Failed to remove the public AI connection",
         |configuration| {
             remove_connection_from_configuration(
                 configuration,
@@ -1562,7 +1562,7 @@ pub(crate) async fn service_remove_public_ai_connection(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 连接移除前配置失败",
+                "Failed to restore the configuration from before the public AI connection was removed",
             );
             return Err(compensated_operation_error(
                 error,
@@ -1615,7 +1615,7 @@ pub(crate) async fn service_remove_public_ai_connection(
                 runtime.as_ref(),
                 &current_configuration,
                 &runtime_before_image,
-                "恢复公共 AI 连接移除前配置失败",
+                "Failed to restore the configuration from before the public AI connection was removed",
             );
             drop(transaction);
             Err(compensated_operation_error(
@@ -1720,7 +1720,7 @@ pub(crate) async fn service_sync_public_ai_connection(
                     &state,
                     runtime.as_ref(),
                     &configuration,
-                    "修复公共 AI 活动模型账号失败",
+                    "Failed to repair the public AI active model account",
                     |candidate| {
                         candidate.active = repaired_active;
                         Ok(())

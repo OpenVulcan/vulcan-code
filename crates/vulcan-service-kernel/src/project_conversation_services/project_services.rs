@@ -66,7 +66,7 @@ fn project_layout_after_pin_toggle(
     let current_project = projects
         .iter()
         .find(|project| project.id == project_id)
-        .ok_or_else(|| format!("未找到要切换置顶状态的项目：{project_id}"))?;
+        .ok_or_else(|| format!("Project to toggle the pin state not found: {project_id}"))?;
     // next_pinned is the exact result state persisted and applied to both retained projections.
     // next_pinned 是持久化并应用到两份保留投影的精确结果状态。
     let next_pinned = !current_project.pinned;
@@ -113,13 +113,15 @@ fn project_layout_after_section_reorder(
 ) -> Result<ProjectLayoutIds, String> {
     // first_project establishes the only section accepted by this reorder request.
     // first_project 确立本次重排请求唯一允许的分区。
-    let first_project_id = ordered_project_ids
-        .first()
-        .ok_or_else(|| String::from("重排项目失败：项目顺序不能为空。"))?;
+    let first_project_id = ordered_project_ids.first().ok_or_else(|| {
+        String::from("Failed to reorder projects: the project order must not be empty.")
+    })?;
     let first_project = projects
         .iter()
         .find(|project| project.id == *first_project_id)
-        .ok_or_else(|| String::from("重排项目失败：第一个项目不存在。"))?;
+        .ok_or_else(|| {
+            String::from("Failed to reorder projects: the first project does not exist.")
+        })?;
     // expected_section_ids is the complete authoritative retained membership for the selected section.
     // expected_section_ids 是所选分区完整的权威保留成员集合。
     let expected_section_ids = projects
@@ -134,11 +136,13 @@ fn project_layout_after_section_reorder(
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
     if ordered_section_ids.len() != ordered_project_ids.len() {
-        return Err(String::from("重排项目失败：项目顺序包含重复标识。"));
+        return Err(String::from(
+            "Failed to reorder projects: the project order contains duplicate identifiers.",
+        ));
     }
     if ordered_section_ids != expected_section_ids {
         return Err(String::from(
-            "重排项目失败：必须提交同一分区的完整项目集合。",
+            "Failed to reorder projects: the complete project set of the same section must be submitted.",
         ));
     }
     // opposite_section_ids retain the untouched section in its current display order.
@@ -220,7 +224,10 @@ pub(crate) fn service_open_project_directory(
         .cloned()
         .ok_or_else(|| format!("project not found: {project_id}"))?;
     shell_host.open_path(&project.path)?;
-    Ok(format!("已请求打开项目目录：{}。", project.name))
+    Ok(format!(
+        "Requested opening the project directory: {}.",
+        project.name
+    ))
 }
 
 /// Opens one arbitrary project directory path in the host system file manager.
@@ -230,7 +237,7 @@ pub(crate) fn service_open_project_directory_path(
     path: String,
 ) -> Result<String, String> {
     shell_host_from_state(&state)?.open_path(&path)?;
-    Ok(format!("已请求打开目录：{path}。"))
+    Ok(format!("Requested opening the directory: {path}."))
 }
 
 /// Returns the best initial directory for the native project folder picker.
@@ -337,7 +344,7 @@ pub(crate) async fn service_set_project_icon(
     // controller_runtime is resolved together with the exact retained active project target.
     // controller_runtime 与精确保留活动项目目标一起解析。
     let (controller_runtime, _project) =
-        controller_runtime_and_active_project_from_state(&state, &project_id, "设置图标")?;
+        controller_runtime_and_active_project_from_state(&state, &project_id, "set the icon")?;
     vulcan_workspace_store::workspace_store::persist_project_icon_update(
         controller_runtime,
         &project_id,
@@ -363,7 +370,7 @@ pub(crate) async fn service_reset_project_icon(
     // controller_runtime is resolved together with the exact retained active project target.
     // controller_runtime 与精确保留活动项目目标一起解析。
     let (controller_runtime, _project) =
-        controller_runtime_and_active_project_from_state(&state, &project_id, "还原图标")?;
+        controller_runtime_and_active_project_from_state(&state, &project_id, "restore the icon")?;
     vulcan_workspace_store::workspace_store::persist_project_icon_update(
         controller_runtime,
         &project_id,
@@ -453,7 +460,7 @@ pub(crate) async fn service_archive_project_conversations(
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let (controller_runtime, project) =
-        controller_runtime_and_active_project_from_state(&state, &project_id, "归档")?;
+        controller_runtime_and_active_project_from_state(&state, &project_id, "archive")?;
     // reserved_session_ids is the retained admission set used only while acquiring the project gate.
     // reserved_session_ids 仅是在获取项目准入闸门时使用的保留准入集合。
     let reserved_session_ids = project.session_ids.clone();
@@ -463,7 +470,7 @@ pub(crate) async fn service_archive_project_conversations(
         &state,
         &project_id,
         reserved_session_ids.iter().copied(),
-        "归档",
+        "archive",
     )?;
     // session_registry is the unique mutable owner used by every child lifecycle transaction.
     // session_registry 是每个子生命周期事务使用的唯一可变 owner。
@@ -526,7 +533,7 @@ pub(crate) async fn service_remove_project(
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let (controller_runtime, project) =
-        controller_runtime_and_active_project_from_state(&state, &project_id, "移除")?;
+        controller_runtime_and_active_project_from_state(&state, &project_id, "remove")?;
     let removal_effect = project_removal_default_project_effect(&state, &project_id, &project)?;
     // reserved_session_ids is the retained admission set used only while acquiring the project gate.
     // reserved_session_ids 仅是在获取项目准入闸门时使用的保留准入集合。
@@ -537,7 +544,7 @@ pub(crate) async fn service_remove_project(
         &state,
         &project_id,
         reserved_session_ids.iter().copied(),
-        "移除",
+        "remove",
     )?;
 
     // project_terminal_ids is the exact project-owned runtime set confirmed by the removal dialog.
@@ -684,10 +691,9 @@ fn project_removal_default_project_effect(
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let workspace_snapshot = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from("The workspace snapshot is not loaded yet; the project cannot be processed.")
+    })?;
     project_removal_default_project_effect_from_snapshot(workspace_snapshot, project_id, project)
 }
 
@@ -721,7 +727,9 @@ fn project_removal_default_project_effect_from_snapshot(
         return Ok(ProjectRemovalDefaultProjectEffect::None);
     }
     if vulcan_workspace_store::workspace_store::is_default_workspace_project(project)? {
-        return Err(String::from("默认项目是当前唯一项目，不能移除。"));
+        return Err(String::from(
+            "The default project is the only project and cannot be removed.",
+        ));
     }
     Ok(ProjectRemovalDefaultProjectEffect::RestoreDefault)
 }
@@ -753,10 +761,9 @@ fn controller_runtime_and_project_layout_from_state(
     })?;
     // workspace_snapshot is the retained source of active project identity and ordering.
     // workspace_snapshot 是活动项目身份与顺序的保留来源。
-    let workspace_snapshot = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from("The workspace snapshot is not loaded yet; the project cannot be processed.")
+    })?;
     // project_layout deliberately copies only fields needed by the guarded mutation.
     // project_layout 有意只复制受保护变更所需字段。
     let project_layout = workspace_snapshot
@@ -797,10 +804,9 @@ pub(super) fn controller_runtime_and_active_project_from_state(
     let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
         String::from("service is still starting; controller runtime is not ready")
     })?;
-    let workspace_snapshot = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from("The workspace snapshot is not loaded yet; the project cannot be processed.")
+    })?;
     let project = active_project_from_workspace(workspace_snapshot, project_id, action_label)?;
     Ok((controller_runtime, project))
 }
@@ -828,7 +834,7 @@ fn active_project_from_workspace(
 ) -> Result<TaskProjectSummary, String> {
     workspace_task_project_for_project_id(workspace_snapshot, project_id)
         .cloned()
-        .ok_or_else(|| format!("未找到要{action_label}的项目：{project_id}"))
+        .ok_or_else(|| format!("Project to {action_label} not found: {project_id}"))
 }
 
 #[cfg(test)]
@@ -925,7 +931,7 @@ mod tests {
 
         // Resolved project returned by the project action helper.
         // 项目操作辅助函数返回的已解析项目。
-        let project = active_project_from_workspace(&workspace_snapshot, "project-a", "移除")
+        let project = active_project_from_workspace(&workspace_snapshot, "project-a", "remove")
             .expect("active project should resolve through shared lookup");
 
         assert_eq!(project.id, "project-a");
@@ -943,10 +949,10 @@ mod tests {
 
         // Error emitted by the shared blank-project-id semantics.
         // 共享空白项目标识语义返回的错误。
-        let error = active_project_from_workspace(&workspace_snapshot, "   ", "移除")
+        let error = active_project_from_workspace(&workspace_snapshot, "   ", "remove")
             .expect_err("blank project id should be rejected by shared lookup");
 
-        assert!(error.contains("未找到要移除的项目"));
+        assert!(error.contains("Project to remove not found"));
     }
 
     /// Rejects removing the default project when it is the only active project.
@@ -967,7 +973,7 @@ mod tests {
         )
         .expect_err("the only default project should not be removable");
 
-        assert!(error.contains("默认项目是当前唯一项目"));
+        assert!(error.contains("only project"));
     }
 
     /// Requests default-project restoration after removing the only non-default project.
@@ -1097,7 +1103,7 @@ mod tests {
         assert!(
             project_layout_after_section_reorder(&projects, &[String::from("project-a")])
                 .expect_err("partial section should fail")
-                .contains("完整项目集合")
+                .contains("complete project set")
         );
         assert!(
             project_layout_after_section_reorder(
@@ -1105,7 +1111,7 @@ mod tests {
                 &[String::from("project-a"), String::from("project-c")],
             )
             .expect_err("cross-section reorder should fail")
-            .contains("完整项目集合")
+            .contains("complete project set")
         );
         assert!(
             project_layout_after_section_reorder(
@@ -1113,7 +1119,7 @@ mod tests {
                 &[String::from("project-a"), String::from("project-a")],
             )
             .expect_err("duplicate reorder identity should fail")
-            .contains("重复标识")
+            .contains("duplicate identifiers")
         );
     }
 

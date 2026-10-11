@@ -337,7 +337,7 @@ fn append_exact_v1_subagent_return(
                 )
                 .map_err(|error| error.to_string())
         })
-        .map_err(|error| format!("读取子会话 V1 回流事实失败：{error}"))??;
+        .map_err(|error| format!("Failed to read the child session V1 return facts: {error}"))??;
     let committed = parent_handle
         .append_execution_subagent_return(
             vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new(execution_id)
@@ -345,7 +345,7 @@ fn append_exact_v1_subagent_return(
             input,
             current_v1_unix_millis()?,
         )
-        .map_err(|error| format!("子代理 V1 回流提交失败：{error}"))?;
+        .map_err(|error| format!("Failed to commit the subagent V1 return: {error}"))?;
     webui_trace(
         "detached_subagent_v1_return_committed",
         format!(

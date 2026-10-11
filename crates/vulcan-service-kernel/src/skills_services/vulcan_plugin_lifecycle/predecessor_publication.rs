@@ -43,13 +43,13 @@ impl PredecessorPluginExtensionPublication {
         // 在原发布使用的相同服务互斥下观测实际桥。
         let guard = state
             .lock()
-            .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+            .map_err(|error| format!("Failed to lock the service state: {error}"))?;
         // Missing bridge ownership cannot be reconstructed from the sealed catalog's copied values.
         // 缺失桥所有权不能从封闭目录复制值重建。
         let bridge = guard
             .agent_runtime
             .as_ref()
-            .ok_or("Agent 扩展代次尚未初始化。")?;
+            .ok_or("The agent extension generation is not initialized yet.")?;
         if !self.authority.matches_manager(runtime)
             || !self
                 .authority
@@ -61,7 +61,7 @@ impl PredecessorPluginExtensionPublication {
             || !Arc::ptr_eq(&runtime.snapshot(), self.publication.catalog())
         {
             return Err(String::from(
-                "原前驱已确认发布不再匹配实际服务槽、目录或首次签发者。",
+                "The confirmed original predecessor publication no longer matches the actual service slot, catalog or first issuer.",
             ));
         }
         Ok(())
@@ -88,7 +88,7 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
     // 服务互斥先于核心注册及每个原生／来源／资源守卫。
     let mut guard = state
         .lock()
-        .map_err(|error| format!("锁定服务状态失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the service state: {error}"))?;
     crate::service_state_access::require_plugin_publication_shutdown_admission(&guard)?;
     crate::service_state_access::require_plugin_update_full_publication_admission(
         &guard,
@@ -99,32 +99,36 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
     let bridge = guard
         .agent_runtime
         .as_mut()
-        .ok_or("Agent 扩展代次尚未初始化。")?;
+        .ok_or("The agent extension generation is not initialized yet.")?;
     if !bridge
         .vulcan_plugin_native_mcp_host
         .matches_manager(&bridge.vulcan_plugin_runtime)
     {
-        return Err(String::from("原前驱管理器与服务首次原生签发者不一致。"));
+        return Err(String::from(
+            "The original predecessor manager disagrees with the first native issuer of the service.",
+        ));
     }
     // Only original predecessor selection determines the old namespace, independently of the aborted target.
     // 仅原前驱选择决定旧命名空间，独立于中止目标。
     let old = transaction
         .record()
         .predecessor()
-        .ok_or("原前驱缺少完整托管选择。")?;
+        .ok_or("The original predecessor has no complete managed selection.")?;
     // This immutable closed observation does not grant Source eligibility; the first actual core publisher checks it independently.
     // 此不可变关闭观测不授予 Source 资格；首次实际核心发布器独立检查它。
     let plugin = staged
         .plugins
         .get(&old.plugin_id)
-        .ok_or("原前驱不在关闭目录中。")?;
+        .ok_or("The original predecessor is not in the shutdown catalog.")?;
     if transaction.record().phase() != VulcanPluginActivationTransactionPhase::Aborted
         || source.request_id() != transaction.record().request_id()
         || !plugin
             .managed_package()
             .is_some_and(|managed| managed.matches_activation(old))
     {
-        return Err(String::from("原前驱发布需要精确完整已中止旧选择。"));
+        return Err(String::from(
+            "The original predecessor publication requires the exact complete aborted old selection.",
+        ));
     }
     // Enforce actual declarations on every attempt, including exact Full completion retries.
     // 在每次尝试中执行实际声明约束，包括精确 Full 完成重试。
@@ -132,12 +136,16 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
         server.manifest.scope == vulcan_plugin_runtime::VulcanPluginMcpScopeManifest::Global
     });
     if has_global_mcp != native.is_some() {
-        return Err(String::from("原前驱全局 MCP 声明与实际所有者不一致。"));
+        return Err(String::from(
+            "The global MCP declaration of the original predecessor disagrees with the actual owner.",
+        ));
     }
     if let Some(native) = native {
         // A repeated issuer or equal-value Source cannot substitute for the actual original participant.
         // 重复签发者或相等值 Source 不能替代实际原参与者。
-        let authority = native.authority().ok_or("原前驱缺少原生签发者。")?;
+        let authority = native
+            .authority()
+            .ok_or("The original predecessor has no native issuer.")?;
         // Pure control observations identify the actual original allocation without acquiring its physical files.
         // 纯控制观测标识实际原分配，不取得其物理文件。
         let control = native.control();
@@ -147,7 +155,9 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
             || control.plugin_id() != old.plugin_id
             || control.generation() != plugin.generation
         {
-            return Err(String::from("原前驱与服务首次签发者或实际来源不一致。"));
+            return Err(String::from(
+                "The original predecessor disagrees with the first issuer or actual source of the service.",
+            ));
         }
     }
     // Clone the same manager, not its catalog or physical resource authority.
@@ -164,7 +174,7 @@ pub(in crate::skills_services) fn publish_activation_predecessor_plugin_extensio
             || !Arc::ptr_eq(&manager.snapshot(), previous.publication.catalog())
         {
             return Err(String::from(
-                "原前驱实际 Full 或最终目录已改变，保留原所有者且不能重新发布。",
+                "The actual Full state or final catalog of the original predecessor changed; keeping the original owner, it cannot be published again.",
             ));
         }
     } else {

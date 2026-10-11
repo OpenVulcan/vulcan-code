@@ -32,7 +32,7 @@ impl NativeVmmMaintenance {
         let _operation_guard = self.operation_gate.read().await;
         *self.session_restart_preview.lock().await = None;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("请先启用原生记忆。".to_owned());
+            return Err("Enable native memory first.".to_owned());
         }
         self.ensure_project(selection.vmm_project_id).await?;
         normalize_ids(&mut selection.session_source_ids)?;
@@ -64,7 +64,7 @@ impl NativeVmmMaintenance {
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
-            return Err("原生记忆已关闭，请重新启用并预览。".to_owned());
+            return Err("Native memory is turned off; enable it again and preview.".to_owned());
         }
         // A retry replays only the same committed preview, never an unrelated operation.
         // 重试只重放同一个已提交预览，不能重放无关操作。
@@ -80,13 +80,19 @@ impl NativeVmmMaintenance {
             let mut slot = self.session_restart_preview.lock().await;
             match slot.as_ref() {
                 Some(prepared) if prepared.summary.preview_id == preview_id => {}
-                _ => return Err("重新启用预览不存在或已被替换，请重新预览。".to_owned()),
+                _ => {
+                    return Err(
+                        "The re-enable preview does not exist or was replaced; preview again."
+                            .to_owned(),
+                    );
+                }
             }
-            slot.take()
-                .ok_or_else(|| "重新启用预览已消费，请重新预览。".to_owned())?
+            slot.take().ok_or_else(|| {
+                "The re-enable preview was already used; preview again.".to_owned()
+            })?
         };
         if prepared.created_at.elapsed() > Duration::from_secs(300) {
-            return Err("重新启用预览已过期，请重新预览。".to_owned());
+            return Err("The re-enable preview expired; preview again.".to_owned());
         }
         self.ensure_project(prepared.summary.selection.vmm_project_id)
             .await?;
@@ -107,11 +113,14 @@ impl NativeVmmMaintenance {
 /// 只修改顺序及重复项；出错时不编造替代身份。
 fn normalize_ids(ids: &mut Vec<String>) -> Result<(), String> {
     if ids.is_empty() || ids.len() > 100 {
-        return Err("请选择 1 至 100 个记忆会话。".to_owned());
+        return Err("Select 1 to 100 memory sessions.".to_owned());
     }
     for id in ids.iter() {
         if id.is_empty() || id.trim() != id {
-            return Err("记忆会话 ID 不能为空或包含首尾空白。".to_owned());
+            return Err(
+                "Memory session IDs must not be empty or have leading or trailing whitespace."
+                    .to_owned(),
+            );
         }
         SessionSourceId::new(id.clone()).map_err(|error| error.to_string())?;
     }
@@ -139,11 +148,12 @@ fn validate_selection(
                     && session.subject_id == subject
                     && session.session_source_id.as_str() == id
             })
-            .ok_or_else(|| format!("项目中不存在记忆会话 `{id}`，请刷新列表。"))?;
-        session
-            .status
-            .restart_transition()
-            .map_err(|_| format!("会话 `{id}` 不是已遗忘状态，请刷新列表。"))?;
+            .ok_or_else(|| {
+                format!("Memory session `{id}` does not exist in the project; refresh the list.")
+            })?;
+        session.status.restart_transition().map_err(|_| {
+            format!("Session `{id}` is not in the forgotten state; refresh the list.")
+        })?;
     }
     Ok(())
 }
@@ -160,7 +170,7 @@ fn apply_restart(
     let version = snapshot
         .storage_version
         .checked_add(1)
-        .ok_or_else(|| "原生记忆存储版本已耗尽。".to_owned())?;
+        .ok_or_else(|| "The native memory storage versions are exhausted.".to_owned())?;
     let scope = project_scope(selection.vmm_project_id)?;
     let subject = native_vmm_subject_id()?;
     for session in &mut snapshot.memory_sessions {

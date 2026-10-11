@@ -76,17 +76,19 @@ pub(crate) fn switch_webui_git_branch(
         &["check-ref-format", "--branch", branch_name.as_str()],
     )?;
     if !format_output.status.success() {
-        return Err(format!("分支名 `{branch_name}` 不是合法的 Git 分支名。"));
+        return Err(format!(
+            "Branch name `{branch_name}` is not a valid Git branch name."
+        ));
     }
     let exists = webui_git_ref_exists(repository_root, &format!("refs/heads/{branch_name}"))?;
     let args: &[&str] = if request.create {
         if exists {
-            return Err(format!("本地分支 `{branch_name}` 已存在。"));
+            return Err(format!("Local branch `{branch_name}` already exists."));
         }
         &["switch", "-c", branch_name.as_str()]
     } else {
         if !exists {
-            return Err(format!("本地分支 `{branch_name}` 不存在。"));
+            return Err(format!("Local branch `{branch_name}` does not exist."));
         }
         &["switch", branch_name.as_str()]
     };

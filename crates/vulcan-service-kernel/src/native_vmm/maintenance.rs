@@ -995,9 +995,9 @@ impl NativeVmmMaintenance {
         host_project_id: &str,
     ) -> Result<vulcan_service_api::VmmNativeHostProjectPolicySummary, String> {
         let _gate = self.operation_gate.read().await;
-        self.bound_project(host_project_id)
-            .await?
-            .ok_or_else(|| "该 VulcanCode 项目尚未绑定原生记忆项目".to_owned())?;
+        self.bound_project(host_project_id).await?.ok_or_else(|| {
+            "This VulcanCode project is not bound to a native memory project yet".to_owned()
+        })?;
         self.runtime.host_project_policy(host_project_id).await
     }
 
@@ -1010,7 +1010,9 @@ impl NativeVmmMaintenance {
         let _gate = self.operation_gate.read().await;
         self.bound_project(&edit.host_project_id)
             .await?
-            .ok_or_else(|| "该 VulcanCode 项目尚未绑定原生记忆项目".to_owned())?;
+            .ok_or_else(|| {
+                "This VulcanCode project is not bound to a native memory project yet".to_owned()
+            })?;
         self.runtime
             .update_host_project_policy(&edit.host_project_id, edit.overrides)
             .await
@@ -1409,7 +1411,7 @@ impl NativeVmmMaintenance {
         let _run_guard = self.retention_run_gate.lock().await;
         if !self.native_backend_enabled.load(Ordering::Acquire) {
             return Err(String::from(
-                "原生 VMM 定期清洗仅在内部原生记忆已启用时可运行。",
+                "Native VMM periodic retention can only run when internal native memory is enabled.",
             ));
         }
         let started_at_unix_ms = unix_ns_to_ms(self.clock.now_ns()?);
@@ -1555,7 +1557,9 @@ impl NativeVmmMaintenance {
         confirmed: bool,
     ) -> Result<NativeVmmVectorRebuildResult, String> {
         if !confirmed {
-            return Err(String::from("向量重建属于高影响操作，必须明确确认后执行。"));
+            return Err(String::from(
+                "Vector rebuild is a high-impact operation and must be explicitly confirmed.",
+            ));
         }
         let _project_guard = self.project_mutation_gate.lock().await;
         let _operation_guard = self.operation_gate.write().await;
@@ -1564,14 +1568,14 @@ impl NativeVmmMaintenance {
         let snapshot = self.runtime.storage_snapshot()?;
         if snapshot.storage_version != expected_storage_version {
             return Err(format!(
-                "原生 VMM 向量重建预检已过期：预期存储版本 {expected_storage_version}，当前版本 {}，请重新预检。",
+                "The native VMM vector rebuild precheck is stale: expected storage version {expected_storage_version}, current version {}; precheck again.",
                 snapshot.storage_version
             ));
         }
         let preview = vector_rebuild_preview(&snapshot, &descriptor)?;
         if preview.preview_fingerprint != expected_preview_fingerprint {
             return Err(String::from(
-                "原生 VMM 向量重建目标已变化，请重新预检后确认。",
+                "The native VMM vector rebuild targets changed; precheck again and confirm.",
             ));
         }
         let active_targets = active_vector_rebuild_targets(&snapshot, &descriptor.vector_space_id);
@@ -1588,7 +1592,7 @@ impl NativeVmmMaintenance {
                     || current.capability_fingerprint != descriptor.capability_fingerprint
                 {
                     return Err(String::from(
-                        "向量重建期间 Embedding 路由发生变化；已提交批次保持有效，请重新预检剩余记录。",
+                        "The embedding route changed during the vector rebuild; committed batches stay valid; precheck the remaining records again.",
                     ));
                 }
                 let now_ns = self.clock.now_ns()?;
@@ -1625,14 +1629,19 @@ impl NativeVmmMaintenance {
                     .await
                     .map_err(|error| error.to_string())?;
                 let CommandResult::Maintenance(result) = result else {
-                    return Err(String::from("原生 VMM Core 返回了非向量维护结果。"));
+                    return Err(String::from(
+                        "Native VMM Core returned a non-vector maintenance result.",
+                    ));
                 };
-                let expected_count = u32::try_from(memory_ids.len())
-                    .map_err(|error| format!("向量重建批次计数超出范围：{error}"))?;
+                let expected_count = u32::try_from(memory_ids.len()).map_err(|error| {
+                    format!("The vector rebuild batch count is out of range: {error}")
+                })?;
                 if result.rebuilt_vector_count != expected_count
                     || result.affected_memory_ids.as_slice() != memory_ids
                 {
-                    return Err(String::from("原生 VMM Core 返回了不一致的向量重建结果。"));
+                    return Err(String::from(
+                        "Native VMM Core returned an inconsistent vector rebuild result.",
+                    ));
                 }
                 rebuilt_memory_count =
                     rebuilt_memory_count.saturating_add(u64::from(expected_count));
@@ -1644,7 +1653,7 @@ impl NativeVmmMaintenance {
                 let current = self.runtime.current_vector_space_descriptor().await?;
                 if current != descriptor {
                     return Err(String::from(
-                        "向量重建期间 Embedding 路由发生变化；已提交批次保持有效，请重新预检剩余记录。",
+                        "The embedding route changed during the vector rebuild; committed batches stay valid; precheck the remaining records again.",
                     ));
                 }
                 let batch_operation_id = vector_rebuild_batch_operation_id(
@@ -1668,7 +1677,7 @@ impl NativeVmmMaintenance {
                 let current = self.runtime.current_vector_space_descriptor().await?;
                 if current != descriptor {
                     return Err(String::from(
-                        "向量重建期间 Embedding 路由发生变化；本批向量未提交，请重新预检剩余记录。",
+                        "The embedding route changed during the vector rebuild; this batch of vectors was not committed; precheck the remaining records again.",
                     ));
                 }
                 let mutation_kind = format!(
@@ -1709,7 +1718,7 @@ impl NativeVmmMaintenance {
                         .ne(memory_ids.iter().map(|memory_id| memory_id.as_str()))
                 {
                     return Err(String::from(
-                        "原生 VMM 回收站向量重建返回了不一致的批次结果。",
+                        "The native VMM recycle-bin vector rebuild returned an inconsistent batch result.",
                     ));
                 }
                 rebuilt_memory_count = rebuilt_memory_count.saturating_add(expected_count);
@@ -1722,7 +1731,7 @@ impl NativeVmmMaintenance {
             .is_empty()
         {
             return Err(String::from(
-                "原生 VMM 回收站仍包含旧向量代次，请重新预检后继续重建。",
+                "The native VMM recycle bin still contains old vector generations; precheck again and continue the rebuild.",
             ));
         }
         Ok(NativeVmmVectorRebuildResult {
@@ -1803,7 +1812,7 @@ impl NativeVmmMaintenance {
         let before = self.runtime.storage_snapshot()?;
         if before.storage_version != expected_storage_version {
             return Err(format!(
-                "原生 VMM 回收站预检已过期：预期存储版本 {expected_storage_version}，当前版本 {}。",
+                "The native VMM recycle-bin precheck is stale: expected storage version {expected_storage_version}, current version {}.",
                 before.storage_version
             ));
         }
@@ -1811,9 +1820,11 @@ impl NativeVmmMaintenance {
             .retention_trash_batches
             .iter()
             .find(|batch| batch.batch_id == batch_id)
-            .ok_or_else(|| format!("原生 VMM 回收批次 `{batch_id}` 不存在。"))?;
+            .ok_or_else(|| format!("Native VMM recycle batch `{batch_id}` does not exist."))?;
         if batch.expires_at_ns <= now_ns {
-            return Err(format!("原生 VMM 回收批次 `{batch_id}` 已到期，不能恢复。"));
+            return Err(format!(
+                "Native VMM recycle batch `{batch_id}` has expired and cannot be restored."
+            ));
         }
         ensure_recycle_restore_has_no_conflicts(&before, batch)?;
         if !batch.dataset.memories.is_empty() {
@@ -1828,7 +1839,7 @@ impl NativeVmmMaintenance {
                 .count();
             if incompatible > 0 {
                 return Err(format!(
-                    "原生 VMM 回收批次 `{batch_id}` 包含 {incompatible} 条旧向量代次记忆。请先在“内部维护”执行向量重建，再恢复该批次。"
+                    "Native VMM recycle batch `{batch_id}` contains {incompatible} memories with an old vector generation. Run the vector rebuild under Internal maintenance first, then restore this batch."
                 ));
             }
         }
@@ -1845,13 +1856,13 @@ impl NativeVmmMaintenance {
                         .retention_trash_batches
                         .iter()
                         .position(|batch| batch.batch_id == batch_id)
-                        .ok_or_else(|| format!("原生 VMM 回收批次 `{batch_id}` 不存在。"))?;
+                        .ok_or_else(|| format!("Native VMM recycle batch `{batch_id}` does not exist."))?;
                     let batch = &snapshot.retention_trash_batches[batch_index];
                     // Provider checks and lock acquisition can outlive the preview's time boundary.
                     // 供应商检查和锁等待可能跨过预检时的时间边界。
                     let apply_now_ns = clock.now_ns()?;
                     if batch.expires_at_ns <= apply_now_ns {
-                        return Err(format!("原生 VMM 回收批次 `{batch_id}` 已到期，不能恢复。"));
+                        return Err(format!("Native VMM recycle batch `{batch_id}` has expired and cannot be restored."));
                     }
                     ensure_recycle_restore_has_no_conflicts(snapshot, batch)?;
                     let batch = snapshot.retention_trash_batches.remove(batch_index);
@@ -1889,7 +1900,9 @@ impl NativeVmmMaintenance {
                         .retention_trash_batches
                         .iter()
                         .position(|batch| batch.batch_id == batch_id)
-                        .ok_or_else(|| format!("原生 VMM 回收批次 `{batch_id}` 不存在。"))?;
+                        .ok_or_else(|| {
+                            format!("Native VMM recycle batch `{batch_id}` does not exist.")
+                        })?;
                     let batch = snapshot.retention_trash_batches.remove(batch_index);
                     let summary = retention_batch_summary(&batch)?;
                     manual_session_lifecycle::apply(
@@ -1932,9 +1945,12 @@ impl NativeVmmMaintenance {
             )
             .await?;
         for project in projects {
-            let project_policy = policies
-                .get(&project.id)
-                .ok_or_else(|| format!("缺少已准入的记忆项目 {} 保留策略。", project.id))?;
+            let project_policy = policies.get(&project.id).ok_or_else(|| {
+                format!(
+                    "The retention policy of admitted memory project {} is missing.",
+                    project.id
+                )
+            })?;
             match self.run_project_retention(project.id, project_policy).await {
                 Ok(result) => aggregate.merge(&result),
                 Err(error) => aggregate
@@ -2118,8 +2134,9 @@ impl NativeVmmMaintenance {
     ) -> Result<NativeVmmRetentionApplyResult, String> {
         let mut aggregate = NativeVmmRetentionApplyResult::default();
         let first = self.run_project_retention_pass(project_id, policy).await?;
-        let completed_cold_jobs = u32::try_from(first.completed_cold_jobs)
-            .map_err(|error| format!("原生 VMM 冷回合完成计数超出 u32 范围：{error}"))?;
+        let completed_cold_jobs = u32::try_from(first.completed_cold_jobs).map_err(|error| {
+            format!("The native VMM cold-turn completion count exceeds the u32 range: {error}")
+        })?;
         let remaining_cold_job_limit = policy
             .cold_turn_job_limit
             .saturating_sub(completed_cold_jobs);
@@ -2239,7 +2256,9 @@ impl NativeVmmMaintenance {
             .await
             .map_err(|error| error.to_string())?;
         let CommandResult::Retention(plan) = result else {
-            return Err(String::from("原生 VMM Core 返回了非保留计划结果。"));
+            return Err(String::from(
+                "Native VMM Core returned a non-retention-plan result.",
+            ));
         };
         Ok(plan)
     }
@@ -2366,7 +2385,7 @@ impl NativeVmmMaintenance {
             .data_plane
             .project_by_id(vmm_project_id)
             .await?
-            .ok_or_else(|| format!("原生 VMM 项目 {vmm_project_id} 不存在"))?;
+            .ok_or_else(|| format!("Native VMM project {vmm_project_id} does not exist"))?;
         self.data_plane
             .bind_vulcan_project(vulcan_project_id, vmm_project_id)
             .await?;
@@ -2406,7 +2425,7 @@ impl NativeVmmMaintenance {
             .data_plane
             .project_by_id(vmm_project_id)
             .await?
-            .ok_or_else(|| format!("原生 VMM 项目 {vmm_project_id} 不存在"))?;
+            .ok_or_else(|| format!("Native VMM project {vmm_project_id} does not exist"))?;
         self.data_plane
             .bind_vulcan_project(vulcan_project_id, vmm_project_id)
             .await?;
@@ -2528,7 +2547,7 @@ impl NativeVmmMaintenance {
             .map(Some)
             .ok_or_else(|| {
                 format!(
-                    "VulcanCode 项目 {vulcan_project_id} 的原生 VMM 绑定指向不存在的项目 {}",
+                    "The native VMM binding of VulcanCode project {vulcan_project_id} points to the nonexistent project {}",
                     binding.owner_project_id
                 )
             })
@@ -2589,9 +2608,9 @@ impl NativeVmmMaintenance {
             .data_plane
             .project_by_id(project_id)
             .await?
-            .ok_or_else(|| format!("原生 VMM 项目 {project_id} 不存在"))?;
+            .ok_or_else(|| format!("Native VMM project {project_id} does not exist"))?;
         if project.protected {
-            return Err(String::from("default VMM 项目不允许删除"));
+            return Err(String::from("The default VMM project cannot be deleted"));
         }
         self.ensure_no_pending_analysis_jobs(project_id).await?;
         let snapshot = self.runtime.storage_snapshot()?;
@@ -2650,12 +2669,12 @@ impl NativeVmmMaintenance {
             && !confirm_detach_bindings
         {
             return Err(String::from(
-                "该原生 VMM 项目仍有 VulcanCode 归属或连带查询关联，请确认解除关联后再删除。",
+                "This native VMM project still has VulcanCode ownership or linked-query associations; remove them before deleting.",
             ));
         }
         if preview.storage_version != expected_storage_version {
             return Err(format!(
-                "原生 VMM 存储版本已变化：预期 {expected_storage_version}，实际 {}，请重新预检",
+                "The native VMM storage version changed: expected {expected_storage_version}, actual {}; precheck again",
                 preview.storage_version
             ));
         }
@@ -2749,12 +2768,12 @@ impl NativeVmmMaintenance {
                         preview_migration(snapshot, source_project_id, target_project_id)?;
                     if preview.preview_fingerprint != expected_preview_fingerprint {
                         return Err(String::from(
-                            "原生 VMM 迁移预检指纹已变化，请重新预检后确认",
+                            "The native VMM migration precheck fingerprint changed; precheck again and confirm",
                         ));
                     }
                     if !preview.session_renames.is_empty() && !accept_session_renames {
                         return Err(format!(
-                            "迁移发现 {} 个会话冲突，请确认自动改名后重试",
+                            "The migration found {} session conflicts; confirm the automatic renames and retry",
                             preview.session_renames.len()
                         ));
                     }
@@ -2826,7 +2845,7 @@ impl NativeVmmMaintenance {
     /// 验证一个原生 VMM 项目存在。
     async fn ensure_project(&self, project_id: u64) -> Result<(), String> {
         if self.data_plane.project_by_id(project_id).await?.is_none() {
-            return Err(format!("原生 VMM 项目 {project_id} 不存在"));
+            return Err(format!("Native VMM project {project_id} does not exist"));
         }
         Ok(())
     }
@@ -2859,7 +2878,7 @@ impl NativeVmmMaintenance {
         }
         if pending_count > 0 {
             return Err(format!(
-                "原生 VMM 项目 {project_id} 仍有 {pending_count} 条后台记忆分析作业，请等待作业完成后重新预检并执行维护"
+                "Native VMM project {project_id} still has {pending_count} background memory analysis jobs; wait for them to finish, then precheck again and run the maintenance"
             ));
         }
         Ok(())
@@ -2895,7 +2914,9 @@ impl NativeVmmMaintenance {
         target_project_id: u64,
     ) -> Result<(), String> {
         if source_project_id == target_project_id {
-            return Err(String::from("原生 VMM 迁移来源项目与目标项目不能相同"));
+            return Err(String::from(
+                "The native VMM migration source and target projects must differ",
+            ));
         }
         self.ensure_project(source_project_id).await?;
         self.ensure_project(target_project_id).await
@@ -3049,7 +3070,7 @@ fn validate_native_retention_plan_bounds(
         || !within(plan.trash_purge.len(), policy.trash_purge_limit)
     {
         return Err(String::from(
-            "原生 VMM 保留计划超过冻结策略规定的单轮处理上限。",
+            "The native VMM retention plan exceeds the per-round limit set by the frozen policy.",
         ));
     }
     Ok(())
@@ -3065,9 +3086,9 @@ fn retention_project_failure_message(result: &NativeVmmRetentionApplyResult) -> 
         result
             .project_failures
             .iter()
-            .map(|failure| format!("项目 {}：{}", failure.project_id, failure.error))
+            .map(|failure| format!("Project {}: {}", failure.project_id, failure.error))
             .collect::<Vec<_>>()
-            .join("；"),
+            .join("; "),
     )
 }
 
@@ -3085,16 +3106,22 @@ fn apply_retention_plan(
     // 为本次原子处理中新建的全部批次一次性冻结选定策略的截止时间。
     let expires_at_ns = now_ns
         .checked_add(retention_duration_ns(policy.trash_retention_ms)?)
-        .ok_or_else(|| String::from("原生 VMM 回收批次到期时间超出可表示范围。"))?;
+        .ok_or_else(|| {
+            String::from(
+                "The native VMM recycle batch expiry time is out of the representable range.",
+            )
+        })?;
     if !plan.vector_gc_retry.is_empty() {
         return Err(String::from(
-            "原生 VMM 使用快照变更日志完成向量清理，不接受独立向量 GC 计划。",
+            "Native VMM finishes vector cleanup with the snapshot change log and does not accept a separate vector GC plan.",
         ));
     }
     let mut result = NativeVmmRetentionApplyResult::default();
     let expected_subject = native_vmm_subject_id()?;
     if plan.subject_id != expected_subject {
-        return Err(String::from("原生 VMM 保留计划主体与固定宿主用户不一致。"));
+        return Err(String::from(
+            "The subject of the native VMM retention plan disagrees with the fixed host user.",
+        ));
     }
 
     let mut profile_node_ids = BTreeSet::new();
@@ -3103,7 +3130,7 @@ fn apply_retention_plan(
             || !profile_node_ids.insert(planned.profile_node_id.clone())
         {
             return Err(format!(
-                "原生 VMM 画像过期计划中的节点 `{}` 使用了错误的原因码或重复身份。",
+                "Node `{}` in the native VMM profile expiry plan uses the wrong reason code or a duplicate identity.",
                 planned.profile_node_id
             ));
         }
@@ -3114,7 +3141,7 @@ fn apply_retention_plan(
             .find(|node| node.id == planned.profile_node_id)
             .ok_or_else(|| {
                 format!(
-                    "原生 VMM 画像过期计划引用了不存在的节点 `{}`。",
+                    "The native VMM profile expiry plan references nonexistent node `{}`.",
                     planned.profile_node_id
                 )
             })?;
@@ -3130,7 +3157,7 @@ fn apply_retention_plan(
                 .is_none_or(|expires_at_ns| expires_at_ns > now_ns)
         {
             return Err(format!(
-                "原生 VMM 画像过期计划中的节点 `{}` 已发生变化，请重新规划。",
+                "Node `{}` in the native VMM profile expiry plan changed; plan again.",
                 planned.profile_node_id
             ));
         }
@@ -3143,7 +3170,7 @@ fn apply_retention_plan(
             .find(|node| node.id == planned.profile_node_id)
             .ok_or_else(|| {
                 format!(
-                    "原生 VMM 画像过期节点 `{}` 在应用阶段消失。",
+                    "Native VMM profile expiry node `{}` disappeared during the apply phase.",
                     planned.profile_node_id
                 )
             })?;
@@ -3152,7 +3179,7 @@ fn apply_retention_plan(
         node.updated_at_ns = now_ns;
         node.version = node.version.checked_add(1).ok_or_else(|| {
             format!(
-                "原生 VMM 画像节点 `{}` 的版本号已经耗尽。",
+                "The version of native VMM profile node `{}` is exhausted.",
                 planned.profile_node_id
             )
         })?;
@@ -3165,7 +3192,7 @@ fn apply_retention_plan(
             || !terminal_ids.insert(planned.memory_id.clone())
         {
             return Err(format!(
-                "原生 VMM 终态记忆回收计划中的记忆 `{}` 使用了错误的原因码或重复身份。",
+                "Memory `{}` in the native VMM terminal memory reclamation plan uses the wrong reason code or a duplicate identity.",
                 planned.memory_id
             ));
         }
@@ -3176,7 +3203,7 @@ fn apply_retention_plan(
             .find(|memory| memory.id.as_str() == planned.memory_id)
             .ok_or_else(|| {
                 format!(
-                    "原生 VMM 保留计划引用了不存在的记忆 `{}`。",
+                    "The native VMM retention plan references nonexistent memory `{}`.",
                     planned.memory_id
                 )
             })?;
@@ -3189,7 +3216,7 @@ fn apply_retention_plan(
             )
         {
             return Err(format!(
-                "原生 VMM 保留计划中的记忆 `{}` 已发生变化，请重新规划。",
+                "Memory `{}` in the native VMM retention plan changed; plan again.",
                 planned.memory_id
             ));
         }
@@ -3218,15 +3245,17 @@ fn apply_retention_plan(
             || !enqueued_session_ids.insert(planned.session_source_id.clone())
         {
             return Err(format!(
-                "原生 VMM 冷回合入队计划中的会话 `{}` 使用了错误的原因码或重复身份。",
+                "Session `{}` in the native VMM cold-turn enqueue plan uses the wrong reason code or a duplicate identity.",
                 planned.session_source_id
             ));
         }
-        let session_source_id = SessionSourceId::new(planned.session_source_id.clone())
-            .map_err(|error| format!("原生 VMM 冷回合任务会话标识无效：{error}"))?;
+        let session_source_id =
+            SessionSourceId::new(planned.session_source_id.clone()).map_err(|error| {
+                format!("Invalid native VMM cold-turn task session identifier: {error}")
+            })?;
         if existing_job_sessions.contains(&session_source_id) {
             return Err(format!(
-                "原生 VMM 冷回合入队计划中的会话 `{}` 已存在耐久任务，请重新规划。",
+                "Session `{}` in the native VMM cold-turn enqueue plan already has a durable task; plan again.",
                 planned.session_source_id
             ));
         }
@@ -3240,7 +3269,7 @@ fn apply_retention_plan(
         .is_empty()
         {
             return Err(format!(
-                "原生 VMM 冷回合入队计划中的会话 `{}` 已无可回收回合，请重新规划。",
+                "Session `{}` in the native VMM cold-turn enqueue plan has no reclaimable turns left; plan again.",
                 planned.session_source_id
             ));
         }
@@ -3268,7 +3297,7 @@ fn apply_retention_plan(
             || !cold_job_session_ids.insert(planned.session_source_id.clone())
         {
             return Err(format!(
-                "原生 VMM 冷回合执行计划中的任务 `{}` 使用了错误的原因码，或重复了任务/会话身份。",
+                "Task `{}` in the native VMM cold-turn execution plan uses the wrong reason code or duplicates a task/session identity.",
                 planned.job_id
             ));
         }
@@ -3284,7 +3313,7 @@ fn apply_retention_plan(
             })
             .ok_or_else(|| {
                 format!(
-                    "原生 VMM 冷回合任务 `{}` 已变化或尚未到期，请重新规划。",
+                    "Native VMM cold-turn task `{}` changed or is not due yet; plan again.",
                     planned.job_id
                 )
             })?;
@@ -3321,12 +3350,12 @@ fn apply_retention_plan(
             || !idle_session_ids.insert(planned.session_source_id.clone())
         {
             return Err(format!(
-                "原生 VMM 闲置会话回收计划中的会话 `{}` 使用了错误的原因码或重复身份。",
+                "Session `{}` in the native VMM idle-session reclamation plan uses the wrong reason code or a duplicate identity.",
                 planned.session_source_id
             ));
         }
         let session_source_id = SessionSourceId::new(planned.session_source_id.clone())
-            .map_err(|error| format!("原生 VMM 闲置会话标识无效：{error}"))?;
+            .map_err(|error| format!("Invalid native VMM idle session identifier: {error}"))?;
         let session_turns = snapshot.dataset.turns.iter().filter(|turn| {
             turn.subject_id == plan.subject_id
                 && turn.scope_id == plan.scope_id
@@ -3345,7 +3374,7 @@ fn apply_retention_plan(
             || latest_session_activity_ns.is_some_and(|latest| latest > idle_cutoff_ns)
         {
             return Err(format!(
-                "原生 VMM 闲置会话 `{}` 已恢复活动，请重新规划。",
+                "Native VMM idle session `{}` became active again; plan again.",
                 planned.session_source_id
             ));
         }
@@ -3368,7 +3397,7 @@ fn apply_retention_plan(
             && !cold_job_session_ids.contains(&planned.session_source_id)
         {
             return Err(format!(
-                "原生 VMM 闲置会话 `{}` 已无可回收内容，请重新规划。",
+                "Native VMM idle session `{}` has no reclaimable content left; plan again.",
                 planned.session_source_id
             ));
         }
@@ -3399,7 +3428,7 @@ fn apply_retention_plan(
             || !purge_ids.insert(planned.batch_id.as_str())
         {
             return Err(format!(
-                "原生 VMM 回收站清除计划中的批次 `{}` 使用了错误的原因码或重复身份。",
+                "Batch `{}` in the native VMM recycle-bin purge plan uses the wrong reason code or a duplicate identity.",
                 planned.batch_id
             ));
         }
@@ -3409,7 +3438,7 @@ fn apply_retention_plan(
             .find(|batch| batch.batch_id == planned.batch_id)
             .ok_or_else(|| {
                 format!(
-                    "原生 VMM 回收站清除计划引用了不存在的批次 `{}`。",
+                    "The native VMM recycle-bin purge plan references nonexistent batch `{}`.",
                     planned.batch_id
                 )
             })?;
@@ -3419,7 +3448,7 @@ fn apply_retention_plan(
             || now_ns < batch.expires_at_ns
         {
             return Err(format!(
-                "原生 VMM 回收站批次 `{}` 的所有权或到期状态已变化，请重新规划。",
+                "The ownership or expiry state of native VMM recycle-bin batch `{}` changed; plan again.",
                 planned.batch_id
             ));
         }
@@ -3600,10 +3629,10 @@ fn ensure_recycle_restore_has_no_conflicts(
     }
     conflicts.sort();
     Err(format!(
-        "原生 VMM 回收批次 `{}` 与 {} 个活动身份冲突：{}",
+        "Native VMM recycle batch `{}` conflicts with {} active identities: {}",
         batch.batch_id,
         conflicts.len(),
-        conflicts.join("，")
+        conflicts.join(", ")
     ))
 }
 
@@ -3955,8 +3984,9 @@ fn retention_session_latest_activity_ns(
 /// Converts a millisecond retention duration into nanoseconds with overflow checking.
 /// 在检查溢出的前提下将毫秒保留时长转换为纳秒。
 fn retention_duration_ns(duration_ms: u64) -> Result<i64, String> {
-    i64::try_from(u128::from(duration_ms).saturating_mul(1_000_000))
-        .map_err(|error| format!("原生 VMM 保留时长超出纳秒范围：{error}"))
+    i64::try_from(u128::from(duration_ms).saturating_mul(1_000_000)).map_err(|error| {
+        format!("The native VMM retention duration exceeds the nanosecond range: {error}")
+    })
 }
 
 /// Projects vector-generation compatibility from one coherent Core snapshot.
@@ -4139,7 +4169,7 @@ fn recycle_bin_vector_summaries(
     for memory_id in memory_ids {
         if !seen.insert(memory_id) {
             return Err(format!(
-                "原生 VMM 回收站向量重建批次重复引用记忆 `{memory_id}`。"
+                "The native VMM recycle-bin vector rebuild batch references memory `{memory_id}` more than once."
             ));
         }
         let matches = snapshot
@@ -4151,20 +4181,20 @@ fn recycle_bin_vector_summaries(
             .collect::<Vec<_>>();
         let [memory] = matches.as_slice() else {
             return Err(format!(
-                "原生 VMM 回收站向量重建目标 `{memory_id}` 缺失或身份不唯一。"
+                "The native VMM recycle-bin vector rebuild target `{memory_id}` is missing or not unique."
             ));
         };
         if !memory.is_visible_to_subject(subject_id)
             || memory.vector_space_id.as_ref() == Some(target)
         {
             return Err(format!(
-                "原生 VMM 回收站向量重建目标 `{memory_id}` 的所有权或向量代次已变化。"
+                "The ownership or vector generation of native VMM recycle-bin vector rebuild target `{memory_id}` changed."
             ));
         }
         let summary = memory.summary.trim();
         if summary.is_empty() {
             return Err(format!(
-                "原生 VMM 回收站向量重建目标 `{memory_id}` 缺少持久摘要。"
+                "The native VMM recycle-bin vector rebuild target `{memory_id}` is missing its persisted summary."
             ));
         }
         summaries.push(summary.to_owned());
@@ -4200,8 +4230,9 @@ fn apply_recycle_bin_vector_batch(
     target_dimension: u32,
     vectors: Vec<Vec<f32>>,
 ) -> Result<NativeVmmRecycleVectorBatchResult, String> {
-    let expected_dimension = usize::try_from(target_dimension)
-        .map_err(|error| format!("原生 VMM 回收站向量维度超出范围：{error}"))?;
+    let expected_dimension = usize::try_from(target_dimension).map_err(|error| {
+        format!("The native VMM recycle-bin vector dimension is out of range: {error}")
+    })?;
     if memory_ids.is_empty()
         || vectors.len() != memory_ids.len()
         || vectors.iter().any(|vector| {
@@ -4209,14 +4240,14 @@ fn apply_recycle_bin_vector_batch(
         })
     {
         return Err(String::from(
-            "原生 VMM 回收站向量批次的数量、维度或数值无效。",
+            "The count, dimension or values of the native VMM recycle-bin vector batch are invalid.",
         ));
     }
     let mut seen = BTreeSet::new();
     for memory_id in memory_ids {
         if !seen.insert(memory_id) {
             return Err(format!(
-                "原生 VMM 回收站向量批次重复引用记忆 `{memory_id}`。"
+                "The native VMM recycle-bin vector batch references memory `{memory_id}` more than once."
             ));
         }
         let matches = snapshot
@@ -4228,7 +4259,7 @@ fn apply_recycle_bin_vector_batch(
             .count();
         if matches != 1 {
             return Err(format!(
-                "原生 VMM 回收站向量目标 `{memory_id}` 缺失或身份不唯一。"
+                "The native VMM recycle-bin vector target `{memory_id}` is missing or not unique."
             ));
         }
     }
@@ -4239,12 +4270,14 @@ fn apply_recycle_bin_vector_batch(
             .filter(|batch| batch.subject_id == *subject_id && batch.scope_id == *scope_id)
             .flat_map(|batch| batch.dataset.memories.iter_mut())
             .find(|memory| memory.id == *memory_id)
-            .ok_or_else(|| format!("原生 VMM 回收站向量目标 `{memory_id}` 已变化。"))?;
+            .ok_or_else(|| {
+                format!("The native VMM recycle-bin vector target `{memory_id}` changed.")
+            })?;
         if !memory.is_visible_to_subject(subject_id)
             || memory.vector_space_id.as_ref() == Some(target)
         {
             return Err(format!(
-                "原生 VMM 回收站向量目标 `{memory_id}` 的所有权或向量代次已变化。"
+                "The ownership or vector generation of native VMM recycle-bin vector target `{memory_id}` changed."
             ));
         }
         memory.vector_space_id = Some(target.clone());
@@ -4369,7 +4402,9 @@ fn vector_rebuild_batch_operation_id(
     memory_ids: &[MemoryId],
 ) -> Result<String, String> {
     if memory_ids.is_empty() {
-        return Err(String::from("原生 VMM 向量重建批次不能为空。"));
+        return Err(String::from(
+            "The native VMM vector rebuild batch must not be empty.",
+        ));
     }
     let mut hasher = Sha256::new();
     hasher.update(b"native-vmm-vector-rebuild-batch-v2\0");
@@ -4390,14 +4425,14 @@ fn vector_rebuild_batch_operation_id(
 /// 返回精确的原生 VMM 固定主体身份。
 fn native_vmm_subject_id() -> Result<SubjectId, String> {
     SubjectId::new(format!("vmm-subject:{NATIVE_VMM_USER_ID}"))
-        .map_err(|error| format!("原生 VMM 固定主体身份无效：{error}"))
+        .map_err(|error| format!("Invalid native VMM fixed subject identity: {error}"))
 }
 
 /// Returns the exact fixed native VMM personal-profile scope.
 /// 返回精确的原生 VMM 固定个人画像作用域。
 fn native_vmm_subject_scope() -> Result<ScopeId, String> {
     ScopeId::new(format!("vmm-subject:{NATIVE_VMM_USER_ID}"))
-        .map_err(|error| format!("原生 VMM 固定个人画像作用域无效：{error}"))
+        .map_err(|error| format!("Invalid native VMM fixed personal profile scope: {error}"))
 }
 
 /// Wall-clock source for maintenance timestamps and the cleanup cadence they anchor.
@@ -4433,7 +4468,7 @@ impl NativeVmmClock {
             } => i64::try_from(origin.elapsed().as_nanos())
                 .ok()
                 .and_then(|elapsed| anchor_unix_ns.checked_add(elapsed))
-                .ok_or_else(|| String::from("测试时钟超出 i64 纳秒范围。")),
+                .ok_or_else(|| String::from("The test clock exceeds the i64 nanosecond range.")),
         }
     }
 }
@@ -4443,9 +4478,9 @@ impl NativeVmmClock {
 fn native_vmm_now_ns() -> Result<i64, String> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("系统时间早于 Unix 纪元：{error}"))?;
+        .map_err(|error| format!("The system time is earlier than the Unix epoch: {error}"))?;
     i64::try_from(duration.as_nanos())
-        .map_err(|error| format!("系统纳秒时间超出 i64 范围：{error}"))
+        .map_err(|error| format!("The system nanosecond time exceeds the i64 range: {error}"))
 }
 
 fn preview_migration(
@@ -4454,7 +4489,9 @@ fn preview_migration(
     target_project_id: u64,
 ) -> Result<NativeVmmMigrationPreview, String> {
     if source_project_id == target_project_id {
-        return Err(String::from("原生 VMM 迁移来源项目与目标项目不能相同"));
+        return Err(String::from(
+            "The native VMM migration source and target projects must differ",
+        ));
     }
     let source_scope = project_scope(source_project_id)?;
     let target_scope = project_scope(target_project_id)?;
@@ -4602,7 +4639,11 @@ fn migration_preview_fingerprint(
         session_renames,
         records,
     ))
-    .map_err(|error| format!("序列化原生 VMM 迁移预检指纹载荷失败：{error}"))?;
+    .map_err(|error| {
+        format!(
+            "Failed to serialize the native VMM migration precheck fingerprint payload: {error}"
+        )
+    })?;
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(payload))))
 }
 
@@ -4633,7 +4674,7 @@ fn apply_migration_records(
         .map(|rename| {
             SessionSourceId::new(rename.to.clone())
                 .map(|target| (rename.from.clone(), target))
-                .map_err(|error| format!("迁移会话改名无效：{error}"))
+                .map_err(|error| format!("Invalid migration session rename: {error}"))
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     apply_migration_dataset(
@@ -4991,7 +5032,7 @@ fn native_profile_record(
 ) -> Result<NativeVmmProfileRecordSummary, String> {
     let effective_state = profile_effective_state_token(node, evaluated_at_ns);
     Ok(NativeVmmProfileRecordSummary {
-        profile_node_id: native_numeric_id(node.id.as_str(), "vmm-profile-", "画像节点")?,
+        profile_node_id: native_numeric_id(node.id.as_str(), "vmm-profile-", "profile node")?,
         target: target.to_owned(),
         stored_state: profile_state_token(node.state).to_owned(),
         effective_state: effective_state.to_owned(),
@@ -5007,7 +5048,7 @@ fn native_profile_record(
         source_turn_ids: node
             .source_turn_ids
             .iter()
-            .map(|turn_id| native_numeric_id(turn_id.as_str(), "vmm-turn-", "画像来源回合"))
+            .map(|turn_id| native_numeric_id(turn_id.as_str(), "vmm-turn-", "profile source turn"))
             .collect::<Result<Vec<_>, _>>()?,
         effective_date_at_unix_ms: node.effective_date_ns.map(unix_ns_to_ms),
         expires_at_unix_ms: node.expires_at_ns.map(unix_ns_to_ms),
@@ -5313,14 +5354,15 @@ fn build_memory_records(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| {
-            SessionSourceId::new(value).map_err(|error| format!("原生 VMM 会话标识无效：{error}"))
+            SessionSourceId::new(value)
+                .map_err(|error| format!("Invalid native VMM session identifier: {error}"))
         })
         .transpose()?;
     if let Some(selected_session_source_id) = selected_session_source_id.as_ref()
         && !project_session_ids.contains(selected_session_source_id.as_str())
     {
         return Err(format!(
-            "原生 VMM 会话 `{}` 不属于项目 {project_id}。",
+            "Native VMM session `{}` does not belong to project {project_id}.",
             selected_session_source_id.as_str()
         ));
     }
@@ -5348,7 +5390,7 @@ fn build_memory_records(
             .is_some()
         {
             return Err(format!(
-                "原生 VMM 回合 `{turn_id}` 关联了多条分析审计作业。"
+                "Native VMM turn `{turn_id}` is linked to multiple analysis audit jobs."
             ));
         }
     }
@@ -5390,7 +5432,8 @@ fn build_memory_records(
         .collect::<Vec<_>>();
     let mut profile_ids_by_turn = BTreeMap::<String, Vec<u64>>::new();
     for profile in &selected_profile_nodes {
-        let profile_node_id = native_numeric_id(profile.id.as_str(), "vmm-profile-", "画像节点")?;
+        let profile_node_id =
+            native_numeric_id(profile.id.as_str(), "vmm-profile-", "profile node")?;
         for turn_id in &profile.source_turn_ids {
             if selected_turn_ids.contains(turn_id.as_str()) {
                 profile_ids_by_turn
@@ -5432,7 +5475,7 @@ fn build_memory_records(
                 .unwrap_or_default();
             let mut generated_memory_ids = generated
                 .iter()
-                .map(|memory| native_numeric_id(memory.id.as_str(), "vmm-memory-", "记忆"))
+                .map(|memory| native_numeric_id(memory.id.as_str(), "vmm-memory-", "memory"))
                 .collect::<Result<Vec<_>, _>>()?;
             generated_memory_ids.sort_unstable();
             let generated_profile_node_ids = profile_ids_by_turn
@@ -5445,16 +5488,16 @@ fn build_memory_records(
             }
             let analysis_job = analysis_jobs_by_turn.get(turn.id.as_str()).copied();
             Ok(NativeVmmTurnRecordSummary {
-                turn_id: native_numeric_id(turn.id.as_str(), "vmm-turn-", "回合")?,
+                turn_id: native_numeric_id(turn.id.as_str(), "vmm-turn-", "turn")?,
                 previous_turn_ids: turn
                     .previous_turn_ids
                     .iter()
-                    .map(|id| native_numeric_id(id.as_str(), "vmm-turn-", "前序回合"))
+                    .map(|id| native_numeric_id(id.as_str(), "vmm-turn-", "previous turn"))
                     .collect::<Result<Vec<_>, _>>()?,
                 next_turn_ids: turn
                     .next_turn_ids
                     .iter()
-                    .map(|id| native_numeric_id(id.as_str(), "vmm-turn-", "后续回合"))
+                    .map(|id| native_numeric_id(id.as_str(), "vmm-turn-", "next turn"))
                     .collect::<Result<Vec<_>, _>>()?,
                 session_source_id: turn.session_source_id.as_str().to_owned(),
                 created_at_unix_ms: unix_ns_to_ms(turn.created_at_ns),
@@ -5492,11 +5535,11 @@ fn build_memory_records(
         .into_iter()
         .map(|memory| {
             Ok(NativeVmmMemoryRecordSummary {
-                memory_id: native_numeric_id(memory.id.as_str(), "vmm-memory-", "记忆")?,
+                memory_id: native_numeric_id(memory.id.as_str(), "vmm-memory-", "memory")?,
                 source_turn_id: memory
                     .source_turn_id
                     .as_ref()
-                    .map(|turn_id| native_numeric_id(turn_id.as_str(), "vmm-turn-", "来源回合"))
+                    .map(|turn_id| native_numeric_id(turn_id.as_str(), "vmm-turn-", "source turn"))
                     .transpose()?,
                 session_source_id: memory
                     .origin_session_source_id
@@ -5604,12 +5647,14 @@ fn unix_ns_to_ms(timestamp_ns: i64) -> i64 {
 /// Parses a Core-generated native identity without accepting alternate prefixes.
 /// 解析 Core 生成的原生身份，且不接受替代前缀。
 fn native_numeric_id(value: &str, prefix: &str, label: &str) -> Result<u64, String> {
-    let numeric = value
-        .strip_prefix(prefix)
-        .ok_or_else(|| format!("原生 VMM {label}标识 `{value}` 不符合 `{prefix}` 前缀契约。"))?;
-    numeric
-        .parse::<u64>()
-        .map_err(|error| format!("原生 VMM {label}标识 `{value}` 不是有效数字身份：{error}"))
+    let numeric = value.strip_prefix(prefix).ok_or_else(|| {
+        format!(
+            "Native VMM {label} identifier `{value}` does not match the `{prefix}` prefix contract."
+        )
+    })?;
+    numeric.parse::<u64>().map_err(|error| {
+        format!("Native VMM {label} identifier `{value}` is not a valid numeric identity: {error}")
+    })
 }
 
 /// Returns a compact user or assistant preview from one canonical turn.
@@ -5762,9 +5807,9 @@ fn session_rename_plan(
                 });
                 break;
             }
-            suffix = suffix
-                .checked_add(1)
-                .ok_or_else(|| String::from("迁移会话自动改名序号已耗尽"))?;
+            suffix = suffix.checked_add(1).ok_or_else(|| {
+                String::from("The automatic rename sequence for migrated sessions is exhausted")
+            })?;
         }
     }
     Ok(renames)
@@ -5808,9 +5853,9 @@ fn all_session_ids(snapshot: &StorageSnapshot) -> BTreeSet<String> {
 /// 构建以指定后缀结尾的合法不透明会话身份。
 fn suffixed_session_id(base: &str, suffix: u64) -> Result<String, String> {
     let suffix = format!("-{suffix}");
-    let max_base_bytes = 512_usize
-        .checked_sub(suffix.len())
-        .ok_or_else(|| String::from("迁移会话后缀超过身份长度限制"))?;
+    let max_base_bytes = 512_usize.checked_sub(suffix.len()).ok_or_else(|| {
+        String::from("The migrated session suffix exceeds the identity length limit")
+    })?;
     let mut retained = String::new();
     for character in base.chars() {
         if retained.len() + character.len_utf8() > max_base_bytes {
@@ -5820,7 +5865,7 @@ fn suffixed_session_id(base: &str, suffix: u64) -> Result<String, String> {
     }
     let candidate = format!("{retained}{suffix}");
     SessionSourceId::new(candidate.clone())
-        .map_err(|error| format!("迁移会话自动改名失败：{error}"))?;
+        .map_err(|error| format!("Automatic rename of the migrated session failed: {error}"))?;
     Ok(candidate)
 }
 
@@ -5855,7 +5900,7 @@ fn mutation_outcome_references_any(
 /// 创建分配给一个原生项目 ID 的稳定 Core 作用域。
 fn project_scope(project_id: u64) -> Result<ScopeId, String> {
     ScopeId::new(format!("vmm-project:{project_id}"))
-        .map_err(|error| format!("原生 VMM 项目作用域无效：{error}"))
+        .map_err(|error| format!("Invalid native VMM project scope: {error}"))
 }
 
 /// Parses the exact one-level native project id from a persisted Core scope.
@@ -5863,14 +5908,16 @@ fn project_scope(project_id: u64) -> Result<ScopeId, String> {
 fn native_project_id_from_scope(scope_id: &ScopeId) -> Result<u64, String> {
     let value = scope_id.as_str();
     let numeric = value.strip_prefix("vmm-project:").ok_or_else(|| {
-        format!("原生 VMM 回收批次作用域 `{value}` 不符合 `vmm-project:<id>` 契约。")
+        format!("Native VMM recycle batch scope `{value}` does not match the `vmm-project:<id>` contract.")
     })?;
-    let project_id = numeric
-        .parse::<u64>()
-        .map_err(|error| format!("原生 VMM 回收批次作用域 `{value}` 不包含有效项目 ID：{error}"))?;
+    let project_id = numeric.parse::<u64>().map_err(|error| {
+        format!(
+            "Native VMM recycle batch scope `{value}` does not contain a valid project ID: {error}"
+        )
+    })?;
     if project_id == 0 {
         return Err(format!(
-            "原生 VMM 回收批次作用域 `{value}` 包含保留项目 ID 0。"
+            "Native VMM recycle batch scope `{value}` contains the reserved project ID 0."
         ));
     }
     Ok(project_id)

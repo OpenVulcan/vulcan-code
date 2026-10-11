@@ -11,13 +11,15 @@ pub(crate) fn tool_calls() -> Vec<ToolCallSummary> {
             id: String::from("service-startup"),
             name: String::from("startup.snapshot"),
             status: String::from("ready"),
-            detail: String::from("WebUI 可读取真实启动阶段快照。"),
+            detail: String::from("The WebUI can read the real startup phase snapshot."),
         },
         ToolCallSummary {
             id: String::from("service-workbench"),
             name: String::from("workbench.snapshot"),
             status: String::from("ready"),
-            detail: String::from("WebUI 可读取真实项目、会话索引与插件信息。"),
+            detail: String::from(
+                "The WebUI can read the real projects, session index and plugin information.",
+            ),
         },
     ]
 }
@@ -90,20 +92,20 @@ pub(crate) fn runtime_modules(
             "core",
             "Core Service",
             StartupStepStatus::Ready,
-            "Core Service 运行中",
+            "Core Service running",
         ),
         runtime_module(
             "vldb",
             "VLDB",
             StartupStepStatus::Ready,
-            &format!("进程内引擎 · {}", controller.sqlite_path.display()),
+            &format!("In-process engine · {}", controller.sqlite_path.display()),
         ),
         runtime_module(
             "luaskills",
             "LuaSkills",
             StartupStepStatus::Ready,
             &format!(
-                "{} · 技能 {} · 入口 {}",
+                "{} · skills {} · entries {}",
                 luaskills_catalog.runtime_root.display(),
                 luaskills_catalog.skills.len(),
                 luaskills_catalog.entry_count
@@ -131,7 +133,7 @@ pub(crate) fn runtime_modules(
             "workspace",
             "Workspace",
             StartupStepStatus::Ready,
-            "项目与会话快照已恢复",
+            "Project and session snapshot restored",
         ),
     ]
 }

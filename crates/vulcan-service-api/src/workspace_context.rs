@@ -210,9 +210,6 @@ pub struct ContextUsageSnapshot {
     /// Whether the active runtime still matches the accepted baseline.
     /// 当前运行时是否仍匹配已接受的基线。
     pub baseline_matches_active_runtime: bool,
-    /// Tooltip title.
-    /// 提示浮层标题。
-    pub tooltip_title: String,
     /// Tooltip diagnostic rows.
     /// 提示浮层诊断行。
     pub tooltip_rows: Vec<String>,

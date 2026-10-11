@@ -188,7 +188,7 @@ fn parse_vmm_memory_action_covers_common_management_branches() {
     }
     let error = parse_vmm_memory_action(&test_vmm_action_request("unknown", json!({})))
         .expect_err("unknown action should fail");
-    assert!(error.contains("不支持的 VMM 记忆动作"));
+    assert!(error.contains("Unsupported VMM memory action"));
 }
 
 /// Verifies backend-projected navigation never presents external identities as native concepts.
@@ -207,10 +207,14 @@ fn vmm_management_sections_use_backend_specific_identity_copy() {
         .find(|section| section.id == "identity_projects")
         .expect("external identity section");
 
-    assert_eq!(native_identity.label, "记忆项目");
-    assert!(!native_identity.description.contains("身份"));
-    assert_eq!(external_identity.label, "用户与项目");
-    assert!(external_identity.description.contains("外置 VMM 身份"));
+    assert_eq!(native_identity.label, "Memory projects");
+    assert!(!native_identity.description.contains("identit"));
+    assert_eq!(external_identity.label, "Users and projects");
+    assert!(
+        external_identity
+            .description
+            .contains("external VMM identities")
+    );
     assert!(native.iter().any(|section| section.id == "inference"));
     assert!(native.iter().any(|section| section.id == "resource_rules"));
     assert!(native.iter().any(|section| section.id == "maintenance"));
@@ -262,7 +266,7 @@ fn external_setup_action_connection_rejects_ambiguous_payloads() {
     assert!(
         vmm_external_action_layer_override(&project_request)
             .expect_err("project-scoped override must fail")
-            .contains("只允许用于全局配置向导")
+            .contains("only allowed in the global configuration wizard")
     );
 
     let unknown = test_vmm_action_request(
@@ -309,7 +313,7 @@ fn persisted_external_actions_require_external_backend() {
         .expect("external backend should allow external actions");
     let error = ensure_external_action_backend(vulcan_vmm::VmmBackendMode::Native)
         .expect_err("native backend should reject external actions");
-    assert!(error.contains("全局选择外置 gRPC 后端"));
+    assert!(error.contains("selecting the external gRPC backend globally"));
 }
 
 /// Verifies session-scoped suppression resolves the explicit request route instead of current selection.
@@ -537,7 +541,7 @@ fn vmm_config_layer_from_draft_validates_external_management_transport() {
     assert!(
         vmm_config_layer_from_draft(&missing_token, true)
             .expect_err("management token must be required")
-            .contains("缺少管理 Token")
+            .contains("management token is missing")
     );
 
     let insecure_remote = VmmConfigDraftSummary {
@@ -554,7 +558,7 @@ fn vmm_config_layer_from_draft_validates_external_management_transport() {
     assert!(
         vmm_config_layer_from_draft(&insecure_remote, true)
             .expect_err("remote management must require HTTPS")
-            .contains("必须使用 HTTPS")
+            .contains("must use HTTPS")
     );
 
     let embedded_credentials = VmmConfigDraftSummary {
@@ -571,7 +575,7 @@ fn vmm_config_layer_from_draft_validates_external_management_transport() {
     assert!(
         vmm_config_layer_from_draft(&embedded_credentials, true)
             .expect_err("management URL credentials must be rejected")
-            .contains("不能包含账号或密码")
+            .contains("must not contain a username or password")
     );
 }
 
@@ -586,7 +590,7 @@ fn vmm_config_layer_from_draft_rejects_zero_identity_ids() {
     };
     let user_error =
         vmm_config_layer_from_draft(&zero_user, false).expect_err("zero user id must be rejected");
-    assert!(user_error.contains("VMM 用户 ID 必须是正整数"));
+    assert!(user_error.contains("user ID must be a positive integer"));
 
     let zero_project = VmmConfigDraftSummary {
         user_id: String::from("1"),
@@ -595,7 +599,7 @@ fn vmm_config_layer_from_draft_rejects_zero_identity_ids() {
     };
     let project_error = vmm_config_layer_from_draft(&zero_project, false)
         .expect_err("zero project id must be rejected");
-    assert!(project_error.contains("VMM 项目 ID 必须是正整数"));
+    assert!(project_error.contains("project ID must be a positive integer"));
 }
 
 /// Verifies project-layer conversion strips transport-only fields.

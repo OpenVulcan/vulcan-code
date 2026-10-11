@@ -25,7 +25,7 @@ pub(crate) async fn bind_new_vulcan_project_to_vmm(
         Err(error) => {
             return Some(binding_failure_notice(
                 project,
-                format!("读取 VMM 全局配置失败：{error}"),
+                format!("Failed to read the global VMM configuration: {error}"),
             ));
         }
     };
@@ -55,14 +55,14 @@ pub(crate) async fn bind_new_vulcan_project_to_vmm(
         Err(error) => {
             return Some(binding_failure_notice(
                 project,
-                format!("锁定原生 VMM 项目管理器失败：{error}"),
+                format!("Failed to lock the native VMM project manager: {error}"),
             ));
         }
     };
     let Some(maintenance) = maintenance else {
         return Some(binding_failure_notice(
             project,
-            String::from("原生 VMM 项目管理器尚未就绪。"),
+            String::from("The native VMM project manager is not ready yet."),
         ));
     };
     let result = match effective.native_project_binding_mode {
@@ -84,7 +84,7 @@ pub(crate) async fn bind_new_vulcan_project_to_vmm(
             vmm_project_name: Some(vmm_project.name.clone()),
             native_vmm_project_id: Some(vmm_project.id),
             external_vmm_project_id: None,
-            message: format!("已绑定到 VMM 记忆项目 {}。", vmm_project.name),
+            message: format!("Bound to VMM memory project {}.", vmm_project.name),
         }),
         Err(error) => Some(binding_failure_notice(project, error)),
     }
@@ -112,7 +112,7 @@ fn existing_external_binding_notice(
         vmm_project_name: None,
         native_vmm_project_id: None,
         external_vmm_project_id: Some(project_id),
-        message: format!("已复用外置 VMM 记忆项目 ID {project_id} 的绑定。"),
+        message: format!("Reused the binding to external VMM memory project ID {project_id}."),
     }
 }
 
@@ -139,7 +139,10 @@ async fn bind_new_external_fixed_project(
     effective: &vulcan_vmm::VmmEffectiveConfig,
 ) -> VmmProjectBindingNotice {
     let Some(project_id) = effective.project_id.filter(|project_id| *project_id > 0) else {
-        return binding_failure_notice(project, String::from("外置 VMM 固定项目 ID 未配置。"));
+        return binding_failure_notice(
+            project,
+            String::from("The external VMM fixed project ID is not configured."),
+        );
     };
     let outcome = vulcan_service_runtime::vmm_management::run_vmm_workbench_action(
         vulcan_service_runtime::vmm_management::VmmWorkbenchAction::LoadUsersAndProjects,
@@ -157,7 +160,7 @@ async fn bind_new_external_fixed_project(
         Ok(_) => {
             return binding_failure_notice(
                 project,
-                String::from("外置 VMM 返回了不匹配的项目目录结果。"),
+                String::from("External VMM returned a mismatched project catalog result."),
             );
         }
         Err(error) => return binding_failure_notice(project, error),
@@ -166,7 +169,10 @@ async fn bind_new_external_fixed_project(
         .into_iter()
         .find(|candidate| candidate.project_id == project_id)
     else {
-        return binding_failure_notice(project, format!("外置 VMM 固定项目 {project_id} 不存在。"));
+        return binding_failure_notice(
+            project,
+            format!("External VMM fixed project {project_id} does not exist."),
+        );
     };
     let persisted_project_id =
         match persist_external_project_id_if_unbound(state, &project.path, project_id).await {
@@ -182,7 +188,7 @@ async fn bind_new_external_fixed_project(
         vmm_project_name: Some(vmm_project.project_name.clone()),
         native_vmm_project_id: None,
         external_vmm_project_id: Some(project_id),
-        message: format!("已绑定到 VMM 记忆项目 {}。", vmm_project.project_name),
+        message: format!("Bound to VMM memory project {}.", vmm_project.project_name),
     }
 }
 
@@ -227,7 +233,7 @@ async fn bind_new_external_project(
         Ok(_) => {
             return binding_failure_notice(
                 project,
-                String::from("外置 VMM 返回了不匹配的项目创建结果。"),
+                String::from("External VMM returned a mismatched project creation result."),
             );
         }
         Err(error) => return binding_failure_notice(project, error),
@@ -251,7 +257,7 @@ async fn bind_new_external_project(
         vmm_project_name: Some(vmm_project.project_name.clone()),
         native_vmm_project_id: None,
         external_vmm_project_id: Some(vmm_project.project_id),
-        message: format!("已绑定到 VMM 记忆项目 {}。", vmm_project.project_name),
+        message: format!("Bound to VMM memory project {}.", vmm_project.project_name),
     }
 }
 
@@ -274,7 +280,9 @@ fn binding_failure_notice(project: &TaskProjectSummary, error: String) -> VmmPro
         vmm_project_name: None,
         native_vmm_project_id: None,
         external_vmm_project_id: None,
-        message: format!("VMM 记忆项目绑定失败：{error}。可在项目设置中重新绑定或创建后绑定。"),
+        message: format!(
+            "VMM memory project binding failed: {error}. Rebind in the project settings, or create a project and then bind it."
+        ),
     }
 }
 

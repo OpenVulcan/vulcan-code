@@ -321,7 +321,7 @@ fn enqueue_webui_pending_prompt_panel_entry(
     let mirror = mirrors.entry(session_id).or_default();
     if mirror.ui_state.pending_prompt_panel_queue.len() >= PENDING_PROMPT_QUEUE_LIMIT {
         return Err(String::from(
-            "待发送消息队列已满，最多保留 10 条，请等待前面的消息完成后再继续追加。",
+            "The pending message queue is full (at most 10 messages); wait for earlier messages to finish before adding more.",
         ));
     }
     let entry_id = entry.id.clone();
@@ -602,13 +602,13 @@ pub(super) fn pending_prompt_preview_text(
     attachments: &[ConversationAttachment],
 ) -> String {
     let trimmed_prompt = prompt.trim();
-    let attachment_prefix = if attachments.is_empty() {
-        String::new()
-    } else {
-        format!("{} 个附件 · ", attachments.len())
+    let attachment_prefix = match attachments.len() {
+        0 => String::new(),
+        1 => String::from("1 attachment · "),
+        count => format!("{count} attachments · "),
     };
     let text = if trimmed_prompt.is_empty() {
-        String::from("附件消息")
+        String::from("Attachment message")
     } else {
         let mut normalized_prompt = String::new();
         // Collapse all whitespace classes into single spaces without materializing a token list.
@@ -688,7 +688,7 @@ mod tests {
     fn pending_prompt_preview_uses_attachment_label_for_empty_prompt() {
         assert_eq!(
             pending_prompt_preview_text("   ", &[preview_test_attachment()]),
-            "1 个附件 · 附件消息"
+            "1 attachment · Attachment message"
         );
     }
 

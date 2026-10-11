@@ -365,7 +365,7 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
         }
         let update_result = mutate_public_ai_configuration_in_transaction(
             &state,
-            "重新授权公共 AI 连接失败",
+            "Failed to reauthorize the public AI connection",
             |configuration| {
                 *configuration = validation_configuration.clone();
                 Ok(())
@@ -386,7 +386,7 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
                     runtime.as_ref(),
                     &current_configuration,
                     &runtime_before_image,
-                    "恢复 OAuth 重新授权前配置失败",
+                    "Failed to restore the configuration from before the OAuth reauthorization",
                 );
                 return Err(compensated_operation_error(
                     error,
@@ -422,7 +422,7 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
                     runtime.as_ref(),
                     &current_configuration,
                     &runtime_before_image,
-                    "恢复 OAuth 重新授权前配置失败",
+                    "Failed to restore the configuration from before the OAuth reauthorization",
                 );
                 drop(transaction);
                 Err(compensated_operation_error(

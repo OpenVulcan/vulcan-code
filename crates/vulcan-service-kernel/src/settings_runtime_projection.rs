@@ -951,7 +951,7 @@ async fn refresh_plugin_catalog_local_state_with_original(
     );
     subagent_catalog
         .merge_plugin_definitions(plugin_catalog.enabled_agents.values().cloned())
-        .map_err(|error| format!("合并插件智能体目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to merge the plugin agent catalog: {error}"))?;
     // subagent_summary is derived before the commit so no partial workbench mutation can escape.
     // subagent_summary 在提交前完成派生，避免任何局部工作台变更外泄。
     let available_model_selectors = public_ai_available_model_selectors(state)?;
@@ -1023,7 +1023,9 @@ async fn refresh_plugin_catalog_local_state_with_original(
         runtime
             .task_runtime
             .replace_subagent_catalog(subagent_catalog.clone())
-            .map_err(|error| format!("刷新运行时插件智能体目录失败：{error}"))?;
+            .map_err(|error| {
+                format!("Failed to refresh the runtime plugin agent catalog: {error}")
+            })?;
         // subagentCatalog publishes the same immutable generation used by TaskRuntime and subsequent workbench projections.
         // subagentCatalog 发布与 TaskRuntime 及后续工作台投影共同使用的同一不可变代次。
         runtime.subagent_catalog = Arc::new(subagent_catalog);
@@ -1122,7 +1124,9 @@ pub(crate) fn parse_agent_skill_project_state(
         "inherit" => Ok(None),
         "enabled" => Ok(Some(PersistedPromptSkillState::Enabled)),
         "disabled" => Ok(Some(PersistedPromptSkillState::Disabled)),
-        other => Err(format!("不支持的项目级 Agent Skill 状态：{other}")),
+        other => Err(format!(
+            "Unsupported project-level Agent Skill state: {other}"
+        )),
     }
 }
 
@@ -1135,7 +1139,9 @@ pub(crate) fn parse_luaskill_tool_registration_state(
         "explicit" => Ok(PersistedLuaSkillToolRegistrationState::Explicit),
         "implicit" => Ok(PersistedLuaSkillToolRegistrationState::Implicit),
         "disabled" => Ok(PersistedLuaSkillToolRegistrationState::Disabled),
-        other => Err(format!("不支持的 LuaSkills 工具注册状态：{other}")),
+        other => Err(format!(
+            "Unsupported LuaSkills tool registration state: {other}"
+        )),
     }
 }
 

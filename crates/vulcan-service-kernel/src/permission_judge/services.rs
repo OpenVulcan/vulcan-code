@@ -89,7 +89,7 @@ pub(super) async fn save_settings(
 ) -> Result<PersistedPermissionJudgeConfiguration, String> {
     mutate_provider_configuration(
         state,
-        "保存权限判定设置失败",
+        "Failed to save the permission judge settings",
         |configuration| mutate(&mut configuration.permission_judge),
         |_, configuration| configuration.permission_judge.clone(),
     )

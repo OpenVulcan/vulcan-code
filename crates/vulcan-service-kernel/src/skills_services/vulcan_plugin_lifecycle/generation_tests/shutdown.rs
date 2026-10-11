@@ -198,7 +198,7 @@ async fn service_plugin_publication_and_projection_reject_every_shutdown_authori
                 before.extension.mcp_runtime(),
             )
             .expect_err("reject ordinary publication")
-            .contains("不能发布插件扩展代次"),
+            .contains("plugin extension generations cannot be published"),
             "{reason:?}"
         );
         before.assert_unchanged(&state);
@@ -235,7 +235,7 @@ async fn service_plugin_publication_and_projection_reject_every_shutdown_authori
                 .await
                 .err()
                 .expect("reject complete projection refresh")
-                .contains("不能发布插件扩展代次"),
+                .contains("plugin extension generations cannot be published"),
             "{reason:?}"
         );
         before.assert_unchanged(&state);

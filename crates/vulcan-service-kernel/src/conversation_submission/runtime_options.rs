@@ -227,10 +227,12 @@ pub(crate) fn exact_v1_dispatch_runtime_options(
                     .clone()
             }
         })
-        .map_err(|error| format!("读取 V1 精确请求推理配置失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to read the V1 exact request reasoning configuration: {error}")
+        })?;
     let reasoning_effort = match thinking_level {
         Some(thinking_level) => parse_reasoning_effort(thinking_level.as_str())
-            .ok_or_else(|| format!("V1 精确请求包含无法识别的推理档位 `{thinking_level}`。"))?,
+            .ok_or_else(|| format!("The V1 exact request contains an unrecognized reasoning level `{thinking_level}`."))?,
         None => ReasoningEffortLevel::Off,
     };
     Ok(PendingPromptRuntimeOptions {

@@ -38,7 +38,10 @@ pub(super) fn schedule_question_wakeup(
             );
             if let Err(diagnostic_error) = crate::push_webui_service_diagnostic(
                 &invocation.state,
-                format!("代理问题 {} 启动失败：{error}", question_id.as_str()),
+                format!(
+                    "Failed to start agent question {}: {error}",
+                    question_id.as_str()
+                ),
             ) {
                 tracing::warn!(
                     "[webui-service] question wakeup diagnostic failed: {diagnostic_error}"

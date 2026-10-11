@@ -396,7 +396,7 @@ fn new_session_rejects_uninitialized_workspace_without_reservation_leak() {
         prepare_retained_submission_preflight(&state, None, PromptSessionTarget::Create, None)
             .err()
             .expect("draft submission should reject an uninitialized workspace");
-    assert!(error.contains("工作区仍在初始化"));
+    assert!(error.contains("still initializing"));
 
     // lifecycle_guard proves rejected admission left no unresolved reservation behind.
     // lifecycle_guard 证明被拒绝的准入没有遗留未解析预留。

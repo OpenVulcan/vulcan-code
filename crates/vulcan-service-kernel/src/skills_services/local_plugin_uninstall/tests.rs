@@ -408,7 +408,7 @@ async fn retained_service_uninstall_failed_callback_requires_ack_without_replay(
             )
             .await
             .expect_err("actual retired failed callback");
-            assert!(error.contains("外部副作用"), "{error}");
+            assert!(error.contains("external side effects"), "{error}");
             assert_eq!(events.0.load(Ordering::Acquire), 1);
             // Sanitized status exposes acknowledgement without private callback diagnostics.
             // 脱敏状态暴露确认需求，不暴露私有回调诊断。

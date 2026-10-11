@@ -16,7 +16,9 @@ pub(super) fn collect(resources: &mut UninstallResources) -> Result<(), String> 
         || resources.callback.is_some()
         || resources.callback_result.is_none()
     {
-        return Err(String::from("原卸载完整发布或回调物理退役尚未确认。"));
+        return Err(String::from(
+            "The full publication or callback physical retirement of the original uninstall is not confirmed yet.",
+        ));
     }
     // Existing OS backend addresses the versioned credential journals.
     // 既有操作系统后端寻址版本化凭据日志。
@@ -28,14 +30,16 @@ pub(super) fn collect(resources: &mut UninstallResources) -> Result<(), String> 
     } = resources
         .original
         .as_mut()
-        .ok_or("原卸载物理所有者缺失。")?;
+        .ok_or("The physical owner of the original uninstall is missing.")?;
     if resources
         .runtime
         .collect_deactivation_state(local, selection)
         .map_err(|error| error.to_string())?
         != vulcan_plugin_runtime::VulcanPluginDeactivationStateObservation::Collected
     {
-        return Err(String::from("原卸载本地状态尚未实际回收。"));
+        return Err(String::from(
+            "The local state of the original uninstall has not actually been reclaimed yet.",
+        ));
     }
     // The frozen real inventory includes historical and unfinished records, not only the selected package.
     // 固定真实清单包含历史及未完成记录，而非仅已选插件包。

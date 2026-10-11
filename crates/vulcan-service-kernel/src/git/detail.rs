@@ -45,7 +45,9 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
             file: None,
             unified_diff: String::new(),
             truncated: false,
-            notice: Some(String::from("当前工作区不是 Git 仓库，无法加载文件 diff。")),
+            notice: Some(String::from(
+                "The current workspace is not a Git repository; the file diff cannot be loaded.",
+            )),
             context_lines: WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
             hunk_index: file.hunk_index,
             hunk_expansion_direction: normalized_webui_diff_hunk_expansion_direction(
@@ -68,7 +70,7 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
         selection.selected_commit_hash.as_deref(),
         &pathspec,
         context_lines,
-        "当前分支没有可展示的未推送提交。",
+        "The current branch has no unpushed commits to show.",
     )?;
     let notices = loaded_diff.notices;
     let mut unified_diff = loaded_diff.unified_diff;
@@ -89,7 +91,7 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
             unified_diff: String::new(),
             truncated: true,
             notice: Some(String::from(
-                "该文件超过 WebUI 渲染阈值，后端未传输文件 diff 正文。可打开文件所在位置查看完整内容。",
+                "This file exceeds the WebUI rendering threshold, so the backend did not send the file diff body. Open the file location to view the full content.",
             )),
             context_lines,
             hunk_index,
@@ -118,7 +120,9 @@ pub(crate) fn load_webui_workspace_diff_file_detail(
     );
     let file_summary = file_summaries.into_iter().next();
     let notice = if unified_diff.trim().is_empty() {
-        Some(String::from("该文件当前没有可加载的 Git diff 详情。"))
+        Some(String::from(
+            "This file currently has no Git diff details to load.",
+        ))
     } else if notices.is_empty() {
         None
     } else {
@@ -172,7 +176,7 @@ fn webui_diff_detail_hunk_scoped_unified_diff(
         selected_commit_hash,
         pathspec,
         WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
-        "当前分支没有可展示的未推送提交。",
+        "The current branch has no unpushed commits to show.",
     )?
     .unified_diff;
     Ok(webui_diff_hunk_scoped_unified_diff(

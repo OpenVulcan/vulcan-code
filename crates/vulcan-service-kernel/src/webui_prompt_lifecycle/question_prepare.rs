@@ -126,9 +126,10 @@ pub(crate) fn spawn_webui_question_prepare_task(
                         "[webui-service] question preparation cleanup failed: {cleanup_error}; original error: {error}"
                     );
                 }
-                if let Err(diagnostic_error) =
-                    push_webui_service_diagnostic(&state, format!("答疑请求准备失败：{error}"))
-                {
+                if let Err(diagnostic_error) = push_webui_service_diagnostic(
+                    &state,
+                    format!("Failed to prepare the question request: {error}"),
+                ) {
                     tracing::warn!(
                         "[webui-service] question preparation diagnostic failed: {diagnostic_error}"
                     );

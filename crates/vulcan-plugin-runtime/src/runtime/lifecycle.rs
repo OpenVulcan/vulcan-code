@@ -739,7 +739,7 @@ impl VulcanPluginRuntimeManager {
                 let pending = error.is_pending();
                 // Use the unchanged host prefix and original error, never a current-map or text classification.
                 // 使用未变宿主前缀及原错误，绝不通过当前映射或文本分类。
-                let diagnostic = format!("{diagnostic_context}：{}", error.into_runtime_error());
+                let diagnostic = format!("{diagnostic_context}: {}", error.into_runtime_error());
                 if pending {
                     self.record_cleanup_pending(plugin_id, diagnostic.clone())?;
                 } else {

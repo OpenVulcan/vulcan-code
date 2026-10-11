@@ -50,7 +50,9 @@ pub(crate) async fn service_insert_pending_prompt(
         pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     handle
         .promote_queued_input_to_pending_turn(identity, current_v1_goal_unix_millis()?)
-        .map_err(|error| format!("把 V1 待发送消息插入当前回合失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to insert the V1 pending message into the current turn: {error}")
+        })?;
     // The V1 promotion is already durable; later panel failures cannot retain its queue lease.
     // V1 提升已可靠提交；后续面板故障不能保留该队列租约。
     reconcile_pending_prompt_attachment_leases(
@@ -58,13 +60,13 @@ pub(crate) async fn service_insert_pending_prompt(
         selected_session_id,
         &attachment_workspace_path,
     )
-    .map_err(|error| format!("待发送消息已提升到 V1 当前回合，但附件清理待重试：{error}"))?;
+    .map_err(|error| format!("The pending message was promoted into the V1 current turn, but attachment cleanup is pending a retry: {error}"))?;
     let locator = handle
         .storage_locator()
-        .map_err(|error| format!("读取 V1 会话资源定位失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the V1 session resource location: {error}"))?;
     let project_directory = locator.project_directory();
     let catalog = load_project_resource_catalog(&project_directory)
-        .map_err(|error| format!("加载 V1 项目资源目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the V1 project resource catalog: {error}"))?;
     rebuild_pending_prompt_panel_from_v1(
         &state,
         selected_session_id,

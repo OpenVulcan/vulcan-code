@@ -51,7 +51,7 @@ pub(super) fn validate(query: &VmmNativeSessionListQuery) -> Result<(), String> 
         || query.search.chars().take(513).count() > 512
     {
         return Err(
-            "会话列表参数无效：请选择项目，分页数量为 1 至 100，搜索最多 512 个字符。".to_owned(),
+            "Invalid session list parameters: select a project, a page size from 1 to 100, and a search of at most 512 characters.".to_owned(),
         );
     }
     if query
@@ -62,7 +62,10 @@ pub(super) fn validate(query: &VmmNativeSessionListQuery) -> Result<(), String> 
             .is_some_and(|value| value < 0)
         || matches!((query.last_activity_from_unix_ms, query.last_activity_before_unix_ms), (Some(from), Some(before)) if from >= before)
     {
-        return Err("最近活动时间范围无效：结束时间必须晚于开始时间。".to_owned());
+        return Err(
+            "Invalid recent activity time range: the end time must be later than the start time."
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -81,7 +84,9 @@ pub(super) fn paginate(
         .expected_storage_version
         .is_some_and(|expected| expected != storage_version)
     {
-        return Err("记忆内容已变更，请刷新会话列表后重新翻页。".to_owned());
+        return Err(
+            "The memory content changed; refresh the session list and page again.".to_owned(),
+        );
     }
     // Search is display metadata only; identity binding always uses the separate source ID.
     // 搜索仅用于显示元数据；身份绑定始终使用独立来源 ID。

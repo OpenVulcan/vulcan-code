@@ -121,7 +121,9 @@ pub(crate) fn schedule(
                         tracing::warn!(%error, "Collaboration startup recovery will retry");
                         if let Err(diagnostic) = crate::push_webui_service_diagnostic(
                             &state,
-                            format!("代理协作启动恢复暂未完成，将自动重试：{error}"),
+                            format!(
+                                "Agent collaboration startup recovery has not finished yet and will retry automatically: {error}"
+                            ),
                         ) {
                             tracing::warn!(%diagnostic, "Collaboration recovery diagnostic publication failed");
                         }

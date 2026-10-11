@@ -560,7 +560,7 @@ fn real_host_storage_embedding_decisions_are_project_scoped_and_revision_checked
                             &state,
                             &config_path,
                             rerank_request.clone(),
-                            "保存内部推理路由失败",
+                            "Failed to save the internal inference route",
                         )
                         .await;
                     })

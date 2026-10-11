@@ -45,7 +45,7 @@ impl NativeVmmMaintenance {
             !bound_ids.contains(*host_id) && !planned_project_ids.contains(*host_id)
         }) {
             return Err(format!(
-                "原生 VMM 项目 `{host_id}` 在预检后变为未绑定，请重新加载项目列表并确认绑定计划后保存。"
+                "Native VMM project `{host_id}` became unbound after the precheck; reload the project list, confirm the binding plan and save again."
             ));
         }
         Ok(guard)

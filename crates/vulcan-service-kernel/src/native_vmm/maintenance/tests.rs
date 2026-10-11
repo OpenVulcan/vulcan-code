@@ -1493,7 +1493,7 @@ fn retention_rejects_cross_project_profile_expiry() {
     )
     .expect_err("cross-project profile expiry must fail");
 
-    assert!(error.contains("已发生变化"));
+    assert!(error.contains("changed; plan again"));
     assert_eq!(
         snapshot.dataset.profile_nodes[0].state,
         ProfileNodeState::Active
@@ -1704,7 +1704,7 @@ fn retention_rejects_idle_plan_after_recent_compaction_activity() {
     )
     .expect_err("recent compaction must invalidate the idle plan");
 
-    assert!(error.contains("已恢复活动"));
+    assert!(error.contains("became active again"));
     assert_eq!(snapshot.dataset.turns.len(), 1);
     assert!(snapshot.retention_trash_batches.is_empty());
 }
@@ -2651,7 +2651,10 @@ fn retention_rejects_wrong_reason_codes_for_every_plan_family() {
             "retention-reason",
         )
         .expect_err("wrong reason must fail");
-        assert!(error.contains("原因码"), "unexpected error: {error}");
+        assert!(
+            error.contains("wrong reason code"),
+            "unexpected error: {error}"
+        );
     }
 }
 
@@ -2686,7 +2689,7 @@ fn retention_rejects_duplicate_profile_identity_atomically() {
     )
     .expect_err("duplicate profile must fail");
 
-    assert!(error.contains("重复身份"));
+    assert!(error.contains("duplicate identity"));
     assert_eq!(
         snapshot.dataset.profile_nodes[0].state,
         ProfileNodeState::Active
@@ -2719,7 +2722,7 @@ fn retention_rejects_premature_or_cross_scope_trash_purge() {
     let error = apply_retention_plan(&mut snapshot, &plan, &policy, 100, "retention-purge")
         .expect_err("cross-scope premature purge must fail");
 
-    assert!(error.contains("所有权或到期状态"));
+    assert!(error.contains("ownership or expiry state"));
     assert_eq!(snapshot.retention_trash_batches.len(), 1);
 }
 
@@ -2748,7 +2751,7 @@ fn retention_purge_preserves_deadline_when_default_is_shortened() {
         });
     let error = apply_retention_plan(&mut snapshot, &plan, &policy, 9_999_999, "shortened")
         .expect_err("frozen deadline has not elapsed");
-    assert!(error.contains("所有权或到期状态"));
+    assert!(error.contains("ownership or expiry state"));
     assert_eq!(
         snapshot.retention_trash_batches[0].expires_at_ns,
         10_000_000
@@ -2832,7 +2835,7 @@ fn retention_rejects_plan_families_above_policy_bounds() {
     )
     .expect_err("oversized plan must fail");
 
-    assert!(error.contains("单轮处理上限"));
+    assert!(error.contains("per-round limit"));
 }
 
 /// Verifies native defaults preserve the exact external VMM P1 and stable protection floors.
@@ -2877,6 +2880,6 @@ fn retention_project_failures_render_exact_project_identity() {
 
     assert_eq!(
         retention_project_failure_message(&result).as_deref(),
-        Some("项目 7：storage unavailable")
+        Some("Project 7: storage unavailable")
     );
 }

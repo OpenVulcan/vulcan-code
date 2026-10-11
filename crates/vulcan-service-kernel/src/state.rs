@@ -99,7 +99,7 @@ impl PreparedActivationPluginExtensionPublication {
         // Only the isolated dispatcher is consulted while core registration remains held.
         // 核心注册门保持持有时，仅访问孤立调度器。
         let hooks = VulcanPluginConversationHooks::prepare(&self.host, manager, catalog)
-            .map_err(|error| format!("准备插件 Hook 代次失败：{error}"))?;
+            .map_err(|error| format!("Failed to prepare the plugin hook generation: {error}"))?;
         // All projected surfaces retain the exact same final catalog and prepared native lease.
         // 全部投影暴露面保留精确相同最终目录及已准备原生租约。
         let next = Arc::new(ExtensionGeneration::new_with_plugin_conversation_hooks(
@@ -143,7 +143,7 @@ impl AgentRuntimeBridge {
         // 此调度器仅携带宿主策略，绝不携带实时监听器或先前插件处理器。
         let mut host = vulcan_hooks::HookDispatcher::new(vulcan_hooks::HookRegistry::new());
         host.register_points(points)
-            .map_err(|error| format!("准备宿主 Hook 点位策略失败：{error}"))?;
+            .map_err(|error| format!("Failed to prepare the host hook point policy: {error}"))?;
         Ok(PreparedActivationPluginExtensionPublication {
             expected,
             revision,
@@ -186,7 +186,9 @@ impl AgentRuntimeBridge {
             self.vulcan_plugin_runtime.clone(),
             catalog,
         )
-        .map_err(|error| format!("准备会话插件 Hook 代次失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to prepare the session plugin hook generation: {error}")
+        })?;
         Ok(Arc::new(
             ExtensionGeneration::new_with_plugin_conversation_hooks(
                 revision,
@@ -214,7 +216,9 @@ impl AgentRuntimeBridge {
             .vulcan_plugin_native_mcp_host
             .matches_manager(&self.vulcan_plugin_runtime)
         {
-            return Err(String::from("插件原生宿主签发者与当前服务管理器不一致。"));
+            return Err(String::from(
+                "The plugin native host issuer disagrees with the current service manager.",
+            ));
         }
         // Capture the real slot while the caller already holds its publication ownership.
         // 调用方已持有发布所有权时，捕获真实槽。
@@ -268,14 +272,16 @@ impl AgentRuntimeBridge {
             .vulcan_plugin_native_mcp_host
             .matches_manager(&self.vulcan_plugin_runtime)
         {
-            return Err(String::from("插件原生宿主签发者与当前服务管理器不一致。"));
+            return Err(String::from(
+                "The plugin native host issuer disagrees with the current service manager.",
+            ));
         }
         // The original target declaration decides whether native ownership is required.
         // 原目标声明决定是否要求原生所有权。
         let plugin = staged
             .plugins
             .get(&transaction.record().target().plugin_id)
-            .ok_or("原更新目标不在暂存目录中。")?;
+            .ok_or("The original update target is not in the staging catalog.")?;
         // A missing or extra native participant cannot silently change the declared resource boundary.
         // 缺失或多余的原生参与者不能静默改变声明的资源边界。
         let has_global_mcp = plugin.mcp_servers.iter().any(|server| {
@@ -283,7 +289,7 @@ impl AgentRuntimeBridge {
         });
         if has_global_mcp != native.is_some() {
             return Err(String::from(
-                "原更新目标的全局 MCP 声明与实际所有者不一致。",
+                "The global MCP declaration of the original update target disagrees with the actual owner.",
             ));
         }
         if let Some(native) = native {
@@ -291,9 +297,11 @@ impl AgentRuntimeBridge {
             // 真实目标必须由同次服务登记签发，不能来自相等管理器上的另一登记。
             let authority =
                 vulcan_plugin_runtime::VulcanPluginNativeMcpHandoffAdapter::authority(native)
-                    .ok_or("原更新目标缺少原生宿主签发者。")?;
+                    .ok_or("The original update target has no native host issuer.")?;
             if !authority.same_issuer(&self.vulcan_plugin_native_mcp_host) {
-                return Err(String::from("原更新目标与服务首次原生签发者不一致。"));
+                return Err(String::from(
+                    "The original update target disagrees with the first native issuer of the service.",
+                ));
             }
         }
         // Capture the sole slot and its successor before acquiring the manager publication gate.
@@ -360,20 +368,22 @@ impl AgentRuntimeBridge {
             .vulcan_plugin_native_mcp_host
             .matches_manager(&self.vulcan_plugin_runtime)
         {
-            return Err(String::from("插件原生宿主签发者与当前服务管理器不一致。"));
+            return Err(String::from(
+                "The plugin native host issuer disagrees with the current service manager.",
+            ));
         }
         // Old identity comes only from the original predecessor selection, never the aborted target's payload.
         // 旧身份仅来自原前驱选择，绝不来自中止目标的载荷。
         let old = transaction
             .record()
             .predecessor()
-            .ok_or("原更新前驱缺少完整托管选择。")?;
+            .ok_or("The original update predecessor has no complete managed selection.")?;
         // This route is merely an observation; the actual core publisher independently checks Source's exact closed Arc and Pending File.
         // 此路由仅为观测；实际核心发布器独立检查 Source 的精确关闭 Arc 及 Pending 文件。
         let plugin = staged
             .plugins
             .get(&old.plugin_id)
-            .ok_or("原更新前驱不在关闭目录中。")?;
+            .ok_or("The original update predecessor is not in the shutdown catalog.")?;
         if transaction.record().phase()
             != vulcan_plugin_runtime::VulcanPluginActivationTransactionPhase::Aborted
             || source.request_id() != transaction.record().request_id()
@@ -383,7 +393,7 @@ impl AgentRuntimeBridge {
                 .is_some_and(|managed| managed.matches_activation(old))
         {
             return Err(String::from(
-                "原更新前驱与完整已中止旧选择或关闭路由不一致。",
+                "The original update predecessor disagrees with the complete aborted old selection or shutdown route.",
             ));
         }
         // Declaration and native participation must match exactly, even when every declared server is disabled.
@@ -393,7 +403,7 @@ impl AgentRuntimeBridge {
         });
         if has_global_mcp != native.is_some() {
             return Err(String::from(
-                "原更新前驱的全局 MCP 声明与实际所有者不一致。",
+                "The global MCP declaration of the original update predecessor disagrees with the actual owner.",
             ));
         }
         if let Some(native) = native {
@@ -403,7 +413,7 @@ impl AgentRuntimeBridge {
                 vulcan_plugin_runtime::VulcanPluginNativeMcpPredecessorHandoffAdapter::authority(
                     native,
                 )
-                .ok_or("原更新前驱缺少原生宿主签发者。")?;
+                .ok_or("The original update predecessor has no native host issuer.")?;
             // Control values are diagnostics alongside actual Source allocation, never standalone restoration authority.
             // 控制值为实际 Source 分配旁的诊断，绝不独立授予恢复权威。
             let control = native.control();
@@ -413,7 +423,9 @@ impl AgentRuntimeBridge {
                 || control.plugin_id() != old.plugin_id
                 || control.generation() != plugin.generation
             {
-                return Err(String::from("原更新前驱与服务首次签发者或实际来源不一致。"));
+                return Err(String::from(
+                    "The original update predecessor disagrees with the first issuer or actual source of the service.",
+                ));
             }
         }
         // Capture the sole current Full allocation before entering core registration.
@@ -473,7 +485,7 @@ impl AgentRuntimeBridge {
             runtime,
             self.extension_generation.plugin_conversation_hooks(),
         )
-        .map_err(|error| format!("投影会话插件 Hook 代次失败：{error}"))
+        .map_err(|error| format!("Failed to project the session plugin hook generation: {error}"))
     }
 }
 
@@ -1282,7 +1294,9 @@ impl ActiveStreamTask {
         match self.handle.await {
             Ok(()) => Ok(()),
             Err(error) if error.is_cancelled() => Ok(()),
-            Err(error) => Err(format!("停止活动执行任务时联接失败：{error}")),
+            Err(error) => Err(format!(
+                "Joining failed while stopping the active execution task: {error}"
+            )),
         }
     }
 

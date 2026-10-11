@@ -67,7 +67,7 @@ pub(crate) fn workspace_file_read_code_response(
 ) -> Result<WorkspaceFileReadResponse, String> {
     let mut handle = fs::File::open(file).map_err(|error| {
         format!(
-            "打开文件失败 `{}`：{error}",
+            "Failed to open file `{}`: {error}",
             normalized_workspace_path_text_from_path(file)
         )
     })?;
@@ -78,7 +78,7 @@ pub(crate) fn workspace_file_read_code_response(
         .read_to_end(&mut bytes)
         .map_err(|error| {
             format!(
-                "读取文件失败 `{}`：{error}",
+                "Failed to read file `{}`: {error}",
                 normalized_workspace_path_text_from_path(file)
             )
         })?;
@@ -87,7 +87,9 @@ pub(crate) fn workspace_file_read_code_response(
         bytes.truncate(WORKSPACE_FILE_READ_LIMIT_BYTES);
     }
     if bytes.contains(&0) {
-        return Err(String::from("该文件包含二进制内容，无法作为代码预览。"));
+        return Err(String::from(
+            "This file contains binary content and cannot be previewed as code.",
+        ));
     }
     let decoded = workspace_file_decode_text_preview(&bytes);
     let line_count = decoded.content.lines().count();

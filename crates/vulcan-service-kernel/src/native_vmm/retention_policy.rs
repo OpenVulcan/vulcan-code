@@ -46,10 +46,13 @@ pub(super) fn validate(settings: &VmmNativeRetentionSettingsSummary) -> Result<(
     // 新回收截止时间必须在当前时间戳之后仍可表示，不能只检查孤立时长。
     let now_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("原生 VMM 清洗配置无法读取当前时间：{error}"))?
+        .map_err(|error| {
+            format!("The native VMM retention settings cannot read the current time: {error}")
+        })?
         .as_nanos();
-    let now_ns =
-        i64::try_from(now_ns).map_err(|error| format!("原生 VMM 当前时间超出纳秒范围：{error}"))?;
+    let now_ns = i64::try_from(now_ns).map_err(|error| {
+        format!("The native VMM current time exceeds the nanosecond range: {error}")
+    })?;
     validate_at(settings, now_ns)
 }
 
@@ -59,24 +62,30 @@ pub(super) fn validate(settings: &VmmNativeRetentionSettingsSummary) -> Result<(
 /// `now_ns` 为 Unix 纳秒；设置无效或截止时间不可表示时返回错误。
 fn validate_at(settings: &VmmNativeRetentionSettingsSummary, now_ns: i64) -> Result<(), String> {
     if settings.scan_interval_minutes == 0 || settings.profile_expiry_interval_seconds == 0 {
-        return Err(String::from("原生 VMM 清洗周期必须大于零。"));
+        return Err(String::from(
+            "The native VMM retention interval must be greater than zero.",
+        ));
     }
     if settings.turn_hot_window_size == 0
         || settings.protected_priority_floor > 100
         || !(MemoryLevel::Session as u32..=MemoryLevel::Persistent as u32)
             .contains(&settings.protected_memory_level_floor)
     {
-        return Err(String::from("原生 VMM 热回合窗口或保护阈值无效。"));
+        return Err(String::from(
+            "The native VMM hot-turn window or protection threshold is invalid.",
+        ));
     }
     for duration in [settings.session_idle_ms, settings.trash_retention_ms] {
         if duration == 0 || u128::from(duration) * 1_000_000 > i64::MAX as u128 {
-            return Err(String::from("原生 VMM 保留时长必须大于零且可表示为纳秒。"));
+            return Err(String::from(
+                "The native VMM retention duration must be greater than zero and representable in nanoseconds.",
+            ));
         }
     }
     let expiry = i128::from(now_ns) + i128::from(settings.trash_retention_ms) * 1_000_000;
     if now_ns < 0 || expiry > i128::from(i64::MAX) {
         return Err(String::from(
-            "原生 VMM 回收保留时长过大：从当前时间计算的新批次截止时间超出可表示范围。",
+            "The native VMM recycle retention duration is too large: the deadline of a new batch computed from the current time is out of the representable range.",
         ));
     }
     Ok(())
@@ -116,7 +125,7 @@ mod tests {
         assert!(
             validate_at(&settings, now_ns)
                 .expect_err("future overflow")
-                .contains("截止时间")
+                .contains("deadline")
         );
         settings = defaults();
         assert!(validate_at(&settings, -1).is_err());

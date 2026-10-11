@@ -169,7 +169,7 @@ pub(super) async fn verify(
     assert!(
         stale
             .expect_err("unreviewed unbound host must reject activation")
-            .contains("绑定")
+            .contains("binding")
     );
     assert_eq!(
         std::fs::read(path).expect("native binding review fixture value"),

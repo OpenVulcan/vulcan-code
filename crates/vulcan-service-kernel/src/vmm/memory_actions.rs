@@ -133,16 +133,16 @@ pub(crate) async fn service_run_vmm_memory_action(
             // 在绑定事务成功后解析同一个已安装维护归属方。
             let maintenance = state
                 .lock()
-                .map_err(|error| format!("原生项目关联已更新，但读取会话缓存运行态失败：{error}"))?
+                .map_err(|error| format!("The native project association was updated, but reading the session cache runtime state failed: {error}"))?
                 .native_vmm_maintenance
                 .clone()
                 .ok_or_else(|| {
-                    "原生项目关联已更新，但维护运行时已不可用，无法同步会话缓存。".to_owned()
+                    "The native project association was updated, but the maintenance runtime is unavailable, so the session cache cannot be synced.".to_owned()
                 })?;
             for event in maintenance
                 .reconcile_host_binding_caches(&state, &host_project_id)
                 .await
-                .map_err(|error| format!("原生项目关联已更新，但会话记忆缓存同步失败：{error}"))?
+                .map_err(|error| format!("The native project association was updated, but syncing the session memory cache failed: {error}"))?
             {
                 crate::settings_runtime_projection::emit_service_event_with_trace(
                     &app,
@@ -213,9 +213,9 @@ pub(crate) async fn service_run_vmm_memory_action(
         // workbench commits the refreshed catalog as an in-memory product cache.
         // workbench 将刷新后的目录提交为内存中的产品缓存。
         let workbench = {
-            let mut guard = state
-                .lock()
-                .map_err(|error| format!("锁定 VMM 管理目录缓存失败：{error}"))?;
+            let mut guard = state.lock().map_err(|error| {
+                format!("Failed to lock the VMM management catalog cache: {error}")
+            })?;
             guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
             guard.workbench.revision = guard.workbench_generation;
             guard.workbench.vmm_memory.management_catalog = management_catalog;
@@ -298,7 +298,7 @@ pub(super) async fn service_load_static_profile_for_panel(
     });
     Ok(VmmMemoryActionResult {
         action: request.action,
-        summary: format!("已读取 {profile_node_count} 条当前有效静态画像。"),
+        summary: format!("Read {profile_node_count} currently valid static profile entries."),
         kind: String::from("static_profile"),
         request: json!({ "conversationId": session_id.to_string() }),
         response: json!(profile),
@@ -372,7 +372,10 @@ pub(super) async fn service_load_dynamic_memory_for_panel(
     );
     Ok(VmmMemoryActionResult {
         action: request.action,
-        summary: format!("已读取 {} 张当前会话 VMM 驻留记忆卡片。", cards.len()),
+        summary: format!(
+            "Read {} VMM resident memory cards of the current session.",
+            cards.len()
+        ),
         kind: String::from("dynamic_memory_cards"),
         request: json!({ "conversationId": session_id.to_string() }),
         response: json!(cards),
@@ -391,16 +394,18 @@ async fn service_run_native_vmm_maintenance_action(
     if effective.backend_mode != vulcan_vmm::VmmBackendMode::Native
         && request.action.trim() != "native_project_catalog"
     {
-        return Err(String::from("原生 VMM 项目维护仅在内部原生模式下可用。"));
+        return Err(String::from(
+            "Native VMM project maintenance is only available in internal native mode.",
+        ));
     }
     let maintenance = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("锁定原生 VMM 维护运行时失败：{error}"))?;
+        let guard = state.lock().map_err(|error| {
+            format!("Failed to lock the native VMM maintenance runtime: {error}")
+        })?;
         guard
             .native_vmm_maintenance
             .clone()
-            .ok_or_else(|| String::from("原生 VMM 维护运行时尚未就绪。"))?
+            .ok_or_else(|| String::from("The native VMM maintenance runtime is not ready yet."))?
     };
     let action = request.action.trim();
     let request_preview = request.payload.clone();
@@ -409,13 +414,13 @@ async fn service_run_native_vmm_maintenance_action(
             // Decode a closed source selection without accepting hidden profile deletion flags.
             // 解码封闭来源选择，不接受隐藏的画像删除标志。
             let query = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("记忆回收选择格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid memory recycle selection: {error}"))?;
             // A preview is read-only and freezes exact IDs rather than just counts.
             // 预览为只读操作，冻结准确 ID 而不只是数量。
             let preview = maintenance.preview_manual_removal(query).await?;
             native_action_result(
                 action,
-                "已准备回收预览，用户画像和项目画像均保留。".to_owned(),
+                "Prepared the recycle preview; user and project profiles are kept.".to_owned(),
                 "native_removal_preview",
                 request_preview,
                 &preview,
@@ -427,9 +432,9 @@ async fn service_run_native_vmm_maintenance_action(
             // 确认不携带替换目标列表或画像删除选项。
             let confirmation: vulcan_service_api::VmmNativeRemovalConfirmation =
                 serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("记忆回收确认格式错误：{error}"))?;
+                    .map_err(|error| format!("Invalid memory recycle confirmation: {error}"))?;
             if !confirmation.confirmed {
-                return Err("请先确认回收影响。".to_owned());
+                return Err("Confirm the recycle impact first.".to_owned());
             }
             // The maintenance owner validates the token, storage version and effective policy.
             // 维护归属方校验令牌、存储版本及有效策略。
@@ -438,7 +443,7 @@ async fn service_run_native_vmm_maintenance_action(
                 .await?;
             native_action_result(
                 action,
-                "所选原始记录已移入回收站，用户画像和项目画像均保留。".to_owned(),
+                "Moved the selected source records to the recycle bin; user and project profiles are kept.".to_owned(),
                 "native_removal",
                 request_preview,
                 &result,
@@ -447,11 +452,12 @@ async fn service_run_native_vmm_maintenance_action(
         }
         "native_removal_impact" => {
             let query = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("记忆来源影响查询格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid memory source impact query: {error}"))?;
             let impact = maintenance.inspect_removal(query).await?;
             native_action_result(
                 action,
-                "已检查所选来源的关联记录，未删除任何数据。".to_owned(),
+                "Checked the records linked to the selected sources; no data was deleted."
+                    .to_owned(),
                 "native_removal_impact",
                 request_preview,
                 &impact,
@@ -460,14 +466,15 @@ async fn service_run_native_vmm_maintenance_action(
         }
         "native_project_retention" => {
             let query: vulcan_service_api::VmmNativeProjectRetentionQuery =
-                serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("记忆项目保留策略查询格式错误：{error}"))?;
+                serde_json::from_value(request.payload.clone()).map_err(|error| {
+                    format!("Invalid memory project retention policy query: {error}")
+                })?;
             let policy = maintenance
                 .project_retention_summary(query.project_id)
                 .await?;
             native_action_result(
                 action,
-                "已加载记忆项目保留规则与继承状态。".to_owned(),
+                "Loaded the memory project retention rules and inheritance state.".to_owned(),
                 "native_project_retention",
                 request_preview,
                 &policy,
@@ -476,14 +483,15 @@ async fn service_run_native_vmm_maintenance_action(
         }
         "native_project_profile_policy" => {
             let query: vulcan_service_api::VmmNativeProjectProfilePolicyQuery =
-                serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("记忆项目画像规则查询格式错误：{error}"))?;
+                serde_json::from_value(request.payload.clone()).map_err(|error| {
+                    format!("Invalid memory project profile rules query: {error}")
+                })?;
             let policy = maintenance
                 .project_profile_policy_summary(query.project_id)
                 .await?;
             native_action_result(
                 action,
-                "已加载记忆项目画像规则与继承状态。".to_owned(),
+                "Loaded the memory project profile rules and inheritance state.".to_owned(),
                 "native_project_profile_policy",
                 request_preview,
                 &policy,
@@ -492,11 +500,11 @@ async fn service_run_native_vmm_maintenance_action(
         }
         "native_project_profile_policy_update" => {
             let edit = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("记忆项目画像规则编辑格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid memory project profile rules edit: {error}"))?;
             let policy = maintenance.update_project_profile_policy(edit).await?;
             native_action_result(
                 action,
-                "记忆项目画像规则已保存，将用于新的画像处理命令。".to_owned(),
+                "Saved the memory project profile rules; new profile processing commands will use them.".to_owned(),
                 "native_project_profile_policy",
                 request_preview,
                 &policy,
@@ -504,12 +512,14 @@ async fn service_run_native_vmm_maintenance_action(
             )
         }
         "native_project_retention_update" => {
-            let edit = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("记忆项目保留策略编辑格式错误：{error}"))?;
+            let edit = serde_json::from_value(request.payload.clone()).map_err(|error| {
+                format!("Invalid memory project retention policy edit: {error}")
+            })?;
             let policy = maintenance.update_project_retention(edit).await?;
             native_action_result(
                 action,
-                "记忆项目保留规则已保存，将用于下一轮清洗。".to_owned(),
+                "Saved the memory project retention rules; the next cleanup round will use them."
+                    .to_owned(),
                 "native_project_retention",
                 request_preview,
                 &policy,
@@ -521,7 +531,7 @@ async fn service_run_native_vmm_maintenance_action(
             let policy = maintenance.host_project_policy(&host_project_id).await?;
             native_action_result(
                 action,
-                "已加载原生宿主项目策略及继承状态。".to_owned(),
+                "Loaded the native host project policies and inheritance state.".to_owned(),
                 "native_host_project_policy",
                 request_preview,
                 &policy,
@@ -530,11 +540,11 @@ async fn service_run_native_vmm_maintenance_action(
         }
         "native_host_project_policy_update" => {
             let edit = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("原生宿主项目策略格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid native host project policies: {error}"))?;
             let policy = maintenance.update_host_project_policy(edit).await?;
             native_action_result(
                 action,
-                "原生宿主项目策略已保存，将用于新命令。".to_owned(),
+                "Saved the native host project policies; new commands will use them.".to_owned(),
                 "native_host_project_policy",
                 request_preview,
                 &policy,
@@ -545,7 +555,7 @@ async fn service_run_native_vmm_maintenance_action(
             let policy = maintenance.runtime_policy().await?;
             native_action_result(
                 action,
-                String::from("已加载原生 VMM 召回与提炼策略。"),
+                String::from("Loaded the native VMM recall and extraction policy."),
                 "native_runtime_policy",
                 request_preview,
                 &policy,
@@ -555,12 +565,15 @@ async fn service_run_native_vmm_maintenance_action(
         "native_runtime_policy_update" => {
             // Strict decoding rejects unknown fields instead of accepting unsupported settings.
             // 严格解码拒绝未知字段，不接纳尚未支持的设置。
-            let recall = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("原生 VMM 召回与提炼策略格式错误：{error}"))?;
+            let recall = serde_json::from_value(request.payload.clone()).map_err(|error| {
+                format!("Invalid native VMM recall and extraction policy: {error}")
+            })?;
             let policy = maintenance.update_runtime_policy(recall).await?;
             native_action_result(
                 action,
-                String::from("原生 VMM 召回与提炼策略已保存，将用于新命令。"),
+                String::from(
+                    "Saved the native VMM recall and extraction policy; new commands will use it.",
+                ),
                 "native_runtime_policy",
                 request_preview,
                 &policy,
@@ -571,11 +584,13 @@ async fn service_run_native_vmm_maintenance_action(
             // Strict decoding keeps host-owned score identities out of user requests.
             // 严格解码将宿主持有的评分身份排除在用户请求之外。
             let retrieval = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("原生 VMM 检索排序策略格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid native VMM retrieval ranking policy: {error}"))?;
             let policy = maintenance.update_retrieval_policy(retrieval).await?;
             native_action_result(
                 action,
-                String::from("原生 VMM 检索排序策略已保存，将用于新命令。"),
+                String::from(
+                    "Saved the native VMM retrieval ranking policy; new commands will use it.",
+                ),
                 "native_runtime_policy",
                 request_preview,
                 &policy,
@@ -586,11 +601,13 @@ async fn service_run_native_vmm_maintenance_action(
             // Explicit typed groups keep user and project formulas separate; no scope ID is accepted here.
             // 显式强类型组保持用户与项目公式独立；此处不接受作用域 ID。
             let profiles = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("原生 VMM 画像规则格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid native VMM profile rules: {error}"))?;
             let policy = maintenance.update_profile_policy(profiles).await?;
             native_action_result(
                 action,
-                String::from("原生 VMM 画像规则已保存，仅影响后续生成或修订的节点。"),
+                String::from(
+                    "Saved the native VMM profile rules; they only affect nodes generated or revised later.",
+                ),
                 "native_runtime_policy",
                 request_preview,
                 &policy,
@@ -601,11 +618,13 @@ async fn service_run_native_vmm_maintenance_action(
             // Only text reduction controls are editable; privacy and reasoning cleanup remain mandatory.
             // 仅允许编辑文本缩减控制项；隐私与思考内容清理保持强制。
             let text = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("原生 VMM 文本清洗策略格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid native VMM text cleaning policy: {error}"))?;
             let policy = maintenance.update_text_policy(text).await?;
             native_action_result(
                 action,
-                String::from("原生 VMM 文本清洗策略已保存，仅影响新入库片段。"),
+                String::from(
+                    "Saved the native VMM text cleaning policy; it only affects newly ingested fragments.",
+                ),
                 "native_runtime_policy",
                 request_preview,
                 &policy,
@@ -616,11 +635,13 @@ async fn service_run_native_vmm_maintenance_action(
             // Only declared cleanup fields are accepted; Core batch limits remain host-owned.
             // 仅接受声明的清洗字段；Core 批次上限仍由宿主持有。
             let settings = serde_json::from_value(request.payload.clone())
-                .map_err(|error| format!("原生 VMM 清洗设置格式错误：{error}"))?;
+                .map_err(|error| format!("Invalid native VMM retention settings: {error}"))?;
             let policy = maintenance.update_retention_settings(settings).await?;
             native_action_result(
                 action,
-                String::from("原生 VMM 清洗设置已保存，周期工作器将使用新配置。"),
+                String::from(
+                    "Saved the native VMM retention settings; the periodic worker will use the new configuration.",
+                ),
                 "native_runtime_policy",
                 request_preview,
                 &policy,
@@ -631,7 +652,7 @@ async fn service_run_native_vmm_maintenance_action(
             let catalog = maintenance.resource_catalog().await?;
             native_action_result(
                 action,
-                format!("已加载 {} 份原生 VMM 资源文件。", catalog.files.len()),
+                format!("Loaded {} native VMM resource files.", catalog.files.len()),
                 "native_resource_catalog",
                 request_preview,
                 &catalog,
@@ -643,7 +664,7 @@ async fn service_run_native_vmm_maintenance_action(
             let file = maintenance.resource_file(&path).await?;
             native_action_result(
                 action,
-                format!("已加载原生 VMM 资源 `{path}`。"),
+                format!("Loaded native VMM resource `{path}`."),
                 "native_resource_file",
                 request_preview,
                 &file,
@@ -663,7 +684,7 @@ async fn service_run_native_vmm_maintenance_action(
                 .await?;
             native_action_result(
                 action,
-                format!("原生 VMM 用户覆盖 `{path}` 已保存并立即激活。"),
+                format!("Saved native VMM user override `{path}` and activated it immediately."),
                 "native_resource_file",
                 request_preview,
                 &file,
@@ -675,7 +696,9 @@ async fn service_run_native_vmm_maintenance_action(
             let file = maintenance.reset_resource_file(&path).await?;
             native_action_result(
                 action,
-                format!("原生 VMM 资源 `{path}` 已恢复内置内容并立即激活。"),
+                format!(
+                    "Restored native VMM resource `{path}` to the built-in content and activated it immediately."
+                ),
                 "native_resource_file",
                 request_preview,
                 &file,
@@ -700,7 +723,9 @@ async fn service_run_native_vmm_maintenance_action(
             let catalog = maintenance.update_resource_settings(settings).await?;
             native_action_result(
                 action,
-                String::from("原生 VMM 资源组合设置已保存并立即激活。"),
+                String::from(
+                    "Saved the native VMM resource composition settings and activated them immediately.",
+                ),
                 "native_resource_catalog",
                 request_preview,
                 &catalog,
@@ -712,7 +737,10 @@ async fn service_run_native_vmm_maintenance_action(
             let result = maintenance.test_pii(&text).await?;
             native_action_result(
                 action,
-                format!("PII 测试完成：命中 {} 条规则。", result.redactions.len()),
+                format!(
+                    "PII test finished: {} rules matched.",
+                    result.redactions.len()
+                ),
                 "native_pii_test",
                 request_preview,
                 &result,
@@ -738,7 +766,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "PII 临时规则测试完成：{} 个正则候选，{accepted_count} 个通过条件公式。",
+                    "PII temporary rule test finished: {} regex candidates, {accepted_count} passed the condition formula.",
                     result.matches.len()
                 ),
                 "native_pii_formula_test",
@@ -754,11 +782,11 @@ async fn service_run_native_vmm_maintenance_action(
                 action,
                 if result.is_noise {
                     format!(
-                        "确定性噪音测试命中类别 `{}`。",
+                        "The deterministic noise test matched category `{}`.",
                         result.category.as_deref().unwrap_or("unknown")
                     )
                 } else {
-                    String::from("确定性噪音测试未命中正则规则。")
+                    String::from("The deterministic noise test matched no regex rule.")
                 },
                 "native_noise_test",
                 request_preview,
@@ -771,11 +799,11 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 if status.running {
-                    String::from("原生 VMM 定期清洗正在运行。")
+                    String::from("Native VMM periodic cleanup is running.")
                 } else if status.enabled {
-                    String::from("原生 VMM 定期清洗已启用。")
+                    String::from("Native VMM periodic cleanup is enabled.")
                 } else {
-                    String::from("原生 VMM 定期清洗当前未启用。")
+                    String::from("Native VMM periodic cleanup is currently disabled.")
                 },
                 "native_retention_status",
                 request_preview,
@@ -787,7 +815,9 @@ async fn service_run_native_vmm_maintenance_action(
             let preview = maintenance.preview_retention_cleanup().await?;
             native_action_result(
                 action,
-                String::from("已生成只读清洗预览，确认前不会更改记忆内容。"),
+                String::from(
+                    "Generated a read-only cleanup preview; memory content is not changed before confirmation.",
+                ),
                 "native_retention_preview",
                 request_preview,
                 &preview,
@@ -796,7 +826,9 @@ async fn service_run_native_vmm_maintenance_action(
         }
         "native_retention_run" => {
             if !required_native_bool(&request.payload, "confirmed")? {
-                return Err(String::from("请先查看清洗影响并明确确认。"));
+                return Err(String::from(
+                    "Review the cleanup impact and confirm explicitly first.",
+                ));
             }
             let preview_id = required_native_text(&request.payload, "previewId")?;
             let result = native_retention_apply_result(
@@ -807,7 +839,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "原生 VMM 清洗完成：收敛 {} 条到期画像，回收 {} 条记忆、{} 个回合，入队 {} 个并完成 {} 个冷回合作业，清除 {} 个到期批次。",
+                    "Native VMM cleanup finished: converged {} expired profile entries, recycled {} memories and {} turns, enqueued {} and completed {} cold-turn jobs, purged {} expired batches.",
                     result.expired_profile_nodes,
                     result.recycled_memories,
                     result.recycled_turns,
@@ -825,7 +857,7 @@ async fn service_run_native_vmm_maintenance_action(
             let status = maintenance.lexical_index_status().await?;
             native_action_result(
                 action,
-                String::from("已读取原生全文索引计数，未修改任何内容。"),
+                String::from("Read the native full-text index counts; nothing was modified."),
                 "native_lexical_status",
                 request_preview,
                 &status,
@@ -842,7 +874,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已从当前记忆内容重建 {} 条全文索引，未重新生成向量。",
+                    "Rebuilt {} full-text index entries from the current memory content; vectors were not regenerated.",
                     result.reindexed_memory_count
                 ),
                 "native_lexical_rebuild",
@@ -856,14 +888,16 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 if !status.configured {
-                    String::from("原生 VMM Embedding 路由尚未就绪。")
+                    String::from("The native VMM embedding route is not ready yet.")
                 } else if status.rebuild_required_memory_count > 0 {
                     format!(
-                        "当前 Embedding 代次需要重建 {} 条活动记忆。",
+                        "{} active memories need a rebuild for the current embedding generation.",
                         status.rebuild_required_memory_count
                     )
                 } else {
-                    String::from("原生 VMM 活动记忆向量均与当前 Embedding 代次一致。")
+                    String::from(
+                        "All native VMM active memory vectors match the current embedding generation.",
+                    )
                 },
                 "native_vector_status",
                 request_preview,
@@ -877,7 +911,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "向量重建预检完成：{} 条活动记忆中有 {} 条需要重建，涉及 {} 个项目、{} 个批次。",
+                    "Vector rebuild precheck finished: of {} active memories, {} need a rebuild, across {} projects and {} batches.",
                     preview.active_memory_count,
                     preview.rebuild_memory_count,
                     preview.affected_project_count,
@@ -906,7 +940,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "原生 VMM 向量重建完成：已在 {} 个批次中重建 {} 条活动记忆。",
+                    "Native VMM vector rebuild finished: across {} batches, rebuilt {} active memories.",
                     result.batch_count, result.rebuilt_memory_count
                 ),
                 "native_vector_rebuild",
@@ -921,7 +955,10 @@ async fn service_run_native_vmm_maintenance_action(
             let recycle_bin = native_recycle_bin(maintenance.recycle_bin(project_id).await?);
             native_action_result(
                 action,
-                format!("已加载 {} 个原生 VMM 回收批次。", recycle_bin.batches.len()),
+                format!(
+                    "Loaded {} native VMM recycle batches.",
+                    recycle_bin.batches.len()
+                ),
                 "native_recycle_bin",
                 request_preview,
                 &recycle_bin,
@@ -933,11 +970,11 @@ async fn service_run_native_vmm_maintenance_action(
             // 读取准确保留批次，而非活动记忆记录投影。
             let query: vulcan_service_api::VmmNativeRecycleRecordQuery =
                 serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("回收明细查询参数无效：{error}"))?;
+                    .map_err(|error| format!("Invalid recycle detail query parameters: {error}"))?;
             let page = maintenance.recycle_records(query).await?;
             native_action_result(
                 action,
-                format!("已加载 {} 条回收明细。", page.records.len()),
+                format!("Loaded {} recycle details.", page.records.len()),
                 "native_recycle_records",
                 request_preview,
                 &page,
@@ -956,7 +993,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已恢复回收批次 `{batch_id}`：{} 个回合、{} 条记忆。",
+                    "Restored recycle batch `{batch_id}`: {} turns, {} memories.",
                     batch.turn_count, batch.memory_count
                 ),
                 "native_recycle_batch",
@@ -977,7 +1014,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已永久清除回收批次 `{batch_id}`：{} 个回合、{} 条记忆。",
+                    "Permanently purged recycle batch `{batch_id}`: {} turns, {} memories.",
                     batch.turn_count, batch.memory_count
                 ),
                 "native_recycle_batch",
@@ -991,7 +1028,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已加载 {} 个原生 VMM 项目和 {} 条 VulcanCode 项目绑定。",
+                    "Loaded {} native VMM projects and {} VulcanCode project bindings.",
                     catalog.projects.len(),
                     catalog.bindings.len()
                 ),
@@ -1006,11 +1043,11 @@ async fn service_run_native_vmm_maintenance_action(
             // 解码封闭选择结构，不猜测字段别名或会话归属。
             let selection: vulcan_service_api::VmmNativeSessionArchiveSelection =
                 serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("归档选择参数无效：{error}"))?;
+                    .map_err(|error| format!("Invalid archive selection parameters: {error}"))?;
             let preview = maintenance.preview_session_archive(selection).await?;
             native_action_result(
                 action,
-                "已生成归档预览；此操作只改变管理分类，不删除内容或关闭记忆。".to_owned(),
+                "Generated the archive preview; this operation only changes the management category and does not delete content or turn off memory.".to_owned(),
                 "native_session_archive_preview",
                 request_preview,
                 &preview,
@@ -1022,9 +1059,9 @@ async fn service_run_native_vmm_maintenance_action(
             // 确认只携带服务端预览身份及用户明确同意。
             let confirmation: vulcan_service_api::VmmNativeSessionArchiveConfirmation =
                 serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("归档确认参数无效：{error}"))?;
+                    .map_err(|error| format!("Invalid archive confirmation parameters: {error}"))?;
             if !confirmation.confirmed {
-                return Err("请先查看归档预览并明确确认。".to_owned());
+                return Err("Review the archive preview and confirm explicitly first.".to_owned());
             }
             let result = maintenance
                 .execute_session_archive(&request.command_id, &confirmation.preview_id)
@@ -1032,11 +1069,11 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已{} {} 个记忆会话；内容与记忆功能保持不变。",
+                    "{} {} memory sessions; content and memory features stay unchanged.",
                     if result.selection.archived {
-                        "归档"
+                        "Archived"
                     } else {
-                        "取消归档"
+                        "Unarchived"
                     },
                     result.selection.session_source_ids.len()
                 ),
@@ -1051,11 +1088,11 @@ async fn service_run_native_vmm_maintenance_action(
             // 只解码准确归属及会话身份，重新启用不接受替代内容。
             let selection: vulcan_service_api::VmmNativeSessionRestartSelection =
                 serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("重新启用选择参数无效：{error}"))?;
+                    .map_err(|error| format!("Invalid re-enable selection parameters: {error}"))?;
             let preview = maintenance.preview_session_restart(selection).await?;
             native_action_result(
                 action,
-                "已生成重新启用预览；不会恢复已删除内容或重放历史对话。".to_owned(),
+                "Generated the re-enable preview; deleted content is not restored and past conversations are not replayed.".to_owned(),
                 "native_session_restart_preview",
                 request_preview,
                 &preview,
@@ -1066,10 +1103,11 @@ async fn service_run_native_vmm_maintenance_action(
             // Explicit confirmation binds the command to an immutable server preview.
             // 明确确认将命令绑定到不可变服务端预览。
             let confirmation: vulcan_service_api::VmmNativeSessionRestartConfirmation =
-                serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("重新启用确认参数无效：{error}"))?;
+                serde_json::from_value(request.payload.clone()).map_err(|error| {
+                    format!("Invalid re-enable confirmation parameters: {error}")
+                })?;
             if !confirmation.confirmed {
-                return Err("请先查看重新启用预览并明确确认。".to_owned());
+                return Err("Review the re-enable preview and confirm explicitly first.".to_owned());
             }
             let result = maintenance
                 .execute_session_restart(&request.command_id, &confirmation.preview_id)
@@ -1077,7 +1115,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已重新启用 {} 个记忆会话；仅后续正常交互使用记忆，不恢复已删除内容。",
+                    "Re-enabled {} memory sessions; only later normal interactions use memory, and deleted content is not restored.",
                     result.selection.session_source_ids.len()
                 ),
                 "native_session_restart",
@@ -1089,7 +1127,7 @@ async fn service_run_native_vmm_maintenance_action(
         "native_session_list" => {
             let query: vulcan_service_api::VmmNativeSessionListQuery =
                 serde_json::from_value(request.payload.clone())
-                    .map_err(|error| format!("会话列表参数无效：{error}"))?;
+                    .map_err(|error| format!("Invalid session list parameters: {error}"))?;
             session_list::validate(&query)?;
             let (version, sessions) = maintenance.session_summaries(query.vmm_project_id).await?;
             let titles = native_session_titles(&state)?;
@@ -1104,7 +1142,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已加载 {} 个会话，共匹配 {} 个。",
+                    "Loaded {} sessions out of {} matches.",
                     page.sessions.len(),
                     page.total
                 ),
@@ -1129,12 +1167,12 @@ async fn service_run_native_vmm_maintenance_action(
                 action,
                 match records.selected_session_source_id.as_deref() {
                     Some(session_id) => format!(
-                        "已加载原生 VMM 项目 {project_id} 的会话 `{session_id}`：{} 个回合、{} 条记忆。",
+                        "Loaded session `{session_id}` of native VMM project {project_id}: {} turns, {} memories.",
                         records.turns.len(),
                         records.memories.len()
                     ),
                     None => format!(
-                        "已加载原生 VMM 项目 {project_id}：{} 个会话、{} 个回合、{} 条记忆。",
+                        "Loaded native VMM project {project_id}: {} sessions, {} turns, {} memories.",
                         records.sessions.len(),
                         records.turns.len(),
                         records.memories.len()
@@ -1154,11 +1192,11 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "已加载原生 VMM {}画像：{} 个活动，{} 个待处理，{} 个非活动，{} 个过期，{} 个待生效。",
+                    "Loaded the native VMM {} profile: {} active, {} pending, {} inactive, {} expired, {} scheduled.",
                     if records.target == "user" {
-                        "用户"
+                        "user"
                     } else {
-                        "项目"
+                        "project"
                     },
                     records.counts.active,
                     records.counts.pending,
@@ -1179,15 +1217,15 @@ async fn service_run_native_vmm_maintenance_action(
                 .create_and_bind_project(&vulcan_project_id, &project_name)
                 .await?;
             crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
-                &mut *state
-                    .lock()
-                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+                &mut *state.lock().map_err(|error| {
+                    format!("Failed to lock the VMM write-back mirror: {error}")
+                })?,
             )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
                 format!(
-                    "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`。",
+                    "VulcanCode project `{vulcan_project_id}` is bound to native VMM project `{}`.",
                     project.name
                 ),
                 "native_project_catalog",
@@ -1203,15 +1241,15 @@ async fn service_run_native_vmm_maintenance_action(
                 .bind_existing_project(&vulcan_project_id, project_id)
                 .await?;
             crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
-                &mut *state
-                    .lock()
-                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+                &mut *state.lock().map_err(|error| {
+                    format!("Failed to lock the VMM write-back mirror: {error}")
+                })?,
             )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
                 format!(
-                    "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`。",
+                    "VulcanCode project `{vulcan_project_id}` is bound to native VMM project `{}`.",
                     project.name
                 ),
                 "native_project_catalog",
@@ -1228,15 +1266,15 @@ async fn service_run_native_vmm_maintenance_action(
                 .set_project_access(&vulcan_project_id, owner_project_id, &linked_project_ids)
                 .await?;
             crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
-                &mut *state
-                    .lock()
-                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+                &mut *state.lock().map_err(|error| {
+                    format!("Failed to lock the VMM write-back mirror: {error}")
+                })?,
             )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
                 format!(
-                    "VulcanCode 项目 `{vulcan_project_id}` 已绑定到原生 VMM 项目 `{}`，并配置 {} 个连带查询项目。",
+                    "VulcanCode project `{vulcan_project_id}` is bound to native VMM project `{}` with {} linked query projects.",
                     access.owner.name,
                     access.linked.len()
                 ),
@@ -1250,14 +1288,16 @@ async fn service_run_native_vmm_maintenance_action(
             let vulcan_project_id = required_native_text(&request.payload, "vulcanProjectId")?;
             maintenance.unbind_project(&vulcan_project_id).await?;
             crate::vmm_hooks::reconcile_vmm_writeback_mirrors(
-                &mut *state
-                    .lock()
-                    .map_err(|error| format!("锁定 VMM 写回镜像失败：{error}"))?,
+                &mut *state.lock().map_err(|error| {
+                    format!("Failed to lock the VMM write-back mirror: {error}")
+                })?,
             )?;
             let catalog = native_project_catalog(maintenance.project_catalog().await?);
             native_action_result(
                 action,
-                format!("VulcanCode 项目 `{vulcan_project_id}` 已解除原生 VMM 绑定。"),
+                format!(
+                    "VulcanCode project `{vulcan_project_id}` is no longer bound to native VMM."
+                ),
                 "native_project_catalog",
                 request_preview,
                 &catalog,
@@ -1274,7 +1314,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "VulcanCode 项目 `{vulcan_project_id}` 的连带查询项目已更新为 {} 个。",
+                    "Updated the linked query projects of VulcanCode project `{vulcan_project_id}` to {}.",
                     linked_project_ids.len()
                 ),
                 "native_project_catalog",
@@ -1291,7 +1331,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "原生 VMM 项目 {} 已改名为 `{}`，现有 ID 绑定保持不变。",
+                    "Renamed native VMM project {} to `{}`; existing ID bindings stay unchanged.",
                     project.id, project.name
                 ),
                 "native_project_catalog",
@@ -1308,7 +1348,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "删除预检完成：{} 个归属项目、{} 个连带查询项目、{} 条记忆将受影响。",
+                    "Deletion precheck finished: {} owning projects, {} linked query projects and {} memories will be affected.",
                     preview.project.owner_vulcan_project_ids.len(),
                     preview.project.linked_vulcan_project_ids.len(),
                     preview.content.memories
@@ -1341,13 +1381,13 @@ async fn service_run_native_vmm_maintenance_action(
                 action,
                 if disable_failures.is_empty() {
                     format!(
-                        "原生 VMM 项目 `{}` 已删除；{} 个 VulcanCode 项目的 VMM 已关闭。",
+                        "Deleted native VMM project `{}`; VMM was turned off for {} VulcanCode projects.",
                         deleted.project.name,
                         deleted.usage.owner_vulcan_project_ids.len()
                     )
                 } else {
                     format!(
-                        "原生 VMM 项目 `{}` 已删除且绑定已解除；项目配置关闭写回失败：[{}]，这些项目仍因无绑定而无法使用 VMM。",
+                        "Deleted native VMM project `{}` and removed its bindings; writing back the disabled project configuration failed: [{}]; these projects still cannot use VMM because they have no binding.",
                         deleted.project.name,
                         disable_failures.join(", ")
                     )
@@ -1371,7 +1411,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "迁移预检完成：来源 {} 个会话、{} 条记忆；目标迁移后 {} 个会话、{} 条记忆；会话冲突 {} 个。",
+                    "Migration precheck finished: source has {} sessions and {} memories; target will have {} sessions and {} memories after migration; {} session conflicts.",
                     preview.source.sessions,
                     preview.source.memories,
                     preview.target_after.sessions,
@@ -1406,7 +1446,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "项目记忆迁移完成：迁移 {} 个会话、{} 个回合、{} 条记忆和 {} 个项目画像节点。",
+                    "Project memory migration finished: migrated {} sessions, {} turns, {} memories and {} project profile nodes.",
                     result.moved.sessions,
                     result.moved.turns,
                     result.moved.memories,
@@ -1424,7 +1464,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "清空预检完成：将删除 {} 个会话、{} 个回合、{} 条记忆和 {} 个项目画像节点。",
+                    "Clear precheck finished: {} sessions, {} turns, {} memories and {} project profile nodes will be deleted.",
                     preview.removed.sessions,
                     preview.removed.turns,
                     preview.removed.memories,
@@ -1448,7 +1488,7 @@ async fn service_run_native_vmm_maintenance_action(
             native_action_result(
                 action,
                 format!(
-                    "项目记忆已清空：删除 {} 个会话、{} 个回合、{} 条记忆和 {} 个项目画像节点。",
+                    "Project memory cleared: deleted {} sessions, {} turns, {} memories and {} project profile nodes.",
                     result.removed.sessions,
                     result.removed.turns,
                     result.removed.memories,
@@ -1471,7 +1511,7 @@ async fn service_run_native_vmm_maintenance_action(
 fn required_native_project_id(payload: &Value, key: &str) -> Result<u64, String> {
     vmm_payload_u64(payload, key)
         .filter(|value| *value > 0)
-        .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+        .ok_or_else(|| format!("The native VMM action is missing the valid field `{key}`."))
 }
 
 /// Requires one trimmed non-empty native VMM action text field.
@@ -1480,7 +1520,7 @@ fn required_native_text(payload: &Value, key: &str) -> Result<String, String> {
     vmm_payload_text(payload, key)
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+        .ok_or_else(|| format!("The native VMM action is missing the valid field `{key}`."))
 }
 
 /// Requires one closed native profile target token from an action payload.
@@ -1492,7 +1532,7 @@ fn required_native_profile_target(
         "user" => Ok(crate::native_vmm::NativeVmmProfileTarget::User),
         "project" => Ok(crate::native_vmm::NativeVmmProfileTarget::Project),
         target => Err(format!(
-            "原生 VMM 画像目标 `{target}` 无效；只允许 `user` 或 `project`。"
+            "Invalid native VMM profile target `{target}`; only `user` or `project` is allowed."
         )),
     }
 }
@@ -1506,7 +1546,7 @@ fn required_native_text_verbatim(payload: &Value, key: &str) -> Result<String, S
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+        .ok_or_else(|| format!("The native VMM action is missing the valid field `{key}`."))
 }
 
 /// Requires one native VMM string field verbatim while allowing an intentional empty value.
@@ -1517,7 +1557,7 @@ fn required_native_string_verbatim(payload: &Value, key: &str) -> Result<String,
         .and_then(|object| object.get(key))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("原生 VMM 动作缺少字符串字段 `{key}`。"))
+        .ok_or_else(|| format!("The native VMM action is missing the string field `{key}`."))
 }
 
 /// Reads one optional native VMM string field verbatim and normalizes blank content to absence.
@@ -1528,7 +1568,7 @@ fn optional_native_text_verbatim(payload: &Value, key: &str) -> Result<Option<St
     };
     let value = value
         .as_str()
-        .ok_or_else(|| format!("原生 VMM 动作字段 `{key}` 必须是字符串。"))?;
+        .ok_or_else(|| format!("Native VMM action field `{key}` must be a string."))?;
     Ok((!value.trim().is_empty()).then(|| value.to_owned()))
 }
 
@@ -1539,7 +1579,7 @@ fn required_native_bool(payload: &Value, key: &str) -> Result<bool, String> {
         .as_object()
         .and_then(|object| object.get(key))
         .and_then(Value::as_bool)
-        .ok_or_else(|| format!("原生 VMM 动作缺少有效布尔字段 `{key}`。"))
+        .ok_or_else(|| format!("The native VMM action is missing the valid boolean field `{key}`."))
 }
 
 /// Requires one finite native VMM floating-point field.
@@ -1550,13 +1590,14 @@ fn required_native_f64(payload: &Value, key: &str) -> Result<f64, String> {
         .and_then(|object| object.get(key))
         .and_then(Value::as_f64)
         .filter(|value| value.is_finite())
-        .ok_or_else(|| format!("原生 VMM 动作缺少有效数值字段 `{key}`。"))
+        .ok_or_else(|| format!("The native VMM action is missing the valid numeric field `{key}`."))
 }
 
 /// Requires one native VMM storage version, including the valid initial version zero.
 /// 读取一个必需的原生 VMM 存储版本，包含合法的初始版本零。
 fn required_native_storage_version(payload: &Value, key: &str) -> Result<u64, String> {
-    vmm_payload_u64(payload, key).ok_or_else(|| format!("原生 VMM 动作缺少有效字段 `{key}`。"))
+    vmm_payload_u64(payload, key)
+        .ok_or_else(|| format!("The native VMM action is missing the valid field `{key}`."))
 }
 
 /// Builds one standard WebUI action result from a serializable native response.
@@ -1574,8 +1615,9 @@ fn native_action_result<T: serde::Serialize>(
         summary,
         kind: kind.to_owned(),
         request,
-        response: serde_json::to_value(response)
-            .map_err(|error| format!("序列化原生 VMM 动作结果失败：{error}"))?,
+        response: serde_json::to_value(response).map_err(|error| {
+            format!("Failed to serialize the native VMM action result: {error}")
+        })?,
         data,
     })
 }
@@ -1776,7 +1818,7 @@ fn native_session_titles(
 ) -> Result<BTreeMap<String, String>, String> {
     let guard = state
         .lock()
-        .map_err(|error| format!("锁定原生 VMM 会话标题目录失败：{error}"))?;
+        .map_err(|error| format!("Failed to lock the native VMM session title catalog: {error}"))?;
     let Some(workspace) = guard.workspace_snapshot.as_ref() else {
         return Ok(BTreeMap::new());
     };
@@ -2005,7 +2047,7 @@ async fn disable_deleted_native_project_owners(
         let commit_state = Arc::clone(state);
         let result = mutate_project_configuration(
             &std::path::PathBuf::from(&project_path),
-            "关闭已解除绑定项目的 VMM 配置失败",
+            "Failed to turn off the VMM configuration of unbound projects",
             move |project_configuration| {
                 project_configuration.vmm.enabled = Some(false);
                 Ok(())
@@ -2252,14 +2294,16 @@ pub(crate) async fn service_suppress_context_injection_item(
     let dedupe_key = vmm_payload_text(&request.payload, "dedupeKey");
     let memory_id = vmm_payload_u64(&request.payload, "memoryId");
     if dedupe_key.is_none() && memory_id.is_none() {
-        return Err(String::from("缺少需要隐藏的记忆条目标识。"));
+        return Err(String::from(
+            "Missing the identifier of the memory item to hide.",
+        ));
     }
     // suppression_key is the exact semantic lease identity selected by the request.
     // suppression_key 是请求选择的精确语义租约身份。
     let suppression_key = dedupe_key
         .clone()
         .or_else(|| memory_id.map(|memory_id| format!("memory:{memory_id}")))
-        .ok_or_else(|| String::from("缺少需要隐藏的记忆条目标识。"))?;
+        .ok_or_else(|| String::from("Missing the identifier of the memory item to hide."))?;
     // request_command_id is validated before any retained or durable state can change.
     // request_command_id 在任何保留状态或持久状态发生变化前完成校验。
     let command_id = vmm_suppression_command_id(&request.command_id)?;
@@ -2273,15 +2317,16 @@ pub(crate) async fn service_suppress_context_injection_item(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace = guard
-            .workspace_snapshot
-            .as_ref()
-            .ok_or_else(|| String::from("工作区尚未载入，无法隐藏动态记忆。"))?;
+        let workspace = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("The workspace is not loaded yet; dynamic memory cannot be hidden.")
+        })?;
         let session_id = vmm_suppression_session_id(workspace, request.conversation_id.as_deref())?;
         let handle = guard
             .session_runtime_registry
             .get(session_id)
-            .map_err(|error| format!("V1 会话 `{session_id}` 尚未完成精确 hydration：{error}"))?;
+            .map_err(|error| {
+                format!("V1 session `{session_id}` has not finished exact hydration: {error}")
+            })?;
         let storage_locator = handle.storage_locator().map_err(|error| {
             format!("Failed to resolve V1 VMM locator for `{session_id}`: {error}")
         })?;
@@ -2295,10 +2340,9 @@ pub(crate) async fn service_suppress_context_injection_item(
         // vmm_controller_registry is process-owned and never exposes mutable VMM state.
         // vmm_controller_registry 由进程持有，绝不暴露可变 VMM 状态。
         let vmm_controller_registry = guard.vmm_controller_registry.clone();
-        let workspace = guard
-            .workspace_snapshot
-            .as_mut()
-            .ok_or_else(|| String::from("工作区尚未载入，无法隐藏动态记忆。"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("The workspace is not loaded yet; dynamic memory cannot be hidden.")
+        })?;
         // session_id is resolved from the initiating request instead of mutable UI selection state.
         // session_id 从动作发起请求解析，而不是依赖可变的 UI 选中状态。
         let session_id = resolved_session_id;
@@ -2376,9 +2420,9 @@ pub(crate) async fn service_suppress_context_injection_item(
     Ok(VmmMemoryActionResult {
         action: request.action,
         summary: if changed {
-            String::from("已在当前会话中隐藏该动态记忆。")
+            String::from("Hid this dynamic memory in the current session.")
         } else {
-            String::from("未找到需要隐藏的动态记忆，可能已被移除。")
+            String::from("The dynamic memory to hide was not found; it may have been removed.")
         },
         kind: String::from("suppress_context_injection_item"),
         request: json!({
@@ -2456,18 +2500,20 @@ pub(crate) fn vmm_suppression_session_id(
     let conversation_id = conversation_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("缺少需要隐藏动态记忆的会话标识。"))?;
+        .ok_or_else(|| String::from("Missing the session identifier for hiding dynamic memory."))?;
     // session_id is the strongly typed identity used by workspace runtime-state maps.
     // session_id 是工作区运行态映射使用的强类型身份标识。
     let session_id = conversation_id
         .parse::<vulcan_workbench_model::SessionId>()
-        .map_err(|error| format!("无效的动态记忆会话标识：{error}"))?;
+        .map_err(|error| format!("Invalid dynamic memory session identifier: {error}"))?;
     if !workspace
         .sessions
         .iter()
         .any(|session| session.id == session_id)
     {
-        return Err(String::from("目标会话已不存在，无法隐藏动态记忆。"));
+        return Err(String::from(
+            "The target session no longer exists; dynamic memory cannot be hidden.",
+        ));
     }
     Ok(session_id)
 }
@@ -2509,7 +2555,9 @@ pub(crate) async fn service_save_vmm_memory_config(
     // project_settings_target is absent only for a valid global save that affects every project.
     // project_settings_target 仅在影响所有项目的有效全局保存中为空。
     let project_settings_target = if project_scope {
-        Some(changed_project_id.ok_or_else(|| String::from("项目 VMM 配置缺少项目标识。"))?)
+        Some(changed_project_id.ok_or_else(|| {
+            String::from("The project VMM configuration is missing the project identifier.")
+        })?)
     } else {
         None
     };
@@ -2583,13 +2631,19 @@ pub(super) fn vmm_external_action_layer_override(
         return Ok(None);
     };
     if !request.scope.trim().eq_ignore_ascii_case("global") {
-        return Err(String::from("临时外置 VMM 连接只允许用于全局配置向导。"));
+        return Err(String::from(
+            "Temporary external VMM connections are only allowed in the global configuration wizard.",
+        ));
     }
     let connection: VmmExternalActionConnection = serde_json::from_value(connection.clone())
-        .map_err(|error| format!("解析临时外置 VMM 连接失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to parse the temporary external VMM connection: {error}")
+        })?;
     let grpc_target = connection.grpc_target.trim();
     if grpc_target.is_empty() {
-        return Err(String::from("临时外置 VMM gRPC 地址不能为空。"));
+        return Err(String::from(
+            "The temporary external VMM gRPC address must not be empty.",
+        ));
     }
     Ok(Some(vulcan_vmm::VmmConfigLayer {
         backend_mode: Some(vulcan_vmm::VmmBackendMode::ExternalGrpc),
@@ -2634,10 +2688,9 @@ pub(crate) fn vmm_action_context(
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let workspace_snapshot = guard
-            .workspace_snapshot
-            .clone()
-            .ok_or_else(|| String::from("工作区尚未载入，无法执行 VMM 管理动作。"))?;
+        let workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
+            String::from("The workspace is not loaded yet; VMM management actions cannot run.")
+        })?;
         let provider_configuration = guard
             .agent_runtime
             .as_ref()
@@ -2652,7 +2705,7 @@ pub(crate) fn vmm_action_context(
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         let project = vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
-            .ok_or_else(|| String::from("请先选择一个项目作用域。"))?;
+            .ok_or_else(|| String::from("Select a project scope first."))?;
         let project_layer = cached_project_vmm_layer(&project.path);
         let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
             &provider_configuration.vmm,
@@ -2726,7 +2779,7 @@ pub(super) fn validate_transient_external_action(action: &str) -> Result<(), Str
         return Ok(());
     }
     Err(format!(
-        "请求级外置 VMM 连接不允许执行动作 `{action}`；请先完成外置后端配置。"
+        "Request-scoped external VMM connections cannot run action `{action}`; finish configuring the external backend first."
     ))
 }
 
@@ -2747,7 +2800,7 @@ pub(super) fn ensure_external_action_backend(
         return Ok(());
     }
     Err(String::from(
-        "外置 VMM 动作仅在全局选择外置 gRPC 后端后可用。",
+        "External VMM actions are only available after selecting the external gRPC backend globally.",
     ))
 }
 
@@ -2886,8 +2939,9 @@ pub(crate) fn parse_vmm_memory_action(
         ),
         "write_memories" => Ok(
             vulcan_service_runtime::vmm_management::VmmWorkbenchAction::WriteMemories {
-                session_id: vmm_payload_text(payload, "sessionId")
-                    .ok_or_else(|| String::from("WriteMemories 缺少明确的 sessionId。"))?,
+                session_id: vmm_payload_text(payload, "sessionId").ok_or_else(|| {
+                    String::from("WriteMemories is missing an explicit sessionId.")
+                })?,
                 item: vulcan_vmm::WriteMemoryItem {
                     scope_level: vmm_payload_i32(payload, "scopeLevel").unwrap_or(2),
                     abstract_text: vmm_payload_text(payload, "abstractText").unwrap_or_default(),
@@ -2904,7 +2958,7 @@ pub(crate) fn parse_vmm_memory_action(
                 reason: vmm_payload_text(payload, "reason").unwrap_or_default(),
             },
         ),
-        other => Err(format!("不支持的 VMM 记忆动作：{other}")),
+        other => Err(format!("Unsupported VMM memory action: {other}")),
     }
 }
 
@@ -2915,7 +2969,7 @@ pub(crate) fn vmm_action_request_preview(
 ) -> Result<Value, String> {
     serde_json::to_value(format!("{action:?}"))
         .map(|debug| json!({ "action": debug }))
-        .map_err(|error| format!("序列化 VMM 请求预览失败：{error}"))
+        .map_err(|error| format!("Failed to serialize the VMM request preview: {error}"))
 }
 
 /// Projects one VMM management outcome into the WebUI action result shape.
@@ -2930,12 +2984,12 @@ pub(crate) fn vmm_memory_action_result(
     let (kind, summary, response) = match outcome {
         VmmManagementOutcome::Healthz(status) => (
             "healthz",
-            format!("VMM 连接正常：{status}"),
+            format!("VMM connection is healthy: {status}"),
             json!({ "status": status }),
         ),
         VmmManagementOutcome::UsersAndProjects { users, projects } => {
             let summary = format!(
-                "用户 {} 个；项目 {} 个。",
+                "{} users; {} projects.",
                 users.users.len(),
                 projects.projects.len()
             );
@@ -2958,7 +3012,7 @@ pub(crate) fn vmm_memory_action_result(
                 .unwrap_or_else(|| project.message.clone());
             (
                 "resolved",
-                format!("用户 {user_text}；项目 {project_text}。"),
+                format!("User {user_text}; project {project_text}."),
                 json!({ "user": user, "project": project }),
             )
         }
@@ -2969,20 +3023,20 @@ pub(crate) fn vmm_memory_action_result(
                 .map(|entry| entry.project_name.clone())
                 .unwrap_or_else(|| response.message.clone());
             let summary = if response.exists {
-                format!("项目“{project_text}”已经存在。")
+                format!("Project `{project_text}` already exists.")
             } else if response.needs_confirm {
-                format!("项目“{project_text}”尚未创建，确认后即可建立。")
+                format!("Project `{project_text}` has not been created yet; confirm to create it.")
             } else {
-                format!("项目“{project_text}”已创建。")
+                format!("Created project `{project_text}`.")
             };
             ("ensure_project", summary, vmm_response_value(response)?)
         }
         VmmManagementOutcome::DeleteUser(response) => {
             let summary = if response.requires_confirmation {
-                String::from("删除该用户前还需要一次确认。")
+                String::from("Deleting this user needs one more confirmation.")
             } else {
                 format!(
-                    "已删除 {} 个用户，并清理 {} 条记忆和 {} 条画像。",
+                    "Deleted {} users and cleaned up {} memories and {} profile entries.",
                     response.deleted_users, response.deleted_memories, response.deleted_profiles
                 )
             };
@@ -2990,10 +3044,10 @@ pub(crate) fn vmm_memory_action_result(
         }
         VmmManagementOutcome::DeleteProject(response) => {
             let summary = if response.needs_confirm {
-                String::from("删除该项目前还需要一次确认。")
+                String::from("Deleting this project needs one more confirmation.")
             } else {
                 format!(
-                    "已删除 {} 个项目，并清理 {} 条记忆和 {} 条画像。",
+                    "Deleted {} projects and cleaned up {} memories and {} profile entries.",
                     response.deleted_projects, response.deleted_memories, response.deleted_profiles
                 )
             };
@@ -3001,26 +3055,26 @@ pub(crate) fn vmm_memory_action_result(
         }
         VmmManagementOutcome::MigrateProject(response) => {
             let summary = if response.needs_confirm {
-                String::from("迁移该项目前还需要一次确认。")
+                String::from("Migrating this project needs one more confirmation.")
             } else {
                 format!(
-                    "项目迁移完成：已迁移 {} 个会话和 {} 条记忆。",
+                    "Project migration finished: migrated {} sessions and {} memories.",
                     response.migrated_sessions, response.migrated_memories
                 )
             };
             ("migrate_project", summary, vmm_response_value(response)?)
         }
         VmmManagementOutcome::ProfileNodes(response) => {
-            let summary = format!("已读取 {} 条有效画像。", response.nodes.len());
+            let summary = format!("Read {} valid profile entries.", response.nodes.len());
             ("profile_nodes", summary, vmm_response_value(response)?)
         }
         VmmManagementOutcome::ProfileBundle(response) => {
-            let summary = String::from("画像资料已加载。");
+            let summary = String::from("Loaded the profile data.");
             ("profile_bundle", summary, vmm_response_value(response)?)
         }
         VmmManagementOutcome::ProfileInstruction(response) => {
             let summary = format!(
-                "画像指令已应用：新增或更新 {} 条，停用 {} 条。",
+                "Applied the profile instructions: {} added or updated, {} deactivated.",
                 response.accepted_nodes.len(),
                 response.retired_nodes.len()
             );
@@ -3037,11 +3091,11 @@ pub(crate) fn vmm_memory_action_result(
                 .map(|entry| entry.user_name.clone())
                 .unwrap_or_else(|| response.message.clone());
             let summary = if response.created {
-                format!("用户“{user_text}”已创建。")
+                format!("Created user `{user_text}`.")
             } else if response.exists {
-                format!("已找到用户“{user_text}”。")
+                format!("Found user `{user_text}`.")
             } else {
-                format!("用户“{user_text}”尚未创建。")
+                format!("User `{user_text}` has not been created yet.")
             };
             ("resolve_user", summary, vmm_response_value(response)?)
         }
@@ -3051,7 +3105,7 @@ pub(crate) fn vmm_memory_action_result(
                 .iter()
                 .map(|group| group.hits.len())
                 .sum::<usize>();
-            let summary = format!("已找到 {hit_count} 条相关记忆。");
+            let summary = format!("Found {hit_count} related memories.");
             (
                 "search_memory_events",
                 summary,
@@ -3059,16 +3113,16 @@ pub(crate) fn vmm_memory_action_result(
             )
         }
         VmmManagementOutcome::GetTurnDetails(response) => {
-            let summary = format!("已读取 {} 个来源回合。", response.turns.len());
+            let summary = format!("Read {} source turns.", response.turns.len());
             ("get_turn_details", summary, vmm_response_value(response)?)
         }
         VmmManagementOutcome::WriteMemories(response) => {
-            let summary = format!("已写入 {} 条记忆。", response.items.len());
+            let summary = format!("Wrote {} memories.", response.items.len());
             ("write_memories", summary, vmm_response_value(response)?)
         }
         VmmManagementOutcome::DeleteMemories(response) => {
             let summary = format!(
-                "已删除 {} 条记忆，另有 {} 条未找到。",
+                "Deleted {} memories; {} were not found.",
                 response.deleted_memory_ids.len(),
                 response.not_found_memory_ids.len()
             );
@@ -3109,7 +3163,9 @@ fn vmm_typed_action_response(
             status: response
                 .get("status")
                 .and_then(Value::as_str)
-                .ok_or_else(|| String::from("VMM healthz 响应缺少准确的 status 字段。"))?
+                .ok_or_else(|| {
+                    String::from("The VMM healthz response is missing the exact status field.")
+                })?
                 .to_string(),
         }),
         "users_projects" => Ok(VmmMemoryActionResponse::UsersProjects {
@@ -3156,7 +3212,9 @@ fn vmm_typed_action_response(
         "delete_memories" => Ok(VmmMemoryActionResponse::DeleteMemories(
             decode_vmm_action_value(response)?,
         )),
-        other => Err(format!("VMM 动作结果缺少强类型投影：{other}")),
+        other => Err(format!(
+            "The VMM action result has no typed projection: {other}"
+        )),
     }
 }
 
@@ -3177,7 +3235,7 @@ where
 {
     let value = response
         .get(field)
-        .ok_or_else(|| format!("VMM 动作响应缺少准确的 {field} 字段。"))?;
+        .ok_or_else(|| format!("The VMM action response is missing the exact {field} field."))?;
     decode_vmm_action_value(value)
 }
 
@@ -3190,5 +3248,5 @@ fn vmm_response_value(response: impl serde::Serialize) -> Result<Value, String> 
 /// Formats a JSON projection error for VMM responses.
 /// 格式化 VMM 响应 JSON 投影错误。
 pub(crate) fn vmm_json_error(error: serde_json::Error) -> String {
-    format!("序列化 VMM 响应失败：{error}")
+    format!("Failed to serialize the VMM response: {error}")
 }

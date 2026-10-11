@@ -158,7 +158,7 @@ pub(crate) async fn service_save_public_ai_provider_tool_selection(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存公共 AI 工具目标失败",
+        "Failed to save the public AI tool targets",
         |configuration| {
             if let Some(selection) = request.selection.clone() {
                 configuration
@@ -231,7 +231,7 @@ pub(crate) async fn service_save_public_ai_multimodal_understanding_candidate(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存多模态理解模型候选开关失败",
+        "Failed to save the multimodal understanding model candidate switch",
         |configuration| {
             configuration.set_multimodal_understanding_candidate_enabled(
                 request.provider_id.as_str(),
@@ -355,7 +355,7 @@ pub(crate) async fn service_save_public_ai_media_understanding_selection(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存媒体理解后端选择失败",
+        "Failed to save the media understanding backend selection",
         |configuration| {
             if let Some(selection) = request.selection.clone() {
                 configuration
@@ -419,7 +419,7 @@ pub(crate) async fn service_save_public_ai_provider_extension_target_set(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存公共 AI 模型扩展目标集合失败",
+        "Failed to save the public AI model extension target set",
         |configuration| {
             if request.selections.is_empty() {
                 configuration
@@ -535,7 +535,7 @@ pub(crate) async fn service_save_public_ai_provider_tool_capability_enabled(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存公共 AI 工具能力启用状态失败",
+        "Failed to save the public AI tool capability enable state",
         |configuration| {
             if request.enabled {
                 configuration

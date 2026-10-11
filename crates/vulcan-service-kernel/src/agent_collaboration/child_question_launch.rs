@@ -223,7 +223,7 @@ pub(super) async fn wake_embedded_question(
                     }
                     if let Err(diagnostic_error) = crate::push_webui_service_diagnostic(
                         &invocation.state,
-                        format!("子代理答疑请求准备失败：{error}"),
+                        format!("Failed to prepare the subagent question request: {error}"),
                     ) {
                         tracing::warn!(
                             "[webui-service] child question diagnostic failed: {diagnostic_error}"

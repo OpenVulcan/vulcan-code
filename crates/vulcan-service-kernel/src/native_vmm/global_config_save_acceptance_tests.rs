@@ -543,7 +543,7 @@ pub(super) async fn verify(
             save(&state, &app, &path, mismatched)
                 .await
                 .expect_err("mismatched plan")
-                .contains("准确覆盖")
+                .contains("must cover exactly")
         );
         assert_eq!(
             std::fs::read(&path).expect("global VMM save fixture value"),

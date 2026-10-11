@@ -22,7 +22,9 @@ pub(super) async fn service_mcp_server_capabilities(
     let capabilities = runtime.server_capabilities(&server_id).await?;
     let current = agent_mcp_runtime_from_state(&state)?;
     if !runtime.shares_server_partition(&current, &server_id) {
-        return Err(String::from("MCP 配置已经变化，请重新读取详情。"));
+        return Err(String::from(
+            "The MCP configuration changed; reload the details.",
+        ));
     }
     Ok(capabilities)
 }
@@ -134,14 +136,18 @@ pub(super) async fn service_save_mcp_server_configuration(
         runtime_mcp_server_configs(&next_configuration)?,
     )
     .await
-    .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
+    .map_err(|error| {
+        format!("Rebuilding the MCP runtime failed; the configuration was not saved: {error}")
+    })?;
     // Ownership validation, persistence and Full replacement share one actual service lock after preparation finishes.
     // 准备完成后，所有权校验、持久化及 Full 替换共享单个实际服务锁。
     let workbench = match store_provider_and_mcp_configuration_after_change_with_persistence(
         &state,
         next_configuration,
         next_mcp_runtime.clone(),
-        |configuration| configuration_transaction.persist(configuration, "保存 MCP 服务器失败"),
+        |configuration| {
+            configuration_transaction.persist(configuration, "Failed to save the MCP server")
+        },
     ) {
         Ok(workbench) => workbench,
         Err(error) => {
@@ -171,21 +177,25 @@ pub(super) async fn service_remove_mcp_server_configuration(
         .mcp
         .servers
         .remove(server_id.trim())
-        .ok_or_else(|| format!("未找到 MCP 服务器 `{}`。", server_id.trim()))?;
+        .ok_or_else(|| format!("MCP server `{}` not found.", server_id.trim()))?;
     let current_mcp_runtime = agent_mcp_runtime_from_state(&state)?;
     let next_mcp_runtime = replace_user_mcp_runtime_partition(
         &current_mcp_runtime,
         runtime_mcp_server_configs(&next_configuration)?,
     )
     .await
-    .map_err(|error| format!("MCP Runtime 重建失败，配置未保存：{error}"))?;
+    .map_err(|error| {
+        format!("Rebuilding the MCP runtime failed; the configuration was not saved: {error}")
+    })?;
     // Reject an update's retained Full before durable removal, without leaving a validation-to-persistence pin window.
     // 持久移除前拒绝更新保留 Full，不留下校验到持久化之间的固定窗口。
     let workbench = match store_provider_and_mcp_configuration_after_change_with_persistence(
         &state,
         next_configuration,
         next_mcp_runtime.clone(),
-        |configuration| configuration_transaction.persist(configuration, "移除 MCP 服务器失败"),
+        |configuration| {
+            configuration_transaction.persist(configuration, "Failed to remove the MCP server")
+        },
     ) {
         Ok(workbench) => workbench,
         Err(error) => {
@@ -214,7 +224,7 @@ pub(super) fn agent_mcp_runtime_from_state(
         .agent_runtime
         .as_ref()
         .map(|runtime| runtime.extension_generation.mcp_runtime())
-        .ok_or_else(|| String::from("Agent MCP Runtime 尚未初始化。"))
+        .ok_or_else(|| String::from("The agent MCP runtime is not initialized yet."))
 }
 
 /// Applies one parsed MCP server entry to the provider configuration without silent overwrites.
@@ -259,11 +269,13 @@ pub(super) fn apply_mcp_server_entry_to_configuration(
     }
     if create_new_server && existing {
         return Err(format!(
-            "MCP 服务器 `{server_id}` 已存在。请更换名称，或编辑现有服务器。"
+            "MCP server `{server_id}` already exists. Use another name or edit the existing server."
         ));
     }
     if !create_new_server && !existing {
-        return Err(format!("未找到 MCP 服务器 `{server_id}`，无法保存修改。"));
+        return Err(format!(
+            "MCP server `{server_id}` not found; the changes cannot be saved."
+        ));
     }
     configuration.mcp.servers.insert(server_id, entry);
     Ok(())
@@ -276,7 +288,7 @@ pub(super) fn parse_mcp_transport(value: &str) -> Result<PersistedMcpTransportKi
         "stdio" => Ok(PersistedMcpTransportKind::Stdio),
         "http" => Ok(PersistedMcpTransportKind::Http),
         "sse" => Ok(PersistedMcpTransportKind::Sse),
-        other => Err(format!("不支持的 MCP 传输类型：{other}")),
+        other => Err(format!("Unsupported MCP transport type: {other}")),
     }
 }
 
@@ -296,10 +308,12 @@ pub(super) fn key_value_inputs_to_map(
             continue;
         }
         if key.is_empty() {
-            return Err(format!("{subject_label} 的键不能为空。"));
+            return Err(format!("The key of {subject_label} must not be empty."));
         }
         if value.is_empty() {
-            return Err(format!("{subject_label} 的{value_label}不能为空。"));
+            return Err(format!(
+                "The {value_label} of {subject_label} must not be empty."
+            ));
         }
         // Environment values are process arguments too; meaningful surrounding whitespace must survive saving.
         // 环境变量值同样是进程输入；有意义的前后空白必须在保存后保留。
@@ -309,7 +323,7 @@ pub(super) fn key_value_inputs_to_map(
             value.to_string()
         };
         if map.insert(key.to_string(), saved_value).is_some() {
-            return Err(format!("{subject_label} `{key}` 重复，请保留一条即可。"));
+            return Err(format!("Duplicate {subject_label} `{key}`; keep only one."));
         }
     }
     Ok(map)
@@ -333,7 +347,7 @@ pub(super) fn mcp_server_entry_from_request(
 ) -> Result<(String, PersistedMcpServerEntry), String> {
     let name = request.name.trim();
     if name.is_empty() {
-        return Err(String::from("请先填写 MCP 服务器名称。"));
+        return Err(String::from("Enter the MCP server name first."));
     }
     let server_id = request
         .server_id
@@ -348,7 +362,7 @@ pub(super) fn mcp_server_entry_from_request(
         PersistedMcpTransportKind::Stdio => {
             let command = request.command.trim();
             if command.is_empty() {
-                return Err(String::from("请先填写 MCP 服务器启动命令。"));
+                return Err(String::from("Enter the MCP server launch command first."));
             }
             Ok((
                 server_id,
@@ -366,7 +380,12 @@ pub(super) fn mcp_server_entry_from_request(
                     headers_from_env: BTreeMap::new(),
                     oauth: None,
                     cwd: trim_to_option(&request.cwd),
-                    env: key_value_inputs_to_map(request.env, "环境变量", "值", true)?,
+                    env: key_value_inputs_to_map(
+                        request.env,
+                        "environment variable",
+                        "value",
+                        true,
+                    )?,
                     env_passthrough: request
                         .env_passthrough
                         .into_iter()
@@ -381,11 +400,11 @@ pub(super) fn mcp_server_entry_from_request(
         PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => {
             let url = request.url.trim();
             if url.is_empty() {
-                return Err(String::from("请先填写 MCP 远端服务器 URL。"));
+                return Err(String::from("Enter the remote MCP server URL first."));
             }
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return Err(String::from(
-                    "MCP 远端服务器 URL 必须以 `http://` 或 `https://` 开头。",
+                    "The remote MCP server URL must start with `http://` or `https://`.",
                 ));
             }
             Ok((
@@ -398,11 +417,16 @@ pub(super) fn mcp_server_entry_from_request(
                     args: Vec::new(),
                     url: Some(url.to_string()),
                     bearer_token: trim_to_option(&request.bearer_token),
-                    headers: key_value_inputs_to_map(request.headers, "请求头", "值", false)?,
+                    headers: key_value_inputs_to_map(
+                        request.headers,
+                        "request header",
+                        "value",
+                        false,
+                    )?,
                     headers_from_env: key_value_inputs_to_map(
                         request.headers_from_env,
-                        "来自环境变量的请求头",
-                        "环境变量名",
+                        "request header from environment variable",
+                        "environment variable name",
                         false,
                     )?,
                     oauth,

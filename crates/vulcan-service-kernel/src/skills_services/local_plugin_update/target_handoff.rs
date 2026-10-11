@@ -122,7 +122,7 @@ pub(super) fn require_unstarted_enabled_update(
             .is_some()
     {
         return Err(String::from(
-            "启用更新已开始实际生命周期；必须恢复原前驱交接，保留原所有者。",
+            "The enabled update already started the actual lifecycle; the original predecessor handoff must be restored and the original owner kept.",
         ));
     }
     Ok(())
@@ -146,7 +146,7 @@ fn require_enabled_policy(
         || configuration.disabled_vulcan_plugins.contains(plugin_id)
     {
         return Err(String::from(
-            "原启用更新目标与当前显式用户策略不一致；保留原请求。",
+            "The original enabled update target disagrees with the current explicit user policy; keeping the original request.",
         ));
     }
     Ok(())
@@ -162,7 +162,9 @@ fn require_original_enabled_policy(
 ) -> Result<(), String> {
     // Exact original policy is retained by the transaction, independently of candidate manifest defaults.
     // 精确原策略由事务保留，独立于候选清单默认值。
-    let policy = record.update_policy().ok_or("原更新请求缺少用户策略。")?;
+    let policy = record
+        .update_policy()
+        .ok_or("The original update request has no user policy.")?;
     // Only the original namespace can be normalized after selection or restored before publication.
     // 仅原命名空间可以在选择之后归一化，或在发布之前恢复。
     let plugin_id = &record.target().plugin_id;
@@ -173,7 +175,7 @@ fn require_original_enabled_policy(
         )
     {
         return Err(String::from(
-            "此插件原用户策略已改变；保留原请求，不覆盖新设置。",
+            "The original user policy of this plugin changed; keeping the original request without overwriting the new settings.",
         ));
     }
     Ok(())
@@ -196,7 +198,9 @@ fn persist_selected_enabled_policy(
         VulcanPluginActivationTransactionPhase::Published
             | VulcanPluginActivationTransactionPhase::Completed
     ) {
-        return Err(String::from("原选择尚未确认，不能归一化启用策略。"));
+        return Err(String::from(
+            "The original selection is not confirmed yet; the enable policy cannot be normalized.",
+        ));
     }
     // The existing provider transaction already precedes service exclusion; never reacquire its asynchronous mutex.
     // 既有供应商事务已经先于服务互斥；绝不重新取得其异步互斥锁。
@@ -207,7 +211,7 @@ fn persist_selected_enabled_policy(
     let bridge = guard
         .agent_runtime
         .as_mut()
-        .ok_or("Agent 运行时尚未初始化。")?;
+        .ok_or("The agent runtime is not initialized yet.")?;
     // Clone only the latest actual configuration, preserving changes to every other plugin and provider.
     // 仅克隆最新实际配置，保留其他全部插件及供应商的变更。
     let mut configuration = bridge.provider_configuration.clone();
@@ -227,7 +231,10 @@ fn persist_selected_enabled_policy(
         .luaskills
         .disabled_vulcan_plugins
         .remove(plugin_id);
-    transaction.persist(&configuration, "保存原已选更新的插件策略失败")?;
+    transaction.persist(
+        &configuration,
+        "Failed to save the plugin policy of the original selected update",
+    )?;
     bridge.provider_configuration = configuration.clone();
     *confirmed = true;
     Ok(configuration)
@@ -253,7 +260,7 @@ pub(super) async fn continue_enabled_update(
     owner.retain_routing_publication(state, &resources)?;
     if resources.target.is_some() {
         return Err(String::from(
-            "原启用更新已经开始；不能重放前驱排空或候选副作用。",
+            "The original enabled update already started; the predecessor drain or candidate side effects cannot be replayed.",
         ));
     }
     // Retained historical Prepared requests must satisfy the same support boundary before their first real drain.
@@ -299,7 +306,7 @@ pub(super) async fn continue_enabled_update(
         })
     {
         return Err(String::from(
-            "准备后的实际启用前驱已经变化；不能排空替代代次。",
+            "The actual enabled predecessor changed after preparation; the superseding generation cannot be drained.",
         ));
     }
     // The candidate borrows the same non-cloneable transaction instead of mutable public discovery.
@@ -352,8 +359,8 @@ pub(super) async fn continue_enabled_update(
         .map_err(|error| error.to_string())?;
     if !drained.failures.is_empty() {
         return Err(format!(
-            "启用前驱资源尚未退役：{}",
-            drained.failures.join("；")
+            "The enabled predecessor resources are not retired yet: {}",
+            drained.failures.join("; ")
         ));
     }
     // The old disable callback consumes the frozen descriptor and its own single-attempt receipt.
@@ -378,8 +385,8 @@ pub(super) async fn continue_enabled_update(
         .map_err(|error| error.to_string())?;
     if !retired.failures.is_empty() {
         return Err(format!(
-            "原停用回调资源尚未退役：{}",
-            retired.failures.join("；")
+            "The original disable callback resources are not retired yet: {}",
+            retired.failures.join("; ")
         ));
     }
     // Release only the borrow so the existing validation worker can borrow this same retained slot.
@@ -411,8 +418,8 @@ pub(super) async fn continue_enabled_update(
         .map_err(|error| error.to_string())?;
     if !retired.failures.is_empty() {
         return Err(format!(
-            "原候选回调资源尚未退役：{}",
-            retired.failures.join("；")
+            "The original candidate callback resources are not retired yet: {}",
+            retired.failures.join("; ")
         ));
     }
     drop(resources);
@@ -452,7 +459,7 @@ async fn select_and_publish_enabled_update(
     pending_owner::require_current_manager(state, &resources)?;
     if resources.target.is_none() {
         return Err(String::from(
-            "原启用更新缺少实际服务参与者；不能由历史回执重建资源。",
+            "The original enabled update has no actual service participant; resources cannot be rebuilt from historical receipts.",
         ));
     }
     // A previous successful transfer only revalidates its actual current Full and observes candidate release.
@@ -469,7 +476,7 @@ async fn select_and_publish_enabled_update(
             .expect("retained enabled original")
             .publication
             .as_ref()
-            .ok_or("已确认目标缺少实际 Full 见证。")?
+            .ok_or("The confirmed target has no actual Full witness.")?
             .validate_current(state, &resources.runtime)?;
         // Reopen owned MCP admission only after the actual completed Full witness still matches the service.
         // 仅在实际已完成 Full 见证仍匹配服务之后，重新开放自有 MCP 入场。
@@ -518,7 +525,7 @@ async fn select_and_publish_enabled_update(
         )
     {
         return Err(String::from(
-            "原启用更新尚未进入选择提交；必须检查原副作用，不能重放验证或安装。",
+            "The original enabled update has not entered the selection commit; check the original side effects, verification or installation cannot be replayed.",
         ));
     }
     if !matches!(
@@ -544,7 +551,9 @@ async fn select_and_publish_enabled_update(
         // A retained configured owner is mandatory after actual selection.
         // 实际选择之后必须存在保留已配置所有者。
         let pending_owner::PendingLocalPluginUpdateStage::Prepared(prepared) = stage else {
-            return Err(String::from("原目标策略提交的准备类型已经变化。"));
+            return Err(String::from(
+                "The preparation kind of the original target policy commit changed.",
+            ));
         };
         // The confirmation is written in the same infallible tail as the actual in-memory configuration replacement.
         // 确认在实际内存配置替换的同一不可失败尾段写入。
@@ -611,7 +620,7 @@ async fn select_and_publish_enabled_update(
         let has_global = staged
             .plugins
             .get(&owner.plugin_id)
-            .ok_or("实际暂存目标缺失。")?
+            .ok_or("The actual staged target is missing.")?
             .mcp_servers
             .iter()
             .any(|server| {
@@ -644,10 +653,10 @@ async fn select_and_publish_enabled_update(
                         let staged = resources
                             .target
                             .as_ref()
-                            .ok_or("原启用更新资源缺失。")?
+                            .ok_or("The original enabled update resources are missing.")?
                             .staged
                             .as_ref()
-                            .ok_or("原目标暂存身份缺失。")?;
+                            .ok_or("The original target staging identity is missing.")?;
                         // Sealed preparation uses the original registered issuer and actual immutable target.
                         // 密封准备使用原注册签发者及实际不可变目标。
                         let prepared = resources
@@ -702,19 +711,19 @@ async fn select_and_publish_enabled_update(
                 .store
                 .target_mcp_initialization_receipt(&owner.plugin_id, owner.request_id)
                 .map_err(|error| error.to_string())?
-                .ok_or("实际原目标 MCP 启动回执缺失。")?;
+                .ok_or("The actual original target MCP startup receipt is missing.")?;
             if receipt.request_id() != owner.request_id
                 || receipt.target() != resources.prepared()?.transaction.record().target()
                 || receipt.routing_generation()
                     != staged
                         .plugins
                         .get(&owner.plugin_id)
-                        .ok_or("实际暂存目标缺失。")?
+                        .ok_or("The actual staged target is missing.")?
                         .generation
                 || receipt.instance_ids() != Some(native.actual_instance_ids())
             {
                 return Err(String::from(
-                    "原目标 MCP 回执与实际保留实例不一致；不能替换资源。",
+                    "The original target MCP receipt disagrees with the actual retained instance; resources cannot be replaced.",
                 ));
             }
             match receipt.phase() {
@@ -730,7 +739,7 @@ async fn select_and_publish_enabled_update(
                 // 失败启动保持不可重放，并保留真实控制用于检查。
                 VulcanPluginTargetMcpInitializationPhase::ObservationFailed => {
                     return Err(String::from(
-                        "原目标 MCP 启动已观测失败；保留原实例，不重启或重放。",
+                        "The original target MCP startup was observed to fail; keeping the original instance without restarting or replaying.",
                     ));
                 }
             }
@@ -742,7 +751,9 @@ async fn select_and_publish_enabled_update(
     // Prepared is the already retained non-cloneable original request, never a reconstructed disk handle.
     // Prepared 为已保留不可克隆原请求，绝非重建磁盘句柄。
     let pending_owner::PendingLocalPluginUpdateStage::Prepared(prepared) = stage else {
-        return Err(String::from("原目标交接的准备类型已经变化。"));
+        return Err(String::from(
+            "The preparation kind of the original target handoff changed.",
+        ));
     };
     // The same physical target slot survives all publisher and unknown completion failures.
     // 相同物理目标槽跨全部发布者及未知完成失败存活。

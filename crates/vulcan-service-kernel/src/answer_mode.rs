@@ -41,7 +41,7 @@ pub(crate) async fn service_save_prompt_answer_mode(
     };
     let provider_configuration = mutate_provider_configuration(
         &state,
-        "保存回答模式设置失败",
+        "Failed to save the answer mode settings",
         |configuration| {
             configuration.prompt.answer_mode = Some(selection);
             Ok(())

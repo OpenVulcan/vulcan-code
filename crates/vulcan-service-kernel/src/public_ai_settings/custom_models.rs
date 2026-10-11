@@ -333,7 +333,7 @@ pub(crate) async fn service_validate_public_ai_custom_model(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存自定义模型验证结果失败",
+        "Failed to save the custom model validation result",
         |configuration| {
             let current_connection = configuration
                 .connection_graph
@@ -555,7 +555,7 @@ pub(crate) async fn service_save_public_ai_custom_models(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存自定义模型失败",
+        "Failed to save the custom models",
         |configuration| {
             apply_custom_model_replacement(
                 configuration,
@@ -632,7 +632,7 @@ pub(crate) async fn service_save_public_ai_custom_model_protocol_preferences(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存自定义模型协议偏好失败",
+        "Failed to save the custom model protocol preferences",
         |configuration| {
             let provider_model_prefix = format!("{}:{provider_id}:", provider_id.len());
             configuration
@@ -737,7 +737,7 @@ pub(crate) async fn service_save_public_ai_custom_provider_model_defaults(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存自定义供应商模型默认值失败",
+        "Failed to save the custom provider model defaults",
         |configuration| {
             replace_custom_provider_model_defaults(
                 configuration,
@@ -900,7 +900,7 @@ pub(crate) async fn service_save_public_ai_custom_model_template_decision(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存自定义模型模板决策失败",
+        "Failed to save the custom model template decision",
         |configuration| {
             if let Some(decision) = decision.clone() {
                 configuration
@@ -989,7 +989,7 @@ pub(crate) async fn service_save_public_ai_custom_model_template_decisions_batch
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "批量保存自定义模型模板决策失败",
+        "Failed to save the custom model template decisions in batch",
         |configuration| {
             for (key, decision) in decisions.clone() {
                 configuration
@@ -1072,7 +1072,7 @@ pub(crate) async fn service_save_public_ai_custom_model_connection_availability(
         &state,
         runtime.as_ref(),
         &current_configuration,
-        "保存自定义模型账号可用性失败",
+        "Failed to save the custom model account availability",
         |configuration| {
             if let Some(enabled) = enabled {
                 configuration

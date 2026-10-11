@@ -353,7 +353,9 @@ pub(crate) async fn service_continue_plugin_pending_operation(
             )
             .await?;
             if !status.is_aborted() {
-                return Err(String::from("插件更新放弃未获持久确认。"));
+                return Err(String::from(
+                    "The plugin update abandonment was not durably confirmed.",
+                ));
             }
             None
         }
