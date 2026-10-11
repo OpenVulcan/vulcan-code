@@ -346,7 +346,7 @@ pub fn application_data_root() -> PathBuf {
 
     #[cfg(not(test))]
     {
-        let home = dirs::home_dir()
+        let home = vulcan_runtime_assets::user_home_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         runtime_assets::user_vulcan_code_root_for_home(&home)
@@ -367,7 +367,7 @@ pub fn application_luaskills_config_root() -> Result<PathBuf, String> {
     #[cfg(not(test))]
     // root requires the platform home directory and deliberately has no current-directory fallback.
     // root 要求平台主目录存在，并刻意不提供当前目录回退。
-    let home = dirs::home_dir()
+    let home = vulcan_runtime_assets::user_home_dir()
         .ok_or_else(|| String::from("Cannot resolve the LuaSkills package configuration root: the home directory is unavailable."))?;
     #[cfg(not(test))]
     let root = runtime_assets::user_vulcan_code_root_for_home(&home);

@@ -19,7 +19,6 @@ test-support = []
 async-stream.workspace = true
 async-trait.workspace = true
 base64.workspace = true
-dirs.workspace = true
 encoding_rs.workspace = true
 filetime.workspace = true
 futures-channel.workspace = true
@@ -74,6 +73,7 @@ vulcan-workspace-store.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
+vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
 # Enables deterministic virtual time so a host-owned deadline test never spends real seconds.
 # 启用确定性虚拟时间，使宿主持有期限测试不必消耗真实秒数。
 # Explicitly supports the database fixture's scheduler instead of relying on transitive feature unification.

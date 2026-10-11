@@ -126,7 +126,7 @@ pub fn resolve_managed_attachment_root(workspace_path: &str) -> PathBuf {
             .join(MANAGED_ATTACHMENT_DIR_NAME);
     }
 
-    let home_directory = dirs::home_dir()
+    let home_directory = vulcan_runtime_assets::user_home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     user_vulcan_code_root_for_home(&home_directory).join(MANAGED_ATTACHMENT_DIR_NAME)
 }

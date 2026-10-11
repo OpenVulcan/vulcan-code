@@ -649,7 +649,7 @@ pub enum PromptSkillStateSource {
 /// Resolves the default user prompt skill root.
 /// 解析默认用户提示词技能根目录。
 pub fn default_user_skill_root() -> PathBuf {
-    let user_vulcan_root = dirs::home_dir()
+    let user_vulcan_root = vulcan_runtime_assets::user_home_dir()
         .map(|home| user_vulcan_root_for_home(&home))
         .unwrap_or_else(|| user_vulcan_root_for_home(Path::new(".")));
     user_vulcan_root.join(DEFAULT_USER_SKILL_DIR)

@@ -369,7 +369,11 @@ pub(crate) async fn run_webui_service_http_bridge(
         .lock()
         .map_err(|error| error.to_string())?
         .webui_service_discovery = Some(Arc::clone(&shared_discovery));
-    write_webui_service_discovery_snapshot(&discovery, dirs::home_dir(), std::env::temp_dir())?;
+    write_webui_service_discovery_snapshot(
+        &discovery,
+        vulcan_runtime_assets::user_home_dir(),
+        std::env::temp_dir(),
+    )?;
     let rpc_event_emitter = event_emitter.clone();
     let rpc_state = state.clone();
     let rpc_dispatcher: WebuiServiceRpcDispatcher = Arc::new(move |method, params| {
@@ -801,7 +805,7 @@ pub(crate) fn mark_webui_service_discovery_status(
     };
     if let Err(error) = write_webui_service_discovery_snapshot(
         &status_snapshot,
-        dirs::home_dir(),
+        vulcan_runtime_assets::user_home_dir(),
         std::env::temp_dir(),
     ) {
         tracing::warn!("[webui-service] browser service discovery {status} write failed: {error}");
@@ -866,7 +870,7 @@ pub fn remove_owned_webui_service_discovery(
         .map_err(|error| format!("failed to lock service discovery identity: {error}"))?
         .clone();
     let path = vulcan_service_api::webui_service_discovery_snapshot_path(
-        dirs::home_dir(),
+        vulcan_runtime_assets::user_home_dir(),
         std::env::temp_dir(),
     );
     remove_discovery_file_if_owned(&path, &expected)

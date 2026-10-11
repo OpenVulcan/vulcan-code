@@ -157,8 +157,8 @@ fn wait_for_headless_exit(
 /// Returns the authoritative user data root for the current build profile.
 /// 返回当前构建配置的权威用户数据根。
 pub fn authoritative_data_root() -> Result<std::path::PathBuf, String> {
-    let home =
-        dirs::home_dir().ok_or_else(|| String::from("failed to resolve user home directory"))?;
+    let home = vulcan_runtime_assets::user_home_dir()
+        .ok_or_else(|| String::from("failed to resolve user home directory"))?;
     Ok(vulcan_runtime_assets::user_vulcan_code_root_for_home(&home))
 }
 

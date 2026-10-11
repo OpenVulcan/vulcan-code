@@ -1,3 +1,9 @@
+# User paths start from vulcan_runtime_assets::user_home_dir, which gives test builds a private home.
+# 用户路径从 vulcan_runtime_assets::user_home_dir 开始，它为测试构建提供私有主目录。
+disallowed-methods = [
+    { path = "dirs::home_dir", reason = "use vulcan_runtime_assets::user_home_dir so test builds never touch the real user's files", allow-invalid = true },
+]
+
 # Tests state their preconditions with unwrap/expect; the workspace `unwrap_used` lint targets
 # production paths only. Clippy reads the nearest clippy.toml without merging, so crates with
 # their own file repeat these two keys.

@@ -12,8 +12,11 @@ workspace = true
 
 [features]
 default = []
-# Enables explicit process-local path isolation for integration test executables only.
-# 仅为集成测试可执行文件启用显式的进程局部路径隔离。
+# Gives test builds a private user home, plus an explicit root for integration test executables.
+# Every crate whose tests reach this crate enables it as a dev-dependency feature, so no test
+# touches the real user's files; normal builds never enable it.
+# 为测试构建提供私有用户主目录，并为集成测试可执行文件提供显式根。凡测试会触及本 crate 的 crate
+# 都在开发依赖中启用此特性，使任何测试都不会触及真实用户的文件；普通构建从不启用。
 test-support = []
 
 [dependencies]

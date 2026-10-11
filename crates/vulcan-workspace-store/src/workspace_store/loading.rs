@@ -711,7 +711,7 @@ pub fn default_workspace_project_path_text() -> Result<String, String> {
 /// Returns the default project path, or an error when the user home directory is unavailable.
 /// 返回默认项目路径；当用户主目录不可用时返回错误。
 fn default_workspace_project_root() -> Result<std::path::PathBuf, String> {
-    dirs::home_dir()
+    vulcan_runtime_assets::user_home_dir()
         .map(|home| default_workspace_project_root_from_home(&home))
         .ok_or_else(|| String::from("Cannot resolve the user's home directory, so the default project cannot be created."))
 }

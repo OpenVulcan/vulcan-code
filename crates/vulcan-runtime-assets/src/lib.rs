@@ -67,16 +67,32 @@ pub fn user_vulcan_code_root_for_home(home: &Path) -> PathBuf {
     user_vulcan_root_for_home(home).join(USER_VULCAN_CODE_DIRECTORY_NAME)
 }
 
+/// Resolves the home directory that owns every user-level Vulcan path; the only place that reads
+/// the platform home. Test builds get a private home (see `test_support`).
+/// 解析拥有全部用户级 Vulcan 路径的主目录；唯一读取平台主目录的位置。测试构建获得私有主目录
+/// （见 `test_support`）。
+pub fn user_home_dir() -> Option<PathBuf> {
+    #[cfg(feature = "test-support")]
+    {
+        Some(test_support::test_home())
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        #[allow(clippy::disallowed_methods)]
+        dirs::home_dir()
+    }
+}
+
 /// Resolves the current user's build-profile-specific Vulcan root.
 /// 解析当前用户对应当前构建配置的 Vulcan 根目录。
 pub fn resolve_user_vulcan_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| user_vulcan_root_for_home(&home))
+    user_home_dir().map(|home| user_vulcan_root_for_home(&home))
 }
 
 /// Resolves the current user's build-profile-specific Vulcan Code root.
 /// 解析当前用户对应当前构建配置的 Vulcan Code 根目录。
 pub fn resolve_user_vulcan_code_root() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| user_vulcan_code_root_for_home(&home))
+    user_home_dir().map(|home| user_vulcan_code_root_for_home(&home))
 }
 
 /// Shared external user-text decoding boundaries.

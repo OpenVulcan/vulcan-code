@@ -21,6 +21,7 @@ const steps = [
   ['pnpm', ['--dir', 'apps/vulcan-code-desktop', 'run', 'typecheck']],
   ['node', ['scripts/wording-assertions.mjs']],
   ['node', ['scripts/backend-cjk-literals.mjs']],
+  ['node', ['scripts/test-home-isolation.mjs']],
 ];
 
 // pnpm is a .cmd shim on Windows, which only a shell can launch.

@@ -2,6 +2,7 @@
 # `vulcan_host_tools::process_creation`, which apply the Windows no-window policy at construction.
 # 子进程必须来自 `vulcan_host_tools::process_creation` 的共享后台工厂，它们在构造时即应用 Windows 无窗口策略。
 disallowed-methods = [
+    { path = "dirs::home_dir", reason = "use vulcan_runtime_assets::user_home_dir so test builds never touch the real user's files", allow-invalid = true },
     { path = "std::process::Command::new", reason = "use vulcan_host_tools::process_creation::new_background_std_command" },
     { path = "tokio::process::Command::new", reason = "use vulcan_host_tools::process_creation::new_background_tokio_command" },
 ]

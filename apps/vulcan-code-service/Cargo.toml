@@ -11,7 +11,6 @@ license.workspace = true
 winresource = { workspace = true, optional = true }
 
 [dependencies]
-dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -39,6 +38,7 @@ test-support = ["vulcan-runtime-assets/test-support", "vulcan-service-kernel/tes
 windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console"] }
 
 [dev-dependencies]
+vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 
 # Only the private Windows Debug console module permits audited native calls.

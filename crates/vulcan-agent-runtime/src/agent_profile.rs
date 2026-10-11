@@ -123,7 +123,7 @@ struct UserAgentFrontmatter {
 /// Returns the user-scoped root directory that stores Agent profile Markdown files.
 /// 返回保存 Agent 配置 Markdown 文件的用户级根目录。
 pub fn agent_profile_root_directory() -> PathBuf {
-    let home = dirs::home_dir()
+    let home = vulcan_runtime_assets::user_home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     user_vulcan_code_root_for_home(&home)

@@ -1,5 +1,6 @@
-//! One-time private data-root selection for a dedicated integration-test process.
-//! 专用集成测试进程的一次性私有数据根选择。
+//! Private user paths for test builds: a home owned by the test process, and a one-time data root a
+//! dedicated integration-test process may install.
+//! 测试构建的私有用户路径：由测试进程持有的主目录，以及专用集成测试进程可安装的一次性数据根。
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -39,4 +40,15 @@ pub(super) fn isolated_user_root() -> Option<PathBuf> {
     ISOLATED_PROCESS_ROOT
         .get()
         .map(|root| root.join("user-vulcan"))
+}
+
+/// Home directory of a test build: below the installed root, or a directory owned by this test
+/// process, so no test reads or overwrites the real user's files.
+/// 测试构建的主目录：位于已安装的根下，或由当前测试进程持有的目录，使任何测试都不会读取或覆盖
+/// 真实用户的文件。
+pub(super) fn test_home() -> PathBuf {
+    match ISOLATED_PROCESS_ROOT.get() {
+        Some(root) => root.join("home"),
+        None => std::env::temp_dir().join(format!("vulcan-test-home-{}", std::process::id())),
+    }
 }

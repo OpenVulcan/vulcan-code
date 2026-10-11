@@ -20,7 +20,7 @@ pub const SYSTEM_PROMPT_FILE_NAME: &str = "system-prompt.md";
 /// `<user-vulcan-root>/code/prompt`.
 /// 返回 `<user-vulcan-root>/code/prompt`。
 pub fn user_prompt_resource_directory() -> PathBuf {
-    let home = dirs::home_dir()
+    let home = vulcan_runtime_assets::user_home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     runtime_assets::user_vulcan_code_root_for_home(&home).join(PROMPT_RESOURCE_DIRECTORY_NAME)
 }

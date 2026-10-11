@@ -9788,7 +9788,6 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base64 0.23.1",
- "dirs",
  "encoding_rs",
  "filetime",
  "futures-channel",
@@ -9871,7 +9870,6 @@ dependencies = [
 name = "vulcan-code-service"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "notify-rust",
  "png",
  "serde",
@@ -9914,6 +9912,7 @@ dependencies = [
  "url",
  "uuid",
  "vulcan-i18n",
+ "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-session-core",
  "workspace-hack",
@@ -9938,6 +9937,7 @@ dependencies = [
  "vulcan-ai-contract",
  "vulcan-context",
  "vulcan-prompt-composer",
+ "vulcan-runtime-assets",
  "workspace-hack",
 ]
 
@@ -10107,6 +10107,7 @@ name = "vulcan-luaskills-prompt"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "vulcan-runtime-assets",
  "vulcan-tools-luaskills-call",
  "workspace-hack",
 ]
@@ -10261,7 +10262,6 @@ dependencies = [
 name = "vulcan-prompt-skills"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "encoding_rs",
  "include_dir",
  "serde",
@@ -10303,7 +10303,6 @@ dependencies = [
 name = "vulcan-provider-config"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "ed25519-dalek",
  "hex",
  "reqwest 0.13.4",
@@ -10379,6 +10378,7 @@ dependencies = [
  "url",
  "uuid",
  "vulcan-i18n",
+ "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-session-core",
  "workspace-hack",
@@ -10390,7 +10390,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
- "dirs",
  "encoding_rs",
  "futures-util",
  "hex",
@@ -10612,6 +10611,7 @@ dependencies = [
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",
+ "vulcan-runtime-assets",
  "vulcan-session-core",
  "vulcan-subagent-core",
  "vulcan-vmm",
@@ -10624,7 +10624,6 @@ version = "0.1.0"
 dependencies = [
  "arrow-ipc",
  "base64 0.23.1",
- "dirs",
  "encoding_rs",
  "futures-util",
  "hex",

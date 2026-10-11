@@ -48,6 +48,7 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 crossterm_winapi.workspace = true
 
 [dev-dependencies]
+vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
 regex.workspace = true
 
 [lints]

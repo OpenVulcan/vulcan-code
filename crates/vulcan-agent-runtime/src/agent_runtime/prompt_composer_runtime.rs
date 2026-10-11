@@ -190,7 +190,7 @@ fn build_default_runtime_prompt_composer_engine() -> PromptComposerEngine {
 fn default_prompt_composer_resource_config() -> Option<PromptComposerResourceConfig> {
     // Without a home directory there is no user-level resource root to override built-ins.
     // 没有主目录时不存在可覆盖内置资源的用户级资源根目录。
-    dirs::home_dir()?;
+    vulcan_runtime_assets::user_home_dir()?;
     let prompt_root = user_prompt_resource_directory();
     Some(PromptComposerResourceConfig {
         personality_directory: Some(prompt_root.join(PROMPT_PERSONALITY_DIR_NAME)),

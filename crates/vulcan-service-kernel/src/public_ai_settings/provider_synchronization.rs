@@ -422,7 +422,7 @@ async fn publish_synced_provider_projections_or_restore(
                         configuration_persistence_attempted = true;
                         vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
                             &candidate_configuration,
-                            &vulcan_workspace_store::data_plane::application_data_root(),
+                            &crate::service_state_access::public_ai_configuration_app_data_root(),
                         )?;
                     }
                     Ok(())
@@ -457,7 +457,7 @@ async fn publish_synced_provider_projections_or_restore(
             let configuration_restore = if configuration_persistence_attempted {
                 vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
                     &configuration,
-                    &vulcan_workspace_store::data_plane::application_data_root(),
+                    &crate::service_state_access::public_ai_configuration_app_data_root(),
                 )
             } else {
                 Ok(())
@@ -916,7 +916,7 @@ pub(crate) async fn service_rollback_provider_manifest(
                             configuration_persistence_attempted.store(true, std::sync::atomic::Ordering::Relaxed);
                             vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
                                 &candidate_configuration,
-                                &vulcan_workspace_store::data_plane::application_data_root(),
+                                &crate::service_state_access::public_ai_configuration_app_data_root(),
                             )?;
                         }
                         Ok(())
@@ -928,7 +928,7 @@ pub(crate) async fn service_rollback_provider_manifest(
                 if configuration_persistence_attempted.load(std::sync::atomic::Ordering::Relaxed) {
                     vulcan_provider_config::config::save_public_ai_connections_with_custom_manifests(
                         &configuration,
-                        &vulcan_workspace_store::data_plane::application_data_root(),
+                        &crate::service_state_access::public_ai_configuration_app_data_root(),
                     )?;
                 }
                 publish_public_ai_workbench(&app, &state, runtime.as_ref(), &configuration)

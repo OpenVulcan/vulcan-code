@@ -739,7 +739,7 @@ where
 
 /// Returns the application-data root used by public AI configuration persistence.
 /// 返回公共 AI 配置持久化使用的应用数据根目录。
-fn public_ai_configuration_app_data_root() -> PathBuf {
+pub(crate) fn public_ai_configuration_app_data_root() -> PathBuf {
     // Tests may explicitly own a private destination; production always uses the user path.
     // 测试可以明确持有私有目标；生产环境始终使用用户路径。
     #[cfg(test)]

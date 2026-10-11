@@ -510,7 +510,7 @@ fn open_webui_in_browser(state: &TrayServiceHandles, text: &TrayText) {
 /// 返回此 Core 发布的发现记录路径，并遵循隔离测试根。
 fn service_discovery_path() -> std::path::PathBuf {
     vulcan_service_api::webui_service_discovery_snapshot_path(
-        dirs::home_dir(),
+        vulcan_runtime_assets::user_home_dir(),
         std::env::temp_dir(),
     )
 }

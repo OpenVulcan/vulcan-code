@@ -191,7 +191,7 @@ impl Default for PublicAiConnectionsFile {
 /// Returns the persisted Vulcan configuration file path.
 /// 返回持久化 Vulcan 配置文件路径。
 pub fn configuration_file_path() -> PathBuf {
-    let home = dirs::home_dir()
+    let home = vulcan_runtime_assets::user_home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     runtime_assets::user_vulcan_root_for_home(&home).join("vulcan-code.json")
@@ -205,7 +205,7 @@ pub fn configuration_file_path() -> PathBuf {
 /// `<user-vulcan-root>/code/ai-connections.toml`.
 /// 返回 `<user-vulcan-root>/code/ai-connections.toml`。
 pub fn public_ai_connections_file_path() -> PathBuf {
-    let home = dirs::home_dir()
+    let home = vulcan_runtime_assets::user_home_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     runtime_assets::user_vulcan_code_root_for_home(&home).join("ai-connections.toml")
 }
