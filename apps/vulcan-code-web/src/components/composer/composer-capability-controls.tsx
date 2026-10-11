@@ -62,7 +62,7 @@ import {
   ComposerCapabilityKindList,
   ComposerCapabilityMediaRoute,
 } from "@/components/composer/composer-capability-dialog-sections";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { formatTokenCount, tokenUnitLabel } from "@/lib/usage-format";
 import { cn } from "@/lib/utils";
 import {
@@ -150,7 +150,7 @@ export function ContextUsageOrb(props: {
   const breakdown = contextUsageBreakdown(snapshot);
   const usageBasisPoints = contextUsageBasisPoints(snapshot);
   const percent = usageBasisPoints / 100;
-  const title = snapshot.tooltipTitle || t("contextUsage.title");
+  const title = t("contextUsage.title");
   const detailVisible = breakdown.length > 0;
   // providerUsage keeps session-level accounting out of repeated process headers.
   // providerUsage 将会话级统计从重复的过程标题中移出。
@@ -247,7 +247,7 @@ export function ContextUsageOrb(props: {
               <div className="context-usage-breakdown-row" key={item.kind}>
                 <span className="context-usage-breakdown-label">
                   <i className={`context-usage-dot kind-${item.kind}`} />
-                  {item.label}
+                  {contextUsageKindLabel(item, t)}
                 </span>
                 <span>{formatBasisPoints(item.basisPoints)}</span>
               </div>
@@ -410,6 +410,24 @@ function contextUsageBasisPoints(snapshot: ContextUsageSnapshot): number {
 // contextUsageBreakdown 在服务未提供字段时返回空的旧版分类明细。
 function contextUsageBreakdown(snapshot: ContextUsageSnapshot): ContextUsageBreakdownItem[] {
   return Array.isArray(snapshot.breakdown) ? snapshot.breakdown : [];
+}
+
+// CONTEXT_USAGE_KIND_KEYS maps service category kinds to localized labels.
+// CONTEXT_USAGE_KIND_KEYS 将服务分类键映射为本地化标签。
+const CONTEXT_USAGE_KIND_KEYS: Record<string, TranslationKey> = {
+  messages: "composer.contextUsage.kind.messages",
+  "system-tools": "composer.contextUsage.kind.system-tools",
+  "mcp-tools": "composer.contextUsage.kind.mcp-tools",
+  other: "composer.contextUsage.kind.other",
+  skills: "composer.contextUsage.kind.skills",
+  "system-prompt": "composer.contextUsage.kind.system-prompt",
+};
+
+// contextUsageKindLabel localizes known kinds and keeps the service label for unknown ones.
+// contextUsageKindLabel 本地化已知分类，未知分类保留服务标签。
+function contextUsageKindLabel(item: ContextUsageBreakdownItem, t: (key: TranslationKey) => string): string {
+  const key = CONTEXT_USAGE_KIND_KEYS[item.kind];
+  return key ? t(key) : item.label;
 }
 
 // formatContextUsageTotal renders the compact current-window summary.

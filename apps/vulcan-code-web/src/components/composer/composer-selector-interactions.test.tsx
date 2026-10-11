@@ -364,9 +364,9 @@ it("opens context controls with a real popover and preserves node selection on r
   let reject!: (reason: Error) => void;
   const change = vi.fn(() => new Promise<boolean>((_, fail) => { reject = fail; }));
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null,
-    maxTokens: 950_000, percent: 8, severity: "normal", tooltipRows: [], tooltipTitle: "Context", usageBasisPoints: 800, usedTokens: 76_000 }}
+    maxTokens: 950_000, percent: 8, severity: "normal", tooltipRows: [], usageBasisPoints: 800, usedTokens: 76_000 }}
     contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId={null} modelContextLimit={950_000} onNodeChange={change} />);
-  await click("Context");
+  await click("contextUsage.title");
   const node = document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-1"]')!;
   await act(async () => { node.click(); node.click(); });
   expect(change).toHaveBeenCalledExactlyOnceWith("compression-window-1");
@@ -382,7 +382,7 @@ it("opens context controls with a real popover and preserves node selection on r
 function CapacityToolbar({ owner, change }: { owner: string; change: React.ComponentProps<typeof ComposerPanelToolbarRight>["onSetSessionContextCompactionWindow"] }) {
   return <ComposerPanelToolbarRight draftSlotKey={owner} attachmentCount={0} draftInput="" isConversationRunning={false} sendBlocked={false} stopPending={false}
     contextUsage={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null, maxTokens: 950_000,
-      percent: 8, severity: "normal", tooltipRows: [], tooltipTitle: "Context", usageBasisPoints: 800, usedTokens: 76_000 }}
+      percent: 8, severity: "normal", tooltipRows: [], usageBasisPoints: 800, usedTokens: 76_000 }}
     contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} sessionContextCompactionWindowNodeId={null} modelContextLimit={950_000}
     onSetSessionContextCompactionWindow={change} onSend={vi.fn()} sendAriaLabel="Send" stopAriaLabel="Stop" />;
 }
@@ -395,12 +395,12 @@ it("isolates pending capacity writes and open popovers by the actual toolbar dra
   const oldChange = vi.fn(() => new Promise<boolean>((_, reject) => { rejectOld = reject; }));
   const newChange = vi.fn(() => new Promise<boolean>((resolve) => { resolveNew = resolve; }));
   await render(<CapacityToolbar owner="conversation:a" change={oldChange} />);
-  await click("Context");
+  await click("contextUsage.title");
   await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-1"]')!.click());
   await render(<CapacityToolbar owner="conversation:b" change={newChange} />);
   expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
   expect(document.querySelector('[role="listbox"]')).toBeNull();
-  await click("Context");
+  await click("contextUsage.title");
   // node belongs to the new owner's popover and must accept an independent write.
   // node 属于新所有者的浮层，必须能够接受独立写入。
   const node = document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-1"]')!;
@@ -420,7 +420,7 @@ it("shows a concise failed-save status for a false acknowledgement and allows re
   // change 遵循生产动作契约：false 表示拒绝，不抛出异常。
   const change = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   await render(<CapacityToolbar owner="conversation:false" change={change} />);
-  await click("Context");
+  await click("contextUsage.title");
   // node remains bound to the last confirmed selected value until the parent publishes success.
   // node 在父级发布成功前继续绑定最后确认的选择值。
   const node = document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-1"]')!;
@@ -438,7 +438,7 @@ it("retains an invalid saved node and lets the user restore the exact model defa
   // change 记录显式重置；加载此状态绝不能自动改写已保存节点。
   const change = vi.fn().mockResolvedValue(true);
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: 0,
-    maxTokens: 256_000, percent: 0, severity: "normal", tooltipRows: [], tooltipTitle: "Context", usageBasisPoints: 0, usedTokens: 0 }}
+    maxTokens: 256_000, percent: 0, severity: "normal", tooltipRows: [], usageBasisPoints: 0, usedTokens: 0 }}
     contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId="compression-window-5" modelContextLimit={256_000} onNodeChange={change} />);
   await act(async () => host.querySelector<HTMLButtonElement>('.context-usage-control')!.click());
   expect(change).not.toHaveBeenCalled();

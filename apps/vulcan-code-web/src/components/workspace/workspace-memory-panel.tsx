@@ -17,7 +17,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import type {
   ContextInjectionCardSummary,
   ContextInjectionItemSummary,
@@ -646,7 +646,7 @@ function ContextInjectionCardView(props: {
                 {sourceLabel ? <ContextInjectionPill label={sourceLabel} tone="inverse" /> : null}
                 {memoryId > 0 ? <ContextInjectionPill label="ID" tone="success" value={String(memoryId)} /> : null}
                 {turnId > 0 ? <ContextInjectionPill label="TID" tone="success" value={String(turnId)} /> : null}
-                {props.mode === "dynamic" ? <ContextInjectionPill label="TTL" value={contextInjectionTtlText(item.ttlLabel)} /> : null}
+                {props.mode === "dynamic" ? <ContextInjectionPill label="TTL" value={contextInjectionTtlText(item.ttlLabel, t)} /> : null}
               </span>
               <span className="context-injection-item-actions">
                 {canLookup ? (
@@ -904,10 +904,17 @@ function contextInjectionCardSourceLabel(card: ContextInjectionCardSummary): str
     : null;
 }
 
-// contextInjectionTtlText returns a compact turn-count label from the backend TTL label.
-// contextInjectionTtlText 从后端 TTL 标签返回紧凑回合数标签。
-function contextInjectionTtlText(ttlLabel: string): string {
+// contextInjectionTtlText returns a compact, localized turn-count label from the backend TTL label.
+// contextInjectionTtlText 从后端 TTL 标签返回紧凑的本地化回合数标签。
+function contextInjectionTtlText(ttlLabel: string, t: (key: TranslationKey) => string): string {
   const normalized = ttlLabel.replace(/^TTL:\s*/i, "").trim();
+  const turnsLeft = /^(\d+) turns? left$/i.exec(normalized);
+  if (turnsLeft) {
+    return t("workspaceMemory.ttl.turnsLeft").replace("{count}", turnsLeft[1]);
+  }
+  if (/^expired$/i.test(normalized)) {
+    return t("workspaceMemory.expiredRegionTitle");
+  }
   return normalized || ttlLabel;
 }
 

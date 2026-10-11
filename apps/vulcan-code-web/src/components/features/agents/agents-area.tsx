@@ -1185,12 +1185,10 @@ function AgentDefinitionDetailDialog(props: {
                 </div>
               ) : null}
             </div>
-            {definition.capabilityDiagnostics.length > 0 ? (
-              <div className="skill-tool-row">
-                <strong>{t("agents.capabilityDiagnostics")}</strong>
-                <p>{definition.capabilityDiagnostics.join(" ")}</p>
-              </div>
-            ) : null}
+            <div className="skill-tool-row">
+              <strong>{t("agents.capabilityDiagnostics")}</strong>
+              <p>{agentCapabilityDiagnostics(definition, t).join(" ")}</p>
+            </div>
             {definition.promptSkillPolicySkills.length > 0 ? (
               <div className="skill-tool-row">
                 <strong>{t("agents.attachedSkills")}</strong>
@@ -1657,6 +1655,29 @@ function agentDefinitionSearchableText(definition: SubagentDefinitionSummary): s
 // agentDefinitionToolAccessLabel 返回单行使用的紧凑工具暴露摘要。
 function agentDefinitionToolAccessLabel(definition: SubagentDefinitionSummary, t: Translate): string {
   return localizedAgentToolPolicyLabel(definition.toolPolicyMode, definition.toolPolicyTools.length, t)
+}
+
+// agentCapabilityDiagnostics explains how the declared policy relates to the final runtime capabilities.
+// agentCapabilityDiagnostics 说明声明的策略与运行时最终能力之间的关系。
+function agentCapabilityDiagnostics(definition: SubagentDefinitionSummary, t: Translate): string[] {
+  const diagnostics: string[] = []
+  if (!definition.enabled) {
+    diagnostics.push(t("agents.diagnostics.disabled"))
+  }
+  const unrestricted = definition.allowedTools.length === 0
+    && definition.disabledTools.length === 0
+    && definition.luaskillsOverrides == null
+    && definition.mcpServerOverrides == null
+    && definition.enabledPromptSkills.length === 0
+    && definition.disabledPromptSkills.length === 0
+  diagnostics.push(t(unrestricted ? "agents.diagnostics.unrestricted" : "agents.diagnostics.policyDeclared"))
+  if (definition.allowedTools.length > 0) {
+    diagnostics.push(t("agents.diagnostics.allowedTools").replace("{count}", String(definition.allowedTools.length)))
+  }
+  if (definition.enabledPromptSkills.length > 0) {
+    diagnostics.push(t("agents.diagnostics.enabledPromptSkills").replace("{count}", String(definition.enabledPromptSkills.length)))
+  }
+  return diagnostics
 }
 
 // agentDefinitionFixedModelSelector returns the fixed provider/model selector for one definition.

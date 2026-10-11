@@ -356,7 +356,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
         mcpServerOverrides: null,
         enabledPromptSkills: [],
         disabledPromptSkills: [],
-        capabilityDiagnostics: ["No explicit restriction; final abilities are filtered by runtime policy."],
       },
     ],
   },

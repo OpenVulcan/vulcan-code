@@ -1715,9 +1715,6 @@ export interface SubagentDefinitionSummary {
   // Explicitly disabled prompt skill names.
   // 显式禁用的提示词技能名称。
   disabledPromptSkills: string[];
-  // Effective capability diagnostic messages.
-  // 最终能力诊断消息。
-  capabilityDiagnostics: string[];
 }
 
 // CapabilityPolicyMode describes how a selector list affects visible capabilities.

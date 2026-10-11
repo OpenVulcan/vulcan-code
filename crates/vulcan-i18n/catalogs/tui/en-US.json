@@ -387,7 +387,6 @@
   "tui.memory.score": "Recall score",
   "tui.memory.tag": "Recall tag",
   "tui.memory.ttl": "Injection TTL",
-  "tui.memory.turnsLeft": "{count} turns left",
   "tui.memory.weight": "Weight",
   "tui.mock.badge": "MOCK DATA",
   "tui.notice.agentClosed": "Ended subagent {name}",

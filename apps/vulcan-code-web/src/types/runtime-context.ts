@@ -247,9 +247,6 @@ export interface ContextUsageSnapshot {
   // Whether the active runtime still matches the accepted baseline.
   // 当前运行时是否仍匹配已接受的基线。
   baselineMatchesActiveRuntime: boolean;
-  // Tooltip title.
-  // 提示浮层标题。
-  tooltipTitle: string;
   // Tooltip diagnostic rows.
   // 提示浮层诊断行。
   tooltipRows: string[];

@@ -52,40 +52,30 @@ function compactUnitLabel(locale: LocaleCode, key: TranslationKey, value: number
   return formatMessage(readLocaleMessage(locale, key), { value });
 }
 
-// compactPersistedRelativeLabel compresses older static labels when no raw timestamp exists.
-// compactPersistedRelativeLabel 在没有原始时间戳时压缩旧的静态标签。
+// PERSISTED_RELATIVE_UNIT_KEYS maps the backend relative-label units (`5 min ago`, `2 mo ago`) to compact templates.
+// PERSISTED_RELATIVE_UNIT_KEYS 将后端相对时间标签的单位（`5 min ago`、`2 mo ago`）映射到紧凑模板。
+const PERSISTED_RELATIVE_UNIT_KEYS: Record<string, TranslationKey> = {
+  min: "projectSidebar.time.minutes",
+  h: "projectSidebar.time.hours",
+  d: "projectSidebar.time.days",
+  w: "projectSidebar.time.weeks",
+  mo: "projectSidebar.time.months",
+};
+
+// compactPersistedRelativeLabel compresses the backend relative label when no raw timestamp exists.
+// compactPersistedRelativeLabel 在没有原始时间戳时压缩后端相对时间标签。
 function compactPersistedRelativeLabel(label: string, locale: LocaleCode): string {
   const trimmed = label.trim();
   if (!trimmed) {
     return "";
   }
-  if (/^(刚刚|now)$/i.test(trimmed)) {
+  if (/^just now$/i.test(trimmed)) {
     return readLocaleMessage(locale, "projectSidebar.time.justNow");
   }
-  const match = trimmed.match(/(\d+)\s*(分|分钟|minute|minutes|min|m|时|小时|hour|hours|h|天|日|day|days|d|周|星期|week|weeks|w|月|month|months|M|年|year|years|Y)/i);
-  if (!match) {
+  const match = trimmed.match(/^(\d+)\s*(min|h|d|w|mo)\s+ago$/i);
+  const key = match ? PERSISTED_RELATIVE_UNIT_KEYS[match[2].toLowerCase()] : undefined;
+  if (!match || !key) {
     return trimmed;
   }
-  const value = Number.parseInt(match[1], 10);
-  const rawUnit = match[2];
-  const unit = rawUnit.toLowerCase();
-  if (rawUnit === "M" || unit === "月" || unit === "month" || unit === "months") {
-    return compactUnitLabel(locale, "projectSidebar.time.months", value);
-  }
-  if (rawUnit === "Y" || unit === "年" || unit === "year" || unit === "years" || unit === "y") {
-    return compactUnitLabel(locale, "projectSidebar.time.years", value);
-  }
-  if (unit === "分" || unit === "分钟" || unit === "minute" || unit === "minutes" || unit === "min" || unit === "m") {
-    return compactUnitLabel(locale, "projectSidebar.time.minutes", value);
-  }
-  if (unit === "时" || unit === "小时" || unit === "hour" || unit === "hours" || unit === "h") {
-    return compactUnitLabel(locale, "projectSidebar.time.hours", value);
-  }
-  if (unit === "天" || unit === "日" || unit === "day" || unit === "days" || unit === "d") {
-    return compactUnitLabel(locale, "projectSidebar.time.days", value);
-  }
-  if (unit === "周" || unit === "星期" || unit === "week" || unit === "weeks" || unit === "w") {
-    return compactUnitLabel(locale, "projectSidebar.time.weeks", value);
-  }
-  return trimmed;
+  return compactUnitLabel(locale, key, Number.parseInt(match[1], 10));
 }

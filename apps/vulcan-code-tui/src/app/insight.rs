@@ -105,7 +105,7 @@ pub fn ttl_label(item: &InjectedMemory) -> String {
     if item.turns_left == 0 {
         tr!("workspaceMemory.expiredRegionTitle")
     } else {
-        tr!("tui.memory.turnsLeft", count = item.turns_left)
+        tr!("workspaceMemory.ttl.turnsLeft", count = item.turns_left)
     }
 }
 

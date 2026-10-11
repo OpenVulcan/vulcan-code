@@ -378,7 +378,7 @@ export function workspaceFilePreviewErrorMessage(
   // normalizedMessage 保存小写副本，用于跨平台判断文件缺失。
   const normalizedMessage = message.toLowerCase();
   if (
-    message.includes("读取文件元数据失败")
+    message.includes("Failed to read file metadata")
     || message.includes("系统找不到指定的文件")
     || normalizedMessage.includes("no such file")
     || normalizedMessage.includes("not found")

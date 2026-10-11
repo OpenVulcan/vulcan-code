@@ -85,7 +85,6 @@ describe("composer toolbar primary action", () => {
       percent: 8,
       severity: "normal",
       tooltipRows: [],
-      tooltipTitle: "Context capacity",
       usageBasisPoints: 810,
       usedTokens: 77_000,
     };
@@ -108,7 +107,7 @@ describe("composer toolbar primary action", () => {
       sessionProviderUsage,
     });
 
-    expect(markup).toContain('aria-label="Context capacity"');
+    expect(markup).toContain('aria-label="Context usage"');
     expect(markup).not.toContain("Total tokens: 35.04M");
   });
 });

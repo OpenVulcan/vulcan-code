@@ -856,7 +856,6 @@ export async function saveSubagentDefinition(definition: SubagentDefinitionSaveR
         mcpServerOverrides: definition.mcpServerOverrides ?? null,
         enabledPromptSkills: definition.enabledPromptSkills,
         disabledPromptSkills: definition.disabledPromptSkills,
-        capabilityDiagnostics: ["Browser preview saved this definition in the user agent layer."],
       };
       if (existingIndex >= 0) {
         snapshot.subagentCatalog.definitions[existingIndex] = nextDefinition;

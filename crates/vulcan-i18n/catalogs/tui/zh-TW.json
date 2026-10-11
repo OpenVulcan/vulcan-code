@@ -387,7 +387,6 @@
   "tui.memory.score": "召回分數",
   "tui.memory.tag": "召回標籤",
   "tui.memory.ttl": "注入有效期",
-  "tui.memory.turnsLeft": "剩餘 {count} 輪",
   "tui.memory.weight": "權重",
   "tui.mock.badge": "模擬資料",
   "tui.notice.agentClosed": "已結束子代理 {name}",
