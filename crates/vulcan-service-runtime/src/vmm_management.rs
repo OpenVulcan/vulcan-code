@@ -255,7 +255,9 @@ pub async fn run_vmm_workbench_action(
         }
         vulcan_vmm::VmmBackendMode::ExternalGrpc => {
             if effective.grpc_target.trim().is_empty() {
-                return Err(String::from("VMM gRPC 地址为空，无法执行管理调用。"));
+                return Err(String::from(
+                    "The VMM gRPC address is empty; the management call cannot run.",
+                ));
             }
             Arc::new(
                 TonicVmmClient::connect(VmmTransportConfig::from_effective(&effective))
@@ -415,7 +417,7 @@ async fn run_vmm_resolve_user_and_project(
         effective
             .user_id
             .map(|value| value.to_string())
-            .ok_or_else(|| String::from("VMM 管理用户引用和用户 ID 都为空，无法解析用户。"))?
+            .ok_or_else(|| String::from("Both the VMM management user reference and user ID are empty; the user cannot be resolved."))?
     } else {
         user_ref
     };
@@ -424,7 +426,7 @@ async fn run_vmm_resolve_user_and_project(
         effective
             .project_id
             .map(|value| value.to_string())
-            .ok_or_else(|| String::from("VMM 管理项目引用和项目 ID 都为空，无法解析项目。"))?
+            .ok_or_else(|| String::from("Both the VMM management project reference and project ID are empty; the project cannot be resolved."))?
     } else {
         project_ref
     };
@@ -451,7 +453,7 @@ async fn run_vmm_ensure_project_preview(
     let project_path = management_project_ref.trim();
     if project_path.is_empty() {
         return Err(String::from(
-            "VMM 管理项目引用为空，无法预检 Team/Space/Project 路径。",
+            "The VMM management project reference is empty; the Team/Space/Project path cannot be prechecked.",
         ));
     }
     let response = client
@@ -473,7 +475,7 @@ async fn run_vmm_resolve_user(
 ) -> Result<VmmManagementOutcome, String> {
     let user_ref = user_ref.trim().to_string();
     if user_ref.is_empty() {
-        return Err(String::from("用户引用不能为空。"));
+        return Err(String::from("The user reference must not be empty."));
     }
     let response = client
         .resolve_user(ResolveUserRequest {
@@ -494,7 +496,7 @@ async fn run_vmm_delete_user(
 ) -> Result<VmmManagementOutcome, String> {
     let user_ref = user_ref.trim().to_string();
     if user_ref.is_empty() {
-        return Err(String::from("用户引用不能为空。"));
+        return Err(String::from("The user reference must not be empty."));
     }
     let response = client
         .delete_user(DeleteUserRequest {
@@ -515,7 +517,7 @@ async fn run_vmm_ensure_project(
 ) -> Result<VmmManagementOutcome, String> {
     let project_path = project_path.trim().to_string();
     if project_path.is_empty() {
-        return Err(String::from("项目路径不能为空。"));
+        return Err(String::from("The project path must not be empty."));
     }
     let response = client
         .ensure_project(EnsureProjectRequest {
@@ -536,7 +538,7 @@ async fn run_vmm_delete_project(
 ) -> Result<VmmManagementOutcome, String> {
     let project_path = project_path.trim().to_string();
     if project_path.is_empty() {
-        return Err(String::from("项目路径不能为空。"));
+        return Err(String::from("The project path must not be empty."));
     }
     let response = client
         .delete_project(DeleteProjectRequest {
@@ -559,7 +561,9 @@ async fn run_vmm_migrate_project(
     let source_project_path = source_project_path.trim().to_string();
     let target_project_path = target_project_path.trim().to_string();
     if source_project_path.is_empty() || target_project_path.is_empty() {
-        return Err(String::from("源项目路径和目标项目路径都不能为空。"));
+        return Err(String::from(
+            "Neither the source project path nor the target project path may be empty.",
+        ));
     }
     let response = client
         .migrate_project(MigrateProjectRequest {
@@ -686,7 +690,9 @@ async fn run_vmm_apply_profile_instruction(
 ) -> Result<VmmManagementOutcome, String> {
     let instruction = instruction.trim().to_string();
     if instruction.is_empty() {
-        return Err(String::from("手工画像指令不能为空。"));
+        return Err(String::from(
+            "The manual profile instruction must not be empty.",
+        ));
     }
     let (user_id, project_id) =
         parse_vmm_profile_identity_ids(management_user_ref, management_project_ref)?;
@@ -726,13 +732,13 @@ fn parse_vmm_profile_identity_ids(
     let user_id = management_user_ref
         .trim()
         .parse::<u64>()
-        .map_err(|_| String::from("请选择一个有效的 VMM 用户后再读取画像。"))?;
+        .map_err(|_| String::from("Select a valid VMM user before reading the profile."))?;
     // project_id is the exact numeric key emitted by `vmm_management_catalog_from_outcome`.
     // project_id 是 `vmm_management_catalog_from_outcome` 产生的准确数字键。
     let project_id = management_project_ref
         .trim()
         .parse::<u64>()
-        .map_err(|_| String::from("请选择一个有效的 VMM 项目后再读取画像。"))?;
+        .map_err(|_| String::from("Select a valid VMM project before reading the profile."))?;
     Ok((user_id, project_id))
 }
 
@@ -753,14 +759,14 @@ async fn run_vmm_search_memory_events(
         .filter(|query| !query.is_empty())
         .collect::<Vec<_>>();
     if queries.is_empty() {
-        return Err(String::from("记忆检索查询不能为空。"));
+        return Err(String::from("The memory search query must not be empty."));
     }
     let user_id = effective
         .user_id
-        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法执行记忆检索。"))?;
+        .ok_or_else(|| String::from("The VMM user ID is empty; memory search cannot run."))?;
     let project_id = effective
         .project_id
-        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法执行记忆检索。"))?;
+        .ok_or_else(|| String::from("The VMM project ID is empty; memory search cannot run."))?;
     let response = client
         .search_memory_events(SearchMemoryEventsRequest {
             runtime_session_id: None,
@@ -786,7 +792,7 @@ async fn run_vmm_get_turn_details(
     turn_ids: Vec<u64>,
 ) -> Result<VmmManagementOutcome, String> {
     if turn_ids.is_empty() {
-        return Err(String::from("Turn ID 列表不能为空。"));
+        return Err(String::from("The turn ID list must not be empty."));
     }
     // request carries native ownership only for the in-process backend; external gRPC keeps its legacy zero identity.
     // request 仅在进程内后端携带原生归属；外置 gRPC 保持原有零身份语义。
@@ -794,10 +800,10 @@ async fn run_vmm_get_turn_details(
         GetTurnDetailsRequest {
             user_id: effective
                 .user_id
-                .ok_or_else(|| String::from("原生 VMM 用户身份未初始化。"))?,
-            project_id: effective
-                .project_id
-                .ok_or_else(|| String::from("原生 VMM 项目身份未初始化。"))?,
+                .ok_or_else(|| String::from("The native VMM user identity is not initialized."))?,
+            project_id: effective.project_id.ok_or_else(|| {
+                String::from("The native VMM project identity is not initialized.")
+            })?,
             host_project_id: host_project_id.to_owned(),
             turn_ids,
             runtime_session_id: None,
@@ -827,14 +833,16 @@ async fn run_vmm_write_memories(
     item: WriteMemoryItem,
 ) -> Result<VmmManagementOutcome, String> {
     if item.abstract_text.trim().is_empty() && item.details.trim().is_empty() {
-        return Err(String::from("主动写入摘要和详情不能同时为空。"));
+        return Err(String::from(
+            "The summary and details of a manual memory write must not both be empty.",
+        ));
     }
     let user_id = effective
         .user_id
-        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法主动写入记忆。"))?;
+        .ok_or_else(|| String::from("The VMM user ID is empty; memories cannot be written."))?;
     let project_id = effective
         .project_id
-        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法主动写入记忆。"))?;
+        .ok_or_else(|| String::from("The VMM project ID is empty; memories cannot be written."))?;
     let response = client
         .write_memories(WriteMemoriesRequest {
             session_id,
@@ -861,10 +869,10 @@ async fn run_vmm_delete_memories(
 ) -> Result<VmmManagementOutcome, String> {
     let user_id = effective
         .user_id
-        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法删除记忆。"))?;
+        .ok_or_else(|| String::from("The VMM user ID is empty; memories cannot be deleted."))?;
     let project_id = effective
         .project_id
-        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法删除记忆。"))?;
+        .ok_or_else(|| String::from("The VMM project ID is empty; memories cannot be deleted."))?;
     let memory_ids = normalize_delete_memory_ids(memory_ids)?;
     let reason = normalize_delete_memory_reason(reason);
     let response = client
@@ -892,12 +900,12 @@ fn normalize_delete_memory_ids(memory_ids: Vec<u64>) -> Result<Vec<u64>, String>
         normalized.push(memory_id);
         if normalized.len() > MAX_DELETE_MEMORY_IDS {
             return Err(format!(
-                "单次最多删除 {MAX_DELETE_MEMORY_IDS} 条记忆，请拆分后重试。"
+                "At most {MAX_DELETE_MEMORY_IDS} memories can be deleted at once; split the request and retry."
             ));
         }
     }
     if normalized.is_empty() {
-        return Err(String::from("记忆 ID 列表不能为空。"));
+        return Err(String::from("The memory ID list must not be empty."));
     }
     Ok(normalized)
 }
@@ -921,7 +929,9 @@ fn normalize_delete_memory_reason(reason: String) -> String {
 /// 将 VMM 删除记忆传输错误格式化为带升级指引的错误。
 fn format_delete_memory_error(error: vulcan_vmm::VmmClientError) -> String {
     if error.is_unimplemented() {
-        String::from("当前 VMM 服务版本不支持删除记忆，请更新 VulcanMemoryMesh 后重试。")
+        String::from(
+            "The current VMM service version does not support deleting memories; update VulcanMemoryMesh and retry.",
+        )
     } else {
         error.to_string()
     }

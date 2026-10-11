@@ -81,7 +81,7 @@ impl RootSkillBootstrapSourceType {
         match self {
             Self::Github => Ok(SkillInstallSourceType::Github),
             Self::Url => Err(String::from(
-                "来源类型 `url` 已被上游来源策略停用，无法使用；请将该技能的来源类型改为 `github`。",
+                "The `url` source type has been disabled by the upstream source policy and cannot be used; change this skill's source type to `github`.",
             )),
         }
     }
@@ -326,7 +326,7 @@ where
     let runtime_root =
         vulcan_runtime_assets::resolve_luaskills_runtime_root().ok_or_else(|| {
             String::from(
-                "未找到 LuaSkills 运行时根目录，请先执行 make sync 生成 output/lua_runtime。",
+                "The LuaSkills runtime root was not found; run make sync first to generate output/lua_runtime.",
             )
         })?;
     // runtime_root pins every derived host path to one absolute native directory identity while removing Windows verbatim prefixes before the path reaches LuaSkills.
@@ -334,27 +334,28 @@ where
     let runtime_root = vulcan_runtime_assets::native_host_path(
         &fs::canonicalize(&runtime_root).map_err(|error| {
             format!(
-                "规范化 LuaSkills 运行时根 `{}` 失败：{error}",
+                "Failed to canonicalize the LuaSkills runtime root `{}`: {error}",
                 runtime_root.display()
             )
         })?,
     );
-    progress("正在准备 LuaSkills 运行时目录");
+    progress("Preparing the LuaSkills runtime directories");
     // output_config_directory is the only runtime configuration root accepted by Vulcan Code.
     // output_config_directory 是 Vulcan Code 唯一接受的运行时配置根目录。
     let output_config_directory = vulcan_runtime_assets::resolve_output_config_directory()
-        .ok_or_else(|| String::from("未找到 Vulcan output/config 目录。"))?;
+        .ok_or_else(|| String::from("The Vulcan output/config directory was not found."))?;
     // runtime_settings is the Vulcan-owned source of truth shared by both host engines.
     // runtime_settings 是两个宿主引擎共享的 Vulcan 自有事实来源。
     let runtime_settings = load_runtime_settings(&output_config_directory)?;
     // managed_runtime_distribution_root is the canonical host-owned public runtime directory.
     // managed_runtime_distribution_root 是宿主持有的规范公共运行时目录。
     let managed_runtime_distribution_root =
-        vulcan_runtime_assets::resolve_managed_runtime_distribution_root()
-            .ok_or_else(|| String::from("未找到 Vulcan 公共 Python/Node 发行根目录。"))?;
+        vulcan_runtime_assets::resolve_managed_runtime_distribution_root().ok_or_else(|| {
+            String::from("The Vulcan shared Python/Node distribution root was not found.")
+        })?;
     fs::create_dir_all(&managed_runtime_distribution_root).map_err(|error| {
         format!(
-            "创建公共 Python/Node 发行根 `{}` 失败：{error}",
+            "Failed to create the shared Python/Node distribution root `{}`: {error}",
             managed_runtime_distribution_root.display()
         )
     })?;
@@ -363,7 +364,7 @@ where
     let managed_runtime_distribution_root = vulcan_runtime_assets::native_host_path(
         &fs::canonicalize(&managed_runtime_distribution_root).map_err(|error| {
             format!(
-                "规范化公共 Python/Node 发行根 `{}` 失败：{error}",
+                "Failed to canonicalize the shared Python/Node distribution root `{}`: {error}",
                 managed_runtime_distribution_root.display()
             )
         })?,
@@ -382,7 +383,7 @@ where
         },
     );
     progress(&format!(
-        "受管 Python/Node 运行时：{}",
+        "Managed Python/Node runtime: {}",
         managed_runtime_report.diagnostic
     ));
     let host_options = build_host_options(
@@ -400,15 +401,15 @@ where
     // 保持相同已解析宿主设置，同时让插件执行独立于技能变更锁。
     let plugin_engine = Arc::new(
         LuaEngine::new(LuaEngineOptions::new(pool_config, host_options.clone()))
-            .map_err(|error| format!("创建插件执行引擎失败：{error}"))?,
+            .map_err(|error| format!("Failed to create the plugin execution engine: {error}"))?,
     );
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
-        .map_err(|error| format!("创建 LuaSkills 引擎失败：{error}"))?;
+        .map_err(|error| format!("Failed to create the LuaSkills engine: {error}"))?;
     ensure_configured_root_skills_installed(&skill_roots, &mut engine, &mut progress)?;
-    progress("正在加载 LuaSkills 技能目录");
+    progress("Loading the LuaSkills skill catalog");
     engine
         .load_from_roots(&skill_roots)
-        .map_err(|error| format!("加载 LuaSkills 技能根失败：{error}"))?;
+        .map_err(|error| format!("Failed to load the LuaSkills skill roots: {error}"))?;
 
     // managed_runtime_environment_root keeps writable environments inside LuaSkills-owned data.
     // managed_runtime_environment_root 将可写环境保留在 LuaSkills 自有数据目录内。
@@ -433,10 +434,11 @@ where
 pub fn load_luaskills_catalog(
     handle: &TauriLuaSkillsHandle,
 ) -> Result<TauriLuaSkillsCatalog, String> {
-    let engine = handle
-        .engine
-        .read()
-        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法读取插件目录。"))?;
+    let engine = handle.engine.read().map_err(|_| {
+        String::from(
+            "The LuaSkills engine read lock is poisoned; the plugin catalog cannot be read.",
+        )
+    })?;
     build_luaskills_catalog(handle, &engine)
 }
 
@@ -455,7 +457,7 @@ pub fn describe_luaskill_package_config(
     let engine = handle
         .engine
         .read()
-        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法读取技能包配置。"))?;
+        .map_err(|_| String::from("The LuaSkills engine read lock is poisoned; the skill package configuration cannot be read."))?;
     describe_host_safe_package_config(&engine, skill_id)
 }
 
@@ -474,7 +476,7 @@ pub fn validate_luaskill_package_config(
     let engine = handle
         .engine
         .read()
-        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法校验技能包配置。"))?;
+        .map_err(|_| String::from("The LuaSkills engine read lock is poisoned; the skill package configuration cannot be validated."))?;
     engine.validate_skill_package_config(skill_id)
 }
 
@@ -495,10 +497,10 @@ pub fn set_luaskill_package_config(
     let mut engine = handle
         .engine
         .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法更新技能包配置。"))?;
+        .map_err(|_| String::from("The LuaSkills engine write lock is poisoned; the skill package configuration cannot be updated."))?;
     let result = engine.set_skill_config_values(skill_id, values, Some(expected_revision))?;
     let descriptor = describe_host_safe_package_config(&engine, skill_id)?
-        .ok_or_else(|| format!("技能 `{skill_id}` 未声明技能包配置。"))?;
+        .ok_or_else(|| format!("Skill `{skill_id}` declares no package configuration."))?;
     Ok((result, descriptor))
 }
 
@@ -519,10 +521,10 @@ pub fn delete_luaskill_package_config_value(
     let mut engine = handle
         .engine
         .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法删除技能包配置。"))?;
+        .map_err(|_| String::from("The LuaSkills engine write lock is poisoned; the skill package configuration cannot be deleted."))?;
     let result = engine.delete_skill_config_value(skill_id, key, Some(expected_revision))?;
     let descriptor = describe_host_safe_package_config(&engine, skill_id)?
-        .ok_or_else(|| format!("技能 `{skill_id}` 未声明技能包配置。"))?;
+        .ok_or_else(|| format!("Skill `{skill_id}` declares no package configuration."))?;
     Ok((result, descriptor))
 }
 
@@ -542,7 +544,7 @@ pub fn poll_luaskill_package_config_events(
     let engine = handle
         .engine
         .read()
-        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法轮询技能包配置事件。"))?;
+        .map_err(|_| String::from("The LuaSkills engine read lock is poisoned; skill package configuration events cannot be polled."))?;
     engine.poll_skill_config_events(after_sequence, limit)
 }
 
@@ -561,7 +563,7 @@ pub fn refresh_luaskill_package_config(
     let engine = handle
         .engine
         .read()
-        .map_err(|_| String::from("LuaSkills 引擎读锁已损坏，无法刷新技能包配置。"))?;
+        .map_err(|_| String::from("The LuaSkills engine read lock is poisoned; the skill package configuration cannot be refreshed."))?;
     engine.refresh_skill_config(store_scope)
 }
 
@@ -602,7 +604,7 @@ fn take_declared_package_config_descriptor(
     let descriptor = descriptors.pop();
     if !descriptors.is_empty() {
         return Err(format!(
-            "技能 `{skill_id}` 返回了多个生效配置描述，运行时状态不一致。"
+            "Skill `{skill_id}` returned multiple effective configuration descriptors; the runtime state is inconsistent."
         ));
     }
     Ok(descriptor.filter(|descriptor| !descriptor.items.is_empty()))
@@ -627,7 +629,7 @@ fn package_declares_configuration(
     let known_configless = handle
         .config_capability_cache
         .lock()
-        .map_err(|_| String::from("LuaSkills 配置能力缓存锁已损坏，无法读取目录。"))?
+        .map_err(|_| String::from("The LuaSkills configuration capability cache lock is poisoned; the catalog cannot be read."))?
         .is_known_configless(skill_id, version);
     if known_configless {
         return Ok(false);
@@ -639,7 +641,7 @@ fn package_declares_configuration(
     handle
         .config_capability_cache
         .lock()
-        .map_err(|_| String::from("LuaSkills 配置能力缓存锁已损坏，无法更新目录。"))?
+        .map_err(|_| String::from("The LuaSkills configuration capability cache lock is poisoned; the catalog cannot be updated."))?
         .record_probe(skill_id, version, has_configuration);
     Ok(has_configuration)
 }
@@ -659,7 +661,7 @@ fn invalidate_config_capability_cache(
     handle
         .config_capability_cache
         .lock()
-        .map_err(|_| String::from("LuaSkills 配置能力缓存锁已损坏，无法使缓存失效。"))?
+        .map_err(|_| String::from("The LuaSkills configuration capability cache lock is poisoned; the cache cannot be invalidated."))?
         .invalidate(skill_id);
     Ok(())
 }
@@ -842,7 +844,7 @@ where
     let mut retained_report = handle
         .managed_runtime_report
         .lock()
-        .map_err(|_| String::from("受管 Python/Node 初始化状态锁已损坏，无法保存重试结果。"))?;
+        .map_err(|_| String::from("The managed Python/Node initialization state lock is poisoned; the retry result cannot be saved."))?;
     *retained_report = report;
     drop(retained_report);
     load_luaskills_catalog(handle)
@@ -853,13 +855,14 @@ where
 pub fn refresh_luaskills_catalog(
     handle: &TauriLuaSkillsHandle,
 ) -> Result<TauriLuaSkillsCatalog, String> {
-    let mut engine = handle
-        .engine
-        .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法刷新插件目录。"))?;
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from(
+            "The LuaSkills engine write lock is poisoned; the plugin catalog cannot be refreshed.",
+        )
+    })?;
     engine
         .reload_from_roots(&handle.skill_roots)
-        .map_err(|error| format!("刷新 LuaSkills 运行时失败：{error}"))?;
+        .map_err(|error| format!("Failed to refresh the LuaSkills runtime: {error}"))?;
     build_luaskills_catalog(handle, &engine)
 }
 
@@ -880,7 +883,7 @@ fn post_commit_projection_failure(
     failed_step: &str,
     error: &str,
 ) -> String {
-    format!("技能 `{skill_id}` 已{completed_action}，但{failed_step}：{error}")
+    format!("Skill `{skill_id}` was {completed_action}, but {failed_step}: {error}")
 }
 
 /// Installs one LuaSkills package into the ordinary USER root.
@@ -891,10 +894,9 @@ pub fn install_luaskill(
     source: String,
     source_type: String,
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
-    let mut engine = handle
-        .engine
-        .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法安装技能。"))?;
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from("The LuaSkills engine write lock is poisoned; the skill cannot be installed.")
+    })?;
     let user_root = ordinary_user_root(handle)?;
     let request = SkillInstallRequest {
         skill_id: normalize_optional_field(skill_id),
@@ -903,7 +905,7 @@ pub fn install_luaskill(
     };
     let result = engine
         .install_skill_in_root(&handle.skill_roots, &user_root, &request)
-        .map_err(|error| format!("安装 LuaSkills 技能失败：{error}"))?;
+        .map_err(|error| format!("Failed to install the LuaSkills skill: {error}"))?;
     // The install is committed on disk once install_skill_in_root returns, so a later
     // failure is a projection failure rather than an install failure. Its message must
     // say the package was installed, because reporting a bare failure here would tell
@@ -911,10 +913,20 @@ pub fn install_luaskill(
     // install_skill_in_root 返回后安装已在盘上提交，因此后续失败是投影失败而不是安装失败。
     // 其消息必须说明包已安装，因为在此报告裸失败会让调用方与操作进度投影以为什么都没变。
     invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
-        post_commit_projection_failure(&result.skill_id, "安装", "配置能力缓存失效失败", &error)
+        post_commit_projection_failure(
+            &result.skill_id,
+            "installed",
+            "invalidating the configuration capability cache failed",
+            &error,
+        )
     })?;
     let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
-        post_commit_projection_failure(&result.skill_id, "安装", "刷新技能目录失败", &error)
+        post_commit_projection_failure(
+            &result.skill_id,
+            "installed",
+            "refreshing the skill catalog failed",
+            &error,
+        )
     })?;
     Ok((result.message, catalog))
 }
@@ -925,10 +937,9 @@ pub fn update_luaskill(
     handle: &TauriLuaSkillsHandle,
     skill_id: String,
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
-    let mut engine = handle
-        .engine
-        .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法更新技能。"))?;
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from("The LuaSkills engine write lock is poisoned; the skill cannot be updated.")
+    })?;
     let target_root = target_root_for_skill(handle, &skill_id)?;
     let request = SkillInstallRequest {
         skill_id: Some(skill_id),
@@ -943,11 +954,11 @@ pub fn update_luaskill(
                 SkillManagementAuthority::System,
                 &request,
             )
-            .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
+            .map_err(|error| format!("Failed to update the LuaSkills skill: {error}"))?
     } else {
         engine
             .update_skill_in_root(&handle.skill_roots, &target_root, &request)
-            .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
+            .map_err(|error| format!("Failed to update the LuaSkills skill: {error}"))?
     };
     // The update is committed on disk once the engine call returns, so a later failure
     // is a projection failure rather than an update failure. Its message must say the
@@ -956,13 +967,23 @@ pub fn update_luaskill(
     // 引擎调用返回后更新已在盘上提交，因此后续失败是投影失败而不是更新失败。其消息必须说明
     // 包已更新，因为裸失败会让调用方与操作进度投影以为旧版本仍然是当前版本。
     invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
-        post_commit_projection_failure(&result.skill_id, "更新", "配置能力缓存失效失败", &error)
+        post_commit_projection_failure(
+            &result.skill_id,
+            "updated",
+            "invalidating the configuration capability cache failed",
+            &error,
+        )
     })?;
     // LuaSkills 0.5.9 reloads the runtime inside the update transaction. Project its
     // committed state without destroying a second VM pool and its native libraries.
     // LuaSkills 0.5.9 在更新事务内重载运行时；直接投影已提交状态，避免再次销毁 VM 池及其原生库。
     let catalog = build_luaskills_catalog(handle, &engine).map_err(|error| {
-        post_commit_projection_failure(&result.skill_id, "更新", "刷新技能目录失败", &error)
+        post_commit_projection_failure(
+            &result.skill_id,
+            "updated",
+            "refreshing the skill catalog failed",
+            &error,
+        )
     })?;
     Ok((result.message, catalog))
 }
@@ -974,10 +995,11 @@ pub fn set_luaskill_enabled(
     skill_id: String,
     enabled: bool,
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
-    let mut engine = handle
-        .engine
-        .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法切换技能状态。"))?;
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from(
+            "The LuaSkills engine write lock is poisoned; the skill state cannot be switched.",
+        )
+    })?;
     let target_root = target_root_for_skill(handle, &skill_id)?;
     if enabled {
         if target_root.name.eq_ignore_ascii_case("ROOT") {
@@ -987,11 +1009,11 @@ pub fn set_luaskill_enabled(
                     SkillManagementAuthority::System,
                     &skill_id,
                 )
-                .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+                .map_err(|error| format!("Failed to enable the LuaSkills skill: {error}"))?;
         } else {
             engine
                 .enable_skill(&handle.skill_roots, &skill_id)
-                .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+                .map_err(|error| format!("Failed to enable the LuaSkills skill: {error}"))?;
         }
     } else if target_root.name.eq_ignore_ascii_case("ROOT") {
         engine
@@ -1001,7 +1023,7 @@ pub fn set_luaskill_enabled(
                 &skill_id,
                 Some("disabled from vulcan-code-web"),
             )
-            .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
+            .map_err(|error| format!("Failed to disable the LuaSkills skill: {error}"))?;
     } else {
         engine
             .disable_skill_in_roots(
@@ -1009,7 +1031,7 @@ pub fn set_luaskill_enabled(
                 &skill_id,
                 Some("disabled from vulcan-code-web"),
             )
-            .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
+            .map_err(|error| format!("Failed to disable the LuaSkills skill: {error}"))?;
     }
     // The enable or disable is committed on disk once the engine call returns, so a
     // later failure is a projection failure. Its message must name the state change
@@ -1017,14 +1039,19 @@ pub fn set_luaskill_enabled(
     // the catalog projection that the previous enabled state is still current.
     // 引擎调用返回后启用或停用已在盘上提交，因此后续失败是投影失败。其消息必须点名已经生效的
     // 状态变更，因为裸失败会让调用方与目录投影以为先前的启停状态仍然是当前状态。
-    let completed_action = if enabled { "启用" } else { "停用" };
+    let completed_action = if enabled { "enabled" } else { "disabled" };
     let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
-        post_commit_projection_failure(&skill_id, completed_action, "刷新技能目录失败", &error)
+        post_commit_projection_failure(
+            &skill_id,
+            completed_action,
+            "refreshing the skill catalog failed",
+            &error,
+        )
     })?;
     let message = if enabled {
-        format!("已启用技能 `{skill_id}`。")
+        format!("Enabled skill `{skill_id}`.")
     } else {
-        format!("已停用技能 `{skill_id}`。")
+        format!("Disabled skill `{skill_id}`.")
     };
     Ok((message, catalog))
 }
@@ -1035,10 +1062,11 @@ pub fn uninstall_luaskill(
     handle: &TauriLuaSkillsHandle,
     skill_id: String,
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
-    let mut engine = handle
-        .engine
-        .write()
-        .map_err(|_| String::from("LuaSkills 引擎写锁已损坏，无法卸载技能。"))?;
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from(
+            "The LuaSkills engine write lock is poisoned; the skill cannot be uninstalled.",
+        )
+    })?;
     let target_root = ordinary_uninstall_target_root_for_skill(handle, &skill_id)?;
     let result = engine
         .uninstall_skill_in_root(
@@ -1047,7 +1075,7 @@ pub fn uninstall_luaskill(
             &skill_id,
             &SkillUninstallOptions::default(),
         )
-        .map_err(|error| format!("卸载 LuaSkills 技能失败：{error}"))?;
+        .map_err(|error| format!("Failed to uninstall the LuaSkills skill: {error}"))?;
     // The uninstall is committed on disk once the engine call returns, so a later
     // failure is a projection failure rather than an uninstall failure. Its message
     // must say the package was uninstalled, because a bare failure here would tell the
@@ -1055,10 +1083,20 @@ pub fn uninstall_luaskill(
     // 引擎调用返回后卸载已在盘上提交，因此后续失败是投影失败而不是卸载失败。其消息必须说明
     // 包已卸载，因为裸失败会让调用方与操作进度投影以为包仍然存在。
     invalidate_config_capability_cache(handle, &result.skill_id).map_err(|error| {
-        post_commit_projection_failure(&result.skill_id, "卸载", "配置能力缓存失效失败", &error)
+        post_commit_projection_failure(
+            &result.skill_id,
+            "uninstalled",
+            "invalidating the configuration capability cache failed",
+            &error,
+        )
     })?;
     let catalog = reload_catalog_after_management(handle, &mut engine).map_err(|error| {
-        post_commit_projection_failure(&result.skill_id, "卸载", "刷新技能目录失败", &error)
+        post_commit_projection_failure(
+            &result.skill_id,
+            "uninstalled",
+            "refreshing the skill catalog failed",
+            &error,
+        )
     })?;
     Ok((result.message, catalog))
 }
@@ -1071,7 +1109,7 @@ fn build_luaskills_catalog(
 ) -> Result<TauriLuaSkillsCatalog, String> {
     let visible_entries = engine
         .list_entries_for_authority(SkillManagementAuthority::System)
-        .map_err(|error| format!("读取 LuaSkills 宿主可见工具失败：{error}"))?;
+        .map_err(|error| format!("Failed to read the LuaSkills host-visible tools: {error}"))?;
     let mut tools_by_skill = visible_entries.into_iter().fold(
         std::collections::BTreeMap::<String, Vec<TauriLuaSkillToolSummary>>::new(),
         |mut grouped_tools, entry: RuntimeEntryDescriptor| {
@@ -1088,21 +1126,38 @@ fn build_luaskills_catalog(
     );
 
     let resolved_skills = collect_effective_skill_instances_from_roots(&handle.skill_roots)
-        .map_err(|error| format!("解析 LuaSkills 生效技能目录失败：{error}"))?;
+        .map_err(|error| {
+            format!("Failed to resolve the effective LuaSkills skill directories: {error}")
+        })?;
     let mut skills = Vec::with_capacity(resolved_skills.len());
     for resolved in resolved_skills {
         let meta = read_skill_meta_from_directory(&resolved.actual_dir, &resolved.skill_id)?;
         let manager = build_skill_manager_for_root(handle, &resolved.root_name)?;
         let enabled = manager
             .is_skill_enabled(&resolved.skill_id)
-            .map_err(|error| format!("读取技能启用状态失败（{}）：{error}", resolved.skill_id))?;
+            .map_err(|error| {
+                format!(
+                    "Failed to read the skill enablement state ({}): {error}",
+                    resolved.skill_id
+                )
+            })?;
         let disabled_reason = manager
             .disabled_record(&resolved.skill_id)
-            .map_err(|error| format!("读取技能停用记录失败（{}）：{error}", resolved.skill_id))?
+            .map_err(|error| {
+                format!(
+                    "Failed to read the skill disablement record ({}): {error}",
+                    resolved.skill_id
+                )
+            })?
             .and_then(|record| record.reason);
         let install_record = manager
             .install_record(&resolved.skill_id)
-            .map_err(|error| format!("读取技能安装记录失败（{}）：{error}", resolved.skill_id))?;
+            .map_err(|error| {
+                format!(
+                    "Failed to read the skill installation record ({}): {error}",
+                    resolved.skill_id
+                )
+            })?;
         let (managed, source_type, source_locator) = match install_record {
             Some(record) => (
                 record.managed,
@@ -1120,7 +1175,7 @@ fn build_luaskills_catalog(
                 .then_with(|| left.canonical_name.cmp(&right.canonical_name))
         });
         let capability = if tools.is_empty() {
-            String::from("未暴露可见工具入口")
+            String::from("No visible tool entry is exposed")
         } else {
             tools
                 .iter()
@@ -1138,7 +1193,10 @@ fn build_luaskills_catalog(
             let descriptors = engine
                 .describe_skill_package_config(Some(&resolved.skill_id), false)
                 .map_err(|error| {
-                    format!("读取技能包配置状态失败（{}）：{error}", resolved.skill_id)
+                    format!(
+                        "Failed to read the skill package configuration state ({}): {error}",
+                        resolved.skill_id
+                    )
                 })?;
             take_declared_package_config_descriptor(&resolved.skill_id, descriptors)?
         } else {
@@ -1179,14 +1237,14 @@ fn build_luaskills_catalog(
     let managed_runtime_report = handle
         .managed_runtime_report
         .lock()
-        .map_err(|_| String::from("受管 Python/Node 初始化状态锁已损坏，无法读取目录。"))?
+        .map_err(|_| String::from("The managed Python/Node initialization state lock is poisoned; the catalog cannot be read."))?
         .clone();
     // managed_runtime_progress is cloned independently because retries update it while the engine remains live.
     // managed_runtime_progress 独立克隆，因为重试会在引擎保持运行时更新它。
     let managed_runtime_progress = handle
         .managed_runtime_progress
         .lock()
-        .map_err(|_| String::from("受管 Python/Node 初始化进度锁已损坏，无法读取目录。"))?
+        .map_err(|_| String::from("The managed Python/Node initialization progress lock is poisoned; the catalog cannot be read."))?
         .clone();
 
     Ok(TauriLuaSkillsCatalog {
@@ -1249,7 +1307,7 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     ] {
         fs::create_dir_all(directory).map_err(|error| {
             format!(
-                "创建 LuaSkills 运行时目录失败（{}）：{error}",
+                "Failed to create the LuaSkills runtime directory ({}): {error}",
                 directory.display()
             )
         })?;
@@ -1277,13 +1335,13 @@ fn ensure_configured_root_skills_installed(
     let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
     let configured_skills = load_root_skill_bootstrap_entries()?;
     if configured_skills.is_empty() {
-        progress("未配置需要自动安装的 LuaSkills ROOT 技能");
+        progress("No LuaSkills ROOT skills are configured for automatic installation");
         return Ok(());
     }
 
     let installed_root_skill_ids =
         collect_effective_skill_instances_from_roots(std::slice::from_ref(&root_target))
-            .map_err(|error| format!("解析 ROOT 层技能目录失败：{error}"))?
+            .map_err(|error| format!("Failed to resolve the ROOT skill directory: {error}"))?
             .into_iter()
             .map(|instance| instance.skill_id)
             .collect::<std::collections::BTreeSet<_>>();
@@ -1294,7 +1352,7 @@ fn ensure_configured_root_skills_installed(
             continue;
         }
 
-        let install_message = format!("正在安装 LuaSkills 技能：{}", configured_skill.skill_id);
+        let install_message = format!("Installing LuaSkills skill: {}", configured_skill.skill_id);
         progress(&install_message);
         // The source type is resolved before the install request is built, so a disabled
         // source type fails with the skill identifier attached instead of a bare policy
@@ -1304,7 +1362,12 @@ fn ensure_configured_root_skills_installed(
         let resolved_source_type = configured_skill
             .source_type
             .into_runtime_source_type()
-            .map_err(|error| format!("ROOT 引导技能 `{}`：{error}", configured_skill.skill_id))?;
+            .map_err(|error| {
+                format!(
+                    "ROOT bootstrap skill `{}`: {error}",
+                    configured_skill.skill_id
+                )
+            })?;
         let install_request = SkillInstallRequest {
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
@@ -1319,27 +1382,27 @@ fn ensure_configured_root_skills_installed(
             )
             .map_err(|error| {
                 format!(
-                    "安装 ROOT 默认技能 `{}` 失败：{error}",
+                    "Failed to install the ROOT default skill `{}`: {error}",
                     configured_skill.skill_id
                 )
             })?;
-        let installed_message = format!("已安装 LuaSkills 技能：{}", configured_skill.skill_id);
+        let installed_message = format!("Installed LuaSkills skill: {}", configured_skill.skill_id);
         progress(&installed_message);
         installed_any_skill = true;
     }
 
     if installed_any_skill {
-        progress("正在刷新 LuaSkills 技能根");
+        progress("Refreshing the LuaSkills skill roots");
         // Every system install above is already committed on disk, so a reload failure
         // must not read as "no default skill was installed": the next bootstrap would
         // otherwise re-attempt installs that already succeeded.
         // 上面的每次系统安装都已在盘上提交，因此重载失败不得被读成「没有安装任何默认技能」：
         // 否则下一次引导会重新尝试那些已经成功的安装。
         engine.reload_from_roots(skill_roots).map_err(|error| {
-            format!("ROOT 默认技能已安装，但刷新 LuaSkills 技能根失败：{error}")
+            format!("The ROOT default skills are installed, but refreshing the LuaSkills skill roots failed: {error}")
         })?;
     } else {
-        progress("LuaSkills 默认技能已存在，正在加载目录");
+        progress("The LuaSkills default skills already exist; loading the catalog");
     }
 
     Ok(())
@@ -1349,27 +1412,27 @@ fn ensure_configured_root_skills_installed(
 /// 仅从 `output/config` 加载声明式 ROOT 技能引导条目。
 fn load_root_skill_bootstrap_entries() -> Result<Vec<RootSkillBootstrapEntry>, String> {
     let config_path = vulcan_runtime_assets::resolve_output_config_directory()
-        .ok_or_else(|| String::from("未找到 Vulcan output/config 目录。"))?
+        .ok_or_else(|| String::from("The Vulcan output/config directory was not found."))?
         .join("luaskills_root_skills.yaml");
     if !config_path.exists() {
         return Ok(Vec::new());
     }
     if !config_path.is_file() {
         return Err(format!(
-            "ROOT 技能引导配置不是有效文件：{}",
+            "The ROOT skill bootstrap configuration is not a regular file: {}",
             config_path.display()
         ));
     }
 
     let config_text = fs::read_to_string(&config_path).map_err(|error| {
         format!(
-            "读取 ROOT 技能引导配置失败（{}）：{error}",
+            "Failed to read the ROOT skill bootstrap configuration ({}): {error}",
             config_path.display()
         )
     })?;
     let config: RootSkillBootstrapConfig = serde_yaml::from_str(&config_text).map_err(|error| {
         format!(
-            "解析 ROOT 技能引导配置失败（{}）：{error}",
+            "Failed to parse the ROOT skill bootstrap configuration ({}): {error}",
             config_path.display()
         )
     })?;
@@ -1380,13 +1443,13 @@ fn load_root_skill_bootstrap_entries() -> Result<Vec<RootSkillBootstrapEntry>, S
         let source = entry.source.trim().to_string();
         if skill_id.is_empty() {
             return Err(format!(
-                "ROOT 技能引导配置存在空 skill_id（{}）。",
+                "The ROOT skill bootstrap configuration has an empty skill_id ({}).",
                 config_path.display()
             ));
         }
         if source.is_empty() {
             return Err(format!(
-                "ROOT 技能引导配置 `{skill_id}` 的 source 不能为空。"
+                "The source of ROOT skill bootstrap entry `{skill_id}` must not be empty."
             ));
         }
         entries.push(RootSkillBootstrapEntry {
@@ -1409,7 +1472,7 @@ fn resolve_named_skill_root(
         .iter()
         .find(|root| root.name == root_name)
         .cloned()
-        .ok_or_else(|| format!("未找到 LuaSkills `{root_name}` 技能根。"))
+        .ok_or_else(|| format!("LuaSkills skill root `{root_name}` was not found."))
 }
 
 /// Parses a WebUI source type key into the LuaSkills install source enum.
@@ -1427,13 +1490,13 @@ fn parse_skill_install_source_type(source_type: &str) -> Result<SkillInstallSour
         // 只会把该拒绝推迟一层，并暴露上游策略文案而不是宿主文案，因此这个已死的来源类型在宿主
         // 边界即被拒绝。
         "url" => Err(String::from(
-            "URL 安装来源已被上游来源策略停用，无法使用；请改用 GitHub 来源安装 LuaSkills 技能包。",
+            "The URL install source has been disabled by the upstream source policy and cannot be used; install the LuaSkills package from a GitHub source instead.",
         )),
         // Naming the supported set keeps a typo recoverable: without it the caller only
         // learns that its value is unknown, not what to send instead.
         // 点名支持集使拼写错误可恢复：否则调用方只知道自己的取值未知，而不知道该改发什么。
         other => Err(format!(
-            "不支持的 LuaSkills 安装来源类型：{other}；当前支持：github。"
+            "Unsupported LuaSkills install source type: {other}; supported: github."
         )),
     }
 }
@@ -1466,7 +1529,7 @@ fn reload_catalog_after_management(
 ) -> Result<TauriLuaSkillsCatalog, String> {
     engine
         .reload_from_roots(&handle.skill_roots)
-        .map_err(|error| format!("同步 LuaSkills 管理操作后的运行时入口失败：{error}"))?;
+        .map_err(|error| format!("Failed to sync the runtime entries after the LuaSkills management operation: {error}"))?;
     build_luaskills_catalog(handle, engine)
 }
 
@@ -1483,10 +1546,10 @@ fn target_root_for_skill(
     skill_id: &str,
 ) -> Result<RuntimeSkillRoot, String> {
     let resolved = collect_effective_skill_instances_from_roots(&handle.skill_roots)
-        .map_err(|error| format!("解析技能目录失败：{error}"))?
+        .map_err(|error| format!("Failed to resolve the skill directories: {error}"))?
         .into_iter()
         .find(|instance| instance.skill_id == skill_id)
-        .ok_or_else(|| format!("未找到技能 `{skill_id}` 对应的生效目录。"))?;
+        .ok_or_else(|| format!("No effective directory was found for skill `{skill_id}`."))?;
     resolve_named_skill_root(&handle.skill_roots, &resolved.root_name)
 }
 
@@ -1499,7 +1562,7 @@ fn ordinary_uninstall_target_root_for_skill(
     let resolved = target_root_for_skill(handle, skill_id)?;
     if resolved.name.eq_ignore_ascii_case("ROOT") {
         return Err(format!(
-            "技能 `{skill_id}` 当前位于 ROOT 层，由宿主内建控制，不允许卸载。"
+            "Skill `{skill_id}` is in the ROOT layer and controlled by the host; it cannot be uninstalled."
         ));
     }
     Ok(resolved)
@@ -1632,7 +1695,7 @@ fn build_skill_manager_for_root(
         .iter()
         .find(|root| root.name == root_name)
         .cloned()
-        .ok_or_else(|| format!("未找到技能根 `{root_name}`。"))?;
+        .ok_or_else(|| format!("Skill root `{root_name}` was not found."))?;
     let lifecycle_root = skill_root
         .skills_dir
         .parent()
@@ -1660,10 +1723,14 @@ fn build_skill_manager_for_root(
 /// 从磁盘读取单个 LuaSkills 公开清单。
 fn read_skill_meta_from_directory(skill_dir: &Path, skill_id: &str) -> Result<SkillMeta, String> {
     let manifest_path = skill_dir.join("skill.yaml");
-    let manifest_text = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("读取技能清单失败（{}）：{error}", manifest_path.display()))?;
+    let manifest_text = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "Failed to read the skill manifest ({}): {error}",
+            manifest_path.display()
+        )
+    })?;
     serde_yaml::from_str::<SkillMeta>(&manifest_text)
-        .map_err(|error| format!("解析技能清单失败（{skill_id}）：{error}"))
+        .map_err(|error| format!("Failed to parse the skill manifest ({skill_id}): {error}"))
 }
 
 #[cfg(test)]
@@ -1856,8 +1923,8 @@ fn download_cache_and_managed_runtime_staging_never_overlap() {
 fn post_commit_failure_names_the_completed_mutation() {
     let message = post_commit_projection_failure(
         "fixture-skill",
-        "安装",
-        "刷新技能目录失败",
+        "installed",
+        "refreshing the skill catalog failed",
         "catalog unavailable",
     );
 
@@ -1865,27 +1932,36 @@ fn post_commit_failure_names_the_completed_mutation() {
     // be mistaken for a bare install failure.
     // 技能标识与已完成的动作必须同时出现，使该消息不会被误读为一次裸的安装失败。
     assert!(message.contains("fixture-skill"), "{message}");
-    assert!(message.contains("已安装"), "{message}");
-    assert!(message.contains("刷新技能目录失败"), "{message}");
+    assert!(message.contains("was installed"), "{message}");
+    assert!(
+        message.contains("refreshing the skill catalog failed"),
+        "{message}"
+    );
     assert!(message.contains("catalog unavailable"), "{message}");
     // The underlying error is preserved rather than replaced by the wrapper.
     // 底层错误被保留，而不是被包装文案替换。
-    assert!(!message.contains("安装 LuaSkills 技能失败"), "{message}");
+    assert!(
+        !message.contains("Failed to install the LuaSkills skill"),
+        "{message}"
+    );
 }
 
 /// Verifies each mutation reports its own completed action.
 /// 验证每种变更报告各自的已完成动作。
 #[test]
 fn post_commit_failure_distinguishes_each_mutation() {
-    for (action, expected) in [("安装", "已安装"), ("更新", "已更新"), ("卸载", "已卸载")]
-    {
-        let message = post_commit_projection_failure("fixture", action, "步骤失败", "boom");
+    for (action, expected) in [
+        ("installed", "was installed"),
+        ("updated", "was updated"),
+        ("uninstalled", "was uninstalled"),
+    ] {
+        let message = post_commit_projection_failure("fixture", action, "a step failed", "boom");
         assert!(message.contains(expected), "{message}");
     }
     // The three actions must not collapse into one shared label.
     // 三种动作不得塌缩成同一个共享标签。
-    let installed = post_commit_projection_failure("f", "安装", "s", "e");
-    let updated = post_commit_projection_failure("f", "更新", "s", "e");
+    let installed = post_commit_projection_failure("f", "installed", "s", "e");
+    let updated = post_commit_projection_failure("f", "updated", "s", "e");
     assert_ne!(installed, updated);
 }
 
@@ -1906,7 +1982,7 @@ fn url_install_source_is_refused_at_the_host_boundary() {
     // 消息必须指向真正可用的来源类型，且不得是通用的未知类型消息，因为 `url` 是已知但被停用的
     // 来源。
     assert!(error.contains("GitHub"), "{error}");
-    assert!(!error.contains("不支持的"), "{error}");
+    assert!(!error.contains("Unsupported"), "{error}");
     // GitHub stays accepted, and parsing stays case-insensitive and trimmed.
     // GitHub 保持被接受，且解析保持大小写不敏感与裁剪。
     assert!(parse_skill_install_source_type(" GitHub ").is_ok());

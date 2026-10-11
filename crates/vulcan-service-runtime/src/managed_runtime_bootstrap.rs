@@ -339,7 +339,7 @@ where
 
     progress(&ManagedRuntimeBootstrapProgress {
         phase: "locking".to_string(),
-        message: "正在等待受管 Python/Node 运行时初始化锁".to_string(),
+        message: "Waiting for the managed Python/Node runtime initialization lock".to_string(),
         overall_percent: Some(2),
         ..ManagedRuntimeBootstrapProgress::default()
     });
