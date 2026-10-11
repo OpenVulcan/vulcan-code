@@ -344,7 +344,7 @@ impl RuntimeFoundation {
                         (explicit_entries, dispatch_entries, help_packages)
                     }
                     Err(error) => {
-                        warnings.push(format!("加载 LuaSkills 工具表失败：{error}"));
+                        warnings.push(format!("Failed to load the LuaSkills tool table: {error}"));
                         (Vec::new(), Vec::new(), Vec::new())
                     }
                 },
@@ -425,7 +425,7 @@ impl RuntimeFoundation {
             .iter()
             .find(|definition| definition.id == self.config.active_agent_id)
             .map(|definition| definition.name.clone())
-            .unwrap_or_else(|| String::from("未解析到激活代理"));
+            .unwrap_or_else(|| String::from("no active agent resolved"));
 
         let coordinator_count = self
             .config
@@ -442,7 +442,7 @@ impl RuntimeFoundation {
                 .config
                 .active_model
                 .clone()
-                .unwrap_or_else(|| String::from("未配置模型")),
+                .unwrap_or_else(|| String::from("no model configured")),
             configured_agent_count: self.config.agents.len(),
             built_agent_count: self.config.agents.len(),
             coordinator_count,
@@ -739,7 +739,7 @@ fn resolve_agent_native_tools(
             }
         } else {
             warnings.push(format!(
-                "代理 `{}` 引用了不存在的工具策略 `{}`，因此不会暴露该策略下的受限原生工具，仅保留通用原生工具。",
+                "Agent `{}` references tool policy `{}`, which does not exist, so restricted native tools of that policy are not exposed; only universal native tools remain.",
                 definition.name, policy_id
             ));
             Vec::new()
@@ -752,7 +752,7 @@ fn resolve_agent_native_tools(
         let is_available = available_native_tool_ids.contains(name);
         if !is_available {
             warnings.push(format!(
-                "代理 `{}` 引用了未注册的原生工具 `{}`。",
+                "Agent `{}` references native tool `{}`, which is not registered.",
                 definition.name, name
             ));
         }
@@ -924,7 +924,7 @@ fn build_luaskill_help_packages(
                 .collect::<BTreeMap<_, _>>()
         }
         Err(error) => {
-            warnings.push(format!("加载 LuaSkills 帮助失败：{error}"));
+            warnings.push(format!("Failed to load LuaSkills help: {error}"));
             BTreeMap::new()
         }
     };

@@ -291,7 +291,11 @@ pub fn transfer_staged_attachment_ref(
         )
     })?;
     let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
-    ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "转交暂存附件租约")?;
+    ensure_attachment_asset_ids_are_indexed(
+        &document,
+        &asset_ids,
+        "Transferring the staged attachment lease",
+    )?;
     let mut changed = false;
     for record in document
         .assets
@@ -443,7 +447,11 @@ pub fn reconcile_staged_attachment_ref_scope(
         )
     })?;
     let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
-    ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "协调草稿附件租约")?;
+    ensure_attachment_asset_ids_are_indexed(
+        &document,
+        &asset_ids,
+        "Reconciling the draft attachment lease",
+    )?;
     let mut changed = false;
     let mut released_asset_ids = BTreeSet::new();
     for record in &mut document.assets {
@@ -523,7 +531,11 @@ pub fn promote_staged_attachment_to_message_ref(
         )
     })?;
     let mut document = load_attachment_asset_index_document_for_mutation(&asset_root)?;
-    ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "提升暂存附件引用")?;
+    ensure_attachment_asset_ids_are_indexed(
+        &document,
+        &asset_ids,
+        "Promoting the staged attachment reference",
+    )?;
     let mut changed = false;
 
     for record in document
@@ -729,7 +741,11 @@ pub(super) fn update_staged_attachment_refs(
         return Ok(false);
     }
     if acquire {
-        ensure_attachment_asset_ids_are_indexed(&document, &asset_ids, "记录暂存附件租约")?;
+        ensure_attachment_asset_ids_are_indexed(
+            &document,
+            &asset_ids,
+            "Recording the staged attachment lease",
+        )?;
     }
 
     for record in document
@@ -916,7 +932,7 @@ fn finish_pending_attachment_deletion_at(
         // deletion_error remains authoritative while the updated tombstone records retry diagnostics.
         // deletion_error 保持权威性，同时更新后的墓碑记录重试诊断。
         let deletion_error = format!(
-            "删除待处理托管附件 `{}` 失败：{}。",
+            "Failed to delete pending managed attachment `{}`: {}.",
             managed_path.display(),
             error
         );
@@ -925,7 +941,7 @@ fn finish_pending_attachment_deletion_at(
         ));
         if let Err(persist_error) = save_attachment_asset_index_document(asset_root, document) {
             return Err(format!(
-                "{deletion_error} 同时保存待删除诊断失败：{persist_error}"
+                "{deletion_error} Saving the pending-deletion diagnostic also failed: {persist_error}"
             ));
         }
         return Err(deletion_error);
@@ -963,7 +979,7 @@ pub(super) fn collect_attachment_asset_ids(
     }
     if !missing_labels.is_empty() {
         return Err(format!(
-            "附件 `{}` 缺少资产标识，请重新添加附件后再试。",
+            "Attachment `{}` has no asset ID; add the attachment again and retry.",
             missing_labels.join("`, `")
         ));
     }
@@ -991,7 +1007,7 @@ pub(super) fn ensure_attachment_asset_ids_are_indexed(
         return Ok(());
     }
     Err(format!(
-        "{operation_label}失败：附件资产索引缺少 `{}`，请重新添加附件后再试。",
+        "{operation_label} failed: the attachment asset index has no `{}`; add the attachment again and retry.",
         missing_ids.join("`, `")
     ))
 }

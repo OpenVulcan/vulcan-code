@@ -13,7 +13,7 @@ import { parseConversationBlocks } from "./conversation-transcript-parser";
 
 // SYSTEM_ERROR_BODY mirrors the new JSON public-contract failure shape shown by the user.
 // SYSTEM_ERROR_BODY 对应用户提供的新 JSON 公共契约失败正文格式。
-const SYSTEM_ERROR_BODY = `Vulcan 公共契约流式执行失败：provider custom:78958aba28114a6babbe55c4e4b5ef1c failure: ${JSON.stringify({
+const SYSTEM_ERROR_BODY = `Provider streaming execution failed: provider custom:78958aba28114a6babbe55c4e4b5ef1c failure: ${JSON.stringify({
   category: "unclassified",
   stage: "stream",
   dispatch_outcome: "dispatched",
@@ -33,11 +33,11 @@ const SYSTEM_ERROR_BODY = `Vulcan 公共契约流式执行失败：provider cust
 
 // LEGACY_SYSTEM_ERROR_BODY protects rendering of already persisted text-format failures during migration.
 // LEGACY_SYSTEM_ERROR_BODY 保障迁移期间已经持久化的旧文本失败仍可渲染。
-const LEGACY_SYSTEM_ERROR_BODY = "Vulcan 公共契约流式执行失败：provider custom:78958aba28114a6babbe55c4e4b5ef1c failure: category=Unclassified | stage=stream | dispatch_outcome=Dispatched | semantic_output_observed=false | retryable=false | upstream_code=server_is_overloaded | Our servers are currently overloaded. Please try again later.";
+const LEGACY_SYSTEM_ERROR_BODY = "Provider streaming execution failed: provider custom:78958aba28114a6babbe55c4e4b5ef1c failure: category=Unclassified | stage=stream | dispatch_outcome=Dispatched | semantic_output_observed=false | retryable=false | upstream_code=server_is_overloaded | Our servers are currently overloaded. Please try again later.";
 
 // EMPTY_MESSAGE_502_BODY mirrors an upstream 502 that supplies retry metadata but no display text.
 // EMPTY_MESSAGE_502_BODY 对应携带重试元数据但没有展示文本的上游 502。
-const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider apikeyfan failure: ${JSON.stringify({
+const EMPTY_MESSAGE_502_BODY = `Provider streaming execution failed: provider apikeyfan failure: ${JSON.stringify({
   category: "provider_unavailable",
   subcategory: "http",
   stage: "response_headers",
@@ -61,7 +61,7 @@ const EMPTY_MESSAGE_502_BODY = `Vulcan 公共契约流式执行失败：provider
 
 // AGENTSPACE_RECONCILIATION_BODY mirrors the route-aware closed pending-confirmation classification.
 // AGENTSPACE_RECONCILIATION_BODY 模拟感知路由的封闭待确认分类。
-const AGENTSPACE_RECONCILIATION_BODY = `Vulcan 公共契约流式执行失败：provider agentspace failure: ${JSON.stringify({
+const AGENTSPACE_RECONCILIATION_BODY = `Provider streaming execution failed: provider agentspace failure: ${JSON.stringify({
   category: "unclassified",
   subcategory: "agentspace_result_reconciliation_required",
   stage: "stream",
@@ -83,12 +83,11 @@ const AGENTSPACE_RECONCILIATION_BODY = `Vulcan 公共契约流式执行失败：
 describe("system provider error card", () => {
   // English runtime errors retain structured diagnostics with and without route context.
   // 英文运行时错误无论是否携带路由上下文，都保留结构化诊断。
-  it("parses English runtime failures and keeps existing Chinese records readable", () => {
+  it("parses runtime failures with and without route context", () => {
     for (const original of [SYSTEM_ERROR_BODY, EMPTY_MESSAGE_502_BODY]) {
       // English mirrors the exact new runtime wrapper and suffix separator.
       // english 对应准确的新运行时外壳及后缀分隔符。
-      const english = original.replace("Vulcan 公共契约流式执行失败：", "Provider streaming execution failed: ")
-        .replace("。 [provider_route: ", " [provider_route: ");
+      const english = original.replace("。 [provider_route: ", " [provider_route: ");
       expect(parseSystemProviderError(english)).toEqual({ ...parseSystemProviderError(original), raw: english });
       expect(parseConversationBlocks({
         id: "english-error", conversationId: "conversation", role: "system", recordKind: "transcript", body: english,
@@ -100,7 +99,6 @@ describe("system provider error card", () => {
   it("does not truncate an upstream message containing a legacy route marker", () => {
     const detail = "An upstream message quoted 。 [provider_route: old] verbatim.";
     const body = SYSTEM_ERROR_BODY
-      .replace("Vulcan 公共契约流式执行失败：", "Provider streaming execution failed: ")
       .replace("upstream detail | key=value", detail)
       + " [provider_route: provider=current, model=current-model]";
     expect(parseSystemProviderError(body)?.upstreamMessage).toBe(detail);

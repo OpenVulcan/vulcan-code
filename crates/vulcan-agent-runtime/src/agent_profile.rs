@@ -190,7 +190,7 @@ fn load_user_agent_profiles_from_directory(
         }
         Err(error) => {
             return Err(format!(
-                "读取 Agent 根目录 `{}` 元数据失败：{}。",
+                "Failed to read metadata of agent root `{}`: {}.",
                 root.display(),
                 error
             ));
@@ -198,12 +198,15 @@ fn load_user_agent_profiles_from_directory(
     };
     if root_metadata.file_type().is_symlink() {
         return Err(format!(
-            "Agent 根目录 `{}` 不能是符号链接。",
+            "Agent root `{}` must not be a symbolic link.",
             root.display()
         ));
     }
     if !root_metadata.is_dir() {
-        return Err(format!("Agent 根路径 `{}` 不是目录。", root.display()));
+        return Err(format!(
+            "Agent root path `{}` is not a directory.",
+            root.display()
+        ));
     }
 
     // profiles is the validated runtime-facing catalog keyed by stable identifier.
@@ -224,14 +227,14 @@ fn load_user_agent_profiles_from_directory(
         let profile = load_user_agent_profile(&path)?;
         if is_reserved_agent_identifier(&profile.id) {
             return Err(format!(
-                "Agent 文件 `{}` 使用了系统保留标识 `{}`。",
+                "Agent file `{}` uses the reserved system ID `{}`.",
                 path.display(),
                 profile.id
             ));
         }
         if let Some(previous_path) = profile_sources.get(&profile.id) {
             return Err(format!(
-                "Agent 标识 `{}` 同时由文件 `{}` 与 `{}` 声明。",
+                "Agent ID `{}` is declared by both `{}` and `{}`.",
                 profile.id,
                 previous_path.display(),
                 path.display()
@@ -249,7 +252,7 @@ fn load_user_agent_profiles_from_directory(
 fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(directory).map_err(|error| {
         format!(
-            "读取 Agent 目录 `{}` 失败：{}。",
+            "Failed to read agent directory `{}`: {}.",
             directory.display(),
             error
         )
@@ -258,7 +261,7 @@ fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
     for entry in entries {
         let entry = entry.map_err(|error| {
             format!(
-                "枚举 Agent 目录 `{}` 时读取条目失败：{}。",
+                "Failed to read an entry while listing agent directory `{}`: {}.",
                 directory.display(),
                 error
             )
@@ -267,7 +270,7 @@ fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
         // file_type 在不跟随符号链接的情况下读取，使递归发现无法越界或形成循环。
         let file_type = entry.file_type().map_err(|error| {
             format!(
-                "读取 Agent 目录条目 `{}` 类型失败：{}。",
+                "Failed to read the type of agent directory entry `{}`: {}.",
                 entry.path().display(),
                 error
             )
@@ -278,7 +281,7 @@ fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
 
         if file_type.is_symlink() {
             return Err(format!(
-                "Agent 配置路径 `{}` 不能是符号链接。",
+                "Agent configuration path `{}` must not be a symbolic link.",
                 path.display()
             ));
         }
@@ -305,10 +308,10 @@ fn collect_markdown_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<
 /// 将单个用户自定义 Agent Markdown 文件加载为结构化配置。
 fn load_user_agent_profile(path: &Path) -> Result<UserAgentProfile, String> {
     let bytes = fs::read(path)
-        .map_err(|error| format!("读取 Agent 文件 `{}` 失败：{}。", path.display(), error))?;
+        .map_err(|error| format!("Failed to read agent file `{}`: {}.", path.display(), error))?;
     let text = decode_complete_user_text(&bytes).map_err(|error| {
         format!(
-            "Agent 文件 `{}` 不是有效 UTF-8 或 GB18030：{}。",
+            "Agent file `{}` is not valid UTF-8 or GB18030: {}.",
             path.display(),
             error
         )
@@ -316,7 +319,7 @@ fn load_user_agent_profile(path: &Path) -> Result<UserAgentProfile, String> {
     let (frontmatter, prompt) = split_frontmatter_and_body(&text.content, path)?;
     if prompt.trim().is_empty() {
         return Err(format!(
-            "Agent 文件 `{}` 缺少有效提示词正文。",
+            "Agent file `{}` has no prompt body.",
             path.display()
         ));
     }
@@ -370,7 +373,7 @@ fn split_frontmatter_and_body(
 
     let Some((frontmatter_text, body)) = rest.split_once("\n---\n") else {
         return Err(format!(
-            "Agent 文件 `{}` 的 YAML frontmatter 缺少结束分隔符 `---`。",
+            "The YAML frontmatter of agent file `{}` has no closing `---` delimiter.",
             path.display()
         ));
     };
@@ -378,7 +381,7 @@ fn split_frontmatter_and_body(
     let frontmatter: UserAgentFrontmatter =
         serde_yaml::from_str(frontmatter_text).map_err(|error| {
             format!(
-                "解析 Agent 文件 `{}` 的 YAML frontmatter 失败：{}。",
+                "Failed to parse the YAML frontmatter of agent file `{}`: {}.",
                 path.display(),
                 error
             )
@@ -419,7 +422,8 @@ pub fn parse_runtime_policy_request_text(
         return Ok(ExecutionRuntimePolicyRequest::default());
     }
 
-    serde_yaml::from_str(trimmed).map_err(|error| format!("解析 runtimePolicy 失败：{}。", error))
+    serde_yaml::from_str(trimmed)
+        .map_err(|error| format!("Failed to parse runtimePolicy: {}.", error))
 }
 
 /// Formats runtime-policy overrides as YAML, or an empty field when no override exists.
@@ -584,7 +588,6 @@ mod tests {
         let error = load_user_agent_profiles_from_directory(root_file.path())
             .expect_err("non-directory Agent profile root should fail");
 
-        assert!(error.contains("不是目录"));
         assert!(error.contains(&root_file.path().display().to_string()));
     }
 

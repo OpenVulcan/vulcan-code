@@ -987,7 +987,7 @@ impl McpRuntimeAccess {
     pub async fn server_capabilities(&self, server_id: &str) -> Result<serde_json::Value, String> {
         let runtime = self
             .partition_for_server(server_id)
-            .ok_or_else(|| String::from("MCP 运行时未就绪。"))?;
+            .ok_or_else(|| String::from("The MCP runtime is not ready."))?;
         runtime.server_capabilities(server_id).await
     }
 

@@ -1089,7 +1089,7 @@ async fn assert_v1_close_agent_navigation(tool_call_count: usize, start_close_to
     // event 同时携带强类型 V1 边界与执行器的规范显示元数据。
     let event = RuntimeEvent::new(
         RuntimeEventKind::ToolFinished,
-        "工具返回 · close-1",
+        "Tool result · close-1",
         "closed",
     )
     .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Finished(result))

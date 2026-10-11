@@ -55,7 +55,11 @@ impl McpServerRegistry {
             .map(|server| {
                 format!(
                     "{} · {} · {} · {}",
-                    if server.enabled { "启用" } else { "禁用" },
+                    if server.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
                     server.name,
                     server.transport_kind().label(),
                     server.command_summary()
@@ -73,7 +77,7 @@ impl McpServerRegistry {
             .map(|server| {
                 format!(
                     "{} · {} · {} · {}",
-                    "启用",
+                    "enabled",
                     server.name,
                     server.transport_kind().label(),
                     server.command_summary()
@@ -179,7 +183,7 @@ mod tests {
         assert_eq!(
             registry.enabled_summary_rows(),
             vec![String::from(
-                "启用 · Enabled Server · stdio · enabled-mcp <1 arguments>"
+                "enabled · Enabled Server · stdio · enabled-mcp <1 arguments>"
             )]
         );
     }
@@ -199,7 +203,7 @@ mod tests {
         assert_eq!(
             overview.active_summary_rows(),
             &[String::from(
-                "启用 · Enabled Server · stdio · enabled-mcp <1 arguments>"
+                "enabled · Enabled Server · stdio · enabled-mcp <1 arguments>"
             )]
         );
         assert!(overview.discovery_report().is_empty());
@@ -239,7 +243,7 @@ mod tests {
         assert_eq!(
             overview.summary_rows(),
             &[String::from(
-                "启用 · Configured Server · stdio · configured-mcp <1 arguments>"
+                "enabled · Configured Server · stdio · configured-mcp <1 arguments>"
             )]
         );
         assert!(overview.discovery_report().is_empty());

@@ -471,7 +471,7 @@ function isLegacyTurnStatsMetricLine(line: string): boolean {
 function hasLegacyToolCallBlockMarker(source: string): boolean {
   return /^#{1,6}\s*Tool Call\b/im.test(source)
     || /(?:^|\n)\s*tool_call_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
-    || /(?:^|\n)\s*工具调用\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*Tool call\s*[·:]\s*[A-Za-z0-9_.:-]+/i.test(source)
     || /(?:^|\n)\s*调用\s+[A-Za-z0-9_.:-]+\s+工具\s*(?:进行中|运行中|已完成|失败)?\s*$/im.test(source);
 }
 
@@ -479,7 +479,7 @@ function hasLegacyToolCallBlockMarker(source: string): boolean {
 // hasLegacyToolResultBlockMarker 检测明确的旧版工具返回转录块。
 function hasLegacyToolResultBlockMarker(source: string): boolean {
   return /^#{1,6}\s*Tool Result\b/im.test(source)
-    || /(?:^|\n)\s*工具返回\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source);
+    || /(?:^|\n)\s*Tool result\s*[·:]\s*[A-Za-z0-9_.:-]+/i.test(source);
 }
 
 // hasLegacyCommandBlockMarker detects explicit command-session transcript blocks without matching ordinary tool lists.

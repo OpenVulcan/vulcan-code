@@ -79,7 +79,11 @@ pub(crate) fn apply_latest_request_snapshot(
 /// Builds the standard failed runtime event emitted when provider execution terminates with one error.
 /// 构建当 Provider 执行以单条错误终止时发出的标准失败运行时事件。
 pub(crate) fn build_failed_runtime_event(error: &str) -> RuntimeEvent {
-    RuntimeEvent::new(RuntimeEventKind::Failed, "真实执行失败", error.to_string())
+    RuntimeEvent::new(
+        RuntimeEventKind::Failed,
+        "Execution failed",
+        error.to_string(),
+    )
 }
 
 /// Builds the standard output-completed event emitted after successful provider output normalization.
@@ -87,9 +91,9 @@ pub(crate) fn build_failed_runtime_event(error: &str) -> RuntimeEvent {
 pub(crate) fn build_output_completed_event(normalized_output: &str) -> RuntimeEvent {
     RuntimeEvent::new(
         RuntimeEventKind::TokenDelta,
-        "模型输出完成",
+        "Model output completed",
         format!(
-            "真实 Provider 已返回 {} 个字符的正式输出内容。",
+            "The provider returned {} characters of final output.",
             normalized_output.chars().count()
         ),
     )
@@ -458,7 +462,7 @@ mod tests {
             [
                 ExecutionStreamEvent::RuntimeEvent { event, .. },
                 ExecutionStreamEvent::Finished(report),
-            ] if event.title == "模型输出完成"
+            ] if event.title == "Model output completed"
                 && report.is_success()
                 && report.assistant_output.as_deref() == Some("最终答案")
                 && report.conversation_state.is_some()

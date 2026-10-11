@@ -45,7 +45,7 @@ pub(crate) fn append_provider_visible_agent_messages_to_core_snapshot(
         validate_provider_visible_agent_message(message)?;
         if !seen_delivery_ids.insert(message.delivery_id.clone()) {
             return Err(format!(
-                "重复的智能体消息投递标识 `{}`，无法播种 Provider 可见消息。",
+                "Duplicate agent message delivery ID `{}`; cannot seed provider-visible messages.",
                 message.delivery_id
             ));
         }
@@ -72,7 +72,7 @@ fn validate_provider_visible_agent_message(
     ] {
         if field_value.trim().is_empty() {
             return Err(format!(
-                "智能体消息字段 `{field_name}` 为空，无法播种 Provider 可见消息。"
+                "Agent message field `{field_name}` is empty; cannot seed provider-visible messages."
             ));
         }
     }
@@ -117,7 +117,7 @@ fn append_provider_visible_agent_message_to_core_snapshot(
         role: CoreTranscriptRole::Assistant,
         record_kind: CoreTranscriptRecordKind::Visible,
         visible: false,
-        title: String::from("智能体消息"),
+        title: String::from("Agent message"),
         body: model_text,
         metadata: message.metadata.clone(),
         created_at,

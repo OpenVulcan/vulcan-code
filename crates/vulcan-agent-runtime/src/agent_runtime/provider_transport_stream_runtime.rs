@@ -593,7 +593,7 @@ where
                             // finalDelta 位于可靠失败之后，使精确协议诊断在投影后仍然保留。
                             let _ = task_sender.send(final_delta);
                             let _ = task_sender.send(Err(format!(
-                                "{}工具协议失败：工具 `{}` 连续两次收到无效参数，本回合已明确失败。{message}",
+                                "{}Tool protocol failure: tool `{}` received invalid arguments twice in a row, so this turn failed. {message}",
                                 provider_label, tool_name
                             )));
                             break;
@@ -708,7 +708,7 @@ where
                             // retryDetail exposes the exact finite host budget for every automatic retry.
                             // retryDetail 为每次自动重试公开精确的有限宿主预算。
                             let retry_detail = format!(
-                                "{} 第 {}/{} 次重试将在 {} 秒后开始：{}",
+                                "{} retry {}/{} starts in {} seconds: {}",
                                 provider_label,
                                 decision.retry_number,
                                 decision.max_retries,
@@ -717,7 +717,7 @@ where
                             );
                             let retry_event = crate::agent_runtime::events::RuntimeEvent::new(
                                 crate::agent_runtime::events::RuntimeEventKind::Retrying,
-                                "Provider 自动重试",
+                                "Provider automatic retry",
                                 retry_detail,
                             )
                             .with_metadata(Some(json!({
@@ -794,7 +794,7 @@ where
 
         if let Err(error) = controller_task.await {
             yield Err(format!(
-                "{}控制器后台任务失败：{}。",
+                "{}Controller background task failed: {}.",
                 provider_label_for_join,
                 error
             ));

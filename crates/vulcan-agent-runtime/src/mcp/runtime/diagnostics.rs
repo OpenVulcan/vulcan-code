@@ -74,14 +74,14 @@ impl McpRuntimeServerStatus {
     /// 返回紧凑的人类可读状态标签。
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Disabled => "禁用",
-            Self::Connecting => "连接中",
-            Self::AwaitingAuthorization => "等待授权",
-            Self::Connected => "在线",
-            Self::Disconnected => "离线",
-            Self::Failed => "失败",
-            Self::Stopping => "停止中",
-            Self::Stopped => "已停止",
+            Self::Disabled => "Disabled",
+            Self::Connecting => "Connecting",
+            Self::AwaitingAuthorization => "Awaiting authorization",
+            Self::Connected => "Online",
+            Self::Disconnected => "Offline",
+            Self::Failed => "Failed",
+            Self::Stopping => "Stopping",
+            Self::Stopped => "Stopped",
         }
     }
 }
@@ -292,7 +292,7 @@ impl McpRuntimeServerDiagnostic {
     /// 返回单条人类可读的运行时摘要语句。
     pub fn summary_text(&self) -> String {
         format!(
-            "服务器 `{}` 当前状态为 `{}`，已注册 {} 个工具、{} 个 prompt 与 {} 个资源。",
+            "Server `{}` is `{}` with {} tools, {} prompts and {} resources registered.",
             self.server_name(),
             self.status().label(),
             self.tool_count(),
@@ -306,7 +306,7 @@ impl McpRuntimeServerDiagnostic {
     pub fn warning_text(&self) -> Option<String> {
         self.last_error
             .as_ref()
-            .map(|error| format!("{} 最近一次错误：{error}", self.summary_text()))
+            .map(|error| format!("{} last error: {error}", self.summary_text()))
     }
 
     /// Returns the recommended runtime event title for UI projection.
@@ -319,28 +319,28 @@ impl McpRuntimeServerDiagnostic {
     pub fn runtime_event_title(&self) -> String {
         match self.status() {
             McpRuntimeServerStatus::Disabled => {
-                format!("MCP 服务器已停用 · {}", self.server_name())
+                format!("MCP server disabled · {}", self.server_name())
             }
             McpRuntimeServerStatus::Connecting => {
-                format!("MCP 服务器连接中 · {}", self.server_name())
+                format!("MCP server connecting · {}", self.server_name())
             }
             McpRuntimeServerStatus::AwaitingAuthorization => {
-                format!("MCP 服务器等待授权 · {}", self.server_name())
+                format!("MCP server awaiting authorization · {}", self.server_name())
             }
             McpRuntimeServerStatus::Connected => {
-                format!("MCP 服务器在线 · {}", self.server_name())
+                format!("MCP server online · {}", self.server_name())
             }
             McpRuntimeServerStatus::Disconnected => {
-                format!("MCP 服务器离线 · {}", self.server_name())
+                format!("MCP server offline · {}", self.server_name())
             }
             McpRuntimeServerStatus::Failed => {
-                format!("MCP 服务器失败 · {}", self.server_name())
+                format!("MCP server failed · {}", self.server_name())
             }
             McpRuntimeServerStatus::Stopping => {
-                format!("MCP 服务器停止中 · {}", self.server_name())
+                format!("MCP server stopping · {}", self.server_name())
             }
             McpRuntimeServerStatus::Stopped => {
-                format!("MCP 服务器已停止 · {}", self.server_name())
+                format!("MCP server stopped · {}", self.server_name())
             }
         }
     }

@@ -7,12 +7,12 @@ use vulcan_tools_manager::VulcanToolSourceKind;
 /// 渲染请求预览与请求快照界面使用的单个工具来源标签。
 pub(crate) fn tool_source_label(source: VulcanToolSourceKind) -> &'static str {
     match source {
-        VulcanToolSourceKind::Native => "原生工具",
-        VulcanToolSourceKind::VulcanManaged => "Vulcan 托管工具",
-        VulcanToolSourceKind::VulcanPlugin => "Vulcan 插件",
+        VulcanToolSourceKind::Native => "Native tool",
+        VulcanToolSourceKind::VulcanManaged => "Vulcan managed tool",
+        VulcanToolSourceKind::VulcanPlugin => "Vulcan plugin",
         VulcanToolSourceKind::LuaSkills => "LuaSkills",
         VulcanToolSourceKind::Mcp => "MCP",
-        VulcanToolSourceKind::AiHostBinding => "AI 专用回退",
+        VulcanToolSourceKind::AiHostBinding => "AI-only fallback",
     }
 }
 

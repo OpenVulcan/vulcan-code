@@ -654,14 +654,14 @@ fn contains_provider_rate_limit_marker(lower: &str) -> bool {
 /// 判断错误文本是否包含已知不可重试标记。
 fn contains_non_retryable_marker(lower: &str) -> bool {
     [
-        "请求预算门阻止发送",
+        "request budget gate blocked sending",
         "context window",
         "context overflow",
-        "上下文",
+        "context length",
         "schema",
         "decoder",
         "decode error",
-        "解码",
+        "failed to decode",
         "unsupported",
         "not supported",
         "invalid request",
@@ -669,8 +669,8 @@ fn contains_non_retryable_marker(lower: &str) -> bool {
         "unauthorized",
         "forbidden",
         "api key",
-        "鉴权",
-        "配额耗尽",
+        "authentication",
+        "quota exceeded",
         "quota",
         "content policy",
     ]
@@ -685,7 +685,7 @@ fn contains_non_retryable_marker(lower: &str) -> bool {
 /// 判断错误文本是否包含已知瞬态传输错误标记。
 fn contains_transport_marker(lower: &str) -> bool {
     [
-        "请求发送失败",
+        "failed to send request",
         "timeout",
         "timed out",
         "connection reset",

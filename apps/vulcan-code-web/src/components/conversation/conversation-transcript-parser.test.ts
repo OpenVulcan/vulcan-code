@@ -36,7 +36,7 @@ describe("conversation transcript parser source identity", () => {
       conversationId: "conversation",
       role: "assistant",
       recordKind: "display-note",
-      body: "Vulcan 公共契约 第 1/5 次重试将在 3 秒后开始：Provider unavailable",
+      body: "Anthropic retry 1/5 starts in 3 seconds: Provider unavailable",
       metadata: {
         notice_kind: "provider_retry",
         provider_retry_state: "retrying",

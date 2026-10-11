@@ -789,7 +789,7 @@ function displayNoteMessage(
       ...base,
       role: "system",
       recordKind: "transcript",
-      body: `Vulcan 公共契约流式执行失败：provider ${provider} failure: ${JSON.stringify(payload)}`,
+      body: `Provider streaming execution failed: provider ${provider} failure: ${JSON.stringify(payload)}`,
       metadata: presentationMetadata(summary, rootInput),
     };
   }

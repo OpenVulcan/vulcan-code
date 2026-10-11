@@ -429,10 +429,10 @@ fn build_prompt_composer_layer_reports(
     user_text: &str,
 ) -> Vec<RuntimePromptComposerLayerReport> {
     [
-        ("System", "系统层", system_text),
-        ("Developer", "开发者层", developer_text),
-        ("ToolMetadata", "工具元数据层", tool_metadata_text),
-        ("User", "用户上下文层", user_text),
+        ("System", "System layer", system_text),
+        ("Developer", "Developer layer", developer_text),
+        ("ToolMetadata", "Tool metadata layer", tool_metadata_text),
+        ("User", "User context layer", user_text),
     ]
     .into_iter()
     .map(|(target_label, title, text)| {
@@ -482,7 +482,7 @@ fn render_prompt_composer_report_markdown(
         .map(|layer| layer.estimated_tokens)
         .sum::<usize>();
     let layer_rows = if layer_summaries.is_empty() {
-        String::from("（无分层摘要）")
+        String::from("(no layer summary)")
     } else {
         layer_summaries
             .iter()
@@ -502,7 +502,7 @@ fn render_prompt_composer_report_markdown(
             .join("\n")
     };
     let cache_event_rows = if cache_events.is_empty() {
-        String::from("（无缓存事件）")
+        String::from("(no cache events)")
     } else {
         cache_events
             .iter()
@@ -525,7 +525,7 @@ fn render_prompt_composer_report_markdown(
         cache_event_rows
     };
     let segment_rows = if segments.is_empty() {
-        String::from("（无提示词片段）")
+        String::from("(no prompt fragments)")
     } else {
         segments
             .iter()
@@ -600,7 +600,7 @@ fn render_prompt_composer_report_markdown(
 /// 将文本渲染为安全的 Markdown 代码块。
 fn fenced_prompt_report_text(text: &str) -> String {
     if text.trim().is_empty() {
-        return String::from("（空）");
+        return String::from("(empty)");
     }
     format!("````text\n{}\n````", text.trim())
 }

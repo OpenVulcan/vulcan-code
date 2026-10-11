@@ -49,7 +49,7 @@ pub(super) fn patch_latest_prechecked_user_prompt_record(
             record.visible
                 && record.kind == SessionMessageKind::User
                 && record.record_kind == SessionMessageRecordKind::Transcript
-                && record.title == "用户指令"
+                && record.title == "User Prompt"
         })
     {
         record.body = build_shared_user_prompt_transcript_body(prompt, attachments);
@@ -158,7 +158,7 @@ pub(super) fn append_shared_visible_user_prompt_record_with_attachments(
             kind: SessionMessageKind::User,
             record_kind: SessionMessageRecordKind::Transcript,
             visible: true,
-            title: String::from("用户指令"),
+            title: String::from("User Prompt"),
             body: build_shared_user_prompt_transcript_body(prompt, &attachments),
             metadata: build_shared_user_prompt_transcript_metadata(prompt, &attachments, source),
             created_at: now.to_string(),
@@ -196,7 +196,7 @@ pub fn build_shared_user_prompt_transcript_body(
         sections.push(prompt.trim().to_string());
     }
     if !visible_attachments.is_empty() {
-        sections.push(String::from("附件与上下文："));
+        sections.push(String::from("Attachments and context:"));
         sections.extend(visible_attachments.iter().map(|attachment| {
             format!(
                 "- {} `{}`",
@@ -208,7 +208,7 @@ pub fn build_shared_user_prompt_transcript_body(
     if sections.is_empty() && !attachments.is_empty() && visible_attachments.is_empty() {
         String::new()
     } else if sections.is_empty() {
-        String::from("空白消息")
+        String::from("Empty message")
     } else {
         sections.join("\n")
     }

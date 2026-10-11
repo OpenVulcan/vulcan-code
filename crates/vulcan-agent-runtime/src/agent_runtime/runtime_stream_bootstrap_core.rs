@@ -352,10 +352,12 @@ pub(crate) async fn seed_runtime_request_snapshot(
             );
         }
         Err(error) => {
-            preparation.provider_request_preview_markdown =
-                format!("# 最后一次真实 API 请求快照\n\n请求快照构建失败：{}", error);
+            preparation.provider_request_preview_markdown = format!(
+                "# Last real API request snapshot\n\nFailed to build the request snapshot: {}",
+                error
+            );
             preparation.provider_request_snapshot_json = None;
-            warnings.push(format!("请求快照构建失败：{error}"));
+            warnings.push(format!("Failed to build the request snapshot: {error}"));
             after_precheck_trace(
                 "after_precheck_29x_request_snapshot_failed",
                 format!(

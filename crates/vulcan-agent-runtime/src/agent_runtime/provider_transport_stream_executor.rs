@@ -222,7 +222,7 @@ impl StreamingRuntimeToolExecutor {
             RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,
                 format!(
-                    "工具调用 · {} · {}",
+                    "Tool call · {} · {}",
                     request.tool_call_id, request.tool_name
                 ),
                 format_tool_call_runtime_detail(&request.tool_name, &request.arguments),
@@ -278,7 +278,7 @@ impl StreamingRuntimeToolExecutor {
         let (tool_finished_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolFinished,
-                format!("工具返回 · {}", request.tool_call_id),
+                format!("Tool result · {}", request.tool_call_id),
                 format_host_tool_result_runtime_detail(&result.model_output),
             )
             .with_tool_execution_boundary(ToolExecutionRecoveryBoundary::Finished(result.clone()))

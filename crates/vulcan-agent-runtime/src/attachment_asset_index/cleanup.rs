@@ -27,7 +27,7 @@ pub fn preview_attachment_cleanup(
     let document = load_attachment_asset_index_document(&asset_root)?;
     let cutoff_text = cutoff_date
         .format(ATTACHMENT_DATE_FORMAT)
-        .map_err(|error| format!("格式化清理截止日期失败：{error}。"))?;
+        .map_err(|error| format!("Failed to format the cleanup cutoff date: {error}."))?;
 
     let mut matched_asset_count = 0usize;
     let mut matched_byte_len = 0_u64;
@@ -68,7 +68,7 @@ pub fn execute_attachment_cleanup(
     let cutoff_date = parse_attachment_cleanup_cutoff_date(cutoff_date_text)?;
     let cutoff_text = cutoff_date
         .format(ATTACHMENT_DATE_FORMAT)
-        .map_err(|error| format!("格式化清理截止日期失败：{error}。"))?;
+        .map_err(|error| format!("Failed to format the cleanup cutoff date: {error}."))?;
     let asset_root = resolve_managed_attachment_root(workspace_path);
     // transaction_lock excludes staging and reference updates during the destructive cleanup transaction.
     // transaction_lock 在破坏性清理事务期间排除暂存与引用更新。
@@ -201,7 +201,7 @@ pub(super) fn validate_cleanup_managed_path(
     let managed_path_text = record.managed_path.trim();
     if managed_path_text.is_empty() {
         return Err(format!(
-            "附件资产 `{}` 的托管路径为空，已停止清理以避免误删。",
+            "Attachment asset `{}` has an empty managed path; cleanup stopped to avoid deleting the wrong file.",
             record.asset_id
         ));
     }
@@ -209,7 +209,7 @@ pub(super) fn validate_cleanup_managed_path(
     let managed_path = PathBuf::from(managed_path_text);
     if !managed_path.is_absolute() || path_contains_parent_component(&managed_path) {
         return Err(format!(
-            "附件资产 `{}` 的托管路径 `{}` 不安全，已停止清理以避免误删。",
+            "Attachment asset `{}` has an unsafe managed path `{}`; cleanup stopped to avoid deleting the wrong file.",
             record.asset_id,
             managed_path.display()
         ));
@@ -221,14 +221,14 @@ pub(super) fn validate_cleanup_managed_path(
     if managed_path.is_file() {
         let canonical_managed_path = fs::canonicalize(&managed_path).map_err(|error| {
             format!(
-                "规范化托管附件 `{}` 失败：{}。",
+                "Failed to canonicalize managed attachment `{}`: {}.",
                 managed_path.display(),
                 error
             )
         })?;
         let canonical_category_dir = fs::canonicalize(&expected_category_dir).map_err(|error| {
             format!(
-                "规范化托管附件分类目录 `{}` 失败：{}。",
+                "Failed to canonicalize the managed attachment category directory `{}`: {}.",
                 expected_category_dir.display(),
                 error
             )
@@ -239,7 +239,7 @@ pub(super) fn validate_cleanup_managed_path(
             case_insensitive_comparison,
         ) {
             return Err(format!(
-                "附件资产 `{}` 的托管路径 `{}` 不在当前项目附件目录内，已停止清理以避免误删。",
+                "Attachment asset `{}` has managed path `{}` outside this project's attachment directory; cleanup stopped to avoid deleting the wrong file.",
                 record.asset_id,
                 managed_path.display()
             ));
@@ -249,14 +249,14 @@ pub(super) fn validate_cleanup_managed_path(
 
     let Some(parent) = managed_path.parent() else {
         return Err(format!(
-            "附件资产 `{}` 的托管路径 `{}` 缺少父目录，已停止清理以避免误删。",
+            "Attachment asset `{}` has managed path `{}` without a parent directory; cleanup stopped to avoid deleting the wrong file.",
             record.asset_id,
             managed_path.display()
         ));
     };
     if !paths_equal_for_host(parent, &expected_category_dir, case_insensitive_comparison) {
         return Err(format!(
-            "附件资产 `{}` 的缺失托管路径 `{}` 不属于当前项目附件分类目录，已停止清理以避免误删。",
+            "Attachment asset `{}` has missing managed path `{}` outside this project's attachment category directory; cleanup stopped to avoid deleting the wrong file.",
             record.asset_id,
             managed_path.display()
         ));

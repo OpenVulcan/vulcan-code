@@ -795,9 +795,9 @@ fn take_provider_retry_status_changed_event(
         return None;
     }
     let (title, display_state) = if succeeded {
-        ("Provider 重试成功", "succeeded")
+        ("Provider retry succeeded", "succeeded")
     } else {
-        ("Provider 重试失败", "failed")
+        ("Provider retry failed", "failed")
     };
     Some(ExecutionStreamEvent::RuntimeEvent {
         session_id,
@@ -1451,7 +1451,7 @@ mod tests {
             Ok(ProviderStreamDelta::RuntimeEvent(
                 RuntimeEvent::new(
                     RuntimeEventKind::ToolStarted,
-                    "工具调用 · read_file",
+                    "Tool call · read_file",
                     "开始调用工具",
                 )
                 .with_metadata(Some(json!({"tool_call_id":"call-1"}))),
@@ -1462,7 +1462,7 @@ mod tests {
             [
                 ExecutionStreamEvent::ThinkingCompleted { .. },
                 ExecutionStreamEvent::RuntimeEvent { event, .. }
-            ] if event.title == "工具调用 · read_file"
+            ] if event.title == "Tool call · read_file"
         ));
         assert!(state.thinking_visible_output().is_empty());
 
@@ -1494,7 +1494,7 @@ mod tests {
         );
         let started = RuntimeEvent::new(
             RuntimeEventKind::ToolRequestStarted,
-            "工具请求 · pending-1 · submit_plan",
+            "Tool request · pending-1 · submit_plan",
             String::new(),
         );
         let started_events = process_provider_stream_delta(
@@ -1511,7 +1511,7 @@ mod tests {
         ));
         let progress = RuntimeEvent::new(
             RuntimeEventKind::ToolRequestProgress,
-            "工具请求 · pending-1 · submit_plan",
+            "Tool request · pending-1 · submit_plan",
             String::new(),
         );
         let progress_events = process_provider_stream_delta(

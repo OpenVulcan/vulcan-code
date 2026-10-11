@@ -106,7 +106,7 @@ impl ProviderRuntimeBlueprint {
     pub fn endpoint_summary(&self) -> String {
         self.base_url
             .clone()
-            .unwrap_or_else(|| String::from("由运行时自动解析"))
+            .unwrap_or_else(|| String::from("resolved automatically by the runtime"))
     }
 
     /// Returns whether the active model accepts explicit temperature overrides.
@@ -415,7 +415,7 @@ fn provider_blueprint_from_selection(
         credential_source: selection.route.connection.display_name.clone(),
         reasoning: ProviderRuntimeReasoningResolution {
             requested_effort: requested_reasoning_effort,
-            source_label: String::from("公共契约"),
+            source_label: String::from("Public contract"),
             note: None,
         },
     })

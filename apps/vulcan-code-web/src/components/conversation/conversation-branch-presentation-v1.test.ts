@@ -51,7 +51,7 @@ describe("V1 branch request configuration presentation", () => {
   // The runtime's existing public-contract failure is the sole authority for the expanded JSON card.
   // 运行时既有公共契约失败是展开 JSON 错误卡的唯一权威。
   it("preserves structured producer errors without nesting or losing their route", () => {
-    const detail = 'Vulcan 公共契约流式执行失败：provider example failure: {"category":"invalid_request","stage":"prepare","dispatch_outcome":"not_dispatched","semantic_output_observed":false,"side_effect_observed":false,"terminal":true,"retryable":false,"provider_id":"example","model_id":"model-a","message":"Exact original failure."}';
+    const detail = 'Provider streaming execution failed: provider example failure: {"category":"invalid_request","stage":"prepare","dispatch_outcome":"not_dispatched","semantic_output_observed":false,"side_effect_observed":false,"terminal":true,"retryable":false,"provider_id":"example","model_id":"model-a","message":"Exact original failure."}';
     const presentation = projectConversationBranchPresentationV1("session-request-config", [{
       seq: 1, turn_id: 1, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
       event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "stream_finished_without_v1_api_terminal", redacted_detail: detail },

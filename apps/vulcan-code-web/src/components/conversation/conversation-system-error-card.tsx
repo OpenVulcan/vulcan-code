@@ -80,11 +80,10 @@ export interface SystemErrorCardProps {
   error: SystemProviderError;
 }
 
-// Registered prefixes cover the English runtime format and already persisted Chinese records.
-// 已登记前缀覆盖英文运行时格式及已经持久化的中文记录。
+// Registered prefixes cover the runtime provider failure format.
+// 已登记前缀覆盖运行时 Provider 失败格式。
 const SYSTEM_PROVIDER_ERROR_PREFIXES = [
   "Provider streaming execution failed: provider ",
-  "Vulcan 公共契约流式执行失败：provider ",
 ];
 
 // SYSTEM_PROVIDER_ERROR_FAILURE_MARKER separates the provider id from the JSON failure object.

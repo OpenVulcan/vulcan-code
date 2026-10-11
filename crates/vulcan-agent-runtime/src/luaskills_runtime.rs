@@ -284,7 +284,7 @@ pub fn render_luaskills_help_trees(
             Ok(None) => None,
             Err(error) => {
                 warnings.push(format!(
-                    "渲染 LuaSkills 包 `{skill_id}` 的帮助 `{flow_name}` 失败：{error}"
+                    "Failed to render help `{flow_name}` of LuaSkills package `{skill_id}`: {error}"
                 ));
                 None
             }

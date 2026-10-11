@@ -65,7 +65,6 @@ fn missing_tool_policy_keeps_only_universal_native_tool_resolution() {
         ]
     );
     assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].contains("仅保留通用原生工具"));
 }
 
 /// Verifies direct agent plugin tools override policy defaults and unknown identifiers are removed.

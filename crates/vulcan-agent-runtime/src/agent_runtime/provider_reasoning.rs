@@ -291,7 +291,7 @@ impl ProviderRuntimeReasoningResolution {
     /// 返回选定强度、来源与可选说明。
     pub fn summary_label(&self) -> String {
         let mut label = format!(
-            "推理：{} · {}",
+            "Reasoning: {} · {}",
             self.requested_effort.compact_label(),
             self.source_label
         );

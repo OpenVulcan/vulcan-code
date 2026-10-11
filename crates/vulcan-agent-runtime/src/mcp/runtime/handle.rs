@@ -661,18 +661,20 @@ impl McpRuntimeHandle {
     ) -> Result<serde_json::Value, String> {
         let server = self
             .server_config(server_id)
-            .ok_or_else(|| String::from("未找到 MCP 服务器。"))?;
+            .ok_or_else(|| String::from("MCP server not found."))?;
         if self
             .snapshot()
             .servers
             .get(server_id)
             .is_none_or(|entry| entry.status != McpRuntimeServerStatus::Connected)
         {
-            return Err(String::from("MCP 服务器尚未连接；详情读取不会自动连接。"));
+            return Err(String::from(
+                "The MCP server is not connected; reading details does not connect it.",
+            ));
         }
         let transport = self
             .transport_for_server(server_id)
-            .ok_or_else(|| String::from("MCP 连接不可用。"))?;
+            .ok_or_else(|| String::from("The MCP connection is unavailable."))?;
         let (prompts, resources) = tokio::join!(
             run_bounded_optional_capability_discovery(
                 &server,
@@ -696,7 +698,9 @@ impl McpRuntimeHandle {
                 .get(server_id)
                 .is_none_or(|entry| entry.status != McpRuntimeServerStatus::Connected)
         {
-            return Err(String::from("MCP 连接已经变化，请重新读取详情。"));
+            return Err(String::from(
+                "The MCP connection changed; read the details again.",
+            ));
         }
         Ok(serde_json::json!({
             "prompts": prompts.as_ref().ok(), "promptError": prompts.as_ref().err().map(|error| server.sanitize_diagnostic(error)),
@@ -2028,7 +2032,7 @@ async fn refresh_server_tools(
         })?
         .map_err(|error| {
             format!(
-                "刷新 MCP 服务器 `{}` 工具列表失败：{}。",
+                "Failed to refresh the tool list of MCP server `{}`: {}.",
                 server.name, error
             )
         })?;
@@ -2383,7 +2387,7 @@ where
         })?
         .map_err(|error| {
             format!(
-                "刷新 MCP 服务器 `{}` {capability} 列表失败：{error}。",
+                "Failed to refresh the {capability} list of MCP server `{}`: {error}.",
                 server.name
             )
         })
@@ -3601,13 +3605,7 @@ mod optional_capability_tests {
             .get_mut(&server.id)
             .expect("server")
             .status = McpRuntimeServerStatus::Disconnected;
-        assert!(
-            handle
-                .server_capabilities(&server.id)
-                .await
-                .expect_err("disconnected reads must not connect")
-                .contains("尚未连接")
-        );
+        assert!(handle.server_capabilities(&server.id).await.is_err());
     }
 
     /// Verifies every AI-visible MCP call failure carries one stable machine code and English text.

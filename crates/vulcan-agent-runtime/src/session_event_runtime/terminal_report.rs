@@ -142,7 +142,7 @@ fn apply_terminal_execution_report_to_draft(
             report
                 .error
                 .as_deref()
-                .unwrap_or("真实执行失败，但未返回具体错误信息。"),
+                .unwrap_or("Execution failed without a specific error message."),
         )?
     };
     let status = if is_success {
@@ -208,7 +208,7 @@ fn ensure_terminal_success_records(
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ThinkingOutput,
             visible: true,
-            title: String::from("思考"),
+            title: String::from("Thinking"),
             body: thinking_output.to_string(),
             metadata: Some(json!({ "collapsed_by_default": true })),
             created_at: now.to_string(),
@@ -243,7 +243,7 @@ fn ensure_terminal_success_records(
                 kind: SessionMessageKind::Assistant,
                 record_kind: SessionMessageRecordKind::AssistantOutput,
                 visible: true,
-                title: String::from("输出"),
+                title: String::from("Output"),
                 body: assistant_output,
                 metadata: None,
                 created_at: now.to_string(),
@@ -442,11 +442,10 @@ fn append_terminal_error_record(
             kind: SessionMessageKind::Error,
             record_kind: SessionMessageRecordKind::Transcript,
             visible: true,
-            title: String::from("执行失败"),
-            body: report
-                .error
-                .clone()
-                .unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。")),
+            title: String::from("Execution failed"),
+            body: report.error.clone().unwrap_or_else(|| {
+                String::from("Execution failed without a specific error message.")
+            }),
             metadata: None,
             created_at: now.to_string(),
         },

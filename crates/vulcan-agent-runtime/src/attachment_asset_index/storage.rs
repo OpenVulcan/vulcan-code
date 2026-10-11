@@ -69,14 +69,14 @@ pub(super) fn load_attachment_asset_index_document(
     }
     let raw = fs::read_to_string(&index_file).map_err(|error| {
         format!(
-            "读取附件资产索引 `{}` 失败：{}。",
+            "Failed to read attachment asset index `{}`: {}.",
             index_file.display(),
             error
         )
     })?;
     serde_json::from_str::<AttachmentAssetIndexDocument>(&raw).map_err(|error| {
         format!(
-            "解析附件资产索引 `{}` 失败：{}。",
+            "Failed to parse attachment asset index `{}`: {}.",
             index_file.display(),
             error
         )
@@ -94,7 +94,7 @@ pub(super) fn save_attachment_asset_index_document(
     let index_directory = resolve_attachment_index_directory(asset_root);
     fs::create_dir_all(&index_directory).map_err(|error| {
         format!(
-            "创建附件资产索引目录 `{}` 失败：{}。",
+            "Failed to create attachment asset index directory `{}`: {}.",
             index_directory.display(),
             error
         )
@@ -107,7 +107,7 @@ pub(super) fn save_attachment_asset_index_document(
     let existing_permissions = match fs::symlink_metadata(&index_file) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(format!(
-                "拒绝替换符号链接附件资产索引 `{}`。",
+                "Refusing to replace attachment asset index `{}` because it is a symbolic link.",
                 index_file.display()
             ));
         }
@@ -115,7 +115,7 @@ pub(super) fn save_attachment_asset_index_document(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(format!(
-                "读取附件资产索引 `{}` 元数据失败：{}。",
+                "Failed to read metadata of attachment asset index `{}`: {}.",
                 index_file.display(),
                 error
             ));
@@ -124,7 +124,7 @@ pub(super) fn save_attachment_asset_index_document(
     // serialized contains the complete next index image before any filesystem state changes.
     // serialized 在任何文件系统状态变化前包含完整的下一版本索引内容。
     let serialized = serde_json::to_vec_pretty(document)
-        .map_err(|error| format!("序列化附件资产索引失败：{}。", error))?;
+        .map_err(|error| format!("Failed to serialize the attachment asset index: {}.", error))?;
     // staged_path and staged_file are exclusively created for this exact save attempt.
     // staged_path 与 staged_file 为当前精确保存尝试独占创建。
     let (staged_path, mut staged_file) = create_attachment_index_staged_file(&index_directory)?;
@@ -141,7 +141,7 @@ pub(super) fn save_attachment_asset_index_document(
         drop(staged_file);
         remove_attachment_index_staged_file(&staged_path);
         return Err(format!(
-            "写入并同步附件资产索引临时文件 `{}` 失败：{}。",
+            "Failed to write and sync temporary attachment asset index `{}`: {}.",
             staged_path.display(),
             error
         ));
@@ -151,7 +151,7 @@ pub(super) fn save_attachment_asset_index_document(
     if let Err(error) = fs::rename(&staged_path, &index_file) {
         remove_attachment_index_staged_file(&staged_path);
         return Err(format!(
-            "使用临时文件 `{}` 替换附件资产索引 `{}` 失败：{}。",
+            "Failed to use temporary file `{}` to replace attachment asset index `{}`: {}.",
             staged_path.display(),
             index_file.display(),
             error
@@ -197,7 +197,7 @@ fn create_attachment_index_staged_file(index_directory: &Path) -> Result<(PathBu
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(format!(
-                    "创建附件资产索引临时文件 `{}` 失败：{}。",
+                    "Failed to create temporary attachment asset index `{}`: {}.",
                     staged_path.display(),
                     error
                 ));
@@ -240,14 +240,14 @@ fn synchronize_attachment_index_directory(index_directory: &Path) -> Result<(), 
     // directory 仅在重命名后的同步操作期间保持打开。
     let directory = File::open(index_directory).map_err(|error| {
         format!(
-            "打开附件资产索引目录 `{}` 以执行同步失败：{}。",
+            "Failed to open attachment asset index directory `{}` for sync: {}.",
             index_directory.display(),
             error
         )
     })?;
     directory.sync_all().map_err(|error| {
         format!(
-            "同步附件资产索引目录 `{}` 失败：{}。",
+            "Failed to sync attachment asset index directory `{}`: {}.",
             index_directory.display(),
             error
         )

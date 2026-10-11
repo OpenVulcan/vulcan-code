@@ -943,7 +943,7 @@ pub fn continue_shared_prompt_turn_after_preparation(
         let runtime_state = workspace_snapshot
             .session_runtime_state
             .get_mut(&session_id)
-            .ok_or_else(|| format!("会话 `{session_id}` 缺少运行态，无法继续提示词回合。"))?;
+            .ok_or_else(|| format!("Session `{session_id}` has no runtime state, so the prompt turn cannot continue."))?;
         continue_shared_prompt_turn_after_preparation_with_runtime_state(
             runtime_state,
             vmm_session_memory,
@@ -977,32 +977,32 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
     let session_id = input.start.session_id;
     if input.precheck_outcome.session_id != session_id {
         return Err(format!(
-            "precheck 结果会话不匹配：期望 {session_id}，实际 {}",
+            "Precheck result session mismatch: expected {session_id}, got {}",
             input.precheck_outcome.session_id
         ));
     }
     let expected_turn_id = input.start.preparation_turn_id.clone();
     if input.precheck_outcome.turn_id != expected_turn_id {
         return Err(format!(
-            "precheck 结果回合不匹配：期望 {expected_turn_id}，实际 {}",
+            "Precheck result turn mismatch: expected {expected_turn_id}, got {}",
             input.precheck_outcome.turn_id
         ));
     }
     if input.profile_outcome.session_id != session_id {
         return Err(format!(
-            "画像准备结果会话不匹配：期望 {session_id}，实际 {}",
+            "Profile preparation result session mismatch: expected {session_id}, got {}",
             input.profile_outcome.session_id
         ));
     }
     if input.profile_outcome.turn_id != expected_turn_id {
         return Err(format!(
-            "画像准备结果回合不匹配：期望 {expected_turn_id}，实际 {}",
+            "Profile preparation result turn mismatch: expected {expected_turn_id}, got {}",
             input.profile_outcome.turn_id
         ));
     }
     if runtime_state.active_precheck_turn_id.as_deref() != Some(expected_turn_id.as_str()) {
         return Err(format!(
-            "提示词准备结果已过期：当前等待 {:?}，收到 {expected_turn_id}",
+            "Prompt preparation result is stale: waiting for {:?}, received {expected_turn_id}",
             runtime_state.active_precheck_turn_id
         ));
     }
@@ -1088,7 +1088,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .filter(|_| vmm_domain_active),
     )? {
         profile_failure_detail =
-            Some("画像来源在准备后发生变化，旧画像结果未注入本次请求。".to_owned());
+            Some("The profile source changed after preparation, so the old profile result was not injected into this request.".to_owned());
     }
     // Profile preparation owns only the persistent baseline and append-only profile deltas.
     // 画像准备仅持有持久化基线与仅追加画像增量。
@@ -1118,12 +1118,12 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
                 .base_profile_content
                 .is_some()
             {
-                "继续复用同来源画像基线"
+                "keeping the profile baseline of the same source"
             } else {
-                "本次不注入旧来源画像"
+                "not injecting the profile of the old source"
             };
             let detail = format!(
-                "会话 `{}` 的画像准备未能完成，{retention}：{error}",
+                "Profile preparation for session `{}` did not complete, {retention}: {error}",
                 input.start.session_title
             );
             profile_failure_detail = Some(detail);
@@ -1139,7 +1139,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .filter(|_| vmm_domain_active),
     )? {
         precheck_failure_detail =
-            Some("记忆来源在准备后发生变化，旧召回及会话状态未应用。".to_owned());
+            Some("The memory source changed after preparation, so the old recall and session state were not applied.".to_owned());
     }
     match input.precheck_outcome.report {
         Ok(report) => {
@@ -1202,7 +1202,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         }
         Err(error) => {
             let detail = format!(
-                "会话 `{}` 的 precheck 未能完成，已继续真实请求：{error}",
+                "Precheck for session `{}` did not complete; the request continued: {error}",
                 input.start.session_title
             );
             precheck_failure_detail = Some(detail);

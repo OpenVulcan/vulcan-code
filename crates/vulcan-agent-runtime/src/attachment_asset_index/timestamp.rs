@@ -13,10 +13,14 @@ pub fn current_attachment_timestamp_parts() -> AttachmentTimestampParts {
 pub fn parse_attachment_cleanup_cutoff_date(cutoff_date_text: &str) -> Result<Date, String> {
     let trimmed_date = cutoff_date_text.trim();
     if trimmed_date.is_empty() {
-        return Err(String::from("请输入清理截止日期，格式为 YYYY-MM-DD。"));
+        return Err(String::from(
+            "Enter a cleanup cutoff date in YYYY-MM-DD format.",
+        ));
     }
     Date::parse(trimmed_date, ATTACHMENT_DATE_FORMAT).map_err(|error| {
-        format!("清理截止日期 `{trimmed_date}` 无效：{error}。请使用 YYYY-MM-DD 格式。")
+        format!(
+            "Cleanup cutoff date `{trimmed_date}` is invalid: {error}. Use the YYYY-MM-DD format."
+        )
     })
 }
 pub(super) fn build_attachment_timestamp_parts(now: OffsetDateTime) -> AttachmentTimestampParts {

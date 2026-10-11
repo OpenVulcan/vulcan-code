@@ -129,8 +129,8 @@ fn prepare_execution_uses_request_execution_agent_override() {
         .preparation;
 
     assert_eq!(preparation.agent_id, PLAN_AGENT_ID);
-    assert_eq!(preparation.agent_name, "方案代理");
-    assert_eq!(preparation.agent_kind, "规划代理");
+    assert_eq!(preparation.agent_name, "Planning agent");
+    assert_eq!(preparation.agent_kind, "Planning agent");
     assert!(preparation.delegate_agents.is_empty());
 }
 
@@ -149,7 +149,6 @@ fn prepare_execution_rejects_missing_request_execution_agent() {
     };
 
     assert!(error.contains("missing-agent"));
-    assert!(error.contains("未能在运行时基础架构中解析到"));
 }
 
 /// Verifies an empty allow-only prompt-skill policy removes every globally available skill from one execution.

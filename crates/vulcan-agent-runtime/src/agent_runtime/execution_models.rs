@@ -893,62 +893,62 @@ impl ExecutionPreparation {
     /// 返回供界面卡片与日志使用的紧凑人类可读摘要行列表。
     pub fn summary_rows(&self) -> Vec<String> {
         let mut rows = vec![
-            format!("会话：#{} · {}", self.session_id, self.session_title),
+            format!("Session: #{} · {}", self.session_id, self.session_title),
             format!(
-                "代理：{}（{}，id={})",
+                "Agent: {} ({}, id={})",
                 self.agent_name, self.agent_kind, self.agent_id
             ),
             format!(
-                "模型：{} / {} · 运行时 {}",
+                "Model: {} / {} · runtime {}",
                 self.model_blueprint.provider_name,
                 self.model_blueprint.model_name,
                 self.model_blueprint.runtime_label
             ),
             format!(
-                "路由：{}/{} · kind={}",
+                "Route: {}/{} · kind={}",
                 self.model_blueprint.provider_id,
                 self.model_blueprint.model_id,
                 self.model_blueprint.runtime_kind_key()
             ),
             format!(
-                "接口族：{} · family={}",
+                "API family: {} · family={}",
                 self.model_blueprint.protocol_profile_label(),
                 self.model_blueprint.protocol_profile_key()
             ),
-            format!("接口：{}", self.model_blueprint.endpoint_summary()),
-            format!("凭据：{}", self.model_blueprint.credential_source),
+            format!("Endpoint: {}", self.model_blueprint.endpoint_summary()),
+            format!("Credential: {}", self.model_blueprint.credential_source),
             format!(
-                "生命周期：{}",
+                "Lifecycle: {}",
                 self.model_blueprint.public_capabilities.evidence_revision
             ),
             format!(
-                "模型发现：{}",
+                "Model discovery: {}",
                 if self.model_blueprint.supports_remote_model_refresh {
-                    "支持远端刷新"
+                    "supports remote refresh"
                 } else {
-                    "使用静态目录"
+                    "uses the static catalog"
                 }
             ),
             format!(
-                "模式：{} · 温度 {}",
+                "Mode: {} · temperature {}",
                 self.execution_mode,
                 self.temperature
                     .map(|value| format!("{value:.2}"))
-                    .unwrap_or_else(|| String::from("使用模型默认值"))
+                    .unwrap_or_else(|| String::from("model default"))
             ),
             self.model_blueprint.reasoning.summary_label(),
-            format!("工作区：{}", self.workspace_path),
-            format!("上下文：{} 条历史消息", self.context_history_count),
+            format!("Workspace: {}", self.workspace_path),
+            format!("Context: {} history messages", self.context_history_count),
             format!(
-                "能力：温度覆盖 {}",
+                "Capabilities: temperature override {}",
                 if self.model_blueprint.supports_temperature() {
-                    "支持"
+                    "supported"
                 } else {
-                    "不支持"
+                    "not supported"
                 }
             ),
             format!(
-                "模态：{} · attachment 声明 {}",
+                "Modalities: {} · attachments declared {}",
                 if self
                     .model_blueprint
                     .public_capabilities
@@ -971,37 +971,43 @@ impl ExecutionPreparation {
                     .input_resources
                     .is_empty()
                 {
-                    "已声明"
+                    "declared"
                 } else {
-                    "未声明"
+                    "not declared"
                 }
             ),
         ];
         if let Some(context_budget) = self.context_budget.as_ref() {
-            rows.push(format!("预算：{}", context_budget.summary_note()));
-            rows.push(format!("预算指纹：{}", context_budget.fingerprint));
+            rows.push(format!("Budget: {}", context_budget.summary_note()));
+            rows.push(format!(
+                "Budget fingerprint: {}",
+                context_budget.fingerprint
+            ));
         }
 
         if let Some(context_assembly) = self.context_assembly.as_ref() {
-            rows.push(format!("上下文层：{}", context_assembly.summary_note()));
+            rows.push(format!(
+                "Context layers: {}",
+                context_assembly.summary_note()
+            ));
         }
 
         if let Some(context_baseline) = self.context_baseline.as_ref() {
             rows.push(format!(
-                "上下文基线：{} 层 · {}",
+                "Context baseline: {} layers · {}",
                 context_baseline.layer_count, context_baseline.fingerprint
             ));
         }
 
         if let Some(context_request_mode) = self.context_request_mode.as_ref() {
             rows.push(format!(
-                "上下文发送：{}",
+                "Context sending: {}",
                 context_request_mode.summary_note()
             ));
         }
 
         if !self.skill_names.is_empty() {
-            rows.push(format!("技能：{}", self.skill_names.join("、")));
+            rows.push(format!("Skills: {}", self.skill_names.join(", ")));
         }
 
         let enabled_prompt_skills = self
@@ -1011,12 +1017,15 @@ impl ExecutionPreparation {
             .map(|skill| skill.skill.name.as_str())
             .collect::<Vec<_>>();
         if !enabled_prompt_skills.is_empty() {
-            rows.push(format!("提示词技能：{}", enabled_prompt_skills.join("、")));
+            rows.push(format!(
+                "Prompt skills: {}",
+                enabled_prompt_skills.join(", ")
+            ));
         }
 
         if !self.tool_descriptors.is_empty() {
             rows.push(format!(
-                "工具：{} 个已直接暴露",
+                "Tools: {} exposed directly",
                 self.tool_descriptors.len()
             ));
         }
@@ -1027,7 +1036,7 @@ impl ExecutionPreparation {
             .filter(|descriptor| descriptor.source == VulcanToolSourceKind::Native)
             .count();
         if native_tool_count > 0 {
-            rows.push(format!("原生工具：{} 个", native_tool_count));
+            rows.push(format!("Native tools: {}", native_tool_count));
         }
 
         let vulcan_managed_tool_count = self
@@ -1036,7 +1045,10 @@ impl ExecutionPreparation {
             .filter(|descriptor| descriptor.source == VulcanToolSourceKind::VulcanManaged)
             .count();
         if vulcan_managed_tool_count > 0 {
-            rows.push(format!("Vulcan 托管工具：{} 个", vulcan_managed_tool_count));
+            rows.push(format!(
+                "Vulcan managed tools: {}",
+                vulcan_managed_tool_count
+            ));
         }
 
         let vulcan_plugin_tool_count = self
@@ -1045,7 +1057,7 @@ impl ExecutionPreparation {
             .filter(|descriptor| descriptor.source == VulcanToolSourceKind::VulcanPlugin)
             .count();
         if vulcan_plugin_tool_count > 0 {
-            rows.push(format!("Vulcan 插件工具：{} 个", vulcan_plugin_tool_count));
+            rows.push(format!("Vulcan plugin tools: {}", vulcan_plugin_tool_count));
         }
 
         let luaskills_tool_count = self
@@ -1054,7 +1066,7 @@ impl ExecutionPreparation {
             .filter(|descriptor| descriptor.source == VulcanToolSourceKind::LuaSkills)
             .count();
         if luaskills_tool_count > 0 {
-            rows.push(format!("LuaSkills 工具：{} 个", luaskills_tool_count));
+            rows.push(format!("LuaSkills tools: {}", luaskills_tool_count));
         }
 
         let mcp_tool_count = self
@@ -1063,7 +1075,7 @@ impl ExecutionPreparation {
             .filter(|descriptor| descriptor.source == VulcanToolSourceKind::Mcp)
             .count();
         if mcp_tool_count > 0 {
-            rows.push(format!("MCP 工具：{} 个", mcp_tool_count));
+            rows.push(format!("MCP tools: {}", mcp_tool_count));
         }
 
         let ai_host_binding_tool_count = self
@@ -1073,20 +1085,20 @@ impl ExecutionPreparation {
             .count();
         if ai_host_binding_tool_count > 0 {
             rows.push(format!(
-                "AI 专用回退工具：{} 个",
+                "AI-only fallback tools: {}",
                 ai_host_binding_tool_count
             ));
         }
 
         if !self.delegate_agents.is_empty() {
-            rows.push(format!("委派：{}", self.delegate_agents.join("、")));
+            rows.push(format!("Delegation: {}", self.delegate_agents.join(", ")));
         }
 
         if !self.enabled_mcp_servers.is_empty() {
-            rows.push(format!("MCP：{}", self.enabled_mcp_servers.join("；")));
+            rows.push(format!("MCP: {}", self.enabled_mcp_servers.join("; ")));
         }
 
-        rows.push(format!("提示词：{}", self.prompt_preview));
+        rows.push(format!("Prompt: {}", self.prompt_preview));
         rows
     }
 }

@@ -130,7 +130,7 @@ pub(crate) fn execute_vulcan_public_stream(
             )
             .with_provider_error_trace_enabled(provider_error_trace_enabled)
         },
-        "Vulcan 公共契约",
+        "Vulcan public contract",
         prompt_intervention,
     )
 }

@@ -612,7 +612,7 @@ impl ProviderRequestBudgetGuard {
         if hard_window_exceeded {
             return Err(VulcanCoreError::ContextCompactionRequired {
                 message: format!(
-                    "当前请求已达到所选模型的真实请求窗口：{}。请选择容量足够的模型或减少上下文。",
+                    "The request exceeds the context window of the selected model: {}. Choose a model with enough capacity or reduce the context.",
                     budget.summary_note()
                 ),
             });
@@ -807,7 +807,7 @@ where
             let budget = request.context_budget().ok_or_else(|| {
                 VulcanCoreError::ContextCompactionRequired {
                     message: String::from(
-                        "请求预算门缺少与最终请求对齐的预算快照，已阻止网络分派。",
+                        "Request budget gate blocked sending: the gate has no budget snapshot aligned with the final request, so network dispatch was stopped.",
                     ),
                 }
             })?;

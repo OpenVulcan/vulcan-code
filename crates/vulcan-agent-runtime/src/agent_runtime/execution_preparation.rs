@@ -92,17 +92,17 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         format!("session={}", request.session_id),
     );
     let active_agent = match request.execution_agent_id.as_deref() {
-        Some(agent_id) => foundation
-            .agent_definition(agent_id)
-            .ok_or_else(|| format!("执行代理 `{agent_id}` 未能在运行时基础架构中解析到。"))?,
-        None => foundation
-            .active_agent_definition()
-            .ok_or_else(|| String::from("当前激活代理未能在运行时基础架构中解析到。"))?,
+        Some(agent_id) => foundation.agent_definition(agent_id).ok_or_else(|| {
+            format!("Execution agent `{agent_id}` could not be resolved in the runtime.")
+        })?,
+        None => foundation.active_agent_definition().ok_or_else(|| {
+            String::from("The active agent could not be resolved in the runtime.")
+        })?,
     };
 
     if !foundation.has_built_agent(&active_agent.id) {
         return Err(format!(
-            "代理 `{}` 当前尚未成功构建，无法启动执行。",
+            "Agent `{}` has not been built successfully, so execution cannot start.",
             active_agent.name
         ));
     }
@@ -227,11 +227,11 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         // 已发布插件快照属于执行契约的一部分；不变量失败不得静默降级。
         prompt_skill_catalog
             .merge_plugin_skills(plugin_catalog.enabled_skills.values().cloned())
-            .map_err(|error| format!("合并插件技能目录失败：{error}"))?;
+            .map_err(|error| format!("Failed to merge plugin skill directories: {error}"))?;
     }
     for error in &prompt_skill_catalog.errors {
         warnings.push(format!(
-            "提示词技能 `{}` 载入失败：{}",
+            "Failed to load prompt skill `{}`: {}",
             error.path.display(),
             error.message
         ));
@@ -309,7 +309,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         .contains(&vulcan_ai_contract::NativeToolKind::WebSearch);
     if suppress_external_web_search {
         warnings.push(String::from(
-            "当前精确模型路由使用供应商原生网页搜索，本回合已隐藏外部网页搜索工具；已保存的外部搜索设置保持不变。",
+            "The exact model route uses the provider's native web search, so external web search tools are hidden this turn; the saved external search settings are unchanged.",
         ));
     }
     let provider_tool_candidates = build_provider_tool_candidates(
@@ -398,7 +398,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     if request.prompt_purpose.disables_provider_tools() {
         if !resolved_tools.descriptors.is_empty() {
             warnings.push(format!(
-                "内部 `{}` 执行不允许工具调用，本轮已隐藏 {} 个工具。",
+                "Internal `{}` execution does not allow tool calls; {} tools are hidden this turn.",
                 request.prompt_purpose.diagnostics_label(),
                 resolved_tools.descriptors.len()
             ));
@@ -421,13 +421,13 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
 
     if workspace_path.is_empty() {
         warnings.push(String::from(
-            "当前工作区路径为空，后续原生工具可能无法提供完整上下文。",
+            "The workspace path is empty; native tools may not have full context.",
         ));
     }
 
     if request.prompt.trim().is_empty() && request.provider_visible_agent_messages.is_empty() {
         warnings.push(String::from(
-            "当前提示词为空，本次准备计划仅验证运行时链路。",
+            "The prompt is empty; this preparation only validates the runtime chain.",
         ));
     }
 
@@ -448,7 +448,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     } else {
         if request.temperature.is_some() {
             warnings.push(format!(
-                "当前模型 `{}` 未声明显式温度能力，本轮将自动回退到模型默认采样设置。",
+                "Model `{}` does not declare temperature support; this turn falls back to the model's default sampling.",
                 model_blueprint.model_name
             ));
         }

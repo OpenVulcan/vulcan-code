@@ -119,11 +119,11 @@ impl RuntimeAgentKind {
     /// 返回紧凑的人类可读标签。
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Worker => "工作代理",
-            Self::Planner => "规划代理",
-            Self::Explorer => "探索代理",
-            Self::Specialist => "专家代理",
-            Self::Coordinator => "协调代理",
+            Self::Worker => "Worker agent",
+            Self::Planner => "Planning agent",
+            Self::Explorer => "Explore agent",
+            Self::Specialist => "Specialist agent",
+            Self::Coordinator => "Coordinator agent",
         }
     }
 }
@@ -451,7 +451,7 @@ fn ensure_default_skill(
 fn default_safe_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
     RuntimeToolPolicyDefinition {
         id: String::from(DEFAULT_SAFE_TOOL_POLICY_ID),
-        name: String::from("默认安全策略"),
+        name: String::from("Default safe policy"),
         allow_all_native: true,
         native_tools: Vec::new(),
         allow_all_plugin_tools: true,
@@ -466,7 +466,7 @@ fn default_safe_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
 fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
     RuntimeToolPolicyDefinition {
         id: String::from(ANALYSIS_SAFE_TOOL_POLICY_ID),
-        name: String::from("分析只读策略"),
+        name: String::from("Read-only analysis policy"),
         allow_all_native: false,
         native_tools: vec![
             String::from("file"),
@@ -488,7 +488,7 @@ fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
 fn default_lua_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
     RuntimeToolPolicyDefinition {
         id: String::from(LUA_SAFE_TOOL_POLICY_ID),
-        name: String::from("Lua 定向策略"),
+        name: String::from("Lua-focused policy"),
         allow_all_native: false,
         native_tools: vec![
             String::from("shell_command"),
@@ -507,9 +507,11 @@ fn default_lua_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
 /// 构建默认的常规工作区技能定义。
 fn default_workspace_skill() -> PersistedSkillEntry {
     PersistedSkillEntry {
-        name: String::from("工作区梳理"),
+        name: String::from("Workspace mapping"),
         kind: PersistedSkillKind::Regular,
-        description: Some(String::from("负责工作区扫描、任务拆解与执行入口预判。")),
+        description: Some(String::from(
+            "Scans the workspace, breaks down tasks and predicts execution entry points.",
+        )),
         enabled: true,
         trigger_signals: vec![String::from("workspace.scan")],
         emitted_signal: Some(String::from("workspace.ready")),
@@ -521,10 +523,10 @@ fn default_workspace_skill() -> PersistedSkillEntry {
 /// 构建默认的 LuaSkills 桥接定义。
 fn default_lua_skill() -> PersistedSkillEntry {
     PersistedSkillEntry {
-        name: String::from("LuaSkills 桥接"),
+        name: String::from("LuaSkills bridge"),
         kind: PersistedSkillKind::LuaSkills,
         description: Some(String::from(
-            "负责 LuaSkills 技能路由、工具装配与执行桥接。",
+            "Routes LuaSkills, assembles tools and bridges execution.",
         )),
         enabled: true,
         trigger_signals: vec![String::from("lua.request")],
@@ -537,9 +539,11 @@ fn default_lua_skill() -> PersistedSkillEntry {
 /// 构建默认的自动化技能定义。
 fn default_automation_skill() -> PersistedSkillEntry {
     PersistedSkillEntry {
-        name: String::from("自动化调度"),
+        name: String::from("Automation scheduling"),
         kind: PersistedSkillKind::Automation,
-        description: Some(String::from("负责自动化唤醒、调度信号与流程编排前置判断。")),
+        description: Some(String::from(
+            "Handles automation wakeups, scheduling signals and pre-checks for workflow orchestration.",
+        )),
         enabled: true,
         trigger_signals: vec![String::from("automation.tick")],
         emitted_signal: Some(String::from("automation.ready")),
@@ -551,9 +555,11 @@ fn default_automation_skill() -> PersistedSkillEntry {
 /// 构建默认的面向记忆体系的技能定义。
 fn default_memory_skill() -> PersistedSkillEntry {
     PersistedSkillEntry {
-        name: String::from("记忆召回"),
+        name: String::from("Memory recall"),
         kind: PersistedSkillKind::Memory,
-        description: Some(String::from("负责记忆网格召回、历史痕迹补全与上下文复用。")),
+        description: Some(String::from(
+            "Recalls from the memory mesh, fills in history and reuses context.",
+        )),
         enabled: true,
         trigger_signals: vec![String::from("memory.recall")],
         emitted_signal: Some(String::from("memory.ready")),
@@ -566,9 +572,11 @@ fn default_memory_skill() -> PersistedSkillEntry {
 fn default_worker_agent() -> RuntimeAgentDefinition {
     RuntimeAgentDefinition {
         id: String::from(DEFAULT_WORKER_AGENT_ID),
-        name: String::from("默认工作代理"),
+        name: String::from("Default worker agent"),
         kind: RuntimeAgentKind::Worker,
-        description: String::from("负责常规 AI Coding 执行、问题拆解与基础工具协作。"),
+        description: String::from(
+            "Handles ordinary AI coding work, problem breakdown and basic tool collaboration.",
+        ),
         system_prompt: load_default_agent_prompt(
             DEFAULT_WORKER_PROMPT_FILE_NAME,
             LEGACY_DEFAULT_WORKER_PROMPT,
@@ -596,9 +604,11 @@ fn default_worker_agent() -> RuntimeAgentDefinition {
 fn default_plan_agent() -> RuntimeAgentDefinition {
     RuntimeAgentDefinition {
         id: String::from(PLAN_AGENT_ID),
-        name: String::from("方案代理"),
+        name: String::from("Planning agent"),
         kind: RuntimeAgentKind::Planner,
-        description: String::from("负责在编码前完成目标拆解、风险识别与执行路径规划。"),
+        description: String::from(
+            "Breaks down goals, identifies risks and plans the execution path before coding.",
+        ),
         system_prompt: load_default_agent_prompt(PLAN_PROMPT_FILE_NAME, LEGACY_PLAN_PROMPT),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
@@ -620,9 +630,11 @@ fn default_plan_agent() -> RuntimeAgentDefinition {
 fn default_explore_agent() -> RuntimeAgentDefinition {
     RuntimeAgentDefinition {
         id: String::from(EXPLORE_AGENT_ID),
-        name: String::from("探索代理"),
+        name: String::from("Explore agent"),
         kind: RuntimeAgentKind::Explorer,
-        description: String::from("负责工作区定位、代码脉络梳理与证据化上下文收集。"),
+        description: String::from(
+            "Locates workspace content, maps code structure and gathers evidence-based context.",
+        ),
         system_prompt: load_default_agent_prompt(EXPLORE_PROMPT_FILE_NAME, LEGACY_EXPLORE_PROMPT),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
@@ -644,9 +656,11 @@ fn default_explore_agent() -> RuntimeAgentDefinition {
 fn default_lua_agent() -> RuntimeAgentDefinition {
     RuntimeAgentDefinition {
         id: String::from(LUA_SPECIALIST_AGENT_ID),
-        name: String::from("LuaSkills 专家代理"),
+        name: String::from("LuaSkills specialist agent"),
         kind: RuntimeAgentKind::Specialist,
-        description: String::from("负责 LuaSkills、Lua 工具链与宿主运行时桥接。"),
+        description: String::from(
+            "Handles LuaSkills, the Lua toolchain and host runtime bridging.",
+        ),
         system_prompt: load_default_agent_prompt(
             LUA_SPECIALIST_PROMPT_FILE_NAME,
             LEGACY_LUA_SPECIALIST_PROMPT,
@@ -671,9 +685,11 @@ fn default_lua_agent() -> RuntimeAgentDefinition {
 fn default_memory_agent() -> RuntimeAgentDefinition {
     RuntimeAgentDefinition {
         id: String::from(MEMORY_SPECIALIST_AGENT_ID),
-        name: String::from("记忆专家代理"),
+        name: String::from("Memory specialist agent"),
         kind: RuntimeAgentKind::Specialist,
-        description: String::from("负责记忆网格、历史上下文与长期信息编织。"),
+        description: String::from(
+            "Handles the memory mesh, historical context and long-term information.",
+        ),
         system_prompt: load_default_agent_prompt(
             MEMORY_SPECIALIST_PROMPT_FILE_NAME,
             LEGACY_MEMORY_SPECIALIST_PROMPT,
@@ -698,9 +714,11 @@ fn default_memory_agent() -> RuntimeAgentDefinition {
 fn default_coordinator_agent() -> RuntimeAgentDefinition {
     RuntimeAgentDefinition {
         id: String::from(WORKSPACE_COORDINATOR_AGENT_ID),
-        name: String::from("系统默认（按模型）"),
+        name: String::from("System default (per model)"),
         kind: RuntimeAgentKind::Coordinator,
-        description: String::from("负责在常规代理、LuaSkills 代理与记忆代理之间进行确定性调度。"),
+        description: String::from(
+            "Routes deterministically among the worker, LuaSkills and memory agents.",
+        ),
         system_prompt: String::new(),
         skill_ids: Vec::new(),
         native_tools: Vec::new(),
@@ -737,7 +755,7 @@ fn runtime_agent_from_user_profile(profile: &UserAgentProfile) -> RuntimeAgentDe
     definition.id = profile.id.clone();
     definition.name = profile.name.clone();
     definition.description = if profile.description.trim().is_empty() {
-        String::from("基于用户自定义提示词的主代理。")
+        String::from("Main agent based on a user-defined prompt.")
     } else {
         profile.description.clone()
     };

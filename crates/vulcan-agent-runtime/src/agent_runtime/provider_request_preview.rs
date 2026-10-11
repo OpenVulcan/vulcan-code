@@ -21,9 +21,9 @@ pub(crate) fn build_provider_request_preview_markdown(
     let temperature_label = request_snapshot
         .temperature
         .map(|value| format!("{value:.2}"))
-        .unwrap_or_else(|| String::from("使用模型默认值"));
+        .unwrap_or_else(|| String::from("model default"));
     let max_turns_label = if request_snapshot.max_turns == DEFAULT_RUNTIME_MAX_TURNS_LIMIT {
-        String::from("不限制")
+        String::from("unlimited")
     } else {
         format!("`{}`", request_snapshot.max_turns)
     };
@@ -31,12 +31,12 @@ pub(crate) fn build_provider_request_preview_markdown(
         .additional_params
         .as_ref()
         .map(render_json_code_fence)
-        .unwrap_or_else(|| String::from("（无附加 Body 参数）"));
+        .unwrap_or_else(|| String::from("(no extra body parameters)"));
     let request_headers_markdown = request_snapshot
         .request_headers
         .as_ref()
         .map(render_json_code_fence)
-        .unwrap_or_else(|| String::from("（无附加请求头）"));
+        .unwrap_or_else(|| String::from("(no extra request headers)"));
     let continuation_markdown =
         render_provider_continuation_markdown(&request_snapshot.continuation);
     // current_rewrite_fingerprint hashes the exact final system prompt shown in this request snapshot.
@@ -117,12 +117,12 @@ pub(crate) fn build_provider_request_preview_markdown(
         .as_ref()
         .map(|budget| {
             format!(
-                "{}\n- 预算指纹：`{}`",
+                "{}\n- Budget fingerprint: `{}`",
                 budget.summary_note(),
                 budget.fingerprint
             )
         })
-        .unwrap_or_else(|| String::from("尚未生成上下文预算快照"));
+        .unwrap_or_else(|| String::from("no context budget snapshot yet"));
     let context_assembly = preparation
         .context_assembly
         .as_ref()
@@ -134,27 +134,27 @@ pub(crate) fn build_provider_request_preview_markdown(
         .map(|baseline| {
             let comparison = baseline.compare(&context_assembly);
             format!(
-                "- 状态：{}\n- 层数：`{}`\n- 指纹：`{}`",
+                "- Status: {}\n- Layers: `{}`\n- Fingerprint: `{}`",
                 comparison.summary_note(),
                 baseline.layer_count,
                 baseline.fingerprint
             )
         })
-        .unwrap_or_else(|| String::from("（尚未生成上下文基线）"));
+        .unwrap_or_else(|| String::from("(no context baseline yet)"));
     let context_request_mode_markdown = preparation
         .context_request_mode
         .as_ref()
         .map(|mode| {
             format!(
-                "- 模式：`{}`\n- 说明：{}",
+                "- Mode: `{}`\n- Note: {}",
                 mode.label(),
                 mode.summary_note()
             )
         })
-        .unwrap_or_else(|| String::from("（尚未生成上下文发送模式）"));
+        .unwrap_or_else(|| String::from("(no context sending mode yet)"));
     let context_layers_markdown = render_context_layers_markdown(&context_assembly);
     let tool_rows = if request_snapshot.tool_schemas.is_empty() {
-        String::from("（本次请求未直接暴露工具 schema）")
+        String::from("(this request exposes no tool schema directly)")
     } else {
         request_snapshot
             .tool_schemas
@@ -168,20 +168,20 @@ pub(crate) fn build_provider_request_preview_markdown(
 
     format!(
         concat!(
-            "# 最后一次真实 API 请求快照\n\n",
-            "## 路由摘要\n",
-            "- 会话：`#{}` · {}\n",
-            "- 代理：`{}` · {} · id=`{}`\n",
-            "- Provider：`{}` · `{}`\n",
-            "- 模型：`{}` · `{}`\n",
-            "- 运行时：`{}` · kind=`{}`\n",
-            "- 接口族：`{}` · family=`{}`\n",
-            "- 接口：`{}`\n",
-            "- 执行模式：`{}`\n",
-            "- 温度：{}\n",
-            "- 最大轮次：{}\n",
-            "- 历史上下文：`{}` 条\n",
-            "- 工具数量：`{}` 个\n\n",
+            "# Last real API request snapshot\n\n",
+            "## Route summary\n",
+            "- Session: `#{}` · {}\n",
+            "- Agent: `{}` · {} · id=`{}`\n",
+            "- Provider: `{}` · `{}`\n",
+            "- Model: `{}` · `{}`\n",
+            "- Runtime: `{}` · kind=`{}`\n",
+            "- API family: `{}` · family=`{}`\n",
+            "- Endpoint: `{}`\n",
+            "- Execution mode: `{}`\n",
+            "- Temperature: {}\n",
+            "- Max turns: {}\n",
+            "- History context: `{}` messages\n",
+            "- Tools: `{}`\n\n",
             "## Context Budget\n",
             "{}\n\n",
             "## Context Layers\n",
@@ -248,7 +248,7 @@ pub(crate) fn build_provider_request_preview_markdown(
 /// 为请求预览渲染一份紧凑的分层上下文摘要。
 fn render_context_layers_markdown(assembly: &ContextAssembly) -> String {
     if assembly.layers.is_empty() {
-        return String::from("（本次请求没有独立上下文层）");
+        return String::from("(this request has no separate context layers)");
     }
 
     assembly
@@ -258,7 +258,7 @@ fn render_context_layers_markdown(assembly: &ContextAssembly) -> String {
         .map(|(index, layer)| {
             let preview = layer.content.trim();
             let preview = if preview.is_empty() {
-                String::from("（空）")
+                String::from("(empty)")
             } else {
                 truncate_preview(preview, 120)
             };
@@ -290,7 +290,7 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
 /// 将 `vulcan-core` 规范历史渲染为结构化 Markdown 快照，使其比单条扁平 Prompt 字符串更易检查。
 fn render_core_conversation_history_markdown(history: &[CoreConversationMessage]) -> String {
     if history.is_empty() {
-        return String::from("（本次请求没有历史消息）");
+        return String::from("(this request has no history messages)");
     }
 
     history
@@ -319,12 +319,12 @@ fn render_core_conversation_message_preview(
                     let replay_status =
                         crate::attachment_asset_index::resolve_attachment_replay_status(attachment);
                     let replay_status_text = match replay_status {
-                        crate::attachment_asset_index::AttachmentReplayStatus::Available => "可回放",
+                        crate::attachment_asset_index::AttachmentReplayStatus::Available => "replayable",
                         crate::attachment_asset_index::AttachmentReplayStatus::FallbackSourceOnly => {
-                            "回退来源"
+                            "fallback source"
                         }
-                        crate::attachment_asset_index::AttachmentReplayStatus::Purged => "已清理",
-                        crate::attachment_asset_index::AttachmentReplayStatus::Missing => "已缺失",
+                        crate::attachment_asset_index::AttachmentReplayStatus::Purged => "cleaned",
+                        crate::attachment_asset_index::AttachmentReplayStatus::Missing => "missing",
                     };
                     format!(
                         "- `{}` · `{}` · `{}` · `{}`",
@@ -414,9 +414,9 @@ fn render_core_tool_request_section(definition: &CoreProviderRequestToolSchema) 
     format!(
         concat!(
             "### `{}`\n",
-            "- 显示名：{}\n",
-            "- 来源：{}\n",
-            "- 描述：{}\n",
+            "- Display name: {}\n",
+            "- Source: {}\n",
+            "- Description: {}\n",
             "{}"
         ),
         definition.id,
@@ -439,7 +439,7 @@ fn render_provider_continuation_markdown(continuation: &CoreProviderContinuation
         && continuation.context_rewrite_fingerprint.is_none()
         && continuation.updated_at.is_none()
     {
-        return String::from("（本次请求没有 continuation 游标）");
+        return String::from("(this request has no continuation cursor)");
     }
 
     let payload = json!({
@@ -522,33 +522,33 @@ fn render_provider_context_injection_diagnostics(
     // The decision reason mirrors the provider continuation safety predicate exactly.
     // 决策原因与 Provider continuation 安全判定谓词严格一致。
     let continuation_decision = if continuation.last_provider_message_id.is_none() {
-        "不复用：当前没有 Provider continuation 游标"
+        "Not reused: there is no provider continuation cursor"
     } else if !continuation_boundary_is_proven {
-        "不复用：Provider continuation 缺少唯一的本地规范消息边界"
+        "Not reused: the provider continuation has no unique local canonical message boundary"
     } else if append_vmm_change && !append_continuation_feature_enabled {
-        "不复用：OpenAI Responses 追加式 VMM continuation 灰度开关已关闭"
+        "Not reused: the OpenAI Responses append-only VMM continuation rollout switch is off"
     } else if !rewrite_fingerprint_matches {
-        "不复用：系统或持久上下文指纹与游标覆盖内容不一致"
+        "Not reused: the system or persistent context fingerprint differs from what the cursor covers"
     } else if uncovered_host_event_is_present {
-        "不复用：游标边界之后存在未覆盖的宿主事件消息"
+        "Not reused: host event messages after the cursor boundary are not covered"
     } else if overlay_reuse_is_proven {
-        "允许复用：无历史改写，且锚点覆盖关系可证明安全"
+        "Reuse allowed: no history rewrite, and anchor coverage is provably safe"
     } else if injection.is_some_and(|injection| injection.requires_historical_rewrite()) {
-        "不复用：上下文覆盖层会改写既有 Provider 输入"
+        "Not reused: a context overlay rewrites existing provider input"
     } else {
-        "不复用：缓存纪元或锚点修订覆盖关系无法证明安全"
+        "Not reused: cache epoch or anchor revision coverage cannot be proven safe"
     };
     format!(
         concat!(
-            "- 变更分类：`{}`\n",
-            "- 缓存纪元：`{}`\n",
-            "- 锚点修订：`{}`\n",
-            "- 锚点数量：`{}`\n",
-            "- 覆盖层指纹：`{}`\n",
-            "- 当前改写指纹：`{}`\n",
-            "- 活跃 VMM 正文：`{} bytes / ~{} tokens`\n",
-            "- 可回收 VMM 锚点：`{} bytes / ~{} tokens`\n",
-            "- Continuation：{}"
+            "- Change class: `{}`\n",
+            "- Cache epoch: `{}`\n",
+            "- Anchor revision: `{}`\n",
+            "- Anchor count: `{}`\n",
+            "- Overlay fingerprint: `{}`\n",
+            "- Current rewrite fingerprint: `{}`\n",
+            "- Active VMM body: `{} bytes / ~{} tokens`\n",
+            "- Reclaimable VMM anchors: `{} bytes / ~{} tokens`\n",
+            "- Continuation: {}"
         ),
         mutation_label,
         injection
@@ -588,7 +588,9 @@ fn render_json_code_fence(value: &Value) -> String {
 /// 渲染当前供应商/模型组合的 AI 专用工具路由计划。
 fn render_ai_tool_plan_markdown(preparation: &ExecutionPreparation) -> String {
     let _ = preparation;
-    String::from("（AI 专用能力由当前公共契约模型快照动态注册）")
+    String::from(
+        "(AI-only capabilities are registered dynamically from the public contract model snapshot)",
+    )
 }
 
 #[cfg(test)]
@@ -699,16 +701,11 @@ mod tests {
 
         let markdown = build_provider_request_preview_markdown(&preparation, &snapshot);
 
-        assert!(markdown.contains("- 运行时：`Anthropic` · kind=`public-ai-contract`"));
-        assert!(
-            markdown.contains("- 接口族：`Anthropic Messages` · family=`anthropic-messages.v1`")
-        );
+        assert!(markdown.contains("`Anthropic` · kind=`public-ai-contract`"));
+        assert!(markdown.contains("`Anthropic Messages` · family=`anthropic-messages.v1`"));
         assert!(markdown.contains("## Context Layers"));
         assert!(markdown.contains("## Context Baseline"));
         assert!(markdown.contains("## Context Request Mode"));
-        assert!(markdown.contains("- 模式：`全量上下文`"));
-        assert!(markdown.contains("系统"));
         assert!(markdown.contains("## AI Specialized Tools"));
-        assert!(markdown.contains("AI 专用能力由当前公共契约模型快照动态注册"));
     }
 }

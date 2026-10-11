@@ -11,9 +11,9 @@ use vulcan_context::RuntimeProviderLoweringRepairEvent;
 pub(crate) fn build_runtime_context_event(preparation: &ExecutionPreparation) -> RuntimeEvent {
     RuntimeEvent::new(
         RuntimeEventKind::ToolStarted,
-        "执行上下文",
+        "Execution context",
         format!(
-            "已进入真实执行阶段，目标模型为 `{}`，工作区为 `{}`。",
+            "Entered execution with target model `{}` and workspace `{}`.",
             preparation.model_blueprint.model_name, preparation.workspace_path
         ),
     )
@@ -156,7 +156,7 @@ mod tests {
                 ExecutionStreamEvent::RuntimeEvent { event: context_event, .. },
                 ExecutionStreamEvent::RuntimeEvent { event: projected_discovery, .. },
             ] if prepared.session_title == "测试会话"
-                && context_event.title == "执行上下文"
+                && context_event.title == "Execution context"
                 && projected_discovery.title == discovery_event.title
         ));
     }

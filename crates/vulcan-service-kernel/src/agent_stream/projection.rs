@@ -1303,7 +1303,7 @@ mod tests {
         let task_id = SessionId::new_v4();
         let event = RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
-            "工具返回 · close_agent",
+            "Tool result · close_agent",
             "closed",
         )
         .with_metadata(Some(json!({

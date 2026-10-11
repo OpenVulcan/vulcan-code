@@ -357,7 +357,7 @@ pub fn stage_attachment_file(
     let canonical_source_path = canonicalize_workspace_path(source_path);
     let file_bytes = fs::read(&canonical_source_path).map_err(|error| {
         format!(
-            "读取附件文件 `{}` 失败：{}。",
+            "Failed to read attachment file `{}`: {}.",
             canonical_source_path.display(),
             error
         )
@@ -405,7 +405,7 @@ pub fn stage_project_attachment_file(
     // file_bytes 提供不可变内容特征与托管副本。
     let file_bytes = fs::read(&canonical_source_path).map_err(|error| {
         format!(
-            "读取附件文件 `{}` 失败：{}。",
+            "Failed to read attachment file `{}`: {}.",
             canonical_source_path.display(),
             error
         )
@@ -455,13 +455,13 @@ pub fn stage_attachment_file_streaming(
     let canonical_source_path = canonicalize_workspace_path(source_path);
     let source_metadata = fs::metadata(&canonical_source_path).map_err(|error| {
         format!(
-            "流式附件源文件 `{}` 读取失败：{error}",
+            "Failed to read streaming attachment source `{}`: {error}",
             canonical_source_path.display()
         )
     })?;
     if !source_metadata.is_file() {
         return Err(format!(
-            "流式附件源路径 `{}` 不是文件。",
+            "Streaming attachment source path `{}` is not a file.",
             canonical_source_path.display()
         ));
     }
@@ -470,7 +470,7 @@ pub fn stage_attachment_file_streaming(
     let category_directory = resolve_attachment_category_directory(&asset_root, &descriptor.kind);
     fs::create_dir_all(&category_directory).map_err(|error| {
         format!(
-            "创建托管附件分类目录 `{}` 失败：{error}",
+            "Failed to create managed attachment category directory `{}`: {error}",
             category_directory.display()
         )
     })?;
@@ -492,7 +492,7 @@ pub fn stage_attachment_file_streaming(
             return Err(rollback_failed_managed_attachment(
                 &managed_file_path,
                 format!(
-                    "流式复制附件 `{}` 到 `{}` 失败：{error}",
+                    "Failed to stream-copy attachment `{}` to `{}`: {error}",
                     canonical_source_path.display(),
                     managed_file_path.display()
                 ),
@@ -503,7 +503,7 @@ pub fn stage_attachment_file_streaming(
         return Err(rollback_failed_managed_attachment(
             &managed_file_path,
             format!(
-                "流式复制附件 `{}` 到 `{}` 后字节数不一致：期望 {}，实际 {}。",
+                "Byte count mismatch after stream-copying attachment `{}` to `{}`: expected {}, got {}.",
                 canonical_source_path.display(),
                 managed_file_path.display(),
                 source_metadata.len(),
@@ -696,7 +696,7 @@ fn stage_attachment_bytes_with_effective_mime_type(
     let category_directory = resolve_attachment_category_directory(&asset_root, &descriptor.kind);
     fs::create_dir_all(&category_directory).map_err(|error| {
         format!(
-            "创建托管附件分类目录 `{}` 失败：{}。",
+            "Failed to create managed attachment category directory `{}`: {}.",
             category_directory.display(),
             error
         )
@@ -715,7 +715,7 @@ fn stage_attachment_bytes_with_effective_mime_type(
     ));
     fs::write(&managed_file_path, bytes).map_err(|error| {
         format!(
-            "写入托管附件 `{}` 失败：{}。",
+            "Failed to write managed attachment `{}`: {}.",
             managed_file_path.display(),
             error
         )
@@ -768,7 +768,7 @@ fn stage_attachment_bytes_with_effective_mime_type(
         // 获胜记录已经持有托管字节；当前未入索引的重复副本必须删除。
         fs::remove_file(&managed_file_path).map_err(|error| {
             format!(
-                "删除重复托管附件 `{}` 失败：{}。",
+                "Failed to delete duplicate managed attachment `{}`: {}.",
                 managed_file_path.display(),
                 error
             )
@@ -870,14 +870,21 @@ pub(crate) fn managed_attachment_resource_path(
 pub(crate) fn streaming_file_sha256(path: &Path) -> Result<String, String> {
     use std::io::Read;
 
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("打开本地附件来源 `{}` 失败：{error}", path.display()))?;
+    let mut file = fs::File::open(path).map_err(|error| {
+        format!(
+            "Failed to open local attachment source `{}`: {error}",
+            path.display()
+        )
+    })?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("读取本地附件来源 `{}` 失败：{error}", path.display()))?;
+        let read = file.read(&mut buffer).map_err(|error| {
+            format!(
+                "Failed to read local attachment source `{}`: {error}",
+                path.display()
+            )
+        })?;
         if read == 0 {
             break;
         }
@@ -933,7 +940,7 @@ fn rollback_failed_managed_attachment(managed_file_path: &Path, primary_error: S
     match fs::remove_file(managed_file_path) {
         Ok(()) => primary_error,
         Err(rollback_error) => format!(
-            "{primary_error} 同时回滚未索引托管附件 `{}` 失败：{}。",
+            "{primary_error} Rolling back unindexed managed attachment `{}` also failed: {}.",
             managed_file_path.display(),
             rollback_error
         ),
@@ -953,7 +960,7 @@ pub fn write_attachment_bytes_to_directory(
     let canonical_target_directory = canonicalize_workspace_path(target_directory);
     fs::create_dir_all(&canonical_target_directory).map_err(|error| {
         format!(
-            "创建导出附件目录 `{}` 失败：{}。",
+            "Failed to create export attachment directory `{}`: {}.",
             canonical_target_directory.display(),
             error
         )
@@ -966,8 +973,13 @@ pub fn write_attachment_bytes_to_directory(
     // 在调用方选定目录内部挑选出的安全避重输出路径。
     let output_path =
         resolve_unique_attachment_output_path(&canonical_target_directory, &normalized_file_name);
-    fs::write(&output_path, bytes)
-        .map_err(|error| format!("写入导出附件 `{}` 失败：{}。", output_path.display(), error))?;
+    fs::write(&output_path, bytes).map_err(|error| {
+        format!(
+            "Failed to write exported attachment `{}`: {}.",
+            output_path.display(),
+            error
+        )
+    })?;
     Ok(output_path)
 }
 
@@ -981,7 +993,7 @@ pub fn encode_rgba_image_to_png_bytes(
     let expected_len = width as usize * height as usize * 4usize;
     if rgba.len() != expected_len {
         return Err(format!(
-            "剪贴板图片像素数据长度无效：期望 {expected_len} 字节，实际 {} 字节。",
+            "Invalid clipboard image pixel data length: expected {expected_len} bytes, got {} bytes.",
             rgba.len()
         ));
     }
@@ -993,10 +1005,10 @@ pub fn encode_rgba_image_to_png_bytes(
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder
             .write_header()
-            .map_err(|error| format!("创建 PNG 编码头失败：{error}。"))?;
+            .map_err(|error| format!("Failed to create the PNG header: {error}."))?;
         writer
             .write_image_data(rgba)
-            .map_err(|error| format!("写入 PNG 图片数据失败：{error}。"))?;
+            .map_err(|error| format!("Failed to write PNG image data: {error}."))?;
     }
 
     Ok(output)
@@ -1181,7 +1193,7 @@ fn set_managed_attachment_file_times(
     let timestamp = FileTime::from_unix_time(seconds, nanoseconds);
     set_file_times(managed_file_path, timestamp, timestamp).map_err(|error| {
         format!(
-            "更新托管附件 `{}` 的访问/修改时间失败：{}。",
+            "Failed to update access/modification times of managed attachment `{}`: {}.",
             managed_file_path.display(),
             error
         )
@@ -1205,7 +1217,7 @@ fn set_managed_attachment_creation_time(
         .open(managed_file_path)
         .map_err(|error| {
             format!(
-                "打开托管附件 `{}` 以更新创建时间失败：{}。",
+                "Failed to open managed attachment `{}` to update its creation time: {}.",
                 managed_file_path.display(),
                 error
             )
@@ -1213,7 +1225,7 @@ fn set_managed_attachment_creation_time(
     let file_times = FileTimes::new().set_created(unix_millis_to_system_time(unix_millis));
     file.set_times(file_times).map_err(|error| {
         format!(
-            "更新托管附件 `{}` 的创建时间失败：{}。",
+            "Failed to update the creation time of managed attachment `{}`: {}.",
             managed_file_path.display(),
             error
         )

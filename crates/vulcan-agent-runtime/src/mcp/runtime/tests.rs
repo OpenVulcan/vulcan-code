@@ -76,8 +76,8 @@ fn active_summary_rows_only_keep_connecting_and_connected_servers() {
     assert_eq!(
         snapshot.active_summary_rows(),
         vec![
-            String::from("在线 · Connected Server · http · https://connected.test/mcp"),
-            String::from("连接中 · Connecting Server · stdio · connecting-mcp"),
+            String::from("Online · Connected Server · http · https://connected.test/mcp"),
+            String::from("Connecting · Connecting Server · stdio · connecting-mcp"),
         ]
     );
 }
@@ -142,18 +142,18 @@ fn runtime_server_diagnostic_exposes_stable_summary_and_warning_text() {
     assert_eq!(
         diagnostic.summary_text(),
         String::from(
-            "服务器 `Enabled Server` 当前状态为 `离线`，已注册 2 个工具、0 个 prompt 与 0 个资源。"
+            "Server `Enabled Server` is `Offline` with 2 tools, 0 prompts and 0 resources registered."
         )
     );
     assert_eq!(
         diagnostic.warning_text(),
         Some(String::from(
-            "服务器 `Enabled Server` 当前状态为 `离线`，已注册 2 个工具、0 个 prompt 与 0 个资源。 最近一次错误：offline"
+            "Server `Enabled Server` is `Offline` with 2 tools, 0 prompts and 0 resources registered. last error: offline"
         ))
     );
     assert_eq!(
         diagnostic.runtime_event_title(),
-        String::from("MCP 服务器离线 · Enabled Server")
+        String::from("MCP server offline · Enabled Server")
     );
 }
 
@@ -177,12 +177,12 @@ fn connected_server_refresh_warning_keeps_online_event_title() {
 
     assert_eq!(
         diagnostic.runtime_event_title(),
-        String::from("MCP 服务器在线 · Connected Server")
+        String::from("MCP server online · Connected Server")
     );
     assert_eq!(projection.kind, McpRuntimeEventProjectionKind::Warning);
     assert_eq!(
         projection.title,
-        String::from("MCP 服务器在线 · Connected Server")
+        String::from("MCP server online · Connected Server")
     );
 }
 
@@ -225,23 +225,23 @@ fn enabled_server_discovery_report_preserves_rows_warnings_and_event_projections
         report.discovery_rows(),
         &[
             String::from(
-                "服务器 `Healthy Server` 当前状态为 `在线`，已注册 0 个工具、0 个 prompt 与 0 个资源。"
+                "Server `Healthy Server` is `Online` with 0 tools, 0 prompts and 0 resources registered."
             ),
             String::from(
-                "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具、0 个 prompt 与 0 个资源。"
+                "Server `Offline Server` is `Offline` with 0 tools, 0 prompts and 0 resources registered."
             ),
         ]
     );
     assert_eq!(
         report.discovery_errors(),
         &[String::from(
-            "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具、0 个 prompt 与 0 个资源。 最近一次错误：dial tcp timeout"
+            "Server `Offline Server` is `Offline` with 0 tools, 0 prompts and 0 resources registered. last error: dial tcp timeout"
         )]
     );
     assert_eq!(
         report.discovery_warnings(),
         &[String::from(
-            "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具、0 个 prompt 与 0 个资源。 最近一次错误：dial tcp timeout"
+            "Server `Offline Server` is `Offline` with 0 tools, 0 prompts and 0 resources registered. last error: dial tcp timeout"
         )]
     );
     assert_eq!(
@@ -249,16 +249,16 @@ fn enabled_server_discovery_report_preserves_rows_warnings_and_event_projections
         &[
             McpRuntimeEventProjection {
                 kind: McpRuntimeEventProjectionKind::Informational,
-                title: String::from("MCP 服务器在线 · Healthy Server"),
+                title: String::from("MCP server online · Healthy Server"),
                 body: String::from(
-                    "服务器 `Healthy Server` 当前状态为 `在线`，已注册 0 个工具、0 个 prompt 与 0 个资源。"
+                    "Server `Healthy Server` is `Online` with 0 tools, 0 prompts and 0 resources registered."
                 ),
             },
             McpRuntimeEventProjection {
                 kind: McpRuntimeEventProjectionKind::Warning,
-                title: String::from("MCP 服务器离线 · Offline Server"),
+                title: String::from("MCP server offline · Offline Server"),
                 body: String::from(
-                    "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具、0 个 prompt 与 0 个资源。 最近一次错误：dial tcp timeout"
+                    "Server `Offline Server` is `Offline` with 0 tools, 0 prompts and 0 resources registered. last error: dial tcp timeout"
                 ),
             },
         ]
@@ -303,20 +303,20 @@ fn overview_groups_summary_rows_active_rows_and_discovery_report() {
     assert_eq!(
         overview.summary_rows(),
         &[
-            String::from("在线 · Healthy Server · http · https://healthy.test/mcp"),
-            String::from("离线 · Offline Server · stdio · offline-mcp · dial tcp timeout"),
+            String::from("Online · Healthy Server · http · https://healthy.test/mcp"),
+            String::from("Offline · Offline Server · stdio · offline-mcp · dial tcp timeout"),
         ]
     );
     assert_eq!(
         overview.active_summary_rows(),
         &[String::from(
-            "在线 · Healthy Server · http · https://healthy.test/mcp"
+            "Online · Healthy Server · http · https://healthy.test/mcp"
         )]
     );
     assert_eq!(
         overview.discovery_report().discovery_errors(),
         &[String::from(
-            "服务器 `Offline Server` 当前状态为 `离线`，已注册 0 个工具、0 个 prompt 与 0 个资源。 最近一次错误：dial tcp timeout"
+            "Server `Offline Server` is `Offline` with 0 tools, 0 prompts and 0 resources registered. last error: dial tcp timeout"
         )]
     );
 }

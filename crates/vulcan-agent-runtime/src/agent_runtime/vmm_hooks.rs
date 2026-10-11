@@ -790,7 +790,7 @@ fn vmm_hook_registration(id: &str, point: &str, mode: HookMode) -> HookRegistrat
     }
     registration.display_name = Some(String::from("VulcanMemoryMesh"));
     if id == VMM_PRECHECK_HOOK_ID {
-        registration.progress_label = Some(String::from("正在进行记忆召回"));
+        registration.progress_label = Some(String::from("Recalling memories"));
     }
     registration
 }

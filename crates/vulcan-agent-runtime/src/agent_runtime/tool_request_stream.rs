@@ -972,7 +972,10 @@ impl ToolRequestStreamCoordinator {
     ) -> RuntimeEvent {
         RuntimeEvent::new(
             kind,
-            format!("工具请求 · {} · {}", draft.tool_call_id, draft.tool_name),
+            format!(
+                "Tool request · {} · {}",
+                draft.tool_call_id, draft.tool_name
+            ),
             String::new(),
         )
         .with_metadata(Some(json!({

@@ -17,7 +17,7 @@ const PROVIDER_RETRY_BLOCK: ConversationBlock = {
   sourceMessageId: "provider-retry-1",
   kind: "notice",
   title: "Provider retry",
-  body: "Vulcan 公共契约 第 1/5 次重试将在 3 秒后开始：Provider unavailable",
+  body: "Anthropic retry 1/5 starts in 3 seconds: Provider unavailable",
   summary: "Provider unavailable",
   status: "retrying",
 };
